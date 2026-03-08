@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import AdminPanel from './AdminPanel'
 
+const API = 'http://127.0.0.1:8000'
+
 const themes = {
   light: {
     bg: '#F0F9FF', bgCard: '#FFFFFF', border: '#BAE6FD', text: '#0F2942',
@@ -25,6 +27,10 @@ function getAutoTheme() {
 
 function capitalize(str) {
   return str.replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w/g, c => c.toLowerCase())
+}
+
+function getToken() {
+  return localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
 }
 
 // ─── MODAL BASE ───────────────────────────────────────────────────────────────
@@ -64,6 +70,23 @@ function Field({ label, t, ...props }) {
   )
 }
 
+function SelectField({ label, t, children, ...props }) {
+  return (
+    <div style={{ marginBottom: '16px' }}>
+      <label style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>
+        {label}
+      </label>
+      <select style={{
+        width: '100%', background: t.inputBg, border: `1.5px solid ${t.inputBorder}`,
+        borderRadius: '10px', padding: '11px 14px', color: t.text, fontSize: '14px',
+        outline: 'none', boxSizing: 'border-box', cursor: 'pointer'
+      }} {...props}>
+        {children}
+      </select>
+    </div>
+  )
+}
+
 // ─── MODAL LOGIN ──────────────────────────────────────────────────────────────
 function ModalLogin({ t, onClose, onLoginOk, onForgot }) {
   const [email, setEmail] = useState('')
@@ -74,10 +97,9 @@ function ModalLogin({ t, onClose, onLoginOk, onForgot }) {
 
   async function handleLogin() {
     if (!email || !password) { setError('Completa todos los campos'); return }
-    setLoading(true)
-    setError('')
+    setLoading(true); setError('')
     try {
-      const res = await fetch('http://127.0.0.1:8000/auth/login', {
+      const res = await fetch(`${API}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password })
@@ -102,13 +124,11 @@ function ModalLogin({ t, onClose, onLoginOk, onForgot }) {
         <h2 style={{ color: t.primary, margin: 0, fontSize: '22px', fontWeight: '800' }}>Iniciar Sesión</h2>
         <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: '13px' }}>Accede a tu cuenta ClaraCore</p>
       </div>
-
       <Field label="CORREO ELECTRÓNICO" t={t} type="email" placeholder="tu@correo.com"
         value={email} onChange={e => setEmail(e.target.value)} />
       <Field label="CONTRASEÑA" t={t} type="password" placeholder="••••••••"
         value={password} onChange={e => setPassword(e.target.value)}
         onKeyDown={e => e.key === 'Enter' && handleLogin()} />
-
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
         <input type="checkbox" id="mantener" checked={mantener} onChange={e => setMantener(e.target.checked)}
           style={{ width: '16px', height: '16px', accentColor: t.primary, cursor: 'pointer' }} />
@@ -116,16 +136,12 @@ function ModalLogin({ t, onClose, onLoginOk, onForgot }) {
           Mantener sesión iniciada
         </label>
       </div>
-
       {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', marginBottom: '16px' }}>{error}</div>}
-
       <button onClick={handleLogin} disabled={loading} style={{
         width: '100%', background: t.primary, color: '#fff', border: 'none',
         borderRadius: '10px', padding: '13px', fontSize: '15px', fontWeight: '700',
-        cursor: loading ? 'wait' : 'pointer', marginBottom: '16px', transition: 'opacity 0.2s',
-        opacity: loading ? 0.7 : 1
+        cursor: loading ? 'wait' : 'pointer', marginBottom: '16px', opacity: loading ? 0.7 : 1
       }}>{loading ? 'Ingresando...' : 'Ingresar'}</button>
-
       <div style={{ textAlign: 'center' }}>
         <button onClick={onForgot} style={{ background: 'none', border: 'none', color: t.primary, fontSize: '13px', cursor: 'pointer', textDecoration: 'underline' }}>
           ¿Olvidaste tu contraseña?
@@ -137,19 +153,22 @@ function ModalLogin({ t, onClose, onLoginOk, onForgot }) {
 
 // ─── MODAL CREAR CUENTA ───────────────────────────────────────────────────────
 function ModalCrearCuenta({ t, onClose }) {
-  const [form, setForm] = useState({ nombres: '', apellidos: '', email: '', cargo_id: '', contrato: '', password: '', confirmar: '' })
+  const [form, setForm] = useState({ nombres: '', apellidos: '', email: '', cargo_id: '', contrato_id: '', password: '', confirmar: '' })
   const [cargos, setCargos] = useState([])
+  const [contratos, setContratos] = useState([])
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
   const [loading, setLoading] = useState(false)
 
-  // Cargar cargos disponibles (endpoint público)
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/cargos')
-      .then(r => r.json())
-      .then(data => setCargos(data))
-      .catch(() => setCargos([]))
+    fetch(`${API}/cargos`).then(r => r.json()).then(setCargos).catch(() => setCargos([]))
+    fetch(`${API}/contratos`).then(r => r.json()).then(setContratos).catch(() => setContratos([]))
   }, [])
+
+  // El cargo seleccionado determina si contrato es obligatorio
+  const cargoSeleccionado = cargos.find(c => c.id === parseInt(form.cargo_id))
+  const esDeveloper = cargoSeleccionado?.nombre === 'Desarrollador'
+  const contratoObligatorio = !esDeveloper
 
   function set(key) {
     return e => {
@@ -163,16 +182,18 @@ function ModalCrearCuenta({ t, onClose }) {
     if (!form.nombres || !form.apellidos || !form.email || !form.cargo_id || !form.password) {
       setError('Completa todos los campos obligatorios'); return
     }
+    if (contratoObligatorio && !form.contrato_id) {
+      setError('Debes seleccionar el contrato al que perteneces'); return
+    }
     if (form.password !== form.confirmar) {
       setError('Las contraseñas no coinciden'); return
     }
     if (form.password.length < 8) {
       setError('La contraseña debe tener mínimo 8 caracteres'); return
     }
-    setLoading(true)
-    setError('')
+    setLoading(true); setError('')
     try {
-      const res = await fetch('http://127.0.0.1:8000/usuarios/registro', {
+      const res = await fetch(`${API}/usuarios/registro`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -180,7 +201,7 @@ function ModalCrearCuenta({ t, onClose }) {
           apellidos: form.apellidos,
           email: form.email,
           cargo_id: parseInt(form.cargo_id),
-          contrato: form.contrato || null,
+          contrato_id: form.contrato_id ? parseInt(form.contrato_id) : null,
           password: form.password
         })
       })
@@ -224,32 +245,36 @@ function ModalCrearCuenta({ t, onClose }) {
 
       <Field label="CORREO ELECTRÓNICO *" t={t} type="email" placeholder="tu@correo.com" value={form.email} onChange={set('email')} />
 
-      {/* Combo de cargos */}
+      <SelectField label="CARGO *" t={t} value={form.cargo_id} onChange={set('cargo_id')}>
+        <option value="">-- Selecciona tu cargo --</option>
+        {cargos.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+      </SelectField>
+
+      {/* Contrato: obligatorio para todos excepto Desarrollador */}
       <div style={{ marginBottom: '16px' }}>
         <label style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>
-          CARGO *
+          CONTRATO {contratoObligatorio ? '*' : '(opcional)'}
         </label>
         <select
-          value={form.cargo_id}
-          onChange={set('cargo_id')}
+          value={form.contrato_id}
+          onChange={set('contrato_id')}
           style={{
             width: '100%', background: t.inputBg, border: `1.5px solid ${t.inputBorder}`,
             borderRadius: '10px', padding: '11px 14px',
-            color: form.cargo_id ? t.text : t.textMuted,
+            color: form.contrato_id ? t.text : t.textMuted,
             fontSize: '14px', outline: 'none', boxSizing: 'border-box', cursor: 'pointer'
           }}
         >
-          <option value="">-- Selecciona tu cargo --</option>
-          {cargos.map(c => (
-            <option key={c.id} value={c.id}>{c.nombre}</option>
-          ))}
+          <option value="">-- Selecciona tu contrato --</option>
+          {contratos.map(c => <option key={c.id} value={c.id}>{c.numero}</option>)}
         </select>
-        <p style={{ fontSize: '11px', color: t.textMuted, margin: '5px 0 0' }}>
-          El administrador asignará tu rol (Interventoría / Contratista) al aprobar tu cuenta.
-        </p>
+        {contratoObligatorio && (
+          <p style={{ fontSize: '11px', color: t.textMuted, margin: '5px 0 0' }}>
+            El administrador asignará tu rol al aprobar tu cuenta.
+          </p>
+        )}
       </div>
 
-      <Field label="NÚMERO DE CONTRATO" t={t} placeholder="Ej: COD-2024-001 (opcional)" value={form.contrato} onChange={set('contrato')} />
       <Field label="CONTRASEÑA *" t={t} type="password" placeholder="Mínimo 8 caracteres" value={form.password} onChange={set('password')} />
       <Field label="CONFIRMAR CONTRASEÑA *" t={t} type="password" placeholder="Repite la contraseña" value={form.confirmar} onChange={set('confirmar')} />
 
@@ -277,8 +302,7 @@ function ModalOlvide({ t, onClose }) {
     if (!email) return
     setLoading(true)
     await new Promise(r => setTimeout(r, 1000))
-    setLoading(false)
-    setSent(true)
+    setLoading(false); setSent(true)
   }
 
   if (sent) return (
@@ -289,9 +313,7 @@ function ModalOlvide({ t, onClose }) {
         <p style={{ color: t.textMuted, fontSize: '14px', lineHeight: '1.6' }}>
           Si el correo <strong>{email}</strong> está registrado, recibirás las instrucciones para restablecer tu contraseña.
         </p>
-        <button onClick={onClose} style={{ marginTop: '24px', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px 32px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}>
-          Aceptar
-        </button>
+        <button onClick={onClose} style={{ marginTop: '24px', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px 32px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}>Aceptar</button>
       </div>
     </Modal>
   )
@@ -303,15 +325,11 @@ function ModalOlvide({ t, onClose }) {
         <h2 style={{ color: t.primary, margin: 0, fontSize: '22px', fontWeight: '800' }}>Olvidé mi Contraseña</h2>
         <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: '13px' }}>Te enviaremos un enlace de restablecimiento</p>
       </div>
-
       <Field label="CORREO ELECTRÓNICO" t={t} type="email" placeholder="tu@correo.com"
         value={email} onChange={e => setEmail(e.target.value)}
         onKeyDown={e => e.key === 'Enter' && handleEnviar()} />
-
       <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
-        <button onClick={onClose} style={{ flex: 1, background: 'transparent', border: `1.5px solid ${t.border}`, borderRadius: '10px', padding: '12px', color: t.textMuted, fontSize: '14px', cursor: 'pointer' }}>
-          Cancelar
-        </button>
+        <button onClick={onClose} style={{ flex: 1, background: 'transparent', border: `1.5px solid ${t.border}`, borderRadius: '10px', padding: '12px', color: t.textMuted, fontSize: '14px', cursor: 'pointer' }}>Cancelar</button>
         <button onClick={handleEnviar} disabled={loading || !email} style={{ flex: 2, background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: (!email || loading) ? 'not-allowed' : 'pointer', opacity: (!email || loading) ? 0.6 : 1 }}>
           {loading ? 'Enviando...' : 'Enviar Enlace'}
         </button>
@@ -331,56 +349,34 @@ function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, 
           </button>
         ))}
       </div>
-
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 24px' }}>
         <div style={{ marginBottom: '16px', animation: 'fadeDown 0.6s ease' }}>
-          <img src="/CLARA.CORE.png" alt="ClaraCore"
-            style={{ height: '80px', filter: activeTheme === 'dark' ? 'brightness(0) invert(1)' : 'none' }} />
+          <img src="/CLARA.CORE.png" alt="ClaraCore" style={{ height: '80px', filter: activeTheme === 'dark' ? 'brightness(0) invert(1)' : 'none' }} />
         </div>
-
         <p style={{ color: t.textMuted, fontSize: '16px', margin: '0 0 56px', letterSpacing: '0.5px', animation: 'fadeDown 0.7s ease', textAlign: 'center', maxWidth: '400px', lineHeight: '1.6' }}>
           Gestión inteligente de contratos de construcción
         </p>
-
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', width: '100%', maxWidth: '340px', animation: 'fadeUp 0.7s ease' }}>
-          <button onClick={onLogin} style={{
-            background: t.primary, color: '#fff', border: 'none', borderRadius: '12px',
-            padding: '16px', fontSize: '16px', fontWeight: '700', cursor: 'pointer',
-            boxShadow: `0 8px 24px rgba(0,119,182,0.35)`, transition: 'transform 0.15s, box-shadow 0.15s',
-            letterSpacing: '0.3px'
-          }}
+          <button onClick={onLogin} style={{ background: t.primary, color: '#fff', border: 'none', borderRadius: '12px', padding: '16px', fontSize: '16px', fontWeight: '700', cursor: 'pointer', boxShadow: `0 8px 24px rgba(0,119,182,0.35)`, transition: 'transform 0.15s, box-shadow 0.15s', letterSpacing: '0.3px' }}
             onMouseEnter={e => { e.target.style.transform = 'translateY(-2px)'; e.target.style.boxShadow = `0 12px 32px rgba(0,119,182,0.45)` }}
             onMouseLeave={e => { e.target.style.transform = 'translateY(0)'; e.target.style.boxShadow = `0 8px 24px rgba(0,119,182,0.35)` }}>
             Iniciar Sesión
           </button>
-
-          <button onClick={onRegistro} style={{
-            background: 'transparent', color: t.primary,
-            border: `2px solid ${t.primary}`, borderRadius: '12px',
-            padding: '14px', fontSize: '16px', fontWeight: '700', cursor: 'pointer',
-            transition: 'all 0.15s'
-          }}
+          <button onClick={onRegistro} style={{ background: 'transparent', color: t.primary, border: `2px solid ${t.primary}`, borderRadius: '12px', padding: '14px', fontSize: '16px', fontWeight: '700', cursor: 'pointer', transition: 'all 0.15s' }}
             onMouseEnter={e => { e.target.style.background = t.primary; e.target.style.color = '#fff' }}
             onMouseLeave={e => { e.target.style.background = 'transparent'; e.target.style.color = t.primary }}>
             Crear Cuenta
           </button>
-
-          <button onClick={onOlvide} style={{
-            background: 'none', border: 'none', color: t.textMuted,
-            fontSize: '14px', cursor: 'pointer', padding: '8px',
-            textDecoration: 'underline', transition: 'color 0.15s'
-          }}
+          <button onClick={onOlvide} style={{ background: 'none', border: 'none', color: t.textMuted, fontSize: '14px', cursor: 'pointer', padding: '8px', textDecoration: 'underline', transition: 'color 0.15s' }}
             onMouseEnter={e => e.target.style.color = t.primary}
             onMouseLeave={e => e.target.style.color = t.textMuted}>
             Olvidé mi contraseña
           </button>
         </div>
       </div>
-
       <div style={{ textAlign: 'center', padding: '20px', color: t.textMuted, fontSize: '12px', opacity: 0.7 }}>
         ClaraCore © {new Date().getFullYear()} — Gestión de construcción
       </div>
-
       <style>{`
         @keyframes fadeDown { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes fadeUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
@@ -394,16 +390,17 @@ function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, 
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout }) {
   const [tabInferior, setTabInferior] = useState('gantt')
   const [analisis, setAnalisis] = useState('financiero')
-  const [showModal, setShowModal] = useState(false)
-  const [contrato, setContrato] = useState({ numero: '', objeto: '', contratista: '', nit: '' })
+  const [showModalContrato, setShowModalContrato] = useState(false)
+  const [showAdmin, setShowAdmin] = useState(false)
+  const [nuevoContrato, setNuevoContrato] = useState({ numero: '', objeto: '', contratista: '', nit: '' })
   const [csvData, setCsvData] = useState(null)
   const [csvNombre, setCsvNombre] = useState('')
-  const [contratos, setContratos] = useState([])
-  const [showAdmin, setShowAdmin] = useState(false)
+  const [savingContrato, setSavingContrato] = useState(false)
+  const [errorContrato, setErrorContrato] = useState('')
 
-  // Botón visible para Desarrollador Y para quien tenga rol Desarrollador
-  const canAdmin = ['Desarrollador'].includes(usuario?.cargo_nombre) ||
-                   ['Desarrollador'].includes(usuario?.rol_nombre)
+  // Desarrollador ve todo; otros usuarios ven solo su contrato
+  const esDeveloper = usuario?.cargo_nombre === 'Desarrollador'
+  const canAdmin = esDeveloper || usuario?.cargo_nombre === 'Administrador'
 
   const s = {
     app: { fontFamily: "'Segoe UI', sans-serif", background: t.bg, minHeight: '100vh', color: t.text },
@@ -446,11 +443,26 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout }) {
     reader.readAsText(file)
   }
 
-  function handleGuardar() {
-    if (!contrato.numero || !contrato.contratista) return
-    setContratos([...contratos, { ...contrato, listado: csvData }])
-    setContrato({ numero: '', objeto: '', contratista: '', nit: '' })
-    setCsvData(null); setCsvNombre(''); setShowModal(false)
+  async function handleGuardarContrato() {
+    if (!nuevoContrato.numero || !nuevoContrato.contratista) {
+      setErrorContrato('Número y contratista son obligatorios'); return
+    }
+    setSavingContrato(true); setErrorContrato('')
+    try {
+      const res = await fetch(`${API}/contratos`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+        body: JSON.stringify({ ...nuevoContrato })
+      })
+      const data = await res.json()
+      if (!res.ok) { setErrorContrato(data.detail || 'Error al crear contrato'); return }
+      setNuevoContrato({ numero: '', objeto: '', contratista: '', nit: '' })
+      setCsvData(null); setCsvNombre(''); setShowModalContrato(false)
+    } catch {
+      setErrorContrato('No se pudo conectar con el servidor')
+    } finally {
+      setSavingContrato(false)
+    }
   }
 
   return (
@@ -484,8 +496,13 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout }) {
 
       <div style={s.body}>
         <div style={s.topBar}>
-          <span style={{ fontSize: '13px', color: t.textMuted }}>📋 Contrato: CODENSA 2024</span>
-          <button style={s.btnCrear} onClick={() => setShowModal(true)}>＋ Crear Contrato</button>
+          <span style={{ fontSize: '13px', color: t.textMuted }}>
+            📋 Contrato: {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
+          </span>
+          {/* Solo Desarrollador puede crear nuevos contratos */}
+          {esDeveloper && (
+            <button style={s.btnCrear} onClick={() => setShowModalContrato(true)}>＋ Crear Contrato</button>
+          )}
         </div>
 
         <div style={s.panelsGrid}>
@@ -526,37 +543,39 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout }) {
         </div>
       </div>
 
-      {/* Modal crear contrato */}
-      {showModal && (
-        <div style={s.overlay} onClick={() => setShowModal(false)}>
+      {/* Modal crear contrato — guarda en Supabase */}
+      {showModalContrato && (
+        <div style={s.overlay} onClick={() => setShowModalContrato(false)}>
           <div style={s.modal} onClick={e => e.stopPropagation()}>
             <div style={{ fontSize: '18px', fontWeight: '700', color: t.primary, marginBottom: '24px' }}>📋 Crear Nuevo Contrato</div>
             <label style={s.label}>NÚMERO DE CONTRATO *</label>
-            <input style={s.input} placeholder="Ej: COD-2024-001" value={contrato.numero} onChange={e => setContrato({ ...contrato, numero: e.target.value })} />
+            <input style={s.input} placeholder="Ej: IDU-1551-2017" value={nuevoContrato.numero} onChange={e => setNuevoContrato({ ...nuevoContrato, numero: e.target.value })} />
             <label style={s.label}>OBJETO DEL CONTRATO</label>
-            <input style={s.input} placeholder="Descripción del objeto contractual" value={contrato.objeto} onChange={e => setContrato({ ...contrato, objeto: e.target.value })} />
+            <input style={s.input} placeholder="Descripción del objeto contractual" value={nuevoContrato.objeto} onChange={e => setNuevoContrato({ ...nuevoContrato, objeto: e.target.value })} />
             <label style={s.label}>CONTRATISTA *</label>
-            <input style={s.input} placeholder="Razón social" value={contrato.contratista} onChange={e => setContrato({ ...contrato, contratista: e.target.value })} />
+            <input style={s.input} placeholder="Razón social" value={nuevoContrato.contratista} onChange={e => setNuevoContrato({ ...nuevoContrato, contratista: e.target.value })} />
             <label style={s.label}>NIT</label>
-            <input style={s.input} placeholder="Ej: 900.123.456-7" value={contrato.nit} onChange={e => setContrato({ ...contrato, nit: e.target.value })} />
+            <input style={s.input} placeholder="Ej: 900.123.456-7" value={nuevoContrato.nit} onChange={e => setNuevoContrato({ ...nuevoContrato, nit: e.target.value })} />
             <label style={s.label}>LISTADO DE PRECIOS (CSV)</label>
-            <label style={{ display: 'block', background: t.bg, border: `2px dashed ${t.border}`, borderRadius: '8px', padding: '16px', textAlign: 'center', cursor: 'pointer', color: t.textMuted, fontSize: '13px', marginBottom: '24px' }}>
+            <label style={{ display: 'block', background: t.bg, border: `2px dashed ${t.border}`, borderRadius: '8px', padding: '16px', textAlign: 'center', cursor: 'pointer', color: t.textMuted, fontSize: '13px', marginBottom: '16px' }}>
               {csvNombre ? `✅ ${csvNombre}` : '📂 Haz clic para cargar CSV'}
               <input type="file" accept=".csv" style={{ display: 'none' }} onChange={handleCSV} />
             </label>
+            {errorContrato && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', marginBottom: '16px' }}>{errorContrato}</div>}
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-              <button onClick={() => setShowModal(false)} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '10px 20px', color: t.textMuted, cursor: 'pointer' }}>Cancelar</button>
-              <button onClick={handleGuardar} style={{ background: t.primary, border: 'none', borderRadius: '8px', padding: '10px 24px', color: '#fff', fontWeight: '600', cursor: 'pointer' }}>Guardar</button>
+              <button onClick={() => setShowModalContrato(false)} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '10px 20px', color: t.textMuted, cursor: 'pointer' }}>Cancelar</button>
+              <button onClick={handleGuardarContrato} disabled={savingContrato} style={{ background: t.primary, border: 'none', borderRadius: '8px', padding: '10px 24px', color: '#fff', fontWeight: '600', cursor: savingContrato ? 'wait' : 'pointer', opacity: savingContrato ? 0.7 : 1 }}>
+                {savingContrato ? 'Guardando...' : 'Guardar'}
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Panel Admin — overlay global */}
       {showAdmin && (
         <AdminPanel
           user={usuario}
-          token={localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')}
+          token={getToken()}
           onClose={() => setShowAdmin(false)}
         />
       )}
@@ -581,15 +600,12 @@ export default function App() {
   }
 
   function handleLoginOk(u) {
-    setUsuario(u)
-    setModal(null)
+    setUsuario(u); setModal(null)
   }
 
   function handleLogout() {
-    localStorage.removeItem('cc_token')
-    localStorage.removeItem('cc_usuario')
-    sessionStorage.removeItem('cc_token')
-    sessionStorage.removeItem('cc_usuario')
+    localStorage.removeItem('cc_token'); localStorage.removeItem('cc_usuario')
+    sessionStorage.removeItem('cc_token'); sessionStorage.removeItem('cc_usuario')
     setUsuario(null)
   }
 
@@ -605,18 +621,9 @@ export default function App() {
         onLogin={() => setModal('login')}
         onRegistro={() => setModal('registro')}
         onOlvide={() => setModal('olvide')} />
-
-      {modal === 'login' && (
-        <ModalLogin t={t} onClose={() => setModal(null)}
-          onLoginOk={handleLoginOk}
-          onForgot={() => setModal('olvide')} />
-      )}
-      {modal === 'registro' && (
-        <ModalCrearCuenta t={t} onClose={() => setModal(null)} />
-      )}
-      {modal === 'olvide' && (
-        <ModalOlvide t={t} onClose={() => setModal(null)} />
-      )}
+      {modal === 'login' && <ModalLogin t={t} onClose={() => setModal(null)} onLoginOk={handleLoginOk} onForgot={() => setModal('olvide')} />}
+      {modal === 'registro' && <ModalCrearCuenta t={t} onClose={() => setModal(null)} />}
+      {modal === 'olvide' && <ModalOlvide t={t} onClose={() => setModal(null)} />}
     </>
   )
 }
