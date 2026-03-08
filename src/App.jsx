@@ -231,7 +231,7 @@ export default function App() {
       {/* HEADER */}
       <div style={s.header}>
         <div style={s.logo}>
-          <img src="/logo.png" alt="ClaraCore" style={{ height: '40px' }} />
+          <img src="/CLARA.CORE.png" alt="ClaraCore" style={{ height: '40px' }} />
         </div>
 
         <div style={s.themeSelector}>
