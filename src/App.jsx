@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import AdminPanel from './AdminPanel'
 
 const themes = {
   light: {
@@ -69,6 +70,7 @@ function ModalLogin({ t, onClose, onLoginOk, onForgot }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [mantener, setMantener] = useState(true)
 
   async function handleLogin() {
     if (!email || !password) { setError('Completa todos los campos'); return }
@@ -82,8 +84,9 @@ function ModalLogin({ t, onClose, onLoginOk, onForgot }) {
       })
       const data = await res.json()
       if (!res.ok) { setError(data.detail || 'Credenciales incorrectas'); return }
-      localStorage.setItem('cc_token', data.access_token)
-      localStorage.setItem('cc_usuario', JSON.stringify(data.usuario))
+      const storage = mantener ? localStorage : sessionStorage
+      storage.setItem('cc_token', data.access_token)
+      storage.setItem('cc_usuario', JSON.stringify(data.usuario))
       onLoginOk(data.usuario)
     } catch {
       setError('No se pudo conectar con el servidor')
@@ -106,6 +109,14 @@ function ModalLogin({ t, onClose, onLoginOk, onForgot }) {
         value={password} onChange={e => setPassword(e.target.value)}
         onKeyDown={e => e.key === 'Enter' && handleLogin()} />
 
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+        <input type="checkbox" id="mantener" checked={mantener} onChange={e => setMantener(e.target.checked)}
+          style={{ width: '16px', height: '16px', accentColor: t.primary, cursor: 'pointer' }} />
+        <label htmlFor="mantener" style={{ fontSize: '13px', color: t.textMuted, cursor: 'pointer' }}>
+          Mantener sesión iniciada
+        </label>
+      </div>
+
       {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', marginBottom: '16px' }}>{error}</div>}
 
       <button onClick={handleLogin} disabled={loading} style={{
@@ -126,10 +137,19 @@ function ModalLogin({ t, onClose, onLoginOk, onForgot }) {
 
 // ─── MODAL CREAR CUENTA ───────────────────────────────────────────────────────
 function ModalCrearCuenta({ t, onClose }) {
-  const [form, setForm] = useState({ nombres: '', apellidos: '', email: '', contrato: '', password: '', confirmar: '' })
+  const [form, setForm] = useState({ nombres: '', apellidos: '', email: '', cargo_id: '', contrato: '', password: '', confirmar: '' })
+  const [cargos, setCargos] = useState([])
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
   const [loading, setLoading] = useState(false)
+
+  // Cargar cargos disponibles (endpoint público)
+  useEffect(() => {
+    fetch('http://127.0.0.1:8000/cargos')
+      .then(r => r.json())
+      .then(data => setCargos(data))
+      .catch(() => setCargos([]))
+  }, [])
 
   function set(key) {
     return e => {
@@ -140,7 +160,7 @@ function ModalCrearCuenta({ t, onClose }) {
   }
 
   async function handleRegistro() {
-    if (!form.nombres || !form.apellidos || !form.email || !form.password) {
+    if (!form.nombres || !form.apellidos || !form.email || !form.cargo_id || !form.password) {
       setError('Completa todos los campos obligatorios'); return
     }
     if (form.password !== form.confirmar) {
@@ -159,7 +179,8 @@ function ModalCrearCuenta({ t, onClose }) {
           nombre: form.nombres,
           apellidos: form.apellidos,
           email: form.email,
-          contrato: form.contrato,
+          cargo_id: parseInt(form.cargo_id),
+          contrato: form.contrato || null,
           password: form.password
         })
       })
@@ -179,7 +200,7 @@ function ModalCrearCuenta({ t, onClose }) {
         <div style={{ fontSize: '48px', marginBottom: '16px' }}>✅</div>
         <h2 style={{ color: t.primary, margin: '0 0 12px', fontSize: '22px' }}>¡Registro exitoso!</h2>
         <p style={{ color: t.textMuted, fontSize: '14px', lineHeight: '1.6' }}>
-          Tu solicitud fue enviada. Un administrador revisará tu cuenta y te notificará cuando esté aprobada.
+          Tu solicitud fue enviada. Un administrador asignará tu rol y activará tu cuenta.
         </p>
         <button onClick={onClose} style={{ marginTop: '24px', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px 32px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}>
           Entendido
@@ -202,6 +223,32 @@ function ModalCrearCuenta({ t, onClose }) {
       </div>
 
       <Field label="CORREO ELECTRÓNICO *" t={t} type="email" placeholder="tu@correo.com" value={form.email} onChange={set('email')} />
+
+      {/* Combo de cargos */}
+      <div style={{ marginBottom: '16px' }}>
+        <label style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>
+          CARGO *
+        </label>
+        <select
+          value={form.cargo_id}
+          onChange={set('cargo_id')}
+          style={{
+            width: '100%', background: t.inputBg, border: `1.5px solid ${t.inputBorder}`,
+            borderRadius: '10px', padding: '11px 14px',
+            color: form.cargo_id ? t.text : t.textMuted,
+            fontSize: '14px', outline: 'none', boxSizing: 'border-box', cursor: 'pointer'
+          }}
+        >
+          <option value="">-- Selecciona tu cargo --</option>
+          {cargos.map(c => (
+            <option key={c.id} value={c.id}>{c.nombre}</option>
+          ))}
+        </select>
+        <p style={{ fontSize: '11px', color: t.textMuted, margin: '5px 0 0' }}>
+          El administrador asignará tu rol (Interventoría / Contratista) al aprobar tu cuenta.
+        </p>
+      </div>
+
       <Field label="NÚMERO DE CONTRATO" t={t} placeholder="Ej: COD-2024-001 (opcional)" value={form.contrato} onChange={set('contrato')} />
       <Field label="CONTRASEÑA *" t={t} type="password" placeholder="Mínimo 8 caracteres" value={form.password} onChange={set('password')} />
       <Field label="CONFIRMAR CONTRASEÑA *" t={t} type="password" placeholder="Repite la contraseña" value={form.confirmar} onChange={set('confirmar')} />
@@ -277,7 +324,6 @@ function ModalOlvide({ t, onClose }) {
 function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, onOlvide }) {
   return (
     <div style={{ minHeight: '100vh', width: '100%', background: t.landingBg, display: 'flex', flexDirection: 'column' }}>
-      {/* Selector tema */}
       <div style={{ position: 'absolute', top: '20px', right: '24px', display: 'flex', gap: '6px', background: activeTheme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.7)', border: `1px solid ${t.border}`, borderRadius: '20px', padding: '4px', backdropFilter: 'blur(8px)' }}>
         {['light', 'auto', 'dark'].map((mode, i) => (
           <button key={mode} onClick={() => onTheme(mode)} style={{ background: themeMode === mode ? t.primary : 'transparent', color: themeMode === mode ? '#fff' : t.textMuted, border: 'none', borderRadius: '16px', padding: '4px 12px', fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s' }}>
@@ -286,23 +332,17 @@ function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, 
         ))}
       </div>
 
-      {/* Centro */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 24px' }}>
-
-        {/* Logo */}
         <div style={{ marginBottom: '16px', animation: 'fadeDown 0.6s ease' }}>
           <img src="/CLARA.CORE.png" alt="ClaraCore"
             style={{ height: '80px', filter: activeTheme === 'dark' ? 'brightness(0) invert(1)' : 'none' }} />
         </div>
 
-        {/* Tagline */}
         <p style={{ color: t.textMuted, fontSize: '16px', margin: '0 0 56px', letterSpacing: '0.5px', animation: 'fadeDown 0.7s ease', textAlign: 'center', maxWidth: '400px', lineHeight: '1.6' }}>
           Gestión inteligente de contratos de construcción
         </p>
 
-        {/* Botones */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', width: '100%', maxWidth: '340px', animation: 'fadeUp 0.7s ease' }}>
-
           <button onClick={onLogin} style={{
             background: t.primary, color: '#fff', border: 'none', borderRadius: '12px',
             padding: '16px', fontSize: '16px', fontWeight: '700', cursor: 'pointer',
@@ -337,7 +377,6 @@ function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, 
         </div>
       </div>
 
-      {/* Footer */}
       <div style={{ textAlign: 'center', padding: '20px', color: t.textMuted, fontSize: '12px', opacity: 0.7 }}>
         ClaraCore © {new Date().getFullYear()} — Gestión de construcción
       </div>
@@ -360,6 +399,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout }) {
   const [csvData, setCsvData] = useState(null)
   const [csvNombre, setCsvNombre] = useState('')
   const [contratos, setContratos] = useState([])
+  const [showAdmin, setShowAdmin] = useState(false)
+
+  // Botón visible para Desarrollador Y para quien tenga rol Desarrollador
+  const canAdmin = ['Desarrollador'].includes(usuario?.cargo_nombre) ||
+                   ['Desarrollador'].includes(usuario?.rol_nombre)
 
   const s = {
     app: { fontFamily: "'Segoe UI', sans-serif", background: t.bg, minHeight: '100vh', color: t.text },
@@ -422,7 +466,15 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout }) {
             ))}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ fontSize: '13px', color: t.textMuted }}>👤 {usuario?.nombre}</span>
+            <span style={{ fontSize: '13px', color: t.textMuted }}>
+              👤 {usuario?.nombre}
+              {usuario?.cargo_nombre && <span style={{ marginLeft: '6px', fontSize: '11px', opacity: 0.7 }}>· {usuario.cargo_nombre}</span>}
+            </span>
+            {canAdmin && (
+              <button onClick={() => setShowAdmin(true)} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.primary, fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>
+                ⚙ Admin
+              </button>
+            )}
             <button onClick={onLogout} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.textMuted, fontSize: '12px', cursor: 'pointer' }}>
               Salir
             </button>
@@ -474,6 +526,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout }) {
         </div>
       </div>
 
+      {/* Modal crear contrato */}
       {showModal && (
         <div style={s.overlay} onClick={() => setShowModal(false)}>
           <div style={s.modal} onClick={e => e.stopPropagation()}>
@@ -498,6 +551,15 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout }) {
           </div>
         </div>
       )}
+
+      {/* Panel Admin — overlay global */}
+      {showAdmin && (
+        <AdminPanel
+          user={usuario}
+          token={localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')}
+          onClose={() => setShowAdmin(false)}
+        />
+      )}
     </div>
   )
 }
@@ -506,7 +568,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout }) {
 export default function App() {
   const [themeMode, setThemeMode] = useState('auto')
   const [activeTheme, setActiveTheme] = useState(getAutoTheme())
-  const [modal, setModal] = useState(null) // 'login' | 'registro' | 'olvide'
+  const [modal, setModal] = useState(null)
   const [usuario, setUsuario] = useState(() => {
     try { return JSON.parse(localStorage.getItem('cc_usuario')) } catch { return null }
   })
@@ -526,6 +588,8 @@ export default function App() {
   function handleLogout() {
     localStorage.removeItem('cc_token')
     localStorage.removeItem('cc_usuario')
+    sessionStorage.removeItem('cc_token')
+    sessionStorage.removeItem('cc_usuario')
     setUsuario(null)
   }
 
