@@ -231,16 +231,7 @@ export default function App() {
       {/* HEADER */}
       <div style={s.header}>
         <div style={s.logo}>
-          <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-            <circle cx="16" cy="16" r="14" stroke={t.primaryLight} strokeWidth="2.5" fill="none"/>
-            <circle cx="16" cy="16" r="7" stroke={t.primary} strokeWidth="2.5" fill="none"/>
-            <circle cx="16" cy="16" r="3" fill={t.primaryLight}/>
-            <line x1="16" y1="2" x2="16" y2="9" stroke={t.primary} strokeWidth="2.5" strokeLinecap="round"/>
-            <line x1="16" y1="23" x2="16" y2="30" stroke={t.primary} strokeWidth="2.5" strokeLinecap="round"/>
-            <line x1="2" y1="16" x2="9" y2="16" stroke={t.primaryLight} strokeWidth="2.5" strokeLinecap="round"/>
-            <line x1="23" y1="16" x2="30" y2="16" stroke={t.primaryLight} strokeWidth="2.5" strokeLinecap="round"/>
-          </svg>
-          <span style={s.logoText}>CLARA<span style={s.logoDot}> • </span>CORE</span>
+          <img src="/logo.png" alt="ClaraCore" style={{ height: '40px' }} />
         </div>
 
         <div style={s.themeSelector}>
