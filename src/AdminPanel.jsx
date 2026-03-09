@@ -364,7 +364,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
                       value={edits[u.id]?.cargo_id || ""}
                       onChange={e => setEdit(u.id, "cargo_id", e.target.value)}>
                       <option value="">Sin cargo</option>
-                      {cargos.filter(c => c.nombre.toLowerCase() !== "desarrollador").map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                      {cargos.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                     </select>
                   </td>
                   <td style={tdStyle}>
@@ -727,7 +727,7 @@ function SeccionResets({ call, theme }) {
 }
 
 // ─── SECCIÓN 5: Contratos ──────────────────────────────────────────────────
-function SeccionContratos({ call, contratos, recargarContratos }) {
+function SeccionContratos({ call, contratos, recargarContratos, perms = { crear: true, editar: true, eliminar: true, exportar: true } }) {
   const FORM_VACIO = { numero: '', objeto: '', contratista: '', nit: '', interventoria: '', logo_contratista: '', logo_interventoria: '' };
   const [form, setForm] = useState(FORM_VACIO);
   const [editandoId, setEditandoId] = useState(null); // null = crear, number = editar
@@ -818,9 +818,11 @@ function SeccionContratos({ call, contratos, recargarContratos }) {
             <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => handleLogo('logo_interventoria', e)} />
           </label>
           {msg && <div style={{ background: msg.type === 'error' ? '#2a0a0a' : '#0a2a1a', color: msg.type === 'error' ? '#f87171' : '#4ade80', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 12 }}>{msg.text}</div>}
+        {(editandoId ? perms?.editar : perms?.crear) && (
           <button onClick={handleGuardar} disabled={saving} style={{ background: '#00afc5', border: 'none', borderRadius: 8, padding: '10px 24px', color: '#fff', fontWeight: 700, cursor: saving ? 'wait' : 'pointer', opacity: saving ? 0.7 : 1, fontSize: 13 }}>
             {saving ? 'Guardando...' : (editandoId ? 'Actualizar Contrato' : 'Guardar Contrato')}
           </button>
+        )}
         </div>
 
         {/* LISTA DE CONTRATOS */}
@@ -1052,7 +1054,8 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
     const funciones = TAB_FUNCIONES[tabId] || [];
     return funciones.some(fname =>
       (user?.permisos || []).some(p =>
-        p.funcion_nombre?.toLowerCase() === fname && p.ver
+        p.funcion_nombre?.toLowerCase() === fname &&
+        (p.ver || p.crear || p.editar || p.eliminar || p.validar || p.exportar)
       )
     );
   }
@@ -1139,8 +1142,17 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
             {tab === "usuarios"  && <SeccionUsuarios  call={call} cargos={cargos} theme={activeTheme} userId={user?.id} />}
             {tab === "cargos"    && <SeccionCargos    call={call} cargos={cargos} recargarCargos={cargarCargos} theme={activeTheme} />}
             {tab === "permisos"  && <SeccionPermisos  call={call} cargos={cargos} theme={activeTheme} />}
-            {tab === "contratos" && <SeccionContratos call={call} contratos={contratos} recargarContratos={cargarContratos} />}
-            {tab === "precios"   && <SeccionListadoPrecios call={call} contratos={contratos} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true } : precioPerms} theme={activeTheme} />}
+            {tab === "contratos" && <SeccionContratos call={call} contratos={contratos} recargarContratos={cargarContratos}
+              perms={isDeveloper || isAdmin ? { crear: true, editar: true } :
+                ["crear contrato","editar contrato"].reduce((acc, fn) => {
+                  const p = (user?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === fn);
+                  if (fn === "crear contrato" && p?.crear) acc.crear = true;
+                  if (fn === "editar contrato" && p?.editar) acc.editar = true;
+                  return acc;
+                }, { crear: false, editar: false })
+              }
+          />}
+            {tab === "precios"   && <SeccionListadoPrecios call={call} contratos={contratos} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true } : precioPerms} theme={activeTheme} />}
             {tab === "resets"    && <SeccionResets    call={call} theme={activeTheme} />}
           </div>
         </div>

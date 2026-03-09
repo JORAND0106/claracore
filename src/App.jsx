@@ -706,19 +706,27 @@ export default function App() {
         const fresh = await res.json()
         const prev = usuarioRef.current
         // Detectar cambios relevantes: cargo, rol, estado, contrato
-        const changed =
-          fresh.cargo_id   !== prev.cargo_id   ||
-          fresh.rol_id     !== prev.rol_id     ||
-          fresh.estado     !== prev.estado     ||
-          fresh.contrato_id !== prev.contrato_id
-        if (changed) {
-          // Actualizar usuario en memoria y storage sin cerrar sesión
-          const updated = { ...prev, ...fresh }
-          const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
-          storage.setItem('cc_usuario', JSON.stringify(updated))
-          setUsuario(updated)
-          setBannerMsg('Tu perfil fue actualizado por el administrador.')
-        }
+const permisosChanged =
+  JSON.stringify((fresh.permisos || []).map(p => `${p.funcion_id}-${p.ver}-${p.crear}-${p.editar}-${p.eliminar}-${p.validar}-${p.exportar}`).sort()) !==
+  JSON.stringify((prev.permisos  || []).map(p => `${p.funcion_id}-${p.ver}-${p.crear}-${p.editar}-${p.eliminar}-${p.validar}-${p.exportar}`).sort())
+  const changed =
+    fresh.cargo_id    !== prev.cargo_id   ||
+    fresh.rol_id      !== prev.rol_id     ||
+    fresh.estado      !== prev.estado     ||
+    fresh.contrato_id !== prev.contrato_id ||
+    permisosChanged
+  if (changed) {
+    const updated = { ...prev, ...fresh }
+    const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
+    storage.setItem('cc_usuario', JSON.stringify(updated))
+    setUsuario(updated)
+    const msgs = []
+    if (fresh.cargo_id !== prev.cargo_id) msgs.push('cargo')
+    if (fresh.contrato_id !== prev.contrato_id) msgs.push('contrato')
+    if (fresh.estado !== prev.estado) msgs.push('estado')
+    if (permisosChanged) msgs.push('permisos')
+    setBannerMsg(`⚡ Tu ${msgs.join(', ')} fue actualizado por el administrador.`)
+  }
       } catch { /* silencioso — no interrumpir la sesión por error de red */ }
     }, 60000)
     return () => clearInterval(id)
