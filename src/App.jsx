@@ -766,14 +766,16 @@ const permisosChanged =
         headers: { Authorization: `Bearer ${token}` }
       })
         const contratos = res.ok ? await res.json() : []
-        const uConContratos = { ...u, _contratos: contratos }
-        if (contratos.length > 1) {
-          setPendingUser({ ...uConContratos, _token: token })
-          setPendingContratos(contratos)
-          setModal('selector_contrato')
-        } else {
-          setUsuario(uConContratos); setModal(null)
-        }
+      const uConContratos = { ...u, _contratos: contratos }
+      const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
+      storage.setItem('cc_usuario', JSON.stringify(uConContratos))
+      if (contratos.length > 1) {
+        setPendingUser({ ...uConContratos, _token: token })
+        setPendingContratos(contratos)
+        setModal('selector_contrato')
+      } else {
+        setUsuario(uConContratos); setModal(null)
+      }
     } catch {
       setUsuario(u); setModal(null)
     }
