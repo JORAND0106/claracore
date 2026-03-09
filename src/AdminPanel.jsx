@@ -842,14 +842,30 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
                     {c.logo_interventoria && <img src={c.logo_interventoria} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
                   </div>
                 </div>
-                {perms?.editar && (
-                  <button
-                    onClick={() => editandoId === c.id ? cancelarEdicion() : iniciarEdicion(c)}
-                    style={{ background: 'transparent', border: '1px solid rgba(0,175,197,0.3)', borderRadius: 6, padding: '4px 10px', color: '#00afc5', fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap', marginLeft: 8 }}
-                  >
-                    {editandoId === c.id ? '✕' : '✏️ Editar'}
-                  </button>
-                )}
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {perms?.editar && (
+                    <button
+                      onClick={() => editandoId === c.id ? cancelarEdicion() : iniciarEdicion(c)}
+                      style={{ background: 'transparent', border: '1px solid rgba(0,175,197,0.3)', borderRadius: 6, padding: '4px 10px', color: '#00afc5', fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                    >
+                      {editandoId === c.id ? '✕' : '✏️ Editar'}
+                    </button>
+                  )}
+                  {perms?.eliminar && (
+                    <button
+                      onClick={async () => {
+                        if (!window.confirm(`¿Eliminar contrato ${c.numero}? Esta acción no se puede deshacer.`)) return;
+                        try {
+                          await call("DELETE", `/contratos/${c.id}`);
+                          recargarContratos();
+                        } catch (e) { setMsg({ type: 'error', text: e.message }); }
+                      }}
+                      style={{ background: 'transparent', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, padding: '4px 10px', color: '#ef4444', fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                    >
+                      🗑 Eliminar
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           ))}
