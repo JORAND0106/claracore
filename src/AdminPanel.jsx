@@ -727,7 +727,7 @@ function SeccionResets({ call, theme }) {
 }
 
 // ─── SECCIÓN 5: Contratos ──────────────────────────────────────────────────
-function SeccionContratos({ call, contratos, recargarContratos, perms = { crear: true, editar: true, eliminar: true, exportar: true } }) {
+function SeccionContratos({ call, contratos, recargarContratos, perms = { crear: false, editar: false } }) {
   const FORM_VACIO = { numero: '', objeto: '', contratista: '', nit: '', interventoria: '', logo_contratista: '', logo_interventoria: '' };
   const [form, setForm] = useState(FORM_VACIO);
   const [editandoId, setEditandoId] = useState(null); // null = crear, number = editar
@@ -842,12 +842,14 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
                     {c.logo_interventoria && <img src={c.logo_interventoria} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
                   </div>
                 </div>
-                <button
-                  onClick={() => editandoId === c.id ? cancelarEdicion() : iniciarEdicion(c)}
-                  style={{ background: 'transparent', border: '1px solid rgba(0,175,197,0.3)', borderRadius: 6, padding: '4px 10px', color: '#00afc5', fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap', marginLeft: 8 }}
-                >
-                  {editandoId === c.id ? '✕' : '✏️ Editar'}
-                </button>
+                {perms?.editar && (
+                  <button
+                    onClick={() => editandoId === c.id ? cancelarEdicion() : iniciarEdicion(c)}
+                    style={{ background: 'transparent', border: '1px solid rgba(0,175,197,0.3)', borderRadius: 6, padding: '4px 10px', color: '#00afc5', fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap', marginLeft: 8 }}
+                  >
+                    {editandoId === c.id ? '✕' : '✏️ Editar'}
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -1146,8 +1148,8 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
               perms={isDeveloper || isAdmin ? { crear: true, editar: true } :
                 ["crear contrato","editar contrato"].reduce((acc, fn) => {
                   const p = (user?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === fn);
-if (fn === "crear contrato" && (p?.ver || p?.crear || p?.editar || p?.eliminar || p?.validar || p?.exportar)) acc.crear = true;
-if (fn === "editar contrato" && (p?.ver || p?.crear || p?.editar || p?.eliminar || p?.validar || p?.exportar)) acc.editar = true;
+                    if (fn === "crear contrato" && p?.crear) acc.crear = true;
+                    if (fn === "editar contrato" && p?.editar) acc.editar = true;
                   return acc;
                 }, { crear: false, editar: false })
               }
