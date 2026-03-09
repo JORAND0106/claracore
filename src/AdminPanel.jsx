@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
-const API = "http://localhost:8000";
+const API = "https://claracore-backend.azurewebsites.net";
 
 // 6 acciones de permiso
 const ACCIONES = ["ver", "crear", "editar", "eliminar", "validar", "exportar"];
@@ -637,7 +637,93 @@ function SeccionPermisos({ call, cargos }) {
     </div>
   );
 }
+function SeccionContratos({ call }) {
+  const [form, setForm] = useState({ numero: '', objeto: '', contratista: '', nit: '', interventoria: '', logo_contratista: '', logo_interventoria: '' });
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [contratos, setContratos] = useState([]);
 
+  useEffect(() => {
+    call("GET", "/contratos").then(setContratos).catch(() => {});
+  }, [call]);
+
+  function handleLogo(campo, e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => setForm(f => ({ ...f, [campo]: ev.target.result }));
+    reader.readAsDataURL(file);
+  }
+
+  async function handleGuardar() {
+    if (!form.numero || !form.contratista) { setMsg({ type: 'error', text: 'Número y contratista son obligatorios' }); return; }
+    setSaving(true); setMsg(null);
+    try {
+      await call("POST", "/contratos", form);
+      setMsg({ type: 'success', text: 'Contrato creado correctamente' });
+      setForm({ numero: '', objeto: '', contratista: '', nit: '', interventoria: '', logo_contratista: '', logo_interventoria: '' });
+      const data = await call("GET", "/contratos");
+      setContratos(data);
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message || 'Error al crear contrato' });
+    } finally { setSaving(false); }
+  }
+
+  const inp = { width: '100%', background: '#0a1628', border: '1.5px solid #1E3A5F', borderRadius: 8, padding: '9px 12px', color: '#E0F2FE', fontSize: 13, outline: 'none', boxSizing: 'border-box', marginBottom: 12 };
+  const lbl = { fontSize: 11, fontWeight: 700, color: '#4a7a87', letterSpacing: 1, display: 'block', marginBottom: 4 };
+
+  return (
+    <div style={{ padding: 28 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
+        {/* FORMULARIO */}
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#00afc5', marginBottom: 20 }}>➕ Nuevo Contrato</div>
+          <label style={lbl}>NÚMERO DE CONTRATO *</label>
+          <input style={inp} placeholder="Ej: IDU-1551-2017" value={form.numero} onChange={e => setForm(f => ({ ...f, numero: e.target.value }))} />
+          <label style={lbl}>OBJETO DEL CONTRATO</label>
+          <input style={inp} placeholder="Descripción del objeto contractual" value={form.objeto} onChange={e => setForm(f => ({ ...f, objeto: e.target.value }))} />
+          <label style={lbl}>CONTRATISTA *</label>
+          <input style={inp} placeholder="Razón social" value={form.contratista} onChange={e => setForm(f => ({ ...f, contratista: e.target.value }))} />
+          <label style={lbl}>NIT CONTRATISTA</label>
+          <input style={inp} placeholder="Ej: 900.123.456-7" value={form.nit} onChange={e => setForm(f => ({ ...f, nit: e.target.value }))} />
+          <label style={lbl}>INTERVENTORÍA</label>
+          <input style={inp} placeholder="Razón social interventoría" value={form.interventoria} onChange={e => setForm(f => ({ ...f, interventoria: e.target.value }))} />
+          <label style={lbl}>LOGO CONTRATISTA</label>
+          <label style={{ display: 'block', background: '#0a1628', border: '2px dashed #1E3A5F', borderRadius: 8, padding: 12, textAlign: 'center', cursor: 'pointer', color: '#4a7a87', fontSize: 12, marginBottom: 12 }}>
+            {form.logo_contratista ? '✅ Logo cargado' : '📂 Cargar logo contratista'}
+            <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => handleLogo('logo_contratista', e)} />
+          </label>
+          <label style={lbl}>LOGO INTERVENTORÍA</label>
+          <label style={{ display: 'block', background: '#0a1628', border: '2px dashed #1E3A5F', borderRadius: 8, padding: 12, textAlign: 'center', cursor: 'pointer', color: '#4a7a87', fontSize: 12, marginBottom: 16 }}>
+            {form.logo_interventoria ? '✅ Logo cargado' : '📂 Cargar logo interventoría'}
+            <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => handleLogo('logo_interventoria', e)} />
+          </label>
+          {msg && <div style={{ background: msg.type === 'error' ? '#2a0a0a' : '#0a2a1a', color: msg.type === 'error' ? '#f87171' : '#4ade80', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 12 }}>{msg.text}</div>}
+          <button onClick={handleGuardar} disabled={saving} style={{ background: '#00afc5', border: 'none', borderRadius: 8, padding: '10px 24px', color: '#fff', fontWeight: 700, cursor: saving ? 'wait' : 'pointer', opacity: saving ? 0.7 : 1, fontSize: 13 }}>
+            {saving ? 'Guardando...' : 'Guardar Contrato'}
+          </button>
+        </div>
+        {/* LISTA */}
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#00afc5', marginBottom: 20 }}>📋 Contratos registrados</div>
+          {contratos.length === 0 ? (
+            <div style={{ color: '#4a7a87', fontSize: 13 }}>No hay contratos registrados</div>
+          ) : contratos.map(c => (
+            <div key={c.id} style={{ background: '#081318', border: '1px solid rgba(0,175,197,0.15)', borderRadius: 8, padding: '12px 16px', marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, color: '#00afc5', fontSize: 13 }}>{c.numero}</div>
+              <div style={{ color: '#8acdd8', fontSize: 12, marginTop: 2 }}>{c.contratista}</div>
+              {c.interventoria && <div style={{ color: '#4a7a87', fontSize: 11, marginTop: 2 }}>Interventoría: {c.interventoria}</div>}
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                {c.logo_contratista && <img src={c.logo_contratista} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
+                {c.logo_interventoria && <img src={c.logo_interventoria} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 // ─── COMPONENTE PRINCIPAL ──────────────────────────────────────────────────
 /**
  * AdminPanel — Panel de administración ClaraCore
@@ -667,15 +753,17 @@ export default function AdminPanel({ user, token, onClose }) {
   useEffect(() => { cargarCargos(); }, [cargarCargos]);
 
   const TABS = [
-    { id: "usuarios", label: "Usuarios pendientes", icon: "👤" },
-    { id: "cargos",   label: "Gestión de cargos",   icon: "🏷️" },
-    { id: "permisos", label: "Matriz de permisos",  icon: "🔑" },
+    { id: "usuarios",  label: "Usuarios pendientes", icon: "👤" },
+    { id: "cargos",    label: "Gestión de cargos",   icon: "🏷️" },
+    { id: "permisos",  label: "Matriz de permisos",  icon: "🔑" },
+    { id: "contratos", label: "Contratos",            icon: "📋" },
   ];
 
   const TITULOS = {
-    usuarios: { title: "Usuarios pendientes", sub: "Aprueba o rechaza solicitudes de acceso" },
-    cargos:   { title: "Gestión de cargos",   sub: "Crea y elimina cargos del sistema" },
-    permisos: { title: "Matriz de permisos",  sub: "Configura qué puede hacer cada cargo" },
+    usuarios:  { title: "Usuarios pendientes", sub: "Aprueba o rechaza solicitudes de acceso" },
+    cargos:    { title: "Gestión de cargos",   sub: "Crea y elimina cargos del sistema" },
+    permisos:  { title: "Matriz de permisos",  sub: "Configura qué puede hacer cada cargo" },
+    contratos: { title: "Contratos",           sub: "Crea y gestiona contratos del sistema" },
   };
 
   return (
@@ -730,6 +818,9 @@ export default function AdminPanel({ user, token, onClose }) {
             )}
             {tab === "permisos" && (
               <SeccionPermisos call={call} cargos={cargos} />
+            )}
+            {tab === "contratos" && (
+              <SeccionContratos call={call} />
             )}
           </div>
         </div>

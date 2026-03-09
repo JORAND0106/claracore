@@ -497,12 +497,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout }) {
       <div style={s.body}>
         <div style={s.topBar}>
           <span style={{ fontSize: '13px', color: t.textMuted }}>
+            {usuario?.logo_contratista && <img src={usuario.logo_contratista} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: '2px 6px', marginRight: 6 }} />}
+            {usuario?.logo_interventoria && <img src={usuario.logo_interventoria} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: '2px 6px', marginRight: 6 }} />}
             📋 Contrato: {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
           </span>
-          {/* Solo Desarrollador puede crear nuevos contratos */}
-          {esDeveloper && (
-            <button style={s.btnCrear} onClick={() => setShowModalContrato(true)}>＋ Crear Contrato</button>
-          )}
+          {/* Crear Contrato se gestiona desde el Panel Admin */}
         </div>
 
         <div style={s.panelsGrid}>
