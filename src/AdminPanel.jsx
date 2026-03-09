@@ -1037,7 +1037,7 @@ const TAB_FUNCIONES = {
   usuarios:  ["aprobar usuarios", "crear usuarios"],
   cargos:    ["panel de administración"],
   permisos:  ["panel de administración"],
-  contratos: ["crear contrato", "ver contratos", "editar contrato"],
+  contratos: ["contratos"],
   precios:   ["listado de precios"],
   resets:    ["panel de administración"],
 };
@@ -1145,14 +1145,18 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
             {tab === "cargos"    && <SeccionCargos    call={call} cargos={cargos} recargarCargos={cargarCargos} theme={activeTheme} />}
             {tab === "permisos"  && <SeccionPermisos  call={call} cargos={cargos} theme={activeTheme} />}
             {tab === "contratos" && <SeccionContratos call={call} contratos={contratos} recargarContratos={cargarContratos}
-              perms={isDeveloper || isAdmin ? { crear: true, editar: true } :
-                ["crear contrato","editar contrato"].reduce((acc, fn) => {
-                  const p = (user?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === fn);
-                    if (fn === "crear contrato" && (p?.crear || p?.ver)) acc.crear = true;
-                    if (fn === "editar contrato" && p?.editar) acc.editar = true;
-                  return acc;
-                }, { crear: false, editar: false })
-              }
+            perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true } :
+              (() => {
+                const p = (user?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === "contratos");
+                return {
+                  ver:      p?.ver      || false,
+                  crear:    p?.crear    || false,
+                  editar:   p?.editar   || false,
+                  eliminar: p?.eliminar || false,
+                  exportar: p?.exportar || false,
+                };
+              })()
+            }
           />}
             {tab === "precios"   && <SeccionListadoPrecios call={call} contratos={contratos} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true } : precioPerms} theme={activeTheme} />}
             {tab === "resets"    && <SeccionResets    call={call} theme={activeTheme} />}
