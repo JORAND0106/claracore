@@ -947,6 +947,7 @@ function SeccionListadoPrecios({ call, contratos, perms, theme }) {
         };
         const CAMPOS = {
           "capitulo": "capitulo", "capítulo": "capitulo",
+          "competencia": "competencia",
           "item_numero": "item_numero", "item número": "item_numero",
           "ítem": "item_numero", "item": "item_numero", "nro": "item_numero",
           "descripcion": "descripcion", "descripción": "descripcion",
@@ -1002,7 +1003,7 @@ function SeccionListadoPrecios({ call, contratos, perms, theme }) {
       {/* Nota formato CSV */}
       {contratoId && (
         <div style={{ fontSize: 11, color: col.textMuted, marginBottom: 12, padding: "0 2px" }}>
-          Formato CSV esperado: <code style={{ color: "#00afc5" }}>capitulo, item_numero, descripcion, unidad, precio_unitario</code>. Cargar reemplaza todos los ítems del contrato.
+          Formato CSV esperado: <code style={{ color: "#00afc5" }}>capitulo, competencia, item_numero, descripcion, unidad, precio_unitario</code>. Cargar reemplaza todos los ítems del contrato.
         </div>
       )}
 
@@ -1018,7 +1019,7 @@ function SeccionListadoPrecios({ call, contratos, perms, theme }) {
           <table style={S.table}>
             <thead>
               <tr>
-                {["Capítulo", "Ítem", "Descripción", "Unidad", "Precio Unit.", ""].map((h, i) => (
+                {["Capítulo", "Competencia", "Ítem", "Descripción", "Unidad", "Precio Unit.", ""].map((h, i) => (
                   <th key={i} style={{ ...S.th, width: i === 2 ? "auto" : undefined }}>{h}</th>
                 ))}
               </tr>
@@ -1028,7 +1029,7 @@ function SeccionListadoPrecios({ call, contratos, perms, theme }) {
                 <tr key={item.id}>
                   {editingId === item.id ? (
                     <>
-                      {[["capitulo", 80], ["item_numero", 70], ["descripcion", 200], ["unidad", 60]].map(([field, w]) => (
+                      {[["capitulo", 80], ["competencia", 100], ["item_numero", 70], ["descripcion", 200], ["unidad", 60]].map(([field, w]) => (
                         <td key={field} style={tdStyle}>
                           <input style={{ ...S.input, padding: "4px 8px", fontSize: 12, width: w }} value={editData[field] || ""} onChange={e => setEditData(d => ({ ...d, [field]: e.target.value }))} />
                         </td>
@@ -1046,6 +1047,7 @@ function SeccionListadoPrecios({ call, contratos, perms, theme }) {
                   ) : (
                     <>
                       <td style={{ ...tdStyle, color: col.textMuted, fontSize: 12 }}>{item.capitulo || "—"}</td>
+                      <td style={{ ...tdStyle, color: col.textMuted, fontSize: 12 }}>{item.competencia || "—"}</td>
                       <td style={{ ...tdStyle, color: col.textSecondary, fontWeight: 600, fontSize: 12 }}>{item.item_numero || "—"}</td>
                       <td style={{ ...tdStyle, color: col.textTable }}>{item.descripcion}</td>
                       <td style={{ ...tdStyle, color: col.textSecondary, fontSize: 12 }}>{item.unidad || "—"}</td>
