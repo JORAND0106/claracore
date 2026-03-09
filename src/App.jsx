@@ -475,7 +475,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout, topO
   // Desarrollador ve todo; otros usuarios ven solo su contrato
   const esDeveloper = usuario?.cargo_nombre === 'Desarrollador'
   // Funciones que habilitan ver el panel admin
-  const ADMIN_FUNCIONES = ["aprobar usuarios", "crear usuarios", "panel de administración", "crear contrato", "ver contratos", "editar contrato", "listado de precios"]
+  const ADMIN_FUNCIONES = ["contratos", "listado de precios"]
   const tienePermisoAdmin = (usuario?.permisos || []).some(p =>
     p.ver && ADMIN_FUNCIONES.includes(p.funcion_nombre?.toLowerCase())
   )
