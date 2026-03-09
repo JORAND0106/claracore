@@ -15,30 +15,25 @@ const S = {
     display: "flex", alignItems: "center", justifyContent: "center",
     fontFamily: "'DM Sans', 'Segoe UI', sans-serif",
   },
-  panel: {
+  panel: (theme) => ({
     width: "min(1100px, 96vw)", height: "min(780px, 92vh)",
-    background: "#0e1c24",
+    background: theme === "light" ? "#F0F9FF" : "#0e1c24",
     borderRadius: 12,
     display: "flex",
     overflow: "hidden",
     boxShadow: "0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,175,197,0.15)",
-  },
-  sidebar: {
+  }),
+  sidebar: (theme) => ({
     width: 210, minWidth: 210,
-    background: "#081318",
-    borderRight: "1px solid rgba(0,175,197,0.12)",
+    background: theme === "light" ? "#E0F2FE" : "#081318",
+    borderRight: theme === "light" ? "1px solid #BAE6FD" : "1px solid rgba(0,175,197,0.12)",
     display: "flex", flexDirection: "column",
     padding: "28px 0",
-  },
+  }),
   sidebarHeader: {
     padding: "0 20px 24px",
     borderBottom: "1px solid rgba(0,175,197,0.1)",
     marginBottom: 16,
-  },
-  logo: {
-    fontSize: 18, fontWeight: 700, letterSpacing: 1.5,
-    color: "#00afc5", fontFamily: "'Rajdhani', 'DM Sans', sans-serif",
-    textTransform: "uppercase",
   },
   logoSub: { fontSize: 11, color: "#4a7a87", letterSpacing: 1, marginTop: 2 },
   navItem: (active) => ({
@@ -65,12 +60,12 @@ const S = {
   content: {
     flex: 1, display: "flex", flexDirection: "column", overflow: "hidden",
   },
-  contentHeader: {
+  contentHeader: (theme) => ({
     padding: "24px 32px 20px",
-    borderBottom: "1px solid rgba(0,175,197,0.1)",
+    borderBottom: theme === "light" ? "1px solid #BAE6FD" : "1px solid rgba(0,175,197,0.1)",
     display: "flex", alignItems: "center", justifyContent: "space-between",
-    background: "#0b1920",
-  },
+    background: theme === "light" ? "#FFFFFF" : "#0b1920",
+  }),
   contentTitle: {
     fontSize: 20, fontWeight: 700, color: "#e0f4f7",
     fontFamily: "'Rajdhani', sans-serif", letterSpacing: 0.5,
@@ -83,11 +78,11 @@ const S = {
     display: "flex", alignItems: "center", justifyContent: "center",
     transition: "all 0.15s",
   },
-  scrollArea: {
+  scrollArea: (theme) => ({
     flex: 1, overflowY: "auto", padding: "24px 32px",
     scrollbarWidth: "thin", scrollbarColor: "#1e3a44 transparent",
-  },
-  // Tabla
+    background: theme === "light" ? "#F8FAFC" : "transparent",
+  }),
   table: {
     width: "100%", borderCollapse: "collapse", fontSize: 13,
   },
@@ -104,7 +99,6 @@ const S = {
     verticalAlign: "middle",
   },
   trHover: { background: "rgba(0,175,197,0.04)", transition: "background 0.15s" },
-  // Badge estado
   badge: (estado) => ({
     display: "inline-block", padding: "3px 10px", borderRadius: 20,
     fontSize: 11, fontWeight: 600,
@@ -115,7 +109,6 @@ const S = {
       : estado === "aprobado" ? "#22c55e"
       : "#ef4444",
   }),
-  // Botones
   btn: (variant = "primary", sm = false) => ({
     padding: sm ? "6px 14px" : "9px 20px",
     borderRadius: 6, cursor: "pointer",
@@ -134,7 +127,6 @@ const S = {
       background: "rgba(0,175,197,0.08)", borderColor: "rgba(0,175,197,0.2)", color: "#00afc5",
     }),
   }),
-  // Input / Select
   input: {
     background: "#081318", border: "1px solid rgba(0,175,197,0.2)",
     borderRadius: 6, color: "#c0dde3", fontSize: 13,
@@ -145,13 +137,11 @@ const S = {
     borderRadius: 6, color: "#c0dde3", fontSize: 12,
     padding: "6px 10px", outline: "none", cursor: "pointer",
   },
-  // Card
   card: {
     background: "#0b1920", border: "1px solid rgba(0,175,197,0.1)",
     borderRadius: 8, padding: "20px 24px", marginBottom: 16,
   },
   cardTitle: { fontSize: 14, fontWeight: 600, color: "#8acdd8", marginBottom: 12 },
-  // Chip checkbox permiso
   chip: (active) => ({
     display: "inline-flex", alignItems: "center", gap: 5,
     padding: "4px 10px", borderRadius: 20, cursor: "pointer",
@@ -162,7 +152,6 @@ const S = {
     borderColor: active ? "#00afc5" : "rgba(255,255,255,0.1)",
     color: active ? "#00afc5" : "#4a7a87",
   }),
-  // Alert
   alert: (type) => ({
     padding: "10px 16px", borderRadius: 6, fontSize: 13,
     marginBottom: 16,
@@ -170,12 +159,10 @@ const S = {
     border: `1px solid ${type === "success" ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}`,
     color: type === "success" ? "#22c55e" : "#ef4444",
   }),
-  // Empty state
   empty: {
     textAlign: "center", padding: "48px 0",
     color: "#2a4a54", fontSize: 14,
   },
-  // Loader dot
   loader: {
     display: "inline-block", width: 8, height: 8, borderRadius: "50%",
     background: "#00afc5", margin: "0 3px",
@@ -204,6 +191,7 @@ function useApi(token) {
   return call;
 }
 
+// ─── SECCIÓN 1: Gestión de Usuarios ───────────────────────────────────────
 function SeccionUsuarios({ call, cargos }) {
   const [usuarios, setUsuarios] = useState([]);
   const [roles, setRoles] = useState([]);
@@ -436,8 +424,6 @@ function SeccionCargos({ call, cargos, recargarCargos }) {
           <span onClick={() => setMsg(null)} style={{ float: "right", cursor: "pointer", opacity: 0.6 }}>✕</span>
         </div>
       )}
-
-      {/* Crear nuevo cargo */}
       <div style={S.card}>
         <div style={S.cardTitle}>Nuevo cargo</div>
         <div style={{ display: "flex", gap: 10 }}>
@@ -453,8 +439,6 @@ function SeccionCargos({ call, cargos, recargarCargos }) {
           </button>
         </div>
       </div>
-
-      {/* Listado */}
       <table style={S.table}>
         <thead>
           <tr>
@@ -465,15 +449,9 @@ function SeccionCargos({ call, cargos, recargarCargos }) {
           {cargos.map((c, i) => (
             <tr key={c.id}>
               <td style={{ ...S.td, color: "#2a5a6a", width: 40 }}>{i + 1}</td>
+              <td style={S.td}><span style={{ color: "#c0dde3" }}>{c.nombre}</span></td>
               <td style={S.td}>
-                <span style={{ color: "#c0dde3" }}>{c.nombre}</span>
-              </td>
-              <td style={S.td}>
-                <button
-                  style={S.btn("danger", true)}
-                  disabled={eliminando === c.id}
-                  onClick={() => eliminar(c.id, c.nombre)}
-                >
+                <button style={S.btn("danger", true)} disabled={eliminando === c.id} onClick={() => eliminar(c.id, c.nombre)}>
                   {eliminando === c.id ? "..." : "Eliminar"}
                 </button>
               </td>
@@ -492,7 +470,7 @@ function SeccionCargos({ call, cargos, recargarCargos }) {
 function SeccionPermisos({ call, cargos }) {
   const [cargoId, setCargoId] = useState("");
   const [funciones, setFunciones] = useState([]);
-  const [permisos, setPermisos] = useState({}); // { funcion_id: { accion: bool } }
+  const [permisos, setPermisos] = useState({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -501,14 +479,11 @@ function SeccionPermisos({ call, cargos }) {
     if (!id) return;
     setLoading(true);
     try {
-      // Traemos funciones y permisos del cargo
       const [fns, perms] = await Promise.all([
         call("GET", "/funciones").catch(() => []),
         call("GET", `/admin/permisos/${id}`).catch(() => []),
       ]);
       setFunciones(fns);
-
-      // Construir mapa { funcion_id: { accion: bool } }
       const mapa = {};
       fns.forEach(f => {
         mapa[f.id] = {};
@@ -532,19 +507,13 @@ function SeccionPermisos({ call, cargos }) {
   useEffect(() => { cargarPermisos(cargoId); }, [cargoId, cargarPermisos]);
 
   const togglePermiso = (funcion_id, accion) => {
-    setPermisos(p => ({
-      ...p,
-      [funcion_id]: { ...p[funcion_id], [accion]: !p[funcion_id][accion] },
-    }));
+    setPermisos(p => ({ ...p, [funcion_id]: { ...p[funcion_id], [accion]: !p[funcion_id][accion] } }));
   };
 
   const toggleFilaCompleta = (funcion_id) => {
     const fila = permisos[funcion_id] || {};
     const todoActivo = ACCIONES.every(a => fila[a]);
-    setPermisos(p => ({
-      ...p,
-      [funcion_id]: Object.fromEntries(ACCIONES.map(a => [a, !todoActivo])),
-    }));
+    setPermisos(p => ({ ...p, [funcion_id]: Object.fromEntries(ACCIONES.map(a => [a, !todoActivo])) }));
   };
 
   const guardar = async () => {
@@ -578,15 +547,9 @@ function SeccionPermisos({ call, cargos }) {
           <span onClick={() => setMsg(null)} style={{ float: "right", cursor: "pointer", opacity: 0.6 }}>✕</span>
         </div>
       )}
-
-      {/* Selector de cargo */}
       <div style={{ ...S.card, display: "flex", alignItems: "center", gap: 16, marginBottom: 20 }}>
         <div style={{ color: "#4a8a96", fontSize: 13, whiteSpace: "nowrap" }}>Cargo a configurar:</div>
-        <select
-          style={{ ...S.select, flex: 1, maxWidth: 280 }}
-          value={cargoId}
-          onChange={e => setCargoId(e.target.value)}
-        >
+        <select style={{ ...S.select, flex: 1, maxWidth: 280 }} value={cargoId} onChange={e => setCargoId(e.target.value)}>
           <option value="">-- Selecciona un cargo --</option>
           {cargos.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
         </select>
@@ -596,25 +559,15 @@ function SeccionPermisos({ call, cargos }) {
           </button>
         )}
       </div>
-
-      {/* Leyenda de acciones */}
       {cargoId && !loading && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
           {ACCIONES.map(a => (
-            <span key={a} style={{
-              fontSize: 11, padding: "3px 10px", borderRadius: 20,
-              background: `${accionColor[a]}18`,
-              border: `1px solid ${accionColor[a]}44`,
-              color: accionColor[a], fontWeight: 600,
-              textTransform: "capitalize",
-            }}>
+            <span key={a} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 20, background: `${accionColor[a]}18`, border: `1px solid ${accionColor[a]}44`, color: accionColor[a], fontWeight: 600, textTransform: "capitalize" }}>
               {a}
             </span>
           ))}
         </div>
       )}
-
-      {/* Matriz */}
       {!cargoId ? (
         <div style={S.empty}>Selecciona un cargo para configurar su matriz de permisos.</div>
       ) : loading ? (
@@ -622,79 +575,32 @@ function SeccionPermisos({ call, cargos }) {
       ) : funciones.length === 0 ? (
         <div style={S.empty}>No hay funciones registradas en el sistema.</div>
       ) : (
-        <div style={{
-          background: "#081318", borderRadius: 8,
-          border: "1px solid rgba(0,175,197,0.1)", overflow: "hidden",
-        }}>
-          {/* Header */}
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: `220px repeat(${ACCIONES.length}, 1fr) 80px`,
-            background: "#06101a",
-            borderBottom: "1px solid rgba(0,175,197,0.15)",
-          }}>
+        <div style={{ background: "#081318", borderRadius: 8, border: "1px solid rgba(0,175,197,0.1)", overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: `220px repeat(${ACCIONES.length}, 1fr) 80px`, background: "#06101a", borderBottom: "1px solid rgba(0,175,197,0.15)" }}>
             <div style={{ ...S.th, padding: "12px 16px" }}>Función</div>
             {ACCIONES.map(a => (
-              <div key={a} style={{
-                ...S.th, textAlign: "center", padding: "12px 4px",
-                color: accionColor[a],
-              }}>
-                {a}
-              </div>
+              <div key={a} style={{ ...S.th, textAlign: "center", padding: "12px 4px", color: accionColor[a] }}>{a}</div>
             ))}
             <div style={{ ...S.th, textAlign: "center" }}>Todo</div>
           </div>
-
-          {/* Filas */}
           {funciones.map((f, idx) => {
             const fila = permisos[f.id] || {};
             const todoActivo = ACCIONES.every(a => fila[a]);
             return (
-              <div key={f.id} style={{
-                display: "grid",
-                gridTemplateColumns: `220px repeat(${ACCIONES.length}, 1fr) 80px`,
-                background: idx % 2 === 0 ? "transparent" : "rgba(0,175,197,0.025)",
-                borderBottom: "1px solid rgba(255,255,255,0.03)",
-                alignItems: "center",
-              }}>
+              <div key={f.id} style={{ display: "grid", gridTemplateColumns: `220px repeat(${ACCIONES.length}, 1fr) 80px`, background: idx % 2 === 0 ? "transparent" : "rgba(0,175,197,0.025)", borderBottom: "1px solid rgba(255,255,255,0.03)", alignItems: "center" }}>
                 <div style={{ ...S.td, padding: "10px 16px" }}>
                   <span style={{ color: "#8acdd8", fontSize: 13 }}>{f.nombre}</span>
-                  {f.descripcion && (
-                    <div style={{ fontSize: 11, color: "#2a5a6a", marginTop: 1 }}>{f.descripcion}</div>
-                  )}
+                  {f.descripcion && <div style={{ fontSize: 11, color: "#2a5a6a", marginTop: 1 }}>{f.descripcion}</div>}
                 </div>
                 {ACCIONES.map(a => (
                   <div key={a} style={{ textAlign: "center", padding: "10px 4px" }}>
-                    <div
-                      onClick={() => togglePermiso(f.id, a)}
-                      style={{
-                        width: 22, height: 22, borderRadius: 5,
-                        margin: "0 auto", cursor: "pointer",
-                        border: `1.5px solid ${fila[a] ? accionColor[a] : "rgba(255,255,255,0.1)"}`,
-                        background: fila[a] ? `${accionColor[a]}22` : "transparent",
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                        fontSize: 13, color: accionColor[a],
-                        transition: "all 0.15s",
-                      }}
-                    >
+                    <div onClick={() => togglePermiso(f.id, a)} style={{ width: 22, height: 22, borderRadius: 5, margin: "0 auto", cursor: "pointer", border: `1.5px solid ${fila[a] ? accionColor[a] : "rgba(255,255,255,0.1)"}`, background: fila[a] ? `${accionColor[a]}22` : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: accionColor[a], transition: "all 0.15s" }}>
                       {fila[a] ? "✓" : ""}
                     </div>
                   </div>
                 ))}
                 <div style={{ textAlign: "center", padding: "10px 4px" }}>
-                  <div
-                    onClick={() => toggleFilaCompleta(f.id)}
-                    title={todoActivo ? "Desactivar todos" : "Activar todos"}
-                    style={{
-                      width: 22, height: 22, borderRadius: 5,
-                      margin: "0 auto", cursor: "pointer",
-                      border: `1.5px solid ${todoActivo ? "#00afc5" : "rgba(255,255,255,0.12)"}`,
-                      background: todoActivo ? "rgba(0,175,197,0.2)" : "transparent",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 11, color: "#00afc5",
-                      transition: "all 0.15s",
-                    }}
-                  >
+                  <div onClick={() => toggleFilaCompleta(f.id)} title={todoActivo ? "Desactivar todos" : "Activar todos"} style={{ width: 22, height: 22, borderRadius: 5, margin: "0 auto", cursor: "pointer", border: `1.5px solid ${todoActivo ? "#00afc5" : "rgba(255,255,255,0.12)"}`, background: todoActivo ? "rgba(0,175,197,0.2)" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#00afc5", transition: "all 0.15s" }}>
                     {todoActivo ? "★" : "☆"}
                   </div>
                 </div>
@@ -706,6 +612,8 @@ function SeccionPermisos({ call, cargos }) {
     </div>
   );
 }
+
+// ─── SECCIÓN 4: Reset de Claves ────────────────────────────────────────────
 function SeccionResets({ call }) {
   const [solicitudes, setSolicitudes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -761,6 +669,8 @@ function SeccionResets({ call }) {
     </div>
   );
 }
+
+// ─── SECCIÓN 5: Contratos ──────────────────────────────────────────────────
 function SeccionContratos({ call }) {
   const [form, setForm] = useState({ numero: '', objeto: '', contratista: '', nit: '', interventoria: '', logo_contratista: '', logo_interventoria: '' });
   const [saving, setSaving] = useState(false);
@@ -799,7 +709,6 @@ function SeccionContratos({ call }) {
   return (
     <div style={{ padding: 28 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
-        {/* FORMULARIO */}
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, color: '#00afc5', marginBottom: 20 }}>➕ Nuevo Contrato</div>
           <label style={lbl}>NÚMERO DE CONTRATO *</label>
@@ -827,7 +736,6 @@ function SeccionContratos({ call }) {
             {saving ? 'Guardando...' : 'Guardar Contrato'}
           </button>
         </div>
-        {/* LISTA */}
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, color: '#00afc5', marginBottom: 20 }}>📋 Contratos registrados</div>
           {contratos.length === 0 ? (
@@ -848,21 +756,9 @@ function SeccionContratos({ call }) {
     </div>
   );
 }
+
 // ─── COMPONENTE PRINCIPAL ──────────────────────────────────────────────────
-/**
- * AdminPanel — Panel de administración ClaraCore
- *
- * Props:
- *   user    : { id, nombre, apellidos, cargo_nombre }  — usuario autenticado actual
- *   token   : string                                   — JWT de sesión
- *   onClose : () => void                               — callback para cerrar el panel
- *
- * Visibilidad recomendada en App.jsx:
- *   const canAdmin = ["Desarrollador", "Administrador"].includes(user?.cargo_nombre);
- *   { canAdmin && <button onClick={() => setShowAdmin(true)}>Admin</button> }
- *   { showAdmin && <AdminPanel user={user} token={token} onClose={() => setShowAdmin(false)} /> }
- */
-export default function AdminPanel({ user, token, onClose }) {
+export default function AdminPanel({ user, token, onClose, activeTheme }) {
   const [tab, setTab] = useState("usuarios");
   const [cargos, setCargos] = useState([]);
   const call = useApi(token);
@@ -881,33 +777,34 @@ export default function AdminPanel({ user, token, onClose }) {
     { id: "cargos",    label: "Gestión de cargos",   icon: "🏷️" },
     { id: "permisos",  label: "Matriz de permisos",  icon: "🔑" },
     { id: "contratos", label: "Contratos",            icon: "📋" },
+    { id: "resets",    label: "Reset Claves",         icon: "🔐" },
   ];
 
   const TITULOS = {
     usuarios:  { title: "Gestión de usuarios", sub: "Administra cargos, roles, contratos y estados" },
     cargos:    { title: "Gestión de cargos",   sub: "Crea y elimina cargos del sistema" },
     permisos:  { title: "Matriz de permisos",  sub: "Configura qué puede hacer cada cargo" },
-    contratos: { title: "Contratos",    sub: "Crea y gestiona contratos del sistema" },
-    resets:    { title: "Reset Claves", sub: "Autoriza solicitudes de cambio de contraseña" },
+    contratos: { title: "Contratos",           sub: "Crea y gestiona contratos del sistema" },
+    resets:    { title: "Reset Claves",        sub: "Autoriza solicitudes de cambio de contraseña" },
   };
 
   return (
     <div style={S.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={S.panel}>
+      <div style={S.panel(activeTheme)}>
 
         {/* SIDEBAR */}
-        <div style={S.sidebar}>
+        <div style={S.sidebar(activeTheme)}>
           <div style={S.sidebarHeader}>
-            <div style={S.logo}>ClaraCore</div>
+            <img
+              src="/CLARA.CORE.png"
+              alt="ClaraCore"
+              style={{ height: 32, marginBottom: 6, filter: activeTheme === "light" ? "none" : "brightness(0) invert(1)" }}
+            />
             <div style={S.logoSub}>PANEL ADMIN</div>
           </div>
 
           {TABS.map(t => (
-            <div
-              key={t.id}
-              style={S.navItem(tab === t.id)}
-              onClick={() => setTab(t.id)}
-            >
+            <div key={t.id} style={S.navItem(tab === t.id)} onClick={() => setTab(t.id)}>
               <div style={S.navDot(tab === t.id)} />
               <span>{t.label}</span>
             </div>
@@ -915,18 +812,14 @@ export default function AdminPanel({ user, token, onClose }) {
 
           <div style={S.sidebarFooter}>
             <div style={S.userTag}>Sesión activa</div>
-            <div style={S.userName}>
-              {user?.nombre} {user?.apellidos}
-            </div>
-            <div style={{ ...S.userTag, marginTop: 2 }}>
-              {user?.cargo_nombre || "Desarrollador"}
-            </div>
+            <div style={S.userName}>{user?.nombre} {user?.apellidos}</div>
+            <div style={{ ...S.userTag, marginTop: 2 }}>{user?.cargo_nombre || "Desarrollador"}</div>
           </div>
         </div>
 
         {/* CONTENIDO */}
         <div style={S.content}>
-          <div style={S.contentHeader}>
+          <div style={S.contentHeader(activeTheme)}>
             <div>
               <div style={S.contentTitle}>{TITULOS[tab].title}</div>
               <div style={S.contentSub}>{TITULOS[tab].sub}</div>
@@ -934,22 +827,12 @@ export default function AdminPanel({ user, token, onClose }) {
             <button style={S.closeBtn} onClick={onClose} title="Cerrar">✕</button>
           </div>
 
-          <div style={S.scrollArea}>
-            {tab === "usuarios" && (
-              <SeccionUsuarios call={call} cargos={cargos} />
-            )}
-            {tab === "cargos" && (
-              <SeccionCargos call={call} cargos={cargos} recargarCargos={cargarCargos} />
-            )}
-            {tab === "permisos" && (
-              <SeccionPermisos call={call} cargos={cargos} />
-            )}
-            {tab === "contratos" && (
-              <SeccionContratos call={call} />
-            )}
-            {tab === "resets" && (
-              <SeccionResets call={call} />
-            )}
+          <div style={S.scrollArea(activeTheme)}>
+            {tab === "usuarios"  && <SeccionUsuarios call={call} cargos={cargos} />}
+            {tab === "cargos"    && <SeccionCargos call={call} cargos={cargos} recargarCargos={cargarCargos} />}
+            {tab === "permisos"  && <SeccionPermisos call={call} cargos={cargos} />}
+            {tab === "contratos" && <SeccionContratos call={call} />}
+            {tab === "resets"    && <SeccionResets call={call} />}
           </div>
         </div>
       </div>
