@@ -645,7 +645,19 @@ export default function App() {
         onLogin={() => setModal('login')}
         onRegistro={() => setModal('registro')}
         onOlvide={() => setModal('olvide')} />
-      {modal === 'login' && <ModalLogin t={t} onClose={() => setModal(null)} onLoginOk={handleLoginOk} onForgot={() => setModal('olvide')} />}
+            {modal === 'login' && <ModalLogin t={t} onClose={() => setModal(null)} onLoginOk={handleLoginOk} onForgot={() => setModal('olvide')} />}
+      {modal === 'selector_contrato' && (
+        <Modal t={t} onClose={() => {}} width="400px">
+          <div style={{ fontSize: '18px', fontWeight: '700', color: t.primary, marginBottom: '8px' }}>🏗️ Selecciona el contrato</div>
+          <div style={{ fontSize: '13px', color: t.textMuted, marginBottom: '20px' }}>Tienes acceso a múltiples contratos. ¿A cuál deseas ingresar?</div>
+          {pendingContratos.map(c => (
+            <button key={c.id} onClick={() => handleSeleccionarContrato(c.id)} style={{ display: 'block', width: '100%', background: t.inputBg, border: `1.5px solid ${t.border}`, borderRadius: '10px', padding: '12px 16px', color: t.text, fontSize: '14px', textAlign: 'left', cursor: 'pointer', marginBottom: '10px', fontWeight: '500' }}>
+              📋 {c.numero}
+              {c.contratista && <div style={{ fontSize: '12px', color: t.textMuted, marginTop: '2px' }}>{c.contratista}</div>}
+            </button>
+          ))}
+        </Modal>
+      )}
       {modal === 'registro' && <ModalCrearCuenta t={t} onClose={() => setModal(null)} />}
       {modal === 'olvide' && <ModalOlvide t={t} onClose={() => setModal(null)} />}
     </>

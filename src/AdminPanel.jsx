@@ -204,120 +204,189 @@ function useApi(token) {
   return call;
 }
 
-// ─── SECCIÓN 1: Usuarios pendientes ───────────────────────────────────────
 function SeccionUsuarios({ call, cargos }) {
   const [usuarios, setUsuarios] = useState([]);
+  const [roles, setRoles] = useState([]);
+  const [contratos, setContratos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState(null);
-  const [cargosSeleccionados, setCargosSeleccionados] = useState({});
+  const [edits, setEdits] = useState({});
+  const [saving, setSaving] = useState(null);
+  const [expandido, setExpandido] = useState(null);
+  const [ucContratos, setUcContratos] = useState({});
+  const [addingContrato, setAddingContrato] = useState({});
 
   const cargar = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await call("GET", "/admin/usuarios-pendientes");
-      setUsuarios(data);
+      const [udata, rdata, cdata] = await Promise.all([
+        call("GET", "/admin/todos-usuarios"),
+        call("GET", "/roles").catch(() => []),
+        call("GET", "/contratos").catch(() => []),
+      ]);
+      setUsuarios(udata);
+      setRoles(rdata);
+      setContratos(cdata);
+      const initEdits = {};
+      udata.forEach(u => {
+        initEdits[u.id] = { cargo_id: u.cargo_id || "", rol_id: u.rol_id || "", contrato_id: u.contrato_id || "", estado: u.estado || "" };
+      });
+      setEdits(initEdits);
     } catch (e) {
       setMsg({ type: "error", text: e.message });
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }, [call]);
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  const aprobar = async (id) => {
-    const cargo_id = cargosSeleccionados[id];
-    if (!cargo_id) {
-      setMsg({ type: "error", text: "Selecciona un cargo antes de aprobar." });
-      return;
-    }
+  const setEdit = (uid, field, val) => setEdits(e => ({ ...e, [uid]: { ...e[uid], [field]: val } }));
+
+  const guardar = async (uid) => {
+    setSaving(uid);
     try {
-      await call("PUT", `/admin/usuarios/${id}/aprobar`, { cargo_id: parseInt(cargo_id) });
-      setMsg({ type: "success", text: "Usuario aprobado correctamente." });
+      await call("PUT", `/admin/usuarios/${uid}`, edits[uid]);
+      setMsg({ type: "success", text: "Usuario actualizado." });
       cargar();
     } catch (e) {
       setMsg({ type: "error", text: e.message });
-    }
+    } finally { setSaving(null); }
   };
 
-  const rechazar = async (id) => {
-    if (!window.confirm("¿Rechazar este usuario?")) return;
+  const cargarUcContratos = async (uid) => {
     try {
-      await call("PUT", `/admin/usuarios/${id}/rechazar`);
-      setMsg({ type: "success", text: "Usuario rechazado." });
-      cargar();
-    } catch (e) {
-      setMsg({ type: "error", text: e.message });
-    }
+      const data = await call("GET", `/admin/usuario-contratos/${uid}`);
+      setUcContratos(p => ({ ...p, [uid]: data }));
+    } catch { setUcContratos(p => ({ ...p, [uid]: [] })); }
   };
+
+  const toggleExpandir = (uid) => {
+    if (expandido === uid) { setExpandido(null); return; }
+    setExpandido(uid);
+    cargarUcContratos(uid);
+  };
+
+  const agregarContrato = async (uid) => {
+    const cid = addingContrato[uid];
+    if (!cid) return;
+    try {
+      await call("POST", "/admin/usuario-contratos", { usuario_id: uid, contrato_id: parseInt(cid) });
+      setMsg({ type: "success", text: "Contrato asignado." });
+      cargarUcContratos(uid);
+      setAddingContrato(p => ({ ...p, [uid]: "" }));
+    } catch (e) { setMsg({ type: "error", text: e.message }); }
+  };
+
+  const quitarContrato = async (uid, cid) => {
+    if (!window.confirm("¿Quitar este contrato al usuario?")) return;
+    try {
+      await call("DELETE", `/admin/usuario-contratos/${uid}/${cid}`);
+      cargarUcContratos(uid);
+    } catch (e) { setMsg({ type: "error", text: e.message }); }
+  };
+
+  const estadoBadge = { pendiente: "#f59e0b", aprobado: "#22c55e", rechazado: "#ef4444" };
 
   return (
     <div>
       {msg && (
         <div style={S.alert(msg.type)}>
           {msg.text}
-          <span
-            onClick={() => setMsg(null)}
-            style={{ float: "right", cursor: "pointer", opacity: 0.6 }}
-          >✕</span>
+          <span onClick={() => setMsg(null)} style={{ float: "right", cursor: "pointer", opacity: 0.6 }}>✕</span>
         </div>
       )}
       {loading ? (
-        <div style={S.empty}>
-          <div style={{ color: "#00afc5", marginBottom: 8 }}>Cargando...</div>
-        </div>
+        <div style={S.empty}><div style={{ color: "#00afc5" }}>Cargando...</div></div>
       ) : usuarios.length === 0 ? (
-        <div style={S.empty}>
-          <div style={{ fontSize: 32, marginBottom: 8 }}>✓</div>
-          No hay usuarios pendientes de aprobación.
-        </div>
+        <div style={S.empty}>No hay usuarios registrados.</div>
       ) : (
         <table style={S.table}>
           <thead>
             <tr>
-              {["Nombre", "Correo", "Fecha registro", "Cargo asignado", "Acciones"].map(h => (
+              {["Usuario", "Estado", "Cargo", "Rol", "Contrato principal", "Acciones"].map(h => (
                 <th key={h} style={S.th}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {usuarios.map(u => (
-              <tr key={u.id} style={{ cursor: "default" }}>
-                <td style={S.td}>
-                  <div style={{ color: "#e0f4f7", fontWeight: 500 }}>
-                    {u.nombre} {u.apellidos}
-                  </div>
-                  <div style={{ fontSize: 11, color: "#4a7a87", marginTop: 2 }}>ID: {u.id}</div>
-                </td>
-                <td style={S.td}>{u.correo || u.email}</td>
-                <td style={S.td}>
-                  <span style={{ color: "#4a8a96" }}>
-                    {u.created_at ? new Date(u.created_at).toLocaleDateString("es-CO") : "—"}
-                  </span>
-                </td>
-                <td style={S.td}>
-                  <select
-                    style={{ ...S.select, minWidth: 160 }}
-                    value={cargosSeleccionados[u.id] || ""}
-                    onChange={e => setCargosSeleccionados(p => ({ ...p, [u.id]: e.target.value }))}
-                  >
-                    <option value="">-- Seleccionar --</option>
-                    {cargos.map(c => (
-                      <option key={c.id} value={c.id}>{c.nombre}</option>
-                    ))}
-                  </select>
-                </td>
-                <td style={S.td}>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button style={S.btn("success", true)} onClick={() => aprobar(u.id)}>
-                      ✓ Aprobar
-                    </button>
-                    <button style={S.btn("danger", true)} onClick={() => rechazar(u.id)}>
-                      ✕ Rechazar
-                    </button>
-                  </div>
-                </td>
-              </tr>
+              <>
+                <tr key={u.id}>
+                  <td style={S.td}>
+                    <div style={{ color: "#e0f4f7", fontWeight: 500 }}>{u.nombre} {u.apellidos}</div>
+                    <div style={{ fontSize: 11, color: "#4a7a87" }}>{u.email}</div>
+                  </td>
+                  <td style={S.td}>
+                    <select style={{ ...S.select, minWidth: 110, color: estadoBadge[edits[u.id]?.estado] || "#c0dde3" }}
+                      value={edits[u.id]?.estado || ""}
+                      onChange={e => setEdit(u.id, "estado", e.target.value)}>
+                      <option value="pendiente">🟡 Pendiente</option>
+                      <option value="aprobado">🟢 Aprobado</option>
+                      <option value="rechazado">🔴 Rechazado</option>
+                    </select>
+                  </td>
+                  <td style={S.td}>
+                    <select style={{ ...S.select, minWidth: 140 }}
+                      value={edits[u.id]?.cargo_id || ""}
+                      onChange={e => setEdit(u.id, "cargo_id", e.target.value)}>
+                      <option value="">Sin cargo</option>
+                      {cargos.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                    </select>
+                  </td>
+                  <td style={S.td}>
+                    <select style={{ ...S.select, minWidth: 130 }}
+                      value={edits[u.id]?.rol_id || ""}
+                      onChange={e => setEdit(u.id, "rol_id", e.target.value)}>
+                      <option value="">Sin rol</option>
+                      {roles.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
+                    </select>
+                  </td>
+                  <td style={S.td}>
+                    <select style={{ ...S.select, minWidth: 150 }}
+                      value={edits[u.id]?.contrato_id || ""}
+                      onChange={e => setEdit(u.id, "contrato_id", e.target.value)}>
+                      <option value="">Sin contrato</option>
+                      {contratos.map(c => <option key={c.id} value={c.id}>{c.numero}</option>)}
+                    </select>
+                  </td>
+                  <td style={S.td}>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button style={S.btn("primary", true)} disabled={saving === u.id} onClick={() => guardar(u.id)}>
+                        {saving === u.id ? "..." : "💾"}
+                      </button>
+                      <button style={S.btn("ghost", true)} title="Gestionar contratos" onClick={() => toggleExpandir(u.id)}>
+                        {expandido === u.id ? "▲" : "📋"}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                {expandido === u.id && (
+                  <tr key={`uc-${u.id}`}>
+                    <td colSpan={6} style={{ ...S.td, background: "rgba(0,175,197,0.04)", padding: "12px 20px" }}>
+                      <div style={{ fontSize: 12, color: "#00afc5", marginBottom: 8, fontWeight: 600 }}>
+                        Contratos autorizados para {u.nombre}:
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                        {(ucContratos[u.id] || []).map(c => (
+                          <span key={c.id} style={{ background: "rgba(0,175,197,0.1)", border: "1px solid rgba(0,175,197,0.3)", borderRadius: 6, padding: "4px 10px", fontSize: 12, color: "#8acdd8", display: "flex", alignItems: "center", gap: 6 }}>
+                            {c.numero}
+                            <span style={{ cursor: "pointer", color: "#ef4444", fontWeight: 700 }} onClick={() => quitarContrato(u.id, c.id)}>×</span>
+                          </span>
+                        ))}
+                        {(ucContratos[u.id] || []).length === 0 && <span style={{ color: "#4a7a87", fontSize: 12 }}>Sin contratos asignados</span>}
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <select style={{ ...S.select, minWidth: 180 }}
+                          value={addingContrato[u.id] || ""}
+                          onChange={e => setAddingContrato(p => ({ ...p, [u.id]: e.target.value }))}>
+                          <option value="">+ Agregar contrato...</option>
+                          {contratos.map(c => <option key={c.id} value={c.id}>{c.numero}</option>)}
+                        </select>
+                        <button style={S.btn("primary", true)} onClick={() => agregarContrato(u.id)}>Asignar</button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </>
             ))}
           </tbody>
         </table>
@@ -753,14 +822,14 @@ export default function AdminPanel({ user, token, onClose }) {
   useEffect(() => { cargarCargos(); }, [cargarCargos]);
 
   const TABS = [
-    { id: "usuarios",  label: "Usuarios pendientes", icon: "👤" },
+    { id: "usuarios",  label: "Gestión de Usuarios", icon: "👤" },
     { id: "cargos",    label: "Gestión de cargos",   icon: "🏷️" },
     { id: "permisos",  label: "Matriz de permisos",  icon: "🔑" },
     { id: "contratos", label: "Contratos",            icon: "📋" },
   ];
 
   const TITULOS = {
-    usuarios:  { title: "Usuarios pendientes", sub: "Aprueba o rechaza solicitudes de acceso" },
+    usuarios:  { title: "Gestión de usuarios", sub: "Administra cargos, roles, contratos y estados" },
     cargos:    { title: "Gestión de cargos",   sub: "Crea y elimina cargos del sistema" },
     permisos:  { title: "Matriz de permisos",  sub: "Configura qué puede hacer cada cargo" },
     contratos: { title: "Contratos",           sub: "Crea y gestiona contratos del sistema" },
