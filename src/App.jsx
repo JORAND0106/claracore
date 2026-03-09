@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import AdminPanel from './AdminPanel'
 
 const API = 'https://claracore-backend.azurewebsites.net'
@@ -461,7 +461,7 @@ function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, 
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout }) {
+function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout, topOffset = 0 }) {
   const [tabInferior, setTabInferior] = useState('gantt')
   const [analisis, setAnalisis] = useState('financiero')
   const [showModalContrato, setShowModalContrato] = useState(false)
@@ -478,7 +478,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout }) {
 
   const s = {
     app: { fontFamily: "'Segoe UI', sans-serif", background: t.bg, minHeight: '100vh', color: t.text },
-    header: { background: t.headerBg, borderBottom: `1px solid ${t.border}`, padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: t.shadow },
+    header: { background: t.headerBg, borderBottom: `1px solid ${t.border}`, padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: t.shadow, marginTop: topOffset },
     themeSelector: { display: 'flex', gap: '6px', background: t.bg, border: `1px solid ${t.border}`, borderRadius: '20px', padding: '4px' },
     themeBtn: (mode) => ({ background: themeMode === mode ? t.primary : 'transparent', color: themeMode === mode ? '#fff' : t.textMuted, border: 'none', borderRadius: '16px', padding: '4px 12px', fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s' }),
     body: { padding: '20px 24px', maxWidth: '1400px', margin: '0 auto' },
@@ -681,6 +681,43 @@ export default function App() {
 
   const [pendingUser, setPendingUser] = useState(null)
   const [pendingContratos, setPendingContratos] = useState([])
+  const [bannerMsg, setBannerMsg] = useState(null)
+
+  // ── Polling de sesión propia cada 60 s ──────────────────────────────────
+  // Detecta cambios de cargo/estado hechos por el admin sin que el usuario deba cerrar sesión
+  const usuarioRef = useRef(usuario)
+  useEffect(() => { usuarioRef.current = usuario }, [usuario])
+
+  useEffect(() => {
+    if (!usuario) return
+    const token = getToken()
+    if (!token) return
+    const id = setInterval(async () => {
+      try {
+        const res = await fetch(`${API}/usuarios/me`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        if (!res.ok) return
+        const fresh = await res.json()
+        const prev = usuarioRef.current
+        // Detectar cambios relevantes: cargo, rol, estado, contrato
+        const changed =
+          fresh.cargo_id   !== prev.cargo_id   ||
+          fresh.rol_id     !== prev.rol_id     ||
+          fresh.estado     !== prev.estado     ||
+          fresh.contrato_id !== prev.contrato_id
+        if (changed) {
+          // Actualizar usuario en memoria y storage sin cerrar sesión
+          const updated = { ...prev, ...fresh }
+          const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
+          storage.setItem('cc_usuario', JSON.stringify(updated))
+          setUsuario(updated)
+          setBannerMsg('Tu perfil fue actualizado por el administrador.')
+        }
+      } catch { /* silencioso — no interrumpir la sesión por error de red */ }
+    }, 60000)
+    return () => clearInterval(id)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleLoginOk(u, token) {
     try {
@@ -715,8 +752,18 @@ export default function App() {
   }
 
   if (usuario) return (
-    <Dashboard t={t} activeTheme={activeTheme} themeMode={themeMode}
-      onTheme={handleTheme} usuario={usuario} onLogout={handleLogout} />
+    <>
+      {bannerMsg && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 99999, background: '#0f2038', borderBottom: '2px solid #00afc5', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '13px', color: '#e0f4f7', boxShadow: '0 2px 12px rgba(0,0,0,0.4)' }}>
+          <span>⚡ {bannerMsg}</span>
+          <button onClick={() => setBannerMsg(null)} style={{ background: 'transparent', border: 'none', color: '#8acdd8', cursor: 'pointer', fontSize: '16px', lineHeight: 1 }}>✕</button>
+        </div>
+      )}
+      <Dashboard t={t} activeTheme={activeTheme} themeMode={themeMode}
+        onTheme={handleTheme} usuario={usuario} onLogout={handleLogout}
+        topOffset={bannerMsg ? 44 : 0}
+      />
+    </>
   )
 
   return (

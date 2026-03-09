@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = "https://claracore-backend.azurewebsites.net";
@@ -193,11 +193,26 @@ function useApi(token) {
     const res = await fetch(`${API}${path}`, opts);
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new Error(err.detail || "Error del servidor");
+      // detail puede ser string (mensaje) o lista de objetos (errores de validación Pydantic)
+      let msg = "Error del servidor";
+      if (typeof err.detail === "string") msg = err.detail;
+      else if (Array.isArray(err.detail)) msg = err.detail.map(e => e.msg).join(", ");
+      else if (err.message) msg = err.message;
+      throw new Error(msg);
     }
     return res.json();
   }, [token]);
   return call;
+}
+
+// Ejecuta fn en intervalo; fn se actualiza sin reiniciar el timer
+function usePolling(fn, intervalMs) {
+  const ref = useRef(fn);
+  useEffect(() => { ref.current = fn; }, [fn]);
+  useEffect(() => {
+    const id = setInterval(() => ref.current(), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
 }
 
 // ─── SECCIÓN 1: Gestión de Usuarios ───────────────────────────────────────
@@ -215,37 +230,59 @@ function SeccionUsuarios({ call, cargos, theme }) {
 
   const col = C(theme);
 
-  const cargar = useCallback(async () => {
-    setLoading(true);
+  const cargar = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const [udata, rdata, cdata] = await Promise.all([
         call("GET", "/admin/todos-usuarios"),
         call("GET", "/roles").catch(() => []),
         call("GET", "/contratos").catch(() => []),
       ]);
-      setUsuarios(udata);
+      // El backend ya filtra Desarrollador, pero doble protección en frontend
+      const filtrados = udata.filter(u => (u.cargo_nombre || "").toLowerCase() !== "desarrollador");
+      setUsuarios(filtrados);
       setRoles(rdata);
       setContratos(cdata);
       const initEdits = {};
-      udata.forEach(u => {
-        initEdits[u.id] = { cargo_id: u.cargo_id || "", rol_id: u.rol_id || "", contrato_id: u.contrato_id || "", estado: u.estado || "" };
+      filtrados.forEach(u => {
+        initEdits[u.id] = {
+          cargo_id: u.cargo_id || "",
+          rol_id: u.rol_id || "",
+          contrato_id: u.contrato_id || "",
+          estado: u.estado || "",
+        };
       });
-      setEdits(initEdits);
+      // Solo actualiza edits si el usuario no tiene cambios pendientes (no pisar trabajo no guardado)
+      setEdits(prev => {
+        const merged = { ...initEdits };
+        Object.keys(prev).forEach(uid => { if (merged[uid]) merged[uid] = { ...merged[uid], ...prev[uid] }; });
+        return merged;
+      });
     } catch (e) {
-      setMsg({ type: "error", text: e.message });
-    } finally { setLoading(false); }
+      if (!silent) setMsg({ type: "error", text: e.message });
+    } finally { if (!silent) setLoading(false); }
   }, [call]);
 
   useEffect(() => { cargar(); }, [cargar]);
+  // Auto-refresh silencioso cada 30 s — detecta nuevos usuarios sin recargar página
+  usePolling(() => cargar(true), 30000);
 
   const setEdit = (uid, field, val) => setEdits(e => ({ ...e, [uid]: { ...e[uid], [field]: val } }));
 
   const guardar = async (uid) => {
     setSaving(uid);
+    const e = edits[uid];
+    // Convertir "" a null para campos int — Pydantic rechaza string vacío en Optional[int]
+    const payload = {
+      cargo_id:    e.cargo_id    ? parseInt(e.cargo_id)    : null,
+      rol_id:      e.rol_id      ? parseInt(e.rol_id)      : null,
+      contrato_id: e.contrato_id ? parseInt(e.contrato_id) : null,
+      estado:      e.estado      || null,
+    };
     try {
-      await call("PUT", `/admin/usuarios/${uid}`, edits[uid]);
+      await call("PUT", `/admin/usuarios/${uid}`, payload);
       setMsg({ type: "success", text: "Usuario actualizado." });
-      cargar();
+      cargar(true);
     } catch (e) {
       setMsg({ type: "error", text: e.message });
     } finally { setSaving(null); }
@@ -329,7 +366,7 @@ function SeccionUsuarios({ call, cargos, theme }) {
                       value={edits[u.id]?.cargo_id || ""}
                       onChange={e => setEdit(u.id, "cargo_id", e.target.value)}>
                       <option value="">Sin cargo</option>
-                      {cargos.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                      {cargos.filter(c => c.nombre.toLowerCase() !== "desarrollador").map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                     </select>
                   </td>
                   <td style={tdStyle}>
@@ -568,7 +605,7 @@ function SeccionPermisos({ call, cargos, theme }) {
         <div style={{ color: col.textSecondary, fontSize: 13, whiteSpace: "nowrap" }}>Cargo a configurar:</div>
         <select style={{ ...S.select, flex: 1, maxWidth: 280 }} value={cargoId} onChange={e => setCargoId(e.target.value)}>
           <option value="">-- Selecciona un cargo --</option>
-          {cargos.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+          {cargos.filter(c => c.nombre.toLowerCase() !== "desarrollador").map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
         </select>
         {cargoId && (
           <button style={S.btn("primary", true)} onClick={guardar} disabled={saving}>
@@ -639,14 +676,16 @@ function SeccionResets({ call, theme }) {
   const col = C(theme);
   const tdStyle = S.td(theme);
 
-  const cargar = useCallback(async () => {
-    setLoading(true);
+  const cargar = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try { setSolicitudes(await call("GET", "/admin/reset-requests")); }
-    catch (e) { setMsg({ type: "error", text: e.message }); }
-    finally { setLoading(false); }
+    catch (e) { if (!silent) setMsg({ type: "error", text: e.message }); }
+    finally { if (!silent) setLoading(false); }
   }, [call]);
 
   useEffect(() => { cargar(); }, [cargar]);
+  // Auto-refresh cada 30 s — el admin ve solicitudes nuevas sin recargar
+  usePolling(() => cargar(true), 30000);
 
   const autorizar = async (id) => {
     const temp = tempPasswords[id];
