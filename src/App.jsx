@@ -656,6 +656,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout }) {
           user={usuario}
           token={getToken()}
           onClose={() => setShowAdmin(false)}
+          activeTheme={activeTheme}
         />
       )}
     </div>
