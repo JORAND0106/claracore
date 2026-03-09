@@ -216,7 +216,7 @@ function usePolling(fn, intervalMs) {
 }
 
 // ─── SECCIÓN 1: Gestión de Usuarios ───────────────────────────────────────
-function SeccionUsuarios({ call, cargos, theme }) {
+function SeccionUsuarios({ call, cargos, theme, userId }) {
   const [usuarios, setUsuarios] = useState([]);
   const [roles, setRoles] = useState([]);
   const [contratos, setContratos] = useState([]);
@@ -238,13 +238,12 @@ function SeccionUsuarios({ call, cargos, theme }) {
         call("GET", "/roles").catch(() => []),
         call("GET", "/contratos").catch(() => []),
       ]);
-      // El backend ya filtra Desarrollador, pero doble protección en frontend
-      const filtrados = udata.filter(u => (u.cargo_nombre || "").toLowerCase() !== "desarrollador");
-      setUsuarios(filtrados);
+      // Backend ya filtra Desarrollador (invisible para otros) pero lo muestra al propio Desarrollador
+      setUsuarios(udata);
       setRoles(rdata);
       setContratos(cdata);
       const initEdits = {};
-      filtrados.forEach(u => {
+      udata.forEach(u => {
         initEdits[u.id] = {
           cargo_id: u.cargo_id || "",
           rol_id: u.rol_id || "",
@@ -252,7 +251,6 @@ function SeccionUsuarios({ call, cargos, theme }) {
           estado: u.estado || "",
         };
       });
-      // Solo actualiza edits si el usuario no tiene cambios pendientes (no pisar trabajo no guardado)
       setEdits(prev => {
         const merged = { ...initEdits };
         Object.keys(prev).forEach(uid => { if (merged[uid]) merged[uid] = { ...merged[uid], ...prev[uid] }; });
@@ -729,15 +727,12 @@ function SeccionResets({ call, theme }) {
 }
 
 // ─── SECCIÓN 5: Contratos ──────────────────────────────────────────────────
-function SeccionContratos({ call }) {
-  const [form, setForm] = useState({ numero: '', objeto: '', contratista: '', nit: '', interventoria: '', logo_contratista: '', logo_interventoria: '' });
+function SeccionContratos({ call, contratos, recargarContratos }) {
+  const FORM_VACIO = { numero: '', objeto: '', contratista: '', nit: '', interventoria: '', logo_contratista: '', logo_interventoria: '' };
+  const [form, setForm] = useState(FORM_VACIO);
+  const [editandoId, setEditandoId] = useState(null); // null = crear, number = editar
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
-  const [contratos, setContratos] = useState([]);
-
-  useEffect(() => {
-    call("GET", "/contratos").then(setContratos).catch(() => {});
-  }, [call]);
 
   function handleLogo(campo, e) {
     const file = e.target.files[0];
@@ -747,17 +742,40 @@ function SeccionContratos({ call }) {
     reader.readAsDataURL(file);
   }
 
+  function iniciarEdicion(c) {
+    setEditandoId(c.id);
+    setForm({
+      numero: c.numero || '', objeto: c.objeto || '',
+      contratista: c.contratista || '', nit: c.nit || '',
+      interventoria: c.interventoria || '',
+      logo_contratista: c.logo_contratista || '',
+      logo_interventoria: c.logo_interventoria || '',
+    });
+    setMsg(null);
+  }
+
+  function cancelarEdicion() {
+    setEditandoId(null);
+    setForm(FORM_VACIO);
+    setMsg(null);
+  }
+
   async function handleGuardar() {
     if (!form.numero || !form.contratista) { setMsg({ type: 'error', text: 'Número y contratista son obligatorios' }); return; }
     setSaving(true); setMsg(null);
     try {
-      await call("POST", "/contratos", form);
-      setMsg({ type: 'success', text: 'Contrato creado correctamente' });
-      setForm({ numero: '', objeto: '', contratista: '', nit: '', interventoria: '', logo_contratista: '', logo_interventoria: '' });
-      const data = await call("GET", "/contratos");
-      setContratos(data);
+      if (editandoId) {
+        await call("PUT", `/contratos/${editandoId}`, form);
+        setMsg({ type: 'success', text: 'Contrato actualizado correctamente' });
+      } else {
+        await call("POST", "/contratos", form);
+        setMsg({ type: 'success', text: 'Contrato creado correctamente' });
+      }
+      setForm(FORM_VACIO);
+      setEditandoId(null);
+      recargarContratos();
     } catch (e) {
-      setMsg({ type: 'error', text: e.message || 'Error al crear contrato' });
+      setMsg({ type: 'error', text: e.message || 'Error al guardar contrato' });
     } finally { setSaving(false); }
   }
 
@@ -767,8 +785,18 @@ function SeccionContratos({ call }) {
   return (
     <div style={{ padding: 28 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
+        {/* FORMULARIO */}
         <div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: '#00afc5', marginBottom: 20 }}>➕ Nuevo Contrato</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#00afc5' }}>
+              {editandoId ? '✏️ Editar Contrato' : '➕ Nuevo Contrato'}
+            </div>
+            {editandoId && (
+              <button onClick={cancelarEdicion} style={{ background: 'transparent', border: '1px solid rgba(0,175,197,0.3)', borderRadius: 6, padding: '4px 12px', color: '#8acdd8', fontSize: 12, cursor: 'pointer' }}>
+                ← Cancelar
+              </button>
+            )}
+          </div>
           <label style={lbl}>NÚMERO DE CONTRATO *</label>
           <input style={inp} placeholder="Ej: IDU-1551-2017" value={form.numero} onChange={e => setForm(f => ({ ...f, numero: e.target.value }))} />
           <label style={lbl}>OBJETO DEL CONTRATO</label>
@@ -791,21 +819,33 @@ function SeccionContratos({ call }) {
           </label>
           {msg && <div style={{ background: msg.type === 'error' ? '#2a0a0a' : '#0a2a1a', color: msg.type === 'error' ? '#f87171' : '#4ade80', borderRadius: 8, padding: '10px 14px', fontSize: 13, marginBottom: 12 }}>{msg.text}</div>}
           <button onClick={handleGuardar} disabled={saving} style={{ background: '#00afc5', border: 'none', borderRadius: 8, padding: '10px 24px', color: '#fff', fontWeight: 700, cursor: saving ? 'wait' : 'pointer', opacity: saving ? 0.7 : 1, fontSize: 13 }}>
-            {saving ? 'Guardando...' : 'Guardar Contrato'}
+            {saving ? 'Guardando...' : (editandoId ? 'Actualizar Contrato' : 'Guardar Contrato')}
           </button>
         </div>
+
+        {/* LISTA DE CONTRATOS */}
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, color: '#00afc5', marginBottom: 20 }}>📋 Contratos registrados</div>
           {contratos.length === 0 ? (
             <div style={{ color: '#4a7a87', fontSize: 13 }}>No hay contratos registrados</div>
           ) : contratos.map(c => (
-            <div key={c.id} style={{ background: '#081318', border: '1px solid rgba(0,175,197,0.15)', borderRadius: 8, padding: '12px 16px', marginBottom: 10 }}>
-              <div style={{ fontWeight: 700, color: '#00afc5', fontSize: 13 }}>{c.numero}</div>
-              <div style={{ color: '#8acdd8', fontSize: 12, marginTop: 2 }}>{c.contratista}</div>
-              {c.interventoria && <div style={{ color: '#4a7a87', fontSize: 11, marginTop: 2 }}>Interventoría: {c.interventoria}</div>}
-              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-                {c.logo_contratista && <img src={c.logo_contratista} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
-                {c.logo_interventoria && <img src={c.logo_interventoria} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
+            <div key={c.id} style={{ background: editandoId === c.id ? 'rgba(0,175,197,0.08)' : '#081318', border: `1px solid ${editandoId === c.id ? 'rgba(0,175,197,0.4)' : 'rgba(0,175,197,0.15)'}`, borderRadius: 8, padding: '12px 16px', marginBottom: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: '#00afc5', fontSize: 13 }}>{c.numero}</div>
+                  <div style={{ color: '#8acdd8', fontSize: 12, marginTop: 2 }}>{c.contratista}</div>
+                  {c.interventoria && <div style={{ color: '#4a7a87', fontSize: 11, marginTop: 2 }}>Interventoría: {c.interventoria}</div>}
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                    {c.logo_contratista && <img src={c.logo_contratista} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
+                    {c.logo_interventoria && <img src={c.logo_interventoria} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
+                  </div>
+                </div>
+                <button
+                  onClick={() => editandoId === c.id ? cancelarEdicion() : iniciarEdicion(c)}
+                  style={{ background: 'transparent', border: '1px solid rgba(0,175,197,0.3)', borderRadius: 6, padding: '4px 10px', color: '#00afc5', fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap', marginLeft: 8 }}
+                >
+                  {editandoId === c.id ? '✕' : '✏️ Editar'}
+                </button>
               </div>
             </div>
           ))}
@@ -815,36 +855,246 @@ function SeccionContratos({ call }) {
   );
 }
 
-// ─── COMPONENTE PRINCIPAL ──────────────────────────────────────────────────
-export default function AdminPanel({ user, token, onClose, activeTheme }) {
-  const [tab, setTab] = useState("usuarios");
-  const [cargos, setCargos] = useState([]);
-  const call = useApi(token);
 
-  const cargarCargos = useCallback(async () => {
+
+// ─── SECCIÓN 6: Listado de Precios ────────────────────────────────────────
+function SeccionListadoPrecios({ call, contratos, perms, theme }) {
+  const [contratoId, setContratoId] = useState("");
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [editData, setEditData] = useState({});
+  const [msg, setMsg] = useState(null);
+  const col = C(theme);
+  const tdStyle = S.td(theme);
+
+  const cargar = useCallback(async () => {
+    if (!contratoId) return;
+    setLoading(true);
+    try { setItems(await call("GET", `/listado-precios/${contratoId}`)); }
+    catch (e) { setMsg({ type: "error", text: e.message }); }
+    finally { setLoading(false); }
+  }, [call, contratoId]);
+
+  useEffect(() => { cargar(); }, [cargar]);
+
+  const startEdit = (item) => { setEditingId(item.id); setEditData({ ...item }); };
+  const cancelEdit = () => { setEditingId(null); setEditData({}); };
+  const saveEdit = async () => {
     try {
-      const data = await call("GET", "/cargos");
-      setCargos(data);
-    } catch { /* silencioso */ }
-  }, [call]);
+      await call("PUT", `/listado-precios/item/${editingId}`, editData);
+      setEditingId(null);
+      cargar();
+    } catch (e) { setMsg({ type: "error", text: e.message }); }
+  };
 
-  useEffect(() => { cargarCargos(); }, [cargarCargos]);
+  const deleteItem = async (id) => {
+    if (!window.confirm("¿Eliminar este ítem?")) return;
+    try { await call("DELETE", `/listado-precios/item/${id}`); cargar(); }
+    catch (e) { setMsg({ type: "error", text: e.message }); }
+  };
 
-  const TABS = [
-    { id: "usuarios",  label: "Gestión de Usuarios", icon: "👤" },
-    { id: "cargos",    label: "Gestión de cargos",   icon: "🏷️" },
-    { id: "permisos",  label: "Matriz de permisos",  icon: "🔑" },
-    { id: "contratos", label: "Contratos",            icon: "📋" },
-    { id: "resets",    label: "Reset Claves",         icon: "🔐" },
+  const downloadCSV = () => {
+    const headers = ["capitulo", "item_numero", "descripcion", "unidad", "precio_unitario"];
+    const rows = items.map(i => headers.map(h => `"${(i[h] ?? "").toString().replace(/"/g, '""')}"`).join(","));
+    const csv = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "listado_precios.csv"; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const uploadCSV = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const lines = ev.target.result.split("\n").filter(l => l.trim());
+        if (lines.length < 2) { setMsg({ type: "error", text: "El CSV no tiene datos." }); return; }
+        const rawHeaders = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, "").toLowerCase());
+        const CAMPOS = { "capitulo": "capitulo", "item_numero": "item_numero", "ítem": "item_numero", "item": "item_numero", "descripcion": "descripcion", "descripción": "descripcion", "unidad": "unidad", "precio_unitario": "precio_unitario", "precio": "precio_unitario" };
+        const headers = rawHeaders.map(h => CAMPOS[h] || h);
+        const parsed = lines.slice(1).map(line => {
+          const vals = line.split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+          const obj = {};
+          headers.forEach((h, i) => { if (vals[i] !== undefined && vals[i] !== "") obj[h] = vals[i]; });
+          return obj;
+        }).filter(r => r.descripcion || r.item_numero);
+        await call("POST", `/listado-precios/${contratoId}/bulk`, parsed);
+        setMsg({ type: "success", text: `✅ ${parsed.length} ítems cargados correctamente.` });
+        cargar();
+      } catch (ex) { setMsg({ type: "error", text: ex.message }); }
+    };
+    reader.readAsText(file, "UTF-8");
+    e.target.value = "";
+  };
+
+  const fmt = (v) => v ? `$${Number(v).toLocaleString("es-CO", { minimumFractionDigits: 0 })}` : "—";
+
+  return (
+    <div>
+      {msg && <div style={S.alert(msg.type)}>{msg.text}<span onClick={() => setMsg(null)} style={{ float: "right", cursor: "pointer", opacity: 0.6 }}>✕</span></div>}
+
+      {/* Selector de contrato + acciones */}
+      <div style={{ ...S.card, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+        <span style={{ color: col.textSecondary, fontSize: 13, whiteSpace: "nowrap" }}>Contrato:</span>
+        <select style={{ ...S.select, flex: 1, maxWidth: 300 }} value={contratoId} onChange={e => setContratoId(e.target.value)}>
+          <option value="">-- Selecciona un contrato --</option>
+          {contratos.map(c => <option key={c.id} value={c.id}>{c.numero} — {c.contratista}</option>)}
+        </select>
+        {contratoId && (
+          <div style={{ display: "flex", gap: 8 }}>
+            {(perms?.exportar) && (
+              <button style={S.btn("ghost", true)} onClick={downloadCSV}>⬇ Descargar CSV</button>
+            )}
+            {(perms?.crear) && (
+              <label style={{ ...S.btn("primary", true), cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                ⬆ Cargar CSV
+                <input type="file" accept=".csv" style={{ display: "none" }} onChange={uploadCSV} />
+              </label>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Nota formato CSV */}
+      {contratoId && (
+        <div style={{ fontSize: 11, color: col.textMuted, marginBottom: 12, padding: "0 2px" }}>
+          Formato CSV esperado: <code style={{ color: "#00afc5" }}>capitulo, item_numero, descripcion, unidad, precio_unitario</code>. Cargar reemplaza todos los ítems del contrato.
+        </div>
+      )}
+
+      {!contratoId ? (
+        <div style={S.empty}>Selecciona un contrato para ver su listado de precios.</div>
+      ) : loading ? (
+        <div style={S.empty}><span style={{ color: "#00afc5" }}>Cargando...</span></div>
+      ) : items.length === 0 ? (
+        <div style={S.empty}>No hay precios cargados para este contrato.<br /><span style={{ fontSize: 12, color: col.textMuted }}>Usa "Cargar CSV" para importar el listado.</span></div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <div style={{ fontSize: 11, color: col.textMuted, marginBottom: 6 }}>{items.length} ítems</div>
+          <table style={S.table}>
+            <thead>
+              <tr>
+                {["Capítulo", "Ítem", "Descripción", "Unidad", "Precio Unit.", ""].map((h, i) => (
+                  <th key={i} style={{ ...S.th, width: i === 2 ? "auto" : undefined }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {items.map(item => (
+                <tr key={item.id}>
+                  {editingId === item.id ? (
+                    <>
+                      {[["capitulo", 80], ["item_numero", 70], ["descripcion", 200], ["unidad", 60]].map(([field, w]) => (
+                        <td key={field} style={tdStyle}>
+                          <input style={{ ...S.input, padding: "4px 8px", fontSize: 12, width: w }} value={editData[field] || ""} onChange={e => setEditData(d => ({ ...d, [field]: e.target.value }))} />
+                        </td>
+                      ))}
+                      <td style={tdStyle}>
+                        <input style={{ ...S.input, padding: "4px 8px", fontSize: 12, width: 100 }} type="number" value={editData.precio_unitario || ""} onChange={e => setEditData(d => ({ ...d, precio_unitario: e.target.value }))} />
+                      </td>
+                      <td style={tdStyle}>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <button style={S.btn("success", true)} onClick={saveEdit} title="Guardar">✓</button>
+                          <button style={S.btn("ghost", true)} onClick={cancelEdit} title="Cancelar">✕</button>
+                        </div>
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td style={{ ...tdStyle, color: col.textMuted, fontSize: 12 }}>{item.capitulo || "—"}</td>
+                      <td style={{ ...tdStyle, color: col.textSecondary, fontWeight: 600, fontSize: 12 }}>{item.item_numero || "—"}</td>
+                      <td style={{ ...tdStyle, color: col.textTable }}>{item.descripcion}</td>
+                      <td style={{ ...tdStyle, color: col.textSecondary, fontSize: 12 }}>{item.unidad || "—"}</td>
+                      <td style={{ ...tdStyle, color: "#22c55e", fontWeight: 600, fontSize: 12, textAlign: "right" }}>{fmt(item.precio_unitario)}</td>
+                      <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          {perms?.editar && <button style={S.btn("ghost", true)} onClick={() => startEdit(item)} title="Editar">✎</button>}
+                          {perms?.eliminar && <button style={S.btn("danger", true)} onClick={() => deleteItem(item.id)} title="Eliminar">×</button>}
+                        </div>
+                      </td>
+                    </>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── COMPONENTE PRINCIPAL ──────────────────────────────────────────────────
+// ─── MAPA: qué funciones habilitan cada tab del panel ─────────────────────────
+// El nombre debe coincidir (case-insensitive) con el campo funcion_nombre en permisos
+const TAB_FUNCIONES = {
+  usuarios:  ["aprobar usuarios", "crear usuarios"],
+  cargos:    ["panel de administración"],
+  permisos:  ["panel de administración"],
+  contratos: ["crear contrato", "ver contratos", "editar contrato"],
+  precios:   ["listado de precios"],
+  resets:    ["panel de administración"],
+};
+
+export default function AdminPanel({ user, token, onClose, activeTheme }) {
+  const call = useApi(token);
+  const [cargos, setCargos] = useState([]);
+  const [contratos, setContratos] = useState([]);
+
+  const isDeveloper = user?.cargo_nombre?.toLowerCase() === "desarrollador";
+  const isAdmin     = user?.cargo_nombre?.toLowerCase() === "administrador";
+
+  // ── Filtrar tabs según permisos del usuario ────────────────────────────────
+  function canSeeTab(tabId) {
+    if (isDeveloper || isAdmin) return true;
+    const funciones = TAB_FUNCIONES[tabId] || [];
+    return funciones.some(fname =>
+      (user?.permisos || []).some(p =>
+        p.funcion_nombre?.toLowerCase() === fname && p.ver
+      )
+    );
+  }
+
+  const TABS_TODOS = [
+    { id: "usuarios",  label: "Gestión de Usuarios" },
+    { id: "cargos",    label: "Gestión de cargos"   },
+    { id: "permisos",  label: "Matriz de permisos"  },
+    { id: "contratos", label: "Contratos"            },
+    { id: "precios",   label: "Listado de Precios"   },
+    { id: "resets",    label: "Reset Claves"         },
   ];
+  const TABS = TABS_TODOS.filter(t => canSeeTab(t.id));
+
+  const [tab, setTab] = useState(() => TABS[0]?.id || "usuarios");
 
   const TITULOS = {
-    usuarios:  { title: "Gestión de usuarios", sub: "Administra cargos, roles, contratos y estados" },
-    cargos:    { title: "Gestión de cargos",   sub: "Crea y elimina cargos del sistema" },
-    permisos:  { title: "Matriz de permisos",  sub: "Configura qué puede hacer cada cargo" },
-    contratos: { title: "Contratos",           sub: "Crea y gestiona contratos del sistema" },
-    resets:    { title: "Reset Claves",        sub: "Autoriza solicitudes de cambio de contraseña" },
+    usuarios:  { title: "Gestión de usuarios",    sub: "Administra cargos, roles, contratos y estados" },
+    cargos:    { title: "Gestión de cargos",      sub: "Crea y elimina cargos del sistema" },
+    permisos:  { title: "Matriz de permisos",     sub: "Configura qué puede hacer cada cargo" },
+    contratos: { title: "Contratos",              sub: "Crea y gestiona contratos del sistema" },
+    precios:   { title: "Listado de Precios",     sub: "Edita, carga y descarga el listado de precios por contrato" },
+    resets:    { title: "Reset Claves",           sub: "Autoriza solicitudes de cambio de contraseña" },
   };
+
+  const cargarCargos = useCallback(async () => {
+    try { setCargos(await call("GET", "/cargos")); } catch {}
+  }, [call]);
+
+  const cargarContratos = useCallback(async () => {
+    try { setContratos(await call("GET", "/contratos")); } catch {}
+  }, [call]);
+
+  useEffect(() => {
+    cargarCargos();
+    cargarContratos();
+  }, [cargarCargos, cargarContratos]);
+
+  // Permisos del usuario sobre "Listado de Precios" para pasar a la sección
+  const precioPerms = (user?.permisos || []).find(
+    p => p.funcion_nombre?.toLowerCase() === "listado de precios"
+  ) || {};
 
   return (
     <div style={S.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
@@ -871,7 +1121,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
           <div style={S.sidebarFooter}>
             <div style={S.userTag}>Sesión activa</div>
             <div style={S.userName}>{user?.nombre} {user?.apellidos}</div>
-            <div style={{ ...S.userTag, marginTop: 2 }}>{user?.cargo_nombre || "Desarrollador"}</div>
+            <div style={{ ...S.userTag, marginTop: 2 }}>{user?.cargo_nombre}</div>
           </div>
         </div>
 
@@ -879,17 +1129,18 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
         <div style={S.content}>
           <div style={S.contentHeader(activeTheme)}>
             <div>
-              <div style={S.contentTitle(activeTheme)}>{TITULOS[tab].title}</div>
-              <div style={S.contentSub(activeTheme)}>{TITULOS[tab].sub}</div>
+              <div style={S.contentTitle(activeTheme)}>{TITULOS[tab]?.title}</div>
+              <div style={S.contentSub(activeTheme)}>{TITULOS[tab]?.sub}</div>
             </div>
             <button style={S.closeBtn} onClick={onClose} title="Cerrar">✕</button>
           </div>
 
           <div style={S.scrollArea(activeTheme)}>
-            {tab === "usuarios"  && <SeccionUsuarios  call={call} cargos={cargos} theme={activeTheme} />}
+            {tab === "usuarios"  && <SeccionUsuarios  call={call} cargos={cargos} theme={activeTheme} userId={user?.id} />}
             {tab === "cargos"    && <SeccionCargos    call={call} cargos={cargos} recargarCargos={cargarCargos} theme={activeTheme} />}
             {tab === "permisos"  && <SeccionPermisos  call={call} cargos={cargos} theme={activeTheme} />}
-            {tab === "contratos" && <SeccionContratos call={call} />}
+            {tab === "contratos" && <SeccionContratos call={call} contratos={contratos} recargarContratos={cargarContratos} />}
+            {tab === "precios"   && <SeccionListadoPrecios call={call} contratos={contratos} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true } : precioPerms} theme={activeTheme} />}
             {tab === "resets"    && <SeccionResets    call={call} theme={activeTheme} />}
           </div>
         </div>
@@ -902,3 +1153,4 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
     </div>
   );
 }
+

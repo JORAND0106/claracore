@@ -474,7 +474,12 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout, topO
 
   // Desarrollador ve todo; otros usuarios ven solo su contrato
   const esDeveloper = usuario?.cargo_nombre === 'Desarrollador'
-  const canAdmin = esDeveloper || usuario?.cargo_nombre === 'Administrador'
+  // Funciones que habilitan ver el panel admin
+  const ADMIN_FUNCIONES = ["aprobar usuarios", "crear usuarios", "panel de administración", "crear contrato", "ver contratos", "editar contrato", "listado de precios"]
+  const tienePermisoAdmin = (usuario?.permisos || []).some(p =>
+    p.ver && ADMIN_FUNCIONES.includes(p.funcion_nombre?.toLowerCase())
+  )
+  const canAdmin = esDeveloper || usuario?.cargo_nombre === 'Administrador' || tienePermisoAdmin
 
   const s = {
     app: { fontFamily: "'Segoe UI', sans-serif", background: t.bg, minHeight: '100vh', color: t.text },
