@@ -583,9 +583,37 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout, topO
 
       <div style={s.body}>
         <div style={s.topBar}>
-          <span style={{ fontSize: '13px', color: t.textMuted }}>
-            📋 Contrato: {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
-          </span>
+          {usuario?._contratos?.length > 1 ? (
+            <select
+              value={usuario.contrato_id || ''}
+              onChange={async (e) => {
+                const cid = parseInt(e.target.value)
+                const contrato = usuario._contratos.find(c => c.id === cid)
+                if (!contrato) return
+                const u = { ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero, logo_contratista: contrato.logo_contratista || usuario.logo_contratista, logo_interventoria: contrato.logo_interventoria || usuario.logo_interventoria }
+                try {
+                  const token = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
+                  await fetch(`${API}/admin/usuarios/${u.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                    body: JSON.stringify({ contrato_id: contrato.id })
+                  })
+                } catch { /* silencioso */ }
+                const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
+                storage.setItem('cc_usuario', JSON.stringify(u))
+                setUsuario(u)
+              }}
+              style={{ fontSize: '13px', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none' }}
+            >
+              {usuario._contratos.map(c => (
+                <option key={c.id} value={c.id}>📋 {c.numero}</option>
+              ))}
+            </select>
+          ) : (
+            <span style={{ fontSize: '13px', color: t.textMuted }}>
+              📋 Contrato: {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
+            </span>
+          )}
           {/* Crear Contrato se gestiona desde el Panel Admin */}
         </div>
 
@@ -737,23 +765,35 @@ const permisosChanged =
       const res = await fetch(`${API}/admin/usuario-contratos/${u.id}`, {
         headers: { Authorization: `Bearer ${token}` }
       })
-      const contratos = res.ok ? await res.json() : []
-      if (contratos.length > 1) {
-        setPendingUser({ ...u, _token: token })
-        setPendingContratos(contratos)
-        setModal('selector_contrato')
-      } else {
-        setUsuario(u); setModal(null)
-      }
+        const contratos = res.ok ? await res.json() : []
+        const uConContratos = { ...u, _contratos: contratos }
+        if (contratos.length > 1) {
+          setPendingUser({ ...uConContratos, _token: token })
+          setPendingContratos(contratos)
+          setModal('selector_contrato')
+        } else {
+          setUsuario(uConContratos); setModal(null)
+        }
     } catch {
       setUsuario(u); setModal(null)
     }
   }
 
-  function handleSeleccionarContrato(contratoId) {
+  async function handleSeleccionarContrato(contratoId) {
     const contrato = pendingContratos.find(c => c.id === parseInt(contratoId))
-    const u = { ...pendingUser, contrato_id: contrato.id, contrato_numero: contrato.numero }
+    const u = { ...pendingUser, contrato_id: contrato.id, contrato_numero: contrato.numero, logo_contratista: contrato.logo_contratista || pendingUser.logo_contratista, logo_interventoria: contrato.logo_interventoria || pendingUser.logo_interventoria }
     delete u._token
+    // Guardar contrato principal en BD
+    try {
+      const token = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
+      await fetch(`${API}/admin/usuarios/${u.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ contrato_id: contrato.id })
+      })
+    } catch { /* silencioso */ }
+    const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
+    storage.setItem('cc_usuario', JSON.stringify(u))
     setUsuario(u); setModal(null)
     setPendingUser(null); setPendingContratos([])
   }
