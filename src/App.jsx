@@ -744,7 +744,16 @@ const permisosChanged =
     fresh.contrato_id !== prev.contrato_id ||
     permisosChanged
   if (changed) {
-    const updated = { ...prev, ...fresh }
+    const updated = {
+      ...prev,
+      ...fresh,
+      // Preservar contrato y contratos elegidos en sesión — no pisar con BD
+      contrato_id:     prev.contrato_id,
+      contrato_numero: prev.contrato_numero,
+      _contratos:      prev._contratos,
+      logo_contratista:   prev.logo_contratista,
+      logo_interventoria: prev.logo_interventoria,
+    }
     const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
     storage.setItem('cc_usuario', JSON.stringify(updated))
     setUsuario(updated)
