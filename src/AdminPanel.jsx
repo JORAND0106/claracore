@@ -945,15 +945,16 @@ function SeccionListadoPrecios({ call, contratos, perms, theme }) {
           vals.push(cur.trim());
           return vals.map(v => v.replace(/^"|"$/g, "").trim());
         };
-        const CAMPOS = {
-          "capitulo": "capitulo", "capítulo": "capitulo",
-          "competencia": "competencia",
-          "item_numero": "item_numero", "item número": "item_numero",
-          "ítem": "item_numero", "item": "item_numero", "nro": "item_numero",
-          "descripcion": "descripcion", "descripción": "descripcion",
-          "unidad": "unidad",
-          "precio_unitario": "precio_unitario", "precio unitario": "precio_unitario",
-          "precio": "precio_unitario", "valor": "precio_unitario"
+          const CAMPOS = {
+            "capitulo": "capitulo", "capítulo": "capitulo",
+            "competencia": "competencia",
+            "item_numero": "item_numero", "item número": "item_numero",
+            "ítem": "item_numero", "item": "item_numero", "nro": "item_numero",
+            "descripcion": "descripcion", "descripción": "descripcion",
+            "unidad": "unidad", "und": "unidad",
+            "precio_unitario": "precio_unitario", "precio unitario": "precio_unitario",
+            "precio": "precio_unitario", "valor": "precio_unitario",
+            "valorunitario": "precio_unitario", "valor unitario": "precio_unitario"
         };
         const rawHeaders = parseRow(lines[0]).map(h => h.toLowerCase());
         const headers = rawHeaders.map(h => CAMPOS[h] || h);
