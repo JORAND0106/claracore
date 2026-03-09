@@ -1148,7 +1148,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
               perms={isDeveloper || isAdmin ? { crear: true, editar: true } :
                 ["crear contrato","editar contrato"].reduce((acc, fn) => {
                   const p = (user?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === fn);
-                    if (fn === "crear contrato" && p?.crear) acc.crear = true;
+                    if (fn === "crear contrato" && (p?.crear || p?.ver)) acc.crear = true;
                     if (fn === "editar contrato" && p?.editar) acc.editar = true;
                   return acc;
                 }, { crear: false, editar: false })
