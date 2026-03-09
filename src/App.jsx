@@ -550,10 +550,10 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout, topO
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <img src="/CLARA.CORE.png" alt="ClaraCore" style={{ height: '40px', filter: activeTheme === 'dark' ? 'brightness(0) invert(1)' : 'none' }} />
           {usuario?.logo_contratista && (usuario?.rol_nombre === 'Contratista' || !['Interventoría'].includes(usuario?.rol_nombre)) && (
-            <img src={usuario.logo_contratista} alt="Contratista" style={{ height: '36px', borderRadius: '6px', background: '#fff', padding: '2px 6px', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }} />
+            <img src={usuario.logo_contratista} alt="Contratista" style={{ height: '52px', borderRadius: '6px', background: '#fff', padding: '3px 8px', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }} />
           )}
           {usuario?.logo_interventoria && (usuario?.rol_nombre === 'Interventoría' || !['Contratista'].includes(usuario?.rol_nombre)) && (
-            <img src={usuario.logo_interventoria} alt="Interventoría" style={{ height: '36px', borderRadius: '6px', background: '#fff', padding: '2px 6px', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }} />
+            <img src={usuario.logo_interventoria} alt="Interventoría" style={{ height: '52px', borderRadius: '6px', background: '#fff', padding: '3px 8px', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }} />
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
