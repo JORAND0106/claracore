@@ -929,13 +929,35 @@ function SeccionListadoPrecios({ call, contratos, perms, theme }) {
     const reader = new FileReader();
     reader.onload = async (ev) => {
       try {
-        const lines = ev.target.result.split("\n").filter(l => l.trim());
+        const raw = ev.target.result.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+        const lines = raw.split("\n").filter(l => l.trim());
         if (lines.length < 2) { setMsg({ type: "error", text: "El CSV no tiene datos." }); return; }
-        const rawHeaders = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, "").toLowerCase());
-        const CAMPOS = { "capitulo": "capitulo", "item_numero": "item_numero", "ítem": "item_numero", "item": "item_numero", "descripcion": "descripcion", "descripción": "descripcion", "unidad": "unidad", "precio_unitario": "precio_unitario", "precio": "precio_unitario" };
+        // Detectar separador: ; o ,
+        const sep = lines[0].includes(";") ? ";" : ",";
+        const parseRow = (line) => {
+          const vals = []; let cur = ""; let inQ = false;
+          for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (ch === '"') { inQ = !inQ; }
+            else if (ch === sep && !inQ) { vals.push(cur.trim()); cur = ""; }
+            else { cur += ch; }
+          }
+          vals.push(cur.trim());
+          return vals.map(v => v.replace(/^"|"$/g, "").trim());
+        };
+        const CAMPOS = {
+          "capitulo": "capitulo", "capítulo": "capitulo",
+          "item_numero": "item_numero", "item número": "item_numero",
+          "ítem": "item_numero", "item": "item_numero", "nro": "item_numero",
+          "descripcion": "descripcion", "descripción": "descripcion",
+          "unidad": "unidad",
+          "precio_unitario": "precio_unitario", "precio unitario": "precio_unitario",
+          "precio": "precio_unitario", "valor": "precio_unitario"
+        };
+        const rawHeaders = parseRow(lines[0]).map(h => h.toLowerCase());
         const headers = rawHeaders.map(h => CAMPOS[h] || h);
         const parsed = lines.slice(1).map(line => {
-          const vals = line.split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+          const vals = parseRow(line);
           const obj = {};
           headers.forEach((h, i) => { if (vals[i] !== undefined && vals[i] !== "") obj[h] = vals[i]; });
           return obj;
@@ -1174,7 +1196,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
               })()
             }
           />}
-            {tab === "precios"   && <SeccionListadoPrecios call={call} contratos={contratos} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true } : precioPerms} theme={activeTheme} />}
+            {tab === "precios"   && <SeccionListadoPrecios call={call} contratos={contratos} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true } : precioPerms} theme={activeTheme} />}
             {tab === "resets"    && <SeccionResets    call={call} theme={activeTheme} />}
           </div>
         </div>
