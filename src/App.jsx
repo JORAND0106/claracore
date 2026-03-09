@@ -605,6 +605,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout, topO
               }}
               style={{ fontSize: '13px', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none' }}
             >
+              {!usuario.contrato_id && (
+                <option value="">— Selecciona un contrato —</option>
+              )}
               {usuario._contratos.map(c => (
                 <option key={c.id} value={c.id}>📋 {c.numero}</option>
               ))}
