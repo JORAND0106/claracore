@@ -3,10 +3,21 @@ import { useState, useEffect, useCallback } from "react";
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = "https://claracore-backend.azurewebsites.net";
 
-// 6 acciones de permiso
 const ACCIONES = ["ver", "crear", "editar", "eliminar", "validar", "exportar"];
 
-// ─── ESTILOS BASE (sin dependencias externas) ──────────────────────────────
+// ─── TOKENS DE COLOR POR TEMA ──────────────────────────────────────────────
+// Evita repetir ternarios en cada componente
+const C = (theme) => ({
+  textPrimary:   theme === "light" ? "#0d3b52" : "#e0f4f7",
+  textSecondary: theme === "light" ? "#2a6070" : "#4a7a87",
+  textMuted:     theme === "light" ? "#4a7a87" : "#2a4a54",
+  textTable:     theme === "light" ? "#1a3a48" : "#c0dde3",
+  bgCard:        theme === "light" ? "#FFFFFF" : "#0b1920",
+  bgInput:       theme === "light" ? "#F0F9FF" : "#081318",
+  borderColor:   theme === "light" ? "#BAE6FD" : "rgba(0,175,197,0.2)",
+});
+
+// ─── ESTILOS BASE ──────────────────────────────────────────────────────────
 const S = {
   overlay: {
     position: "fixed", inset: 0, zIndex: 9999,
@@ -66,11 +77,16 @@ const S = {
     display: "flex", alignItems: "center", justifyContent: "space-between",
     background: theme === "light" ? "#FFFFFF" : "#0b1920",
   }),
-  contentTitle: {
-    fontSize: 20, fontWeight: 700, color: "#e0f4f7",
+  contentTitle: (theme) => ({
+    fontSize: 20, fontWeight: 700,
+    color: theme === "light" ? "#0d3b52" : "#e0f4f7",   // ← legible en ambos
     fontFamily: "'Rajdhani', sans-serif", letterSpacing: 0.5,
-  },
-  contentSub: { fontSize: 12, color: "#4a7a87", marginTop: 3 },
+  }),
+  contentSub: (theme) => ({
+    fontSize: 12,
+    color: theme === "light" ? "#2a6070" : "#4a7a87",   // ← legible en ambos
+    marginTop: 3,
+  }),
   closeBtn: {
     width: 32, height: 32, borderRadius: 6,
     background: "rgba(0,175,197,0.08)", border: "1px solid rgba(0,175,197,0.2)",
@@ -83,9 +99,7 @@ const S = {
     scrollbarWidth: "thin", scrollbarColor: "#1e3a44 transparent",
     background: theme === "light" ? "#F8FAFC" : "transparent",
   }),
-  table: {
-    width: "100%", borderCollapse: "collapse", fontSize: 13,
-  },
+  table: { width: "100%", borderCollapse: "collapse", fontSize: 13 },
   th: {
     textAlign: "left", padding: "10px 14px",
     background: "#081318", color: "#4a8a96",
@@ -93,12 +107,12 @@ const S = {
     textTransform: "uppercase",
     borderBottom: "1px solid rgba(0,175,197,0.12)",
   },
-  td: {
-    padding: "12px 14px", color: "#c0dde3",
-    borderBottom: "1px solid rgba(255,255,255,0.04)",
+  td: (theme) => ({
+    padding: "12px 14px",
+    color: theme === "light" ? "#1a3a48" : "#c0dde3",   // ← legible en ambos
+    borderBottom: theme === "light" ? "1px solid #E0F2FE" : "1px solid rgba(255,255,255,0.04)",
     verticalAlign: "middle",
-  },
-  trHover: { background: "rgba(0,175,197,0.04)", transition: "background 0.15s" },
+  }),
   badge: (estado) => ({
     display: "inline-block", padding: "3px 10px", borderRadius: 20,
     fontSize: 11, fontWeight: 600,
@@ -163,11 +177,6 @@ const S = {
     textAlign: "center", padding: "48px 0",
     color: "#2a4a54", fontSize: 14,
   },
-  loader: {
-    display: "inline-block", width: 8, height: 8, borderRadius: "50%",
-    background: "#00afc5", margin: "0 3px",
-    animation: "pulse 1.2s ease-in-out infinite",
-  },
 };
 
 // ─── HOOK: llamadas a la API ───────────────────────────────────────────────
@@ -192,7 +201,7 @@ function useApi(token) {
 }
 
 // ─── SECCIÓN 1: Gestión de Usuarios ───────────────────────────────────────
-function SeccionUsuarios({ call, cargos }) {
+function SeccionUsuarios({ call, cargos, theme }) {
   const [usuarios, setUsuarios] = useState([]);
   const [roles, setRoles] = useState([]);
   const [contratos, setContratos] = useState([]);
@@ -203,6 +212,8 @@ function SeccionUsuarios({ call, cargos }) {
   const [expandido, setExpandido] = useState(null);
   const [ucContratos, setUcContratos] = useState({});
   const [addingContrato, setAddingContrato] = useState({});
+
+  const col = C(theme);
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -273,6 +284,7 @@ function SeccionUsuarios({ call, cargos }) {
   };
 
   const estadoBadge = { pendiente: "#f59e0b", aprobado: "#22c55e", rechazado: "#ef4444" };
+  const tdStyle = S.td(theme);
 
   return (
     <div>
@@ -299,12 +311,12 @@ function SeccionUsuarios({ call, cargos }) {
             {usuarios.map(u => (
               <>
                 <tr key={u.id}>
-                  <td style={S.td}>
-                    <div style={{ color: "#e0f4f7", fontWeight: 500 }}>{u.nombre} {u.apellidos}</div>
-                    <div style={{ fontSize: 11, color: "#4a7a87" }}>{u.email}</div>
+                  <td style={tdStyle}>
+                    <div style={{ color: col.textPrimary, fontWeight: 500 }}>{u.nombre} {u.apellidos}</div>
+                    <div style={{ fontSize: 11, color: col.textSecondary }}>{u.email}</div>
                   </td>
-                  <td style={S.td}>
-                    <select style={{ ...S.select, minWidth: 110, color: estadoBadge[edits[u.id]?.estado] || "#c0dde3" }}
+                  <td style={tdStyle}>
+                    <select style={{ ...S.select, minWidth: 110, color: estadoBadge[edits[u.id]?.estado] || col.textTable }}
                       value={edits[u.id]?.estado || ""}
                       onChange={e => setEdit(u.id, "estado", e.target.value)}>
                       <option value="pendiente">🟡 Pendiente</option>
@@ -312,7 +324,7 @@ function SeccionUsuarios({ call, cargos }) {
                       <option value="rechazado">🔴 Rechazado</option>
                     </select>
                   </td>
-                  <td style={S.td}>
+                  <td style={tdStyle}>
                     <select style={{ ...S.select, minWidth: 140 }}
                       value={edits[u.id]?.cargo_id || ""}
                       onChange={e => setEdit(u.id, "cargo_id", e.target.value)}>
@@ -320,7 +332,7 @@ function SeccionUsuarios({ call, cargos }) {
                       {cargos.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
                     </select>
                   </td>
-                  <td style={S.td}>
+                  <td style={tdStyle}>
                     <select style={{ ...S.select, minWidth: 130 }}
                       value={edits[u.id]?.rol_id || ""}
                       onChange={e => setEdit(u.id, "rol_id", e.target.value)}>
@@ -328,7 +340,7 @@ function SeccionUsuarios({ call, cargos }) {
                       {roles.map(r => <option key={r.id} value={r.id}>{r.nombre}</option>)}
                     </select>
                   </td>
-                  <td style={S.td}>
+                  <td style={tdStyle}>
                     <select style={{ ...S.select, minWidth: 150 }}
                       value={edits[u.id]?.contrato_id || ""}
                       onChange={e => setEdit(u.id, "contrato_id", e.target.value)}>
@@ -336,7 +348,7 @@ function SeccionUsuarios({ call, cargos }) {
                       {contratos.map(c => <option key={c.id} value={c.id}>{c.numero}</option>)}
                     </select>
                   </td>
-                  <td style={S.td}>
+                  <td style={tdStyle}>
                     <div style={{ display: "flex", gap: 6 }}>
                       <button style={S.btn("primary", true)} disabled={saving === u.id} onClick={() => guardar(u.id)}>
                         {saving === u.id ? "..." : "💾"}
@@ -349,7 +361,7 @@ function SeccionUsuarios({ call, cargos }) {
                 </tr>
                 {expandido === u.id && (
                   <tr key={`uc-${u.id}`}>
-                    <td colSpan={6} style={{ ...S.td, background: "rgba(0,175,197,0.04)", padding: "12px 20px" }}>
+                    <td colSpan={6} style={{ ...tdStyle, background: "rgba(0,175,197,0.04)", padding: "12px 20px" }}>
                       <div style={{ fontSize: 12, color: "#00afc5", marginBottom: 8, fontWeight: 600 }}>
                         Contratos autorizados para {u.nombre}:
                       </div>
@@ -360,7 +372,7 @@ function SeccionUsuarios({ call, cargos }) {
                             <span style={{ cursor: "pointer", color: "#ef4444", fontWeight: 700 }} onClick={() => quitarContrato(u.id, c.id)}>×</span>
                           </span>
                         ))}
-                        {(ucContratos[u.id] || []).length === 0 && <span style={{ color: "#4a7a87", fontSize: 12 }}>Sin contratos asignados</span>}
+                        {(ucContratos[u.id] || []).length === 0 && <span style={{ color: col.textSecondary, fontSize: 12 }}>Sin contratos asignados</span>}
                       </div>
                       <div style={{ display: "flex", gap: 8 }}>
                         <select style={{ ...S.select, minWidth: 180 }}
@@ -384,10 +396,12 @@ function SeccionUsuarios({ call, cargos }) {
 }
 
 // ─── SECCIÓN 2: CRUD Cargos ────────────────────────────────────────────────
-function SeccionCargos({ call, cargos, recargarCargos }) {
+function SeccionCargos({ call, cargos, recargarCargos, theme }) {
   const [nuevo, setNuevo] = useState("");
   const [msg, setMsg] = useState(null);
   const [eliminando, setEliminando] = useState(null);
+  const col = C(theme);
+  const tdStyle = S.td(theme);
 
   const crear = async () => {
     const nombre = nuevo.trim();
@@ -448,9 +462,9 @@ function SeccionCargos({ call, cargos, recargarCargos }) {
         <tbody>
           {cargos.map((c, i) => (
             <tr key={c.id}>
-              <td style={{ ...S.td, color: "#2a5a6a", width: 40 }}>{i + 1}</td>
-              <td style={S.td}><span style={{ color: "#c0dde3" }}>{c.nombre}</span></td>
-              <td style={S.td}>
+              <td style={{ ...tdStyle, color: col.textMuted, width: 40 }}>{i + 1}</td>
+              <td style={tdStyle}><span style={{ color: col.textTable }}>{c.nombre}</span></td>
+              <td style={tdStyle}>
                 <button style={S.btn("danger", true)} disabled={eliminando === c.id} onClick={() => eliminar(c.id, c.nombre)}>
                   {eliminando === c.id ? "..." : "Eliminar"}
                 </button>
@@ -458,7 +472,7 @@ function SeccionCargos({ call, cargos, recargarCargos }) {
             </tr>
           ))}
           {cargos.length === 0 && (
-            <tr><td colSpan={3} style={{ ...S.td, ...S.empty }}>Sin cargos registrados.</td></tr>
+            <tr><td colSpan={3} style={{ ...tdStyle, ...S.empty }}>Sin cargos registrados.</td></tr>
           )}
         </tbody>
       </table>
@@ -467,13 +481,14 @@ function SeccionCargos({ call, cargos, recargarCargos }) {
 }
 
 // ─── SECCIÓN 3: Matriz de permisos ─────────────────────────────────────────
-function SeccionPermisos({ call, cargos }) {
+function SeccionPermisos({ call, cargos, theme }) {
   const [cargoId, setCargoId] = useState("");
   const [funciones, setFunciones] = useState([]);
   const [permisos, setPermisos] = useState({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
+  const col = C(theme);
 
   const cargarPermisos = useCallback(async (id) => {
     if (!id) return;
@@ -539,6 +554,8 @@ function SeccionPermisos({ call, cargos }) {
     eliminar: "#ef4444", validar: "#a78bfa", exportar: "#38bdf8",
   };
 
+  const tdStyle = S.td(theme);
+
   return (
     <div>
       {msg && (
@@ -548,7 +565,7 @@ function SeccionPermisos({ call, cargos }) {
         </div>
       )}
       <div style={{ ...S.card, display: "flex", alignItems: "center", gap: 16, marginBottom: 20 }}>
-        <div style={{ color: "#4a8a96", fontSize: 13, whiteSpace: "nowrap" }}>Cargo a configurar:</div>
+        <div style={{ color: col.textSecondary, fontSize: 13, whiteSpace: "nowrap" }}>Cargo a configurar:</div>
         <select style={{ ...S.select, flex: 1, maxWidth: 280 }} value={cargoId} onChange={e => setCargoId(e.target.value)}>
           <option value="">-- Selecciona un cargo --</option>
           {cargos.map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
@@ -588,7 +605,7 @@ function SeccionPermisos({ call, cargos }) {
             const todoActivo = ACCIONES.every(a => fila[a]);
             return (
               <div key={f.id} style={{ display: "grid", gridTemplateColumns: `220px repeat(${ACCIONES.length}, 1fr) 80px`, background: idx % 2 === 0 ? "transparent" : "rgba(0,175,197,0.025)", borderBottom: "1px solid rgba(255,255,255,0.03)", alignItems: "center" }}>
-                <div style={{ ...S.td, padding: "10px 16px" }}>
+                <div style={{ ...tdStyle, padding: "10px 16px" }}>
                   <span style={{ color: "#8acdd8", fontSize: 13 }}>{f.nombre}</span>
                   {f.descripcion && <div style={{ fontSize: 11, color: "#2a5a6a", marginTop: 1 }}>{f.descripcion}</div>}
                 </div>
@@ -614,11 +631,13 @@ function SeccionPermisos({ call, cargos }) {
 }
 
 // ─── SECCIÓN 4: Reset de Claves ────────────────────────────────────────────
-function SeccionResets({ call }) {
+function SeccionResets({ call, theme }) {
   const [solicitudes, setSolicitudes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tempPasswords, setTempPasswords] = useState({});
   const [msg, setMsg] = useState(null);
+  const col = C(theme);
+  const tdStyle = S.td(theme);
 
   const cargar = useCallback(async () => {
     setLoading(true);
@@ -651,14 +670,14 @@ function SeccionResets({ call }) {
           <tbody>
             {solicitudes.map(s => (
               <tr key={s.id}>
-                <td style={S.td}><div style={{ color: "#e0f4f7", fontWeight: 500 }}>{s.email}</div></td>
-                <td style={S.td}><span style={{ color: "#4a8a96" }}>{new Date(s.created_at).toLocaleDateString("es-CO")}</span></td>
-                <td style={S.td}>
+                <td style={tdStyle}><div style={{ color: col.textPrimary, fontWeight: 500 }}>{s.email}</div></td>
+                <td style={tdStyle}><span style={{ color: col.textSecondary }}>{new Date(s.created_at).toLocaleDateString("es-CO")}</span></td>
+                <td style={tdStyle}>
                   <input style={{ ...S.input, maxWidth: 180 }} type="text" placeholder="Ej: Temp1234"
                     value={tempPasswords[s.id] || ""}
                     onChange={e => setTempPasswords(p => ({ ...p, [s.id]: e.target.value }))} />
                 </td>
-                <td style={S.td}>
+                <td style={tdStyle}>
                   <button style={S.btn("success", true)} onClick={() => autorizar(s.id)}>✓ Autorizar</button>
                 </td>
               </tr>
@@ -821,18 +840,18 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
         <div style={S.content}>
           <div style={S.contentHeader(activeTheme)}>
             <div>
-              <div style={S.contentTitle}>{TITULOS[tab].title}</div>
-              <div style={S.contentSub}>{TITULOS[tab].sub}</div>
+              <div style={S.contentTitle(activeTheme)}>{TITULOS[tab].title}</div>
+              <div style={S.contentSub(activeTheme)}>{TITULOS[tab].sub}</div>
             </div>
             <button style={S.closeBtn} onClick={onClose} title="Cerrar">✕</button>
           </div>
 
           <div style={S.scrollArea(activeTheme)}>
-            {tab === "usuarios"  && <SeccionUsuarios call={call} cargos={cargos} />}
-            {tab === "cargos"    && <SeccionCargos call={call} cargos={cargos} recargarCargos={cargarCargos} />}
-            {tab === "permisos"  && <SeccionPermisos call={call} cargos={cargos} />}
+            {tab === "usuarios"  && <SeccionUsuarios  call={call} cargos={cargos} theme={activeTheme} />}
+            {tab === "cargos"    && <SeccionCargos    call={call} cargos={cargos} recargarCargos={cargarCargos} theme={activeTheme} />}
+            {tab === "permisos"  && <SeccionPermisos  call={call} cargos={cargos} theme={activeTheme} />}
             {tab === "contratos" && <SeccionContratos call={call} />}
-            {tab === "resets"    && <SeccionResets call={call} />}
+            {tab === "resets"    && <SeccionResets    call={call} theme={activeTheme} />}
           </div>
         </div>
       </div>
