@@ -109,7 +109,7 @@ function ModalLogin({ t, onClose, onLoginOk, onForgot }) {
       const storage = mantener ? localStorage : sessionStorage
       storage.setItem('cc_token', data.access_token)
       storage.setItem('cc_usuario', JSON.stringify(data.usuario))
-      onLoginOk(data.usuario)
+      onLoginOk(data.usuario, data.access_token)
     } catch {
       setError('No se pudo conectar con el servidor')
     } finally {
@@ -598,8 +598,33 @@ export default function App() {
     setActiveTheme(mode === 'auto' ? getAutoTheme() : mode)
   }
 
-  function handleLoginOk(u) {
+  const [pendingUser, setPendingUser] = useState(null)
+  const [pendingContratos, setPendingContratos] = useState([])
+
+  async function handleLoginOk(u, token) {
+    try {
+      const res = await fetch(`${API}/admin/usuario-contratos/${u.id}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const contratos = res.ok ? await res.json() : []
+      if (contratos.length > 1) {
+        setPendingUser({ ...u, _token: token })
+        setPendingContratos(contratos)
+        setModal('selector_contrato')
+      } else {
+        setUsuario(u); setModal(null)
+      }
+    } catch {
+      setUsuario(u); setModal(null)
+    }
+  }
+
+  function handleSeleccionarContrato(contratoId) {
+    const contrato = pendingContratos.find(c => c.id === parseInt(contratoId))
+    const u = { ...pendingUser, contrato_id: contrato.id, contrato_numero: contrato.numero }
+    delete u._token
     setUsuario(u); setModal(null)
+    setPendingUser(null); setPendingContratos([])
   }
 
   function handleLogout() {
