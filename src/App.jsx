@@ -728,7 +728,7 @@ const permisosChanged =
     setBannerMsg(`⚡ Tu ${msgs.join(', ')} fue actualizado por el administrador.`)
   }
       } catch { /* silencioso — no interrumpir la sesión por error de red */ }
-    }, 60000)
+    }, 15000)
     return () => clearInterval(id)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
