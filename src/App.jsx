@@ -591,16 +591,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout, topO
                 const contrato = usuario._contratos.find(c => c.id === cid)
                 if (!contrato) return
                 const u = { ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero, logo_contratista: contrato.logo_contratista || usuario.logo_contratista, logo_interventoria: contrato.logo_interventoria || usuario.logo_interventoria }
-                try {
-                  const token = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
-                  await fetch(`${API}/admin/usuarios/${u.id}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                    body: JSON.stringify({ contrato_id: contrato.id })
-                  })
-                } catch { /* silencioso */ }
-                const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
-                storage.setItem('cc_usuario', JSON.stringify(u))
                 setUsuario(u)
               }}
               style={{ fontSize: '13px', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none' }}
