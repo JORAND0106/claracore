@@ -295,26 +295,99 @@ function ModalCrearCuenta({ t, onClose }) {
 // ─── MODAL OLVIDÉ CONTRASEÑA ──────────────────────────────────────────────────
 function ModalOlvide({ t, onClose }) {
   const [email, setEmail] = useState('')
-  const [sent, setSent] = useState(false)
+  const [paso, setPaso] = useState('email') // 'email' | 'enviado' | 'cambiar'
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [tempPass, setTempPass] = useState('')
+  const [nuevaPass, setNuevaPass] = useState('')
+  const [confirmarPass, setConfirmarPass] = useState('')
 
-  async function handleEnviar() {
+  async function handleSolicitar() {
     if (!email) return
-    setLoading(true)
-    await new Promise(r => setTimeout(r, 1000))
-    setLoading(false); setSent(true)
+    setLoading(true); setError('')
+    try {
+      const res = await fetch(`${API}/auth/solicitar-reset`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.detail || 'Error'); return }
+      setPaso('enviado')
+    } catch { setError('No se pudo conectar con el servidor') }
+    finally { setLoading(false) }
   }
 
-  if (sent) return (
+  async function handleVerificarAutorizacion() {
+    if (!email) return
+    setLoading(true); setError('')
+    try {
+      const res = await fetch(`${API}/auth/reset-autorizado?email=${encodeURIComponent(email)}`)
+      const data = await res.json()
+      if (data.autorizado) { setPaso('cambiar') }
+      else { setError('Aún no has sido autorizado por el administrador.') }
+    } catch { setError('No se pudo conectar') }
+    finally { setLoading(false) }
+  }
+
+  async function handleCambiar() {
+    if (!tempPass || !nuevaPass || !confirmarPass) { setError('Completa todos los campos'); return }
+    if (nuevaPass !== confirmarPass) { setError('Las contraseñas no coinciden'); return }
+    if (nuevaPass.length < 8) { setError('Mínimo 8 caracteres'); return }
+    setLoading(true); setError('')
+    try {
+      const res = await fetch(`${API}/auth/cambiar-password-temporal`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, contrasena_temporal: tempPass, nueva_password: nuevaPass })
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data.detail || 'Error'); return }
+      setPaso('listo')
+    } catch { setError('No se pudo conectar') }
+    finally { setLoading(false) }
+  }
+
+  if (paso === 'listo') return (
     <Modal t={t} onClose={onClose} width="400px">
       <div style={{ textAlign: 'center', padding: '20px 0' }}>
-        <div style={{ fontSize: '48px', marginBottom: '16px' }}>📧</div>
-        <h2 style={{ color: t.primary, margin: '0 0 12px', fontSize: '20px' }}>Correo enviado</h2>
-        <p style={{ color: t.textMuted, fontSize: '14px', lineHeight: '1.6' }}>
-          Si el correo <strong>{email}</strong> está registrado, recibirás las instrucciones para restablecer tu contraseña.
-        </p>
-        <button onClick={onClose} style={{ marginTop: '24px', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px 32px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}>Aceptar</button>
+        <div style={{ fontSize: '48px', marginBottom: '16px' }}>✅</div>
+        <h2 style={{ color: t.primary, margin: '0 0 12px', fontSize: '20px' }}>¡Contraseña actualizada!</h2>
+        <p style={{ color: t.textMuted, fontSize: '14px' }}>Ya puedes iniciar sesión con tu nueva contraseña.</p>
+        <button onClick={onClose} style={{ marginTop: '24px', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px 32px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}>Ingresar</button>
       </div>
+    </Modal>
+  )
+
+  if (paso === 'enviado') return (
+    <Modal t={t} onClose={onClose} width="400px">
+      <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+        <div style={{ fontSize: '40px', marginBottom: '8px' }}>⏳</div>
+        <h2 style={{ color: t.primary, margin: '0 0 8px', fontSize: '20px' }}>Solicitud enviada</h2>
+        <p style={{ color: t.textMuted, fontSize: '13px', lineHeight: '1.6' }}>
+          El administrador recibirá tu solicitud y te asignará una contraseña temporal. Cuando te lo indique, regresa aquí.
+        </p>
+      </div>
+      {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', marginBottom: '12px' }}>{error}</div>}
+      <button onClick={handleVerificarAutorizacion} disabled={loading} style={{ width: '100%', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', marginBottom: '10px' }}>
+        {loading ? 'Verificando...' : '🔍 Ya me autorizaron, continuar'}
+      </button>
+      <button onClick={onClose} style={{ width: '100%', background: 'transparent', border: `1.5px solid ${t.border}`, borderRadius: '10px', padding: '12px', color: t.textMuted, fontSize: '14px', cursor: 'pointer' }}>Cerrar</button>
+    </Modal>
+  )
+
+  if (paso === 'cambiar') return (
+    <Modal t={t} onClose={onClose} width="400px">
+      <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+        <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔐</div>
+        <h2 style={{ color: t.primary, margin: 0, fontSize: '20px', fontWeight: '800' }}>Nueva Contraseña</h2>
+        <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: '13px' }}>Ingresa la contraseña temporal que te dio el administrador</p>
+      </div>
+      <Field label="CONTRASEÑA TEMPORAL" t={t} type="password" placeholder="La que te dio el admin" value={tempPass} onChange={e => setTempPass(e.target.value)} />
+      <Field label="NUEVA CONTRASEÑA" t={t} type="password" placeholder="Mínimo 8 caracteres" value={nuevaPass} onChange={e => setNuevaPass(e.target.value)} />
+      <Field label="CONFIRMAR NUEVA CONTRASEÑA" t={t} type="password" placeholder="Repite la contraseña" value={confirmarPass} onChange={e => setConfirmarPass(e.target.value)} />
+      {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', marginBottom: '12px' }}>{error}</div>}
+      <button onClick={handleCambiar} disabled={loading} style={{ width: '100%', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}>
+        {loading ? 'Guardando...' : 'Guardar Nueva Contraseña'}
+      </button>
     </Modal>
   )
 
@@ -323,15 +396,16 @@ function ModalOlvide({ t, onClose }) {
       <div style={{ textAlign: 'center', marginBottom: '28px' }}>
         <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔑</div>
         <h2 style={{ color: t.primary, margin: 0, fontSize: '22px', fontWeight: '800' }}>Olvidé mi Contraseña</h2>
-        <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: '13px' }}>Te enviaremos un enlace de restablecimiento</p>
+        <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: '13px' }}>El administrador te asignará una contraseña temporal</p>
       </div>
       <Field label="CORREO ELECTRÓNICO" t={t} type="email" placeholder="tu@correo.com"
         value={email} onChange={e => setEmail(e.target.value)}
-        onKeyDown={e => e.key === 'Enter' && handleEnviar()} />
+        onKeyDown={e => e.key === 'Enter' && handleSolicitar()} />
+      {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', marginBottom: '12px' }}>{error}</div>}
       <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
         <button onClick={onClose} style={{ flex: 1, background: 'transparent', border: `1.5px solid ${t.border}`, borderRadius: '10px', padding: '12px', color: t.textMuted, fontSize: '14px', cursor: 'pointer' }}>Cancelar</button>
-        <button onClick={handleEnviar} disabled={loading || !email} style={{ flex: 2, background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: (!email || loading) ? 'not-allowed' : 'pointer', opacity: (!email || loading) ? 0.6 : 1 }}>
-          {loading ? 'Enviando...' : 'Enviar Enlace'}
+        <button onClick={handleSolicitar} disabled={loading || !email} style={{ flex: 2, background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: (!email || loading) ? 'not-allowed' : 'pointer', opacity: (!email || loading) ? 0.6 : 1 }}>
+          {loading ? 'Enviando...' : 'Solicitar Reset'}
         </button>
       </div>
     </Modal>
@@ -468,7 +542,15 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout }) {
   return (
     <div style={s.app}>
       <div style={s.header}>
-        <img src="/CLARA.CORE.png" alt="ClaraCore" style={{ height: '40px', filter: activeTheme === 'dark' ? 'brightness(0) invert(1)' : 'none' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <img src="/CLARA.CORE.png" alt="ClaraCore" style={{ height: '40px', filter: activeTheme === 'dark' ? 'brightness(0) invert(1)' : 'none' }} />
+          {usuario?.logo_contratista && (usuario?.rol_nombre === 'Contratista' || !['Interventoría'].includes(usuario?.rol_nombre)) && (
+            <img src={usuario.logo_contratista} alt="Contratista" style={{ height: '36px', borderRadius: '6px', background: '#fff', padding: '2px 6px', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }} />
+          )}
+          {usuario?.logo_interventoria && (usuario?.rol_nombre === 'Interventoría' || !['Contratista'].includes(usuario?.rol_nombre)) && (
+            <img src={usuario.logo_interventoria} alt="Interventoría" style={{ height: '36px', borderRadius: '6px', background: '#fff', padding: '2px 6px', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }} />
+          )}
+        </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <div style={s.themeSelector}>
             {['light', 'auto', 'dark'].map((mode, i) => (
@@ -497,8 +579,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, onLogout }) {
       <div style={s.body}>
         <div style={s.topBar}>
           <span style={{ fontSize: '13px', color: t.textMuted }}>
-            {usuario?.logo_contratista && <img src={usuario.logo_contratista} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: '2px 6px', marginRight: 6 }} />}
-            {usuario?.logo_interventoria && <img src={usuario.logo_interventoria} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: '2px 6px', marginRight: 6 }} />}
             📋 Contrato: {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
           </span>
           {/* Crear Contrato se gestiona desde el Panel Admin */}

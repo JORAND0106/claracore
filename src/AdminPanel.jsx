@@ -706,6 +706,61 @@ function SeccionPermisos({ call, cargos }) {
     </div>
   );
 }
+function SeccionResets({ call }) {
+  const [solicitudes, setSolicitudes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [tempPasswords, setTempPasswords] = useState({});
+  const [msg, setMsg] = useState(null);
+
+  const cargar = useCallback(async () => {
+    setLoading(true);
+    try { setSolicitudes(await call("GET", "/admin/reset-requests")); }
+    catch (e) { setMsg({ type: "error", text: e.message }); }
+    finally { setLoading(false); }
+  }, [call]);
+
+  useEffect(() => { cargar(); }, [cargar]);
+
+  const autorizar = async (id) => {
+    const temp = tempPasswords[id];
+    if (!temp || temp.length < 6) { setMsg({ type: "error", text: "Ingresa una contraseña temporal de mínimo 6 caracteres" }); return; }
+    try {
+      await call("PUT", `/admin/reset-requests/${id}/autorizar`, { contrasena_temporal: temp });
+      setMsg({ type: "success", text: "Reset autorizado. El usuario ya puede cambiar su contraseña." });
+      cargar();
+    } catch (e) { setMsg({ type: "error", text: e.message }); }
+  };
+
+  return (
+    <div>
+      {msg && <div style={S.alert(msg.type)}>{msg.text}<span onClick={() => setMsg(null)} style={{ float: "right", cursor: "pointer", opacity: 0.6 }}>✕</span></div>}
+      {loading ? <div style={S.empty}>Cargando...</div>
+      : solicitudes.length === 0 ? (
+        <div style={S.empty}><div style={{ fontSize: 32, marginBottom: 8 }}>✓</div>No hay solicitudes de reset pendientes.</div>
+      ) : (
+        <table style={S.table}>
+          <thead><tr>{["Correo", "Fecha solicitud", "Contraseña temporal", "Acción"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {solicitudes.map(s => (
+              <tr key={s.id}>
+                <td style={S.td}><div style={{ color: "#e0f4f7", fontWeight: 500 }}>{s.email}</div></td>
+                <td style={S.td}><span style={{ color: "#4a8a96" }}>{new Date(s.created_at).toLocaleDateString("es-CO")}</span></td>
+                <td style={S.td}>
+                  <input style={{ ...S.input, maxWidth: 180 }} type="text" placeholder="Ej: Temp1234"
+                    value={tempPasswords[s.id] || ""}
+                    onChange={e => setTempPasswords(p => ({ ...p, [s.id]: e.target.value }))} />
+                </td>
+                <td style={S.td}>
+                  <button style={S.btn("success", true)} onClick={() => autorizar(s.id)}>✓ Autorizar</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
 function SeccionContratos({ call }) {
   const [form, setForm] = useState({ numero: '', objeto: '', contratista: '', nit: '', interventoria: '', logo_contratista: '', logo_interventoria: '' });
   const [saving, setSaving] = useState(false);
@@ -832,7 +887,8 @@ export default function AdminPanel({ user, token, onClose }) {
     usuarios:  { title: "Gestión de usuarios", sub: "Administra cargos, roles, contratos y estados" },
     cargos:    { title: "Gestión de cargos",   sub: "Crea y elimina cargos del sistema" },
     permisos:  { title: "Matriz de permisos",  sub: "Configura qué puede hacer cada cargo" },
-    contratos: { title: "Contratos",           sub: "Crea y gestiona contratos del sistema" },
+    contratos: { title: "Contratos",    sub: "Crea y gestiona contratos del sistema" },
+    resets:    { title: "Reset Claves", sub: "Autoriza solicitudes de cambio de contraseña" },
   };
 
   return (
@@ -890,6 +946,9 @@ export default function AdminPanel({ user, token, onClose }) {
             )}
             {tab === "contratos" && (
               <SeccionContratos call={call} />
+            )}
+            {tab === "resets" && (
+              <SeccionResets call={call} />
             )}
           </div>
         </div>
