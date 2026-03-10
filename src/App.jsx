@@ -525,9 +525,9 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   }
 
   // ── Drill-down computado ───────────────────────────────────────────────────
-  const nivelIdx    = drill.length
-  const nivelActual = NIVELES[nivelIdx] || null
-  const colorActual = PALETA_BARRAS[Math.min(nivelIdx, PALETA_BARRAS.length - 1)]
+  const [nivelActual, setNivelActual] = useState('capitulo')
+  const nivelIdx    = NIVELES.indexOf(nivelActual)
+  const colorActual = PALETA_BARRAS[Math.max(0, Math.min(nivelIdx, PALETA_BARRAS.length - 1))]
 
   const registrosFiltrados = useMemo(() =>
     registros.filter(r => drill.every(({campo, valor}) => r[campo] === valor))
@@ -561,11 +561,13 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   function handleBarClick(barData) {
     if (!nivelActual || !barData?.name) return
     setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
+    setNivelActual(null)
     setSeleccionados(new Set())
   }
 
   function irA(idx) {
     setDrill(prev => prev.slice(0, idx))
+    setNivelActual(null)
     setSeleccionados(new Set())
   }
 
@@ -757,21 +759,40 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
             ))}
           </div>
 
-          {/* Título y totales */}
-          <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px',flexWrap:'wrap',gap:'8px' }}>
-            <div>
-              <span style={{ fontSize:'13px',fontWeight:'700',color:t.text }}>
-                {nivelActual ? `Vista por ${NOM[nivelActual]}` : 'Vista detalle completa'}
-              </span>
-              <span style={{ fontSize:'12px',color:t.textMuted,marginLeft:'12px' }}>
+          {/* Selector de nivel */}
+          <div style={{ marginBottom:'14px' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap', marginBottom:'10px' }}>
+              <span style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>AGRUPAR POR:</span>
+              {NIVELES.map(n => {
+                const usado = drill.some(d => d.campo === n)
+                const activo = nivelActual === n
+                return (
+                  <button key={n} onClick={() => !usado && setNivelActual(activo ? null : n)}
+                    style={{
+                      background: activo ? colorActual : usado ? t.border : t.bg,
+                      color: activo ? '#fff' : usado ? t.textMuted : t.text,
+                      border: `1.5px solid ${activo ? colorActual : t.border}`,
+                      borderRadius:'20px', padding:'4px 14px', fontSize:'12px',
+                      fontWeight: activo ? '700' : '400',
+                      cursor: usado ? 'not-allowed' : 'pointer',
+                      opacity: usado ? 0.45 : 1,
+                      transition:'all 0.15s'
+                    }}>
+                    {NOM[n]}
+                  </button>
+                )
+              })}
+            </div>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'8px' }}>
+              <span style={{ fontSize:'12px', color:t.textMuted }}>
                 {registrosFiltrados.length} registros · <strong style={{color:colorActual}}>{fmt(costoTotal)}</strong>
               </span>
+              {nivelActual && (
+                <span style={{ fontSize:'11px', color:t.textMuted, fontStyle:'italic' }}>
+                  👆 Click en una barra para filtrar por ese valor
+                </span>
+              )}
             </div>
-            {nivelActual && (
-              <span style={{ fontSize:'11px',color:t.textMuted,fontStyle:'italic' }}>
-                👆 Click en una barra para explorar el siguiente nivel
-              </span>
-            )}
           </div>
 
           {/* Gráfico */}
