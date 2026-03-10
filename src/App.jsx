@@ -484,7 +484,11 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   // ── Constantes drill-down ──────────────────────────────────────────────────
   const NIVELES = ['capitulo', 'item', 'pk_id', 'tramo', 'calzada']
   const NOM     = { capitulo:'Capítulo', item:'Ítem', pk_id:'PK_ID', tramo:'Tramo', calzada:'Calzada' }
-  const PALETA  = ['#0077B6','#00B4C6','#00A896','#028090','#05668D']
+  const PALETA_BARRAS = [
+    '#0077B6','#00B4C6','#00A896','#028090','#05668D',
+    '#2E86AB','#A23B72','#F18F01','#C73E1D','#3B1F2B',
+    '#44BBA4','#E94F37','#393E41','#F5A623','#7B2D8B',
+  ]
 
   const fmt  = (n) => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '-'
   const fmtN = (n) => n != null ? new Intl.NumberFormat('es-CO',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n) : '-'
@@ -534,17 +538,16 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
       agg[key].costo += r.costo_directo ?? 0
       agg[key].count++
     })
-    return Object.values(agg).sort((a, b) => b.costo - a.costo).slice(0, 15)
+    return Object.values(agg).sort((a, b) => a.name.localeCompare(b.name, 'es', {numeric: true})).slice(0, 20)
   }, [registrosFiltrados, nivelActual])
 
   const costoTotal = useMemo(() =>
     registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
   , [registrosFiltrados])
 
-  function handleBarClick(data) {
-    if (!nivelActual || !data?.activePayload?.[0]) return
-    const valor = data.activePayload[0].payload.name
-    setDrill(prev => [...prev, { campo: nivelActual, valor }])
+  function handleBarClick(barData) {
+    if (!nivelActual || !barData?.name) return
+    setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
     setSeleccionados(new Set())
   }
 
@@ -776,7 +779,6 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
             <ResponsiveContainer width="100%" height={Math.max(180, chartData.length * 40 + 20)}>
               <BarChart data={chartData} layout="vertical"
                 margin={{ left: 8, right: 80, top: 4, bottom: 4 }}
-                onClick={handleBarClick}
                 style={{ cursor: 'pointer' }}>
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={t.border} />
                 <XAxis type="number" tickFormatter={fmtM}
@@ -785,15 +787,19 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                   tick={{ fontSize:11, fill:t.text }} tickLine={false} axisLine={false} />
                 <Tooltip content={<CustomTooltip />} cursor={{ fill: colorActual + '18' }} />
                 <Bar dataKey="costo" radius={[0, 5, 5, 0]}
+                  onClick={(barData) => handleBarClick(barData)}
                   onMouseEnter={(_, i) => setHoveredBar(i)}
                   onMouseLeave={() => setHoveredBar(null)}>
-                  {chartData.map((_, i) => (
-                    <Cell key={i}
-                      fill={hoveredBar === null || hoveredBar === i ? colorActual : colorActual + '55'}
-                      stroke={hoveredBar === i ? colorActual : 'none'}
-                      strokeWidth={2}
-                    />
-                  ))}
+                  {chartData.map((_, i) => {
+                    const color = PALETA_BARRAS[i % PALETA_BARRAS.length]
+                    return (
+                      <Cell key={i}
+                        fill={hoveredBar === null || hoveredBar === i ? color : color + '66'}
+                        stroke={hoveredBar === i ? color : 'none'}
+                        strokeWidth={2}
+                      />
+                    )
+                  })}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
