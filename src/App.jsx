@@ -1301,55 +1301,117 @@ export default function App() {
   const [pendingContratos, setPendingContratos] = useState([])
   const [bannerMsg, setBannerMsg] = useState(null)
 
-  // ── Polling de sesión propia cada 60 s ──────────────────────────────────
-  // Detecta cambios de cargo/estado hechos por el admin sin que el usuario deba cerrar sesión
+  // ── Inactividad y renovación de token ───────────────────────────────────
   const usuarioRef = useRef(usuario)
+  const lastActivityRef = useRef(Date.now())
+  const INACTIVITY_LIMIT = 60 * 60 * 1000      // 60 min → cerrar sesión
+  const WARN_BEFORE     = 5  * 60 * 1000        // avisar 5 min antes
+  const REFRESH_INTERVAL = 50 * 60 * 1000       // renovar token a los 50 min de actividad
+
   useEffect(() => { usuarioRef.current = usuario }, [usuario])
+
+  // Rastrear actividad del usuario
+  useEffect(() => {
+    if (!usuario) return
+    const touch = () => { lastActivityRef.current = Date.now() }
+    window.addEventListener('mousemove', touch)
+    window.addEventListener('keydown', touch)
+    window.addEventListener('click', touch)
+    window.addEventListener('scroll', touch)
+    return () => {
+      window.removeEventListener('mousemove', touch)
+      window.removeEventListener('keydown', touch)
+      window.removeEventListener('click', touch)
+      window.removeEventListener('scroll', touch)
+    }
+  }, [usuario])
 
   useEffect(() => {
     if (!usuario) return
-    const token = getToken()
-    if (!token) return
     const id = setInterval(async () => {
+      const token = getToken()
+      if (!token) return
+
+      const inactivo = Date.now() - lastActivityRef.current
+
+      // Cerrar sesión por inactividad
+      if (inactivo >= INACTIVITY_LIMIT) {
+        clearInterval(id)
+        const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
+        storage.removeItem('cc_token')
+        storage.removeItem('cc_usuario')
+        setUsuario(null)
+        setBannerMsg('🔒 Sesión cerrada por inactividad. Inicia sesión nuevamente.')
+        return
+      }
+
+      // Advertir 5 min antes
+      if (inactivo >= INACTIVITY_LIMIT - WARN_BEFORE) {
+        const mins = Math.ceil((INACTIVITY_LIMIT - inactivo) / 60000)
+        setBannerMsg(`⚠️ Tu sesión expirará en ${mins} minuto${mins !== 1 ? 's' : ''} por inactividad.`)
+      }
+
+      // Renovar token si el usuario ha estado activo (inactivo < 50 min)
+      if (inactivo < REFRESH_INTERVAL) {
+        try {
+          const refreshRes = await fetch(`${API}/auth/refresh`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` }
+          })
+          if (refreshRes.ok) {
+            const { access_token } = await refreshRes.json()
+            const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
+            storage.setItem('cc_token', access_token)
+          } else if (refreshRes.status === 401) {
+            // Token ya venció en el servidor
+            const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
+            storage.removeItem('cc_token')
+            storage.removeItem('cc_usuario')
+            setUsuario(null)
+            setBannerMsg('🔒 Tu sesión expiró. Inicia sesión nuevamente.')
+            return
+          }
+        } catch { /* silencioso */ }
+      }
+
+      // Polling de cambios de perfil (cargo, permisos, etc.)
       try {
+        const freshToken = getToken()
         const res = await fetch(`${API}/usuarios/me`, {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: { Authorization: `Bearer ${freshToken}` }
         })
         if (!res.ok) return
         const fresh = await res.json()
         const prev = usuarioRef.current
-        // Detectar cambios relevantes: cargo, rol, estado, contrato
-const permisosChanged =
-  JSON.stringify((fresh.permisos || []).map(p => `${p.funcion_id}-${p.ver}-${p.crear}-${p.editar}-${p.eliminar}-${p.validar}-${p.exportar}`).sort()) !==
-  JSON.stringify((prev.permisos  || []).map(p => `${p.funcion_id}-${p.ver}-${p.crear}-${p.editar}-${p.eliminar}-${p.validar}-${p.exportar}`).sort())
-  const changed =
-    fresh.cargo_id    !== prev.cargo_id   ||
-    fresh.rol_id      !== prev.rol_id     ||
-    fresh.estado      !== prev.estado     ||
-    fresh.contrato_id !== prev.contrato_id ||
-    permisosChanged
-  if (changed) {
-    const updated = {
-      ...prev,
-      ...fresh,
-      // Preservar contrato y contratos elegidos en sesión — no pisar con BD
-      contrato_id:     prev.contrato_id,
-      contrato_numero: prev.contrato_numero,
-      _contratos:      prev._contratos,
-      logo_contratista:   prev.logo_contratista,
-      logo_interventoria: prev.logo_interventoria,
-    }
-    const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
-    storage.setItem('cc_usuario', JSON.stringify(updated))
-    setUsuario(updated)
-    const msgs = []
-    if (fresh.cargo_id !== prev.cargo_id) msgs.push('cargo')
-    if (fresh.contrato_id !== prev.contrato_id) msgs.push('contrato')
-    if (fresh.estado !== prev.estado) msgs.push('estado')
-    if (permisosChanged) msgs.push('permisos')
-    setBannerMsg(`⚡ Tu ${msgs.join(', ')} fue actualizado por el administrador.`)
-  }
-      } catch { /* silencioso — no interrumpir la sesión por error de red */ }
+        const permisosChanged =
+          JSON.stringify((fresh.permisos || []).map(p => `${p.funcion_id}-${p.ver}-${p.crear}-${p.editar}-${p.eliminar}-${p.validar}-${p.exportar}`).sort()) !==
+          JSON.stringify((prev.permisos  || []).map(p => `${p.funcion_id}-${p.ver}-${p.crear}-${p.editar}-${p.eliminar}-${p.validar}-${p.exportar}`).sort())
+        const changed =
+          fresh.cargo_id    !== prev.cargo_id   ||
+          fresh.rol_id      !== prev.rol_id     ||
+          fresh.estado      !== prev.estado     ||
+          fresh.contrato_id !== prev.contrato_id ||
+          permisosChanged
+        if (changed) {
+          const updated = {
+            ...prev, ...fresh,
+            contrato_id:      prev.contrato_id,
+            contrato_numero:  prev.contrato_numero,
+            _contratos:       prev._contratos,
+            logo_contratista: prev.logo_contratista,
+            logo_interventoria: prev.logo_interventoria,
+          }
+          const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
+          storage.setItem('cc_usuario', JSON.stringify(updated))
+          setUsuario(updated)
+          const msgs = []
+          if (fresh.cargo_id    !== prev.cargo_id)    msgs.push('cargo')
+          if (fresh.contrato_id !== prev.contrato_id) msgs.push('contrato')
+          if (fresh.estado      !== prev.estado)      msgs.push('estado')
+          if (permisosChanged)                         msgs.push('permisos')
+          setBannerMsg(`⚡ Tu ${msgs.join(', ')} fue actualizado por el administrador.`)
+        }
+      } catch { /* silencioso */ }
     }, 15000)
     return () => clearInterval(id)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
