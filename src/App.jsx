@@ -501,6 +501,8 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const [modalConfirm, setModalConfirm] = useState(false)
   const [bulkEstado, setBulkEstado] = useState('')
   const [guardandoBulk, setGuardandoBulk] = useState(false)
+  const [itemBusqueda, setItemBusqueda] = useState('')
+  const [itemDropOpen, setItemDropOpen] = useState(false)
 
   // ── Constantes drill-down ──────────────────────────────────────────────────
   const NIVELES = ['capitulo', 'item', 'pk_id', 'tramo', 'calzada']
@@ -928,57 +930,85 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
 
       {/* ── Barra Editar / Validar ── */}
       {(puedeEditar || puedeValidar) && registrosFiltrados.length > 0 && (
-        <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',padding:'14px 18px',marginBottom:'12px',boxShadow:t.shadow,display:'flex',flexWrap:'wrap',gap:'16px',alignItems:'flex-end' }}>
-          {puedeEditar && (<>
-            <div style={{ display:'flex',flexDirection:'column',gap:'4px' }}>
-              <label style={{ fontSize:'10px',fontWeight:'700',color:t.textMuted,letterSpacing:'1px' }}>CAPÍTULO</label>
-              <select value={editCapitulo} onChange={e => { setEditCapitulo(e.target.value); setEditItem('') }}
-                style={{ background:t.inputBg,border:`1.5px solid ${t.border}`,borderRadius:'8px',padding:'7px 12px',color:t.text,fontSize:'13px',minWidth:'160px',cursor:'pointer' }}>
-                <option value="">— Sin cambio —</option>
-                {capitulosListado.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-            <div style={{ display:'flex',flexDirection:'column',gap:'4px' }}>
-              <label style={{ fontSize:'10px',fontWeight:'700',color:t.textMuted,letterSpacing:'1px' }}>ÍTEM</label>
-              <select value={editItem} onChange={e => setEditItem(e.target.value)}
-                style={{ background:t.inputBg,border:`1.5px solid ${t.border}`,borderRadius:'8px',padding:'7px 12px',color:t.text,fontSize:'13px',minWidth:'260px',cursor:'pointer' }}>
-                <option value="">— Sin cambio —</option>
-                {itemsListado.map(p => <option key={p.id} value={p.item_numero}>{p.item_numero} · {p.descripcion}</option>)}
-              </select>
-            </div>
-            {precioSeleccionado && (
-              <div style={{ display:'flex',flexDirection:'column',gap:'4px' }}>
-                <label style={{ fontSize:'10px',fontWeight:'700',color:t.textMuted,letterSpacing:'1px' }}>VLR. UNIT.</label>
-                <div style={{ padding:'7px 14px',background:t.bg,border:`1.5px solid ${t.border}`,borderRadius:'8px',fontSize:'13px',fontWeight:'700',color:t.primary,minWidth:'120px' }}>
-                  {fmt(precioSeleccionado.precio_unitario)}
-                </div>
-              </div>
-            )}
-            <button onClick={() => hayModificaciones && setModalConfirm(true)}
-              disabled={!hayModificaciones}
-              style={{ background:hayModificaciones?t.primary:t.border,color:hayModificaciones?'#fff':t.textMuted,border:'none',borderRadius:'8px',padding:'9px 20px',fontSize:'13px',fontWeight:'700',cursor:hayModificaciones?'pointer':'not-allowed',transition:'all 0.2s',alignSelf:'flex-end' }}>
-              🔄 Recalcular {seleccionados.size > 0 ? `(${seleccionados.size})` : ''}
-            </button>
-          </>)}
-          {puedeValidar && (<>
-            <div style={{ display:'flex',flexDirection:'column',gap:'4px' }}>
-              <label style={{ fontSize:'10px',fontWeight:'700',color:t.textMuted,letterSpacing:'1px' }}>ESTADO DE REVISIÓN</label>
-              <select value={bulkEstado} onChange={e => setBulkEstado(e.target.value)}
-                style={{ background:t.inputBg,border:`1.5px solid ${t.border}`,borderRadius:'8px',padding:'7px 12px',color:t.text,fontSize:'13px',minWidth:'180px',cursor:'pointer' }}>
-                <option value="">— Selecciona estado —</option>
-                {['Pendiente','Verificar Campo','Verificado'].map(o => <option key={o} value={o}>{o}</option>)}
-              </select>
-            </div>
-            <button onClick={ejecutarBulkEstado}
-              disabled={!bulkEstado || seleccionados.size === 0 || guardandoBulk}
-              style={{ background:bulkEstado&&seleccionados.size>0?'#16A34A':t.border,color:bulkEstado&&seleccionados.size>0?'#fff':t.textMuted,border:'none',borderRadius:'8px',padding:'9px 20px',fontSize:'13px',fontWeight:'700',cursor:bulkEstado&&seleccionados.size>0?'pointer':'not-allowed',transition:'all 0.2s',alignSelf:'flex-end' }}>
-              ✓ Aplicar {seleccionados.size > 0 ? `(${seleccionados.size})` : ''}
-            </button>
-          </>)}
-          {(puedeEditar || puedeValidar) && seleccionados.size === 0 && (
-            <span style={{ fontSize:'12px',color:t.textMuted,fontStyle:'italic',alignSelf:'center' }}>
-              ☝️ Selecciona registros en la tabla para habilitar las acciones
+        <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'10px',boxShadow:t.shadow,display:'flex',flexWrap:'wrap',gap:'8px',alignItems:'center' }}>
+          {seleccionados.size === 0 ? (
+            <span style={{ fontSize:'12px',color:t.textMuted,fontStyle:'italic' }}>
+              ☝️ Selecciona registros para habilitar acciones
             </span>
+          ) : (
+            <>
+              <span style={{ fontSize:'12px',fontWeight:'700',color:t.primary,background:t.primary+'18',borderRadius:'20px',padding:'3px 10px',whiteSpace:'nowrap' }}>
+                {seleccionados.size} sel.
+              </span>
+
+              {puedeEditar && (<>
+                {/* Capítulo */}
+                <select value={editCapitulo}
+                  onChange={e => { setEditCapitulo(e.target.value); setEditItem(''); setItemBusqueda(''); setItemDropOpen(false) }}
+                  style={{ background:t.inputBg,border:`1.5px solid ${editCapitulo?t.primary:t.border}`,borderRadius:'7px',padding:'5px 10px',color:editCapitulo?t.text:t.textMuted,fontSize:'12px',cursor:'pointer',maxWidth:'180px' }}>
+                  <option value="">Capítulo…</option>
+                  {capitulosListado.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+
+                {/* Buscador predictivo de ítem */}
+                <div style={{ position:'relative' }}>
+                  <input
+                    value={itemBusqueda}
+                    onChange={e => { setItemBusqueda(e.target.value); setItemDropOpen(true); if (!e.target.value) setEditItem('') }}
+                    onFocus={() => setItemDropOpen(true)}
+                    onBlur={() => setTimeout(() => setItemDropOpen(false), 180)}
+                    placeholder={editCapitulo ? 'Buscar ítem…' : 'Primero selecciona capítulo'}
+                    disabled={!editCapitulo}
+                    style={{ background:t.inputBg,border:`1.5px solid ${editItem?t.primary:t.border}`,borderRadius:'7px',padding:'5px 10px',color:t.text,fontSize:'12px',width:'280px',opacity:editCapitulo?1:0.45,cursor:editCapitulo?'text':'not-allowed' }}
+                  />
+                  {itemDropOpen && editCapitulo && itemBusqueda.length > 0 && (
+                    <div style={{ position:'absolute',top:'100%',left:0,right:0,zIndex:999,background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'8px',boxShadow:'0 8px 24px rgba(0,0,0,0.2)',maxHeight:'220px',overflowY:'auto',marginTop:'3px' }}>
+                      {itemsListado
+                        .filter(p => `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase()))
+                        .slice(0, 30)
+                        .map(p => (
+                          <div key={p.id}
+                            onMouseDown={() => { setEditItem(p.item_numero); setItemBusqueda(`${p.item_numero} · ${p.descripcion}`); setItemDropOpen(false) }}
+                            style={{ padding:'8px 12px',fontSize:'12px',cursor:'pointer',borderBottom:`1px solid ${t.border}`,color:t.text }}
+                            onMouseEnter={e => e.currentTarget.style.background=t.primary+'22'}
+                            onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                            <strong>{p.item_numero}</strong> · {p.descripcion}
+                          </div>
+                        ))}
+                      {itemsListado.filter(p => `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase())).length === 0 && (
+                        <div style={{ padding:'10px 12px',fontSize:'12px',color:t.textMuted }}>Sin resultados</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Vlr unit badge */}
+                {precioSeleccionado && (
+                  <span style={{ fontSize:'12px',fontWeight:'700',color:t.primary,background:t.primary+'18',borderRadius:'7px',padding:'5px 10px',whiteSpace:'nowrap' }}>
+                    {fmt(precioSeleccionado.precio_unitario)}
+                  </span>
+                )}
+
+                <button onClick={() => hayModificaciones && setModalConfirm(true)}
+                  disabled={!hayModificaciones}
+                  style={{ background:hayModificaciones?t.primary:t.border,color:hayModificaciones?'#fff':t.textMuted,border:'none',borderRadius:'7px',padding:'6px 14px',fontSize:'12px',fontWeight:'700',cursor:hayModificaciones?'pointer':'not-allowed',whiteSpace:'nowrap' }}>
+                  🔄 Recalcular
+                </button>
+              </>)}
+
+              {puedeValidar && (<>
+                <select value={bulkEstado} onChange={e => setBulkEstado(e.target.value)}
+                  style={{ background:t.inputBg,border:`1.5px solid ${bulkEstado?t.primary:t.border}`,borderRadius:'7px',padding:'5px 10px',color:bulkEstado?t.text:t.textMuted,fontSize:'12px',cursor:'pointer' }}>
+                  <option value="">Estado…</option>
+                  {['Pendiente','Verificar Campo','Verificado'].map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+                <button onClick={ejecutarBulkEstado}
+                  disabled={!bulkEstado || guardandoBulk}
+                  style={{ background:bulkEstado?'#16A34A':t.border,color:bulkEstado?'#fff':t.textMuted,border:'none',borderRadius:'7px',padding:'6px 14px',fontSize:'12px',fontWeight:'700',cursor:bulkEstado?'pointer':'not-allowed',whiteSpace:'nowrap' }}>
+                  ✓ Aplicar
+                </button>
+              </>)}
+            </>
           )}
         </div>
       )}
