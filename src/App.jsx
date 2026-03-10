@@ -527,7 +527,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   // ── Drill-down computado ───────────────────────────────────────────────────
   const nivelIdx    = drill.length
   const nivelActual = NIVELES[nivelIdx] || null
-  const colorActual = PALETA[Math.min(nivelIdx, PALETA.length - 1)]
+  const colorActual = PALETA_BARRAS[Math.min(nivelIdx, PALETA_BARRAS.length - 1)]
 
   const registrosFiltrados = useMemo(() =>
     registros.filter(r => drill.every(({campo, valor}) => r[campo] === valor))
@@ -1531,12 +1531,27 @@ export default function App() {
       const uConContratos = { ...u, _contratos: contratos }
       const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
       storage.setItem('cc_usuario', JSON.stringify(uConContratos))
-      if (contratos.length > 1) {
+if (contratos.length > 1) {
         setPendingUser({ ...uConContratos, _token: token })
         setPendingContratos(contratos)
         setModal('selector_contrato')
       } else {
-        setUsuario(uConContratos); setModal(null)
+        if (contratos.length === 1) {
+          const c = contratos[0]
+          const uWithLogos = {
+            ...uConContratos,
+            contrato_id:        uConContratos.contrato_id        ?? c.id,
+            contrato_numero:    uConContratos.contrato_numero    ?? c.numero,
+            logo_contratista:   uConContratos.logo_contratista   ?? c.logo_contratista   ?? null,
+            logo_interventoria: uConContratos.logo_interventoria ?? c.logo_interventoria ?? null,
+          }
+          const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
+          storage.setItem('cc_usuario', JSON.stringify(uWithLogos))
+          setUsuario(uWithLogos)
+        } else {
+          setUsuario(uConContratos)
+        }
+        setModal(null)
       }
     } catch {
       setUsuario(u); setModal(null)
