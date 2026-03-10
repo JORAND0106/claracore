@@ -471,15 +471,19 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const [loading, setLoading] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState('')
+  const [importProgreso, setImportProgreso] = useState(0)
   const [seleccionados, setSeleccionados] = useState(new Set())
   const [editando, setEditando] = useState(null) // { id, campo, valor }
   const [editValues, setEditValues] = useState({})
+  const [modalImport, setModalImport] = useState(null) // { rows, fileName }
+  const [modoImport, setModoImport] = useState('replace')
+  const [confirmReplace, setConfirmReplace] = useState(false)
 
   const fmt = (n) => n != null ? new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(n) : '-'
   const fmtN = (n) => n != null ? new Intl.NumberFormat('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n) : '-'
 
-  // Cargar filtros al montar
-  useEffect(() => { if (contratoId) cargarFiltros() }, [contratoId])
+  // Cargar filtros y registros al montar
+  useEffect(() => { if (contratoId) { cargarFiltros(); cargarRegistros({capitulo:'',item:'',tramo:'',calzada:''}) } }, [contratoId])
 
   async function cargarFiltros(params = {}) {
     const qs = new URLSearchParams(params).toString()
@@ -506,10 +510,9 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
     await cargarRegistros(nuevoSel)
   }
 
-  // Importar CSV
+  // Leer CSV y mostrar modal de confirmación
   async function handleImportCSV(e) {
     const file = e.target.files[0]; if (!file) return
-    setImporting(true); setImportMsg('Procesando CSV...')
     const text = await file.text()
     const sep = text.indexOf(';') > text.indexOf(',') ? ';' : ','
     const lines = text.split(/\r?\n/).filter(l => l.trim())
@@ -541,28 +544,41 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
         const key = MAP[h.toLowerCase()]
         if (!key) return
         const v = vals[idx] || ''
-        if (NUMS.has(key)) {
-          const n = parseFloat(v.replace(/[,$]/g, ''))
-          obj[key] = isNaN(n) ? null : n
-        } else {
-          obj[key] = v || null
-        }
+        if (NUMS.has(key)) { const n = parseFloat(v.replace(/[,$]/g, '')); obj[key] = isNaN(n) ? null : n }
+        else obj[key] = v || null
       })
       if (obj.pk_id || obj.item) rows.push(obj)
     }
-
-    setImportMsg(`Subiendo ${rows.length} registros...`)
-    const res = await fetch(`${API}/presupuesto/${contratoId}/bulk`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(rows)
-    })
-    const data = await res.json()
-    setImportMsg(res.ok ? `✅ ${data.mensaje}` : `❌ Error: ${data.detail}`)
-    setImporting(false)
-    if (res.ok) { await cargarFiltros(); await cargarRegistros({ capitulo:'',item:'',tramo:'',calzada:'' }) }
-    setTimeout(() => setImportMsg(''), 4000)
+    setModalImport({ rows, fileName: file.name })
+    setModoImport('replace')
+    setConfirmReplace(false)
     e.target.value = ''
+  }
+
+  async function ejecutarImport() {
+    if (!modalImport) return
+    if (modoImport === 'replace' && !confirmReplace) { setConfirmReplace(true); return }
+    const { rows } = modalImport
+    setModalImport(null); setImporting(true); setImportProgreso(0)
+    const BATCH = 500
+    const total = Math.ceil(rows.length / BATCH)
+    let ok = true; let msj = ''
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const batch = rows.slice(i, i + BATCH)
+      const isFirst = i === 0
+      const mode = isFirst ? modoImport : 'append'
+      const res = await fetch(`${API}/presupuesto/${contratoId}/bulk?mode=${mode}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(batch)
+      })
+      if (!res.ok) { const d = await res.json(); msj = `❌ Error: ${d.detail}`; ok = false; break }
+      setImportProgreso(Math.round(((i + BATCH) / rows.length) * 100))
+    }
+    if (ok) msj = `✅ ${rows.length} registros ${modoImport === 'replace' ? 'cargados' : 'agregados'}`
+    setImportMsg(msj); setImporting(false); setImportProgreso(0)
+    if (ok) { await cargarFiltros(); await cargarRegistros({capitulo:'',item:'',tramo:'',calzada:''}) }
+    setTimeout(() => setImportMsg(''), 5000)
   }
 
   // Selección múltiple
@@ -613,12 +629,47 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
 
   return (
     <div>
+      {/* Modal importar */}
+      {modalImport && (
+        <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'28px', width:'420px', maxWidth:'95vw', boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ fontSize:'16px', fontWeight:'700', color:t.primary, marginBottom:'8px' }}>📂 Importar Presupuesto</div>
+            <div style={{ fontSize:'13px', color:t.textMuted, marginBottom:'20px' }}>{modalImport.fileName} — <strong style={{color:t.text}}>{modalImport.rows.length} registros</strong></div>
+            <div style={{ fontSize:'13px', fontWeight:'600', color:t.text, marginBottom:'10px' }}>¿Cómo desea cargar los datos?</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:'8px', marginBottom:'20px' }}>
+              {[['replace','🔄 Reemplazar todo','Elimina los registros actuales y carga los nuevos'],['append','➕ Agregar','Agrega los nuevos registros sin eliminar los existentes']].map(([v,l,d]) => (
+                <label key={v} style={{ display:'flex', alignItems:'flex-start', gap:'10px', padding:'12px', border:`2px solid ${modoImport===v?t.primary:t.border}`, borderRadius:'8px', cursor:'pointer', background:modoImport===v?t.primary+'11':'transparent' }}>
+                  <input type="radio" name="modo" value={v} checked={modoImport===v} onChange={() => { setModoImport(v); setConfirmReplace(false) }} style={{ marginTop:'2px' }} />
+                  <div><div style={{ fontSize:'13px', fontWeight:'600', color:t.text }}>{l}</div><div style={{ fontSize:'11px', color:t.textMuted }}>{d}</div></div>
+                </label>
+              ))}
+            </div>
+            {modoImport === 'replace' && confirmReplace && (
+              <div style={{ background:'#FEE2E2', border:'1px solid #FCA5A5', borderRadius:'8px', padding:'12px', marginBottom:'16px', fontSize:'12px', color:'#DC2626' }}>
+                ⚠️ <strong>Esta acción no se puede deshacer.</strong> Se eliminarán todos los registros actuales del presupuesto. ¿Confirma?
+              </div>
+            )}
+            <div style={{ display:'flex', gap:'10px', justifyContent:'flex-end' }}>
+              <button onClick={() => { setModalImport(null); setConfirmReplace(false) }} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'9px 18px', fontSize:'13px', color:t.textMuted, cursor:'pointer' }}>Cancelar</button>
+              <button onClick={ejecutarImport} style={{ background: modoImport==='replace'&&confirmReplace ? '#DC2626' : t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'9px 20px', fontSize:'13px', fontWeight:'600', cursor:'pointer' }}>
+                {modoImport==='replace' && !confirmReplace ? 'Continuar →' : modoImport==='replace' ? '⚠️ Sí, reemplazar' : '➕ Agregar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toolbar */}
       <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' }}>
         <label style={{ background: t.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '9px 18px', fontSize: '13px', fontWeight: '600', cursor: importing ? 'wait' : 'pointer', opacity: importing ? 0.7 : 1 }}>
-          {importing ? 'Importando...' : '📂 Importar CSV'}
+          {importing ? `Importando ${importProgreso}%...` : '📂 Importar CSV'}
           <input type="file" accept=".csv" style={{ display: 'none' }} onChange={handleImportCSV} disabled={importing} />
         </label>
+        {importing && (
+          <div style={{ flex:1, maxWidth:'200px', height:'6px', background:t.border, borderRadius:'3px', overflow:'hidden' }}>
+            <div style={{ width:`${importProgreso}%`, height:'100%', background:t.primary, borderRadius:'3px', transition:'width 0.3s' }} />
+          </div>
+        )}
         {importMsg && <span style={{ fontSize: '13px', color: importMsg.startsWith('✅') ? '#16A34A' : importMsg.startsWith('❌') ? '#DC2626' : t.textMuted }}>{importMsg}</span>}
         <span style={{ marginLeft: 'auto', fontSize: '12px', color: t.textMuted }}>{registros.length} registros · {seleccionados.size} seleccionados</span>
       </div>
@@ -758,24 +809,20 @@ function ModuloCobro({ t, usuario, token, s }) {
   const API = 'https://claracore-backend.azurewebsites.net'
   const contratoId = usuario?.contrato_id
 
-  const [vista, setVista] = useState('dashboard') // 'dashboard' | 'detalle'
-  const [resumen, setResumen] = useState(null)
   const [registros, setRegistros] = useState([])
   const [filtros, setFiltros] = useState({ capitulos:[], items:[], actas:[], calzadas:[] })
   const [sel, setSel] = useState({ capitulo:'', item:'', acta:'', calzada:'' })
   const [loading, setLoading] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState('')
+  const [importProgreso, setImportProgreso] = useState(0)
+  const [modalImport, setModalImport] = useState(null)
+  const [modoImport, setModoImport] = useState('append')
+  const [confirmReplace, setConfirmReplace] = useState(false)
 
   const fmt = (n) => n != null ? new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', minimumFractionDigits:0 }).format(n) : '$0'
-  const pctColor = (p) => p >= 90 ? '#DC2626' : p >= 70 ? '#D97706' : '#16A34A'
 
-  useEffect(() => { if (contratoId) { cargarResumen(); cargarFiltros() } }, [contratoId])
-
-  async function cargarResumen() {
-    const res = await fetch(`${API}/cobro/${contratoId}/resumen`, { headers: { Authorization:`Bearer ${token}` } })
-    if (res.ok) setResumen(await res.json())
-  }
+  useEffect(() => { if (contratoId) cargarFiltros() }, [contratoId])
 
   async function cargarFiltros(params = {}) {
     const qs = new URLSearchParams(params).toString()
@@ -801,12 +848,10 @@ function ModuloCobro({ t, usuario, token, s }) {
 
   async function handleImportCSV(e) {
     const file = e.target.files[0]; if (!file) return
-    setImporting(true); setImportMsg('Procesando CSV...')
     const text = await file.text()
     const sep = (text.split('\n')[0].match(/;/g)||[]).length > (text.split('\n')[0].match(/,/g)||[]).length ? ';' : ','
     const lines = text.split(/\r?\n/).filter(l => l.trim())
     const headers = lines[0].split(sep).map(h => h.replace(/^"|"$/g,'').trim().toUpperCase())
-
     const MAP = {
       'ACTA RPO':'acta','ACTA':'acta','SEMANA':'semana','FECHA':'fecha',
       'CAPITULO':'capitulo','COMPETENCIA':'competencia',
@@ -817,7 +862,6 @@ function ModuloCobro({ t, usuario, token, s }) {
       'CALZADA':'calzada','TRAMO INICIO':'tramo_inicio','TRAMO FINAL':'tramo_final','PK_ID':'pk_id'
     }
     const NUMS = new Set(['acta','longitud','ancho','espesor','cantidad','valor_unitario','costo_directo'])
-
     const rows = []
     for (let i = 1; i < lines.length; i++) {
       const vals = lines[i].split(sep).map(v => v.replace(/^"|"$/g,'').trim())
@@ -830,18 +874,33 @@ function ModuloCobro({ t, usuario, token, s }) {
       })
       if (obj.pk_id || obj.item) rows.push(obj)
     }
-
-    setImportMsg(`Subiendo ${rows.length} registros...`)
-    const res = await fetch(`${API}/cobro/${contratoId}/bulk`, {
-      method:'POST', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
-      body: JSON.stringify(rows)
-    })
-    const data = await res.json()
-    setImportMsg(res.ok ? `✅ ${data.mensaje}` : `❌ Error: ${data.detail}`)
-    setImporting(false)
-    if (res.ok) { await cargarResumen(); await cargarFiltros() }
-    setTimeout(() => setImportMsg(''), 4000)
+    setModalImport({ rows, fileName: file.name })
+    setModoImport('append')
+    setConfirmReplace(false)
     e.target.value = ''
+  }
+
+  async function ejecutarImport() {
+    if (!modalImport) return
+    if (modoImport === 'replace' && !confirmReplace) { setConfirmReplace(true); return }
+    const { rows } = modalImport
+    setModalImport(null); setImporting(true); setImportProgreso(0)
+    const BATCH = 500
+    let ok = true; let msj = ''
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const batch = rows.slice(i, i + BATCH)
+      const mode = i === 0 ? modoImport : 'append'
+      const res = await fetch(`${API}/cobro/${contratoId}/bulk?mode=${mode}`, {
+        method:'POST', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
+        body: JSON.stringify(batch)
+      })
+      if (!res.ok) { const d = await res.json(); msj = `❌ Error: ${d.detail}`; ok = false; break }
+      setImportProgreso(Math.round(((i + BATCH) / rows.length) * 100))
+    }
+    if (ok) msj = `✅ ${rows.length} registros ${modoImport === 'replace' ? 'cargados' : 'agregados'}`
+    setImportMsg(msj); setImporting(false); setImportProgreso(0)
+    if (ok) { await cargarFiltros() }
+    setTimeout(() => setImportMsg(''), 5000)
   }
 
   const thStyle = { padding:'8px 10px', fontSize:'11px', fontWeight:'700', letterSpacing:'0.5px', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
@@ -849,152 +908,132 @@ function ModuloCobro({ t, usuario, token, s }) {
 
   return (
     <div>
+      {/* Modal importar */}
+      {modalImport && (
+        <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'28px', width:'420px', maxWidth:'95vw', boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ fontSize:'16px', fontWeight:'700', color:t.primary, marginBottom:'8px' }}>📂 Importar Cobro</div>
+            <div style={{ fontSize:'13px', color:t.textMuted, marginBottom:'20px' }}>{modalImport.fileName} — <strong style={{color:t.text}}>{modalImport.rows.length} registros</strong></div>
+            <div style={{ fontSize:'13px', fontWeight:'600', color:t.text, marginBottom:'10px' }}>¿Cómo desea cargar los datos?</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:'8px', marginBottom:'20px' }}>
+              {[['append','➕ Agregar acta','Agrega los registros sin eliminar los existentes (recomendado para nuevas actas)'],['replace','🔄 Reemplazar todo','Elimina todos los registros actuales y carga los nuevos']].map(([v,l,d]) => (
+                <label key={v} style={{ display:'flex', alignItems:'flex-start', gap:'10px', padding:'12px', border:`2px solid ${modoImport===v?t.primary:t.border}`, borderRadius:'8px', cursor:'pointer', background:modoImport===v?t.primary+'11':'transparent' }}>
+                  <input type="radio" name="modoCobro" value={v} checked={modoImport===v} onChange={() => { setModoImport(v); setConfirmReplace(false) }} style={{ marginTop:'2px' }} />
+                  <div><div style={{ fontSize:'13px', fontWeight:'600', color:t.text }}>{l}</div><div style={{ fontSize:'11px', color:t.textMuted }}>{d}</div></div>
+                </label>
+              ))}
+            </div>
+            {modoImport === 'replace' && confirmReplace && (
+              <div style={{ background:'#FEE2E2', border:'1px solid #FCA5A5', borderRadius:'8px', padding:'12px', marginBottom:'16px', fontSize:'12px', color:'#DC2626' }}>
+                ⚠️ <strong>Esta acción no se puede deshacer.</strong> Se eliminarán todos los registros de cobro. ¿Confirma?
+              </div>
+            )}
+            <div style={{ display:'flex', gap:'10px', justifyContent:'flex-end' }}>
+              <button onClick={() => { setModalImport(null); setConfirmReplace(false) }} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'9px 18px', fontSize:'13px', color:t.textMuted, cursor:'pointer' }}>Cancelar</button>
+              <button onClick={ejecutarImport} style={{ background: modoImport==='replace'&&confirmReplace ? '#DC2626' : t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'9px 20px', fontSize:'13px', fontWeight:'600', cursor:'pointer' }}>
+                {modoImport==='replace' && !confirmReplace ? 'Continuar →' : modoImport==='replace' ? '⚠️ Sí, reemplazar' : '➕ Agregar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toolbar */}
       <div style={{ display:'flex', gap:'12px', alignItems:'center', marginBottom:'16px', flexWrap:'wrap' }}>
         <label style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'9px 18px', fontSize:'13px', fontWeight:'600', cursor:importing?'wait':'pointer', opacity:importing?0.7:1 }}>
-          {importing ? 'Importando...' : '📂 Importar CSV'}
+          {importing ? `Importando ${importProgreso}%...` : '📂 Importar CSV'}
           <input type="file" accept=".csv" style={{ display:'none' }} onChange={handleImportCSV} disabled={importing} />
         </label>
+        {importing && (
+          <div style={{ flex:1, maxWidth:'200px', height:'6px', background:t.border, borderRadius:'3px', overflow:'hidden' }}>
+            <div style={{ width:`${importProgreso}%`, height:'100%', background:t.primary, borderRadius:'3px', transition:'width 0.3s' }} />
+          </div>
+        )}
         {importMsg && <span style={{ fontSize:'13px', color:importMsg.startsWith('✅')?'#16A34A':importMsg.startsWith('❌')?'#DC2626':t.textMuted }}>{importMsg}</span>}
-        <div style={{ marginLeft:'auto', display:'flex', gap:'4px' }}>
-          {[['dashboard','📊 Análisis'],['detalle','📋 Detalle']].map(([k,l]) => (
-            <button key={k} onClick={() => { setVista(k); if(k==='detalle') cargarRegistros() }}
-              style={{ background:vista===k?t.primary:t.bgCard, color:vista===k?'#fff':t.textMuted, border:`1px solid ${vista===k?t.primary:t.border}`, borderRadius:'6px', padding:'7px 14px', fontSize:'13px', cursor:'pointer' }}>{l}</button>
-          ))}
-        </div>
+        <span style={{ marginLeft:'auto', fontSize:'12px', color:t.textMuted }}>{registros.length} registros mostrados</span>
       </div>
 
-      {/* Vista Análisis */}
-      {vista === 'dashboard' && resumen && (
-        <div>
-          {/* KPIs */}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'16px', marginBottom:'20px' }}>
-            {[
-              ['💰 Presupuesto Total', fmt(resumen.total_presupuesto), ''],
-              ['✅ Total Cobrado', fmt(resumen.total_cobrado), ''],
-              ['📉 Delta', fmt(resumen.delta), ''],
-              ['📊 % Consumo', `${resumen.consumo_pct}%`, `${resumen.actas?.length || 0} actas registradas`],
-            ].map(([label, val, sub]) => (
-              <div key={label} style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'16px', boxShadow:t.shadow }}>
-                <div style={{ fontSize:'11px', fontWeight:'600', letterSpacing:'1px', color:t.textMuted, marginBottom:'6px' }}>{label}</div>
-                <div style={{ fontSize:'22px', fontWeight:'700', color:t.primary }}>{val}</div>
-                {sub && <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'4px' }}>{sub}</div>}
-              </div>
-            ))}
+      {/* Filtros en cascada */}
+      <div style={{ display:'flex', gap:'10px', marginBottom:'16px', flexWrap:'wrap' }}>
+        {[['capitulo','Capítulo',filtros.capitulos],['item','Ítem',filtros.items],['acta','Acta',filtros.actas],['calzada','Calzada',filtros.calzadas]].map(([campo,label,opciones]) => (
+          <div key={campo} style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
+            <label style={{ fontSize:'11px', fontWeight:'600', color:t.textMuted, letterSpacing:'0.5px' }}>{label}</label>
+            <select value={sel[campo]} onChange={e => cambiarFiltro(campo, e.target.value)}
+              style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'7px 12px', color:t.text, fontSize:'13px', minWidth:'130px', cursor:'pointer' }}>
+              <option value="">— Todos —</option>
+              {opciones.map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
           </div>
+        ))}
+        {(sel.capitulo||sel.item||sel.acta||sel.calzada) && (
+          <button onClick={() => { setSel({capitulo:'',item:'',acta:'',calzada:''}); cargarFiltros(); setRegistros([]) }}
+            style={{ alignSelf:'flex-end', background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'7px 12px', fontSize:'12px', color:t.textMuted, cursor:'pointer' }}>
+            ✕ Limpiar
+          </button>
+        )}
+      </div>
 
-          {/* Por acta */}
-          {resumen.por_acta?.length > 0 && (
-            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', marginBottom:'20px', boxShadow:t.shadow }}>
-              <div style={{ fontSize:'13px', fontWeight:'700', color:t.text, marginBottom:'14px' }}>Cobrado por Acta</div>
-              <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
-                {resumen.por_acta.map(a => (
-                  <div key={a.acta} style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px 16px', textAlign:'center' }}>
-                    <div style={{ fontSize:'11px', color:t.textMuted, marginBottom:'4px' }}>Acta {a.acta}</div>
-                    <div style={{ fontSize:'14px', fontWeight:'700', color:t.primary }}>{fmt(a.cobrado)}</div>
-                  </div>
+      <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', overflow:'auto', boxShadow:t.shadow }}>
+        {loading ? <div style={s.emptyState}>Cargando...</div> : registros.length === 0 ? (
+          <div style={s.emptyState}>📂 {filtros.actas.length ? 'Selecciona un filtro para ver registros' : 'Importa un CSV de cobro para comenzar'}</div>
+        ) : (
+          <table style={{ width:'100%', borderCollapse:'collapse' }}>
+            <thead style={{ background:t.bg }}>
+              <tr>
+                {['Acta','PK_ID','Capítulo','Ítem','Descripción','Und','Cantidad','Vlr Unit.','Costo Directo','Calzada','Tramo Ini'].map(h => (
+                  <th key={h} style={thStyle}>{h}</th>
                 ))}
-              </div>
-            </div>
-          )}
-
-          {/* Comparativo por capítulo */}
-          {resumen.comparativo_capitulos?.length > 0 && (
-            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
-              <div style={{ fontSize:'13px', fontWeight:'700', color:t.text, marginBottom:'14px' }}>Presupuesto vs Cobro por Capítulo</div>
-              <table style={{ width:'100%', borderCollapse:'collapse' }}>
-                <thead>
-                  <tr>
-                    {['Capítulo','Presupuesto','Cobrado','Delta','% Consumo','Estado'].map(h => (
-                      <th key={h} style={thStyle}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {resumen.comparativo_capitulos.map(c => (
-                    <tr key={c.capitulo}>
-                      <td style={{ ...tdStyle, fontWeight:'600', color:t.text }}>{c.capitulo}</td>
-                      <td style={{ ...tdStyle, textAlign:'right' }}>{fmt(c.presupuesto)}</td>
-                      <td style={{ ...tdStyle, textAlign:'right', color:t.primary, fontWeight:'600' }}>{fmt(c.cobrado)}</td>
-                      <td style={{ ...tdStyle, textAlign:'right', color: c.delta < 0 ? '#DC2626':'#16A34A' }}>{fmt(c.delta)}</td>
-                      <td style={{ ...tdStyle, textAlign:'right' }}>
-                        <div style={{ display:'flex', alignItems:'center', gap:'8px', justifyContent:'flex-end' }}>
-                          <div style={{ width:'80px', height:'6px', background:t.border, borderRadius:'3px', overflow:'hidden' }}>
-                            <div style={{ width:`${Math.min(c.consumo_pct,100)}%`, height:'100%', background:pctColor(c.consumo_pct), borderRadius:'3px' }} />
-                          </div>
-                          <span style={{ fontSize:'11px', fontWeight:'700', color:pctColor(c.consumo_pct) }}>{c.consumo_pct}%</span>
-                        </div>
-                      </td>
-                      <td style={tdStyle}>
-                        <span style={{ fontSize:'11px', fontWeight:'600', color:pctColor(c.consumo_pct), background:pctColor(c.consumo_pct)+'22', borderRadius:'4px', padding:'2px 8px' }}>
-                          {c.consumo_pct >= 90 ? '🔴 Crítico' : c.consumo_pct >= 70 ? '🟡 Alerta' : '🟢 OK'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {!resumen.total_cobrado && <div style={s.emptyState}>📂 Importa un CSV de cobro para ver el análisis</div>}
-        </div>
-      )}
-
-      {/* Vista Detalle */}
-      {vista === 'detalle' && (
-        <div>
-          {/* Filtros */}
-          <div style={{ display:'flex', gap:'10px', marginBottom:'16px', flexWrap:'wrap' }}>
-            {[['capitulo','Capítulo',filtros.capitulos],['item','Ítem',filtros.items],['acta','Acta',filtros.actas],['calzada','Calzada',filtros.calzadas]].map(([campo,label,opciones]) => (
-              <div key={campo} style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
-                <label style={{ fontSize:'11px', fontWeight:'600', color:t.textMuted, letterSpacing:'0.5px' }}>{label}</label>
-                <select value={sel[campo]} onChange={e => cambiarFiltro(campo, e.target.value)}
-                  style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'7px 12px', color:t.text, fontSize:'13px', minWidth:'130px', cursor:'pointer' }}>
-                  <option value="">— Todos —</option>
-                  {opciones.map(o => <option key={o} value={o}>{o}</option>)}
-                </select>
-              </div>
-            ))}
-          </div>
-
-          <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', overflow:'auto', boxShadow:t.shadow }}>
-            {loading ? <div style={s.emptyState}>Cargando...</div> : registros.length === 0 ? (
-              <div style={s.emptyState}>📂 {sel.capitulo?'Sin registros para los filtros seleccionados':'Importa un CSV o selecciona un filtro'}</div>
-            ) : (
-              <table style={{ width:'100%', borderCollapse:'collapse' }}>
-                <thead style={{ background:t.bg }}>
-                  <tr>
-                    {['Acta','PK_ID','Capítulo','Ítem','Descripción','Und','Cantidad','Vlr Unit.','Costo Directo','Calzada','Tramo Ini'].map(h => (
-                      <th key={h} style={thStyle}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {registros.map((r,i) => (
-                    <tr key={r.id || i}>
-                      <td style={{ ...tdStyle, fontWeight:'700', color:t.primary }}>{r.acta}</td>
-                      <td style={{ ...tdStyle, fontWeight:'600' }}>{r.pk_id}</td>
-                      <td style={tdStyle}>{r.capitulo}</td>
-                      <td style={tdStyle}>{r.item}</td>
-                      <td style={{ ...tdStyle, maxWidth:'200px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.descripcion}</td>
-                      <td style={tdStyle}>{r.und}</td>
-                      <td style={{ ...tdStyle, textAlign:'right' }}>{r.cantidad}</td>
-                      <td style={{ ...tdStyle, textAlign:'right' }}>{fmt(r.valor_unitario)}</td>
-                      <td style={{ ...tdStyle, textAlign:'right', fontWeight:'700', color:t.primary }}>{fmt(r.costo_directo)}</td>
-                      <td style={tdStyle}>{r.calzada}</td>
-                      <td style={tdStyle}>{r.tramo_inicio}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
-      )}
+              </tr>
+            </thead>
+            <tbody>
+              {registros.map((r,i) => (
+                <tr key={r.id || i}>
+                  <td style={{ ...tdStyle, fontWeight:'700', color:t.primary }}>{r.acta}</td>
+                  <td style={{ ...tdStyle, fontWeight:'600' }}>{r.pk_id}</td>
+                  <td style={tdStyle}>{r.capitulo}</td>
+                  <td style={tdStyle}>{r.item}</td>
+                  <td style={{ ...tdStyle, maxWidth:'200px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.descripcion}</td>
+                  <td style={tdStyle}>{r.und}</td>
+                  <td style={{ ...tdStyle, textAlign:'right' }}>{r.cantidad}</td>
+                  <td style={{ ...tdStyle, textAlign:'right' }}>{fmt(r.valor_unitario)}</td>
+                  <td style={{ ...tdStyle, textAlign:'right', fontWeight:'700', color:t.primary }}>{fmt(r.costo_directo)}</td>
+                  <td style={tdStyle}>{r.calzada}</td>
+                  <td style={tdStyle}>{r.tramo_inicio}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   )
 }
+
+
+  const fmt = (n) => n != null ? new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', minimumFractionDigits:0 }).format(n) : '$0'
+  const pctColor = (p) => p >= 90 ? '#DC2626' : p >= 70 ? '#D97706' : '#16A34A'
+
+  useEffect(() => { if (contratoId) { cargarResumen(); cargarFiltros() } }, [contratoId])
+
+  async function cargarResumen() {
+    const res = await fetch(`${API}/cobro/${contratoId}/resumen`, { headers: { Authorization:`Bearer ${token}` } })
+    if (res.ok) setResumen(await res.json())
+  }
+
+  async function cargarFiltros(params = {}) {
+    const qs = new URLSearchParams(params).toString()
+    const res = await fetch(`${API}/cobro/${contratoId}/filtros${qs?'?'+qs:''}`, { headers: { Authorization:`Bearer ${token}` } })
+    if (res.ok) setFiltros(await res.json())
+  }
+
+  async function cargarRegistros(params = sel) {
+    setLoading(true)
+    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([,v]) => v))).toString()
+    const res = await fetch(`${API}/cobro/${contratoId}${qs?'?'+qs:''}`, { headers: { Authorization:`Bearer ${token}` } })
+    if (res.ok) setRegistros(await res.json())
+    setLoading(false)
+  }
+
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0 }) {
@@ -1008,6 +1047,20 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [csvNombre, setCsvNombre] = useState('')
   const [savingContrato, setSavingContrato] = useState(false)
   const [errorContrato, setErrorContrato] = useState('')
+  const [kpiPpto, setKpiPpto] = useState(null)
+  const [kpiCobro, setKpiCobro] = useState(null)
+
+  const API_URL = 'https://claracore-backend.azurewebsites.net'
+  const contratoIdDash = usuario?.contrato_id
+
+  useEffect(() => {
+    if (!contratoIdDash) return
+    const tok = getToken()
+    fetch(`${API_URL}/presupuesto/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
+      .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiPpto(d) })
+    fetch(`${API_URL}/cobro/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
+      .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiCobro(d) })
+  }, [contratoIdDash])
 
   // Desarrollador ve todo; otros usuarios ven solo su contrato
   const esDeveloper = usuario?.cargo_nombre === 'Desarrollador'
@@ -1160,15 +1213,20 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         {/* ── MÓDULO DASHBOARD ── */}
         {moduloActivo === 'dashboard' && <>
         <div style={s.panelsGrid}>
-          {[['📋 PRESUPUESTO', '$181,927,908', 'Valor inicial del contrato'],
-            ['💰 COBRO', '$138,023,945', 'Acumulado facturado'],
-            ['🏪 ALMACÉN', '$0', 'Próximamente']].map(([label, value, sub]) => (
-            <div key={label} style={s.card}>
-              <div style={s.cardLabel}>{label}</div>
-              <div style={s.cardValue}>{value}</div>
-              <div style={s.cardSub}>{sub}</div>
-            </div>
-          ))}
+          {(() => {
+            const fmtD = (n) => n != null ? new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', minimumFractionDigits:0 }).format(n) : '—'
+            return [
+              ['📋 PRESUPUESTO', kpiPpto ? fmtD(kpiPpto.costo_total) : '—', kpiPpto ? `${kpiPpto.total_registros} registros` : 'Sin datos'],
+              ['💰 COBRO', kpiCobro ? fmtD(kpiCobro.total_cobrado) : '—', kpiCobro ? `${kpiCobro.consumo_pct}% consumo · ${kpiCobro.actas?.length || 0} actas` : 'Sin datos'],
+              ['🏪 ALMACÉN', '$0', 'Próximamente'],
+            ].map(([label, value, sub]) => (
+              <div key={label} style={s.card}>
+                <div style={s.cardLabel}>{label}</div>
+                <div style={s.cardValue}>{value}</div>
+                <div style={s.cardSub}>{sub}</div>
+              </div>
+            ))
+          })()}
         </div>
 
         <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
