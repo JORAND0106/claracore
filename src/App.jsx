@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import AdminPanel from './AdminPanel'
 
 const API = 'https://claracore-backend.azurewebsites.net'
@@ -465,86 +466,125 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const API = 'https://claracore-backend.azurewebsites.net'
   const contratoId = usuario?.contrato_id
 
+  // ── Estado ─────────────────────────────────────────────────────────────────
   const [registros, setRegistros] = useState([])
-  const [filtros, setFiltros] = useState({ capitulos: [], items: [], tramos: [], calzadas: [] })
-  const [sel, setSel] = useState({ capitulo: '', item: '', tramo: '', calzada: '' })
   const [loading, setLoading] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState('')
   const [importProgreso, setImportProgreso] = useState(0)
   const [seleccionados, setSeleccionados] = useState(new Set())
-  const [editando, setEditando] = useState(null) // { id, campo, valor }
+  const [editando, setEditando] = useState(null)
   const [editValues, setEditValues] = useState({})
-  const [modalImport, setModalImport] = useState(null) // { rows, fileName }
+  const [modalImport, setModalImport] = useState(null)
   const [modoImport, setModoImport] = useState('replace')
   const [confirmReplace, setConfirmReplace] = useState(false)
+  const [drill, setDrill] = useState([])        // [{campo, valor}, …] – ruta activa
+  const [hoveredBar, setHoveredBar] = useState(null)
 
-  const fmt = (n) => n != null ? new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(n) : '-'
-  const fmtN = (n) => n != null ? new Intl.NumberFormat('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n) : '-'
+  // ── Constantes drill-down ──────────────────────────────────────────────────
+  const NIVELES = ['capitulo', 'item', 'pk_id', 'tramo', 'calzada']
+  const NOM     = { capitulo:'Capítulo', item:'Ítem', pk_id:'PK_ID', tramo:'Tramo', calzada:'Calzada' }
+  const PALETA  = ['#0077B6','#00B4C6','#00A896','#028090','#05668D']
 
-  // Cargar filtros y registros al montar
-  useEffect(() => { if (contratoId) { cargarFiltros(); cargarRegistros({capitulo:'',item:'',tramo:'',calzada:''}) } }, [contratoId])
-
-  async function cargarFiltros(params = {}) {
-    const qs = new URLSearchParams(params).toString()
-    const res = await fetch(`${API}/presupuesto/${contratoId}/filtros${qs ? '?' + qs : ''}`, { headers: { Authorization: `Bearer ${token}` } })
-    if (res.ok) setFiltros(await res.json())
+  const fmt  = (n) => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '-'
+  const fmtN = (n) => n != null ? new Intl.NumberFormat('es-CO',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n) : '-'
+  const fmtM = (n) => {
+    if (n == null) return ''
+    if (n >= 1e9) return `$${(n/1e9).toFixed(1)}B`
+    if (n >= 1e6) return `$${(n/1e6).toFixed(1)}M`
+    if (n >= 1e3) return `$${(n/1e3).toFixed(0)}K`
+    return `$${Math.round(n)}`
   }
 
-  async function cargarRegistros(params = sel) {
+  // ── Carga inicial ──────────────────────────────────────────────────────────
+  useEffect(() => { if (contratoId) cargarRegistros() }, [contratoId])
+
+  async function cargarRegistros() {
     if (!contratoId) return
     setLoading(true)
-    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([,v]) => v))).toString()
-    const res = await fetch(`${API}/presupuesto/${contratoId}${qs ? '?' + qs : ''}`, { headers: { Authorization: `Bearer ${token}` } })
+    const res = await fetch(`${API}/presupuesto/${contratoId}`, { headers: { Authorization: `Bearer ${token}` } })
     if (res.ok) setRegistros(await res.json())
     setLoading(false)
   }
 
-  async function cambiarFiltro(campo, valor) {
-    const nuevoSel = { ...sel, [campo]: valor }
-    // Cascada: al cambiar capitulo resetear item/tramo/calzada
-    if (campo === 'capitulo') { nuevoSel.item = ''; nuevoSel.tramo = ''; nuevoSel.calzada = '' }
-    if (campo === 'item') { nuevoSel.tramo = ''; nuevoSel.calzada = '' }
-    setSel(nuevoSel)
-    await cargarFiltros(Object.fromEntries(Object.entries(nuevoSel).filter(([,v]) => v)))
-    await cargarRegistros(nuevoSel)
+  // ── Drill-down computado ───────────────────────────────────────────────────
+  const nivelIdx    = drill.length
+  const nivelActual = NIVELES[nivelIdx] || null
+  const colorActual = PALETA[Math.min(nivelIdx, PALETA.length - 1)]
+
+  const registrosFiltrados = useMemo(() =>
+    registros.filter(r => drill.every(({campo, valor}) => r[campo] === valor))
+  , [registros, drill])
+
+  const chartData = useMemo(() => {
+    if (!nivelActual || registros.length === 0) return []
+    const agg = {}
+    registrosFiltrados.forEach(r => {
+      const key = r[nivelActual] ?? '(sin valor)'
+      if (!agg[key]) {
+        let label = key
+        if (nivelActual === 'item') {
+          const desc = (r.descripcion ?? '').slice(0, 38)
+          label = `${r.item ?? ''} · ${desc}${(r.descripcion ?? '').length > 38 ? '…' : ''}`
+        } else if (key.length > 48) {
+          label = key.slice(0, 48) + '…'
+        }
+        agg[key] = { name: key, label, costo: 0, count: 0 }
+      }
+      agg[key].costo += r.costo_directo ?? 0
+      agg[key].count++
+    })
+    return Object.values(agg).sort((a, b) => b.costo - a.costo).slice(0, 15)
+  }, [registrosFiltrados, nivelActual])
+
+  const costoTotal = useMemo(() =>
+    registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
+  , [registrosFiltrados])
+
+  function handleBarClick(data) {
+    if (!nivelActual || !data?.activePayload?.[0]) return
+    const valor = data.activePayload[0].payload.name
+    setDrill(prev => [...prev, { campo: nivelActual, valor }])
+    setSeleccionados(new Set())
   }
 
-  // Leer CSV y mostrar modal de confirmación
+  function irA(idx) {
+    setDrill(prev => prev.slice(0, idx))
+    setSeleccionados(new Set())
+  }
+
+  // ── Import CSV ─────────────────────────────────────────────────────────────
   async function handleImportCSV(e) {
     const file = e.target.files[0]; if (!file) return
     const raw = await file.text()
-    const text = raw.replace(/^\uFEFF/, '') // quitar BOM si existe
+    const text = raw.replace(/^\uFEFF/, '')
     const firstLine = text.split(/\r?\n/)[0]
     const sep = (firstLine.match(/;/g)||[]).length > (firstLine.match(/,/g)||[]).length ? ';' : ','
     const lines = text.split(/\r?\n/).filter(l => l.trim())
     const headers = lines[0].split(sep).map(h => h.replace(/^"|"$/g, '').trim())
-
     const MAP = {
-      'pk_id': 'pk_id', 'capitulo': 'capitulo', 'competencia': 'competencia',
-      'item': 'item', 'descripción': 'descripcion', 'descripcion': 'descripcion',
-      'und': 'und', 'calzada': 'calzada', 'tramo': 'tramo',
-      'abs. inicio': 'abs_inicio', 'abs. final': 'abs_final',
-      'vlr unitario': 'vlr_unitario', 'no. inicio': 'no_inicio', 'no. final': 'no_final',
-      'area/long/nod': 'area_long_nod', 'ancho': 'ancho', 'espesor': 'espesor',
-      'cant.total': 'cant_total', 'costo directo': 'costo_directo',
-      'tipo de ejecución': 'tipo_ejecucion', 'tipo de entidad': 'tipo_entidad',
-      'id_pol': 'id_pol', 'observación': 'observacion', 'observacion': 'observacion',
-      'enthandle': 'ent_handle', 'txthandle': 'txt_handle',
-      'layerent': 'layer_ent', 'layertxt': 'layer_txt',
-      'colorhex': 'color_hex', 'guid': 'guid',
-      'x_label (este)': 'x_label', 'y_label (norte)': 'y_label',
-      'revisado (true/false)': 'revisado', 'observación externa': 'observacion_externa',
+      'pk_id':'pk_id','capitulo':'capitulo','competencia':'competencia',
+      'item':'item','descripción':'descripcion','descripcion':'descripcion',
+      'und':'und','calzada':'calzada','tramo':'tramo',
+      'abs. inicio':'abs_inicio','abs. final':'abs_final',
+      'vlr unitario':'vlr_unitario','no. inicio':'no_inicio','no. final':'no_final',
+      'area/long/nod':'area_long_nod','ancho':'ancho','espesor':'espesor',
+      'cant.total':'cant_total','costo directo':'costo_directo',
+      'tipo de ejecución':'tipo_ejecucion','tipo de entidad':'tipo_entidad',
+      'id_pol':'id_pol','observación':'observacion','observacion':'observacion',
+      'enthandle':'ent_handle','txthandle':'txt_handle',
+      'layerent':'layer_ent','layertxt':'layer_txt',
+      'colorhex':'color_hex','guid':'guid',
+      'x_label (este)':'x_label','y_label (norte)':'y_label',
+      'revisado (true/false)':'revisado','observación externa':'observacion_externa',
     }
     const NUMS = new Set(['vlr_unitario','no_inicio','no_final','area_long_nod','ancho','espesor','cant_total','costo_directo','x_label','y_label'])
-
     const rows = []
     for (let i = 1; i < lines.length; i++) {
       const vals = lines[i].split(sep).map(v => v.replace(/^"|"$/g, '').trim())
       const obj = {}
       headers.forEach((h, idx) => {
-        const key = MAP[h.toLowerCase()]
-        if (!key) return
+        const key = MAP[h.toLowerCase()]; if (!key) return
         const v = vals[idx] || ''
         if (NUMS.has(key)) { const n = parseFloat(v.replace(/[,$]/g, '')); obj[key] = isNaN(n) ? null : n }
         else obj[key] = v || null
@@ -563,12 +603,10 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
     const { rows } = modalImport
     setModalImport(null); setImporting(true); setImportProgreso(0)
     const BATCH = 500
-    const total = Math.ceil(rows.length / BATCH)
     let ok = true; let msj = ''
     for (let i = 0; i < rows.length; i += BATCH) {
       const batch = rows.slice(i, i + BATCH)
-      const isFirst = i === 0
-      const mode = isFirst ? modoImport : 'append'
+      const mode = i === 0 ? modoImport : 'append'
       const res = await fetch(`${API}/presupuesto/${contratoId}/bulk?mode=${mode}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -579,19 +617,11 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
     }
     if (ok) msj = `✅ ${rows.length} registros ${modoImport === 'replace' ? 'cargados' : 'agregados'}`
     setImportMsg(msj); setImporting(false); setImportProgreso(0)
-    if (ok) { await cargarFiltros(); await cargarRegistros({capitulo:'',item:'',tramo:'',calzada:''}) }
+    if (ok) { setDrill([]); await cargarRegistros() }
     setTimeout(() => setImportMsg(''), 5000)
   }
 
-  // Selección múltiple
-  function toggleSel(id) {
-    setSeleccionados(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
-  }
-  function toggleTodos() {
-    setSeleccionados(prev => prev.size === registros.length ? new Set() : new Set(registros.map(r => r.id)))
-  }
-
-  // Edición inline
+  // ── Edición inline ─────────────────────────────────────────────────────────
   function iniciarEdicion(registro) {
     setEditando(registro.id)
     setEditValues({
@@ -609,109 +639,179 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
     const body = {}
     Object.entries(editValues).forEach(([k, v]) => {
       if (v === '' || v == null) return
-      const NUMS = ['area_long_nod','ancho','espesor','vlr_unitario']
-      body[k] = NUMS.includes(k) ? parseFloat(v) : v
+      body[k] = ['area_long_nod','ancho','espesor','vlr_unitario'].includes(k) ? parseFloat(v) : v
     })
     const res = await fetch(`${API}/presupuesto/item/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(body)
     })
-    if (res.ok) {
-      setEditando(null)
-      await cargarRegistros()
-    }
+    if (res.ok) { setEditando(null); await cargarRegistros() }
   }
 
+  // ── Selección ──────────────────────────────────────────────────────────────
+  function toggleSel(id) {
+    setSeleccionados(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  function toggleTodos() {
+    setSeleccionados(prev => prev.size === registrosFiltrados.length ? new Set() : new Set(registrosFiltrados.map(r => r.id)))
+  }
+
+  // ── Estilos ────────────────────────────────────────────────────────────────
   const REVISADO_OPTS = ['Pendiente', 'Verificar Campo', 'Verificado']
   const estadoColor = (r) => r === 'Verificado' ? '#16A34A' : r === 'Verificar Campo' ? '#D97706' : '#6B7280'
+  const thStyle = { padding:'8px 10px', fontSize:'11px', fontWeight:'700', letterSpacing:'0.5px', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
+  const tdStyle = { padding:'7px 10px', fontSize:'12px', borderBottom:`1px solid ${t.border}`, verticalAlign:'middle' }
+  const bcBtn   = (active) => ({
+    background: active ? t.primary : 'transparent',
+    color: active ? '#fff' : t.textMuted,
+    border: `1px solid ${active ? t.primary : t.border}`,
+    borderRadius: '20px', padding: '4px 12px', fontSize: '12px',
+    fontWeight: active ? '600' : '400', cursor: 'pointer', transition: 'all 0.15s',
+  })
 
-  const thStyle = { padding: '8px 10px', fontSize: '11px', fontWeight: '700', letterSpacing: '0.5px', color: t.textMuted, borderBottom: `1px solid ${t.border}`, textAlign: 'left', whiteSpace: 'nowrap' }
-  const tdStyle = { padding: '7px 10px', fontSize: '12px', borderBottom: `1px solid ${t.border}`, verticalAlign: 'middle' }
+  // ── CustomTooltip ──────────────────────────────────────────────────────────
+  const CustomTooltip = ({ active, payload }) => {
+    if (!active || !payload?.length) return null
+    const d = payload[0].payload
+    return (
+      <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px 14px', boxShadow:'0 4px 20px rgba(0,0,0,0.15)' }}>
+        <div style={{ fontSize:'12px', fontWeight:'700', color:t.text, marginBottom:'4px', maxWidth:'280px', wordBreak:'break-word' }}>{d.label}</div>
+        <div style={{ fontSize:'13px', fontWeight:'700', color:colorActual }}>{fmt(d.costo)}</div>
+        <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>{d.count} registro{d.count !== 1 ? 's' : ''}</div>
+      </div>
+    )
+  }
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div>
-      {/* Modal importar */}
+      {/* ── Modal importar ── */}
       {modalImport && (
-        <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center' }}>
-          <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'28px', width:'420px', maxWidth:'95vw', boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }}>
-            <div style={{ fontSize:'16px', fontWeight:'700', color:t.primary, marginBottom:'8px' }}>📂 Importar Presupuesto</div>
-            <div style={{ fontSize:'13px', color:t.textMuted, marginBottom:'20px' }}>{modalImport.fileName} — <strong style={{color:t.text}}>{modalImport.rows.length} registros</strong></div>
-            <div style={{ fontSize:'13px', fontWeight:'600', color:t.text, marginBottom:'10px' }}>¿Cómo desea cargar los datos?</div>
-            <div style={{ display:'flex', flexDirection:'column', gap:'8px', marginBottom:'20px' }}>
+        <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.5)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center' }}>
+          <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'16px',padding:'28px',width:'420px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ fontSize:'16px',fontWeight:'700',color:t.primary,marginBottom:'8px' }}>📂 Importar Presupuesto</div>
+            <div style={{ fontSize:'13px',color:t.textMuted,marginBottom:'20px' }}>{modalImport.fileName} — <strong style={{color:t.text}}>{modalImport.rows.length} registros</strong></div>
+            <div style={{ fontSize:'13px',fontWeight:'600',color:t.text,marginBottom:'10px' }}>¿Cómo desea cargar los datos?</div>
+            <div style={{ display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px' }}>
               {[['replace','🔄 Reemplazar todo','Elimina los registros actuales y carga los nuevos'],['append','➕ Agregar','Agrega los nuevos registros sin eliminar los existentes']].map(([v,l,d]) => (
-                <label key={v} style={{ display:'flex', alignItems:'flex-start', gap:'10px', padding:'12px', border:`2px solid ${modoImport===v?t.primary:t.border}`, borderRadius:'8px', cursor:'pointer', background:modoImport===v?t.primary+'11':'transparent' }}>
+                <label key={v} style={{ display:'flex',alignItems:'flex-start',gap:'10px',padding:'12px',border:`2px solid ${modoImport===v?t.primary:t.border}`,borderRadius:'8px',cursor:'pointer',background:modoImport===v?t.primary+'11':'transparent' }}>
                   <input type="radio" name="modo" value={v} checked={modoImport===v} onChange={() => { setModoImport(v); setConfirmReplace(false) }} style={{ marginTop:'2px' }} />
-                  <div><div style={{ fontSize:'13px', fontWeight:'600', color:t.text }}>{l}</div><div style={{ fontSize:'11px', color:t.textMuted }}>{d}</div></div>
+                  <div><div style={{ fontSize:'13px',fontWeight:'600',color:t.text }}>{l}</div><div style={{ fontSize:'11px',color:t.textMuted }}>{d}</div></div>
                 </label>
               ))}
             </div>
             {modoImport === 'replace' && confirmReplace && (
-              <div style={{ background:'#FEE2E2', border:'1px solid #FCA5A5', borderRadius:'8px', padding:'12px', marginBottom:'16px', fontSize:'12px', color:'#DC2626' }}>
-                ⚠️ <strong>Esta acción no se puede deshacer.</strong> Se eliminarán todos los registros actuales del presupuesto. ¿Confirma?
+              <div style={{ background:'#FEE2E2',border:'1px solid #FCA5A5',borderRadius:'8px',padding:'12px',marginBottom:'16px',fontSize:'12px',color:'#DC2626' }}>
+                ⚠️ <strong>Esta acción no se puede deshacer.</strong> Se eliminarán todos los registros actuales. ¿Confirma?
               </div>
             )}
-            <div style={{ display:'flex', gap:'10px', justifyContent:'flex-end' }}>
-              <button onClick={() => { setModalImport(null); setConfirmReplace(false) }} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'9px 18px', fontSize:'13px', color:t.textMuted, cursor:'pointer' }}>Cancelar</button>
-              <button onClick={ejecutarImport} style={{ background: modoImport==='replace'&&confirmReplace ? '#DC2626' : t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'9px 20px', fontSize:'13px', fontWeight:'600', cursor:'pointer' }}>
-                {modoImport==='replace' && !confirmReplace ? 'Continuar →' : modoImport==='replace' ? '⚠️ Sí, reemplazar' : '➕ Agregar'}
+            <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end' }}>
+              <button onClick={() => { setModalImport(null); setConfirmReplace(false) }} style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'8px',padding:'9px 18px',fontSize:'13px',color:t.textMuted,cursor:'pointer' }}>Cancelar</button>
+              <button onClick={ejecutarImport} style={{ background:modoImport==='replace'&&confirmReplace?'#DC2626':t.primary,color:'#fff',border:'none',borderRadius:'8px',padding:'9px 20px',fontSize:'13px',fontWeight:'600',cursor:'pointer' }}>
+                {modoImport==='replace'&&!confirmReplace?'Continuar →':modoImport==='replace'?'⚠️ Sí, reemplazar':'➕ Agregar'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Toolbar */}
-      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' }}>
-        <label style={{ background: t.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '9px 18px', fontSize: '13px', fontWeight: '600', cursor: importing ? 'wait' : 'pointer', opacity: importing ? 0.7 : 1 }}>
+      {/* ── Toolbar ── */}
+      <div style={{ display:'flex',gap:'12px',alignItems:'center',marginBottom:'16px',flexWrap:'wrap' }}>
+        <label style={{ background:t.primary,color:'#fff',border:'none',borderRadius:'8px',padding:'9px 18px',fontSize:'13px',fontWeight:'600',cursor:importing?'wait':'pointer',opacity:importing?0.7:1 }}>
           {importing ? `Importando ${importProgreso}%...` : '📂 Importar CSV'}
-          <input type="file" accept=".csv" style={{ display: 'none' }} onChange={handleImportCSV} disabled={importing} />
+          <input type="file" accept=".csv" style={{ display:'none' }} onChange={handleImportCSV} disabled={importing} />
         </label>
         {importing && (
-          <div style={{ flex:1, maxWidth:'200px', height:'6px', background:t.border, borderRadius:'3px', overflow:'hidden' }}>
-            <div style={{ width:`${importProgreso}%`, height:'100%', background:t.primary, borderRadius:'3px', transition:'width 0.3s' }} />
+          <div style={{ flex:1,maxWidth:'200px',height:'6px',background:t.border,borderRadius:'3px',overflow:'hidden' }}>
+            <div style={{ width:`${importProgreso}%`,height:'100%',background:t.primary,borderRadius:'3px',transition:'width 0.3s' }} />
           </div>
         )}
-        {importMsg && <span style={{ fontSize: '13px', color: importMsg.startsWith('✅') ? '#16A34A' : importMsg.startsWith('❌') ? '#DC2626' : t.textMuted }}>{importMsg}</span>}
-        <span style={{ marginLeft: 'auto', fontSize: '12px', color: t.textMuted }}>{registros.length} registros · {seleccionados.size} seleccionados</span>
+        {importMsg && <span style={{ fontSize:'13px',color:importMsg.startsWith('✅')?'#16A34A':importMsg.startsWith('❌')?'#DC2626':t.textMuted }}>{importMsg}</span>}
+        <span style={{ marginLeft:'auto',fontSize:'12px',color:t.textMuted }}>
+          {registros.length} total · {registrosFiltrados.length} filtrados · {seleccionados.size} seleccionados
+        </span>
       </div>
 
-      {/* Filtros en cascada */}
-      <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
-        {[
-          ['capitulo', 'Capítulo', filtros.capitulos],
-          ['item', 'Ítem', filtros.items],
-          ['tramo', 'Tramo', filtros.tramos],
-          ['calzada', 'Calzada', filtros.calzadas],
-        ].map(([campo, label, opciones]) => (
-          <div key={campo} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '11px', fontWeight: '600', color: t.textMuted, letterSpacing: '0.5px' }}>{label}</label>
-            <select value={sel[campo]} onChange={e => cambiarFiltro(campo, e.target.value)}
-              style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '6px', padding: '7px 12px', color: t.text, fontSize: '13px', minWidth: '160px', cursor: 'pointer' }}>
-              <option value="">— Todos —</option>
-              {opciones.map(o => <option key={o} value={o}>{o}</option>)}
-            </select>
+      {/* ── Panel drill-down ── */}
+      {loading ? (
+        <div style={s.emptyState}>Cargando registros...</div>
+      ) : registros.length === 0 ? (
+        <div style={s.emptyState}>📂 Importa un CSV para comenzar</div>
+      ) : (
+        <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',padding:'20px',marginBottom:'16px',boxShadow:t.shadow }}>
+
+          {/* Breadcrumb */}
+          <div style={{ display:'flex',alignItems:'center',gap:'6px',marginBottom:'16px',flexWrap:'wrap' }}>
+            <button onClick={() => irA(0)} style={bcBtn(drill.length === 0)}>📊 Todo el presupuesto</button>
+            {drill.map(({campo, valor}, idx) => (
+              <span key={idx} style={{ display:'flex',alignItems:'center',gap:'6px' }}>
+                <span style={{ color:t.textMuted,fontSize:'13px' }}>›</span>
+                <button onClick={() => irA(idx + 1)} style={bcBtn(idx === drill.length - 1)}>
+                  {NOM[campo]}: {valor.length > 28 ? valor.slice(0, 28) + '…' : valor}
+                </button>
+              </span>
+            ))}
           </div>
-        ))}
-        {(sel.capitulo||sel.item||sel.tramo||sel.calzada) && (
-          <button onClick={() => { setSel({capitulo:'',item:'',tramo:'',calzada:''}); cargarFiltros(); cargarRegistros({capitulo:'',item:'',tramo:'',calzada:''}) }}
-            style={{ alignSelf: 'flex-end', background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '6px', padding: '7px 12px', fontSize: '12px', color: t.textMuted, cursor: 'pointer' }}>
-            ✕ Limpiar
-          </button>
-        )}
-      </div>
 
-      {/* Tabla */}
-      <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '12px', overflow: 'auto', boxShadow: t.shadow }}>
-        {loading ? (
-          <div style={s.emptyState}>Cargando...</div>
-        ) : registros.length === 0 ? (
-          <div style={s.emptyState}>📂 {sel.capitulo ? 'Sin registros para los filtros seleccionados' : 'Importa un CSV o selecciona un capítulo'}</div>
-        ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-            <thead style={{ background: t.bg }}>
+          {/* Título y totales */}
+          <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px',flexWrap:'wrap',gap:'8px' }}>
+            <div>
+              <span style={{ fontSize:'13px',fontWeight:'700',color:t.text }}>
+                {nivelActual ? `Vista por ${NOM[nivelActual]}` : 'Vista detalle completa'}
+              </span>
+              <span style={{ fontSize:'12px',color:t.textMuted,marginLeft:'12px' }}>
+                {registrosFiltrados.length} registros · <strong style={{color:colorActual}}>{fmt(costoTotal)}</strong>
+              </span>
+            </div>
+            {nivelActual && (
+              <span style={{ fontSize:'11px',color:t.textMuted,fontStyle:'italic' }}>
+                👆 Click en una barra para explorar el siguiente nivel
+              </span>
+            )}
+          </div>
+
+          {/* Gráfico */}
+          {nivelActual ? (
+            <ResponsiveContainer width="100%" height={Math.max(180, chartData.length * 40 + 20)}>
+              <BarChart data={chartData} layout="vertical"
+                margin={{ left: 8, right: 80, top: 4, bottom: 4 }}
+                onClick={handleBarClick}
+                style={{ cursor: 'pointer' }}>
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={t.border} />
+                <XAxis type="number" tickFormatter={fmtM}
+                  tick={{ fontSize:10, fill:t.textMuted }} axisLine={false} tickLine={false} />
+                <YAxis type="category" dataKey="label" width={220}
+                  tick={{ fontSize:11, fill:t.text }} tickLine={false} axisLine={false} />
+                <Tooltip content={<CustomTooltip />} cursor={{ fill: colorActual + '18' }} />
+                <Bar dataKey="costo" radius={[0, 5, 5, 0]}
+                  onMouseEnter={(_, i) => setHoveredBar(i)}
+                  onMouseLeave={() => setHoveredBar(null)}>
+                  {chartData.map((_, i) => (
+                    <Cell key={i}
+                      fill={hoveredBar === null || hoveredBar === i ? colorActual : colorActual + '55'}
+                      stroke={hoveredBar === i ? colorActual : 'none'}
+                      strokeWidth={2}
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div style={{ textAlign:'center',padding:'16px 0',fontSize:'13px',color:t.textMuted }}>
+              Nivel máximo de detalle — vea la tabla a continuación.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Tabla ── */}
+      {registrosFiltrados.length > 0 && (
+        <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',boxShadow:t.shadow }}>
+          <table style={{ width:'100%',borderCollapse:'collapse',fontSize:'12px' }}>
+            <thead style={{ background:t.bg }}>
               <tr>
-                <th style={thStyle}><input type="checkbox" checked={seleccionados.size === registros.length && registros.length > 0} onChange={toggleTodos} /></th>
+                <th style={thStyle}><input type="checkbox" checked={seleccionados.size === registrosFiltrados.length && registrosFiltrados.length > 0} onChange={toggleTodos} /></th>
                 <th style={thStyle}>PK_ID</th>
                 <th style={thStyle}>Capítulo</th>
                 <th style={thStyle}>Ítem</th>
@@ -730,69 +830,69 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
               </tr>
             </thead>
             <tbody>
-              {registros.map(r => {
+              {registrosFiltrados.map(r => {
                 const isEdit = editando === r.id
                 return (
-                  <tr key={r.id} style={{ background: seleccionados.has(r.id) ? (t.primary + '18') : 'transparent' }}
+                  <tr key={r.id} style={{ background:seleccionados.has(r.id)?(t.primary+'18'):'transparent' }}
                     onClick={() => !isEdit && toggleSel(r.id)}>
-                    <td style={tdStyle} onClick={e => e.stopPropagation()}><input type="checkbox" checked={seleccionados.has(r.id)} onChange={() => toggleSel(r.id)} /></td>
-                    <td style={{ ...tdStyle, fontWeight: '600', color: t.primary }}>{r.pk_id || r.id_pol || '-'}</td>
+                    <td style={tdStyle} onClick={e=>e.stopPropagation()}><input type="checkbox" checked={seleccionados.has(r.id)} onChange={() => toggleSel(r.id)} /></td>
+                    <td style={{ ...tdStyle,fontWeight:'600',color:t.primary }}>{r.pk_id||r.id_pol||'-'}</td>
                     <td style={tdStyle}>
-                      {isEdit ? <input value={editValues.capitulo} onChange={e => setEditValues({...editValues,capitulo:e.target.value})}
-                        style={{ width: '120px', background: t.inputBg, border: `1px solid ${t.border}`, borderRadius:'4px', padding:'3px 6px', color:t.text, fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
+                      {isEdit ? <input value={editValues.capitulo} onChange={e=>setEditValues({...editValues,capitulo:e.target.value})}
+                        style={{ width:'120px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
                         : r.capitulo}
                     </td>
                     <td style={tdStyle}>
-                      {isEdit ? <input value={editValues.item} onChange={e => setEditValues({...editValues,item:e.target.value})}
-                        style={{ width: '80px', background: t.inputBg, border: `1px solid ${t.border}`, borderRadius:'4px', padding:'3px 6px', color:t.text, fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
+                      {isEdit ? <input value={editValues.item} onChange={e=>setEditValues({...editValues,item:e.target.value})}
+                        style={{ width:'80px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
                         : r.item}
                     </td>
-                    <td style={{ ...tdStyle, maxWidth: '220px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.descripcion}</td>
+                    <td style={{ ...tdStyle,maxWidth:'220px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{r.descripcion}</td>
                     <td style={tdStyle}>{r.und}</td>
-                    <td style={{ ...tdStyle, textAlign:'right' }}>{fmtN(r.no_inicio)}</td>
-                    <td style={{ ...tdStyle, textAlign:'right' }}>{fmtN(r.no_final)}</td>
-                    <td style={{ ...tdStyle, textAlign:'right' }}>
-                      {isEdit ? <input type="number" value={editValues.area_long_nod} onChange={e => setEditValues({...editValues,area_long_nod:e.target.value})}
-                        style={{ width:'80px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'3px 6px', color:t.text, fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
+                    <td style={{ ...tdStyle,textAlign:'right' }}>{fmtN(r.no_inicio)}</td>
+                    <td style={{ ...tdStyle,textAlign:'right' }}>{fmtN(r.no_final)}</td>
+                    <td style={{ ...tdStyle,textAlign:'right' }}>
+                      {isEdit ? <input type="number" value={editValues.area_long_nod} onChange={e=>setEditValues({...editValues,area_long_nod:e.target.value})}
+                        style={{ width:'80px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
                         : fmtN(r.area_long_nod)}
                     </td>
-                    <td style={{ ...tdStyle, textAlign:'right' }}>
-                      {isEdit ? <input type="number" value={editValues.ancho} onChange={e => setEditValues({...editValues,ancho:e.target.value})}
-                        style={{ width:'70px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'3px 6px', color:t.text, fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
+                    <td style={{ ...tdStyle,textAlign:'right' }}>
+                      {isEdit ? <input type="number" value={editValues.ancho} onChange={e=>setEditValues({...editValues,ancho:e.target.value})}
+                        style={{ width:'70px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
                         : fmtN(r.ancho)}
                     </td>
-                    <td style={{ ...tdStyle, textAlign:'right' }}>
-                      {isEdit ? <input type="number" value={editValues.espesor} onChange={e => setEditValues({...editValues,espesor:e.target.value})}
-                        style={{ width:'70px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'3px 6px', color:t.text, fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
+                    <td style={{ ...tdStyle,textAlign:'right' }}>
+                      {isEdit ? <input type="number" value={editValues.espesor} onChange={e=>setEditValues({...editValues,espesor:e.target.value})}
+                        style={{ width:'70px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
                         : fmtN(r.espesor)}
                     </td>
-                    <td style={{ ...tdStyle, textAlign:'right', fontWeight:'600' }}>{fmtN(r.cant_total)}</td>
-                    <td style={{ ...tdStyle, textAlign:'right' }}>
-                      {isEdit ? <input type="number" value={editValues.vlr_unitario} onChange={e => setEditValues({...editValues,vlr_unitario:e.target.value})}
-                        style={{ width:'90px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'3px 6px', color:t.text, fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
+                    <td style={{ ...tdStyle,textAlign:'right',fontWeight:'600' }}>{fmtN(r.cant_total)}</td>
+                    <td style={{ ...tdStyle,textAlign:'right' }}>
+                      {isEdit ? <input type="number" value={editValues.vlr_unitario} onChange={e=>setEditValues({...editValues,vlr_unitario:e.target.value})}
+                        style={{ width:'90px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
                         : fmt(r.vlr_unitario)}
                     </td>
-                    <td style={{ ...tdStyle, textAlign:'right', fontWeight:'700', color: t.primary }}>{fmt(r.costo_directo)}</td>
+                    <td style={{ ...tdStyle,textAlign:'right',fontWeight:'700',color:t.primary }}>{fmt(r.costo_directo)}</td>
                     <td style={tdStyle} onClick={e=>e.stopPropagation()}>
                       {isEdit ? (
-                        <select value={editValues.revisado} onChange={e => setEditValues({...editValues,revisado:e.target.value})}
-                          style={{ background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'3px 6px', color:t.text, fontSize:'11px' }}>
+                        <select value={editValues.revisado} onChange={e=>setEditValues({...editValues,revisado:e.target.value})}
+                          style={{ background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'11px' }}>
                           {REVISADO_OPTS.map(o => <option key={o} value={o}>{o}</option>)}
                         </select>
                       ) : (
-                        <span style={{ fontSize:'11px', fontWeight:'600', color: estadoColor(r.revisado), background: estadoColor(r.revisado)+'22', borderRadius:'4px', padding:'2px 8px' }}>
+                        <span style={{ fontSize:'11px',fontWeight:'600',color:estadoColor(r.revisado),background:estadoColor(r.revisado)+'22',borderRadius:'4px',padding:'2px 8px' }}>
                           {r.revisado || 'Pendiente'}
                         </span>
                       )}
                     </td>
                     <td style={tdStyle} onClick={e=>e.stopPropagation()}>
                       {isEdit ? (
-                        <div style={{ display:'flex', gap:'4px' }}>
-                          <button onClick={() => guardarEdicion(r.id)} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'4px', padding:'4px 10px', fontSize:'11px', cursor:'pointer' }}>✓</button>
-                          <button onClick={() => setEditando(null)} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'4px 8px', fontSize:'11px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                        <div style={{ display:'flex',gap:'4px' }}>
+                          <button onClick={() => guardarEdicion(r.id)} style={{ background:t.primary,color:'#fff',border:'none',borderRadius:'4px',padding:'4px 10px',fontSize:'11px',cursor:'pointer' }}>✓</button>
+                          <button onClick={() => setEditando(null)} style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'4px',padding:'4px 8px',fontSize:'11px',cursor:'pointer',color:t.textMuted }}>✕</button>
                         </div>
                       ) : (
-                        <button onClick={() => iniciarEdicion(r)} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'4px 8px', fontSize:'11px', cursor:'pointer', color:t.textMuted }}>✏️</button>
+                        <button onClick={() => iniciarEdicion(r)} style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'4px',padding:'4px 8px',fontSize:'11px',cursor:'pointer',color:t.textMuted }}>✏️</button>
                       )}
                     </td>
                   </tr>
@@ -800,8 +900,8 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
               })}
             </tbody>
           </table>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   )
 }
