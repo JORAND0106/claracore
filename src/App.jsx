@@ -493,6 +493,14 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const [confirmReplace, setConfirmReplace] = useState(false)
   const [drill, setDrill] = useState([])        // [{campo, valor}, …] – ruta activa
   const [hoveredBar, setHoveredBar] = useState(null)
+  // ── Estado edición y validación ────────────────────────────────────────────
+  const [listadoPrecios, setListadoPrecios] = useState([])
+  const [editCapitulo, setEditCapitulo] = useState('')
+  const [editItem, setEditItem] = useState('')
+  const [editDims, setEditDims] = useState({})      // {[id]: {ancho, espesor}}
+  const [modalConfirm, setModalConfirm] = useState(false)
+  const [bulkEstado, setBulkEstado] = useState('')
+  const [guardandoBulk, setGuardandoBulk] = useState(false)
 
   // ── Constantes drill-down ──────────────────────────────────────────────────
   const NIVELES = ['capitulo', 'item', 'pk_id', 'tramo', 'calzada']
@@ -515,6 +523,16 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
 
   // ── Carga inicial ──────────────────────────────────────────────────────────
   useEffect(() => { if (contratoId) cargarRegistros() }, [contratoId])
+
+  useEffect(() => {
+    if (!contratoId) return
+    fetch(`${API}/listado-precios/${contratoId}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : []).then(setListadoPrecios).catch(() => {})
+  }, [contratoId])
+
+  const _permPpto = (usuario?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === 'editar registros presupuesto')
+  const puedeEditar  = _permPpto?.editar   ?? false
+  const puedeValidar = _permPpto?.validar  ?? false
 
   async function cargarRegistros() {
     if (!contratoId) return
@@ -639,6 +657,49 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
     setTimeout(() => setImportMsg(''), 5000)
   }
 
+  // ── Listado de precios: derivados ──────────────────────────────────────────
+  const capitulosListado = useMemo(() => [...new Set(listadoPrecios.map(p => p.capitulo).filter(Boolean))].sort(), [listadoPrecios])
+  const itemsListado = useMemo(() => listadoPrecios.filter(p => !editCapitulo || p.capitulo === editCapitulo), [listadoPrecios, editCapitulo])
+  const precioSeleccionado = useMemo(() => listadoPrecios.find(p => p.item_numero === editItem) || null, [listadoPrecios, editItem])
+  const hayModificaciones = seleccionados.size > 0 && (
+    editCapitulo !== '' || editItem !== '' ||
+    [...seleccionados].some(id => editDims[id])
+  )
+
+  async function ejecutarRecalcular() {
+    const ids = [...seleccionados]
+    const dims = ids.filter(id => editDims[id]).map(id => ({
+      id,
+      ancho:   editDims[id].ancho   !== '' ? parseFloat(editDims[id].ancho)   : null,
+      espesor: editDims[id].espesor !== '' ? parseFloat(editDims[id].espesor) : null,
+    }))
+    const body = { ids, dims: dims.length > 0 ? dims : null }
+    if (editCapitulo)   body.capitulo    = editCapitulo
+    if (editItem)       { body.item = editItem; body.descripcion = precioSeleccionado?.descripcion ?? null }
+    if (precioSeleccionado) body.vlr_unitario = precioSeleccionado.precio_unitario
+    setGuardandoBulk(true)
+    const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-recalcular`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body)
+    })
+    setGuardandoBulk(false)
+    if (res.ok) {
+      setEditCapitulo(''); setEditItem(''); setEditDims({}); setSeleccionados(new Set()); setModalConfirm(false)
+      await cargarRegistros()
+    }
+  }
+
+  async function ejecutarBulkEstado() {
+    if (!bulkEstado || seleccionados.size === 0) return
+    setGuardandoBulk(true)
+    const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ids: [...seleccionados], revisado: bulkEstado })
+    })
+    setGuardandoBulk(false)
+    if (res.ok) { setBulkEstado(''); setSeleccionados(new Set()); await cargarRegistros() }
+  }
+
   // ── Edición inline ─────────────────────────────────────────────────────────
   function iniciarEdicion(registro) {
     setEditando(registro.id)
@@ -691,6 +752,38 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div>
+      {/* ── Modal confirmar recálculo ── */}
+      {modalConfirm && (
+        <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.55)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center' }}>
+          <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'16px',padding:'28px',width:'440px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ fontSize:'16px',fontWeight:'700',color:t.primary,marginBottom:'16px' }}>🔄 Confirmar Recálculo</div>
+            <div style={{ fontSize:'13px',color:t.textMuted,marginBottom:'14px' }}>
+              Se actualizarán <strong style={{color:t.text}}>{seleccionados.size} registro(s)</strong> con los siguientes cambios:
+            </div>
+            <div style={{ background:t.bg,borderRadius:'8px',padding:'12px',marginBottom:'16px',fontSize:'13px',display:'flex',flexDirection:'column',gap:'6px' }}>
+              {editCapitulo && <span>📁 <strong>Capítulo:</strong> {editCapitulo}</span>}
+              {editItem && <span>📌 <strong>Ítem:</strong> {editItem} · {precioSeleccionado?.descripcion || ''}</span>}
+              {precioSeleccionado && <span>💲 <strong>Vlr. Unitario:</strong> {fmt(precioSeleccionado.precio_unitario)}</span>}
+              {[...seleccionados].some(id => editDims[id]) && (
+                <span>📐 <strong>Dimensiones</strong> modificadas en {[...seleccionados].filter(id => editDims[id]).length} fila(s)</span>
+              )}
+              <span style={{color:t.textMuted,fontSize:'12px',marginTop:'4px'}}>
+                Cant.Total = Área × Ancho × Espesor &nbsp;→&nbsp; Costo Directo = Cant.Total × Vlr.Unit
+              </span>
+            </div>
+            <div style={{ background:'#FEF3C7',border:'1px solid #FCD34D',borderRadius:'8px',padding:'10px 14px',fontSize:'12px',color:'#92400E',marginBottom:'20px' }}>
+              ⚠️ Esta acción modifica los datos en la base de datos y <strong>no se puede deshacer.</strong>
+            </div>
+            <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end' }}>
+              <button onClick={() => setModalConfirm(false)} style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'8px',padding:'9px 18px',fontSize:'13px',color:t.textMuted,cursor:'pointer' }}>Cancelar</button>
+              <button onClick={ejecutarRecalcular} disabled={guardandoBulk} style={{ background:t.primary,color:'#fff',border:'none',borderRadius:'8px',padding:'9px 22px',fontSize:'13px',fontWeight:'700',cursor:guardandoBulk?'wait':'pointer',opacity:guardandoBulk?0.7:1 }}>
+                {guardandoBulk ? 'Guardando...' : '✓ Confirmar y guardar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Modal importar ── */}
       {modalImport && (
         <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.5)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center' }}>
@@ -832,6 +925,63 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
         </div>
       )}
 
+      {/* ── Barra Editar / Validar ── */}
+      {(puedeEditar || puedeValidar) && registrosFiltrados.length > 0 && (
+        <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',padding:'14px 18px',marginBottom:'12px',boxShadow:t.shadow,display:'flex',flexWrap:'wrap',gap:'16px',alignItems:'flex-end' }}>
+          {puedeEditar && (<>
+            <div style={{ display:'flex',flexDirection:'column',gap:'4px' }}>
+              <label style={{ fontSize:'10px',fontWeight:'700',color:t.textMuted,letterSpacing:'1px' }}>CAPÍTULO</label>
+              <select value={editCapitulo} onChange={e => { setEditCapitulo(e.target.value); setEditItem('') }}
+                style={{ background:t.inputBg,border:`1.5px solid ${t.border}`,borderRadius:'8px',padding:'7px 12px',color:t.text,fontSize:'13px',minWidth:'160px',cursor:'pointer' }}>
+                <option value="">— Sin cambio —</option>
+                {capitulosListado.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div style={{ display:'flex',flexDirection:'column',gap:'4px' }}>
+              <label style={{ fontSize:'10px',fontWeight:'700',color:t.textMuted,letterSpacing:'1px' }}>ÍTEM</label>
+              <select value={editItem} onChange={e => setEditItem(e.target.value)}
+                style={{ background:t.inputBg,border:`1.5px solid ${t.border}`,borderRadius:'8px',padding:'7px 12px',color:t.text,fontSize:'13px',minWidth:'260px',cursor:'pointer' }}>
+                <option value="">— Sin cambio —</option>
+                {itemsListado.map(p => <option key={p.id} value={p.item_numero}>{p.item_numero} · {p.descripcion}</option>)}
+              </select>
+            </div>
+            {precioSeleccionado && (
+              <div style={{ display:'flex',flexDirection:'column',gap:'4px' }}>
+                <label style={{ fontSize:'10px',fontWeight:'700',color:t.textMuted,letterSpacing:'1px' }}>VLR. UNIT.</label>
+                <div style={{ padding:'7px 14px',background:t.bg,border:`1.5px solid ${t.border}`,borderRadius:'8px',fontSize:'13px',fontWeight:'700',color:t.primary,minWidth:'120px' }}>
+                  {fmt(precioSeleccionado.precio_unitario)}
+                </div>
+              </div>
+            )}
+            <button onClick={() => hayModificaciones && setModalConfirm(true)}
+              disabled={!hayModificaciones}
+              style={{ background:hayModificaciones?t.primary:t.border,color:hayModificaciones?'#fff':t.textMuted,border:'none',borderRadius:'8px',padding:'9px 20px',fontSize:'13px',fontWeight:'700',cursor:hayModificaciones?'pointer':'not-allowed',transition:'all 0.2s',alignSelf:'flex-end' }}>
+              🔄 Recalcular {seleccionados.size > 0 ? `(${seleccionados.size})` : ''}
+            </button>
+          </>)}
+          {puedeValidar && (<>
+            <div style={{ display:'flex',flexDirection:'column',gap:'4px' }}>
+              <label style={{ fontSize:'10px',fontWeight:'700',color:t.textMuted,letterSpacing:'1px' }}>ESTADO DE REVISIÓN</label>
+              <select value={bulkEstado} onChange={e => setBulkEstado(e.target.value)}
+                style={{ background:t.inputBg,border:`1.5px solid ${t.border}`,borderRadius:'8px',padding:'7px 12px',color:t.text,fontSize:'13px',minWidth:'180px',cursor:'pointer' }}>
+                <option value="">— Selecciona estado —</option>
+                {['Pendiente','Verificar Campo','Verificado'].map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </div>
+            <button onClick={ejecutarBulkEstado}
+              disabled={!bulkEstado || seleccionados.size === 0 || guardandoBulk}
+              style={{ background:bulkEstado&&seleccionados.size>0?'#16A34A':t.border,color:bulkEstado&&seleccionados.size>0?'#fff':t.textMuted,border:'none',borderRadius:'8px',padding:'9px 20px',fontSize:'13px',fontWeight:'700',cursor:bulkEstado&&seleccionados.size>0?'pointer':'not-allowed',transition:'all 0.2s',alignSelf:'flex-end' }}>
+              ✓ Aplicar {seleccionados.size > 0 ? `(${seleccionados.size})` : ''}
+            </button>
+          </>)}
+          {(puedeEditar || puedeValidar) && seleccionados.size === 0 && (
+            <span style={{ fontSize:'12px',color:t.textMuted,fontStyle:'italic',alignSelf:'center' }}>
+              ☝️ Selecciona registros en la tabla para habilitar las acciones
+            </span>
+          )}
+        </div>
+      )}
+
       {/* ── Tabla ── */}
       {registrosFiltrados.length > 0 && (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',boxShadow:t.shadow }}>
@@ -883,14 +1033,18 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                         style={{ width:'80px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
                         : fmtN(r.area_long_nod)}
                     </td>
-                    <td style={{ ...tdStyle,textAlign:'right' }}>
-                      {isEdit ? <input type="number" value={editValues.ancho} onChange={e=>setEditValues({...editValues,ancho:e.target.value})}
-                        style={{ width:'70px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
-                        : fmtN(r.ancho)}
+                    <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
+                      {puedeEditar && seleccionados.has(r.id)
+                        ? <input type="number" value={editDims[r.id]?.ancho ?? (r.ancho ?? '')}
+                            onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { espesor: r.espesor, ...prev[r.id], ancho: v } })) }}
+                            style={{ width:'70px',background:t.inputBg,border:`1.5px solid ${t.primary}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} />
+                        : fmtN(r.ancho)}                
                     </td>
-                    <td style={{ ...tdStyle,textAlign:'right' }}>
-                      {isEdit ? <input type="number" value={editValues.espesor} onChange={e=>setEditValues({...editValues,espesor:e.target.value})}
-                        style={{ width:'70px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
+                    <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
+                      {puedeEditar && seleccionados.has(r.id)
+                        ? <input type="number" value={editDims[r.id]?.espesor ?? (r.espesor ?? '')}
+                            onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ancho: r.ancho, ...prev[r.id], espesor: v } })) }}
+                            style={{ width:'70px',background:t.inputBg,border:`1.5px solid ${t.primary}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} />
                         : fmtN(r.espesor)}
                     </td>
                     <td style={{ ...tdStyle,textAlign:'right',fontWeight:'600' }}>{fmtN(r.cant_total)}</td>
@@ -912,16 +1066,18 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                         </span>
                       )}
                     </td>
-                    <td style={tdStyle} onClick={e=>e.stopPropagation()}>
-                      {isEdit ? (
-                        <div style={{ display:'flex',gap:'4px' }}>
-                          <button onClick={() => guardarEdicion(r.id)} style={{ background:t.primary,color:'#fff',border:'none',borderRadius:'4px',padding:'4px 10px',fontSize:'11px',cursor:'pointer' }}>✓</button>
-                          <button onClick={() => setEditando(null)} style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'4px',padding:'4px 8px',fontSize:'11px',cursor:'pointer',color:t.textMuted }}>✕</button>
-                        </div>
-                      ) : (
-                        <button onClick={() => iniciarEdicion(r)} style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'4px',padding:'4px 8px',fontSize:'11px',cursor:'pointer',color:t.textMuted }}>✏️</button>
-                      )}
-                    </td>
+                    {!puedeEditar && !puedeValidar && (
+                      <td style={tdStyle} onClick={e=>e.stopPropagation()}>
+                        {isEdit ? (
+                          <div style={{ display:'flex',gap:'4px' }}>
+                            <button onClick={() => guardarEdicion(r.id)} style={{ background:t.primary,color:'#fff',border:'none',borderRadius:'4px',padding:'4px 10px',fontSize:'11px',cursor:'pointer' }}>✓</button>
+                            <button onClick={() => setEditando(null)} style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'4px',padding:'4px 8px',fontSize:'11px',cursor:'pointer',color:t.textMuted }}>✕</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => iniciarEdicion(r)} style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'4px',padding:'4px 8px',fontSize:'11px',cursor:'pointer',color:t.textMuted }}>✏️</button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 )
               })}
