@@ -1157,7 +1157,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                 const cid = parseInt(e.target.value)
                 const contrato = usuario._contratos.find(c => c.id === cid)
                 if (!contrato) return
-                const u = { ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero, logo_contratista: contrato.logo_contratista || usuario.logo_contratista, logo_interventoria: contrato.logo_interventoria || usuario.logo_interventoria }
+                const u = { ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero, logo_contratista: contrato.logo_contratista ?? null, logo_interventoria: contrato.logo_interventoria ?? null }
                 setUsuario(u)
               }}
               style={{ fontSize: '13px', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none' }}
@@ -1439,7 +1439,7 @@ export default function App() {
 
   async function handleSeleccionarContrato(contratoId) {
     const contrato = pendingContratos.find(c => c.id === parseInt(contratoId))
-    const u = { ...pendingUser, contrato_id: contrato.id, contrato_numero: contrato.numero, logo_contratista: contrato.logo_contratista || pendingUser.logo_contratista, logo_interventoria: contrato.logo_interventoria || pendingUser.logo_interventoria }
+    const u = { ...pendingUser, contrato_id: contrato.id, contrato_numero: contrato.numero, logo_contratista: contrato.logo_contratista ?? null, logo_interventoria: contrato.logo_interventoria ?? null }
     delete u._token
     // Guardar contrato principal en BD
     try {
