@@ -515,7 +515,8 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
     const file = e.target.files[0]; if (!file) return
     const raw = await file.text()
     const text = raw.replace(/^\uFEFF/, '') // quitar BOM si existe
-    const sep = text.indexOf(';') > text.indexOf(',') ? ';' : ','
+    const firstLine = text.split(/\r?\n/)[0]
+    const sep = (firstLine.match(/;/g)||[]).length > (firstLine.match(/,/g)||[]).length ? ';' : ','
     const lines = text.split(/\r?\n/).filter(l => l.trim())
     const headers = lines[0].split(sep).map(h => h.replace(/^"|"$/g, '').trim())
 
