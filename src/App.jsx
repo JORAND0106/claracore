@@ -460,8 +460,545 @@ function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, 
   )
 }
 
+// ─── MÓDULO PRESUPUESTO ───────────────────────────────────────────────────────
+function ModuloPresupuesto({ t, usuario, token, s }) {
+  const API = 'https://claracore-backend.azurewebsites.net'
+  const contratoId = usuario?.contrato_id
+
+  const [registros, setRegistros] = useState([])
+  const [filtros, setFiltros] = useState({ capitulos: [], items: [], tramos: [], calzadas: [] })
+  const [sel, setSel] = useState({ capitulo: '', item: '', tramo: '', calzada: '' })
+  const [loading, setLoading] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importMsg, setImportMsg] = useState('')
+  const [seleccionados, setSeleccionados] = useState(new Set())
+  const [editando, setEditando] = useState(null) // { id, campo, valor }
+  const [editValues, setEditValues] = useState({})
+
+  const fmt = (n) => n != null ? new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(n) : '-'
+  const fmtN = (n) => n != null ? new Intl.NumberFormat('es-CO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n) : '-'
+
+  // Cargar filtros al montar
+  useEffect(() => { if (contratoId) cargarFiltros() }, [contratoId])
+
+  async function cargarFiltros(params = {}) {
+    const qs = new URLSearchParams(params).toString()
+    const res = await fetch(`${API}/presupuesto/${contratoId}/filtros${qs ? '?' + qs : ''}`, { headers: { Authorization: `Bearer ${token}` } })
+    if (res.ok) setFiltros(await res.json())
+  }
+
+  async function cargarRegistros(params = sel) {
+    if (!contratoId) return
+    setLoading(true)
+    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([,v]) => v))).toString()
+    const res = await fetch(`${API}/presupuesto/${contratoId}${qs ? '?' + qs : ''}`, { headers: { Authorization: `Bearer ${token}` } })
+    if (res.ok) setRegistros(await res.json())
+    setLoading(false)
+  }
+
+  async function cambiarFiltro(campo, valor) {
+    const nuevoSel = { ...sel, [campo]: valor }
+    // Cascada: al cambiar capitulo resetear item/tramo/calzada
+    if (campo === 'capitulo') { nuevoSel.item = ''; nuevoSel.tramo = ''; nuevoSel.calzada = '' }
+    if (campo === 'item') { nuevoSel.tramo = ''; nuevoSel.calzada = '' }
+    setSel(nuevoSel)
+    await cargarFiltros(Object.fromEntries(Object.entries(nuevoSel).filter(([,v]) => v)))
+    await cargarRegistros(nuevoSel)
+  }
+
+  // Importar CSV
+  async function handleImportCSV(e) {
+    const file = e.target.files[0]; if (!file) return
+    setImporting(true); setImportMsg('Procesando CSV...')
+    const text = await file.text()
+    const sep = text.indexOf(';') > text.indexOf(',') ? ';' : ','
+    const lines = text.split(/\r?\n/).filter(l => l.trim())
+    const headers = lines[0].split(sep).map(h => h.replace(/^"|"$/g, '').trim())
+
+    const MAP = {
+      'pk_id': 'pk_id', 'capitulo': 'capitulo', 'competencia': 'competencia',
+      'item': 'item', 'descripción': 'descripcion', 'descripcion': 'descripcion',
+      'und': 'und', 'calzada': 'calzada', 'tramo': 'tramo',
+      'abs. inicio': 'abs_inicio', 'abs. final': 'abs_final',
+      'vlr unitario': 'vlr_unitario', 'no. inicio': 'no_inicio', 'no. final': 'no_final',
+      'area/long/nod': 'area_long_nod', 'ancho': 'ancho', 'espesor': 'espesor',
+      'cant.total': 'cant_total', 'costo directo': 'costo_directo',
+      'tipo de ejecución': 'tipo_ejecucion', 'tipo de entidad': 'tipo_entidad',
+      'id_pol': 'id_pol', 'observación': 'observacion', 'observacion': 'observacion',
+      'enthandle': 'ent_handle', 'txthandle': 'txt_handle',
+      'layerent': 'layer_ent', 'layertxt': 'layer_txt',
+      'colorhex': 'color_hex', 'guid': 'guid',
+      'x_label (este)': 'x_label', 'y_label (norte)': 'y_label',
+      'revisado (true/false)': 'revisado', 'observación externa': 'observacion_externa',
+    }
+    const NUMS = new Set(['vlr_unitario','no_inicio','no_final','area_long_nod','ancho','espesor','cant_total','costo_directo','x_label','y_label'])
+
+    const rows = []
+    for (let i = 1; i < lines.length; i++) {
+      const vals = lines[i].split(sep).map(v => v.replace(/^"|"$/g, '').trim())
+      const obj = {}
+      headers.forEach((h, idx) => {
+        const key = MAP[h.toLowerCase()]
+        if (!key) return
+        const v = vals[idx] || ''
+        if (NUMS.has(key)) {
+          const n = parseFloat(v.replace(/[,$]/g, ''))
+          obj[key] = isNaN(n) ? null : n
+        } else {
+          obj[key] = v || null
+        }
+      })
+      if (obj.pk_id || obj.item) rows.push(obj)
+    }
+
+    setImportMsg(`Subiendo ${rows.length} registros...`)
+    const res = await fetch(`${API}/presupuesto/${contratoId}/bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(rows)
+    })
+    const data = await res.json()
+    setImportMsg(res.ok ? `✅ ${data.mensaje}` : `❌ Error: ${data.detail}`)
+    setImporting(false)
+    if (res.ok) { await cargarFiltros(); await cargarRegistros({ capitulo:'',item:'',tramo:'',calzada:'' }) }
+    setTimeout(() => setImportMsg(''), 4000)
+    e.target.value = ''
+  }
+
+  // Selección múltiple
+  function toggleSel(id) {
+    setSeleccionados(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
+  function toggleTodos() {
+    setSeleccionados(prev => prev.size === registros.length ? new Set() : new Set(registros.map(r => r.id)))
+  }
+
+  // Edición inline
+  function iniciarEdicion(registro) {
+    setEditando(registro.id)
+    setEditValues({
+      area_long_nod: registro.area_long_nod ?? '',
+      ancho: registro.ancho ?? '',
+      espesor: registro.espesor ?? '',
+      vlr_unitario: registro.vlr_unitario ?? '',
+      capitulo: registro.capitulo ?? '',
+      item: registro.item ?? '',
+      revisado: registro.revisado ?? '',
+    })
+  }
+
+  async function guardarEdicion(id) {
+    const body = {}
+    Object.entries(editValues).forEach(([k, v]) => {
+      if (v === '' || v == null) return
+      const NUMS = ['area_long_nod','ancho','espesor','vlr_unitario']
+      body[k] = NUMS.includes(k) ? parseFloat(v) : v
+    })
+    const res = await fetch(`${API}/presupuesto/item/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify(body)
+    })
+    if (res.ok) {
+      setEditando(null)
+      await cargarRegistros()
+    }
+  }
+
+  const REVISADO_OPTS = ['Pendiente', 'Verificar Campo', 'Verificado']
+  const estadoColor = (r) => r === 'Verificado' ? '#16A34A' : r === 'Verificar Campo' ? '#D97706' : '#6B7280'
+
+  const thStyle = { padding: '8px 10px', fontSize: '11px', fontWeight: '700', letterSpacing: '0.5px', color: t.textMuted, borderBottom: `1px solid ${t.border}`, textAlign: 'left', whiteSpace: 'nowrap' }
+  const tdStyle = { padding: '7px 10px', fontSize: '12px', borderBottom: `1px solid ${t.border}`, verticalAlign: 'middle' }
+
+  return (
+    <div>
+      {/* Toolbar */}
+      <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' }}>
+        <label style={{ background: t.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '9px 18px', fontSize: '13px', fontWeight: '600', cursor: importing ? 'wait' : 'pointer', opacity: importing ? 0.7 : 1 }}>
+          {importing ? 'Importando...' : '📂 Importar CSV'}
+          <input type="file" accept=".csv" style={{ display: 'none' }} onChange={handleImportCSV} disabled={importing} />
+        </label>
+        {importMsg && <span style={{ fontSize: '13px', color: importMsg.startsWith('✅') ? '#16A34A' : importMsg.startsWith('❌') ? '#DC2626' : t.textMuted }}>{importMsg}</span>}
+        <span style={{ marginLeft: 'auto', fontSize: '12px', color: t.textMuted }}>{registros.length} registros · {seleccionados.size} seleccionados</span>
+      </div>
+
+      {/* Filtros en cascada */}
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
+        {[
+          ['capitulo', 'Capítulo', filtros.capitulos],
+          ['item', 'Ítem', filtros.items],
+          ['tramo', 'Tramo', filtros.tramos],
+          ['calzada', 'Calzada', filtros.calzadas],
+        ].map(([campo, label, opciones]) => (
+          <div key={campo} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <label style={{ fontSize: '11px', fontWeight: '600', color: t.textMuted, letterSpacing: '0.5px' }}>{label}</label>
+            <select value={sel[campo]} onChange={e => cambiarFiltro(campo, e.target.value)}
+              style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '6px', padding: '7px 12px', color: t.text, fontSize: '13px', minWidth: '160px', cursor: 'pointer' }}>
+              <option value="">— Todos —</option>
+              {opciones.map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+        ))}
+        {(sel.capitulo||sel.item||sel.tramo||sel.calzada) && (
+          <button onClick={() => { setSel({capitulo:'',item:'',tramo:'',calzada:''}); cargarFiltros(); cargarRegistros({capitulo:'',item:'',tramo:'',calzada:''}) }}
+            style={{ alignSelf: 'flex-end', background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '6px', padding: '7px 12px', fontSize: '12px', color: t.textMuted, cursor: 'pointer' }}>
+            ✕ Limpiar
+          </button>
+        )}
+      </div>
+
+      {/* Tabla */}
+      <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '12px', overflow: 'auto', boxShadow: t.shadow }}>
+        {loading ? (
+          <div style={s.emptyState}>Cargando...</div>
+        ) : registros.length === 0 ? (
+          <div style={s.emptyState}>📂 {sel.capitulo ? 'Sin registros para los filtros seleccionados' : 'Importa un CSV o selecciona un capítulo'}</div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+            <thead style={{ background: t.bg }}>
+              <tr>
+                <th style={thStyle}><input type="checkbox" checked={seleccionados.size === registros.length && registros.length > 0} onChange={toggleTodos} /></th>
+                <th style={thStyle}>PK_ID</th>
+                <th style={thStyle}>Capítulo</th>
+                <th style={thStyle}>Ítem</th>
+                <th style={thStyle}>Descripción</th>
+                <th style={thStyle}>Und</th>
+                <th style={thStyle}>No.Ini</th>
+                <th style={thStyle}>No.Fin</th>
+                <th style={thStyle}>Área/Long</th>
+                <th style={thStyle}>Ancho</th>
+                <th style={thStyle}>Espesor</th>
+                <th style={thStyle}>Cant.Total</th>
+                <th style={thStyle}>Vlr Unit.</th>
+                <th style={thStyle}>Costo Directo</th>
+                <th style={thStyle}>Revisado</th>
+                <th style={thStyle}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {registros.map(r => {
+                const isEdit = editando === r.id
+                return (
+                  <tr key={r.id} style={{ background: seleccionados.has(r.id) ? (t.primary + '18') : 'transparent' }}
+                    onClick={() => !isEdit && toggleSel(r.id)}>
+                    <td style={tdStyle} onClick={e => e.stopPropagation()}><input type="checkbox" checked={seleccionados.has(r.id)} onChange={() => toggleSel(r.id)} /></td>
+                    <td style={{ ...tdStyle, fontWeight: '600', color: t.primary }}>{r.pk_id || r.id_pol || '-'}</td>
+                    <td style={tdStyle}>
+                      {isEdit ? <input value={editValues.capitulo} onChange={e => setEditValues({...editValues,capitulo:e.target.value})}
+                        style={{ width: '120px', background: t.inputBg, border: `1px solid ${t.border}`, borderRadius:'4px', padding:'3px 6px', color:t.text, fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
+                        : r.capitulo}
+                    </td>
+                    <td style={tdStyle}>
+                      {isEdit ? <input value={editValues.item} onChange={e => setEditValues({...editValues,item:e.target.value})}
+                        style={{ width: '80px', background: t.inputBg, border: `1px solid ${t.border}`, borderRadius:'4px', padding:'3px 6px', color:t.text, fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
+                        : r.item}
+                    </td>
+                    <td style={{ ...tdStyle, maxWidth: '220px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.descripcion}</td>
+                    <td style={tdStyle}>{r.und}</td>
+                    <td style={{ ...tdStyle, textAlign:'right' }}>{fmtN(r.no_inicio)}</td>
+                    <td style={{ ...tdStyle, textAlign:'right' }}>{fmtN(r.no_final)}</td>
+                    <td style={{ ...tdStyle, textAlign:'right' }}>
+                      {isEdit ? <input type="number" value={editValues.area_long_nod} onChange={e => setEditValues({...editValues,area_long_nod:e.target.value})}
+                        style={{ width:'80px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'3px 6px', color:t.text, fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
+                        : fmtN(r.area_long_nod)}
+                    </td>
+                    <td style={{ ...tdStyle, textAlign:'right' }}>
+                      {isEdit ? <input type="number" value={editValues.ancho} onChange={e => setEditValues({...editValues,ancho:e.target.value})}
+                        style={{ width:'70px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'3px 6px', color:t.text, fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
+                        : fmtN(r.ancho)}
+                    </td>
+                    <td style={{ ...tdStyle, textAlign:'right' }}>
+                      {isEdit ? <input type="number" value={editValues.espesor} onChange={e => setEditValues({...editValues,espesor:e.target.value})}
+                        style={{ width:'70px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'3px 6px', color:t.text, fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
+                        : fmtN(r.espesor)}
+                    </td>
+                    <td style={{ ...tdStyle, textAlign:'right', fontWeight:'600' }}>{fmtN(r.cant_total)}</td>
+                    <td style={{ ...tdStyle, textAlign:'right' }}>
+                      {isEdit ? <input type="number" value={editValues.vlr_unitario} onChange={e => setEditValues({...editValues,vlr_unitario:e.target.value})}
+                        style={{ width:'90px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'3px 6px', color:t.text, fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
+                        : fmt(r.vlr_unitario)}
+                    </td>
+                    <td style={{ ...tdStyle, textAlign:'right', fontWeight:'700', color: t.primary }}>{fmt(r.costo_directo)}</td>
+                    <td style={tdStyle} onClick={e=>e.stopPropagation()}>
+                      {isEdit ? (
+                        <select value={editValues.revisado} onChange={e => setEditValues({...editValues,revisado:e.target.value})}
+                          style={{ background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'3px 6px', color:t.text, fontSize:'11px' }}>
+                          {REVISADO_OPTS.map(o => <option key={o} value={o}>{o}</option>)}
+                        </select>
+                      ) : (
+                        <span style={{ fontSize:'11px', fontWeight:'600', color: estadoColor(r.revisado), background: estadoColor(r.revisado)+'22', borderRadius:'4px', padding:'2px 8px' }}>
+                          {r.revisado || 'Pendiente'}
+                        </span>
+                      )}
+                    </td>
+                    <td style={tdStyle} onClick={e=>e.stopPropagation()}>
+                      {isEdit ? (
+                        <div style={{ display:'flex', gap:'4px' }}>
+                          <button onClick={() => guardarEdicion(r.id)} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'4px', padding:'4px 10px', fontSize:'11px', cursor:'pointer' }}>✓</button>
+                          <button onClick={() => setEditando(null)} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'4px 8px', fontSize:'11px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => iniciarEdicion(r)} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'4px 8px', fontSize:'11px', cursor:'pointer', color:t.textMuted }}>✏️</button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── MÓDULO COBRO ─────────────────────────────────────────────────────────────
+function ModuloCobro({ t, usuario, token, s }) {
+  const API = 'https://claracore-backend.azurewebsites.net'
+  const contratoId = usuario?.contrato_id
+
+  const [vista, setVista] = useState('dashboard') // 'dashboard' | 'detalle'
+  const [resumen, setResumen] = useState(null)
+  const [registros, setRegistros] = useState([])
+  const [filtros, setFiltros] = useState({ capitulos:[], items:[], actas:[], calzadas:[] })
+  const [sel, setSel] = useState({ capitulo:'', item:'', acta:'', calzada:'' })
+  const [loading, setLoading] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importMsg, setImportMsg] = useState('')
+
+  const fmt = (n) => n != null ? new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', minimumFractionDigits:0 }).format(n) : '$0'
+  const pctColor = (p) => p >= 90 ? '#DC2626' : p >= 70 ? '#D97706' : '#16A34A'
+
+  useEffect(() => { if (contratoId) { cargarResumen(); cargarFiltros() } }, [contratoId])
+
+  async function cargarResumen() {
+    const res = await fetch(`${API}/cobro/${contratoId}/resumen`, { headers: { Authorization:`Bearer ${token}` } })
+    if (res.ok) setResumen(await res.json())
+  }
+
+  async function cargarFiltros(params = {}) {
+    const qs = new URLSearchParams(params).toString()
+    const res = await fetch(`${API}/cobro/${contratoId}/filtros${qs?'?'+qs:''}`, { headers: { Authorization:`Bearer ${token}` } })
+    if (res.ok) setFiltros(await res.json())
+  }
+
+  async function cargarRegistros(params = sel) {
+    setLoading(true)
+    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([,v]) => v))).toString()
+    const res = await fetch(`${API}/cobro/${contratoId}${qs?'?'+qs:''}`, { headers: { Authorization:`Bearer ${token}` } })
+    if (res.ok) setRegistros(await res.json())
+    setLoading(false)
+  }
+
+  async function cambiarFiltro(campo, valor) {
+    const nuevoSel = { ...sel, [campo]: valor }
+    if (campo === 'capitulo') { nuevoSel.item=''; nuevoSel.calzada='' }
+    setSel(nuevoSel)
+    await cargarFiltros(Object.fromEntries(Object.entries(nuevoSel).filter(([,v]) => v)))
+    await cargarRegistros(nuevoSel)
+  }
+
+  async function handleImportCSV(e) {
+    const file = e.target.files[0]; if (!file) return
+    setImporting(true); setImportMsg('Procesando CSV...')
+    const text = await file.text()
+    const sep = (text.split('\n')[0].match(/;/g)||[]).length > (text.split('\n')[0].match(/,/g)||[]).length ? ';' : ','
+    const lines = text.split(/\r?\n/).filter(l => l.trim())
+    const headers = lines[0].split(sep).map(h => h.replace(/^"|"$/g,'').trim().toUpperCase())
+
+    const MAP = {
+      'ACTA RPO':'acta','ACTA':'acta','SEMANA':'semana','FECHA':'fecha',
+      'CAPITULO':'capitulo','COMPETENCIA':'competencia',
+      'ABS INCIAL':'abs_inicial','ABS INICIAL':'abs_inicial','ABS FINAL':'abs_final',
+      'CIV':'civ','ITEM':'item','DESCRIPCION':'descripcion','DESCRIPCIÓN':'descripcion',
+      'UND':'und','LONGITUD':'longitud','ANCHO':'ancho','ESPESOR':'espesor',
+      'CANTIDAD':'cantidad','VALOR UNITARIO':'valor_unitario','COSTO DIRECTO':'costo_directo',
+      'CALZADA':'calzada','TRAMO INICIO':'tramo_inicio','TRAMO FINAL':'tramo_final','PK_ID':'pk_id'
+    }
+    const NUMS = new Set(['acta','longitud','ancho','espesor','cantidad','valor_unitario','costo_directo'])
+
+    const rows = []
+    for (let i = 1; i < lines.length; i++) {
+      const vals = lines[i].split(sep).map(v => v.replace(/^"|"$/g,'').trim())
+      const obj = {}
+      headers.forEach((h, idx) => {
+        const key = MAP[h]; if (!key) return
+        const v = vals[idx] || ''
+        if (NUMS.has(key)) { const n = parseFloat(v.replace(/[,$]/g,'')); obj[key] = isNaN(n) ? null : n }
+        else obj[key] = v || null
+      })
+      if (obj.pk_id || obj.item) rows.push(obj)
+    }
+
+    setImportMsg(`Subiendo ${rows.length} registros...`)
+    const res = await fetch(`${API}/cobro/${contratoId}/bulk`, {
+      method:'POST', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
+      body: JSON.stringify(rows)
+    })
+    const data = await res.json()
+    setImportMsg(res.ok ? `✅ ${data.mensaje}` : `❌ Error: ${data.detail}`)
+    setImporting(false)
+    if (res.ok) { await cargarResumen(); await cargarFiltros() }
+    setTimeout(() => setImportMsg(''), 4000)
+    e.target.value = ''
+  }
+
+  const thStyle = { padding:'8px 10px', fontSize:'11px', fontWeight:'700', letterSpacing:'0.5px', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
+  const tdStyle = { padding:'7px 10px', fontSize:'12px', borderBottom:`1px solid ${t.border}` }
+
+  return (
+    <div>
+      {/* Toolbar */}
+      <div style={{ display:'flex', gap:'12px', alignItems:'center', marginBottom:'16px', flexWrap:'wrap' }}>
+        <label style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'9px 18px', fontSize:'13px', fontWeight:'600', cursor:importing?'wait':'pointer', opacity:importing?0.7:1 }}>
+          {importing ? 'Importando...' : '📂 Importar CSV'}
+          <input type="file" accept=".csv" style={{ display:'none' }} onChange={handleImportCSV} disabled={importing} />
+        </label>
+        {importMsg && <span style={{ fontSize:'13px', color:importMsg.startsWith('✅')?'#16A34A':importMsg.startsWith('❌')?'#DC2626':t.textMuted }}>{importMsg}</span>}
+        <div style={{ marginLeft:'auto', display:'flex', gap:'4px' }}>
+          {[['dashboard','📊 Análisis'],['detalle','📋 Detalle']].map(([k,l]) => (
+            <button key={k} onClick={() => { setVista(k); if(k==='detalle') cargarRegistros() }}
+              style={{ background:vista===k?t.primary:t.bgCard, color:vista===k?'#fff':t.textMuted, border:`1px solid ${vista===k?t.primary:t.border}`, borderRadius:'6px', padding:'7px 14px', fontSize:'13px', cursor:'pointer' }}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Vista Análisis */}
+      {vista === 'dashboard' && resumen && (
+        <div>
+          {/* KPIs */}
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'16px', marginBottom:'20px' }}>
+            {[
+              ['💰 Presupuesto Total', fmt(resumen.total_presupuesto), ''],
+              ['✅ Total Cobrado', fmt(resumen.total_cobrado), ''],
+              ['📉 Delta', fmt(resumen.delta), ''],
+              ['📊 % Consumo', `${resumen.consumo_pct}%`, `${resumen.actas?.length || 0} actas registradas`],
+            ].map(([label, val, sub]) => (
+              <div key={label} style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'16px', boxShadow:t.shadow }}>
+                <div style={{ fontSize:'11px', fontWeight:'600', letterSpacing:'1px', color:t.textMuted, marginBottom:'6px' }}>{label}</div>
+                <div style={{ fontSize:'22px', fontWeight:'700', color:t.primary }}>{val}</div>
+                {sub && <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'4px' }}>{sub}</div>}
+              </div>
+            ))}
+          </div>
+
+          {/* Por acta */}
+          {resumen.por_acta?.length > 0 && (
+            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', marginBottom:'20px', boxShadow:t.shadow }}>
+              <div style={{ fontSize:'13px', fontWeight:'700', color:t.text, marginBottom:'14px' }}>Cobrado por Acta</div>
+              <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+                {resumen.por_acta.map(a => (
+                  <div key={a.acta} style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px 16px', textAlign:'center' }}>
+                    <div style={{ fontSize:'11px', color:t.textMuted, marginBottom:'4px' }}>Acta {a.acta}</div>
+                    <div style={{ fontSize:'14px', fontWeight:'700', color:t.primary }}>{fmt(a.cobrado)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Comparativo por capítulo */}
+          {resumen.comparativo_capitulos?.length > 0 && (
+            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
+              <div style={{ fontSize:'13px', fontWeight:'700', color:t.text, marginBottom:'14px' }}>Presupuesto vs Cobro por Capítulo</div>
+              <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                <thead>
+                  <tr>
+                    {['Capítulo','Presupuesto','Cobrado','Delta','% Consumo','Estado'].map(h => (
+                      <th key={h} style={thStyle}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {resumen.comparativo_capitulos.map(c => (
+                    <tr key={c.capitulo}>
+                      <td style={{ ...tdStyle, fontWeight:'600', color:t.text }}>{c.capitulo}</td>
+                      <td style={{ ...tdStyle, textAlign:'right' }}>{fmt(c.presupuesto)}</td>
+                      <td style={{ ...tdStyle, textAlign:'right', color:t.primary, fontWeight:'600' }}>{fmt(c.cobrado)}</td>
+                      <td style={{ ...tdStyle, textAlign:'right', color: c.delta < 0 ? '#DC2626':'#16A34A' }}>{fmt(c.delta)}</td>
+                      <td style={{ ...tdStyle, textAlign:'right' }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:'8px', justifyContent:'flex-end' }}>
+                          <div style={{ width:'80px', height:'6px', background:t.border, borderRadius:'3px', overflow:'hidden' }}>
+                            <div style={{ width:`${Math.min(c.consumo_pct,100)}%`, height:'100%', background:pctColor(c.consumo_pct), borderRadius:'3px' }} />
+                          </div>
+                          <span style={{ fontSize:'11px', fontWeight:'700', color:pctColor(c.consumo_pct) }}>{c.consumo_pct}%</span>
+                        </div>
+                      </td>
+                      <td style={tdStyle}>
+                        <span style={{ fontSize:'11px', fontWeight:'600', color:pctColor(c.consumo_pct), background:pctColor(c.consumo_pct)+'22', borderRadius:'4px', padding:'2px 8px' }}>
+                          {c.consumo_pct >= 90 ? '🔴 Crítico' : c.consumo_pct >= 70 ? '🟡 Alerta' : '🟢 OK'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {!resumen.total_cobrado && <div style={s.emptyState}>📂 Importa un CSV de cobro para ver el análisis</div>}
+        </div>
+      )}
+
+      {/* Vista Detalle */}
+      {vista === 'detalle' && (
+        <div>
+          {/* Filtros */}
+          <div style={{ display:'flex', gap:'10px', marginBottom:'16px', flexWrap:'wrap' }}>
+            {[['capitulo','Capítulo',filtros.capitulos],['item','Ítem',filtros.items],['acta','Acta',filtros.actas],['calzada','Calzada',filtros.calzadas]].map(([campo,label,opciones]) => (
+              <div key={campo} style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
+                <label style={{ fontSize:'11px', fontWeight:'600', color:t.textMuted, letterSpacing:'0.5px' }}>{label}</label>
+                <select value={sel[campo]} onChange={e => cambiarFiltro(campo, e.target.value)}
+                  style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'7px 12px', color:t.text, fontSize:'13px', minWidth:'130px', cursor:'pointer' }}>
+                  <option value="">— Todos —</option>
+                  {opciones.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', overflow:'auto', boxShadow:t.shadow }}>
+            {loading ? <div style={s.emptyState}>Cargando...</div> : registros.length === 0 ? (
+              <div style={s.emptyState}>📂 {sel.capitulo?'Sin registros para los filtros seleccionados':'Importa un CSV o selecciona un filtro'}</div>
+            ) : (
+              <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                <thead style={{ background:t.bg }}>
+                  <tr>
+                    {['Acta','PK_ID','Capítulo','Ítem','Descripción','Und','Cantidad','Vlr Unit.','Costo Directo','Calzada','Tramo Ini'].map(h => (
+                      <th key={h} style={thStyle}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {registros.map((r,i) => (
+                    <tr key={r.id || i}>
+                      <td style={{ ...tdStyle, fontWeight:'700', color:t.primary }}>{r.acta}</td>
+                      <td style={{ ...tdStyle, fontWeight:'600' }}>{r.pk_id}</td>
+                      <td style={tdStyle}>{r.capitulo}</td>
+                      <td style={tdStyle}>{r.item}</td>
+                      <td style={{ ...tdStyle, maxWidth:'200px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.descripcion}</td>
+                      <td style={tdStyle}>{r.und}</td>
+                      <td style={{ ...tdStyle, textAlign:'right' }}>{r.cantidad}</td>
+                      <td style={{ ...tdStyle, textAlign:'right' }}>{fmt(r.valor_unitario)}</td>
+                      <td style={{ ...tdStyle, textAlign:'right', fontWeight:'700', color:t.primary }}>{fmt(r.costo_directo)}</td>
+                      <td style={tdStyle}>{r.calzada}</td>
+                      <td style={tdStyle}>{r.tramo_inicio}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0 }) {
+  const [moduloActivo, setModuloActivo] = useState('dashboard')
   const [tabInferior, setTabInferior] = useState('gantt')
   const [analisis, setAnalisis] = useState('financiero')
   const [showModalContrato, setShowModalContrato] = useState(false)
@@ -610,6 +1147,18 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           {/* Crear Contrato se gestiona desde el Panel Admin */}
         </div>
 
+        {/* ── Tabs de módulo ── */}
+        <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', borderBottom: `2px solid ${t.border}`, paddingBottom: '0' }}>
+          {[['dashboard','🏠 Dashboard'],['presupuesto','📋 Presupuesto'],['cobro','💰 Cobro']].map(([key,label]) => (
+            <button key={key} onClick={() => setModuloActivo(key)} style={{
+              background: 'transparent', border: 'none', borderBottom: moduloActivo === key ? `3px solid ${t.primary}` : '3px solid transparent',
+              color: moduloActivo === key ? t.primary : t.textMuted, fontWeight: moduloActivo === key ? '700' : '400',
+              fontSize: '14px', padding: '8px 20px', cursor: 'pointer', marginBottom: '-2px', transition: 'all 0.2s'
+            }}>{label}</button>
+          ))}
+        </div>
+        {/* ── MÓDULO DASHBOARD ── */}
+        {moduloActivo === 'dashboard' && <>
         <div style={s.panelsGrid}>
           {[['📋 PRESUPUESTO', '$181,927,908', 'Valor inicial del contrato'],
             ['💰 COBRO', '$138,023,945', 'Acumulado facturado'],
@@ -646,6 +1195,14 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
             {tabInferior === 'gantt' ? '📅 Diagrama Gantt — próximamente' : '🗺️ Plano Semáforo — próximamente'}
           </div>
         </div>
+        </>}
+
+        {/* ── MÓDULO PRESUPUESTO ── */}
+        {moduloActivo === 'presupuesto' && <ModuloPresupuesto t={t} usuario={usuario} token={getToken()} s={s} />}
+
+        {/* ── MÓDULO COBRO ── */}
+        {moduloActivo === 'cobro' && <ModuloCobro t={t} usuario={usuario} token={getToken()} s={s} />}
+
       </div>
 
       {/* Modal crear contrato — guarda en Supabase */}
