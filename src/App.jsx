@@ -530,9 +530,10 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
       .then(r => r.ok ? r.json() : []).then(setListadoPrecios).catch(() => {})
   }, [contratoId])
 
-  const _permPpto = (usuario?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === 'editar registros presupuesto')
-  const puedeEditar  = _permPpto?.editar   ?? false
-  const puedeValidar = _permPpto?.validar  ?? false
+  const esDeveloper  = usuario?.cargo_nombre?.toLowerCase() === 'desarrollador'
+  const _permPpto    = (usuario?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === 'editar registros presupuesto')
+  const puedeEditar  = esDeveloper || (_permPpto?.editar   ?? false)
+  const puedeValidar = esDeveloper || (_permPpto?.validar  ?? false)  
 
   async function cargarRegistros() {
     if (!contratoId) return
