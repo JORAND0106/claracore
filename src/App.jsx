@@ -525,9 +525,11 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   }
 
   // ── Drill-down computado ───────────────────────────────────────────────────
-  const [nivelActual, setNivelActual] = useState('capitulo')
-  const nivelIdx    = NIVELES.indexOf(nivelActual)
-  const colorActual = PALETA_BARRAS[Math.max(0, Math.min(nivelIdx, PALETA_BARRAS.length - 1))]
+  const [primerNivel, setPrimerNivel] = useState('capitulo')
+  const nivelesOrden = [primerNivel, ...NIVELES.filter(n => n !== primerNivel)]
+  const nivelActual  = nivelesOrden[drill.length] || null
+  const nivelIdx     = NIVELES.indexOf(nivelActual ?? primerNivel)
+  const colorActual  = PALETA_BARRAS[Math.max(0, Math.min(nivelIdx, PALETA_BARRAS.length - 1))]
 
   const registrosFiltrados = useMemo(() =>
     registros.filter(r => drill.every(({campo, valor}) => r[campo] === valor))
@@ -561,13 +563,11 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   function handleBarClick(barData) {
     if (!nivelActual || !barData?.name) return
     setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
-    setNivelActual(null)
     setSeleccionados(new Set())
   }
 
   function irA(idx) {
     setDrill(prev => prev.slice(0, idx))
-    setNivelActual(null)
     setSeleccionados(new Set())
   }
 
@@ -764,18 +764,16 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
             <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap', marginBottom:'10px' }}>
               <span style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>AGRUPAR POR:</span>
               {NIVELES.map(n => {
-                const usado = drill.some(d => d.campo === n)
-                const activo = nivelActual === n
+                const activo = primerNivel === n
                 return (
-                  <button key={n} onClick={() => !usado && setNivelActual(activo ? null : n)}
+                  <button key={n} onClick={() => { setPrimerNivel(n); setDrill([]); setSeleccionados(new Set()) }}
                     style={{
-                      background: activo ? colorActual : usado ? t.border : t.bg,
-                      color: activo ? '#fff' : usado ? t.textMuted : t.text,
+                      background: activo ? colorActual : t.bg,
+                      color: activo ? '#fff' : t.text,
                       border: `1.5px solid ${activo ? colorActual : t.border}`,
                       borderRadius:'20px', padding:'4px 14px', fontSize:'12px',
                       fontWeight: activo ? '700' : '400',
-                      cursor: usado ? 'not-allowed' : 'pointer',
-                      opacity: usado ? 0.45 : 1,
+                      cursor: 'pointer',
                       transition:'all 0.15s'
                     }}>
                     {NOM[n]}
