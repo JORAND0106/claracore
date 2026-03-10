@@ -1010,31 +1010,6 @@ function ModuloCobro({ t, usuario, token, s }) {
 }
 
 
-  const fmt = (n) => n != null ? new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', minimumFractionDigits:0 }).format(n) : '$0'
-  const pctColor = (p) => p >= 90 ? '#DC2626' : p >= 70 ? '#D97706' : '#16A34A'
-
-  useEffect(() => { if (contratoId) { cargarResumen(); cargarFiltros() } }, [contratoId])
-
-  async function cargarResumen() {
-    const res = await fetch(`${API}/cobro/${contratoId}/resumen`, { headers: { Authorization:`Bearer ${token}` } })
-    if (res.ok) setResumen(await res.json())
-  }
-
-  async function cargarFiltros(params = {}) {
-    const qs = new URLSearchParams(params).toString()
-    const res = await fetch(`${API}/cobro/${contratoId}/filtros${qs?'?'+qs:''}`, { headers: { Authorization:`Bearer ${token}` } })
-    if (res.ok) setFiltros(await res.json())
-  }
-
-  async function cargarRegistros(params = sel) {
-    setLoading(true)
-    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([,v]) => v))).toString()
-    const res = await fetch(`${API}/cobro/${contratoId}${qs?'?'+qs:''}`, { headers: { Authorization:`Bearer ${token}` } })
-    if (res.ok) setRegistros(await res.json())
-    setLoading(false)
-  }
-
-
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0 }) {
   const [moduloActivo, setModuloActivo] = useState('dashboard')
