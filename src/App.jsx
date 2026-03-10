@@ -513,7 +513,8 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   // Leer CSV y mostrar modal de confirmación
   async function handleImportCSV(e) {
     const file = e.target.files[0]; if (!file) return
-    const text = await file.text()
+    const raw = await file.text()
+    const text = raw.replace(/^\uFEFF/, '') // quitar BOM si existe
     const sep = text.indexOf(';') > text.indexOf(',') ? ';' : ','
     const lines = text.split(/\r?\n/).filter(l => l.trim())
     const headers = lines[0].split(sep).map(h => h.replace(/^"|"$/g, '').trim())
