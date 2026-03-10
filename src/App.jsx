@@ -824,9 +824,11 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
-          ) : (
-            <div style={{ textAlign:'center',padding:'16px 0',fontSize:'13px',color:t.textMuted }}>
-              Nivel máximo de detalle — vea la tabla a continuación.
+            ) : (
+            <div style={{ textAlign:'center',padding:'24px 0',fontSize:'13px',color:t.textMuted }}>
+              {NIVELES.some(n => !drill.some(d => d.campo === n))
+                ? '☝️ Selecciona un nivel de agrupación para ver el gráfico'
+                : 'Nivel máximo de detalle — vea la tabla a continuación.'}
             </div>
           )}
         </div>
