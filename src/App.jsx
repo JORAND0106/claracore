@@ -461,6 +461,19 @@ function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, 
   )
 }
 
+// ── Tooltip Presupuesto (fuera del componente para evitar re-creación) ────────
+function PresupuestoTooltip({ active, payload, t, color, fmt }) {
+  if (!active || !payload?.length) return null
+  const d = payload[0].payload
+  return (
+    <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px 14px', boxShadow:'0 4px 20px rgba(0,0,0,0.15)' }}>
+      <div style={{ fontSize:'12px', fontWeight:'700', color:t.text, marginBottom:'4px', maxWidth:'280px', wordBreak:'break-word' }}>{d.label}</div>
+      <div style={{ fontSize:'13px', fontWeight:'700', color }}>{fmt(d.costo)}</div>
+      <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>{d.count} registro{d.count !== 1 ? 's' : ''}</div>
+    </div>
+  )
+}
+
 // ─── MÓDULO PRESUPUESTO ───────────────────────────────────────────────────────
 function ModuloPresupuesto({ t, usuario, token, s }) {
   const API = 'https://claracore-backend.azurewebsites.net'
@@ -673,19 +686,6 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
     fontWeight: active ? '600' : '400', cursor: 'pointer', transition: 'all 0.15s',
   })
 
-  // ── CustomTooltip ──────────────────────────────────────────────────────────
-  const CustomTooltip = ({ active, payload }) => {
-    if (!active || !payload?.length) return null
-    const d = payload[0].payload
-    return (
-      <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px 14px', boxShadow:'0 4px 20px rgba(0,0,0,0.15)' }}>
-        <div style={{ fontSize:'12px', fontWeight:'700', color:t.text, marginBottom:'4px', maxWidth:'280px', wordBreak:'break-word' }}>{d.label}</div>
-        <div style={{ fontSize:'13px', fontWeight:'700', color:colorActual }}>{fmt(d.costo)}</div>
-        <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>{d.count} registro{d.count !== 1 ? 's' : ''}</div>
-      </div>
-    )
-  }
-
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div>
@@ -785,7 +785,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                   tick={{ fontSize:10, fill:t.textMuted }} axisLine={false} tickLine={false} />
                 <YAxis type="category" dataKey="label" width={220}
                   tick={{ fontSize:11, fill:t.text }} tickLine={false} axisLine={false} />
-                <Tooltip content={<CustomTooltip />} cursor={{ fill: colorActual + '18' }} />
+                <Tooltip content={(props) => <PresupuestoTooltip {...props} t={t} color={colorActual} fmt={fmt} />} cursor={{ fill: colorActual + '18' }} />
                 <Bar dataKey="costo" radius={[0, 5, 5, 0]}
                   onClick={(barData) => handleBarClick(barData)}
                   onMouseEnter={(_, i) => setHoveredBar(i)}
