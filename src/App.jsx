@@ -621,6 +621,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
       'x_label (este)':'x_label','y_label (norte)':'y_label',
       'revisado (true/false)':'revisado','observación externa':'observacion_externa',
     }
+    
     const NUMS = new Set(['vlr_unitario','no_inicio','no_final','area_long_nod','ancho','espesor','cant_total','costo_directo','x_label','y_label'])
     const rows = []
     for (let i = 1; i < lines.length; i++) {
