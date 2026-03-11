@@ -1802,8 +1802,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                 const START = -135, SPAN = 270
                 const fillEnd = START + (clamp / 100) * SPAN
                 const nTip = polarPt(cx, cy, r - sw - 4, fillEnd)
-                const textoGauge = d.descripcion ? `${d.nombre} · ${d.descripcion}` : (d.nombre || '')
-                const nom  = textoGauge.length > 28 ? textoGauge.slice(0, 28) + '…' : textoGauge
+                const nom     = d.nombre || ''
+                const nomDesc = d.descripcion ? (d.descripcion.length > 32 ? d.descripcion.slice(0,32)+'…' : d.descripcion) : ''
                 return (
                   <div
                     onClick={onClick}
@@ -1833,9 +1833,12 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                       <circle cx={cx} cy={cy} r={size * 0.022} fill={t.bgCard} />
                       
                     </svg>
-                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', width:'100%', marginTop:'2px', marginBottom:'2px', padding:'0 4px' }}>
-                      <span style={{ fontSize: '11px', fontWeight: '700', color: t.text, lineHeight: 1.3, flex:1, textAlign:'left' }}>{nom}</span>
-                      <span style={{ fontSize: '15px', fontWeight: '800', color, marginLeft:'6px', whiteSpace:'nowrap' }}>{pct}%</span>
+                    <div style={{ width:'100%', marginTop:'2px', marginBottom:'2px', padding:'0 4px' }}>
+                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                        <span style={{ fontSize: '11px', fontWeight: '700', color: t.text, lineHeight: 1.3 }}>{nom}</span>
+                        <span style={{ fontSize: '15px', fontWeight: '800', color, marginLeft:'6px', whiteSpace:'nowrap' }}>{pct}%</span>
+                      </div>
+                      {nomDesc && <div style={{ fontSize:'10px', color:t.textMuted, marginTop:'2px', lineHeight:1.3 }}>{nomDesc}</div>}
                     </div>
                     <div style={{ display: 'flex', gap: '6px', fontSize: '10px', marginTop: '3px', flexWrap: 'wrap', justifyContent: 'center' }}>
                       <span style={{ color: '#0077B6' }}>▪ {fmtM(d.presupuesto)}</span>
@@ -1881,7 +1884,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                           <span style={{ color: t.textMuted }}>›</span>
                           <button onClick={() => setDashDrill(prev => prev.slice(0, i + 1))}
                             style={{ background: i === dashDrill.length - 1 ? t.primary + '22' : 'transparent', border: `1px solid ${i === dashDrill.length - 1 ? t.primary : t.border}`, borderRadius: '20px', padding: '3px 12px', fontSize: '12px', color: i === dashDrill.length - 1 ? t.primary : t.textMuted, cursor: 'pointer' }}>
-                            {d.valor.length > 32 ? d.valor.slice(0, 32) + '…' : d.valor}
+                            {d.valor}{d.descripcion ? ` · ${d.descripcion.length > 30 ? d.descripcion.slice(0,30)+'…' : d.descripcion}` : ''}
                           </button>
                         </span>
                       ))}
@@ -1978,7 +1981,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                             size={gaugeSize}
                             t={t}
                             isClickable={dashDrill.length < 2}
-                            onClick={dashDrill.length < 2 ? () => setDashDrill(prev => [...prev, { campo: dashData.campo, valor: d.nombre }]) : undefined}
+                            onClick={dashDrill.length < 2 ? () => setDashDrill(prev => [...prev, { campo: dashData.campo, valor: d.nombre, descripcion: d.descripcion || '' }]) : undefined}
                           />
                         ))}
                       </div>
