@@ -608,7 +608,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
       'item':'item','descripción':'descripcion','descripcion':'descripcion',
       'und':'und','calzada':'calzada','tramo':'tramo',
       'abs. inicio':'abs_inicio','abs. final':'abs_final',
-      'vlr unitario':'vlr_unitario','No. inicio':'no_inicio','No. final':'no_final',
+      'vlr unitario':'vlr_unitario','No. Inicio':'no_inicio','No. Final':'no_final',
       'no.inicio':'no_inicio','no.final':'no_final',
       'no inicio':'no_inicio','no final':'no_final',
       'area/long/nod':'area_long_nod','ancho':'ancho','espesor':'espesor',
