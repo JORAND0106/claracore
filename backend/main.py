@@ -728,8 +728,8 @@ def get_cobro(
 @app.get("/cobro/{contrato_id}/resumen")
 def get_resumen_cobro(contrato_id: int, current_user=Depends(get_current_user)):
     """KPIs + comparativo Presupuesto vs Cobro por capítulo."""
-    cobros = supabase.table("cobro").select("capitulo, item, pk_id, costo_directo, acta").eq("contrato_id", contrato_id).execute().data
-    ppto   = supabase.table("presupuesto").select("capitulo, item, pk_id, costo_directo").eq("contrato_id", contrato_id).execute().data
+    cobros = supabase.table("cobro").select("capitulo, item, pk_id, costo_directo, descripcion").eq("contrato_id", contrato_id).execute().data
+    ppto   = supabase.table("presupuesto").select("capitulo, item, pk_id, costo_directo, descripcion").eq("contrato_id", contrato_id).execute().data
 
     total_cobrado  = sum(r.get("costo_directo") or 0 for r in cobros)
     total_ppto     = sum(r.get("costo_directo") or 0 for r in ppto)

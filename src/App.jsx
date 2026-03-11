@@ -1802,7 +1802,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                 const START = -135, SPAN = 270
                 const fillEnd = START + (clamp / 100) * SPAN
                 const nTip = polarPt(cx, cy, r - sw - 4, fillEnd)
-                const nom  = (d.nombre || '').length > 20 ? (d.nombre || '').slice(0, 20) + '…' : (d.nombre || '')
+                const textoGauge = d.descripcion ? `${d.nombre} · ${d.descripcion}` : (d.nombre || '')
+                const nom  = textoGauge.length > 28 ? textoGauge.slice(0, 28) + '…' : textoGauge
                 return (
                   <div
                     onClick={onClick}
