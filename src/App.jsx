@@ -1759,110 +1759,156 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
               </div>
             </div>
 
-            {/* ── Análisis comparativo drill-down ── */}
-            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, marginBottom:'20px' }}>
+            {/* ── COCKPIT: velocímetros por capítulo ── */}
+            {(() => {
+              const polarPt = (cx, cy, rad, angleDeg) => {
+                const r = (angleDeg - 90) * Math.PI / 180
+                return { x: cx + rad * Math.cos(r), y: cy + rad * Math.sin(r) }
+              }
+              const arcPath = (cx, cy, rad, start, end) => {
+                const s = polarPt(cx, cy, rad, start)
+                const e = polarPt(cx, cy, rad, end)
+                const large = (end - start) > 180 ? 1 : 0
+                return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${rad} ${rad} 0 ${large} 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)}`
+              }
 
-              {/* Header del panel */}
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px', flexWrap:'wrap', gap:'8px' }}>
-                <div>
-                  <div style={{ fontSize:'14px', fontWeight:'700', color:t.text }}>📊 Presupuesto vs SICOE</div>
-                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Click en una barra para explorar el siguiente nivel</div>
-                </div>
-                {/* Leyenda */}
-                <div style={{ display:'flex', gap:'16px' }}>
-                  {[['#0077B6','Presupuesto'],['#00A896','SICOE'],['#EF4444','Diferencia']].map(([c,l]) => (
-                    <div key={l} style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'11px', color:t.textMuted }}>
-                      <div style={{ width:'10px', height:'10px', borderRadius:'2px', background:c }} />{l}
+              const GaugeMeter = ({ d, size = 150, onClick, isClickable }) => {
+                const pct   = Math.round(d.pct || 0)
+                const clamp = Math.min(Math.max(pct, 0), 100)
+                const color = pct > 100 ? '#DC2626' : pct >= 90 ? '#EF4444' : pct >= 70 ? '#F59E0B' : '#10B981'
+                const cx = size / 2, cy = size * 0.57
+                const r = size * 0.37, sw = size * 0.076
+                const START = -135, SPAN = 270
+                const fillEnd = START + (clamp / 100) * SPAN
+                const nTip = polarPt(cx, cy, r - sw - 4, fillEnd)
+                const nom  = (d.nombre || '').length > 20 ? (d.nombre || '').slice(0, 20) + '…' : (d.nombre || '')
+                return (
+                  <div
+                    onClick={onClick}
+                    title={d.nombre}
+                    style={{ cursor: isClickable ? 'pointer' : 'default', background: t.bgCard, border: `1.5px solid ${color}55`, borderRadius: '14px', padding: '10px 8px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', transition: 'all 0.22s', boxShadow: `0 2px 18px ${color}1A` }}
+                    onMouseEnter={e => { if (isClickable) { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.borderColor = color; e.currentTarget.style.boxShadow = `0 8px 28px ${color}44` } }}
+                    onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.borderColor = `${color}55`; e.currentTarget.style.boxShadow = `0 2px 18px ${color}1A` }}>
+                    <svg width={size} height={size * 0.66} viewBox={`0 0 ${size} ${size * 0.66}`}>
+                      {/* Glow externo */}
+                      {clamp > 0 && <path d={arcPath(cx, cy, r, START, fillEnd)} fill="none" stroke={color} strokeWidth={sw + 8} strokeLinecap="round" opacity={0.12} />}
+                      {/* Arco fondo */}
+                      <path d={arcPath(cx, cy, r, START, START + SPAN)} fill="none" stroke={t.border} strokeWidth={sw} strokeLinecap="round" />
+                      {/* Arco relleno */}
+                      {clamp > 0 && <path d={arcPath(cx, cy, r, START, fillEnd)} fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" />}
+                      {/* Marcas 0/25/50/75/100 */}
+                      {[0, 25, 50, 75, 100].map(tp => {
+                        const a = START + (tp / 100) * SPAN
+                        const p1 = polarPt(cx, cy, r - sw / 2 - 2, a)
+                        const p2 = polarPt(cx, cy, r - sw - 6, a)
+                        return <line key={tp} x1={p1.x.toFixed(1)} y1={p1.y.toFixed(1)} x2={p2.x.toFixed(1)} y2={p2.y.toFixed(1)} stroke={t.textMuted} strokeWidth={1.5} opacity={0.5} />
+                      })}
+                      {/* Anillo interior decorativo */}
+                      <circle cx={cx} cy={cy} r={r - sw - size * 0.055} fill="none" stroke={t.border} strokeWidth={0.5} opacity={0.35} />
+                      {/* Aguja */}
+                      <line x1={cx} y1={cy} x2={nTip.x.toFixed(2)} y2={nTip.y.toFixed(2)} stroke={color} strokeWidth={size * 0.016} strokeLinecap="round" />
+                      <circle cx={cx} cy={cy} r={size * 0.048} fill={color} />
+                      <circle cx={cx} cy={cy} r={size * 0.022} fill={t.bgCard} />
+                      {/* Porcentaje */}
+                      <text x={cx} y={cy + r * 0.14} textAnchor="middle" fontSize={size * 0.148} fontWeight="800" fill={color} dominantBaseline="middle">{pct}%</text>
+                    </svg>
+                    <div style={{ fontSize: '11px', fontWeight: '700', color: t.text, textAlign: 'center', marginTop: '2px', lineHeight: 1.3 }}>{nom}</div>
+                    <div style={{ display: 'flex', gap: '6px', fontSize: '10px', marginTop: '3px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                      <span style={{ color: '#0077B6' }}>▪ {fmtM(d.presupuesto)}</span>
+                      <span style={{ color }}>▪ {fmtM(d.cobrado)}</span>
                     </div>
-                  ))}
-                </div>
-              </div>
+                    {d.delta < 0 && <div style={{ fontSize: '10px', color: '#EF4444', marginTop: '2px', fontWeight: '600' }}>⚠ −{fmtM(Math.abs(d.delta))}</div>}
+                    {isClickable && <div style={{ fontSize: '9px', color: t.textMuted, marginTop: '3px', opacity: 0.7 }}>click para explorar</div>}
+                  </div>
+                )
+              }
 
-              {/* Breadcrumb */}
-              {dashDrill.length > 0 && (
-                <div style={{ display:'flex', alignItems:'center', gap:'6px', marginBottom:'14px', flexWrap:'wrap' }}>
-                  <button onClick={() => setDashDrill([])} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'20px', padding:'3px 12px', fontSize:'12px', color:t.textMuted, cursor:'pointer' }}>
-                    🏠 Todo
-                  </button>
-                  {dashDrill.map((d,i) => (
-                    <span key={i} style={{ display:'flex', alignItems:'center', gap:'6px' }}>
-                      <span style={{ color:t.textMuted }}>›</span>
-                      <button onClick={() => setDashDrill(prev => prev.slice(0, i+1))}
-                        style={{ background: i===dashDrill.length-1 ? t.primary+'22' : 'transparent', border:`1px solid ${i===dashDrill.length-1?t.primary:t.border}`, borderRadius:'20px', padding:'3px 12px', fontSize:'12px', color:i===dashDrill.length-1?t.primary:t.textMuted, cursor:'pointer' }}>
-                        {d.valor.length > 30 ? d.valor.slice(0,30)+'…' : d.valor}
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
+              const nItems = dashData?.items?.length || 0
+              const gaugeSize = nItems > 10 ? 125 : nItems > 6 ? 140 : 155
 
-              {/* Gráfico */}
-              {dashLoading ? (
-                <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>Cargando análisis...</div>
-              ) : !dashData || dashData.items.length === 0 ? (
-                <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>
-                  {(!kpiPpto || !kpiCobro) ? '📂 Importa datos de Presupuesto y SICOE para ver el análisis' : 'Sin datos para mostrar'}
-                </div>
-              ) : dashData.campo === 'pk_id' ? (
-                /* Nivel PK_ID → chips */
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(90px, 1fr))', gap:'6px', maxHeight:'320px', overflowY:'auto' }}>
-                  {dashData.items.map((d,i) => {
-                    const color = d.delta < 0 ? '#EF4444' : d.pct >= 80 ? '#F59E0B' : '#10B981'
-                    return (
-                      <div key={i} title={`Ppto: ${fmtD(d.presupuesto)}\nSICOE: ${fmtD(d.cobrado)}\nDelta: ${fmtD(d.delta)}`}
-                        style={{ background:color+'18', border:`1.5px solid ${color}`, borderRadius:'6px', padding:'6px', textAlign:'center', fontSize:'10px' }}>
-                        <div style={{ fontWeight:'700', color, marginBottom:'2px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{d.nombre}</div>
-                        <div style={{ color:t.textMuted }}>{d.pct}%</div>
+              return (
+                <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '12px', padding: '20px', boxShadow: t.shadow, marginBottom: '20px' }}>
+                  {/* Header */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                    <div>
+                      <div style={{ fontSize: '14px', fontWeight: '700', color: t.text }}>🎛️ Panel de Control — Ejecución por Capítulo</div>
+                      <div style={{ fontSize: '11px', color: t.textMuted, marginTop: '2px' }}>
+                        {dashDrill.length === 0 ? 'Haz click en un instrumento para analizar ítems' : dashDrill.length === 1 ? 'Ítems del capítulo · click para ver por PK_ID' : 'Detalle por PK_ID'}
                       </div>
-                    )
-                  })}
-                </div>
-              ) : (
-                /* Nivel capítulo o ítem → barras agrupadas */
-                <ResponsiveContainer width="100%" height={Math.max(200, dashData.items.length * 52 + 20)}>
-                  <BarChart data={dashData.items} layout="vertical" margin={{ left:8, right:60, top:4, bottom:4 }} style={{ cursor:'pointer' }}
-                    onClick={e => {
-                      if (!e?.activePayload) return
-                      const nombre = e.activePayload[0]?.payload?.nombre
-                      if (!nombre) return
-                      const campo = dashData.campo
-                      const nuevoDrill = [...dashDrill, { campo, valor: nombre }]
-                      if (nuevoDrill.length <= 2) setDashDrill(nuevoDrill)
-                    }}>
-                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={t.border} />
-                    <XAxis type="number" tickFormatter={fmtM} tick={{ fontSize:10, fill:t.textMuted }} axisLine={false} tickLine={false} />
-                    <YAxis type="category" dataKey="nombre" width={200} tick={{ fontSize:11, fill:t.text }} tickLine={false} axisLine={false}
-                      tickFormatter={v => v.length > 30 ? v.slice(0,30)+'…' : v} />
-                    <Tooltip
-                      content={({ active, payload }) => {
-                        if (!active || !payload?.length) return null
-                        const d = payload[0]?.payload
-                        return (
-                          <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px 14px', fontSize:'12px', boxShadow:'0 4px 20px rgba(0,0,0,0.2)' }}>
-                            <div style={{ fontWeight:'700', color:t.text, marginBottom:'6px', maxWidth:'240px' }}>{d.nombre}</div>
-                            <div style={{ color:'#0077B6' }}>📋 Presupuesto: <strong>{fmtD(d.presupuesto)}</strong></div>
-                            <div style={{ color:'#00A896' }}>💰 SICOE: <strong>{fmtD(d.cobrado)}</strong></div>
-                            <div style={{ color: d.delta < 0 ? '#EF4444' : '#10B981', marginTop:'4px' }}>
-                              {d.delta < 0 ? '⚠️' : '✅'} Delta: <strong>{fmtD(d.delta)}</strong>
-                            </div>
-                            <div style={{ color:t.textMuted, fontSize:'11px', marginTop:'2px' }}>Consumo: {d.pct}%</div>
-                          </div>
-                        )
-                      }}
-                    />
-                    <Bar dataKey="presupuesto" name="Presupuesto" fill="#0077B6" radius={[0,4,4,0]} barSize={14} />
-                    <Bar dataKey="cobrado"     name="SICOE"       fill="#00A896" radius={[0,4,4,0]} barSize={14} />
-                    <Bar dataKey="delta"       name="Diferencia"
-                      radius={[0,4,4,0]} barSize={10}
-                      fill="#EF4444">
-                      {dashData.items.map((d,i) => (
-                        <Cell key={i} fill={d.delta < 0 ? '#EF4444' : '#10B981'} />
+                    </div>
+                    {/* Leyenda colores */}
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                      {[['#10B981', '< 70%'], ['#F59E0B', '70–90%'], ['#EF4444', '90–100%'], ['#DC2626', '> 100%']].map(([c, l]) => (
+                        <div key={l} style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: t.textMuted }}>
+                          <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: c }} />{l}
+                        </div>
                       ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </div>
+                    </div>
+                  </div>
+
+                  {/* Breadcrumb */}
+                  {dashDrill.length > 0 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '14px', flexWrap: 'wrap' }}>
+                      <button onClick={() => setDashDrill([])} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '20px', padding: '3px 12px', fontSize: '12px', color: t.textMuted, cursor: 'pointer' }}>🏠 Capítulos</button>
+                      {dashDrill.map((d, i) => (
+                        <span key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ color: t.textMuted }}>›</span>
+                          <button onClick={() => setDashDrill(prev => prev.slice(0, i + 1))}
+                            style={{ background: i === dashDrill.length - 1 ? t.primary + '22' : 'transparent', border: `1px solid ${i === dashDrill.length - 1 ? t.primary : t.border}`, borderRadius: '20px', padding: '3px 12px', fontSize: '12px', color: i === dashDrill.length - 1 ? t.primary : t.textMuted, cursor: 'pointer' }}>
+                            {d.valor.length > 32 ? d.valor.slice(0, 32) + '…' : d.valor}
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Contenido */}
+                  {dashLoading ? (
+                    <div style={{ textAlign: 'center', padding: '60px', color: t.textMuted, fontSize: '13px' }}>
+                      <div style={{ fontSize: '28px', marginBottom: '10px', animation: 'spin 1s linear infinite' }}>⚙️</div>
+                      Cargando instrumentos...
+                    </div>
+                  ) : !dashData || dashData.items.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '60px', color: t.textMuted, fontSize: '13px' }}>
+                      <div style={{ fontSize: '36px', marginBottom: '12px' }}>🛩️</div>
+                      {(!kpiPpto || !kpiCobro) ? 'Importa datos de Presupuesto y SICOE para encender los instrumentos' : 'Sin datos disponibles'}
+                    </div>
+                  ) : dashData.campo === 'pk_id' ? (
+                    /* Nivel PK_ID → chips de color */
+                    <>
+                      <div style={{ fontSize: '12px', color: t.textMuted, marginBottom: '10px' }}>{dashData.items.length} PK_IDs encontrados</div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '8px', maxHeight: '360px', overflowY: 'auto' }}>
+                        {dashData.items.map((d, i) => {
+                          const color = d.delta < 0 ? '#EF4444' : d.pct >= 90 ? '#F59E0B' : '#10B981'
+                          return (
+                            <div key={i} title={`Ppto: ${fmtD(d.presupuesto)}\nSICOE: ${fmtD(d.cobrado)}\nDelta: ${fmtD(d.delta)}\nConsumo: ${d.pct}%`}
+                              style={{ background: color + '18', border: `1.5px solid ${color}`, borderRadius: '8px', padding: '8px 6px', textAlign: 'center' }}>
+                              <div style={{ fontWeight: '700', color, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '2px' }}>{d.nombre}</div>
+                              <div style={{ fontSize: '13px', fontWeight: '800', color }}>{d.pct}%</div>
+                              <div style={{ fontSize: '9px', color: t.textMuted, marginTop: '2px' }}>{d.delta < 0 ? `⚠ −${fmtM(Math.abs(d.delta))}` : '✓ OK'}</div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </>
+                  ) : (
+                    /* Nivel capítulo o ítem → cuadrícula de velocímetros */
+                    <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${gaugeSize}px, 1fr))`, gap: '14px' }}>
+                      {dashData.items.map((d, i) => (
+                        <GaugeMeter
+                          key={i}
+                          d={d}
+                          size={gaugeSize}
+                          t={t}
+                          isClickable={dashDrill.length < 2}
+                          onClick={dashDrill.length < 2 ? () => setDashDrill(prev => [...prev, { campo: dashData.campo, valor: d.nombre }]) : undefined}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* ── Panel inferior Gantt / Semáforo ── */}
             <div style={s.bottomPanel}>
