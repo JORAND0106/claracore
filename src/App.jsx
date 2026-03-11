@@ -897,6 +897,37 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
 
           {/* Gráfico */}
           {nivelActual ? (
+            nivelActual === 'pk_id' ? (
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(15, 1fr)', gap:'6px', maxHeight:'320px', overflowY:'auto', padding:'4px 2px' }}>
+                {chartData.map((d, i) => {
+                  const color = PALETA_BARRAS[i % PALETA_BARRAS.length]
+                  return (
+                    <button key={d.name} onClick={() => handleBarClick(d)}
+                      title={`${d.name}\n${fmt(d.costo)}\n${d.count} registro${d.count !== 1 ? 's' : ''}`}
+                      style={{
+                        background: color + '22',
+                        border: `1.5px solid ${color}`,
+                        borderRadius: '6px',
+                        padding: '5px 4px',
+                        fontSize: '11px',
+                        fontWeight: '600',
+                        color: color,
+                        cursor: 'pointer',
+                        textAlign: 'center',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        transition: 'all 0.15s',
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.background = color; e.currentTarget.style.color = '#fff' }}
+                      onMouseLeave={e => { e.currentTarget.style.background = color + '22'; e.currentTarget.style.color = color }}
+                    >
+                      {d.name}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
             <ResponsiveContainer width="100%" height={Math.max(180, chartData.length * 40 + 20)}>
               <BarChart data={chartData} layout="vertical"
                 margin={{ left: 8, right: 80, top: 4, bottom: 4 }}
@@ -924,7 +955,8 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
-            ) : (
+            )
+          ) : (
             <div style={{ textAlign:'center',padding:'24px 0',fontSize:'13px',color:t.textMuted }}>
               {NIVELES.some(n => !drill.some(d => d.campo === n))
                 ? '☝️ Selecciona un nivel de agrupación para ver el gráfico'
