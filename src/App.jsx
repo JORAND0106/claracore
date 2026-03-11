@@ -1826,7 +1826,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                       <span style={{ color: '#0077B6' }}>▪ {fmtM(d.presupuesto)}</span>
                       <span style={{ color }}>▪ {fmtM(d.cobrado)}</span>
                     </div>
-                    {d.delta < 0 && <div style={{ fontSize: '10px', color: '#EF4444', marginTop: '2px', fontWeight: '600' }}>⚠ −{fmtM(Math.abs(d.delta))}</div>}
+                    <div style={{ fontSize: '10px', color: d.delta < 0 ? '#EF4444' : '#10B981', marginTop: '2px', fontWeight: '600' }}>
+                      {d.delta < 0 ? `⚠ −${fmtM(Math.abs(d.delta))}` : `✓ +${fmtM(d.delta)}`}
+                    </div>
                     {isClickable && <div style={{ fontSize: '9px', color: t.textMuted, marginTop: '3px', opacity: 0.7 }}>click para explorar</div>}
                   </div>
                 )
