@@ -1506,9 +1506,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [errorContrato, setErrorContrato] = useState('')
   const [kpiPpto,    setKpiPpto]    = useState(null)
   const [kpiCobro,   setKpiCobro]   = useState(null)
-  const [dashDrill,  setDashDrill]  = useState([])   // [{campo, valor}, …]
-  const [dashData,   setDashData]   = useState(null) // {campo, items:[]}
-  const [dashLoading,setDashLoading]= useState(false)
+  const [dashDrill,    setDashDrill]    = useState([])
+  const [dashData,     setDashData]     = useState(null)
+  const [dashLoading,  setDashLoading]  = useState(false)
+  const [dashTabla,    setDashTabla]    = useState(null)
+  const [dashTablaLoad,setDashTablaLoad]= useState(false)
 
   const API_URL = 'https://claracore-backend.azurewebsites.net'
   const contratoIdDash = usuario?.contrato_id
@@ -1524,6 +1526,18 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
 
   async function cargarDashDrill(drill) {
     if (!contratoIdDash) return
+    // Si tenemos capitulo+item → cargar tabla detallada en lugar de más gauges
+    if (drill.length >= 2) {
+      setDashTablaLoad(true); setDashTabla(null)
+      const params = new URLSearchParams()
+      drill.forEach(d => params.set(d.campo, d.valor))
+      const tok = getToken()
+      const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+      if (res.ok) setDashTabla(await res.json())
+      setDashTablaLoad(false)
+      return
+    }
+    setDashTabla(null)
     setDashLoading(true)
     const params = new URLSearchParams()
     drill.forEach(d => params.set(d.campo, d.valor))
@@ -1884,24 +1898,76 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                       <div style={{ fontSize: '36px', marginBottom: '12px' }}>🛩️</div>
                       {(!kpiPpto || !kpiCobro) ? 'Importa datos de Presupuesto y SICOE para encender los instrumentos' : 'Sin datos disponibles'}
                     </div>
-                  ) : dashData.campo === 'pk_id' ? (
-                    /* Nivel PK_ID → chips de color */
-                    <>
-                      <div style={{ fontSize: '12px', color: t.textMuted, marginBottom: '10px' }}>{dashData.items.length} PK_IDs encontrados</div>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '8px', maxHeight: '360px', overflowY: 'auto' }}>
-                        {dashData.items.map((d, i) => {
-                          const color = d.delta < 0 ? '#EF4444' : d.pct >= 90 ? '#F59E0B' : '#10B981'
-                          return (
-                            <div key={i} title={`Ppto: ${fmtD(d.presupuesto)}\nSICOE: ${fmtD(d.cobrado)}\nDelta: ${fmtD(d.delta)}\nConsumo: ${d.pct}%`}
-                              style={{ background: color + '18', border: `1.5px solid ${color}`, borderRadius: '8px', padding: '8px 6px', textAlign: 'center' }}>
-                              <div style={{ fontWeight: '700', color, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '2px' }}>{d.nombre}</div>
-                              <div style={{ fontSize: '13px', fontWeight: '800', color }}>{d.pct}%</div>
-                              <div style={{ fontSize: '9px', color: t.textMuted, marginTop: '2px' }}>{d.delta < 0 ? `⚠ −${fmtM(Math.abs(d.delta))}` : '✓ OK'}</div>
+                  ) : null /* nivel pk_id ya no usa gauges aquí */}
+
+                  {/* ── Tabla PK_ID detallada (aparece al seleccionar ítem) ── */}
+                  {dashDrill.length >= 2 && (
+                    dashTablaLoad ? (
+                      <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>Cargando tabla comparativa...</div>
+                    ) : dashTabla ? (() => {
+                      const fmtQ = n => n != null ? new Intl.NumberFormat('es-CO',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n) : '—'
+                      const thS  = { padding:'8px 10px', fontSize:'11px', fontWeight:'700', color:t.textMuted, borderBottom:`2px solid ${t.border}`, textAlign:'right', whiteSpace:'nowrap' }
+                      const tdS  = { padding:'7px 10px', fontSize:'12px', borderBottom:`1px solid ${t.border}`, textAlign:'right' }
+                      const tdPK = { ...tdS, textAlign:'left', fontWeight:'700', color:t.primary }
+                      return (
+                        <>
+                          {/* Resúmenes lado a lado */}
+                          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'16px' }}>
+                            <div style={{ background:'#10B98118', border:'2px solid #10B981', borderRadius:'10px', padding:'14px 18px' }}>
+                              <div style={{ fontSize:'10px', fontWeight:'700', color:'#10B981', letterSpacing:'1.5px', marginBottom:'6px' }}>✅ POR COBRAR</div>
+                              <div style={{ fontSize:'24px', fontWeight:'800', color:'#10B981' }}>{fmtD(dashTabla.por_cobrar)}</div>
+                              <div style={{ fontSize:'11px', color:'#10B98199', marginTop:'4px' }}>
+                                {dashTabla.rows.filter(r => r.delta_costo > 0).length} PK_IDs con saldo a favor
+                              </div>
                             </div>
-                          )
-                        })}
-                      </div>
-                    </>
+                            <div style={{ background:'#3B82F618', border:'2px solid #3B82F6', borderRadius:'10px', padding:'14px 18px' }}>
+                              <div style={{ fontSize:'10px', fontWeight:'700', color:'#3B82F6', letterSpacing:'1.5px', marginBottom:'6px' }}>🔄 DEVOLUCIÓN</div>
+                              <div style={{ fontSize:'24px', fontWeight:'800', color:'#3B82F6' }}>{fmtD(dashTabla.devolucion)}</div>
+                              <div style={{ fontSize:'11px', color:'#3B82F699', marginTop:'4px' }}>
+                                {dashTabla.rows.filter(r => r.delta_costo < 0).length} PK_IDs con sobrecosto
+                              </div>
+                            </div>
+                          </div>
+                          {/* Tabla */}
+                          <div style={{ overflowX:'auto', borderRadius:'8px', border:`1px solid ${t.border}` }}>
+                            <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                              <thead style={{ background:t.bg }}>
+                                <tr>
+                                  <th style={{ ...thS, textAlign:'left' }}>PK_ID</th>
+                                  <th style={thS}>Cant. Ppto.</th>
+                                  <th style={thS}>Costo Ppto.</th>
+                                  <th style={thS}>Cant. SICOE</th>
+                                  <th style={thS}>Costo SICOE</th>
+                                  <th style={thS}>Δ Cant.</th>
+                                  <th style={thS}>Δ Costo</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {dashTabla.rows.map((r, i) => {
+                                  const dCostoColor = r.delta_costo > 0 ? '#10B981' : r.delta_costo < 0 ? '#EF4444' : t.textMuted
+                                  const dCantColor  = r.delta_cant  > 0 ? '#10B981' : r.delta_cant  < 0 ? '#EF4444' : t.textMuted
+                                  return (
+                                    <tr key={i} style={{ background: i%2===0 ? 'transparent' : t.bg+'44' }}>
+                                      <td style={tdPK}>{r.pk_id}</td>
+                                      <td style={tdS}>{fmtQ(r.cant_ppto)}</td>
+                                      <td style={tdS}>{fmtD(r.costo_ppto)}</td>
+                                      <td style={tdS}>{fmtQ(r.cant_sicoe)}</td>
+                                      <td style={tdS}>{fmtD(r.costo_sicoe)}</td>
+                                      <td style={{ ...tdS, fontWeight:'700', color:dCantColor }}>
+                                        {r.delta_cant > 0 ? '+' : ''}{fmtQ(r.delta_cant)}
+                                      </td>
+                                      <td style={{ ...tdS, fontWeight:'700', color:dCostoColor }}>
+                                        {r.delta_costo > 0 ? '+' : ''}{fmtD(r.delta_costo)}
+                                      </td>
+                                    </tr>
+                                  )
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      )
+                    })() : null
                   ) : (
                     /* Nivel capítulo o ítem → cuadrícula de velocímetros */
                     <div style={{ display: 'grid', gridTemplateColumns: `repeat(4, 1fr)`, gap: '16px' }}>
