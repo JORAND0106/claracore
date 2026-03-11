@@ -608,7 +608,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
       'item':'item','descripción':'descripcion','descripcion':'descripcion',
       'und':'und','calzada':'calzada','tramo':'tramo',
       'abs. inicio':'abs_inicio','abs. final':'abs_final',
-      'vlr unitario':'vlr_unitario','no. inicio':'no_inicio','no. final':'no_final',
+      'vlr unitario':'vlr_unitario','No. inicio':'no_inicio','No. final':'no_final',
       'no.inicio':'no_inicio','no.final':'no_final',
       'no inicio':'no_inicio','no final':'no_final',
       'area/long/nod':'area_long_nod','ancho':'ancho','espesor':'espesor',
@@ -621,7 +621,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
       'x_label (este)':'x_label','y_label (norte)':'y_label',
       'revisado (true/false)':'revisado','observación externa':'observacion_externa',
     }
-    
+
     const NUMS = new Set(['vlr_unitario','no_inicio','no_final','area_long_nod','ancho','espesor','cant_total','costo_directo','x_label','y_label'])
     const rows = []
     for (let i = 1; i < lines.length; i++) {
