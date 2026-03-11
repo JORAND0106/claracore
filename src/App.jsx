@@ -1213,12 +1213,7 @@ function ModuloCobro({ t, usuario, token, s }) {
     if (!contratoId) return
     setLoading(true)
     const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
-      if (res.ok) {
-        setDashTabla(await res.json())
-      } else {
-        const err = await res.json().catch(() => ({}))
-        console.error('pkid-tabla error:', res.status, err)
-      }
+      if (res.ok) setDashTabla(await res.json())
       setDashTablaLoad(false)
   }
 
