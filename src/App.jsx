@@ -981,12 +981,11 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                       {itemsListado
                         .filter(p => `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase()))
                         .slice(0, 30)
-                        .map(p => (
+                        .map((p, idx) => (
                           <div key={p.id}
-                            onMouseDown={() => { setEditItem(p.item_numero); setItemBusqueda(`${p.item_numero} · ${p.descripcion}`); setItemDropOpen(false) }}
-                            style={{ padding:'8px 12px',fontSize:'12px',cursor:'pointer',borderBottom:`1px solid ${t.border}`,color:t.text, background: itemNavIdx === itemsListado.filter(p => `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase())).slice(0,30).indexOf(p) === itemNavIdx ? t.primary+'33' : 'transparent' }}
-                            onMouseEnter={e => { setItemNavIdx(itemsListado.filter(p2 => `${p2.item_numero} ${p2.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase())).slice(0,30).indexOf(p)); e.currentTarget.style.background=t.primary+'22' }}
-                            onMouseLeave={e => e.currentTarget.style.background= itemsListado.filter(p2 => `${p2.item_numero} ${p2.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase())).slice(0,30).indexOf(p) === itemNavIdx ? t.primary+'33' : 'transparent'}>
+                            onMouseDown={() => { setEditItem(p.item_numero); setItemBusqueda(`${p.item_numero} · ${p.descripcion}`); setItemDropOpen(false); setItemNavIdx(-1) }}
+                            onMouseEnter={() => setItemNavIdx(idx)}
+                            style={{ padding:'8px 12px', fontSize:'12px', cursor:'pointer', borderBottom:`1px solid ${t.border}`, color: idx === itemNavIdx ? '#fff' : t.text, background: idx === itemNavIdx ? t.primary : 'transparent', transition:'background 0.1s' }}>
                             <strong>{p.item_numero}</strong> · {p.descripcion}
                           </div>
                         ))}
