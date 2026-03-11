@@ -461,15 +461,20 @@ function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, 
   )
 }
 
-// ── Tooltip Presupuesto (fuera del componente para evitar re-creación) ────────
 function PresupuestoTooltip({ active, payload, t, color, fmt }) {
   if (!active || !payload?.length) return null
   const d = payload[0].payload
+  const fmtQ = n => n != null ? new Intl.NumberFormat('es-CO',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n) : '—'
   return (
     <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px 14px', boxShadow:'0 4px 20px rgba(0,0,0,0.15)' }}>
-      <div style={{ fontSize:'12px', fontWeight:'700', color:t.text, marginBottom:'4px', maxWidth:'280px', wordBreak:'break-word' }}>{d.label}</div>
-      <div style={{ fontSize:'13px', fontWeight:'700', color }}>{fmt(d.costo)}</div>
-      <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>{d.count} registro{d.count !== 1 ? 's' : ''}</div>
+      <div style={{ fontSize:'12px', fontWeight:'700', color:t.text, marginBottom:'6px', maxWidth:'280px', wordBreak:'break-word' }}>{d.label}</div>
+      <div style={{ fontSize:'13px', fontWeight:'700', color, marginBottom:'4px' }}>{fmt(d.costo)}</div>
+      <div style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
+        <div style={{ fontSize:'11px', color:t.textMuted }}>{d.count} registro{d.count !== 1 ? 's' : ''}</div>
+        {d.cantTotal != null   && <div style={{ fontSize:'11px', color:t.textMuted }}>Cant. Total: <span style={{color:t.text,fontWeight:'600'}}>{fmtQ(d.cantTotal)}</span></div>}
+        {d.und != null         && <div style={{ fontSize:'11px', color:t.textMuted }}>Und: <span style={{color:t.text,fontWeight:'600'}}>{d.und}</span></div>}
+        {d.vlrUnit != null     && <div style={{ fontSize:'11px', color:t.textMuted }}>Vlr. Unit.: <span style={{color:t.text,fontWeight:'600'}}>{fmt(d.vlrUnit)}</span></div>}
+      </div>
     </div>
   )
 }
@@ -571,9 +576,10 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
         } else if (key.length > 48) {
           label = key.slice(0, 48) + '…'
         }
-        agg[key] = { name: key, label, costo: 0, count: 0 }
+        agg[key] = { name: key, label, costo: 0, count: 0, cantTotal: 0, und: r.und ?? null, vlrUnit: r.vlr_unitario ?? null }
       }
-      agg[key].costo += r.costo_directo ?? 0
+      agg[key].costo     += r.costo_directo ?? 0
+      agg[key].cantTotal += r.cant_total ?? 0
       agg[key].count++
     })
     return Object.values(agg).sort((a, b) => a.name.localeCompare(b.name, 'es', {numeric: true})).slice(0, 20)
@@ -1226,9 +1232,10 @@ function ModuloCobro({ t, usuario, token, s }) {
           const desc = (r.descripcion ?? '').slice(0, 38)
           label = `${r.item ?? ''} · ${desc}${(r.descripcion ?? '').length > 38 ? '…' : ''}`
         } else if (String(key).length > 48) label = String(key).slice(0, 48) + '…'
-        agg[key] = { name: key, label, costo: 0, count: 0 }
+        agg[key] = { name: key, label, costo: 0, count: 0, cantTotal: 0, und: r.und ?? null, vlrUnit: r.valor_unitario ?? null }
       }
-      agg[key].costo += r.costo_directo ?? 0
+      agg[key].costo     += r.costo_directo ?? 0
+      agg[key].cantTotal += r.cantidad ?? 0
       agg[key].count++
     })
     return Object.values(agg).sort((a,b) => String(a.name).localeCompare(String(b.name), 'es', {numeric:true})).slice(0, 20)
@@ -1824,7 +1831,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
               }
 
               const nItems = dashData?.items?.length || 0
-              const gaugeSize = nItems > 10 ? 125 : nItems > 6 ? 140 : 155
+              const gaugeSize = nItems > 10 ? 157 : nItems > 6 ? 175 : 194
 
               return (
                 <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '12px', padding: '20px', boxShadow: t.shadow, marginBottom: '20px' }}>
@@ -1893,7 +1900,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                     </>
                   ) : (
                     /* Nivel capítulo o ítem → cuadrícula de velocímetros */
-                    <div style={{ display: 'grid', gridTemplateColumns: `repeat(auto-fill, minmax(${gaugeSize}px, 1fr))`, gap: '14px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: `repeat(4, 1fr)`, gap: '16px' }}>
                       {dashData.items.map((d, i) => (
                         <GaugeMeter
                           key={i}
