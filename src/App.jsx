@@ -1884,7 +1884,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                           <span style={{ color: t.textMuted }}>›</span>
                           <button onClick={() => setDashDrill(prev => prev.slice(0, i + 1))}
                             style={{ background: i === dashDrill.length - 1 ? t.primary + '22' : 'transparent', border: `1px solid ${i === dashDrill.length - 1 ? t.primary : t.border}`, borderRadius: '20px', padding: '3px 12px', fontSize: '12px', color: i === dashDrill.length - 1 ? t.primary : t.textMuted, cursor: 'pointer' }}>
-                            {d.valor}{d.descripcion ? ` · ${d.descripcion.length > 30 ? d.descripcion.slice(0,30)+'…' : d.descripcion}` : ''}
+                            {d.valor}{d.descripcion ? ` · ${d.descripcion}` : ''}
                           </button>
                         </span>
                       ))}
