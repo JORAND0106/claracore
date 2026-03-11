@@ -503,6 +503,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const [guardandoBulk, setGuardandoBulk] = useState(false)
   const [itemBusqueda, setItemBusqueda] = useState('')
   const [itemDropOpen, setItemDropOpen] = useState(false)
+  const [itemNavIdx, setItemNavIdx] = useState(-1)
 
   // ── Constantes drill-down ──────────────────────────────────────────────────
   const NIVELES = ['capitulo', 'item', 'pk_id', 'tramo', 'calzada']
@@ -954,9 +955,19 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                 <div style={{ position:'relative' }}>
                   <input
                     value={itemBusqueda}
-                    onChange={e => { setItemBusqueda(e.target.value); setItemDropOpen(true); if (!e.target.value) setEditItem('') }}
+                    onChange={e => { setItemBusqueda(e.target.value); setItemDropOpen(true); setItemNavIdx(-1); if (!e.target.value) setEditItem('') }}
                     onFocus={() => setItemDropOpen(true)}
-                    onBlur={() => setTimeout(() => setItemDropOpen(false), 180)}
+                    onBlur={() => setTimeout(() => { setItemDropOpen(false); setItemNavIdx(-1) }, 180)}
+                    onKeyDown={e => {
+                      const filtrados = itemsListado.filter(p => `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase())).slice(0, 30)
+                      if (e.key === 'ArrowDown') { e.preventDefault(); setItemNavIdx(i => Math.min(i + 1, filtrados.length - 1)) }
+                      else if (e.key === 'ArrowUp') { e.preventDefault(); setItemNavIdx(i => Math.max(i - 1, 0)) }
+                      else if (e.key === 'Enter' && itemNavIdx >= 0 && filtrados[itemNavIdx]) {
+                        const p = filtrados[itemNavIdx]
+                        setEditItem(p.item_numero); setItemBusqueda(`${p.item_numero} · ${p.descripcion}`); setItemDropOpen(false); setItemNavIdx(-1)
+                      }
+                      else if (e.key === 'Escape') { setItemDropOpen(false); setItemNavIdx(-1) }
+                    }}
                     placeholder={editCapitulo ? 'Buscar ítem…' : 'Primero selecciona capítulo'}
                     disabled={!editCapitulo}
                     style={{ background:t.inputBg,border:`1.5px solid ${editItem?t.primary:t.border}`,borderRadius:'7px',padding:'5px 10px',color:t.text,fontSize:'12px',width:'280px',opacity:editCapitulo?1:0.45,cursor:editCapitulo?'text':'not-allowed' }}
@@ -969,9 +980,9 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                         .map(p => (
                           <div key={p.id}
                             onMouseDown={() => { setEditItem(p.item_numero); setItemBusqueda(`${p.item_numero} · ${p.descripcion}`); setItemDropOpen(false) }}
-                            style={{ padding:'8px 12px',fontSize:'12px',cursor:'pointer',borderBottom:`1px solid ${t.border}`,color:t.text }}
-                            onMouseEnter={e => e.currentTarget.style.background=t.primary+'22'}
-                            onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                            style={{ padding:'8px 12px',fontSize:'12px',cursor:'pointer',borderBottom:`1px solid ${t.border}`,color:t.text, background: itemNavIdx === itemsListado.filter(p => `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase())).slice(0,30).indexOf(p) === itemNavIdx ? t.primary+'33' : 'transparent' }}
+                            onMouseEnter={e => { setItemNavIdx(itemsListado.filter(p2 => `${p2.item_numero} ${p2.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase())).slice(0,30).indexOf(p)); e.currentTarget.style.background=t.primary+'22' }}
+                            onMouseLeave={e => e.currentTarget.style.background= itemsListado.filter(p2 => `${p2.item_numero} ${p2.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase())).slice(0,30).indexOf(p) === itemNavIdx ? t.primary+'33' : 'transparent'}>
                             <strong>{p.item_numero}</strong> · {p.descripcion}
                           </div>
                         ))}
