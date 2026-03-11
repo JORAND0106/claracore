@@ -1029,7 +1029,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
       )}
 
       {/* ── Tabla ── */}
-      {registrosFiltrados.length > 0 && (
+      {drill.length > 0 && registrosFiltrados.length > 0 && (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',boxShadow:t.shadow }}>
           <table style={{ width:'100%',borderCollapse:'collapse',fontSize:'12px' }}>
             <thead style={{ background:t.bg }}>
