@@ -504,6 +504,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const [itemBusqueda, setItemBusqueda] = useState('')
   const [itemDropOpen, setItemDropOpen] = useState(false)
   const [itemNavIdx, setItemNavIdx] = useState(-1)
+  const itemDropRef = useRef(null)
 
   // ── Constantes drill-down ──────────────────────────────────────────────────
   const NIVELES = ['capitulo', 'item', 'pk_id', 'tramo', 'calzada']
@@ -964,8 +965,8 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                     onBlur={() => setTimeout(() => { setItemDropOpen(false); setItemNavIdx(-1) }, 180)}
                     onKeyDown={e => {
                       const filtrados = itemsListado.filter(p => `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase())).slice(0, 30)
-                      if (e.key === 'ArrowDown') { e.preventDefault(); setItemNavIdx(i => Math.min(i + 1, filtrados.length - 1)) }
-                      else if (e.key === 'ArrowUp') { e.preventDefault(); setItemNavIdx(i => Math.max(i - 1, 0)) }
+                      if (e.key === 'ArrowDown') { e.preventDefault(); setItemNavIdx(i => { const n = Math.min(i + 1, filtrados.length - 1); setTimeout(() => { const el = itemDropRef.current?.children[n]; el?.scrollIntoView({ block:'nearest' }) }, 0); return n }) }
+                      else if (e.key === 'ArrowUp') { e.preventDefault(); setItemNavIdx(i => { const n = Math.max(i - 1, 0); setTimeout(() => { const el = itemDropRef.current?.children[n]; el?.scrollIntoView({ block:'nearest' }) }, 0); return n }) }
                       else if (e.key === 'Enter' && itemNavIdx >= 0 && filtrados[itemNavIdx]) {
                         const p = filtrados[itemNavIdx]
                         setEditItem(p.item_numero); setItemBusqueda(`${p.item_numero} · ${p.descripcion}`); setItemDropOpen(false); setItemNavIdx(-1)
@@ -977,7 +978,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                     style={{ background:t.inputBg,border:`1.5px solid ${editItem?t.primary:t.border}`,borderRadius:'7px',padding:'5px 10px',color:t.text,fontSize:'12px',width:'280px',opacity:editCapitulo?1:0.45,cursor:editCapitulo?'text':'not-allowed' }}
                   />
                   {itemDropOpen && editCapitulo && itemBusqueda.length > 0 && (
-                    <div style={{ position:'absolute',top:'100%',left:0,right:0,zIndex:999,background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'8px',boxShadow:'0 8px 24px rgba(0,0,0,0.2)',maxHeight:'220px',overflowY:'auto',marginTop:'3px' }}>
+                    <div ref={itemDropRef} style={{ position:'absolute',top:'100%',left:0,right:0,zIndex:999,background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'8px',boxShadow:'0 8px 24px rgba(0,0,0,0.2)',maxHeight:'220px',overflowY:'auto',marginTop:'3px' }}>
                       {itemsListado
                         .filter(p => `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase()))
                         .slice(0, 30)
@@ -1343,6 +1344,7 @@ function ModuloCobro({ t, usuario, token, s }) {
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0 }) {
   const [moduloActivo, setModuloActivo] = useState('dashboard')
+  const [menuAbierto, setMenuAbierto] = useState(false)
   const [tabInferior, setTabInferior] = useState('gantt')
   const [analisis, setAnalisis] = useState('financiero')
   const [showModalContrato, setShowModalContrato] = useState(false)
@@ -1476,7 +1478,59 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         </div>
       </div>
 
-      <div style={s.body}>
+      <div style={{ display:'flex', minHeight:'calc(100vh - 72px)' }}>
+
+        {/* ── Sidebar ── */}
+        <div style={{
+          width: menuAbierto ? '220px' : '52px',
+          minHeight: '100%',
+          background: t.headerBg,
+          borderRight: `1px solid ${t.border}`,
+          transition: 'width 0.25s ease',
+          display: 'flex', flexDirection: 'column',
+          overflow: 'hidden', flexShrink: 0,
+          boxShadow: menuAbierto ? '4px 0 20px rgba(0,0,0,0.12)' : 'none',
+          position: 'relative', zIndex: 10,
+        }}>
+          {/* Botón hamburguesa */}
+          <button onClick={() => setMenuAbierto(o => !o)} style={{
+            background: 'none', border: 'none', cursor: 'pointer',
+            padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '10px',
+            color: t.textMuted, fontSize: '18px', borderBottom: `1px solid ${t.border}`,
+            minHeight: '48px', whiteSpace: 'nowrap', width: '100%'
+          }}>
+            <span style={{ fontSize:'18px', lineHeight:1 }}>☰</span>
+            {menuAbierto && <span style={{ fontSize:'12px', fontWeight:'700', letterSpacing:'1px', color:t.textMuted }}>MÓDULOS</span>}
+          </button>
+
+          {/* Items del menú */}
+          {[
+            ['dashboard',    '🏠', 'Dashboard'],
+            ['presupuesto',  '📋', 'Presupuesto'],
+            ['cobro',        '💰', 'SICOE'],
+            ['almacen',      '🏪', 'Almacén'],
+            ['gantt',        '📅', 'Gantt'],
+            ['semaforo',     '🗺️', 'Plano Semáforo'],
+          ].map(([key, icon, label]) => (
+            <button key={key} onClick={() => { setModuloActivo(key); setMenuAbierto(false) }} style={{
+              background: moduloActivo === key ? t.primary+'22' : 'none',
+              border: 'none',
+              borderLeft: moduloActivo === key ? `3px solid ${t.primary}` : '3px solid transparent',
+              cursor: 'pointer', padding: '12px 16px',
+              display: 'flex', alignItems: 'center', gap: '12px',
+              color: moduloActivo === key ? t.primary : t.textMuted,
+              fontWeight: moduloActivo === key ? '700' : '400',
+              fontSize: '13px', whiteSpace: 'nowrap', width: '100%',
+              transition: 'all 0.15s', textAlign: 'left',
+            }}>
+              <span style={{ fontSize:'16px', lineHeight:1, flexShrink:0 }}>{icon}</span>
+              {menuAbierto && <span>{label}</span>}
+            </button>
+          ))}
+        </div>
+
+        {/* ── Contenido principal ── */}
+        <div style={{ flex:1, padding:'20px 24px', maxWidth:'100%', overflowX:'auto' }}>
         <div style={s.topBar}>
           {usuario?._contratos?.length > 1 ? (
             <select
@@ -1505,16 +1559,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           {/* Crear Contrato se gestiona desde el Panel Admin */}
         </div>
 
-        {/* ── Tabs de módulo ── */}
-        <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', borderBottom: `2px solid ${t.border}`, paddingBottom: '0' }}>
-          {[['dashboard','🏠 Dashboard'],['presupuesto','📋 Presupuesto'],['cobro','💰 Cobro']].map(([key,label]) => (
-            <button key={key} onClick={() => setModuloActivo(key)} style={{
-              background: 'transparent', border: 'none', borderBottom: moduloActivo === key ? `3px solid ${t.primary}` : '3px solid transparent',
-              color: moduloActivo === key ? t.primary : t.textMuted, fontWeight: moduloActivo === key ? '700' : '400',
-              fontSize: '14px', padding: '8px 20px', cursor: 'pointer', marginBottom: '-2px', transition: 'all 0.2s'
-            }}>{label}</button>
-          ))}
-        </div>
         {/* ── MÓDULO DASHBOARD ── */}
         {moduloActivo === 'dashboard' && <>
         <div style={s.panelsGrid}>
@@ -1563,10 +1607,18 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         {/* ── MÓDULO PRESUPUESTO ── */}
         {moduloActivo === 'presupuesto' && <ModuloPresupuesto t={t} usuario={usuario} token={getToken()} s={s} />}
 
-        {/* ── MÓDULO COBRO ── */}
+{/* ── MÓDULO COBRO ── */}
         {moduloActivo === 'cobro' && <ModuloCobro t={t} usuario={usuario} token={getToken()} s={s} />}
 
-      </div>
+        {/* ── Módulos próximamente ── */}
+        {['almacen','gantt','semaforo'].includes(moduloActivo) && (
+          <div style={{ textAlign:'center', padding:'80px 20px', color:t.textMuted, fontSize:'15px' }}>
+            {moduloActivo === 'almacen' ? '🏪' : moduloActivo === 'gantt' ? '📅' : '🗺️'} Módulo próximamente
+          </div>
+        )}
+
+        </div>{/* fin contenido principal */}
+      </div>{/* fin layout flex */}
 
       {/* Modal crear contrato — guarda en Supabase */}
       {showModalContrato && (
