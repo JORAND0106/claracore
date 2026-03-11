@@ -757,7 +757,21 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
 
   // ── Estilos ────────────────────────────────────────────────────────────────
   const REVISADO_OPTS = ['Pendiente', 'Verificar Campo', 'Verificado']
-  const estadoColor = (r) => r === 'Verificado' ? '#16A34A' : r === 'Verificar Campo' ? '#D97706' : '#6B7280'
+  const estadoColor = (r) => r === 'Verificado' ? '#16A34A' : r === 'Verificar Campo' ? '#D97706' : '#EF4444'
+  const SEMAFORO = [
+    { valor: 'Pendiente',       color: '#EF4444', label: '🔴' },
+    { valor: 'Verificar Campo', color: '#D97706', label: '🟡' },
+    { valor: 'Verificado',      color: '#16A34A', label: '🟢' },
+  ]
+  async function cambiarEstadoDirecto(id, nuevoEstado) {
+    const token = getToken()
+    await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ids: [id], revisado: nuevoEstado })
+    })
+    await cargarRegistros()
+  }
   const thStyle = { padding:'8px 10px', fontSize:'11px', fontWeight:'700', letterSpacing:'0.5px', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
   const tdStyle = { padding:'7px 10px', fontSize:'12px', borderBottom:`1px solid ${t.border}`, verticalAlign:'middle' }
   const bcBtn   = (active) => ({
@@ -1143,16 +1157,28 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                     </td>
                     <td style={{ ...tdStyle,textAlign:'right',fontWeight:'700',color:t.primary }}>{fmt(r.costo_directo)}</td>
                     <td style={tdStyle} onClick={e=>e.stopPropagation()}>
-                      {isEdit ? (
-                        <select value={editValues.revisado} onChange={e=>setEditValues({...editValues,revisado:e.target.value})}
-                          style={{ background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'11px' }}>
-                          {REVISADO_OPTS.map(o => <option key={o} value={o}>{o}</option>)}
-                        </select>
-                      ) : (
-                        <span style={{ fontSize:'11px',fontWeight:'600',color:estadoColor(r.revisado),background:estadoColor(r.revisado)+'22',borderRadius:'4px',padding:'2px 8px' }}>
-                          {r.revisado || 'Pendiente'}
-                        </span>
-                      )}
+                      <div style={{ display:'flex', gap:'6px', alignItems:'center', justifyContent:'center' }}>
+                        {SEMAFORO.map(s => {
+                          const activo = (r.revisado || 'Pendiente') === s.valor
+                          return (
+                            <div
+                              key={s.valor}
+                              title={s.valor}
+                              onClick={() => puedeValidar && !activo && cambiarEstadoDirecto(r.id, s.valor)}
+                              style={{
+                                width: activo ? '18px' : '12px',
+                                height: activo ? '18px' : '12px',
+                                borderRadius: '50%',
+                                background: activo ? s.color : s.color + '33',
+                                border: `2px solid ${activo ? s.color : s.color + '66'}`,
+                                cursor: puedeValidar && !activo ? 'pointer' : 'default',
+                                transition: 'all 0.2s',
+                                boxShadow: activo ? `0 0 8px ${s.color}88` : 'none',
+                              }}
+                            />
+                          )
+                        })}
+                      </div>
                     </td>
                     {!puedeEditar && !puedeValidar && (
                       <td style={tdStyle} onClick={e=>e.stopPropagation()}>
