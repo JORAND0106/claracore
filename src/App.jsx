@@ -1212,9 +1212,14 @@ function ModuloCobro({ t, usuario, token, s }) {
   async function cargarRegistros() {
     if (!contratoId) return
     setLoading(true)
-    const res = await fetch(`${API}/cobro/${contratoId}`, { headers: { Authorization:`Bearer ${token}` } })
-    if (res.ok) setRegistros(await res.json())
-    setLoading(false)
+    const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+      if (res.ok) {
+        setDashTabla(await res.json())
+      } else {
+        const err = await res.json().catch(() => ({}))
+        console.error('pkid-tabla error:', res.status, err)
+      }
+      setDashTablaLoad(false)
   }
 
   const registrosFiltrados = useMemo(() =>
