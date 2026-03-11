@@ -603,14 +603,15 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
     const sep = (firstLine.match(/;/g)||[]).length > (firstLine.match(/,/g)||[]).length ? ';' : ','
     const lines = text.split(/\r?\n/).filter(l => l.trim())
     const headers = lines[0].split(sep).map(h => h.replace(/^"|"$/g, '').trim())
+    const normalize = s => s.toLowerCase().replace(/\s+/g, ' ').trim()
     const MAP = {
       'pk_id':'pk_id','capitulo':'capitulo','competencia':'competencia',
       'item':'item','descripción':'descripcion','descripcion':'descripcion',
       'und':'und','calzada':'calzada','tramo':'tramo',
       'abs. inicio':'abs_inicio','abs. final':'abs_final',
-      'vlr unitario':'vlr_unitario','No. Inicio':'no_inicio','No. Final':'no_final',
-      'no.inicio':'no_inicio','no.final':'no_final',
-      'no inicio':'no_inicio','no final':'no_final',
+      'vlr unitario':'vlr_unitario',
+      'no. inicio':'no_inicio','no. inicio':'no_inicio','no.inicio':'no_inicio','no inicio':'no_inicio',
+      'no. final':'no_final','no. final':'no_final','no.final':'no_final','no final':'no_final',
       'area/long/nod':'area_long_nod','ancho':'ancho','espesor':'espesor',
       'cant.total':'cant_total','costo directo':'costo_directo',
       'tipo de ejecución':'tipo_ejecucion','tipo de entidad':'tipo_entidad',
@@ -628,7 +629,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
       const vals = lines[i].split(sep).map(v => v.replace(/^"|"$/g, '').trim())
       const obj = {}
       headers.forEach((h, idx) => {
-        const key = MAP[h.toLowerCase()]; if (!key) return
+        const key = MAP[normalize(h)] ?? MAP[normalize(h).replace(/\.\s*/g, '.')] ?? MAP[normalize(h).replace(/[.\s]/g, '')]; if (!key) return
         const v = vals[idx] || ''
         if (NUMS.has(key)) { const n = parseFloat(v.replace(/[,$]/g, '')); obj[key] = isNaN(n) ? null : n }
         else obj[key] = v || null
