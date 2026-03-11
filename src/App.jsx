@@ -1888,18 +1888,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                   )}
 
                   {/* Contenido */}
-                  {dashLoading ? (
-                    <div style={{ textAlign: 'center', padding: '60px', color: t.textMuted, fontSize: '13px' }}>
-                      <div style={{ fontSize: '28px', marginBottom: '10px', animation: 'spin 1s linear infinite' }}>⚙️</div>
-                      Cargando instrumentos...
-                    </div>
-                  ) : !dashData || dashData.items.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '60px', color: t.textMuted, fontSize: '13px' }}>
-                      <div style={{ fontSize: '36px', marginBottom: '12px' }}>🛩️</div>
-                      {(!kpiPpto || !kpiCobro) ? 'Importa datos de Presupuesto y SICOE para encender los instrumentos' : 'Sin datos disponibles'}
-                    </div>
-                  ) : null /* nivel pk_id ya no usa gauges aquí */}
-
+                  
                   {/* ── Tabla PK_ID detallada (aparece al seleccionar ítem) ── */}
                   {dashDrill.length >= 2 && (
                     dashTablaLoad ? (
@@ -1968,20 +1957,31 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                         </>
                       )
                     })() : null
-                  ) : (
-                    /* Nivel capítulo o ítem → cuadrícula de velocímetros */
-                    <div style={{ display: 'grid', gridTemplateColumns: `repeat(4, 1fr)`, gap: '16px' }}>
-                      {dashData.items.map((d, i) => (
-                        <GaugeMeter
-                          key={i}
-                          d={d}
-                          size={gaugeSize}
-                          t={t}
-                          isClickable={dashDrill.length < 2}
-                          onClick={dashDrill.length < 2 ? () => setDashDrill(prev => [...prev, { campo: dashData.campo, valor: d.nombre }]) : undefined}
-                        />
-                      ))}
-                    </div>
+                  )}
+
+                  {/* Gauges — visible solo cuando drill < 2 */}
+                  {dashDrill.length < 2 && (
+                    dashLoading ? (
+                      <div style={{ textAlign:'center', padding:'60px', color:t.textMuted }}>Cargando instrumentos...</div>
+                    ) : !dashData || dashData.items.length === 0 ? (
+                      <div style={{ textAlign:'center', padding:'60px', color:t.textMuted, fontSize:'13px' }}>
+                        <div style={{ fontSize:'36px', marginBottom:'12px' }}>🛩️</div>
+                        {(!kpiPpto || !kpiCobro) ? 'Importa datos de Presupuesto y SICOE para encender los instrumentos' : 'Sin datos disponibles'}
+                      </div>
+                    ) : (
+                      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:'16px' }}>
+                        {dashData.items.map((d, i) => (
+                          <GaugeMeter
+                            key={i}
+                            d={d}
+                            size={gaugeSize}
+                            t={t}
+                            isClickable={dashDrill.length < 2}
+                            onClick={dashDrill.length < 2 ? () => setDashDrill(prev => [...prev, { campo: dashData.campo, valor: d.nombre }]) : undefined}
+                          />
+                        ))}
+                      </div>
+                    )
                   )}
                 </div>
               )
