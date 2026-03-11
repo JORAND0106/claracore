@@ -1497,8 +1497,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [csvNombre, setCsvNombre] = useState('')
   const [savingContrato, setSavingContrato] = useState(false)
   const [errorContrato, setErrorContrato] = useState('')
-  const [kpiPpto, setKpiPpto] = useState(null)
-  const [kpiCobro, setKpiCobro] = useState(null)
+  const [kpiPpto,    setKpiPpto]    = useState(null)
+  const [kpiCobro,   setKpiCobro]   = useState(null)
+  const [dashDrill,  setDashDrill]  = useState([])   // [{campo, valor}, …]
+  const [dashData,   setDashData]   = useState(null) // {campo, items:[]}
+  const [dashLoading,setDashLoading]= useState(false)
 
   const API_URL = 'https://claracore-backend.azurewebsites.net'
   const contratoIdDash = usuario?.contrato_id
@@ -1511,6 +1514,19 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     fetch(`${API_URL}/cobro/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
       .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiCobro(d) })
   }, [contratoIdDash])
+
+  async function cargarDashDrill(drill) {
+    if (!contratoIdDash) return
+    setDashLoading(true)
+    const params = new URLSearchParams()
+    drill.forEach(d => params.set(d.campo, d.valor))
+    const tok = getToken()
+    const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+    if (res.ok) setDashData(await res.json())
+    setDashLoading(false)
+  }
+
+  useEffect(() => { if (contratoIdDash) cargarDashDrill(dashDrill) }, [contratoIdDash, dashDrill])
 
   // Desarrollador ve todo; otros usuarios ven solo su contrato
   const esDeveloper = usuario?.cargo_nombre === 'Desarrollador'
@@ -1703,49 +1719,163 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         </div>
 
         {/* ── MÓDULO DASHBOARD ── */}
-        {moduloActivo === 'dashboard' && <>
-        <div style={s.panelsGrid}>
-          {(() => {
-            const fmtD = (n) => n != null ? new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', minimumFractionDigits:0 }).format(n) : '—'
-            return [
-              ['📋 PRESUPUESTO', kpiPpto ? fmtD(kpiPpto.costo_total) : '—', kpiPpto ? `${kpiPpto.total_registros} registros` : 'Sin datos'],
-              ['💰 SICOE', kpiCobro ? fmtD(kpiCobro.total_cobrado) : '—', kpiCobro ? `${kpiCobro.consumo_pct}% consumo · ${kpiCobro.actas?.length || 0} actas` : 'Sin datos'],
-              ['🏪 ALMACÉN', '$0', 'Próximamente'],
-            ].map(([label, value, sub]) => (
-              <div key={label} style={s.card}>
-                <div style={s.cardLabel}>{label}</div>
-                <div style={s.cardValue}>{value}</div>
-                <div style={s.cardSub}>{sub}</div>
+        {moduloActivo === 'dashboard' && (() => {
+          const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+          const fmtM = n => { if(!n) return '$0'; if(n>=1e9) return `$${(n/1e9).toFixed(1)}B`; if(n>=1e6) return `$${(n/1e6).toFixed(1)}M`; if(n>=1e3) return `$${(n/1e3).toFixed(0)}K`; return `$${Math.round(n)}` }
+          const ppto  = kpiPpto?.costo_total  || 0
+          const cobro = kpiCobro?.total_cobrado || 0
+          const delta = ppto - cobro
+          const pct   = ppto ? Math.min(100, Math.round(cobro/ppto*100)) : 0
+          const alerta = pct >= 90 ? '#EF4444' : pct >= 70 ? '#F59E0B' : '#10B981'
+
+          return <>
+            {/* ── KPIs compactos ── */}
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'12px', marginBottom:'20px' }}>
+              {[
+                { label:'PRESUPUESTO TOTAL', value: fmtD(ppto), sub: kpiPpto ? `${kpiPpto.total_registros} ítems` : '—', color:'#0077B6', icon:'📋' },
+                { label:'SICOE ACUMULADO',   value: fmtD(cobro), sub: kpiCobro ? `${kpiCobro.actas?.length||0} actas` : '—', color:'#00A896', icon:'💰' },
+                { label:'SALDO DISPONIBLE',  value: fmtD(delta), sub: delta < 0 ? '⚠️ Sobrecosto' : 'Sin sobrecosto', color: delta < 0 ? '#EF4444' : '#10B981', icon:'📊' },
+                { label:'% CONSUMO',         value: `${pct}%`,   sub: pct >= 90 ? '🔴 Crítico' : pct >= 70 ? '🟡 Alerta' : '🟢 Normal', color: alerta, icon:'⚡' },
+              ].map(k => (
+                <div key={k.label} style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'14px 16px', boxShadow:t.shadow, borderLeft:`4px solid ${k.color}` }}>
+                  <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'6px' }}>{k.icon} {k.label}</div>
+                  <div style={{ fontSize:'22px', fontWeight:'800', color:k.color, lineHeight:1, marginBottom:'4px' }}>{k.value}</div>
+                  <div style={{ fontSize:'11px', color:t.textMuted }}>{k.sub}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* ── Barra de consumo global ── */}
+            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'14px 20px', marginBottom:'20px', boxShadow:t.shadow }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
+                <span style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>Avance financiero del contrato</span>
+                <span style={{ fontSize:'12px', fontWeight:'700', color:alerta }}>{pct}% ejecutado</span>
               </div>
-            ))
-          })()}
-        </div>
+              <div style={{ height:'10px', background:t.border, borderRadius:'5px', overflow:'hidden' }}>
+                <div style={{ height:'100%', width:`${pct}%`, background:`linear-gradient(90deg, #0077B6, ${alerta})`, borderRadius:'5px', transition:'width 0.8s ease' }} />
+              </div>
+              <div style={{ display:'flex', justifyContent:'space-between', marginTop:'6px', fontSize:'11px', color:t.textMuted }}>
+                <span>$0</span><span>{fmtD(ppto)}</span>
+              </div>
+            </div>
 
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
-          {[['financiero', 'Presupuesto vs SICOE — Análisis Financiero'],
-            ['pedidos', 'Presupuesto vs Almacén — Análisis de Pedidos'],
-            ['consumo', 'SICOE vs Almacén — Análisis de Consumo']].map(([key, label]) => (
-            <button key={key} style={s.analisisBtn(key)} onClick={() => setAnalisis(key)}>{label}</button>
-          ))}
-        </div>
+            {/* ── Análisis comparativo drill-down ── */}
+            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, marginBottom:'20px' }}>
 
-        <div style={s.table}>
-          <div style={s.tableHeader}>
-            <span>Ítem / Descripción</span><span>Presupuesto</span><span>Cobrado</span><span>Delta</span><span>Estado</span>
-          </div>
-          <div style={s.emptyState}>📂 Importa un archivo Excel para ver el análisis comparativo</div>
-        </div>
+              {/* Header del panel */}
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px', flexWrap:'wrap', gap:'8px' }}>
+                <div>
+                  <div style={{ fontSize:'14px', fontWeight:'700', color:t.text }}>📊 Presupuesto vs SICOE</div>
+                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Click en una barra para explorar el siguiente nivel</div>
+                </div>
+                {/* Leyenda */}
+                <div style={{ display:'flex', gap:'16px' }}>
+                  {[['#0077B6','Presupuesto'],['#00A896','SICOE'],['#EF4444','Diferencia']].map(([c,l]) => (
+                    <div key={l} style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'11px', color:t.textMuted }}>
+                      <div style={{ width:'10px', height:'10px', borderRadius:'2px', background:c }} />{l}
+                    </div>
+                  ))}
+                </div>
+              </div>
 
-        <div style={s.bottomPanel}>
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
-            <button style={s.tab('gantt')} onClick={() => setTabInferior('gantt')}>📅 Programación / Gantt</button>
-            <button style={s.tab('mapa')} onClick={() => setTabInferior('mapa')}>🗺️ Plano Semáforo</button>
-          </div>
-          <div style={s.emptyState}>
-            {tabInferior === 'gantt' ? '📅 Diagrama Gantt — próximamente' : '🗺️ Plano Semáforo — próximamente'}
-          </div>
-        </div>
-        </>}
+              {/* Breadcrumb */}
+              {dashDrill.length > 0 && (
+                <div style={{ display:'flex', alignItems:'center', gap:'6px', marginBottom:'14px', flexWrap:'wrap' }}>
+                  <button onClick={() => setDashDrill([])} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'20px', padding:'3px 12px', fontSize:'12px', color:t.textMuted, cursor:'pointer' }}>
+                    🏠 Todo
+                  </button>
+                  {dashDrill.map((d,i) => (
+                    <span key={i} style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+                      <span style={{ color:t.textMuted }}>›</span>
+                      <button onClick={() => setDashDrill(prev => prev.slice(0, i+1))}
+                        style={{ background: i===dashDrill.length-1 ? t.primary+'22' : 'transparent', border:`1px solid ${i===dashDrill.length-1?t.primary:t.border}`, borderRadius:'20px', padding:'3px 12px', fontSize:'12px', color:i===dashDrill.length-1?t.primary:t.textMuted, cursor:'pointer' }}>
+                        {d.valor.length > 30 ? d.valor.slice(0,30)+'…' : d.valor}
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Gráfico */}
+              {dashLoading ? (
+                <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>Cargando análisis...</div>
+              ) : !dashData || dashData.items.length === 0 ? (
+                <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>
+                  {(!kpiPpto || !kpiCobro) ? '📂 Importa datos de Presupuesto y SICOE para ver el análisis' : 'Sin datos para mostrar'}
+                </div>
+              ) : dashData.campo === 'pk_id' ? (
+                /* Nivel PK_ID → chips */
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(90px, 1fr))', gap:'6px', maxHeight:'320px', overflowY:'auto' }}>
+                  {dashData.items.map((d,i) => {
+                    const color = d.delta < 0 ? '#EF4444' : d.pct >= 80 ? '#F59E0B' : '#10B981'
+                    return (
+                      <div key={i} title={`Ppto: ${fmtD(d.presupuesto)}\nSICOE: ${fmtD(d.cobrado)}\nDelta: ${fmtD(d.delta)}`}
+                        style={{ background:color+'18', border:`1.5px solid ${color}`, borderRadius:'6px', padding:'6px', textAlign:'center', fontSize:'10px' }}>
+                        <div style={{ fontWeight:'700', color, marginBottom:'2px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{d.nombre}</div>
+                        <div style={{ color:t.textMuted }}>{d.pct}%</div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                /* Nivel capítulo o ítem → barras agrupadas */
+                <ResponsiveContainer width="100%" height={Math.max(200, dashData.items.length * 52 + 20)}>
+                  <BarChart data={dashData.items} layout="vertical" margin={{ left:8, right:60, top:4, bottom:4 }} style={{ cursor:'pointer' }}
+                    onClick={e => {
+                      if (!e?.activePayload) return
+                      const nombre = e.activePayload[0]?.payload?.nombre
+                      if (!nombre) return
+                      const campo = dashData.campo
+                      const nuevoDrill = [...dashDrill, { campo, valor: nombre }]
+                      if (nuevoDrill.length <= 2) setDashDrill(nuevoDrill)
+                    }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={t.border} />
+                    <XAxis type="number" tickFormatter={fmtM} tick={{ fontSize:10, fill:t.textMuted }} axisLine={false} tickLine={false} />
+                    <YAxis type="category" dataKey="nombre" width={200} tick={{ fontSize:11, fill:t.text }} tickLine={false} axisLine={false}
+                      tickFormatter={v => v.length > 30 ? v.slice(0,30)+'…' : v} />
+                    <Tooltip
+                      content={({ active, payload }) => {
+                        if (!active || !payload?.length) return null
+                        const d = payload[0]?.payload
+                        return (
+                          <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px 14px', fontSize:'12px', boxShadow:'0 4px 20px rgba(0,0,0,0.2)' }}>
+                            <div style={{ fontWeight:'700', color:t.text, marginBottom:'6px', maxWidth:'240px' }}>{d.nombre}</div>
+                            <div style={{ color:'#0077B6' }}>📋 Presupuesto: <strong>{fmtD(d.presupuesto)}</strong></div>
+                            <div style={{ color:'#00A896' }}>💰 SICOE: <strong>{fmtD(d.cobrado)}</strong></div>
+                            <div style={{ color: d.delta < 0 ? '#EF4444' : '#10B981', marginTop:'4px' }}>
+                              {d.delta < 0 ? '⚠️' : '✅'} Delta: <strong>{fmtD(d.delta)}</strong>
+                            </div>
+                            <div style={{ color:t.textMuted, fontSize:'11px', marginTop:'2px' }}>Consumo: {d.pct}%</div>
+                          </div>
+                        )
+                      }}
+                    />
+                    <Bar dataKey="presupuesto" name="Presupuesto" fill="#0077B6" radius={[0,4,4,0]} barSize={14} />
+                    <Bar dataKey="cobrado"     name="SICOE"       fill="#00A896" radius={[0,4,4,0]} barSize={14} />
+                    <Bar dataKey="delta"       name="Diferencia"
+                      radius={[0,4,4,0]} barSize={10}
+                      fill="#EF4444">
+                      {dashData.items.map((d,i) => (
+                        <Cell key={i} fill={d.delta < 0 ? '#EF4444' : '#10B981'} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+
+            {/* ── Panel inferior Gantt / Semáforo ── */}
+            <div style={s.bottomPanel}>
+              <div style={{ display:'flex', gap:'8px', marginBottom:'16px' }}>
+                <button style={s.tab('gantt')} onClick={() => setTabInferior('gantt')}>📅 Programación / Gantt</button>
+                <button style={s.tab('mapa')} onClick={() => setTabInferior('mapa')}>🗺️ Plano Semáforo</button>
+              </div>
+              <div style={s.emptyState}>
+                {tabInferior === 'gantt' ? '📅 Diagrama Gantt — próximamente' : '🗺️ Plano Semáforo — próximamente'}
+              </div>
+            </div>
+          </>
+        })()}
 
         {/* ── MÓDULO PRESUPUESTO ── */}
         {moduloActivo === 'presupuesto' && <ModuloPresupuesto t={t} usuario={usuario} token={getToken()} s={s} />}
