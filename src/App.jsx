@@ -1811,6 +1811,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                     style={{ cursor: isClickable ? 'pointer' : 'default', background: t.bgCard, border: `1.5px solid ${color}55`, borderRadius: '14px', padding: '10px 8px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', transition: 'all 0.22s', boxShadow: `0 2px 18px ${color}1A` }}
                     onMouseEnter={e => { if (isClickable) { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.borderColor = color; e.currentTarget.style.boxShadow = `0 8px 28px ${color}44` } }}
                     onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.borderColor = `${color}55`; e.currentTarget.style.boxShadow = `0 2px 18px ${color}1A` }}>
+                    {nomDesc && <div style={{ fontSize:'10px', color:t.textMuted, textAlign:'center', lineHeight:1.3, marginBottom:'4px', width:'100%', padding:'0 4px' }}>{nomDesc}</div>}
                     <svg width={size} height={size * 0.66} viewBox={`0 0 ${size} ${size * 0.66}`} style={{overflow:'visible'}}>
                       {/* Glow externo */}
                       {clamp > 0 && <path d={arcPath(cx, cy, r, START, fillEnd)} fill="none" stroke={color} strokeWidth={sw + 8} strokeLinecap="round" opacity={0.12} />}
@@ -1838,7 +1839,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                         <span style={{ fontSize: '11px', fontWeight: '700', color: t.text, lineHeight: 1.3 }}>{nom}</span>
                         <span style={{ fontSize: '15px', fontWeight: '800', color, marginLeft:'6px', whiteSpace:'nowrap' }}>{pct}%</span>
                       </div>
-                      {nomDesc && <div style={{ fontSize:'10px', color:t.textMuted, marginTop:'2px', lineHeight:1.3 }}>{nomDesc}</div>}
                     </div>
                     <div style={{ display: 'flex', gap: '6px', fontSize: '10px', marginTop: '3px', flexWrap: 'wrap', justifyContent: 'center' }}>
                       <span style={{ color: '#0077B6' }}>▪ {fmtM(d.presupuesto)}</span>
