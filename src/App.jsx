@@ -1108,8 +1108,8 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                     </td>
                     <td style={{ ...tdStyle,maxWidth:'220px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{r.descripcion}</td>
                     <td style={tdStyle}>{r.und}</td>
-                    <td style={{ ...tdStyle,textAlign:'right' }}>{fmtN(r.no_inicio)}</td>
-                    <td style={{ ...tdStyle,textAlign:'right' }}>{fmtN(r.no_final)}</td>
+                    <td style={{ ...tdStyle }}>{r.no_inicio || '-'}</td>
+                    <td style={{ ...tdStyle }}>{r.no_final || '-'}</td>
                     <td style={{ ...tdStyle,textAlign:'right' }}>
                       {isEdit ? <input type="number" value={editValues.area_long_nod} onChange={e=>setEditValues({...editValues,area_long_nod:e.target.value})}
                         style={{ width:'80px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
