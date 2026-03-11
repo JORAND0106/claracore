@@ -1762,7 +1762,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                 <div style={{ height:'100%', width:`${pct}%`, background:`linear-gradient(90deg, #0077B6, ${alerta})`, borderRadius:'5px', transition:'width 0.8s ease' }} />
               </div>
               <div style={{ display:'flex', justifyContent:'space-between', marginTop:'6px', fontSize:'11px', color:t.textMuted }}>
-                <span>$0</span><span>{fmtD(ppto)}</span>
+                <span style={{color:alerta,fontWeight:'600'}}>{fmtD(cobro)}</span><span>{fmtD(ppto)}</span>
               </div>
             </div>
 
@@ -1796,7 +1796,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                     style={{ cursor: isClickable ? 'pointer' : 'default', background: t.bgCard, border: `1.5px solid ${color}55`, borderRadius: '14px', padding: '10px 8px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', transition: 'all 0.22s', boxShadow: `0 2px 18px ${color}1A` }}
                     onMouseEnter={e => { if (isClickable) { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.borderColor = color; e.currentTarget.style.boxShadow = `0 8px 28px ${color}44` } }}
                     onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.borderColor = `${color}55`; e.currentTarget.style.boxShadow = `0 2px 18px ${color}1A` }}>
-                    <svg width={size} height={size * 0.66} viewBox={`0 0 ${size} ${size * 0.66}`}>
+                    <svg width={size} height={size * 0.66} viewBox={`0 0 ${size} ${size * 0.66}`} style={{overflow:'visible'}}>
                       {/* Glow externo */}
                       {clamp > 0 && <path d={arcPath(cx, cy, r, START, fillEnd)} fill="none" stroke={color} strokeWidth={sw + 8} strokeLinecap="round" opacity={0.12} />}
                       {/* Arco fondo */}
@@ -1816,10 +1816,12 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                       <line x1={cx} y1={cy} x2={nTip.x.toFixed(2)} y2={nTip.y.toFixed(2)} stroke={color} strokeWidth={size * 0.016} strokeLinecap="round" />
                       <circle cx={cx} cy={cy} r={size * 0.048} fill={color} />
                       <circle cx={cx} cy={cy} r={size * 0.022} fill={t.bgCard} />
-                      {/* Porcentaje */}
-                      <text x={cx} y={cy + r * 0.14} textAnchor="middle" fontSize={size * 0.148} fontWeight="800" fill={color} dominantBaseline="middle">{pct}%</text>
+                      
                     </svg>
-                    <div style={{ fontSize: '11px', fontWeight: '700', color: t.text, textAlign: 'center', marginTop: '2px', lineHeight: 1.3 }}>{nom}</div>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', width:'100%', marginTop:'2px', marginBottom:'2px', padding:'0 4px' }}>
+                      <span style={{ fontSize: '11px', fontWeight: '700', color: t.text, lineHeight: 1.3, flex:1, textAlign:'left' }}>{nom}</span>
+                      <span style={{ fontSize: '15px', fontWeight: '800', color, marginLeft:'6px', whiteSpace:'nowrap' }}>{pct}%</span>
+                    </div>
                     <div style={{ display: 'flex', gap: '6px', fontSize: '10px', marginTop: '3px', flexWrap: 'wrap', justifyContent: 'center' }}>
                       <span style={{ color: '#0077B6' }}>▪ {fmtM(d.presupuesto)}</span>
                       <span style={{ color }}>▪ {fmtM(d.cobrado)}</span>
