@@ -1171,52 +1171,93 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   )
 }
 
-// ─── MÓDULO COBRO ─────────────────────────────────────────────────────────────
+// ─── MÓDULO SICOE ─────────────────────────────────────────────────────────────
 function ModuloCobro({ t, usuario, token, s }) {
   const API = 'https://claracore-backend.azurewebsites.net'
   const contratoId = usuario?.contrato_id
 
-  const [registros, setRegistros] = useState([])
-  const [filtros, setFiltros] = useState({ capitulos:[], items:[], actas:[], calzadas:[] })
-  const [sel, setSel] = useState({ capitulo:'', item:'', acta:'', calzada:'' })
-  const [loading, setLoading] = useState(false)
-  const [importing, setImporting] = useState(false)
-  const [importMsg, setImportMsg] = useState('')
+  const [registros,      setRegistros]      = useState([])
+  const [loading,        setLoading]        = useState(false)
+  const [importing,      setImporting]      = useState(false)
+  const [importMsg,      setImportMsg]      = useState('')
   const [importProgreso, setImportProgreso] = useState(0)
-  const [modalImport, setModalImport] = useState(null)
-  const [modoImport, setModoImport] = useState('append')
+  const [modalImport,    setModalImport]    = useState(null)
+  const [modoImport,     setModoImport]     = useState('append')
   const [confirmReplace, setConfirmReplace] = useState(false)
+  const [drill,          setDrill]          = useState([])
+  const [hoveredBar,     setHoveredBar]     = useState(null)
+  const [primerNivel,    setPrimerNivel]    = useState('capitulo')
 
-  const fmt = (n) => n != null ? new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', minimumFractionDigits:0 }).format(n) : '$0'
+  const NIVELES = ['capitulo', 'item', 'pk_id', 'acta', 'calzada']
+  const NOM     = { capitulo:'Capítulo', item:'Ítem', pk_id:'PK_ID', acta:'Acta', calzada:'Calzada' }
+  const PALETA  = ['#0077B6','#00B4C6','#00A896','#028090','#05668D','#2E86AB','#A23B72','#F18F01','#C73E1D','#3B1F2B','#44BBA4','#E94F37','#393E41','#F5A623','#7B2D8B']
 
-  useEffect(() => { if (contratoId) cargarFiltros() }, [contratoId])
+  const fmt  = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '-'
+  const fmtM = n => { if(n==null) return ''; if(n>=1e9) return `$${(n/1e9).toFixed(1)}B`; if(n>=1e6) return `$${(n/1e6).toFixed(1)}M`; if(n>=1e3) return `$${(n/1e3).toFixed(0)}K`; return `$${Math.round(n)}` }
+  const fmtN = n => n != null ? new Intl.NumberFormat('es-CO',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n) : '-'
 
-  async function cargarFiltros(params = {}) {
-    const qs = new URLSearchParams(params).toString()
-    const res = await fetch(`${API}/cobro/${contratoId}/filtros${qs?'?'+qs:''}`, { headers: { Authorization:`Bearer ${token}` } })
-    if (res.ok) setFiltros(await res.json())
-  }
+  const nivelesOrden = [primerNivel, ...NIVELES.filter(n => n !== primerNivel)]
+  const nivelActual  = nivelesOrden[drill.length] || null
+  const nivelIdx     = NIVELES.indexOf(nivelActual ?? primerNivel)
+  const colorActual  = PALETA[Math.max(0, Math.min(nivelIdx, PALETA.length - 1))]
 
-  async function cargarRegistros(params = sel) {
+  useEffect(() => { if (contratoId) cargarRegistros() }, [contratoId])
+
+  async function cargarRegistros() {
+    if (!contratoId) return
     setLoading(true)
-    const qs = new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([,v]) => v))).toString()
-    const res = await fetch(`${API}/cobro/${contratoId}${qs?'?'+qs:''}`, { headers: { Authorization:`Bearer ${token}` } })
+    const res = await fetch(`${API}/cobro/${contratoId}`, { headers: { Authorization:`Bearer ${token}` } })
     if (res.ok) setRegistros(await res.json())
     setLoading(false)
   }
 
-  async function cambiarFiltro(campo, valor) {
-    const nuevoSel = { ...sel, [campo]: valor }
-    if (campo === 'capitulo') { nuevoSel.item=''; nuevoSel.calzada='' }
-    setSel(nuevoSel)
-    await cargarFiltros(Object.fromEntries(Object.entries(nuevoSel).filter(([,v]) => v)))
-    await cargarRegistros(nuevoSel)
-  }
+  const registrosFiltrados = useMemo(() =>
+    registros.filter(r => drill.every(({campo, valor}) => r[campo] === valor))
+  , [registros, drill])
 
+  const chartData = useMemo(() => {
+    if (!nivelActual || registros.length === 0) return []
+    const agg = {}
+    registrosFiltrados.forEach(r => {
+      const key = r[nivelActual] ?? '(sin valor)'
+      if (!agg[key]) {
+        let label = key
+        if (nivelActual === 'item') {
+          const desc = (r.descripcion ?? '').slice(0, 38)
+          label = `${r.item ?? ''} · ${desc}${(r.descripcion ?? '').length > 38 ? '…' : ''}`
+        } else if (String(key).length > 48) label = String(key).slice(0, 48) + '…'
+        agg[key] = { name: key, label, costo: 0, count: 0 }
+      }
+      agg[key].costo += r.costo_directo ?? 0
+      agg[key].count++
+    })
+    return Object.values(agg).sort((a,b) => String(a.name).localeCompare(String(b.name), 'es', {numeric:true})).slice(0, 20)
+  }, [registrosFiltrados, nivelActual])
+
+  const costoTotal = useMemo(() =>
+    registrosFiltrados.reduce((s,r) => s + (r.costo_directo ?? 0), 0)
+  , [registrosFiltrados])
+
+  function handleBarClick(barData) {
+    if (!nivelActual || !barData?.name) return
+    setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
+  }
+  function irA(idx) { setDrill(prev => prev.slice(0, idx)) }
+
+  const bcBtn = active => ({
+    background: active ? colorActual : 'transparent', color: active ? '#fff' : colorActual,
+    border: `1px solid ${active ? colorActual : colorActual+'66'}`,
+    borderRadius:'20px', padding:'4px 12px', fontSize:'12px',
+    fontWeight: active ? '600' : '400', cursor:'pointer', transition:'all 0.15s',
+  })
+
+  // ── Import CSV ──────────────────────────────────────────────────────────────
   async function handleImportCSV(e) {
     const file = e.target.files[0]; if (!file) return
-    const text = await file.text()
-    const sep = (text.split('\n')[0].match(/;/g)||[]).length > (text.split('\n')[0].match(/,/g)||[]).length ? ';' : ','
+    const raw  = await file.text()
+    const text = raw.replace(/^\uFEFF/, '')
+    const firstLine = text.split(/\r?\n/)[0]
+    const sep = (firstLine.match(/;/g)||[]).length > (firstLine.match(/,/g)||[]).length ? ';' : ','
     const lines = text.split(/\r?\n/).filter(l => l.trim())
     const headers = lines[0].split(sep).map(h => h.replace(/^"|"$/g,'').trim().toUpperCase())
     const MAP = {
@@ -1242,9 +1283,7 @@ function ModuloCobro({ t, usuario, token, s }) {
       if (obj.pk_id || obj.item) rows.push(obj)
     }
     setModalImport({ rows, fileName: file.name })
-    setModoImport('append')
-    setConfirmReplace(false)
-    e.target.value = ''
+    setModoImport('append'); setConfirmReplace(false); e.target.value = ''
   }
 
   async function ejecutarImport() {
@@ -1252,11 +1291,10 @@ function ModuloCobro({ t, usuario, token, s }) {
     if (modoImport === 'replace' && !confirmReplace) { setConfirmReplace(true); return }
     const { rows } = modalImport
     setModalImport(null); setImporting(true); setImportProgreso(0)
-    const BATCH = 500
-    let ok = true; let msj = ''
+    const BATCH = 500; let ok = true; let msj = ''
     for (let i = 0; i < rows.length; i += BATCH) {
       const batch = rows.slice(i, i + BATCH)
-      const mode = i === 0 ? modoImport : 'append'
+      const mode  = i === 0 ? modoImport : 'append'
       const res = await fetch(`${API}/cobro/${contratoId}/bulk?mode=${mode}`, {
         method:'POST', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
         body: JSON.stringify(batch)
@@ -1266,7 +1304,7 @@ function ModuloCobro({ t, usuario, token, s }) {
     }
     if (ok) msj = `✅ ${rows.length} registros ${modoImport === 'replace' ? 'cargados' : 'agregados'}`
     setImportMsg(msj); setImporting(false); setImportProgreso(0)
-    if (ok) { await cargarFiltros() }
+    if (ok) { setDrill([]); await cargarRegistros() }
     setTimeout(() => setImportMsg(''), 5000)
   }
 
@@ -1277,28 +1315,28 @@ function ModuloCobro({ t, usuario, token, s }) {
     <div>
       {/* Modal importar */}
       {modalImport && (
-        <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:2000, display:'flex', alignItems:'center', justifyContent:'center' }}>
-          <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'28px', width:'420px', maxWidth:'95vw', boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }}>
-            <div style={{ fontSize:'16px', fontWeight:'700', color:t.primary, marginBottom:'8px' }}>📂 Importar Cobro</div>
-            <div style={{ fontSize:'13px', color:t.textMuted, marginBottom:'20px' }}>{modalImport.fileName} — <strong style={{color:t.text}}>{modalImport.rows.length} registros</strong></div>
-            <div style={{ fontSize:'13px', fontWeight:'600', color:t.text, marginBottom:'10px' }}>¿Cómo desea cargar los datos?</div>
-            <div style={{ display:'flex', flexDirection:'column', gap:'8px', marginBottom:'20px' }}>
-              {[['append','➕ Agregar acta','Agrega los registros sin eliminar los existentes (recomendado para nuevas actas)'],['replace','🔄 Reemplazar todo','Elimina todos los registros actuales y carga los nuevos']].map(([v,l,d]) => (
-                <label key={v} style={{ display:'flex', alignItems:'flex-start', gap:'10px', padding:'12px', border:`2px solid ${modoImport===v?t.primary:t.border}`, borderRadius:'8px', cursor:'pointer', background:modoImport===v?t.primary+'11':'transparent' }}>
-                  <input type="radio" name="modoCobro" value={v} checked={modoImport===v} onChange={() => { setModoImport(v); setConfirmReplace(false) }} style={{ marginTop:'2px' }} />
-                  <div><div style={{ fontSize:'13px', fontWeight:'600', color:t.text }}>{l}</div><div style={{ fontSize:'11px', color:t.textMuted }}>{d}</div></div>
+        <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.5)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center' }}>
+          <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'16px',padding:'28px',width:'420px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ fontSize:'16px',fontWeight:'700',color:t.primary,marginBottom:'8px' }}>📂 Importar SICOE</div>
+            <div style={{ fontSize:'13px',color:t.textMuted,marginBottom:'20px' }}>{modalImport.fileName} — <strong style={{color:t.text}}>{modalImport.rows.length} registros</strong></div>
+            <div style={{ fontSize:'13px',fontWeight:'600',color:t.text,marginBottom:'10px' }}>¿Cómo desea cargar los datos?</div>
+            <div style={{ display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px' }}>
+              {[['append','➕ Agregar acta','Agrega los registros sin eliminar los existentes'],['replace','🔄 Reemplazar todo','Elimina todos los registros y carga los nuevos']].map(([v,l,d]) => (
+                <label key={v} style={{ display:'flex',alignItems:'flex-start',gap:'10px',padding:'12px',border:`2px solid ${modoImport===v?colorActual:t.border}`,borderRadius:'8px',cursor:'pointer',background:modoImport===v?colorActual+'11':'transparent' }}>
+                  <input type="radio" name="modoSicoe" value={v} checked={modoImport===v} onChange={() => { setModoImport(v); setConfirmReplace(false) }} style={{ marginTop:'2px' }} />
+                  <div><div style={{ fontSize:'13px',fontWeight:'600',color:t.text }}>{l}</div><div style={{ fontSize:'11px',color:t.textMuted }}>{d}</div></div>
                 </label>
               ))}
             </div>
             {modoImport === 'replace' && confirmReplace && (
-              <div style={{ background:'#FEE2E2', border:'1px solid #FCA5A5', borderRadius:'8px', padding:'12px', marginBottom:'16px', fontSize:'12px', color:'#DC2626' }}>
-                ⚠️ <strong>Esta acción no se puede deshacer.</strong> Se eliminarán todos los registros de cobro. ¿Confirma?
+              <div style={{ background:'#FEE2E2',border:'1px solid #FCA5A5',borderRadius:'8px',padding:'12px',marginBottom:'16px',fontSize:'12px',color:'#DC2626' }}>
+                ⚠️ <strong>Esta acción no se puede deshacer.</strong> ¿Confirma?
               </div>
             )}
-            <div style={{ display:'flex', gap:'10px', justifyContent:'flex-end' }}>
-              <button onClick={() => { setModalImport(null); setConfirmReplace(false) }} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'9px 18px', fontSize:'13px', color:t.textMuted, cursor:'pointer' }}>Cancelar</button>
-              <button onClick={ejecutarImport} style={{ background: modoImport==='replace'&&confirmReplace ? '#DC2626' : t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'9px 20px', fontSize:'13px', fontWeight:'600', cursor:'pointer' }}>
-                {modoImport==='replace' && !confirmReplace ? 'Continuar →' : modoImport==='replace' ? '⚠️ Sí, reemplazar' : '➕ Agregar'}
+            <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end' }}>
+              <button onClick={() => { setModalImport(null); setConfirmReplace(false) }} style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'8px',padding:'9px 18px',fontSize:'13px',color:t.textMuted,cursor:'pointer' }}>Cancelar</button>
+              <button onClick={ejecutarImport} style={{ background:modoImport==='replace'&&confirmReplace?'#DC2626':colorActual,color:'#fff',border:'none',borderRadius:'8px',padding:'9px 20px',fontSize:'13px',fontWeight:'600',cursor:'pointer' }}>
+                {modoImport==='replace'&&!confirmReplace?'Continuar →':modoImport==='replace'?'⚠️ Sí, reemplazar':'➕ Agregar'}
               </button>
             </div>
           </div>
@@ -1306,77 +1344,146 @@ function ModuloCobro({ t, usuario, token, s }) {
       )}
 
       {/* Toolbar */}
-      <div style={{ display:'flex', gap:'12px', alignItems:'center', marginBottom:'16px', flexWrap:'wrap' }}>
-        <label style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'9px 18px', fontSize:'13px', fontWeight:'600', cursor:importing?'wait':'pointer', opacity:importing?0.7:1 }}>
+      <div style={{ display:'flex',gap:'12px',alignItems:'center',marginBottom:'16px',flexWrap:'wrap' }}>
+        <label style={{ background:colorActual,color:'#fff',border:'none',borderRadius:'8px',padding:'9px 18px',fontSize:'13px',fontWeight:'600',cursor:importing?'wait':'pointer',opacity:importing?0.7:1 }}>
           {importing ? `Importando ${importProgreso}%...` : '📂 Importar CSV'}
           <input type="file" accept=".csv" style={{ display:'none' }} onChange={handleImportCSV} disabled={importing} />
         </label>
         {importing && (
-          <div style={{ flex:1, maxWidth:'200px', height:'6px', background:t.border, borderRadius:'3px', overflow:'hidden' }}>
-            <div style={{ width:`${importProgreso}%`, height:'100%', background:t.primary, borderRadius:'3px', transition:'width 0.3s' }} />
+          <div style={{ flex:1,maxWidth:'200px',height:'6px',background:t.border,borderRadius:'3px',overflow:'hidden' }}>
+            <div style={{ width:`${importProgreso}%`,height:'100%',background:colorActual,borderRadius:'3px',transition:'width 0.3s' }} />
           </div>
         )}
-        {importMsg && <span style={{ fontSize:'13px', color:importMsg.startsWith('✅')?'#16A34A':importMsg.startsWith('❌')?'#DC2626':t.textMuted }}>{importMsg}</span>}
-        <span style={{ marginLeft:'auto', fontSize:'12px', color:t.textMuted }}>{registros.length} registros mostrados</span>
+        {importMsg && <span style={{ fontSize:'13px',color:importMsg.startsWith('✅')?'#16A34A':importMsg.startsWith('❌')?'#DC2626':t.textMuted }}>{importMsg}</span>}
+        <span style={{ marginLeft:'auto',fontSize:'12px',color:t.textMuted }}>
+          {registros.length} total · {registrosFiltrados.length} filtrados
+        </span>
       </div>
 
-      {/* Filtros en cascada */}
-      <div style={{ display:'flex', gap:'10px', marginBottom:'16px', flexWrap:'wrap' }}>
-        {[['capitulo','Capítulo',filtros.capitulos],['item','Ítem',filtros.items],['acta','Acta',filtros.actas],['calzada','Calzada',filtros.calzadas]].map(([campo,label,opciones]) => (
-          <div key={campo} style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
-            <label style={{ fontSize:'11px', fontWeight:'600', color:t.textMuted, letterSpacing:'0.5px' }}>{label}</label>
-            <select value={sel[campo]} onChange={e => cambiarFiltro(campo, e.target.value)}
-              style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'7px 12px', color:t.text, fontSize:'13px', minWidth:'130px', cursor:'pointer' }}>
-              <option value="">— Todos —</option>
-              {opciones.map(o => <option key={o} value={o}>{o}</option>)}
-            </select>
+      {/* Panel drill-down */}
+      {loading ? (
+        <div style={s.emptyState}>Cargando registros...</div>
+      ) : registros.length === 0 ? (
+        <div style={s.emptyState}>📂 Importa un CSV para comenzar</div>
+      ) : (
+        <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',padding:'20px',marginBottom:'16px',boxShadow:t.shadow }}>
+
+          {/* Breadcrumb */}
+          <div style={{ display:'flex',alignItems:'center',gap:'6px',marginBottom:'16px',flexWrap:'wrap' }}>
+            <button onClick={() => irA(0)} style={bcBtn(drill.length === 0)}>📊 Todo el SICOE</button>
+            {drill.map(({campo, valor}, idx) => (
+              <span key={idx} style={{ display:'flex',alignItems:'center',gap:'6px' }}>
+                <span style={{ color:t.textMuted,fontSize:'13px' }}>›</span>
+                <button onClick={() => irA(idx + 1)} style={bcBtn(idx === drill.length - 1)}>
+                  {NOM[campo]}: {String(valor).length > 28 ? String(valor).slice(0,28)+'…' : valor}
+                </button>
+              </span>
+            ))}
           </div>
-        ))}
-        {(sel.capitulo||sel.item||sel.acta||sel.calzada) && (
-          <button onClick={() => { setSel({capitulo:'',item:'',acta:'',calzada:''}); cargarFiltros(); setRegistros([]) }}
-            style={{ alignSelf:'flex-end', background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'7px 12px', fontSize:'12px', color:t.textMuted, cursor:'pointer' }}>
-            ✕ Limpiar
-          </button>
-        )}
-      </div>
 
-      <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', overflow:'auto', boxShadow:t.shadow }}>
-        {loading ? <div style={s.emptyState}>Cargando...</div> : registros.length === 0 ? (
-          <div style={s.emptyState}>📂 {filtros.actas.length ? 'Selecciona un filtro para ver registros' : 'Importa un CSV de cobro para comenzar'}</div>
-        ) : (
-          <table style={{ width:'100%', borderCollapse:'collapse' }}>
+          {/* Selector nivel */}
+          <div style={{ marginBottom:'14px' }}>
+            <div style={{ display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap',marginBottom:'10px' }}>
+              <span style={{ fontSize:'11px',fontWeight:'700',color:t.textMuted,letterSpacing:'0.5px' }}>AGRUPAR POR:</span>
+              {NIVELES.map(n => {
+                const activo = primerNivel === n
+                return (
+                  <button key={n} onClick={() => { setPrimerNivel(n); setDrill([]) }}
+                    style={{ background:activo?colorActual:t.bg, color:activo?'#fff':t.text, border:`1.5px solid ${activo?colorActual:t.border}`, borderRadius:'20px', padding:'4px 14px', fontSize:'12px', fontWeight:activo?'700':'400', cursor:'pointer', transition:'all 0.15s' }}>
+                    {NOM[n]}
+                  </button>
+                )
+              })}
+            </div>
+            <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:'8px' }}>
+              <span style={{ fontSize:'12px',color:t.textMuted }}>
+                {registrosFiltrados.length} registros · <strong style={{color:colorActual}}>{fmt(costoTotal)}</strong>
+              </span>
+              {nivelActual && <span style={{ fontSize:'11px',color:t.textMuted,fontStyle:'italic' }}>👆 Click en una barra para filtrar</span>}
+            </div>
+          </div>
+
+          {/* Gráfico */}
+          {nivelActual ? (
+            nivelActual === 'pk_id' ? (
+              <div style={{ display:'grid',gridTemplateColumns:'repeat(15, 1fr)',gap:'6px',maxHeight:'320px',overflowY:'auto',padding:'4px 2px' }}>
+                {chartData.map((d, i) => {
+                  const color = PALETA[i % PALETA.length]
+                  return (
+                    <button key={d.name} onClick={() => handleBarClick(d)}
+                      title={`${d.name}\n${fmt(d.costo)}\n${d.count} registros`}
+                      style={{ background:color+'22',border:`1.5px solid ${color}`,borderRadius:'6px',padding:'5px 4px',fontSize:'11px',fontWeight:'600',color,cursor:'pointer',textAlign:'center',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',transition:'all 0.15s' }}
+                      onMouseEnter={e => { e.currentTarget.style.background=color; e.currentTarget.style.color='#fff' }}
+                      onMouseLeave={e => { e.currentTarget.style.background=color+'22'; e.currentTarget.style.color=color }}>
+                      {d.name}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={Math.max(180, chartData.length * 40 + 20)}>
+                <BarChart data={chartData} layout="vertical" margin={{ left:8, right:80, top:4, bottom:4 }} style={{ cursor:'pointer' }}>
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={t.border} />
+                  <XAxis type="number" tickFormatter={fmtM} tick={{ fontSize:10, fill:t.textMuted }} axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="label" width={220} tick={{ fontSize:11, fill:t.text }} tickLine={false} axisLine={false} />
+                  <Tooltip content={(props) => <PresupuestoTooltip {...props} t={t} color={colorActual} fmt={fmt} />} cursor={{ fill:colorActual+'18' }} />
+                  <Bar dataKey="costo" radius={[0,5,5,0]} onClick={handleBarClick} onMouseEnter={(_,i) => setHoveredBar(i)} onMouseLeave={() => setHoveredBar(null)}>
+                    {chartData.map((_,i) => {
+                      const color = PALETA[i % PALETA.length]
+                      return <Cell key={i} fill={hoveredBar===null||hoveredBar===i?color:color+'66'} stroke={hoveredBar===i?color:'none'} strokeWidth={2} />
+                    })}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )
+          ) : (
+            <div style={{ textAlign:'center',padding:'24px 0',fontSize:'13px',color:t.textMuted }}>
+              {NIVELES.some(n => !drill.some(d => d.campo === n))
+                ? '☝️ Selecciona un nivel de agrupación para ver el gráfico'
+                : 'Nivel máximo de detalle — vea la tabla a continuación.'}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tabla — solo visible con drill activo */}
+      {drill.length > 0 && registrosFiltrados.length > 0 && (
+        <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',boxShadow:t.shadow }}>
+          <table style={{ width:'100%',borderCollapse:'collapse',fontSize:'12px' }}>
             <thead style={{ background:t.bg }}>
               <tr>
-                {['Acta','PK_ID','Capítulo','Ítem','Descripción','Und','Cantidad','Vlr Unit.','Costo Directo','Calzada','Tramo Ini'].map(h => (
+                {['Acta','PK_ID','Capítulo','Ítem','Descripción','Und','Cantidad','Vlr Unit.','Costo Directo','Calzada','Tramo Ini','Tramo Fin'].map(h => (
                   <th key={h} style={thStyle}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {registros.map((r,i) => (
-                <tr key={r.id || i}>
-                  <td style={{ ...tdStyle, fontWeight:'700', color:t.primary }}>{r.acta}</td>
-                  <td style={{ ...tdStyle, fontWeight:'600' }}>{r.pk_id}</td>
+              {registrosFiltrados.map((r,i) => (
+                <tr key={r.id || i} style={{ background:'transparent' }}>
+                  <td style={{ ...tdStyle,fontWeight:'700',color:colorActual }}>{r.acta}</td>
+                  <td style={{ ...tdStyle,fontWeight:'600' }}>{r.pk_id}</td>
                   <td style={tdStyle}>{r.capitulo}</td>
                   <td style={tdStyle}>{r.item}</td>
-                  <td style={{ ...tdStyle, maxWidth:'200px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.descripcion}</td>
+                  <td style={{ ...tdStyle,maxWidth:'200px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{r.descripcion}</td>
                   <td style={tdStyle}>{r.und}</td>
-                  <td style={{ ...tdStyle, textAlign:'right' }}>{r.cantidad}</td>
-                  <td style={{ ...tdStyle, textAlign:'right' }}>{fmt(r.valor_unitario)}</td>
-                  <td style={{ ...tdStyle, textAlign:'right', fontWeight:'700', color:t.primary }}>{fmt(r.costo_directo)}</td>
+                  <td style={{ ...tdStyle,textAlign:'right' }}>{fmtN(r.cantidad)}</td>
+                  <td style={{ ...tdStyle,textAlign:'right' }}>{fmt(r.valor_unitario)}</td>
+                  <td style={{ ...tdStyle,textAlign:'right',fontWeight:'700',color:colorActual }}>{fmt(r.costo_directo)}</td>
                   <td style={tdStyle}>{r.calzada}</td>
                   <td style={tdStyle}>{r.tramo_inicio}</td>
+                  <td style={tdStyle}>{r.tramo_final}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   )
 }
 
 
+// ─── DASHBOARD ────────────────────────────────────────────────────────────────
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0 }) {
   const [moduloActivo, setModuloActivo] = useState('dashboard')
