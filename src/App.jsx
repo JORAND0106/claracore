@@ -1709,7 +1709,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
             const fmtD = (n) => n != null ? new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', minimumFractionDigits:0 }).format(n) : '—'
             return [
               ['📋 PRESUPUESTO', kpiPpto ? fmtD(kpiPpto.costo_total) : '—', kpiPpto ? `${kpiPpto.total_registros} registros` : 'Sin datos'],
-              ['💰 COBRO', kpiCobro ? fmtD(kpiCobro.total_cobrado) : '—', kpiCobro ? `${kpiCobro.consumo_pct}% consumo · ${kpiCobro.actas?.length || 0} actas` : 'Sin datos'],
+              ['💰 SICOE', kpiCobro ? fmtD(kpiCobro.total_cobrado) : '—', kpiCobro ? `${kpiCobro.consumo_pct}% consumo · ${kpiCobro.actas?.length || 0} actas` : 'Sin datos'],
               ['🏪 ALMACÉN', '$0', 'Próximamente'],
             ].map(([label, value, sub]) => (
               <div key={label} style={s.card}>
@@ -1722,9 +1722,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         </div>
 
         <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
-          {[['financiero', 'Presupuesto vs Cobro — Análisis Financiero'],
+          {[['financiero', 'Presupuesto vs SICOE — Análisis Financiero'],
             ['pedidos', 'Presupuesto vs Almacén — Análisis de Pedidos'],
-            ['consumo', 'Cobro vs Almacén — Análisis de Consumo']].map(([key, label]) => (
+            ['consumo', 'SICOE vs Almacén — Análisis de Consumo']].map(([key, label]) => (
             <button key={key} style={s.analisisBtn(key)} onClick={() => setAnalisis(key)}>{label}</button>
           ))}
         </div>
@@ -1750,7 +1750,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         {/* ── MÓDULO PRESUPUESTO ── */}
         {moduloActivo === 'presupuesto' && <ModuloPresupuesto t={t} usuario={usuario} token={getToken()} s={s} />}
 
-{/* ── MÓDULO COBRO ── */}
+{/* ── MÓDULO SICOE ── */}
         {moduloActivo === 'cobro' && <ModuloCobro t={t} usuario={usuario} token={getToken()} s={s} />}
 
         {/* ── Módulos próximamente ── */}
