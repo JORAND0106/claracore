@@ -992,7 +992,6 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                     </div>
                   )}
                 </div>
-
                 {/* Vlr unit badge */}
                 {precioSeleccionado && (
                   <span style={{ fontSize:'12px',fontWeight:'700',color:t.primary,background:t.primary+'18',borderRadius:'7px',padding:'5px 10px',whiteSpace:'nowrap' }}>
