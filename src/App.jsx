@@ -662,7 +662,11 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   }
 
   // ── Listado de precios: derivados ──────────────────────────────────────────
-  const capitulosListado = useMemo(() => [...new Set(listadoPrecios.map(p => p.capitulo).filter(Boolean))].sort(), [listadoPrecios])
+  const capitulosListado = useMemo(() => [...new Set(listadoPrecios.map(p => p.capitulo).filter(Boolean))].sort((a, b) => {
+    const numA = parseFloat(a); const numB = parseFloat(b)
+    if (!isNaN(numA) && !isNaN(numB)) return numA - numB
+    return a.localeCompare(b, 'es', { numeric: true })
+  }), [listadoPrecios])
   const itemsListado = useMemo(() => listadoPrecios.filter(p => !editCapitulo || p.capitulo === editCapitulo), [listadoPrecios, editCapitulo])
   const precioSeleccionado = useMemo(() => listadoPrecios.find(p => p.item_numero === editItem) || null, [listadoPrecios, editItem])
   const hayModificaciones = seleccionados.size > 0 && (
@@ -992,6 +996,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                     </div>
                   )}
                 </div>
+
                 {/* Vlr unit badge */}
                 {precioSeleccionado && (
                   <span style={{ fontSize:'12px',fontWeight:'700',color:t.primary,background:t.primary+'18',borderRadius:'7px',padding:'5px 10px',whiteSpace:'nowrap' }}>
