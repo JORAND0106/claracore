@@ -873,7 +873,6 @@ function zoomEnDwg(registro) {
   }
 
   async function cambiarEstadoDirecto(id, nuevoEstado) {
-    if (!dwgEnlazado) return
     const obligatorio = nuevoEstado === 'Verificar Campo' || nuevoEstado === 'Pendiente'
     const comentario = await pedirComentario('validacion', obligatorio)
     if (comentario === null) return
