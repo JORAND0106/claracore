@@ -994,9 +994,9 @@ function zoomEnDwg(registro) {
               </div>
             ) : nivelActual === 'item' ? (() => {
               const costoMax = Math.max(...chartData.map(d => d.costo), 1)
-              const gSize = chartData.length > 20 ? 130 : chartData.length > 10 ? 145 : 160
+              const gSize = chartData.length > 20 ? 117 : chartData.length > 10 ? 130 : 144
               return (
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(10, 1fr)', gap:'8px', padding:'4px 2px' }}>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(9, 1fr)', gap:'8px', padding:'4px 2px' }}>
                   {chartData.map((d, i) => {
                     const pct   = Math.round((d.costo / costoMax) * 100)
                     const clamp = Math.min(Math.max(pct, 0), 100)
