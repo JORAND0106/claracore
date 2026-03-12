@@ -871,7 +871,7 @@ function zoomEnDwg(registro) {
     const uri = `claralink://zoom?x=${registro.x_label}&y=${registro.y_label}&radio=20`
     window.location.href = uri
   }
-
+  
   async function cambiarEstadoDirecto(id, nuevoEstado) {
     const obligatorio = nuevoEstado === 'Verificar Campo' || nuevoEstado === 'Pendiente'
     const comentario = await pedirComentario('validacion', obligatorio)
