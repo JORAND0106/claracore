@@ -510,6 +510,8 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const [itemDropOpen, setItemDropOpen] = useState(false)
   const [itemNavIdx, setItemNavIdx] = useState(-1)
   const itemDropRef = useRef(null)
+  const [pagina, setPagina] = useState(1)
+  const POR_PAGINA = 50
   // ── Enlace DWG ────────────────────────────────────────────────────────────
   const [dwgEnlazado, setDwgEnlazado] = useState(false)
   useEffect(() => {
@@ -560,12 +562,13 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const puedeEditar  = esDeveloper || (_permPpto?.editar   ?? false)
   const puedeValidar = esDeveloper || (_permPpto?.validar  ?? false)  
 
-  async function cargarRegistros() {
+async function cargarRegistros() {
     if (!contratoId) return
     setLoading(true)
     const res = await fetch(`${API}/presupuesto/${contratoId}`, { headers: { Authorization: `Bearer ${token}` } })
     if (res.ok) setRegistros(await res.json())
     setLoading(false)
+    setPagina(1)
   }
 
   // ── Drill-down computado ───────────────────────────────────────────────────
@@ -604,6 +607,11 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const costoTotal = useMemo(() =>
     registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
   , [registrosFiltrados])
+
+  const totalPaginas = Math.ceil(registrosFiltrados.length / POR_PAGINA)
+  const registrosPagina = useMemo(() =>
+    registrosFiltrados.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA)
+  , [registrosFiltrados, pagina])
 
   function handleBarClick(barData) {
     if (!nivelActual || !barData?.name) return
@@ -770,6 +778,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   function toggleTodos() {
     setSeleccionados(prev => prev.size === registrosFiltrados.length ? new Set() : new Set(registrosFiltrados.map(r => r.id)))
   }
+  useEffect(() => setPagina(1), [registrosFiltrados.length])
 
   // ── Estilos ────────────────────────────────────────────────────────────────
   const REVISADO_OPTS = ['Pendiente', 'Verificar Campo', 'Verificado']
@@ -884,6 +893,15 @@ function zoomEnDwg(registro) {
         {importMsg && <span style={{ fontSize:'13px',color:importMsg.startsWith('✅')?'#16A34A':importMsg.startsWith('❌')?'#DC2626':t.textMuted }}>{importMsg}</span>}
         <span style={{ marginLeft:'auto',fontSize:'12px',color:t.textMuted }}>
           {registros.length} total · {registrosFiltrados.length} filtrados · {seleccionados.size} seleccionados
+      {totalPaginas > 1 && (
+        <span style={{ marginLeft: '16px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+          <button onClick={() => setPagina(p => Math.max(1, p-1))} disabled={pagina === 1}
+            style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', cursor: pagina===1?'default':'pointer', color: pagina===1?t.textMuted:t.text }}>‹</button>
+          <span style={{ fontSize:'11px', color:t.textMuted }}>Pág. {pagina} / {totalPaginas}</span>
+          <button onClick={() => setPagina(p => Math.min(totalPaginas, p+1))} disabled={pagina === totalPaginas}
+            style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', cursor: pagina===totalPaginas?'default':'pointer', color: pagina===totalPaginas?t.textMuted:t.text }}>›</button>
+        </span>
+      )}
         </span>
       </div>
 
@@ -1143,11 +1161,11 @@ function zoomEnDwg(registro) {
               </tr>
             </thead>
             <tbody>
-              {registrosFiltrados.map(r => {
+              {registrosPagina.map(r => {
                 const isEdit = editando === r.id
                 return (
                   <tr key={r.id} style={{ background:seleccionados.has(r.id)?(t.primary+'18'):'transparent', cursor: r.x_label ? 'crosshair' : 'default' }}
-                    onClick={() => { if (!isEdit) { toggleSel(r.id); zoomEnDwg(r) } }}>
+                    onClick={() => { if (!isEdit) zoomEnDwg(r) }}>
                     <td style={tdStyle} onClick={e=>e.stopPropagation()}><input type="checkbox" checked={seleccionados.has(r.id)} onChange={() => toggleSel(r.id)} /></td>
                     <td style={{ ...tdStyle,fontWeight:'600',color:t.primary }}>{r.pk_id||r.id_pol||'-'}</td>
                     <td style={tdStyle}>
