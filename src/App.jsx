@@ -873,7 +873,6 @@ function zoomEnDwg(registro) {
   }
 
   async function cambiarEstadoDirecto(id, nuevoEstado) {
-    if (!dwgEnlazado) return
     const obligatorio = nuevoEstado === 'Verificar Campo' || nuevoEstado === 'Pendiente'
     const comentario = await pedirComentario('validacion', obligatorio)
     if (comentario === null) return
@@ -1360,15 +1359,15 @@ function zoomEnDwg(registro) {
                             <div
                               key={s.valor}
                               title={s.valor}
-                              onClick={() => puedeValidar && !activo && dwgEnlazado && cambiarEstadoDirecto(r.id, s.valor)}
+                              onClick={() => puedeValidar && !activo && cambiarEstadoDirecto(r.id, s.valor)}
                               style={{
                                 width: activo ? '18px' : '12px',
                                 height: activo ? '18px' : '12px',
                                 borderRadius: '50%',
                                 background: activo ? s.color : s.color + '33',
                                 border: `2px solid ${activo ? s.color : s.color + '66'}`,
-                                cursor: puedeValidar && !activo && dwgEnlazado ? 'pointer' : 'default',
-                                opacity: dwgEnlazado ? 1 : 0.4,
+                                cursor: puedeValidar && !activo ? 'pointer' : 'default',
+                                opacity: 1,
                                 transition: 'all 0.2s',
                                 boxShadow: activo ? `0 0 8px ${s.color}88` : 'none',
                               }}
