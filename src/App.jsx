@@ -1576,7 +1576,99 @@ async function cargarRegistros() {
 
   return (
     <div>
-      
+      {/* ── Modal comentario ── */}
+      {modalComentario && (() => {
+        const TITULOS = { dims:'📐 Comentario — Cambio de Dimensiones', item_capitulo:'🔄 Comentario — Cambio de Ítem/Capítulo', validacion:'🔍 Comentario — Cambio de Estado' }
+        const COLORES = { dims:'#F59E0B', item_capitulo:'#0077B6', validacion:'#10B981' }
+        const color   = COLORES[modalComentario.tipo] || t.primary
+        const valido  = !modalComentario.obligatorio || textoComentario.trim().length > 0
+        return (
+          <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center' }}>
+            <div style={{ background:t.bgCard,border:`1.5px solid ${color}44`,borderRadius:'16px',padding:'28px',width:'460px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}>
+              <div style={{ fontSize:'15px',fontWeight:'700',color,marginBottom:'6px' }}>{TITULOS[modalComentario.tipo]}</div>
+              <div style={{ fontSize:'12px',color:t.textMuted,marginBottom:'16px' }}>
+                {modalComentario.obligatorio
+                  ? '⚠️ El comentario es obligatorio para este estado.'
+                  : 'Opcional — explica el motivo del cambio.'}
+              </div>
+              <textarea
+                autoFocus
+                value={textoComentario}
+                onChange={e => setTextoComentario(e.target.value)}
+                placeholder="Escribe aquí el motivo o comentario..."
+                style={{ width:'100%',minHeight:'100px',background:t.inputBg,border:`1.5px solid ${!valido && textoComentario !== '' ? '#EF4444' : color+'66'}`,borderRadius:'8px',padding:'10px',color:t.text,fontSize:'13px',resize:'vertical',boxSizing:'border-box' }}
+              />
+              {modalComentario.obligatorio && !textoComentario.trim() && (
+                <div style={{ fontSize:'11px',color:'#EF4444',marginTop:'4px' }}>* Este campo es obligatorio</div>
+              )}
+              <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end',marginTop:'18px' }}>
+                <button onClick={() => { modalComentario.resolve(null); setModalComentario(null) }}
+                  style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'8px',padding:'9px 18px',fontSize:'13px',color:t.textMuted,cursor:'pointer' }}>Cancelar</button>
+                <button onClick={() => { if (!valido) return; modalComentario.resolve(textoComentario); setModalComentario(null) }}
+                  disabled={!valido}
+                  style={{ background:valido?color:'#999',color:'#fff',border:'none',borderRadius:'8px',padding:'9px 22px',fontSize:'13px',fontWeight:'700',cursor:valido?'pointer':'not-allowed',transition:'all 0.15s' }}>
+                  {modalComentario.obligatorio ? '✓ Confirmar' : '✓ Continuar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* ── Modal hilo de comentarios ── */}
+      {modalHilo && (() => {
+        const TITULOS = { dims:'📐 Dimensiones', item_capitulo:'🔄 Ítem / Capítulo', validacion:'🔍 Validación' }
+        const COLORES = { dims:'#F59E0B', item_capitulo:'#0077B6', validacion:'#10B981' }
+        const color   = COLORES[modalHilo.tipo] || t.primary
+        const fmtFecha = iso => { try { return new Date(iso).toLocaleString('es-CO',{dateStyle:'short',timeStyle:'short'}) } catch { return iso } }
+        return (
+          <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center' }}>
+            <div style={{ background:t.bgCard,border:`1.5px solid ${color}44`,borderRadius:'16px',padding:'24px',width:'520px',maxWidth:'95vw',maxHeight:'80vh',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}>
+              <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px' }}>
+                <div style={{ fontSize:'15px',fontWeight:'700',color }}>💬 {TITULOS[modalHilo.tipo]}</div>
+                <button onClick={() => setModalHilo(null)} style={{ background:'transparent',border:'none',fontSize:'18px',cursor:'pointer',color:t.textMuted }}>✕</button>
+              </div>
+              <div style={{ overflowY:'auto',flex:1,display:'flex',flexDirection:'column',gap:'12px',paddingRight:'4px' }}>
+                {hiloLoading ? (
+                  <div style={{ textAlign:'center',padding:'30px',color:t.textMuted }}>Cargando...</div>
+                ) : modalHilo.data.length === 0 ? (
+                  <div style={{ textAlign:'center',padding:'30px',color:t.textMuted }}>Sin comentarios</div>
+                ) : modalHilo.data.map(c => (
+                  <div key={c.id}>
+                    <div style={{ background:t.bg,borderRadius:'10px',padding:'12px',border:`1px solid ${color}33` }}>
+                      <div style={{ display:'flex',justifyContent:'space-between',marginBottom:'6px' }}>
+                        <span style={{ fontSize:'12px',fontWeight:'700',color }}>{c.usuario_nombre}</span>
+                        <span style={{ fontSize:'10px',color:t.textMuted }}>{fmtFecha(c.created_at)}</span>
+                      </div>
+                      <div style={{ fontSize:'13px',color:t.text,lineHeight:1.5 }}>{c.mensaje}</div>
+                      {(c.respuestas||[]).length > 0 && (
+                        <div style={{ marginTop:'10px',paddingLeft:'12px',borderLeft:`2px solid ${color}44`,display:'flex',flexDirection:'column',gap:'8px' }}>
+                          {c.respuestas.map(r => (
+                            <div key={r.id}>
+                              <div style={{ display:'flex',justifyContent:'space-between',marginBottom:'3px' }}>
+                                <span style={{ fontSize:'11px',fontWeight:'700',color:t.textMuted }}>{r.usuario_nombre}</span>
+                                <span style={{ fontSize:'10px',color:t.textMuted }}>{fmtFecha(r.created_at)}</span>
+                              </div>
+                              <div style={{ fontSize:'12px',color:t.text }}>{r.mensaje}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div style={{ marginTop:'10px',display:'flex',gap:'6px' }}>
+                        <input value={respuestaTexto} onChange={e=>setRespuestaTexto(e.target.value)}
+                          onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); responderEnHilo(c.id) } }}
+                          placeholder="Responder..." style={{ flex:1,background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'6px',padding:'5px 10px',fontSize:'12px',color:t.text }} />
+                        <button onClick={()=>responderEnHilo(c.id)} disabled={!respuestaTexto.trim()}
+                          style={{ background:respuestaTexto.trim()?color:'#999',color:'#fff',border:'none',borderRadius:'6px',padding:'5px 12px',fontSize:'12px',cursor:respuestaTexto.trim()?'pointer':'default' }}>↩</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
       {/* ── Modal importar ── */}
       {modalImport && (
         <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.5)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center' }}>
