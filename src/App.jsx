@@ -1203,7 +1203,7 @@ function zoomEnDwg(registro) {
             <thead style={{ background:t.bg }}>
               <tr>
                 <th style={thStyle}><input type="checkbox" checked={seleccionados.size === registrosFiltrados.length && registrosFiltrados.length > 0} onChange={toggleTodos} /></th>
-                <th style={thStyle}>PK_ID</th>
+                <th style={thStyle}>ID_POL</th>
                 <th style={thStyle}>Capítulo</th>
                 <th style={thStyle}>Ítem</th>
                 <th style={thStyle}>Descripción</th>
@@ -1227,7 +1227,7 @@ function zoomEnDwg(registro) {
                   <tr key={r.id} style={{ background:seleccionados.has(r.id)?(t.primary+'18'):'transparent', cursor: r.x_label ? 'crosshair' : 'default' }}
                     onClick={() => { if (!isEdit) zoomEnDwg(r) }}>
                     <td style={tdStyle} onClick={e=>e.stopPropagation()}><input type="checkbox" checked={seleccionados.has(r.id)} onChange={() => toggleSel(r.id)} /></td>
-                    <td style={{ ...tdStyle,fontWeight:'600',color:t.primary }}>{r.pk_id||r.id_pol||'-'}</td>
+                    <td style={{ ...tdStyle,fontWeight:'600',color:t.primary }}>{r.id_pol||r.pk_id||'-'}</td>
                     <td style={tdStyle}>
                       {isEdit ? <input value={editValues.capitulo} onChange={e=>setEditValues({...editValues,capitulo:e.target.value})}
                         style={{ width:'120px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
