@@ -866,7 +866,8 @@ async function cargarRegistros() {
     { valor: 'Verificar Campo', color: '#D97706', label: '🟡' },
     { valor: 'Verificado',      color: '#16A34A', label: '🟢' },
   ]
-function zoomEnDwg(registro) {
+
+  function zoomEnDwg(registro) {
     if (!registro.x_label || !registro.y_label) return
     const uri = `claralink://zoom?x=${registro.x_label}&y=${registro.y_label}&radio=20`
     window.location.href = uri
