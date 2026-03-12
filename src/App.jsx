@@ -512,8 +512,14 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const itemDropRef = useRef(null)
   const [pagina, setPagina] = useState(1)
   const POR_PAGINA = 50
-  // ── Enlace DWG ────────────────────────────────────────────────────────────
-  const [dwgEnlazado, setDwgEnlazado] = useState(false)
+  // ── Comentarios ──────────────────────────────────────────────────────────
+  const [modalComentario,  setModalComentario]  = useState(null) // {tipo, obligatorio, resolve}
+  const [textoComentario,  setTextoComentario]  = useState('')
+  const [comentariosPorId, setComentariosPorId] = useState({})
+  const [modalHilo,        setModalHilo]        = useState(null) // {registroId, tipo, data}
+  const [hiloLoading,      setHiloLoading]      = useState(false)
+  const [respuestaTexto,   setRespuestaTexto]   = useState('')
+  // ── Enlace DWG ────────────────────────────────────────────────────────────  const [dwgEnlazado, setDwgEnlazado] = useState(false)
   useEffect(() => {
     if (!contratoId) return
     const check = async () => {
@@ -577,6 +583,59 @@ async function cargarRegistros() {
   const nivelActual  = nivelesOrden[drill.length] || null
   const nivelIdx     = NIVELES.indexOf(nivelActual ?? primerNivel)
   const colorActual  = PALETA_BARRAS[Math.max(0, Math.min(nivelIdx, PALETA_BARRAS.length - 1))]
+
+  // ── Comentarios: pedir, crear, cargar resumen ────────────────────────────
+  function pedirComentario(tipo, obligatorio) {
+    return new Promise(resolve => {
+      setTextoComentario('')
+      setModalComentario({ tipo, obligatorio, resolve })
+    })
+  }
+
+  async function crearComentarios(ids, tipo, mensaje) {
+    if (!mensaje.trim()) return
+    await fetch(`${API}/presupuesto/${contratoId}/comentarios/bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ presupuesto_ids: ids, tipo, mensaje: mensaje.trim(), usuario_nombre: usuario?.nombre || 'Usuario' })
+    })
+  }
+
+  async function cargarComentariosResumen(ids) {
+    if (!ids || ids.length === 0) return
+    const res = await fetch(`${API}/presupuesto/${contratoId}/comentarios-resumen?ids=${ids.join(',')}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (res.ok) {
+      const data = await res.json()
+      setComentariosPorId(prev => ({ ...prev, ...data }))
+    }
+  }
+
+  async function abrirHilo(registroId, tipo) {
+    setHiloLoading(true)
+    setRespuestaTexto('')
+    setModalHilo({ registroId, tipo, data: [] })
+    const res = await fetch(`${API}/presupuesto/${registroId}/comentarios?tipo=${tipo}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (res.ok) {
+      const data = await res.json()
+      setModalHilo({ registroId, tipo, data })
+    }
+    setHiloLoading(false)
+  }
+
+  async function responderEnHilo(parentId) {
+    if (!respuestaTexto.trim()) return
+    await fetch(`${API}/comentarios/${parentId}/respuesta`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ mensaje: respuestaTexto.trim(), usuario_nombre: usuario?.nombre || 'Usuario' })
+    })
+    setRespuestaTexto('')
+    if (modalHilo) await abrirHilo(modalHilo.registroId, modalHilo.tipo)
+  }
 
   const registrosFiltrados = useMemo(() =>
     registros.filter(r => drill.every(({campo, valor}) => r[campo] === valor))
@@ -711,6 +770,14 @@ async function cargarRegistros() {
 
   async function ejecutarRecalcular() {
     const ids = [...seleccionados]
+    const tieneDims  = ids.some(id => editDims[id])
+    const tieneItem  = !!(editCapitulo || editItem)
+    const tipoComent = tieneItem ? 'item_capitulo' : 'dims'
+
+    // Pedir comentario (opcional para ambos tipos)
+    const comentario = await pedirComentario(tipoComent, false)
+    if (comentario === null) return  // canceló
+
     const dims = ids.filter(id => editDims[id]).map(id => ({
       id,
       ancho:   editDims[id].ancho   !== '' ? parseFloat(editDims[id].ancho)   : null,
@@ -727,6 +794,7 @@ async function cargarRegistros() {
     })
     setGuardandoBulk(false)
     if (res.ok) {
+      if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario)
       setEditCapitulo(''); setEditItem(''); setEditDims({}); setSeleccionados(new Set()); setModalConfirm(false)
       await cargarRegistros()
     }
@@ -734,13 +802,19 @@ async function cargarRegistros() {
 
   async function ejecutarBulkEstado() {
     if (!bulkEstado || seleccionados.size === 0) return
+    const obligatorio = bulkEstado === 'Verificar Campo' || bulkEstado === 'Pendiente'
+    const comentario = await pedirComentario('validacion', obligatorio)
+    if (comentario === null) return
     setGuardandoBulk(true)
     const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ ids: [...seleccionados], revisado: bulkEstado })
     })
     setGuardandoBulk(false)
-    if (res.ok) { setBulkEstado(''); setSeleccionados(new Set()); await cargarRegistros() }
+    if (res.ok) {
+      if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario)
+      setBulkEstado(''); setSeleccionados(new Set()); await cargarRegistros()
+    }
   }
 
   // ── Edición inline ─────────────────────────────────────────────────────────
@@ -779,6 +853,10 @@ async function cargarRegistros() {
     setSeleccionados(prev => prev.size === registrosFiltrados.length ? new Set() : new Set(registrosFiltrados.map(r => r.id)))
   }
   useEffect(() => setPagina(1), [registrosFiltrados.length])
+  useEffect(() => {
+    const ids = registrosPagina?.map(r => r.id)
+    if (ids?.length) cargarComentariosResumen(ids)
+  }, [pagina, registrosFiltrados.length])
 
   // ── Estilos ────────────────────────────────────────────────────────────────
   const REVISADO_OPTS = ['Pendiente', 'Verificar Campo', 'Verificado']
@@ -795,15 +873,20 @@ function zoomEnDwg(registro) {
   }
 
   async function cambiarEstadoDirecto(id, nuevoEstado) {
-    if (!dwgEnlazado) return   // bloqueado sin DWG
+    if (!dwgEnlazado) return
+    const obligatorio = nuevoEstado === 'Verificar Campo' || nuevoEstado === 'Pendiente'
+    const comentario = await pedirComentario('validacion', obligatorio)
+    if (comentario === null) return
     const token = getToken()
     await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ ids: [id], revisado: nuevoEstado })
     })
+    if (comentario.trim()) await crearComentarios([id], 'validacion', comentario)
     await cargarRegistros()
   }
+
   const thStyle = { padding:'8px 10px', fontSize:'11px', fontWeight:'700', letterSpacing:'0.5px', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
   const tdStyle = { padding:'7px 10px', fontSize:'12px', borderBottom:`1px solid ${t.border}`, verticalAlign:'middle' }
   const bcBtn   = (active) => ({
@@ -1217,6 +1300,7 @@ function zoomEnDwg(registro) {
                 <th style={thStyle}>Vlr Unit.</th>
                 <th style={thStyle}>Costo Directo</th>
                 <th style={thStyle}>Revisado</th>
+                <th style={thStyle}>💬</th>
                 <th style={thStyle}></th>
               </tr>
             </thead>
@@ -1289,6 +1373,38 @@ function zoomEnDwg(registro) {
                                 boxShadow: activo ? `0 0 8px ${s.color}88` : 'none',
                               }}
                             />
+                          )
+                        })}
+                      </div>
+                    </td>
+                    <td style={{ ...tdStyle, minWidth:'80px' }} onClick={e=>e.stopPropagation()}>
+                      <div style={{ display:'flex', gap:'4px', alignItems:'center', justifyContent:'center' }}>
+                        {[
+                          { tipo:'dims',          icono:'📐', color:'#F59E0B', label:'Dims' },
+                          { tipo:'item_capitulo', icono:'🔄', color:'#0077B6', label:'Ítem/Cap' },
+                          { tipo:'validacion',    icono:'🔍', color:'#10B981', label:'Validación' },
+                        ].map(({ tipo, icono, color, label }) => {
+                          const c = comentariosPorId[r.id]?.[tipo]
+                          if (!c || c.count === 0) return null
+                          const tieneRespuestas = c.replies
+                          return (
+                            <div key={tipo} style={{ position:'relative' }}
+                              title={`${label}: ${c.count} comentario(s)`}
+                              onClick={() => abrirHilo(r.id, tipo)}>
+                              <div style={{
+                                background: color + '22', border:`1px solid ${color}66`,
+                                borderRadius:'6px', padding:'2px 5px', fontSize:'11px',
+                                cursor:'pointer', color, transition:'all 0.15s',
+                                fontWeight: tieneRespuestas ? '700' : '400',
+                              }}
+                                onMouseEnter={e => { e.currentTarget.style.background = color + '44' }}
+                                onMouseLeave={e => { e.currentTarget.style.background = color + '22' }}>
+                                {icono}
+                              </div>
+                              {tieneRespuestas && (
+                                <div style={{ position:'absolute', top:'-3px', right:'-3px', width:'7px', height:'7px', borderRadius:'50%', background:color, border:`1.5px solid ${t.bgCard}` }} />
+                              )}
+                            </div>
                           )
                         })}
                       </div>
@@ -1459,7 +1575,101 @@ async function cargarRegistros() {
 
   return (
     <div>
-      {/* Modal importar */}
+      {/* ── Modal comentario ── */}
+      {modalComentario && (() => {
+        const TITULOS = { dims:'📐 Comentario — Cambio de Dimensiones', item_capitulo:'🔄 Comentario — Cambio de Ítem/Capítulo', validacion:'🔍 Comentario — Cambio de Estado' }
+        const COLORES = { dims:'#F59E0B', item_capitulo:'#0077B6', validacion:'#10B981' }
+        const color   = COLORES[modalComentario.tipo] || t.primary
+        const valido  = !modalComentario.obligatorio || textoComentario.trim().length > 0
+        return (
+          <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center' }}>
+            <div style={{ background:t.bgCard,border:`1.5px solid ${color}44`,borderRadius:'16px',padding:'28px',width:'460px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}>
+              <div style={{ fontSize:'15px',fontWeight:'700',color,marginBottom:'6px' }}>{TITULOS[modalComentario.tipo]}</div>
+              <div style={{ fontSize:'12px',color:t.textMuted,marginBottom:'16px' }}>
+                {modalComentario.obligatorio
+                  ? '⚠️ El comentario es obligatorio para este estado.'
+                  : 'Opcional — explica el motivo del cambio.'}
+              </div>
+              <textarea
+                autoFocus
+                value={textoComentario}
+                onChange={e => setTextoComentario(e.target.value)}
+                placeholder="Escribe aquí el motivo o comentario..."
+                style={{ width:'100%',minHeight:'100px',background:t.inputBg,border:`1.5px solid ${!valido && textoComentario !== '' ? '#EF4444' : color+'66'}`,borderRadius:'8px',padding:'10px',color:t.text,fontSize:'13px',resize:'vertical',boxSizing:'border-box' }}
+              />
+              {modalComentario.obligatorio && !textoComentario.trim() && (
+                <div style={{ fontSize:'11px',color:'#EF4444',marginTop:'4px' }}>* Este campo es obligatorio</div>
+              )}
+              <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end',marginTop:'18px' }}>
+                <button onClick={() => { modalComentario.resolve(null); setModalComentario(null) }}
+                  style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'8px',padding:'9px 18px',fontSize:'13px',color:t.textMuted,cursor:'pointer' }}>Cancelar</button>
+                <button onClick={() => { if (!valido) return; modalComentario.resolve(textoComentario); setModalComentario(null) }}
+                  disabled={!valido}
+                  style={{ background:valido?color:'#999',color:'#fff',border:'none',borderRadius:'8px',padding:'9px 22px',fontSize:'13px',fontWeight:'700',cursor:valido?'pointer':'not-allowed',transition:'all 0.15s' }}>
+                  {modalComentario.obligatorio ? '✓ Confirmar' : '✓ Continuar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* ── Modal hilo de comentarios ── */}
+      {modalHilo && (() => {
+        const TITULOS = { dims:'📐 Dimensiones', item_capitulo:'🔄 Ítem / Capítulo', validacion:'🔍 Validación' }
+        const COLORES = { dims:'#F59E0B', item_capitulo:'#0077B6', validacion:'#10B981' }
+        const color   = COLORES[modalHilo.tipo] || t.primary
+        const fmtFecha = iso => { try { return new Date(iso).toLocaleString('es-CO',{dateStyle:'short',timeStyle:'short'}) } catch { return iso } }
+        return (
+          <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center' }}>
+            <div style={{ background:t.bgCard,border:`1.5px solid ${color}44`,borderRadius:'16px',padding:'24px',width:'520px',maxWidth:'95vw',maxHeight:'80vh',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}>
+              <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px' }}>
+                <div style={{ fontSize:'15px',fontWeight:'700',color }}>💬 {TITULOS[modalHilo.tipo]}</div>
+                <button onClick={() => setModalHilo(null)} style={{ background:'transparent',border:'none',fontSize:'18px',cursor:'pointer',color:t.textMuted }}>✕</button>
+              </div>
+              <div style={{ overflowY:'auto',flex:1,display:'flex',flexDirection:'column',gap:'12px',paddingRight:'4px' }}>
+                {hiloLoading ? (
+                  <div style={{ textAlign:'center',padding:'30px',color:t.textMuted }}>Cargando...</div>
+                ) : modalHilo.data.length === 0 ? (
+                  <div style={{ textAlign:'center',padding:'30px',color:t.textMuted }}>Sin comentarios</div>
+                ) : modalHilo.data.map(c => (
+                  <div key={c.id}>
+                    <div style={{ background:t.bg,borderRadius:'10px',padding:'12px',border:`1px solid ${color}33` }}>
+                      <div style={{ display:'flex',justifyContent:'space-between',marginBottom:'6px' }}>
+                        <span style={{ fontSize:'12px',fontWeight:'700',color }}>{c.usuario_nombre}</span>
+                        <span style={{ fontSize:'10px',color:t.textMuted }}>{fmtFecha(c.created_at)}</span>
+                      </div>
+                      <div style={{ fontSize:'13px',color:t.text,lineHeight:1.5 }}>{c.mensaje}</div>
+                      {(c.respuestas||[]).length > 0 && (
+                        <div style={{ marginTop:'10px',paddingLeft:'12px',borderLeft:`2px solid ${color}44`,display:'flex',flexDirection:'column',gap:'8px' }}>
+                          {c.respuestas.map(r => (
+                            <div key={r.id}>
+                              <div style={{ display:'flex',justifyContent:'space-between',marginBottom:'3px' }}>
+                                <span style={{ fontSize:'11px',fontWeight:'700',color:t.textMuted }}>{r.usuario_nombre}</span>
+                                <span style={{ fontSize:'10px',color:t.textMuted }}>{fmtFecha(r.created_at)}</span>
+                              </div>
+                              <div style={{ fontSize:'12px',color:t.text }}>{r.mensaje}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div style={{ marginTop:'10px',display:'flex',gap:'6px' }}>
+                        <input value={respuestaTexto} onChange={e=>setRespuestaTexto(e.target.value)}
+                          onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); responderEnHilo(c.id) } }}
+                          placeholder="Responder..." style={{ flex:1,background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'6px',padding:'5px 10px',fontSize:'12px',color:t.text }} />
+                        <button onClick={()=>responderEnHilo(c.id)} disabled={!respuestaTexto.trim()}
+                          style={{ background:respuestaTexto.trim()?color:'#999',color:'#fff',border:'none',borderRadius:'6px',padding:'5px 12px',fontSize:'12px',cursor:respuestaTexto.trim()?'pointer':'default' }}>↩</button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* ── Modal importar ── */}
       {modalImport && (
         <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.5)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center' }}>
           <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'16px',padding:'28px',width:'420px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }}>
