@@ -601,7 +601,7 @@ async function cargarRegistros() {
       agg[key].cantTotal += r.cant_total ?? 0
       agg[key].count++
     })
-    return Object.values(agg).sort((a, b) => a.name.localeCompare(b.name, 'es', {numeric: true})).slice(0, 20)
+    return Object.values(agg).sort((a, b) => a.name.localeCompare(b.name, 'es', {numeric: true}))
   }, [registrosFiltrados, nivelActual])
 
   const costoTotal = useMemo(() =>
@@ -952,9 +952,9 @@ function zoomEnDwg(registro) {
               <span style={{ fontSize:'12px', color:t.textMuted }}>
                 {registrosFiltrados.length} registros · <strong style={{color:colorActual}}>{fmt(costoTotal)}</strong>
               </span>
-              {nivelActual && (
+            {nivelActual && (
                 <span style={{ fontSize:'11px', color:t.textMuted, fontStyle:'italic' }}>
-                  👆 Click en una barra para filtrar por ese valor
+                  {nivelActual === 'item' ? '🎛️ Click en un instrumento para filtrar' : '👆 Click en una barra para filtrar por ese valor'}
                 </span>
               )}
             </div>
@@ -992,7 +992,66 @@ function zoomEnDwg(registro) {
                   )
                 })}
               </div>
-            ) : (
+            ) : nivelActual === 'item' ? (() => {
+              const costoMax = Math.max(...chartData.map(d => d.costo), 1)
+              const gSize = chartData.length > 20 ? 130 : chartData.length > 10 ? 145 : 160
+              return (
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(10, 1fr)', gap:'8px', padding:'4px 2px' }}>
+                  {chartData.map((d, i) => {
+                    const pct   = Math.round((d.costo / costoMax) * 100)
+                    const clamp = Math.min(Math.max(pct, 0), 100)
+                    const color = PALETA_BARRAS[i % PALETA_BARRAS.length]
+                    const cx = gSize / 2, cy = gSize * 0.57
+                    const r = gSize * 0.37, sw = gSize * 0.076
+                    const START = -135, SPAN = 270
+                    const fillEnd = START + (clamp / 100) * SPAN
+                    const toRad = a => (a * Math.PI) / 180
+                    const pt = (angle) => ({
+                      x: cx + r * Math.cos(toRad(angle)),
+                      y: cy + r * Math.sin(toRad(angle))
+                    })
+                    const arcD = (a1, a2) => {
+                      const s = pt(a1), e = pt(a2)
+                      const large = (a2 - a1) > 180 ? 1 : 0
+                      return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)}`
+                    }
+                    const nTip = { x: cx + (r - sw - 4) * Math.cos(toRad(fillEnd)), y: cy + (r - sw - 4) * Math.sin(toRad(fillEnd)) }
+                    const nomDesc = d.label || d.name
+                    return (
+                      <div key={d.name}
+                        onClick={() => handleBarClick(d)}
+                        title={`${d.name}\n${fmt(d.costo)}\n${d.count} registro${d.count !== 1 ? 's' : ''}`}
+                        style={{ cursor:'pointer', background:t.bgCard, border:`1.5px solid ${color}55`, borderRadius:'12px', padding:'8px 6px 10px', display:'flex', flexDirection:'column', alignItems:'center', transition:'all 0.2s', boxShadow:`0 2px 12px ${color}1A` }}
+                        onMouseEnter={e => { e.currentTarget.style.transform='translateY(-3px)'; e.currentTarget.style.borderColor=color; e.currentTarget.style.boxShadow=`0 8px 24px ${color}44` }}
+                        onMouseLeave={e => { e.currentTarget.style.transform=''; e.currentTarget.style.borderColor=`${color}55`; e.currentTarget.style.boxShadow=`0 2px 12px ${color}1A` }}>
+                        <div style={{ fontSize:'9px', color:t.textMuted, textAlign:'center', lineHeight:1.3, marginBottom:'3px', width:'100%', padding:'0 2px', overflow:'hidden', display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical' }}>
+                          {nomDesc}
+                        </div>
+                        <svg width={gSize} height={gSize * 0.66} viewBox={`0 0 ${gSize} ${gSize * 0.66}`} style={{overflow:'visible'}}>
+                          {clamp > 0 && <path d={arcD(START, fillEnd)} fill="none" stroke={color} strokeWidth={sw+6} strokeLinecap="round" opacity={0.1}/>}
+                          <path d={arcD(START, START+SPAN)} fill="none" stroke={t.border} strokeWidth={sw} strokeLinecap="round"/>
+                          {clamp > 0 && <path d={arcD(START, fillEnd)} fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round"/>}
+                          {[0,25,50,75,100].map(tp => {
+                            const a = START+(tp/100)*SPAN
+                            const p1 = { x: cx+(r-sw/2-2)*Math.cos(toRad(a)), y: cy+(r-sw/2-2)*Math.sin(toRad(a)) }
+                            const p2 = { x: cx+(r-sw-5)*Math.cos(toRad(a)),   y: cy+(r-sw-5)*Math.sin(toRad(a)) }
+                            return <line key={tp} x1={p1.x.toFixed(1)} y1={p1.y.toFixed(1)} x2={p2.x.toFixed(1)} y2={p2.y.toFixed(1)} stroke={t.textMuted} strokeWidth={1.2} opacity={0.4}/>
+                          })}
+                          <line x1={cx} y1={cy} x2={nTip.x.toFixed(2)} y2={nTip.y.toFixed(2)} stroke={color} strokeWidth={gSize*0.016} strokeLinecap="round"/>
+                          <circle cx={cx} cy={cy} r={gSize*0.048} fill={color}/>
+                          <circle cx={cx} cy={cy} r={gSize*0.022} fill={t.bgCard}/>
+                        </svg>
+                        <div style={{ display:'flex', justifyContent:'space-between', width:'100%', padding:'0 3px', marginTop:'2px' }}>
+                          <span style={{ fontSize:'10px', fontWeight:'700', color:t.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'60%' }}>{d.name}</span>
+                          <span style={{ fontSize:'13px', fontWeight:'800', color }}>{pct}%</span>
+                        </div>
+                        <div style={{ fontSize:'9px', color:t.textMuted, marginTop:'2px' }}>{fmtM(d.costo)}</div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })() : (
             <ResponsiveContainer width="100%" height={Math.max(180, chartData.length * 40 + 20)}>
               <BarChart data={chartData} layout="vertical"
                 margin={{ left: 8, right: 80, top: 4, bottom: 4 }}
