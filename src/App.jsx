@@ -1471,7 +1471,6 @@ async function cargarRegistros() {
     setLoading(false)
     setPagina(1)
   }
-
   const registrosFiltrados = useMemo(() =>
     registros.filter(r => drill.every(({campo, valor}) => r[campo] === valor))
   , [registros, drill])
