@@ -779,7 +779,13 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
     { valor: 'Verificar Campo', color: '#D97706', label: '🟡' },
     { valor: 'Verificado',      color: '#16A34A', label: '🟢' },
   ]
-async function cambiarEstadoDirecto(id, nuevoEstado) {
+function zoomEnDwg(registro) {
+    if (!registro.x_label || !registro.y_label) return
+    const uri = `claralink://zoom?x=${registro.x_label}&y=${registro.y_label}&radio=20`
+    window.location.href = uri
+  }
+
+  async function cambiarEstadoDirecto(id, nuevoEstado) {
     if (!dwgEnlazado) return   // bloqueado sin DWG
     const token = getToken()
     await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
@@ -1140,8 +1146,8 @@ async function cambiarEstadoDirecto(id, nuevoEstado) {
               {registrosFiltrados.map(r => {
                 const isEdit = editando === r.id
                 return (
-                  <tr key={r.id} style={{ background:seleccionados.has(r.id)?(t.primary+'18'):'transparent' }}
-                    onClick={() => !isEdit && toggleSel(r.id)}>
+                  <tr key={r.id} style={{ background:seleccionados.has(r.id)?(t.primary+'18'):'transparent', cursor: r.x_label ? 'crosshair' : 'default' }}
+                    onClick={() => { if (!isEdit) { toggleSel(r.id); zoomEnDwg(r) } }}>
                     <td style={tdStyle} onClick={e=>e.stopPropagation()}><input type="checkbox" checked={seleccionados.has(r.id)} onChange={() => toggleSel(r.id)} /></td>
                     <td style={{ ...tdStyle,fontWeight:'600',color:t.primary }}>{r.pk_id||r.id_pol||'-'}</td>
                     <td style={tdStyle}>
