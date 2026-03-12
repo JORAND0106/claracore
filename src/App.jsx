@@ -866,14 +866,14 @@ async function cargarRegistros() {
     { valor: 'Verificar Campo', color: '#D97706', label: '🟡' },
     { valor: 'Verificado',      color: '#16A34A', label: '🟢' },
   ]
-
-  function zoomEnDwg(registro) {
+function zoomEnDwg(registro) {
     if (!registro.x_label || !registro.y_label) return
     const uri = `claralink://zoom?x=${registro.x_label}&y=${registro.y_label}&radio=20`
     window.location.href = uri
   }
 
   async function cambiarEstadoDirecto(id, nuevoEstado) {
+    if (!dwgEnlazado) return
     const obligatorio = nuevoEstado === 'Verificar Campo' || nuevoEstado === 'Pendiente'
     const comentario = await pedirComentario('validacion', obligatorio)
     if (comentario === null) return
@@ -1467,11 +1467,11 @@ function ModuloCobro({ t, usuario, token, s }) {
 async function cargarRegistros() {
     if (!contratoId) return
     setLoading(true)
-    const res = await fetch(`${API}/presupuesto/${contratoId}`, { headers: { Authorization: `Bearer ${token}` } })
+    const res = await fetch(`${API}/cobro/${contratoId}`, { headers: { Authorization: `Bearer ${token}` } })
     if (res.ok) setRegistros(await res.json())
     setLoading(false)
-    setPagina(1)
   }
+
   const registrosFiltrados = useMemo(() =>
     registros.filter(r => drill.every(({campo, valor}) => r[campo] === valor))
   , [registros, drill])
