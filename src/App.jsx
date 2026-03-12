@@ -960,6 +960,7 @@ function zoomEnDwg(registro) {
             </div>
           </div>
 
+
           {/* Gráfico */}
           {nivelActual ? (
             nivelActual === 'pk_id' ? (
