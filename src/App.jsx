@@ -510,6 +510,22 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const [itemDropOpen, setItemDropOpen] = useState(false)
   const [itemNavIdx, setItemNavIdx] = useState(-1)
   const itemDropRef = useRef(null)
+  // ── Enlace DWG ────────────────────────────────────────────────────────────
+  const [dwgEnlazado, setDwgEnlazado] = useState(false)
+  useEffect(() => {
+    if (!contratoId) return
+    const check = async () => {
+      try {
+        const r = await fetch(`${API}/cad-queue/${contratoId}/estado`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        if (r.ok) { const d = await r.json(); setDwgEnlazado(d.enlazado) }
+      } catch {}
+    }
+    check()
+    const iv = setInterval(check, 5000)
+    return () => clearInterval(iv)
+  }, [contratoId])
 
   // ── Constantes drill-down ──────────────────────────────────────────────────
   const NIVELES = ['capitulo', 'item', 'pk_id', 'tramo', 'calzada']
@@ -680,7 +696,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   }), [listadoPrecios])
   const itemsListado = useMemo(() => listadoPrecios.filter(p => !editCapitulo || p.capitulo === editCapitulo), [listadoPrecios, editCapitulo])
   const precioSeleccionado = useMemo(() => listadoPrecios.find(p => p.item_numero === editItem) || null, [listadoPrecios, editItem])
-  const hayModificaciones = seleccionados.size > 0 && (
+  const hayModificaciones = seleccionados.size > 0 && dwgEnlazado && (
     editCapitulo !== '' || editItem !== '' ||
     [...seleccionados].some(id => editDims[id])
   )
@@ -763,7 +779,8 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
     { valor: 'Verificar Campo', color: '#D97706', label: '🟡' },
     { valor: 'Verificado',      color: '#16A34A', label: '🟢' },
   ]
-  async function cambiarEstadoDirecto(id, nuevoEstado) {
+async function cambiarEstadoDirecto(id, nuevoEstado) {
+    if (!dwgEnlazado) return   // bloqueado sin DWG
     const token = getToken()
     await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
       method: 'PUT',
@@ -991,6 +1008,17 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
       )}
 
       {/* ── Barra Editar / Validar ── */}
+      {/* ── Indicador DWG ─────────────────────────────────────────── */}
+      <div style={{ display:'flex', alignItems:'center', gap:'8px', padding:'6px 14px',
+        background: dwgEnlazado ? '#16A34A18' : '#EF444418',
+        border: `1px solid ${dwgEnlazado ? '#16A34A44' : '#EF444444'}`,
+        borderRadius:'8px', fontSize:'11px', color: dwgEnlazado ? '#16A34A' : '#EF4444',
+        fontWeight:'600' }}>
+        <div style={{ width:'8px', height:'8px', borderRadius:'50%',
+          background: dwgEnlazado ? '#16A34A' : '#EF4444',
+          boxShadow: dwgEnlazado ? '0 0 6px #16A34A' : 'none' }} />
+        {dwgEnlazado ? '🔗 DWG Enlazado — Semáforo y edición activos' : '⛓️ Sin DWG — Semáforo y edición deshabilitados'}
+      </div>
       {(puedeEditar || puedeValidar) && registrosFiltrados.length > 0 && (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'10px',boxShadow:t.shadow,display:'flex',flexWrap:'wrap',gap:'8px',alignItems:'center' }}>
           {seleccionados.size === 0 ? (
@@ -1164,14 +1192,15 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
                             <div
                               key={s.valor}
                               title={s.valor}
-                              onClick={() => puedeValidar && !activo && cambiarEstadoDirecto(r.id, s.valor)}
+                              onClick={() => puedeValidar && !activo && dwgEnlazado && cambiarEstadoDirecto(r.id, s.valor)}
                               style={{
                                 width: activo ? '18px' : '12px',
                                 height: activo ? '18px' : '12px',
                                 borderRadius: '50%',
                                 background: activo ? s.color : s.color + '33',
                                 border: `2px solid ${activo ? s.color : s.color + '66'}`,
-                                cursor: puedeValidar && !activo ? 'pointer' : 'default',
+                                cursor: puedeValidar && !activo && dwgEnlazado ? 'pointer' : 'default',
+                                opacity: dwgEnlazado ? 1 : 0.4,
                                 transition: 'all 0.2s',
                                 boxShadow: activo ? `0 0 8px ${s.color}88` : 'none',
                               }}
