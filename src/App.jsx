@@ -765,7 +765,7 @@ async function cargarRegistros() {
   }), [listadoPrecios])
   const itemsListado = useMemo(() => listadoPrecios.filter(p => !editCapitulo || p.capitulo === editCapitulo), [listadoPrecios, editCapitulo])
   const precioSeleccionado = useMemo(() => listadoPrecios.find(p => p.item_numero === editItem) || null, [listadoPrecios, editItem])
-  const hayModificaciones = seleccionados.size > 0 && dwgEnlazado && (
+  const hayModificaciones = seleccionados.size > 0 && (
     editCapitulo !== '' || editItem !== '' ||
     [...seleccionados].some(id => editDims[id])
   )
@@ -993,6 +993,7 @@ function zoomEnDwg(registro) {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div>
+      
       {/* ── Modal confirmar recálculo ── */}
       {modalConfirm && (
         <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.55)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center' }}>
