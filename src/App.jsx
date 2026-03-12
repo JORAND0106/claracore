@@ -871,7 +871,7 @@ function zoomEnDwg(registro) {
     const uri = `claralink://zoom?x=${registro.x_label}&y=${registro.y_label}&radio=20`
     window.location.href = uri
   }
-  
+
   async function cambiarEstadoDirecto(id, nuevoEstado) {
     const obligatorio = nuevoEstado === 'Verificar Campo' || nuevoEstado === 'Pendiente'
     const comentario = await pedirComentario('validacion', obligatorio)
@@ -1466,9 +1466,10 @@ function ModuloCobro({ t, usuario, token, s }) {
 async function cargarRegistros() {
     if (!contratoId) return
     setLoading(true)
-    const res = await fetch(`${API}/cobro/${contratoId}`, { headers: { Authorization: `Bearer ${token}` } })
+    const res = await fetch(`${API}/presupuesto/${contratoId}`, { headers: { Authorization: `Bearer ${token}` } })
     if (res.ok) setRegistros(await res.json())
     setLoading(false)
+    setPagina(1)
   }
 
   const registrosFiltrados = useMemo(() =>
