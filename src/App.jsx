@@ -505,6 +505,9 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const [editDims, setEditDims] = useState({})      // {[id]: {ancho, espesor}}
   const [modalConfirm, setModalConfirm] = useState(false)
   const [bulkEstado, setBulkEstado] = useState('')
+  const [busquedaTipo, setBusquedaTipo] = useState('')   // 'nodo' | 'abscisa' | 'idpol'
+  const [busquedaV1,   setBusquedaV1]   = useState('')   // nodo_ini | abs_ini | idpol
+  const [busquedaV2,   setBusquedaV2]   = useState('')   // nodo_fin | abs_fin (no se usa en idpol)
   const [guardandoBulk, setGuardandoBulk] = useState(false)
   const [itemBusqueda, setItemBusqueda] = useState('')
   const [itemDropOpen, setItemDropOpen] = useState(false)
@@ -568,7 +571,9 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const esDeveloper  = usuario?.cargo_nombre?.toLowerCase() === 'desarrollador'
   const _permPpto    = (usuario?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === 'editar registros presupuesto')
   const puedeEditar  = esDeveloper || (_permPpto?.editar   ?? false)
-  const puedeValidar = esDeveloper || (_permPpto?.validar  ?? false)  
+  const puedeValidar = esDeveloper || (_permPpto?.validar  ?? false)
+  const puedeEliminar = esDeveloper || (_permPpto?.eliminar ?? false)
+  const [verPapelera, setVerPapelera] = useState(false)  
 
 async function cargarRegistros() {
     if (!contratoId) return
@@ -639,9 +644,35 @@ async function cargarRegistros() {
     if (modalHilo) await abrirHilo(modalHilo.registroId, modalHilo.tipo)
   }
 
-  const registrosFiltrados = useMemo(() =>
-    registros.filter(r => drill.every(({campo, valor}) => r[campo] === valor))
-  , [registros, drill])
+  const registrosFiltrados = useMemo(() => {
+    // Función auxiliar: convierte "1+450.32" → 1450.32
+    const parseAbs = s => {
+      if (!s) return null
+      return parseFloat(String(s).replace('+', ''))
+    }
+    return registros.filter(r => {
+      // Filtro de drill existente
+      if (!drill.every(({campo, valor}) => r[campo] === valor)) return false
+      // Filtro buscador mixto
+      if (busquedaTipo === 'nodo') {
+        const v1 = busquedaV1.trim().toLowerCase()
+        const v2 = busquedaV2.trim().toLowerCase()
+        if (v1 && !(r.no_inicio || '').toLowerCase().includes(v1)) return false
+        if (v2 && !(r.no_final  || '').toLowerCase().includes(v2)) return false
+      } else if (busquedaTipo === 'abscisa') {
+        const ini = parseAbs(r.abs_inicio)
+        const fin = parseAbs(r.abs_final)
+        const v1 = busquedaV1.trim() !== '' ? parseFloat(busquedaV1) : null
+        const v2 = busquedaV2.trim() !== '' ? parseFloat(busquedaV2) : null
+        if (v1 !== null && ini !== null && ini < v1) return false
+        if (v2 !== null && fin !== null && fin > v2) return false
+      } else if (busquedaTipo === 'idpol') {
+        const v1 = busquedaV1.trim().toLowerCase()
+        if (v1 && !(r.id_pol || '').toLowerCase().includes(v1)) return false
+      }
+      return true
+    })
+  }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2])
 
   const chartData = useMemo(() => {
     if (!nivelActual || registros.length === 0) return []
@@ -861,9 +892,10 @@ async function cargarRegistros() {
   }, [pagina, registrosFiltrados.length])
 
   // ── Estilos ────────────────────────────────────────────────────────────────
-  const REVISADO_OPTS = ['Pendiente', 'Verificar Campo', 'Verificado']
-  const estadoColor = (r) => r === 'Verificado' ? '#16A34A' : r === 'Verificar Campo' ? '#D97706' : '#EF4444'
+  const REVISADO_OPTS = ['No Revisado', 'Pendiente', 'Verificar Campo', 'Verificado']
+  const estadoColor = (r) => r === 'Verificado' ? '#16A34A' : r === 'Verificar Campo' ? '#D97706' : r === 'Pendiente' ? '#EF4444' : '#3B82F6'
   const SEMAFORO = [
+    { valor: 'No Revisado',     color: '#3B82F6', label: '🔵' },
     { valor: 'Pendiente',       color: '#EF4444', label: '🔴' },
     { valor: 'Verificar Campo', color: '#D97706', label: '🟡' },
     { valor: 'Verificado',      color: '#16A34A', label: '🟢' },
@@ -886,6 +918,15 @@ function zoomEnDwg(registro) {
     })
     if (comentario.trim()) await crearComentarios([id], 'validacion', comentario)
     await cargarRegistros()
+  }
+
+async function darDeBaja(id) {
+    if (!window.confirm('¿Dar de baja este registro? Se ocultará de la vista y su layer cambiará en CAD.')) return
+    const res = await fetch(`${API}/presupuesto/item/${id}/dar-baja`, {
+      method: 'PUT', headers: { Authorization: `Bearer ${token}` }
+    })
+    if (res.ok) await cargarRegistros()
+    else alert('Error al dar de baja el registro')
   }
 
   const thStyle = { padding:'8px 10px', fontSize:'11px', fontWeight:'700', letterSpacing:'0.5px', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
@@ -1260,22 +1301,58 @@ function zoomEnDwg(registro) {
 
       {/* ── Barra Editar / Validar ── */}
       {/* ── Indicador DWG ─────────────────────────────────────────── */}
-      <div style={{ display:'flex', alignItems:'center', gap:'8px', padding:'6px 14px',
-        background: dwgEnlazado ? '#16A34A18' : '#EF444418',
-        border: `1px solid ${dwgEnlazado ? '#16A34A44' : '#EF444444'}`,
-        borderRadius:'8px', fontSize:'11px', color: dwgEnlazado ? '#16A34A' : '#EF4444',
-        fontWeight:'600' }}>
-        <div style={{ width:'8px', height:'8px', borderRadius:'50%',
-          background: dwgEnlazado ? '#16A34A' : '#EF4444',
-          boxShadow: dwgEnlazado ? '0 0 6px #16A34A' : 'none' }} />
-        {dwgEnlazado ? '🔗 DWG Enlazado — Semáforo y edición activos' : '⛓️ Sin DWG — Semáforo y edición deshabilitados'}
+<div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', flexWrap:'wrap' }}>
+        {puedeEliminar && (
+          <button onClick={() => setVerPapelera(v => !v)}
+            style={{ background: verPapelera ? '#EF444422' : t.bgCard, border:`1px solid ${verPapelera ? '#EF4444' : t.border}`, borderRadius:'8px', padding:'6px 14px', color: verPapelera ? '#EF4444' : t.textMuted, fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
+            🗑️ {verPapelera ? 'Ver activos' : 'Papelera'}
+          </button>
+        )}
+        <div style={{ display:'flex', alignItems:'center', gap:'8px', padding:'6px 14px',
+          background: dwgEnlazado ? '#16A34A18' : '#EF444418',
+          border: `1px solid ${dwgEnlazado ? '#16A34A44' : '#EF444444'}`,
+          borderRadius:'8px', fontSize:'11px', color: dwgEnlazado ? '#16A34A' : '#EF4444',
+          fontWeight:'600' }}>
+          <div style={{ width:'8px', height:'8px', borderRadius:'50%',
+            background: dwgEnlazado ? '#16A34A' : '#EF4444',
+            boxShadow: dwgEnlazado ? '0 0 6px #16A34A' : 'none' }} />
+          {dwgEnlazado ? '🔗 DWG Enlazado — Semáforo y edición activos' : '⛓️ Sin DWG — Semáforo y edición deshabilitados'}
+        </div>
       </div>
       {(puedeEditar || puedeValidar) && registrosFiltrados.length > 0 && (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'10px',boxShadow:t.shadow,display:'flex',flexWrap:'wrap',gap:'8px',alignItems:'center' }}>
           {seleccionados.size === 0 ? (
-            <span style={{ fontSize:'12px',color:t.textMuted,fontStyle:'italic' }}>
-              ☝️ Selecciona registros para habilitar acciones
-            </span>
+            <div style={{ display:'flex', gap:'6px', alignItems:'center', flexWrap:'wrap' }}>
+              <select value={busquedaTipo} onChange={e => { setBusquedaTipo(e.target.value); setBusquedaV1(''); setBusquedaV2('') }}
+                style={{ background:t.inputBg, border:`1.5px solid ${busquedaTipo?t.primary:t.border}`, borderRadius:'7px', padding:'5px 10px', color:busquedaTipo?t.text:t.textMuted, fontSize:'12px', cursor:'pointer' }}>
+                <option value="">🔍 Buscar por…</option>
+                <option value="nodo">🔵 Nodo</option>
+                <option value="abscisa">📍 Abscisa</option>
+                <option value="idpol">🆔 ID Pol</option>
+              </select>
+              {busquedaTipo === 'nodo' && (<>
+                <input value={busquedaV1} onChange={e => setBusquedaV1(e.target.value)} placeholder="Nodo Inicial…"
+                  style={{ background:t.inputBg, border:`1.5px solid ${busquedaV1?t.primary:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'130px' }} />
+                <input value={busquedaV2} onChange={e => setBusquedaV2(e.target.value)} placeholder="Nodo Final…"
+                  style={{ background:t.inputBg, border:`1.5px solid ${busquedaV2?t.primary:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'130px' }} />
+              </>)}
+              {busquedaTipo === 'abscisa' && (<>
+                <input type="number" value={busquedaV1} onChange={e => setBusquedaV1(e.target.value)} placeholder="Abs. Inicio (ej: 1450.32)"
+                  style={{ background:t.inputBg, border:`1.5px solid ${busquedaV1?t.primary:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'170px' }} />
+                <input type="number" value={busquedaV2} onChange={e => setBusquedaV2(e.target.value)} placeholder="Abs. Final (ej: 2100.00)"
+                  style={{ background:t.inputBg, border:`1.5px solid ${busquedaV2?t.primary:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'170px' }} />
+              </>)}
+              {busquedaTipo === 'idpol' && (
+                <input value={busquedaV1} onChange={e => setBusquedaV1(e.target.value)} placeholder="ID Pol…"
+                  style={{ background:t.inputBg, border:`1.5px solid ${busquedaV1?t.primary:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'180px' }} />
+              )}
+              {(busquedaV1 || busquedaV2) && (
+                <button onClick={() => { setBusquedaTipo(''); setBusquedaV1(''); setBusquedaV2('') }}
+                  style={{ background:'#EF444422', border:'1px solid #EF444466', borderRadius:'7px', padding:'5px 10px', color:'#EF4444', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
+                  ✕ Limpiar
+                </button>
+              )}
+            </div>
           ) : (
             <>
               <span style={{ fontSize:'12px',fontWeight:'700',color:t.primary,background:t.primary+'18',borderRadius:'20px',padding:'3px 10px',whiteSpace:'nowrap' }}>
@@ -1348,9 +1425,9 @@ function zoomEnDwg(registro) {
 
               {puedeValidar && (<>
                 <select value={bulkEstado} onChange={e => setBulkEstado(e.target.value)}
-                  style={{ background:t.inputBg,border:`1.5px solid ${bulkEstado?t.primary:t.border}`,borderRadius:'7px',padding:'5px 10px',color:bulkEstado?t.text:t.textMuted,fontSize:'12px',cursor:'pointer' }}>
+                  style={{ background:t.inputBg, border:`1.5px solid ${bulkEstado ? estadoColor(bulkEstado) : t.border}`, borderRadius:'7px', padding:'5px 10px', color:bulkEstado ? estadoColor(bulkEstado) : t.textMuted, fontSize:'12px', cursor:'pointer', fontWeight: bulkEstado ? '700' : '400' }}>
                   <option value="">Estado…</option>
-                  {['Pendiente','Verificar Campo','Verificado'].map(o => <option key={o} value={o}>{o}</option>)}
+                  {SEMAFORO.map(s => <option key={s.valor} value={s.valor}>{s.label} {s.valor}</option>)}
                 </select>
                 <button onClick={ejecutarBulkEstado}
                   disabled={!bulkEstado || guardandoBulk}
@@ -1439,7 +1516,7 @@ function zoomEnDwg(registro) {
                     <td style={tdStyle} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', gap:'6px', alignItems:'center', justifyContent:'center' }}>
                         {SEMAFORO.map(s => {
-                          const activo = (r.revisado || 'Pendiente') === s.valor
+                          const activo = (r.revisado || 'No Revisado') === s.valor
                           return (
                             <div
                               key={s.valor}
@@ -1493,6 +1570,15 @@ function zoomEnDwg(registro) {
                         })}
                       </div>
                     </td>
+                    {puedeEliminar && !verPapelera && (
+                      <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
+                        <button onClick={() => darDeBaja(r.id)}
+                          title="Dar de baja"
+                          style={{ background:'#EF444415', border:'1px solid #EF444444', borderRadius:'6px', padding:'3px 8px', color:'#EF4444', fontSize:'11px', cursor:'pointer' }}>
+                          🗑️
+                        </button>
+                      </td>
+                    )}
                     {!puedeEditar && !puedeValidar && (
                       <td style={tdStyle} onClick={e=>e.stopPropagation()}>
                         {isEdit ? (
