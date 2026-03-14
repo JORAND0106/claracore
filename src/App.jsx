@@ -1337,7 +1337,7 @@ async function darDeBaja(id) {
           {dwgEnlazado ? '🔗 DWG Enlazado — Semáforo y edición activos' : '⛓️ Sin DWG — Semáforo y edición deshabilitados'}
         </div>
       </div>
-      {(puedeEditar || puedeValidar) && registrosFiltrados.length > 0 && (
+      {(puedeEditar || puedeValidar) && registros.length > 0 && (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'10px',boxShadow:t.shadow,display:'flex',flexWrap:'wrap',gap:'8px',alignItems:'center' }}>
           {/* Filtro de estado — siempre visible */}
           <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)}
