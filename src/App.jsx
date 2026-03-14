@@ -1642,6 +1642,11 @@ function ModuloCobro({ t, usuario, token, s }) {
   const [drill,          setDrill]          = useState([])
   const [hoveredBar,     setHoveredBar]     = useState(null)
   const [primerNivel,    setPrimerNivel]    = useState('capitulo')
+  const [busquedaTipo,   setBusquedaTipo]   = useState('')
+  const [busquedaV1,     setBusquedaV1]     = useState('')
+  const [busquedaV2,     setBusquedaV2]     = useState('')
+  const [pagina,         setPagina]         = useState(1)
+  const POR_PAGINA = 50
 
   const NIVELES = ['capitulo', 'item', 'pk_id', 'acta', 'calzada']
   const NOM     = { capitulo:'Capítulo', item:'Ítem', pk_id:'PK_ID', acta:'Acta', calzada:'Calzada' }
