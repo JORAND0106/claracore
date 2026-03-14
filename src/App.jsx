@@ -730,49 +730,51 @@ async function cargarRegistros(modoPapelera) {
   // ── Import CSV ─────────────────────────────────────────────────────────────
   async function handleImportCSV(e) {
     const file = e.target.files[0]; if (!file) return
-    const raw = await file.text()
+    const raw  = await file.text()
     const text = raw.replace(/^\uFEFF/, '')
-    const firstLine = text.split(/\r?\n/)[0]
-    const sep = (firstLine.match(/;/g)||[]).length > (firstLine.match(/,/g)||[]).length ? ';' : ','
-    const lines = text.split(/\r?\n/).filter(l => l.trim())
-    const headers = lines[0].split(sep).map(h => h.replace(/^"|"$/g, '').trim())
-    const normalize = s => s.toLowerCase().replace(/\s+/g, ' ').trim()
-    const MAP = {
-      'pk_id':'pk_id','capitulo':'capitulo','competencia':'competencia',
-      'item':'item','descripción':'descripcion','descripcion':'descripcion',
-      'und':'und','calzada':'calzada','tramo':'tramo',
-      'abs. inicio':'abs_inicio','abs. final':'abs_final',
-      'vlr unitario':'vlr_unitario',
-      'no. inicio':'no_inicio','no. inicio':'no_inicio','no.inicio':'no_inicio','no inicio':'no_inicio',
-      'no. final':'no_final','no. final':'no_final','no.final':'no_final','no final':'no_final',
-      'area/long/nod':'area_long_nod','ancho':'ancho','espesor':'espesor',
-      'cant.total':'cant_total','costo directo':'costo_directo',
-      'tipo de ejecución':'tipo_ejecucion','tipo de entidad':'tipo_entidad',
-      'id_pol':'id_pol','observación':'observacion','observacion':'observacion',
-      'enthandle':'ent_handle','txthandle':'txt_handle',
-      'layerent':'layer_ent','layertxt':'layer_txt',
-      'colorhex':'color_hex','guid':'guid',
-      'x_label (este)':'x_label','y_label (norte)':'y_label',
-      'revisado (true/false)':'revisado','observación externa':'observacion_externa',
+
+    // Parser CSV robusto — respeta campos entre comillas con separador interno
+    function parseCSVLine(line, sep) {
+      const result = []; let cur = ''; let inQuote = false
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i]
+        if (ch === '"') { inQuote = !inQuote }
+        else if (ch === sep && !inQuote) { result.push(cur.trim()); cur = '' }
+        else { cur += ch }
+      }
+      result.push(cur.trim())
+      return result
     }
 
-    const NUMS = new Set(['vlr_unitario','area_long_nod','ancho','espesor','cant_total','costo_directo','x_label','y_label'])
+    const lines = text.split(/\r?\n/).filter(l => l.trim())
+    const firstLine = lines[0]
+    const sep = (firstLine.match(/;/g)||[]).length > (firstLine.match(/,/g)||[]).length ? ';' : ','
+    const headers = parseCSVLine(firstLine, sep).map(h => h.replace(/^"|"$/g,'').trim().toUpperCase())
+
+    const MAP = {
+      'ACTA RPO':'acta','ACTA':'acta','SEMANA':'semana','FECHA':'fecha',
+      'CAPITULO':'capitulo','COMPETENCIA':'competencia',
+      'ABS INCIAL':'abs_inicial','ABS INICIAL':'abs_inicial','ABS FINAL':'abs_final',
+      'CIV':'civ','ITEM':'item','DESCRIPCION':'descripcion','DESCRIPCIÓN':'descripcion',
+      'UND':'und','LONGITUD':'longitud','ANCHO':'ancho','ESPESOR':'espesor',
+      'CANTIDAD':'cantidad','VALOR UNITARIO':'valor_unitario','COSTO DIRECTO':'costo_directo',
+      'CALZADA':'calzada','TRAMO INICIO':'tramo_inicio','TRAMO FINAL':'tramo_final','PK_ID':'pk_id'
+    }
+    const NUMS = new Set(['acta','longitud','ancho','espesor','cantidad','valor_unitario','costo_directo'])
     const rows = []
     for (let i = 1; i < lines.length; i++) {
-      const vals = lines[i].split(sep).map(v => v.replace(/^"|"$/g, '').trim())
+      const vals = parseCSVLine(lines[i], sep).map(v => v.replace(/^"|"$/g,'').trim())
       const obj = {}
       headers.forEach((h, idx) => {
-        const key = MAP[normalize(h)] ?? MAP[normalize(h).replace(/\.\s*/g, '.')] ?? MAP[normalize(h).replace(/[.\s]/g, '')]; if (!key) return
+        const key = MAP[h]; if (!key) return
         const v = vals[idx] || ''
-        if (NUMS.has(key)) { const n = parseFloat(v.replace(/[,$]/g, '')); obj[key] = isNaN(n) ? null : n }
+        if (NUMS.has(key)) { const n = parseFloat(v.replace(/[,$]/g,'')); obj[key] = isNaN(n) ? null : n }
         else obj[key] = v || null
       })
       if (obj.pk_id || obj.item) rows.push(obj)
     }
     setModalImport({ rows, fileName: file.name })
-    setModoImport('replace')
-    setConfirmReplace(false)
-    e.target.value = ''
+    setModoImport('append'); setConfirmReplace(false); e.target.value = ''
   }
 
   async function ejecutarImport() {
