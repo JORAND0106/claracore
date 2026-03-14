@@ -1721,7 +1721,7 @@ async function cargarRegistros() {
       agg[key].cantTotal += r.cantidad ?? 0
       agg[key].count++
     })
-    return Object.values(agg).sort((a,b) => String(a.name).localeCompare(String(b.name), 'es', {numeric:true})).slice(0, 20)
+    return Object.values(agg).sort((a,b) => String(a.name).localeCompare(String(b.name), 'es', {numeric:true}))
   }, [registrosFiltrados, nivelActual])
 
   const costoTotal = useMemo(() =>
@@ -1746,7 +1746,12 @@ async function cargarRegistros() {
   // ── Import CSV ──────────────────────────────────────────────────────────────
   async function handleImportCSV(e) {
     const file = e.target.files[0]; if (!file) return
-    const raw  = await file.text()
+    // Intentar Latin-1 primero; si hay caracteres de reemplazo, quedarse con UTF-8
+    const rawLatin  = await file.arrayBuffer()
+    const decodedLatin = new TextDecoder('iso-8859-1').decode(rawLatin)
+    const decodedUTF8  = new TextDecoder('utf-8').decode(rawLatin)
+    // Si UTF-8 tiene caracteres de reemplazo (�) usar Latin-1, si no usar UTF-8
+    const raw = decodedUTF8.includes('\uFFFD') ? decodedLatin : decodedUTF8
     const text = raw.replace(/^\uFEFF/, '')
     const firstLine = text.split(/\r?\n/)[0]
     const sep = (firstLine.match(/;/g)||[]).length > (firstLine.match(/,/g)||[]).length ? ';' : ','
