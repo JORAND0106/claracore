@@ -1827,7 +1827,7 @@ async function cargarRegistros() {
     }
     if (ok) msj = `✅ ${rows.length} registros ${modoImport === 'replace' ? 'cargados' : 'agregados'}`
     setImportMsg(msj); setImporting(false); setImportProgreso(0)
-    if (ok) { setDrill([]); await cargarRegistros() }
+    if (ok) { setDrill([]); setRegistros([]) }
     setTimeout(() => setImportMsg(''), 8000)
   }
 
