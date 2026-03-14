@@ -2522,15 +2522,18 @@ export default function App() {
   // ── Detección de nueva versión ─────────────────────────────────────────────
   const [hayNuevaVersion, setHayNuevaVersion] = useState(false)
   useEffect(() => {
-    const scriptActual = [...document.querySelectorAll('script[src]')]
-      .map(s => s.src).find(s => s.includes('/assets/index'))
-    if (!scriptActual) return
+    let htmlBaseline = null
+    // Captura el html inicial como baseline
+    fetch(`/index.html?_=${Date.now()}`, { cache: 'no-store' })
+      .then(r => r.text())
+      .then(html => { htmlBaseline = html })
+      .catch(() => {})
     const intervalo = setInterval(async () => {
+      if (!htmlBaseline) return
       try {
         const res = await fetch(`/index.html?_=${Date.now()}`, { cache: 'no-store' })
         const html = await res.text()
-        const match = html.match(/src="(\/assets\/index[^"]+)"/)
-        if (match && match[1] && !scriptActual.endsWith(match[1])) {
+        if (html !== htmlBaseline) {
           setHayNuevaVersion(true)
           clearInterval(intervalo)
         }
