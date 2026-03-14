@@ -1666,9 +1666,36 @@ async function cargarRegistros() {
     setLoading(false)
   }
 
-  const registrosFiltrados = useMemo(() =>
-    registros.filter(r => drill.every(({campo, valor}) => r[campo] === valor))
-  , [registros, drill])
+  const registrosFiltrados = useMemo(() => {
+    const parseAbs = s => s ? parseFloat(String(s).replace('+', '')) : null
+    return registros.filter(r => {
+      if (!drill.every(({campo, valor}) => r[campo] === valor)) return false
+      if (busquedaTipo === 'nodo') {
+        const v1 = busquedaV1.trim().toLowerCase()
+        const v2 = busquedaV2.trim().toLowerCase()
+        if (v1 && !(r.tramo_inicio || '').toLowerCase().includes(v1)) return false
+        if (v2 && !(r.tramo_final  || '').toLowerCase().includes(v2)) return false
+      } else if (busquedaTipo === 'abscisa') {
+        const ini = parseAbs(r.abs_inicial)
+        const v1 = busquedaV1.trim() !== '' ? parseFloat(busquedaV1) : null
+        const v2 = busquedaV2.trim() !== '' ? parseFloat(busquedaV2) : null
+        if (v1 !== null || v2 !== null) {
+          if (ini === null) return false
+          if (v1 !== null && ini < v1) return false
+          if (v2 !== null && ini > v2) return false
+        }
+      } else if (busquedaTipo === 'idpol') {
+        const v1 = busquedaV1.trim().toLowerCase()
+        if (v1 && !(r.pk_id || '').toLowerCase().includes(v1)) return false
+      }
+      return true
+    })
+  }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2])
+
+  const totalPaginasCobro = Math.ceil(registrosFiltrados.length / POR_PAGINA)
+  const registrosPagina = useMemo(() =>
+    registrosFiltrados.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA)
+  , [registrosFiltrados, pagina])
 
   const chartData = useMemo(() => {
     if (!nivelActual || registros.length === 0) return []
@@ -1693,6 +1720,8 @@ async function cargarRegistros() {
   const costoTotal = useMemo(() =>
     registrosFiltrados.reduce((s,r) => s + (r.costo_directo ?? 0), 0)
   , [registrosFiltrados])
+
+  useEffect(() => setPagina(1), [registrosFiltrados.length])
 
   function handleBarClick(barData) {
     if (!nivelActual || !barData?.name) return
@@ -1747,21 +1776,36 @@ async function cargarRegistros() {
     if (modoImport === 'replace' && !confirmReplace) { setConfirmReplace(true); return }
     const { rows } = modalImport
     setModalImport(null); setImporting(true); setImportProgreso(0)
-    const BATCH = 500; let ok = true; let msj = ''
+    const BATCH = 300; let ok = true; let msj = ''
+    // Si es replace, primero limpiamos en una request separada
+    if (modoImport === 'replace') {
+      setImportMsg('🗑️ Limpiando registros anteriores...')
+      const clearRes = await fetch(`${API}/cobro/${contratoId}/clear`, {
+        method: 'DELETE', headers: { Authorization: `Bearer ${token}` }
+      })
+      if (!clearRes.ok) {
+        setImportMsg('❌ Error al limpiar registros anteriores')
+        setImporting(false); setImportProgreso(0); return
+      }
+    }
+    // Luego insertamos en batches pequeños
     for (let i = 0; i < rows.length; i += BATCH) {
       const batch = rows.slice(i, i + BATCH)
-      const mode  = i === 0 ? modoImport : 'append'
-      const res = await fetch(`${API}/cobro/${contratoId}/bulk?mode=${mode}`, {
-        method:'POST', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
+      const res = await fetch(`${API}/cobro/${contratoId}/bulk`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(batch)
       })
-      if (!res.ok) { const d = await res.json(); msj = `❌ Error: ${d.detail}`; ok = false; break }
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        msj = `❌ Error en batch ${Math.floor(i/BATCH)+1}: ${d.detail || 'Error desconocido'}`
+        ok = false; break
+      }
       setImportProgreso(Math.round(((i + BATCH) / rows.length) * 100))
     }
     if (ok) msj = `✅ ${rows.length} registros ${modoImport === 'replace' ? 'cargados' : 'agregados'}`
     setImportMsg(msj); setImporting(false); setImportProgreso(0)
     if (ok) { setDrill([]); await cargarRegistros() }
-    setTimeout(() => setImportMsg(''), 5000)
+    setTimeout(() => setImportMsg(''), 8000)
   }
 
   const thStyle = { padding:'8px 10px', fontSize:'11px', fontWeight:'700', letterSpacing:'0.5px', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
@@ -1813,8 +1857,52 @@ async function cargarRegistros() {
         {importMsg && <span style={{ fontSize:'13px',color:importMsg.startsWith('✅')?'#16A34A':importMsg.startsWith('❌')?'#DC2626':t.textMuted }}>{importMsg}</span>}
         <span style={{ marginLeft:'auto',fontSize:'12px',color:t.textMuted }}>
           {registros.length} total · {registrosFiltrados.length} filtrados
+          {totalPaginasCobro > 1 && (
+            <span style={{ marginLeft:'16px', display:'inline-flex', alignItems:'center', gap:'6px' }}>
+              <button onClick={() => setPagina(p => Math.max(1, p-1))} disabled={pagina===1}
+                style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', cursor:pagina===1?'default':'pointer', color:pagina===1?t.textMuted:t.text }}>‹</button>
+              <span style={{ fontSize:'11px', color:t.textMuted }}>Pág. {pagina} / {totalPaginasCobro}</span>
+              <button onClick={() => setPagina(p => Math.min(totalPaginasCobro, p+1))} disabled={pagina===totalPaginasCobro}
+                style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', cursor:pagina===totalPaginasCobro?'default':'pointer', color:pagina===totalPaginasCobro?t.textMuted:t.text }}>›</button>
+            </span>
+          )}
         </span>
       </div>
+
+      {/* ── Barra de búsqueda cobro ── */}
+      {registros.length > 0 && (
+        <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', marginBottom:'10px', boxShadow:t.shadow, display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center' }}>
+          <select value={busquedaTipo} onChange={e => { setBusquedaTipo(e.target.value); setBusquedaV1(''); setBusquedaV2('') }}
+            style={{ background:t.inputBg, border:`1.5px solid ${busquedaTipo?colorActual:t.border}`, borderRadius:'7px', padding:'5px 10px', color:busquedaTipo?t.text:t.textMuted, fontSize:'12px', cursor:'pointer' }}>
+            <option value="">🔍 Buscar por…</option>
+            <option value="nodo">🔵 Tramo (Ini/Fin)</option>
+            <option value="abscisa">📍 Abscisa</option>
+            <option value="idpol">🆔 PK_ID</option>
+          </select>
+          {busquedaTipo === 'nodo' && (<>
+            <input value={busquedaV1} onChange={e => setBusquedaV1(e.target.value)} placeholder="Tramo Inicio…"
+              style={{ background:t.inputBg, border:`1.5px solid ${busquedaV1?colorActual:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'140px' }} />
+            <input value={busquedaV2} onChange={e => setBusquedaV2(e.target.value)} placeholder="Tramo Final…"
+              style={{ background:t.inputBg, border:`1.5px solid ${busquedaV2?colorActual:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'140px' }} />
+          </>)}
+          {busquedaTipo === 'abscisa' && (<>
+            <input type="number" value={busquedaV1} onChange={e => setBusquedaV1(e.target.value)} placeholder="Abs. desde (ej: 1000)"
+              style={{ background:t.inputBg, border:`1.5px solid ${busquedaV1?colorActual:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'170px' }} />
+            <input type="number" value={busquedaV2} onChange={e => setBusquedaV2(e.target.value)} placeholder="Abs. hasta (ej: 1200)"
+              style={{ background:t.inputBg, border:`1.5px solid ${busquedaV2?colorActual:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'170px' }} />
+          </>)}
+          {busquedaTipo === 'idpol' && (
+            <input value={busquedaV1} onChange={e => setBusquedaV1(e.target.value)} placeholder="PK_ID…"
+              style={{ background:t.inputBg, border:`1.5px solid ${busquedaV1?colorActual:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'180px' }} />
+          )}
+          {(busquedaV1 || busquedaV2) && (
+            <button onClick={() => { setBusquedaTipo(''); setBusquedaV1(''); setBusquedaV2('') }}
+              style={{ background:'#EF444422', border:'1px solid #EF444466', borderRadius:'7px', padding:'5px 10px', color:'#EF4444', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
+              ✕ Limpiar
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Panel drill-down */}
       {loading ? (
@@ -1902,8 +1990,8 @@ async function cargarRegistros() {
         </div>
       )}
 
-      {/* Tabla — solo visible con drill activo */}
-      {drill.length > 0 && registrosFiltrados.length > 0 && (
+      {/* Tabla — visible con drill activo o búsqueda activa */}
+      {(drill.length > 0 || busquedaTipo) && registrosFiltrados.length > 0 && (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',boxShadow:t.shadow }}>
           <table style={{ width:'100%',borderCollapse:'collapse',fontSize:'12px' }}>
             <thead style={{ background:t.bg }}>
@@ -1914,7 +2002,7 @@ async function cargarRegistros() {
               </tr>
             </thead>
             <tbody>
-              {registrosFiltrados.map((r,i) => (
+              {registrosPagina.map((r,i) => (
                 <tr key={r.id || i} style={{ background:'transparent' }}>
                   <td style={{ ...tdStyle,fontWeight:'700',color:colorActual }}>{r.acta}</td>
                   <td style={{ ...tdStyle,fontWeight:'600' }}>{r.pk_id}</td>
