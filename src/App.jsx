@@ -672,9 +672,9 @@ async function cargarRegistros(modoPapelera) {
           if (v1 !== null && ini < v1) return false
           if (v2 !== null && ini > v2) return false
         }
-      } else if (busquedaTipo === 'idpol') {
+      } else if (busquedaTipo === 'registro') {
         const v1 = busquedaV1.trim().toLowerCase()
-        if (v1 && !(r.id_pol || '').toLowerCase().includes(v1)) return false
+        if (v1 && !(r.registro || '').toLowerCase().includes(v1)) return false
       }
       // Filtro permanente de estado
       if (filtroEstado) {
@@ -1109,10 +1109,12 @@ async function darDeBaja(id) {
 
       {/* ── Toolbar ── */}
       <div style={{ display:'flex',gap:'12px',alignItems:'center',marginBottom:'16px',flexWrap:'wrap' }}>
-        <label style={{ background:t.primary,color:'#fff',border:'none',borderRadius:'8px',padding:'9px 18px',fontSize:'13px',fontWeight:'600',cursor:importing?'wait':'pointer',opacity:importing?0.7:1 }}>
-          {importing ? `Importando ${importProgreso}%...` : '📂 Importar CSV'}
-          <input type="file" accept=".csv" style={{ display:'none' }} onChange={handleImportCSV} disabled={importing} />
-        </label>
+        {esDeveloper && (
+          <label style={{ background:colorActual,color:'#fff',border:'none',borderRadius:'8px',padding:'9px 18px',fontSize:'13px',fontWeight:'600',cursor:importing?'wait':'pointer',opacity:importing?0.7:1 }}>
+            {importing ? `Importando ${importProgreso}%...` : '📂 Importar CSV'}
+            <input type="file" accept=".csv" style={{ display:'none' }} onChange={handleImportCSV} disabled={importing} />
+          </label>
+        )}
         {importing && (
           <div style={{ flex:1,maxWidth:'200px',height:'6px',background:t.border,borderRadius:'3px',overflow:'hidden' }}>
             <div style={{ width:`${importProgreso}%`,height:'100%',background:t.primary,borderRadius:'3px',transition:'width 0.3s' }} />
@@ -1631,7 +1633,7 @@ async function darDeBaja(id) {
 // ─── MÓDULO SICOE ─────────────────────────────────────────────────────────────
 function ModuloCobro({ t, usuario, token, s }) {
   const API = 'https://claracore-backend.azurewebsites.net'
-  const contratoId = usuario?.contrato_id
+  const esDeveloper = usuario?.cargo_nombre?.toLowerCase() === 'desarrollador'
 
   const [registros,      setRegistros]      = useState([])
   const [loading,        setLoading]        = useState(false)
@@ -1789,7 +1791,7 @@ async function cargarRegistros() {
     if (modoImport === 'replace' && !confirmReplace) { setConfirmReplace(true); return }
     const { rows } = modalImport
     setModalImport(null); setImporting(true); setImportProgreso(0)
-    const BATCH = 300; let ok = true; let msj = ''
+    let ok = true; let msj = ''
     // Si es replace, primero limpiamos en una request separada
     if (modoImport === 'replace') {
       setImportMsg('🗑️ Limpiando registros anteriores...')
@@ -1802,18 +1804,26 @@ async function cargarRegistros() {
       }
     }
     // Luego insertamos en batches pequeños
-    for (let i = 0; i < rows.length; i += BATCH) {
-      const batch = rows.slice(i, i + BATCH)
-      const res = await fetch(`${API}/cobro/${contratoId}/bulk`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(batch)
-      })
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}))
-        msj = `❌ Error en batch ${Math.floor(i/BATCH)+1}: ${d.detail || 'Error desconocido'}`
+    const BATCH = 500
+    const PARALELO = 5  // batches simultáneos
+    const chunks = []
+    for (let i = 0; i < rows.length; i += BATCH) chunks.push(rows.slice(i, i + BATCH))
+
+    for (let i = 0; i < chunks.length; i += PARALELO) {
+      const grupo = chunks.slice(i, i + PARALELO)
+      const resultados = await Promise.all(grupo.map(batch =>
+        fetch(`${API}/cobro/${contratoId}/bulk`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(batch)
+        })
+      ))
+      const fallido = resultados.find(r => !r.ok)
+      if (fallido) {
+        const d = await fallido.json().catch(() => ({}))
+        msj = `❌ Error en grupo ${Math.floor(i/PARALELO)+1}: ${d.detail || 'Error desconocido'}`
         ok = false; break
       }
-      setImportProgreso(Math.round(((i + BATCH) / rows.length) * 100))
+      setImportProgreso(Math.round(((i + PARALELO) * BATCH / rows.length) * 100))
     }
     if (ok) msj = `✅ ${rows.length} registros ${modoImport === 'replace' ? 'cargados' : 'agregados'}`
     setImportMsg(msj); setImporting(false); setImportProgreso(0)
@@ -1858,10 +1868,12 @@ async function cargarRegistros() {
 
       {/* Toolbar */}
       <div style={{ display:'flex',gap:'12px',alignItems:'center',marginBottom:'16px',flexWrap:'wrap' }}>
-        <label style={{ background:colorActual,color:'#fff',border:'none',borderRadius:'8px',padding:'9px 18px',fontSize:'13px',fontWeight:'600',cursor:importing?'wait':'pointer',opacity:importing?0.7:1 }}>
-          {importing ? `Importando ${importProgreso}%...` : '📂 Importar CSV'}
-          <input type="file" accept=".csv" style={{ display:'none' }} onChange={handleImportCSV} disabled={importing} />
-        </label>
+        {esDeveloper && (
+          <label style={{ background:t.primary,color:'#fff',border:'none',borderRadius:'8px',padding:'9px 18px',fontSize:'13px',fontWeight:'600',cursor:importing?'wait':'pointer',opacity:importing?0.7:1 }}>
+            {importing ? `Importando ${importProgreso}%...` : '📂 Importar CSV'}
+            <input type="file" accept=".csv" style={{ display:'none' }} onChange={handleImportCSV} disabled={importing} />
+          </label>
+        )}
         {importing && (
           <div style={{ flex:1,maxWidth:'200px',height:'6px',background:t.border,borderRadius:'3px',overflow:'hidden' }}>
             <div style={{ width:`${importProgreso}%`,height:'100%',background:colorActual,borderRadius:'3px',transition:'width 0.3s' }} />
@@ -1890,7 +1902,7 @@ async function cargarRegistros() {
             <option value="">🔍 Buscar por…</option>
             <option value="nodo">🔵 Tramo (Ini/Fin)</option>
             <option value="abscisa">📍 Abscisa</option>
-            <option value="idpol">🆔 PK_ID</option>
+            <option value="registro">🆔 Registro</option>
           </select>
           {busquedaTipo === 'nodo' && (<>
             <input value={busquedaV1} onChange={e => setBusquedaV1(e.target.value)} placeholder="Tramo Inicio…"
