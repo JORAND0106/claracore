@@ -1634,7 +1634,7 @@ async function darDeBaja(id) {
 function ModuloCobro({ t, usuario, token, s }) {
   const API = 'https://claracore-backend.azurewebsites.net'
   const esDeveloper = usuario?.cargo_nombre?.toLowerCase() === 'desarrollador'
-
+  const contratoId = usuario?.contrato_id
   const [registros,      setRegistros]      = useState([])
   const [loading,        setLoading]        = useState(false)
   const [importing,      setImporting]      = useState(false)
