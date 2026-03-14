@@ -2516,10 +2516,12 @@ export default function App() {
   const [activeTheme, setActiveTheme] = useState(getAutoTheme())
   const [modal, setModal] = useState(null)
   const [usuario, setUsuario] = useState(() => {
-    // ── Detección de nueva versión ─────────────────────────────────────────────
+    try { return JSON.parse(localStorage.getItem('cc_usuario')) } catch { return null }
+  })
+
+  // ── Detección de nueva versión ─────────────────────────────────────────────
   const [hayNuevaVersion, setHayNuevaVersion] = useState(false)
   useEffect(() => {
-    // Captura el hash del bundle actual (el src del script principal de Vite)
     const scriptActual = [...document.querySelectorAll('script[src]')]
       .map(s => s.src).find(s => s.includes('/assets/index'))
     if (!scriptActual) return
@@ -2536,8 +2538,6 @@ export default function App() {
     }, 2 * 60 * 1000) // cada 2 minutos
     return () => clearInterval(intervalo)
   }, [])
-    try { return JSON.parse(localStorage.getItem('cc_usuario')) } catch { return null }
-  })
 
   const t = themes[activeTheme]
 
