@@ -1465,7 +1465,7 @@ async function darDeBaja(id) {
       )}
 
       {/* ── Tabla ── */}
-      {drill.length > 0 && registrosFiltrados.length > 0 && (
+      {(drill.length > 0 || busquedaTipo || filtroEstado) && registrosFiltrados.length > 0 && (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',boxShadow:t.shadow }}>
           <table style={{ width:'100%',borderCollapse:'collapse',fontSize:'12px' }}>
             <thead style={{ background:t.bg }}>
@@ -2516,6 +2516,26 @@ export default function App() {
   const [activeTheme, setActiveTheme] = useState(getAutoTheme())
   const [modal, setModal] = useState(null)
   const [usuario, setUsuario] = useState(() => {
+    // ── Detección de nueva versión ─────────────────────────────────────────────
+  const [hayNuevaVersion, setHayNuevaVersion] = useState(false)
+  useEffect(() => {
+    // Captura el hash del bundle actual (el src del script principal de Vite)
+    const scriptActual = [...document.querySelectorAll('script[src]')]
+      .map(s => s.src).find(s => s.includes('/assets/index'))
+    if (!scriptActual) return
+    const intervalo = setInterval(async () => {
+      try {
+        const res = await fetch(`/index.html?_=${Date.now()}`, { cache: 'no-store' })
+        const html = await res.text()
+        const match = html.match(/src="(\/assets\/index[^"]+)"/)
+        if (match && match[1] && !scriptActual.endsWith(match[1])) {
+          setHayNuevaVersion(true)
+          clearInterval(intervalo)
+        }
+      } catch { /* silencioso */ }
+    }, 2 * 60 * 1000) // cada 2 minutos
+    return () => clearInterval(intervalo)
+  }, [])
     try { return JSON.parse(localStorage.getItem('cc_usuario')) } catch { return null }
   })
 
@@ -2708,6 +2728,55 @@ if (contratos.length > 1) {
 
   if (usuario) return (
     <>
+    {hayNuevaVersion && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 99999,
+          background: 'linear-gradient(90deg, #0077B6, #00B4C6)',
+          padding: '12px 24px', display: 'flex', alignItems: 'center',
+          justifyContent: 'space-between', boxShadow: '0 2px 16px rgba(0,0,0,0.3)'
+        }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+            <span style={{ fontSize:'18px' }}>🔄</span>
+            <div>
+              <div style={{ fontSize:'13px', fontWeight:'700', color:'#fff' }}>
+                ClaraCore tiene una actualización disponible
+              </div>
+              <div style={{ fontSize:'11px', color:'rgba(255,255,255,0.85)', marginTop:'2px' }}>
+                Ofrecemos disculpas por la interrupción — trabajamos continuamente para mejorar tu experiencia.
+              </div>
+            </div>
+          </div>
+          <div style={{ display:'flex', gap:'10px', flexShrink:0 }}>
+            <button
+              onClick={() => {
+                const ok = window.confirm(
+                  '⚠️ Antes de actualizar:\n\n' +
+                  '• Si tienes dimensiones editadas sin guardar → cancela, haz clic en "Recalcular" primero.\n' +
+                  '• Si tienes estados pendientes de aplicar → cancela, haz clic en "Aplicar" primero.\n\n' +
+                  'Los datos ya guardados en la plataforma NO se pierden.\n\n' +
+                  '¿Deseas actualizar ahora?'
+                )
+                if (ok) window.location.reload()
+              }}
+              style={{
+                background: '#fff', color: '#0077B6', border: 'none',
+                borderRadius: '8px', padding: '8px 18px', fontSize: '13px',
+                fontWeight: '700', cursor: 'pointer', whiteSpace: 'nowrap'
+              }}>
+              🔃 Actualizar ahora         
+            </button>
+            <button
+              onClick={() => setHayNuevaVersion(false)}
+              style={{
+                background: 'rgba(255,255,255,0.2)', color: '#fff', border: 'none',
+                borderRadius: '8px', padding: '8px 14px', fontSize: '13px',
+                cursor: 'pointer', whiteSpace: 'nowrap'
+              }}>
+              Después
+            </button>
+          </div>
+        </div>
+      )}
       {bannerMsg && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 99999, background: '#0f2038', borderBottom: '2px solid #00afc5', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '13px', color: '#e0f4f7', boxShadow: '0 2px 12px rgba(0,0,0,0.4)' }}>
           <span>⚡ {bannerMsg}</span>
