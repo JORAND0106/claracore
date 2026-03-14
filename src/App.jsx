@@ -508,6 +508,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const [busquedaTipo, setBusquedaTipo] = useState('')   // 'nodo' | 'abscisa' | 'idpol'
   const [busquedaV1,   setBusquedaV1]   = useState('')   // nodo_ini | abs_ini | idpol
   const [busquedaV2,   setBusquedaV2]   = useState('')   // nodo_fin | abs_fin (no se usa en idpol)
+  const [filtroEstado, setFiltroEstado] = useState('')   // filtro permanente de estado de revisión
   const [guardandoBulk, setGuardandoBulk] = useState(false)
   const [itemBusqueda, setItemBusqueda] = useState('')
   const [itemDropOpen, setItemDropOpen] = useState(false)
@@ -575,10 +576,12 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const puedeEliminar = esDeveloper || (_permPpto?.eliminar ?? false)
   const [verPapelera, setVerPapelera] = useState(false)  
 
-async function cargarRegistros() {
+async function cargarRegistros(modoPapelera) {
     if (!contratoId) return
     setLoading(true)
-    const res = await fetch(`${API}/presupuesto/${contratoId}`, { headers: { Authorization: `Bearer ${token}` } })
+    const esPapelera = modoPapelera !== undefined ? modoPapelera : verPapelera
+    const params = esPapelera ? '?papelera=true' : ''
+    const res = await fetch(`${API}/presupuesto/${contratoId}${params}`, { headers: { Authorization: `Bearer ${token}` } })
     if (res.ok) setRegistros(await res.json())
     setLoading(false)
     setPagina(1)
@@ -660,19 +663,27 @@ async function cargarRegistros() {
         if (v1 && !(r.no_inicio || '').toLowerCase().includes(v1)) return false
         if (v2 && !(r.no_final  || '').toLowerCase().includes(v2)) return false
       } else if (busquedaTipo === 'abscisa') {
+        // Ambos campos filtran abs_inicio como rango (desde / hasta)
         const ini = parseAbs(r.abs_inicio)
-        const fin = parseAbs(r.abs_final)
         const v1 = busquedaV1.trim() !== '' ? parseFloat(busquedaV1) : null
         const v2 = busquedaV2.trim() !== '' ? parseFloat(busquedaV2) : null
-        if (v1 !== null && ini !== null && ini < v1) return false
-        if (v2 !== null && fin !== null && fin > v2) return false
+        if (v1 !== null || v2 !== null) {
+          if (ini === null) return false
+          if (v1 !== null && ini < v1) return false
+          if (v2 !== null && ini > v2) return false
+        }
       } else if (busquedaTipo === 'idpol') {
         const v1 = busquedaV1.trim().toLowerCase()
         if (v1 && !(r.id_pol || '').toLowerCase().includes(v1)) return false
       }
+      // Filtro permanente de estado
+      if (filtroEstado) {
+        const estadoReal = r.revisado || 'No Revisado'
+        if (estadoReal !== filtroEstado) return false
+      }
       return true
     })
-  }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2])
+  }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado])
 
   const chartData = useMemo(() => {
     if (!nivelActual || registros.length === 0) return []
@@ -921,12 +932,19 @@ function zoomEnDwg(registro) {
   }
 
 async function darDeBaja(id) {
-    if (!window.confirm('¿Dar de baja este registro? Se ocultará de la vista y su layer cambiará en CAD.')) return
+    if (!dwgEnlazado) {
+      alert('⚠️ Para dar de baja un registro necesitas tener el DWG enlazado.')
+      return
+    }
+    const comentario = await pedirComentario('validacion', true) // obligatorio
+    if (comentario === null) return
     const res = await fetch(`${API}/presupuesto/item/${id}/dar-baja`, {
       method: 'PUT', headers: { Authorization: `Bearer ${token}` }
     })
-    if (res.ok) await cargarRegistros()
-    else alert('Error al dar de baja el registro')
+    if (res.ok) {
+      await crearComentarios([id], 'validacion', `[BAJA] ${comentario}`)
+      await cargarRegistros()
+    } else alert('Error al dar de baja el registro')
   }
 
   const thStyle = { padding:'8px 10px', fontSize:'11px', fontWeight:'700', letterSpacing:'0.5px', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
@@ -1303,7 +1321,7 @@ async function darDeBaja(id) {
       {/* ── Indicador DWG ─────────────────────────────────────────── */}
 <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', flexWrap:'wrap' }}>
         {puedeEliminar && (
-          <button onClick={() => setVerPapelera(v => !v)}
+          <button onClick={() => { const v = !verPapelera; setVerPapelera(v); cargarRegistros(v) }}
             style={{ background: verPapelera ? '#EF444422' : t.bgCard, border:`1px solid ${verPapelera ? '#EF4444' : t.border}`, borderRadius:'8px', padding:'6px 14px', color: verPapelera ? '#EF4444' : t.textMuted, fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
             🗑️ {verPapelera ? 'Ver activos' : 'Papelera'}
           </button>
@@ -1321,6 +1339,12 @@ async function darDeBaja(id) {
       </div>
       {(puedeEditar || puedeValidar) && registrosFiltrados.length > 0 && (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'10px',boxShadow:t.shadow,display:'flex',flexWrap:'wrap',gap:'8px',alignItems:'center' }}>
+          {/* Filtro de estado — siempre visible */}
+          <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)}
+            style={{ background:t.inputBg, border:`1.5px solid ${filtroEstado ? estadoColor(filtroEstado) : t.border}`, borderRadius:'7px', padding:'5px 10px', color: filtroEstado ? estadoColor(filtroEstado) : t.textMuted, fontSize:'12px', cursor:'pointer', fontWeight: filtroEstado ? '700' : '400' }}>
+            <option value="">🎨 Estado…</option>
+            {SEMAFORO.map(s => <option key={s.valor} value={s.valor}>{s.label} {s.valor}</option>)}
+          </select>
           {seleccionados.size === 0 ? (
             <div style={{ display:'flex', gap:'6px', alignItems:'center', flexWrap:'wrap' }}>
               <select value={busquedaTipo} onChange={e => { setBusquedaTipo(e.target.value); setBusquedaV1(''); setBusquedaV2('') }}
@@ -1337,9 +1361,9 @@ async function darDeBaja(id) {
                   style={{ background:t.inputBg, border:`1.5px solid ${busquedaV2?t.primary:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'130px' }} />
               </>)}
               {busquedaTipo === 'abscisa' && (<>
-                <input type="number" value={busquedaV1} onChange={e => setBusquedaV1(e.target.value)} placeholder="Abs. Inicio (ej: 1450.32)"
+                <input type="number" value={busquedaV1} onChange={e => setBusquedaV1(e.target.value)} placeholder="Abs. desde (ej: 1125.32)"
                   style={{ background:t.inputBg, border:`1.5px solid ${busquedaV1?t.primary:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'170px' }} />
-                <input type="number" value={busquedaV2} onChange={e => setBusquedaV2(e.target.value)} placeholder="Abs. Final (ej: 2100.00)"
+                <input type="number" value={busquedaV2} onChange={e => setBusquedaV2(e.target.value)} placeholder="Abs. hasta (ej: 1265.23)"
                   style={{ background:t.inputBg, border:`1.5px solid ${busquedaV2?t.primary:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'170px' }} />
               </>)}
               {busquedaTipo === 'idpol' && (
@@ -1347,7 +1371,7 @@ async function darDeBaja(id) {
                   style={{ background:t.inputBg, border:`1.5px solid ${busquedaV1?t.primary:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'180px' }} />
               )}
               {(busquedaV1 || busquedaV2) && (
-                <button onClick={() => { setBusquedaTipo(''); setBusquedaV1(''); setBusquedaV2('') }}
+                <button onClick={() => { setBusquedaTipo(''); setBusquedaV1(''); setBusquedaV2(''); setFiltroEstado('') }}
                   style={{ background:'#EF444422', border:'1px solid #EF444466', borderRadius:'7px', padding:'5px 10px', color:'#EF4444', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
                   ✕ Limpiar
                 </button>
@@ -1570,7 +1594,7 @@ async function darDeBaja(id) {
                         })}
                       </div>
                     </td>
-                    {puedeEliminar && !verPapelera && (
+                    {puedeEliminar && !verPapelera && dwgEnlazado && (
                       <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
                         <button onClick={() => darDeBaja(r.id)}
                           title="Dar de baja"
