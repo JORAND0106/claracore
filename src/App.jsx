@@ -1764,7 +1764,8 @@ async function cargarRegistros() {
       'CIV':'civ','ITEM':'item','DESCRIPCION':'descripcion','DESCRIPCIÓN':'descripcion',
       'UND':'und','LONGITUD':'longitud','ANCHO':'ancho','ESPESOR':'espesor',
       'CANTIDAD':'cantidad','VALOR UNITARIO':'valor_unitario','COSTO DIRECTO':'costo_directo',
-      'CALZADA':'calzada','TRAMO INICIO':'tramo_inicio','TRAMO FINAL':'tramo_final','PK_ID':'pk_id'
+      'CALZADA':'calzada','TRAMO INICIO':'tramo_inicio','TRAMO FINAL':'tramo_final','PK_ID':'pk_id',
+      'REGISTRO':'registro','TRAMO':'tramo','OBSERVACIONES':'observaciones','OBSERVACIÓN':'observaciones'
     }
     const NUMS = new Set(['acta','longitud','ancho','espesor','cantidad','valor_unitario','costo_directo'])
     const rows = []
