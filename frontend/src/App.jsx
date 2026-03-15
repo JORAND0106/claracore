@@ -2955,6 +2955,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                               {/* Área hover invisible con tooltip */}
                               <g>
                                 <rect x={x-2} y={PAD_T} width={BAR_W*2+6} height={H-PAD_T-PAD_B} fill="transparent"
+                                  style={{cursor:'pointer'}}
+                                  onClick={() => setDashDrill([{campo:'capitulo', valor:cap.capitulo}])}
                                   onMouseEnter={e => {
                                     const tip = document.getElementById(`tip-vs-${i}`)
                                     if(tip) tip.style.display='block'
@@ -2964,6 +2966,10 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                                     if(tip) tip.style.display='none'
                                   }}
                                 />
+                                  onMouseLeave={e => {
+                                    const tip = document.getElementById(`tip-vs-${i}`)
+                                    if(tip) tip.style.display='none'
+                                  }}
                                 <g id={`tip-vs-${i}`} style={{display:'none', pointerEvents:'none'}}>
                                   <rect x={Math.min(x-10, totalW-220)} y={Math.min(yP,yC)-68} width="215" height="62" rx="6"
                                     fill={t.bgCard} stroke={t.border} strokeWidth="1"
