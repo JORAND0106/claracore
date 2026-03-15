@@ -2019,17 +2019,97 @@ async function cargarRegistros() {
                   )
                 })}
               </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={Math.max(180, chartData.length * 40 + 20)}>
-                <BarChart data={chartData} layout="vertical" margin={{ left:8, right:80, top:4, bottom:4 }} style={{ cursor:'pointer' }}>
+            ) : nivelActual === 'item' ? (() => {
+              const costoMax = Math.max(...chartData.map(d => d.costo), 1)
+              const gSize = chartData.length > 20 ? 117 : chartData.length > 10 ? 130 : 144
+              return (
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(8, 1fr)', gap:'8px', padding:'4px 2px' }}>
+                  {chartData.map((d, i) => {
+                    const pct   = Math.round((d.costo / costoMax) * 100)
+                    const clamp = Math.min(Math.max(pct, 0), 100)
+                    const color = PALETA[i % PALETA.length]
+                    const cx = gSize/2, cy = gSize*0.57, r = gSize*0.37, sw = gSize*0.076
+                    const START=-135, SPAN=270, fillEnd = START+(clamp/100)*SPAN
+                    const toRad = a => (a*Math.PI)/180
+                    const pt = angle => ({ x: cx+r*Math.cos(toRad(angle)), y: cy+r*Math.sin(toRad(angle)) })
+                    const arcD = (a1,a2) => { const s=pt(a1),e=pt(a2); const large=(a2-a1)>180?1:0; return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)}` }
+                    const nTip = { x: cx+(r-sw-4)*Math.cos(toRad(fillEnd)), y: cy+(r-sw-4)*Math.sin(toRad(fillEnd)) }
+                    return (
+                      <div key={d.name} onClick={() => handleBarClick(d)}
+                        title={`${d.name}\n${fmt(d.costo)}\n${d.count} registros`}
+                        style={{ cursor:'pointer',background:t.bgCard,border:`1.5px solid ${color}55`,borderRadius:'12px',padding:'8px 6px 10px',display:'flex',flexDirection:'column',alignItems:'center',transition:'all 0.2s',boxShadow:`0 2px 12px ${color}1A` }}
+                        onMouseEnter={e => { e.currentTarget.style.transform='translateY(-3px)'; e.currentTarget.style.borderColor=color; e.currentTarget.style.boxShadow=`0 8px 24px ${color}44` }}
+                        onMouseLeave={e => { e.currentTarget.style.transform=''; e.currentTarget.style.borderColor=`${color}55`; e.currentTarget.style.boxShadow=`0 2px 12px ${color}1A` }}>
+                        <div style={{ fontSize:'9px',color:t.textMuted,textAlign:'center',lineHeight:1.3,marginBottom:'3px',width:'100%',padding:'0 2px',overflow:'hidden',display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical' }}>{d.label||d.name}</div>
+                        <svg width={gSize} height={gSize*0.66} viewBox={`0 0 ${gSize} ${gSize*0.66}`} style={{overflow:'visible'}}>
+                          {clamp>0 && <path d={arcD(START,fillEnd)} fill="none" stroke={color} strokeWidth={sw+6} strokeLinecap="round" opacity={0.1}/>}
+                          <path d={arcD(START,START+SPAN)} fill="none" stroke={t.border} strokeWidth={sw} strokeLinecap="round"/>
+                          {clamp>0 && <path d={arcD(START,fillEnd)} fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round"/>}
+                          {[0,25,50,75,100].map(tp => {
+                            const a=START+(tp/100)*SPAN; const p1={x:cx+(r-sw/2-2)*Math.cos(toRad(a)),y:cy+(r-sw/2-2)*Math.sin(toRad(a))}; const p2={x:cx+(r-sw-5)*Math.cos(toRad(a)),y:cy+(r-sw-5)*Math.sin(toRad(a))}
+                            return <line key={tp} x1={p1.x.toFixed(1)} y1={p1.y.toFixed(1)} x2={p2.x.toFixed(1)} y2={p2.y.toFixed(1)} stroke={t.textMuted} strokeWidth={1.2} opacity={0.4}/>
+                          })}
+                          <line x1={cx} y1={cy} x2={nTip.x.toFixed(2)} y2={nTip.y.toFixed(2)} stroke={color} strokeWidth={gSize*0.016} strokeLinecap="round"/>
+                          <circle cx={cx} cy={cy} r={gSize*0.048} fill={color}/><circle cx={cx} cy={cy} r={gSize*0.022} fill={t.bgCard}/>
+                        </svg>
+                        <div style={{ display:'flex',justifyContent:'space-between',width:'100%',padding:'0 3px',marginTop:'2px' }}>
+                          <span style={{ fontSize:'10px',fontWeight:'700',color:t.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'60%' }}>{d.name}</span>
+                          <span style={{ fontSize:'13px',fontWeight:'800',color }}>{pct}%</span>
+                        </div>
+                        <div style={{ fontSize:'9px',color:t.textMuted,marginTop:'2px' }}>{fmtM(d.costo)}</div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })() : nivelActual === 'capitulo' ? (() => {
+              const maxVal = Math.max(...chartData.map(d => d.costo), 1)
+              const BAR_W=22, GAP=10, PAD_L=8, PAD_R=8, H=220, PAD_T=14, PAD_B=28
+              const totalW = PAD_L + chartData.length*(BAR_W+GAP) + PAD_R
+              const scaleH = v => PAD_T + (1-v/maxVal)*(H-PAD_T-PAD_B)
+              return (
+                <div style={{ overflowX:'auto' }}>
+                  <svg width={Math.max(totalW,400)} height={H} style={{ overflow:'visible', display:'block' }}>
+                    {[0,25,50,75,100].map(pct => {
+                      const y = PAD_T+(1-pct/100)*(H-PAD_T-PAD_B)
+                      return <line key={pct} x1={PAD_L} x2={Math.max(totalW,400)} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="3,3"/>
+                    })}
+                    {chartData.map((d,i) => {
+                      const color = PALETA[i%PALETA.length]
+                      const x = PAD_L+i*(BAR_W+GAP)
+                      const y = scaleH(d.costo)
+                      const h = H-PAD_B-y
+                      const nomCorto = String(d.name).length>10 ? String(d.name).slice(0,10)+'…' : String(d.name)
+                      return (
+                        <g key={d.name} onClick={() => handleBarClick(d)} style={{ cursor:'pointer' }}>
+                          <rect x={x} y={y} width={BAR_W} height={Math.max(h,2)} fill={color} rx="3" opacity="0.85"
+                            onMouseEnter={e => { e.currentTarget.style.opacity='1'; const tip=document.getElementById(`tip-scobro-${i}`); if(tip) tip.style.display='block' }}
+                            onMouseLeave={e => { e.currentTarget.style.opacity='0.85'; const tip=document.getElementById(`tip-scobro-${i}`); if(tip) tip.style.display='none' }}/>
+                          <text x={x+BAR_W/2} y={H-10} textAnchor="middle" fontSize="7" fill={t.textMuted}>{nomCorto}</text>
+                          <g id={`tip-scobro-${i}`} style={{display:'none',pointerEvents:'none'}}>
+                            <rect x={Math.min(x-10,Math.max(totalW,400)-190)} y={Math.max(y-50,0)} width="185" height="42" rx="5" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
+                            <text x={Math.min(x-10,Math.max(totalW,400)-190)+10} y={Math.max(y-50,0)+16} fontSize="10" fontWeight="700" fill={t.text}>{String(d.name).length>24?String(d.name).slice(0,24)+'…':String(d.name)}</text>
+                            <text x={Math.min(x-10,Math.max(totalW,400)-190)+10} y={Math.max(y-50,0)+32} fontSize="10" fill={t.textMuted}>
+                              <tspan fontWeight="700" fill={color}>{fmt(d.costo)}</tspan><tspan> · {d.count} reg.</tspan>
+                            </text>
+                          </g>
+                        </g>
+                      )
+                    })}
+                  </svg>
+                </div>
+              )
+            })() : (
+              <ResponsiveContainer width="100%" height={Math.max(180, chartData.length*40+20)}>
+                <BarChart data={chartData} layout="vertical" margin={{ left:8,right:80,top:4,bottom:4 }} style={{ cursor:'pointer' }}>
                   <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke={t.border} />
-                  <XAxis type="number" tickFormatter={fmtM} tick={{ fontSize:10, fill:t.textMuted }} axisLine={false} tickLine={false} />
-                  <YAxis type="category" dataKey="label" width={220} tick={{ fontSize:11, fill:t.text }} tickLine={false} axisLine={false} />
+                  <XAxis type="number" tickFormatter={fmtM} tick={{ fontSize:10,fill:t.textMuted }} axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="label" width={220} tick={{ fontSize:11,fill:t.text }} tickLine={false} axisLine={false} />
                   <Tooltip content={(props) => <PresupuestoTooltip {...props} t={t} color={colorActual} fmt={fmt} />} cursor={{ fill:colorActual+'18' }} />
                   <Bar dataKey="costo" radius={[0,5,5,0]} onClick={handleBarClick} onMouseEnter={(_,i) => setHoveredBar(i)} onMouseLeave={() => setHoveredBar(null)}>
                     {chartData.map((_,i) => {
-                      const color = PALETA[i % PALETA.length]
-                      return <Cell key={i} fill={hoveredBar===null||hoveredBar===i?color:color+'66'} stroke={hoveredBar===i?color:'none'} strokeWidth={2} />
+                      const color = PALETA[i%PALETA.length]
+                      return <Cell key={i} fill={hoveredBar===null||hoveredBar===i?color:color+'66'} stroke={hoveredBar===i?color:'none'} strokeWidth={2}/>
                     })}
                   </Bar>
                 </BarChart>
