@@ -3108,7 +3108,31 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                       dashTablaLoad ? (
                         <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>⏳ Cargando tabla...</div>
                       ) : dashTabla ? (
-                        <div style={{ overflowX:'auto' }}>
+                        <div>
+                          {/* Totales resumen */}
+                          {(() => {
+                            const filas = dashTabla.rows || dashTabla.filas || []
+                            const totalDeltaCant = filas.reduce((s,f) => s + (f.delta_cant ?? ((f.cant_ppto||0)-(f.cant_sicoe||0))), 0)
+                            const totalDeltaCosto = filas.reduce((s,f) => s + (f.delta_costo ?? ((f.costo_ppto||0)-(f.costo_sicoe||0))), 0)
+                            const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+                            return (
+                              <div style={{ display:'flex', gap:'16px', marginBottom:'12px', flexWrap:'wrap' }}>
+                                <div style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 14px', display:'flex', flexDirection:'column', gap:'2px' }}>
+                                  <span style={{ fontSize:'10px', color:t.textMuted, fontWeight:'700', letterSpacing:'0.5px' }}>Δ CANTIDAD TOTAL</span>
+                                  <span style={{ fontSize:'16px', fontWeight:'800', color: totalDeltaCant >= 0 ? '#10B981' : '#EF4444' }}>
+                                    {totalDeltaCant >= 0 ? '+' : ''}{totalDeltaCant.toFixed(2)}
+                                  </span>
+                                </div>
+                                <div style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 14px', display:'flex', flexDirection:'column', gap:'2px' }}>
+                                  <span style={{ fontSize:'10px', color:t.textMuted, fontWeight:'700', letterSpacing:'0.5px' }}>Δ COSTO TOTAL</span>
+                                  <span style={{ fontSize:'16px', fontWeight:'800', color: totalDeltaCosto >= 0 ? '#10B981' : '#EF4444' }}>
+                                    {totalDeltaCosto >= 0 ? '+' : ''}{fmtD(totalDeltaCosto)}
+                                  </span>
+                                </div>
+                              </div>
+                            )
+                          })()}
+                          <div style={{ overflowX:'auto' }}>
                           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
                             <thead>
                               <tr style={{ background:t.bg }}>
@@ -3139,6 +3163,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                               })}
                             </tbody>
                           </table>
+                        </div>
                         </div>
                       ) : (
                         <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>Sin datos</div>
