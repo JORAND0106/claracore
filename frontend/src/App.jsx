@@ -2539,7 +2539,7 @@ function MiniMapaPresupuesto({ t, colores, pkidsActivos, onPkidClick }) {
     const map = new mapboxgl.Map({
       container: mapRef.current,
       style: t.bg === '#0A1628' ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11',
-      center: [-74.05, 4.72], zoom: 11, interactive: true
+      center: [-74.05, 4.72], zoom: 11, interactive: true, bearing: 90
     })
     mapInst.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
@@ -2680,7 +2680,7 @@ function MiniMapaSemaforo({ t, colores, height = 220 }) {
     const map = new mapboxgl.Map({
       container: mapRef.current,
       style: t.bg === '#0A1628' ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11',
-      center: [-74.05, 4.72], zoom: 11, interactive: true,
+      center: [-74.05, 4.72], zoom: 11, interactive: true, bearing: 90,
     })
     mapInstance.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
@@ -3429,15 +3429,15 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                                           onMouseLeave={e => { e.currentTarget.style.opacity='0.85'; const tip=document.getElementById(`tip-drill-${i}`); if(tip) tip.style.display='none' }}/>
                                         <text x={x+BAR_W} y={H-8} textAnchor="middle" fontSize="7" fill={t.textMuted}>{nomCorto}</text>
                                         <g id={`tip-drill-${i}`} style={{display:'none', pointerEvents:'none'}}>
-                                          <rect x={Math.min(x-10, totalW-220)} y={Math.min(yP,yC)-102} width="215" height="100" rx="5" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
-                                          <text x={Math.min(x-10, totalW-220)+10} y={Math.min(yP,yC)-86} fontSize="10" fontWeight="700" fill={t.text}>{String(item.item||'').length>24?String(item.item||'').slice(0,24)+'…':String(item.item||'')}</text>
-                                          <text x={Math.min(x-10, totalW-220)+10} y={Math.min(yP,yC)-74} fontSize="8" fill={t.textMuted}>{String(item.descripcion||'').length>32?String(item.descripcion||'').slice(0,32)+'…':String(item.descripcion||'')}</text>
-                                          <rect x={Math.min(x-10, totalW-220)+10} y={Math.min(yP,yC)-64} width="8" height="8" rx="1" fill="#0077B6"/>
-                                          <text x={Math.min(x-10, totalW-220)+22} y={Math.min(yP,yC)-57} fontSize="9" fill={t.textMuted}>Ppto: <tspan fontWeight="700" fill="#0077B6">{fmtD(item.presupuesto)}</tspan></text>
-                                          <text x={Math.min(x-10, totalW-220)+22} y={Math.min(yP,yC)-44} fontSize="9" fill={t.textMuted}>Cant: <tspan fontWeight="700" fill="#0077B6">{(item.cant_ppto||0).toFixed(2)}</tspan></text>
-                                          <rect x={Math.min(x-10, totalW-220)+10} y={Math.min(yP,yC)-34} width="8" height="8" rx="1" fill="#00A896"/>
-                                          <text x={Math.min(x-10, totalW-220)+22} y={Math.min(yP,yC)-27} fontSize="9" fill={t.textMuted}>Cobro: <tspan fontWeight="700" fill="#00A896">{fmtD(item.cobrado)}</tspan></text>
-                                          <text x={Math.min(x-10, totalW-220)+22} y={Math.min(yP,yC)-14} fontSize="9" fill={t.textMuted}>Cant: <tspan fontWeight="700" fill="#00A896">{(item.cant_cobro||0).toFixed(2)}</tspan></text>
+                                          <rect x={Math.min(x-10, Math.max(totalW,300)-220)} y={H-PAD_B-100} width="215" height="100" rx="5" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
+                                        <text x={Math.min(x-10, Math.max(totalW,300)-220)+10} y={H-PAD_B-84} fontSize="10" fontWeight="700" fill={t.text}>{String(item.item||'').length>24?String(item.item||'').slice(0,24)+'…':String(item.item||'')}</text>
+                                        <text x={Math.min(x-10, Math.max(totalW,300)-220)+10} y={H-PAD_B-72} fontSize="8" fill={t.textMuted}>{String(item.descripcion||'').length>32?String(item.descripcion||'').slice(0,32)+'…':String(item.descripcion||'')}</text>
+                                        <rect x={Math.min(x-10, Math.max(totalW,300)-220)+10} y={H-PAD_B-62} width="8" height="8" rx="1" fill="#0077B6"/>
+                                        <text x={Math.min(x-10, Math.max(totalW,300)-220)+22} y={H-PAD_B-55} fontSize="9" fill={t.textMuted}>Ppto: <tspan fontWeight="700" fill="#0077B6">{fmtD(item.presupuesto)}</tspan></text>
+                                        <text x={Math.min(x-10, Math.max(totalW,300)-220)+22} y={H-PAD_B-42} fontSize="9" fill={t.textMuted}>Cant: <tspan fontWeight="700" fill="#0077B6">{(item.cant_ppto||0).toFixed(2)}</tspan></text>
+                                        <rect x={Math.min(x-10, Math.max(totalW,300)-220)+10} y={H-PAD_B-32} width="8" height="8" rx="1" fill="#00A896"/>
+                                        <text x={Math.min(x-10, Math.max(totalW,300)-220)+22} y={H-PAD_B-25} fontSize="9" fill={t.textMuted}>Cobro: <tspan fontWeight="700" fill="#00A896">{fmtD(item.cobrado)}</tspan></text>
+                                        <text x={Math.min(x-10, Math.max(totalW,300)-220)+22} y={H-PAD_B-12} fontSize="9" fill={t.textMuted}>Cant: <tspan fontWeight="700" fill="#00A896">{(item.cant_cobro||0).toFixed(2)}</tspan></text>
                                         </g>
                                       </g>
                                     )
