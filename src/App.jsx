@@ -1672,6 +1672,7 @@ function ModuloCobro({ t, usuario, token, s }) {
 
   const [chartLoading, setChartLoading] = useState(false)
   const [chartDataRemoto, setChartDataRemoto] = useState([])
+  const [tieneDatos, setTieneDatos] = useState(null) // null=cargando, true=hay datos, false=sin datos
 
   useEffect(() => { if (contratoId) { cargarChart(primerNivel) } }, [contratoId])
   useEffect(() => { if (contratoId) cargarChart(nivelActual || primerNivel, drill) }, [nivelActual, drill.length])
@@ -1681,10 +1682,20 @@ function ModuloCobro({ t, usuario, token, s }) {
     setChartLoading(true)
     const params = new URLSearchParams({ nivel })
     drillActual.forEach(d => params.set(d.campo, d.valor))
-    const res = await fetch(`${API}/cobro/${contratoId}/chart?${params}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-    if (res.ok) setChartDataRemoto(await res.json())
+    try {
+      const res = await fetch(`${API}/cobro/${contratoId}/chart?${params}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setChartDataRemoto(data)
+        setTieneDatos(data.length > 0)
+      } else {
+        setTieneDatos(false)
+      }
+    } catch {
+      setTieneDatos(false)
+    }
     setChartLoading(false)
   }
 
@@ -1949,9 +1960,9 @@ async function cargarRegistros() {
       )}
 
       {/* Panel drill-down */}
-      {chartLoading ? (
-        <div style={s.emptyState}>Cargando datos...</div>
-      ) : chartData.length === 0 && registros.length === 0 ? (
+      {chartLoading || tieneDatos === null ? (
+        <div style={s.emptyState}>⏳ Cargando datos...</div>
+      ) : tieneDatos === false ? (
         <div style={s.emptyState}>📂 Importa un CSV para comenzar</div>
       ) : (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',padding:'20px',marginBottom:'16px',boxShadow:t.shadow }}>
