@@ -2070,7 +2070,7 @@ async function cargarRegistros() {
               )
             })() : nivelActual === 'capitulo' ? (() => {
               const maxVal = Math.max(...chartData.map(d => d.costo), 1)
-              const BAR_W=80, GAP=16, PAD_L=8, PAD_R=8, H=220, PAD_T=14, PAD_B=28
+              const BAR_W=50, GAP=12, PAD_L=8, PAD_R=8, H=220, PAD_T=14, PAD_B=28
               const totalW = PAD_L + chartData.length*(BAR_W+GAP) + PAD_R
               const scaleH = v => PAD_T + (1-v/maxVal)*(H-PAD_T-PAD_B)
               return (
