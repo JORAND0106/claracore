@@ -2358,7 +2358,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                     <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>💰 Cobro por Acta</div>
                     <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Acumulado por número de acta</div>
                   </div>
-                  <div style={{ fontSize:'18px', fontWeight:'800', color:'#00A896' }}>{fmtM(cobro)}</div>
+                  <div style={{ fontSize:'16px', fontWeight:'800', color:'#00A896' }}>{fmtD(cobro)}</div>
                 </div>
                 {porActa.length === 0 ? (
                   <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin datos de cobro</div>
@@ -2398,9 +2398,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                             />
                             <circle cx={p.x} cy={p.y} r="3.5" fill="#00A896" stroke={t.bgCard} strokeWidth="1.5" style={{pointerEvents:'none'}}/>
                             <g className={'tip-'+i} style={{display:'none', pointerEvents:'none'}}>
-                              <rect x={Math.min(p.x-40, W-100)} y={p.y-42} width="90" height="36" rx="6" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
+                              <rect x={Math.min(p.x-10, W-200)} y={p.y-42} width="195" height="36" rx="6" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
                               <text x={Math.min(p.x, W-55)} y={p.y-26} textAnchor="middle" fontSize="10" fill={t.textMuted}>Acta {p.acta}</text>
-                              <text x={Math.min(p.x, W-55)} y={p.y-12} textAnchor="middle" fontSize="11" fontWeight="700" fill="#00A896">{fmtM(p.val)}</text>
+                              <text x={Math.min(p.x-10, W-120)} y={p.y-12} textAnchor="start" fontSize="10" fontWeight="700" fill="#00A896">{fmtD(p.val)}</text>
                             </g>
                           </g>
                         ))}
@@ -2421,7 +2421,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                     <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>📋 Presupuesto por Capítulo</div>
                     <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Top 15 capítulos por valor</div>
                   </div>
-                  <div style={{ fontSize:'18px', fontWeight:'800', color:'#0077B6' }}>{fmtM(ppto)}</div>
+                  <div style={{ fontSize:'16px', fontWeight:'800', color:'#0077B6' }}>{fmtD(ppto)}</div>
                 </div>
                 {porCapPpto.length === 0 ? (
                   <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin datos de presupuesto</div>
@@ -2446,133 +2446,93 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                 )}
               </div>
 
-              {/* 🟢 Panel Presupuesto vs Cobro — velocímetros con drill */}
+              {/* 🟢 Panel Presupuesto vs Cobro — barras verticales por capítulo */}
               <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
+                <div style={{ marginBottom:'14px' }}>
+                  <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>📊 Presupuesto vs Cobro</div>
+                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Por capítulo — hover para ver detalle</div>
+                </div>
                 {(() => {
-                  const polarPt = (cx, cy, rad, angleDeg) => {
-                    const r = (angleDeg - 90) * Math.PI / 180
-                    return { x: cx + rad * Math.cos(r), y: cy + rad * Math.sin(r) }
-                  }
-                  const arcPath = (cx, cy, rad, start, end) => {
-                    const s = polarPt(cx, cy, rad, start); const e = polarPt(cx, cy, rad, end)
-                    const large = (end - start) > 180 ? 1 : 0
-                    return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${rad} ${rad} 0 ${large} 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)}`
-                  }
-                  const GaugeMini = ({ d, size=120, onClick, isClickable }) => {
-                    const pct2  = Math.round(d.pct || 0)
-                    const clamp = Math.min(Math.max(pct2, 0), 100)
-                    const color = pct2 > 100 ? '#DC2626' : pct2 >= 90 ? '#EF4444' : pct2 >= 70 ? '#F59E0B' : '#10B981'
-                    const cx = size/2, cy = size*0.57, r = size*0.37, sw = size*0.076
-                    const START=-135, SPAN=270, fillEnd = START+(clamp/100)*SPAN
-                    const nTip = polarPt(cx, cy, r-sw-4, fillEnd)
-                    return (
-                      <div onClick={onClick} title={d.nombre}
-                        style={{ cursor:isClickable?'pointer':'default', background:t.bg, border:`1.5px solid ${color}44`, borderRadius:'10px', padding:'6px 4px 8px', display:'flex', flexDirection:'column', alignItems:'center', transition:'all 0.2s' }}
-                        onMouseEnter={e => { if(isClickable){ e.currentTarget.style.borderColor=color; e.currentTarget.style.transform='translateY(-2px)' }}}
-                        onMouseLeave={e => { e.currentTarget.style.borderColor=`${color}44`; e.currentTarget.style.transform='' }}>
-                        <div style={{ fontSize:'8px', color:t.textMuted, textAlign:'center', marginBottom:'2px', width:'100%', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', padding:'0 2px' }}>{d.descripcion||d.nombre}</div>
-                        <svg width={size} height={size*0.66} viewBox={`0 0 ${size} ${size*0.66}`} style={{overflow:'visible'}}>
-                          {clamp>0 && <path d={arcPath(cx,cy,r,START,fillEnd)} fill="none" stroke={color} strokeWidth={sw+6} strokeLinecap="round" opacity={0.1}/>}
-                          <path d={arcPath(cx,cy,r,START,START+SPAN)} fill="none" stroke={t.border} strokeWidth={sw} strokeLinecap="round"/>
-                          {clamp>0 && <path d={arcPath(cx,cy,r,START,fillEnd)} fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round"/>}
-                          <line x1={cx} y1={cy} x2={nTip.x.toFixed(2)} y2={nTip.y.toFixed(2)} stroke={color} strokeWidth={size*0.016} strokeLinecap="round"/>
-                          <circle cx={cx} cy={cy} r={size*0.048} fill={color}/>
-                          <circle cx={cx} cy={cy} r={size*0.022} fill={t.bgCard}/>
-                        </svg>
-                        <div style={{ display:'flex', justifyContent:'space-between', width:'100%', padding:'0 4px' }}>
-                          <span style={{ fontSize:'9px', fontWeight:'700', color:t.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'55%' }}>{d.nombre}</span>
-                          <span style={{ fontSize:'12px', fontWeight:'800', color }}>{pct2}%</span>
-                        </div>
-                        <div style={{ fontSize:'8px', color:t.textMuted, marginTop:'1px' }}>{fmtM(d.cobrado)}</div>
-                      </div>
-                    )
-                  }
-                  const nItems = dashData?.items?.length || 0
-                  const gSize = nItems > 8 ? 100 : nItems > 4 ? 110 : 120
-                  const cols = nItems > 8 ? 5 : nItems > 4 ? 4 : 3
+                  const comp = kpiCobro?.comparativo_capitulos || []
+                  if (comp.length === 0) return (
+                    <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin datos</div>
+                  )
+                  const maxVal = Math.max(...comp.map(c => Math.max(c.presupuesto||0, c.cobrado||0)), 1)
+                  const BAR_W = 18, GAP = 6, PAD_L = 8, PAD_R = 8, H = 180, PAD_T = 10, PAD_B = 24
+                  const totalW = PAD_L + comp.length * (BAR_W*2 + GAP + 8) + PAD_R
+                  const scaleH = (v) => PAD_T + (1 - v/maxVal) * (H - PAD_T - PAD_B)
+
                   return (
-                    <>
-                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'12px', flexWrap:'wrap', gap:'6px' }}>
-                        <div>
-                          <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>📊 Presupuesto vs Cobro</div>
-                          <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>
-                            {dashDrill.length === 0 ? 'Click en un instrumento para ver ítems' : dashDrill.length === 1 ? 'Ítems del capítulo' : 'Detalle por PK_ID'}
-                          </div>
+                    <div style={{ overflowX:'auto', overflowY:'visible' }}>
+                      <svg width={Math.max(totalW, 400)} height={H} style={{ overflow:'visible', display:'block' }}>
+                        {/* Líneas de referencia */}
+                        {[0,25,50,75,100].map(pct => {
+                          const y = PAD_T + (1-pct/100)*(H-PAD_T-PAD_B)
+                          return <line key={pct} x1={PAD_L} x2={totalW-PAD_R} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="3,3"/>
+                        })}
+                        {comp.map((cap, i) => {
+                          const x = PAD_L + i * (BAR_W*2 + GAP + 8)
+                          const yP = scaleH(cap.presupuesto||0)
+                          const yC = scaleH(cap.cobrado||0)
+                          const hP = H - PAD_B - yP
+                          const hC = H - PAD_B - yC
+                          const sobrecosto = (cap.cobrado||0) > (cap.presupuesto||0)
+                          const colorC = sobrecosto ? '#DC2626' : '#00A896'
+                          const nomCorto = (cap.capitulo||'').length > 8 ? (cap.capitulo||'').slice(0,8)+'…' : (cap.capitulo||'')
+                          return (
+                            <g key={i}>
+                              {/* Barra Presupuesto */}
+                              <rect x={x} y={yP} width={BAR_W} height={Math.max(hP,2)} fill="#0077B6" rx="2" opacity="0.85"/>
+                              {/* Barra Cobro */}
+                              <rect x={x+BAR_W+2} y={yC} width={BAR_W} height={Math.max(hC,2)} fill={colorC} rx="2" opacity="0.85"/>
+                              {/* Etiqueta eje X */}
+                              <text x={x+BAR_W} y={H-6} textAnchor="middle" fontSize="7" fill={t.textMuted}>{nomCorto}</text>
+                              {/* Área hover invisible con tooltip */}
+                              <g>
+                                <rect x={x-2} y={PAD_T} width={BAR_W*2+6} height={H-PAD_T-PAD_B} fill="transparent"
+                                  onMouseEnter={e => {
+                                    const tip = document.getElementById(`tip-vs-${i}`)
+                                    if(tip) tip.style.display='block'
+                                  }}
+                                  onMouseLeave={e => {
+                                    const tip = document.getElementById(`tip-vs-${i}`)
+                                    if(tip) tip.style.display='none'
+                                  }}
+                                />
+                                <g id={`tip-vs-${i}`} style={{display:'none', pointerEvents:'none'}}>
+                                  <rect x={Math.min(x-10, totalW-220)} y={Math.min(yP,yC)-68} width="215" height="62" rx="6"
+                                    fill={t.bgCard} stroke={t.border} strokeWidth="1"
+                                    style={{filter:'drop-shadow(0 2px 8px rgba(0,0,0,0.3))'}}/>
+                                  <text x={Math.min(x-10,totalW-220)+10} y={Math.min(yP,yC)-50} fontSize="10" fontWeight="700" fill={t.text}>
+                                    {(cap.capitulo||'').length > 28 ? (cap.capitulo||'').slice(0,28)+'…' : (cap.capitulo||'')}
+                                  </text>
+                                  <rect x={Math.min(x-10,totalW-220)+10} y={Math.min(yP,yC)-40} width="8" height="8" rx="1" fill="#0077B6"/>
+                                  <text x={Math.min(x-10,totalW-220)+22} y={Math.min(yP,yC)-33} fontSize="10" fill={t.textMuted}>
+                                    Ppto: <tspan fontWeight="700" fill="#0077B6">{fmtD(cap.presupuesto)}</tspan>
+                                  </text>
+                                  <rect x={Math.min(x-10,totalW-220)+10} y={Math.min(yP,yC)-24} width="8" height="8" rx="1" fill={colorC}/>
+                                  <text x={Math.min(x-10,totalW-220)+22} y={Math.min(yP,yC)-17} fontSize="10" fill={t.textMuted}>
+                                    Cobro: <tspan fontWeight="700" fill={colorC}>{fmtD(cap.cobrado)}</tspan>
+                                  </text>
+                                </g>
+                              </g>
+                            </g>
+                          )
+                        })}
+                      </svg>
+                      {/* Leyenda */}
+                      <div style={{ display:'flex', gap:'16px', marginTop:'8px', justifyContent:'center' }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'11px', color:t.textMuted }}>
+                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#0077B6' }}/> Presupuesto
                         </div>
-                        <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
-                          {[['#10B981','<70%'],['#F59E0B','70-90%'],['#EF4444','90-100%'],['#DC2626','>100%']].map(([c,l]) => (
-                            <div key={l} style={{ display:'flex', alignItems:'center', gap:'3px', fontSize:'9px', color:t.textMuted }}>
-                              <div style={{ width:'6px', height:'6px', borderRadius:'50%', background:c }}/>{l}
-                            </div>
-                          ))}
+                        <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'11px', color:t.textMuted }}>
+                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#00A896' }}/> Cobro
+                        </div>
+                        <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'11px', color:t.textMuted }}>
+                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#DC2626' }}/> Sobrecosto
                         </div>
                       </div>
-                      {dashDrill.length > 0 && (
-                        <div style={{ display:'flex', alignItems:'center', gap:'6px', marginBottom:'10px', flexWrap:'wrap' }}>
-                          <button onClick={() => setDashDrill([])} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'20px', padding:'2px 10px', fontSize:'11px', color:t.textMuted, cursor:'pointer' }}>🏠</button>
-                          {dashDrill.map((d,i) => (
-                            <span key={i} style={{ display:'flex', alignItems:'center', gap:'4px' }}>
-                              <span style={{ color:t.textMuted, fontSize:'11px' }}>›</span>
-                              <button onClick={() => setDashDrill(prev => prev.slice(0,i+1))}
-                                style={{ background:i===dashDrill.length-1?t.primary+'22':'transparent', border:`1px solid ${i===dashDrill.length-1?t.primary:t.border}`, borderRadius:'20px', padding:'2px 10px', fontSize:'11px', color:i===dashDrill.length-1?t.primary:t.textMuted, cursor:'pointer' }}>
-                                {d.valor}
-                              </button>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      {dashDrill.length >= 2 ? (
-                        dashTablaLoad ? <div style={{ textAlign:'center', padding:'30px', color:t.textMuted, fontSize:'12px' }}>Cargando tabla...</div>
-                        : dashTabla ? (() => {
-                          const fmtQ = n => n!=null ? new Intl.NumberFormat('es-CO',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n) : '—'
-                          const thS = { padding:'6px 8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'right', whiteSpace:'nowrap' }
-                          const tdS = { padding:'5px 8px', fontSize:'11px', borderBottom:`1px solid ${t.border}`, textAlign:'right' }
-                          return (
-                            <div style={{ overflowX:'auto', maxHeight:'200px', overflowY:'auto' }}>
-                              <table style={{ width:'100%', borderCollapse:'collapse' }}>
-                                <thead style={{ background:t.bg, position:'sticky', top:0 }}>
-                                  <tr>
-                                    <th style={{ ...thS, textAlign:'left' }}>PK_ID</th>
-                                    <th style={thS}>Cant.Ppto</th><th style={thS}>Costo Ppto</th>
-                                    <th style={thS}>Cant.SICOE</th><th style={thS}>Costo SICOE</th>
-                                    <th style={thS}>Δ Costo</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {dashTabla.rows.map((r,i) => {
-                                    const dc = r.delta_costo > 0 ? '#10B981' : r.delta_costo < 0 ? '#EF4444' : t.textMuted
-                                    return (
-                                      <tr key={i} style={{ background:i%2===0?'transparent':t.bg+'44' }}>
-                                        <td style={{ ...tdS, textAlign:'left', fontWeight:'700', color:t.primary }}>{r.pk_id}</td>
-                                        <td style={tdS}>{fmtQ(r.cant_ppto)}</td><td style={tdS}>{fmtD(r.costo_ppto)}</td>
-                                        <td style={tdS}>{fmtQ(r.cant_sicoe)}</td><td style={tdS}>{fmtD(r.costo_sicoe)}</td>
-                                        <td style={{ ...tdS, fontWeight:'700', color:dc }}>{r.delta_costo>0?'+':''}{fmtD(r.delta_costo)}</td>
-                                      </tr>
-                                    )
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
-                          )
-                        })() : null
-                      ) : dashLoading ? (
-                        <div style={{ textAlign:'center', padding:'30px', color:t.textMuted, fontSize:'12px' }}>Cargando instrumentos...</div>
-                      ) : !dashData || dashData.items.length === 0 ? (
-                        <div style={{ textAlign:'center', padding:'30px', color:t.textMuted, fontSize:'12px' }}>
-                          <div style={{ fontSize:'28px', marginBottom:'8px' }}>🛩️</div>
-                          Importa Presupuesto y SICOE para ver los instrumentos
-                        </div>
-                      ) : (
-                        <div style={{ display:'grid', gridTemplateColumns:`repeat(${cols}, 1fr)`, gap:'8px' }}>
-                          {dashData.items.map((d,i) => (
-                            <GaugeMini key={i} d={d} size={gSize} t={t}
-                              isClickable={dashDrill.length < 2}
-                              onClick={dashDrill.length < 2 ? () => setDashDrill(prev => [...prev, { campo:dashData.campo, valor:d.nombre, descripcion:d.descripcion||'' }]) : undefined}
-                            />
-                          ))}
-                        </div>
-                      )}
-                    </>
+                    </div>
                   )
                 })()}
               </div>
