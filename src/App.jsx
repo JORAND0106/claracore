@@ -1713,6 +1713,18 @@ async function cargarRegistros() {
     setLoading(false)
   }
 
+  async function cargarRegistrosFiltrados(drillActual) {
+    if (!contratoId) return
+    setLoading(true)
+    const params = new URLSearchParams()
+    drillActual.forEach(d => params.set(d.campo, d.valor))
+    const res = await fetch(`${API}/cobro/${contratoId}?${params}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (res.ok) setRegistros(await res.json())
+    setLoading(false)
+  }
+
   const registrosFiltrados = useMemo(() => {
     const parseAbs = s => s ? parseFloat(String(s).replace('+', '')) : null
     return registros.filter(r => {
@@ -1768,11 +1780,12 @@ async function cargarRegistros() {
     if (!nivelActual || !barData?.name) return
     const nuevoDrill = [...drill, { campo: nivelActual, valor: barData.name }]
     setDrill(nuevoDrill)
-    // Solo cargamos registros cuando llegamos al último nivel (necesitamos tabla)
-    const sigNivel = nivelesOrden[nuevoDrill.length]
-    if (!sigNivel) cargarRegistros()
+    cargarRegistrosFiltrados(nuevoDrill)
   }
-  function irA(idx) { setDrill(prev => prev.slice(0, idx)) }
+  function irA(idx) {
+    setDrill(prev => prev.slice(0, idx))
+    if (idx === 0) setRegistros([])
+  }
 
   const bcBtn = active => ({
     background: active ? colorActual : 'transparent', color: active ? '#fff' : colorActual,
