@@ -516,6 +516,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const itemDropRef = useRef(null)
   const [pagina, setPagina] = useState(1)
   const POR_PAGINA = 50
+  const [modalDetallePpto, setModalDetallePpto] = useState(null)
   // ── Comentarios ──────────────────────────────────────────────────────────
   const [modalComentario,  setModalComentario]  = useState(null) // {tipo, obligatorio, resolve}
   const [textoComentario,  setTextoComentario]  = useState('')
@@ -962,6 +963,58 @@ async function darDeBaja(id) {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div>
+      {/* Modal detalle registro presupuesto */}
+      {modalDetallePpto && (
+        <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.65)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center' }}
+          onClick={() => setModalDetallePpto(null)}>
+          <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'14px',padding:'20px',width:'520px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.4)' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px' }}>
+              <div style={{ fontSize:'14px',fontWeight:'800',color:t.primary }}>📋 Detalle del Registro</div>
+              <button onClick={() => setModalDetallePpto(null)} style={{ background:'transparent',border:'none',fontSize:'18px',cursor:'pointer',color:t.textMuted }}>✕</button>
+            </div>
+            {(() => {
+              const r = modalDetallePpto
+              const F = ({label, val, flex=1}) => (
+                <div style={{ flex, minWidth:0 }}>
+                  <div style={{ fontSize:'9px',fontWeight:'700',color:t.textMuted,letterSpacing:'0.6px' }}>{label}</div>
+                  <div style={{ fontSize:'12px',color:t.text,fontWeight:'500',marginTop:'1px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{val ?? '—'}</div>
+                </div>
+              )
+              const Row = ({children}) => (
+                <div style={{ display:'flex',gap:'12px',background:t.bg,borderRadius:'6px',padding:'7px 10px',marginBottom:'5px' }}>{children}</div>
+              )
+              const BigF = ({label, val}) => (
+                <div style={{ background:t.bg,borderRadius:'6px',padding:'7px 10px',marginBottom:'5px' }}>
+                  <div style={{ fontSize:'9px',fontWeight:'700',color:t.textMuted,letterSpacing:'0.6px',marginBottom:'3px' }}>{label}</div>
+                  <div style={{ fontSize:'12px',color:t.text,lineHeight:1.5 }}>{val ?? '—'}</div>
+                </div>
+              )
+              return (
+                <>
+                  <Row><F label="ID_POL" val={r.id_pol||r.pk_id}/><F label="CAPÍTULO" val={r.capitulo}/><F label="ÍTEM" val={r.item} flex={0.5}/></Row>
+                  <BigF label="DESCRIPCIÓN" val={r.descripcion}/>
+                  <Row><F label="UNIDAD" val={r.und} flex={0.5}/><F label="REVISADO" val={r.revisado||'No Revisado'}/><F label="TIPO" val={r.tipo}/></Row>
+                  <Row><F label="NODO INICIO" val={r.no_inicio}/><F label="NODO FINAL" val={r.no_final}/></Row>
+                  <Row><F label="ABS. INICIO" val={r.abs_inicio}/><F label="ABS. FINAL" val={r.abs_final}/></Row>
+                  <Row>
+                    <F label="ÁREA/LONG" val={fmtN(r.area_long_nod)} flex={0.6}/>
+                    <F label="ANCHO" val={fmtN(r.ancho)} flex={0.6}/>
+                    <F label="ESPESOR" val={fmtN(r.espesor)} flex={0.6}/>
+                    <F label="CANT. TOTAL" val={fmtN(r.cant_total)} flex={0.6}/>
+                  </Row>
+                  <Row>
+                    <F label="VLR. UNITARIO" val={fmt(r.vlr_unitario)}/>
+                    <F label="COSTO DIRECTO" val={fmt(r.costo_directo)}/>
+                  </Row>
+                  <Row><F label="TRAMO" val={r.tramo}/><F label="CALZADA" val={r.calzada}/><F label="PK" val={r.pk_id} flex={0.5}/></Row>
+                  {r.observaciones && <BigF label="OBSERVACIONES" val={r.observaciones}/>}
+                </>
+              )
+            })()}
+          </div>
+        </div>
+      )}
       {/* ── Modal comentario ── */}
       {modalComentario && (() => {
         const TITULOS = { dims:'📐 Comentario — Cambio de Dimensiones', item_capitulo:'🔄 Comentario — Cambio de Ítem/Capítulo', validacion:'🔍 Comentario — Cambio de Estado' }
@@ -1504,7 +1557,18 @@ async function darDeBaja(id) {
                 return (
                   <tr key={r.id} style={{ background:seleccionados.has(r.id)?(t.primary+'18'):'transparent', cursor: r.x_label ? 'crosshair' : 'default' }}
                     onClick={() => { if (!isEdit) zoomEnDwg(r) }}>
-                    <td style={tdStyle} onClick={e=>e.stopPropagation()}><input type="checkbox" checked={seleccionados.has(r.id)} onChange={() => toggleSel(r.id)} /></td>
+                    <td style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>
+                      <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+                        <input type="checkbox" checked={seleccionados.has(r.id)} onChange={() => toggleSel(r.id)} />
+                        <button onClick={() => setModalDetallePpto(r)}
+                          title="Ver detalle"
+                          style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'13px', padding:'0', lineHeight:1, display:'flex', alignItems:'center' }}
+                          onMouseEnter={e => e.currentTarget.style.color=t.primary}
+                          onMouseLeave={e => e.currentTarget.style.color=t.textMuted}>
+                          ℹ️
+                        </button>
+                      </div>
+                    </td>
                     <td style={{ ...tdStyle,fontWeight:'600',color:t.primary }}>{r.id_pol||r.pk_id||'-'}</td>
                     <td style={tdStyle}>
                       {isEdit ? <input value={editValues.capitulo} onChange={e=>setEditValues({...editValues,capitulo:e.target.value})}
