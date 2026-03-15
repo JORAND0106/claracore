@@ -2311,7 +2311,7 @@ async function cargarRegistros() {
 }
 
 // ─── MÓDULO PLANO SEMÁFORO ────────────────────────────────────────────────────
-const MAPBOX_TOKEN = 'pk.eyJ1IjoiY2xhcmFjb3JlIiwiYSI6ImNtbXJkdTQyZTE3aDYycnB0b2RjYTRqM3gifQ.SuNXBcyeXC3lBVEVn0CTRQ'
+const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
 function ModuloPlanoSemaforo({ t, usuario, token }) {
   const API = 'https://claracore-backend.azurewebsites.net'
   const contratoId = usuario?.contrato_id
@@ -2979,7 +2979,33 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                 })()}
               </div>
 
-              
+              {/* 🟣 Panel Plano Semáforo — placeholder */}
+              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, display:'flex', flexDirection:'column' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
+                  <div>
+                    <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>🗺️ Plano Semáforo</div>
+                    <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Mapa de avance por PK_ID</div>
+                  </div>
+                </div>
+                <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:'12px',
+                  background:`radial-gradient(ellipse at center, ${t.primary}11 0%, transparent 70%)`,
+                  borderRadius:'8px', border:`1px dashed ${t.border}`, padding:'20px', minHeight:'180px' }}>
+                  <div style={{ fontSize:'40px' }}>🗺️</div>
+                  <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>Plano Semáforo</div>
+                  <div style={{ fontSize:'11px', color:t.textMuted, textAlign:'center', lineHeight:1.6 }}>
+                    Polígonos PK_ID coloreados por % cobro.<br/>
+                    Alerta roja en sobrecosto.<br/>
+                    <span style={{ color:t.primary, fontWeight:'600' }}>Próximamente</span>
+                  </div>
+                  <div style={{ display:'flex', gap:'8px', marginTop:'4px' }}>
+                    {[['#10B981','< 70%'],['#F59E0B','70-90%'],['#EF4444','90-100%'],['#DC2626','> 100%']].map(([c,l]) => (
+                      <div key={l} style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color:t.textMuted }}>
+                        <div style={{ width:'10px', height:'10px', borderRadius:'2px', background:c }}/>{l}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
 
             </div>
           </>

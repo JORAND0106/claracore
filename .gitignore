@@ -24,3 +24,7 @@ dist-ssr
 *.sw?
 backend/.env
 App.jsx.backup
+
+frontend/.env
+
+frontend/.env.local
