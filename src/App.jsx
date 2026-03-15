@@ -2301,7 +2301,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           {/* Crear Contrato se gestiona desde el Panel Admin */}
         </div>
 
-        {/* ── MÓDULO DASHBOARD ── */}
+{/* ── MÓDULO DASHBOARD ── */}
         {moduloActivo === 'dashboard' && (() => {
           const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
           const fmtM = n => { if(!n) return '$0'; if(n>=1e9) return `$${(n/1e9).toFixed(1)}B`; if(n>=1e6) return `$${(n/1e6).toFixed(1)}M`; if(n>=1e3) return `$${(n/1e3).toFixed(0)}K`; return `$${Math.round(n)}` }
@@ -2311,6 +2311,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           const pct   = ppto ? Math.min(100, Math.round(cobro/ppto*100)) : 0
           const alerta = pct >= 90 ? '#EF4444' : pct >= 70 ? '#F59E0B' : '#10B981'
 
+          // Datos para gráficos
+          const porActa = (kpiCobro?.por_acta || []).sort((a,b) => (a.acta||0)-(b.acta||0))
+          const porCapPpto = (kpiPpto?.por_capitulo || []).sort((a,b) => b.costo - a.costo).slice(0,15)
+          const maxCapCosto = Math.max(...porCapPpto.map(c => c.costo), 1)
+
           return <>
             {/* ── KPIs compactos ── */}
             <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'12px', marginBottom:'20px' }}>
@@ -2318,7 +2323,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                 { label:'PRESUPUESTO TOTAL', value: fmtD(ppto), sub: kpiPpto ? `${kpiPpto.total_registros} ítems` : '—', color:'#0077B6', icon:'📋' },
                 { label:'SICOE ACUMULADO',   value: fmtD(cobro), sub: kpiCobro ? `${kpiCobro.actas?.length||0} actas` : '—', color:'#00A896', icon:'💰' },
                 { label:'SALDO DISPONIBLE',  value: fmtD(delta), sub: delta < 0 ? '⚠️ Sobrecosto' : 'Sin sobrecosto', color: delta < 0 ? '#EF4444' : '#10B981', icon:'📊' },
-                { label:'% CONSUMO',         value: `${pct}%`,   sub: pct >= 90 ? '🔴 Crítico' : pct >= 70 ? '🟡 Alerta' : '🟢 Normal', color: alerta, icon:'⚡' },
+                { label:'% CONSUMO',         value: `${pct}%`, sub: pct >= 90 ? '🔴 Crítico' : pct >= 70 ? '🟡 Alerta' : '🟢 Normal', color: alerta, icon:'⚡' },
               ].map(k => (
                 <div key={k.label} style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'14px 16px', boxShadow:t.shadow, borderLeft:`4px solid ${k.color}` }}>
                   <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'6px' }}>{k.icon} {k.label}</div>
@@ -2342,226 +2347,263 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
               </div>
             </div>
 
-            {/* ── COCKPIT: velocímetros por capítulo ── */}
-            {(() => {
-              const polarPt = (cx, cy, rad, angleDeg) => {
-                const r = (angleDeg - 90) * Math.PI / 180
-                return { x: cx + rad * Math.cos(r), y: cy + rad * Math.sin(r) }
-              }
-              const arcPath = (cx, cy, rad, start, end) => {
-                const s = polarPt(cx, cy, rad, start)
-                const e = polarPt(cx, cy, rad, end)
-                const large = (end - start) > 180 ? 1 : 0
-                return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${rad} ${rad} 0 ${large} 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)}`
-              }
+            {/* ── Grid 2×2 ── */}
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', marginBottom:'20px' }}>
 
-              const GaugeMeter = ({ d, size = 150, onClick, isClickable }) => {
-                const pct   = Math.round(d.pct || 0)
-                const clamp = Math.min(Math.max(pct, 0), 100)
-                const color = pct > 100 ? '#DC2626' : pct >= 90 ? '#EF4444' : pct >= 70 ? '#F59E0B' : '#10B981'
-                const cx = size / 2, cy = size * 0.57
-                const r = size * 0.37, sw = size * 0.076
-                const START = -135, SPAN = 270
-                const fillEnd = START + (clamp / 100) * SPAN
-                const nTip = polarPt(cx, cy, r - sw - 4, fillEnd)
-                const nom     = d.nombre || ''
-                const nomDesc = d.descripcion ? (d.descripcion.length > 32 ? d.descripcion.slice(0,32)+'…' : d.descripcion) : ''
-                return (
-                  <div
-                    onClick={onClick}
-                    title={d.nombre}
-                    style={{ cursor: isClickable ? 'pointer' : 'default', background: t.bgCard, border: `1.5px solid ${color}55`, borderRadius: '14px', padding: '10px 8px 12px', display: 'flex', flexDirection: 'column', alignItems: 'center', transition: 'all 0.22s', boxShadow: `0 2px 18px ${color}1A` }}
-                    onMouseEnter={e => { if (isClickable) { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.borderColor = color; e.currentTarget.style.boxShadow = `0 8px 28px ${color}44` } }}
-                    onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.borderColor = `${color}55`; e.currentTarget.style.boxShadow = `0 2px 18px ${color}1A` }}>
-                    {nomDesc && <div style={{ fontSize:'10px', color:t.textMuted, textAlign:'center', lineHeight:1.3, marginBottom:'4px', width:'100%', padding:'0 4px' }}>{nomDesc}</div>}
-                    <svg width={size} height={size * 0.66} viewBox={`0 0 ${size} ${size * 0.66}`} style={{overflow:'visible'}}>
-                      {/* Glow externo */}
-                      {clamp > 0 && <path d={arcPath(cx, cy, r, START, fillEnd)} fill="none" stroke={color} strokeWidth={sw + 8} strokeLinecap="round" opacity={0.12} />}
-                      {/* Arco fondo */}
-                      <path d={arcPath(cx, cy, r, START, START + SPAN)} fill="none" stroke={t.border} strokeWidth={sw} strokeLinecap="round" />
-                      {/* Arco relleno */}
-                      {clamp > 0 && <path d={arcPath(cx, cy, r, START, fillEnd)} fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round" />}
-                      {/* Marcas 0/25/50/75/100 */}
-                      {[0, 25, 50, 75, 100].map(tp => {
-                        const a = START + (tp / 100) * SPAN
-                        const p1 = polarPt(cx, cy, r - sw / 2 - 2, a)
-                        const p2 = polarPt(cx, cy, r - sw - 6, a)
-                        return <line key={tp} x1={p1.x.toFixed(1)} y1={p1.y.toFixed(1)} x2={p2.x.toFixed(1)} y2={p2.y.toFixed(1)} stroke={t.textMuted} strokeWidth={1.5} opacity={0.5} />
-                      })}
-                      {/* Anillo interior decorativo */}
-                      <circle cx={cx} cy={cy} r={r - sw - size * 0.055} fill="none" stroke={t.border} strokeWidth={0.5} opacity={0.35} />
-                      {/* Aguja */}
-                      <line x1={cx} y1={cy} x2={nTip.x.toFixed(2)} y2={nTip.y.toFixed(2)} stroke={color} strokeWidth={size * 0.016} strokeLinecap="round" />
-                      <circle cx={cx} cy={cy} r={size * 0.048} fill={color} />
-                      <circle cx={cx} cy={cy} r={size * 0.022} fill={t.bgCard} />
-                      
-                    </svg>
-                    <div style={{ width:'100%', marginTop:'2px', marginBottom:'2px', padding:'0 4px' }}>
-                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                        <span style={{ fontSize: '11px', fontWeight: '700', color: t.text, lineHeight: 1.3 }}>{nom}</span>
-                        <span style={{ fontSize: '15px', fontWeight: '800', color, marginLeft:'6px', whiteSpace:'nowrap' }}>{pct}%</span>
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '6px', fontSize: '10px', marginTop: '3px', flexWrap: 'wrap', justifyContent: 'center' }}>
-                      <span style={{ color: '#0077B6' }}>▪ {fmtM(d.presupuesto)}</span>
-                      <span style={{ color }}>▪ {fmtM(d.cobrado)}</span>
-                    </div>
-                    <div style={{ fontSize: '10px', color: d.delta < 0 ? '#EF4444' : '#10B981', marginTop: '2px', fontWeight: '600' }}>
-                      {d.delta < 0 ? `⚠ −${fmtM(Math.abs(d.delta))}` : `✓ +${fmtM(d.delta)}`}
-                    </div>
-                    {isClickable && <div style={{ fontSize: '9px', color: t.textMuted, marginTop: '3px', opacity: 0.7 }}>click para explorar</div>}
+              {/* 🔴 Panel Cobro por Acta — área/línea */}
+              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
+                  <div>
+                    <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>💰 Cobro por Acta</div>
+                    <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Acumulado por número de acta</div>
                   </div>
-                )
-              }
-
-              const nItems = dashData?.items?.length || 0
-              const gaugeSize = nItems > 10 ? 157 : nItems > 6 ? 175 : 194
-
-              return (
-                <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '12px', padding: '20px', boxShadow: t.shadow, marginBottom: '20px' }}>
-                  {/* Header */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px', flexWrap: 'wrap', gap: '8px' }}>
-                    <div>
-                      <div style={{ fontSize: '14px', fontWeight: '700', color: t.text }}>🎛️ Panel de Control — Ejecución por Capítulo</div>
-                      <div style={{ fontSize: '11px', color: t.textMuted, marginTop: '2px' }}>
-                        {dashDrill.length === 0 ? 'Haz click en un instrumento para analizar ítems' : dashDrill.length === 1 ? 'Ítems del capítulo · click para ver por PK_ID' : 'Detalle por PK_ID'}
-                      </div>
-                    </div>
-                    {/* Leyenda colores */}
-                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                      {[['#10B981', '< 70%'], ['#F59E0B', '70–90%'], ['#EF4444', '90–100%'], ['#DC2626', '> 100%']].map(([c, l]) => (
-                        <div key={l} style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: t.textMuted }}>
-                          <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: c }} />{l}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Breadcrumb */}
-                  {dashDrill.length > 0 && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '14px', flexWrap: 'wrap' }}>
-                      <button onClick={() => setDashDrill([])} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '20px', padding: '3px 12px', fontSize: '12px', color: t.textMuted, cursor: 'pointer' }}>🏠 Capítulos</button>
-                      {dashDrill.map((d, i) => (
-                        <span key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <span style={{ color: t.textMuted }}>›</span>
-                          <button onClick={() => setDashDrill(prev => prev.slice(0, i + 1))}
-                            style={{ background: i === dashDrill.length - 1 ? t.primary + '22' : 'transparent', border: `1px solid ${i === dashDrill.length - 1 ? t.primary : t.border}`, borderRadius: '20px', padding: '3px 12px', fontSize: '12px', color: i === dashDrill.length - 1 ? t.primary : t.textMuted, cursor: 'pointer' }}>
-                            {d.valor}{d.descripcion ? ` · ${d.descripcion}` : ''}
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Contenido */}
-                  
-                  {/* ── Tabla PK_ID detallada (aparece al seleccionar ítem) ── */}
-                  {dashDrill.length >= 2 && (
-                    dashTablaLoad ? (
-                      <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>Cargando tabla comparativa...</div>
-                    ) : dashTabla ? (() => {
-                      const fmtQ = n => n != null ? new Intl.NumberFormat('es-CO',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n) : '—'
-                      const thS  = { padding:'8px 10px', fontSize:'11px', fontWeight:'700', color:t.textMuted, borderBottom:`2px solid ${t.border}`, textAlign:'right', whiteSpace:'nowrap' }
-                      const tdS  = { padding:'7px 10px', fontSize:'12px', borderBottom:`1px solid ${t.border}`, textAlign:'right' }
-                      const tdPK = { ...tdS, textAlign:'left', fontWeight:'700', color:t.primary }
-                      return (
-                        <>
-                          {/* Resúmenes lado a lado */}
-                          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px', marginBottom:'16px' }}>
-                            <div style={{ background:'#10B98118', border:'2px solid #10B981', borderRadius:'10px', padding:'14px 18px' }}>
-                              <div style={{ fontSize:'10px', fontWeight:'700', color:'#10B981', letterSpacing:'1.5px', marginBottom:'6px' }}>✅ POR COBRAR</div>
-                              <div style={{ fontSize:'24px', fontWeight:'800', color:'#10B981' }}>{fmtD(dashTabla.por_cobrar)}</div>
-                              <div style={{ fontSize:'11px', color:'#10B98199', marginTop:'4px' }}>
-                                {dashTabla.rows.filter(r => r.delta_costo > 0).length} PK_IDs con saldo a favor
-                              </div>
-                            </div>
-                            <div style={{ background:'#3B82F618', border:'2px solid #3B82F6', borderRadius:'10px', padding:'14px 18px' }}>
-                              <div style={{ fontSize:'10px', fontWeight:'700', color:'#3B82F6', letterSpacing:'1.5px', marginBottom:'6px' }}>🔄 DEVOLUCIÓN</div>
-                              <div style={{ fontSize:'24px', fontWeight:'800', color:'#3B82F6' }}>{fmtD(dashTabla.devolucion)}</div>
-                              <div style={{ fontSize:'11px', color:'#3B82F699', marginTop:'4px' }}>
-                                {dashTabla.rows.filter(r => r.delta_costo < 0).length} PK_IDs con sobrecosto
-                              </div>
-                            </div>
-                          </div>
-                          {/* Tabla */}
-                          <div style={{ overflowX:'auto', borderRadius:'8px', border:`1px solid ${t.border}` }}>
-                            <table style={{ width:'100%', borderCollapse:'collapse' }}>
-                              <thead style={{ background:t.bg }}>
-                                <tr>
-                                  <th style={{ ...thS, textAlign:'left' }}>PK_ID</th>
-                                  <th style={thS}>Cant. Ppto.</th>
-                                  <th style={thS}>Costo Ppto.</th>
-                                  <th style={thS}>Cant. SICOE</th>
-                                  <th style={thS}>Costo SICOE</th>
-                                  <th style={thS}>Δ Cant.</th>
-                                  <th style={thS}>Δ Costo</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {dashTabla.rows.map((r, i) => {
-                                  const dCostoColor = r.delta_costo > 0 ? '#10B981' : r.delta_costo < 0 ? '#EF4444' : t.textMuted
-                                  const dCantColor  = r.delta_cant  > 0 ? '#10B981' : r.delta_cant  < 0 ? '#EF4444' : t.textMuted
-                                  return (
-                                    <tr key={i} style={{ background: i%2===0 ? 'transparent' : t.bg+'44' }}>
-                                      <td style={tdPK}>{r.pk_id}</td>
-                                      <td style={tdS}>{fmtQ(r.cant_ppto)}</td>
-                                      <td style={tdS}>{fmtD(r.costo_ppto)}</td>
-                                      <td style={tdS}>{fmtQ(r.cant_sicoe)}</td>
-                                      <td style={tdS}>{fmtD(r.costo_sicoe)}</td>
-                                      <td style={{ ...tdS, fontWeight:'700', color:dCantColor }}>
-                                        {r.delta_cant > 0 ? '+' : ''}{fmtQ(r.delta_cant)}
-                                      </td>
-                                      <td style={{ ...tdS, fontWeight:'700', color:dCostoColor }}>
-                                        {r.delta_costo > 0 ? '+' : ''}{fmtD(r.delta_costo)}
-                                      </td>
-                                    </tr>
-                                  )
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
-                        </>
-                      )
-                    })() : null
-                  )}
-
-                  {/* Gauges — visible solo cuando drill < 2 */}
-                  {dashDrill.length < 2 && (
-                    dashLoading ? (
-                      <div style={{ textAlign:'center', padding:'60px', color:t.textMuted }}>Cargando instrumentos...</div>
-                    ) : !dashData || dashData.items.length === 0 ? (
-                      <div style={{ textAlign:'center', padding:'60px', color:t.textMuted, fontSize:'13px' }}>
-                        <div style={{ fontSize:'36px', marginBottom:'12px' }}>🛩️</div>
-                        {(!kpiPpto || !kpiCobro) ? 'Importa datos de Presupuesto y SICOE para encender los instrumentos' : 'Sin datos disponibles'}
-                      </div>
-                    ) : (
-                      <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:'16px' }}>
-                        {dashData.items.map((d, i) => (
-                          <GaugeMeter
-                            key={i}
-                            d={d}
-                            size={gaugeSize}
-                            t={t}
-                            isClickable={dashDrill.length < 2}
-                            onClick={dashDrill.length < 2 ? () => setDashDrill(prev => [...prev, { campo: dashData.campo, valor: d.nombre, descripcion: d.descripcion || '' }]) : undefined}
-                          />
+                  <div style={{ fontSize:'18px', fontWeight:'800', color:'#00A896' }}>{fmtM(cobro)}</div>
+                </div>
+                {porActa.length === 0 ? (
+                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin datos de cobro</div>
+                ) : (() => {
+                  const W = 440, H = 160, PAD = 8
+                  const maxVal = Math.max(...porActa.map(a => a.cobrado), 1)
+                  const pts = porActa.map((a, i) => ({
+                    x: PAD + (i / Math.max(porActa.length-1, 1)) * (W - PAD*2),
+                    y: PAD + (1 - a.cobrado/maxVal) * (H - PAD*2),
+                    acta: a.acta, val: a.cobrado
+                  }))
+                  const pathD = pts.map((p,i) => `${i===0?'M':'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
+                  const areaD = `${pathD} L${pts[pts.length-1].x.toFixed(1)},${H-PAD} L${pts[0].x.toFixed(1)},${H-PAD} Z`
+                  const [hovered, setHovered] = [null, ()=>{}]
+                  return (
+                    <div style={{ position:'relative' }}>
+                      <svg viewBox={`0 0 ${W} ${H}`} style={{ width:'100%', height:'160px', overflow:'visible' }}>
+                        <defs>
+                          <linearGradient id="cobroGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#00A896" stopOpacity="0.4"/>
+                            <stop offset="100%" stopColor="#00A896" stopOpacity="0.02"/>
+                          </linearGradient>
+                        </defs>
+                        <path d={areaD} fill="url(#cobroGrad)" />
+                        <path d={pathD} fill="none" stroke="#00A896" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        {pts.map((p, i) => (
+                          <g key={i}>
+                            <circle cx={p.x} cy={p.y} r="10" fill="transparent"
+                              onMouseEnter={e => {
+                                const tip = e.currentTarget.parentNode.querySelector('.tip-'+i)
+                                if(tip) tip.style.display='block'
+                              }}
+                              onMouseLeave={e => {
+                                const tip = e.currentTarget.parentNode.querySelector('.tip-'+i)
+                                if(tip) tip.style.display='none'
+                              }}
+                            />
+                            <circle cx={p.x} cy={p.y} r="3.5" fill="#00A896" stroke={t.bgCard} strokeWidth="1.5" style={{pointerEvents:'none'}}/>
+                            <g className={'tip-'+i} style={{display:'none', pointerEvents:'none'}}>
+                              <rect x={Math.min(p.x-40, W-100)} y={p.y-42} width="90" height="36" rx="6" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
+                              <text x={Math.min(p.x, W-55)} y={p.y-26} textAnchor="middle" fontSize="10" fill={t.textMuted}>Acta {p.acta}</text>
+                              <text x={Math.min(p.x, W-55)} y={p.y-12} textAnchor="middle" fontSize="11" fontWeight="700" fill="#00A896">{fmtM(p.val)}</text>
+                            </g>
+                          </g>
                         ))}
+                      </svg>
+                      <div style={{ display:'flex', justifyContent:'space-between', marginTop:'4px', fontSize:'10px', color:t.textMuted }}>
+                        {porActa.length > 0 && <span>Acta {porActa[0]?.acta}</span>}
+                        {porActa.length > 1 && <span>Acta {porActa[porActa.length-1]?.acta}</span>}
+                      </div>
+                    </div>
+                  )
+                })()}
+              </div>
+
+              {/* ⬛ Panel Presupuesto por Capítulo — barras */}
+              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
+                  <div>
+                    <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>📋 Presupuesto por Capítulo</div>
+                    <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Top 15 capítulos por valor</div>
+                  </div>
+                  <div style={{ fontSize:'18px', fontWeight:'800', color:'#0077B6' }}>{fmtM(ppto)}</div>
+                </div>
+                {porCapPpto.length === 0 ? (
+                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin datos de presupuesto</div>
+                ) : (
+                  <div style={{ display:'flex', flexDirection:'column', gap:'6px', maxHeight:'200px', overflowY:'auto' }}>
+                    {porCapPpto.map((cap, i) => {
+                      const pct = Math.round(cap.costo / maxCapCosto * 100)
+                      const color = ['#0077B6','#00B4C6','#00A896','#028090','#05668D','#2E86AB','#A23B72','#F18F01','#C73E1D','#3B1F2B','#44BBA4','#E94F37','#393E41','#F5A623','#7B2D8B'][i % 15]
+                      return (
+                        <div key={cap.capitulo} style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                          <div style={{ fontSize:'10px', color:t.textMuted, width:'140px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={cap.capitulo}>
+                            {cap.capitulo}
+                          </div>
+                          <div style={{ flex:1, height:'14px', background:t.border, borderRadius:'7px', overflow:'hidden' }}>
+                            <div style={{ width:`${pct}%`, height:'100%', background:color, borderRadius:'7px', transition:'width 0.6s ease' }}/>
+                          </div>
+                          <div style={{ fontSize:'10px', fontWeight:'700', color, width:'52px', textAlign:'right', flexShrink:0 }}>{fmtM(cap.costo)}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* 🟢 Panel Presupuesto vs Cobro — velocímetros con drill */}
+              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
+                {(() => {
+                  const polarPt = (cx, cy, rad, angleDeg) => {
+                    const r = (angleDeg - 90) * Math.PI / 180
+                    return { x: cx + rad * Math.cos(r), y: cy + rad * Math.sin(r) }
+                  }
+                  const arcPath = (cx, cy, rad, start, end) => {
+                    const s = polarPt(cx, cy, rad, start); const e = polarPt(cx, cy, rad, end)
+                    const large = (end - start) > 180 ? 1 : 0
+                    return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${rad} ${rad} 0 ${large} 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)}`
+                  }
+                  const GaugeMini = ({ d, size=120, onClick, isClickable }) => {
+                    const pct2  = Math.round(d.pct || 0)
+                    const clamp = Math.min(Math.max(pct2, 0), 100)
+                    const color = pct2 > 100 ? '#DC2626' : pct2 >= 90 ? '#EF4444' : pct2 >= 70 ? '#F59E0B' : '#10B981'
+                    const cx = size/2, cy = size*0.57, r = size*0.37, sw = size*0.076
+                    const START=-135, SPAN=270, fillEnd = START+(clamp/100)*SPAN
+                    const nTip = polarPt(cx, cy, r-sw-4, fillEnd)
+                    return (
+                      <div onClick={onClick} title={d.nombre}
+                        style={{ cursor:isClickable?'pointer':'default', background:t.bg, border:`1.5px solid ${color}44`, borderRadius:'10px', padding:'6px 4px 8px', display:'flex', flexDirection:'column', alignItems:'center', transition:'all 0.2s' }}
+                        onMouseEnter={e => { if(isClickable){ e.currentTarget.style.borderColor=color; e.currentTarget.style.transform='translateY(-2px)' }}}
+                        onMouseLeave={e => { e.currentTarget.style.borderColor=`${color}44`; e.currentTarget.style.transform='' }}>
+                        <div style={{ fontSize:'8px', color:t.textMuted, textAlign:'center', marginBottom:'2px', width:'100%', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', padding:'0 2px' }}>{d.descripcion||d.nombre}</div>
+                        <svg width={size} height={size*0.66} viewBox={`0 0 ${size} ${size*0.66}`} style={{overflow:'visible'}}>
+                          {clamp>0 && <path d={arcPath(cx,cy,r,START,fillEnd)} fill="none" stroke={color} strokeWidth={sw+6} strokeLinecap="round" opacity={0.1}/>}
+                          <path d={arcPath(cx,cy,r,START,START+SPAN)} fill="none" stroke={t.border} strokeWidth={sw} strokeLinecap="round"/>
+                          {clamp>0 && <path d={arcPath(cx,cy,r,START,fillEnd)} fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round"/>}
+                          <line x1={cx} y1={cy} x2={nTip.x.toFixed(2)} y2={nTip.y.toFixed(2)} stroke={color} strokeWidth={size*0.016} strokeLinecap="round"/>
+                          <circle cx={cx} cy={cy} r={size*0.048} fill={color}/>
+                          <circle cx={cx} cy={cy} r={size*0.022} fill={t.bgCard}/>
+                        </svg>
+                        <div style={{ display:'flex', justifyContent:'space-between', width:'100%', padding:'0 4px' }}>
+                          <span style={{ fontSize:'9px', fontWeight:'700', color:t.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'55%' }}>{d.nombre}</span>
+                          <span style={{ fontSize:'12px', fontWeight:'800', color }}>{pct2}%</span>
+                        </div>
+                        <div style={{ fontSize:'8px', color:t.textMuted, marginTop:'1px' }}>{fmtM(d.cobrado)}</div>
                       </div>
                     )
-                  )}
-                </div>
-              )
-            })()}
+                  }
+                  const nItems = dashData?.items?.length || 0
+                  const gSize = nItems > 8 ? 100 : nItems > 4 ? 110 : 120
+                  const cols = nItems > 8 ? 5 : nItems > 4 ? 4 : 3
+                  return (
+                    <>
+                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'12px', flexWrap:'wrap', gap:'6px' }}>
+                        <div>
+                          <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>📊 Presupuesto vs Cobro</div>
+                          <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>
+                            {dashDrill.length === 0 ? 'Click en un instrumento para ver ítems' : dashDrill.length === 1 ? 'Ítems del capítulo' : 'Detalle por PK_ID'}
+                          </div>
+                        </div>
+                        <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
+                          {[['#10B981','<70%'],['#F59E0B','70-90%'],['#EF4444','90-100%'],['#DC2626','>100%']].map(([c,l]) => (
+                            <div key={l} style={{ display:'flex', alignItems:'center', gap:'3px', fontSize:'9px', color:t.textMuted }}>
+                              <div style={{ width:'6px', height:'6px', borderRadius:'50%', background:c }}/>{l}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      {dashDrill.length > 0 && (
+                        <div style={{ display:'flex', alignItems:'center', gap:'6px', marginBottom:'10px', flexWrap:'wrap' }}>
+                          <button onClick={() => setDashDrill([])} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'20px', padding:'2px 10px', fontSize:'11px', color:t.textMuted, cursor:'pointer' }}>🏠</button>
+                          {dashDrill.map((d,i) => (
+                            <span key={i} style={{ display:'flex', alignItems:'center', gap:'4px' }}>
+                              <span style={{ color:t.textMuted, fontSize:'11px' }}>›</span>
+                              <button onClick={() => setDashDrill(prev => prev.slice(0,i+1))}
+                                style={{ background:i===dashDrill.length-1?t.primary+'22':'transparent', border:`1px solid ${i===dashDrill.length-1?t.primary:t.border}`, borderRadius:'20px', padding:'2px 10px', fontSize:'11px', color:i===dashDrill.length-1?t.primary:t.textMuted, cursor:'pointer' }}>
+                                {d.valor}
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {dashDrill.length >= 2 ? (
+                        dashTablaLoad ? <div style={{ textAlign:'center', padding:'30px', color:t.textMuted, fontSize:'12px' }}>Cargando tabla...</div>
+                        : dashTabla ? (() => {
+                          const fmtQ = n => n!=null ? new Intl.NumberFormat('es-CO',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n) : '—'
+                          const thS = { padding:'6px 8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'right', whiteSpace:'nowrap' }
+                          const tdS = { padding:'5px 8px', fontSize:'11px', borderBottom:`1px solid ${t.border}`, textAlign:'right' }
+                          return (
+                            <div style={{ overflowX:'auto', maxHeight:'200px', overflowY:'auto' }}>
+                              <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                                <thead style={{ background:t.bg, position:'sticky', top:0 }}>
+                                  <tr>
+                                    <th style={{ ...thS, textAlign:'left' }}>PK_ID</th>
+                                    <th style={thS}>Cant.Ppto</th><th style={thS}>Costo Ppto</th>
+                                    <th style={thS}>Cant.SICOE</th><th style={thS}>Costo SICOE</th>
+                                    <th style={thS}>Δ Costo</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {dashTabla.rows.map((r,i) => {
+                                    const dc = r.delta_costo > 0 ? '#10B981' : r.delta_costo < 0 ? '#EF4444' : t.textMuted
+                                    return (
+                                      <tr key={i} style={{ background:i%2===0?'transparent':t.bg+'44' }}>
+                                        <td style={{ ...tdS, textAlign:'left', fontWeight:'700', color:t.primary }}>{r.pk_id}</td>
+                                        <td style={tdS}>{fmtQ(r.cant_ppto)}</td><td style={tdS}>{fmtD(r.costo_ppto)}</td>
+                                        <td style={tdS}>{fmtQ(r.cant_sicoe)}</td><td style={tdS}>{fmtD(r.costo_sicoe)}</td>
+                                        <td style={{ ...tdS, fontWeight:'700', color:dc }}>{r.delta_costo>0?'+':''}{fmtD(r.delta_costo)}</td>
+                                      </tr>
+                                    )
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          )
+                        })() : null
+                      ) : dashLoading ? (
+                        <div style={{ textAlign:'center', padding:'30px', color:t.textMuted, fontSize:'12px' }}>Cargando instrumentos...</div>
+                      ) : !dashData || dashData.items.length === 0 ? (
+                        <div style={{ textAlign:'center', padding:'30px', color:t.textMuted, fontSize:'12px' }}>
+                          <div style={{ fontSize:'28px', marginBottom:'8px' }}>🛩️</div>
+                          Importa Presupuesto y SICOE para ver los instrumentos
+                        </div>
+                      ) : (
+                        <div style={{ display:'grid', gridTemplateColumns:`repeat(${cols}, 1fr)`, gap:'8px' }}>
+                          {dashData.items.map((d,i) => (
+                            <GaugeMini key={i} d={d} size={gSize} t={t}
+                              isClickable={dashDrill.length < 2}
+                              onClick={dashDrill.length < 2 ? () => setDashDrill(prev => [...prev, { campo:dashData.campo, valor:d.nombre, descripcion:d.descripcion||'' }]) : undefined}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )
+                })()}
+              </div>
 
-            {/* ── Panel inferior Gantt / Semáforo ── */}
-            <div style={s.bottomPanel}>
-              <div style={{ display:'flex', gap:'8px', marginBottom:'16px' }}>
-                <button style={s.tab('gantt')} onClick={() => setTabInferior('gantt')}>📅 Programación / Gantt</button>
-                <button style={s.tab('mapa')} onClick={() => setTabInferior('mapa')}>🗺️ Plano Semáforo</button>
+              {/* 🟣 Panel Plano Semáforo — placeholder */}
+              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, display:'flex', flexDirection:'column' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
+                  <div>
+                    <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>🗺️ Plano Semáforo</div>
+                    <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Mapa de avance por PK_ID</div>
+                  </div>
+                </div>
+                <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:'12px',
+                  background:`radial-gradient(ellipse at center, ${t.primary}11 0%, transparent 70%)`,
+                  borderRadius:'8px', border:`1px dashed ${t.border}`, padding:'20px', minHeight:'180px' }}>
+                  <div style={{ fontSize:'40px' }}>🗺️</div>
+                  <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>Plano Semáforo</div>
+                  <div style={{ fontSize:'11px', color:t.textMuted, textAlign:'center', lineHeight:1.6 }}>
+                    Polígonos PK_ID coloreados por % cobro.<br/>
+                    Alerta roja en sobrecosto.<br/>
+                    <span style={{ color:t.primary, fontWeight:'600' }}>Próximamente</span>
+                  </div>
+                  <div style={{ display:'flex', gap:'8px', marginTop:'4px' }}>
+                    {[['#10B981','< 70%'],['#F59E0B','70-90%'],['#EF4444','90-100%'],['#DC2626','> 100%']].map(([c,l]) => (
+                      <div key={l} style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color:t.textMuted }}>
+                        <div style={{ width:'10px', height:'10px', borderRadius:'2px', background:c }}/>{l}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
-              <div style={s.emptyState}>
-                {tabInferior === 'gantt' ? '📅 Diagrama Gantt — próximamente' : '🗺️ Plano Semáforo — próximamente'}
-              </div>
+
             </div>
           </>
         })()}
