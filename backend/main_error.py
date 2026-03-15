@@ -9,12 +9,6 @@ from jose import jwt, JWTError
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import os
-import time
-from datetime import datetime, timedelta
-
-# ── Sesiones DWG activas (en memoria) ─────────────────────────────────────────
-# { contrato_id: timestamp_ultimo_heartbeat }
-_dwg_sessions: dict = {}
 
 load_dotenv()
 
@@ -128,8 +122,8 @@ class PresupuestoRow(BaseModel):
     abs_inicio: Optional[str] = None
     abs_final: Optional[str] = None
     vlr_unitario: Optional[float] = None
-    no_inicio: Optional[str] = None
-    no_final: Optional[str] = None
+    no_inicio: Optional[float] = None
+    no_final: Optional[float] = None
     area_long_nod: Optional[float] = None
     ancho: Optional[float] = None
     espesor: Optional[float] = None
@@ -167,31 +161,6 @@ class PresupuestoUpdate(BaseModel):
     revisado: Optional[str] = None
     observacion_externa: Optional[str] = None
 
-class DimOverride(BaseModel):
-    id: int
-    ancho: Optional[float] = None
-    espesor: Optional[float] = None
-
-class PresupuestoBulkRecalc(BaseModel):
-    ids: List[int]
-    capitulo: Optional[str] = None
-    item: Optional[str] = None
-    descripcion: Optional[str] = None
-    vlr_unitario: Optional[float] = None
-    dims: Optional[List[DimOverride]] = None  # cambios de dimensión por fila
-
-class PresupuestoBulkEstado(BaseModel):
-    ids: List[int]
-    revisado: str
-
-class CadQueueCreate(BaseModel):
-    tipo: str        # cambiar_layer | insertar_bloque
-    payload: dict
-
-class CadQueueProcesado(BaseModel):
-    rev_block_handle: Optional[str] = None   # solo para insertar_bloque
-    presupuesto_id:   Optional[int] = None
-
 class CobroRow(BaseModel):
     pk_id: Optional[str] = None
     acta: Optional[int] = None
@@ -214,9 +183,6 @@ class CobroRow(BaseModel):
     calzada: Optional[str] = None
     tramo_inicio: Optional[str] = None
     tramo_final: Optional[str] = None
-    registro: Optional[str] = None
-    tramo: Optional[str] = None
-    observaciones: Optional[str] = None
 
 class ResetSolicitud(BaseModel):
     email: str
@@ -524,14 +490,12 @@ def todos_usuarios(current_user=Depends(get_current_user)):
 
 @app.put("/admin/usuarios/{usuario_id}")
 def actualizar_usuario(usuario_id: int, body: UsuarioUpdate, current_user=Depends(get_current_user)):
-    # Proteger: no se puede modificar un Desarrollador SALVO que sea él mismo editándose
-    es_el_mismo = str(usuario_id) == str(current_user.get("sub"))
-    if not es_el_mismo:
-        target = supabase.table("usuarios").select("cargo_id").eq("id", usuario_id).execute()
-        if target.data and target.data[0].get("cargo_id"):
-            cargo_res = supabase.table("cargos").select("nombre").eq("id", target.data[0]["cargo_id"]).execute()
-            if cargo_res.data and cargo_res.data[0]["nombre"].lower() == "desarrollador":
-                raise HTTPException(status_code=403, detail="No se puede modificar un usuario Desarrollador")
+    # Proteger: no se puede modificar un usuario con cargo Desarrollador
+    target = supabase.table("usuarios").select("cargo_id").eq("id", usuario_id).execute()
+    if target.data and target.data[0].get("cargo_id"):
+        cargo_res = supabase.table("cargos").select("nombre").eq("id", target.data[0]["cargo_id"]).execute()
+        if cargo_res.data and cargo_res.data[0]["nombre"].lower() == "desarrollador":
+            raise HTTPException(status_code=403, detail="No se puede modificar un usuario Desarrollador")
     # exclude_unset=True: campos no enviados no se tocan; null explícito sí borra el campo
     data = body.dict(exclude_unset=True)
     if body.estado == "aprobado":
@@ -547,7 +511,7 @@ def get_usuario_contratos(usuario_id: int, current_user=Depends(get_current_user
     ids = [r["contrato_id"] for r in result.data]
     if not ids:
         return []
-    contratos = supabase.table("contratos").select("id, numero, contratista, interventoria, logo_contratista, logo_interventoria").in_("id", ids).execute()
+    contratos = supabase.table("contratos").select("id, numero, contratista, logo_contratista, logo_interventoria, interventoria").in_("id", ids).execute()
     return contratos.data
 
 @app.post("/admin/usuario-contratos")
@@ -648,35 +612,20 @@ def delete_precio(item_id: int, current_user=Depends(get_current_user)):
 # ─────────────────────────────────────────────
 
 @app.get("/presupuesto/{contrato_id}")
-@app.get("/presupuesto/{contrato_id}")
 def get_presupuesto(
     contrato_id: int,
     capitulo: Optional[str] = None,
     item: Optional[str] = None,
     tramo: Optional[str] = None,
     calzada: Optional[str] = None,
-    papelera: bool = False,
     current_user=Depends(get_current_user)
 ):
-    PAGE = 1000
-    all_rows = []
-    offset = 0
-    while True:
-        q = supabase.table("presupuesto").select("*").eq("contrato_id", contrato_id)
-        if papelera:
-            q = q.eq("dado_de_baja", True)
-        else:
-            q = q.eq("dado_de_baja", False)
-        if capitulo: q = q.eq("capitulo", capitulo)
-        if item:     q = q.eq("item", item)
-        if tramo:    q = q.eq("tramo", tramo)
-        if calzada:  q = q.eq("calzada", calzada)
-        batch = q.order("capitulo").order("item").order("pk_id").range(offset, offset + PAGE - 1).execute().data
-        all_rows.extend(batch)
-        if len(batch) < PAGE:
-            break
-        offset += PAGE
-    return all_rows
+    q = supabase.table("presupuesto").select("*").eq("contrato_id", contrato_id)
+    if capitulo: q = q.eq("capitulo", capitulo)
+    if item:     q = q.eq("item", item)
+    if tramo:    q = q.eq("tramo", tramo)
+    if calzada:  q = q.eq("calzada", calzada)
+    return q.order("capitulo").order("item").order("pk_id").limit(10000).execute().data
 
 @app.get("/presupuesto/{contrato_id}/filtros")
 def get_filtros_presupuesto(
@@ -700,16 +649,41 @@ def get_filtros_presupuesto(
 
 @app.get("/presupuesto/{contrato_id}/resumen")
 def get_resumen_presupuesto(contrato_id: int, current_user=Depends(get_current_user)):
-    res  = supabase.table("vista_ppto_resumen").select("*").eq("contrato_id", contrato_id).execute().data
-    caps = supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
-    total = res[0].get("total_ppto", 0) if res else 0
-    regs  = res[0].get("total_registros", 0) if res else 0
+    """KPIs: total registros, costo total, por capítulo, estados revisado."""
+    rows = supabase.table("presupuesto").select(
+        "capitulo, costo_directo, revisado"
+    ).eq("contrato_id", contrato_id).execute().data
+    total_registros = len(rows)
+    costo_total = sum(r.get("costo_directo") or 0 for r in rows)
+    por_capitulo = {}
+    for r in rows:
+        cap = r.get("capitulo") or "Sin capítulo"
+        por_capitulo.setdefault(cap, {"registros": 0, "costo": 0})
+        por_capitulo[cap]["registros"] += 1
+        por_capitulo[cap]["costo"] += r.get("costo_directo") or 0
+    revisados   = sum(1 for r in rows if (r.get("revisado") or "").lower() == "verificado")
+    campo       = sum(1 for r in rows if (r.get("revisado") or "").lower() == "verificar campo")
+    pendientes  = sum(1 for r in rows if (r.get("revisado") or "").lower() == "pendiente")
     return {
-        "total_registros": regs,
-        "costo_total": total,
-        "revisados": 0, "campo": 0, "pendientes": 0,
-        "por_capitulo": [{"capitulo": r["capitulo"], "costo": r["presupuesto"], "registros": r["registros"]} for r in caps]
+        "total_registros": total_registros,
+        "costo_total": costo_total,
+        "revisados": revisados,
+        "campo": campo,
+        "pendientes": pendientes,
+        "por_capitulo": [{"capitulo": k, **v} for k, v in sorted(por_capitulo.items())]
     }
+
+@app.post("/presupuesto/{contrato_id}/bulk")
+def bulk_presupuesto(contrato_id: int, items: List[PresupuestoRow], mode: str = "replace", current_user=Depends(get_current_user)):
+    """Carga masiva. mode=replace elimina primero; mode=append agrega."""
+    if mode == "replace":
+        supabase.table("presupuesto").delete().eq("contrato_id", contrato_id).execute()
+    if items:
+        BATCH = 500
+        all_rows = [{"contrato_id": contrato_id, **{k: v for k, v in row.dict().items() if v is not None}} for row in items]
+        for i in range(0, len(all_rows), BATCH):
+            supabase.table("presupuesto").insert(all_rows[i:i+BATCH]).execute()
+    return {"mensaje": f"{len(items)} registros {'cargados' if mode=='replace' else 'agregados'}"}
 
 @app.put("/presupuesto/item/{item_id}")
 def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=Depends(get_current_user)):
@@ -731,268 +705,9 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
     supabase.table("presupuesto").update(data).eq("id", item_id).execute()
     return {"mensaje": "Registro actualizado"}
 
-@app.put("/presupuesto/item/{item_id}/dar-baja")
-def dar_baja_presupuesto(item_id: int, current_user=Depends(get_current_user)):
-    """Soft delete: marca el registro como dado de baja y renombra sus layers en CAD."""
-    row = supabase.table("presupuesto").select(
-        "layer_txt, layer_ent, x_label, y_label, contrato_id"
-    ).eq("id", item_id).execute().data
-    if not row:
-        raise HTTPException(status_code=404, detail="Registro no encontrado")
-    r = row[0]
-    supabase.table("presupuesto").update({
-        "dado_de_baja": True,
-        "updated_at": "now()"
-    }).eq("id", item_id).execute()
-    # Cola CAD: renombrar layers si el registro tiene coordenadas
-    if r.get("x_label") and r.get("y_label"):
-        old_ltxt = r.get("layer_txt") or ""
-        old_lent = r.get("layer_ent") or ""
-        if old_ltxt and not old_ltxt.startswith("del_"):
-            supabase.table("cad_queue").insert({
-                "contrato_id": r["contrato_id"],
-                "tipo": "cambiar_layer",
-                "payload": {
-                    "x": r["x_label"], "y": r["y_label"],
-                    "new_layer": f"del_{old_ltxt}"
-                },
-                "procesado": False
-            }).execute()
-        if old_lent and not old_lent.startswith("del_"):
-            supabase.table("cad_queue").insert({
-                "contrato_id": r["contrato_id"],
-                "tipo": "cambiar_layer",
-                "payload": {
-                    "x": r["x_label"], "y": r["y_label"],
-                    "new_layer": f"del_{old_lent}"
-                },
-                "procesado": False
-            }).execute()
-    return {"ok": True}
-
-@app.put("/presupuesto/{contrato_id}/bulk-recalcular")
-def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=Depends(get_current_user)):
-    if not body.ids:
-        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
-    dims_map = {d.id: d for d in (body.dims or [])}
-    # Traer también handles y layers para cad_queue
-    rows = supabase.table("presupuesto").select(
-        "id, area_long_nod, ancho, espesor, vlr_unitario, ent_handle, txt_handle, layer_ent, layer_txt, color_hex, competencia"
-    ).in_("id", body.ids).execute().data
-    for r in rows:
-        rid = r["id"]
-        dim = dims_map.get(rid)
-        ancho   = (dim.ancho   if dim and dim.ancho   is not None else None) or r.get("ancho")   or 1
-        espesor = (dim.espesor if dim and dim.espesor is not None else None) or r.get("espesor") or 1
-        area    = r.get("area_long_nod") or 0
-        vlr     = body.vlr_unitario if body.vlr_unitario is not None else (r.get("vlr_unitario") or 0)
-        cant    = round(float(area) * float(ancho) * float(espesor), 2)
-        costo   = round(cant * float(vlr), 0)
-        data = {"ancho": ancho, "espesor": espesor, "cant_total": cant, "costo_directo": costo, "updated_at": "now()"}
-        if body.capitulo    is not None: data["capitulo"]    = body.capitulo
-        if body.item        is not None: data["item"]        = body.item
-        if body.descripcion is not None: data["descripcion"] = body.descripcion
-        if body.vlr_unitario is not None: data["vlr_unitario"] = body.vlr_unitario
-        # Reconstruir id_pol si cambia el ítem
-        new_id_pol = None
-        if body.item is not None:
-            rows_idpol = supabase.table("presupuesto").select("id_pol").eq("id", rid).execute().data
-            old_id_pol = (rows_idpol[0].get("id_pol") or "") if rows_idpol else ""
-            # Extraer sufijo: todo lo que va después del 
-            #  "._"
-            if "._" in old_id_pol:
-                sufijo = old_id_pol[old_id_pol.index("._"):]   # ej: "._1558"
-            else:
-                sufijo = f"._{rid}"
-            new_id_pol = f"{body.item}{sufijo}"   # ej: "8.01._1558"
-            data["id_pol"] = new_id_pol
-        supabase.table("presupuesto").update(data).eq("id", rid).execute()
-        # ── Encolar operación CAD si cambió ítem/capítulo ──────────────────
-        if (body.capitulo is not None or body.item is not None) and _dwg_sessions.get(contrato_id):
-            nuevo_cap  = body.capitulo or ""
-            nuevo_item = body.item     or ""
-            comp       = r.get("competencia") or ""
-            cap6       = nuevo_cap.replace(".", "")[:6]
-            new_layer_ent = f"{cap6}_{comp}_{nuevo_item}"
-            new_layer_txt = f"txt_{cap6}_{comp}_{nuevo_item}"
-            payload_cad = {
-                "ent_handle":  r.get("ent_handle") or "",
-                "txt_handle":  r.get("txt_handle") or "",
-                "layer_ent":   new_layer_ent,
-                "layer_txt":   new_layer_txt,
-                "color_hex":   r.get("color_hex") or "",
-            }
-            if new_id_pol:
-                payload_cad["new_text"] = new_id_pol
-            supabase.table("cad_queue").insert({
-                "contrato_id": contrato_id,
-                "tipo": "cambiar_layer",
-                "estado": "pendiente",
-                "payload": payload_cad
-            }).execute()
-    return {"actualizados": len(rows)}
-
-@app.put("/presupuesto/{contrato_id}/bulk-estado")
-def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depends(get_current_user)):
-    if not body.ids:
-        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
-    # Traer x_label, y_label, layer_txt para cad_queue
-    rows_info = supabase.table("presupuesto").select("id, x_label, y_label, layer_txt, rev_block_handle"
-        ).in_("id", body.ids).execute().data
-    info_map = {r["id"]: r for r in rows_info}
-    for rid in body.ids:
-        supabase.table("presupuesto").update({"revisado": body.revisado, "updated_at": "now()"}).eq("id", rid).execute()
-        # ── Encolar operación CAD si DWG conectado ─────────────────────────
-        if _dwg_sessions.get(contrato_id):
-            r = info_map.get(rid, {})
-            if r.get("x_label") and r.get("y_label"):
-                supabase.table("cad_queue").insert({
-                    "contrato_id": contrato_id,
-                    "tipo": "insertar_bloque",
-                    "estado": "pendiente",
-                    "payload": {
-                        "presupuesto_id":    rid,
-                        "x_label":           r["x_label"],
-                        "y_label":           r["y_label"],
-                        "estado":            body.revisado,
-                        "layer_txt":         r.get("layer_txt") or "",
-                        "rev_block_handle":  r.get("rev_block_handle") or "",
-                    }
-                }).execute()
-    return {"actualizados": len(body.ids)}
-
-# ─────────────────────────────────────────────
-# CAD QUEUE
-# ─────────────────────────────────────────────
-
-@app.post("/cad-queue/{contrato_id}/heartbeat")
-def cad_heartbeat(contrato_id: int, current_user=Depends(get_current_user)):
-    """SicoeCAD llama esto cada 3s para indicar que el DWG está abierto."""
-    _dwg_sessions[contrato_id] = time.time()
-    return {"ok": True}
-
-@app.get("/cad-queue/{contrato_id}/estado")
-def cad_estado(contrato_id: int, current_user=Depends(get_current_user)):
-    """ClaraCore web consulta si hay DWG enlazado (heartbeat < 10s)."""
-    last = _dwg_sessions.get(contrato_id)
-    enlazado = last is not None and (time.time() - last) < 10
-    return {"enlazado": enlazado}
-
-@app.get("/cad-queue/{contrato_id}/pendientes")
-def cad_pendientes(contrato_id: int, current_user=Depends(get_current_user)):
-    """SicoeCAD descarga las operaciones pendientes."""
-    rows = supabase.table("cad_queue").select("*") \
-        .eq("contrato_id", contrato_id).eq("estado", "pendiente") \
-        .order("id").limit(50).execute().data
-    return rows
-
-@app.put("/cad-queue/{op_id}/procesado")
-def cad_procesado(op_id: int, body: CadQueueProcesado, current_user=Depends(get_current_user)):
-    """SicoeCAD marca la operación como procesada."""
-    supabase.table("cad_queue").update({
-        "estado": "procesado",
-        "processed_at": datetime.utcnow().isoformat()
-    }).eq("id", op_id).execute()
-    # Si la op era insertar_bloque, guardar el handle del bloque en presupuesto
-    if body.presupuesto_id and body.rev_block_handle:
-        supabase.table("presupuesto").update({
-            "rev_block_handle": body.rev_block_handle
-        }).eq("id", body.presupuesto_id).execute()
-    return {"ok": True}
-
 # ─────────────────────────────────────────────
 # COBRO
 # ─────────────────────────────────────────────
-
-@app.get("/cobro/{contrato_id}/pkid-tabla")
-def pkid_tabla(contrato_id: int, capitulo: str = None, item: str = None, current_user=Depends(get_current_user)):
-    """Tabla comparativa detallada por PK_ID con cantidades"""
-    try:
-        q_c = supabase.table("cobro").select("pk_id, costo_directo, longitud, cantidad").eq("contrato_id", contrato_id)
-        q_p = supabase.table("presupuesto").select("pk_id, cant_total, costo_directo").eq("contrato_id", contrato_id)
-        if item:
-            q_c = q_c.eq("item", item)
-            q_p = q_p.eq("item", item)
-        elif capitulo:
-            q_c = q_c.eq("capitulo", capitulo)
-            q_p = q_p.eq("capitulo", capitulo)
-        def paginate(q):
-            all_rows = []; offset = 0
-            while True:
-                batch = q.range(offset, offset + 999).execute().data or []
-                all_rows.extend(batch)
-                if len(batch) < 1000: break
-                offset += 1000
-            return all_rows
-        cobros = paginate(q_c)
-        ppto   = paginate(q_p)
-        agg_p = {}
-        for r in ppto:
-            k = r.get("pk_id") or "(sin pk)"
-            if k not in agg_p: agg_p[k] = {"cant": 0.0, "costo": 0.0}
-            agg_p[k]["cant"]  += float(r.get("cant_total") or 0)
-            agg_p[k]["costo"] += float(r.get("costo_directo") or 0)
-        agg_c = {}
-        for r in cobros:
-            k = r.get("pk_id") or "(sin pk)"
-            if k not in agg_c: agg_c[k] = {"cant": 0.0, "costo": 0.0}
-            agg_c[k]["cant"]  += float(r.get("cantidad") or r.get("longitud") or 0)
-            agg_c[k]["costo"] += float(r.get("costo_directo") or 0)
-        keys = sorted(set(list(agg_p.keys()) + list(agg_c.keys())), key=lambda x: str(x))
-        rows = []
-        for k in keys:
-            p = agg_p.get(k, {"cant": 0.0, "costo": 0.0})
-            c = agg_c.get(k, {"cant": 0.0, "costo": 0.0})
-            rows.append({"pk_id": k, "cant_ppto": p["cant"], "costo_ppto": p["costo"],
-                         "cant_sicoe": c["cant"], "costo_sicoe": c["costo"],
-                         "delta_cant": round(p["cant"] - c["cant"], 2),
-                         "delta_costo": round(p["costo"] - c["costo"], 0)})
-        por_cobrar = sum(r["delta_costo"] for r in rows if r["delta_costo"] > 0)
-        devolucion = sum(abs(r["delta_costo"]) for r in rows if r["delta_costo"] < 0)
-        return {"rows": rows, "por_cobrar": por_cobrar, "devolucion": devolucion}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/cobro/{contrato_id}/drill")
-def drill_comparativo(contrato_id: int, capitulo: str = None, item: str = None, current_user=Depends(get_current_user)):
-    """Drill comparativo presupuesto vs cobro por capitulo→item→pk_id"""
-    cobros, ppto = [], []
-    for tabla, dest in [("cobro", "capitulo, item, pk_id, costo_directo, acta"), ("presupuesto", "capitulo, item, pk_id, costo_directo")]:
-        acc, offset = [], 0
-        while True:
-            batch = supabase.table(tabla).select(dest).eq("contrato_id", contrato_id).range(offset, offset + 999).execute().data
-            acc.extend(batch)
-            if len(batch) < 1000:
-                break
-            offset += 1000
-        if tabla == "cobro":
-            cobros = acc
-        else:
-            ppto = acc
-
-    if capitulo: cobros = [r for r in cobros if r.get("capitulo") == capitulo]; ppto = [r for r in ppto if r.get("capitulo") == capitulo]
-    if item:     cobros = [r for r in cobros if r.get("item") == item];     ppto = [r for r in ppto if r.get("item") == item]
-
-    campo = "pk_id" if (capitulo and item) else ("item" if capitulo else "capitulo")
-
-    agg_p = {}; agg_c = {}; desc_map = {}
-    for r in ppto:
-        k = r.get(campo) or "(sin valor)"
-        agg_p[k] = agg_p.get(k, 0) + (r.get("costo_directo") or 0)
-        if campo == "item" and r.get("descripcion") and k not in desc_map:
-            desc_map[k] = r.get("descripcion", "")
-    for r in cobros:
-        k = r.get(campo) or "(sin valor)"
-        agg_c[k] = agg_c.get(k, 0) + (r.get("costo_directo") or 0)
-        if campo == "item" and r.get("descripcion") and k not in desc_map:
-            desc_map[k] = r.get("descripcion", "")
-
-    keys = sorted(set(list(agg_p.keys()) + list(agg_c.keys())), key=lambda x: str(x))
-    result = []
-    for k in keys:
-        p = agg_p.get(k, 0); c = agg_c.get(k, 0)
-        result.append({"nombre": k, "descripcion": desc_map.get(k, ""), "presupuesto": p, "cobrado": c, "delta": p - c, "pct": round(c/p*100,1) if p else 0})
-    return {"campo": campo, "items": result}
 
 @app.get("/cobro/{contrato_id}")
 def get_cobro(
@@ -1008,114 +723,60 @@ def get_cobro(
     if item:     q = q.eq("item", item)
     if acta:     q = q.eq("acta", acta)
     if calzada:  q = q.eq("calzada", calzada)
-    PAGE = 1000
-    all_rows = []
-    offset = 0
-    while True:
-        batch = q.order("acta").order("capitulo").order("item").range(offset, offset + PAGE - 1).execute().data
-        all_rows.extend(batch)
-        if len(batch) < PAGE:
-            break
-        offset += PAGE
-    return all_rows
-
-@app.get("/cobro/{contrato_id}/chart")
-def get_cobro_chart(
-    contrato_id: int,
-    nivel: str = "capitulo",
-    capitulo: Optional[str] = None,
-    item: Optional[str] = None,
-    current_user=Depends(get_current_user)
-):
-    """Devuelve datos agregados para gráficos con fallback directo a tabla cobro."""
-    try:
-        if nivel == "capitulo":
-            raw = supabase.table("vista_cobro_por_capitulo_detalle").select("*").eq("contrato_id", contrato_id).execute().data
-            rows = [{"capitulo": r.get("capitulo"), "costo": r.get("cobrado") or r.get("costo") or 0, "count": r.get("count", 0)} for r in raw]
-        elif nivel == "item":
-            q = supabase.table("vista_cobro_por_item").select("*").eq("contrato_id", contrato_id)
-            if capitulo: q = q.eq("capitulo", capitulo)
-            rows = q.execute().data
-            rows = [{"item": r.get("item"), "descripcion": r.get("descripcion"), "costo": r.get("cobrado") or r.get("costo") or 0, "count": r.get("count", 0)} for r in rows]
-        elif nivel == "acta":
-            raw = supabase.table("vista_cobro_por_acta").select("*").eq("contrato_id", contrato_id).execute().data
-            rows = [{"acta": r.get("acta"), "costo": r.get("cobrado") or r.get("costo") or 0, "count": r.get("count", 0)} for r in raw]
-        elif nivel == "calzada":
-            raw = supabase.table("vista_cobro_por_calzada").select("*").eq("contrato_id", contrato_id).execute().data
-            rows = [{"calzada": r.get("calzada"), "costo": r.get("cobrado") or r.get("costo") or 0, "count": r.get("count", 0)} for r in raw]
-        else:
-            rows = []
-    except Exception:
-        raw = []; offset = 0
-        sel = "item, descripcion, capitulo, costo_directo" if nivel == "item" else f"{nivel}, costo_directo"
-        q_fb = supabase.table("cobro").select(sel).eq("contrato_id", contrato_id)
-        if capitulo and nivel == "item":
-            q_fb = q_fb.eq("capitulo", capitulo)
-        while True:
-            batch = q_fb.range(offset, offset+999).execute().data
-            raw.extend(batch)
-            if len(batch) < 1000: break
-            offset += 1000
-        agg = {}
-        for r in raw:
-            k = r.get(nivel) or "(sin valor)"
-            if k not in agg: agg[k] = {nivel: k, "costo": 0, "count": 0}
-            agg[k]["costo"] += r.get("costo_directo") or 0
-            agg[k]["count"] += 1
-        rows = list(agg.values())
-    return sorted(rows, key=lambda r: str(r.get(nivel) or ""))
+    return q.order("acta").order("capitulo").order("item").limit(10000).execute().data
 
 @app.get("/cobro/{contrato_id}/resumen")
 def get_resumen_cobro(contrato_id: int, current_user=Depends(get_current_user)):
-    res      = supabase.table("vista_cobro_resumen").select("*").eq("contrato_id", contrato_id).execute().data
-    por_acta = supabase.table("vista_cobro_por_acta").select("*").eq("contrato_id", contrato_id).execute().data
-    por_cap  = supabase.table("vista_cobro_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
-    total    = res[0].get("total_cobrado", 0) if res else 0
-    actas    = sorted(set(r["acta"] for r in por_acta if r.get("acta")))
-    # Comparativo por capítulo
-    ppto_caps = {r["capitulo"]: r["presupuesto"] for r in
-                 supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data}
-    cobro_caps = {r["capitulo"]: r.get("cobrado") or r.get("costo") or 0 for r in por_cap}
-    caps = sorted(set(list(ppto_caps.keys()) + list(cobro_caps.keys())))
-    comparativo = [{"capitulo": c, "presupuesto": ppto_caps.get(c,0), "cobrado": cobro_caps.get(c,0),
-                    "delta": ppto_caps.get(c,0)-cobro_caps.get(c,0),
-                    "consumo_pct": round(cobro_caps.get(c,0)/ppto_caps.get(c,0)*100,1) if ppto_caps.get(c,0) else 0}
-                   for c in caps]
-    ppto_total = sum(ppto_caps.values())
-    return {
-        "total_presupuesto": ppto_total,
-        "total_cobrado": total,
-        "delta": ppto_total - total,
-        "consumo_pct": round(total/ppto_total*100,1) if ppto_total else 0,
-        "actas": actas,
-        "comparativo_capitulos": comparativo,
-        "por_acta": [{"acta": r["acta"], "cobrado": r.get("cobrado") or r.get("costo") or 0} for r in por_acta]
-    }
+    """KPIs + comparativo Presupuesto vs Cobro por capítulo."""
+    cobros = supabase.table("cobro").select("capitulo, item, pk_id, costo_directo, descripcion").eq("contrato_id", contrato_id).execute().data
+    ppto   = supabase.table("presupuesto").select("capitulo, item, pk_id, costo_directo, descripcion").eq("contrato_id", contrato_id).execute().data
 
-@app.get("/cobro/{contrato_id}/pkid-colores")
-def get_pkid_colores(contrato_id: int, current_user=Depends(get_current_user)):
-    """Devuelve % cobro por PK_ID para colorear el plano semáforo."""
-    cobro  = supabase.table("cobro").select("pk_id, costo_directo").eq("contrato_id", contrato_id).execute().data
-    ppto   = supabase.table("presupuesto").select("pk_id, costo_directo").eq("contrato_id", contrato_id).execute().data
-    cobro_agg = {}
-    for r in cobro:
-        k = str(r.get("pk_id") or "").strip()
-        if k: cobro_agg[k] = cobro_agg.get(k, 0) + (r.get("costo_directo") or 0)
-    ppto_agg = {}
+    total_cobrado  = sum(r.get("costo_directo") or 0 for r in cobros)
+    total_ppto     = sum(r.get("costo_directo") or 0 for r in ppto)
+    actas_unicas   = sorted(set(r.get("acta") for r in cobros if r.get("acta")))
+
+    # Por capítulo
+    por_cap_ppto  = {}
     for r in ppto:
-        k = str(r.get("pk_id") or "").strip()
-        if k: ppto_agg[k] = ppto_agg.get(k, 0) + (r.get("costo_directo") or 0)
-    result = {}
-    for pk in set(list(cobro_agg.keys()) + list(ppto_agg.keys())):
-        c = cobro_agg.get(pk, 0)
-        p = ppto_agg.get(pk, 0)
-        result[pk] = {
-            "cobrado": c,
+        cap = r.get("capitulo") or "Sin capítulo"
+        por_cap_ppto.setdefault(cap, 0)
+        por_cap_ppto[cap] += r.get("costo_directo") or 0
+
+    por_cap_cobro = {}
+    for r in cobros:
+        cap = r.get("capitulo") or "Sin capítulo"
+        por_cap_cobro.setdefault(cap, 0)
+        por_cap_cobro[cap] += r.get("costo_directo") or 0
+
+    caps = sorted(set(list(por_cap_ppto.keys()) + list(por_cap_cobro.keys())))
+    comparativo = []
+    for cap in caps:
+        p = por_cap_ppto.get(cap, 0)
+        c = por_cap_cobro.get(cap, 0)
+        comparativo.append({
+            "capitulo": cap,
             "presupuesto": p,
-            "pct": round(c / p * 100, 1) if p else 0,
-            "sobrecosto": c > p
-        }
-    return result
+            "cobrado": c,
+            "delta": p - c,
+            "consumo_pct": round(c / p * 100, 1) if p else 0
+        })
+
+    # Por acta
+    por_acta = {}
+    for r in cobros:
+        a = r.get("acta") or 0
+        por_acta.setdefault(a, 0)
+        por_acta[a] += r.get("costo_directo") or 0
+
+    return {
+        "total_presupuesto": total_ppto,
+        "total_cobrado": total_cobrado,
+        "delta": total_ppto - total_cobrado,
+        "consumo_pct": round(total_cobrado / total_ppto * 100, 1) if total_ppto else 0,
+        "actas": actas_unicas,
+        "comparativo_capitulos": comparativo,
+        "por_acta": [{"acta": k, "cobrado": v} for k, v in sorted(por_acta.items())]
+    }
 
 @app.get("/cobro/{contrato_id}/filtros")
 def get_filtros_cobro(
@@ -1135,125 +796,16 @@ def get_filtros_cobro(
         "calzadas":  sorted(set(r["calzada"]  for r in rows if r.get("calzada"))),
     }
 
-@app.delete("/cobro/{contrato_id}/clear")
-def clear_cobro(contrato_id: int, current_user=Depends(get_current_user)):
-    # Borrar en batches de 1000 para no timeout en Supabase free tier
-    while True:
-        ids = supabase.table("cobro").select("id").eq("contrato_id", contrato_id).limit(1000).execute().data
-        if not ids:
-            break
-        id_list = [r["id"] for r in ids]
-        supabase.table("cobro").delete().in_("id", id_list).execute()
-    return {"ok": True}
-
 @app.post("/cobro/{contrato_id}/bulk")
-def bulk_cobro(contrato_id: int, items: List[CobroRow], current_user=Depends(get_current_user)):
-    if not items:
-        return {"insertados": 0}
-    BATCH = 500
-    all_rows = []
-    for row in items:
-        d = {}
-        for k, v in row.dict().items():
-            if v is None:
-                continue
-            if k == "fecha":
-                continue
-            # Limpiar saltos de línea en campos de texto
-            if isinstance(v, str):
-                v = v.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ').strip()
-                v = ' '.join(v.split())  # colapsar espacios múltiples
-            d[k] = v
-        d["contrato_id"] = contrato_id
-        all_rows.append(d)
-    insertados = 0
-    for i in range(0, len(all_rows), BATCH):
-        try:
+def bulk_cobro(contrato_id: int, items: List[CobroRow], mode: str = "replace", current_user=Depends(get_current_user)):
+    """Carga masiva. mode=replace elimina primero; mode=append agrega."""
+    if mode == "replace":
+        supabase.table("cobro").delete().eq("contrato_id", contrato_id).execute()
+    if items:
+        BATCH = 500
+        all_rows = [{"contrato_id": contrato_id, **{k: v for k, v in row.dict().items() if v is not None}} for row in items]
+        for i in range(0, len(all_rows), BATCH):
             supabase.table("cobro").insert(all_rows[i:i+BATCH]).execute()
-            insertados += len(all_rows[i:i+BATCH])
-        except Exception:
-            # Si falla el batch, insertar fila por fila para no perder todo
-            for row in all_rows[i:i+BATCH]:
-                try:
-                    supabase.table("cobro").insert(row).execute()
-                    insertados += 1
-                except Exception:
-                    pass  # omitir fila problemática y continuar
-    return {"insertados": insertados}
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# COMENTARIOS
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class ComentarioBulk(BaseModel):
-    presupuesto_ids: List[int]
-    tipo: str        # dims | item_capitulo | validacion
-    mensaje: str
-    usuario_nombre: str
-
-class RespuestaCreate(BaseModel):
-    mensaje: str
-    usuario_nombre: str
-
-@app.post("/presupuesto/{contrato_id}/comentarios/bulk")
-def crear_comentarios_bulk(contrato_id: int, body: ComentarioBulk, current_user=Depends(get_current_user)):
-    rows = [{"presupuesto_id": pid, "tipo": body.tipo, "mensaje": body.mensaje,
-             "usuario_nombre": body.usuario_nombre} for pid in body.presupuesto_ids]
-    supabase.table("comentarios").insert(rows).execute()
-    return {"creados": len(rows)}
-
-@app.get("/presupuesto/{contrato_id}/comentarios-resumen")
-def comentarios_resumen(contrato_id: int, ids: str, current_user=Depends(get_current_user)):
-    id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
-    if not id_list:
-        return {}
-    rows = supabase.table("comentarios").select(
-        "id, presupuesto_id, tipo, parent_id"
-    ).in_("presupuesto_id", id_list).execute().data
-    id_to_tipo = {r["id"]: r["tipo"] for r in rows}
-    result = {}
-    for r in rows:
-        pid = r["presupuesto_id"]
-        if pid not in result:
-            result[pid] = {
-                "dims":          {"count": 0, "replies": False},
-                "item_capitulo": {"count": 0, "replies": False},
-                "validacion":    {"count": 0, "replies": False},
-            }
-        tipo = r["tipo"]
-        if r["parent_id"] is None:
-            result[pid][tipo]["count"] += 1
-        else:
-            result[pid][tipo]["replies"] = True
-    return result
-
-@app.get("/presupuesto/{presupuesto_id}/comentarios")
-def get_comentarios(presupuesto_id: int, tipo: str, current_user=Depends(get_current_user)):
-    rows = supabase.table("comentarios").select("*").eq(
-        "presupuesto_id", presupuesto_id).eq("tipo", tipo).order("created_at").execute().data
-    roots = [r for r in rows if r["parent_id"] is None]
-    children = {}
-    for r in rows:
-        if r["parent_id"]:
-            children.setdefault(r["parent_id"], []).append(r)
-    for root in roots:
-        root["respuestas"] = children.get(root["id"], [])
-    return roots
-
-@app.post("/comentarios/{comentario_id}/respuesta")
-def responder_comentario(comentario_id: int, body: RespuestaCreate, current_user=Depends(get_current_user)):
-    parent = supabase.table("comentarios").select("presupuesto_id, tipo").eq("id", comentario_id).execute().data
-    if not parent:
-        raise HTTPException(status_code=404, detail="Comentario no encontrado")
-    p = parent[0]
-    supabase.table("comentarios").insert({
-        "presupuesto_id": p["presupuesto_id"],
-        "tipo":           p["tipo"],
-        "mensaje":        body.mensaje,
-        "usuario_nombre": body.usuario_nombre,
-        "parent_id":      comentario_id
-    }).execute()
-    return {"ok": True}
+    return {"mensaje": f"{len(items)} registros {'cargados' if mode=='replace' else 'agregados'}"}
 
 
