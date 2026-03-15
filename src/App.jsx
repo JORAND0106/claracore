@@ -718,13 +718,13 @@ async function cargarRegistros(modoPapelera) {
 
   function handleBarClick(barData) {
     if (!nivelActual || !barData?.name) return
-    setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
-    setSeleccionados(new Set())
+    const nuevoDrill = [...drill, { campo: nivelActual, valor: barData.name }]
+    setDrill(nuevoDrill)
+    cargarRegistrosFiltrados(nuevoDrill)
   }
-
   function irA(idx) {
     setDrill(prev => prev.slice(0, idx))
-    setSeleccionados(new Set())
+    if (idx === 0) setRegistros([])
   }
 
   // ── Import CSV ─────────────────────────────────────────────────────────────
@@ -1218,7 +1218,7 @@ async function darDeBaja(id) {
                     const pct   = Math.round((d.costo / costoMax) * 100)
                     const clamp = Math.min(Math.max(pct, 0), 100)
                     const color = PALETA_BARRAS[i % PALETA_BARRAS.length]
-                    const cx = gSize / 2, cy = gSize * 0.57, r = gSize*0.37, sw = gSize*0.076
+                    const cx = gSize/2, cy = gSize*0.57, r = gSize*0.37, sw = gSize*0.076
                     const START=-135, SPAN=270, fillEnd = START+(clamp/100)*SPAN
                     const toRad = a => (a*Math.PI)/180
                     const pt = angle => ({ x: cx+r*Math.cos(toRad(angle)), y: cy+r*Math.sin(toRad(angle)) })
@@ -1271,7 +1271,7 @@ async function darDeBaja(id) {
                       return <line key={pct} x1={PAD_L} x2={totalW} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="3,3"/>
                     })}
                     {chartData.map((d,i) => {
-                      const color = PALETA[i%PALETA.length]
+                      const color = PALETA_BARRAS[i%PALETA_BARRAS.length]
                       const x = PAD_L+i*(BAR_W+GAP)
                       const y = scaleH(d.costo)
                       const h = H-PAD_B-y
@@ -1309,7 +1309,7 @@ async function darDeBaja(id) {
                   <Tooltip content={(props) => <PresupuestoTooltip {...props} t={t} color={colorActual} fmt={fmt} />} cursor={{ fill:colorActual+'18' }} />
                   <Bar dataKey="costo" radius={[0,5,5,0]} onClick={handleBarClick} onMouseEnter={(_,i) => setHoveredBar(i)} onMouseLeave={() => setHoveredBar(null)}>
                     {chartData.map((_,i) => {
-                      const color = PALETA[i%PALETA.length]
+                      const color = PALETA_BARRAS[i%PALETA_BARRAS.length]
                       return <Cell key={i} fill={hoveredBar===null||hoveredBar===i?color:color+'66'} stroke={hoveredBar===i?color:'none'} strokeWidth={2}/>
                     })}
                   </Bar>
@@ -1713,18 +1713,6 @@ async function cargarRegistros() {
     setLoading(false)
   }
 
-  async function cargarRegistrosFiltrados(drillActual) {
-    if (!contratoId) return
-    setLoading(true)
-    const params = new URLSearchParams()
-    drillActual.forEach(d => params.set(d.campo, d.valor))
-    const res = await fetch(`${API}/cobro/${contratoId}?${params}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-    if (res.ok) setRegistros(await res.json())
-    setLoading(false)
-  }
-
   const registrosFiltrados = useMemo(() => {
     const parseAbs = s => s ? parseFloat(String(s).replace('+', '')) : null
     return registros.filter(r => {
@@ -1780,12 +1768,11 @@ async function cargarRegistros() {
     if (!nivelActual || !barData?.name) return
     const nuevoDrill = [...drill, { campo: nivelActual, valor: barData.name }]
     setDrill(nuevoDrill)
-    cargarRegistrosFiltrados(nuevoDrill)
+    // Solo cargamos registros cuando llegamos al último nivel (necesitamos tabla)
+    const sigNivel = nivelesOrden[nuevoDrill.length]
+    if (!sigNivel) cargarRegistros()
   }
-  function irA(idx) {
-    setDrill(prev => prev.slice(0, idx))
-    if (idx === 0) setRegistros([])
-  }
+  function irA(idx) { setDrill(prev => prev.slice(0, idx)) }
 
   const bcBtn = active => ({
     background: active ? colorActual : 'transparent', color: active ? '#fff' : colorActual,
