@@ -1196,7 +1196,7 @@ async function darDeBaja(id) {
             nivelActual === 'pk_id' ? (
               <div style={{ display:'grid',gridTemplateColumns:'repeat(15, 1fr)',gap:'6px',maxHeight:'320px',overflowY:'auto',padding:'4px 2px' }}>
                 {chartData.map((d, i) => {
-                  const color = PALETA[i % PALETA.length]
+                  const color = PALETA_BARRAS[i % PALETA_BARRAS.length]
                   return (
                     <button key={d.name} onClick={() => handleBarClick(d)}
                       title={`${d.name}\n${fmt(d.costo)}\n${d.count} registros`}
@@ -1217,8 +1217,8 @@ async function darDeBaja(id) {
                   {chartData.map((d, i) => {
                     const pct   = Math.round((d.costo / costoMax) * 100)
                     const clamp = Math.min(Math.max(pct, 0), 100)
-                    const color = PALETA[i % PALETA.length]
-                    const cx = gSize/2, cy = gSize*0.57, r = gSize*0.37, sw = gSize*0.076
+                    const color = PALETA_BARRAS[i % PALETA_BARRAS.length]
+                    const cx = gSize / 2, cy = gSize * 0.57, r = gSize*0.37, sw = gSize*0.076
                     const START=-135, SPAN=270, fillEnd = START+(clamp/100)*SPAN
                     const toRad = a => (a*Math.PI)/180
                     const pt = angle => ({ x: cx+r*Math.cos(toRad(angle)), y: cy+r*Math.sin(toRad(angle)) })
@@ -1713,6 +1713,18 @@ async function cargarRegistros() {
     setLoading(false)
   }
 
+  async function cargarRegistrosFiltrados(drillActual) {
+    if (!contratoId) return
+    setLoading(true)
+    const params = new URLSearchParams()
+    drillActual.forEach(d => params.set(d.campo, d.valor))
+    const res = await fetch(`${API}/cobro/${contratoId}?${params}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (res.ok) setRegistros(await res.json())
+    setLoading(false)
+  }
+
   const registrosFiltrados = useMemo(() => {
     const parseAbs = s => s ? parseFloat(String(s).replace('+', '')) : null
     return registros.filter(r => {
@@ -1768,11 +1780,15 @@ async function cargarRegistros() {
     if (!nivelActual || !barData?.name) return
     const nuevoDrill = [...drill, { campo: nivelActual, valor: barData.name }]
     setDrill(nuevoDrill)
-    // Solo cargamos registros cuando llegamos al último nivel (necesitamos tabla)
-    const sigNivel = nivelesOrden[nuevoDrill.length]
-    if (!sigNivel) cargarRegistros()
+    // Cargar registros filtrados cuando tenemos al menos capitulo+item
+    if (nuevoDrill.length >= 2) {
+      cargarRegistrosFiltrados(nuevoDrill)
+    }
   }
-  function irA(idx) { setDrill(prev => prev.slice(0, idx)) }
+  function irA(idx) {
+    setDrill(prev => prev.slice(0, idx))
+    if (idx < 2) setRegistros([])
+  }
 
   const bcBtn = active => ({
     background: active ? colorActual : 'transparent', color: active ? '#fff' : colorActual,
