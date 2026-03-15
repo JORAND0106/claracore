@@ -1674,36 +1674,24 @@ function ModuloCobro({ t, usuario, token, s }) {
   const [chartDataRemoto, setChartDataRemoto] = useState([])
   const [tieneDatos, setTieneDatos] = useState(null) // null=cargando, true=hay datos, false=sin datos
 
-  useEffect(() => { if (contratoId) { cargarChart(primerNivel) } }, [contratoId])
   useEffect(() => {
-    if (!contratoId || !nivelActual) return
-    // Extraer el filtro del drill anterior (el capitulo seleccionado)
-    const capDrill = drill.find(d => d.campo === 'capitulo')
-    cargarChart(nivelActual, drill, capDrill?.valor || null)
-  }, [nivelActual, drill.length])
-
-  async function cargarChart(nivel, drillActual = [], capituloFiltro = null) {
-    if (!contratoId || !nivel) return
-    setChartLoading(true)
+    if (!contratoId) return
+    const nivel = nivelesOrden[drill.length] || primerNivel
     const params = new URLSearchParams({ nivel })
-    if (capituloFiltro) params.set('capitulo', capituloFiltro)
-    drillActual.forEach(d => params.set(d.campo, d.valor))
-    try {
-      const res = await fetch(`${API}/cobro/${contratoId}/chart?${params}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      })
-      if (res.ok) {
-        const data = await res.json()
+    // Pasar filtros del drill al backend
+    drill.forEach(d => params.set(d.campo, d.valor))
+    setChartLoading(true)
+    setTieneDatos(null)
+    fetch(`${API}/cobro/${contratoId}/chart?${params}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    }).then(r => r.ok ? r.json() : [])
+      .then(data => {
         setChartDataRemoto(data)
         setTieneDatos(data.length > 0)
-      } else {
-        setTieneDatos(false)
-      }
-    } catch {
-      setTieneDatos(false)
-    }
-    setChartLoading(false)
-  }
+        setChartLoading(false)
+      })
+      .catch(() => { setTieneDatos(false); setChartLoading(false) })
+  }, [contratoId, drill.length, primerNivel])
 
 async function cargarRegistros() {
     if (!contratoId) return
