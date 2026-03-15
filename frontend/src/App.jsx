@@ -2897,7 +2897,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         </div>
 
         {/* ── Contenido principal ── */}
-        <div style={{ flex:1, padding:'20px 24px', maxWidth:'100%', overflowX:'auto' }}>
+        <div style={{ flex:1, padding:'20px 24px', minWidth:0, overflow:'hidden' }}>
         <div style={s.topBar}>
           {usuario?._contratos?.length > 1 ? (
             <select
@@ -2973,7 +2973,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
             </div>
 
             {/* ── Grid 2×2 ── */}                                  
-            <div style={{ display:'grid', gridTemplateColumns:colsGrid, gap:'16px', marginBottom:'20px', transition:'grid-template-columns 0.3s ease' }}>
+            <div style={{ display:'grid', gridTemplateColumns:colsGrid, gap:'16px', marginBottom:'20px', transition:'grid-template-columns 0.3s ease', minWidth:0 }}>
 
               {/* 🔴 Panel Cobro por Acta — área/línea */}
               <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, ...(panelFoco==='cobro-acta' && {gridColumn:'1 / -1'}) }}>
