@@ -1656,6 +1656,7 @@ function ModuloCobro({ t, usuario, token, s }) {
   const [busquedaV2,     setBusquedaV2]     = useState('')
   const [pagina,         setPagina]         = useState(1)
   const POR_PAGINA = 50
+  const [modalDetalle,   setModalDetalle]   = useState(null)
 
   const NIVELES = ['capitulo', 'item', 'pk_id', 'acta', 'calzada']
   const NOM     = { capitulo:'Capítulo', item:'Ítem', pk_id:'PK_ID', acta:'Acta', calzada:'Calzada' }
@@ -2143,7 +2144,66 @@ async function cargarRegistros() {
           )}
         </div>
       )}
-
+      {/* Modal detalle registro */}
+      {modalDetalle && (
+        <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.65)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center' }}
+          onClick={() => setModalDetalle(null)}>
+          <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'16px',padding:'28px',width:'680px',maxWidth:'95vw',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.4)' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'20px' }}>
+              <div>
+                <div style={{ fontSize:'15px',fontWeight:'800',color:t.primary }}>📋 Detalle del Registro</div>
+                <div style={{ fontSize:'11px',color:t.textMuted,marginTop:'2px' }}>PK_ID: {modalDetalle.pk_id} · Acta {modalDetalle.acta}</div>
+              </div>
+              <button onClick={() => setModalDetalle(null)} style={{ background:'transparent',border:'none',fontSize:'20px',cursor:'pointer',color:t.textMuted }}>✕</button>
+            </div>
+            {/* Grid de campos */}
+            <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px',marginBottom:'16px' }}>
+              {[
+                ['Acta',          modalDetalle.acta],
+                ['PK_ID',         modalDetalle.pk_id],
+                ['Capítulo',      modalDetalle.capitulo],
+                ['Ítem',          modalDetalle.item],
+                ['Unidad',        modalDetalle.und],
+                ['Calzada',       modalDetalle.calzada],
+                ['Competencia',   modalDetalle.competencia],
+                ['CIV',           modalDetalle.civ],
+                ['Semana',        modalDetalle.semana],
+                ['Fecha',         modalDetalle.fecha],
+                ['Abs. Inicial',  modalDetalle.abs_inicial],
+                ['Abs. Final',    modalDetalle.abs_final],
+                ['Longitud',      fmtN(modalDetalle.longitud)],
+                ['Ancho',         fmtN(modalDetalle.ancho)],
+                ['Espesor',       fmtN(modalDetalle.espesor)],
+                ['Cantidad',      fmtN(modalDetalle.cantidad)],
+                ['Vlr. Unitario', fmt(modalDetalle.valor_unitario)],
+                ['Costo Directo', fmt(modalDetalle.costo_directo)],
+                ['Tramo Inicio',  modalDetalle.tramo_inicio],
+                ['Tramo Final',   modalDetalle.tramo_final],
+                ['Registro',      modalDetalle.registro],
+                ['Tramo',         modalDetalle.tramo],
+              ].map(([label, valor]) => (
+                <div key={label} style={{ background:t.bg,borderRadius:'8px',padding:'10px 14px' }}>
+                  <div style={{ fontSize:'10px',fontWeight:'700',color:t.textMuted,letterSpacing:'0.8px',marginBottom:'4px' }}>{label.toUpperCase()}</div>
+                  <div style={{ fontSize:'13px',color:t.text,fontWeight:'500' }}>{valor ?? '—'}</div>
+                </div>
+              ))}
+            </div>
+            {/* Descripción */}
+            <div style={{ background:t.bg,borderRadius:'8px',padding:'12px 14px',marginBottom:'12px' }}>
+              <div style={{ fontSize:'10px',fontWeight:'700',color:t.textMuted,letterSpacing:'0.8px',marginBottom:'6px' }}>DESCRIPCIÓN</div>
+              <div style={{ fontSize:'13px',color:t.text,lineHeight:1.6 }}>{modalDetalle.descripcion ?? '—'}</div>
+            </div>
+            {/* Observaciones */}
+            {modalDetalle.observaciones && (
+              <div style={{ background:t.bg,borderRadius:'8px',padding:'12px 14px' }}>
+                <div style={{ fontSize:'10px',fontWeight:'700',color:t.textMuted,letterSpacing:'0.8px',marginBottom:'6px' }}>OBSERVACIONES</div>
+                <div style={{ fontSize:'13px',color:t.text,lineHeight:1.6 }}>{modalDetalle.observaciones}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       {/* Tabla — visible con drill activo o búsqueda activa */}
       {drill.length > 0 && loading && (
         <div style={s.emptyState}>⏳ Cargando registros...</div>
@@ -2163,7 +2223,11 @@ async function cargarRegistros() {
             </thead>
             <tbody>
               {registrosPagina.map((r,i) => (
-                <tr key={r.id || i} style={{ background:'transparent' }}>
+                <tr key={r.id || i}
+                  onClick={() => setModalDetalle(r)}
+                  style={{ background:'transparent', cursor:'pointer', transition:'background 0.15s' }}
+                  onMouseEnter={e => e.currentTarget.style.background = t.primary+'18'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                   <td style={{ ...tdStyle,fontWeight:'700',color:colorActual }}>{r.acta}</td>
                   <td style={{ ...tdStyle,fontWeight:'600' }}>{r.pk_id}</td>
                   <td style={tdStyle}>{r.capitulo}</td>
