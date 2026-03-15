@@ -708,8 +708,8 @@ async function cargarRegistros(modoPapelera) {
   }, [registrosFiltrados, nivelActual])
 
   const costoTotal = useMemo(() =>
-    registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
-  , [registrosFiltrados])
+    chartData.reduce((s, d) => s + (d.costo ?? 0), 0)
+  , [chartData])
 
   const totalPaginas = Math.ceil(registrosFiltrados.length / POR_PAGINA)
   const registrosPagina = useMemo(() =>
@@ -1673,7 +1673,7 @@ function ModuloCobro({ t, usuario, token, s }) {
   const [chartLoading, setChartLoading] = useState(false)
   const [chartDataRemoto, setChartDataRemoto] = useState([])
 
-  useEffect(() => { if (contratoId) { cargarChart(primerNivel); cargarRegistros() } }, [contratoId])
+  useEffect(() => { if (contratoId) { cargarChart(primerNivel) } }, [contratoId])
   useEffect(() => { if (contratoId) cargarChart(nivelActual || primerNivel, drill) }, [nivelActual, drill.length])
 
   async function cargarChart(nivel, drillActual = []) {
@@ -1749,7 +1749,11 @@ async function cargarRegistros() {
 
   function handleBarClick(barData) {
     if (!nivelActual || !barData?.name) return
-    setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
+    const nuevoDrill = [...drill, { campo: nivelActual, valor: barData.name }]
+    setDrill(nuevoDrill)
+    // Solo cargamos registros cuando llegamos al último nivel (necesitamos tabla)
+    const sigNivel = nivelesOrden[nuevoDrill.length]
+    if (!sigNivel) cargarRegistros()
   }
   function irA(idx) { setDrill(prev => prev.slice(0, idx)) }
 
@@ -1896,7 +1900,7 @@ async function cargarRegistros() {
         )}
         {importMsg && <span style={{ fontSize:'13px',color:importMsg.startsWith('✅')?'#16A34A':importMsg.startsWith('❌')?'#DC2626':t.textMuted }}>{importMsg}</span>}
         <span style={{ marginLeft:'auto',fontSize:'12px',color:t.textMuted }}>
-          {registros.length} total · {registrosFiltrados.length} filtrados
+          {registros.length > 0 ? `${registros.length} total · ${registrosFiltrados.length} filtrados` : `${chartData.reduce((s,d)=>s+(d.count??0),0)} registros`}
           {totalPaginasCobro > 1 && (
             <span style={{ marginLeft:'16px', display:'inline-flex', alignItems:'center', gap:'6px' }}>
               <button onClick={() => setPagina(p => Math.max(1, p-1))} disabled={pagina===1}
