@@ -2946,11 +2946,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                           return (
                             <g key={i}>
                               {/* Barra Presupuesto */}
-                              <rect x={x} y={yP} width={BAR_W} height={Math.max(hP,2)} fill="#0077B6" rx="2" opacity={isSelected?1:0.85}
-                                style={{cursor:'pointer'}} onClick={() => setDashDrill([{campo:'capitulo', valor:cap.capitulo}])}/>
+                              <rect x={x} y={yP} width={BAR_W} height={Math.max(hP,2)} fill="#0077B6" rx="2" opacity={isSelected?1:0.85} style={{cursor:'pointer'}} onClick={() => setDashDrill([{campo:'capitulo', valor:cap.capitulo}])}/>
                               {/* Barra Cobro */}
-                              <rect x={x+BAR_W+2} y={yC} width={BAR_W} height={Math.max(hC,2)} fill={colorC} rx="2" opacity={isSelected?1:0.85}
-                                style={{cursor:'pointer'}} onClick={() => setDashDrill([{campo:'capitulo', valor:cap.capitulo}])}/>
+                              <rect x={x+BAR_W+2} y={yC} width={BAR_W} height={Math.max(hC,2)} fill={colorC} rx="2" opacity={isSelected?1:0.85} style={{cursor:'pointer'}} onClick={() => setDashDrill([{campo:'capitulo', valor:cap.capitulo}])}/>
                               {/* Etiqueta eje X */}
                               <text x={x+BAR_W} y={H-6} textAnchor="middle" fontSize="7" fill={t.textMuted}>{nomCorto}</text>
                               {/* Área hover invisible con tooltip */}
