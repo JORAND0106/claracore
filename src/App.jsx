@@ -1716,7 +1716,7 @@ async function cargarRegistros() {
   const registrosFiltrados = useMemo(() => {
     const parseAbs = s => s ? parseFloat(String(s).replace('+', '')) : null
     return registros.filter(r => {
-      if (!drill.every(({campo, valor}) => r[campo] === valor)) return false
+      // NO aplica filtro drill — el backend ya filtra por drill en cargarRegistrosFiltrados
       if (busquedaTipo === 'nodo') {
         const v1 = busquedaV1.trim().toLowerCase()
         const v2 = busquedaV2.trim().toLowerCase()
