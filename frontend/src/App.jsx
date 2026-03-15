@@ -2500,13 +2500,34 @@ function MiniMapaSemaforo({ t, colores, height = 220 }) {
   const mapRef      = useRef(null)
   const mapInstance = useRef(null)
   const [listo, setListo] = useState(false)
+  const [modo, setModo]   = useState('ambos') // 'presupuesto' | 'cobro' | 'ambos'
 
-  const getColor = (pct) => {
+  const getColorCobro = (pct) => {
     if (pct >= 100) return '#DC2626'
     if (pct >= 90)  return '#EF4444'
     if (pct >= 70)  return '#F59E0B'
     return '#10B981'
   }
+
+  const buildFeatures = (geojson) =>
+    geojson.features
+      .filter(f => f.properties.Layer !== 'dibujo externo')
+      .map(f => {
+        const pkid = String(f.properties.Layer).trim()
+        const d    = colores[pkid] || {}
+        return {
+          ...f,
+          properties: {
+            ...f.properties,
+            pk_id:       pkid,
+            pct:         d.pct || 0,
+            tiene_cobro: d.cobrado > 0 ? 1 : 0,
+            tiene_ppto:  d.presupuesto > 0 ? 1 : 0,
+            color_cobro: d.cobrado != null ? getColorCobro(d.pct || 0) : '#334155',
+            color_ppto:  d.presupuesto > 0 ? '#0077B6' : '#334155',
+          }
+        }
+      })
 
   // Inicializar mapa una sola vez
   useEffect(() => {
@@ -2515,9 +2536,7 @@ function MiniMapaSemaforo({ t, colores, height = 220 }) {
     const map = new mapboxgl.Map({
       container: mapRef.current,
       style: t.bg === '#0A1628' ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11',
-      center: [-74.05, 4.72],
-      zoom: 11,
-      interactive: true,
+      center: [-74.05, 4.72], zoom: 11, interactive: true,
     })
     mapInstance.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
@@ -2525,34 +2544,28 @@ function MiniMapaSemaforo({ t, colores, height = 220 }) {
       fetch('/pOLIGONOS_1551t_Project_Feat.json')
         .then(r => r.json())
         .then(geojson => {
-          const enriched = {
-            ...geojson,
-            features: geojson.features
-              .filter(f => f.properties.Layer !== 'dibujo externo')
-              .map(f => {
-                const pkid = String(f.properties.Layer).trim()
-                const data = colores[pkid] || {}
-                return {
-                  ...f,
-                  properties: {
-                    ...f.properties,
-                    pk_id: pkid,
-                    pct: data.pct || 0,
-                    activo: colores[pkid] ? 1 : 0,
-                    color: colores[pkid] ? getColor(data.pct || 0) : '#334155'
-                  }
-                }
-              })
-          }
-          map.addSource('mini-pols', { type: 'geojson', data: enriched })
-          map.addLayer({ id: 'mini-fill', type: 'fill', source: 'mini-pols',
-            paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'activo'], 1], 0.8, 0.2] }
+          const features = buildFeatures(geojson)
+          const data = { ...geojson, features }
+          map.addSource('mini-pols', { type: 'geojson', data })
+          // Capa presupuesto (azul)
+          map.addLayer({ id: 'mini-fill-ppto', type: 'fill', source: 'mini-pols',
+            paint: {
+              'fill-color': ['get', 'color_ppto'],
+              'fill-opacity': ['case', ['==', ['get', 'tiene_ppto'], 1], 0.7, 0.1]
+            }
+          })
+          // Capa cobro (semáforo)
+          map.addLayer({ id: 'mini-fill-cobro', type: 'fill', source: 'mini-pols',
+            paint: {
+              'fill-color': ['get', 'color_cobro'],
+              'fill-opacity': ['case', ['==', ['get', 'tiene_cobro'], 1], 0.7, 0.1]
+            }
           })
           map.addLayer({ id: 'mini-line', type: 'line', source: 'mini-pols',
             paint: { 'line-color': '#ffffff', 'line-width': 0.8, 'line-opacity': 0.3 }
           })
           // Fit bounds
-          const coords = enriched.features.flatMap(f => {
+          const coords = features.flatMap(f => {
             const g = f.geometry
             if (g.type === 'Polygon') return g.coordinates[0]
             if (g.type === 'MultiPolygon') return g.coordinates.flat(2)
@@ -2568,49 +2581,73 @@ function MiniMapaSemaforo({ t, colores, height = 220 }) {
     return () => { if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; setListo(false) } }
   }, [])
 
-  // Actualizar colores cuando cambia el drill
+  // Actualizar colores cuando cambia colores o modo
   useEffect(() => {
     const map = mapInstance.current
-    if (!map || !listo || !map.getSource('mini-pols')) return
+    if (!map || !listo) return
+    // Actualizar datos
     const src = map.getSource('mini-pols')
-    const data = src._data || src._options?.data
-    if (!data || !data.features) return
-    const updated = {
-      ...data,
-      features: data.features.map(f => {
-        const pkid = f.properties.pk_id || String(f.properties.Layer).trim()
-        const d = colores[pkid] || {}
-        return {
-          ...f,
-          properties: {
-            ...f.properties,
-            pk_id: pkid,
-            pct: d.pct || 0,
-            activo: colores[pkid] ? 1 : 0,
-            color: colores[pkid] ? getColor(d.pct || 0) : '#334155'
-          }
-        }
-      })
+    if (src) {
+      const raw = src._data
+      if (raw && raw.features) {
+        src.setData({ ...raw, features: buildFeatures(raw) })
+      }
     }
-    src.setData(updated)
-  }, [colores, listo])
+    // Visibilidad de capas según modo
+    if (map.getLayer('mini-fill-ppto') && map.getLayer('mini-fill-cobro')) {
+      if (modo === 'presupuesto') {
+        map.setPaintProperty('mini-fill-ppto', 'fill-opacity', ['case', ['==', ['get', 'tiene_ppto'], 1], 0.85, 0.08])
+        map.setPaintProperty('mini-fill-cobro', 'fill-opacity', 0)
+      } else if (modo === 'cobro') {
+        map.setPaintProperty('mini-fill-ppto', 'fill-opacity', 0)
+        map.setPaintProperty('mini-fill-cobro', 'fill-opacity', ['case', ['==', ['get', 'tiene_cobro'], 1], 0.85, 0.08])
+      } else {
+        map.setPaintProperty('mini-fill-ppto', 'fill-opacity', ['case', ['==', ['get', 'tiene_ppto'], 1], 0.45, 0.05])
+        map.setPaintProperty('mini-fill-cobro', 'fill-opacity', ['case', ['==', ['get', 'tiene_cobro'], 1], 0.55, 0.05])
+      }
+    }
+  }, [colores, listo, modo])
+
+  const btnModo = (key, label, color) => (
+    <button key={key} onClick={() => setModo(key)} style={{
+      background: modo === key ? color : 'transparent',
+      color: modo === key ? '#fff' : t.textMuted,
+      border: `1.5px solid ${modo === key ? color : t.border}`,
+      borderRadius: '20px', padding: '2px 10px', fontSize: '10px',
+      fontWeight: modo === key ? '700' : '400', cursor: 'pointer',
+      transition: 'all 0.15s'
+    }}>{label}</button>
+  )
 
   return (
-    <div style={{ position:'relative', width:'100%', height:`${height}px`, borderRadius:'8px', overflow:'hidden' }}>
-      <div ref={mapRef} style={{ width:'100%', height:'100%' }} />
-      {!listo && (
-        <div style={{ position:'absolute', top:0, left:0, right:0, bottom:0, background:t.bg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:'12px', color:t.textMuted }}>
-          ⏳ Cargando mapa...
-        </div>
-      )}
-      {/* Leyenda mini */}
-      <div style={{ position:'absolute', bottom:'8px', left:'8px', background:t.bgCard+'DD', borderRadius:'6px', padding:'5px 8px', fontSize:'9px', display:'flex', gap:'6px', flexWrap:'wrap' }}>
-        {[['#10B981','<70%'],['#F59E0B','70-90%'],['#EF4444','90-100%'],['#DC2626','>100%']].map(([c,l]) => (
-          <div key={l} style={{ display:'flex', alignItems:'center', gap:'3px', color:t.textMuted }}>
-            <div style={{ width:'8px', height:'8px', borderRadius:'2px', background:c }}/>
-            {l}
+    <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
+      {/* Toggle de modo */}
+      <div style={{ display:'flex', gap:'6px', justifyContent:'center' }}>
+        {btnModo('presupuesto', '📋 Presupuesto', '#0077B6')}
+        {btnModo('cobro',       '💰 Cobro',       '#00A896')}
+        {btnModo('ambos',       '⚡ Ambos',        '#7C3AED')}
+      </div>
+      {/* Mapa */}
+      <div style={{ position:'relative', width:'100%', height:`${height}px`, borderRadius:'8px', overflow:'hidden' }}>
+        <div ref={mapRef} style={{ width:'100%', height:'100%' }} />
+        {!listo && (
+          <div style={{ position:'absolute', top:0, left:0, right:0, bottom:0, background:t.bg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:'12px', color:t.textMuted }}>
+            ⏳ Cargando mapa...
           </div>
-        ))}
+        )}
+        {/* Leyenda */}
+        <div style={{ position:'absolute', bottom:'8px', left:'8px', background:t.bgCard+'DD', borderRadius:'6px', padding:'5px 8px', fontSize:'9px', display:'flex', gap:'6px', flexWrap:'wrap' }}>
+          {modo !== 'presupuesto' && [['#10B981','<70%'],['#F59E0B','70-90%'],['#EF4444','90-100%'],['#DC2626','>100%']].map(([c,l]) => (
+            <div key={l} style={{ display:'flex', alignItems:'center', gap:'3px', color:t.textMuted }}>
+              <div style={{ width:'8px', height:'8px', borderRadius:'2px', background:c }}/>{l}
+            </div>
+          ))}
+          {modo !== 'cobro' && (
+            <div style={{ display:'flex', alignItems:'center', gap:'3px', color:t.textMuted }}>
+              <div style={{ width:'8px', height:'8px', borderRadius:'2px', background:'#0077B6' }}/>Ppto
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
