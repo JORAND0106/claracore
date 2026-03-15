@@ -2549,7 +2549,16 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     drill.forEach(d => params.set(d.campo, d.valor))
     const tok = getToken()
     const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
-    if (res.ok) setDashData(await res.json())
+    if (res.ok) {
+      const data = await res.json()
+      const lista = data.items || data
+      setDashData(lista.map(r => ({
+        item: r.item || r.nombre,
+        descripcion: r.descripcion || '',
+        presupuesto: r.presupuesto || 0,
+        cobrado: r.cobrado || 0,
+      })))
+    }
     setDashLoading(false)
   }
 
