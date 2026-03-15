@@ -1268,9 +1268,9 @@ async function darDeBaja(id) {
           {/* Gráfico */}
           {nivelActual ? (
             nivelActual === 'pk_id' ? (
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
-                {/* Botones PK_ID */}
-                <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(80px,1fr))',gap:'6px',maxHeight:'320px',overflowY:'auto',padding:'4px 2px' }}>
+              <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
+                {/* Botones PK_ID en fila con scroll */}
+                <div style={{ display:'flex', flexWrap:'wrap', gap:'6px', maxHeight:'120px', overflowY:'auto', padding:'4px 2px' }}>
                   {chartData.map((d, i) => {
                     const color = PALETA_BARRAS[i % PALETA_BARRAS.length]
                     const activo = pptoPkidFoco === d.name
