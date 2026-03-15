@@ -2148,59 +2148,53 @@ async function cargarRegistros() {
       {modalDetalle && (
         <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.65)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center' }}
           onClick={() => setModalDetalle(null)}>
-          <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'16px',padding:'28px',width:'680px',maxWidth:'95vw',maxHeight:'85vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.4)' }}
+          <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'14px',padding:'20px',width:'520px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.4)' }}
             onClick={e => e.stopPropagation()}>
-            <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'20px' }}>
-              <div>
-                <div style={{ fontSize:'15px',fontWeight:'800',color:t.primary }}>📋 Detalle del Registro</div>
-                <div style={{ fontSize:'11px',color:t.textMuted,marginTop:'2px' }}>PK_ID: {modalDetalle.pk_id} · Acta {modalDetalle.acta}</div>
-              </div>
-              <button onClick={() => setModalDetalle(null)} style={{ background:'transparent',border:'none',fontSize:'20px',cursor:'pointer',color:t.textMuted }}>✕</button>
+            {/* Header */}
+            <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px' }}>
+              <div style={{ fontSize:'14px',fontWeight:'800',color:t.primary }}>📋 Detalle del Registro</div>
+              <button onClick={() => setModalDetalle(null)} style={{ background:'transparent',border:'none',fontSize:'18px',cursor:'pointer',color:t.textMuted }}>✕</button>
             </div>
-            {/* Grid de campos */}
-            <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px',marginBottom:'16px' }}>
-              {[
-                ['Acta',          modalDetalle.acta],
-                ['PK_ID',         modalDetalle.pk_id],
-                ['Capítulo',      modalDetalle.capitulo],
-                ['Ítem',          modalDetalle.item],
-                ['Unidad',        modalDetalle.und],
-                ['Calzada',       modalDetalle.calzada],
-                ['Competencia',   modalDetalle.competencia],
-                ['CIV',           modalDetalle.civ],
-                ['Semana',        modalDetalle.semana],
-                ['Fecha',         modalDetalle.fecha],
-                ['Abs. Inicial',  modalDetalle.abs_inicial],
-                ['Abs. Final',    modalDetalle.abs_final],
-                ['Longitud',      fmtN(modalDetalle.longitud)],
-                ['Ancho',         fmtN(modalDetalle.ancho)],
-                ['Espesor',       fmtN(modalDetalle.espesor)],
-                ['Cantidad',      fmtN(modalDetalle.cantidad)],
-                ['Vlr. Unitario', fmt(modalDetalle.valor_unitario)],
-                ['Costo Directo', fmt(modalDetalle.costo_directo)],
-                ['Tramo Inicio',  modalDetalle.tramo_inicio],
-                ['Tramo Final',   modalDetalle.tramo_final],
-                ['Registro',      modalDetalle.registro],
-                ['Tramo',         modalDetalle.tramo],
-              ].map(([label, valor]) => (
-                <div key={label} style={{ background:t.bg,borderRadius:'8px',padding:'10px 14px' }}>
-                  <div style={{ fontSize:'10px',fontWeight:'700',color:t.textMuted,letterSpacing:'0.8px',marginBottom:'4px' }}>{label.toUpperCase()}</div>
-                  <div style={{ fontSize:'13px',color:t.text,fontWeight:'500' }}>{valor ?? '—'}</div>
+            {/* Contenido compacto */}
+            {(() => {
+              const F = ({label, val, flex=1}) => (
+                <div style={{ flex, minWidth:0 }}>
+                  <div style={{ fontSize:'9px',fontWeight:'700',color:t.textMuted,letterSpacing:'0.6px' }}>{label}</div>
+                  <div style={{ fontSize:'12px',color:t.text,fontWeight:'500',marginTop:'1px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{val ?? '—'}</div>
                 </div>
-              ))}
-            </div>
-            {/* Descripción */}
-            <div style={{ background:t.bg,borderRadius:'8px',padding:'12px 14px',marginBottom:'12px' }}>
-              <div style={{ fontSize:'10px',fontWeight:'700',color:t.textMuted,letterSpacing:'0.8px',marginBottom:'6px' }}>DESCRIPCIÓN</div>
-              <div style={{ fontSize:'13px',color:t.text,lineHeight:1.6 }}>{modalDetalle.descripcion ?? '—'}</div>
-            </div>
-            {/* Observaciones */}
-            {modalDetalle.observaciones && (
-              <div style={{ background:t.bg,borderRadius:'8px',padding:'12px 14px' }}>
-                <div style={{ fontSize:'10px',fontWeight:'700',color:t.textMuted,letterSpacing:'0.8px',marginBottom:'6px' }}>OBSERVACIONES</div>
-                <div style={{ fontSize:'13px',color:t.text,lineHeight:1.6 }}>{modalDetalle.observaciones}</div>
-              </div>
-            )}
+              )
+              const Row = ({children}) => (
+                <div style={{ display:'flex',gap:'12px',background:t.bg,borderRadius:'6px',padding:'7px 10px',marginBottom:'5px' }}>{children}</div>
+              )
+              const BigF = ({label, val}) => (
+                <div style={{ background:t.bg,borderRadius:'6px',padding:'7px 10px',marginBottom:'5px' }}>
+                  <div style={{ fontSize:'9px',fontWeight:'700',color:t.textMuted,letterSpacing:'0.6px',marginBottom:'3px' }}>{label}</div>
+                  <div style={{ fontSize:'12px',color:t.text,lineHeight:1.5 }}>{val ?? '—'}</div>
+                </div>
+              )
+              return (
+                <>
+                  <Row><F label="REGISTRO" val={modalDetalle.registro}/><F label="ACTA" val={modalDetalle.acta} flex={0.5}/><F label="SEMANA" val={modalDetalle.semana} flex={0.5}/></Row>
+                  <Row><F label="CAPÍTULO" val={modalDetalle.capitulo}/><F label="COMPETENCIA" val={modalDetalle.competencia}/></Row>
+                  <Row><F label="ÍTEM" val={modalDetalle.item} flex={0.5}/><F label="UNIDAD" val={modalDetalle.und} flex={0.5}/><F label="FECHA" val={modalDetalle.fecha}/></Row>
+                  <BigF label="DESCRIPCIÓN" val={modalDetalle.descripcion}/>
+                  <Row><F label="CIV" val={modalDetalle.civ}/><F label="PK_ID" val={modalDetalle.pk_id}/><F label="TRAMO" val={modalDetalle.tramo}/></Row>
+                  <Row><F label="ABS. INICIAL" val={modalDetalle.abs_inicial}/><F label="ABS. FINAL" val={modalDetalle.abs_final}/><F label="CALZADA" val={modalDetalle.calzada}/></Row>
+                  <Row><F label="TRAMO INICIO" val={modalDetalle.tramo_inicio}/><F label="TRAMO FINAL" val={modalDetalle.tramo_final}/></Row>
+                  <Row>
+                    <F label="LONGITUD" val={fmtN(modalDetalle.longitud)} flex={0.5}/>
+                    <F label="ANCHO" val={fmtN(modalDetalle.ancho)} flex={0.5}/>
+                    <F label="ESPESOR" val={fmtN(modalDetalle.espesor)} flex={0.5}/>
+                    <F label="CANTIDAD" val={fmtN(modalDetalle.cantidad)} flex={0.5}/>
+                  </Row>
+                  <Row>
+                    <F label="VLR. UNITARIO" val={fmt(modalDetalle.valor_unitario)}/>
+                    <F label="COSTO DIRECTO" val={fmt(modalDetalle.costo_directo)}/>
+                  </Row>
+                  {modalDetalle.observaciones && <BigF label="OBSERVACIONES" val={modalDetalle.observaciones}/>}
+                </>
+              )
+            })()}
           </div>
         </div>
       )}
