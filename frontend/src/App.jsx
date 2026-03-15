@@ -2516,7 +2516,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashTabla,    setDashTabla]    = useState(null)
   const [dashTablaLoad,setDashTablaLoad]= useState(false)
   const [panelFoco, setPanelFoco] = useState(null)
-
+  const colsGrid = panelFoco === 'cobro-acta' || panelFoco === 'ppto-cobro' ? '2fr 1fr'
+                : panelFoco === 'ppto-capitulo' || panelFoco === 'semaforo'  ? '1fr 2fr'
+                : '1fr 1fr'
   const API_URL = 'https://claracore-backend.azurewebsites.net'
   const contratoIdDash = usuario?.contrato_id
 
@@ -2791,10 +2793,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
               </div>
             </div>
 
-            {/* ── Grid 2×2 ── */}
-            const colsGrid = panelFoco === 'cobro-acta' || panelFoco === 'ppto-cobro' ? '2fr 1fr'
-               : panelFoco === 'ppto-capitulo' || panelFoco === 'semaforo'  ? '1fr 2fr'
-               : '1fr 1fr'
+            {/* ── Grid 2×2 ── */}                                  
             <div style={{ display:'grid', gridTemplateColumns:colsGrid, gap:'16px', marginBottom:'20px', transition:'grid-template-columns 0.3s ease' }}>
 
               {/* 🔴 Panel Cobro por Acta — área/línea */}
