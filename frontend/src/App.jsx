@@ -2516,9 +2516,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashTabla,    setDashTabla]    = useState(null)
   const [dashTablaLoad,setDashTablaLoad]= useState(false)
   const [panelFoco, setPanelFoco] = useState(null)
-  const colsGrid = panelFoco === 'cobro-acta' || panelFoco === 'ppto-cobro' ? '2fr 1fr'
-                : panelFoco === 'ppto-capitulo' || panelFoco === 'semaforo'  ? '1fr 2fr'
-                : '1fr 1fr'
+  const colsGrid = '1fr 1fr'
   const API_URL = 'https://claracore-backend.azurewebsites.net'
   const contratoIdDash = usuario?.contrato_id
 
@@ -2797,7 +2795,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
             <div style={{ display:'grid', gridTemplateColumns:colsGrid, gap:'16px', marginBottom:'20px', transition:'grid-template-columns 0.3s ease' }}>
 
               {/* 🔴 Panel Cobro por Acta — área/línea */}
-              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
+              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, ...(panelFoco==='cobro-acta' && {gridColumn:'1 / -1'}) }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
                   <div>
                     <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
@@ -2867,7 +2865,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
               </div>
 
               {/* ⬛ Panel Presupuesto por Capítulo — barras */}
-              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
+              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, ...(panelFoco==='ppto-capitulo' && {gridColumn:'1 / -1'}) }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
                   <div>
                     <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
@@ -2906,7 +2904,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
               </div>
 
               {/* 🟢 Panel Presupuesto vs Cobro — barras verticales por capítulo */}
-              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
+              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, ...(panelFoco==='ppto-cobro' && {gridColumn:'1 / -1'}) }}>
                 <div style={{ marginBottom:'14px' }}>
                   <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
                     <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>📊 Presupuesto vs Cobro</div>
@@ -3004,7 +3002,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
               </div>
 
               {/* 🟣 Panel Plano Semáforo — placeholder */}
-              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, display:'flex', flexDirection:'column' }}>
+              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, display:'flex', flexDirection:'column', ...(panelFoco==='semaforo' && {gridColumn:'1 / -1'}) }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
                   <div>
                     <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
