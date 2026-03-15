@@ -1673,7 +1673,7 @@ function ModuloCobro({ t, usuario, token, s }) {
   const [chartLoading, setChartLoading] = useState(false)
   const [chartDataRemoto, setChartDataRemoto] = useState([])
 
-  useEffect(() => { if (contratoId) { cargarChart(primerNivel) } }, [contratoId])
+  useEffect(() => { if (contratoId) { cargarChart(primerNivel); cargarRegistros() } }, [contratoId])
   useEffect(() => { if (contratoId) cargarChart(nivelActual || primerNivel, drill) }, [nivelActual, drill.length])
 
   async function cargarChart(nivel, drillActual = []) {
