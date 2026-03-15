@@ -2515,6 +2515,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashLoading,  setDashLoading]  = useState(false)
   const [dashTabla,    setDashTabla]    = useState(null)
   const [dashTablaLoad,setDashTablaLoad]= useState(false)
+  const [panelFoco, setPanelFoco] = useState(null)
 
   const API_URL = 'https://claracore-backend.azurewebsites.net'
   const contratoIdDash = usuario?.contrato_id
@@ -2791,13 +2792,23 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
             </div>
 
             {/* ── Grid 2×2 ── */}
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', marginBottom:'20px' }}>
+            const colsGrid = panelFoco === 'cobro-acta' || panelFoco === 'ppto-cobro' ? '2fr 1fr'
+               : panelFoco === 'ppto-capitulo' || panelFoco === 'semaforo'  ? '1fr 2fr'
+               : '1fr 1fr'
+            <div style={{ display:'grid', gridTemplateColumns:colsGrid, gap:'16px', marginBottom:'20px', transition:'grid-template-columns 0.3s ease' }}>
 
               {/* 🔴 Panel Cobro por Acta — área/línea */}
               <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
                   <div>
+                    <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
                     <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>💰 Cobro por Acta</div>
+                    <button onClick={() => setPanelFoco(p => p === 'cobro-acta' ? null : 'cobro-acta')}
+                      style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'14px', padding:'0' }}
+                      title="Expandir panel">
+                      {panelFoco === 'cobro-acta' ? '⊠' : '⤢'}
+                    </button>
+                  </div>
                     <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Acumulado por número de acta</div>
                   </div>
                   <div style={{ fontSize:'16px', fontWeight:'800', color:t.primary }}>{fmtD(cobro)}</div>
@@ -2860,7 +2871,14 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
               <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
                   <div>
-                    <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>📋 Presupuesto por Capítulo</div>
+                    <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                      <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>📋 Presupuesto por Capítulo</div>
+                      <button onClick={() => setPanelFoco(p => p === 'ppto-capitulo' ? null : 'ppto-capitulo')}
+                        style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'14px', padding:'0' }}
+                        title="Expandir panel">
+                        {panelFoco === 'ppto-capitulo' ? '⊠' : '⤢'}
+                      </button>
+                    </div>
                     <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Top 15 capítulos por valor</div>
                   </div>
                   <div style={{ fontSize:'16px', fontWeight:'800', color:'#0077B6' }}>{fmtD(ppto)}</div>
@@ -2891,7 +2909,14 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
               {/* 🟢 Panel Presupuesto vs Cobro — barras verticales por capítulo */}
               <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow }}>
                 <div style={{ marginBottom:'14px' }}>
-                  <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>📊 Presupuesto vs Cobro</div>
+                  <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                    <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>📊 Presupuesto vs Cobro</div>
+                    <button onClick={() => setPanelFoco(p => p === 'ppto-cobro' ? null : 'ppto-cobro')}
+                      style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'14px', padding:'0' }}
+                      title="Expandir panel">
+                      {panelFoco === 'ppto-cobro' ? '⊠' : '⤢'}
+                    </button>
+                  </div>
                   <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Por capítulo — hover para ver detalle</div>
                 </div>
                 {(() => {
@@ -2983,7 +3008,14 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
               <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, display:'flex', flexDirection:'column' }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
                   <div>
-                    <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>🗺️ Plano Semáforo</div>
+                    <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                      <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>🗺️ Plano Semáforo</div>
+                      <button onClick={() => setPanelFoco(p => p === 'semaforo' ? null : 'semaforo')}
+                        style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'14px', padding:'0' }}
+                        title="Expandir panel">
+                        {panelFoco === 'semaforo' ? '⊠' : '⤢'}
+                      </button>
+                    </div>
                     <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Mapa de avance por PK_ID</div>
                   </div>
                 </div>
