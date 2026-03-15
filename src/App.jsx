@@ -2132,6 +2132,12 @@ async function cargarRegistros() {
       )}
 
       {/* Tabla — visible con drill activo o búsqueda activa */}
+      {drill.length > 0 && loading && (
+        <div style={s.emptyState}>⏳ Cargando registros...</div>
+      )}
+      {(drill.length > 0 || busquedaTipo) && !loading && registrosFiltrados.length === 0 && registros.length === 0 && drill.length > 0 && (
+        <div style={s.emptyState}>Sin registros para este filtro</div>
+      )}
       {(drill.length > 0 || busquedaTipo) && registrosFiltrados.length > 0 && (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',boxShadow:t.shadow }}>
           <table style={{ width:'100%',borderCollapse:'collapse',fontSize:'12px' }}>
