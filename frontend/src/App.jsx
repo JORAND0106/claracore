@@ -3376,7 +3376,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                       dashLoading ? (
                         <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>⏳ Cargando...</div>
                       ) : dashData?.length > 0 ? (() => {
-                          const POR_PAG = 15
+                          const POR_PAG = 20
                           const totalPags = Math.ceil(dashData.length / POR_PAG)
                           const paginaItems = dashDrillPag || 0
                           const slice = dashData.slice(paginaItems * POR_PAG, (paginaItems + 1) * POR_PAG)
