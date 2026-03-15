@@ -565,6 +565,20 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
 
   // ── Carga inicial ──────────────────────────────────────────────────────────
   useEffect(() => { if (contratoId) cargarRegistros() }, [contratoId])
+  
+    useEffect(() => {
+    if (!contratoId) return
+    const pkidDrill = drill.find(d => d.campo === 'pk_id')
+    if (pkidDrill) { setPptoPkidColores({}); return }
+    const params = new URLSearchParams()
+    const capDrill = drill.find(d => d.campo === 'capitulo')
+    const itemDrill = drill.find(d => d.campo === 'item')
+    if (itemDrill) params.set('item', itemDrill.valor)
+    else if (capDrill) params.set('capitulo', capDrill.valor)
+    fetch(`${API}/presupuesto/${contratoId}/pkid-colores?${params}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    }).then(r => r.ok ? r.json() : {}).then(setPptoPkidColores).catch(() => {})
+  }, [contratoId, drill])
 
   useEffect(() => {
     if (!contratoId) return
@@ -591,6 +605,11 @@ async function cargarRegistros(modoPapelera) {
   }
 
   // ── Drill-down computado ───────────────────────────────────────────────────
+  const [pptoPkidColores, setPptoPkidColores] = useState({})
+  const [pptoPkidFoco,    setPptoPkidFoco]    = useState(null)
+  const mapPptoRef      = useRef(null)
+  const mapPptoInstance = useRef(null)
+  const [mapPptoListo,   setMapPptoListo]   = useState(false)
   const [primerNivel, setPrimerNivel] = useState('capitulo')
   const nivelesOrden = [primerNivel, ...NIVELES.filter(n => n !== primerNivel)]
   const nivelActual  = nivelesOrden[drill.length] || null
@@ -1249,19 +1268,33 @@ async function darDeBaja(id) {
           {/* Gráfico */}
           {nivelActual ? (
             nivelActual === 'pk_id' ? (
-              <div style={{ display:'grid',gridTemplateColumns:'repeat(15, 1fr)',gap:'6px',maxHeight:'320px',overflowY:'auto',padding:'4px 2px' }}>
-                {chartData.map((d, i) => {
-                  const color = PALETA_BARRAS[i % PALETA_BARRAS.length]
-                  return (
-                    <button key={d.name} onClick={() => handleBarClick(d)}
-                      title={`${d.name}\n${fmt(d.costo)}\n${d.count} registros`}
-                      style={{ background:color+'22',border:`1.5px solid ${color}`,borderRadius:'6px',padding:'5px 4px',fontSize:'11px',fontWeight:'600',color,cursor:'pointer',textAlign:'center',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',transition:'all 0.15s' }}
-                      onMouseEnter={e => { e.currentTarget.style.background=color; e.currentTarget.style.color='#fff' }}
-                      onMouseLeave={e => { e.currentTarget.style.background=color+'22'; e.currentTarget.style.color=color }}>
-                      {d.name}
-                    </button>
-                  )
-                })}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
+                {/* Botones PK_ID */}
+                <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fill, minmax(80px,1fr))',gap:'6px',maxHeight:'320px',overflowY:'auto',padding:'4px 2px' }}>
+                  {chartData.map((d, i) => {
+                    const color = PALETA_BARRAS[i % PALETA_BARRAS.length]
+                    const activo = pptoPkidFoco === d.name
+                    return (
+                      <button key={d.name} onClick={() => handleBarClick(d)}
+                        title={`${d.name}\n${fmt(d.costo)}\n${d.count} registros`}
+                        style={{ background: activo ? color : color+'22', border:`2px solid ${color}`, borderRadius:'6px', padding:'5px 4px', fontSize:'11px', fontWeight:'600', color: activo ? '#fff' : color, cursor:'pointer', textAlign:'center', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', transition:'all 0.15s' }}
+                        onMouseEnter={e => { e.currentTarget.style.background=color; e.currentTarget.style.color='#fff' }}
+                        onMouseLeave={e => { if (!activo) { e.currentTarget.style.background=color+'22'; e.currentTarget.style.color=color } }}>
+                        {d.name}
+                      </button>
+                    )
+                  })}
+                </div>
+                {/* Mini-mapa presupuesto */}
+                <MiniMapaPresupuesto
+                  t={t}
+                  colores={pptoPkidColores}
+                  pkidsActivos={chartData.map(d => d.name)}
+                  onPkidClick={(pkid) => {
+                    const found = chartData.find(d => d.name === pkid)
+                    if (found) handleBarClick(found)
+                  }}
+                />
               </div>
             ) : nivelActual === 'item' ? (() => {
               // ── Velocímetros para ítems (igual que ModuloPresupuesto) ──
@@ -2494,7 +2527,118 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
     </div>
   )
 }
+// ─── MINI MAPA PRESUPUESTO ────────────────────────────────────────────────────
+function MiniMapaPresupuesto({ t, colores, pkidsActivos, onPkidClick }) {
+  const mapRef  = useRef(null)
+  const mapInst = useRef(null)
+  const [listo, setListo] = useState(false)
 
+  useEffect(() => {
+    if (!mapRef.current || mapInst.current) return
+    mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
+    const map = new mapboxgl.Map({
+      container: mapRef.current,
+      style: t.bg === '#0A1628' ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11',
+      center: [-74.05, 4.72], zoom: 11, interactive: true
+    })
+    mapInst.current = map
+    map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    map.on('load', () => {
+      fetch('/pOLIGONOS_1551t_Project_Feat.json').then(r => r.json()).then(geojson => {
+        const features = geojson.features
+          .filter(f => f.properties.Layer !== 'dibujo externo')
+          .map(f => {
+            const pkid = String(f.properties.Layer).trim()
+            const activo = pkidsActivos.includes(pkid)
+            const d = colores[pkid] || {}
+            const pct = d.pct || 0
+            const color = activo
+              ? pct > 75 ? '#0077B6' : pct > 50 ? '#00B4C6' : pct > 25 ? '#00A896' : '#028090'
+              : '#334155'
+            return { ...f, properties: { ...f.properties, pk_id: pkid, activo: activo ? 1 : 0, color } }
+          })
+        const data = { ...geojson, features }
+        map.addSource('ppto-pols', { type: 'geojson', data })
+        map.addLayer({ id: 'ppto-fill', type: 'fill', source: 'ppto-pols',
+          paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'activo'], 1], 0.8, 0.1] }
+        })
+        map.addLayer({ id: 'ppto-line', type: 'line', source: 'ppto-pols',
+          paint: { 'line-color': '#ffffff', 'line-width': 0.8, 'line-opacity': 0.3 }
+        })
+        map.on('mouseenter', 'ppto-fill', (e) => {
+          if (e.features[0].properties.activo) map.getCanvas().style.cursor = 'pointer'
+        })
+        map.on('mouseleave', 'ppto-fill', () => { map.getCanvas().style.cursor = '' })
+        map.on('click', 'ppto-fill', (e) => {
+          const props = e.features[0].properties
+          if (props.activo) onPkidClick(props.pk_id)
+        })
+        const coords = features.flatMap(f => {
+          const g = f.geometry
+          if (g.type === 'Polygon') return g.coordinates[0]
+          if (g.type === 'MultiPolygon') return g.coordinates.flat(2)
+          return []
+        })
+        if (coords.length > 0) {
+          const lngs = coords.map(c => c[0]), lats = coords.map(c => c[1])
+          map.fitBounds([[Math.min(...lngs), Math.min(...lats)],[Math.max(...lngs), Math.max(...lats)]], { padding: 20, duration: 0 })
+        }
+        setListo(true)
+      })
+    })
+    return () => { if (mapInst.current) { mapInst.current.remove(); mapInst.current = null; setListo(false) } }
+  }, [])
+
+  // Actualizar cuando cambian pkidsActivos o colores
+  useEffect(() => {
+    const map = mapInst.current
+    if (!map || !listo || !map.getSource('ppto-pols')) return
+    const src = map.getSource('ppto-pols')
+    const raw = src._data
+    if (!raw?.features) return
+    src.setData({
+      ...raw,
+      features: raw.features.map(f => {
+        const pkid = f.properties.pk_id || String(f.properties.Layer).trim()
+        const activo = pkidsActivos.includes(pkid)
+        const d = colores[pkid] || {}
+        const pct = d.pct || 0
+        const color = activo
+          ? pct > 75 ? '#0077B6' : pct > 50 ? '#00B4C6' : pct > 25 ? '#00A896' : '#028090'
+          : '#334155'
+        return { ...f, properties: { ...f.properties, pk_id: pkid, activo: activo ? 1 : 0, color } }
+      })
+    })
+    // Fit bounds solo a los activos
+    if (pkidsActivos.length > 0) {
+      const activos = raw.features.filter(f => pkidsActivos.includes(f.properties.pk_id || String(f.properties.Layer).trim()))
+      const coords = activos.flatMap(f => {
+        const g = f.geometry
+        if (g.type === 'Polygon') return g.coordinates[0]
+        if (g.type === 'MultiPolygon') return g.coordinates.flat(2)
+        return []
+      })
+      if (coords.length > 0) {
+        const lngs = coords.map(c => c[0]), lats = coords.map(c => c[1])
+        map.fitBounds([[Math.min(...lngs), Math.min(...lats)],[Math.max(...lngs), Math.max(...lats)]], { padding: 30, duration: 800 })
+      }
+    }
+  }, [colores, pkidsActivos, listo])
+
+  return (
+    <div style={{ position:'relative', width:'100%', height:'320px', borderRadius:'8px', overflow:'hidden', border:`1px solid ${t.border}` }}>
+      <div ref={mapRef} style={{ width:'100%', height:'100%' }} />
+      {!listo && (
+        <div style={{ position:'absolute', top:0, left:0, right:0, bottom:0, background:t.bg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:'12px', color:t.textMuted }}>
+          ⏳ Cargando mapa...
+        </div>
+      )}
+      <div style={{ position:'absolute', bottom:'8px', left:'8px', background:t.bgCard+'DD', borderRadius:'6px', padding:'5px 8px', fontSize:'9px', color:t.textMuted }}>
+        🔵 Activo — click para filtrar
+      </div>
+    </div>
+  )
+}
 // ─── MINI MAPA SEMÁFORO (dashboard) ──────────────────────────────────────────
 function MiniMapaSemaforo({ t, colores, height = 220 }) {
   const mapRef      = useRef(null)
@@ -3232,7 +3376,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                       dashLoading ? (
                         <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>⏳ Cargando...</div>
                       ) : dashData?.length > 0 ? (() => {
-                          const POR_PAG = 25
+                          const POR_PAG = 15
                           const totalPags = Math.ceil(dashData.length / POR_PAG)
                           const paginaItems = dashDrillPag || 0
                           const slice = dashData.slice(paginaItems * POR_PAG, (paginaItems + 1) * POR_PAG)

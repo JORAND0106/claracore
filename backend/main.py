@@ -1119,6 +1119,30 @@ def get_pkid_colores(contrato_id: int, current_user=Depends(get_current_user)):
         }
     return result
 
+@app.get("/presupuesto/{contrato_id}/pkid-colores")
+def get_ppto_pkid_colores(
+    contrato_id: int,
+    capitulo: Optional[str] = None,
+    item: Optional[str] = None,
+    current_user=Depends(get_current_user)
+):
+    """Colores PK_ID para el mini-mapa del módulo presupuesto."""
+    q = supabase.table("presupuesto").select("pk_id, costo_directo").eq("contrato_id", contrato_id)
+    if item:     q = q.eq("item", item)
+    elif capitulo: q = q.eq("capitulo", capitulo)
+    rows = q.execute().data
+    agg = {}
+    for r in rows:
+        k = str(r.get("pk_id") or "").strip()
+        if k: agg[k] = agg.get(k, 0) + (r.get("costo_directo") or 0)
+    if not agg: return {}
+    max_costo = max(agg.values()) or 1
+    result = {}
+    for pk, costo in agg.items():
+        pct = round(costo / max_costo * 100, 1)
+        result[pk] = {"costo": costo, "pct": pct, "activo": True}
+    return result
+
 @app.get("/cobro/{contrato_id}/pkid-colores-drill")
 def get_pkid_colores_drill(
     contrato_id: int,
