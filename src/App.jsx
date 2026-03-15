@@ -1804,8 +1804,8 @@ async function cargarRegistros() {
       }
     }
     // Luego insertamos en batches pequeños
-    const BATCH = 500
-    const PARALELO = 5  // batches simultáneos
+    const BATCH = 1000
+    const PARALELO = 2  // Supabase free tier no aguanta más
     const chunks = []
     for (let i = 0; i < rows.length; i += BATCH) chunks.push(rows.slice(i, i + BATCH))
 
