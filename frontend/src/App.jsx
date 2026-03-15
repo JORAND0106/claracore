@@ -2557,6 +2557,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         descripcion: r.descripcion || '',
         presupuesto: r.presupuesto || 0,
         cobrado: r.cobrado || 0,
+        cant_ppto: r.cant_ppto || 0,
+        cant_cobro: r.cant_cobro || r.cant_sicoe || 0,
       })))
     }
     setDashLoading(false)
@@ -3072,12 +3074,14 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                                         onMouseLeave={e => { e.currentTarget.style.opacity='0.85'; const tip=document.getElementById(`tip-drill-${i}`); if(tip) tip.style.display='none' }}/>
                                       <text x={x+BAR_W} y={H-8} textAnchor="middle" fontSize="7" fill={t.textMuted}>{nomCorto}</text>
                                       <g id={`tip-drill-${i}`} style={{display:'none', pointerEvents:'none'}}>
-                                        <rect x={Math.min(x-10, Math.max(totalW,300)-200)} y={Math.min(yP,yC)-54} width="195" height="48" rx="5" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
+                                        <rect x={Math.min(x-10, Math.max(totalW,300)-200)} y={Math.min(yP,yC)-72} width="210" height="66" rx="5" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
                                         <text x={Math.min(x-10, Math.max(totalW,300)-200)+10} y={Math.min(yP,yC)-38} fontSize="10" fontWeight="700" fill={t.text}>{String(item.item||'').length>22?String(item.item||'').slice(0,22)+'…':String(item.item||'')}</text>
                                         <rect x={Math.min(x-10, Math.max(totalW,300)-200)+10} y={Math.min(yP,yC)-28} width="8" height="8" rx="1" fill="#0077B6"/>
-                                        <text x={Math.min(x-10, Math.max(totalW,300)-200)+22} y={Math.min(yP,yC)-21} fontSize="9" fill={t.textMuted}>Ppto: <tspan fontWeight="700" fill="#0077B6">{fmtD(item.presupuesto)}</tspan></text>
-                                        <rect x={Math.min(x-10, Math.max(totalW,300)-200)+10} y={Math.min(yP,yC)-14} width="8" height="8" rx="1" fill="#00A896"/>
-                                        <text x={Math.min(x-10, Math.max(totalW,300)-200)+22} y={Math.min(yP,yC)-7} fontSize="9" fill={t.textMuted}>Cobro: <tspan fontWeight="700" fill="#00A896">{fmtD(item.cobrado)}</tspan></text>
+                                        <text x={Math.min(x-10, Math.max(totalW,300)-200)+22} y={Math.min(yP,yC)-39} fontSize="9" fill={t.textMuted}>Ppto: <tspan fontWeight="700" fill="#0077B6">{fmtD(item.presupuesto)}</tspan></text>
+                                        <text x={Math.min(x-10, Math.max(totalW,300)-200)+22} y={Math.min(yP,yC)-27} fontSize="9" fill={t.textMuted}>Cant: <tspan fontWeight="700" fill="#0077B6">{(item.cant_ppto||0).toFixed(2)}</tspan></text>
+                                        <rect x={Math.min(x-10, Math.max(totalW,300)-200)+10} y={Math.min(yP,yC)-20} width="8" height="8" rx="1" fill="#00A896"/>
+                                        <text x={Math.min(x-10, Math.max(totalW,300)-200)+22} y={Math.min(yP,yC)-13} fontSize="9" fill={t.textMuted}>Cobro: <tspan fontWeight="700" fill="#00A896">{fmtD(item.cobrado)}</tspan></text>
+                                        <text x={Math.min(x-10, Math.max(totalW,300)-200)+22} y={Math.min(yP,yC)-1} fontSize="9" fill={t.textMuted}>Cant: <tspan fontWeight="700" fill="#00A896">{(item.cant_cobro||0).toFixed(2)}</tspan></text>
                                       </g>
                                     </g>
                                   )
@@ -3113,16 +3117,16 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                               </tr>
                             </thead>
                             <tbody>
-                              {(dashTabla.filas || []).map((f, i) => {
-                                const deltaC = (f.cant_sicoe||0) - (f.cant_cobro||0)
-                                const deltaCosto = (f.costo_sicoe||0) - (f.costo_cobro||0)
+                              {(dashTabla.rows || dashTabla.filas || []).map((f, i) => {
+                                const deltaC = f.delta_cant ?? ((f.cant_ppto||0) - (f.cant_sicoe||0))
+                                const deltaCosto = f.delta_costo ?? ((f.costo_ppto||0) - (f.costo_sicoe||0))
                                 return (
                                   <tr key={i} style={{ borderBottom:`1px solid ${t.border}` }}>
                                     <td style={{ padding:'5px 8px', fontWeight:'700', color:t.primary }}>{f.pk_id}</td>
-                                    <td style={{ padding:'5px 8px', textAlign:'right' }}>{f.cant_sicoe?.toFixed(2)}</td>
+                                    <td style={{ padding:'5px 8px', textAlign:'right' }}>{(f.cant_ppto||0).toFixed(2)}</td>
+                                    <td style={{ padding:'5px 8px', textAlign:'right' }}>{fmtD(f.costo_ppto)}</td>
+                                    <td style={{ padding:'5px 8px', textAlign:'right' }}>{(f.cant_sicoe||0).toFixed(2)}</td>
                                     <td style={{ padding:'5px 8px', textAlign:'right' }}>{fmtD(f.costo_sicoe)}</td>
-                                    <td style={{ padding:'5px 8px', textAlign:'right' }}>{f.cant_cobro?.toFixed(2)}</td>
-                                    <td style={{ padding:'5px 8px', textAlign:'right' }}>{fmtD(f.costo_cobro)}</td>
                                     <td style={{ padding:'5px 8px', textAlign:'right', fontWeight:'700', color: deltaC > 0 ? '#10B981' : deltaC < 0 ? '#EF4444' : t.textMuted }}>
                                       {deltaC > 0 ? '+' : ''}{deltaC?.toFixed(2)}
                                     </td>
