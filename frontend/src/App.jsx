@@ -3189,7 +3189,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                 })()}
               {/* ── Drill capítulo → ítem → tabla ── */}
                 {dashDrill.length > 0 && (
-                  <div style={{ marginTop:'16px', borderTop:`1px solid ${t.border}`, paddingTop:'14px' }}>
+                  <div style={{ marginTop:'16px', borderTop:`1px solid ${t.border}`, paddingTop:'14px', minWidth:0, overflow:'hidden' }}>
                     {/* Breadcrumb */}
                     <div style={{ display:'flex', alignItems:'center', gap:'6px', marginBottom:'12px', flexWrap:'wrap' }}>
                       <button onClick={() => setDashDrill([])}
@@ -3237,8 +3237,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                           const scaleH = v => PAD_T + (1 - v/maxV) * (H - PAD_T - PAD_B)
                           const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
                           return (
-                            <div style={{ overflowX:'auto', overflowY:'visible', marginTop:'8px' }}>
-                              <svg width={Math.max(totalW, 300)} height={H} style={{ overflow:'visible', display:'block' }}>
+                            <div style={{ overflowX:'auto', overflowY:'visible', marginTop:'8px', maxWidth:'100%' }}>
+                              <svg width={Math.max(totalW, 300)} height={H} style={{ overflow:'visible', display:'block', minWidth:`${Math.max(totalW, 300)}px` }}>
                                 {[0,50,100].map(pct => {
                                   const y = PAD_T + (1-pct/100)*(H-PAD_T-PAD_B)
                                   return <line key={pct} x1={PAD_L} x2={Math.max(totalW,300)} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="3,3"/>
