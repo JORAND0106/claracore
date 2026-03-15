@@ -2358,12 +2358,12 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                     <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>💰 Cobro por Acta</div>
                     <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Acumulado por número de acta</div>
                   </div>
-                  <div style={{ fontSize:'16px', fontWeight:'800', color:'#00A896' }}>{fmtD(cobro)}</div>
+                  <div style={{ fontSize:'16px', fontWeight:'800', color:t.primary }}>{fmtD(cobro)}</div>
                 </div>
                 {porActa.length === 0 ? (
                   <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin datos de cobro</div>
                 ) : (() => {
-                  const W = 440, H = 160, PAD = 8
+                  const W = 860, H = 160, PAD = 8
                   const maxVal = Math.max(...porActa.map(a => a.cobrado), 1)
                   const pts = porActa.map((a, i) => ({
                     x: PAD + (i / Math.max(porActa.length-1, 1)) * (W - PAD*2),
@@ -2378,12 +2378,12 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                       <svg viewBox={`0 0 ${W} ${H}`} style={{ width:'100%', height:'160px', overflow:'visible' }}>
                         <defs>
                           <linearGradient id="cobroGrad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#00A896" stopOpacity="0.4"/>
+                            <stop offset="0%" stopColor={t.primary} stopOpacity="0.4"/>
                             <stop offset="100%" stopColor="#00A896" stopOpacity="0.02"/>
                           </linearGradient>
                         </defs>
                         <path d={areaD} fill="url(#cobroGrad)" />
-                        <path d={pathD} fill="none" stroke="#00A896" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                        <path d={pathD} fill="none" stroke={t.primary} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
                         {pts.map((p, i) => (
                           <g key={i}>
                             <circle cx={p.x} cy={p.y} r="10" fill="transparent"
@@ -2396,11 +2396,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                                 if(tip) tip.style.display='none'
                               }}
                             />
-                            <circle cx={p.x} cy={p.y} r="3.5" fill="#00A896" stroke={t.bgCard} strokeWidth="1.5" style={{pointerEvents:'none'}}/>
+                            <circle cx={p.x} cy={p.y} r="3.5" fill={t.primary} stroke={t.bgCard} strokeWidth="1.5" style={{pointerEvents:'none'}}/>
                             <g className={'tip-'+i} style={{display:'none', pointerEvents:'none'}}>
                               <rect x={Math.min(p.x-10, W-200)} y={p.y-42} width="195" height="36" rx="6" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
                               <text x={Math.min(p.x, W-55)} y={p.y-26} textAnchor="middle" fontSize="10" fill={t.textMuted}>Acta {p.acta}</text>
-                              <text x={Math.min(p.x-10, W-120)} y={p.y-12} textAnchor="start" fontSize="10" fontWeight="700" fill="#00A896">{fmtD(p.val)}</text>
+                              <text x={Math.min(p.x-10, W-120)} y={p.y-12} textAnchor="start" fontSize="10" fontWeight="700" fill={t.primary}>{fmtD(p.val)}</text>
                             </g>
                           </g>
                         ))}
