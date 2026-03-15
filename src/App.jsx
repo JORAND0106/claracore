@@ -1675,12 +1675,18 @@ function ModuloCobro({ t, usuario, token, s }) {
   const [tieneDatos, setTieneDatos] = useState(null) // null=cargando, true=hay datos, false=sin datos
 
   useEffect(() => { if (contratoId) { cargarChart(primerNivel) } }, [contratoId])
-  useEffect(() => { if (contratoId) cargarChart(nivelActual || primerNivel, drill) }, [nivelActual, drill.length])
+  useEffect(() => {
+    if (!contratoId || !nivelActual) return
+    // Extraer el filtro del drill anterior (el capitulo seleccionado)
+    const capDrill = drill.find(d => d.campo === 'capitulo')
+    cargarChart(nivelActual, drill, capDrill?.valor || null)
+  }, [nivelActual, drill.length])
 
-  async function cargarChart(nivel, drillActual = []) {
+  async function cargarChart(nivel, drillActual = [], capituloFiltro = null) {
     if (!contratoId || !nivel) return
     setChartLoading(true)
     const params = new URLSearchParams({ nivel })
+    if (capituloFiltro) params.set('capitulo', capituloFiltro)
     drillActual.forEach(d => params.set(d.campo, d.valor))
     try {
       const res = await fetch(`${API}/cobro/${contratoId}/chart?${params}`, {
@@ -2064,7 +2070,7 @@ async function cargarRegistros() {
               )
             })() : nivelActual === 'capitulo' ? (() => {
               const maxVal = Math.max(...chartData.map(d => d.costo), 1)
-              const BAR_W=22, GAP=10, PAD_L=8, PAD_R=8, H=220, PAD_T=14, PAD_B=28
+              const BAR_W=30, GAP=14, PAD_L=8, PAD_R=8, H=220, PAD_T=14, PAD_B=28
               const totalW = PAD_L + chartData.length*(BAR_W+GAP) + PAD_R
               const scaleH = v => PAD_T + (1-v/maxVal)*(H-PAD_T-PAD_B)
               return (
