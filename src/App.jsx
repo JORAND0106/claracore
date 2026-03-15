@@ -1981,7 +1981,7 @@ async function cargarRegistros() {
       {/* Panel drill-down */}
       {chartLoading || tieneDatos === null ? (
         <div style={s.emptyState}>⏳ Cargando datos...</div>
-      ) : tieneDatos === false ? (
+      ) : tieneDatos === false && drill.length === 0 ? (
         <div style={s.emptyState}>📂 Importa un CSV para comenzar</div>
       ) : (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',padding:'20px',marginBottom:'16px',boxShadow:t.shadow }}>
