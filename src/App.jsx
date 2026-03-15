@@ -2083,7 +2083,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     fetch(`${API_URL}/presupuesto/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
       .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiPpto(d) })
     fetch(`${API_URL}/cobro/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
-      .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiCobro(d) })
+      .then(r => { console.log('cobro resumen status:', r.status); return r.ok ? r.json() : null })
+      .then(d => { console.log('cobro resumen data:', d); if(d) setKpiCobro(d) })
   }, [contratoIdDash])
 
   async function cargarDashDrill(drill) {
