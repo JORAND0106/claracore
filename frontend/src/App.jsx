@@ -2495,6 +2495,127 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
   )
 }
 
+// ─── MINI MAPA SEMÁFORO (dashboard) ──────────────────────────────────────────
+function MiniMapaSemaforo({ t, colores, height = 220 }) {
+  const mapRef      = useRef(null)
+  const mapInstance = useRef(null)
+  const [listo, setListo] = useState(false)
+
+  const getColor = (pct) => {
+    if (pct >= 100) return '#DC2626'
+    if (pct >= 90)  return '#EF4444'
+    if (pct >= 70)  return '#F59E0B'
+    return '#10B981'
+  }
+
+  // Inicializar mapa una sola vez
+  useEffect(() => {
+    if (!mapRef.current || mapInstance.current) return
+    mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
+    const map = new mapboxgl.Map({
+      container: mapRef.current,
+      style: t.bg === '#0A1628' ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11',
+      center: [-74.05, 4.72],
+      zoom: 11,
+      interactive: true,
+    })
+    mapInstance.current = map
+    map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    map.on('load', () => {
+      fetch('/pOLIGONOS_1551t_Project_Feat.json')
+        .then(r => r.json())
+        .then(geojson => {
+          const enriched = {
+            ...geojson,
+            features: geojson.features
+              .filter(f => f.properties.Layer !== 'dibujo externo')
+              .map(f => {
+                const pkid = String(f.properties.Layer).trim()
+                const data = colores[pkid] || {}
+                return {
+                  ...f,
+                  properties: {
+                    ...f.properties,
+                    pk_id: pkid,
+                    pct: data.pct || 0,
+                    activo: colores[pkid] ? 1 : 0,
+                    color: colores[pkid] ? getColor(data.pct || 0) : '#334155'
+                  }
+                }
+              })
+          }
+          map.addSource('mini-pols', { type: 'geojson', data: enriched })
+          map.addLayer({ id: 'mini-fill', type: 'fill', source: 'mini-pols',
+            paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'activo'], 1], 0.8, 0.2] }
+          })
+          map.addLayer({ id: 'mini-line', type: 'line', source: 'mini-pols',
+            paint: { 'line-color': '#ffffff', 'line-width': 0.8, 'line-opacity': 0.3 }
+          })
+          // Fit bounds
+          const coords = enriched.features.flatMap(f => {
+            const g = f.geometry
+            if (g.type === 'Polygon') return g.coordinates[0]
+            if (g.type === 'MultiPolygon') return g.coordinates.flat(2)
+            return []
+          })
+          if (coords.length > 0) {
+            const lngs = coords.map(c => c[0]), lats = coords.map(c => c[1])
+            map.fitBounds([[Math.min(...lngs), Math.min(...lats)],[Math.max(...lngs), Math.max(...lats)]], { padding: 20, duration: 0 })
+          }
+          setListo(true)
+        })
+    })
+    return () => { if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; setListo(false) } }
+  }, [])
+
+  // Actualizar colores cuando cambia el drill
+  useEffect(() => {
+    const map = mapInstance.current
+    if (!map || !listo || !map.getSource('mini-pols')) return
+    const src = map.getSource('mini-pols')
+    const data = src._data || src._options?.data
+    if (!data || !data.features) return
+    const updated = {
+      ...data,
+      features: data.features.map(f => {
+        const pkid = f.properties.pk_id || String(f.properties.Layer).trim()
+        const d = colores[pkid] || {}
+        return {
+          ...f,
+          properties: {
+            ...f.properties,
+            pk_id: pkid,
+            pct: d.pct || 0,
+            activo: colores[pkid] ? 1 : 0,
+            color: colores[pkid] ? getColor(d.pct || 0) : '#334155'
+          }
+        }
+      })
+    }
+    src.setData(updated)
+  }, [colores, listo])
+
+  return (
+    <div style={{ position:'relative', width:'100%', height:`${height}px`, borderRadius:'8px', overflow:'hidden' }}>
+      <div ref={mapRef} style={{ width:'100%', height:'100%' }} />
+      {!listo && (
+        <div style={{ position:'absolute', top:0, left:0, right:0, bottom:0, background:t.bg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:'12px', color:t.textMuted }}>
+          ⏳ Cargando mapa...
+        </div>
+      )}
+      {/* Leyenda mini */}
+      <div style={{ position:'absolute', bottom:'8px', left:'8px', background:t.bgCard+'DD', borderRadius:'6px', padding:'5px 8px', fontSize:'9px', display:'flex', gap:'6px', flexWrap:'wrap' }}>
+        {[['#10B981','<70%'],['#F59E0B','70-90%'],['#EF4444','90-100%'],['#DC2626','>100%']].map(([c,l]) => (
+          <div key={l} style={{ display:'flex', alignItems:'center', gap:'3px', color:t.textMuted }}>
+            <div style={{ width:'8px', height:'8px', borderRadius:'2px', background:c }}/>
+            {l}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0 }) {
   const [moduloActivo, setModuloActivo] = useState('dashboard')
@@ -2517,6 +2638,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashTablaLoad,setDashTablaLoad]= useState(false)
   const [panelFoco, setPanelFoco] = useState(null)
   const colsGrid = '1fr 1fr'
+  const [miniMapaColores, setMiniMapaColores] = useState({})
+  const miniMapaRef = useRef(null)
   const API_URL = 'https://claracore-backend.azurewebsites.net'
   const contratoIdDash = usuario?.contrato_id
 
@@ -2565,6 +2688,16 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   }
 
   useEffect(() => { if (contratoIdDash) cargarDashDrill(dashDrill) }, [contratoIdDash, dashDrill])
+    useEffect(() => {
+    if (!contratoIdDash) return
+    const tok = getToken()
+    const params = new URLSearchParams()
+    if (dashDrill[0]) params.set('capitulo', dashDrill[0].valor)
+    if (dashDrill[1]) params.set('item', dashDrill[1].valor)
+    fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-colores-drill?${params}`, {
+      headers: { Authorization: `Bearer ${tok}` }
+    }).then(r => r.ok ? r.json() : {}).then(setMiniMapaColores).catch(() => {})
+  }, [contratoIdDash, dashDrill])
 
   // Desarrollador ve todo; otros usuarios ven solo su contrato
   const esDeveloper = usuario?.cargo_nombre === 'Desarrollador'
@@ -3166,9 +3299,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                 )} 
               </div>
 
-              {/* 🟣 Panel Plano Semáforo — placeholder */}
-              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, display:'flex', flexDirection:'column', ...(panelFoco==='semaforo' && {gridColumn:'1 / -1'}) }}>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
+              {/* 🗺️ Panel Mini Mapa Semáforo */}
+              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'16px', boxShadow:t.shadow, display:'flex', flexDirection:'column', ...(panelFoco==='semaforo' && {gridColumn:'1 / -1'}) }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px' }}>
                   <div>
                     <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
                       <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>🗺️ Plano Semáforo</div>
@@ -3178,27 +3311,19 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                         {panelFoco === 'semaforo' ? '⊠' : '⤢'}
                       </button>
                     </div>
-                    <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Mapa de avance por PK_ID</div>
+                    <div style={{ fontSize:'10px', color:t.textMuted, marginTop:'1px' }}>
+                      {dashDrill.length === 0 ? 'Todo el contrato' : dashDrill.length === 1 ? `Cap: ${dashDrill[0].valor.slice(0,20)}` : `Ítem: ${dashDrill[1].valor}`}
+                    </div>
+                  </div>
+                  <div style={{ fontSize:'11px', color:t.textMuted }}>
+                    {Object.keys(miniMapaColores).length} PK_IDs
                   </div>
                 </div>
-                <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:'12px',
-                  background:`radial-gradient(ellipse at center, ${t.primary}11 0%, transparent 70%)`,
-                  borderRadius:'8px', border:`1px dashed ${t.border}`, padding:'20px', minHeight:'180px' }}>
-                  <div style={{ fontSize:'40px' }}>🗺️</div>
-                  <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>Plano Semáforo</div>
-                  <div style={{ fontSize:'11px', color:t.textMuted, textAlign:'center', lineHeight:1.6 }}>
-                    Polígonos PK_ID coloreados por % cobro.<br/>
-                    Alerta roja en sobrecosto.<br/>
-                    <span style={{ color:t.primary, fontWeight:'600' }}>Próximamente</span>
-                  </div>
-                  <div style={{ display:'flex', gap:'8px', marginTop:'4px' }}>
-                    {[['#10B981','< 70%'],['#F59E0B','70-90%'],['#EF4444','90-100%'],['#DC2626','> 100%']].map(([c,l]) => (
-                      <div key={l} style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color:t.textMuted }}>
-                        <div style={{ width:'10px', height:'10px', borderRadius:'2px', background:c }}/>{l}
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <MiniMapaSemaforo
+                  t={t}
+                  colores={miniMapaColores}
+                  height={panelFoco === 'semaforo' ? 420 : 220}
+                />
               </div>
 
             </div>

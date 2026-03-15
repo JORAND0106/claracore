@@ -1119,6 +1119,44 @@ def get_pkid_colores(contrato_id: int, current_user=Depends(get_current_user)):
         }
     return result
 
+@app.get("/cobro/{contrato_id}/pkid-colores-drill")
+def get_pkid_colores_drill(
+    contrato_id: int,
+    capitulo: Optional[str] = None,
+    item: Optional[str] = None,
+    current_user=Depends(get_current_user)
+):
+    """Colores PK_ID filtrados por capítulo/ítem para el mini-mapa del dashboard."""
+    q_c = supabase.table("cobro").select("pk_id, costo_directo").eq("contrato_id", contrato_id)
+    q_p = supabase.table("presupuesto").select("pk_id, costo_directo").eq("contrato_id", contrato_id)
+    if item:
+        q_c = q_c.eq("item", item)
+        q_p = q_p.eq("item", item)
+    elif capitulo:
+        q_c = q_c.eq("capitulo", capitulo)
+        q_p = q_p.eq("capitulo", capitulo)
+    cobro = q_c.execute().data
+    ppto  = q_p.execute().data
+    cobro_agg = {}
+    for r in cobro:
+        k = str(r.get("pk_id") or "").strip()
+        if k: cobro_agg[k] = cobro_agg.get(k, 0) + (r.get("costo_directo") or 0)
+    ppto_agg = {}
+    for r in ppto:
+        k = str(r.get("pk_id") or "").strip()
+        if k: ppto_agg[k] = ppto_agg.get(k, 0) + (r.get("costo_directo") or 0)
+    result = {}
+    for pk in set(list(cobro_agg.keys()) + list(ppto_agg.keys())):
+        c = cobro_agg.get(pk, 0)
+        p = ppto_agg.get(pk, 0)
+        result[pk] = {
+            "cobrado": c,
+            "presupuesto": p,
+            "pct": round(c / p * 100, 1) if p else 0,
+            "sobrecosto": c > p
+        }
+    return result
+
 @app.get("/cobro/{contrato_id}/filtros")
 def get_filtros_cobro(
     contrato_id: int,
