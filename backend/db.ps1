@@ -1,0 +1,1 @@
+az webapp up --name claracore-backend --resource-group andres_jaimes82_rg_5760
