@@ -1670,7 +1670,23 @@ function ModuloCobro({ t, usuario, token, s }) {
   const nivelIdx     = NIVELES.indexOf(nivelActual ?? primerNivel)
   const colorActual  = PALETA[Math.max(0, Math.min(nivelIdx, PALETA.length - 1))]
 
-  useEffect(() => { if (contratoId) cargarRegistros() }, [contratoId])
+  const [chartLoading, setChartLoading] = useState(false)
+  const [chartDataRemoto, setChartDataRemoto] = useState([])
+
+  useEffect(() => { if (contratoId) { cargarChart(primerNivel) } }, [contratoId])
+  useEffect(() => { if (contratoId) cargarChart(nivelActual || primerNivel, drill) }, [nivelActual, drill.length])
+
+  async function cargarChart(nivel, drillActual = []) {
+    if (!contratoId || !nivel) return
+    setChartLoading(true)
+    const params = new URLSearchParams({ nivel })
+    drillActual.forEach(d => params.set(d.campo, d.valor))
+    const res = await fetch(`${API}/cobro/${contratoId}/chart?${params}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (res.ok) setChartDataRemoto(await res.json())
+    setChartLoading(false)
+  }
 
 async function cargarRegistros() {
     if (!contratoId) return
@@ -1712,24 +1728,18 @@ async function cargarRegistros() {
   , [registrosFiltrados, pagina])
 
   const chartData = useMemo(() => {
-    if (!nivelActual || registros.length === 0) return []
-    const agg = {}
-    registrosFiltrados.forEach(r => {
-      const key = r[nivelActual] ?? '(sin valor)'
-      if (!agg[key]) {
-        let label = key
-        if (nivelActual === 'item') {
-          const desc = (r.descripcion ?? '').slice(0, 38)
-          label = `${r.item ?? ''} · ${desc}${(r.descripcion ?? '').length > 38 ? '…' : ''}`
-        } else if (String(key).length > 48) label = String(key).slice(0, 48) + '…'
-        agg[key] = { name: key, label, costo: 0, count: 0, cantTotal: 0, und: r.und ?? null, vlrUnit: r.valor_unitario ?? null }
-      }
-      agg[key].costo     += r.costo_directo ?? 0
-      agg[key].cantTotal += r.cantidad ?? 0
-      agg[key].count++
-    })
-    return Object.values(agg).sort((a,b) => String(a.name).localeCompare(String(b.name), 'es', {numeric:true}))
-  }, [registrosFiltrados, nivelActual])
+    return chartDataRemoto.map(r => ({
+      name: r[nivelActual] ?? '(sin valor)',
+      label: nivelActual === 'item'
+        ? `${r.item ?? ''} · ${(r.descripcion ?? '').slice(0,38)}${(r.descripcion ?? '').length > 38 ? '…' : ''}`
+        : String(r[nivelActual] ?? '').slice(0,48),
+      costo: r.costo ?? 0,
+      count: r.count ?? 0,
+      cantTotal: 0,
+      und: null,
+      vlrUnit: null
+    }))
+  }, [chartDataRemoto, nivelActual])
 
   const costoTotal = useMemo(() =>
     registrosFiltrados.reduce((s,r) => s + (r.costo_directo ?? 0), 0)
