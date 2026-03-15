@@ -2943,6 +2943,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                           const sobrecosto = (cap.cobrado||0) > (cap.presupuesto||0)
                           const colorC = sobrecosto ? '#DC2626' : '#00A896'
                           const isSelected = dashDrill[0]?.valor === cap.capitulo
+                          const nomCorto = (cap.capitulo||'').length > 8 ? (cap.capitulo||'').slice(0,8)+'…' : (cap.capitulo||'')
                           return (
                             <g key={i}>
                               {/* Barra Presupuesto */}
