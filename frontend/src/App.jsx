@@ -3042,38 +3042,58 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                     {dashDrill.length === 1 && (
                       dashLoading ? (
                         <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>⏳ Cargando...</div>
-                      ) : dashData?.length > 0 ? (
-                        <div style={{ display:'flex', flexDirection:'column', gap:'5px', maxHeight:'220px', overflowY:'auto' }}>
-                          {dashData.map((item, i) => {
-                            const pptoCap = item.presupuesto || 0
-                            const cobroCap = item.cobrado || 0
-                            const maxV = Math.max(pptoCap, cobroCap, 1)
-                            const sobrecosto = cobroCap > pptoCap
-                            const colorC = sobrecosto ? '#DC2626' : '#00A896'
-                            return (
-                              <div key={i} onClick={() => setDashDrill([dashDrill[0], {campo:'item', valor: item.item}])}
-                                style={{ display:'flex', alignItems:'center', gap:'8px', padding:'6px 8px', borderRadius:'8px', cursor:'pointer', background:'transparent', transition:'background 0.15s' }}
-                                onMouseEnter={e => e.currentTarget.style.background = t.primary+'11'}
-                                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                                <div style={{ fontSize:'11px', color:t.textMuted, width:'80px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={item.item}>
-                                  {item.item}
+                      ) : dashData?.length > 0 ? (() => {
+                          const maxV = Math.max(...dashData.map(d => Math.max(d.presupuesto||0, d.cobrado||0)), 1)
+                          const BAR_W = 18, GAP = 6, PAD_L = 8, PAD_R = 8, H = 160, PAD_T = 10, PAD_B = 28
+                          const totalW = PAD_L + dashData.length * (BAR_W*2 + GAP + 8) + PAD_R
+                          const scaleH = v => PAD_T + (1 - v/maxV) * (H - PAD_T - PAD_B)
+                          const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+                          return (
+                            <div style={{ overflowX:'auto', overflowY:'visible', marginTop:'8px' }}>
+                              <svg width={Math.max(totalW, 300)} height={H} style={{ overflow:'visible', display:'block' }}>
+                                {[0,50,100].map(pct => {
+                                  const y = PAD_T + (1-pct/100)*(H-PAD_T-PAD_B)
+                                  return <line key={pct} x1={PAD_L} x2={Math.max(totalW,300)} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="3,3"/>
+                                })}
+                                {dashData.map((item, i) => {
+                                  const x = PAD_L + i * (BAR_W*2 + GAP + 8)
+                                  const yP = scaleH(item.presupuesto||0)
+                                  const yC = scaleH(item.cobrado||0)
+                                  const hP = H - PAD_B - yP
+                                  const hC = H - PAD_B - yC
+                                  const nomCorto = String(item.item||'').length > 6 ? String(item.item||'').slice(0,6)+'…' : String(item.item||'')
+                                  return (
+                                    <g key={i} onClick={() => setDashDrill([dashDrill[0], {campo:'item', valor: item.item}])} style={{cursor:'pointer'}}>
+                                      <rect x={x} y={yP} width={BAR_W} height={Math.max(hP,2)} fill="#0077B6" rx="2" opacity="0.85"
+                                        onMouseEnter={e => { e.currentTarget.style.opacity='1'; const tip=document.getElementById(`tip-drill-${i}`); if(tip) tip.style.display='block' }}
+                                        onMouseLeave={e => { e.currentTarget.style.opacity='0.85'; const tip=document.getElementById(`tip-drill-${i}`); if(tip) tip.style.display='none' }}/>
+                                      <rect x={x+BAR_W+2} y={yC} width={BAR_W} height={Math.max(hC,2)} fill="#00A896" rx="2" opacity="0.85"
+                                        onMouseEnter={e => { e.currentTarget.style.opacity='1'; const tip=document.getElementById(`tip-drill-${i}`); if(tip) tip.style.display='block' }}
+                                        onMouseLeave={e => { e.currentTarget.style.opacity='0.85'; const tip=document.getElementById(`tip-drill-${i}`); if(tip) tip.style.display='none' }}/>
+                                      <text x={x+BAR_W} y={H-8} textAnchor="middle" fontSize="7" fill={t.textMuted}>{nomCorto}</text>
+                                      <g id={`tip-drill-${i}`} style={{display:'none', pointerEvents:'none'}}>
+                                        <rect x={Math.min(x-10, Math.max(totalW,300)-200)} y={Math.min(yP,yC)-54} width="195" height="48" rx="5" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
+                                        <text x={Math.min(x-10, Math.max(totalW,300)-200)+10} y={Math.min(yP,yC)-38} fontSize="10" fontWeight="700" fill={t.text}>{String(item.item||'').length>22?String(item.item||'').slice(0,22)+'…':String(item.item||'')}</text>
+                                        <rect x={Math.min(x-10, Math.max(totalW,300)-200)+10} y={Math.min(yP,yC)-28} width="8" height="8" rx="1" fill="#0077B6"/>
+                                        <text x={Math.min(x-10, Math.max(totalW,300)-200)+22} y={Math.min(yP,yC)-21} fontSize="9" fill={t.textMuted}>Ppto: <tspan fontWeight="700" fill="#0077B6">{fmtD(item.presupuesto)}</tspan></text>
+                                        <rect x={Math.min(x-10, Math.max(totalW,300)-200)+10} y={Math.min(yP,yC)-14} width="8" height="8" rx="1" fill="#00A896"/>
+                                        <text x={Math.min(x-10, Math.max(totalW,300)-200)+22} y={Math.min(yP,yC)-7} fontSize="9" fill={t.textMuted}>Cobro: <tspan fontWeight="700" fill="#00A896">{fmtD(item.cobrado)}</tspan></text>
+                                      </g>
+                                    </g>
+                                  )
+                                })}
+                              </svg>
+                              <div style={{ display:'flex', gap:'12px', marginTop:'6px', justifyContent:'center' }}>
+                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color:t.textMuted }}>
+                                  <div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#0077B6' }}/> Presupuesto
                                 </div>
-                                <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'2px' }}>
-                                  <div style={{ height:'6px', background:t.border, borderRadius:'3px', overflow:'hidden' }}>
-                                    <div style={{ width:`${Math.round(pptoCap/maxV*100)}%`, height:'100%', background:'#0077B6', borderRadius:'3px' }}/>
-                                  </div>
-                                  <div style={{ height:'6px', background:t.border, borderRadius:'3px', overflow:'hidden' }}>
-                                    <div style={{ width:`${Math.round(cobroCap/maxV*100)}%`, height:'100%', background:colorC, borderRadius:'3px' }}/>
-                                  </div>
-                                </div>
-                                <div style={{ fontSize:'10px', fontWeight:'700', color:colorC, width:'52px', textAlign:'right', flexShrink:0 }}>
-                                  {Math.round(cobroCap/Math.max(pptoCap,1)*100)}%
+                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color:t.textMuted }}>
+                                  <div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#00A896' }}/> Cobro
                                 </div>
                               </div>
-                            )
-                          })}
-                        </div>
-                      ) : (
+                            </div>
+                          )
+                        })() : (
                         <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>Sin ítems</div>
                       )
                     )}
