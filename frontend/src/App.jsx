@@ -2856,7 +2856,7 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   const [destinatarios, setDestinatarios] = useState([])
   const [nuevo, setNuevo] = useState({ destinatario_id: '', asunto: '', mensaje: '', tipo: 'MENSAJE_DIRECTO' })
   const [enviando, setEnviando] = useState(false)
-  const [respuesta, setRespuesta] = useState('')
+  const [respondiendo, setRespondiendo] = useState(false)
 
   const esDev = usuario?.cargo_nombre === 'Desarrollador'
   const h = { Authorization: `Bearer ${token}` }
@@ -2911,7 +2911,8 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   }
 
   async function responder() {
-    if (!respuesta.trim() || !hiloActivo) return
+    if (!respuesta.trim() || !hiloActivo || respondiendo) return
+    setRespondiendo(true)
     const padre = hilo[0]
     await fetch(`${API}/notificaciones`, {
       method:'POST', headers:{...h,'Content-Type':'application/json'},
@@ -2928,7 +2929,9 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
       })
     })
     setRespuesta('')
+    setRespondiendo(false)
     abrirHilo(hiloActivo)
+    cargarEnviados()
   }
 
   const fmtFecha = iso => { try { return new Date(iso).toLocaleString('es-CO',{dateStyle:'short',timeStyle:'short'}) } catch { return iso } }
@@ -3088,8 +3091,8 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
                 style={{ width:'100%', minHeight:'72px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 10px', color:t.text, fontSize:'13px', resize:'vertical', boxSizing:'border-box' }} />
               <div style={{ display:'flex', justifyContent:'flex-end', marginTop:'8px' }}>
                 <button onClick={responder} disabled={!respuesta.trim()}
-                  style={{ background: respuesta.trim() ? t.primary : t.border, color: respuesta.trim() ? '#fff' : t.textMuted, border:'none', borderRadius:'8px', padding:'8px 20px', fontSize:'13px', fontWeight:'700', cursor: respuesta.trim() ? 'pointer' : 'not-allowed' }}>
-                  ↩ Responder
+                  style={{ background: respuesta.trim() && !respondiendo ? t.primary : t.border, color: respuesta.trim() && !respondiendo ? '#fff' : t.textMuted, border:'none', borderRadius:'8px', padding:'8px 20px', fontSize:'13px', fontWeight:'700', cursor: respuesta.trim() && !respondiendo ? 'pointer' : 'not-allowed', opacity: respondiendo ? 0.7 : 1 }}>
+                  {respondiendo ? 'Enviando...' : '↩ Responder'}
                 </button>
               </div>
             </div>

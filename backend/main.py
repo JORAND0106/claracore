@@ -1554,11 +1554,12 @@ def get_notificaciones_enviadas(
 
 @app.get("/notificaciones/no-leidas-count")
 def get_no_leidas_count(current_user=Depends(get_current_user)):
-    """Conteo de notificaciones no leídas — para el badge de la campana."""
+    """Conteo de notificaciones no leídas — solo mensajes raíz."""
     uid = int(current_user.get("sub", 0))
     result = supabase.table("notificaciones").select("id", count="exact") \
         .eq("destinatario_id", uid) \
         .eq("leido", False) \
+        .is_("padre_id", "null") \
         .execute()
     return {"count": result.count or 0}
 
