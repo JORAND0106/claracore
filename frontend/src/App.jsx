@@ -4006,13 +4006,13 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
               {/* Header */}
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px' }}>
                 <div>
-                  <div style={{ fontSize:'13px', fontWeight:'700', color:t.textMuted }}>
+                  <div style={{ fontSize:'16px', fontWeight:'700', color:t.textMuted }}>
                     {dashDrill[0]?.valor}
                   </div>
-                  <div style={{ fontSize:'15px', fontWeight:'800', color:t.primary, marginTop:'2px' }}>
+                  <div style={{ fontSize:'12px', fontWeight:'800', color:t.primary, marginTop:'2px' }}>
                     {dashDrill[1]?.valor} — {popupPkid.data?.ppto?.[0]?.descripcion || popupPkid.data?.cobro?.[0]?.descripcion || ''}
                   </div>
-                  <div style={{ fontSize:'12px', color:t.textMuted, marginTop:'3px' }}>
+                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'3px' }}>
                     PK_ID: <strong style={{ color:t.text }}>{popupPkid.pkid}</strong>
                   </div>
                 </div>
@@ -4066,14 +4066,15 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                         <div style={{ overflowX:'auto' }}>
                           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
                             <thead>
-                              <tr>{['Registro','Tramo Ini','Tramo Fin','Cant','Costo'].map(h => <th key={h} style={thS}>{h}</th>)}</tr>
+                              <tr>{['Registro','Acta','Tramo Ini','Tramo Fin','Cant','Costo'].map(h => <th key={h} style={thS}>{h}</th>)}</tr>
                             </thead>
                             <tbody>
                               {cobro.length === 0
                                 ? <tr><td colSpan={5} style={{...tdS, textAlign:'center', color:t.textMuted}}>Sin registros</td></tr>
                                 : cobro.map((r,i) => (
                                   <tr key={i}>
-                                    <td style={{...tdS, fontWeight:'600', color:'#00A896'}}>{r.registro || r.acta || '—'}</td>
+                                    <td style={{...tdS, fontWeight:'600', color:'#00A896'}}>{r.registro || '—'}</td>
+                                    <td style={tdS}>{r.acta || '—'}</td>
                                     <td style={tdS}>{r.tramo_inicio || '—'}</td>
                                     <td style={tdS}>{r.tramo_final || '—'}</td>
                                     <td style={{...tdS, textAlign:'right'}}>{fmtN(r.cantidad || r.longitud)}</td>
