@@ -707,7 +707,7 @@ async function cargarRegistros(modoPapelera) {
       // Filtro de drill existente
       if (!drill.every(({campo, valor}) => r[campo] === valor)) return false
 
-      if (pkidsSeleccionados.length > 0 && nivelActual === null) {
+      if (pkidsSeleccionados.length > 0) {
         if (!pkidsSeleccionados.includes(r.pk_id)) return false
       }
 
@@ -1668,7 +1668,7 @@ async function darDeBaja(id) {
       )}
 
       {/* ── Tabla ── */}
-      {(drill.length > 0 || busquedaTipo || filtroEstado) && registrosFiltrados.length > 0 && (
+      {(drill.length > 0 || busquedaTipo || filtroEstado || pkidsSeleccionados.length > 0) && registrosFiltrados.length > 0 && (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',boxShadow:t.shadow }}>
           <table style={{ width:'100%',borderCollapse:'collapse',fontSize:'12px' }}>
             <thead style={{ background:t.bg }}>
@@ -2717,9 +2717,8 @@ function MiniMapaPresupuesto({ t, colores, pkidsActivos, onPkidClick }) {
         return { ...f, properties: { ...f.properties, pk_id: pkid, activo: activo ? 1 : 0, color } }
       })
     })
-    // Fit bounds solo a los activos
-    if (pkidsActivos.length > 0) {
-      const activos = raw.features.filter(f => pkidsActivos.includes(f.properties.pk_id || String(f.properties.Layer).trim()))
+
+    // Solo hacer fitBounds si cambió pkidsActivos (no al resaltar)
       const coords = activos.flatMap(f => {
         const g = f.geometry
         if (g.type === 'Polygon') return g.coordinates[0]
