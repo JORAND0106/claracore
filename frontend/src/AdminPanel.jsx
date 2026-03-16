@@ -702,6 +702,11 @@ function SeccionLogs({ call, theme }) {
 
   useEffect(() => { cargarLogs(0) }, [filtUsuario, filtModulo, filtAccion, filtDesde, filtHasta])
 
+  useEffect(() => {
+    const iv = setInterval(() => cargarLogs(offset), 30000)
+    return () => clearInterval(iv)
+  }, [offset, filtUsuario, filtModulo, filtAccion, filtDesde, filtHasta])
+
   async function cargarLogs(off = 0) {
     setLoading(true); setOffset(off)
     const params = new URLSearchParams({ limit: LIMIT, offset: off })
@@ -756,6 +761,10 @@ function SeccionLogs({ call, theme }) {
         <button onClick={() => { setFiltUsuario(""); setFiltModulo(""); setFiltAccion(""); setFiltDesde(""); setFiltHasta("") }}
           style={{ background:"#EF444422", border:"1px solid #EF444466", borderRadius:6, padding:"5px 12px", color:"#EF4444", fontSize:11, fontWeight:700, cursor:"pointer" }}>
           ✕ Limpiar
+        </button>
+        <button onClick={() => cargarLogs(0)}
+          style={{ background:"#0077B622", border:"1px solid #0077B666", borderRadius:6, padding:"5px 12px", color:"#0077B6", fontSize:11, fontWeight:700, cursor:"pointer" }}>
+          🔄 Actualizar
         </button>
         <span style={{ marginLeft:"auto", fontSize:12, color: col.textMuted, alignSelf:"center" }}>
           {logs.length} registros · click para ver historial
