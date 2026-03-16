@@ -2636,10 +2636,18 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
   )
 }
 // ─── MINI MAPA PRESUPUESTO ────────────────────────────────────────────────────
-function MiniMapaPresupuesto({ t, colores, pkidsActivos, onPkidClick }) {
+function MiniMapaPresupuesto({ t, colores, pkidsActivos, pkidsResaltados = [], onPkidClick }) {
   const mapRef  = useRef(null)
   const mapInst = useRef(null)
   const [listo, setListo] = useState(false)
+
+  const getColor = (pkid, activo, pct) => {
+    if (!activo) return '#334155'
+    if (pkidsResaltados.length > 0) {
+      return pkidsResaltados.includes(pkid) ? '#FF6B00' : '#0077B633'
+    }
+    return pct > 75 ? '#0077B6' : pct > 50 ? '#00B4C6' : pct > 25 ? '#00A896' : '#028090'
+  }
 
   useEffect(() => {
     if (!mapRef.current || mapInst.current) return
@@ -2660,15 +2668,12 @@ function MiniMapaPresupuesto({ t, colores, pkidsActivos, onPkidClick }) {
             const activo = pkidsActivos.includes(pkid)
             const d = colores[pkid] || {}
             const pct = d.pct || 0
-            const color = activo
-              ? pct > 75 ? '#0077B6' : pct > 50 ? '#00B4C6' : pct > 25 ? '#00A896' : '#028090'
-              : '#334155'
-            return { ...f, properties: { ...f.properties, pk_id: pkid, activo: activo ? 1 : 0, color } }
+            return { ...f, properties: { ...f.properties, pk_id: pkid, activo: activo ? 1 : 0, color: getColor(pkid, activo, pct) } }
           })
         const data = { ...geojson, features }
         map.addSource('ppto-pols', { type: 'geojson', data })
         map.addLayer({ id: 'ppto-fill', type: 'fill', source: 'ppto-pols',
-          paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'activo'], 1], 0.8, 0.1] }
+          paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'activo'], 1], 0.85, 0.1] }
         })
         map.addLayer({ id: 'ppto-line', type: 'line', source: 'ppto-pols',
           paint: { 'line-color': '#ffffff', 'line-width': 0.8, 'line-opacity': 0.3 }
@@ -2681,7 +2686,7 @@ function MiniMapaPresupuesto({ t, colores, pkidsActivos, onPkidClick }) {
           const props = e.features[0].properties
           if (props.activo) onPkidClick(props.pk_id, e.originalEvent.ctrlKey || e.originalEvent.metaKey)
         })
-        const coords = features.flatMap(f => {
+        const coords = features.filter(f => f.properties.activo).flatMap(f => {
           const g = f.geometry
           if (g.type === 'Polygon') return g.coordinates[0]
           if (g.type === 'MultiPolygon') return g.coordinates.flat(2)
@@ -2697,7 +2702,7 @@ function MiniMapaPresupuesto({ t, colores, pkidsActivos, onPkidClick }) {
     return () => { if (mapInst.current) { mapInst.current.remove(); mapInst.current = null; setListo(false) } }
   }, [])
 
-  // Actualizar cuando cambian pkidsActivos o colores
+  // Actualizar colores sin hacer zoom
   useEffect(() => {
     const map = mapInst.current
     if (!map || !listo || !map.getSource('ppto-pols')) return
@@ -2711,26 +2716,10 @@ function MiniMapaPresupuesto({ t, colores, pkidsActivos, onPkidClick }) {
         const activo = pkidsActivos.includes(pkid)
         const d = colores[pkid] || {}
         const pct = d.pct || 0
-        const color = activo
-          ? pct > 75 ? '#0077B6' : pct > 50 ? '#00B4C6' : pct > 25 ? '#00A896' : '#028090'
-          : '#334155'
-        return { ...f, properties: { ...f.properties, pk_id: pkid, activo: activo ? 1 : 0, color } }
+        return { ...f, properties: { ...f.properties, pk_id: pkid, activo: activo ? 1 : 0, color: getColor(pkid, activo, pct) } }
       })
     })
-
-    // Solo hacer fitBounds si cambió pkidsActivos (no al resaltar)
-      const coords = activos.flatMap(f => {
-        const g = f.geometry
-        if (g.type === 'Polygon') return g.coordinates[0]
-        if (g.type === 'MultiPolygon') return g.coordinates.flat(2)
-        return []
-      })
-      if (coords.length > 0) {
-        const lngs = coords.map(c => c[0]), lats = coords.map(c => c[1])
-        map.fitBounds([[Math.min(...lngs), Math.min(...lats)],[Math.max(...lngs), Math.max(...lats)]], { padding: 30, duration: 800 })
-      }
-    }
-  }, [colores, pkidsActivos, listo])
+  }, [colores, pkidsActivos, pkidsResaltados, listo])
 
   return (
     <div style={{ position:'relative', width:'100%', height:'320px', borderRadius:'8px', overflow:'hidden', border:`1px solid ${t.border}` }}>
@@ -2741,7 +2730,7 @@ function MiniMapaPresupuesto({ t, colores, pkidsActivos, onPkidClick }) {
         </div>
       )}
       <div style={{ position:'absolute', bottom:'8px', left:'8px', background:t.bgCard+'DD', borderRadius:'6px', padding:'5px 8px', fontSize:'9px', color:t.textMuted }}>
-        🔵 Activo — click para filtrar
+        🔵 Activo · 🟠 Seleccionado · Ctrl+click para multi-selección
       </div>
     </div>
   )
