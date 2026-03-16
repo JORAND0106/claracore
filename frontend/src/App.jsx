@@ -547,8 +547,8 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   }, [contratoId])
 
   // ── Constantes drill-down ──────────────────────────────────────────────────
-  const NIVELES = ['capitulo', 'item', 'pk_id', 'tramo', 'calzada']
-  const NOM     = { capitulo:'Capítulo', item:'Ítem', pk_id:'PK_ID', tramo:'Tramo', calzada:'Calzada' }
+  const NIVELES = ['capitulo', 'item', 'pk_id']
+  const NOM     = { capitulo:'Capítulo', item:'Ítem', pk_id:'PK_ID' }
   const PALETA_BARRAS = [
     '#0077B6','#00B4C6','#00A896','#028090','#05668D',
     '#2E86AB','#A23B72','#F18F01','#C73E1D','#3B1F2B',
@@ -724,6 +724,9 @@ async function cargarRegistros(modoPapelera) {
       } else if (busquedaTipo === 'registro') {
         const v1 = busquedaV1.trim().toLowerCase()
         if (v1 && !(r.registro || '').toLowerCase().includes(v1)) return false
+      } else if (busquedaTipo === 'idpol') {
+        const v1 = busquedaV1.trim().toLowerCase()
+        if (v1 && !(r.id_pol || r.pk_id || '').toLowerCase().includes(v1)) return false
       }
       // Filtro permanente de estado
       if (filtroEstado) {
@@ -1354,9 +1357,18 @@ async function darDeBaja(id) {
                   t={t}
                   colores={pptoPkidColores}
                   pkidsActivos={chartData.map(d => d.name)}
-                  onPkidClick={(pkid) => {
-                    const found = chartData.find(d => d.name === pkid)
-                    if (found) handleBarClick(found)
+                  onPkidClick={(pkid, ctrlKey) => {
+                    if (ctrlKey) {
+                      // Multi-selección: filtrar por múltiples PK_IDs
+                      const yaFiltrado = drill.some(d => d.campo === 'pk_id' && d.valor === pkid)
+                      if (!yaFiltrado) {
+                        const nuevoDrill = [...drill.filter(d => d.campo !== 'pk_id'), { campo: 'pk_id', valor: pkid }]
+                        setDrill(nuevoDrill)
+                      }
+                    } else {
+                      const found = chartData.find(d => d.name === pkid)
+                      if (found) handleBarClick(found)
+                    }
                   }}
                 />
               </div>
@@ -1578,7 +1590,7 @@ async function darDeBaja(id) {
                     <div ref={itemDropRef} style={{ position:'absolute',top:'100%',left:0,right:0,zIndex:999,background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'8px',boxShadow:'0 8px 24px rgba(0,0,0,0.2)',maxHeight:'220px',overflowY:'auto',marginTop:'3px' }}>
                       {itemsListado
                         .filter(p => `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase()))
-                        .slice(0, 30)
+                        .slice(0, 80)
                         .map((p, idx) => (
                           <div key={p.id}
                             onMouseDown={() => { setEditItem(p.item_numero); setItemBusqueda(`${p.item_numero} · ${p.descripcion}`); setItemDropOpen(false); setItemNavIdx(-1) }}
@@ -2655,7 +2667,7 @@ function MiniMapaPresupuesto({ t, colores, pkidsActivos, onPkidClick }) {
         map.on('mouseleave', 'ppto-fill', () => { map.getCanvas().style.cursor = '' })
         map.on('click', 'ppto-fill', (e) => {
           const props = e.features[0].properties
-          if (props.activo) onPkidClick(props.pk_id)
+          if (props.activo) onPkidClick(props.pk_id, e.originalEvent.ctrlKey || e.originalEvent.metaKey)
         })
         const coords = features.flatMap(f => {
           const g = f.geometry
