@@ -3304,8 +3304,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   }
 
   useEffect(() => { if (contratoIdDash) { setDashDrillPag(0); cargarDashDrill(dashDrill) } }, [contratoIdDash, dashDrill])
-  
-    async function abrirPopupPkid(pkid) {
+
+  async function abrirPopupPkid(pkid) {
     if (dashDrill.length < 2) return
     setPopupLoading(true); setPopupPkid({ pkid, data: null })
     const tok = getToken()
