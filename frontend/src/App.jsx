@@ -4006,11 +4006,14 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
               {/* Header */}
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px' }}>
                 <div>
-                  <div style={{ fontSize:'15px', fontWeight:'800', color:t.primary }}>
-                    {dashDrill[1]?.valor} — {popupPkid.pkid}
-                  </div>
-                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>
+                  <div style={{ fontSize:'13px', fontWeight:'700', color:t.textMuted }}>
                     {dashDrill[0]?.valor}
+                  </div>
+                  <div style={{ fontSize:'15px', fontWeight:'800', color:t.primary, marginTop:'2px' }}>
+                    {dashDrill[1]?.valor} — {popupPkid.data?.ppto?.[0]?.descripcion || popupPkid.data?.cobro?.[0]?.descripcion || ''}
+                  </div>
+                  <div style={{ fontSize:'12px', color:t.textMuted, marginTop:'3px' }}>
+                    PK_ID: <strong style={{ color:t.text }}>{popupPkid.pkid}</strong>
                   </div>
                 </div>
                 <button onClick={() => setPopupPkid(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
@@ -4085,18 +4088,18 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                     </div>
 
                     {/* Footer deltas */}
-                    <div style={{ borderTop:`2px solid ${t.border}`, paddingTop:'12px', display:'flex', gap:'16px', flexWrap:'wrap' }}>
+                    <div style={{ borderTop:`2px solid ${t.border}`, paddingTop:'10px', display:'flex', gap:'8px', flexWrap:'nowrap', overflowX:'auto' }}>
                       {[
-                        { label:'Cant. Ppto', val: fmtN(totales.cant_ppto), color:'#0077B6' },
-                        { label:'Cant. Cobro', val: fmtN(totales.cant_cobro), color:'#00A896' },
-                        { label:'Δ Cantidad', val: `${totales.delta_cant >= 0 ? '+' : ''}${fmtN(totales.delta_cant)}`, color: totales.delta_cant >= 0 ? '#10B981' : '#EF4444' },
-                        { label:'Costo Ppto', val: fmtD(totales.costo_ppto), color:'#0077B6' },
+                        { label:'Cant. Ppto',  val: fmtN(totales.cant_ppto),   color:'#0077B6' },
+                        { label:'Costo Ppto',  val: fmtD(totales.costo_ppto),  color:'#0077B6' },
+                        { label:'Cant. Cobro', val: fmtN(totales.cant_cobro),  color:'#00A896' },
                         { label:'Costo Cobro', val: fmtD(totales.costo_cobro), color:'#00A896' },
-                        { label:'Δ Costo', val: `${totales.delta_costo >= 0 ? '+' : ''}${fmtD(totales.delta_costo)}`, color: totales.delta_costo >= 0 ? '#10B981' : '#EF4444' },
+                        { label:'Δ Cantidad',  val: `${totales.delta_cant >= 0?'+':''}${fmtN(totales.delta_cant)}`,   color: totales.delta_cant  >= 0 ? '#10B981' : '#EF4444' },
+                        { label:'Δ Costo',     val: `${totales.delta_costo >= 0?'+':''}${fmtD(totales.delta_costo)}`, color: totales.delta_costo >= 0 ? '#10B981' : '#EF4444' },
                       ].map(({label, val, color}) => (
-                        <div key={label} style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 14px', minWidth:'120px' }}>
-                          <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', marginBottom:'3px' }}>{label}</div>
-                          <div style={{ fontSize:'14px', fontWeight:'800', color }}>{val}</div>
+                        <div key={label} style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', flex:1, minWidth:'100px' }}>
+                          <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.4px', marginBottom:'2px', whiteSpace:'nowrap' }}>{label}</div>
+                          <div style={{ fontSize:'12px', fontWeight:'800', color, whiteSpace:'nowrap' }}>{val}</div>
                         </div>
                       ))}
                     </div>
