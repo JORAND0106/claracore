@@ -2797,6 +2797,321 @@ function MiniMapaSemaforo({ t, colores, height = 220 }) {
   )
 }
 
+// ─── BUZÓN DE NOTIFICACIONES ──────────────────────────────────────────────────
+function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
+  const API = 'https://claracore-backend.azurewebsites.net'
+  const [abierto,       setAbierto]       = useState(false)
+  const [tab,           setTab]           = useState('recibidos')
+  const [recibidos,     setRecibidos]     = useState([])
+  const [enviados,      setEnviados]      = useState([])
+  const [noLeidas,      setNoLeidas]      = useState(0)
+  const [hiloActivo,    setHiloActivo]    = useState(null)
+  const [hilo,          setHilo]          = useState([])
+  const [hiloLoading,   setHiloLoading]   = useState(false)
+  const [mostrarNuevo,  setMostrarNuevo]  = useState(false)
+  const [destinatarios, setDestinatarios] = useState([])
+  const [nuevo, setNuevo] = useState({ destinatario_id: '', asunto: '', mensaje: '', tipo: 'MENSAJE_DIRECTO' })
+  const [enviando, setEnviando] = useState(false)
+  const [respuesta, setRespuesta] = useState('')
+
+  const esDev = usuario?.cargo_nombre === 'Desarrollador'
+  const h = { Authorization: `Bearer ${token}` }
+
+  const cargarCount = async () => {
+    const r = await fetch(`${API}/notificaciones/no-leidas-count`, { headers: h }).catch(() => null)
+    if (r?.ok) { const d = await r.json(); setNoLeidas(d.count || 0) }
+  }
+
+  const cargarRecibidos = async () => {
+    const r = await fetch(`${API}/notificaciones/recibidas`, { headers: h }).catch(() => null)
+    if (r?.ok) setRecibidos(await r.json())
+  }
+
+  const cargarEnviados = async () => {
+    const r = await fetch(`${API}/notificaciones/enviadas`, { headers: h }).catch(() => null)
+    if (r?.ok) setEnviados(await r.json())
+  }
+
+  const cargarDestinatarios = async () => {
+    const r = await fetch(`${API}/notificaciones/usuarios-destinatarios`, { headers: h }).catch(() => null)
+    if (r?.ok) setDestinatarios(await r.json())
+  }
+
+  useEffect(() => {
+    cargarCount()
+    const iv = setInterval(cargarCount, 30000)
+    return () => clearInterval(iv)
+  }, [])
+
+  useEffect(() => {
+    if (!abierto) return
+    cargarRecibidos(); cargarEnviados(); cargarDestinatarios()
+  }, [abierto])
+
+  async function abrirHilo(notif) {
+    setHiloActivo(notif); setHiloLoading(true); setHilo([])
+    const r = await fetch(`${API}/notificaciones/${notif.id}/hilo`, { headers: h }).catch(() => null)
+    if (r?.ok) { const d = await r.json(); setHilo(d.hilo || []) }
+    setHiloLoading(false)
+    cargarCount(); cargarRecibidos()
+  }
+
+  async function enviarNuevo() {
+    if (!nuevo.asunto || !nuevo.mensaje) return
+    setEnviando(true)
+    const body = { ...nuevo, destinatario_id: nuevo.tipo === 'BROADCAST' ? null : parseInt(nuevo.destinatario_id) || null }
+    await fetch(`${API}/notificaciones`, { method:'POST', headers:{...h,'Content-Type':'application/json'}, body: JSON.stringify(body) })
+    setNuevo({ destinatario_id:'', asunto:'', mensaje:'', tipo:'MENSAJE_DIRECTO' })
+    setMostrarNuevo(false); setEnviando(false)
+    cargarEnviados()
+  }
+
+  async function responder() {
+    if (!respuesta.trim() || !hiloActivo) return
+    const padre = hilo[0]
+    await fetch(`${API}/notificaciones`, {
+      method:'POST', headers:{...h,'Content-Type':'application/json'},
+      body: JSON.stringify({
+        destinatario_id: padre.remitente_id === usuario.id ? padre.destinatario_id : padre.remitente_id,
+        asunto: `Re: ${padre.asunto}`,
+        mensaje: respuesta.trim(),
+        tipo: 'MENSAJE_DIRECTO',
+        padre_id: padre.id,
+        modulo: padre.modulo,
+        contrato_id: padre.contrato_id,
+        entidad_tipo: padre.entidad_tipo,
+        entidad_id: padre.entidad_id,
+      })
+    })
+    setRespuesta('')
+    abrirHilo(hiloActivo)
+  }
+
+  const fmtFecha = iso => { try { return new Date(iso).toLocaleString('es-CO',{dateStyle:'short',timeStyle:'short'}) } catch { return iso } }
+  const TIPO_COLOR = { MENSAJE_DIRECTO:'#0077B6', BROADCAST:'#7C3AED', SISTEMA:'#10B981', SOPORTE:'#F59E0B' }
+  const TIPO_LABEL = { MENSAJE_DIRECTO:'Mensaje', BROADCAST:'Broadcast', SISTEMA:'Sistema', SOPORTE:'Soporte' }
+
+  const btnTab = (key, label) => (
+    <button key={key} onClick={() => setTab(key)} style={{
+      background: tab===key ? t.primary : 'transparent',
+      color: tab===key ? '#fff' : t.textMuted,
+      border: `1px solid ${tab===key ? t.primary : t.border}`,
+      borderRadius:'20px', padding:'4px 14px', fontSize:'12px',
+      fontWeight: tab===key ? '700' : '400', cursor:'pointer'
+    }}>{label}</button>
+  )
+
+  const ItemNotif = ({ n, esRecibido }) => {
+    const noLeida = esRecibido && !n.leido
+    return (
+      <div onClick={() => abrirHilo(n)}
+        style={{ padding:'10px 14px', borderRadius:'8px', cursor:'pointer', marginBottom:'6px',
+          background: noLeida ? t.primary+'11' : t.bg,
+          border: `1px solid ${noLeida ? t.primary+'44' : t.border}`,
+          transition:'background 0.15s' }}
+        onMouseEnter={e => e.currentTarget.style.background = t.primary+'18'}
+        onMouseLeave={e => e.currentTarget.style.background = noLeida ? t.primary+'11' : t.bg}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'4px' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+            {noLeida && <div style={{ width:'8px', height:'8px', borderRadius:'50%', background:t.primary, flexShrink:0 }}/>}
+            <span style={{ fontSize:'12px', fontWeight:'700', color:t.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'220px' }}>{n.asunto}</span>
+          </div>
+          <span style={{ fontSize:'10px', color:t.textMuted, flexShrink:0, marginLeft:'8px' }}>{fmtFecha(n.created_at)}</span>
+        </div>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <span style={{ fontSize:'11px', color:t.textMuted }}>
+            {esRecibido ? `De: ${n.remitente_nombre}` : `Para: ${destinatarios.find(d=>d.id===n.destinatario_id)?.nombre || (n.destinatario_id ? `#${n.destinatario_id}` : 'Todos')}`}
+          </span>
+          <span style={{ fontSize:'10px', background: TIPO_COLOR[n.tipo]+'22', color: TIPO_COLOR[n.tipo], border:`1px solid ${TIPO_COLOR[n.tipo]}44`, borderRadius:'20px', padding:'1px 8px' }}>
+            {TIPO_LABEL[n.tipo]}
+          </span>
+        </div>
+        {n.mensaje && <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'4px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{n.mensaje}</div>}
+      </div>
+    )
+  }
+
+  return (
+    <>
+      {/* Campana */}
+      <div style={{ position:'relative' }}>
+        <button onClick={() => setAbierto(o => !o)} style={{
+          background: abierto ? t.primary+'22' : 'transparent',
+          border: `1px solid ${abierto ? t.primary : t.border}`,
+          borderRadius:'8px', padding:'6px 12px', cursor:'pointer',
+          color: abierto ? t.primary : t.textMuted, fontSize:'18px', lineHeight:1,
+          display:'flex', alignItems:'center', gap:'4px'
+        }}>
+          🔔
+          {noLeidas > 0 && (
+            <span style={{ background:'#EF4444', color:'#fff', borderRadius:'20px', fontSize:'10px', fontWeight:'700', padding:'1px 6px', minWidth:'16px', textAlign:'center' }}>
+              {noLeidas > 99 ? '99+' : noLeidas}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* Panel buzón */}
+      {abierto && (
+        <div style={{ position:'fixed', top:0, right:0, bottom:0, width:'400px', background:t.bgCard, borderLeft:`1px solid ${t.border}`, zIndex:9998, display:'flex', flexDirection:'column', boxShadow:'-4px 0 24px rgba(0,0,0,0.2)' }}>
+          {/* Header del buzón */}
+          <div style={{ padding:'16px 20px', borderBottom:`1px solid ${t.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <div style={{ fontSize:'15px', fontWeight:'700', color:t.text }}>🔔 Notificaciones</div>
+            <div style={{ display:'flex', gap:'8px' }}>
+              <button onClick={() => setMostrarNuevo(true)} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'5px 12px', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
+                ✉️ Nuevo
+              </button>
+              <button onClick={() => setAbierto(false)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+            </div>
+          </div>
+
+          {/* Tabs */}
+          <div style={{ padding:'10px 16px', borderBottom:`1px solid ${t.border}`, display:'flex', gap:'8px' }}>
+            {btnTab('recibidos', `📥 Recibidos${noLeidas > 0 ? ` (${noLeidas})` : ''}`)}
+            {btnTab('enviados', '📤 Enviados')}
+          </div>
+
+          {/* Lista */}
+          <div style={{ flex:1, overflowY:'auto', padding:'12px 16px' }}>
+            {tab === 'recibidos' && (
+              recibidos.length === 0
+                ? <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin notificaciones</div>
+                : recibidos.map(n => <ItemNotif key={n.id} n={n} esRecibido={true} />)
+            )}
+            {tab === 'enviados' && (
+              enviados.length === 0
+                ? <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin mensajes enviados</div>
+                : enviados.map(n => <ItemNotif key={n.id} n={n} esRecibido={false} />)
+            )}
+          </div>
+
+          {/* Soporte al desarrollador */}
+          {!esDev && (
+            <div style={{ padding:'12px 16px', borderTop:`1px solid ${t.border}` }}>
+              <button onClick={() => { setNuevo({ destinatario_id:'', asunto:'', mensaje:'', tipo:'SOPORTE' }); setMostrarNuevo(true) }}
+                style={{ width:'100%', background:'#F59E0B22', border:'1px solid #F59E0B66', borderRadius:'8px', padding:'8px', color:'#F59E0B', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
+                🐛 Reportar bug / Solicitar al Desarrollador
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modal hilo */}
+      {hiloActivo && (
+        <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}
+          onClick={() => setHiloActivo(null)}>
+          <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'540px', maxWidth:'95vw', maxHeight:'80vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px' }}>
+              <div>
+                <div style={{ fontSize:'15px', fontWeight:'700', color:t.text }}>{hilo[0]?.asunto}</div>
+                <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>
+                  {hilo.length} mensaje{hilo.length !== 1 ? 's' : ''} en este hilo
+                </div>
+              </div>
+              <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
+                {hilo[0]?.modulo && (
+                  <button onClick={() => { onNavegar(hilo[0]); setHiloActivo(null); setAbierto(false) }}
+                    style={{ background:t.primary+'22', border:`1px solid ${t.primary}44`, borderRadius:'8px', padding:'5px 12px', color:t.primary, fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
+                    🔍 Rastrear registro
+                  </button>
+                )}
+                <button onClick={() => setHiloActivo(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+              </div>
+            </div>
+            <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:'10px', marginBottom:'14px' }}>
+              {hiloLoading ? (
+                <div style={{ textAlign:'center', padding:'30px', color:t.textMuted }}>⏳ Cargando...</div>
+              ) : hilo.map((m, i) => {
+                const esMio = m.remitente_id === usuario?.id
+                const color = TIPO_COLOR[m.tipo] || t.primary
+                return (
+                  <div key={m.id} style={{ background: esMio ? t.primary+'11' : t.bg, border:`1px solid ${esMio ? t.primary+'33' : t.border}`, borderRadius:'10px', padding:'12px' }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
+                      <span style={{ fontSize:'12px', fontWeight:'700', color: esMio ? t.primary : t.text }}>{esMio ? 'Tú' : m.remitente_nombre}</span>
+                      <span style={{ fontSize:'10px', color:t.textMuted }}>{fmtFecha(m.created_at)}</span>
+                    </div>
+                    <div style={{ fontSize:'13px', color:t.text, lineHeight:1.6 }}>{m.mensaje}</div>
+                  </div>
+                )
+              })}
+            </div>
+            {/* Responder */}
+            <div style={{ borderTop:`1px solid ${t.border}`, paddingTop:'12px' }}>
+              <textarea value={respuesta} onChange={e => setRespuesta(e.target.value)}
+                placeholder="Escribe tu respuesta..."
+                style={{ width:'100%', minHeight:'72px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 10px', color:t.text, fontSize:'13px', resize:'vertical', boxSizing:'border-box' }} />
+              <div style={{ display:'flex', justifyContent:'flex-end', marginTop:'8px' }}>
+                <button onClick={responder} disabled={!respuesta.trim()}
+                  style={{ background: respuesta.trim() ? t.primary : t.border, color: respuesta.trim() ? '#fff' : t.textMuted, border:'none', borderRadius:'8px', padding:'8px 20px', fontSize:'13px', fontWeight:'700', cursor: respuesta.trim() ? 'pointer' : 'not-allowed' }}>
+                  ↩ Responder
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal nuevo mensaje */}
+      {mostrarNuevo && (
+        <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.5)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}
+          onClick={() => setMostrarNuevo(false)}>
+          <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'28px', width:'480px', maxWidth:'95vw', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'20px' }}>
+              <div style={{ fontSize:'15px', fontWeight:'700', color:t.text }}>✉️ Nuevo Mensaje</div>
+              <button onClick={() => setMostrarNuevo(false)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+            </div>
+            {esDev && (
+              <div style={{ marginBottom:'14px' }}>
+                <label style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>TIPO</label>
+                <select value={nuevo.tipo} onChange={e => setNuevo({...nuevo, tipo: e.target.value, destinatario_id: e.target.value === 'BROADCAST' ? '' : nuevo.destinatario_id})}
+                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'13px' }}>
+                  <option value="MENSAJE_DIRECTO">💬 Mensaje Directo</option>
+                  <option value="BROADCAST">📢 Broadcast — Todos los usuarios</option>
+                </select>
+              </div>
+            )}
+            {nuevo.tipo !== 'BROADCAST' && (
+              <div style={{ marginBottom:'14px' }}>
+                <label style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>PARA</label>
+                <select value={nuevo.destinatario_id} onChange={e => setNuevo({...nuevo, destinatario_id: e.target.value})}
+                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'13px' }}>
+                  <option value="">— Selecciona destinatario —</option>
+                  {nuevo.tipo === 'SOPORTE'
+                    ? destinatarios.filter(d => d.cargo?.toLowerCase() === 'desarrollador').map(d => <option key={d.id} value={d.id}>{d.nombre} · {d.cargo}</option>)
+                    : destinatarios.map(d => <option key={d.id} value={d.id}>{d.nombre} · {d.cargo}</option>)
+                  }
+                </select>
+              </div>
+            )}
+            <div style={{ marginBottom:'14px' }}>
+              <label style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>ASUNTO</label>
+              <input value={nuevo.asunto} onChange={e => setNuevo({...nuevo, asunto: e.target.value})}
+                placeholder="Asunto del mensaje..."
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+            </div>
+            <div style={{ marginBottom:'20px' }}>
+              <label style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>MENSAJE</label>
+              <textarea value={nuevo.mensaje} onChange={e => setNuevo({...nuevo, mensaje: e.target.value})}
+                placeholder="Escribe tu mensaje..."
+                style={{ width:'100%', minHeight:'100px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'13px', resize:'vertical', boxSizing:'border-box' }} />
+            </div>
+            <div style={{ display:'flex', gap:'10px', justifyContent:'flex-end' }}>
+              <button onClick={() => setMostrarNuevo(false)} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 18px', fontSize:'13px', color:t.textMuted, cursor:'pointer' }}>Cancelar</button>
+              <button onClick={enviarNuevo} disabled={enviando || !nuevo.asunto || !nuevo.mensaje || (nuevo.tipo !== 'BROADCAST' && !nuevo.destinatario_id)}
+                style={{ background: t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'8px 22px', fontSize:'13px', fontWeight:'700', cursor:'pointer', opacity: enviando ? 0.7 : 1 }}>
+                {enviando ? 'Enviando...' : '📨 Enviar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0 }) {
   const [moduloActivo, setModuloActivo] = useState('dashboard')
@@ -2819,6 +3134,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashTablaLoad,setDashTablaLoad]= useState(false)
   const [dashDrillPag, setDashDrillPag] = useState(0)
   const [panelFoco, setPanelFoco] = useState(null)
+  const [notifNavegar, setNotifNavegar] = useState(null)
   const colsGrid = '1fr 1fr'
   const [miniMapaColores, setMiniMapaColores] = useState({})
   const miniMapaRef = useRef(null)
@@ -2870,6 +3186,13 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   }
 
   useEffect(() => { if (contratoIdDash) { setDashDrillPag(0); cargarDashDrill(dashDrill) } }, [contratoIdDash, dashDrill])
+    
+    function handleNavegar(notif) {
+    if (!notif?.modulo) return
+    const modMap = { PRESUPUESTO:'presupuesto', COBRO:'cobro', AUTH:'dashboard' }
+    const mod = modMap[notif.modulo] || 'dashboard'
+    setModuloActivo(mod)
+  }
     useEffect(() => {
     if (!contratoIdDash) return
     const tok = getToken()
@@ -2978,6 +3301,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
               👤 {usuario?.nombre}
               {usuario?.cargo_nombre && <span style={{ marginLeft: '6px', fontSize: '11px', opacity: 0.7 }}>· {usuario.cargo_nombre}</span>}
             </span>
+            <BuzonNotificaciones t={t} usuario={usuario} token={getToken()} onNavegar={handleNavegar} />
             {canAdmin && (
               <button onClick={() => setShowAdmin(true)} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.primary, fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>
                 ⚙ Admin
@@ -3070,6 +3394,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           )}
           {/* Crear Contrato se gestiona desde el Panel Admin */}
         </div>
+
+
 
 {/* ── MÓDULO DASHBOARD ── */}
         {moduloActivo === 'dashboard' && (() => {

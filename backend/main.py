@@ -492,8 +492,12 @@ def aprobar_usuario(usuario_id: int, body: AprobarRequest, current_user=Depends(
     supabase.table("usuarios").update({
         "estado": "aprobado", "activo": True, "rol_id": body.rol_id
     }).eq("id", usuario_id).execute()
+    rol_nombre = ""
+    if body.rol_id:
+        r = supabase.table("roles").select("nombre").eq("id", body.rol_id).execute()
+        rol_nombre = r.data[0]["nombre"] if r.data else str(body.rol_id)
     registrar_log(current_user, "APROBAR", "USUARIOS", "usuario", str(usuario_id),
-        {"estado": "aprobado", "rol_id": body.rol_id})
+        {"estado": "aprobado", "rol": rol_nombre})
     return {"mensaje": "Usuario aprobado"}
 
 @app.put("/admin/usuarios/{usuario_id}/rechazar")
@@ -573,7 +577,21 @@ def actualizar_usuario(usuario_id: int, body: UsuarioUpdate, current_user=Depend
     elif body.estado == "rechazado":
         data["activo"] = False
     supabase.table("usuarios").update(data).eq("id", usuario_id).execute()
-    registrar_log(current_user, "EDITAR", "USUARIOS", "usuario", str(usuario_id), data)
+    # Enriquecer detalle con nombres legibles
+    detalle_log = dict(data)
+    if "cargo_id" in detalle_log:
+        r = supabase.table("cargos").select("nombre").eq("id", detalle_log["cargo_id"]).execute()
+        detalle_log["cargo"] = r.data[0]["nombre"] if r.data else str(detalle_log["cargo_id"])
+        del detalle_log["cargo_id"]
+    if "rol_id" in detalle_log:
+        r = supabase.table("roles").select("nombre").eq("id", detalle_log["rol_id"]).execute()
+        detalle_log["rol"] = r.data[0]["nombre"] if r.data else str(detalle_log["rol_id"])
+        del detalle_log["rol_id"]
+    if "contrato_id" in detalle_log:
+        r = supabase.table("contratos").select("numero").eq("id", detalle_log["contrato_id"]).execute()
+        detalle_log["contrato"] = r.data[0]["numero"] if r.data else str(detalle_log["contrato_id"])
+        del detalle_log["contrato_id"]
+    registrar_log(current_user, "EDITAR", "USUARIOS", "usuario", str(usuario_id), detalle_log)
     return {"mensaje": "Usuario actualizado"}
 
 @app.get("/admin/usuario-contratos/{usuario_id}")
@@ -1406,3 +1424,147 @@ def get_logs_entidad(entidad_tipo: str, entidad_id: str, current_user=Depends(ge
         .order("created_at", desc=False) \
         .execute().data
 
+# ─────────────────────────────────────────────
+# NOTIFICACIONES
+# ─────────────────────────────────────────────
+
+class NotificacionCreate(BaseModel):
+    destinatario_id: Optional[int] = None  # None = broadcast a todos
+    asunto: str
+    mensaje: str
+    tipo: str = "MENSAJE_DIRECTO"  # MENSAJE_DIRECTO | BROADCAST | SISTEMA | SOPORTE
+    modulo: Optional[str] = None
+    contrato_id: Optional[int] = None
+    entidad_tipo: Optional[str] = None
+    entidad_id: Optional[str] = None
+    padre_id: Optional[int] = None
+
+@app.post("/notificaciones")
+def crear_notificacion(body: NotificacionCreate, current_user=Depends(get_current_user)):
+    """Envía una notificación. Si destinatario_id es None y tipo=BROADCAST, envía a todos."""
+    uid = int(current_user.get("sub", 0))
+    nombre = current_user.get("nombre") or current_user.get("email", "")
+
+    if body.tipo == "BROADCAST":
+        # Enviar a todos los usuarios activos excepto el remitente
+        usuarios = supabase.table("usuarios").select("id").eq("activo", True).execute().data
+        rows = []
+        for u in usuarios:
+            if u["id"] == uid:
+                continue
+            rows.append({
+                "remitente_id":     uid,
+                "remitente_nombre": nombre,
+                "destinatario_id":  u["id"],
+                "asunto":           body.asunto,
+                "mensaje":          body.mensaje,
+                "tipo":             body.tipo,
+                "modulo":           body.modulo,
+                "contrato_id":      body.contrato_id,
+                "entidad_tipo":     body.entidad_tipo,
+                "entidad_id":       body.entidad_id,
+                "padre_id":         body.padre_id,
+            })
+        if rows:
+            supabase.table("notificaciones").insert(rows).execute()
+        registrar_log(current_user, "BROADCAST", "NOTIFICACIONES", "notificacion", None,
+            {"asunto": body.asunto, "destinatarios": len(rows)})
+        return {"enviados": len(rows)}
+    else:
+        row = {
+            "remitente_id":     uid,
+            "remitente_nombre": nombre,
+            "destinatario_id":  body.destinatario_id,
+            "asunto":           body.asunto,
+            "mensaje":          body.mensaje,
+            "tipo":             body.tipo,
+            "modulo":           body.modulo,
+            "contrato_id":      body.contrato_id,
+            "entidad_tipo":     body.entidad_tipo,
+            "entidad_id":       body.entidad_id,
+            "padre_id":         body.padre_id,
+        }
+        result = supabase.table("notificaciones").insert(row).execute()
+        registrar_log(current_user, "ENVIAR", "NOTIFICACIONES", "notificacion",
+            str(result.data[0]["id"]) if result.data else None,
+            {"asunto": body.asunto, "destinatario_id": body.destinatario_id, "tipo": body.tipo})
+        return result.data[0] if result.data else {}
+
+@app.get("/notificaciones/recibidas")
+def get_notificaciones_recibidas(
+    solo_no_leidas: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+    current_user=Depends(get_current_user)
+):
+    """Notificaciones recibidas por el usuario actual."""
+    uid = int(current_user.get("sub", 0))
+    q = supabase.table("notificaciones").select("*") \
+        .eq("destinatario_id", uid) \
+        .is_("padre_id", "null") \
+        .order("created_at", desc=True)
+    if solo_no_leidas:
+        q = q.eq("leido", False)
+    q = q.range(offset, offset + limit - 1)
+    return q.execute().data
+
+@app.get("/notificaciones/enviadas")
+def get_notificaciones_enviadas(
+    limit: int = 50,
+    offset: int = 0,
+    current_user=Depends(get_current_user)
+):
+    """Notificaciones enviadas por el usuario actual."""
+    uid = int(current_user.get("sub", 0))
+    return supabase.table("notificaciones").select("*") \
+        .eq("remitente_id", uid) \
+        .is_("padre_id", "null") \
+        .order("created_at", desc=True) \
+        .range(offset, offset + limit - 1) \
+        .execute().data
+
+@app.get("/notificaciones/no-leidas-count")
+def get_no_leidas_count(current_user=Depends(get_current_user)):
+    """Conteo de notificaciones no leídas — para el badge de la campana."""
+    uid = int(current_user.get("sub", 0))
+    result = supabase.table("notificaciones").select("id", count="exact") \
+        .eq("destinatario_id", uid) \
+        .eq("leido", False) \
+        .execute()
+    return {"count": result.count or 0}
+
+@app.get("/notificaciones/{notif_id}/hilo")
+def get_hilo(notif_id: int, current_user=Depends(get_current_user)):
+    """Devuelve el hilo completo de una notificación (padre + respuestas)."""
+    # Primero encontrar el padre raíz
+    notif = supabase.table("notificaciones").select("*").eq("id", notif_id).execute().data
+    if not notif: raise HTTPException(status_code=404, detail="No encontrada")
+    padre_id = notif[0].get("padre_id") or notif_id
+    # Marcar como leída
+    uid = int(current_user.get("sub", 0))
+    supabase.table("notificaciones").update({"leido": True, "leido_at": "now()"}) \
+        .eq("id", notif_id).eq("destinatario_id", uid).execute()
+    # Traer padre + todas las respuestas
+    padre = supabase.table("notificaciones").select("*").eq("id", padre_id).execute().data
+    respuestas = supabase.table("notificaciones").select("*") \
+        .eq("padre_id", padre_id).order("created_at").execute().data
+    return {"hilo": padre + respuestas}
+
+@app.put("/notificaciones/{notif_id}/leida")
+def marcar_leida(notif_id: int, current_user=Depends(get_current_user)):
+    uid = int(current_user.get("sub", 0))
+    supabase.table("notificaciones").update({"leido": True, "leido_at": "now()"}) \
+        .eq("id", notif_id).eq("destinatario_id", uid).execute()
+    return {"ok": True}
+
+@app.get("/notificaciones/usuarios-destinatarios")
+def get_usuarios_destinatarios(current_user=Depends(get_current_user)):
+    """Lista de usuarios activos para el selector de destinatario."""
+    uid = int(current_user.get("sub", 0))
+    rows = supabase.table("usuarios").select("id, nombre, apellidos, cargo_id") \
+        .eq("activo", True).execute().data
+    cargos = {c["id"]: c["nombre"] for c in supabase.table("cargos").select("id, nombre").execute().data}
+    return [
+        {"id": r["id"], "nombre": f"{r['nombre']} {r.get('apellidos','')}", "cargo": cargos.get(r.get("cargo_id"), "")}
+        for r in rows if r["id"] != uid
+    ]
