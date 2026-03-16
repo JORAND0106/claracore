@@ -774,15 +774,39 @@ async function cargarRegistros(modoPapelera) {
     const headers = parseCSVLine(firstLine, sep).map(h => h.replace(/^"|"$/g,'').trim().toUpperCase())
 
     const MAP = {
-      'ACTA RPO':'acta','ACTA':'acta','SEMANA':'semana','FECHA':'fecha',
-      'CAPITULO':'capitulo','COMPETENCIA':'competencia',
-      'ABS INCIAL':'abs_inicial','ABS INICIAL':'abs_inicial','ABS FINAL':'abs_final',
-      'CIV':'civ','ITEM':'item','DESCRIPCION':'descripcion','DESCRIPCIÓN':'descripcion',
-      'UND':'und','LONGITUD':'longitud','ANCHO':'ancho','ESPESOR':'espesor',
-      'CANTIDAD':'cantidad','VALOR UNITARIO':'valor_unitario','COSTO DIRECTO':'costo_directo',
-      'CALZADA':'calzada','TRAMO INICIO':'tramo_inicio','TRAMO FINAL':'tramo_final','PK_ID':'pk_id'
+      'PK_ID':'pk_id','PK_ID':'pk_id',
+      'CAPITULO':'capitulo','CAPÍTULO':'capitulo','COMPETENCIA':'competencia',
+      'ITEM':'item','ÍTEM':'item',
+      'DESCRIPCION':'descripcion','DESCRIPCIÓN':'descripcion',
+      'UND':'und',
+      'CALZADA':'calzada','TRAMO':'tramo',
+      'ABS. INICIO':'abs_inicio','ABS. FINAL':'abs_final',
+      'ABS INICIO':'abs_inicio','ABS FINAL':'abs_final',
+      'VLR UNITARIO':'vlr_unitario','VLR. UNITARIO':'vlr_unitario','VALOR UNITARIO':'valor_unitario',
+      'NO. INICIO':'no_inicio','NO. FINAL':'no_final',
+      'NO INICIO':'no_inicio','NO FINAL':'no_final',
+      'AREA/LONG/NOD':'area_long_nod','ÁREA/LONG/NOD':'area_long_nod',
+      'AREA/LONG':'area_long_nod','ÁREA/LONG':'area_long_nod',
+      'ANCHO':'ancho','ESPESOR':'espesor',
+      'CANT.TOTAL':'cant_total','CANT. TOTAL':'cant_total','CANTIDAD':'cant_total',
+      'COSTO DIRECTO':'costo_directo',
+      'TIPO DE EJECUCIÓN':'tipo_ejecucion','TIPO DE EJECUCION':'tipo_ejecucion',
+      'TIPO DE ENTIDAD':'tipo_entidad',
+      'ID_POL':'id_pol','ID POL':'id_pol',
+      'OBSERVACIÓN':'observacion','OBSERVACION':'observacion',
+      'ENTHANDLE':'ent_handle','ENT_HANDLE':'ent_handle',
+      'TXTHANDLE':'txt_handle','TXT_HANDLE':'txt_handle',
+      'LAYERENT':'layer_ent','LAYER_ENT':'layer_ent','LAYERENT':'layer_ent',
+      'LAYERTXT':'layer_txt','LAYER_TXT':'layer_txt',
+      'COLORHEX':'color_hex','COLOR_HEX':'color_hex',
+      'GUID':'guid',
+      'X_LABEL (ESTE)':'x_label','X_LABEL':'x_label',
+      'Y_LABEL (NORTE)':'y_label','Y_LABEL':'y_label',
+      'REVISADO (TRUE/FALSE)':'revisado','REVISADO':'revisado',
+      'OBSERVACIÓN EXTERNA':'observacion_externa','OBSERVACION EXTERNA':'observacion_externa',
+      'REV_BLOCK_HANDLE':'rev_block_handle',
     }
-    const NUMS = new Set(['acta','longitud','ancho','espesor','cantidad','valor_unitario','costo_directo'])
+    const NUMS = new Set(['vlr_unitario','valor_unitario','area_long_nod','ancho','espesor','cant_total','costo_directo','x_label','y_label'])
     const rows = []
     for (let i = 1; i < lines.length; i++) {
       const vals = parseCSVLine(lines[i], sep).map(v => v.replace(/^"|"$/g,'').trim())

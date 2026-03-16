@@ -823,6 +823,35 @@ def dar_baja_presupuesto(item_id: int, current_user=Depends(get_current_user)):
             }).execute()
     return {"ok": True}
 
+@app.post("/presupuesto/{contrato_id}/bulk")
+def bulk_presupuesto(contrato_id: int, items: List[PresupuestoRow], mode: str = "append", current_user=Depends(get_current_user)):
+    """Importa registros de presupuesto. mode=replace elimina todo primero, mode=append agrega."""
+    if mode == "replace":
+        supabase.table("presupuesto").delete().eq("contrato_id", contrato_id).execute()
+    if not items:
+        return {"insertados": 0}
+    BATCH = 500
+    rows = []
+    for item in items:
+        d = {k: v for k, v in item.dict().items() if v is not None}
+        d["contrato_id"] = contrato_id
+        rows.append(d)
+    insertados = 0
+    for i in range(0, len(rows), BATCH):
+        try:
+            supabase.table("presupuesto").insert(rows[i:i+BATCH]).execute()
+            insertados += len(rows[i:i+BATCH])
+        except Exception as e:
+            for row in rows[i:i+BATCH]:
+                try:
+                    supabase.table("presupuesto").insert(row).execute()
+                    insertados += 1
+                except Exception:
+                    pass
+    registrar_log(current_user, "IMPORTAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id),
+        {"contrato_id": contrato_id, "mode": mode, "registros_insertados": insertados})
+    return {"insertados": insertados}
+
 @app.put("/presupuesto/{contrato_id}/bulk-recalcular")
 def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=Depends(get_current_user)):
     if not body.ids:
