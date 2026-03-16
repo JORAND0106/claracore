@@ -2753,7 +2753,7 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
   const mapRef      = useRef(null)
   const mapInstance = useRef(null)
   const [listo, setListo] = useState(false)
-  const [modo, setModo]   = useState('ambos') // 'presupuesto' | 'cobro' | 'ambos'
+  const [modo, setModo]   = useState('ambos')
 
   const getColorCobro = (pct) => {
     if (pct >= 100) return '#DC2626'
@@ -2782,7 +2782,6 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
         }
       })
 
-  // Inicializar mapa una sola vez
   useEffect(() => {
     if (!mapRef.current || mapInstance.current) return
     mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
@@ -2800,37 +2799,28 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
           const features = buildFeatures(geojson)
           const data = { ...geojson, features }
           map.addSource('mini-pols', { type: 'geojson', data })
-          // Capa presupuesto (azul)
           map.addLayer({ id: 'mini-fill-ppto', type: 'fill', source: 'mini-pols',
-            paint: {
-              'fill-color': ['get', 'color_ppto'],
-              'fill-opacity': ['case', ['==', ['get', 'tiene_ppto'], 1], 0.7, 0.1]
-            }
+            paint: { 'fill-color': ['get', 'color_ppto'], 'fill-opacity': ['case', ['==', ['get', 'tiene_ppto'], 1], 0.7, 0.1] }
           })
-          // Capa cobro (semáforo)
           map.addLayer({ id: 'mini-fill-cobro', type: 'fill', source: 'mini-pols',
-            paint: {
-              'fill-color': ['get', 'color_cobro'],
-              'fill-opacity': ['case', ['==', ['get', 'tiene_cobro'], 1], 0.7, 0.1]
-            }
+            paint: { 'fill-color': ['get', 'color_cobro'], 'fill-opacity': ['case', ['==', ['get', 'tiene_cobro'], 1], 0.7, 0.1] }
           })
           map.addLayer({ id: 'mini-line', type: 'line', source: 'mini-pols',
             paint: { 'line-color': '#ffffff', 'line-width': 0.8, 'line-opacity': 0.3 }
           })
-          // Click en polígono
+          // Click handlers
           map.on('click', 'mini-fill-cobro', (e) => {
-            const pkid = e.features[0]?.properties?.pk_id || String(e.features[0]?.properties?.Layer || '').trim()
+            const pkid = e.features[0]?.properties?.pk_id
             if (pkid && onPkidClick) onPkidClick(pkid)
           })
           map.on('click', 'mini-fill-ppto', (e) => {
-            const pkid = e.features[0]?.properties?.pk_id || String(e.features[0]?.properties?.Layer || '').trim()
+            const pkid = e.features[0]?.properties?.pk_id
             if (pkid && onPkidClick) onPkidClick(pkid)
           })
           map.on('mouseenter', 'mini-fill-cobro', () => { if (onPkidClick) map.getCanvas().style.cursor = 'pointer' })
           map.on('mouseleave', 'mini-fill-cobro', () => { map.getCanvas().style.cursor = '' })
           map.on('mouseenter', 'mini-fill-ppto',  () => { if (onPkidClick) map.getCanvas().style.cursor = 'pointer' })
           map.on('mouseleave', 'mini-fill-ppto',  () => { map.getCanvas().style.cursor = '' })
-          // Fit bounds
           const coords = features.flatMap(f => {
             const g = f.geometry
             if (g.type === 'Polygon') return g.coordinates[0]
@@ -2847,19 +2837,14 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
     return () => { if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; setListo(false) } }
   }, [])
 
-  // Actualizar colores cuando cambia colores o modo
   useEffect(() => {
     const map = mapInstance.current
     if (!map || !listo) return
-    // Actualizar datos
     const src = map.getSource('mini-pols')
     if (src) {
       const raw = src._data
-      if (raw && raw.features) {
-        src.setData({ ...raw, features: buildFeatures(raw) })
-      }
+      if (raw && raw.features) src.setData({ ...raw, features: buildFeatures(raw) })
     }
-    // Visibilidad de capas según modo
     if (map.getLayer('mini-fill-ppto') && map.getLayer('mini-fill-cobro')) {
       if (modo === 'presupuesto') {
         map.setPaintProperty('mini-fill-ppto', 'fill-opacity', ['case', ['==', ['get', 'tiene_ppto'], 1], 0.85, 0.08])
@@ -2887,13 +2872,11 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
-      {/* Toggle de modo */}
       <div style={{ display:'flex', gap:'6px', justifyContent:'center' }}>
         {btnModo('presupuesto', '📋 Presupuesto', '#0077B6')}
         {btnModo('cobro',       '💰 Cobro',       '#00A896')}
         {btnModo('ambos',       '⚡ Ambos',        '#7C3AED')}
       </div>
-      {/* Mapa */}
       <div style={{ position:'relative', width:'100%', height:`${height}px`, borderRadius:'8px', overflow:'hidden' }}>
         <div ref={mapRef} style={{ width:'100%', height:'100%' }} />
         {!listo && (
@@ -2901,7 +2884,11 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
             ⏳ Cargando mapa...
           </div>
         )}
-        {/* Leyenda */}
+        {onPkidClick && (
+          <div style={{ position:'absolute', top:'8px', left:'8px', background:t.bgCard+'DD', borderRadius:'6px', padding:'4px 8px', fontSize:'9px', color:t.primary, fontWeight:'700' }}>
+            👆 Click en polígono para ver detalle
+          </div>
+        )}
         <div style={{ position:'absolute', bottom:'8px', left:'8px', background:t.bgCard+'DD', borderRadius:'6px', padding:'5px 8px', fontSize:'9px', display:'flex', gap:'6px', flexWrap:'wrap' }}>
           {modo !== 'presupuesto' && [['#10B981','<70%'],['#F59E0B','70-90%'],['#EF4444','90-100%'],['#DC2626','>100%']].map(([c,l]) => (
             <div key={l} style={{ display:'flex', alignItems:'center', gap:'3px', color:t.textMuted }}>
