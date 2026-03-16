@@ -1544,6 +1544,24 @@ async function darDeBaja(id) {
                 </button>
               </>)}
 
+              {puedeEliminar && !verPapelera && dwgEnlazado && seleccionados.size > 1 && (
+                <button onClick={async () => {
+                  const comentario = await pedirComentario('validacion', true)
+                  if (comentario === null) return
+                  for (const id of [...seleccionados]) {
+                    const res = await fetch(`${API}/presupuesto/item/${id}/dar-baja`, {
+                      method: 'PUT', headers: { Authorization: `Bearer ${token}` }
+                    })
+                    if (res.ok) await crearComentarios([id], 'validacion', `[BAJA MASIVA] ${comentario}`)
+                  }
+                  setSeleccionados(new Set())
+                  await cargarRegistros()
+                }}
+                style={{ background:'#EF444415', border:'1px solid #EF444466', borderRadius:'7px', padding:'6px 14px', color:'#EF4444', fontSize:'12px', fontWeight:'700', cursor:'pointer', whiteSpace:'nowrap' }}>
+                  🗑️ Dar de baja ({seleccionados.size})
+                </button>
+              )}
+
               {puedeValidar && (<>
                 <select value={bulkEstado} onChange={e => setBulkEstado(e.target.value)}
                   style={{ background:t.inputBg, border:`1.5px solid ${bulkEstado ? estadoColor(bulkEstado) : t.border}`, borderRadius:'7px', padding:'5px 10px', color:bulkEstado ? estadoColor(bulkEstado) : t.textMuted, fontSize:'12px', cursor:'pointer', fontWeight: bulkEstado ? '700' : '400' }}>
@@ -1704,11 +1722,13 @@ async function darDeBaja(id) {
                     </td>
                     {puedeEliminar && !verPapelera && dwgEnlazado && (
                       <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
-                        <button onClick={() => darDeBaja(r.id)}
-                          title="Dar de baja"
-                          style={{ background:'#EF444415', border:'1px solid #EF444444', borderRadius:'6px', padding:'3px 8px', color:'#EF4444', fontSize:'11px', cursor:'pointer' }}>
-                          🗑️
-                        </button>
+                        {seleccionados.has(r.id) && (
+                          <button onClick={() => darDeBaja(r.id)}
+                            title="Dar de baja"
+                            style={{ background:'#EF444415', border:'1px solid #EF444444', borderRadius:'6px', padding:'3px 8px', color:'#EF4444', fontSize:'11px', cursor:'pointer' }}>
+                            🗑️
+                          </button>
+                        )}
                       </td>
                     )}
                     {!puedeEditar && !puedeValidar && (
