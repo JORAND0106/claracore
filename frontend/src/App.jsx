@@ -2749,7 +2749,7 @@ function MiniMapaPresupuesto({ t, colores, pkidsActivos, pkidsResaltados = [], o
   )
 }
 // ─── MINI MAPA SEMÁFORO (dashboard) ──────────────────────────────────────────
-function MiniMapaSemaforo({ t, colores, height = 220 }) {
+function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
   const mapRef      = useRef(null)
   const mapInstance = useRef(null)
   const [listo, setListo] = useState(false)
@@ -2817,6 +2817,19 @@ function MiniMapaSemaforo({ t, colores, height = 220 }) {
           map.addLayer({ id: 'mini-line', type: 'line', source: 'mini-pols',
             paint: { 'line-color': '#ffffff', 'line-width': 0.8, 'line-opacity': 0.3 }
           })
+          // Click en polígono
+          map.on('click', 'mini-fill-cobro', (e) => {
+            const pkid = e.features[0]?.properties?.pk_id || String(e.features[0]?.properties?.Layer || '').trim()
+            if (pkid && onPkidClick) onPkidClick(pkid)
+          })
+          map.on('click', 'mini-fill-ppto', (e) => {
+            const pkid = e.features[0]?.properties?.pk_id || String(e.features[0]?.properties?.Layer || '').trim()
+            if (pkid && onPkidClick) onPkidClick(pkid)
+          })
+          map.on('mouseenter', 'mini-fill-cobro', () => { if (onPkidClick) map.getCanvas().style.cursor = 'pointer' })
+          map.on('mouseleave', 'mini-fill-cobro', () => { map.getCanvas().style.cursor = '' })
+          map.on('mouseenter', 'mini-fill-ppto',  () => { if (onPkidClick) map.getCanvas().style.cursor = 'pointer' })
+          map.on('mouseleave', 'mini-fill-ppto',  () => { map.getCanvas().style.cursor = '' })
           // Fit bounds
           const coords = features.flatMap(f => {
             const g = f.geometry
@@ -3249,6 +3262,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [notifNavegar, setNotifNavegar] = useState(null)
   const colsGrid = '1fr 1fr'
   const [miniMapaColores, setMiniMapaColores] = useState({})
+  const [popupPkid,      setPopupPkid]      = useState(null)  // {pkid, data}
+  const [popupLoading,   setPopupLoading]   = useState(false)
   const miniMapaRef = useRef(null)
   const API_URL = 'https://claracore-backend.azurewebsites.net'
   const contratoIdDash = usuario?.contrato_id
@@ -3298,7 +3313,22 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   }
 
   useEffect(() => { if (contratoIdDash) { setDashDrillPag(0); cargarDashDrill(dashDrill) } }, [contratoIdDash, dashDrill])
-    
+  
+    async function abrirPopupPkid(pkid) {
+    if (dashDrill.length < 2) return  // solo en nivel item
+    setPopupLoading(true); setPopupPkid({ pkid, data: null })
+    const tok = getToken()
+    const params = new URLSearchParams({ pk_id: pkid })
+    if (dashDrill[1]) params.set('item', dashDrill[1].valor)
+    if (dashDrill[0]) params.set('capitulo', dashDrill[0].valor)
+    const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-detalle?${params}`, {
+      headers: { Authorization: `Bearer ${tok}` }
+    })
+    const data = res.ok ? await res.json() : null
+    setPopupPkid({ pkid, data })
+    setPopupLoading(false)
+  }
+
     function handleNavegar(notif) {
     if (!notif?.modulo) return
     const modMap = { PRESUPUESTO:'presupuesto', COBRO:'cobro', AUTH:'dashboard' }
@@ -3968,12 +3998,125 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                   t={t}
                   colores={miniMapaColores}
                   height={panelFoco === 'semaforo' ? 420 : 220}
+                  onPkidClick={dashDrill.length >= 2 ? abrirPopupPkid : null}
                 />
               </div>
 
             </div>
           </>
         })()}
+
+{/* ── Popup detalle PK_ID ── */}
+        {popupPkid && (
+          <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.55)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}
+            onClick={() => setPopupPkid(null)}>
+            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'780px', maxWidth:'96vw', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
+              onClick={e => e.stopPropagation()}>
+              {/* Header */}
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px' }}>
+                <div>
+                  <div style={{ fontSize:'15px', fontWeight:'800', color:t.primary }}>
+                    {dashDrill[1]?.valor} — {popupPkid.pkid}
+                  </div>
+                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>
+                    {dashDrill[0]?.valor}
+                  </div>
+                </div>
+                <button onClick={() => setPopupPkid(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+              </div>
+
+              {popupLoading ? (
+                <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>⏳ Cargando...</div>
+              ) : popupPkid.data ? (() => {
+                const { ppto, cobro, totales } = popupPkid.data
+                const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+                const fmtN = n => n != null ? Number(n).toFixed(2) : '—'
+                const thS = { padding:'6px 10px', fontSize:'10px', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
+                const tdS = { padding:'6px 10px', fontSize:'11px', color:t.text, borderBottom:`1px solid ${t.border}` }
+                return (
+                  <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:'16px' }}>
+                    {/* Dos columnas */}
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px' }}>
+                      {/* PRESUPUESTO */}
+                      <div>
+                        <div style={{ fontSize:'12px', fontWeight:'700', color:'#0077B6', marginBottom:'8px', padding:'6px 10px', background:'#0077B611', borderRadius:'6px' }}>
+                          📋 Presupuesto ({ppto.length} registros)
+                        </div>
+                        <div style={{ overflowX:'auto' }}>
+                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                            <thead>
+                              <tr>{['ID_Pol','Nodo Ini','Nodo Fin','Cant','Costo'].map(h => <th key={h} style={thS}>{h}</th>)}</tr>
+                            </thead>
+                            <tbody>
+                              {ppto.length === 0
+                                ? <tr><td colSpan={5} style={{...tdS, textAlign:'center', color:t.textMuted}}>Sin registros</td></tr>
+                                : ppto.map((r,i) => (
+                                  <tr key={i}>
+                                    <td style={{...tdS, fontWeight:'600', color:t.primary}}>{r.id_pol || '—'}</td>
+                                    <td style={tdS}>{r.no_inicio || '—'}</td>
+                                    <td style={tdS}>{r.no_final || '—'}</td>
+                                    <td style={{...tdS, textAlign:'right'}}>{fmtN(r.cant_total)}</td>
+                                    <td style={{...tdS, textAlign:'right'}}>{fmtD(r.costo_directo)}</td>
+                                  </tr>
+                                ))
+                              }
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                      {/* COBRO */}
+                      <div>
+                        <div style={{ fontSize:'12px', fontWeight:'700', color:'#00A896', marginBottom:'8px', padding:'6px 10px', background:'#00A89611', borderRadius:'6px' }}>
+                          💰 Cobro ({cobro.length} registros)
+                        </div>
+                        <div style={{ overflowX:'auto' }}>
+                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                            <thead>
+                              <tr>{['Registro','Tramo Ini','Tramo Fin','Cant','Costo'].map(h => <th key={h} style={thS}>{h}</th>)}</tr>
+                            </thead>
+                            <tbody>
+                              {cobro.length === 0
+                                ? <tr><td colSpan={5} style={{...tdS, textAlign:'center', color:t.textMuted}}>Sin registros</td></tr>
+                                : cobro.map((r,i) => (
+                                  <tr key={i}>
+                                    <td style={{...tdS, fontWeight:'600', color:'#00A896'}}>{r.registro || r.acta || '—'}</td>
+                                    <td style={tdS}>{r.tramo_inicio || '—'}</td>
+                                    <td style={tdS}>{r.tramo_final || '—'}</td>
+                                    <td style={{...tdS, textAlign:'right'}}>{fmtN(r.cantidad || r.longitud)}</td>
+                                    <td style={{...tdS, textAlign:'right'}}>{fmtD(r.costo_directo)}</td>
+                                  </tr>
+                                ))
+                              }
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Footer deltas */}
+                    <div style={{ borderTop:`2px solid ${t.border}`, paddingTop:'12px', display:'flex', gap:'16px', flexWrap:'wrap' }}>
+                      {[
+                        { label:'Cant. Ppto', val: fmtN(totales.cant_ppto), color:'#0077B6' },
+                        { label:'Cant. Cobro', val: fmtN(totales.cant_cobro), color:'#00A896' },
+                        { label:'Δ Cantidad', val: `${totales.delta_cant >= 0 ? '+' : ''}${fmtN(totales.delta_cant)}`, color: totales.delta_cant >= 0 ? '#10B981' : '#EF4444' },
+                        { label:'Costo Ppto', val: fmtD(totales.costo_ppto), color:'#0077B6' },
+                        { label:'Costo Cobro', val: fmtD(totales.costo_cobro), color:'#00A896' },
+                        { label:'Δ Costo', val: `${totales.delta_costo >= 0 ? '+' : ''}${fmtD(totales.delta_costo)}`, color: totales.delta_costo >= 0 ? '#10B981' : '#EF4444' },
+                      ].map(({label, val, color}) => (
+                        <div key={label} style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 14px', minWidth:'120px' }}>
+                          <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', marginBottom:'3px' }}>{label}</div>
+                          <div style={{ fontSize:'14px', fontWeight:'800', color }}>{val}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })() : (
+                <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>Sin datos</div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ── MÓDULO PRESUPUESTO ── */}
         {moduloActivo === 'presupuesto' && <ModuloPresupuesto t={t} usuario={usuario} token={getToken()} s={s} />}

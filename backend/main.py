@@ -1048,6 +1048,46 @@ def pkid_tabla(contrato_id: int, capitulo: str = None, item: str = None, current
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/cobro/{contrato_id}/pkid-detalle")
+def pkid_detalle(contrato_id: int, pk_id: str = None, item: str = None, capitulo: str = None, current_user=Depends(get_current_user)):
+    """Filas individuales de ppto y cobro para un PK_ID específico."""
+    try:
+        q_p = supabase.table("presupuesto").select(
+            "id_pol, no_inicio, no_final, cant_total, costo_directo, descripcion, item"
+        ).eq("contrato_id", contrato_id)
+        q_c = supabase.table("cobro").select(
+            "registro, tramo_inicio, tramo_final, cantidad, longitud, costo_directo, descripcion, item, acta, calzada"
+        ).eq("contrato_id", contrato_id)
+        if pk_id:
+            q_p = q_p.eq("pk_id", pk_id)
+            q_c = q_c.eq("pk_id", pk_id)
+        if item:
+            q_p = q_p.eq("item", item)
+            q_c = q_c.eq("item", item)
+        elif capitulo:
+            q_p = q_p.eq("capitulo", capitulo)
+            q_c = q_c.eq("capitulo", capitulo)
+        ppto  = q_p.execute().data or []
+        cobro = q_c.execute().data or []
+        cant_ppto  = sum(float(r.get("cant_total") or 0) for r in ppto)
+        costo_ppto = sum(float(r.get("costo_directo") or 0) for r in ppto)
+        cant_cobro  = sum(float(r.get("cantidad") or r.get("longitud") or 0) for r in cobro)
+        costo_cobro = sum(float(r.get("costo_directo") or 0) for r in cobro)
+        return {
+            "ppto":  ppto,
+            "cobro": cobro,
+            "totales": {
+                "cant_ppto":   round(cant_ppto, 2),
+                "costo_ppto":  round(costo_ppto, 0),
+                "cant_cobro":  round(cant_cobro, 2),
+                "costo_cobro": round(costo_cobro, 0),
+                "delta_cant":  round(cant_ppto - cant_cobro, 2),
+                "delta_costo": round(costo_ppto - costo_cobro, 0),
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/cobro/{contrato_id}/drill")
 def drill_comparativo(contrato_id: int, capitulo: str = None, item: str = None, current_user=Depends(get_current_user)):
     """Drill comparativo presupuesto vs cobro por capitulo→item→pk_id"""
