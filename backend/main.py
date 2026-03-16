@@ -230,6 +230,28 @@ class CambiarPassword(BaseModel):
     nueva_password: str
 
 # ─────────────────────────────────────────────
+# SISTEMA DE LOGS
+# ─────────────────────────────────────────────
+def registrar_log(usuario, accion, modulo, entidad_tipo=None, entidad_id=None, detalle=None, resultado="ok"):
+    try:
+        uid = usuario.get("sub") or usuario.get("id")
+        supabase.table("logs").insert({
+            "usuario_id":      int(uid) if uid else None,
+            "usuario_nombre":  usuario.get("nombre") or usuario.get("email", ""),
+            "cargo_nombre":    usuario.get("cargo_nombre", ""),
+            "contrato_id":     usuario.get("contrato_id"),
+            "contrato_numero": usuario.get("contrato_numero"),
+            "accion":          accion,
+            "modulo":          modulo,
+            "entidad_tipo":    entidad_tipo,
+            "entidad_id":      str(entidad_id) if entidad_id is not None else None,
+            "detalle":         detalle or {},
+            "resultado":       resultado,
+        }).execute()
+    except Exception:
+        pass
+
+# ─────────────────────────────────────────────
 # SEGURIDAD
 # ─────────────────────────────────────────────
 
@@ -314,6 +336,14 @@ def login(request: LoginRequest):
         permisos_raw = supabase.table("permisos").select("*").eq("cargo_id", usuario["cargo_id"]).execute().data
         funciones_map = {f["id"]: f["nombre"] for f in supabase.table("funciones").select("id, nombre").execute().data}
         permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
+
+    registrar_log(
+        {"sub": str(usuario["id"]), "nombre": usuario.get("nombre",""),
+         "cargo_nombre": cargo_nombre, "contrato_id": usuario.get("contrato_id"),
+         "contrato_numero": contrato_numero},
+        "LOGIN", "AUTH", "usuario", str(usuario["id"]),
+        {"email": usuario["email"], "cargo": cargo_nombre, "contrato": contrato_numero}
+    )
 
     return {
         "access_token": token,
@@ -462,6 +492,8 @@ def aprobar_usuario(usuario_id: int, body: AprobarRequest, current_user=Depends(
     supabase.table("usuarios").update({
         "estado": "aprobado", "activo": True, "rol_id": body.rol_id
     }).eq("id", usuario_id).execute()
+    registrar_log(current_user, "APROBAR", "USUARIOS", "usuario", str(usuario_id),
+        {"estado": "aprobado", "rol_id": body.rol_id})
     return {"mensaje": "Usuario aprobado"}
 
 @app.put("/admin/usuarios/{usuario_id}/rechazar")
@@ -469,6 +501,8 @@ def rechazar_usuario(usuario_id: int, current_user=Depends(get_current_user)):
     supabase.table("usuarios").update({
         "estado": "rechazado", "activo": False
     }).eq("id", usuario_id).execute()
+    registrar_log(current_user, "RECHAZAR", "USUARIOS", "usuario", str(usuario_id),
+        {"estado": "rechazado"})
     return {"mensaje": "Usuario rechazado"}
 
 @app.post("/admin/cargos")
@@ -539,6 +573,7 @@ def actualizar_usuario(usuario_id: int, body: UsuarioUpdate, current_user=Depend
     elif body.estado == "rechazado":
         data["activo"] = False
     supabase.table("usuarios").update(data).eq("id", usuario_id).execute()
+    registrar_log(current_user, "EDITAR", "USUARIOS", "usuario", str(usuario_id), data)
     return {"mensaje": "Usuario actualizado"}
 
 @app.get("/admin/usuario-contratos/{usuario_id}")
@@ -830,6 +865,9 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
                 "estado": "pendiente",
                 "payload": payload_cad
             }).execute()
+    registrar_log(current_user, "RECALCULAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id),
+        {"contrato_id": contrato_id, "cantidad_registros": len(rows),
+         "capitulo": body.capitulo, "item": body.item})
     return {"actualizados": len(rows)}
 
 @app.put("/presupuesto/{contrato_id}/bulk-estado")
@@ -859,6 +897,8 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
                         "rev_block_handle":  r.get("rev_block_handle") or "",
                     }
                 }).execute()
+    registrar_log(current_user, "VALIDAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id),
+        {"contrato_id": contrato_id, "cantidad_registros": len(body.ids), "estado": body.revisado})            
     return {"actualizados": len(body.ids)}
 
 # ─────────────────────────────────────────────
@@ -1243,6 +1283,8 @@ def bulk_cobro(contrato_id: int, items: List[CobroRow], current_user=Depends(get
                     insertados += 1
                 except Exception:
                     pass  # omitir fila problemática y continuar
+    registrar_log(current_user, "IMPORTAR", "COBRO", "cobro_bulk", str(contrato_id),
+        {"contrato_id": contrato_id, "registros_insertados": insertados})    
     return {"insertados": insertados}
 
 
@@ -1319,5 +1361,48 @@ def responder_comentario(comentario_id: int, body: RespuestaCreate, current_user
         "parent_id":      comentario_id
     }).execute()
     return {"ok": True}
+# ─────────────────────────────────────────────
+# LOGS
+# ─────────────────────────────────────────────
 
+@app.get("/logs")
+def get_logs(
+    usuario_id:   Optional[int] = None,
+    modulo:       Optional[str] = None,
+    accion:       Optional[str] = None,
+    fecha_desde:  Optional[str] = None,
+    fecha_hasta:  Optional[str] = None,
+    limit:        int = 100,
+    offset:       int = 0,
+    current_user=Depends(get_current_user)
+):
+    """Consulta logs con filtros. Solo para Desarrollador y Administrador."""
+    q = supabase.table("logs").select("*").order("created_at", desc=True)
+    if usuario_id:  q = q.eq("usuario_id", usuario_id)
+    if modulo:      q = q.eq("modulo", modulo)
+    if accion:      q = q.eq("accion", accion)
+    if fecha_desde: q = q.gte("created_at", fecha_desde)
+    if fecha_hasta: q = q.lte("created_at", fecha_hasta + "T23:59:59")
+    q = q.range(offset, offset + limit - 1)
+    return q.execute().data
+
+@app.get("/logs/usuarios-lista")
+def get_logs_usuarios(current_user=Depends(get_current_user)):
+    """Lista de usuarios que tienen logs — para el selector de filtros."""
+    rows = supabase.table("logs").select("usuario_id, usuario_nombre, cargo_nombre").execute().data
+    vistos = {}
+    for r in rows:
+        uid = r.get("usuario_id")
+        if uid and uid not in vistos:
+            vistos[uid] = {"id": uid, "nombre": r.get("usuario_nombre",""), "cargo": r.get("cargo_nombre","")}
+    return list(vistos.values())
+
+@app.get("/logs/entidad/{entidad_tipo}/{entidad_id}")
+def get_logs_entidad(entidad_tipo: str, entidad_id: str, current_user=Depends(get_current_user)):
+    """Historial completo de una entidad específica."""
+    return supabase.table("logs").select("*") \
+        .eq("entidad_tipo", entidad_tipo) \
+        .eq("entidad_id", entidad_id) \
+        .order("created_at", desc=False) \
+        .execute().data
 

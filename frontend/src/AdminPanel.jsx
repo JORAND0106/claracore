@@ -665,6 +665,236 @@ function SeccionPermisos({ call, cargos, theme }) {
   );
 }
 
+// ─── SECCIÓN LOGS ─────────────────────────────────────────────────────────────
+function SeccionLogs({ call, theme }) {
+  const col = colors(theme)
+  const API = "https://claracore-backend.azurewebsites.net"
+  const token = localStorage.getItem("cc_token") || sessionStorage.getItem("cc_token")
+
+  const [logs,          setLogs]          = useState([])
+  const [usuarios,      setUsuarios]      = useState([])
+  const [loading,       setLoading]       = useState(false)
+  const [logSelec,      setLogSelec]      = useState(null)
+  const [historial,     setHistorial]     = useState([])
+  const [histLoading,   setHistLoading]   = useState(false)
+
+  // Filtros
+  const [filtUsuario,   setFiltUsuario]   = useState("")
+  const [filtModulo,    setFiltModulo]    = useState("")
+  const [filtAccion,    setFiltAccion]    = useState("")
+  const [filtDesde,     setFiltDesde]     = useState("")
+  const [filtHasta,     setFiltHasta]     = useState("")
+  const [offset,        setOffset]        = useState(0)
+  const LIMIT = 50
+
+  const MODULOS = ["AUTH","PRESUPUESTO","COBRO","USUARIOS","CONTRATOS","PERMISOS","PRECIOS"]
+  const ACCIONES = ["LOGIN","APROBAR","RECHAZAR","EDITAR","RECALCULAR","VALIDAR","IMPORTAR","CREAR","ELIMINAR"]
+  const ACCION_COLOR = {
+    LOGIN:"#0077B6", APROBAR:"#10B981", RECHAZAR:"#EF4444",
+    EDITAR:"#F59E0B", RECALCULAR:"#7C3AED", VALIDAR:"#00A896",
+    IMPORTAR:"#2E86AB", CREAR:"#16A34A", ELIMINAR:"#DC2626"
+  }
+
+  useEffect(() => {
+    fetch(`${API}/logs/usuarios-lista`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : []).then(setUsuarios).catch(() => {})
+  }, [])
+
+  useEffect(() => { cargarLogs(0) }, [filtUsuario, filtModulo, filtAccion, filtDesde, filtHasta])
+
+  async function cargarLogs(off = 0) {
+    setLoading(true); setOffset(off)
+    const params = new URLSearchParams({ limit: LIMIT, offset: off })
+    if (filtUsuario) params.set("usuario_id", filtUsuario)
+    if (filtModulo)  params.set("modulo",     filtModulo)
+    if (filtAccion)  params.set("accion",     filtAccion)
+    if (filtDesde)   params.set("fecha_desde",filtDesde)
+    if (filtHasta)   params.set("fecha_hasta",filtHasta)
+    const data = await fetch(`${API}/logs?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : []).catch(() => [])
+    setLogs(data); setLoading(false)
+  }
+
+  async function abrirHistorial(log) {
+    setLogSelec(log); setHistLoading(true); setHistorial([])
+    if (log.entidad_tipo && log.entidad_id) {
+      const data = await fetch(`${API}/logs/entidad/${log.entidad_tipo}/${log.entidad_id}`,
+        { headers: { Authorization: `Bearer ${token}` } })
+        .then(r => r.ok ? r.json() : []).catch(() => [])
+      setHistorial(data)
+    }
+    setHistLoading(false)
+  }
+
+  const fmtFecha = iso => { try { return new Date(iso).toLocaleString("es-CO", { dateStyle:"short", timeStyle:"short" }) } catch { return iso } }
+  const tdS = { padding:"8px 10px", fontSize:12, borderBottom:`1px solid ${col.border}`, color: col.textTable }
+  const thS = { padding:"8px 10px", fontSize:11, fontWeight:700, color: col.textMuted, borderBottom:`1px solid ${col.border}`, textAlign:"left", whiteSpace:"nowrap" }
+
+  return (
+    <div>
+      {/* Filtros */}
+      <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:16, padding:"12px 16px", background: col.bgCard, borderRadius:10, border:`1px solid ${col.border}` }}>
+        <select value={filtUsuario} onChange={e => setFiltUsuario(e.target.value)}
+          style={{ background: col.inputBg, border:`1px solid ${col.border}`, borderRadius:6, padding:"5px 10px", color: col.textTable, fontSize:12, cursor:"pointer" }}>
+          <option value="">👤 Todos los usuarios</option>
+          {usuarios.map(u => <option key={u.id} value={u.id}>{u.nombre} · {u.cargo}</option>)}
+        </select>
+        <select value={filtModulo} onChange={e => setFiltModulo(e.target.value)}
+          style={{ background: col.inputBg, border:`1px solid ${col.border}`, borderRadius:6, padding:"5px 10px", color: col.textTable, fontSize:12, cursor:"pointer" }}>
+          <option value="">📦 Todos los módulos</option>
+          {MODULOS.map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <select value={filtAccion} onChange={e => setFiltAccion(e.target.value)}
+          style={{ background: col.inputBg, border:`1px solid ${col.border}`, borderRadius:6, padding:"5px 10px", color: col.textTable, fontSize:12, cursor:"pointer" }}>
+          <option value="">⚡ Todas las acciones</option>
+          {ACCIONES.map(a => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <input type="date" value={filtDesde} onChange={e => setFiltDesde(e.target.value)}
+          style={{ background: col.inputBg, border:`1px solid ${col.border}`, borderRadius:6, padding:"5px 10px", color: col.textTable, fontSize:12 }} />
+        <input type="date" value={filtHasta} onChange={e => setFiltHasta(e.target.value)}
+          style={{ background: col.inputBg, border:`1px solid ${col.border}`, borderRadius:6, padding:"5px 10px", color: col.textTable, fontSize:12 }} />
+        <button onClick={() => { setFiltUsuario(""); setFiltModulo(""); setFiltAccion(""); setFiltDesde(""); setFiltHasta("") }}
+          style={{ background:"#EF444422", border:"1px solid #EF444466", borderRadius:6, padding:"5px 12px", color:"#EF4444", fontSize:11, fontWeight:700, cursor:"pointer" }}>
+          ✕ Limpiar
+        </button>
+        <span style={{ marginLeft:"auto", fontSize:12, color: col.textMuted, alignSelf:"center" }}>
+          {logs.length} registros · click para ver historial
+        </span>
+      </div>
+
+      {/* Tabla */}
+      {loading ? (
+        <div style={{ textAlign:"center", padding:40, color: col.textMuted }}>⏳ Cargando...</div>
+      ) : (
+        <div style={{ overflowX:"auto" }}>
+          <table style={{ width:"100%", borderCollapse:"collapse" }}>
+            <thead style={{ background: col.bgCard }}>
+              <tr>
+                {["Fecha","Usuario","Cargo","Módulo","Acción","Entidad","Contrato","Resultado"].map(h => (
+                  <th key={h} style={thS}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {logs.length === 0 ? (
+                <tr><td colSpan={8} style={{ ...tdS, textAlign:"center", padding:40, color: col.textMuted }}>Sin registros</td></tr>
+              ) : logs.map((log, i) => (
+                <tr key={log.id} onClick={() => abrirHistorial(log)}
+                  style={{ cursor:"pointer", background:"transparent", transition:"background 0.15s" }}
+                  onMouseEnter={e => e.currentTarget.style.background = col.hover}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  <td style={tdS}>{fmtFecha(log.created_at)}</td>
+                  <td style={{ ...tdS, fontWeight:600 }}>{log.usuario_nombre}</td>
+                  <td style={{ ...tdS, color: col.textMuted }}>{log.cargo_nombre}</td>
+                  <td style={tdS}>
+                    <span style={{ background: col.bgCard, border:`1px solid ${col.border}`, borderRadius:4, padding:"2px 8px", fontSize:11 }}>
+                      {log.modulo}
+                    </span>
+                  </td>
+                  <td style={tdS}>
+                    <span style={{ background: (ACCION_COLOR[log.accion]||"#666")+"22", color: ACCION_COLOR[log.accion]||"#666", border:`1px solid ${(ACCION_COLOR[log.accion]||"#666")}44`, borderRadius:20, padding:"2px 10px", fontSize:11, fontWeight:700 }}>
+                      {log.accion}
+                    </span>
+                  </td>
+                  <td style={{ ...tdS, color: col.textMuted, fontSize:11 }}>
+                    {log.entidad_tipo && `${log.entidad_tipo} #${log.entidad_id}`}
+                  </td>
+                  <td style={{ ...tdS, fontSize:11 }}>{log.contrato_numero || "—"}</td>
+                  <td style={tdS}>
+                    <span style={{ color: log.resultado === "ok" ? "#10B981" : "#EF4444", fontWeight:700, fontSize:11 }}>
+                      {log.resultado === "ok" ? "✓" : "✗"} {log.resultado}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Paginación */}
+      <div style={{ display:"flex", gap:8, alignItems:"center", marginTop:12, justifyContent:"center" }}>
+        <button onClick={() => cargarLogs(Math.max(0, offset - LIMIT))} disabled={offset === 0}
+          style={{ background:"transparent", border:`1px solid ${col.border}`, borderRadius:6, padding:"4px 14px", cursor: offset===0?"default":"pointer", color: offset===0?col.textMuted:col.textTable }}>‹ Anterior</button>
+        <span style={{ fontSize:12, color: col.textMuted }}>Página {Math.floor(offset/LIMIT)+1}</span>
+        <button onClick={() => cargarLogs(offset + LIMIT)} disabled={logs.length < LIMIT}
+          style={{ background:"transparent", border:`1px solid ${col.border}`, borderRadius:6, padding:"4px 14px", cursor: logs.length<LIMIT?"default":"pointer", color: logs.length<LIMIT?col.textMuted:col.textTable }}>Siguiente ›</button>
+      </div>
+
+      {/* Modal historial */}
+      {logSelec && (
+        <div style={{ position:"fixed", top:0, left:0, right:0, bottom:0, background:"rgba(0,0,0,0.6)", zIndex:9999, display:"flex", alignItems:"center", justifyContent:"center" }}
+          onClick={() => setLogSelec(null)}>
+          <div style={{ background: col.bgCard, border:`1px solid ${col.border}`, borderRadius:16, padding:28, width:620, maxWidth:"95vw", maxHeight:"80vh", display:"flex", flexDirection:"column", boxShadow:"0 20px 60px rgba(0,0,0,0.35)" }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+              <div>
+                <div style={{ fontSize:15, fontWeight:700, color: col.textTable }}>
+                  📋 Historial — {logSelec.entidad_tipo} #{logSelec.entidad_id}
+                </div>
+                <div style={{ fontSize:11, color: col.textMuted, marginTop:2 }}>
+                  {logSelec.modulo} · {logSelec.accion} · {fmtFecha(logSelec.created_at)}
+                </div>
+              </div>
+              <button onClick={() => setLogSelec(null)} style={{ background:"transparent", border:"none", fontSize:18, cursor:"pointer", color: col.textMuted }}>✕</button>
+            </div>
+
+            {/* Detalle del log seleccionado */}
+            {logSelec.detalle && Object.keys(logSelec.detalle).length > 0 && (
+              <div style={{ background: col.bg, borderRadius:8, padding:"10px 14px", marginBottom:16, fontSize:12 }}>
+                <div style={{ fontWeight:700, color: col.textMuted, fontSize:10, letterSpacing:"0.5px", marginBottom:6 }}>DETALLE DE ESTA ACCIÓN</div>
+                {Object.entries(logSelec.detalle).map(([k,v]) => (
+                  <div key={k} style={{ display:"flex", gap:8, marginBottom:3 }}>
+                    <span style={{ color: col.textMuted, minWidth:120 }}>{k}:</span>
+                    <span style={{ color: col.textTable, fontWeight:500 }}>{typeof v === "object" ? JSON.stringify(v) : String(v)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Historial completo de la entidad */}
+            <div style={{ fontWeight:700, color: col.textMuted, fontSize:10, letterSpacing:"0.5px", marginBottom:8 }}>
+              HISTORIAL COMPLETO DE ESTA ENTIDAD
+            </div>
+            <div style={{ overflowY:"auto", flex:1, display:"flex", flexDirection:"column", gap:8 }}>
+              {histLoading ? (
+                <div style={{ textAlign:"center", padding:20, color: col.textMuted }}>⏳ Cargando historial...</div>
+              ) : historial.length === 0 ? (
+                <div style={{ textAlign:"center", padding:20, color: col.textMuted }}>Sin historial adicional</div>
+              ) : historial.map((h, i) => {
+                const color = ACCION_COLOR[h.accion] || "#666"
+                const esActual = h.id === logSelec.id
+                return (
+                  <div key={h.id} style={{ background: esActual ? color+"11" : col.bg, border:`1px solid ${esActual ? color+"44" : col.border}`, borderRadius:8, padding:"10px 14px" }}>
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                        <span style={{ background: color+"22", color, border:`1px solid ${color}44`, borderRadius:20, padding:"1px 8px", fontSize:10, fontWeight:700 }}>{h.accion}</span>
+                        <span style={{ fontSize:11, fontWeight:600, color: col.textTable }}>{h.usuario_nombre}</span>
+                        <span style={{ fontSize:10, color: col.textMuted }}>· {h.cargo_nombre}</span>
+                      </div>
+                      <span style={{ fontSize:10, color: col.textMuted }}>{fmtFecha(h.created_at)}</span>
+                    </div>
+                    {h.detalle && Object.keys(h.detalle).length > 0 && (
+                      <div style={{ display:"flex", flexWrap:"wrap", gap:"4px 16px", marginTop:4 }}>
+                        {Object.entries(h.detalle).slice(0,5).map(([k,v]) => (
+                          <span key={k} style={{ fontSize:10, color: col.textMuted }}>
+                            {k}: <strong style={{ color: col.textTable }}>{typeof v === "object" ? JSON.stringify(v) : String(v ?? "—")}</strong>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {esActual && <div style={{ fontSize:9, color, fontWeight:700, marginTop:4 }}>← ACCIÓN SELECCIONADA</div>}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── SECCIÓN 4: Reset de Claves ────────────────────────────────────────────
 function SeccionResets({ call, theme }) {
   const [solicitudes, setSolicitudes] = useState([]);
@@ -1093,6 +1323,8 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
 
   // ── Filtrar tabs según permisos del usuario ────────────────────────────────
   function canSeeTab(tabId) {
+    const tab = TABS_TODOS.find(t => t.id === tabId);
+    if (tab?.soloAdmin) return isDeveloper || isAdmin;
     if (isDeveloper || isAdmin) return true;
     const funciones = TAB_FUNCIONES[tabId] || [];
     return funciones.some(fname =>
@@ -1110,6 +1342,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
     { id: "contratos", label: "Contratos"            },
     { id: "precios",   label: "Listado de Precios"   },
     { id: "resets",    label: "Reset Claves"         },
+    { id: "logs",      label: "📋 Logs del Sistema", soloAdmin: true },
   ];
   const TABS = TABS_TODOS.filter(t => canSeeTab(t.id));
 
@@ -1122,6 +1355,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
     contratos: { title: "Contratos",              sub: "Crea y gestiona contratos del sistema" },
     precios:   { title: "Listado de Precios",     sub: "Edita, carga y descarga el listado de precios por contrato" },
     resets:    { title: "Reset Claves",           sub: "Autoriza solicitudes de cambio de contraseña" },
+    logs:      { title: "Logs del Sistema",       sub: "Auditoría completa de acciones en la plataforma" },
   };
 
   const cargarCargos = useCallback(async () => {
@@ -1201,6 +1435,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
           />}
             {tab === "precios"   && <SeccionListadoPrecios call={call} contratos={contratos} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true } : precioPerms} theme={activeTheme} />}
             {tab === "resets"    && <SeccionResets    call={call} theme={activeTheme} />}
+              {tab === "logs"      && <SeccionLogs      call={call} theme={activeTheme} />}
           </div>
         </div>
       </div>
