@@ -12,6 +12,5 @@ Set-Location ..
 git add .
 git commit -m $msg
 git push origin main
-Set-Location frontend
 
 Write-Host "Deploy completado!" -ForegroundColor Green

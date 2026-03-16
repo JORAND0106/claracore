@@ -667,7 +667,7 @@ function SeccionPermisos({ call, cargos, theme }) {
 
 // ─── SECCIÓN LOGS ─────────────────────────────────────────────────────────────
 function SeccionLogs({ call, theme }) {
-  const col = colors(theme)
+  const col = C(theme)
   const API = "https://claracore-backend.azurewebsites.net"
   const token = localStorage.getItem("cc_token") || sessionStorage.getItem("cc_token")
 
