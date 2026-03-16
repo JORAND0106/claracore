@@ -1343,6 +1343,17 @@ async function darDeBaja(id) {
             nivelActual === 'pk_id' ? (
               <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
                 {/* Botones PK_ID en fila con scroll */}
+                {pkidsSeleccionados.length > 0 && (
+                    <div style={{ marginBottom:'6px', display:'flex', alignItems:'center', gap:'8px' }}>
+                      <span style={{ fontSize:'11px', color:t.textMuted }}>
+                        {pkidsSeleccionados.length} PK_ID{pkidsSeleccionados.length > 1 ? 's' : ''} seleccionado{pkidsSeleccionados.length > 1 ? 's' : ''}
+                      </span>
+                      <button onClick={() => setPkidsSeleccionados([])}
+                        style={{ background:'#EF444415', border:'1px solid #EF444444', borderRadius:'20px', padding:'2px 10px', color:'#EF4444', fontSize:'10px', fontWeight:'700', cursor:'pointer' }}>
+                        ✕ Limpiar selección
+                      </button>
+                    </div>
+                  )}
                 <div style={{ display:'flex', flexWrap:'wrap', gap:'6px', maxHeight:'120px', overflowY:'auto', padding:'4px 2px' }}>
                   {chartData.map((d, i) => {
                     const color = PALETA_BARRAS[i % PALETA_BARRAS.length]
@@ -1354,8 +1365,10 @@ async function darDeBaja(id) {
                             prev.includes(d.name) ? prev.filter(p => p !== d.name) : [...prev, d.name]
                           )
                         } else {
-                          setPkidsSeleccionados([d.name])
-                        }
+                          setPkidsSeleccionados(prev =>
+                            prev.length === 1 && prev[0] === d.name ? [] : [d.name]
+                          )
+                        }                      
                       }}
                       title={`${d.name}\n${fmt(d.costo)}\n${d.count} registros`}
                       style={{ background: pkidsSeleccionados.includes(d.name) ? color : color+'22', border:`2px solid ${color}`, borderRadius:'6px', padding:'5px 4px', fontSize:'11px', fontWeight:'600', color: pkidsSeleccionados.includes(d.name) ? '#fff' : color, cursor:'pointer', textAlign:'center', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', transition:'all 0.15s' }}
