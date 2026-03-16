@@ -849,10 +849,10 @@ function SeccionLogs({ call, theme }) {
             </div>
 
             {/* Detalle del log seleccionado */}
-            {logSelec.detalle && Object.keys(logSelec.detalle).length > 0 && (
+            {logSelec.detalle && Object.keys(typeof logSelec.detalle === 'string' ? JSON.parse(logSelec.detalle) : logSelec.detalle).length > 0 && (
               <div style={{ background: col.bg, borderRadius:8, padding:"10px 14px", marginBottom:16, fontSize:12 }}>
                 <div style={{ fontWeight:700, color: col.textMuted, fontSize:10, letterSpacing:"0.5px", marginBottom:6 }}>DETALLE DE ESTA ACCIÓN</div>
-                {Object.entries(logSelec.detalle).map(([k,v]) => (
+                {Object.entries(typeof logSelec.detalle === 'string' ? JSON.parse(logSelec.detalle) : logSelec.detalle).map(([k,v]) => (
                   <div key={k} style={{ display:"flex", gap:8, marginBottom:3 }}>
                     <span style={{ color: col.textMuted, minWidth:120 }}>{k}:</span>
                     <span style={{ color: col.textTable, fontWeight:500 }}>{typeof v === "object" ? JSON.stringify(v) : String(v)}</span>
@@ -885,7 +885,7 @@ function SeccionLogs({ call, theme }) {
                     </div>
                     {h.detalle && Object.keys(h.detalle).length > 0 && (
                       <div style={{ display:"flex", flexWrap:"wrap", gap:"4px 16px", marginTop:4 }}>
-                        {Object.entries(h.detalle).slice(0,5).map(([k,v]) => (
+                        {Object.entries(typeof h.detalle === 'string' ? JSON.parse(h.detalle) : h.detalle).slice(0,5).map(([k,v]) => (
                           <span key={k} style={{ fontSize:10, color: col.textMuted }}>
                             {k}: <strong style={{ color: col.textTable }}>{typeof v === "object" ? JSON.stringify(v) : String(v ?? "—")}</strong>
                           </span>
