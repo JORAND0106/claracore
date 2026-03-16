@@ -2750,10 +2750,14 @@ function MiniMapaPresupuesto({ t, colores, pkidsActivos, pkidsResaltados = [], o
 }
 // ─── MINI MAPA SEMÁFORO (dashboard) ──────────────────────────────────────────
 function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
-  const mapRef      = useRef(null)
-  const mapInstance = useRef(null)
+  const mapRef        = useRef(null)
+  const mapInstance   = useRef(null)
+  const onClickRef    = useRef(onPkidClick)
   const [listo, setListo] = useState(false)
   const [modo, setModo]   = useState('ambos')
+
+  // Mantener ref actualizada sin re-inicializar el mapa
+  useEffect(() => { onClickRef.current = onPkidClick }, [onPkidClick])
 
   const getColorCobro = (pct) => {
     if (pct >= 100) return '#DC2626'
@@ -2811,15 +2815,15 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
           // Click handlers
           map.on('click', 'mini-fill-cobro', (e) => {
             const pkid = e.features[0]?.properties?.pk_id
-            if (pkid && onPkidClick) onPkidClick(pkid)
+            if (pkid && onClickRef.current) onClickRef.current(pkid)
           })
           map.on('click', 'mini-fill-ppto', (e) => {
             const pkid = e.features[0]?.properties?.pk_id
-            if (pkid && onPkidClick) onPkidClick(pkid)
+            if (pkid && onClickRef.current) onClickRef.current(pkid)
           })
-          map.on('mouseenter', 'mini-fill-cobro', () => { if (onPkidClick) map.getCanvas().style.cursor = 'pointer' })
+          map.on('mouseenter', 'mini-fill-cobro', () => { if (onClickRef.current) map.getCanvas().style.cursor = 'pointer' })
           map.on('mouseleave', 'mini-fill-cobro', () => { map.getCanvas().style.cursor = '' })
-          map.on('mouseenter', 'mini-fill-ppto',  () => { if (onPkidClick) map.getCanvas().style.cursor = 'pointer' })
+          map.on('mouseenter', 'mini-fill-ppto',  () => { if (onClickRef.current) map.getCanvas().style.cursor = 'pointer' })
           map.on('mouseleave', 'mini-fill-ppto',  () => { map.getCanvas().style.cursor = '' })
           const coords = features.flatMap(f => {
             const g = f.geometry
@@ -2884,7 +2888,7 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
             ⏳ Cargando mapa...
           </div>
         )}
-        {onPkidClick && (
+        {onClickRef.current && (
           <div style={{ position:'absolute', top:'8px', left:'8px', background:t.bgCard+'DD', borderRadius:'6px', padding:'4px 8px', fontSize:'9px', color:t.primary, fontWeight:'700' }}>
             👆 Click en polígono para ver detalle
           </div>
