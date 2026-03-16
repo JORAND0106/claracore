@@ -522,6 +522,8 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   // ── Comentarios ──────────────────────────────────────────────────────────
   const [modalComentario,  setModalComentario]  = useState(null) // {tipo, obligatorio, resolve}
   const [textoComentario,  setTextoComentario]  = useState('')
+  const [destinatarioComentario, setDestinatarioComentario] = useState('')
+  const [usuariosDestinatarios,  setUsuariosDestinatarios]  = useState([])
   const [comentariosPorId, setComentariosPorId] = useState({})
   const [modalHilo,        setModalHilo]        = useState(null) // {registroId, tipo, data}
   const [hiloLoading,      setHiloLoading]      = useState(false)
@@ -566,6 +568,12 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   // ── Carga inicial ──────────────────────────────────────────────────────────
   useEffect(() => { if (contratoId) cargarRegistros() }, [contratoId])
   
+    useEffect(() => {
+    if (!contratoId) return
+    fetch(`${API}/notificaciones/usuarios-destinatarios`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : []).then(setUsuariosDestinatarios).catch(() => {})
+  }, [contratoId])
+
     useEffect(() => {
     if (!contratoId) return
     const pkidDrill = drill.find(d => d.campo === 'pk_id')
@@ -620,17 +628,36 @@ async function cargarRegistros(modoPapelera) {
   function pedirComentario(tipo, obligatorio) {
     return new Promise(resolve => {
       setTextoComentario('')
+      setDestinatarioComentario('')
       setModalComentario({ tipo, obligatorio, resolve })
     })
   }
 
-  async function crearComentarios(ids, tipo, mensaje) {
+  async function crearComentarios(ids, tipo, mensaje, destinatarioId = null) {
     if (!mensaje.trim()) return
     await fetch(`${API}/presupuesto/${contratoId}/comentarios/bulk`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ presupuesto_ids: ids, tipo, mensaje: mensaje.trim(), usuario_nombre: usuario?.nombre || 'Usuario' })
     })
+    // Enviar notificación si hay destinatario
+    if (destinatarioId) {
+      const TITULOS = { dims:'📐 Cambio de Dimensiones', item_capitulo:'🔄 Cambio de Ítem/Capítulo', validacion:'🔍 Cambio de Estado' }
+      await fetch(`${API}/notificaciones`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          destinatario_id: parseInt(destinatarioId),
+          asunto: TITULOS[tipo] || 'Comentario en presupuesto',
+          mensaje: mensaje.trim(),
+          tipo: 'MENSAJE_DIRECTO',
+          modulo: 'PRESUPUESTO',
+          contrato_id: contratoId,
+          entidad_tipo: 'presupuesto',
+          entidad_id: ids[0]?.toString(),
+        })
+      }).catch(() => {})
+    }
   }
 
   async function cargarComentariosResumen(ids) {
@@ -886,7 +913,7 @@ async function cargarRegistros(modoPapelera) {
     })
     setGuardandoBulk(false)
     if (res.ok) {
-      if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario)
+      if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario, destinatarioComentario)
       setEditCapitulo(''); setEditItem(''); setEditDims({}); setSeleccionados(new Set()); setModalConfirm(false)
       await cargarRegistros()
     }
@@ -904,7 +931,7 @@ async function cargarRegistros(modoPapelera) {
     })
     setGuardandoBulk(false)
     if (res.ok) {
-      if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario)
+      if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario, destinatarioComentario)
       setBulkEstado(''); setSeleccionados(new Set()); await cargarRegistros()
     }
   }
@@ -975,7 +1002,7 @@ function zoomEnDwg(registro) {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ ids: [id], revisado: nuevoEstado })
     })
-    if (comentario.trim()) await crearComentarios([id], 'validacion', comentario)
+    if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioComentario)
     await cargarRegistros()
   }
 
@@ -990,7 +1017,7 @@ async function darDeBaja(id) {
       method: 'PUT', headers: { Authorization: `Bearer ${token}` }
     })
     if (res.ok) {
-      await crearComentarios([id], 'validacion', `[BAJA] ${comentario}`)
+      await crearComentarios([id], 'validacion', `[BAJA] ${comentario}`, destinatarioComentario)
       await cargarRegistros()
     } else alert('Error al dar de baja el registro')
   }
@@ -1072,6 +1099,19 @@ async function darDeBaja(id) {
               <div style={{ fontSize:'15px',fontWeight:'700',color,marginBottom:'6px' }}>{TITULOS[modalComentario.tipo]}</div>
               <div style={{ fontSize:'12px',color:t.textMuted,marginBottom:'16px' }}>
                 {modalComentario.obligatorio ? '⚠️ El comentario es obligatorio para este estado.' : 'Opcional — explica el motivo del cambio.'}
+              </div>
+              {/* Selector de destinatario */}
+              <div style={{ marginBottom:'12px' }}>
+                <div style={{ fontSize:'11px',fontWeight:'700',color:t.textMuted,marginBottom:'6px',letterSpacing:'0.5px' }}>
+                  NOTIFICAR A (opcional)
+                </div>
+                <select value={destinatarioComentario} onChange={e => setDestinatarioComentario(e.target.value)}
+                  style={{ width:'100%',background:t.inputBg,border:`1.5px solid ${t.border}`,borderRadius:'8px',padding:'8px 12px',color:destinatarioComentario ? t.text : t.textMuted,fontSize:'13px',cursor:'pointer' }}>
+                  <option value="">— Sin notificación —</option>
+                  {usuariosDestinatarios.map(u => (
+                    <option key={u.id} value={u.id}>{u.nombre} · {u.cargo}</option>
+                  ))}
+                </select>
               </div>
               <textarea autoFocus value={textoComentario} onChange={e => setTextoComentario(e.target.value)}
                 placeholder="Escribe aquí el motivo o comentario..."
