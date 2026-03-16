@@ -674,7 +674,15 @@ def guardar_permisos(permisos: List[PermisoUpdate], current_user=Depends(get_cur
 
 @app.get("/listado-precios/{contrato_id}")
 def get_listado_precios(contrato_id: int, current_user=Depends(get_current_user)):
-    return supabase.table("listado_precios").select("*").eq("contrato_id", contrato_id).order("item_numero").execute().data
+    all_rows = []
+    offset = 0
+    while True:
+        batch = supabase.table("listado_precios").select("*").eq("contrato_id", contrato_id).order("item_numero").range(offset, offset + 999).execute().data
+        all_rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        offset += 1000
+    return all_rows
 
 @app.post("/listado-precios/{contrato_id}/bulk")
 def bulk_precios(contrato_id: int, items: List[ListadoPrecioItem], current_user=Depends(get_current_user)):
