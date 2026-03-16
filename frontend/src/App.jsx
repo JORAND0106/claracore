@@ -893,8 +893,8 @@ async function cargarRegistros(modoPapelera) {
     const tieneItem  = !!(editCapitulo || editItem)
     const tipoComent = tieneItem ? 'item_capitulo' : 'dims'
 
-    // Pedir comentario (opcional para ambos tipos)
-    const comentario = await pedirComentario(tipoComent, false)
+    // Pedir comentario (obligatorio)
+    const comentario = await pedirComentario(tipoComent, true)
     if (comentario === null) return  // canceló
 
     const dims = ids.filter(id => editDims[id]).map(id => ({
