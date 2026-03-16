@@ -613,8 +613,9 @@ async function cargarRegistros(modoPapelera) {
   }
 
   // ── Drill-down computado ───────────────────────────────────────────────────
-  const [pptoPkidColores, setPptoPkidColores] = useState({})
+  const [pptoPkidColores,    setPptoPkidColores]    = useState({})
   const [pptoPkidFoco,    setPptoPkidFoco]    = useState(null)
+  const [pkidsSeleccionados, setPkidsSeleccionados] = useState([])
   const mapPptoRef      = useRef(null)
   const mapPptoInstance = useRef(null)
   const [mapPptoListo,   setMapPptoListo]   = useState(false)
@@ -705,6 +706,11 @@ async function cargarRegistros(modoPapelera) {
     return registros.filter(r => {
       // Filtro de drill existente
       if (!drill.every(({campo, valor}) => r[campo] === valor)) return false
+
+      if (pkidsSeleccionados.length > 0 && nivelActual === null) {
+        if (!pkidsSeleccionados.includes(r.pk_id)) return false
+      }
+
       // Filtro buscador mixto
       if (busquedaTipo === 'nodo') {
         const v1 = busquedaV1.trim().toLowerCase()
@@ -735,7 +741,7 @@ async function cargarRegistros(modoPapelera) {
       }
       return true
     })
-  }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado])
+  }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, pkidsSeleccionados])
 
   const chartData = useMemo(() => {
     if (!nivelActual || registros.length === 0) return []
@@ -1342,32 +1348,38 @@ async function darDeBaja(id) {
                     const color = PALETA_BARRAS[i % PALETA_BARRAS.length]
                     const activo = pptoPkidFoco === d.name
                     return (
-                      <button key={d.name} onClick={() => handleBarClick(d)}
-                        title={`${d.name}\n${fmt(d.costo)}\n${d.count} registros`}
-                        style={{ background: activo ? color : color+'22', border:`2px solid ${color}`, borderRadius:'6px', padding:'5px 4px', fontSize:'11px', fontWeight:'600', color: activo ? '#fff' : color, cursor:'pointer', textAlign:'center', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', transition:'all 0.15s' }}
-                        onMouseEnter={e => { e.currentTarget.style.background=color; e.currentTarget.style.color='#fff' }}
-                        onMouseLeave={e => { if (!activo) { e.currentTarget.style.background=color+'22'; e.currentTarget.style.color=color } }}>
-                        {d.name}
-                      </button>
+                      <button key={d.name} onClick={(e) => {
+                        if (e.ctrlKey || e.metaKey) {
+                          setPkidsSeleccionados(prev =>
+                            prev.includes(d.name) ? prev.filter(p => p !== d.name) : [...prev, d.name]
+                          )
+                        } else {
+                          setPkidsSeleccionados([d.name])
+                        }
+                      }}
+                      title={`${d.name}\n${fmt(d.costo)}\n${d.count} registros`}
+                      style={{ background: pkidsSeleccionados.includes(d.name) ? color : color+'22', border:`2px solid ${color}`, borderRadius:'6px', padding:'5px 4px', fontSize:'11px', fontWeight:'600', color: pkidsSeleccionados.includes(d.name) ? '#fff' : color, cursor:'pointer', textAlign:'center', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', transition:'all 0.15s' }}
+                      onMouseEnter={e => { e.currentTarget.style.background=color; e.currentTarget.style.color='#fff' }}
+                      onMouseLeave={e => { if (!pkidsSeleccionados.includes(d.name)) { e.currentTarget.style.background=color+'22'; e.currentTarget.style.color=color } }}>
+                      {d.name}
+                    </button>
                     )
                   })}
                 </div>
+                {/* Mini-mapa presupuesto */}
                 {/* Mini-mapa presupuesto */}
                 <MiniMapaPresupuesto
                   t={t}
                   colores={pptoPkidColores}
                   pkidsActivos={chartData.map(d => d.name)}
+                  pkidsResaltados={pkidsSeleccionados}
                   onPkidClick={(pkid, ctrlKey) => {
                     if (ctrlKey) {
-                      // Multi-selección: filtrar por múltiples PK_IDs
-                      const yaFiltrado = drill.some(d => d.campo === 'pk_id' && d.valor === pkid)
-                      if (!yaFiltrado) {
-                        const nuevoDrill = [...drill.filter(d => d.campo !== 'pk_id'), { campo: 'pk_id', valor: pkid }]
-                        setDrill(nuevoDrill)
-                      }
+                      setPkidsSeleccionados(prev =>
+                        prev.includes(pkid) ? prev.filter(p => p !== pkid) : [...prev, pkid]
+                      )
                     } else {
-                      const found = chartData.find(d => d.name === pkid)
-                      if (found) handleBarClick(found)
+                      setPkidsSeleccionados([pkid])
                     }
                   }}
                 />
