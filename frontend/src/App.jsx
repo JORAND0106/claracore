@@ -3961,6 +3961,15 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
                             <thead>
                               <tr style={{ background:t.bg }}>
+                                <td colSpan={7} style={{ padding:'6px 10px', fontSize:'11px', color:t.textMuted, borderBottom:`1px solid ${t.border}`, fontStyle:'italic', background:t.bg }}>
+                                  {dashDrill[1]?.valor && (() => {
+                                    const filas = dashTabla?.rows || dashTabla?.filas || []
+                                    const desc = filas[0]?.descripcion || ''
+                                    return desc ? `${dashDrill[1].valor} — ${desc}` : dashDrill[1].valor
+                                  })()}
+                                </td>
+                              </tr>
+                              <tr>
                                 {['PK_ID','Cant. SICOE','Costo SICOE','Cant. Cobro','Costo Cobro','Δ Cant','Δ Costo'].map(h => (
                                   <th key={h} style={{ padding:'6px 8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'right', whiteSpace:'nowrap' }}>{h}</th>
                                 ))}
