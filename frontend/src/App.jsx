@@ -1327,7 +1327,7 @@ async function darDeBaja(id) {
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'8px' }}>
               <span style={{ fontSize:'12px', color:t.textMuted }}>
                 {registrosFiltrados.length} registros
-                {nivelActual === null && drill.some(d => d.campo === 'item') && (() => {
+                {drill.some(d => d.campo === 'item') && (() => {
                   const cantSum = registrosFiltrados.reduce((s,r) => s + (r.cant_total||0), 0)
                   const und = registrosFiltrados[0]?.und || ''
                   return <> · <strong style={{color:'#0077B6'}}>{cantSum.toFixed(2)} {und}</strong></>
@@ -3993,8 +3993,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                           <div style={{ overflowX:'auto' }}>
                           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
                             <thead>
-                              <tr style={{ background:t.bg }}>
-                                <td colSpan={7} style={{ padding:'6px 10px', fontSize:'11px', color:t.textMuted, borderBottom:`1px solid ${t.border}`, fontStyle:'italic', background:t.bg }}>
+                              <tr style={{ background:t.primary+'11' }}>
+                                <td colSpan={7} style={{ padding:'8px 10px', fontSize:'13px', fontWeight:'700', color:t.primary, borderBottom:`2px solid ${t.primary}33`, fontStyle:'italic', background:t.primary+'11' }}>
                                   {dashDrill[1]?.valor && (() => {
                                     const filas = dashTabla?.rows || dashTabla?.filas || []
                                     const desc = filas.find(f => f.descripcion)?.descripcion || ''
