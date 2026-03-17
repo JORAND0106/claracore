@@ -765,9 +765,18 @@ async function cargarRegistros(modoPapelera) {
     return Object.values(agg).sort((a, b) => a.name.localeCompare(b.name, 'es', {numeric: true}))
   }, [registrosFiltrados, nivelActual])
 
-  const costoTotal = useMemo(() =>
-    registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
-  , [registrosFiltrados])
+  const costoTotal = useMemo(() => {
+    const total = registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
+    if (registrosFiltrados.length === 2133) {
+      // Exportar todos los costos para comparar
+      const datos = registrosFiltrados.map(r => ({id: r.id, cd: r.costo_directo}))
+      const suma = datos.reduce((s,r) => s + r.cd, 0)
+      console.log('SUMA FRONTEND:', suma)
+      window.__registros = datos
+      console.log('Ejecuta: copy(JSON.stringify(window.__registros)) para exportar')
+    }
+    return total
+  }, [registrosFiltrados])
 
   const totalPaginas = Math.ceil(registrosFiltrados.length / POR_PAGINA)
   const registrosPagina = useMemo(() =>
@@ -4402,6 +4411,13 @@ export default function App() {
     }, 15000)
     return () => clearInterval(id)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+useEffect(() => {
+    const ping = () => fetch('https://claracore-backend.azurewebsites.net/').catch(() => {})
+    ping()
+    const iv = setInterval(ping, 8 * 60 * 1000)
+    return () => clearInterval(iv)
+  }, [])
 
   async function handleLoginOk(u, token) {
     try {
