@@ -787,7 +787,6 @@ async function cargarRegistros(modoPapelera) {
     if (!nivelActual || !barData?.name) return
     const nuevoDrill = [...drill, { campo: nivelActual, valor: barData.name }]
     setDrill(nuevoDrill)
-    cargarRegistrosFiltrados(nuevoDrill)
   }
   function irA(idx) {
     setDrill(prev => prev.slice(0, idx))
