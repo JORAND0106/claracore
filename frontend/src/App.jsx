@@ -2688,8 +2688,15 @@ function MiniMapaPresupuesto({ t, colores, pkidsActivos, pkidsResaltados = [], o
         map.addLayer({ id: 'ppto-fill', type: 'fill', source: 'ppto-pols',
           paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['case', ['==', ['get', 'activo'], 1], 0.85, 0.1] }
         })
-        map.addLayer({ id: 'ppto-line', type: 'line', source: 'ppto-pols',
-          paint: { 'line-color': '#ffffff', 'line-width': 0.8, 'line-opacity': 0.3 }
+        map.addLayer({ id: 'ppto-labels', type: 'symbol', source: 'ppto-pols',
+          layout: {
+            'text-field': ['get', 'pk_id'],
+            'text-size': 9,
+            'text-anchor': 'center',
+            'text-allow-overlap': false,
+            'text-ignore-placement': false,
+          },
+          paint: { 'text-color': '#ffffff', 'text-halo-color': 'rgba(0,0,0,0.6)', 'text-halo-width': 1 }
         })
         map.on('mouseenter', 'ppto-fill', (e) => {
           if (e.features[0].properties.activo) map.getCanvas().style.cursor = 'pointer'
@@ -2809,8 +2816,15 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
           map.addLayer({ id: 'mini-fill-cobro', type: 'fill', source: 'mini-pols',
             paint: { 'fill-color': ['get', 'color_cobro'], 'fill-opacity': ['case', ['==', ['get', 'tiene_cobro'], 1], 0.7, 0.1] }
           })
-          map.addLayer({ id: 'mini-line', type: 'line', source: 'mini-pols',
-            paint: { 'line-color': '#ffffff', 'line-width': 0.8, 'line-opacity': 0.3 }
+          map.addLayer({ id: 'mini-labels', type: 'symbol', source: 'mini-pols',
+            layout: {
+              'text-field': ['get', 'pk_id'],
+              'text-size': 9,
+              'text-anchor': 'center',
+              'text-allow-overlap': false,
+              'text-ignore-placement': false,
+            },
+            paint: { 'text-color': '#ffffff', 'text-halo-color': 'rgba(0,0,0,0.6)', 'text-halo-width': 1 }
           })
           // Click handlers
           map.on('click', 'mini-fill-cobro', (e) => {
