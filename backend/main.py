@@ -1004,7 +1004,7 @@ def pkid_tabla(contrato_id: int, capitulo: str = None, item: str = None, current
     """Tabla comparativa detallada por PK_ID con cantidades"""
     try:
         q_c = supabase.table("cobro").select("pk_id, costo_directo, longitud, cantidad").eq("contrato_id", contrato_id)
-        q_p = supabase.table("presupuesto").select("pk_id, cant_total, costo_directo").eq("contrato_id", contrato_id)
+        q_p = supabase.table("presupuesto").select("pk_id, cant_total, costo_directo, descripcion").eq("contrato_id", contrato_id)
         if item:
             q_c = q_c.eq("item", item)
             q_p = q_p.eq("item", item)
@@ -1024,9 +1024,11 @@ def pkid_tabla(contrato_id: int, capitulo: str = None, item: str = None, current
         agg_p = {}
         for r in ppto:
             k = r.get("pk_id") or "(sin pk)"
-            if k not in agg_p: agg_p[k] = {"cant": 0.0, "costo": 0.0}
+            if k not in agg_p: agg_p[k] = {"cant": 0.0, "costo": 0.0, "desc": ""}
             agg_p[k]["cant"]  += float(r.get("cant_total") or 0)
             agg_p[k]["costo"] += float(r.get("costo_directo") or 0)
+            if not agg_p[k]["desc"] and r.get("descripcion"):
+                agg_p[k]["desc"] = r.get("descripcion", "")
         agg_c = {}
         for r in cobros:
             k = r.get("pk_id") or "(sin pk)"
@@ -1041,7 +1043,8 @@ def pkid_tabla(contrato_id: int, capitulo: str = None, item: str = None, current
             rows.append({"pk_id": k, "cant_ppto": p["cant"], "costo_ppto": p["costo"],
                          "cant_sicoe": c["cant"], "costo_sicoe": c["costo"],
                          "delta_cant": round(p["cant"] - c["cant"], 2),
-                         "delta_costo": round(p["costo"] - c["costo"], 0)})
+                         "delta_costo": round(p["costo"] - c["costo"], 0),
+                         "descripcion": p.get("desc", "")})
         por_cobrar = sum(r["delta_costo"] for r in rows if r["delta_costo"] > 0)
         devolucion = sum(abs(r["delta_costo"]) for r in rows if r["delta_costo"] < 0)
         return {"rows": rows, "por_cobrar": por_cobrar, "devolucion": devolucion}
