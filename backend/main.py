@@ -615,6 +615,16 @@ def agregar_usuario_contrato(body: UsuarioContratoCreate, current_user=Depends(g
 def quitar_usuario_contrato(usuario_id: int, contrato_id: int, current_user=Depends(get_current_user)):
     supabase.table("usuario_contratos").delete().eq("usuario_id", usuario_id).eq("contrato_id", contrato_id).execute()
     return {"mensaje": "Contrato removido"}
+
+@app.post("/auth/refresh")
+def refresh_token(current_user=Depends(get_current_user)):
+    """Renueva el token JWT del usuario activo."""
+    new_token = create_token({
+        "sub": current_user.get("sub"),
+        "email": current_user.get("email")
+    })
+    return {"access_token": new_token, "token_type": "bearer"}
+
 @app.post("/auth/solicitar-reset")
 def solicitar_reset(body: ResetSolicitud):
     usuario = supabase.table("usuarios").select("id, email, nombre").eq("email", body.email).execute()

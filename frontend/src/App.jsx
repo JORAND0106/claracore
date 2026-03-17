@@ -546,6 +546,15 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
     return () => clearInterval(iv)
   }, [contratoId])
 
+  // ── Auto-reload cuando DWG enlazado ───────────────────────────────────────
+  useEffect(() => {
+    if (!contratoId || !dwgEnlazado) return
+    const iv = setInterval(() => {
+      cargarRegistros()
+    }, 15000)
+    return () => clearInterval(iv)
+  }, [contratoId, dwgEnlazado])
+
   // ── Constantes drill-down ──────────────────────────────────────────────────
   const NIVELES = ['capitulo', 'item', 'pk_id']
   const NOM     = { capitulo:'Capítulo', item:'Ítem', pk_id:'PK_ID' }
@@ -3282,6 +3291,20 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     fetch(`${API_URL}/cobro/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
       .then(r => { console.log('cobro resumen status:', r.status); return r.ok ? r.json() : null })
       .then(d => { console.log('cobro resumen data:', d); if(d) setKpiCobro(d) })
+  }, [contratoIdDash])
+
+// ── Auto-refresh dashboard cada 60 segundos ───────────────────────────────
+  useEffect(() => {
+    if (!contratoIdDash) return
+    const recargar = () => {
+      const tok = getToken()
+      fetch(`${API_URL}/presupuesto/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
+        .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiPpto(d) }).catch(() => {})
+      fetch(`${API_URL}/cobro/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
+        .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiCobro(d) }).catch(() => {})
+    }
+    const iv = setInterval(recargar, 60000)
+    return () => clearInterval(iv)
   }, [contratoIdDash])
 
   async function cargarDashDrill(drill) {
