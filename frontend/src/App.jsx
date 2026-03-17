@@ -766,7 +766,7 @@ async function cargarRegistros(modoPapelera) {
   }, [registrosFiltrados, nivelActual])
 
   const costoTotal = useMemo(() =>
-    registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
+    Math.round(registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0))
   , [registrosFiltrados])
 
   const totalPaginas = Math.ceil(registrosFiltrados.length / POR_PAGINA)
