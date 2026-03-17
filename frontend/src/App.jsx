@@ -1326,7 +1326,13 @@ async function darDeBaja(id) {
             </div>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'8px' }}>
               <span style={{ fontSize:'12px', color:t.textMuted }}>
-                {registrosFiltrados.length} registros · <strong style={{color:colorActual}}>{fmt(costoTotal)}</strong>
+                {registrosFiltrados.length} registros
+                {nivelActual === null && drill.some(d => d.campo === 'item') && (() => {
+                  const cantSum = registrosFiltrados.reduce((s,r) => s + (r.cant_total||0), 0)
+                  const und = registrosFiltrados[0]?.und || ''
+                  return <> · <strong style={{color:'#0077B6'}}>{cantSum.toFixed(2)} {und}</strong></>
+                })()}
+                {' · '}<strong style={{color:colorActual}}>{fmt(costoTotal)}</strong>
               </span>
             {nivelActual && (
                 <span style={{ fontSize:'11px', color:t.textMuted, fontStyle:'italic' }}>
@@ -3860,10 +3866,24 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                         {/* Totales inline */}
                         {dashTabla && (() => {
                           const filas = dashTabla.rows || dashTabla.filas || []
-                          const totalDeltaCant = filas.reduce((s,f) => s + (f.delta_cant ?? ((f.cant_ppto||0)-(f.cant_sicoe||0))), 0)
+                          const totalCantSicoe  = filas.reduce((s,f) => s + (f.cant_ppto||0), 0)
+                          const totalCostSicoe  = filas.reduce((s,f) => s + (f.costo_ppto||0), 0)
+                          const totalCantCobro  = filas.reduce((s,f) => s + (f.cant_sicoe||0), 0)
+                          const totalCostCobro  = filas.reduce((s,f) => s + (f.costo_sicoe||0), 0)
+                          const totalDeltaCant  = filas.reduce((s,f) => s + (f.delta_cant ?? ((f.cant_ppto||0)-(f.cant_sicoe||0))), 0)
                           const totalDeltaCosto = filas.reduce((s,f) => s + (f.delta_costo ?? ((f.costo_ppto||0)-(f.costo_sicoe||0))), 0)
                           const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+                          const Pill = ({label, val, color}) => (
+                            <span style={{ fontSize:'11px', fontWeight:'700', color, background:color+'18', borderRadius:'20px', padding:'3px 10px', whiteSpace:'nowrap' }}>
+                              {label}: {val}
+                            </span>
+                          )
                           return <>
+                            <span style={{ fontSize:'11px', color:t.textMuted }}>|</span>
+                            <Pill label="Cant SICOE"  val={totalCantSicoe.toFixed(2)}  color='#0077B6'/>
+                            <Pill label="Costo SICOE" val={fmtD(totalCostSicoe)}        color='#0077B6'/>
+                            <Pill label="Cant Cobro"  val={totalCantCobro.toFixed(2)}   color='#00A896'/>
+                            <Pill label="Costo Cobro" val={fmtD(totalCostCobro)}         color='#00A896'/>
                             <span style={{ fontSize:'11px', color:t.textMuted }}>|</span>
                             <span style={{ fontSize:'11px', fontWeight:'700', color: totalDeltaCant >= 0 ? '#10B981' : '#EF4444', background: totalDeltaCant >= 0 ? '#10B98118' : '#EF444418', borderRadius:'20px', padding:'3px 10px' }}>
                               Δ Cant: {totalDeltaCant >= 0 ? '+' : ''}{totalDeltaCant.toFixed(2)}

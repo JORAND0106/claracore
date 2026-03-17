@@ -785,19 +785,14 @@ def get_resumen_presupuesto(contrato_id: int, current_user=Depends(get_current_u
 @app.put("/presupuesto/item/{item_id}")
 def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=Depends(get_current_user)):
     data = body.dict(exclude_unset=True)
-    # Recalcular cant_total y costo_directo si cambian dimensiones
-    dims = {k: data.get(k) for k in ["area_long_nod", "ancho", "espesor"]}
-    if any(v is not None for v in dims.values()):
-        current = supabase.table("presupuesto").select("area_long_nod, ancho, espesor, vlr_unitario").eq("id", item_id).execute().data
+    # Recalcular costo_directo solo si cambia vlr_unitario o cant_total
+    if "vlr_unitario" in data or "cant_total" in data:
+        current = supabase.table("presupuesto").select("cant_total, vlr_unitario").eq("id", item_id).execute().data
         if current:
             c = current[0]
-            area   = data.get("area_long_nod", c.get("area_long_nod") or 0)
-            ancho  = data.get("ancho",         c.get("ancho")         or 0)
-            esp    = data.get("espesor",        c.get("espesor")       or 0)
-            vlr    = data.get("vlr_unitario",   c.get("vlr_unitario")  or 0)
-            cant = round(float(area) * float(ancho) * float(esp), 2) if ancho or esp else round(float(area), 2)
-            data["cant_total"]    = cant
-            data["costo_directo"] = round(cant * float(vlr), 0)
+            cant = data.get("cant_total", c.get("cant_total") or 0)
+            vlr  = data.get("vlr_unitario", c.get("vlr_unitario") or 0)
+            data["costo_directo"] = round(float(cant) * float(vlr), 0)
     data["updated_at"] = "now()"
     supabase.table("presupuesto").update(data).eq("id", item_id).execute()
     return {"mensaje": "Registro actualizado"}
@@ -886,9 +881,9 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
         espesor = (dim.espesor if dim and dim.espesor is not None else None) or r.get("espesor") or 1
         area    = r.get("area_long_nod") or 0
         vlr     = body.vlr_unitario if body.vlr_unitario is not None else (r.get("vlr_unitario") or 0)
-        cant    = round(float(area) * float(ancho) * float(espesor), 2)
-        costo   = round(cant * float(vlr), 0)
-        data = {"ancho": ancho, "espesor": espesor, "cant_total": cant, "costo_directo": costo, "updated_at": "now()"}
+        cant    = r.get("cant_total") or 0
+        costo   = round(float(cant) * float(vlr), 0)
+        data = {"costo_directo": costo, "updated_at": "now()"}
         if body.capitulo    is not None: data["capitulo"]    = body.capitulo
         if body.item        is not None: data["item"]        = body.item
         if body.descripcion is not None: data["descripcion"] = body.descripcion
