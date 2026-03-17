@@ -3991,17 +3991,18 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                       ) : dashTabla ? (
                         <div>
                           <div style={{ overflowX:'auto' }}>
+                          {/* Encabezado descripción fuera de la tabla */}
+                          {dashDrill[1]?.valor && (() => {
+                            const filas = dashTabla?.rows || dashTabla?.filas || []
+                            const desc = filas.find(f => f.descripcion)?.descripcion || ''
+                            return (
+                              <div style={{ padding:'10px 12px', fontSize:'13px', fontWeight:'700', color:t.primary, borderBottom:`2px solid ${t.primary}44`, fontStyle:'italic', background:t.primary+'08', borderRadius:'6px 6px 0 0', marginBottom:'0' }}>
+                                {desc ? `${dashDrill[1].valor} — ${desc}` : dashDrill[1].valor}
+                              </div>
+                            )
+                          })()}
                           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
                             <thead>
-                              <tr style={{ background:t.primary+'11' }}>
-                                <td colSpan={7} style={{ padding:'8px 10px', fontSize:'13px', fontWeight:'700', color:t.primary, borderBottom:`2px solid ${t.primary}33`, fontStyle:'italic', background:t.primary+'11' }}>
-                                  {dashDrill[1]?.valor && (() => {
-                                    const filas = dashTabla?.rows || dashTabla?.filas || []
-                                    const desc = filas.find(f => f.descripcion)?.descripcion || ''
-                                    return desc ? `${dashDrill[1].valor} — ${desc}` : dashDrill[1].valor
-                                  })()}
-                                </td>
-                              </tr>
                               <tr>
                                 {['PK_ID','Cant. SICOE','Costo SICOE','Cant. Cobro','Costo Cobro','Δ Cant','Δ Costo'].map(h => (
                                   <th key={h} style={{ padding:'6px 8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'right', whiteSpace:'nowrap' }}>{h}</th>
