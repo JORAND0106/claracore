@@ -765,21 +765,9 @@ async function cargarRegistros(modoPapelera) {
     return Object.values(agg).sort((a, b) => a.name.localeCompare(b.name, 'es', {numeric: true}))
   }, [registrosFiltrados, nivelActual])
 
-  const costoTotal = useMemo(() => {
-    const total = registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
-    if (registrosFiltrados.length > 0) {
-      // Registros con costo pero sin vlr_unitario
-      const sinVlr = registrosFiltrados.filter(r => (r.costo_directo > 0) && (!r.vlr_unitario || r.vlr_unitario === 0))
-      console.log('con costo pero sin vlr_unitario:', sinVlr.length, sinVlr.slice(0,3).map(r => ({id:r.id, id_pol:r.id_pol, cd:r.costo_directo, vlr:r.vlr_unitario, cant:r.cant_total})))
-      // Registros con vlr pero sin costo
-      const sinCosto = registrosFiltrados.filter(r => (!r.costo_directo || r.costo_directo === 0) && (r.vlr_unitario > 0))
-      console.log('con vlr pero sin costo:', sinCosto.length)
-      // Suma exacta de los sin vlr
-      const sumaSinVlr = sinVlr.reduce((s,r) => s + (r.costo_directo||0), 0)
-      console.log('suma de registros sin vlr_unitario:', sumaSinVlr)
-    }
-    return total
-  }, [registrosFiltrados])
+  const costoTotal = useMemo(() =>
+    registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
+  , [registrosFiltrados])
 
   const totalPaginas = Math.ceil(registrosFiltrados.length / POR_PAGINA)
   const registrosPagina = useMemo(() =>
