@@ -607,7 +607,14 @@ async function cargarRegistros(modoPapelera) {
     const esPapelera = modoPapelera !== undefined ? modoPapelera : verPapelera
     const params = esPapelera ? '?papelera=true' : ''
     const res = await fetch(`${API}/presupuesto/${contratoId}${params}`, { headers: { Authorization: `Bearer ${token}` } })
-    if (res.ok) setRegistros(await res.json())
+    if (res.ok) {
+      const data = await res.json()
+      setRegistros(data.map(r => ({
+        ...r,
+        costo_directo: r.costo_directo != null ? Math.round(r.costo_directo) : null,
+        cant_total: r.cant_total != null ? Math.round(r.cant_total * 10000) / 10000 : null
+      })))
+    }
     setLoading(false)
     setPagina(1)
   }
