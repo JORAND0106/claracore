@@ -1268,6 +1268,10 @@ async function darDeBaja(id) {
         )}
         {importMsg && <span style={{ fontSize:'13px',color:importMsg.startsWith('✅')?'#16A34A':importMsg.startsWith('❌')?'#DC2626':t.textMuted }}>{importMsg}</span>}
         <span style={{ marginLeft:'auto',fontSize:'12px',color:t.textMuted }}>
+        <button onClick={() => cargarRegistros()}
+          style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'7px 14px', color:t.textMuted, fontSize:'12px', fontWeight:'600', cursor:'pointer' }}>
+          🔄 Actualizar
+        </button>
           {registros.length} total · {registrosFiltrados.length} filtrados · {seleccionados.size} seleccionados
       {totalPaginas > 1 && (
         <span style={{ marginLeft: '16px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
