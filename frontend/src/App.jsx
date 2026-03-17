@@ -3723,8 +3723,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                   )
                   const maxVal = Math.max(...comp.map(c => Math.max(c.presupuesto||0, c.cobrado||0)), 1)
                   const CAP_PAG = 10
-                  const capPagina = dashDrill.length === 0 ? (typeof dashCapPag !== 'undefined' ? dashCapPag : 0) : 0
-                  const compSlice = comp.slice(capPagina * CAP_PAG, (capPagina + 1) * CAP_PAG)
+                  const compSlice = comp.slice(dashCapPag * CAP_PAG, (dashCapPag + 1) * CAP_PAG)
                   const BAR_W = 28, GAP = 10, PAD_L = 8, PAD_R = 8, H = 260, PAD_T = 14, PAD_B = 32
                   const totalW = PAD_L + compSlice.length * (BAR_W*2 + GAP + 12) + PAD_R
                   const scaleH = (v) => PAD_T + (1 - v/maxVal) * (H - PAD_T - PAD_B)
@@ -3737,7 +3736,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                           const y = PAD_T + (1-pct/100)*(H-PAD_T-PAD_B)
                           return <line key={pct} x1={PAD_L} x2={totalW-PAD_R} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="3,3"/>
                         })}
-                        {comp.map((cap, i) => {
+                        {compSlice.map((cap, i) => {
                           const x = PAD_L + i * (BAR_W*2 + GAP + 8)
                           const yP = scaleH(cap.presupuesto||0)
                           const yC = scaleH(cap.cobrado||0)
