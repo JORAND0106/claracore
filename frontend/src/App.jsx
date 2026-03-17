@@ -546,16 +546,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
     return () => clearInterval(iv)
   }, [contratoId])
 
-  // ── Auto-reload cuando DWG enlazado ───────────────────────────────────────
-  useEffect(() => {
-    if (!contratoId || !dwgEnlazado) return
-    const iv = setInterval(() => {
-      cargarRegistros()
-    }, 15000)
-    return () => clearInterval(iv)
-  }, [contratoId, dwgEnlazado])
-
-  // ── Constantes drill-down ──────────────────────────────────────────────────
+    // ── Constantes drill-down ──────────────────────────────────────────────────
   const NIVELES = ['capitulo', 'item', 'pk_id']
   const NOM     = { capitulo:'Capítulo', item:'Ítem', pk_id:'PK_ID' }
   const PALETA_BARRAS = [
@@ -774,9 +765,11 @@ async function cargarRegistros(modoPapelera) {
     return Object.values(agg).sort((a, b) => a.name.localeCompare(b.name, 'es', {numeric: true}))
   }, [registrosFiltrados, nivelActual])
 
-  const costoTotal = useMemo(() =>
-    registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
-  , [registrosFiltrados])
+  const costoTotal = useMemo(() => {
+    const total = registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
+    console.log('registros en memoria:', registrosFiltrados.length, 'total:', total)
+    return total
+  }, [registrosFiltrados])
 
   const totalPaginas = Math.ceil(registrosFiltrados.length / POR_PAGINA)
   const registrosPagina = useMemo(() =>
