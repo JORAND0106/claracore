@@ -969,8 +969,17 @@ async function cargarRegistros(modoPapelera) {
     const body = {}
     Object.entries(editValues).forEach(([k, v]) => {
       if (v === '' || v == null) return
-      body[k] = ['area_long_nod','ancho','espesor','vlr_unitario'].includes(k) ? parseFloat(v) : v
+      body[k] = ['area_long_nod','ancho','espesor','vlr_unitario','cant_total'].includes(k) ? parseFloat(v) : v
     })
+    // Calcular cant_total si vienen dimensiones
+    const area = parseFloat(editValues.area_long_nod) || 0
+    const ancho = parseFloat(editValues.ancho) || 0
+    const esp = parseFloat(editValues.espesor) || 0
+    if (area > 0) {
+      body.cant_total = (ancho > 0 || esp > 0)
+        ? Math.round(area * ancho * esp * 10000) / 10000
+        : area
+    }
     const res = await fetch(`${API}/presupuesto/item/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },

@@ -785,14 +785,14 @@ def get_resumen_presupuesto(contrato_id: int, current_user=Depends(get_current_u
 @app.put("/presupuesto/item/{item_id}")
 def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=Depends(get_current_user)):
     data = body.dict(exclude_unset=True)
-    # Recalcular costo_directo solo si cambia vlr_unitario o cant_total
-    if "vlr_unitario" in data or "cant_total" in data:
+    data.pop("costo_directo", None)  # nunca permitir que venga del frontend
+    if "cant_total" in data or "vlr_unitario" in data:
         current = supabase.table("presupuesto").select("cant_total, vlr_unitario").eq("id", item_id).execute().data
         if current:
             c = current[0]
-            cant = data.get("cant_total", c.get("cant_total") or 0)
-            vlr  = data.get("vlr_unitario", c.get("vlr_unitario") or 0)
-            data["costo_directo"] = round(float(cant) * float(vlr), 0)
+            cant = float(data.get("cant_total") or c.get("cant_total") or 0)
+            vlr  = float(data.get("vlr_unitario") or c.get("vlr_unitario") or 0)
+            data["costo_directo"] = round(cant * vlr, 0)
     data["updated_at"] = "now()"
     supabase.table("presupuesto").update(data).eq("id", item_id).execute()
     return {"mensaje": "Registro actualizado"}
