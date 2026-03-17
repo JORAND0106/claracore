@@ -767,7 +767,14 @@ async function cargarRegistros(modoPapelera) {
 
   const costoTotal = useMemo(() => {
     const total = registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
-    console.log('registros en memoria:', registrosFiltrados.length, 'total:', total)
+    if (registrosFiltrados.length > 0) {
+      console.log('total memoria:', total, 'diferencia con DB:', total - 2129228430)
+      const sospechosos = registrosFiltrados.filter(r => {
+        const calc = Math.round((r.cant_total || 0) * (r.vlr_unitario || 0))
+        return Math.abs(calc - (r.costo_directo || 0)) > 100
+      })
+      console.log('registros con costo_directo distinto al calculado:', sospechosos.length, sospechosos.slice(0,5).map(r => ({id: r.id, id_pol: r.id_pol, cd: r.costo_directo, calc: Math.round((r.cant_total||0)*(r.vlr_unitario||0))})))
+    }
     return total
   }, [registrosFiltrados])
 
