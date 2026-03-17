@@ -3249,6 +3249,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashTabla,    setDashTabla]    = useState(null)
   const [dashTablaLoad,setDashTablaLoad]= useState(false)
   const [dashDrillPag, setDashDrillPag] = useState(0)
+  const [dashCapPag, setDashCapPag] = useState(0)
   const [panelFoco, setPanelFoco] = useState(null)
   const [notifNavegar, setNotifNavegar] = useState(null)
   const colsGrid = '1fr 1fr'
@@ -3707,8 +3708,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                     <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin datos</div>
                   )
                   const maxVal = Math.max(...comp.map(c => Math.max(c.presupuesto||0, c.cobrado||0)), 1)
-                  const BAR_W = 18, GAP = 6, PAD_L = 8, PAD_R = 8, H = 180, PAD_T = 10, PAD_B = 24
-                  const totalW = PAD_L + comp.length * (BAR_W*2 + GAP + 8) + PAD_R
+                  const CAP_PAG = 10
+                  const capPagina = dashDrill.length === 0 ? (typeof dashCapPag !== 'undefined' ? dashCapPag : 0) : 0
+                  const compSlice = comp.slice(capPagina * CAP_PAG, (capPagina + 1) * CAP_PAG)
+                  const BAR_W = 28, GAP = 10, PAD_L = 8, PAD_R = 8, H = 260, PAD_T = 14, PAD_B = 32
+                  const totalW = PAD_L + compSlice.length * (BAR_W*2 + GAP + 12) + PAD_R
                   const scaleH = (v) => PAD_T + (1 - v/maxVal) * (H - PAD_T - PAD_B)
 
                   return (
@@ -3728,7 +3732,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                           const sobrecosto = (cap.cobrado||0) > (cap.presupuesto||0)
                           const colorC = sobrecosto ? '#DC2626' : '#00A896'
                           const isSelected = dashDrill[0]?.valor === cap.capitulo
-                          const nomCorto = (cap.capitulo||'').length > 8 ? (cap.capitulo||'').slice(0,8)+'…' : (cap.capitulo||'')
+                          const nomCorto = (cap.capitulo||'').length > 10 ? (cap.capitulo||'').slice(0,10)+'…' : (cap.capitulo||'')
                           return (
                             <g key={i}>
                               {/* Barra Presupuesto */}
@@ -3736,7 +3740,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                               {/* Barra Cobro */}
                               <rect x={x+BAR_W+2} y={yC} width={BAR_W} height={Math.max(hC,2)} fill={colorC} rx="2" opacity={isSelected?1:0.85} style={{cursor:'pointer'}} onClick={() => setDashDrill([{campo:'capitulo', valor:cap.capitulo}])}/>
                               {/* Etiqueta eje X */}
-                              <text x={x+BAR_W} y={H-6} textAnchor="middle" fontSize="7" fill={t.textMuted}>{nomCorto}</text>
+                              <text x={x+BAR_W} y={H-8} textAnchor="middle" fontSize="9" fill={t.textMuted}>{nomCorto}</text>
                               {/* Área hover invisible con tooltip */}
                               <g>
                                 <rect x={x-2} y={PAD_T} width={BAR_W*2+6} height={H-PAD_T-PAD_B} fill="transparent"
@@ -3788,6 +3792,22 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                           <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#DC2626' }}/> Sobrecosto
                         </div>
                       </div>
+                      {/* Paginador capítulos */}
+                      {comp.length > CAP_PAG && (
+                        <div style={{ display:'flex', gap:'6px', justifyContent:'center', marginTop:'10px', alignItems:'center' }}>
+                          <button onClick={() => setDashCapPag(p => Math.max(0,p-1))} disabled={dashCapPag===0}
+                            style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'11px', cursor: dashCapPag===0?'default':'pointer', color: dashCapPag===0?t.textMuted:t.text }}>‹</button>
+                          {Array.from({length: Math.ceil(comp.length/CAP_PAG)}, (_,i) => (
+                            <button key={i} onClick={() => setDashCapPag(i)}
+                              style={{ background: dashCapPag===i ? t.primary : 'transparent', color: dashCapPag===i ? '#fff' : t.textMuted, border:`1px solid ${dashCapPag===i ? t.primary : t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'11px', cursor:'pointer' }}>
+                              {i+1}
+                            </button>
+                          ))}
+                          <button onClick={() => setDashCapPag(p => Math.min(Math.ceil(comp.length/CAP_PAG)-1, p+1))} disabled={dashCapPag===Math.ceil(comp.length/CAP_PAG)-1}
+                            style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'11px', cursor:'pointer', color:t.text }}>›</button>
+                          <span style={{ fontSize:'10px', color:t.textMuted }}>{dashCapPag*CAP_PAG+1}–{Math.min((dashCapPag+1)*CAP_PAG, comp.length)} de {comp.length}</span>
+                        </div>
+                      )}
                     </div>
                   )
                 })()}
@@ -3835,12 +3855,12 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                       dashLoading ? (
                         <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>⏳ Cargando...</div>
                       ) : dashData?.length > 0 ? (() => {
-                          const POR_PAG = 20
+                          const POR_PAG = 15
                           const totalPags = Math.ceil(dashData.length / POR_PAG)
                           const paginaItems = dashDrillPag || 0
                           const slice = dashData.slice(paginaItems * POR_PAG, (paginaItems + 1) * POR_PAG)
                           const maxV = Math.max(...slice.map(d => Math.max(d.presupuesto||0, d.cobrado||0)), 1)
-                          const BAR_W = 18, GAP = 6, PAD_L = 8, PAD_R = 8, H = 160, PAD_T = 10, PAD_B = 28
+                          const BAR_W = 26, GAP = 10, PAD_L = 8, PAD_R = 8, H = 240, PAD_T = 14, PAD_B = 32
                           const totalW = PAD_L + slice.length * (BAR_W*2 + GAP + 8) + PAD_R
                           const scaleH = v => PAD_T + (1 - v/maxV) * (H - PAD_T - PAD_B)
                           const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
@@ -3886,7 +3906,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                                         <rect x={x+BAR_W+2} y={yC} width={BAR_W} height={Math.max(hC,2)} fill="#00A896" rx="2" opacity="0.85"
                                           onMouseEnter={e => { e.currentTarget.style.opacity='1'; const tip=document.getElementById(`tip-drill-${i}`); if(tip) tip.style.display='block' }}
                                           onMouseLeave={e => { e.currentTarget.style.opacity='0.85'; const tip=document.getElementById(`tip-drill-${i}`); if(tip) tip.style.display='none' }}/>
-                                        <text x={x+BAR_W} y={H-8} textAnchor="middle" fontSize="7" fill={t.textMuted}>{nomCorto}</text>
+                                        <text x={x+BAR_W} y={H-8} textAnchor="middle" fontSize="9" fill={t.textMuted}>{nomCorto}</text>
                                         <g id={`tip-drill-${i}`} style={{display:'none', pointerEvents:'none'}}>
                                           <rect x={Math.min(x-10, Math.max(totalW,300)-220)} y={H-PAD_B-100} width="215" height="100" rx="5" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
                                         <text x={Math.min(x-10, Math.max(totalW,300)-220)+10} y={H-PAD_B-84} fontSize="10" fontWeight="700" fill={t.text}>{String(item.item||'').length>24?String(item.item||'').slice(0,24)+'…':String(item.item||'')}</text>
