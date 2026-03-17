@@ -785,13 +785,17 @@ def get_resumen_presupuesto(contrato_id: int, current_user=Depends(get_current_u
 @app.put("/presupuesto/item/{item_id}")
 def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=Depends(get_current_user)):
     data = body.dict(exclude_unset=True)
-    data.pop("costo_directo", None)  # nunca permitir que venga del frontend
-    if "cant_total" in data or "vlr_unitario" in data:
-        current = supabase.table("presupuesto").select("cant_total, vlr_unitario").eq("id", item_id).execute().data
+    dims = {k: data.get(k) for k in ["area_long_nod", "ancho", "espesor"]}
+    if any(v is not None for v in dims.values()):
+        current = supabase.table("presupuesto").select("area_long_nod, ancho, espesor, vlr_unitario, cant_total").eq("id", item_id).execute().data
         if current:
             c = current[0]
-            cant = float(data.get("cant_total") or c.get("cant_total") or 0)
-            vlr  = float(data.get("vlr_unitario") or c.get("vlr_unitario") or 0)
+            area  = float(data.get("area_long_nod", c.get("area_long_nod") or 0))
+            ancho = float(data.get("ancho",         c.get("ancho")         or 0))
+            esp   = float(data.get("espesor",        c.get("espesor")       or 0))
+            vlr   = float(data.get("vlr_unitario",   c.get("vlr_unitario")  or 0))
+            cant  = round(area * ancho * esp, 2) if (ancho or esp) else round(area, 2)
+            data["cant_total"]    = cant
             data["costo_directo"] = round(cant * vlr, 0)
     data["updated_at"] = "now()"
     supabase.table("presupuesto").update(data).eq("id", item_id).execute()

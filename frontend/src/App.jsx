@@ -607,14 +607,7 @@ async function cargarRegistros(modoPapelera) {
     const esPapelera = modoPapelera !== undefined ? modoPapelera : verPapelera
     const params = esPapelera ? '?papelera=true' : ''
     const res = await fetch(`${API}/presupuesto/${contratoId}${params}`, { headers: { Authorization: `Bearer ${token}` } })
-    if (res.ok) {
-      const data = await res.json()
-      setRegistros(data.map(r => ({
-        ...r,
-        costo_directo: r.costo_directo != null ? Math.round(r.costo_directo) : null,
-        cant_total: r.cant_total != null ? Math.round(r.cant_total * 10000) / 10000 : null
-      })))
-    }
+    if (res.ok) setRegistros(await res.json())
     setLoading(false)
     setPagina(1)
   }
@@ -773,7 +766,7 @@ async function cargarRegistros(modoPapelera) {
   }, [registrosFiltrados, nivelActual])
 
   const costoTotal = useMemo(() =>
-    registrosFiltrados.reduce((s, r) => s + Math.round(r.costo_directo ?? 0), 0)
+    registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
   , [registrosFiltrados])
 
   const totalPaginas = Math.ceil(registrosFiltrados.length / POR_PAGINA)
