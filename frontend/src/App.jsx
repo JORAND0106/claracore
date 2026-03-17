@@ -3964,7 +3964,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                                 <td colSpan={7} style={{ padding:'6px 10px', fontSize:'11px', color:t.textMuted, borderBottom:`1px solid ${t.border}`, fontStyle:'italic', background:t.bg }}>
                                   {dashDrill[1]?.valor && (() => {
                                     const filas = dashTabla?.rows || dashTabla?.filas || []
-                                    const desc = filas[0]?.descripcion || ''
+                                    const desc = filas.find(f => f.descripcion)?.descripcion || ''
                                     return desc ? `${dashDrill[1].valor} — ${desc}` : dashDrill[1].valor
                                   })()}
                                 </td>
