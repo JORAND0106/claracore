@@ -3341,6 +3341,13 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       fetch(`${API_URL}/cobro/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiCobro(d) }).catch(() => {})
       if (dashDrillRef.current.length > 0) cargarDashDrill(dashDrillRef.current)
+      const tok2 = getToken()
+      const params2 = new URLSearchParams()
+      if (dashDrillRef.current[0]) params2.set('capitulo', dashDrillRef.current[0].valor)
+      if (dashDrillRef.current[1]) params2.set('item', dashDrillRef.current[1].valor)
+      fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-colores-drill?${params2}`, {
+        headers: { Authorization: `Bearer ${tok2}` }
+      }).then(r => r.ok ? r.json() : {}).then(setMiniMapaColores).catch(() => {})
     }
     const iv = setInterval(recargar, 30000)
     return () => clearInterval(iv)
