@@ -3315,6 +3315,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [popupPkid,      setPopupPkid]      = useState(null)  // {pkid, data}
   const [popupLoading,   setPopupLoading]   = useState(false)
   const [zoomingPkid,    setZoomingPkid]    = useState(false)
+  const [dwgEnlazadoDash, setDwgEnlazadoDash] = useState(false)
   const miniMapaRef = useRef(null)
   const API_URL = 'https://claracore-backend.azurewebsites.net'
   const contratoIdDash = usuario?.contrato_id
@@ -3342,14 +3343,16 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       fetch(`${API_URL}/cobro/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiCobro(d) }).catch(() => {})
       if (dashDrillRef.current.length > 0) refrescarDashDrillSilencioso(dashDrillRef.current)
-      const tok2 = getToken()
+      fetch(`${API_URL}/cad-queue/${contratoIdDash}/estado`, { headers: { Authorization:`Bearer ${tok}` } })
+        .then(r => r.ok ? r.json() : null).then(d => { if(d) setDwgEnlazadoDash(d.enlazado) }).catch(() => {})
       const params2 = new URLSearchParams()
       if (dashDrillRef.current[0]) params2.set('capitulo', dashDrillRef.current[0].valor)
       if (dashDrillRef.current[1]) params2.set('item', dashDrillRef.current[1].valor)
       fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-colores-drill?${params2}`, {
-        headers: { Authorization: `Bearer ${tok2}` }
+        headers: { Authorization: `Bearer ${tok}` }
       }).then(r => r.ok ? r.json() : {}).then(setMiniMapaColores).catch(() => {})
     }
+    recargar()
     const iv = setInterval(recargar, 30000)
     return () => clearInterval(iv)
   }, [contratoIdDash])
@@ -4777,7 +4780,7 @@ async function enviarZoomPkid(pkid) {
                   </div>
                 </div>
                 <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                  {usuario?.dwgEnlazado && (
+                  {dwgEnlazadoDash && (
                     <button
                       onClick={() => enviarZoomPkid(popupPkid.pkid)}
                       disabled={zoomingPkid}

@@ -973,13 +973,15 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
 @app.post("/cad-queue/{contrato_id}/heartbeat")
 def cad_heartbeat(contrato_id: int, current_user=Depends(get_current_user)):
     """SicoeCAD llama esto cada 3s para indicar que el DWG está abierto."""
-    _dwg_sessions[contrato_id] = time.time()
+    usuario_id = current_user.get("id")
+    _dwg_sessions[(contrato_id, usuario_id)] = time.time()
     return {"ok": True}
 
 @app.get("/cad-queue/{contrato_id}/estado")
 def cad_estado(contrato_id: int, current_user=Depends(get_current_user)):
     """ClaraCore web consulta si hay DWG enlazado (heartbeat < 10s)."""
-    last = _dwg_sessions.get(contrato_id)
+    usuario_id = current_user.get("id")
+    last = _dwg_sessions.get((contrato_id, usuario_id))
     enlazado = last is not None and (time.time() - last) < 10
     return {"enlazado": enlazado}
 
