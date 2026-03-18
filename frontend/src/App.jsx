@@ -3340,7 +3340,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiPpto(d) }).catch(() => {})
       fetch(`${API_URL}/cobro/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiCobro(d) }).catch(() => {})
-      if (dashDrillRef.current.length > 0) cargarDashDrill(dashDrillRef.current)
+      if (dashDrillRef.current.length > 0) refrescarDashDrillSilencioso(dashDrillRef.current)
       const tok2 = getToken()
       const params2 = new URLSearchParams()
       if (dashDrillRef.current[0]) params2.set('capitulo', dashDrillRef.current[0].valor)
@@ -3385,6 +3385,26 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       })))
     }
     setDashLoading(false)
+  }
+
+async function refrescarDashDrillSilencioso(drill) {
+    if (!contratoIdDash) return
+    try {
+      const tok = getToken()
+      const params = new URLSearchParams()
+      drill.forEach(d => params.set(d.campo, d.valor))
+      if (drill.length >= 2) {
+        const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+        if (res.ok) setDashTabla(await res.json())  // actualiza silenciosamente, sin null previo
+      } else {
+        const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+        if (res.ok) {
+          const data = await res.json()
+          const lista = data.items || data
+          setDashData(lista.map(r => ({ item: r.item||r.nombre, descripcion:r.descripcion||'', presupuesto:r.presupuesto||0, cobrado:r.cobrado||0, cant_ppto:r.cant_ppto||0, cant_cobro:r.cant_cobro||r.cant_sicoe||0 })))
+        }
+      }
+    } catch {}
   }
 
   useEffect(() => { if (contratoIdDash) { setDashDrillPag(0); cargarDashDrill(dashDrill) } }, [contratoIdDash, dashDrill])
