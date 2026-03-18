@@ -1051,6 +1051,16 @@ async function darDeBaja(id) {
     } else alert('Error al dar de baja el registro')
   }
 
+async function restaurar(id) {
+    if (!window.confirm('¿Restaurar este registro? Volverá a aparecer en la grilla y se reactivará en el DWG.')) return
+    const res = await fetch(`${API}/presupuesto/item/${id}/restaurar`, {
+      method: 'PUT', headers: { Authorization: `Bearer ${token}` }
+    })
+    if (res.ok) {
+      await cargarRegistros()
+    } else alert('Error al restaurar el registro')
+  }
+
   const thStyle = { padding:'8px 10px', fontSize:'11px', fontWeight:'700', letterSpacing:'0.5px', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
   const tdStyle = { padding:'7px 10px', fontSize:'12px', borderBottom:`1px solid ${t.border}`, verticalAlign:'middle' }
   const bcBtn   = (active) => ({
@@ -1859,6 +1869,17 @@ async function darDeBaja(id) {
                             title="Dar de baja"
                             style={{ background:'#EF444415', border:'1px solid #EF444444', borderRadius:'6px', padding:'3px 8px', color:'#EF4444', fontSize:'11px', cursor:'pointer' }}>
                             🗑️
+                          </button>
+                        )}
+                      </td>
+                    )}
+                    {puedeEliminar && verPapelera && (
+                      <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
+                        {seleccionados.has(r.id) && (
+                          <button onClick={() => restaurar(r.id)}
+                            title="Restaurar registro"
+                            style={{ background:'#10B98115', border:'1px solid #10B98144', borderRadius:'6px', padding:'3px 8px', color:'#10B981', fontSize:'11px', cursor:'pointer' }}>
+                            🔄 Restaurar
                           </button>
                         )}
                       </td>

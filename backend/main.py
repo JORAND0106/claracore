@@ -16,6 +16,17 @@ from datetime import datetime, timedelta
 # { contrato_id: timestamp_ultimo_heartbeat }
 _dwg_sessions: dict = {}
 
+def _dwg_activo(contrato_id: int, usuario_id: int = None) -> bool:
+    """Verifica si hay un DWG enlazado para el contrato, por usuario o cualquier usuario."""
+    if usuario_id and _dwg_sessions.get((contrato_id, usuario_id)):
+        ts = _dwg_sessions[(contrato_id, usuario_id)]
+        return (time.time() - ts) < 10
+    # Fallback: cualquier usuario del contrato con sesión activa
+    for k, ts in _dwg_sessions.items():
+        if isinstance(k, tuple) and k[0] == contrato_id and (time.time() - ts) < 10:
+            return True
+    return False
+
 load_dotenv()
 
 app = FastAPI(title="ClaraCore API")
@@ -816,7 +827,7 @@ def dar_baja_presupuesto(item_id: int, current_user=Depends(get_current_user)):
         "updated_at": "now()"
     }).eq("id", item_id).execute()
     # Cola CAD: renombrar layers con prefijo del_
-    if _dwg_sessions.get(r.get("contrato_id")):
+    if _dwg_activo(r.get("contrato_id")):
         old_lent = r.get("layer_ent") or ""
         old_ltxt = r.get("layer_txt") or ""
         if old_lent and not old_lent.startswith("del_"):
@@ -838,6 +849,45 @@ def dar_baja_presupuesto(item_id: int, current_user=Depends(get_current_user)):
         supabase.table("presupuesto").update({
             "layer_ent": f"del_{old_lent}" if old_lent and not old_lent.startswith("del_") else old_lent,
             "layer_txt": f"del_{old_ltxt}" if old_ltxt and not old_ltxt.startswith("del_") else old_ltxt,
+        }).eq("id", item_id).execute()
+    return {"ok": True}
+
+@app.put("/presupuesto/item/{item_id}/restaurar")
+def restaurar_presupuesto(item_id: int, current_user=Depends(get_current_user)):
+    """Restaura un registro dado de baja: quita del_ de layers y reactiva en CAD."""
+    row = supabase.table("presupuesto").select(
+        "layer_txt, layer_ent, x_label, y_label, contrato_id, ent_handle, txt_handle, color_hex"
+    ).eq("id", item_id).execute().data
+    if not row:
+        raise HTTPException(status_code=404, detail="Registro no encontrado")
+    r = row[0]
+    supabase.table("presupuesto").update({
+        "dado_de_baja": False,
+        "updated_at": "now()"
+    }).eq("id", item_id).execute()
+    # Cola CAD: restaurar layers quitando prefijo del_
+    if _dwg_activo(r.get("contrato_id")):
+        old_lent = r.get("layer_ent") or ""
+        old_ltxt = r.get("layer_txt") or ""
+        new_lent = old_lent[4:] if old_lent.startswith("del_") else old_lent
+        new_ltxt = old_ltxt[4:] if old_ltxt.startswith("del_") else old_ltxt
+        if new_lent:
+            supabase.table("cad_queue").insert({
+                "contrato_id": r["contrato_id"],
+                "tipo": "cambiar_layer",
+                "estado": "pendiente",
+                "payload": {
+                    "ent_handle": r.get("ent_handle") or "",
+                    "txt_handle": r.get("txt_handle") or "",
+                    "layer_ent":  new_lent,
+                    "layer_txt":  new_ltxt,
+                    "color_hex":  r.get("color_hex") or "",
+                    "layoff": False
+                }
+            }).execute()
+        supabase.table("presupuesto").update({
+            "layer_ent": new_lent,
+            "layer_txt": new_ltxt,
         }).eq("id", item_id).execute()
     return {"ok": True}
 
@@ -908,7 +958,7 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
             data["id_pol"] = new_id_pol
         supabase.table("presupuesto").update(data).eq("id", rid).execute()
         # ── Encolar operación CAD si cambió ítem/capítulo ──────────────────
-        if (body.capitulo is not None or body.item is not None) and _dwg_sessions.get(contrato_id):
+        if (body.capitulo is not None or body.item is not None) and _dwg_activo(contrato_id):
             nuevo_cap  = body.capitulo or ""
             nuevo_item = body.item     or ""
             comp       = r.get("competencia") or ""
@@ -946,7 +996,7 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
     for rid in body.ids:
         supabase.table("presupuesto").update({"revisado": body.revisado, "updated_at": "now()"}).eq("id", rid).execute()
         # ── Encolar operación CAD si DWG conectado ─────────────────────────
-        if _dwg_sessions.get(contrato_id):
+        if _dwg_activo(contrato_id):
             r = info_map.get(rid, {})
             if r.get("x_label") and r.get("y_label"):
                 supabase.table("cad_queue").insert({
