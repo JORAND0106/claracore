@@ -4264,6 +4264,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                       t={t}
                       colores={analisisMapaColores}
                       height={260}
+                      bearing={90}
                       onPkidClick={analisisSeleccion ? abrirAnalisisMapaPopup : null}
                     />
                     <div style={{ fontSize:'10px', color:t.textMuted, marginTop:'6px', textAlign:'center' }}>
