@@ -3280,6 +3280,17 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [analisisMapaColores, setAnalisisMapaColores] = useState({})
   const [analisisMapaPopup, setAnalisisMapaPopup] = useState(null)
   const [analisisMapaPopupLoading, setAnalisisMapaPopupLoading] = useState(false)
+  // ── Liquidación ──
+  const [liqData,          setLiqData]          = useState(null)
+  const [liqLoading,       setLiqLoading]       = useState(false)
+  const [liqDir,           setLiqDir]           = useState('todos')
+  const [liqSortCol,       setLiqSortCol]       = useState('delta_costo')
+  const [liqSortDir,       setLiqSortDir]       = useState('asc')
+  const [liqPag,           setLiqPag]           = useState(0)
+  const [liqSeleccion,     setLiqSeleccion]     = useState(null)
+  const [liqMapaColores,   setLiqMapaColores]   = useState({})
+  const [liqMapaPopup,     setLiqMapaPopup]     = useState(null)
+  const [liqMapaPopupLoad, setLiqMapaPopupLoad] = useState(false)
   const [showModalContrato, setShowModalContrato] = useState(false)
   const [showAdmin, setShowAdmin] = useState(false)
   const [nuevoContrato, setNuevoContrato] = useState({ numero: '', objeto: '', contratista: '', nit: '' })
@@ -3451,6 +3462,57 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     setAnalisisMapaPopup({ pkid, data: res.ok ? await res.json() : null })
     setAnalisisMapaPopupLoading(false)
   }
+
+  async function cargarLiquidacion() {
+    if (!contratoIdDash) return
+    setLiqLoading(true); setLiqData(null); setLiqPag(0)
+    try {
+      const tok = getToken()
+      const res = await fetch(`${API_URL}/presupuesto/${contratoIdDash}/analisis-liquidacion`, { headers: { Authorization: `Bearer ${tok}` } })
+      if (res.ok) setLiqData((await res.json()).items || [])
+    } catch {}
+    setLiqLoading(false)
+  }
+
+  useEffect(() => {
+    if (contratoIdDash && dashTab === 'liquidacion') cargarLiquidacion()
+  }, [contratoIdDash, dashTab])
+
+  useEffect(() => {
+    if (!contratoIdDash || !liqSeleccion) { setLiqMapaColores({}); return }
+    const tok = getToken()
+    const params = new URLSearchParams()
+    if (liqSeleccion.capitulo) params.set('capitulo', liqSeleccion.capitulo)
+    if (liqSeleccion.item)     params.set('item', liqSeleccion.item)
+    fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-colores-liquidacion?${params}`, {
+      headers: { Authorization: `Bearer ${tok}` }
+    }).then(r => r.ok ? r.json() : {}).then(setLiqMapaColores).catch(() => {})
+  }, [contratoIdDash, liqSeleccion])
+
+  async function abrirLiqMapaPopup(pkid) {
+    if (!liqSeleccion) return
+    setLiqMapaPopupLoad(true); setLiqMapaPopup({ pkid, data: null })
+    const tok = getToken()
+    const params = new URLSearchParams({ pk_id: pkid })
+    if (liqSeleccion.capitulo) params.set('capitulo', liqSeleccion.capitulo)
+    if (liqSeleccion.item)     params.set('item', liqSeleccion.item)
+    const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-detalle?${params}`, {
+      headers: { Authorization: `Bearer ${tok}` }
+    })
+    setLiqMapaPopup({ pkid, data: res.ok ? await res.json() : null })
+    setLiqMapaPopupLoad(false)
+  }
+
+  const liqFiltrado = useMemo(() => {
+    if (!liqData) return []
+    let data = liqData.filter(r => r.categoria !== 'EJECUCION') // Ejecución es informativo, no se lista
+    if (liqDir !== 'todos') data = data.filter(r => r.categoria === liqDir)
+    return [...data].sort((a, b) => {
+      const va = a[liqSortCol] ?? 0, vb = b[liqSortCol] ?? 0
+      if (typeof va === 'string') return liqSortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va)
+      return liqSortDir === 'asc' ? va - vb : vb - va
+    })
+  }, [liqData, liqDir, liqSortCol, liqSortDir])
 
   const analisisFiltrado = useMemo(() => {
     if (!analisisData) return []
@@ -3648,7 +3710,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                 const cid = parseInt(e.target.value)
                 const contrato = usuario._contratos.find(c => c.id === cid)
                 if (!contrato) return
-                const u = { ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero, logo_contratista: contrato.logo_contratista ?? null, logo_interventoria: contrato.logo_interventoria ?? null }
+                const u = { ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero, logo_contratista: contrato.logo_contratista ?? null, logo_interventoria: contrato.logo_interventoria ?? null, contrato_fase: contrato.fase ?? 'PRESUPUESTO' }
                 setUsuario(u)
               }}
               style={{ fontSize: '13px', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none' }}
@@ -3688,7 +3750,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           return <>
             {/* ── Tab bar Dashboard ── */}
             <div style={{ display:'flex', gap:'6px', marginBottom:'20px', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'6px', width:'fit-content', boxShadow:t.shadow }}>
-              {[['resumen','📊 Resumen'],['analisis','🔍 Análisis de Desviaciones']].map(([key,label]) => (
+              {[
+                ['resumen',   '📊 Resumen'],
+                ['analisis',  '🔍 Análisis de Desviaciones'],
+                ...(usuario?.contrato_fase === 'LIQUIDACION' ? [['liquidacion', '⚖️ Análisis de Liquidación']] : []),
+              ].map(([key,label]) => (
                 <button key={key} onClick={() => setDashTab(key)} style={{ background:dashTab===key?t.primary:'transparent', color:dashTab===key?'#fff':t.textMuted, border:'none', borderRadius:'8px', padding:'8px 22px', fontSize:'13px', fontWeight:'700', cursor:'pointer', transition:'all 0.15s', letterSpacing:'0.2px' }}>{label}</button>
               ))}
             </div>
@@ -4388,10 +4454,259 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                 )}
               </>
             })()}
+
+            {dashTab === 'liquidacion' && usuario?.contrato_fase === 'LIQUIDACION' && (() => {
+              const fmtD2 = n => n!=null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+              const fmtM2 = n => { if(n==null) return '$0'; const abs=Math.abs(n); const sign=n<0?'-':''; if(abs>=1e9) return `${sign}$${(abs/1e9).toFixed(1)}B`; if(abs>=1e6) return `${sign}$${(abs/1e6).toFixed(1)}M`; if(abs>=1e3) return `${sign}$${(abs/1e3).toFixed(0)}K`; return `${sign}$${Math.round(abs)}` }
+              const nSuper  = liqFiltrado.filter(r=>r.categoria==='SUPERCOBRO').length
+              const nDev    = liqFiltrado.filter(r=>r.categoria==='DEVOLUCION').length
+              const nCobrar = liqFiltrado.filter(r=>r.categoria==='POR_COBRAR').length
+              const nEjec   = (liqData||[]).filter(r=>r.categoria==='EJECUCION').length
+              const sumSuper  = liqFiltrado.filter(r=>r.categoria==='SUPERCOBRO').reduce((s,r)=>s+Math.abs(r.delta_costo),0)
+              const sumDev    = liqFiltrado.filter(r=>r.categoria==='DEVOLUCION').reduce((s,r)=>s+Math.abs(r.delta_costo),0)
+              const sumCobrar = liqFiltrado.filter(r=>r.categoria==='POR_COBRAR').reduce((s,r)=>s+r.delta_costo,0)
+              const top10liq  = [...liqFiltrado].sort((a,b)=>Math.abs(b.delta_costo)-Math.abs(a.delta_costo)).slice(0,10)
+              const LIQ_PAG = 20
+              const totalPagsL = Math.ceil(liqFiltrado.length / LIQ_PAG)
+              const sliceL = liqFiltrado.slice(liqPag*LIQ_PAG, (liqPag+1)*LIQ_PAG)
+              const CAT_COLOR = { SUPERCOBRO:'#EF4444', DEVOLUCION:'#F59E0B', POR_COBRAR:'#10B981', EQUILIBRIO:'#6B7280' }
+              function liqThClick(key) {
+                if (liqSortCol===key) setLiqSortDir(d=>d==='asc'?'desc':'asc')
+                else { setLiqSortCol(key); setLiqSortDir('asc') }
+              }
+              const LIQ_COLS = [
+                {key:'capitulo',     label:'Capítulo',      align:'left'},
+                {key:'nombre',       label:'Ítem',          align:'left'},
+                {key:'descripcion',  label:'Descripción',   align:'left'},
+                {key:'cant_recalc',  label:'Cant Recalc.',  align:'right'},
+                {key:'recalculado',  label:'Costo Recalc.', align:'right'},
+                {key:'cant_cobro',   label:'Cant Cobro',    align:'right'},
+                {key:'cobrado',      label:'Costo Cobro',   align:'right'},
+                {key:'delta_cant',   label:'Δ Cant',        align:'right'},
+                {key:'delta_costo',  label:'Δ Costo',       align:'right'},
+                {key:'pct',          label:'% Ejec.',       align:'right'},
+                {key:'categoria',    label:'Categoría',     align:'center'},
+              ]
+              return <>
+                {/* Filtros */}
+                <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'12px 16px', marginBottom:'14px', boxShadow:t.shadow }}>
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:'10px', alignItems:'center' }}>
+                    <select value={liqDir} onChange={e=>{setLiqDir(e.target.value);setLiqPag(0)}} style={{ background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'11px', cursor:'pointer', outline:'none' }}>
+                      <option value="todos">🔵 Todas las categorías</option>
+                      <option value="SUPERCOBRO">🔴 Supercobro — excede +$20M</option>
+                      <option value="DEVOLUCION">🟡 Por Devolución — excede hasta $20M</option>
+                      <option value="POR_COBRAR">🟢 Por Cobrar — recalc mayor al cobro</option>
+                    </select>
+                    {liqDir !== 'todos' && (
+                      <button onClick={()=>{setLiqDir('todos');setLiqPag(0)}} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', fontSize:'11px', color:t.textMuted, cursor:'pointer' }}>✕ Limpiar</button>
+                    )}
+                    <div style={{ marginLeft:'auto', fontSize:'11px', color:t.textMuted, fontStyle:'italic' }}>
+                      {liqLoading ? '⏳ Cargando...' : `${liqFiltrado.length} registros · ${nEjec} ítems de solo ejecución (excluidos)`}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Mapa + KPI chips */}
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:'14px', marginBottom:'14px', alignItems:'start' }}>
+                  <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'12px 14px', boxShadow:t.shadow }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
+                      <div style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>🗺️ Plano — Cobro vs Recalculado</div>
+                      {liqSeleccion ? (
+                        <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+                          <span style={{ fontSize:'10px', background:t.primary+'18', color:t.primary, borderRadius:'20px', padding:'2px 10px', fontWeight:'700' }}>
+                            {liqSeleccion.item ? `Ítem: ${liqSeleccion.item}` : `Cap: ${liqSeleccion.capitulo?.slice(0,24)}`}
+                          </span>
+                          <button onClick={()=>setLiqSeleccion(null)} style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'13px' }}>✕</button>
+                        </div>
+                      ) : <span style={{ fontSize:'10px', color:t.textMuted, fontStyle:'italic' }}>← Clic en fila para ver en plano</span>}
+                    </div>
+                    <MiniMapaSemaforo t={t} colores={liqMapaColores} height={260} bearing={90} onPkidClick={liqSeleccion ? abrirLiqMapaPopup : null} />
+                    <div style={{ fontSize:'10px', color:t.textMuted, marginTop:'6px', textAlign:'center' }}>
+                      {Object.keys(liqMapaColores).length > 0 ? `${Object.keys(liqMapaColores).length} PK_IDs activos` : liqSeleccion ? 'Sin PK_IDs para este registro' : 'Selecciona una fila'}
+                    </div>
+                  </div>
+                  <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+                    {[
+                      {key:'SUPERCOBRO', label:'SUPERCOBRO',    count:nSuper,  amount:sumSuper,  color:'#EF4444', icon:'🔴', sub:'Cobro excede recalc en más de $20M'},
+                      {key:'DEVOLUCION', label:'POR DEVOLUCIÓN',count:nDev,    amount:sumDev,    color:'#F59E0B', icon:'🟡', sub:'Excede recalc hasta $20M'},
+                      {key:'POR_COBRAR', label:'POR COBRAR',    count:nCobrar, amount:sumCobrar, color:'#10B981', icon:'🟢', sub:'Recalculado mayor al cobro'},
+                    ].map(k => (
+                      <div key={k.key} onClick={()=>{setLiqDir(d=>d===k.key?'todos':k.key);setLiqPag(0)}}
+                        style={{ background:t.bgCard, border:`1px solid ${liqDir===k.key?k.color:k.color+'44'}`, borderRadius:'10px', padding:'10px 14px', boxShadow:t.shadow, borderLeft:`4px solid ${k.color}`, cursor:'pointer', opacity:liqDir!=='todos'&&liqDir!==k.key?0.5:1 }}>
+                        <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'3px' }}>{k.icon} {k.label}</div>
+                        <div style={{ fontSize:'20px', fontWeight:'800', color:k.color, lineHeight:1, marginBottom:'2px' }}>{k.count} <span style={{fontSize:'11px',fontWeight:'400'}}>registros</span></div>
+                        <div style={{ fontSize:'10px', fontWeight:'700', color:k.color }}>{fmtD2(k.amount)}</div>
+                        <div style={{ fontSize:'9px', color:t.textMuted, marginTop:'2px' }}>{k.sub}</div>
+                      </div>
+                    ))}
+                    <div style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', fontSize:'10px', color:t.textMuted }}>
+                      ℹ️ <strong>{nEjec}</strong> ítems de solo ejecución excluidos del análisis
+                    </div>
+                  </div>
+                </div>
+
+                {/* Top 10 */}
+                {!liqLoading && top10liq.length > 0 && (
+                  <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'14px 16px', marginBottom:'14px', boxShadow:t.shadow }}>
+                    <div style={{ fontSize:'12px', fontWeight:'700', color:t.text, marginBottom:'10px' }}>⚡ Top 10 — Mayor Desviación Absoluta</div>
+                    {top10liq.map((r,i) => {
+                      const maxAbs = Math.abs(top10liq[0].delta_costo)||1
+                      const color = CAT_COLOR[r.categoria] || t.textMuted
+                      return (
+                        <div key={i} style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'5px' }}>
+                          <div style={{ fontSize:'10px', color:t.textMuted, width:'24px', textAlign:'right', flexShrink:0 }}>#{i+1}</div>
+                          <div style={{ fontSize:'10px', color:t.text, width:'150px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.nombre}</div>
+                          <div style={{ fontSize:'9px', color:t.textMuted, width:'80px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.capitulo}</div>
+                          <div style={{ flex:1, height:'14px', background:t.border, borderRadius:'4px', overflow:'hidden' }}>
+                            <div style={{ width:`${Math.abs(r.delta_costo)/maxAbs*100}%`, height:'100%', background:color, borderRadius:'4px' }}/>
+                          </div>
+                          <div style={{ fontSize:'10px', fontWeight:'700', color, width:'80px', textAlign:'right', flexShrink:0 }}>{fmtM2(r.delta_costo)}</div>
+                          <span style={{ fontSize:'9px', background:color+'18', color, borderRadius:'10px', padding:'1px 7px', flexShrink:0 }}>{r.categoria}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Tabla */}
+                {liqLoading ? (
+                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>⏳ Cargando datos de liquidación...</div>
+                ) : liqFiltrado.length===0 ? (
+                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>Sin registros para los filtros seleccionados</div>
+                ) : (
+                  <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', boxShadow:t.shadow, overflow:'hidden' }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 16px', borderBottom:`1px solid ${t.border}` }}>
+                      <div style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>⚖️ Liquidación — {liqFiltrado.length} registros</div>
+                      {totalPagsL > 1 && (
+                        <div style={{ display:'flex', gap:'4px', alignItems:'center' }}>
+                          <button onClick={()=>setLiqPag(p=>Math.max(0,p-1))} disabled={liqPag===0} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 7px', fontSize:'11px', cursor:liqPag===0?'default':'pointer', color:liqPag===0?t.textMuted:t.text }}>‹</button>
+                          <span style={{ fontSize:'10px', color:t.textMuted }}>{liqPag+1}/{totalPagsL}</span>
+                          <button onClick={()=>setLiqPag(p=>Math.min(totalPagsL-1,p+1))} disabled={liqPag===totalPagsL-1} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 7px', fontSize:'11px', cursor:liqPag===totalPagsL-1?'default':'pointer', color:liqPag===totalPagsL-1?t.textMuted:t.text }}>›</button>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ overflowX:'auto', overflowY:'auto', maxHeight:'420px' }}>
+                      <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                        <thead style={{ position:'sticky', top:0, zIndex:2 }}>
+                          <tr style={{ background:t.bg }}>
+                            {LIQ_COLS.map(col => (
+                              <th key={col.key} onClick={()=>liqThClick(col.key)} style={{ padding:'8px 10px', fontSize:'10px', fontWeight:'700', color:liqSortCol===col.key?t.primary:t.textMuted, textAlign:col.align, cursor:'pointer', whiteSpace:'nowrap', userSelect:'none', borderBottom:`2px solid ${t.border}` }}>
+                                {col.label}{liqSortCol===col.key?(liqSortDir==='asc'?' ↑':' ↓'):''}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sliceL.map((r,i) => {
+                            const color = CAT_COLOR[r.categoria] || t.textMuted
+                            const bgBadge = (CAT_COLOR[r.categoria] || '#6B7280') + '18'
+                            const isSelected = liqSeleccion && (liqSeleccion.item ? liqSeleccion.item===r.nombre && liqSeleccion.capitulo===r.capitulo : liqSeleccion.capitulo===r.nombre)
+                            return (
+                              <tr key={i}
+                                onClick={()=>setLiqSeleccion({capitulo:r.capitulo, item:r.nombre})}
+                                style={{ borderBottom:`1px solid ${t.border}44`, background:isSelected?t.primary+'18':i%2===0?'transparent':t.bg+'44', cursor:'pointer' }}>
+                                <td style={{ padding:'6px 10px', fontSize:'10px', color:t.textMuted, maxWidth:'100px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.capitulo}</td>
+                                <td style={{ padding:'6px 10px', fontWeight:'700', color:t.primary, whiteSpace:'nowrap' }}>{r.nombre}</td>
+                                <td style={{ padding:'6px 10px', fontSize:'10px', color:t.textMuted, maxWidth:'160px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.descripcion}>{r.descripcion||'—'}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'right', color:t.textMuted }}>{(r.cant_recalc||0).toFixed(2)}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'right', color:t.text }}>{fmtM2(r.recalculado)}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'right', color:t.textMuted }}>{(r.cant_cobro||0).toFixed(2)}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'right', color:t.text }}>{fmtM2(r.cobrado)}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:'700', color:r.delta_cant>0?'#10B981':r.delta_cant<0?'#EF4444':t.textMuted }}>{r.delta_cant>0?'+':''}{(r.delta_cant||0).toFixed(2)}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:'700', color }}>{r.delta_costo>0?'+':''}{fmtM2(r.delta_costo)}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'right' }}>
+                                  <div style={{ display:'flex', alignItems:'center', gap:'4px', justifyContent:'flex-end' }}>
+                                    <div style={{ width:'28px', height:'5px', background:t.border, borderRadius:'3px', overflow:'hidden' }}>
+                                      <div style={{ width:`${Math.min(100,Math.max(0,r.pct))}%`, height:'100%', background:color, borderRadius:'3px' }}/>
+                                    </div>
+                                    <span style={{ color, fontWeight:'700', minWidth:'30px' }}>{Math.min(r.pct,999)}%</span>
+                                  </div>
+                                </td>
+                                <td style={{ padding:'6px 10px', textAlign:'center' }}>
+                                  <span style={{ background:bgBadge, color, borderRadius:'20px', padding:'2px 8px', fontSize:'9px', fontWeight:'700' }}>{r.categoria}</span>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </>
+            })()}
           </>
         })()}
 
-{/* ── Popup detalle PK_ID ── */}
+{/* ── Popup PK_ID Liquidación ── */}
+        {liqMapaPopup && (
+          <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.55)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}
+            onClick={() => setLiqMapaPopup(null)}>
+            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'780px', maxWidth:'96vw', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
+              onClick={e => e.stopPropagation()}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px' }}>
+                <div>
+                  <div style={{ fontSize:'16px', fontWeight:'700', color:t.textMuted }}>{liqSeleccion?.capitulo}</div>
+                  <div style={{ fontSize:'12px', fontWeight:'800', color:t.primary, marginTop:'2px' }}>
+                    {liqSeleccion?.item} — {liqMapaPopup.data?.ppto?.[0]?.descripcion || liqMapaPopup.data?.cobro?.[0]?.descripcion || ''}
+                  </div>
+                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'3px' }}>PK_ID: <strong style={{ color:t.text }}>{liqMapaPopup.pkid}</strong></div>
+                </div>
+                <button onClick={() => setLiqMapaPopup(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+              </div>
+              {liqMapaPopupLoad ? (
+                <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>⏳ Cargando...</div>
+              ) : liqMapaPopup.data ? (() => {
+                const { ppto, cobro, totales } = liqMapaPopup.data
+                const fmtD3 = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+                const fmtN3 = n => n != null ? Number(n).toFixed(2) : '—'
+                const thS = { padding:'6px 10px', fontSize:'10px', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
+                const tdS = { padding:'6px 10px', fontSize:'11px', color:t.text, borderBottom:`1px solid ${t.border}` }
+                return (
+                  <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:'16px' }}>
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px' }}>
+                      <div style={{ background:t.bg, borderRadius:'10px', overflow:'hidden' }}>
+                        <div style={{ padding:'8px 12px', fontSize:'11px', fontWeight:'700', color:'#0077B6', borderBottom:`1px solid ${t.border}` }}>📋 Recalculado ({ppto?.length||0} registros)</div>
+                        {ppto?.length > 0 ? (
+                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                            <thead><tr>{['ID_Pol','Nodo Ini','Nodo Fin','Cant','Costo'].map(h=><th key={h} style={thS}>{h}</th>)}</tr></thead>
+                            <tbody>{ppto.map((p,i)=><tr key={i}><td style={tdS}>{p.id_polilinia}</td><td style={tdS}>{p.nodo_ini}</td><td style={tdS}>{p.nodo_fin}</td><td style={tdS}>{fmtN3(p.cantidad)}</td><td style={tdS}>{fmtD3(p.costo_directo)}</td></tr>)}</tbody>
+                          </table>
+                        ) : <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'12px' }}>Sin registros recalculados</div>}
+                      </div>
+                      <div style={{ background:t.bg, borderRadius:'10px', overflow:'hidden' }}>
+                        <div style={{ padding:'8px 12px', fontSize:'11px', fontWeight:'700', color:'#00A896', borderBottom:`1px solid ${t.border}` }}>💰 Cobro ({cobro?.length||0} registros)</div>
+                        {cobro?.length > 0 ? (
+                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                            <thead><tr>{['Registro','Acta','Tramo Ini','Tramo Fin','Cant','Costo'].map(h=><th key={h} style={thS}>{h}</th>)}</tr></thead>
+                            <tbody>{cobro.map((c,i)=><tr key={i}><td style={{...tdS,color:'#00A896',fontWeight:'700'}}>{c.id}</td><td style={tdS}>{c.acta}</td><td style={tdS}>{c.nodo_ini}</td><td style={tdS}>{c.nodo_fin}</td><td style={tdS}>{fmtN3(c.cantidad)}</td><td style={tdS}>{fmtD3(c.costo_directo)}</td></tr>)}</tbody>
+                          </table>
+                        ) : <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'12px' }}>Sin registros de cobro</div>}
+                      </div>
+                    </div>
+                    {totales && (
+                      <div style={{ borderTop:`2px solid ${t.border}`, paddingTop:'10px', display:'flex', gap:'8px', flexWrap:'nowrap', overflowX:'auto' }}>
+                        {[
+                          { label:'Cant. Recalc.',  val: fmtN3(totales.cant_ppto),   color:'#0077B6' },
+                          { label:'Costo Recalc.',  val: fmtD3(totales.costo_ppto),  color:'#0077B6' },
+                          { label:'Cant. Cobro',    val: fmtN3(totales.cant_cobro),  color:'#00A896' },
+                          { label:'Costo Cobro',    val: fmtD3(totales.costo_cobro), color:'#00A896' },
+                          { label:'Δ Cantidad',     val: `${totales.delta_cant>=0?'+':''}${fmtN3(totales.delta_cant)}`,   color:totales.delta_cant>=0?'#10B981':'#EF4444' },
+                          { label:'Δ Costo',        val: `${totales.delta_costo>=0?'+':''}${fmtD3(totales.delta_costo)}`, color:totales.delta_costo>=0?'#10B981':'#EF4444' },
+                        ].map(({label,val,color}) => (
+                          <div key={label} style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', flex:1, minWidth:'100px' }}>
+                            <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.4px', marginBottom:'2px', whiteSpace:'nowrap' }}>{label}</div>
+                            <div style={{ fontSize:'12px', fontWeight:'800', color, whiteSpace:'nowrap' }}>{val}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })() : <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>Sin datos</div>}
+            </div>
+          </div>
+        )}
         {popupPkid && (
           <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.55)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}
             onClick={() => setPopupPkid(null)}>
@@ -4824,6 +5139,7 @@ if (contratos.length > 1) {
             contrato_numero:    uConContratos.contrato_numero    ?? c.numero,
             logo_contratista:   uConContratos.logo_contratista   ?? c.logo_contratista   ?? null,
             logo_interventoria: uConContratos.logo_interventoria ?? c.logo_interventoria ?? null,
+            contrato_fase:      c.fase ?? 'PRESUPUESTO',
           }
           const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
           storage.setItem('cc_usuario', JSON.stringify(uWithLogos))
@@ -4840,7 +5156,7 @@ if (contratos.length > 1) {
 
   async function handleSeleccionarContrato(contratoId) {
     const contrato = pendingContratos.find(c => c.id === parseInt(contratoId))
-    const u = { ...pendingUser, contrato_id: contrato.id, contrato_numero: contrato.numero, logo_contratista: contrato.logo_contratista ?? null, logo_interventoria: contrato.logo_interventoria ?? null }
+    const u = { ...pendingUser, contrato_id: contrato.id, contrato_numero: contrato.numero, logo_contratista: contrato.logo_contratista ?? null, logo_interventoria: contrato.logo_interventoria ?? null, contrato_fase: contrato.fase ?? 'PRESUPUESTO' }
     delete u._token
     // Guardar contrato principal en BD
     try {

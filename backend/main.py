@@ -106,6 +106,7 @@ class ContratoUpdate(BaseModel):
     interventoria: Optional[str] = None
     logo_contratista: Optional[str] = None
     logo_interventoria: Optional[str] = None
+    fase: Optional[str] = None  # 'PRESUPUESTO' | 'LIQUIDACION'
 
 class ListadoPrecioItem(BaseModel):
     capitulo: Optional[str] = None
@@ -600,7 +601,7 @@ def get_usuario_contratos(usuario_id: int, current_user=Depends(get_current_user
     ids = [r["contrato_id"] for r in result.data]
     if not ids:
         return []
-    contratos = supabase.table("contratos").select("id, numero, contratista, interventoria, logo_contratista, logo_interventoria").in_("id", ids).execute()
+    contratos = supabase.table("contratos").select("id, numero, contratista, interventoria, logo_contratista, logo_interventoria, fase").in_("id", ids).execute()
     return contratos.data
 
 @app.post("/admin/usuario-contratos")
@@ -1184,7 +1185,112 @@ def get_analisis_items(contrato_id: int, current_user=Depends(get_current_user))
         })
     return {"items": result2}
 
-@app.get("/cobro/{contrato_id}")
+@app.get("/presupuesto/{contrato_id}/analisis-liquidacion")
+def get_analisis_liquidacion(contrato_id: int, current_user=Depends(get_current_user)):
+    """Compara cobro vs cantidades recalculadas (tipo_ejecucion='O') para fase de liquidación."""
+    cobros, recalc = [], []
+    # Cobro: toda la tabla cobro del contrato
+    offset = 0
+    while True:
+        batch = supabase.table("cobro").select("capitulo, item, costo_directo, cantidad, longitud").eq("contrato_id", contrato_id).range(offset, offset + 999).execute().data
+        cobros.extend(batch)
+        if len(batch) < 1000: break
+        offset += 1000
+    # Recalculado: presupuesto con tipo_ejecucion = 'O' (Obra ejecutada)
+    offset = 0
+    while True:
+        batch = supabase.table("presupuesto").select("capitulo, item, descripcion, costo_directo, cant_total").eq("contrato_id", contrato_id).eq("tipo_ejecucion", "O").range(offset, offset + 999).execute().data
+        recalc.extend(batch)
+        if len(batch) < 1000: break
+        offset += 1000
+
+    agg_r = {}; agg_c = {}; agg_r_cant = {}; agg_c_cant = {}; desc_map = {}; cap_map = {}
+    for r in recalc:
+        k = r.get("item") or "(sin item)"
+        agg_r[k] = agg_r.get(k, 0) + (r.get("costo_directo") or 0)
+        agg_r_cant[k] = agg_r_cant.get(k, 0) + (r.get("cant_total") or 0)
+        if r.get("descripcion") and k not in desc_map: desc_map[k] = r["descripcion"]
+        if k not in cap_map: cap_map[k] = r.get("capitulo") or ""
+    for r in cobros:
+        k = r.get("item") or "(sin item)"
+        agg_c[k] = agg_c.get(k, 0) + (r.get("costo_directo") or 0)
+        agg_c_cant[k] = agg_c_cant.get(k, 0) + (r.get("cantidad") or r.get("longitud") or 0)
+        if k not in cap_map and r.get("capitulo"): cap_map[k] = r["capitulo"]
+
+    keys = sorted(set(list(agg_r.keys()) + list(agg_c.keys())))
+    UMBRAL = 20_000_000  # 20 millones COP
+    result = []
+    for k in keys:
+        r_val = agg_r.get(k, 0)
+        c_val = agg_c.get(k, 0)
+        r_cant = agg_r_cant.get(k, 0)
+        c_cant = agg_c_cant.get(k, 0)
+        delta_costo = r_val - c_val  # positivo = por cobrar, negativo = cobro excede recalc
+        # Clasificación según reglas de liquidación
+        if r_cant == 0 and c_val > 0:
+            categoria = "EJECUCION"        # No cuantificado por planos, se acepta
+        elif c_val > r_val and (c_val - r_val) > UMBRAL:
+            categoria = "SUPERCOBRO"       # Cobro excede recalc en más de 20M
+        elif c_val > r_val and (c_val - r_val) <= UMBRAL:
+            categoria = "DEVOLUCION"       # Cobro excede recalc hasta 20M
+        elif r_val > c_val:
+            categoria = "POR_COBRAR"       # Recalc supera lo cobrado
+        else:
+            categoria = "EQUILIBRIO"
+        result.append({
+            "nombre": k, "capitulo": cap_map.get(k, ""), "descripcion": desc_map.get(k, ""),
+            "recalculado": r_val, "cobrado": c_val,
+            "delta_costo": delta_costo,
+            "pct": round(c_val / r_val * 100, 1) if r_val else 0,
+            "cant_recalc": r_cant, "cant_cobro": c_cant,
+            "delta_cant": r_cant - c_cant,
+            "categoria": categoria,
+        })
+    return {"items": result}
+
+@app.get("/cobro/{contrato_id}/pkid-colores-liquidacion")
+def get_pkid_colores_liquidacion(
+    contrato_id: int,
+    capitulo: Optional[str] = None,
+    item: Optional[str] = None,
+    current_user=Depends(get_current_user)
+):
+    """Colores PK_ID: cobro vs recalculado (tipo_ejecucion='O') para mini-mapa liquidación."""
+    q_c = supabase.table("cobro").select("pk_id, costo_directo").eq("contrato_id", contrato_id)
+    q_r = supabase.table("presupuesto").select("pk_id, costo_directo").eq("contrato_id", contrato_id).eq("tipo_ejecucion", "O")
+    if item:
+        q_c = q_c.eq("item", item)
+        q_r = q_r.eq("item", item)
+    elif capitulo:
+        q_c = q_c.eq("capitulo", capitulo)
+        q_r = q_r.eq("capitulo", capitulo)
+    cobro = q_c.execute().data
+    recalc = q_r.execute().data
+    cobro_agg = {}
+    for r in cobro:
+        k = str(r.get("pk_id") or "").strip()
+        if k: cobro_agg[k] = cobro_agg.get(k, 0) + (r.get("costo_directo") or 0)
+    recalc_agg = {}
+    for r in recalc:
+        k = str(r.get("pk_id") or "").strip()
+        if k: recalc_agg[k] = recalc_agg.get(k, 0) + (r.get("costo_directo") or 0)
+    UMBRAL = 20_000_000
+    result = {}
+    for pk in set(list(cobro_agg.keys()) + list(recalc_agg.keys())):
+        c = cobro_agg.get(pk, 0)
+        r2 = recalc_agg.get(pk, 0)
+        if r2 == 0 and c > 0:
+            categoria = "EJECUCION"
+        elif c > r2 and (c - r2) > UMBRAL:
+            categoria = "SUPERCOBRO"
+        elif c > r2 and (c - r2) <= UMBRAL:
+            categoria = "DEVOLUCION"
+        elif r2 > c:
+            categoria = "POR_COBRAR"
+        else:
+            categoria = "EQUILIBRIO"
+        result[pk] = {"cobrado": c, "recalculado": r2, "pct": round(c / r2 * 100, 1) if r2 else 0, "categoria": categoria}
+    return result
 def get_cobro(
     contrato_id: int,
     capitulo: Optional[str] = None,

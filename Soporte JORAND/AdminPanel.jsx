@@ -972,7 +972,6 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
   const [editandoId, setEditandoId] = useState(null); // null = crear, number = editar
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
-  const [togglingFase, setTogglingFase] = useState(null); // id del contrato en proceso
 
   function handleLogo(campo, e) {
     const file = e.target.files[0];
@@ -998,19 +997,6 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     setEditandoId(null);
     setForm(FORM_VACIO);
     setMsg(null);
-  }
-
-  async function toggleFase(c) {
-    const nuevaFase = (c.fase || 'PRESUPUESTO') === 'PRESUPUESTO' ? 'LIQUIDACION' : 'PRESUPUESTO';
-    if (!window.confirm(`¿Cambiar el contrato "${c.numero}" a fase ${nuevaFase}?\n\n${nuevaFase === 'LIQUIDACION' ? 'Activará el tab de Análisis de Liquidación en el Dashboard.' : 'Desactivará el tab de Análisis de Liquidación.'}`)) return;
-    setTogglingFase(c.id);
-    try {
-      await call("PUT", `/contratos/${c.id}`, { fase: nuevaFase });
-      setMsg({ type: 'success', text: `Contrato "${c.numero}" cambiado a fase ${nuevaFase}` });
-      recargarContratos();
-    } catch (e) {
-      setMsg({ type: 'error', text: e.message || 'Error al cambiar fase' });
-    } finally { setTogglingFase(null); }
   }
 
   async function handleGuardar() {
@@ -1090,35 +1076,12 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
                   <div style={{ fontWeight: 700, color: '#00afc5', fontSize: 13 }}>{c.numero}</div>
                   <div style={{ color: '#8acdd8', fontSize: 12, marginTop: 2 }}>{c.contratista}</div>
                   {c.interventoria && <div style={{ color: '#4a7a87', fontSize: 11, marginTop: 2 }}>Interventoría: {c.interventoria}</div>}
-                  {/* Badge de fase */}
-                  <div style={{ marginTop: 8, display: 'inline-flex', alignItems: 'center', gap: 6, background: (c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? 'rgba(245,158,11,0.12)' : 'rgba(0,175,197,0.10)', border: `1px solid ${(c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? 'rgba(245,158,11,0.4)' : 'rgba(0,175,197,0.3)'}`, borderRadius: 20, padding: '3px 10px' }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: (c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? '#F59E0B' : '#00afc5', letterSpacing: 1 }}>
-                      {(c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? '⚖️ LIQUIDACIÓN' : '📋 PRESUPUESTO'}
-                    </span>
-                  </div>
                   <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
                     {c.logo_contratista && <img src={c.logo_contratista} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
                     {c.logo_interventoria && <img src={c.logo_interventoria} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
                   </div>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
-                  {/* Toggle PRESUPUESTO / LIQUIDACIÓN */}
-                  {perms?.editar && (
-                    <div style={{ display: 'flex', gap: 0, background: '#0a1628', border: '1px solid rgba(0,175,197,0.25)', borderRadius: 8, overflow: 'hidden' }}>
-                      {['PRESUPUESTO', 'LIQUIDACION'].map(fase => {
-                        const activo = (c.fase || 'PRESUPUESTO') === fase;
-                        const col = fase === 'LIQUIDACION' ? '#F59E0B' : '#00afc5';
-                        return (
-                          <button key={fase} disabled={activo || togglingFase === c.id}
-                            onClick={() => toggleFase(c)}
-                            style={{ background: activo ? col + '22' : 'transparent', color: activo ? col : '#4a7a87', border: 'none', borderRight: fase === 'PRESUPUESTO' ? '1px solid rgba(0,175,197,0.2)' : 'none', padding: '5px 10px', fontSize: 10, fontWeight: activo ? 700 : 400, cursor: activo ? 'default' : 'pointer', letterSpacing: 0.5, transition: 'all 0.15s', whiteSpace: 'nowrap' }}>
-                            {fase === 'PRESUPUESTO' ? '📋 Presupuesto' : '⚖️ Liquidación'}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', gap: 6 }}>
+                <div style={{ display: 'flex', gap: 6 }}>
                   {perms?.editar && (
                     <button
                       onClick={() => editandoId === c.id ? cancelarEdicion() : iniciarEdicion(c)}
@@ -1141,7 +1104,6 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
                       🗑 Eliminar
                     </button>
                   )}
-                  </div>
                 </div>
               </div>
             </div>
