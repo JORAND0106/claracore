@@ -1005,8 +1005,20 @@ async function cargarRegistros(modoPapelera) {
   ]
 function zoomEnDwg(registro) {
     if (!registro.x_label || !registro.y_label) return
-    const uri = `claralink://zoom?x=${registro.x_label}&y=${registro.y_label}&radio=20`
-    window.location.href = uri
+    // En PC con ClaraLink → protocolo directo (instantáneo)
+    // En tablet/móvil → via cad_queue (max 3s)
+    const esClaraLinkDisponible = !(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
+    if (esClaraLinkDisponible) {
+      const uri = `claralink://zoom?x=${registro.x_label}&y=${registro.y_label}&radio=20`
+      window.location.href = uri
+    } else {
+      // Ruta tablet: encolar via backend
+      if (!registro.pk_id) return
+      const tok = getToken()
+      fetch(`${API}/cad-queue/${contratoId}/zoom-pkid?pk_id=${encodeURIComponent(registro.pk_id)}`, {
+        method: 'POST', headers: { Authorization: `Bearer ${tok}` }
+      }).catch(() => {})
+    }
   }
 
   async function cambiarEstadoDirecto(id, nuevoEstado) {
@@ -1728,10 +1740,11 @@ async function darDeBaja(id) {
                 const isEdit = editando === r.id
                 return (
                   <tr key={r.id} style={{ background:seleccionados.has(r.id)?(t.primary+'18'):'transparent', cursor: r.x_label ? 'crosshair' : 'default' }}
-                    onClick={() => { if (!isEdit) zoomEnDwg(r) }}>
+                    onClick={() => { if (!isEdit) { zoomEnDwg(r); if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && r.pk_id) { const td = document.getElementById(`zoom-feedback-${r.id}`); if(td){td.style.opacity='1'; setTimeout(()=>{td.style.opacity='0'},2000)} } } }}>
                     <td style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                         <input type="checkbox" checked={seleccionados.has(r.id)} onChange={() => toggleSel(r.id)} />
+                        <span id={`zoom-feedback-${r.id}`} style={{ fontSize:'10px', color:'#10B981', opacity:'0', transition:'opacity 0.3s', pointerEvents:'none' }}>🎯</span>
                         <button onClick={() => setModalDetallePpto(r)}
                           title="Ver detalle"
                           style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'13px', padding:'0', lineHeight:1, display:'flex', alignItems:'center' }}
