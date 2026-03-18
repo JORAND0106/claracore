@@ -3328,7 +3328,10 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       .then(d => { console.log('cobro resumen data:', d); if(d) setKpiCobro(d) })
   }, [contratoIdDash])
 
-// ── Auto-refresh dashboard cada 60 segundos ───────────────────────────────
+// ── Auto-refresh dashboard cada 30 segundos ───────────────────────────────
+  const dashDrillRef = useRef([])
+  useEffect(() => { dashDrillRef.current = dashDrill }, [dashDrill])
+
   useEffect(() => {
     if (!contratoIdDash) return
     const recargar = () => {
@@ -3337,9 +3340,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiPpto(d) }).catch(() => {})
       fetch(`${API_URL}/cobro/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiCobro(d) }).catch(() => {})
-      if (dashDrill.length > 0) cargarDashDrill(dashDrill)
+      if (dashDrillRef.current.length > 0) cargarDashDrill(dashDrillRef.current)
     }
-    const iv = setInterval(recargar, 60000)
+    const iv = setInterval(recargar, 30000)
     return () => clearInterval(iv)
   }, [contratoIdDash])
 
