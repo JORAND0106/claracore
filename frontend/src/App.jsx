@@ -3266,6 +3266,16 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [menuAbierto, setMenuAbierto] = useState(false)
   const [tabInferior, setTabInferior] = useState('gantt')
   const [analisis, setAnalisis] = useState('financiero')
+  const [dashTab, setDashTab] = useState('resumen')
+  const [analisisNivel, setAnalisisNivel] = useState('capitulo')
+  const [analisisDir, setAnalisisDir] = useState('todos')
+  const [analisisRangoMin, setAnalisisRangoMin] = useState('')
+  const [analisisRangoMax, setAnalisisRangoMax] = useState('')
+  const [analisisData, setAnalisisData] = useState(null)
+  const [analisisLoading, setAnalisisLoading] = useState(false)
+  const [analisisSortCol, setAnalisisSortCol] = useState('delta_costo')
+  const [analisisSortDir, setAnalisisSortDir] = useState('asc')
+  const [analisisPag, setAnalisisPag] = useState(0)
   const [showModalContrato, setShowModalContrato] = useState(false)
   const [showAdmin, setShowAdmin] = useState(false)
   const [nuevoContrato, setNuevoContrato] = useState({ numero: '', objeto: '', contratista: '', nit: '' })
@@ -3383,6 +3393,60 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       headers: { Authorization: `Bearer ${tok}` }
     }).then(r => r.ok ? r.json() : {}).then(setMiniMapaColores).catch(() => {})
   }, [contratoIdDash, dashDrill])
+
+  async function cargarAnalisis(nivel) {
+    if (!contratoIdDash) return
+    setAnalisisLoading(true); setAnalisisData(null); setAnalisisPag(0)
+    const tok = getToken()
+    try {
+      const url = nivel === 'capitulo'
+        ? `${API_URL}/cobro/${contratoIdDash}/drill`
+        : `${API_URL}/cobro/${contratoIdDash}/analisis-items`
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } })
+      if (res.ok) {
+        const data = await res.json()
+        setAnalisisData((data.items || data).map(r => ({
+          nombre: r.nombre || r.item,
+          capitulo: r.capitulo || r.nombre || '',
+          descripcion: r.descripcion || '',
+          presupuesto: r.presupuesto || 0,
+          cobrado: r.cobrado || 0,
+          cant_ppto: r.cant_ppto || 0,
+          cant_cobro: r.cant_cobro || 0,
+        })))
+      }
+    } catch {}
+    setAnalisisLoading(false)
+  }
+
+  useEffect(() => {
+    if (contratoIdDash && dashTab === 'analisis') cargarAnalisis(analisisNivel)
+  }, [contratoIdDash, dashTab, analisisNivel])
+
+  const analisisFiltrado = useMemo(() => {
+    if (!analisisData) return []
+    let data = analisisData.map(r => {
+      const delta_costo = (r.presupuesto || 0) - (r.cobrado || 0)
+      const delta_cant  = (r.cant_ppto   || 0) - (r.cant_cobro  || 0)
+      const pct = r.presupuesto ? Math.round(r.cobrado / r.presupuesto * 100) : (r.cobrado > 0 ? 999 : 0)
+      const estado = r.presupuesto === 0 ? 'SIN_PPTO'
+        : r.cobrado > r.presupuesto * 1.05 ? 'SOBRECOBRO'
+        : r.cobrado < r.presupuesto * 0.95 ? 'SUBCOBRO' : 'EQUILIBRIO'
+      return { ...r, delta_costo, delta_cant, pct, estado }
+    })
+    if (analisisDir === 'sobrecobro') data = data.filter(r => r.estado === 'SOBRECOBRO')
+    else if (analisisDir === 'subcobro') data = data.filter(r => r.estado === 'SUBCOBRO')
+    else if (analisisDir === 'equilibrio') data = data.filter(r => r.estado === 'EQUILIBRIO')
+    const minM = analisisRangoMin !== '' ? parseFloat(analisisRangoMin) * 1e6 : null
+    const maxM = analisisRangoMax !== '' ? parseFloat(analisisRangoMax) * 1e6 : null
+    if (minM !== null && !isNaN(minM)) data = data.filter(r => Math.abs(r.delta_costo) >= minM)
+    if (maxM !== null && !isNaN(maxM)) data = data.filter(r => Math.abs(r.delta_costo) <= maxM)
+    return [...data].sort((a, b) => {
+      const va = a[analisisSortCol] ?? 0, vb = b[analisisSortCol] ?? 0
+      if (typeof va === 'string') return analisisSortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va)
+      return analisisSortDir === 'asc' ? va - vb : vb - va
+    })
+  }, [analisisData, analisisDir, analisisRangoMin, analisisRangoMax, analisisSortCol, analisisSortDir])
 
   // Desarrollador ve todo; otros usuarios ven solo su contrato
   const esDeveloper = usuario?.cargo_nombre === 'Desarrollador'
@@ -3593,6 +3657,14 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           const maxCapCosto = Math.max(...porCapPpto.map(c => c.costo), 1)
 
           return <>
+            {/* ── Tab bar Dashboard ── */}
+            <div style={{ display:'flex', gap:'4px', marginBottom:'16px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'4px', width:'fit-content' }}>
+              {[['resumen','📊 Resumen'],['analisis','🔍 Análisis']].map(([key,label]) => (
+                <button key={key} onClick={() => setDashTab(key)} style={{ background:dashTab===key?t.primary:'transparent', color:dashTab===key?'#fff':t.textMuted, border:'none', borderRadius:'7px', padding:'6px 20px', fontSize:'12px', fontWeight:'600', cursor:'pointer', transition:'all 0.15s' }}>{label}</button>
+              ))}
+            </div>
+
+            {dashTab === 'resumen' && <>
             {/* ── KPIs compactos ── */}
             <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'12px', marginBottom:'20px' }}>
               {[
@@ -4079,6 +4151,175 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
               </div>
 
             </div>
+            </>}
+
+            {dashTab === 'analisis' && (() => {
+              const fmtD2 = n => n!=null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+              const fmtM2 = n => { if(n==null) return '$0'; const abs=Math.abs(n); const sign=n<0?'-':''; if(abs>=1e9) return `${sign}$${(abs/1e9).toFixed(1)}B`; if(abs>=1e6) return `${sign}$${(abs/1e6).toFixed(1)}M`; if(abs>=1e3) return `${sign}$${(abs/1e3).toFixed(0)}K`; return `${sign}$${Math.round(abs)}` }
+              const nSobre = analisisFiltrado.filter(r=>r.estado==='SOBRECOBRO').length
+              const nSub   = analisisFiltrado.filter(r=>r.estado==='SUBCOBRO').length
+              const nEq    = analisisFiltrado.filter(r=>r.estado==='EQUILIBRIO').length
+              const sumSobre = analisisFiltrado.filter(r=>r.estado==='SOBRECOBRO').reduce((s,r)=>s+Math.abs(r.delta_costo),0)
+              const sumSub   = analisisFiltrado.filter(r=>r.estado==='SUBCOBRO').reduce((s,r)=>s+r.delta_costo,0)
+              const top10 = [...analisisFiltrado].sort((a,b)=>Math.abs(b.delta_costo)-Math.abs(a.delta_costo)).slice(0,10)
+              const ANA_PAG = 20
+              const totalPagsA = Math.ceil(analisisFiltrado.length / ANA_PAG)
+              const sliceA = analisisFiltrado.slice(analisisPag*ANA_PAG, (analisisPag+1)*ANA_PAG)
+              function thClick(key) {
+                if (analisisSortCol===key) setAnalisisSortDir(d=>d==='asc'?'desc':'asc')
+                else { setAnalisisSortCol(key); setAnalisisSortDir('desc') }
+              }
+              const COLS = [
+                {key:'nombre',label:'Código',align:'left'},
+                ...(analisisNivel==='item' ? [{key:'capitulo',label:'Capítulo',align:'left'}] : []),
+                {key:'presupuesto',label:'Costo PPTO',align:'right'},
+                {key:'cobrado',label:'Costo Cobro',align:'right'},
+                {key:'delta_costo',label:'Δ Costo',align:'right'},
+                {key:'pct',label:'% Ejec.',align:'right'},
+                {key:'cant_ppto',label:'Cant PPTO',align:'right'},
+                {key:'cant_cobro',label:'Cant Cobro',align:'right'},
+                {key:'delta_cant',label:'Δ Cant',align:'right'},
+                {key:'estado',label:'Estado',align:'center'},
+              ]
+              return <>
+                {/* ── Filtros ── */}
+                <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'12px 16px', marginBottom:'14px', boxShadow:t.shadow }}>
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:'10px', alignItems:'center' }}>
+                    <div style={{ display:'flex', gap:'2px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'7px', padding:'2px' }}>
+                      {[['capitulo','Capítulo'],['item','Ítem']].map(([k,l]) => (
+                        <button key={k} onClick={()=>setAnalisisNivel(k)} style={{ background:analisisNivel===k?t.primary:'transparent', color:analisisNivel===k?'#fff':t.textMuted, border:'none', borderRadius:'5px', padding:'5px 12px', fontSize:'11px', fontWeight:'600', cursor:'pointer' }}>{l}</button>
+                      ))}
+                    </div>
+                    <select value={analisisDir} onChange={e=>{setAnalisisDir(e.target.value);setAnalisisPag(0)}} style={{ background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'11px', cursor:'pointer', outline:'none' }}>
+                      <option value="todos">🔵 Todos los registros</option>
+                      <option value="sobrecobro">🔴 Sobrecobro — Cobro &gt; PPTO</option>
+                      <option value="subcobro">🟡 Subcobro — PPTO &gt; Cobro</option>
+                      <option value="equilibrio">🟢 En equilibrio (±5%)</option>
+                    </select>
+                    <div style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'11px', color:t.textMuted }}>
+                      <span>|Δ| desde</span>
+                      <input type="number" min="0" placeholder="0" value={analisisRangoMin} onChange={e=>{setAnalisisRangoMin(e.target.value);setAnalisisPag(0)}} style={{ width:'68px', background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'6px', padding:'5px 7px', color:t.text, fontSize:'11px', outline:'none' }}/>
+                      <span>hasta</span>
+                      <input type="number" min="0" placeholder="∞" value={analisisRangoMax} onChange={e=>{setAnalisisRangoMax(e.target.value);setAnalisisPag(0)}} style={{ width:'68px', background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'6px', padding:'5px 7px', color:t.text, fontSize:'11px', outline:'none' }}/>
+                      <span style={{fontSize:'10px'}}>millones COP</span>
+                    </div>
+                    {(analisisDir!=='todos'||analisisRangoMin||analisisRangoMax) && (
+                      <button onClick={()=>{setAnalisisDir('todos');setAnalisisRangoMin('');setAnalisisRangoMax('');setAnalisisPag(0)}} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', fontSize:'11px', color:t.textMuted, cursor:'pointer' }}>✕ Limpiar filtros</button>
+                    )}
+                    <div style={{ marginLeft:'auto', fontSize:'11px', color:t.textMuted, fontStyle:'italic' }}>
+                      {analisisLoading ? '⏳ Cargando datos...' : `${analisisFiltrado.length} registros`}
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── KPI chips — clickeables para filtrar ── */}
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'12px', marginBottom:'14px' }}>
+                  {[
+                    {key:'sobrecobro', label:'SOBRECOBRO', count:nSobre, amount:sumSobre,  color:'#EF4444', icon:'🔴', sub:'Cobro excede el presupuesto'},
+                    {key:'subcobro',   label:'SUBCOBRO',   count:nSub,   amount:sumSub,    color:'#F59E0B', icon:'🟡', sub:'Saldo PPTO sin ejecutar'},
+                    {key:'equilibrio', label:'EQUILIBRIO', count:nEq,    amount:null,      color:'#10B981', icon:'🟢', sub:'Desviación dentro de ±5%'},
+                  ].map(k => (
+                    <div key={k.label}
+                      onClick={()=>{setAnalisisDir(d=>d===k.key?'todos':k.key);setAnalisisPag(0)}}
+                      style={{ background:t.bgCard, border:`1px solid ${analisisDir===k.key?k.color:k.color+'44'}`, borderRadius:'10px', padding:'12px 16px', boxShadow:t.shadow, borderLeft:`4px solid ${k.color}`, cursor:'pointer', transition:'border 0.15s', opacity:analisisDir!=='todos'&&analisisDir!==k.key?0.55:1 }}>
+                      <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'4px' }}>{k.icon} {k.label}</div>
+                      <div style={{ fontSize:'24px', fontWeight:'800', color:k.color, lineHeight:1, marginBottom:'3px' }}>{k.count} <span style={{fontSize:'12px',fontWeight:'400'}}>registros</span></div>
+                      {k.amount!=null && <div style={{ fontSize:'11px', fontWeight:'700', color:k.color, marginBottom:'2px' }}>{fmtD2(k.amount)}</div>}
+                      <div style={{ fontSize:'10px', color:t.textMuted }}>{k.sub}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* ── Top 10 desviaciones absolutas ── */}
+                {!analisisLoading && top10.length > 0 && (
+                  <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'14px 16px', marginBottom:'14px', boxShadow:t.shadow }}>
+                    <div style={{ fontSize:'12px', fontWeight:'700', color:t.text, marginBottom:'10px' }}>
+                      ⚡ Top 10 — Mayor Desviación Absoluta de Costo
+                      <span style={{ fontSize:'10px', fontWeight:'400', color:t.textMuted, marginLeft:'8px' }}>sobre los registros filtrados</span>
+                    </div>
+                    {top10.map((r,i) => {
+                      const maxAbs = Math.abs(top10[0].delta_costo)||1
+                      const pctBar = Math.abs(r.delta_costo)/maxAbs*100
+                      const color = r.estado==='SOBRECOBRO'?'#EF4444':r.estado==='SUBCOBRO'?'#F59E0B':'#10B981'
+                      return (
+                        <div key={i} style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'5px' }}>
+                          <div style={{ fontSize:'10px', color:t.textMuted, width:'24px', textAlign:'right', flexShrink:0 }}>#{i+1}</div>
+                          <div style={{ fontSize:'10px', color:t.text, width:'150px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.nombre}>{r.nombre}</div>
+                          {analisisNivel==='item' && <div style={{ fontSize:'9px', color:t.textMuted, width:'80px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.capitulo}>{r.capitulo}</div>}
+                          <div style={{ flex:1, height:'14px', background:t.border, borderRadius:'4px', overflow:'hidden' }}>
+                            <div style={{ width:`${pctBar}%`, height:'100%', background:color, borderRadius:'4px', transition:'width 0.5s ease' }}/>
+                          </div>
+                          <div style={{ fontSize:'10px', fontWeight:'700', color, width:'80px', textAlign:'right', flexShrink:0 }}>{r.delta_costo>0?'+':''}{fmtM2(r.delta_costo)}</div>
+                          <div style={{ fontSize:'10px', color:t.textMuted, width:'36px', textAlign:'right', flexShrink:0 }}>{Math.min(r.pct,999)}%</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* ── Tabla sortable ── */}
+                {analisisLoading ? (
+                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>⏳ Cargando datos de análisis...</div>
+                ) : analisisFiltrado.length===0 ? (
+                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin registros para los filtros seleccionados</div>
+                ) : (
+                  <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', boxShadow:t.shadow, overflow:'hidden' }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 16px', borderBottom:`1px solid ${t.border}` }}>
+                      <div style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>📋 Detalle — {analisisFiltrado.length} registros</div>
+                      {totalPagsA > 1 && (
+                        <div style={{ display:'flex', gap:'4px', alignItems:'center' }}>
+                          <button onClick={()=>setAnalisisPag(p=>Math.max(0,p-1))} disabled={analisisPag===0} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 7px', fontSize:'11px', cursor:analisisPag===0?'default':'pointer', color:analisisPag===0?t.textMuted:t.text }}>‹</button>
+                          <span style={{ fontSize:'10px', color:t.textMuted }}>{analisisPag+1}/{totalPagsA}</span>
+                          <button onClick={()=>setAnalisisPag(p=>Math.min(totalPagsA-1,p+1))} disabled={analisisPag===totalPagsA-1} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 7px', fontSize:'11px', cursor:analisisPag===totalPagsA-1?'default':'pointer', color:analisisPag===totalPagsA-1?t.textMuted:t.text }}>›</button>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ overflowX:'auto' }}>
+                      <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                        <thead>
+                          <tr style={{ background:t.bg }}>
+                            {COLS.map(col => (
+                              <th key={col.key} onClick={()=>thClick(col.key)} style={{ padding:'8px 10px', fontSize:'10px', fontWeight:'700', color:analisisSortCol===col.key?t.primary:t.textMuted, textAlign:col.align, cursor:'pointer', whiteSpace:'nowrap', userSelect:'none', borderBottom:`2px solid ${t.border}` }}>
+                                {col.label}{analisisSortCol===col.key?(analisisSortDir==='asc'?' ↑':' ↓'):''}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sliceA.map((r,i) => {
+                            const colorD = r.estado==='SOBRECOBRO'?'#EF4444':r.estado==='SUBCOBRO'?'#F59E0B':'#10B981'
+                            const badgeBg = r.estado==='SOBRECOBRO'?'#EF444418':r.estado==='SUBCOBRO'?'#F59E0B18':'#10B98118'
+                            return (
+                              <tr key={i} style={{ borderBottom:`1px solid ${t.border}44`, background:i%2===0?'transparent':t.bg+'44' }}>
+                                <td style={{ padding:'6px 10px', fontWeight:'700', color:t.primary, whiteSpace:'nowrap' }}>{r.nombre}</td>
+                                {analisisNivel==='item' && <td style={{ padding:'6px 10px', fontSize:'10px', color:t.textMuted, maxWidth:'90px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.capitulo}</td>}
+                                <td style={{ padding:'6px 10px', textAlign:'right', color:t.text }}>{fmtM2(r.presupuesto)}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'right', color:t.text }}>{fmtM2(r.cobrado)}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:'700', color:colorD }}>{r.delta_costo>0?'+':''}{fmtM2(r.delta_costo)}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'right' }}>
+                                  <div style={{ display:'flex', alignItems:'center', gap:'4px', justifyContent:'flex-end' }}>
+                                    <div style={{ width:'28px', height:'5px', background:t.border, borderRadius:'3px', overflow:'hidden' }}>
+                                      <div style={{ width:`${Math.min(100,Math.max(0,r.pct))}%`, height:'100%', background:colorD, borderRadius:'3px' }}/>
+                                    </div>
+                                    <span style={{ color:colorD, fontWeight:'700', minWidth:'30px' }}>{Math.min(r.pct,999)}%</span>
+                                  </div>
+                                </td>
+                                <td style={{ padding:'6px 10px', textAlign:'right', color:t.textMuted }}>{(r.cant_ppto||0).toFixed(2)}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'right', color:t.textMuted }}>{(r.cant_cobro||0).toFixed(2)}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:'700', color:r.delta_cant>0?'#10B981':r.delta_cant<0?'#EF4444':t.textMuted }}>{r.delta_cant>0?'+':''}{(r.delta_cant||0).toFixed(2)}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'center' }}>
+                                  <span style={{ background:badgeBg, color:colorD, borderRadius:'20px', padding:'2px 8px', fontSize:'9px', fontWeight:'700' }}>{r.estado}</span>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </>
+            })()}
           </>
         })()}
 

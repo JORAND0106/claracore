@@ -1143,47 +1143,6 @@ def drill_comparativo(contrato_id: int, capitulo: str = None, item: str = None, 
         result.append({"nombre": k, "descripcion": desc_map.get(k, ""), "presupuesto": p, "cobrado": c, "delta": p - c, "pct": round(c/p*100,1) if p else 0, "cant_ppto": agg_p_cant.get(k, 0), "cant_cobro": agg_c_cant.get(k, 0)})
     return {"campo": campo, "items": result}
 
-@app.get("/cobro/{contrato_id}/analisis-items")
-def get_analisis_items(contrato_id: int, current_user=Depends(get_current_user)):
-    """Todos los ítems con comparativo ppto vs cobro para análisis de desviaciones"""
-    cobros, ppto = [], []
-    for tabla, dest in [
-        ("cobro", "capitulo, item, costo_directo, cantidad, longitud"),
-        ("presupuesto", "capitulo, item, descripcion, costo_directo, cant_total")
-    ]:
-        acc, offset = [], 0
-        while True:
-            batch = supabase.table(tabla).select(dest).eq("contrato_id", contrato_id).range(offset, offset + 999).execute().data
-            acc.extend(batch)
-            if len(batch) < 1000: break
-            offset += 1000
-        if tabla == "cobro": cobros = acc
-        else: ppto = acc
-
-    agg_p = {}; agg_c = {}; agg_p_cant = {}; agg_c_cant = {}; desc_map = {}; cap_map = {}
-    for r in ppto:
-        k = r.get("item") or "(sin item)"
-        agg_p[k] = agg_p.get(k, 0) + (r.get("costo_directo") or 0)
-        agg_p_cant[k] = agg_p_cant.get(k, 0) + (r.get("cant_total") or 0)
-        if r.get("descripcion") and k not in desc_map: desc_map[k] = r["descripcion"]
-        if k not in cap_map: cap_map[k] = r.get("capitulo") or ""
-    for r in cobros:
-        k = r.get("item") or "(sin item)"
-        agg_c[k] = agg_c.get(k, 0) + (r.get("costo_directo") or 0)
-        agg_c_cant[k] = agg_c_cant.get(k, 0) + (r.get("cantidad") or r.get("longitud") or 0)
-
-    keys2 = sorted(set(list(agg_p.keys()) + list(agg_c.keys())))
-    result2 = []
-    for k in keys2:
-        p = agg_p.get(k, 0); c = agg_c.get(k, 0)
-        result2.append({
-            "nombre": k, "capitulo": cap_map.get(k, ""), "descripcion": desc_map.get(k, ""),
-            "presupuesto": p, "cobrado": c, "delta": p - c,
-            "pct": round(c / p * 100, 1) if p else 0,
-            "cant_ppto": agg_p_cant.get(k, 0), "cant_cobro": agg_c_cant.get(k, 0),
-        })
-    return {"items": result2}
-
 @app.get("/cobro/{contrato_id}")
 def get_cobro(
     contrato_id: int,
