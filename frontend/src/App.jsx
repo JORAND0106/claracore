@@ -4202,7 +4202,8 @@ async function refrescarDashDrillSilencioso(drill) {
                           {/* Encabezado descripción fuera de la tabla */}
                           {dashDrill[1]?.valor && (() => {
                             const filas = dashTabla?.rows || dashTabla?.filas || []
-                            const desc = filas.find(f => f.descripcion)?.descripcion || ''
+                            const desc = dashData?.find(d => d.item === dashDrill[1]?.valor)?.descripcion
+                              || filas.find(f => f.descripcion)?.descripcion || ''
                             return (
                               <div style={{ padding:'10px 12px', fontSize:'13px', fontWeight:'700', color:t.primary, borderBottom:`2px solid ${t.primary}44`, fontStyle:'italic', background:t.primary+'08', borderRadius:'6px 6px 0 0', marginBottom:'0' }}>
                                 {desc ? `${dashDrill[1].valor} — ${desc}` : dashDrill[1].valor}
