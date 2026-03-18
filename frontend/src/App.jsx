@@ -493,6 +493,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const [importMsg, setImportMsg] = useState('')
   const [importProgreso, setImportProgreso] = useState(0)
   const [seleccionados, setSeleccionados] = useState(new Set())
+  const [filaZoom, setFilaZoom] = useState(null) // id de la fila con zoom activo
   const [editando, setEditando] = useState(null)
   const [editValues, setEditValues] = useState({})
   const [modalImport, setModalImport] = useState(null)
@@ -1003,16 +1004,15 @@ async function cargarRegistros(modoPapelera) {
     { valor: 'Verificar Campo', color: '#D97706', label: '🟡' },
     { valor: 'Verificado',      color: '#16A34A', label: '🟢' },
   ]
-function zoomEnDwg(registro) {
+
+  function zoomEnDwg(registro) {
     if (!registro.x_label || !registro.y_label) return
-    // En PC con ClaraLink → protocolo directo (instantáneo)
-    // En tablet/móvil → via cad_queue (max 3s)
+    setFilaZoom(registro.id)
     const esClaraLinkDisponible = !(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
     if (esClaraLinkDisponible) {
       const uri = `claralink://zoom?x=${registro.x_label}&y=${registro.y_label}&radio=20`
       window.location.href = uri
     } else {
-      // Ruta tablet: encolar via backend
       if (!registro.pk_id) return
       const tok = getToken()
       fetch(`${API}/cad-queue/${contratoId}/zoom-pkid?pk_id=${encodeURIComponent(registro.pk_id)}`, {
@@ -1739,7 +1739,7 @@ async function darDeBaja(id) {
               {registrosPagina.map(r => {
                 const isEdit = editando === r.id
                 return (
-                  <tr key={r.id} style={{ background:seleccionados.has(r.id)?(t.primary+'18'):'transparent', cursor: r.x_label ? 'crosshair' : 'default' }}
+                  <tr key={r.id} style={{ background: filaZoom===r.id ? '#F59E0B22' : seleccionados.has(r.id) ? (t.primary+'18') : 'transparent', cursor: r.x_label ? 'crosshair' : 'default', outline: filaZoom===r.id ? '2px solid #F59E0B88' : 'none', transition:'background 0.3s, outline 0.3s' }}
                     onClick={() => { if (!isEdit) { zoomEnDwg(r); if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && r.pk_id) { const td = document.getElementById(`zoom-feedback-${r.id}`); if(td){td.style.opacity='1'; setTimeout(()=>{td.style.opacity='0'},2000)} } } }}>
                     <td style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
