@@ -3274,8 +3274,12 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [analisisData, setAnalisisData] = useState(null)
   const [analisisLoading, setAnalisisLoading] = useState(false)
   const [analisisSortCol, setAnalisisSortCol] = useState('delta_costo')
-  const [analisisSortDir, setAnalisisSortDir] = useState('asc')
+  const [analisisSortDir, setAnalisisSortDir] = useState('desc')
   const [analisisPag, setAnalisisPag] = useState(0)
+  const [analisisSeleccion, setAnalisisSeleccion] = useState(null)   // {capitulo, item} | null
+  const [analisisMapaColores, setAnalisisMapaColores] = useState({})
+  const [analisisMapaPopup, setAnalisisMapaPopup] = useState(null)
+  const [analisisMapaPopupLoading, setAnalisisMapaPopupLoading] = useState(false)
   const [showModalContrato, setShowModalContrato] = useState(false)
   const [showAdmin, setShowAdmin] = useState(false)
   const [nuevoContrato, setNuevoContrato] = useState({ numero: '', objeto: '', contratista: '', nit: '' })
@@ -3422,6 +3426,31 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   useEffect(() => {
     if (contratoIdDash && dashTab === 'analisis') cargarAnalisis(analisisNivel)
   }, [contratoIdDash, dashTab, analisisNivel])
+
+  useEffect(() => {
+    if (!contratoIdDash || !analisisSeleccion) { setAnalisisMapaColores({}); return }
+    const tok = getToken()
+    const params = new URLSearchParams()
+    if (analisisSeleccion.capitulo) params.set('capitulo', analisisSeleccion.capitulo)
+    if (analisisSeleccion.item)     params.set('item', analisisSeleccion.item)
+    fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-colores-drill?${params}`, {
+      headers: { Authorization: `Bearer ${tok}` }
+    }).then(r => r.ok ? r.json() : {}).then(setAnalisisMapaColores).catch(() => {})
+  }, [contratoIdDash, analisisSeleccion])
+
+  async function abrirAnalisisMapaPopup(pkid) {
+    if (!analisisSeleccion) return
+    setAnalisisMapaPopupLoading(true); setAnalisisMapaPopup({ pkid, data: null })
+    const tok = getToken()
+    const params = new URLSearchParams({ pk_id: pkid })
+    if (analisisSeleccion.capitulo) params.set('capitulo', analisisSeleccion.capitulo)
+    if (analisisSeleccion.item)     params.set('item', analisisSeleccion.item)
+    const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-detalle?${params}`, {
+      headers: { Authorization: `Bearer ${tok}` }
+    })
+    setAnalisisMapaPopup({ pkid, data: res.ok ? await res.json() : null })
+    setAnalisisMapaPopupLoading(false)
+  }
 
   const analisisFiltrado = useMemo(() => {
     if (!analisisData) return []
@@ -3658,9 +3687,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
 
           return <>
             {/* ── Tab bar Dashboard ── */}
-            <div style={{ display:'flex', gap:'4px', marginBottom:'16px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'4px', width:'fit-content' }}>
-              {[['resumen','📊 Resumen'],['analisis','🔍 Análisis']].map(([key,label]) => (
-                <button key={key} onClick={() => setDashTab(key)} style={{ background:dashTab===key?t.primary:'transparent', color:dashTab===key?'#fff':t.textMuted, border:'none', borderRadius:'7px', padding:'6px 20px', fontSize:'12px', fontWeight:'600', cursor:'pointer', transition:'all 0.15s' }}>{label}</button>
+            <div style={{ display:'flex', gap:'6px', marginBottom:'20px', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'6px', width:'fit-content', boxShadow:t.shadow }}>
+              {[['resumen','📊 Resumen'],['analisis','🔍 Análisis de Desviaciones']].map(([key,label]) => (
+                <button key={key} onClick={() => setDashTab(key)} style={{ background:dashTab===key?t.primary:'transparent', color:dashTab===key?'#fff':t.textMuted, border:'none', borderRadius:'8px', padding:'8px 22px', fontSize:'13px', fontWeight:'700', cursor:'pointer', transition:'all 0.15s', letterSpacing:'0.2px' }}>{label}</button>
               ))}
             </div>
 
@@ -4170,16 +4199,17 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                 else { setAnalisisSortCol(key); setAnalisisSortDir('desc') }
               }
               const COLS = [
-                {key:'nombre',label:'Código',align:'left'},
-                ...(analisisNivel==='item' ? [{key:'capitulo',label:'Capítulo',align:'left'}] : []),
-                {key:'presupuesto',label:'Costo PPTO',align:'right'},
-                {key:'cobrado',label:'Costo Cobro',align:'right'},
-                {key:'delta_costo',label:'Δ Costo',align:'right'},
-                {key:'pct',label:'% Ejec.',align:'right'},
-                {key:'cant_ppto',label:'Cant PPTO',align:'right'},
-                {key:'cant_cobro',label:'Cant Cobro',align:'right'},
-                {key:'delta_cant',label:'Δ Cant',align:'right'},
-                {key:'estado',label:'Estado',align:'center'},
+                {key:'capitulo',    label:'Capítulo',    align:'left'},
+                {key:'nombre',      label:'Ítem',        align:'left'},
+                {key:'descripcion', label:'Descripción', align:'left'},
+                {key:'cant_ppto',   label:'Cant PPTO',   align:'right'},
+                {key:'presupuesto', label:'Costo PPTO',  align:'right'},
+                {key:'cant_cobro',  label:'Cant Cobro',  align:'right'},
+                {key:'cobrado',     label:'Costo Cobro', align:'right'},
+                {key:'delta_cant',  label:'Δ Cant',      align:'right'},
+                {key:'delta_costo', label:'Δ Costo',     align:'right'},
+                {key:'pct',         label:'% Ejec.',     align:'right'},
+                {key:'estado',      label:'Estado',      align:'center'},
               ]
               return <>
                 {/* ── Filtros ── */}
@@ -4187,7 +4217,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                   <div style={{ display:'flex', flexWrap:'wrap', gap:'10px', alignItems:'center' }}>
                     <div style={{ display:'flex', gap:'2px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'7px', padding:'2px' }}>
                       {[['capitulo','Capítulo'],['item','Ítem']].map(([k,l]) => (
-                        <button key={k} onClick={()=>setAnalisisNivel(k)} style={{ background:analisisNivel===k?t.primary:'transparent', color:analisisNivel===k?'#fff':t.textMuted, border:'none', borderRadius:'5px', padding:'5px 12px', fontSize:'11px', fontWeight:'600', cursor:'pointer' }}>{l}</button>
+                        <button key={k} onClick={()=>{setAnalisisNivel(k);setAnalisisSeleccion(null)}} style={{ background:analisisNivel===k?t.primary:'transparent', color:analisisNivel===k?'#fff':t.textMuted, border:'none', borderRadius:'5px', padding:'5px 12px', fontSize:'11px', fontWeight:'600', cursor:'pointer' }}>{l}</button>
                       ))}
                     </div>
                     <select value={analisisDir} onChange={e=>{setAnalisisDir(e.target.value);setAnalisisPag(0)}} style={{ background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'11px', cursor:'pointer', outline:'none' }}>
@@ -4212,22 +4242,54 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                   </div>
                 </div>
 
-                {/* ── KPI chips — clickeables para filtrar ── */}
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'12px', marginBottom:'14px' }}>
-                  {[
-                    {key:'sobrecobro', label:'SOBRECOBRO', count:nSobre, amount:sumSobre,  color:'#EF4444', icon:'🔴', sub:'Cobro excede el presupuesto'},
-                    {key:'subcobro',   label:'SUBCOBRO',   count:nSub,   amount:sumSub,    color:'#F59E0B', icon:'🟡', sub:'Saldo PPTO sin ejecutar'},
-                    {key:'equilibrio', label:'EQUILIBRIO', count:nEq,    amount:null,      color:'#10B981', icon:'🟢', sub:'Desviación dentro de ±5%'},
-                  ].map(k => (
-                    <div key={k.label}
-                      onClick={()=>{setAnalisisDir(d=>d===k.key?'todos':k.key);setAnalisisPag(0)}}
-                      style={{ background:t.bgCard, border:`1px solid ${analisisDir===k.key?k.color:k.color+'44'}`, borderRadius:'10px', padding:'12px 16px', boxShadow:t.shadow, borderLeft:`4px solid ${k.color}`, cursor:'pointer', transition:'border 0.15s', opacity:analisisDir!=='todos'&&analisisDir!==k.key?0.55:1 }}>
-                      <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'4px' }}>{k.icon} {k.label}</div>
-                      <div style={{ fontSize:'24px', fontWeight:'800', color:k.color, lineHeight:1, marginBottom:'3px' }}>{k.count} <span style={{fontSize:'12px',fontWeight:'400'}}>registros</span></div>
-                      {k.amount!=null && <div style={{ fontSize:'11px', fontWeight:'700', color:k.color, marginBottom:'2px' }}>{fmtD2(k.amount)}</div>}
-                      <div style={{ fontSize:'10px', color:t.textMuted }}>{k.sub}</div>
+                {/* ── Layout 2 columnas: Mapa + KPI chips ── */}
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:'14px', marginBottom:'14px', alignItems:'start' }}>
+
+                  {/* Mapa semáforo */}
+                  <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'12px 14px', boxShadow:t.shadow }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
+                      <div style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>🗺️ Plano Semáforo</div>
+                      {analisisSeleccion ? (
+                        <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+                          <span style={{ fontSize:'10px', background:t.primary+'18', color:t.primary, borderRadius:'20px', padding:'2px 10px', fontWeight:'700' }}>
+                            {analisisSeleccion.item ? `Ítem: ${analisisSeleccion.item}` : `Cap: ${analisisSeleccion.capitulo?.slice(0,24)}`}
+                          </span>
+                          <button onClick={()=>setAnalisisSeleccion(null)} style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'13px', padding:'0' }}>✕</button>
+                        </div>
+                      ) : (
+                        <span style={{ fontSize:'10px', color:t.textMuted, fontStyle:'italic' }}>← Clic en una fila para ver en el plano</span>
+                      )}
                     </div>
-                  ))}
+                    <MiniMapaSemaforo
+                      t={t}
+                      colores={analisisMapaColores}
+                      height={260}
+                      onPkidClick={analisisSeleccion ? abrirAnalisisMapaPopup : null}
+                    />
+                    <div style={{ fontSize:'10px', color:t.textMuted, marginTop:'6px', textAlign:'center' }}>
+                      {Object.keys(analisisMapaColores).length > 0
+                        ? `${Object.keys(analisisMapaColores).length} PK_IDs activos — clic en polígono para detalle`
+                        : analisisSeleccion ? 'Sin PK_IDs para este registro' : 'Selecciona una fila de la tabla'}
+                    </div>
+                  </div>
+
+                  {/* KPI chips apilados a la derecha */}
+                  <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+                    {[
+                      {key:'sobrecobro', label:'SOBRECOBRO', count:nSobre, amount:sumSobre,  color:'#EF4444', icon:'🔴', sub:'Cobro excede el presupuesto'},
+                      {key:'subcobro',   label:'SUBCOBRO',   count:nSub,   amount:sumSub,    color:'#F59E0B', icon:'🟡', sub:'Saldo PPTO sin ejecutar'},
+                      {key:'equilibrio', label:'EQUILIBRIO', count:nEq,    amount:null,      color:'#10B981', icon:'🟢', sub:'Desviación dentro de ±5%'},
+                    ].map(k => (
+                      <div key={k.label}
+                        onClick={()=>{setAnalisisDir(d=>d===k.key?'todos':k.key);setAnalisisPag(0)}}
+                        style={{ background:t.bgCard, border:`1px solid ${analisisDir===k.key?k.color:k.color+'44'}`, borderRadius:'10px', padding:'10px 14px', boxShadow:t.shadow, borderLeft:`4px solid ${k.color}`, cursor:'pointer', transition:'border 0.15s', opacity:analisisDir!=='todos'&&analisisDir!==k.key?0.5:1 }}>
+                        <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'3px' }}>{k.icon} {k.label}</div>
+                        <div style={{ fontSize:'20px', fontWeight:'800', color:k.color, lineHeight:1, marginBottom:'2px' }}>{k.count} <span style={{fontSize:'11px',fontWeight:'400'}}>registros</span></div>
+                        {k.amount!=null && <div style={{ fontSize:'10px', fontWeight:'700', color:k.color }}>{fmtD2(k.amount)}</div>}
+                        <div style={{ fontSize:'9px', color:t.textMuted, marginTop:'2px' }}>{k.sub}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
 
                 {/* ── Top 10 desviaciones absolutas ── */}
@@ -4274,9 +4336,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                         </div>
                       )}
                     </div>
-                    <div style={{ overflowX:'auto' }}>
+                    <div style={{ overflowX:'auto', overflowY:'auto', maxHeight:'420px' }}>
                       <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
-                        <thead>
+                        <thead style={{ position:'sticky', top:0, zIndex:2 }}>
                           <tr style={{ background:t.bg }}>
                             {COLS.map(col => (
                               <th key={col.key} onClick={()=>thClick(col.key)} style={{ padding:'8px 10px', fontSize:'10px', fontWeight:'700', color:analisisSortCol===col.key?t.primary:t.textMuted, textAlign:col.align, cursor:'pointer', whiteSpace:'nowrap', userSelect:'none', borderBottom:`2px solid ${t.border}` }}>
@@ -4289,12 +4351,20 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                           {sliceA.map((r,i) => {
                             const colorD = r.estado==='SOBRECOBRO'?'#EF4444':r.estado==='SUBCOBRO'?'#F59E0B':'#10B981'
                             const badgeBg = r.estado==='SOBRECOBRO'?'#EF444418':r.estado==='SUBCOBRO'?'#F59E0B18':'#10B98118'
+                            const selKey = analisisNivel==='item' ? r.nombre : r.nombre
+                            const isSelected = analisisSeleccion && (analisisNivel==='item' ? analisisSeleccion.item===r.nombre && analisisSeleccion.capitulo===r.capitulo : analisisSeleccion.capitulo===r.nombre)
                             return (
-                              <tr key={i} style={{ borderBottom:`1px solid ${t.border}44`, background:i%2===0?'transparent':t.bg+'44' }}>
-                                <td style={{ padding:'6px 10px', fontWeight:'700', color:t.primary, whiteSpace:'nowrap' }}>{r.nombre}</td>
-                                {analisisNivel==='item' && <td style={{ padding:'6px 10px', fontSize:'10px', color:t.textMuted, maxWidth:'90px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.capitulo}</td>}
+                              <tr key={i}
+                                onClick={()=>setAnalisisSeleccion(analisisNivel==='item' ? {capitulo:r.capitulo, item:r.nombre} : {capitulo:r.nombre, item:null})}
+                                style={{ borderBottom:`1px solid ${t.border}44`, background: isSelected ? t.primary+'18' : i%2===0?'transparent':t.bg+'44', cursor:'pointer', outline: isSelected ? `2px solid ${t.primary}44` : 'none', transition:'background 0.1s' }}>
+                                <td style={{ padding:'6px 10px', fontSize:'10px', color:t.textMuted, maxWidth:'100px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.capitulo}>{r.capitulo}</td>
+                                <td style={{ padding:'6px 10px', fontWeight:'700', color:isSelected?t.primary:t.primary, whiteSpace:'nowrap' }}>{r.nombre}</td>
+                                <td style={{ padding:'6px 10px', fontSize:'10px', color:t.textMuted, maxWidth:'160px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.descripcion}>{r.descripcion || '—'}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'right', color:t.textMuted }}>{(r.cant_ppto||0).toFixed(2)}</td>
                                 <td style={{ padding:'6px 10px', textAlign:'right', color:t.text }}>{fmtM2(r.presupuesto)}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'right', color:t.textMuted }}>{(r.cant_cobro||0).toFixed(2)}</td>
                                 <td style={{ padding:'6px 10px', textAlign:'right', color:t.text }}>{fmtM2(r.cobrado)}</td>
+                                <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:'700', color:r.delta_cant>0?'#10B981':r.delta_cant<0?'#EF4444':t.textMuted }}>{r.delta_cant>0?'+':''}{(r.delta_cant||0).toFixed(2)}</td>
                                 <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:'700', color:colorD }}>{r.delta_costo>0?'+':''}{fmtM2(r.delta_costo)}</td>
                                 <td style={{ padding:'6px 10px', textAlign:'right' }}>
                                   <div style={{ display:'flex', alignItems:'center', gap:'4px', justifyContent:'flex-end' }}>
@@ -4304,9 +4374,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                                     <span style={{ color:colorD, fontWeight:'700', minWidth:'30px' }}>{Math.min(r.pct,999)}%</span>
                                   </div>
                                 </td>
-                                <td style={{ padding:'6px 10px', textAlign:'right', color:t.textMuted }}>{(r.cant_ppto||0).toFixed(2)}</td>
-                                <td style={{ padding:'6px 10px', textAlign:'right', color:t.textMuted }}>{(r.cant_cobro||0).toFixed(2)}</td>
-                                <td style={{ padding:'6px 10px', textAlign:'right', fontWeight:'700', color:r.delta_cant>0?'#10B981':r.delta_cant<0?'#EF4444':t.textMuted }}>{r.delta_cant>0?'+':''}{(r.delta_cant||0).toFixed(2)}</td>
                                 <td style={{ padding:'6px 10px', textAlign:'center' }}>
                                   <span style={{ background:badgeBg, color:colorD, borderRadius:'20px', padding:'2px 8px', fontSize:'9px', fontWeight:'700' }}>{r.estado}</span>
                                 </td>
@@ -4435,6 +4502,76 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
               })() : (
                 <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>Sin datos</div>
               )}
+            </div>
+          </div>
+        )}
+
+{/* ── Popup PK_ID desde tab Análisis ── */}
+        {analisisMapaPopup && (
+          <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.55)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}
+            onClick={() => setAnalisisMapaPopup(null)}>
+            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'780px', maxWidth:'96vw', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
+              onClick={e => e.stopPropagation()}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px' }}>
+                <div>
+                  <div style={{ fontSize:'16px', fontWeight:'700', color:t.textMuted }}>{analisisSeleccion?.capitulo}</div>
+                  <div style={{ fontSize:'12px', fontWeight:'800', color:t.primary, marginTop:'2px' }}>
+                    {analisisSeleccion?.item && `${analisisSeleccion.item} — `}{analisisMapaPopup.data?.ppto?.[0]?.descripcion || analisisMapaPopup.data?.cobro?.[0]?.descripcion || ''}
+                  </div>
+                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'3px' }}>PK_ID: <strong style={{ color:t.text }}>{analisisMapaPopup.pkid}</strong></div>
+                </div>
+                <button onClick={() => setAnalisisMapaPopup(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+              </div>
+              {analisisMapaPopupLoading ? (
+                <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>⏳ Cargando...</div>
+              ) : analisisMapaPopup.data ? (() => {
+                const { ppto, cobro, totales } = analisisMapaPopup.data
+                const fmtD3 = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+                const fmtN3 = n => n != null ? Number(n).toFixed(2) : '—'
+                const thS = { padding:'6px 10px', fontSize:'10px', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
+                const tdS = { padding:'6px 10px', fontSize:'11px', color:t.text, borderBottom:`1px solid ${t.border}` }
+                return (
+                  <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:'16px' }}>
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px' }}>
+                      <div style={{ background:t.bg, borderRadius:'10px', overflow:'hidden' }}>
+                        <div style={{ padding:'8px 12px', fontSize:'11px', fontWeight:'700', color:'#0077B6', borderBottom:`1px solid ${t.border}`, background:'#0077B608' }}>📋 Presupuesto ({ppto?.length||0} registros)</div>
+                        {ppto?.length > 0 ? (
+                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                            <thead><tr>{['ID_Pol','Nodo Ini','Nodo Fin','Cant','Costo'].map(h=><th key={h} style={thS}>{h}</th>)}</tr></thead>
+                            <tbody>{ppto.map((p,i)=><tr key={i}><td style={tdS}>{p.id_polilinia}</td><td style={tdS}>{p.nodo_ini}</td><td style={tdS}>{p.nodo_fin}</td><td style={tdS}>{fmtN3(p.cantidad)}</td><td style={tdS}>{fmtD3(p.costo_directo)}</td></tr>)}</tbody>
+                          </table>
+                        ) : <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'12px' }}>Sin registros</div>}
+                      </div>
+                      <div style={{ background:t.bg, borderRadius:'10px', overflow:'hidden' }}>
+                        <div style={{ padding:'8px 12px', fontSize:'11px', fontWeight:'700', color:'#00A896', borderBottom:`1px solid ${t.border}`, background:'#00A89608' }}>💰 Cobro ({cobro?.length||0} registros)</div>
+                        {cobro?.length > 0 ? (
+                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                            <thead><tr>{['Registro','Acta','Tramo Ini','Tramo Fin','Cant','Costo'].map(h=><th key={h} style={thS}>{h}</th>)}</tr></thead>
+                            <tbody>{cobro.map((c,i)=><tr key={i}><td style={{...tdS,color:'#00A896',fontWeight:'700'}}>{c.id}</td><td style={tdS}>{c.acta}</td><td style={tdS}>{c.nodo_ini}</td><td style={tdS}>{c.nodo_fin}</td><td style={tdS}>{fmtN3(c.cantidad)}</td><td style={tdS}>{fmtD3(c.costo_directo)}</td></tr>)}</tbody>
+                          </table>
+                        ) : <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'12px' }}>Sin registros</div>}
+                      </div>
+                    </div>
+                    {totales && (
+                      <div style={{ borderTop:`2px solid ${t.border}`, paddingTop:'10px', display:'flex', gap:'8px', flexWrap:'nowrap', overflowX:'auto' }}>
+                        {[
+                          { label:'Cant. Ppto',  val: fmtN3(totales.cant_ppto),   color:'#0077B6' },
+                          { label:'Costo Ppto',  val: fmtD3(totales.costo_ppto),  color:'#0077B6' },
+                          { label:'Cant. Cobro', val: fmtN3(totales.cant_cobro),  color:'#00A896' },
+                          { label:'Costo Cobro', val: fmtD3(totales.costo_cobro), color:'#00A896' },
+                          { label:'Δ Cantidad',  val: `${totales.delta_cant>=0?'+':''}${fmtN3(totales.delta_cant)}`,   color: totales.delta_cant>=0?'#10B981':'#EF4444' },
+                          { label:'Δ Costo',     val: `${totales.delta_costo>=0?'+':''}${fmtD3(totales.delta_costo)}`, color: totales.delta_costo>=0?'#10B981':'#EF4444' },
+                        ].map(({label,val,color}) => (
+                          <div key={label} style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', flex:1, minWidth:'100px' }}>
+                            <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.4px', marginBottom:'2px', whiteSpace:'nowrap' }}>{label}</div>
+                            <div style={{ fontSize:'12px', fontWeight:'800', color, whiteSpace:'nowrap' }}>{val}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })() : <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>Sin datos</div>}
             </div>
           </div>
         )}
