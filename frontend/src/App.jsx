@@ -3283,6 +3283,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   // ── Liquidación ──
   const [liqData,          setLiqData]          = useState(null)
   const [liqLoading,       setLiqLoading]       = useState(false)
+  const [liqNivel,         setLiqNivel]         = useState('item')
   const [liqDir,           setLiqDir]           = useState('todos')
   const [liqSortCol,       setLiqSortCol]       = useState('delta_costo')
   const [liqSortDir,       setLiqSortDir]       = useState('asc')
@@ -3463,20 +3464,20 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     setAnalisisMapaPopupLoading(false)
   }
 
-  async function cargarLiquidacion() {
+  async function cargarLiquidacion(nivel = liqNivel) {
     if (!contratoIdDash) return
     setLiqLoading(true); setLiqData(null); setLiqPag(0)
     try {
       const tok = getToken()
-      const res = await fetch(`${API_URL}/presupuesto/${contratoIdDash}/analisis-liquidacion`, { headers: { Authorization: `Bearer ${tok}` } })
+      const res = await fetch(`${API_URL}/presupuesto/${contratoIdDash}/analisis-liquidacion?nivel=${nivel}`, { headers: { Authorization: `Bearer ${tok}` } })
       if (res.ok) setLiqData((await res.json()).items || [])
     } catch {}
     setLiqLoading(false)
   }
 
   useEffect(() => {
-    if (contratoIdDash && dashTab === 'liquidacion') cargarLiquidacion()
-  }, [contratoIdDash, dashTab])
+    if (contratoIdDash && dashTab === 'liquidacion') cargarLiquidacion(liqNivel)
+  }, [contratoIdDash, dashTab, liqNivel])
 
   useEffect(() => {
     if (!contratoIdDash || !liqSeleccion) { setLiqMapaColores({}); return }
@@ -4491,6 +4492,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
                 {/* Filtros */}
                 <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'12px 16px', marginBottom:'14px', boxShadow:t.shadow }}>
                   <div style={{ display:'flex', flexWrap:'wrap', gap:'10px', alignItems:'center' }}>
+                    <div style={{ display:'flex', gap:'2px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'7px', padding:'2px' }}>
+                      {[['item','Ítem'],['capitulo','Capítulo']].map(([k,l]) => (
+                        <button key={k} onClick={()=>{setLiqNivel(k);setLiqSeleccion(null)}} style={{ background:liqNivel===k?t.primary:'transparent', color:liqNivel===k?'#fff':t.textMuted, border:'none', borderRadius:'5px', padding:'5px 12px', fontSize:'11px', fontWeight:'600', cursor:'pointer' }}>{l}</button>
+                      ))}
+                    </div>
                     <select value={liqDir} onChange={e=>{setLiqDir(e.target.value);setLiqPag(0)}} style={{ background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'11px', cursor:'pointer', outline:'none' }}>
                       <option value="todos">🔵 Todas las categorías</option>
                       <option value="SUPERCOBRO">🔴 Supercobro — excede +$20M</option>

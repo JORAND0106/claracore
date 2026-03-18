@@ -294,7 +294,7 @@ def listar_roles():
 
 @app.get("/contratos")
 def listar_contratos():
-    return supabase.table("contratos").select("id, numero, objeto, contratista, nit, interventoria, logo_contratista, logo_interventoria").order("numero").execute().data
+    return supabase.table("contratos").select("id, numero, objeto, contratista, nit, interventoria, logo_contratista, logo_interventoria, fase").order("numero").execute().data
 
 @app.post("/auth/login")
 def login(request: LoginRequest):
@@ -1186,7 +1186,7 @@ def get_analisis_items(contrato_id: int, current_user=Depends(get_current_user))
     return {"items": result2}
 
 @app.get("/presupuesto/{contrato_id}/analisis-liquidacion")
-def get_analisis_liquidacion(contrato_id: int, current_user=Depends(get_current_user)):
+def get_analisis_liquidacion(contrato_id: int, nivel: str = "item", current_user=Depends(get_current_user)):
     """Compara cobro vs cantidades recalculadas (tipo_ejecucion='O') para fase de liquidación."""
     cobros, recalc = [], []
     # Cobro: toda la tabla cobro del contrato
@@ -1217,33 +1217,43 @@ def get_analisis_liquidacion(contrato_id: int, current_user=Depends(get_current_
         agg_c_cant[k] = agg_c_cant.get(k, 0) + (r.get("cantidad") or r.get("longitud") or 0)
         if k not in cap_map and r.get("capitulo"): cap_map[k] = r["capitulo"]
 
+    # Si nivel=capitulo, re-agregar por capítulo
+    if nivel == "capitulo":
+        cap_r = {}; cap_c = {}; cap_r_cant = {}; cap_c_cant = {}; cap_desc = {}
+        for k in agg_r:
+            cap = cap_map.get(k, "(sin capítulo)")
+            cap_r[cap] = cap_r.get(cap, 0) + agg_r[k]
+            cap_r_cant[cap] = cap_r_cant.get(cap, 0) + agg_r_cant.get(k, 0)
+        for k in agg_c:
+            cap = cap_map.get(k, "(sin capítulo)")
+            cap_c[cap] = cap_c.get(cap, 0) + agg_c[k]
+            cap_c_cant[cap] = cap_c_cant.get(cap, 0) + agg_c_cant.get(k, 0)
+        agg_r = cap_r; agg_c = cap_c; agg_r_cant = cap_r_cant; agg_c_cant = cap_c_cant
+        cap_map = {k: k for k in agg_r}
+
+    UMBRAL = 20_000_000
     keys = sorted(set(list(agg_r.keys()) + list(agg_c.keys())))
-    UMBRAL = 20_000_000  # 20 millones COP
     result = []
     for k in keys:
-        r_val = agg_r.get(k, 0)
-        c_val = agg_c.get(k, 0)
-        r_cant = agg_r_cant.get(k, 0)
-        c_cant = agg_c_cant.get(k, 0)
-        delta_costo = r_val - c_val  # positivo = por cobrar, negativo = cobro excede recalc
-        # Clasificación según reglas de liquidación
+        r_val = agg_r.get(k, 0); c_val = agg_c.get(k, 0)
+        r_cant = agg_r_cant.get(k, 0); c_cant = agg_c_cant.get(k, 0)
+        delta_costo = r_val - c_val
         if r_cant == 0 and c_val > 0:
-            categoria = "EJECUCION"        # No cuantificado por planos, se acepta
+            categoria = "EJECUCION"
         elif c_val > r_val and (c_val - r_val) > UMBRAL:
-            categoria = "SUPERCOBRO"       # Cobro excede recalc en más de 20M
+            categoria = "SUPERCOBRO"
         elif c_val > r_val and (c_val - r_val) <= UMBRAL:
-            categoria = "DEVOLUCION"       # Cobro excede recalc hasta 20M
+            categoria = "DEVOLUCION"
         elif r_val > c_val:
-            categoria = "POR_COBRAR"       # Recalc supera lo cobrado
+            categoria = "POR_COBRAR"
         else:
             categoria = "EQUILIBRIO"
+        cap_val = k if nivel == "capitulo" else cap_map.get(k, "")
         result.append({
-            "nombre": k, "capitulo": cap_map.get(k, ""), "descripcion": desc_map.get(k, ""),
-            "recalculado": r_val, "cobrado": c_val,
-            "delta_costo": delta_costo,
+            "nombre": k, "capitulo": cap_val, "descripcion": desc_map.get(k, ""),
+            "recalculado": r_val, "cobrado": c_val, "delta_costo": delta_costo,
             "pct": round(c_val / r_val * 100, 1) if r_val else 0,
-            "cant_recalc": r_cant, "cant_cobro": c_cant,
-            "delta_cant": r_cant - c_cant,
+            "cant_recalc": r_cant, "cant_cobro": c_cant, "delta_cant": r_cant - c_cant,
             "categoria": categoria,
         })
     return {"items": result}
