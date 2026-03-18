@@ -3314,6 +3314,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [miniMapaColores, setMiniMapaColores] = useState({})
   const [popupPkid,      setPopupPkid]      = useState(null)  // {pkid, data}
   const [popupLoading,   setPopupLoading]   = useState(false)
+  const [zoomingPkid,    setZoomingPkid]    = useState(false)
   const miniMapaRef = useRef(null)
   const API_URL = 'https://claracore-backend.azurewebsites.net'
   const contratoIdDash = usuario?.contrato_id
@@ -3422,6 +3423,18 @@ async function refrescarDashDrillSilencioso(drill) {
     const data = res.ok ? await res.json() : null
     setPopupPkid({ pkid, data })
     setPopupLoading(false)
+  }
+
+async function enviarZoomPkid(pkid) {
+    if (!contratoIdDash || !pkid) return
+    setZoomingPkid(true)
+    try {
+      const tok = getToken()
+      await fetch(`${API_URL}/cad-queue/${contratoIdDash}/zoom-pkid?pk_id=${encodeURIComponent(pkid)}`, {
+        method: 'POST', headers: { Authorization: `Bearer ${tok}` }
+      })
+    } catch {}
+    setTimeout(() => setZoomingPkid(false), 2000)
   }
 
   function handleNavegar(notif) {
@@ -4763,7 +4776,18 @@ async function refrescarDashDrillSilencioso(drill) {
                     PK_ID: <strong style={{ color:t.text }}>{popupPkid.pkid}</strong>
                   </div>
                 </div>
-                <button onClick={() => setPopupPkid(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+                  {usuario?.dwgEnlazado && (
+                    <button
+                      onClick={() => enviarZoomPkid(popupPkid.pkid)}
+                      disabled={zoomingPkid}
+                      title="Zoom a este PK_ID en AutoCAD"
+                      style={{ background: zoomingPkid ? '#10B981' : t.primary, border:'none', borderRadius:'8px', padding:'6px 14px', color:'#fff', fontSize:'12px', fontWeight:'700', cursor: zoomingPkid ? 'default' : 'pointer', transition:'all 0.3s', opacity: zoomingPkid ? 0.85 : 1 }}>
+                      {zoomingPkid ? '✅ Enviado a AutoCAD' : '🎯 Ver en AutoCAD'}
+                    </button>
+                  )}
+                  <button onClick={() => setPopupPkid(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                </div>
               </div>
 
               {popupLoading ? (

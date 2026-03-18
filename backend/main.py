@@ -991,6 +991,34 @@ def cad_pendientes(contrato_id: int, current_user=Depends(get_current_user)):
         .order("id").limit(50).execute().data
     return rows
 
+@app.post("/cad-queue/{contrato_id}/zoom-pkid")
+def zoom_pkid(contrato_id: int, pk_id: str, current_user=Depends(get_current_user)):
+    """Encola operación de zoom a un PK_ID en AutoCAD."""
+    rows = supabase.table("presupuesto").select(
+        "ent_handle, x_label, y_label"
+    ).eq("contrato_id", contrato_id).eq("pk_id", pk_id).limit(1).execute().data
+    if not rows:
+        raise HTTPException(status_code=404, detail="PK_ID no encontrado en presupuesto")
+    r = rows[0]
+    ent_handle = r.get("ent_handle") or ""
+    x = r.get("x_label") or 0
+    y = r.get("y_label") or 0
+    if not ent_handle and (x == 0 and y == 0):
+        raise HTTPException(status_code=404, detail="Sin coordenadas para este PK_ID")
+    supabase.table("cad_queue").insert({
+        "contrato_id": contrato_id,
+        "tipo": "zoom_pkid",
+        "estado": "pendiente",
+        "payload": {
+            "pk_id":      pk_id,
+            "ent_handle": ent_handle,
+            "x":          x,
+            "y":          y,
+            "radio":      30
+        }
+    }).execute()
+    return {"ok": True, "pk_id": pk_id}
+
 @app.put("/cad-queue/{op_id}/procesado")
 def cad_procesado(op_id: int, body: CadQueueProcesado, current_user=Depends(get_current_user)):
     """SicoeCAD marca la operación como procesada."""
