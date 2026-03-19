@@ -3843,19 +3843,42 @@ async function enviarZoomPkid(pkid) {
 
             {dashTab === 'resumen' && <>
             {/* ── KPIs compactos ── */}
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'12px', marginBottom:'20px' }}>
-              {[
-                { label:'PRESUPUESTO TOTAL', value: fmtD(ppto), sub: kpiPpto ? `${kpiPpto.total_registros} ítems` : '—', color:'#0077B6', icon:'📋' },
-                { label:'SICOE ACUMULADO',   value: fmtD(cobro), sub: kpiCobro ? `${kpiCobro.actas?.length||0} actas` : '—', color:'#00A896', icon:'💰' },
-                { label:'SALDO DISPONIBLE',  value: fmtD(delta), sub: delta < 0 ? '⚠️ Sobrecosto' : 'Sin sobrecosto', color: delta < 0 ? '#EF4444' : '#10B981', icon:'📊' },
-                { label:'% CONSUMO',         value: `${pct}%`, sub: pct >= 90 ? '🔴 Crítico' : pct >= 70 ? '🟡 Alerta' : '🟢 Normal', color: alerta, icon:'⚡' },
-              ].map(k => (
-                <div key={k.label} style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'14px 16px', boxShadow:t.shadow, borderLeft:`4px solid ${k.color}` }}>
-                  <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'6px' }}>{k.icon} {k.label}</div>
-                  <div style={{ fontSize:'22px', fontWeight:'800', color:k.color, lineHeight:1, marginBottom:'4px' }}>{k.value}</div>
-                  <div style={{ fontSize:'11px', color:t.textMuted }}>{k.sub}</div>
-                </div>
-              ))}
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'10px', marginBottom:'16px' }}>
+              {(() => {
+                const esLiq = usuario?.contrato_fase === 'LIQUIDACION'
+                let kpis
+                if (esLiq && liqData?.length > 0) {
+                  // Valor Actual: max(recalculado, cobrado) por ítem
+                  const valorActual = liqData.reduce((sum, r) => {
+                    if ((r.cant_recalc||0) === 0 && (r.cobrado||0) > 0) return sum + (r.cobrado||0)
+                    return sum + Math.max(r.recalculado||0, r.cobrado||0)
+                  }, 0)
+                  const cobroLiq = cobro
+                  const saldoLiq = valorActual - cobroLiq
+                  const pctLiq = valorActual ? Math.min(100, Math.round(cobroLiq/valorActual*100)) : 0
+                  const alertaLiq = pctLiq >= 90 ? '#EF4444' : pctLiq >= 70 ? '#F59E0B' : '#10B981'
+                  kpis = [
+                    { label:'VALOR ACTUAL CONTRATO', value: fmtD(valorActual), sub: `${liqData.length} ítems`, color:'#0077B6', icon:'📋' },
+                    { label:'SICOE ACUMULADO',        value: fmtD(cobroLiq),   sub: kpiCobro ? `${kpiCobro.actas?.length||0} actas` : '—', color:'#00A896', icon:'💰' },
+                    { label: saldoLiq >= 0 ? 'POR COBRAR' : 'POR DEVOLUCIÓN', value: fmtD(Math.abs(saldoLiq)), sub: saldoLiq >= 0 ? '✅ Saldo positivo' : '⚠️ Saldo negativo', color: saldoLiq >= 0 ? '#10B981' : '#EF4444', icon:'📊' },
+                    { label:'% EJECUCIÓN',            value: `${pctLiq}%`, sub: pctLiq >= 90 ? '🔴 Crítico' : pctLiq >= 70 ? '🟡 Alerta' : '🟢 Normal', color: alertaLiq, icon:'⚡' },
+                  ]
+                } else {
+                  kpis = [
+                    { label:'PRESUPUESTO TOTAL', value: fmtD(ppto), sub: kpiPpto ? `${kpiPpto.total_registros} ítems` : '—', color:'#0077B6', icon:'📋' },
+                    { label:'SICOE ACUMULADO',   value: fmtD(cobro), sub: kpiCobro ? `${kpiCobro.actas?.length||0} actas` : '—', color:'#00A896', icon:'💰' },
+                    { label:'SALDO DISPONIBLE',  value: fmtD(delta), sub: delta < 0 ? '⚠️ Sobrecosto' : 'Sin sobrecosto', color: delta < 0 ? '#EF4444' : '#10B981', icon:'📊' },
+                    { label:'% CONSUMO',         value: `${pct}%`, sub: pct >= 90 ? '🔴 Crítico' : pct >= 70 ? '🟡 Alerta' : '🟢 Normal', color: alerta, icon:'⚡' },
+                  ]
+                }
+                return kpis.map(k => (
+                  <div key={k.label} style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', boxShadow:t.shadow, borderLeft:`4px solid ${k.color}` }}>
+                    <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'4px' }}>{k.icon} {k.label}</div>
+                    <div style={{ fontSize:'18px', fontWeight:'800', color:k.color, lineHeight:1, marginBottom:'3px' }}>{k.value}</div>
+                    <div style={{ fontSize:'10px', color:t.textMuted }}>{k.sub}</div>
+                  </div>
+                ))
+              })()}
             </div>
 
             {/* ── Barra de consumo global ── */}
