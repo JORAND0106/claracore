@@ -1121,6 +1121,18 @@ async function restaurar(id) {
                   </Row>
                   <Row><F label="TRAMO" val={r.tramo}/><F label="CALZADA" val={r.calzada}/><F label="PK" val={r.pk_id} flex={0.5}/></Row>
                   {r.observaciones && <BigF label="OBSERVACIONES" val={r.observaciones}/>}
+                  {r.revisado === 'Verificado' && r.validado_por && (
+                    <div style={{ borderTop:`1px solid ${t.border}`, marginTop:'8px', paddingTop:'8px', display:'flex', alignItems:'center', gap:'8px' }}>
+                      <div style={{ width:'28px', height:'28px', borderRadius:'50%', background:'#16A34A22', border:'1px solid #16A34A44', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'13px', flexShrink:0 }}>✅</div>
+                      <div>
+                        <div style={{ fontSize:'10px', fontWeight:'700', color:'#16A34A', letterSpacing:'0.5px' }}>VERIFICADO POR</div>
+                        <div style={{ fontSize:'12px', color:t.text, fontWeight:'600' }}>{r.validado_por}</div>
+                        {r.validado_en && <div style={{ fontSize:'10px', color:t.textMuted }}>
+                          {new Date(r.validado_en).toLocaleString('es-CO', { dateStyle:'medium', timeStyle:'short' })}
+                        </div>}
+                      </div>
+                    </div>
+                  )}
                 </>
               )
             })()}
