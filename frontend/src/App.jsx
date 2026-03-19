@@ -4125,11 +4125,17 @@ async function enviarZoomPkid(pkid) {
                         </span>
                         <button onClick={() => setDashDrill([dashDrill[0]])}
                           style={{ background:'transparent', border:'none', fontSize:'11px', color:t.textMuted, cursor:'pointer' }}>✕</button>
-                        {(dashTabla?.descripcion_item || dashDrill[1]?.descripcion) && (
-                          <span style={{ fontSize:'11px', color:t.textMuted, fontStyle:'italic', marginLeft:'4px' }}>
-                            — {dashTabla?.descripcion_item || dashDrill[1]?.descripcion}
-                          </span>
-                        )}
+                        {(() => {
+                          const desc = dashTabla?.descripcion_item
+                            || dashDrill[1]?.descripcion
+                            || dashData?.find(d => d.item === dashDrill[1]?.valor)?.descripcion
+                            || ''
+                          return desc ? (
+                            <span style={{ fontSize:'11px', color:t.textMuted, fontStyle:'italic', marginLeft:'4px', maxWidth:'500px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', display:'inline-block', verticalAlign:'middle' }}>
+                              — {desc}
+                            </span>
+                          ) : null
+                        })()}
                       </>}
                     </div>
                     {/* Totales — línea 2 (solo cuando hay ítem seleccionado) */}
