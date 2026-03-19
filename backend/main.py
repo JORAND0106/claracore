@@ -1001,10 +1001,18 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
     info_map = {r["id"]: r for r in rows_info}
     es_interventoria = current_user.get("rol_nombre") == "Interventoría"
     sellar = body.revisado == "Verificado" and es_interventoria
+    nombre_usuario = current_user.get("nombre") or current_user.get("email") or "Usuario"
     for rid in body.ids:
         data_upd = {"revisado": body.revisado, "updated_at": "now()"}
         if sellar:
             data_upd["sellado"] = True
+        if body.revisado == "Verificado":
+            data_upd["validado_por"] = nombre_usuario
+            data_upd["validado_en"]  = datetime.utcnow().isoformat()
+        elif body.revisado != "Verificado":
+            # Si cambia de Verificado a otro estado, limpiar
+            data_upd["validado_por"] = None
+            data_upd["validado_en"]  = None
         supabase.table("presupuesto").update(data_upd).eq("id", rid).execute()
         # ── Encolar operación CAD si DWG conectado ─────────────────────────
         if _dwg_activo(contrato_id):
