@@ -3851,7 +3851,15 @@ async function enviarZoomPkid(pkid) {
               {(() => {
                 const esLiq = usuario?.contrato_fase === 'LIQUIDACION'
                 let kpis
-                if (esLiq && liqData?.length > 0) {
+                if (esLiq && liqLoading) {
+                  // Cargando datos de liquidación — mostrar skeleton
+                  kpis = [
+                    { label:'VALOR ACTUAL CONTRATO', value:'...', sub:'Calculando', color:'#0077B6', icon:'📋' },
+                    { label:'SICOE ACUMULADO',        value: fmtD(cobro), sub: kpiCobro ? `${kpiCobro.actas?.length||0} actas` : '—', color:'#00A896', icon:'💰' },
+                    { label:'SALDO LIQUIDACIÓN',      value:'...', sub:'Calculando', color:'#F59E0B', icon:'📊' },
+                    { label:'% EJECUCIÓN',            value:'...', sub:'Calculando', color:'#F59E0B', icon:'⚡' },
+                  ]
+                } else if (esLiq && liqData?.length > 0) {
                   // Universo completo — sin filtro de categoría
                   const todoLiq = liqData
                   const sumPorCobrar  = todoLiq.filter(r=>r.categoria==='POR_COBRAR').reduce((s,r)=>s+(r.delta_costo||0),0)
