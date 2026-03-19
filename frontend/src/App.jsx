@@ -3316,7 +3316,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [analisisMapaPopupLoading, setAnalisisMapaPopupLoading] = useState(false)
   // ── Liquidación ──
   const [liqData,          setLiqData]          = useState(null)
-  const [liqLoading,       setLiqLoading]       = useState(false)
+  const [liqLoading,       setLiqLoading]       = useState(true)
   const [liqNivel,         setLiqNivel]         = useState('item')
   const [liqDir,           setLiqDir]           = useState('todos')
   const [liqSortCol,       setLiqSortCol]       = useState('delta_costo')
