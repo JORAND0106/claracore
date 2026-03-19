@@ -3320,7 +3320,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [liqNivel,         setLiqNivel]         = useState('item')
   const [liqDir,           setLiqDir]           = useState('todos')
   const [liqSortCol,       setLiqSortCol]       = useState('delta_costo')
-  const [liqSortDir,       setLiqSortDir]       = useState('asc')
+  const [liqSortDir,       setLiqSortDir]       = useState('desc')
   const [liqPag,           setLiqPag]           = useState(0)
   const [liqSeleccion,     setLiqSeleccion]     = useState(null)
   const [liqMapaColores,   setLiqMapaColores]   = useState({})

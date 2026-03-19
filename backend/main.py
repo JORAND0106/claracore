@@ -1190,7 +1190,7 @@ def pkid_detalle(contrato_id: int, pk_id: str = None, item: str = None, capitulo
 def drill_comparativo(contrato_id: int, capitulo: str = None, item: str = None, current_user=Depends(get_current_user)):
     """Drill comparativo presupuesto vs cobro por capitulo→item→pk_id"""
     cobros, ppto = [], []
-    for tabla, dest in [("cobro", "capitulo, item, pk_id, costo_directo, cantidad, longitud"), ("presupuesto", "capitulo, item, pk_id, costo_directo, cant_total, descripcion")]:
+    for tabla, dest in [("cobro", "capitulo, item, pk_id, costo_directo, cantidad, longitud, descripcion"), ("presupuesto", "capitulo, item, pk_id, costo_directo, cant_total, descripcion")]:
         acc, offset = [], 0
         while True:
             batch = supabase.table(tabla).select(dest).eq("contrato_id", contrato_id).range(offset, offset + 999).execute().data
@@ -1284,7 +1284,7 @@ def get_analisis_liquidacion(contrato_id: int, nivel: str = "item", current_user
     # Recalculado: presupuesto con tipo_ejecucion = 'O' (Obra ejecutada)
     offset = 0
     while True:
-        batch = supabase.table("presupuesto").select("capitulo, item, descripcion, costo_directo, cant_total").eq("contrato_id", contrato_id).eq("tipo_ejecucion", "O").range(offset, offset + 999).execute().data
+        batch = supabase.table("presupuesto").select("capitulo, item, descripcion, costo_directo, cant_total").eq("contrato_id", contrato_id).eq("tipo_ejecucion", "Obra Ejecutada").range(offset, offset + 999).execute().data
         recalc.extend(batch)
         if len(batch) < 1000: break
         offset += 1000
@@ -1352,7 +1352,7 @@ def get_pkid_colores_liquidacion(
 ):
     """Colores PK_ID: cobro vs recalculado (tipo_ejecucion='O') para mini-mapa liquidación."""
     q_c = supabase.table("cobro").select("pk_id, costo_directo").eq("contrato_id", contrato_id)
-    q_r = supabase.table("presupuesto").select("pk_id, costo_directo").eq("contrato_id", contrato_id).eq("tipo_ejecucion", "O")
+    q_r = supabase.table("presupuesto").select("pk_id, costo_directo").eq("contrato_id", contrato_id).eq("tipo_ejecucion", "obra ejecutada")
     if item:
         q_c = q_c.eq("item", item)
         q_r = q_r.eq("item", item)
