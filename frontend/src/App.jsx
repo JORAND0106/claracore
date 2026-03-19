@@ -3547,12 +3547,22 @@ async function enviarZoomPkid(pkid) {
 
   async function cargarLiquidacion(nivel = liqNivel) {
     if (!contratoIdDash) return
-    setLiqLoading(true); setLiqData(null); setLiqPag(0)
+    setLiqLoading(true); setLiqPag(0)
     try {
       const tok = getToken()
       const res = await fetch(`${API_URL}/presupuesto/${contratoIdDash}/analisis-liquidacion?nivel=${nivel}`, { headers: { Authorization: `Bearer ${tok}` } })
-      if (res.ok) setLiqData((await res.json()).items || [])
-    } catch {}
+      if (res.ok) {
+        const items = (await res.json()).items || []
+        setLiqData(items)
+      } else if (!liqData) {
+        // Si falla y no hay datos previos, reintentar una vez después de 3s
+        setTimeout(() => cargarLiquidacion(nivel), 3000)
+        return
+      }
+    } catch {
+      if (!liqData) setTimeout(() => cargarLiquidacion(nivel), 3000)
+      return
+    }
     setLiqLoading(false)
   }
 
