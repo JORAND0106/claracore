@@ -4203,7 +4203,7 @@ async function enviarZoomPkid(pkid) {
                                     const hC = H - PAD_B - yC
                                     const nomCorto = String(item.item||'').length > 6 ? String(item.item||'').slice(0,6)+'…' : String(item.item||'')
                                     return (
-                                      <g key={i} onClick={() => setDashDrill([dashDrill[0], {campo:'item', valor: item.item}])} style={{cursor:'pointer'}}>
+                                      <g key={i} onClick={() => setDashDrill([dashDrill[0], {campo:'item', valor: item.item, descripcion: item.descripcion || ''}])} style={{cursor:'pointer'}}>
                                         <rect x={x} y={yP} width={BAR_W} height={Math.max(hP,2)} fill="#0077B6" rx="2" opacity="0.85"
                                           onMouseEnter={e => { e.currentTarget.style.opacity='1'; const tip=document.getElementById(`tip-drill-${i}`); if(tip) tip.style.display='block' }}
                                           onMouseLeave={e => { e.currentTarget.style.opacity='0.85'; const tip=document.getElementById(`tip-drill-${i}`); if(tip) tip.style.display='none' }}/>
@@ -4252,7 +4252,8 @@ async function enviarZoomPkid(pkid) {
                           {/* Encabezado descripción fuera de la tabla */}
                           {dashDrill[1]?.valor && (() => {
                             const filas = dashTabla?.rows || dashTabla?.filas || []
-                            const desc = dashData?.find(d => d.item === dashDrill[1]?.valor)?.descripcion
+                            const desc = dashDrill[1]?.descripcion
+                              || dashData?.find(d => d.item === dashDrill[1]?.valor)?.descripcion
                               || filas.find(f => f.descripcion)?.descripcion || ''
                             return (
                               <div style={{ padding:'10px 12px', fontSize:'13px', fontWeight:'700', color:t.primary, borderBottom:`2px solid ${t.primary}44`, fontStyle:'italic', background:t.primary+'08', borderRadius:'6px 6px 0 0', marginBottom:'0' }}>
