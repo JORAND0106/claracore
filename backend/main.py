@@ -1137,7 +1137,12 @@ def pkid_tabla(contrato_id: int, capitulo: str = None, item: str = None, current
                          "descripcion": p.get("desc", "")})
         por_cobrar = sum(r["delta_costo"] for r in rows if r["delta_costo"] > 0)
         devolucion = sum(abs(r["delta_costo"]) for r in rows if r["delta_costo"] < 0)
-        return {"rows": rows, "por_cobrar": por_cobrar, "devolucion": devolucion}
+        # Descripción del ítem — consulta dedicada, no depende de los polígonos
+        desc_item = ""
+        if item:
+            d = supabase.table("presupuesto").select("descripcion").eq("contrato_id", contrato_id).eq("item", item).not_.is_("descripcion", "null").limit(1).execute().data
+            if d: desc_item = d[0].get("descripcion") or ""
+        return {"rows": rows, "por_cobrar": por_cobrar, "devolucion": devolucion, "descripcion_item": desc_item}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1185,7 +1190,7 @@ def pkid_detalle(contrato_id: int, pk_id: str = None, item: str = None, capitulo
 def drill_comparativo(contrato_id: int, capitulo: str = None, item: str = None, current_user=Depends(get_current_user)):
     """Drill comparativo presupuesto vs cobro por capitulo→item→pk_id"""
     cobros, ppto = [], []
-    for tabla, dest in [("cobro", "capitulo, item, pk_id, costo_directo, cantidad, longitud"), ("presupuesto", "capitulo, item, pk_id, costo_directo, cant_total")]:
+    for tabla, dest in [("cobro", "capitulo, item, pk_id, costo_directo, cantidad, longitud"), ("presupuesto", "capitulo, item, pk_id, costo_directo, cant_total, descripcion")]:
         acc, offset = [], 0
         while True:
             batch = supabase.table(tabla).select(dest).eq("contrato_id", contrato_id).range(offset, offset + 999).execute().data

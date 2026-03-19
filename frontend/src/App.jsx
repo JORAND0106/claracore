@@ -4252,7 +4252,8 @@ async function enviarZoomPkid(pkid) {
                           {/* Encabezado descripción fuera de la tabla */}
                           {dashDrill[1]?.valor && (() => {
                             const filas = dashTabla?.rows || dashTabla?.filas || []
-                            const desc = dashDrill[1]?.descripcion
+                            const desc = dashTabla?.descripcion_item
+                              || dashDrill[1]?.descripcion
                               || dashData?.find(d => d.item === dashDrill[1]?.valor)?.descripcion
                               || filas.find(f => f.descripcion)?.descripcion || ''
                             return (
