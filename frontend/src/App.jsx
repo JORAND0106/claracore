@@ -4125,6 +4125,11 @@ async function enviarZoomPkid(pkid) {
                         </span>
                         <button onClick={() => setDashDrill([dashDrill[0]])}
                           style={{ background:'transparent', border:'none', fontSize:'11px', color:t.textMuted, cursor:'pointer' }}>✕</button>
+                        {(dashTabla?.descripcion_item || dashDrill[1]?.descripcion) && (
+                          <span style={{ fontSize:'11px', color:t.textMuted, fontStyle:'italic', marginLeft:'4px' }}>
+                            — {dashTabla?.descripcion_item || dashDrill[1]?.descripcion}
+                          </span>
+                        )}
                       </>}
                     </div>
                     {/* Totales — línea 2 (solo cuando hay ítem seleccionado) */}
@@ -4249,19 +4254,6 @@ async function enviarZoomPkid(pkid) {
                       ) : dashTabla ? (
                         <div>
                           <div style={{ overflowX:'auto' }}>
-                          {/* Encabezado descripción fuera de la tabla */}
-                          {dashDrill[1]?.valor && (() => {
-                            const filas = dashTabla?.rows || dashTabla?.filas || []
-                            const desc = dashTabla?.descripcion_item
-                              || dashDrill[1]?.descripcion
-                              || dashData?.find(d => d.item === dashDrill[1]?.valor)?.descripcion
-                              || filas.find(f => f.descripcion)?.descripcion || ''
-                            return (
-                              <div style={{ padding:'10px 12px', fontSize:'13px', fontWeight:'700', color:t.primary, borderBottom:`2px solid ${t.primary}44`, fontStyle:'italic', background:t.primary+'08', borderRadius:'6px 6px 0 0', marginBottom:'0', whiteSpace:'normal', wordBreak:'break-word', lineHeight:'1.5' }}>
-                                {desc ? `${dashDrill[1].valor} — ${desc}` : dashDrill[1].valor}
-                              </div>
-                            )
-                          })()}
                           <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
                             <thead>
                               <tr>
