@@ -3852,19 +3852,19 @@ async function enviarZoomPkid(pkid) {
                 const esLiq = usuario?.contrato_fase === 'LIQUIDACION'
                 let kpis
                 if (esLiq && liqData?.length > 0) {
-                  // Valor Actual: max(recalculado, cobrado) por ítem
-                  const valorActual = liqData.reduce((sum, r) => {
-                    if ((r.cant_recalc||0) === 0 && (r.cobrado||0) > 0) return sum + (r.cobrado||0)
-                    return sum + Math.max(r.recalculado||0, r.cobrado||0)
-                  }, 0)
-                  const cobroLiq = cobro
-                  const saldoLiq = valorActual - cobroLiq
-                  const pctLiq = valorActual ? Math.min(100, Math.round(cobroLiq/valorActual*100)) : 0
-                  const alertaLiq = pctLiq >= 90 ? '#EF4444' : pctLiq >= 70 ? '#F59E0B' : '#10B981'
+                  // Universo completo — sin filtro de categoría
+                  const todoLiq = liqData
+                  const sumPorCobrar  = todoLiq.filter(r=>r.categoria==='POR_COBRAR') .reduce((s,r)=>s+(r.delta_costo||0),0)
+                  const sumDevolucion = todoLiq.filter(r=>r.categoria==='DEVOLUCION') .reduce((s,r)=>s+Math.abs(r.delta_costo||0),0)
+                  const sumSupercobro = todoLiq.filter(r=>r.categoria==='SUPERCOBRO') .reduce((s,r)=>s+Math.abs(r.delta_costo||0),0)
+                  const valorActual   = sumPorCobrar - sumDevolucion - sumSupercobro
+                  const cobroLiq      = cobro
+                  const pctLiq        = cobroLiq && Math.abs(valorActual) ? Math.min(999, Math.round(cobroLiq / (cobroLiq + Math.abs(valorActual)) * 100)) : 0
+                  const alertaLiq     = pctLiq >= 90 ? '#EF4444' : pctLiq >= 70 ? '#F59E0B' : '#10B981'
                   kpis = [
-                    { label:'VALOR ACTUAL CONTRATO', value: fmtD(valorActual), sub: `${liqData.length} ítems`, color:'#0077B6', icon:'📋' },
+                    { label:'VALOR ACTUAL CONTRATO', value: fmtD(valorActual), sub: `${todoLiq.filter(r=>r.categoria!=='EJECUCION').length} ítems en análisis`, color: valorActual >= 0 ? '#0077B6' : '#EF4444', icon:'📋' },
                     { label:'SICOE ACUMULADO',        value: fmtD(cobroLiq),   sub: kpiCobro ? `${kpiCobro.actas?.length||0} actas` : '—', color:'#00A896', icon:'💰' },
-                    { label: saldoLiq >= 0 ? 'POR COBRAR' : 'POR DEVOLUCIÓN', value: fmtD(Math.abs(saldoLiq)), sub: saldoLiq >= 0 ? '✅ Saldo positivo' : '⚠️ Saldo negativo', color: saldoLiq >= 0 ? '#10B981' : '#EF4444', icon:'📊' },
+                    { label: valorActual >= 0 ? 'POR COBRAR' : 'POR DEVOLUCIÓN', value: fmtD(Math.abs(valorActual)), sub: valorActual >= 0 ? `✅ +${fmtM(sumPorCobrar)} cobrar / -${fmtM(sumDevolucion+sumSupercobro)} devolver` : `⚠️ Saldo neto negativo`, color: valorActual >= 0 ? '#10B981' : '#EF4444', icon:'📊' },
                     { label:'% EJECUCIÓN',            value: `${pctLiq}%`, sub: pctLiq >= 90 ? '🔴 Crítico' : pctLiq >= 70 ? '🟡 Alerta' : '🟢 Normal', color: alertaLiq, icon:'⚡' },
                   ]
                 } else {
