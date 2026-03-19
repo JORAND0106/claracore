@@ -3561,6 +3561,10 @@ async function enviarZoomPkid(pkid) {
   }, [contratoIdDash, dashTab, liqNivel])
 
   useEffect(() => {
+    if (contratoIdDash && usuario?.contrato_fase === 'LIQUIDACION') cargarLiquidacion('item')
+  }, [contratoIdDash])
+
+  useEffect(() => {
     if (!contratoIdDash || !liqSeleccion) { setLiqMapaColores({}); return }
     const tok = getToken()
     const params = new URLSearchParams()
