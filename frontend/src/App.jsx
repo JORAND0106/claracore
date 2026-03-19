@@ -3562,7 +3562,7 @@ async function enviarZoomPkid(pkid) {
 
   useEffect(() => {
     if (contratoIdDash && usuario?.contrato_fase === 'LIQUIDACION') cargarLiquidacion('item')
-  }, [contratoIdDash])
+  }, [contratoIdDash, usuario?.contrato_fase])
 
   useEffect(() => {
     if (!contratoIdDash || !liqSeleccion) { setLiqMapaColores({}); return }
@@ -3857,7 +3857,10 @@ async function enviarZoomPkid(pkid) {
                   const sumPorCobrar  = todoLiq.filter(r=>r.categoria==='POR_COBRAR') .reduce((s,r)=>s+(r.delta_costo||0),0)
                   const sumDevolucion = todoLiq.filter(r=>r.categoria==='DEVOLUCION') .reduce((s,r)=>s+Math.abs(r.delta_costo||0),0)
                   const sumSupercobro = todoLiq.filter(r=>r.categoria==='SUPERCOBRO') .reduce((s,r)=>s+Math.abs(r.delta_costo||0),0)
-                  const valorActual   = sumPorCobrar - sumDevolucion - sumSupercobro
+                  const valorActual   = todoLiq.reduce((sum, r) => {
+                    if ((r.cant_recalc||0) === 0 && (r.cobrado||0) > 0) return sum + (r.cobrado||0)
+                    return sum + Math.max(r.recalculado||0, r.cobrado||0)
+                  }, 0)
                   const cobroLiq      = cobro
                   const pctLiq        = cobroLiq && Math.abs(valorActual) ? Math.min(999, Math.round(cobroLiq / (cobroLiq + Math.abs(valorActual)) * 100)) : 0
                   const alertaLiq     = pctLiq >= 90 ? '#EF4444' : pctLiq >= 70 ? '#F59E0B' : '#10B981'
