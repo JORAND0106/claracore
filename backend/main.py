@@ -936,9 +936,15 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
         espesor = (dim.espesor if dim and dim.espesor is not None else None) or r.get("espesor") or 1
         area    = r.get("area_long_nod") or 0
         vlr     = body.vlr_unitario if body.vlr_unitario is not None else (r.get("vlr_unitario") or 0)
-        cant  = r.get("cant_total") or 0
+        # Recalcular cant_total con las nuevas dimensiones si hay dims
+        if dim and (dim.ancho is not None or dim.espesor is not None):
+            cant = round(float(area) * float(ancho) * float(espesor), 4)
+            data_ancho   = {"ancho": ancho, "espesor": espesor}
+        else:
+            cant = r.get("cant_total") or 0
+            data_ancho   = {}
         costo = round(float(cant) * float(vlr), 0)
-        data  = {"cant_total": cant, "costo_directo": costo, "updated_at": "now()"}
+        data  = {"cant_total": cant, "costo_directo": costo, "updated_at": "now()", **data_ancho}
         if body.capitulo    is not None: data["capitulo"]    = body.capitulo
         if body.item        is not None: data["item"]        = body.item
         if body.descripcion is not None: data["descripcion"] = body.descripcion
@@ -993,8 +999,13 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
     rows_info = supabase.table("presupuesto").select("id, x_label, y_label, layer_txt, rev_block_handle"
         ).in_("id", body.ids).execute().data
     info_map = {r["id"]: r for r in rows_info}
+    es_interventoria = current_user.get("rol_nombre") == "Interventoría"
+    sellar = body.revisado == "Verificado" and es_interventoria
     for rid in body.ids:
-        supabase.table("presupuesto").update({"revisado": body.revisado, "updated_at": "now()"}).eq("id", rid).execute()
+        data_upd = {"revisado": body.revisado, "updated_at": "now()"}
+        if sellar:
+            data_upd["sellado"] = True
+        supabase.table("presupuesto").update(data_upd).eq("id", rid).execute()
         # ── Encolar operación CAD si DWG conectado ─────────────────────────
         if _dwg_activo(contrato_id):
             r = info_map.get(rid, {})

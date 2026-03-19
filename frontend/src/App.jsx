@@ -600,6 +600,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const puedeEditar  = esDeveloper || (_permPpto?.editar   ?? false)
   const puedeValidar = esDeveloper || (_permPpto?.validar  ?? false)
   const puedeEliminar = esDeveloper || (_permPpto?.eliminar ?? false)
+  const esSellado = (r) => r?.sellado === true
   const [verPapelera, setVerPapelera] = useState(false)  
 
 async function cargarRegistros(modoPapelera) {
@@ -894,7 +895,7 @@ async function cargarRegistros(modoPapelera) {
   const hayModificaciones = seleccionados.size > 0 && (
     editCapitulo !== '' || editItem !== '' ||
     [...seleccionados].some(id => editDims[id])
-  )
+  ) && ![...seleccionados].some(id => esSellado(registros.find(r => r.id === id)))
 
   async function ejecutarRecalcular() {
     const ids = [...seleccionados]
@@ -1785,14 +1786,14 @@ async function restaurar(id) {
                         : fmtN(r.area_long_nod)}
                     </td>
                     <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
-                      {puedeEditar && seleccionados.has(r.id)
+                      {puedeEditar && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.ancho ?? (r.ancho ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { espesor: r.espesor, ...prev[r.id], ancho: v } })) }}
                             style={{ width:'70px',background:t.inputBg,border:`1.5px solid ${t.primary}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} />
                         : fmtN(r.ancho)}                
                     </td>
                     <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
-                      {puedeEditar && seleccionados.has(r.id)
+                      {puedeEditar && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.espesor ?? (r.espesor ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ancho: r.ancho, ...prev[r.id], espesor: v } })) }}
                             style={{ width:'70px',background:t.inputBg,border:`1.5px solid ${t.primary}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} />
@@ -1813,7 +1814,7 @@ async function restaurar(id) {
                             <div
                               key={s.valor}
                               title={s.valor}
-                              onClick={() => puedeValidar && !activo && cambiarEstadoDirecto(r.id, s.valor)}
+                              onClick={() => puedeValidar && !activo && !esSellado(r) && cambiarEstadoDirecto(r.id, s.valor)}
                               style={{
                                 width: activo ? '18px' : '12px',
                                 height: activo ? '18px' : '12px',
@@ -1865,8 +1866,9 @@ async function restaurar(id) {
                     {puedeEliminar && !verPapelera && dwgEnlazado && (
                       <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
                         {seleccionados.has(r.id) && (
-                          <button onClick={() => darDeBaja(r.id)}
+                          <button onClick={() => !esSellado(r) && darDeBaja(r.id)}
                             title="Dar de baja"
+                            disabled={esSellado(r)}
                             style={{ background:'#EF444415', border:'1px solid #EF444444', borderRadius:'6px', padding:'3px 8px', color:'#EF4444', fontSize:'11px', cursor:'pointer' }}>
                             🗑️
                           </button>
