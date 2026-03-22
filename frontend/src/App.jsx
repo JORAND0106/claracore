@@ -4132,8 +4132,8 @@ async function enviarZoomPkid(pkid) {
                   const scaleH = (v) => PAD_T + (1 - v/maxVal) * (H - PAD_T - PAD_B)
 
                   return (
-                    <div style={{ overflowX:'auto', overflowY:'visible' }}>
-                      <svg width="100%" viewBox={`0 0 ${Math.max(totalW, 400)} ${H}`} style={{ overflow:'visible', display:'block' }}>
+                    <div style={{ overflowX:'auto', overflowY:'hidden', maxHeight:'300px' }}>
+                      <svg width="100%" viewBox={`0 0 ${Math.max(totalW, 400)} ${H}`} style={{ overflow:'visible', display:'block', maxHeight:'300px' }}>
                         {/* Líneas de referencia */}
                         {[0,25,50,75,100].map(pct => {
                           const y = PAD_T + (1-pct/100)*(H-PAD_T-PAD_B)
@@ -4264,66 +4264,40 @@ async function enviarZoomPkid(pkid) {
                             style={{ background:'transparent', border:'none', fontSize:'12px', color:t.textMuted, cursor:'pointer' }}>✕ volver a ítems</button>
                         </>
                       )}
+                    </div>                    
+                    <div style={{ display:'flex', gap:'8px', alignItems:'center', flexShrink:0 }}>
+                      <button
+                        id="btn-exportar-xlsx"
+                        title="Informe Excel"
+                        onClick={async (e) => {
+                          const btn = e.currentTarget
+                          if (btn.disabled) return
+                          btn.disabled = true; const orig = btn.innerHTML
+                          btn.innerHTML = '⏳'; btn.style.opacity='0.6'; btn.style.cursor='wait'
+                          const tok = getToken()
+                          const cap = encodeURIComponent(dashDrill[0]?.valor || '')
+                          const url = `${API}/cobro/${usuario.contrato_id}/exportar-capitulo?capitulo=${cap}`
+                          try {
+                            const res = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } })
+                            if (!res.ok) { const err = await res.json().catch(()=>({})); alert('Error: '+(err.detail||res.status)); return }
+                            const blob = await res.blob()
+                            const a = document.createElement('a')
+                            a.href = URL.createObjectURL(blob)
+                            a.download = `ClaraCore_${(dashDrill[0]?.valor||'').slice(0,30)}_${new Date().toISOString().slice(0,10)}.xlsx`
+                            a.click(); URL.revokeObjectURL(a.href)
+                          } catch { alert('Error de conexión') }
+                          finally { btn.disabled=false; btn.innerHTML=orig; btn.style.opacity='1'; btn.style.cursor='pointer' }
+                        }}
+                        style={{ background:'transparent', color:'#1E8449', border:'1.5px solid #1E8449', borderRadius:'8px', padding:'5px 10px', fontSize:'16px', cursor:'pointer', lineHeight:1, transition:'all 0.15s' }}
+                        onMouseEnter={e=>{ e.currentTarget.style.background='#1E8449'; e.currentTarget.style.color='#fff' }}
+                        onMouseLeave={e=>{ e.currentTarget.style.background='transparent'; e.currentTarget.style.color='#1E8449' }}>
+                        📊
+                      </button>
+                      <button onClick={() => { setPopupCapitulo(false); setDashDrill([]) }}
+                        style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'5px 14px', fontSize:'13px', cursor:'pointer', color:t.textMuted }}>
+                        ✕ Cerrar
+                      </button>
                     </div>
-                    {(() => {
-                      const [xlsxLoading, setXlsxLoading] = window.__xlsxState || [false, ()=>{}]
-                      return null
-                    })()}
-                    <button
-                      id="btn-exportar-xlsx"
-                      title="Informe Excel — Resumen capítulo + análisis por ítem + bases de datos"
-                      onClick={async (e) => {
-                        const btn = e.currentTarget
-                        if (btn.disabled) return
-                        btn.disabled = true
-                        const orig = btn.innerHTML
-                        btn.innerHTML = '⏳'
-                        btn.style.opacity = '0.6'
-                        btn.style.cursor = 'wait'
-                        const tok = getToken()
-                        const cap = encodeURIComponent(dashDrill[0]?.valor || '')
-                        const url = `${API}/cobro/${usuario.contrato_id}/exportar-capitulo?capitulo=${cap}`
-                        try {
-                          const res = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } })
-                          if (!res.ok) {
-                            const err = await res.json().catch(() => ({}))
-                            alert('Error al generar: ' + (err.detail || res.status))
-                            return
-                          }
-                          const blob = await res.blob()
-                          const a = document.createElement('a')
-                          a.href = URL.createObjectURL(blob)
-                          a.download = `ClaraCore_${(dashDrill[0]?.valor||'').slice(0,30)}_${new Date().toISOString().slice(0,10)}.xlsx`
-                          a.click()
-                          URL.revokeObjectURL(a.href)
-                        } catch { alert('Error de conexión') }
-                        finally {
-                          btn.disabled = false
-                          btn.innerHTML = orig
-                          btn.style.opacity = '1'
-                          btn.style.cursor = 'pointer'
-                        }
-                      }}
-                      style={{
-                        background: 'transparent',
-                        color: '#1E8449',
-                        border: '1.5px solid #1E8449',
-                        borderRadius: '8px',
-                        padding: '5px 10px',
-                        fontSize: '16px',
-                        cursor: 'pointer',
-                        flexShrink: 0,
-                        lineHeight: 1,
-                        transition: 'all 0.15s'
-                      }}
-                      onMouseEnter={e => { e.currentTarget.style.background='#1E8449'; e.currentTarget.style.color='#fff' }}
-                      onMouseLeave={e => { e.currentTarget.style.background='transparent'; e.currentTarget.style.color='#1E8449' }}>
-                      📊
-                    </button>
-                    <button onClick={() => { setPopupCapitulo(false); setDashDrill([]) }}
-                      style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'5px 14px', fontSize:'13px', cursor:'pointer', color:t.textMuted, flexShrink:0 }}>
-                      ✕ Cerrar
-                    </button>
                   </div>
 
                   {/* Cuerpo scrolleable */}
