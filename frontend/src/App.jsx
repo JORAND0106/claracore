@@ -4080,7 +4080,7 @@ async function enviarZoomPkid(pkid) {
 
                   return (
                     <div style={{ overflowX:'auto', overflowY:'visible' }}>
-                      <svg width={Math.max(totalW, 400)} height={H} style={{ overflow:'visible', display:'block' }}>
+                      <svg width="100%" viewBox={`0 0 ${Math.max(totalW, 400)} ${H}`} style={{ overflow:'visible', display:'block' }}>
                         {/* Líneas de referencia */}
                         {[0,25,50,75,100].map(pct => {
                           const y = PAD_T + (1-pct/100)*(H-PAD_T-PAD_B)
@@ -4198,6 +4198,17 @@ async function enviarZoomPkid(pkid) {
                           <span style={{ fontSize:'13px', fontWeight:'700', color:'#00A896', background:'#00A89618', borderRadius:'20px', padding:'3px 12px' }}>
                             Ítem: {dashDrill[1]?.valor}
                           </span>
+                          {(() => {
+                            const desc = dashTabla?.descripcion_item
+                              || dashDrill[1]?.descripcion
+                              || dashData?.find(d => d.item === dashDrill[1]?.valor)?.descripcion
+                              || ''
+                            return desc ? (
+                              <span style={{ fontSize:'11px', color:t.textMuted, fontStyle:'italic', maxWidth:'400px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                                — {desc}
+                              </span>
+                            ) : null
+                          })()}
                           <button onClick={() => setDashDrill([dashDrill[0]])}
                             style={{ background:'transparent', border:'none', fontSize:'12px', color:t.textMuted, cursor:'pointer' }}>✕ volver a ítems</button>
                         </>
