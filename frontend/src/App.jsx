@@ -504,7 +504,7 @@ function EmojiPicker({ onSelect, t }) {
         🙂
       </button>
       {open && (
-        <div style={{ position:'absolute', bottom:'calc(100% + 6px)', left:0, zIndex:9999, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'8px', boxShadow:'0 8px 32px rgba(0,0,0,0.25)', display:'grid', gridTemplateColumns:'repeat(9, 1fr)', gap:'2px', width:'260px' }}>
+        <div style={{ position:'absolute', bottom:'calc(100% + 6px)', right:0, zIndex:9999, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'8px', boxShadow:'0 8px 32px rgba(0,0,0,0.25)', display:'grid', gridTemplateColumns:'repeat(10, 1fr)', gap:'2px', width:'340px', maxHeight:'280px', overflowY:'auto' }}>
           {EMOJIS.map(em => (
             <button key={em} type="button" onClick={() => { onSelect(em); setOpen(false) }}
               style={{ background:'transparent', border:'none', borderRadius:'4px', padding:'4px', fontSize:'16px', cursor:'pointer', lineHeight:1 }}
