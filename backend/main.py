@@ -1122,17 +1122,7 @@ def exportar_capitulo_excel(contrato_id: int, capitulo: str, current_user=Depend
                 ws.column_dimensions[get_column_letter(i)].width = w
 
         def add_logo(ws, url, anchor):
-            if not url: return
-            try:
-                r = req_http.get(url, timeout=5)
-                if r.status_code == 200:
-                    tmp = tempfile.mktemp(suffix=".png")
-                    with open(tmp, "wb") as f: f.write(r.content)
-                    img = XLImage(tmp)
-                    img.height = 50; img.width = 120
-                    ws.add_image(img, anchor)
-                    os.remove(tmp)
-            except: pass
+            pass  # logos omitidos para evitar timeout — agregar manualmente si se requiere
 
         def titulo_hoja(ws, titulo, subtitulo, ncols):
             ws.row_dimensions[1].height = 55
@@ -1389,52 +1379,48 @@ def exportar_capitulo_excel(contrato_id: int, capitulo: str, current_user=Depend
             ws.freeze_panes = "A8"
 
         # ══════════════════════════════════════════════════════════════════════
-        # HOJA — Base Cobro
+        # HOJA — Base Cobro (write_only para velocidad)
         # ══════════════════════════════════════════════════════════════════════
         ws_c = wb.create_sheet("Base Cobro")
-        ws_c.sheet_view.showGridLines = False
         if cobro_rows:
+            from openpyxl.styles import NamedStyle
             cols_c = list(cobro_rows[0].keys())
-            NCOLS_C = len(cols_c)
-            titulo_hoja(ws_c, f"BASE COBRO — {cap_nombre}",
-                        f"Generado: {now_str}  |  {len(cobro_rows)} registros", NCOLS_C)
-            for i, h in enumerate(cols_c, 1):
-                header_style(ws_c, 4, i, str(h).upper(), size=8)
-            for ri, row_d in enumerate(cobro_rows, 5):
-                alt = (ri % 2 == 0)
-                for ci, col in enumerate(cols_c, 1):
-                    v = row_d.get(col)
-                    c = ws_c.cell(ri, ci, v)
-                    c.font = Font(name="Arial", size=8)
-                    if alt: c.fill = PatternFill("solid", fgColor=COLOR_ALT)
-                    c.alignment = Alignment(horizontal="left", vertical="center")
-            ws_c.freeze_panes = "A5"
-            for i in range(1, NCOLS_C+1):
-                ws_c.column_dimensions[get_column_letter(i)].width = 14
+            hdr_font = Font(name="Arial", bold=True, color="FFFFFF", size=8)
+            hdr_fill = PatternFill("solid", fgColor=COLOR_HEADER)
+            hdr_aln  = Alignment(horizontal="center", vertical="center")
+            # Header
+            hdr_row = []
+            for h in cols_c:
+                c = ws_c.cell(row=1, column=1)  # dummy — usamos append
+                hdr_row.append(str(h).upper())
+            ws_c.append(hdr_row)
+            for ci, h in enumerate(cols_c, 1):
+                cell = ws_c.cell(1, ci)
+                cell.font = hdr_font; cell.fill = hdr_fill; cell.alignment = hdr_aln
+            # Datos sin formato alternado — mucho más rápido
+            for row_d in cobro_rows:
+                ws_c.append([row_d.get(col) for col in cols_c])
+            ws_c.freeze_panes = "A2"
+            for i in range(1, len(cols_c)+1):
+                ws_c.column_dimensions[get_column_letter(i)].width = 13
 
         # ══════════════════════════════════════════════════════════════════════
         # HOJA — ClaraCore Data (Presupuesto)
         # ══════════════════════════════════════════════════════════════════════
         ws_p = wb.create_sheet("ClaraCore Data")
-        ws_p.sheet_view.showGridLines = False
         if ppto_rows:
             cols_p = list(ppto_rows[0].keys())
-            NCOLS_P = len(cols_p)
-            titulo_hoja(ws_p, f"CLARACORE DATA — {cap_nombre}",
-                        f"Generado: {now_str}  |  {len(ppto_rows)} registros", NCOLS_P)
-            for i, h in enumerate(cols_p, 1):
-                header_style(ws_p, 4, i, str(h).upper(), size=8)
-            for ri, row_d in enumerate(ppto_rows, 5):
-                alt = (ri % 2 == 0)
-                for ci, col in enumerate(cols_p, 1):
-                    v = row_d.get(col)
-                    c = ws_p.cell(ri, ci, v)
-                    c.font = Font(name="Arial", size=8)
-                    if alt: c.fill = PatternFill("solid", fgColor=COLOR_ALT)
-                    c.alignment = Alignment(horizontal="left", vertical="center")
-            ws_p.freeze_panes = "A5"
-            for i in range(1, NCOLS_P+1):
-                ws_p.column_dimensions[get_column_letter(i)].width = 14
+            ws_p.append([str(h).upper() for h in cols_p])
+            for ci, h in enumerate(cols_p, 1):
+                cell = ws_p.cell(1, ci)
+                cell.font = Font(name="Arial", bold=True, color="FFFFFF", size=8)
+                cell.fill = PatternFill("solid", fgColor=COLOR_TITLE)
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            for row_d in ppto_rows:
+                ws_p.append([row_d.get(col) for col in cols_p])
+            ws_p.freeze_panes = "A2"
+            for i in range(1, len(cols_p)+1):
+                ws_p.column_dimensions[get_column_letter(i)].width = 13
 
         # ── 5. Stream ────────────────────────────────────────────────────────
         buf = io.BytesIO()
