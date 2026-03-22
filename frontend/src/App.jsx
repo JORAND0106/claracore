@@ -488,9 +488,9 @@ const EMOJIS = [
 ]
 
 function EmojiPicker({ onSelect, t }) {
-  const [open, setOpen] = React.useState(false)
-  const ref = React.useRef(null)
-  React.useEffect(() => {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
     if (!open) return
     const handler = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
     document.addEventListener('mousedown', handler)
