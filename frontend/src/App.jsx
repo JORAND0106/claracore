@@ -4272,7 +4272,11 @@ async function enviarZoomPkid(pkid) {
                         const url = `${API}/cobro/${usuario.contrato_id}/exportar-capitulo?capitulo=${cap}`
                         try {
                           const res = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } })
-                          if (!res.ok) { alert('Error al generar el archivo'); return }
+                          if (!res.ok) {
+                            const err = await res.json().catch(() => ({}))
+                            alert('Error: ' + (err.detail || res.status))
+                            return
+                          }
                           const blob = await res.blob()
                           const a = document.createElement('a')
                           a.href = URL.createObjectURL(blob)
