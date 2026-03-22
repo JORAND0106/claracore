@@ -3365,6 +3365,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashDrillPag, setDashDrillPag] = useState(0)
   const [dashCapPag, setDashCapPag] = useState(0)
   const [panelFoco, setPanelFoco] = useState(null)
+  const dashDrillCache = useRef({})   // caché ítems: { 'capitulo': { data, ts } }
+  const dashTablaCache = useRef({})   // caché tabla: { 'cap|item': { data, ts } }
+  const CACHE_TTL = 5 * 60 * 1000    // 5 minutos en ms
   const [popupCapitulo, setPopupCapitulo] = useState(false)
   const [notifNavegar, setNotifNavegar] = useState(null)
   const colsGrid = '1fr 1fr'
@@ -3416,56 +3419,87 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
 
   async function cargarDashDrill(drill) {
     if (!contratoIdDash) return
-    // Si tenemos capitulo+item → cargar tabla detallada en lugar de más gauges
+    const tok = getToken()
+    const params = new URLSearchParams()
+    drill.forEach(d => params.set(d.campo, d.valor))
+
+    // ── Nivel 2: tabla pkid-tabla ──
     if (drill.length >= 2) {
+      const cacheKey = `${drill[0]?.valor}|${drill[1]?.valor}`
+      const cached = dashTablaCache.current[cacheKey]
+      const ahora = Date.now()
+      if (cached && (ahora - cached.ts) < CACHE_TTL) {
+        setDashTabla(cached.data)             // instantáneo desde caché
+        setDashTablaLoad(false)
+        // refresco silencioso en background
+        fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+          .then(r => r.ok ? r.json() : null)
+          .then(data => { if (data) { dashTablaCache.current[cacheKey] = { data, ts: Date.now() }; setDashTabla(data) } })
+          .catch(() => {})
+        return
+      }
       setDashTablaLoad(true); setDashTabla(null)
-      const params = new URLSearchParams()
-      drill.forEach(d => params.set(d.campo, d.valor))
-      const tok = getToken()
       const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
-      if (res.ok) setDashTabla(await res.json())
+      if (res.ok) {
+        const data = await res.json()
+        dashTablaCache.current[cacheKey] = { data, ts: Date.now() }
+        setDashTabla(data)
+      }
       setDashTablaLoad(false)
       return
     }
+
+    // ── Nivel 1: ítems del capítulo ──
     setDashTabla(null)
+    const cacheKey = drill[0]?.valor || '__todos__'
+    const cached = dashDrillCache.current[cacheKey]
+    const ahora = Date.now()
+    if (cached && (ahora - cached.ts) < CACHE_TTL) {
+      setDashData(cached.data)               // instantáneo desde caché
+      setDashLoading(false)
+      // refresco silencioso en background
+      fetch(`${API_URL}/cobro/${contratoIdDash}/drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data) {
+            const lista = (data.items || data).map(r => ({
+              item: r.item || r.nombre, descripcion: r.descripcion || '',
+              presupuesto: r.presupuesto || 0, cobrado: r.cobrado || 0,
+              cant_ppto: r.cant_ppto || 0, cant_cobro: r.cant_cobro || r.cant_sicoe || 0,
+            }))
+            dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
+            setDashData(lista)
+          }
+        })
+        .catch(() => {})
+      return
+    }
     setDashLoading(true)
-    const params = new URLSearchParams()
-    drill.forEach(d => params.set(d.campo, d.valor))
-    const tok = getToken()
     const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
     if (res.ok) {
       const data = await res.json()
-      const lista = data.items || data
-      setDashData(lista.map(r => ({
-        item: r.item || r.nombre,
-        descripcion: r.descripcion || '',
-        presupuesto: r.presupuesto || 0,
-        cobrado: r.cobrado || 0,
-        cant_ppto: r.cant_ppto || 0,
-        cant_cobro: r.cant_cobro || r.cant_sicoe || 0,
-      })))
+      const lista = (data.items || data).map(r => ({
+        item: r.item || r.nombre, descripcion: r.descripcion || '',
+        presupuesto: r.presupuesto || 0, cobrado: r.cobrado || 0,
+        cant_ppto: r.cant_ppto || 0, cant_cobro: r.cant_cobro || r.cant_sicoe || 0,
+      }))
+      dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
+      setDashData(lista)
     }
     setDashLoading(false)
   }
 
 async function refrescarDashDrillSilencioso(drill) {
-    if (!contratoIdDash) return
-    try {
-      const tok = getToken()
-      const params = new URLSearchParams()
-      drill.forEach(d => params.set(d.campo, d.valor))
-      if (drill.length >= 2) {
-        const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
-        if (res.ok) setDashTabla(await res.json())  // actualiza silenciosamente, sin null previo
-      } else {
-        const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
-        if (res.ok) {
-          const data = await res.json()
-          const lista = data.items || data
-          setDashData(lista.map(r => ({ item: r.item||r.nombre, descripcion:r.descripcion||'', presupuesto:r.presupuesto||0, cobrado:r.cobrado||0, cant_ppto:r.cant_ppto||0, cant_cobro:r.cant_cobro||r.cant_sicoe||0 })))
-        }
-      }
-    } catch {}
+    // Invalida caché para que el próximo click cargue datos frescos
+    if (drill.length >= 2) {
+      const cacheKey = `${drill[0]?.valor}|${drill[1]?.valor}`
+      if (dashTablaCache.current[cacheKey]) dashTablaCache.current[cacheKey].ts = 0
+    } else if (drill.length === 1) {
+      const cacheKey = drill[0]?.valor || '__todos__'
+      if (dashDrillCache.current[cacheKey]) dashDrillCache.current[cacheKey].ts = 0
+    }
+    // Luego recarga normalmente (ya sin caché vigente)
+    await cargarDashDrill(drill)
   }
 
   useEffect(() => { if (contratoIdDash) { setDashDrillPag(0); cargarDashDrill(dashDrill) } }, [contratoIdDash, dashDrill])
