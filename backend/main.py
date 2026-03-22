@@ -15,15 +15,16 @@ from datetime import datetime, timedelta
 # ── Sesiones DWG activas (en memoria) ─────────────────────────────────────────
 # { contrato_id: timestamp_ultimo_heartbeat }
 _dwg_sessions: dict = {}
+_DWG_TIMEOUT = 30  # segundos — margen para curl.exe
 
 def _dwg_activo(contrato_id: int, usuario_id: int = None) -> bool:
     """Verifica si hay un DWG enlazado para el contrato, por usuario o cualquier usuario."""
     if usuario_id and _dwg_sessions.get((contrato_id, usuario_id)):
         ts = _dwg_sessions[(contrato_id, usuario_id)]
-        return (time.time() - ts) < 10
+        return (time.time() - ts) < _DWG_TIMEOUT
     # Fallback: cualquier usuario del contrato con sesión activa
     for k, ts in _dwg_sessions.items():
-        if isinstance(k, tuple) and k[0] == contrato_id and (time.time() - ts) < 10:
+        if isinstance(k, tuple) and k[0] == contrato_id and (time.time() - ts) < _DWG_TIMEOUT:
             return True
     return False
 
@@ -1043,16 +1044,14 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
 @app.post("/cad-queue/{contrato_id}/heartbeat")
 def cad_heartbeat(contrato_id: int, current_user=Depends(get_current_user)):
     """SicoeCAD llama esto cada 3s para indicar que el DWG está abierto."""
-    usuario_id = current_user.get("id")
+    usuario_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
     _dwg_sessions[(contrato_id, usuario_id)] = time.time()
-    return {"ok": True}
+    return {"ok": True, "ts": time.time()}
 
 @app.get("/cad-queue/{contrato_id}/estado")
 def cad_estado(contrato_id: int, current_user=Depends(get_current_user)):
-    """ClaraCore web consulta si hay DWG enlazado (heartbeat < 10s)."""
-    usuario_id = current_user.get("id")
-    last = _dwg_sessions.get((contrato_id, usuario_id))
-    enlazado = last is not None and (time.time() - last) < 10
+    """ClaraCore web consulta si hay DWG enlazado."""
+    enlazado = _dwg_activo(contrato_id)
     return {"enlazado": enlazado}
 
 @app.get("/cad-queue/{contrato_id}/pendientes")

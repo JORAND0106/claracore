@@ -1037,7 +1037,7 @@ async function highlightEnDwg(registro) {
     setFilaZoom(registro.id)
     const esClaraLinkDisponible = !(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
     if (esClaraLinkDisponible) {
-      const uri = `claralink://zoom?x=${registro.x_label}&y=${registro.y_label}&radio=20`
+      const uri = `claralink://zoom?x=${registro.x_label}&y=${registro.y_label}&radio=20&handle=${registro.ent_handle || ''}&txt=${registro.txt_handle || ''}`
       window.location.href = uri
     } else {
       if (!registro.pk_id) return
