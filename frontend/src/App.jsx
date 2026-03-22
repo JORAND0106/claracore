@@ -3095,6 +3095,7 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   const [nuevo, setNuevo] = useState({ destinatario_id: '', asunto: '', mensaje: '', tipo: 'MENSAJE_DIRECTO' })
   const [enviando, setEnviando] = useState(false)
   const [respondiendo, setRespondiendo] = useState(false)
+  const [respuesta,    setRespuesta]    = useState('')
 
   const esDev = usuario?.cargo_nombre === 'Desarrollador'
   const h = { Authorization: `Bearer ${token}` }
