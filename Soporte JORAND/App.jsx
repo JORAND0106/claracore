@@ -1905,7 +1905,6 @@ async function restaurar(id) {
                         )}
                       </td>
                     )}
-
                     {puedeEditar && (
                       <td style={tdStyle} onClick={e=>e.stopPropagation()}>
                         {isEdit ? (
