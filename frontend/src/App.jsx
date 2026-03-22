@@ -1013,6 +1013,25 @@ async function cargarRegistros(modoPapelera) {
     { valor: 'Verificado',      color: '#16A34A', label: '🟢' },
   ]
 
+async function highlightEnDwg(registro) {
+  if (!registro?.id) return
+  const esTablet = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  const contratoId = registro.contrato_id
+  const token = getToken()
+  if (esTablet || !window.__claralink_disponible) {
+    // vía cad_queue
+    await fetch(`${API}/cad-queue/${contratoId}/highlight-registro`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ presupuesto_id: registro.id })
+    }).catch(() => {})
+  } else {
+    // vía ClaraLink (mismo esquema que zoomEnDwg)
+    const url = `claralink://highlight?handle=${registro.ent_handle}&txt=${registro.txt_handle || ''}&x=${registro.x_label || 0}&y=${registro.y_label || 0}`
+    window.location.href = url
+  }
+}
+
   function zoomEnDwg(registro) {
     if (!registro.x_label || !registro.y_label) return
     setFilaZoom(registro.id)
@@ -1770,7 +1789,7 @@ async function restaurar(id) {
                 const isEdit = editando === r.id
                 return (
                   <tr key={r.id} style={{ background: filaZoom===r.id ? '#F59E0B22' : seleccionados.has(r.id) ? (t.primary+'18') : 'transparent', cursor: r.x_label ? 'crosshair' : 'default', outline: filaZoom===r.id ? '2px solid #F59E0B88' : 'none', transition:'background 0.3s, outline 0.3s' }}
-                    onClick={() => { if (!isEdit) { zoomEnDwg(r); if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && r.pk_id) { const td = document.getElementById(`zoom-feedback-${r.id}`); if(td){td.style.opacity='1'; setTimeout(()=>{td.style.opacity='0'},2000)} } } }}>
+                    onClick={() => { if (!isEdit) { zoomEnDwg(r); highlightEnDwg(r); if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && r.pk_id) { const td = document.getElementById(`zoom-feedback-${r.id}`); if(td){td.style.opacity='1'; setTimeout(()=>{td.style.opacity='0'},2000)} } } }}>
                     <td style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                         <input type="checkbox" checked={seleccionados.has(r.id)} onChange={() => toggleSel(r.id)} />

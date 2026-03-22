@@ -1063,6 +1063,31 @@ def cad_pendientes(contrato_id: int, current_user=Depends(get_current_user)):
         .order("id").limit(50).execute().data
     return rows
 
+@app.post("/cad-queue/{contrato_id}/highlight-registro")
+def highlight_registro(contrato_id: int, body: dict, current_user=Depends(get_current_user)):
+    """Encola highlight de entidad+texto de un registro de presupuesto."""
+    presupuesto_id = body.get("presupuesto_id")
+    if not presupuesto_id:
+        raise HTTPException(status_code=400, detail="presupuesto_id requerido")
+    row = supabase.table("presupuesto").select("ent_handle, txt_handle, x_label, y_label").eq("id", presupuesto_id).single().execute().data
+    if not row or not row.get("ent_handle"):
+        raise HTTPException(status_code=404, detail="Registro sin ent_handle")
+    payload = {
+        "ent_handle": row.get("ent_handle", ""),
+        "txt_handle": row.get("txt_handle", ""),
+        "x_label":    row.get("x_label", 0),
+        "y_label":    row.get("y_label", 0),
+    }
+    usuario_id = current_user["id"] if isinstance(current_user, dict) else current_user.id
+    supabase.table("cad_queue").insert({
+        "contrato_id":  contrato_id,
+        "tipo":         "highlight_registro",
+        "payload":      payload,
+        "usuario_id":   usuario_id,
+        "procesado":    False,
+    }).execute()
+    return {"ok": True}
+
 @app.post("/cad-queue/{contrato_id}/zoom-pkid")
 def zoom_pkid(contrato_id: int, pk_id: str, current_user=Depends(get_current_user)):
     """Encola operación de zoom a un PK_ID en AutoCAD."""
@@ -1209,22 +1234,21 @@ def pkid_detalle(contrato_id: int, pk_id: str = None, item: str = None, capitulo
 @app.get("/cobro/{contrato_id}/drill")
 def drill_comparativo(contrato_id: int, capitulo: str = None, item: str = None, current_user=Depends(get_current_user)):
     """Drill comparativo presupuesto vs cobro por capitulo→item→pk_id"""
-    cobros, ppto = [], []
-    for tabla, dest in [("cobro", "capitulo, item, pk_id, costo_directo, cantidad, longitud, descripcion"), ("presupuesto", "capitulo, item, pk_id, costo_directo, cant_total, descripcion")]:
+    def fetch_filtered(tabla, dest, capitulo, item):
         acc, offset = [], 0
         while True:
-            batch = supabase.table(tabla).select(dest).eq("contrato_id", contrato_id).range(offset, offset + 999).execute().data
+            q = supabase.table(tabla).select(dest).eq("contrato_id", contrato_id)
+            if capitulo: q = q.eq("capitulo", capitulo)
+            if item:     q = q.eq("item", item)
+            batch = q.range(offset, offset + 999).execute().data
             acc.extend(batch)
             if len(batch) < 1000:
                 break
             offset += 1000
-        if tabla == "cobro":
-            cobros = acc
-        else:
-            ppto = acc
+        return acc
 
-    if capitulo: cobros = [r for r in cobros if r.get("capitulo") == capitulo]; ppto = [r for r in ppto if r.get("capitulo") == capitulo]
-    if item:     cobros = [r for r in cobros if r.get("item") == item];     ppto = [r for r in ppto if r.get("item") == item]
+    cobros = fetch_filtered("cobro",       "capitulo, item, pk_id, costo_directo, cantidad, longitud, descripcion", capitulo, item)
+    ppto   = fetch_filtered("presupuesto", "capitulo, item, pk_id, costo_directo, cant_total, descripcion",          capitulo, item)
 
     campo = "pk_id" if (capitulo and item) else ("item" if capitulo else "capitulo")
 
