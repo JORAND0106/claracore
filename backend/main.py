@@ -1122,7 +1122,20 @@ def exportar_capitulo_excel(contrato_id: int, capitulo: str, current_user=Depend
                 ws.column_dimensions[get_column_letter(i)].width = w
 
         def add_logo(ws, url, anchor):
-            pass  # logos omitidos para evitar timeout — agregar manualmente si se requiere
+            if not url: return
+            try:
+                import tempfile, os
+                r = req_http.get(url, timeout=4)
+                if r.status_code != 200: return
+                ext = ".png" if "png" in r.headers.get("content-type","") else ".jpg"
+                tmp = tempfile.mktemp(suffix=ext)
+                with open(tmp, "wb") as f: f.write(r.content)
+                img = XLImage(tmp)
+                img.height = 45; img.width = 110
+                ws.add_image(img, anchor)
+                try: os.remove(tmp)
+                except: pass
+            except: pass
 
         def titulo_hoja(ws, titulo, subtitulo, ncols):
             ws.row_dimensions[1].height = 55
@@ -1130,9 +1143,9 @@ def exportar_capitulo_excel(contrato_id: int, capitulo: str, current_user=Depend
             ws.row_dimensions[3].height = 8
             ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
             c = ws.cell(1, 1, titulo)
-            c.font = Font(name="Arial", bold=True, size=14, color="FFFFFF")
+            c.font = Font(name="Arial", bold=True, size=10, color="FFFFFF")
             c.fill = PatternFill("solid", fgColor=COLOR_TITLE)
-            c.alignment = Alignment(horizontal="center", vertical="center")
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
             c2 = ws.cell(2, 1, subtitulo)
             c2.font = Font(name="Arial", size=9, color="7F8C8D")
@@ -1158,19 +1171,27 @@ def exportar_capitulo_excel(contrato_id: int, capitulo: str, current_user=Depend
                 p_item[it]["vlr_unit"] = r.get("vlr_unitario") or 0
 
         # Cobro agregado por ítem
-        c_item = defaultdict(lambda: {"cant": 0, "costo": 0})
+        c_item = defaultdict(lambda: {"cant": 0, "costo": 0, "desc": ""})
         for r in cobro_rows:
             it = r.get("item", "")
-            c_item[it]["cant"]  += r.get("longitud") or r.get("cantidad") or 0
+            c_item[it]["cant"]  += r.get("cantidad") or r.get("longitud") or 0
             c_item[it]["costo"] += r.get("costo_directo") or 0
+            if not c_item[it]["desc"]:
+                c_item[it]["desc"] = r.get("descripcion", "")
+
+        # Completar descripción faltante desde cobro cuando ppto no tiene el ítem
+        for it in c_item:
+            if not p_item[it]["desc"] and c_item[it]["desc"]:
+                p_item[it]["desc"] = c_item[it]["desc"]
 
         all_items = sorted(set(list(p_item.keys()) + list(c_item.keys())))
 
         def get_estado(p_cant, p_costo, c_cant, c_costo):
+            # Cobro Histórico: sin presupuesto calculado pero con cobro — delta positivo
+            if p_cant == 0 and p_costo == 0 and c_cant > 0:
+                return "Cobro Histórico", round(c_cant, 4), round(c_costo, 0)
             d_cant  = round(p_cant  - c_cant,  4)
             d_costo = round(p_costo - c_costo, 0)
-            if p_cant == 0 and p_costo == 0 and c_cant > 0:
-                return "Cobro Histórico", d_cant, d_costo
             if d_costo < 0:
                 return "Devolución", d_cant, d_costo
             return "Por cobrar", d_cant, d_costo
@@ -1288,22 +1309,24 @@ def exportar_capitulo_excel(contrato_id: int, capitulo: str, current_user=Depend
             ws.sheet_view.showGridLines = False
             NCOLS = 7
 
-            titulo_hoja(ws, f"ANÁLISIS DE COBRO — {it}",
+            desc_it = p_item[it]["desc"] or c_item[it].get("desc", "")
+            titulo_hoja(ws, f"ANÁLISIS DE COBRO — {it}  |  {desc_it}",
                         f"{cap_nombre}   |   Generado: {now_str}", NCOLS)
 
             # Resumen ítem (fila 4)
             ws.row_dimensions[4].height = 20
-            sum_hdrs = ["Cant. ClaraCore","Cant. Cobrada","Costo ClaraCore",
+            sum_hdrs = ["Cant. ClaraCore","Costo ClaraCore","Cant. Cobrada",
                         "Costo Cobrado","Δ Cantidad","Δ Costo"]
+            
             for i, h in enumerate(sum_hdrs, 1):
                 header_style(ws, 4, i, h, bg=COLOR_ITEM_H)
             ws.row_dimensions[5].height = 18
             d_cant_it = round(p["cant"] - c["cant"], 2)
             d_cost_it = round(p["costo"]- c["costo"], 0)
-            vals = [round(p["cant"],2), round(c["cant"],2),
-                    round(p["costo"],0), round(c["costo"],0),
+            vals = [round(p["cant"],2), round(p["costo"],0),
+                    round(c["cant"],2), round(c["costo"],0),
                     d_cant_it, d_cost_it]
-            fmts = ["#,##0.00","#,##0.00","$#,##0","$#,##0","#,##0.00","$#,##0"]
+            fmts = ["#,##0.00","$#,##0","#,##0.00","$#,##0","#,##0.00","$#,##0"]
             for i,(v,f) in enumerate(zip(vals,fmts),1):
                 cc = ws.cell(5, i, v); cc.number_format = f
                 cc.font = Font(name="Arial", bold=True, size=10,

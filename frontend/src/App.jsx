@@ -4265,8 +4265,21 @@ async function enviarZoomPkid(pkid) {
                         </>
                       )}
                     </div>
+                    {(() => {
+                      const [xlsxLoading, setXlsxLoading] = window.__xlsxState || [false, ()=>{}]
+                      return null
+                    })()}
                     <button
-                      onClick={async () => {
+                      id="btn-exportar-xlsx"
+                      title="Informe Excel — Resumen capítulo + análisis por ítem + bases de datos"
+                      onClick={async (e) => {
+                        const btn = e.currentTarget
+                        if (btn.disabled) return
+                        btn.disabled = true
+                        const orig = btn.innerHTML
+                        btn.innerHTML = '⏳'
+                        btn.style.opacity = '0.6'
+                        btn.style.cursor = 'wait'
                         const tok = getToken()
                         const cap = encodeURIComponent(dashDrill[0]?.valor || '')
                         const url = `${API}/cobro/${usuario.contrato_id}/exportar-capitulo?capitulo=${cap}`
@@ -4274,19 +4287,38 @@ async function enviarZoomPkid(pkid) {
                           const res = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } })
                           if (!res.ok) {
                             const err = await res.json().catch(() => ({}))
-                            alert('Error: ' + (err.detail || res.status))
+                            alert('Error al generar: ' + (err.detail || res.status))
                             return
                           }
                           const blob = await res.blob()
                           const a = document.createElement('a')
                           a.href = URL.createObjectURL(blob)
-                          a.download = `ClaraCore_${dashDrill[0]?.valor?.slice(0,30)}_${new Date().toISOString().slice(0,10)}.xlsx`
+                          a.download = `ClaraCore_${(dashDrill[0]?.valor||'').slice(0,30)}_${new Date().toISOString().slice(0,10)}.xlsx`
                           a.click()
                           URL.revokeObjectURL(a.href)
                         } catch { alert('Error de conexión') }
+                        finally {
+                          btn.disabled = false
+                          btn.innerHTML = orig
+                          btn.style.opacity = '1'
+                          btn.style.cursor = 'pointer'
+                        }
                       }}
-                      style={{ background:'#1E8449', color:'#fff', border:'none', borderRadius:'8px', padding:'5px 16px', fontSize:'13px', fontWeight:'700', cursor:'pointer', flexShrink:0 }}>
-                      📥 Exportar Excel
+                      style={{
+                        background: 'transparent',
+                        color: '#1E8449',
+                        border: '1.5px solid #1E8449',
+                        borderRadius: '8px',
+                        padding: '5px 10px',
+                        fontSize: '16px',
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                        lineHeight: 1,
+                        transition: 'all 0.15s'
+                      }}
+                      onMouseEnter={e => { e.currentTarget.style.background='#1E8449'; e.currentTarget.style.color='#fff' }}
+                      onMouseLeave={e => { e.currentTarget.style.background='transparent'; e.currentTarget.style.color='#1E8449' }}>
+                      📊
                     </button>
                     <button onClick={() => { setPopupCapitulo(false); setDashDrill([]) }}
                       style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'5px 14px', fontSize:'13px', cursor:'pointer', color:t.textMuted, flexShrink:0 }}>
