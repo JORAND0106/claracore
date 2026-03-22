@@ -463,6 +463,62 @@ function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, 
   )
 }
 
+// ─── EMOJI PICKER ─────────────────────────────────────────────────────────────
+const EMOJIS = [
+  // Caras útiles
+  '😀','😊','😅','🤔','😬','😤','😮','🥴','😎','🤝',
+  // Manos / gestos
+  '👍','👎','👌','✌️','🤞','👏','🙌','🙏','💪','👷',
+  // Estado / semáforo
+  '✅','❌','⚠️','🔴','🟠','🟡','🟢','🔵','⛔','🚫',
+  // Símbolos útiles construcción
+  '📌','📍','🔧','🔨','⛏️','🏗️','🚧','🏢','📐','📏',
+  // Documentos / datos
+  '📝','📋','📊','📈','📉','📁','🗂️','📎','📌','🔗',
+  // Alertas / marcadores
+  '❗','❓','💡','🔔','📢','🚨','🆘','🆗','🆕','🆙',
+  // Tiempo / proceso
+  '⏳','⏰','📅','🕐','🔄','▶️','⏸️','⏹️','🔁','🔃',
+  // Dinero / métricas
+  '💰','💵','💲','📦','🎯','🏆','✨','🌟','💎','🔑',
+  // Flechas / símbolos
+  '➡️','⬅️','⬆️','⬇️','↩️','↪️','🔼','🔽','➕','➖',
+  // Comunicación
+  '💬','✉️','📨','📩','📤','📥','🗣️','👀','🤫','💭',
+]
+
+function EmojiPicker({ onSelect, t }) {
+  const [open, setOpen] = React.useState(false)
+  const ref = React.useRef(null)
+  React.useEffect(() => {
+    if (!open) return
+    const handler = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+  return (
+    <div ref={ref} style={{ position:'relative', display:'inline-block' }}>
+      <button type="button" onClick={() => setOpen(o => !o)}
+        title="Insertar emoji"
+        style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'4px 8px', fontSize:'14px', cursor:'pointer', color:t.textMuted, lineHeight:1 }}>
+        🙂
+      </button>
+      {open && (
+        <div style={{ position:'absolute', bottom:'calc(100% + 6px)', left:0, zIndex:9999, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'8px', boxShadow:'0 8px 32px rgba(0,0,0,0.25)', display:'grid', gridTemplateColumns:'repeat(9, 1fr)', gap:'2px', width:'260px' }}>
+          {EMOJIS.map(em => (
+            <button key={em} type="button" onClick={() => { onSelect(em); setOpen(false) }}
+              style={{ background:'transparent', border:'none', borderRadius:'4px', padding:'4px', fontSize:'16px', cursor:'pointer', lineHeight:1 }}
+              onMouseEnter={e => e.currentTarget.style.background=t.bg}
+              onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+              {em}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function PresupuestoTooltip({ active, payload, t, color, fmt }) {
   if (!active || !payload?.length) return null
   const d = payload[0].payload
@@ -1191,9 +1247,14 @@ async function restaurar(id) {
                   ))}
                 </select>
               </div>
-              <textarea autoFocus value={textoComentario} onChange={e => setTextoComentario(e.target.value)}
-                placeholder="Escribe aquí el motivo o comentario..."
-                style={{ width:'100%',minHeight:'100px',background:t.inputBg,border:`1.5px solid ${color}66`,borderRadius:'8px',padding:'10px',color:t.text,fontSize:'13px',resize:'vertical',boxSizing:'border-box' }} />
+              <div style={{ position:'relative' }}>
+                <textarea id="textarea-comentario" autoFocus value={textoComentario} onChange={e => setTextoComentario(e.target.value)}
+                  placeholder="Escribe aquí el motivo o comentario..."
+                  style={{ width:'100%',minHeight:'100px',background:t.inputBg,border:`1.5px solid ${color}66`,borderRadius:'8px',padding:'10px',color:t.text,fontSize:'13px',resize:'vertical',boxSizing:'border-box' }} />
+                <div style={{ position:'absolute', bottom:'8px', right:'8px' }}>
+                  <EmojiPicker t={t} onSelect={em => setTextoComentario(prev => prev + em)} />
+                </div>
+              </div>
               {modalComentario.obligatorio && !textoComentario.trim() && (
                 <div style={{ fontSize:'11px',color:'#EF4444',marginTop:'4px' }}>* Este campo es obligatorio</div>
               )}
@@ -1247,7 +1308,8 @@ async function restaurar(id) {
                         ))}
                       </div>
                     )}
-                    <div style={{ marginTop:'10px',display:'flex',gap:'6px' }}>
+                    <div style={{ marginTop:'10px',display:'flex',gap:'6px',alignItems:'center' }}>
+                      <EmojiPicker t={t} onSelect={em => setRespuestaTexto(prev => prev + em)} />
                       <input value={respuestaTexto} onChange={e=>setRespuestaTexto(e.target.value)}
                         onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); responderEnHilo(c.id) } }}
                         placeholder="Responder..." style={{ flex:1,background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'6px',padding:'5px 10px',fontSize:'12px',color:t.text }} />
@@ -3262,9 +3324,14 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
             </div>
             {/* Responder */}
             <div style={{ borderTop:`1px solid ${t.border}`, paddingTop:'12px' }}>
-              <textarea value={respuesta} onChange={e => setRespuesta(e.target.value)}
-                placeholder="Escribe tu respuesta..."
-                style={{ width:'100%', minHeight:'72px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 10px', color:t.text, fontSize:'13px', resize:'vertical', boxSizing:'border-box' }} />
+              <div style={{ position:'relative' }}>
+                <textarea value={respuesta} onChange={e => setRespuesta(e.target.value)}
+                  placeholder="Escribe tu respuesta..."
+                  style={{ width:'100%', minHeight:'72px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 10px', color:t.text, fontSize:'13px', resize:'vertical', boxSizing:'border-box' }} />
+                <div style={{ position:'absolute', bottom:'8px', right:'8px' }}>
+                  <EmojiPicker t={t} onSelect={em => setRespuesta(prev => prev + em)} />
+                </div>
+              </div>
               <div style={{ display:'flex', justifyContent:'flex-end', marginTop:'8px' }}>
                 <button onClick={responder} disabled={!respuesta.trim()}
                   style={{ background: respuesta.trim() && !respondiendo ? t.primary : t.border, color: respuesta.trim() && !respondiendo ? '#fff' : t.textMuted, border:'none', borderRadius:'8px', padding:'8px 20px', fontSize:'13px', fontWeight:'700', cursor: respuesta.trim() && !respondiendo ? 'pointer' : 'not-allowed', opacity: respondiendo ? 0.7 : 1 }}>
@@ -3317,9 +3384,14 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
             </div>
             <div style={{ marginBottom:'20px' }}>
               <label style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>MENSAJE</label>
-              <textarea value={nuevo.mensaje} onChange={e => setNuevo({...nuevo, mensaje: e.target.value})}
-                placeholder="Escribe tu mensaje..."
-                style={{ width:'100%', minHeight:'100px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'13px', resize:'vertical', boxSizing:'border-box' }} />
+              <div style={{ position:'relative' }}>
+                <textarea value={nuevo.mensaje} onChange={e => setNuevo({...nuevo, mensaje: e.target.value})}
+                  placeholder="Escribe tu mensaje..."
+                  style={{ width:'100%', minHeight:'100px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'13px', resize:'vertical', boxSizing:'border-box' }} />
+                <div style={{ position:'absolute', bottom:'8px', right:'8px' }}>
+                  <EmojiPicker t={t} onSelect={em => setNuevo(n => ({...n, mensaje: n.mensaje + em}))} />
+                </div>
+              </div>
             </div>
             <div style={{ display:'flex', gap:'10px', justifyContent:'flex-end' }}>
               <button onClick={() => setMostrarNuevo(false)} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 18px', fontSize:'13px', color:t.textMuted, cursor:'pointer' }}>Cancelar</button>
@@ -4132,8 +4204,8 @@ async function enviarZoomPkid(pkid) {
                   const scaleH = (v) => PAD_T + (1 - v/maxVal) * (H - PAD_T - PAD_B)
 
                   return (
-                    <div style={{ overflowX:'auto', overflowY:'hidden', maxHeight:'300px' }}>
-                      <svg width="100%" viewBox={`0 0 ${Math.max(totalW, 400)} ${H}`} style={{ overflow:'visible', display:'block', maxHeight:'300px' }}>
+                    <div style={{ overflowX:'auto', overflowY:'visible' }}>
+                      <svg width="100%" viewBox={`0 0 ${Math.max(totalW, 400)} ${H}`} style={{ overflow:'visible', display:'block', height:'260px' }}>
                         {/* Líneas de referencia */}
                         {[0,25,50,75,100].map(pct => {
                           const y = PAD_T + (1-pct/100)*(H-PAD_T-PAD_B)
