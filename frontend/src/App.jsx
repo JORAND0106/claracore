@@ -1013,20 +1013,19 @@ async function cargarRegistros(modoPapelera) {
     { valor: 'Verificado',      color: '#16A34A', label: '🟢' },
   ]
 
-function zoomEnDwg(registro) {
+  function zoomEnDwg(registro) {
     if (!registro.x_label || !registro.y_label) return
     setFilaZoom(registro.id)
-    if (dwgEnlazado) {
-      // SicoeCAD activo → usar cad_queue directamente
+    const esClaraLinkDisponible = !(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
+    if (esClaraLinkDisponible) {
+      const uri = `claralink://zoom?x=${registro.x_label}&y=${registro.y_label}&radio=20`
+      window.location.href = uri
+    } else {
       if (!registro.pk_id) return
       const tok = getToken()
       fetch(`${API}/cad-queue/${contratoId}/zoom-pkid?pk_id=${encodeURIComponent(registro.pk_id)}`, {
         method: 'POST', headers: { Authorization: `Bearer ${tok}` }
       }).catch(() => {})
-    } else {
-      // Sin DWG enlazado → usar ClaraLink externo
-      const uri = `claralink://zoom?x=${registro.x_label}&y=${registro.y_label}&radio=20`
-      window.location.href = uri
     }
   }
 
@@ -4175,18 +4174,16 @@ async function enviarZoomPkid(pkid) {
                     </div>
                   )
                 })()}
-              {/* ── Drill capítulo → ítem → tabla ahora vive en el popup ── */}
+              {/* ── Drill → ahora vive en el popup ── */}
               </div>
 
             </div>
 
             {/* ══════════════ POPUP CAPÍTULO ══════════════ */}
             {popupCapitulo && dashDrill.length > 0 && (
-              <div
-                style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.65)', zIndex:1200, display:'flex', alignItems:'center', justifyContent:'center' }}
+              <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.65)', zIndex:1200, display:'flex', alignItems:'center', justifyContent:'center' }}
                 onClick={() => { setPopupCapitulo(false); setDashDrill([]) }}>
-                <div
-                  style={{ background:t.bgCard, borderRadius:'16px', width:'88vw', maxWidth:'1160px', height:'90vh', overflow:'hidden', display:'flex', flexDirection:'column', boxShadow:'0 24px 80px rgba(0,0,0,0.55)', border:`1px solid ${t.border}` }}
+                <div style={{ background:t.bgCard, borderRadius:'16px', width:'88vw', maxWidth:'1160px', height:'90vh', overflow:'hidden', display:'flex', flexDirection:'column', boxShadow:'0 24px 80px rgba(0,0,0,0.55)', border:`1px solid ${t.border}` }}
                   onClick={e => e.stopPropagation()}>
 
                   {/* Header fijo */}
@@ -4221,7 +4218,7 @@ async function enviarZoomPkid(pkid) {
                     </button>
                   </div>
 
-                  {/* Cuerpo con scroll */}
+                  {/* Cuerpo scrolleable */}
                   <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column' }}>
 
                     {/* Mapa sticky */}
@@ -4230,18 +4227,13 @@ async function enviarZoomPkid(pkid) {
                         <span style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>🗺️ PLANO SEMÁFORO</span>
                         <span style={{ fontSize:'10px', color:t.textMuted }}>{Object.keys(miniMapaColores).length} PK_IDs</span>
                       </div>
-                      <MiniMapaSemaforo
-                        t={t}
-                        colores={miniMapaColores}
-                        height={240}
-                        onPkidClick={dashDrill.length >= 2 ? abrirPopupPkid : null}
-                      />
+                      <MiniMapaSemaforo t={t} colores={miniMapaColores} height={240} onPkidClick={dashDrill.length >= 2 ? abrirPopupPkid : null} />
                     </div>
 
-                    {/* Área de drill scrolleable */}
+                    {/* Área drill */}
                     <div style={{ padding:'16px 24px', flex:1 }}>
 
-                      {/* Totales (cuando hay ítem seleccionado) */}
+                      {/* Totales ítem */}
                       {dashDrill[1] && dashTabla && (() => {
                         const filas = dashTabla.rows || dashTabla.filas || []
                         const totalCantSicoe  = filas.reduce((s,f) => s + (f.cant_ppto||0), 0)
@@ -4268,92 +4260,74 @@ async function enviarZoomPkid(pkid) {
                         )
                       })()}
 
-                      {/* Nivel 1: ítems del capítulo */}
+                      {/* Nivel 1: ítems */}
                       {dashDrill.length === 1 && (
                         dashLoading ? (
                           <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>⏳ Cargando ítems...</div>
                         ) : dashData?.length > 0 ? (() => {
-                            const POR_PAG = 15
-                            const totalPags = Math.ceil(dashData.length / POR_PAG)
-                            const paginaItems = dashDrillPag || 0
-                            const slice = dashData.slice(paginaItems * POR_PAG, (paginaItems + 1) * POR_PAG)
-                            const maxV = Math.max(...slice.map(d => Math.max(d.presupuesto||0, d.cobrado||0)), 1)
-                            const BAR_W = 26, GAP = 10, PAD_L = 8, PAD_R = 8, H = 240, PAD_T = 14, PAD_B = 32
-                            const totalW = PAD_L + slice.length * (BAR_W*2 + GAP + 8) + PAD_R
-                            const scaleH = v => PAD_T + (1 - v/maxV) * (H - PAD_T - PAD_B)
-                            const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
-                            return (
-                              <div style={{ marginTop:'8px' }}>
-                                {/* Paginación */}
-                                {totalPags > 1 && (
-                                  <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', flexWrap:'wrap' }}>
-                                    <span style={{ fontSize:'10px', color:t.textMuted }}>
-                                      {paginaItems * POR_PAG + 1}–{Math.min((paginaItems + 1) * POR_PAG, dashData.length)} de {dashData.length} ítems
-                                    </span>
-                                    <button onClick={() => setDashDrillPag(p => Math.max(0, p-1))} disabled={paginaItems === 0}
-                                      style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'11px', cursor: paginaItems===0?'default':'pointer', color: paginaItems===0?t.textMuted:t.text }}>‹</button>
-                                    {Array.from({length: totalPags}, (_,i) => (
-                                      <button key={i} onClick={() => setDashDrillPag(i)}
-                                        style={{ background: paginaItems===i ? t.primary : 'transparent', color: paginaItems===i ? '#fff' : t.textMuted, border:`1px solid ${paginaItems===i ? t.primary : t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'11px', cursor:'pointer' }}>
-                                        {i+1}
-                                      </button>
-                                    ))}
-                                    <button onClick={() => setDashDrillPag(p => Math.min(totalPags-1, p+1))} disabled={paginaItems === totalPags-1}
-                                      style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'11px', cursor: paginaItems===totalPags-1?'default':'pointer', color: paginaItems===totalPags-1?t.textMuted:t.text }}>›</button>
-                                  </div>
-                                )}
-                                {/* Gráfico ítems */}
-                                <div style={{ width:'100%', overflowX:'auto' }}>
-                                  <svg width={totalW} height={H} style={{ overflow:'visible', display:'block' }}>
-                                    {[0,50,100].map(pct => {
-                                      const y = PAD_T + (1-pct/100)*(H-PAD_T-PAD_B)
-                                      return <line key={pct} x1={PAD_L} x2={totalW} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="3,3"/>
-                                    })}
-                                    {slice.map((item, i) => {
-                                      const x = PAD_L + i * (BAR_W*2 + GAP + 8)
-                                      const yP = scaleH(item.presupuesto||0)
-                                      const yC = scaleH(item.cobrado||0)
-                                      const hP = H - PAD_B - yP
-                                      const hC = H - PAD_B - yC
-                                      const nomCorto = String(item.item||'').length > 6 ? String(item.item||'').slice(0,6)+'…' : String(item.item||'')
-                                      return (
-                                        <g key={i} onClick={() => setDashDrill([dashDrill[0], {campo:'item', valor: item.item, descripcion: item.descripcion || ''}])} style={{cursor:'pointer'}}>
-                                          <rect x={x} y={yP} width={BAR_W} height={Math.max(hP,2)} fill="#0077B6" rx="2" opacity="0.85"
-                                            onMouseEnter={e => { e.currentTarget.style.opacity='1'; const tip=document.getElementById(`tip-drill-${i}`); if(tip) tip.style.display='block' }}
-                                            onMouseLeave={e => { e.currentTarget.style.opacity='0.85'; const tip=document.getElementById(`tip-drill-${i}`); if(tip) tip.style.display='none' }}/>
-                                          <rect x={x+BAR_W+2} y={yC} width={BAR_W} height={Math.max(hC,2)} fill="#00A896" rx="2" opacity="0.85"
-                                            onMouseEnter={e => { e.currentTarget.style.opacity='1'; const tip=document.getElementById(`tip-drill-${i}`); if(tip) tip.style.display='block' }}
-                                            onMouseLeave={e => { e.currentTarget.style.opacity='0.85'; const tip=document.getElementById(`tip-drill-${i}`); if(tip) tip.style.display='none' }}/>
-                                          <text x={x+BAR_W} y={H-8} textAnchor="middle" fontSize="9" fill={t.textMuted}>{nomCorto}</text>
-                                          <g id={`tip-drill-${i}`} style={{display:'none', pointerEvents:'none'}}>
-                                            <rect x={Math.min(x-10, Math.max(totalW,300)-220)} y={H-PAD_B-100} width="215" height="100" rx="5" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
-                                            <text x={Math.min(x-10, Math.max(totalW,300)-220)+10} y={H-PAD_B-84} fontSize="10" fontWeight="700" fill={t.text}>{String(item.item||'').length>24?String(item.item||'').slice(0,24)+'…':String(item.item||'')}</text>
-                                            <text x={Math.min(x-10, Math.max(totalW,300)-220)+10} y={H-PAD_B-72} fontSize="8" fill={t.textMuted}>{String(item.descripcion||'').length>32?String(item.descripcion||'').slice(0,32)+'…':String(item.descripcion||'')}</text>
-                                            <rect x={Math.min(x-10, Math.max(totalW,300)-220)+10} y={H-PAD_B-62} width="8" height="8" rx="1" fill="#0077B6"/>
-                                            <text x={Math.min(x-10, Math.max(totalW,300)-220)+22} y={H-PAD_B-55} fontSize="9" fill={t.textMuted}>Ppto: <tspan fontWeight="700" fill="#0077B6">{fmtD(item.presupuesto)}</tspan></text>
-                                            <text x={Math.min(x-10, Math.max(totalW,300)-220)+22} y={H-PAD_B-42} fontSize="9" fill={t.textMuted}>Cant: <tspan fontWeight="700" fill="#0077B6">{(item.cant_ppto||0).toFixed(2)}</tspan></text>
-                                            <rect x={Math.min(x-10, Math.max(totalW,300)-220)+10} y={H-PAD_B-32} width="8" height="8" rx="1" fill="#00A896"/>
-                                            <text x={Math.min(x-10, Math.max(totalW,300)-220)+22} y={H-PAD_B-25} fontSize="9" fill={t.textMuted}>Cobro: <tspan fontWeight="700" fill="#00A896">{fmtD(item.cobrado)}</tspan></text>
-                                            <text x={Math.min(x-10, Math.max(totalW,300)-220)+22} y={H-PAD_B-12} fontSize="9" fill={t.textMuted}>Cant: <tspan fontWeight="700" fill="#00A896">{(item.cant_cobro||0).toFixed(2)}</tspan></text>
-                                          </g>
+                          const POR_PAG = 15
+                          const totalPags = Math.ceil(dashData.length / POR_PAG)
+                          const paginaItems = dashDrillPag || 0
+                          const slice = dashData.slice(paginaItems * POR_PAG, (paginaItems + 1) * POR_PAG)
+                          const maxV = Math.max(...slice.map(d => Math.max(d.presupuesto||0, d.cobrado||0)), 1)
+                          const BAR_W = 26, GAP = 10, PAD_L = 8, PAD_R = 8, H = 240, PAD_T = 14, PAD_B = 32
+                          const totalW = PAD_L + slice.length * (BAR_W*2 + GAP + 8) + PAD_R
+                          const scaleH = v => PAD_T + (1 - v/maxV) * (H - PAD_T - PAD_B)
+                          const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+                          return (
+                            <div style={{ marginTop:'8px' }}>
+                              {totalPags > 1 && (
+                                <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', flexWrap:'wrap' }}>
+                                  <span style={{ fontSize:'10px', color:t.textMuted }}>{paginaItems*POR_PAG+1}–{Math.min((paginaItems+1)*POR_PAG, dashData.length)} de {dashData.length} ítems</span>
+                                  <button onClick={() => setDashDrillPag(p => Math.max(0,p-1))} disabled={paginaItems===0}
+                                    style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'11px', cursor:paginaItems===0?'default':'pointer', color:paginaItems===0?t.textMuted:t.text }}>‹</button>
+                                  {Array.from({length: totalPags}, (_,i) => (
+                                    <button key={i} onClick={() => setDashDrillPag(i)}
+                                      style={{ background:paginaItems===i?t.primary:'transparent', color:paginaItems===i?'#fff':t.textMuted, border:`1px solid ${paginaItems===i?t.primary:t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'11px', cursor:'pointer' }}>{i+1}</button>
+                                  ))}
+                                  <button onClick={() => setDashDrillPag(p => Math.min(totalPags-1,p+1))} disabled={paginaItems===totalPags-1}
+                                    style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'11px', cursor:paginaItems===totalPags-1?'default':'pointer', color:paginaItems===totalPags-1?t.textMuted:t.text }}>›</button>
+                                </div>
+                              )}
+                              <div style={{ width:'100%', overflowX:'auto' }}>
+                                <svg width="100%" viewBox={`0 0 ${totalW} ${H}`} style={{ overflow:'visible', display:'block' }}>
+                                  {[0,50,100].map(pct => { const y=PAD_T+(1-pct/100)*(H-PAD_T-PAD_B); return <line key={pct} x1={PAD_L} x2={totalW} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="3,3"/> })}
+                                  {slice.map((item, i) => {
+                                    const x=PAD_L+i*(BAR_W*2+GAP+8), yP=scaleH(item.presupuesto||0), yC=scaleH(item.cobrado||0)
+                                    const hP=H-PAD_B-yP, hC=H-PAD_B-yC
+                                    const nomCorto=String(item.item||'').length>6?String(item.item||'').slice(0,6)+'…':String(item.item||'')
+                                    return (
+                                      <g key={i} onClick={() => setDashDrill([dashDrill[0], {campo:'item', valor:item.item, descripcion:item.descripcion||''}])} style={{cursor:'pointer'}}>
+                                        <rect x={x} y={yP} width={BAR_W} height={Math.max(hP,2)} fill="#0077B6" rx="2" opacity="0.85"
+                                          onMouseEnter={e=>{e.currentTarget.style.opacity='1';const tip=document.getElementById(`tip-drill-${i}`);if(tip)tip.style.display='block'}}
+                                          onMouseLeave={e=>{e.currentTarget.style.opacity='0.85';const tip=document.getElementById(`tip-drill-${i}`);if(tip)tip.style.display='none'}}/>
+                                        <rect x={x+BAR_W+2} y={yC} width={BAR_W} height={Math.max(hC,2)} fill="#00A896" rx="2" opacity="0.85"
+                                          onMouseEnter={e=>{e.currentTarget.style.opacity='1';const tip=document.getElementById(`tip-drill-${i}`);if(tip)tip.style.display='block'}}
+                                          onMouseLeave={e=>{e.currentTarget.style.opacity='0.85';const tip=document.getElementById(`tip-drill-${i}`);if(tip)tip.style.display='none'}}/>
+                                        <text x={x+BAR_W} y={H-8} textAnchor="middle" fontSize="9" fill={t.textMuted}>{nomCorto}</text>
+                                        <g id={`tip-drill-${i}`} style={{display:'none',pointerEvents:'none'}}>
+                                          <rect x={Math.min(x-10,Math.max(totalW,300)-220)} y={H-PAD_B-100} width="215" height="100" rx="5" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
+                                          <text x={Math.min(x-10,Math.max(totalW,300)-220)+10} y={H-PAD_B-84} fontSize="10" fontWeight="700" fill={t.text}>{String(item.item||'').length>24?String(item.item||'').slice(0,24)+'…':String(item.item||'')}</text>
+                                          <text x={Math.min(x-10,Math.max(totalW,300)-220)+10} y={H-PAD_B-72} fontSize="8" fill={t.textMuted}>{String(item.descripcion||'').length>32?String(item.descripcion||'').slice(0,32)+'…':String(item.descripcion||'')}</text>
+                                          <rect x={Math.min(x-10,Math.max(totalW,300)-220)+10} y={H-PAD_B-62} width="8" height="8" rx="1" fill="#0077B6"/>
+                                          <text x={Math.min(x-10,Math.max(totalW,300)-220)+22} y={H-PAD_B-55} fontSize="9" fill={t.textMuted}>Ppto: <tspan fontWeight="700" fill="#0077B6">{fmtD(item.presupuesto)}</tspan></text>
+                                          <text x={Math.min(x-10,Math.max(totalW,300)-220)+22} y={H-PAD_B-42} fontSize="9" fill={t.textMuted}>Cant: <tspan fontWeight="700" fill="#0077B6">{(item.cant_ppto||0).toFixed(2)}</tspan></text>
+                                          <rect x={Math.min(x-10,Math.max(totalW,300)-220)+10} y={H-PAD_B-32} width="8" height="8" rx="1" fill="#00A896"/>
+                                          <text x={Math.min(x-10,Math.max(totalW,300)-220)+22} y={H-PAD_B-25} fontSize="9" fill={t.textMuted}>Cobro: <tspan fontWeight="700" fill="#00A896">{fmtD(item.cobrado)}</tspan></text>
+                                          <text x={Math.min(x-10,Math.max(totalW,300)-220)+22} y={H-PAD_B-12} fontSize="9" fill={t.textMuted}>Cant: <tspan fontWeight="700" fill="#00A896">{(item.cant_cobro||0).toFixed(2)}</tspan></text>
                                         </g>
-                                      )
-                                    })}
-                                  </svg>
-                                </div>
-                                <div style={{ display:'flex', gap:'12px', marginTop:'6px', justifyContent:'center' }}>
-                                  <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color:t.textMuted }}>
-                                    <div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#0077B6' }}/> Presupuesto
-                                  </div>
-                                  <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color:t.textMuted }}>
-                                    <div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#00A896' }}/> Cobro
-                                  </div>
-                                </div>
+                                      </g>
+                                    )
+                                  })}
+                                </svg>
                               </div>
-                            )
-                          })() : (
-                          <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>Sin ítems para este capítulo</div>
-                        )
+                              <div style={{ display:'flex', gap:'12px', marginTop:'6px', justifyContent:'center' }}>
+                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color:t.textMuted }}><div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#0077B6' }}/> Presupuesto</div>
+                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color:t.textMuted }}><div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#00A896' }}/> Cobro</div>
+                              </div>
+                            </div>
+                          )
+                        })() : <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>Sin ítems</div>
                       )}
 
                       {/* Nivel 2: tabla PK_ID */}
@@ -4361,47 +4335,41 @@ async function enviarZoomPkid(pkid) {
                         dashTablaLoad ? (
                           <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>⏳ Cargando tabla...</div>
                         ) : dashTabla ? (
-                          <div>
-                            <div style={{ overflowX:'auto' }}>
+                          <div style={{ overflowX:'auto' }}>
                             <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
                               <thead>
-                                <tr>
-                                  {['PK_ID','Cant. SICOE','Costo SICOE','Cant. Cobro','Costo Cobro','Δ Cant','Δ Costo'].map(h => (
-                                    <th key={h} style={{ padding:'6px 8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'right', whiteSpace:'nowrap' }}>{h}</th>
-                                  ))}
-                                </tr>
+                                <tr>{['PK_ID','Cant. SICOE','Costo SICOE','Cant. Cobro','Costo Cobro','Δ Cant','Δ Costo'].map(h => (
+                                  <th key={h} style={{ padding:'6px 8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'right', whiteSpace:'nowrap' }}>{h}</th>
+                                ))}</tr>
                               </thead>
                               <tbody>
                                 {(dashTabla.rows || dashTabla.filas || []).map((row, i) => {
-                                  const dCant  = row.delta_cant  ?? ((row.cant_ppto||0)  - (row.cant_sicoe||0))
-                                  const dCosto = row.delta_costo ?? ((row.costo_ppto||0) - (row.costo_sicoe||0))
+                                  const dCant  = row.delta_cant  ?? ((row.cant_ppto||0)-(row.cant_sicoe||0))
+                                  const dCosto = row.delta_costo ?? ((row.costo_ppto||0)-(row.costo_sicoe||0))
                                   const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
                                   return (
-                                    <tr key={i} style={{ background: i%2===0 ? 'transparent' : t.bg+'88' }}>
-                                      <td style={{ padding:'5px 8px', fontWeight:'600', color:t.primary, textAlign:'right' }}>{row.pk_id || row.id_pol || '—'}</td>
+                                    <tr key={i} style={{ background: i%2===0?'transparent':t.bg+'88' }}>
+                                      <td style={{ padding:'5px 8px', fontWeight:'600', color:t.primary, textAlign:'right' }}>{row.pk_id||row.id_pol||'—'}</td>
                                       <td style={{ padding:'5px 8px', textAlign:'right', color:t.text }}>{(row.cant_ppto||0).toFixed(2)}</td>
                                       <td style={{ padding:'5px 8px', textAlign:'right', color:'#0077B6', fontWeight:'600' }}>{fmtD(row.costo_ppto)}</td>
                                       <td style={{ padding:'5px 8px', textAlign:'right', color:t.text }}>{(row.cant_sicoe||0).toFixed(2)}</td>
                                       <td style={{ padding:'5px 8px', textAlign:'right', color:'#00A896', fontWeight:'600' }}>{fmtD(row.costo_sicoe)}</td>
-                                      <td style={{ padding:'5px 8px', textAlign:'right', color: dCant >= 0 ? '#10B981' : '#EF4444', fontWeight:'600' }}>{dCant >= 0 ? '+' : ''}{dCant.toFixed(2)}</td>
-                                      <td style={{ padding:'5px 8px', textAlign:'right', color: dCosto >= 0 ? '#10B981' : '#EF4444', fontWeight:'600' }}>{dCosto >= 0 ? '+' : ''}{fmtD(dCosto)}</td>
+                                      <td style={{ padding:'5px 8px', textAlign:'right', color:dCant>=0?'#10B981':'#EF4444', fontWeight:'600' }}>{dCant>=0?'+':''}{dCant.toFixed(2)}</td>
+                                      <td style={{ padding:'5px 8px', textAlign:'right', color:dCosto>=0?'#10B981':'#EF4444', fontWeight:'600' }}>{dCosto>=0?'+':''}{fmtD(dCosto)}</td>
                                     </tr>
                                   )
                                 })}
                               </tbody>
                             </table>
-                            </div>
                           </div>
-                        ) : (
-                          <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>Sin datos</div>
-                        )
+                        ) : <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>Sin datos</div>
                       )}
 
                     </div>{/* fin área drill */}
                   </div>{/* fin cuerpo scroll */}
                 </div>{/* fin popup card */}
               </div>
-            )}{/* fin popup */}
+            )}{/* fin popup capítulo */}
 
             </>}
 
