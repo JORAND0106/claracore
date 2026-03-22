@@ -1013,19 +1013,20 @@ async function cargarRegistros(modoPapelera) {
     { valor: 'Verificado',      color: '#16A34A', label: '🟢' },
   ]
 
-  function zoomEnDwg(registro) {
+function zoomEnDwg(registro) {
     if (!registro.x_label || !registro.y_label) return
     setFilaZoom(registro.id)
-    const esClaraLinkDisponible = !(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
-    if (esClaraLinkDisponible) {
-      const uri = `claralink://zoom?x=${registro.x_label}&y=${registro.y_label}&radio=20`
-      window.location.href = uri
-    } else {
+    if (dwgEnlazado) {
+      // SicoeCAD activo → usar cad_queue directamente
       if (!registro.pk_id) return
       const tok = getToken()
       fetch(`${API}/cad-queue/${contratoId}/zoom-pkid?pk_id=${encodeURIComponent(registro.pk_id)}`, {
         method: 'POST', headers: { Authorization: `Bearer ${tok}` }
       }).catch(() => {})
+    } else {
+      // Sin DWG enlazado → usar ClaraLink externo
+      const uri = `claralink://zoom?x=${registro.x_label}&y=${registro.y_label}&radio=20`
+      window.location.href = uri
     }
   }
 
