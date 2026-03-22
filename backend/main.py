@@ -34,7 +34,8 @@ app = FastAPI(title="ClaraCore API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://happy-grass-0aea5f31e.6.azurestaticapps.net",
+        "https://claracore.co",
+        "https://www.claracore.co",
         "http://localhost:5173",
         "http://localhost:5174",
     ],
@@ -1567,8 +1568,14 @@ def get_pkid_colores_drill(
     elif capitulo:
         q_c = q_c.eq("capitulo", capitulo)
         q_p = q_p.eq("capitulo", capitulo)
-    cobro = q_c.execute().data
-    ppto  = q_p.execute().data
+    try:
+        cobro = q_c.execute().data
+    except Exception:
+        cobro = []
+    try:
+        ppto = q_p.execute().data
+    except Exception:
+        ppto = []
     cobro_agg = {}
     for r in cobro:
         k = str(r.get("pk_id") or "").strip()

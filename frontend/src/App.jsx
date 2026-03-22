@@ -772,9 +772,16 @@ async function cargarRegistros(modoPapelera) {
   , [registrosFiltrados])
 
   const totalPaginas = Math.ceil(registrosFiltrados.length / POR_PAGINA)
+  const registrosOrdenados = useMemo(() =>
+    [...registrosFiltrados].sort((a, b) => {
+      const va = String(a.id_pol || a.pk_id || '')
+      const vb = String(b.id_pol || b.pk_id || '')
+      return vb.localeCompare(va, 'es', { numeric: true })
+    })
+  , [registrosFiltrados])
   const registrosPagina = useMemo(() =>
-    registrosFiltrados.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA)
-  , [registrosFiltrados, pagina])
+    registrosOrdenados.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA)
+  , [registrosOrdenados, pagina])
 
   function handleBarClick(barData) {
     if (!nivelActual || !barData?.name) return
@@ -1898,7 +1905,7 @@ async function restaurar(id) {
                         )}
                       </td>
                     )}
-                    {!puedeEditar && !puedeValidar && (
+                    {puedeEditar && (
                       <td style={tdStyle} onClick={e=>e.stopPropagation()}>
                         {isEdit ? (
                           <div style={{ display:'flex',gap:'4px' }}>
