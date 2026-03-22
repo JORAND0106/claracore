@@ -6,3 +6,5 @@ bcrypt==3.2.2
 python-jose[cryptography]
 python-dotenv
 pydantic
+openpyxl
+requests

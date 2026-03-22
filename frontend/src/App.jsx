@@ -4265,6 +4265,25 @@ async function enviarZoomPkid(pkid) {
                         </>
                       )}
                     </div>
+                    <button
+                      onClick={async () => {
+                        const tok = getToken()
+                        const cap = encodeURIComponent(dashDrill[0]?.valor || '')
+                        const url = `${API}/cobro/${usuario.contrato_id}/exportar-capitulo?capitulo=${cap}`
+                        try {
+                          const res = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } })
+                          if (!res.ok) { alert('Error al generar el archivo'); return }
+                          const blob = await res.blob()
+                          const a = document.createElement('a')
+                          a.href = URL.createObjectURL(blob)
+                          a.download = `ClaraCore_${dashDrill[0]?.valor?.slice(0,30)}_${new Date().toISOString().slice(0,10)}.xlsx`
+                          a.click()
+                          URL.revokeObjectURL(a.href)
+                        } catch { alert('Error de conexión') }
+                      }}
+                      style={{ background:'#1E8449', color:'#fff', border:'none', borderRadius:'8px', padding:'5px 16px', fontSize:'13px', fontWeight:'700', cursor:'pointer', flexShrink:0 }}>
+                      📥 Exportar Excel
+                    </button>
                     <button onClick={() => { setPopupCapitulo(false); setDashDrill([]) }}
                       style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'5px 14px', fontSize:'13px', cursor:'pointer', color:t.textMuted, flexShrink:0 }}>
                       ✕ Cerrar
