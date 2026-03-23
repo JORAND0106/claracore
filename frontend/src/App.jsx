@@ -538,7 +538,7 @@ function PresupuestoTooltip({ active, payload, t, color, fmt }) {
 }
 
 // ─── MÓDULO PRESUPUESTO ───────────────────────────────────────────────────────
-function ModuloPresupuesto({ t, usuario, token, s }) {
+function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRegistroConsumed }) {
   const API = 'https://claracore-backend.azurewebsites.net'
   const contratoId = usuario?.contrato_id
 
@@ -626,6 +626,21 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   // ── Carga inicial ──────────────────────────────────────────────────────────
   useEffect(() => { if (contratoId) cargarRegistros() }, [contratoId])
   
+useEffect(() => {
+    if (!navRegistroId || !contratoId) return
+    const tok = getToken()
+    fetch(`${API}/presupuesto/item/${navRegistroId}`, { headers: { Authorization: `Bearer ${tok}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(registro => {
+        if (registro) {
+          setModalDetallePpto(registro)
+          setModalDetallePptoEditable(true)
+        }
+      })
+      .catch(() => {})
+    if (onNavRegistroConsumed) onNavRegistroConsumed()
+  }, [navRegistroId])
+
     useEffect(() => {
     if (!contratoId) return
     fetch(`${API}/notificaciones/usuarios-destinatarios`, { headers: { Authorization: `Bearer ${token}` } })
@@ -3680,25 +3695,14 @@ async function enviarZoomPkid(pkid) {
     setTimeout(() => setZoomingPkid(false), 2000)
   }
 
+const [navRegistroId, setNavRegistroId] = useState(null)
+
   function handleNavegar(notif) {
     if (!notif?.modulo) return
+    const modMap = { PRESUPUESTO:'presupuesto', COBRO:'cobro', AUTH:'dashboard' }
+    setModuloActivo(modMap[notif.modulo] || 'dashboard')
     if (notif.entidad_id && notif.modulo === 'PRESUPUESTO') {
-      // Cargar el registro directo sin cambiar de módulo
-      const id = parseInt(notif.entidad_id)
-      if (!id) return
-      const tok = getToken()
-      fetch(`${API}/presupuesto/item/${id}`, { headers: { Authorization: `Bearer ${tok}` } })
-        .then(r => r.ok ? r.json() : null)
-        .then(registro => {
-          if (registro) {
-            setModalDetallePpto(registro)
-            setModalDetallePptoEditable(true)
-          }
-        })
-        .catch(() => {})
-    } else {
-      const modMap = { PRESUPUESTO:'presupuesto', COBRO:'cobro', AUTH:'dashboard' }
-      setModuloActivo(modMap[notif.modulo] || 'dashboard')
+      setNavRegistroId(parseInt(notif.entidad_id))
     }
   }
     useEffect(() => {
@@ -5261,7 +5265,7 @@ async function enviarZoomPkid(pkid) {
         )}
 
         {/* ── MÓDULO PRESUPUESTO ── */}
-        {moduloActivo === 'presupuesto' && <ModuloPresupuesto t={t} usuario={usuario} token={getToken()} s={s} />}
+        {moduloActivo === 'presupuesto' && <ModuloPresupuesto t={t} usuario={usuario} token={getToken()} s={s} navRegistroId={navRegistroId} onNavRegistroConsumed={() => setNavRegistroId(null)} />}
 
 {/* ── MÓDULO SICOE ── */}
         {moduloActivo === 'cobro' && <ModuloCobro t={t} usuario={usuario} token={getToken()} s={s} />}
