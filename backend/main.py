@@ -2287,6 +2287,16 @@ def crear_notificacion(body: NotificacionCreate, current_user=Depends(get_curren
             "padre_id":         body.padre_id,
         }
         result = supabase.table("notificaciones").insert(row).execute()
+
+        # Si es respuesta, marcar el mensaje raíz como no leído para el destinatario
+        if body.padre_id:
+            try:
+                supabase.table("notificaciones") \
+                    .update({"leido": False}) \
+                    .eq("id", body.padre_id) \
+                    .execute()
+            except: pass
+
         registrar_log(current_user, "ENVIAR", "NOTIFICACIONES", "notificacion",
             str(result.data[0]["id"]) if result.data else None,
             {"asunto": body.asunto, "destinatario_id": body.destinatario_id, "tipo": body.tipo})
@@ -2303,7 +2313,6 @@ def get_notificaciones_recibidas(
     uid = int(current_user.get("sub", 0))
     q = supabase.table("notificaciones").select("*") \
         .eq("destinatario_id", uid) \
-        .is_("padre_id", "null") \
         .order("created_at", desc=True)
     if solo_no_leidas:
         q = q.eq("leido", False)
@@ -2320,7 +2329,6 @@ def get_notificaciones_enviadas(
     uid = int(current_user.get("sub", 0))
     return supabase.table("notificaciones").select("*") \
         .eq("remitente_id", uid) \
-        .is_("padre_id", "null") \
         .order("created_at", desc=True) \
         .range(offset, offset + limit - 1) \
         .execute().data

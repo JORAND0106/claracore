@@ -1850,7 +1850,7 @@ async function restaurar(id) {
               {registrosPagina.map(r => {
                 const isEdit = editando === r.id
                 return (
-                  <tr key={r.id} style={{ background: filaZoom===r.id ? '#F59E0B22' : seleccionados.has(r.id) ? (t.primary+'18') : 'transparent', cursor: r.x_label ? 'crosshair' : 'default', outline: filaZoom===r.id ? '2px solid #F59E0B88' : 'none', transition:'background 0.3s, outline 0.3s' }}
+                  <tr key={r.id} data-id={r.id} style={{ background: filaZoom===r.id ? '#F59E0B22' : seleccionados.has(r.id) ? (t.primary+'18') : 'transparent', cursor: r.x_label ? 'crosshair' : 'default', outline: filaZoom===r.id ? '2px solid #F59E0B88' : 'none', transition:'background 0.3s, outline 0.3s' }}
                     onClick={() => { if (!isEdit) { zoomEnDwg(r); highlightEnDwg(r); if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && r.pk_id) { const td = document.getElementById(`zoom-feedback-${r.id}`); if(td){td.style.opacity='1'; setTimeout(()=>{td.style.opacity='0'},2000)} } } }}>
                     <td style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
@@ -3628,6 +3628,24 @@ async function enviarZoomPkid(pkid) {
     const modMap = { PRESUPUESTO:'presupuesto', COBRO:'cobro', AUTH:'dashboard' }
     const mod = modMap[notif.modulo] || 'dashboard'
     setModuloActivo(mod)
+    // Si tiene entidad_id, intentar hacer zoom al registro después de cambiar módulo
+    if (notif.entidad_id && notif.modulo === 'PRESUPUESTO') {
+      setTimeout(() => {
+        const id = parseInt(notif.entidad_id)
+        if (!id) return
+        // Buscar el elemento en la tabla y hacer scroll
+        const row = document.querySelector(`tr[data-id="${id}"]`)
+        if (row) {
+          row.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          row.style.outline = '2px solid #F59E0B'
+          row.style.background = '#F59E0B22'
+          setTimeout(() => {
+            row.style.outline = ''
+            row.style.background = ''
+          }, 3000)
+        }
+      }, 800)
+    }
   }
     useEffect(() => {
     if (!contratoIdDash) return
