@@ -577,6 +577,13 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const POR_PAGINA = 50
   const [modalDetallePpto, setModalDetallePpto] = useState(null)
   const [modalDetallePptoEditable, setModalDetallePptoEditable] = useState(false)
+  const [popupDims, setPopupDims] = useState({ ancho: '', espesor: '' })
+  const [popupCap,  setPopupCap]  = useState('')
+  const [popupItem, setPopupItem] = useState('')
+  const [popupItemBusq, setPopupItemBusq] = useState('')
+  const [popupItemOpen, setPopupItemOpen] = useState(false)
+  const [popupGuardando, setPopupGuardando] = useState(false)
+  const [popupMsg, setPopupMsg] = useState('')
   // ── Comentarios ──────────────────────────────────────────────────────────
   const [modalComentario,  setModalComentario]  = useState(null) // {tipo, obligatorio, resolve}
   const [textoComentario,  setTextoComentario]  = useState('')
@@ -635,6 +642,11 @@ useEffect(() => {
         if (registro) {
           setModalDetallePpto(registro)
           setModalDetallePptoEditable(true)
+          setPopupDims({ ancho: registro.ancho ?? '', espesor: registro.espesor ?? '' })
+          setPopupCap(registro.capitulo || '')
+          setPopupItem(registro.item || '')
+          setPopupItemBusq(registro.item ? `${registro.item} · ${registro.descripcion || ''}` : '')
+          setPopupMsg('')
         }
       })
       .catch(() => {})
@@ -1232,38 +1244,120 @@ async function restaurar(id) {
                     <F label="COSTO DIRECTO" val={fmt(r.costo_directo)}/>
                   </Row>
                   <Row><F label="TRAMO" val={r.tramo}/><F label="CALZADA" val={r.calzada}/><F label="PK" val={r.pk_id} flex={0.5}/></Row>
-                  {/* Acciones desde buzón — solo si viene de rastrear y tiene permisos */}
+                  {/* Acciones desde buzón */}
                   {modalDetallePptoEditable && (puedeEditar || puedeEliminar) && !esSellado(r) && (
-                    <div style={{ borderTop:`1px solid ${t.border}`, marginTop:'12px', paddingTop:'12px', display:'flex', gap:'8px', flexWrap:'wrap' }}>
+                    <div style={{ borderTop:`1px solid ${t.border}`, marginTop:'12px', paddingTop:'12px' }}>
+
+                      {/* ── Editar dimensiones ── */}
                       {puedeEditar && (
-                        <>
-                          <button onClick={() => {
-                            setModalDetallePpto(null); setModalDetallePptoEditable(false)
-                            iniciarEdicion(r)
-                            // Asegurar que el registro está en memoria
-                            if (!registros.find(x => x.id === r.id)) {
-                              setRegistros(prev => [...prev, r])
-                            }
-                            setModuloActivo('presupuesto')
+                        <div style={{ background:t.bg, borderRadius:'8px', padding:'10px 12px', marginBottom:'10px' }}>
+                          <div style={{ fontSize:'10px', fontWeight:'700', color:'#F59E0B', letterSpacing:'0.5px', marginBottom:'8px' }}>📐 EDITAR DIMENSIONES</div>
+                          <div style={{ display:'flex', gap:'10px', marginBottom:'8px' }}>
+                            <div style={{ flex:1 }}>
+                              <div style={{ fontSize:'9px', color:t.textMuted, fontWeight:'700', marginBottom:'3px' }}>ANCHO</div>
+                              <input type="number" value={popupDims.ancho}
+                                onChange={e => setPopupDims(d => ({...d, ancho: e.target.value}))}
+                                style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'12px', boxSizing:'border-box' }} />
+                            </div>
+                            <div style={{ flex:1 }}>
+                              <div style={{ fontSize:'9px', color:t.textMuted, fontWeight:'700', marginBottom:'3px' }}>ESPESOR</div>
+                              <input type="number" value={popupDims.espesor}
+                                onChange={e => setPopupDims(d => ({...d, espesor: e.target.value}))}
+                                style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'12px', boxSizing:'border-box' }} />
+                            </div>
+                          </div>
+                          <button disabled={popupGuardando} onClick={async () => {
+                            setPopupGuardando(true); setPopupMsg('')
+                            const area = parseFloat(r.area_long_nod) || 0
+                            const ancho = parseFloat(popupDims.ancho) || 0
+                            const esp   = parseFloat(popupDims.espesor) || 0
+                            const cant  = (ancho > 0 || esp > 0) ? Math.round(area * ancho * esp * 10000) / 10000 : area
+                            const costo = Math.round(cant * (r.vlr_unitario || 0))
+                            const body  = { ancho: ancho || null, espesor: esp || null, cant_total: cant, costo_directo: costo }
+                            const res = await fetch(`${API}/presupuesto/item/${r.id}`, {
+                              method:'PUT', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
+                              body: JSON.stringify(body)
+                            })
+                            if (res.ok) {
+                              const updated = await fetch(`${API}/presupuesto/item/${r.id}`, { headers:{ Authorization:`Bearer ${token}` } })
+                              if (updated.ok) { const d = await updated.json(); setModalDetallePpto(d) }
+                              _pptoCacheRef.current = null
+                              setPopupMsg('✅ Dimensiones actualizadas')
+                            } else setPopupMsg('❌ Error al guardar')
+                            setPopupGuardando(false)
                           }}
-                            style={{ background:'#F59E0B18', border:'1px solid #F59E0B44', borderRadius:'8px', padding:'8px 16px', fontSize:'12px', fontWeight:'700', color:'#F59E0B', cursor:'pointer' }}>
-                            📐 Editar dimensiones
+                            style={{ background:'#F59E0B', color:'#fff', border:'none', borderRadius:'7px', padding:'7px 18px', fontSize:'12px', fontWeight:'700', cursor:'pointer', opacity: popupGuardando ? 0.6 : 1 }}>
+                            {popupGuardando ? '⏳ Guardando...' : '💾 Recalcular y guardar'}
                           </button>
-                          <button onClick={() => {
-                            setModalDetallePpto(null); setModalDetallePptoEditable(false)
-                            setEditValues({ capitulo: r.capitulo, item: r.item })
-                            setEditando(r.id)
-                            if (!registros.find(x => x.id === r.id)) {
-                              setRegistros(prev => [...prev, r])
-                            }
-                            setModuloActivo('presupuesto')
-                          }}
-                            style={{ background:'#0077B618', border:'1px solid #0077B644', borderRadius:'8px', padding:'8px 16px', fontSize:'12px', fontWeight:'700', color:'#0077B6', cursor:'pointer' }}>
-                            🔄 Cambiar capítulo/ítem
-                          </button>
-                        </>
+                        </div>
                       )}
-                      {puedeEliminar && (
+
+                      {/* ── Cambiar capítulo / ítem ── */}
+                      {puedeEditar && (
+                        <div style={{ background:t.bg, borderRadius:'8px', padding:'10px 12px', marginBottom:'10px' }}>
+                          <div style={{ fontSize:'10px', fontWeight:'700', color:'#0077B6', letterSpacing:'0.5px', marginBottom:'8px' }}>🔄 CAMBIAR CAPÍTULO / ÍTEM</div>
+                          <div style={{ marginBottom:'8px' }}>
+                            <div style={{ fontSize:'9px', color:t.textMuted, fontWeight:'700', marginBottom:'3px' }}>CAPÍTULO</div>
+                            <select value={popupCap}
+                              onChange={e => { setPopupCap(e.target.value); setPopupItem(''); setPopupItemBusq('') }}
+                              style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'12px', boxSizing:'border-box' }}>
+                              <option value="">— Selecciona capítulo —</option>
+                              {capitulosListado.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          </div>
+                          <div style={{ marginBottom:'8px', position:'relative' }}>
+                            <div style={{ fontSize:'9px', color:t.textMuted, fontWeight:'700', marginBottom:'3px' }}>ÍTEM</div>
+                            <input value={popupItemBusq} disabled={!popupCap}
+                              onChange={e => { setPopupItemBusq(e.target.value); setPopupItemOpen(true); setPopupItem('') }}
+                              placeholder={popupCap ? 'Buscar ítem...' : 'Primero selecciona capítulo'}
+                              style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${popupItem ? t.primary : t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'12px', boxSizing:'border-box' }} />
+                            {popupItemOpen && popupCap && (
+                              <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', maxHeight:'160px', overflowY:'auto', zIndex:100, boxShadow:'0 4px 16px rgba(0,0,0,0.2)' }}>
+                                {listadoPrecios
+                                  .filter(p => p.capitulo === popupCap && (!popupItemBusq || `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(popupItemBusq.toLowerCase())))
+                                  .slice(0, 20)
+                                  .map(p => (
+                                    <div key={p.item_numero} onClick={() => { setPopupItem(p.item_numero); setPopupItemBusq(`${p.item_numero} · ${p.descripcion}`); setPopupItemOpen(false) }}
+                                      style={{ padding:'6px 10px', fontSize:'11px', cursor:'pointer', borderBottom:`1px solid ${t.border}44` }}
+                                      onMouseEnter={e => e.currentTarget.style.background=t.bg}
+                                      onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                                      <strong>{p.item_numero}</strong> — {p.descripcion}
+                                    </div>
+                                  ))}
+                              </div>
+                            )}
+                          </div>
+                          <button disabled={popupGuardando || (!popupCap && !popupItem)} onClick={async () => {
+                            setPopupGuardando(true); setPopupMsg('')
+                            const precio = listadoPrecios.find(p => p.item_numero === popupItem)
+                            const vlr    = precio?.valor_unitario || precio?.vlr_unitario || r.vlr_unitario || 0
+                            const cant   = r.cant_total || 0
+                            const body   = {
+                              ...(popupCap  && { capitulo: popupCap }),
+                              ...(popupItem && { item: popupItem, descripcion: precio?.descripcion || r.descripcion, und: precio?.und || r.und }),
+                              vlr_unitario:  vlr,
+                              costo_directo: Math.round(cant * vlr)
+                            }
+                            const res = await fetch(`${API}/presupuesto/item/${r.id}`, {
+                              method:'PUT', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
+                              body: JSON.stringify(body)
+                            })
+                            if (res.ok) {
+                              const updated = await fetch(`${API}/presupuesto/item/${r.id}`, { headers:{ Authorization:`Bearer ${token}` } })
+                              if (updated.ok) { const d = await updated.json(); setModalDetallePpto(d) }
+                              _pptoCacheRef.current = null
+                              setPopupMsg('✅ Capítulo/ítem actualizado')
+                            } else setPopupMsg('❌ Error al guardar')
+                            setPopupGuardando(false)
+                          }}
+                            style={{ background:'#0077B6', color:'#fff', border:'none', borderRadius:'7px', padding:'7px 18px', fontSize:'12px', fontWeight:'700', cursor:'pointer', opacity: (popupGuardando || (!popupCap && !popupItem)) ? 0.5 : 1 }}>
+                            {popupGuardando ? '⏳ Guardando...' : '💾 Actualizar y recalcular'}
+                          </button>
+                        </div>
+                      )}
+
+                      {/* ── Dar de baja — solo si DWG enlazado ── */}
+                      {puedeEliminar && dwgEnlazado && (
                         <button onClick={async () => {
                           if (!window.confirm('¿Dar de baja este registro?')) return
                           setModalDetallePpto(null); setModalDetallePptoEditable(false)
@@ -1272,6 +1366,13 @@ async function restaurar(id) {
                           style={{ background:'#EF444418', border:'1px solid #EF444444', borderRadius:'8px', padding:'8px 16px', fontSize:'12px', fontWeight:'700', color:'#EF4444', cursor:'pointer' }}>
                           🗑️ Dar de baja
                         </button>
+                      )}
+
+                      {/* Mensaje de resultado */}
+                      {popupMsg && (
+                        <div style={{ marginTop:'8px', fontSize:'12px', color: popupMsg.startsWith('✅') ? '#16A34A' : '#EF4444', fontWeight:'600' }}>
+                          {popupMsg}
+                        </div>
                       )}
                     </div>
                   )}
