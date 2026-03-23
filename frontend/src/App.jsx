@@ -657,15 +657,29 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const puedeValidar = esDeveloper || (_permPpto?.validar  ?? false)
   const puedeEliminar = esDeveloper || (_permPpto?.eliminar ?? false)
   const esSellado = (r) => r?.sellado === true
-  const [verPapelera, setVerPapelera] = useState(false)  
+  const [verPapelera, setVerPapelera] = useState(false)
+  const _pptoCacheRef = useRef(null)  // { data, ts, papelera }
+  const PPTO_CACHE_TTL = 5 * 60 * 1000  // 5 minutos  
 
-async function cargarRegistros(modoPapelera) {
+async function cargarRegistros(modoPapelera, forzar = false) {
     if (!contratoId) return
-    setLoading(true)
     const esPapelera = modoPapelera !== undefined ? modoPapelera : verPapelera
+    // Servir desde caché si es válido
+    const cached = _pptoCacheRef.current
+    if (!forzar && cached && cached.papelera === esPapelera &&
+        (Date.now() - cached.ts) < PPTO_CACHE_TTL) {
+      setRegistros(cached.data)
+      setPagina(1)
+      return
+    }
+    setLoading(true)
     const params = esPapelera ? '?papelera=true' : ''
     const res = await fetch(`${API}/presupuesto/${contratoId}${params}`, { headers: { Authorization: `Bearer ${token}` } })
-    if (res.ok) setRegistros(await res.json())
+    if (res.ok) {
+      const data = await res.json()
+      _pptoCacheRef.current = { data, ts: Date.now(), papelera: esPapelera }
+      setRegistros(data)
+    }
     setLoading(false)
     setPagina(1)
   }
@@ -943,7 +957,7 @@ async function cargarRegistros(modoPapelera) {
     }
     if (ok) msj = `✅ ${rows.length} registros ${modoImport === 'replace' ? 'cargados' : 'agregados'}`
     setImportMsg(msj); setImporting(false); setImportProgreso(0)
-    if (ok) { setDrill([]); await cargarRegistros() }
+    if (ok) { _pptoCacheRef.current = null; setDrill([]); await cargarRegistros() }
     setTimeout(() => setImportMsg(''), 5000)
   }
 
@@ -1005,7 +1019,7 @@ async function cargarRegistros(modoPapelera) {
     setGuardandoBulk(false)
     if (res.ok) {
       if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario, destinatarioComentario)
-      setBulkEstado(''); setSeleccionados(new Set()); await cargarRegistros()
+      setBulkEstado(''); setSeleccionados(new Set()); _pptoCacheRef.current = null; await cargarRegistros()
     }
   }
 
@@ -1043,7 +1057,7 @@ async function cargarRegistros(modoPapelera) {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(body)
     })
-    if (res.ok) { setEditando(null); await cargarRegistros() }
+    if (res.ok) { setEditando(null); _pptoCacheRef.current = null; await cargarRegistros() }
   }
 
   // ── Selección ──────────────────────────────────────────────────────────────
@@ -1140,7 +1154,7 @@ async function restaurar(id) {
       method: 'PUT', headers: { Authorization: `Bearer ${token}` }
     })
     if (res.ok) {
-      await cargarRegistros()
+      _pptoCacheRef.current = null; await cargarRegistros()
     } else alert('Error al restaurar el registro')
   }
 
@@ -1400,7 +1414,7 @@ async function restaurar(id) {
         )}
         {importMsg && <span style={{ fontSize:'13px',color:importMsg.startsWith('✅')?'#16A34A':importMsg.startsWith('❌')?'#DC2626':t.textMuted }}>{importMsg}</span>}
         <span style={{ marginLeft:'auto',fontSize:'12px',color:t.textMuted }}>
-        <button onClick={() => cargarRegistros()}
+        <button onClick={() => { _pptoCacheRef.current = null; cargarRegistros() }}
           style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'7px 14px', color:t.textMuted, fontSize:'12px', fontWeight:'600', cursor:'pointer' }}>
           🔄 Actualizar
         </button>
@@ -1660,7 +1674,7 @@ async function restaurar(id) {
       {/* ── Indicador DWG ─────────────────────────────────────────── */}
 <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', flexWrap:'wrap' }}>
         {puedeEliminar && (
-          <button onClick={() => { const v = !verPapelera; setVerPapelera(v); cargarRegistros(v) }}
+          <button onClick={() => { const v = !verPapelera; setVerPapelera(v); _pptoCacheRef.current = null; cargarRegistros(v) }}
             style={{ background: verPapelera ? '#EF444422' : t.bgCard, border:`1px solid ${verPapelera ? '#EF4444' : t.border}`, borderRadius:'8px', padding:'6px 14px', color: verPapelera ? '#EF4444' : t.textMuted, fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
             🗑️ {verPapelera ? 'Ver activos' : 'Papelera'}
           </button>
