@@ -576,6 +576,7 @@ function ModuloPresupuesto({ t, usuario, token, s }) {
   const [pagina, setPagina] = useState(1)
   const POR_PAGINA = 50
   const [modalDetallePpto, setModalDetallePpto] = useState(null)
+  const [modalDetallePptoEditable, setModalDetallePptoEditable] = useState(false)
   // ── Comentarios ──────────────────────────────────────────────────────────
   const [modalComentario,  setModalComentario]  = useState(null) // {tipo, obligatorio, resolve}
   const [textoComentario,  setTextoComentario]  = useState('')
@@ -1174,12 +1175,12 @@ async function restaurar(id) {
       {/* Modal detalle registro presupuesto */}
       {modalDetallePpto && (
         <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.65)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center' }}
-          onClick={() => setModalDetallePpto(null)}>
+          onClick={() => { setModalDetallePpto(null); setModalDetallePptoEditable(false) }}>
           <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'14px',padding:'20px',width:'520px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.4)' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px' }}>
               <div style={{ fontSize:'14px',fontWeight:'800',color:t.primary }}>📋 Detalle del Registro</div>
-              <button onClick={() => setModalDetallePpto(null)} style={{ background:'transparent',border:'none',fontSize:'18px',cursor:'pointer',color:t.textMuted }}>✕</button>
+              <button onClick={() => { setModalDetallePpto(null); setModalDetallePptoEditable(false) }} style={{ background:'transparent',border:'none',fontSize:'18px',cursor:'pointer',color:t.textMuted }}>✕</button>
             </div>
             {(() => {
               const r = modalDetallePpto
@@ -1216,8 +1217,50 @@ async function restaurar(id) {
                     <F label="COSTO DIRECTO" val={fmt(r.costo_directo)}/>
                   </Row>
                   <Row><F label="TRAMO" val={r.tramo}/><F label="CALZADA" val={r.calzada}/><F label="PK" val={r.pk_id} flex={0.5}/></Row>
-                  {r.observaciones && <BigF label="OBSERVACIONES" val={r.observaciones}/>}
-                  {r.revisado === 'Verificado' && r.validado_por && (
+                  {/* Acciones desde buzón — solo si viene de rastrear y tiene permisos */}
+                  {modalDetallePptoEditable && (puedeEditar || puedeEliminar) && !esSellado(r) && (
+                    <div style={{ borderTop:`1px solid ${t.border}`, marginTop:'12px', paddingTop:'12px', display:'flex', gap:'8px', flexWrap:'wrap' }}>
+                      {puedeEditar && (
+                        <>
+                          <button onClick={() => {
+                            setModalDetallePpto(null); setModalDetallePptoEditable(false)
+                            iniciarEdicion(r)
+                            // Asegurar que el registro está en memoria
+                            if (!registros.find(x => x.id === r.id)) {
+                              setRegistros(prev => [...prev, r])
+                            }
+                            setModuloActivo('presupuesto')
+                          }}
+                            style={{ background:'#F59E0B18', border:'1px solid #F59E0B44', borderRadius:'8px', padding:'8px 16px', fontSize:'12px', fontWeight:'700', color:'#F59E0B', cursor:'pointer' }}>
+                            📐 Editar dimensiones
+                          </button>
+                          <button onClick={() => {
+                            setModalDetallePpto(null); setModalDetallePptoEditable(false)
+                            setEditValues({ capitulo: r.capitulo, item: r.item })
+                            setEditando(r.id)
+                            if (!registros.find(x => x.id === r.id)) {
+                              setRegistros(prev => [...prev, r])
+                            }
+                            setModuloActivo('presupuesto')
+                          }}
+                            style={{ background:'#0077B618', border:'1px solid #0077B644', borderRadius:'8px', padding:'8px 16px', fontSize:'12px', fontWeight:'700', color:'#0077B6', cursor:'pointer' }}>
+                            🔄 Cambiar capítulo/ítem
+                          </button>
+                        </>
+                      )}
+                      {puedeEliminar && (
+                        <button onClick={async () => {
+                          if (!window.confirm('¿Dar de baja este registro?')) return
+                          setModalDetallePpto(null); setModalDetallePptoEditable(false)
+                          await darDeBaja(r.id)
+                        }}
+                          style={{ background:'#EF444418', border:'1px solid #EF444444', borderRadius:'8px', padding:'8px 16px', fontSize:'12px', fontWeight:'700', color:'#EF4444', cursor:'pointer' }}>
+                          🗑️ Dar de baja
+                        </button>
+                      )}
+                    </div>
+                  )}
+                    {r.revisado === 'Verificado' && r.validado_por && (
                     <div style={{ borderTop:`1px solid ${t.border}`, marginTop:'8px', paddingTop:'8px', display:'flex', alignItems:'center', gap:'8px' }}>
                       <div style={{ width:'28px', height:'28px', borderRadius:'50%', background:'#16A34A22', border:'1px solid #16A34A44', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'13px', flexShrink:0 }}>✅</div>
                       <div>
@@ -3639,26 +3682,23 @@ async function enviarZoomPkid(pkid) {
 
   function handleNavegar(notif) {
     if (!notif?.modulo) return
-    const modMap = { PRESUPUESTO:'presupuesto', COBRO:'cobro', AUTH:'dashboard' }
-    const mod = modMap[notif.modulo] || 'dashboard'
-    setModuloActivo(mod)
-    // Si tiene entidad_id, intentar hacer zoom al registro después de cambiar módulo
     if (notif.entidad_id && notif.modulo === 'PRESUPUESTO') {
-      setTimeout(() => {
-        const id = parseInt(notif.entidad_id)
-        if (!id) return
-        // Buscar el elemento en la tabla y hacer scroll
-        const row = document.querySelector(`tr[data-id="${id}"]`)
-        if (row) {
-          row.scrollIntoView({ behavior: 'smooth', block: 'center' })
-          row.style.outline = '2px solid #F59E0B'
-          row.style.background = '#F59E0B22'
-          setTimeout(() => {
-            row.style.outline = ''
-            row.style.background = ''
-          }, 3000)
-        }
-      }, 800)
+      // Cargar el registro directo sin cambiar de módulo
+      const id = parseInt(notif.entidad_id)
+      if (!id) return
+      const tok = getToken()
+      fetch(`${API}/presupuesto/item/${id}`, { headers: { Authorization: `Bearer ${tok}` } })
+        .then(r => r.ok ? r.json() : null)
+        .then(registro => {
+          if (registro) {
+            setModalDetallePpto(registro)
+            setModalDetallePptoEditable(true)
+          }
+        })
+        .catch(() => {})
+    } else {
+      const modMap = { PRESUPUESTO:'presupuesto', COBRO:'cobro', AUTH:'dashboard' }
+      setModuloActivo(modMap[notif.modulo] || 'dashboard')
     }
   }
     useEffect(() => {

@@ -798,6 +798,14 @@ def get_resumen_presupuesto(contrato_id: int, current_user=Depends(get_current_u
         "por_capitulo": [{"capitulo": r["capitulo"], "costo": r["presupuesto"], "registros": r["registros"]} for r in caps]
     }
 
+@app.get("/presupuesto/item/{item_id}")
+def get_presupuesto_item(item_id: int, current_user=Depends(get_current_user)):
+    """Trae un único registro de presupuesto por ID."""
+    row = supabase.table("presupuesto").select("*").eq("id", item_id).single().execute().data
+    if not row:
+        raise HTTPException(status_code=404, detail="Registro no encontrado")
+    return row
+
 @app.put("/presupuesto/item/{item_id}")
 def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=Depends(get_current_user)):
     data = body.dict(exclude_unset=True)
@@ -2353,7 +2361,7 @@ def get_hilo(notif_id: int, current_user=Depends(get_current_user)):
     padre_id = notif[0].get("padre_id") or notif_id
     # Marcar como leída
     uid = int(current_user.get("sub", 0))
-    supabase.table("notificaciones").update({"leido": True, "leido_at": "now()"}) \
+    supabase.table("notificaciones").update({"leido": True, "leido_at": datetime.utcnow().isoformat()}) \
         .eq("id", notif_id).eq("destinatario_id", uid).execute()
     # Traer padre + todas las respuestas
     padre = supabase.table("notificaciones").select("*").eq("id", padre_id).execute().data
