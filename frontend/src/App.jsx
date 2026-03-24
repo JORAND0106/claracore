@@ -706,8 +706,9 @@ async function cargarCapitulos() {
 
 async function cargarRegistros(modoPapelera, forzar = false, capFiltro, itemFiltro) {
     if (!contratoId) return
+    if (!capFiltro) { await cargarCapitulos(); return }
     const esPapelera = modoPapelera !== undefined ? modoPapelera : verPapelera
-    const cacheKey = `${esPapelera}|${capFiltro||''}|${itemFiltro||''}`
+    const cacheKey = `${esPapelera}|${capFiltro}|${itemFiltro||''}`
     const cached = _pptoCacheRef.current
     if (!forzar && cached && cached.key === cacheKey &&
         (Date.now() - cached.ts) < PPTO_CACHE_TTL) {
@@ -716,21 +717,38 @@ async function cargarRegistros(modoPapelera, forzar = false, capFiltro, itemFilt
       return
     }
     setLoadingDrill(true)
-    const params = new URLSearchParams({ papelera: esPapelera })
-    if (capFiltro)  params.set('capitulo', capFiltro)
-    if (itemFiltro) params.set('item', itemFiltro)
+    setRegistros([])
+    const BATCH = 2500
+    let offset = 0
+    let total = null
+    let acumulado = []
     try {
-      const res = await fetch(`${API}/presupuesto/${contratoId}/drill-lazy?${params}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      })
-      if (res.ok) {
+      while (true) {
+        const params = new URLSearchParams({ papelera: esPapelera, offset, limit: BATCH })
+        if (capFiltro)  params.set('capitulo', capFiltro)
+        if (itemFiltro) params.set('item', itemFiltro)
+        const res = await fetch(`${API}/presupuesto/${contratoId}/drill-lazy?${params}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        if (!res.ok) break
         const data = await res.json()
-        _pptoCacheRef.current = { data, ts: Date.now(), key: cacheKey, papelera: esPapelera }
-        setRegistros(data)
-        setPagina(1)
+        if (total === null) total = data.total
+        acumulado = [...acumulado, ...data.data]
+        setRegistros([...acumulado])
+        if (offset === 0) setPagina(1)
+        offset += data.data.length
+        if (offset >= total || data.data.length < BATCH) break
       }
+      _pptoCacheRef.current = { data: acumulado, ts: Date.now(), key: cacheKey, papelera: esPapelera }
     } catch {}
     setLoadingDrill(false)
+  }
+
+function recargarActual(forzar = false, papeleraOverride) {
+    const capAct  = drill.find(d => d.campo === 'capitulo')?.valor
+    const itemAct = drill.find(d => d.campo === 'item')?.valor
+    if (capAct) return cargarRegistros(papeleraOverride, forzar, capAct, itemAct)
+    return cargarCapitulos()
   }
 
   // ── Drill-down computado ───────────────────────────────────────────────────
@@ -1021,7 +1039,7 @@ async function cargarRegistros(modoPapelera, forzar = false, capFiltro, itemFilt
     }
     if (ok) msj = `✅ ${rows.length} registros ${modoImport === 'replace' ? 'cargados' : 'agregados'}`
     setImportMsg(msj); setImporting(false); setImportProgreso(0)
-    if (ok) { _pptoCacheRef.current = null; setDrill([]); await cargarRegistros() }
+    if (ok) { _pptoCacheRef.current = null; setDrill([]); setRegistros([]); await cargarCapitulos() }
     setTimeout(() => setImportMsg(''), 5000)
   }
 
@@ -1066,7 +1084,7 @@ async function cargarRegistros(modoPapelera, forzar = false, capFiltro, itemFilt
     if (res.ok) {
       if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario, destinatarioComentario)
       setEditCapitulo(''); setEditItem(''); setEditDims({}); setSeleccionados(new Set()); setModalConfirm(false)
-      await cargarRegistros()
+      await recargarActual(true)
     }
   }
 
@@ -1083,7 +1101,7 @@ async function cargarRegistros(modoPapelera, forzar = false, capFiltro, itemFilt
     setGuardandoBulk(false)
     if (res.ok) {
       if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario, destinatarioComentario)
-      setBulkEstado(''); setSeleccionados(new Set()); _pptoCacheRef.current = null; await cargarRegistros()
+      setBulkEstado(''); setSeleccionados(new Set()); _pptoCacheRef.current = null; await recargarActual(true)
     }
   }
 
@@ -1121,7 +1139,7 @@ async function cargarRegistros(modoPapelera, forzar = false, capFiltro, itemFilt
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(body)
     })
-    if (res.ok) { setEditando(null); _pptoCacheRef.current = null; await cargarRegistros() }
+    if (res.ok) { setEditando(null); _pptoCacheRef.current = null; await recargarActual(true) }
   }
 
   // ── Selección ──────────────────────────────────────────────────────────────
@@ -1193,7 +1211,7 @@ async function highlightEnDwg(registro) {
       body: JSON.stringify({ ids: [id], revisado: nuevoEstado })
     })
     if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioComentario)
-    await cargarRegistros()
+    await recargarActual(true)
   }
 
 async function darDeBaja(id) {
@@ -1208,7 +1226,7 @@ async function darDeBaja(id) {
     })
     if (res.ok) {
       await crearComentarios([id], 'validacion', `[BAJA] ${comentario}`, destinatarioComentario)
-      await cargarRegistros()
+      await recargarActual(true)
     } else alert('Error al dar de baja el registro')
   }
 
@@ -1218,7 +1236,7 @@ async function restaurar(id) {
       method: 'PUT', headers: { Authorization: `Bearer ${token}` }
     })
     if (res.ok) {
-      _pptoCacheRef.current = null; await cargarRegistros()
+      _pptoCacheRef.current = null; await recargarActual(true)
     } else alert('Error al restaurar el registro')
   }
 
@@ -1609,11 +1627,11 @@ async function restaurar(id) {
         )}
         {importMsg && <span style={{ fontSize:'13px',color:importMsg.startsWith('✅')?'#16A34A':importMsg.startsWith('❌')?'#DC2626':t.textMuted }}>{importMsg}</span>}
         <span style={{ marginLeft:'auto',fontSize:'12px',color:t.textMuted }}>
-        <button onClick={() => { _pptoCacheRef.current = null; cargarRegistros() }}
+        <button onClick={() => { _pptoCacheRef.current = null; recargarActual(true) }}
           style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'7px 14px', color:t.textMuted, fontSize:'12px', fontWeight:'600', cursor:'pointer' }}>
           🔄 Actualizar
         </button>
-          {registros.length} total · {registrosFiltrados.length} filtrados · {seleccionados.size} seleccionados
+          {registros.length}{loadingDrill ? ' ⏳' : ''} total · {registrosFiltrados.length} filtrados · {seleccionados.size} seleccionados
       {totalPaginas > 1 && (
         <span style={{ marginLeft: '16px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
           <button onClick={() => setPagina(p => Math.max(1, p-1))} disabled={pagina === 1}
@@ -1869,7 +1887,7 @@ async function restaurar(id) {
       {/* ── Indicador DWG ─────────────────────────────────────────── */}
 <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', flexWrap:'wrap' }}>
         {puedeEliminar && (
-          <button onClick={() => { const v = !verPapelera; setVerPapelera(v); _pptoCacheRef.current = null; cargarRegistros(v) }}
+          <button onClick={() => { const v = !verPapelera; setVerPapelera(v); _pptoCacheRef.current = null; recargarActual(true, v) }}
             style={{ background: verPapelera ? '#EF444422' : t.bgCard, border:`1px solid ${verPapelera ? '#EF4444' : t.border}`, borderRadius:'8px', padding:'6px 14px', color: verPapelera ? '#EF4444' : t.textMuted, fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
             🗑️ {verPapelera ? 'Ver activos' : 'Papelera'}
           </button>
@@ -2006,7 +2024,7 @@ async function restaurar(id) {
                     if (res.ok) await crearComentarios([id], 'validacion', `[BAJA MASIVA] ${comentario}`)
                   }
                   setSeleccionados(new Set())
-                  await cargarRegistros()
+                  await recargarActual(true)
                 }}
                 style={{ background:'#EF444415', border:'1px solid #EF444466', borderRadius:'7px', padding:'6px 14px', color:'#EF4444', fontSize:'12px', fontWeight:'700', cursor:'pointer', whiteSpace:'nowrap' }}>
                   🗑️ Dar de baja ({seleccionados.size})
