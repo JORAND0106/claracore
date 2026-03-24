@@ -787,16 +787,19 @@ def get_filtros_presupuesto(
 
 @app.get("/presupuesto/{contrato_id}/resumen")
 def get_resumen_presupuesto(contrato_id: int, current_user=Depends(get_current_user)):
-    res  = supabase.table("vista_ppto_resumen").select("*").eq("contrato_id", contrato_id).execute().data
-    caps = supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
-    total = res[0].get("total_ppto", 0) if res else 0
-    regs  = res[0].get("total_registros", 0) if res else 0
-    return {
-        "total_registros": regs,
-        "costo_total": total,
-        "revisados": 0, "campo": 0, "pendientes": 0,
-        "por_capitulo": [{"capitulo": r["capitulo"], "costo": r["presupuesto"], "registros": r["registros"]} for r in caps]
-    }
+    try:
+        res  = supabase.table("vista_ppto_resumen").select("*").eq("contrato_id", contrato_id).execute().data
+        caps = supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
+        total = res[0].get("total_ppto", 0) if res else 0
+        regs  = res[0].get("total_registros", 0) if res else 0
+        return {
+            "total_registros": regs,
+            "costo_total": total,
+            "revisados": 0, "campo": 0, "pendientes": 0,
+            "por_capitulo": [{"capitulo": r["capitulo"], "costo": r["presupuesto"], "registros": r["registros"]} for r in caps]
+        }
+    except Exception:
+        return {"total_registros": 0, "costo_total": 0, "revisados": 0, "campo": 0, "pendientes": 0, "por_capitulo": []}
 
 @app.get("/presupuesto/{contrato_id}/drill-lazy")
 def get_presupuesto_drill_lazy(
