@@ -784,7 +784,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (!ESTADOS_BLOQUE.includes(nuevoEstado)) return
     const targets = ids
       .map(id => registros.find(r => r.id === id))
-      .filter(r => r?.ent_handle && r?.layer_ent)
+      .filter(r => r?.txt_handle && r?.layer_txt)
     for (const r of targets) {
       const params = new URLSearchParams({
         bloque:      nuevoEstado,
