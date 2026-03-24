@@ -694,13 +694,15 @@ useEffect(() => {
 async function cargarCapitulos() {
     if (!contratoId) return
     setLoading(true)
-    const res = await fetch(`${API}/presupuesto/${contratoId}/resumen`, {
-      headers: { Authorization: `Bearer ${token}` }
-    })
-    if (res.ok) {
-      const data = await res.json()
-      setCapitulosResumen(data.por_capitulo || [])
-    }
+    try {
+      const res = await fetch(`${API}/presupuesto/${contratoId}/resumen`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setCapitulosResumen(data.por_capitulo || [])
+      }
+    } catch {}
     setLoading(false)
   }
 
