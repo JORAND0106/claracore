@@ -777,6 +777,34 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     await cargarCapitulos()
   }
 
+  // ── Inserción de bloque de validación vía ClaraLink ───────────────────────
+  async function lanzarClaraLinkEstado(ids, nuevoEstado) {
+    if (!dwgEnlazado) return
+    const ESTADOS_BLOQUE = ['Verificado', 'Verificar Campo', 'Pendiente']
+    if (!ESTADOS_BLOQUE.includes(nuevoEstado)) return
+    const targets = ids
+      .map(id => registros.find(r => r.id === id))
+      .filter(r => r?.x_label != null && r?.y_label != null && r?.txt_layer)
+    for (const r of targets) {
+      const params = new URLSearchParams({
+        bloque:      nuevoEstado,
+        layer:       r.txt_layer,
+        x:           String(r.x_label),
+        y:           String(r.y_label),
+        registro_id: String(r.id),
+        api_token:   token,
+      })
+      if (r.rev_block_handle) params.set('handle_borrar', r.rev_block_handle)
+      const a = document.createElement('a')
+      a.href = `claralink://insertar?${params}`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      // Pausa entre registros para que ClaraLink procese uno a uno
+      if (targets.length > 1) await new Promise(res => setTimeout(res, 900))
+    }
+  }
+
   // ── Drill-down computado ───────────────────────────────────────────────────
   const [pptoPkidColores,    setPptoPkidColores]    = useState({})
   const [pptoPkidFoco,    setPptoPkidFoco]    = useState(null)
@@ -1125,7 +1153,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setGuardandoBulk(false)
     if (res.ok) {
       if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario, destinatarioComentario)
-      setBulkEstado(''); setSeleccionados(new Set()); await recargarCapActual()
+      const idsSelec = [...seleccionados]
+      setBulkEstado(''); setSeleccionados(new Set())
+      await lanzarClaraLinkEstado(idsSelec, bulkEstado)
+      await recargarCapActual()
     }
   }
 
@@ -1235,6 +1266,7 @@ async function highlightEnDwg(registro) {
       body: JSON.stringify({ ids: [id], revisado: nuevoEstado })
     })
     if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioComentario)
+    await lanzarClaraLinkEstado([id], nuevoEstado)
     await recargarCapActual()
   }
 
