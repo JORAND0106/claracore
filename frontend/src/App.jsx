@@ -1153,9 +1153,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (res.ok) {
       if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario, destinatarioComentario)
       const idsSelec = [...seleccionados]
+      const estadoAplicado = bulkEstado
       setBulkEstado(''); setSeleccionados(new Set())
-      await lanzarClaraLinkEstado(idsSelec, bulkEstado)
-      await recargarCapActual()
+      lanzarClaraLinkEstado(idsSelec, estadoAplicado)
+      setRegistros(prev => prev.map(r => idsSelec.includes(r.id) ? { ...r, revisado: estadoAplicado } : r))
     }
   }
 
@@ -1265,8 +1266,8 @@ async function highlightEnDwg(registro) {
       body: JSON.stringify({ ids: [id], revisado: nuevoEstado })
     })
     if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioComentario)
-    await lanzarClaraLinkEstado([id], nuevoEstado)
-    await recargarCapActual()
+    lanzarClaraLinkEstado([id], nuevoEstado)
+    setRegistros(prev => prev.map(r => r.id === id ? { ...r, revisado: nuevoEstado } : r))
   }
 
 async function darDeBaja(id) {
