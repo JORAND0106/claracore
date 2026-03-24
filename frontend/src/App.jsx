@@ -779,12 +779,14 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   // ── Inserción de bloque de validación vía ClaraLink ───────────────────────
   async function lanzarClaraLinkEstado(ids, nuevoEstado) {
+    alert(`DEBUG: dwgEnlazado=${dwgEnlazado} | estado=${nuevoEstado} | ids=${ids}`)
     if (!dwgEnlazado) return
     const ESTADOS_BLOQUE = ['Verificado', 'Verificar Campo', 'Pendiente']
     if (!ESTADOS_BLOQUE.includes(nuevoEstado)) return
     const targets = ids
       .map(id => registros.find(r => r.id === id))
       .filter(r => r?.txt_handle && r?.layer_txt)
+    alert(`DEBUG targets encontrados: ${targets.length} | txt_handles: ${targets.map(r=>r.txt_handle).join(',')}`)
     for (const r of targets) {
       const params = new URLSearchParams({
         bloque:      nuevoEstado,
