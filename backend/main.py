@@ -818,13 +818,7 @@ def get_presupuesto_drill_lazy(
     if item:
         q = q.eq("item", item)
     rows = q.order("capitulo").order("item").order("pk_id").range(offset, offset + limit - 1).execute().data
-    return {
-        "total": offset + len(rows) + (1 if len(rows) == limit else 0),
-        "offset": offset,
-        "limit": limit,
-        "data": rows,
-        "has_more": len(rows) == limit
-    }
+    return rows
 
 @app.get("/presupuesto/item/{item_id}")
 def get_presupuesto_item(item_id: int, current_user=Depends(get_current_user)):

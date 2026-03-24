@@ -731,12 +731,12 @@ async function cargarRegistros(modoPapelera, forzar = false, capFiltro, itemFilt
           headers: { Authorization: `Bearer ${token}` }
         })
         if (!res.ok) break
-        const data = await res.json()
-        acumulado = [...acumulado, ...data.data]
+        const batch = await res.json()
+        acumulado = [...acumulado, ...batch]
         setRegistros([...acumulado])
         if (offset === 0) setPagina(1)
-        hasMore = data.has_more
-        offset += data.data.length
+        hasMore = batch.length === BATCH
+        offset += batch.length
       }
       _pptoCacheRef.current = { data: acumulado, ts: Date.now(), key: cacheKey, papelera: esPapelera }
     } catch {}
