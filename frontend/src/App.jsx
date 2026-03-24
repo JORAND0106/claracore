@@ -1629,7 +1629,7 @@ async function restaurar(id) {
       {/* ── Panel drill-down ── */}
       {loading ? (
         <div style={s.emptyState}>Cargando registros...</div>
-      ) : registros.length === 0 ? (
+      ) : registros.length === 0 && capitulosResumen.length === 0 ? (
         <div style={s.emptyState}>📂 Importa un CSV para comenzar</div>
       ) : (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',padding:'20px',marginBottom:'16px',boxShadow:t.shadow }}>

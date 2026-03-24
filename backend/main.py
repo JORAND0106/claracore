@@ -714,7 +714,7 @@ def get_listado_precios(contrato_id: int, current_user=Depends(get_current_user)
     all_rows = []
     offset = 0
     while True:
-        batch = supabase.table("listado_precios").select("*").eq("contrato_id", contrato_id).order("item_numero").range(offset, offset + 999).execute().data
+        batch = supabase_execute(supabase.table("listado_precios").select("*").eq("contrato_id", contrato_id).order("item_numero").range(offset, offset + 999))
         all_rows.extend(batch)
         if len(batch) < 1000:
             break
