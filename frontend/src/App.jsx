@@ -788,8 +788,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     for (const r of targets) {
       const params = new URLSearchParams({
         bloque:      nuevoEstado,
-        ent_handle:  r.ent_handle,
-        layer:       r.layer_ent,
+        ent_handle:  r.txt_handle,
+        layer:       r.layer_txt,
         registro_id: String(r.id),
         api_token:   token,
       })
