@@ -779,8 +779,6 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   // ── Inserción de bloque de validación vía ClaraLink ───────────────────────
   async function lanzarClaraLinkEstado(ids, nuevoEstado) {
-    alert(`DEBUG: dwgEnlazado=${dwgEnlazado} | estado=${nuevoEstado} | ids=${ids}`)
-    if (!dwgEnlazado) return
     const ESTADOS_BLOQUE = ['Verificado', 'Verificar Campo', 'Pendiente']
     if (!ESTADOS_BLOQUE.includes(nuevoEstado)) return
     const targets = ids
