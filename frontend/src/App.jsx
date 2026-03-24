@@ -692,6 +692,7 @@ useEffect(() => {
 async function cargarRegistros(modoPapelera, forzar = false) {
     if (!contratoId) return
     const esPapelera = modoPapelera !== undefined ? modoPapelera : verPapelera
+
     // Servir desde caché si es válido
     const cached = _pptoCacheRef.current
     if (!forzar && cached && cached.papelera === esPapelera &&
@@ -700,16 +701,39 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       setPagina(1)
       return
     }
+
     setLoading(true)
-    const params = esPapelera ? '?papelera=true' : ''
-    const res = await fetch(`${API}/presupuesto/${contratoId}${params}`, { headers: { Authorization: `Bearer ${token}` } })
-    if (res.ok) {
-      const data = await res.json()
-      _pptoCacheRef.current = { data, ts: Date.now(), papelera: esPapelera }
-      setRegistros(data)
+    const base = `${API}/presupuesto/${contratoId}${esPapelera ? '?papelera=true&' : '?'}`
+
+    try {
+      // 1) Cargar primeros 1000 inmediatamente → mostrar
+      const r1 = await fetch(`${base}limit=1000&offset=0`, { headers: { Authorization: `Bearer ${token}` } })
+      if (!r1.ok) { setLoading(false); return }
+      const primera = await r1.json()
+      setRegistros(primera)
+      setLoading(false)
+      setPagina(1)
+
+      // 2) Si había exactamente 1000, cargar el resto en background
+      if (primera.length === 1000) {
+        let todos = [...primera]
+        let off = 1000
+        while (true) {
+          const rx = await fetch(`${base}limit=1000&offset=${off}`, { headers: { Authorization: `Bearer ${token}` } })
+          if (!rx.ok) break
+          const lote = await rx.json()
+          todos = [...todos, ...lote]
+          setRegistros([...todos])  // actualiza la tabla silenciosamente
+          if (lote.length < 1000) break
+          off += 1000
+        }
+        _pptoCacheRef.current = { data: todos, ts: Date.now(), papelera: esPapelera }
+      } else {
+        _pptoCacheRef.current = { data: primera, ts: Date.now(), papelera: esPapelera }
+      }
+    } catch {
+      setLoading(false)
     }
-    setLoading(false)
-    setPagina(1)
   }
 
   // ── Drill-down computado ───────────────────────────────────────────────────

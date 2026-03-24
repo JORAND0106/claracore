@@ -48,6 +48,17 @@ app.add_middleware(
 )
 
 supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+
+def supabase_execute(query, reintentos=3):
+    """Reintentar ante RemoteProtocolError de Supabase tras cold start."""
+    import time
+    for intento in range(reintentos):
+        try:
+            return query.execute().data
+        except Exception as e:
+            if intento == reintentos - 1: raise
+            time.sleep(1)
+
 security = HTTPBearer()
 
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -409,22 +420,22 @@ def registro_usuario(usuario: UsuarioRegistro):
 def get_mi_usuario(current_user=Depends(get_current_user)):
     """Devuelve el perfil actualizado del usuario en sesión. Usado para polling de sesión en tiempo real."""
     uid = int(current_user["sub"])
-    result = supabase.table("usuarios").select("*").eq("id", uid).execute()
-    if not result.data:
+    data = supabase_execute(supabase.table("usuarios").select("*").eq("id", uid))
+    if not data:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    u = result.data[0]
+    u = data[0]
     cargo_nombre = None
     if u.get("cargo_id"):
-        r = supabase.table("cargos").select("nombre").eq("id", u["cargo_id"]).execute()
-        if r.data: cargo_nombre = r.data[0]["nombre"]
+        r = supabase_execute(supabase.table("cargos").select("nombre").eq("id", u["cargo_id"]))
+        if r: cargo_nombre = r[0]["nombre"]
     rol_nombre = None
     if u.get("rol_id"):
-        r = supabase.table("roles").select("nombre").eq("id", u["rol_id"]).execute()
-        if r.data: rol_nombre = r.data[0]["nombre"]
+        r = supabase_execute(supabase.table("roles").select("nombre").eq("id", u["rol_id"]))
+        if r: rol_nombre = r[0]["nombre"]
     permisos = []
     if u.get("cargo_id"):
-        permisos_raw = supabase.table("permisos").select("*").eq("cargo_id", u["cargo_id"]).execute().data
-        funciones_map = {f["id"]: f["nombre"] for f in supabase.table("funciones").select("id, nombre").execute().data}
+        permisos_raw = supabase_execute(supabase.table("permisos").select("*").eq("cargo_id", u["cargo_id"]))
+        funciones_map = {f["id"]: f["nombre"] for f in supabase_execute(supabase.table("funciones").select("id, nombre"))}
         permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
     return {
         "id": u["id"], "nombre": u["nombre"], "apellidos": u.get("apellidos"),
@@ -743,26 +754,32 @@ def get_presupuesto(
     tramo: Optional[str] = None,
     calzada: Optional[str] = None,
     papelera: bool = False,
+    limit: Optional[int] = None,
+    offset: int = 0,
     current_user=Depends(get_current_user)
 ):
-    PAGE = 1000
-    all_rows = []
-    offset = 0
+    q = supabase.table("presupuesto").select("*").eq("contrato_id", contrato_id)
+    if papelera:
+        q = q.eq("dado_de_baja", True)
+    else:
+        q = q.eq("dado_de_baja", False)
+    if capitulo: q = q.eq("capitulo", capitulo)
+    if item:     q = q.eq("item", item)
+    if tramo:    q = q.eq("tramo", tramo)
+    if calzada:  q = q.eq("calzada", calzada)
+    q = q.order("capitulo").order("item").order("pk_id")
+
+    # Si se pide con limit: devolver solo esa página
+    if limit is not None:
+        return supabase_execute(q.range(offset, offset + limit - 1))
+
+    # Sin limit: traer todo (comportamiento original)
+    all_rows, off = [], 0
     while True:
-        q = supabase.table("presupuesto").select("*").eq("contrato_id", contrato_id)
-        if papelera:
-            q = q.eq("dado_de_baja", True)
-        else:
-            q = q.eq("dado_de_baja", False)
-        if capitulo: q = q.eq("capitulo", capitulo)
-        if item:     q = q.eq("item", item)
-        if tramo:    q = q.eq("tramo", tramo)
-        if calzada:  q = q.eq("calzada", calzada)
-        batch = q.order("capitulo").order("item").order("pk_id").range(offset, offset + PAGE - 1).execute().data
+        batch = supabase_execute(q.range(off, off + 999))
         all_rows.extend(batch)
-        if len(batch) < PAGE:
-            break
-        offset += PAGE
+        if len(batch) < 1000: break
+        off += 1000
     return all_rows
 
 @app.get("/presupuesto/{contrato_id}/filtros")
@@ -787,8 +804,8 @@ def get_filtros_presupuesto(
 
 @app.get("/presupuesto/{contrato_id}/resumen")
 def get_resumen_presupuesto(contrato_id: int, current_user=Depends(get_current_user)):
-    res  = supabase.table("vista_ppto_resumen").select("*").eq("contrato_id", contrato_id).execute().data
-    caps = supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
+    res  = supabase_execute(supabase.table("vista_ppto_resumen").select("*").eq("contrato_id", contrato_id))
+    caps = supabase_execute(supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id))
     total = res[0].get("total_ppto", 0) if res else 0
     regs  = res[0].get("total_registros", 0) if res else 0
     return {
@@ -1669,7 +1686,14 @@ def drill_comparativo(contrato_id: int, capitulo: str = None, item: str = None, 
             q = supabase.table(tabla).select(dest).eq("contrato_id", contrato_id)
             if capitulo: q = q.eq("capitulo", capitulo)
             if item:     q = q.eq("item", item)
-            batch = q.range(offset, offset + 999).execute().data
+            # Reintentar hasta 3 veces si Supabase desconecta (cold start)
+            for intento in range(3):
+                try:
+                    batch = q.range(offset, offset + 999).execute().data
+                    break
+                except Exception:
+                    if intento == 2: raise
+                    import time; time.sleep(1)
             acc.extend(batch)
             if len(batch) < 1000:
                 break
@@ -1750,14 +1774,14 @@ def get_analisis_liquidacion(contrato_id: int, nivel: str = "item", current_user
     # Cobro: toda la tabla cobro del contrato
     offset = 0
     while True:
-        batch = supabase.table("cobro").select("capitulo, item, costo_directo, cantidad, longitud").eq("contrato_id", contrato_id).range(offset, offset + 999).execute().data
+        batch = supabase_execute(supabase.table("cobro").select("capitulo, item, costo_directo, cantidad, longitud").eq("contrato_id", contrato_id).range(offset, offset + 999))
         cobros.extend(batch)
         if len(batch) < 1000: break
         offset += 1000
     # Recalculado: presupuesto con tipo_ejecucion = 'O' (Obra ejecutada)
     offset = 0
     while True:
-        batch = supabase.table("presupuesto").select("capitulo, item, descripcion, costo_directo, cant_total").eq("contrato_id", contrato_id).eq("tipo_ejecucion", "Obra Ejecutada").range(offset, offset + 999).execute().data
+        batch = supabase_execute(supabase.table("presupuesto").select("capitulo, item, descripcion, costo_directo, cant_total").eq("contrato_id", contrato_id).eq("tipo_ejecucion", "Obra Ejecutada").range(offset, offset + 999))
         recalc.extend(batch)
         if len(batch) < 1000: break
         offset += 1000
@@ -1931,14 +1955,14 @@ def get_cobro_chart(
 
 @app.get("/cobro/{contrato_id}/resumen")
 def get_resumen_cobro(contrato_id: int, current_user=Depends(get_current_user)):
-    res      = supabase.table("vista_cobro_resumen").select("*").eq("contrato_id", contrato_id).execute().data
-    por_acta = supabase.table("vista_cobro_por_acta").select("*").eq("contrato_id", contrato_id).execute().data
-    por_cap  = supabase.table("vista_cobro_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
+    res      = supabase_execute(supabase.table("vista_cobro_resumen").select("*").eq("contrato_id", contrato_id))
+    por_acta = supabase_execute(supabase.table("vista_cobro_por_acta").select("*").eq("contrato_id", contrato_id))
+    por_cap  = supabase_execute(supabase.table("vista_cobro_por_capitulo").select("*").eq("contrato_id", contrato_id))
     total    = res[0].get("total_cobrado", 0) if res else 0
     actas    = sorted(set(r["acta"] for r in por_acta if r.get("acta")))
     # Comparativo por capítulo
     ppto_caps = {r["capitulo"]: r["presupuesto"] for r in
-                 supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data}
+                 supabase_execute(supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id))}
     cobro_caps = {r["capitulo"]: r.get("cobrado") or r.get("costo") or 0 for r in por_cap}
     caps = sorted(set(list(ppto_caps.keys()) + list(cobro_caps.keys())))
     comparativo = [{"capitulo": c, "presupuesto": ppto_caps.get(c,0), "cobrado": cobro_caps.get(c,0),
@@ -2345,12 +2369,18 @@ def get_notificaciones_enviadas(
 def get_no_leidas_count(current_user=Depends(get_current_user)):
     """Conteo de notificaciones no leídas — solo mensajes raíz."""
     uid = int(current_user.get("sub", 0))
-    result = supabase.table("notificaciones").select("id", count="exact") \
-        .eq("destinatario_id", uid) \
-        .eq("leido", False) \
-        .is_("padre_id", "null") \
-        .execute()
-    return {"count": result.count or 0}
+    import time
+    for intento in range(3):
+        try:
+            result = supabase.table("notificaciones").select("id", count="exact") \
+                .eq("destinatario_id", uid) \
+                .eq("leido", False) \
+                .is_("padre_id", "null") \
+                .execute()
+            return {"count": result.count or 0}
+        except Exception:
+            if intento == 2: return {"count": 0}
+            time.sleep(1)
 
 @app.get("/notificaciones/{notif_id}/hilo")
 def get_hilo(notif_id: int, current_user=Depends(get_current_user)):
@@ -2380,9 +2410,8 @@ def marcar_leida(notif_id: int, current_user=Depends(get_current_user)):
 def get_usuarios_destinatarios(current_user=Depends(get_current_user)):
     """Lista de usuarios activos para el selector de destinatario."""
     uid = int(current_user.get("sub", 0))
-    rows = supabase.table("usuarios").select("id, nombre, apellidos, cargo_id") \
-        .eq("activo", True).execute().data
-    cargos = {c["id"]: c["nombre"] for c in supabase.table("cargos").select("id, nombre").execute().data}
+    rows = supabase_execute(supabase.table("usuarios").select("id, nombre, apellidos, cargo_id").eq("activo", True))
+    cargos = {c["id"]: c["nombre"] for c in supabase_execute(supabase.table("cargos").select("id, nombre"))}
     return [
         {"id": r["id"], "nombre": f"{r['nombre']} {r.get('apellidos','')}", "cargo": cargos.get(r.get("cargo_id"), "")}
         for r in rows if r["id"] != uid
