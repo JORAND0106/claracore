@@ -631,7 +631,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   }
 
   // ── Carga inicial ──────────────────────────────────────────────────────────
-  useEffect(() => { if (contratoId) cargarRegistros() }, [contratoId])
+  useEffect(() => { if (contratoId) cargarCapitulos() }, [contratoId])
   
 useEffect(() => {
     if (!navRegistroId || !contratoId) return
@@ -686,8 +686,12 @@ useEffect(() => {
   const puedeEliminar = esDeveloper || (_permPpto?.eliminar ?? false)
   const esSellado = (r) => r?.sellado === true
   const [verPapelera, setVerPapelera] = useState(false)
-  const _pptoCacheRef = useRef(null)  // { data, ts, papelera }
-  const PPTO_CACHE_TTL = 5 * 60 * 1000  // 5 minutos  
+  const _pptoCacheRef   = useRef(null)   // { data, ts, papelera } – solo para papelera
+  const _pptoCachePorCap = useRef({})    // { [capitulo]: { data, ts } }
+  const PPTO_CACHE_TTL  = 5 * 60 * 1000  // 5 min (papelera)
+  const CAP_CACHE_TTL   = 10 * 60 * 1000 // 10 min por capítulo
+  const [capitulosResumen,  setCapitulosResumen]  = useState([])
+  const [loadingCapitulos,  setLoadingCapitulos]  = useState(false)  
 
 async function cargarRegistros(modoPapelera, forzar = false) {
     if (!contratoId) return
@@ -710,6 +714,67 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     setLoading(false)
     setPagina(1)
+  }
+
+  // ── Carga lazy por capítulo ────────────────────────────────────────────────
+  async function cargarCapitulos() {
+    if (!contratoId) return
+    setLoadingCapitulos(true)
+    try {
+      const res = await fetch(`${API}/presupuesto/${contratoId}/capitulos-lista`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (res.ok) setCapitulosResumen(await res.json())
+    } catch {}
+    setLoadingCapitulos(false)
+  }
+
+  async function cargarCapituloData(capitulo) {
+    if (!contratoId) return
+    const cached = _pptoCachePorCap.current[capitulo]
+    if (cached && (Date.now() - cached.ts) < CAP_CACHE_TTL) {
+      setRegistros(prev => {
+        const yaIds = new Set(prev.map(r => r.id))
+        const nuevos = cached.data.filter(r => !yaIds.has(r.id))
+        return nuevos.length > 0 ? [...prev, ...nuevos] : prev
+      })
+      return
+    }
+    setLoading(true)
+    try {
+      const res = await fetch(
+        `${API}/presupuesto/${contratoId}?capitulo=${encodeURIComponent(capitulo)}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      )
+      if (res.ok) {
+        const data = await res.json()
+        _pptoCachePorCap.current[capitulo] = { data, ts: Date.now() }
+        setRegistros(prev => {
+          const yaIds = new Set(prev.map(r => r.id))
+          const nuevos = data.filter(r => !yaIds.has(r.id))
+          return nuevos.length > 0 ? [...prev, ...nuevos] : prev
+        })
+      }
+    } catch {}
+    setLoading(false)
+  }
+
+  async function recargarCapActual(limpiarTodo = false) {
+    if (limpiarTodo) {
+      _pptoCachePorCap.current = {}
+      _pptoCacheRef.current = null
+      setRegistros([])
+      setDrill([])
+      await cargarCapitulos()
+      return
+    }
+    const capActual = drill.find(d => d.campo === 'capitulo')?.valor
+    if (capActual) {
+      delete _pptoCachePorCap.current[capActual]
+      setRegistros(prev => prev.filter(r => r.capitulo !== capActual))
+      await cargarCapituloData(capActual)
+    }
+    await cargarCapitulos()
   }
 
   // ── Drill-down computado ───────────────────────────────────────────────────
@@ -844,6 +909,15 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, pkidsSeleccionados])
 
   const chartData = useMemo(() => {
+    if (drill.length === 0 && primerNivel === 'capitulo') {
+      return capitulosResumen.map(c => ({
+        name: c.capitulo,
+        label: c.capitulo.length > 48 ? c.capitulo.slice(0, 48) + '…' : c.capitulo,
+        costo: c.costo_total,
+        count: c.total_registros,
+        cantTotal: null, und: null, vlrUnit: null,
+      })).sort((a, b) => a.name.localeCompare(b.name, 'es', { numeric: true }))
+    }
     if (!nivelActual || registros.length === 0) return []
     const agg = {}
     registrosFiltrados.forEach(r => {
@@ -863,11 +937,13 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       agg[key].count++
     })
     return Object.values(agg).sort((a, b) => a.name.localeCompare(b.name, 'es', {numeric: true}))
-  }, [registrosFiltrados, nivelActual])
+  }, [registrosFiltrados, nivelActual, drill, primerNivel, capitulosResumen])
 
-  const costoTotal = useMemo(() =>
-    registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
-  , [registrosFiltrados])
+  const costoTotal = useMemo(() => {
+    if (drill.length === 0 && primerNivel === 'capitulo')
+      return capitulosResumen.reduce((s, c) => s + (c.costo_total ?? 0), 0)
+    return registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
+  }, [registrosFiltrados, drill, primerNivel, capitulosResumen])
 
   const totalPaginas = Math.ceil(registrosFiltrados.length / POR_PAGINA)
   const registrosOrdenados = useMemo(() =>
@@ -881,14 +957,16 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     registrosOrdenados.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA)
   , [registrosOrdenados, pagina])
 
-  function handleBarClick(barData) {
+  async function handleBarClick(barData) {
     if (!nivelActual || !barData?.name) return
-    const nuevoDrill = [...drill, { campo: nivelActual, valor: barData.name }]
-    setDrill(nuevoDrill)
+    if (nivelActual === 'capitulo') {
+      await cargarCapituloData(barData.name)
+    }
+    setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
   }
   function irA(idx) {
     setDrill(prev => prev.slice(0, idx))
-    if (idx === 0) setRegistros([])
+    // Los registros de capítulos cargados permanecen en memoria para re-uso
   }
 
   // ── Import CSV ─────────────────────────────────────────────────────────────
@@ -985,7 +1063,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     if (ok) msj = `✅ ${rows.length} registros ${modoImport === 'replace' ? 'cargados' : 'agregados'}`
     setImportMsg(msj); setImporting(false); setImportProgreso(0)
-    if (ok) { _pptoCacheRef.current = null; setDrill([]); await cargarRegistros() }
+    if (ok) { await recargarCapActual(true) }
     setTimeout(() => setImportMsg(''), 5000)
   }
 
@@ -1030,7 +1108,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (res.ok) {
       if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario, destinatarioComentario)
       setEditCapitulo(''); setEditItem(''); setEditDims({}); setSeleccionados(new Set()); setModalConfirm(false)
-      await cargarRegistros()
+      await recargarCapActual()
     }
   }
 
@@ -1047,7 +1125,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setGuardandoBulk(false)
     if (res.ok) {
       if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario, destinatarioComentario)
-      setBulkEstado(''); setSeleccionados(new Set()); _pptoCacheRef.current = null; await cargarRegistros()
+      setBulkEstado(''); setSeleccionados(new Set()); await recargarCapActual()
     }
   }
 
@@ -1085,7 +1163,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(body)
     })
-    if (res.ok) { setEditando(null); _pptoCacheRef.current = null; await cargarRegistros() }
+    if (res.ok) { setEditando(null); await recargarCapActual() }
   }
 
   // ── Selección ──────────────────────────────────────────────────────────────
@@ -1157,7 +1235,7 @@ async function highlightEnDwg(registro) {
       body: JSON.stringify({ ids: [id], revisado: nuevoEstado })
     })
     if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioComentario)
-    await cargarRegistros()
+    await recargarCapActual()
   }
 
 async function darDeBaja(id) {
@@ -1172,7 +1250,7 @@ async function darDeBaja(id) {
     })
     if (res.ok) {
       await crearComentarios([id], 'validacion', `[BAJA] ${comentario}`, destinatarioComentario)
-      await cargarRegistros()
+      await recargarCapActual()
     } else alert('Error al dar de baja el registro')
   }
 
@@ -1182,7 +1260,7 @@ async function restaurar(id) {
       method: 'PUT', headers: { Authorization: `Bearer ${token}` }
     })
     if (res.ok) {
-      _pptoCacheRef.current = null; await cargarRegistros()
+      await recargarCapActual()
     } else alert('Error al restaurar el registro')
   }
 
@@ -1281,7 +1359,7 @@ async function restaurar(id) {
                             if (res.ok) {
                               const updated = await fetch(`${API}/presupuesto/item/${r.id}`, { headers:{ Authorization:`Bearer ${token}` } })
                               if (updated.ok) { const d = await updated.json(); setModalDetallePpto(d) }
-                              _pptoCacheRef.current = null
+                              { const c = drill.find(d=>d.campo==='capitulo')?.valor; if(c) delete _pptoCachePorCap.current[c] }
                               setPopupMsg('✅ Dimensiones actualizadas')
                             } else setPopupMsg('❌ Error al guardar')
                             setPopupGuardando(false)
@@ -1345,7 +1423,7 @@ async function restaurar(id) {
                             if (res.ok) {
                               const updated = await fetch(`${API}/presupuesto/item/${r.id}`, { headers:{ Authorization:`Bearer ${token}` } })
                               if (updated.ok) { const d = await updated.json(); setModalDetallePpto(d) }
-                              _pptoCacheRef.current = null
+                              { const c = drill.find(d=>d.campo==='capitulo')?.valor; if(c) delete _pptoCachePorCap.current[c] }
                               setPopupMsg('✅ Capítulo/ítem actualizado')
                             } else setPopupMsg('❌ Error al guardar')
                             setPopupGuardando(false)
@@ -1573,11 +1651,13 @@ async function restaurar(id) {
         )}
         {importMsg && <span style={{ fontSize:'13px',color:importMsg.startsWith('✅')?'#16A34A':importMsg.startsWith('❌')?'#DC2626':t.textMuted }}>{importMsg}</span>}
         <span style={{ marginLeft:'auto',fontSize:'12px',color:t.textMuted }}>
-        <button onClick={() => { _pptoCacheRef.current = null; cargarRegistros() }}
+        <button onClick={() => recargarCapActual(drill.length === 0)}
           style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'7px 14px', color:t.textMuted, fontSize:'12px', fontWeight:'600', cursor:'pointer' }}>
           🔄 Actualizar
         </button>
-          {registros.length} total · {registrosFiltrados.length} filtrados · {seleccionados.size} seleccionados
+          {drill.length === 0 && !verPapelera
+            ? `${capitulosResumen.length} capítulos`
+            : `${registros.length} total · ${registrosFiltrados.length} filtrados`} · {seleccionados.size} seleccionados
       {totalPaginas > 1 && (
         <span style={{ marginLeft: '16px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
           <button onClick={() => setPagina(p => Math.max(1, p-1))} disabled={pagina === 1}
@@ -1591,9 +1671,9 @@ async function restaurar(id) {
       </div>
 
       {/* ── Panel drill-down ── */}
-      {loading ? (
-        <div style={s.emptyState}>Cargando registros...</div>
-      ) : registros.length === 0 ? (
+      {(loading || loadingCapitulos) ? (
+        <div style={s.emptyState}>{loadingCapitulos ? '⏳ Cargando presupuesto...' : '⏳ Cargando capítulo...'}</div>
+      ) : (verPapelera ? registros.length === 0 : (capitulosResumen.length === 0 && registros.length === 0)) ? (
         <div style={s.emptyState}>📂 Importa un CSV para comenzar</div>
       ) : (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',padding:'20px',marginBottom:'16px',boxShadow:t.shadow }}>
@@ -1635,7 +1715,9 @@ async function restaurar(id) {
             </div>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:'8px' }}>
               <span style={{ fontSize:'12px', color:t.textMuted }}>
-                {registrosFiltrados.length} registros
+                {drill.length === 0 && primerNivel === 'capitulo'
+                  ? `${capitulosResumen.reduce((s,c) => s+(c.total_registros??0),0)} registros`
+                  : `${registrosFiltrados.length} registros`}
                 {drill.some(d => d.campo === 'item') && (() => {
                   const cantSum = registrosFiltrados.reduce((s,r) => s + (r.cant_total||0), 0)
                   const und = registrosFiltrados[0]?.und || ''
@@ -1833,7 +1915,7 @@ async function restaurar(id) {
       {/* ── Indicador DWG ─────────────────────────────────────────── */}
 <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', flexWrap:'wrap' }}>
         {puedeEliminar && (
-          <button onClick={() => { const v = !verPapelera; setVerPapelera(v); _pptoCacheRef.current = null; cargarRegistros(v) }}
+          <button onClick={async () => { const v = !verPapelera; setVerPapelera(v); if (v) { _pptoCacheRef.current = null; cargarRegistros(true) } else { setRegistros([]); setDrill([]); await cargarCapitulos() } }}
             style={{ background: verPapelera ? '#EF444422' : t.bgCard, border:`1px solid ${verPapelera ? '#EF4444' : t.border}`, borderRadius:'8px', padding:'6px 14px', color: verPapelera ? '#EF4444' : t.textMuted, fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
             🗑️ {verPapelera ? 'Ver activos' : 'Papelera'}
           </button>
@@ -1970,7 +2052,7 @@ async function restaurar(id) {
                     if (res.ok) await crearComentarios([id], 'validacion', `[BAJA MASIVA] ${comentario}`)
                   }
                   setSeleccionados(new Set())
-                  await cargarRegistros()
+                  await recargarCapActual()
                 }}
                 style={{ background:'#EF444415', border:'1px solid #EF444466', borderRadius:'7px', padding:'6px 14px', color:'#EF4444', fontSize:'12px', fontWeight:'700', cursor:'pointer', whiteSpace:'nowrap' }}>
                   🗑️ Dar de baja ({seleccionados.size})

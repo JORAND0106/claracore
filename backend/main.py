@@ -798,6 +798,12 @@ def get_resumen_presupuesto(contrato_id: int, current_user=Depends(get_current_u
         "por_capitulo": [{"capitulo": r["capitulo"], "costo": r["presupuesto"], "registros": r["registros"]} for r in caps]
     }
 
+@app.get("/presupuesto/{contrato_id}/capitulos-lista")
+def get_capitulos_presupuesto(contrato_id: int, current_user=Depends(get_current_user)):
+    """Devuelve capítulos con costo total y total de registros. Carga rápida sin traer filas individuales."""
+    caps = supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
+    return [{"capitulo": r["capitulo"], "costo_total": r["presupuesto"], "total_registros": r["registros"]} for r in caps]
+
 @app.get("/presupuesto/item/{item_id}")
 def get_presupuesto_item(item_id: int, current_user=Depends(get_current_user)):
     """Trae un único registro de presupuesto por ID."""
