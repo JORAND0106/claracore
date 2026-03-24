@@ -720,10 +720,10 @@ async function cargarRegistros(modoPapelera, forzar = false, capFiltro, itemFilt
     setRegistros([])
     const BATCH = 2500
     let offset = 0
-    let total = null
     let acumulado = []
+    let hasMore = true
     try {
-      while (true) {
+      while (hasMore) {
         const params = new URLSearchParams({ papelera: esPapelera, offset, limit: BATCH })
         if (capFiltro)  params.set('capitulo', capFiltro)
         if (itemFiltro) params.set('item', itemFiltro)
@@ -732,12 +732,11 @@ async function cargarRegistros(modoPapelera, forzar = false, capFiltro, itemFilt
         })
         if (!res.ok) break
         const data = await res.json()
-        if (total === null) total = data.total
         acumulado = [...acumulado, ...data.data]
         setRegistros([...acumulado])
         if (offset === 0) setPagina(1)
+        hasMore = data.has_more
         offset += data.data.length
-        if (offset >= total || data.data.length < BATCH) break
       }
       _pptoCacheRef.current = { data: acumulado, ts: Date.now(), key: cacheKey, papelera: esPapelera }
     } catch {}

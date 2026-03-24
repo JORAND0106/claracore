@@ -808,7 +808,7 @@ def get_presupuesto_drill_lazy(
     limit: int = 2500,
     current_user=Depends(get_current_user)
 ):
-    q = supabase.table("presupuesto").select("*", count="exact").eq("contrato_id", contrato_id)
+    q = supabase.table("presupuesto").select("*").eq("contrato_id", contrato_id)
     if papelera:
         q = q.eq("dado_de_baja", True)
     else:
@@ -817,12 +817,13 @@ def get_presupuesto_drill_lazy(
         q = q.eq("capitulo", capitulo)
     if item:
         q = q.eq("item", item)
-    result = q.order("capitulo").order("item").order("pk_id").range(offset, offset + limit - 1).execute()
+    rows = q.order("capitulo").order("item").order("pk_id").range(offset, offset + limit - 1).execute().data
     return {
-        "total": result.count,
+        "total": offset + len(rows) + (1 if len(rows) == limit else 0),
         "offset": offset,
         "limit": limit,
-        "data": result.data
+        "data": rows,
+        "has_more": len(rows) == limit
     }
 
 @app.get("/presupuesto/item/{item_id}")
