@@ -544,8 +544,6 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
 
   // ── Estado ─────────────────────────────────────────────────────────────────
   const [registros, setRegistros] = useState([])
-  const [capitulosResumen, setCapitulosResumen] = useState([])
-  const [loadingDrill, setLoadingDrill] = useState(false)
   const [loading, setLoading] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState('')
@@ -633,7 +631,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   }
 
   // ── Carga inicial ──────────────────────────────────────────────────────────
-  useEffect(() => { if (contratoId) cargarCapitulos() }, [contratoId])
+  useEffect(() => { if (contratoId) cargarRegistros() }, [contratoId])
   
 useEffect(() => {
     if (!navRegistroId || !contratoId) return
@@ -691,65 +689,27 @@ useEffect(() => {
   const _pptoCacheRef = useRef(null)  // { data, ts, papelera }
   const PPTO_CACHE_TTL = 5 * 60 * 1000  // 5 minutos  
 
-async function cargarCapitulos() {
+async function cargarRegistros(modoPapelera, forzar = false) {
     if (!contratoId) return
-    setLoading(true)
-    try {
-      const res = await fetch(`${API}/presupuesto/${contratoId}/resumen`, {
-        headers: { Authorization: `Bearer ${token}` }
-      })
-      if (res.ok) {
-        const data = await res.json()
-        setCapitulosResumen(data.por_capitulo || [])
-      }
-    } catch {}
-    setLoading(false)
-  }
-
-async function cargarRegistros(modoPapelera, forzar = false, capFiltro, itemFiltro) {
-    if (!contratoId) return
-    if (!capFiltro) { await cargarCapitulos(); return }
     const esPapelera = modoPapelera !== undefined ? modoPapelera : verPapelera
-    const cacheKey = `${esPapelera}|${capFiltro}|${itemFiltro||''}`
+    // Servir desde caché si es válido
     const cached = _pptoCacheRef.current
-    if (!forzar && cached && cached.key === cacheKey &&
+    if (!forzar && cached && cached.papelera === esPapelera &&
         (Date.now() - cached.ts) < PPTO_CACHE_TTL) {
       setRegistros(cached.data)
       setPagina(1)
       return
     }
-    setLoadingDrill(true)
-    setRegistros([])
-    const BATCH = 2500
-    let offset = 0
-    let acumulado = []
-    let hasMore = true
-    try {
-      while (hasMore) {
-        const params = new URLSearchParams({ papelera: esPapelera, offset, limit: BATCH })
-        if (capFiltro)  params.set('capitulo', capFiltro)
-        if (itemFiltro) params.set('item', itemFiltro)
-        const res = await fetch(`${API}/presupuesto/${contratoId}/drill-lazy?${params}`, {
-          headers: { Authorization: `Bearer ${token}` }
-        })
-        if (!res.ok) break
-        const batch = await res.json()
-        acumulado = [...acumulado, ...batch]
-        setRegistros([...acumulado])
-        if (offset === 0) setPagina(1)
-        hasMore = batch.length === BATCH
-        offset += batch.length
-      }
-      _pptoCacheRef.current = { data: acumulado, ts: Date.now(), key: cacheKey, papelera: esPapelera }
-    } catch {}
-    setLoadingDrill(false)
-  }
-
-function recargarActual(forzar = false, papeleraOverride) {
-    const capAct  = drill.find(d => d.campo === 'capitulo')?.valor
-    const itemAct = drill.find(d => d.campo === 'item')?.valor
-    if (capAct) return cargarRegistros(papeleraOverride, forzar, capAct, itemAct)
-    return cargarCapitulos()
+    setLoading(true)
+    const params = esPapelera ? '?papelera=true' : ''
+    const res = await fetch(`${API}/presupuesto/${contratoId}${params}`, { headers: { Authorization: `Bearer ${token}` } })
+    if (res.ok) {
+      const data = await res.json()
+      _pptoCacheRef.current = { data, ts: Date.now(), papelera: esPapelera }
+      setRegistros(data)
+    }
+    setLoading(false)
+    setPagina(1)
   }
 
   // ── Drill-down computado ───────────────────────────────────────────────────
@@ -884,18 +844,7 @@ function recargarActual(forzar = false, papeleraOverride) {
   }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, pkidsSeleccionados])
 
   const chartData = useMemo(() => {
-    if (!nivelActual) return []
-    // Nivel capítulo sin drill — usar resumen precargado
-    if (drill.length === 0 && nivelActual === 'capitulo' && capitulosResumen.length > 0) {
-      return capitulosResumen.map(c => ({
-        name: c.capitulo,
-        label: c.capitulo?.length > 48 ? c.capitulo.slice(0,48)+'…' : c.capitulo,
-        costo: c.costo,
-        count: c.registros,
-        cantTotal: 0
-      }))
-    }
-    if (registros.length === 0) return []
+    if (!nivelActual || registros.length === 0) return []
     const agg = {}
     registrosFiltrados.forEach(r => {
       const key = r[nivelActual] ?? '(sin valor)'
@@ -936,14 +885,10 @@ function recargarActual(forzar = false, papeleraOverride) {
     if (!nivelActual || !barData?.name) return
     const nuevoDrill = [...drill, { campo: nivelActual, valor: barData.name }]
     setDrill(nuevoDrill)
-    // Cargar registros del nivel seleccionado
-    const capVal  = nuevoDrill.find(d => d.campo === 'capitulo')?.valor
-    const itemVal = nuevoDrill.find(d => d.campo === 'item')?.valor
-    if (capVal) cargarRegistros(undefined, false, capVal, itemVal)
   }
   function irA(idx) {
     setDrill(prev => prev.slice(0, idx))
-    if (idx === 0) { setRegistros([]); _pptoCacheRef.current = null }
+    if (idx === 0) setRegistros([])
   }
 
   // ── Import CSV ─────────────────────────────────────────────────────────────
@@ -1040,7 +985,7 @@ function recargarActual(forzar = false, papeleraOverride) {
     }
     if (ok) msj = `✅ ${rows.length} registros ${modoImport === 'replace' ? 'cargados' : 'agregados'}`
     setImportMsg(msj); setImporting(false); setImportProgreso(0)
-    if (ok) { _pptoCacheRef.current = null; setDrill([]); setRegistros([]); await cargarCapitulos() }
+    if (ok) { _pptoCacheRef.current = null; setDrill([]); await cargarRegistros() }
     setTimeout(() => setImportMsg(''), 5000)
   }
 
@@ -1085,7 +1030,7 @@ function recargarActual(forzar = false, papeleraOverride) {
     if (res.ok) {
       if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario, destinatarioComentario)
       setEditCapitulo(''); setEditItem(''); setEditDims({}); setSeleccionados(new Set()); setModalConfirm(false)
-      await recargarActual(true)
+      await cargarRegistros()
     }
   }
 
@@ -1102,7 +1047,7 @@ function recargarActual(forzar = false, papeleraOverride) {
     setGuardandoBulk(false)
     if (res.ok) {
       if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario, destinatarioComentario)
-      setBulkEstado(''); setSeleccionados(new Set()); _pptoCacheRef.current = null; await recargarActual(true)
+      setBulkEstado(''); setSeleccionados(new Set()); _pptoCacheRef.current = null; await cargarRegistros()
     }
   }
 
@@ -1140,7 +1085,7 @@ function recargarActual(forzar = false, papeleraOverride) {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(body)
     })
-    if (res.ok) { setEditando(null); _pptoCacheRef.current = null; await recargarActual(true) }
+    if (res.ok) { setEditando(null); _pptoCacheRef.current = null; await cargarRegistros() }
   }
 
   // ── Selección ──────────────────────────────────────────────────────────────
@@ -1212,7 +1157,7 @@ async function highlightEnDwg(registro) {
       body: JSON.stringify({ ids: [id], revisado: nuevoEstado })
     })
     if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioComentario)
-    await recargarActual(true)
+    await cargarRegistros()
   }
 
 async function darDeBaja(id) {
@@ -1227,7 +1172,7 @@ async function darDeBaja(id) {
     })
     if (res.ok) {
       await crearComentarios([id], 'validacion', `[BAJA] ${comentario}`, destinatarioComentario)
-      await recargarActual(true)
+      await cargarRegistros()
     } else alert('Error al dar de baja el registro')
   }
 
@@ -1237,7 +1182,7 @@ async function restaurar(id) {
       method: 'PUT', headers: { Authorization: `Bearer ${token}` }
     })
     if (res.ok) {
-      _pptoCacheRef.current = null; await recargarActual(true)
+      _pptoCacheRef.current = null; await cargarRegistros()
     } else alert('Error al restaurar el registro')
   }
 
@@ -1628,11 +1573,11 @@ async function restaurar(id) {
         )}
         {importMsg && <span style={{ fontSize:'13px',color:importMsg.startsWith('✅')?'#16A34A':importMsg.startsWith('❌')?'#DC2626':t.textMuted }}>{importMsg}</span>}
         <span style={{ marginLeft:'auto',fontSize:'12px',color:t.textMuted }}>
-        <button onClick={() => { _pptoCacheRef.current = null; recargarActual(true) }}
+        <button onClick={() => { _pptoCacheRef.current = null; cargarRegistros() }}
           style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'7px 14px', color:t.textMuted, fontSize:'12px', fontWeight:'600', cursor:'pointer' }}>
           🔄 Actualizar
         </button>
-          {registros.length}{loadingDrill ? ' ⏳' : ''} total · {registrosFiltrados.length} filtrados · {seleccionados.size} seleccionados
+          {registros.length} total · {registrosFiltrados.length} filtrados · {seleccionados.size} seleccionados
       {totalPaginas > 1 && (
         <span style={{ marginLeft: '16px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
           <button onClick={() => setPagina(p => Math.max(1, p-1))} disabled={pagina === 1}
@@ -1648,7 +1593,7 @@ async function restaurar(id) {
       {/* ── Panel drill-down ── */}
       {loading ? (
         <div style={s.emptyState}>Cargando registros...</div>
-      ) : registros.length === 0 && capitulosResumen.length === 0 ? (
+      ) : registros.length === 0 ? (
         <div style={s.emptyState}>📂 Importa un CSV para comenzar</div>
       ) : (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',padding:'20px',marginBottom:'16px',boxShadow:t.shadow }}>
@@ -1888,7 +1833,7 @@ async function restaurar(id) {
       {/* ── Indicador DWG ─────────────────────────────────────────── */}
 <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', flexWrap:'wrap' }}>
         {puedeEliminar && (
-          <button onClick={() => { const v = !verPapelera; setVerPapelera(v); _pptoCacheRef.current = null; recargarActual(true, v) }}
+          <button onClick={() => { const v = !verPapelera; setVerPapelera(v); _pptoCacheRef.current = null; cargarRegistros(v) }}
             style={{ background: verPapelera ? '#EF444422' : t.bgCard, border:`1px solid ${verPapelera ? '#EF4444' : t.border}`, borderRadius:'8px', padding:'6px 14px', color: verPapelera ? '#EF4444' : t.textMuted, fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
             🗑️ {verPapelera ? 'Ver activos' : 'Papelera'}
           </button>
@@ -2025,7 +1970,7 @@ async function restaurar(id) {
                     if (res.ok) await crearComentarios([id], 'validacion', `[BAJA MASIVA] ${comentario}`)
                   }
                   setSeleccionados(new Set())
-                  await recargarActual(true)
+                  await cargarRegistros()
                 }}
                 style={{ background:'#EF444415', border:'1px solid #EF444466', borderRadius:'7px', padding:'6px 14px', color:'#EF4444', fontSize:'12px', fontWeight:'700', cursor:'pointer', whiteSpace:'nowrap' }}>
                   🗑️ Dar de baja ({seleccionados.size})
