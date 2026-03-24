@@ -544,6 +544,8 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
 
   // ── Estado ─────────────────────────────────────────────────────────────────
   const [registros, setRegistros] = useState([])
+  const [capitulosResumen, setCapitulosResumen] = useState([])
+  const [loadingDrill, setLoadingDrill] = useState(false)
   const [loading, setLoading] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState('')
@@ -631,7 +633,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   }
 
   // ── Carga inicial ──────────────────────────────────────────────────────────
-  useEffect(() => { if (contratoId) cargarRegistros() }, [contratoId])
+  useEffect(() => { if (contratoId) cargarCapitulos() }, [contratoId])
   
 useEffect(() => {
     if (!navRegistroId || !contratoId) return
@@ -689,51 +691,46 @@ useEffect(() => {
   const _pptoCacheRef = useRef(null)  // { data, ts, papelera }
   const PPTO_CACHE_TTL = 5 * 60 * 1000  // 5 minutos  
 
-async function cargarRegistros(modoPapelera, forzar = false) {
+async function cargarCapitulos() {
+    if (!contratoId) return
+    setLoading(true)
+    const res = await fetch(`${API}/presupuesto/${contratoId}/resumen`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    if (res.ok) {
+      const data = await res.json()
+      setCapitulosResumen(data.por_capitulo || [])
+    }
+    setLoading(false)
+  }
+
+async function cargarRegistros(modoPapelera, forzar = false, capFiltro, itemFiltro) {
     if (!contratoId) return
     const esPapelera = modoPapelera !== undefined ? modoPapelera : verPapelera
-
-    // Servir desde caché si es válido
+    const cacheKey = `${esPapelera}|${capFiltro||''}|${itemFiltro||''}`
     const cached = _pptoCacheRef.current
-    if (!forzar && cached && cached.papelera === esPapelera &&
+    if (!forzar && cached && cached.key === cacheKey &&
         (Date.now() - cached.ts) < PPTO_CACHE_TTL) {
       setRegistros(cached.data)
       setPagina(1)
       return
     }
-
-    setLoading(true)
-    const base = `${API}/presupuesto/${contratoId}${esPapelera ? '?papelera=true&' : '?'}`
-
+    setLoadingDrill(true)
+    const params = new URLSearchParams({ papelera: esPapelera })
+    if (capFiltro)  params.set('capitulo', capFiltro)
+    if (itemFiltro) params.set('item', itemFiltro)
     try {
-      // 1) Cargar primeros 1000 inmediatamente → mostrar
-      const r1 = await fetch(`${base}limit=1000&offset=0`, { headers: { Authorization: `Bearer ${token}` } })
-      if (!r1.ok) { setLoading(false); return }
-      const primera = await r1.json()
-      setRegistros(primera)
-      setLoading(false)
-      setPagina(1)
-
-      // 2) Si había exactamente 1000, cargar el resto en background
-      if (primera.length === 1000) {
-        let todos = [...primera]
-        let off = 1000
-        while (true) {
-          const rx = await fetch(`${base}limit=1000&offset=${off}`, { headers: { Authorization: `Bearer ${token}` } })
-          if (!rx.ok) break
-          const lote = await rx.json()
-          todos = [...todos, ...lote]
-          setRegistros([...todos])  // actualiza la tabla silenciosamente
-          if (lote.length < 1000) break
-          off += 1000
-        }
-        _pptoCacheRef.current = { data: todos, ts: Date.now(), papelera: esPapelera }
-      } else {
-        _pptoCacheRef.current = { data: primera, ts: Date.now(), papelera: esPapelera }
+      const res = await fetch(`${API}/presupuesto/${contratoId}/drill-lazy?${params}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (res.ok) {
+        const data = await res.json()
+        _pptoCacheRef.current = { data, ts: Date.now(), key: cacheKey, papelera: esPapelera }
+        setRegistros(data)
+        setPagina(1)
       }
-    } catch {
-      setLoading(false)
-    }
+    } catch {}
+    setLoadingDrill(false)
   }
 
   // ── Drill-down computado ───────────────────────────────────────────────────
@@ -868,7 +865,18 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, pkidsSeleccionados])
 
   const chartData = useMemo(() => {
-    if (!nivelActual || registros.length === 0) return []
+    if (!nivelActual) return []
+    // Nivel capítulo sin drill — usar resumen precargado
+    if (drill.length === 0 && nivelActual === 'capitulo' && capitulosResumen.length > 0) {
+      return capitulosResumen.map(c => ({
+        name: c.capitulo,
+        label: c.capitulo?.length > 48 ? c.capitulo.slice(0,48)+'…' : c.capitulo,
+        costo: c.costo,
+        count: c.registros,
+        cantTotal: 0
+      }))
+    }
+    if (registros.length === 0) return []
     const agg = {}
     registrosFiltrados.forEach(r => {
       const key = r[nivelActual] ?? '(sin valor)'
@@ -909,10 +917,14 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (!nivelActual || !barData?.name) return
     const nuevoDrill = [...drill, { campo: nivelActual, valor: barData.name }]
     setDrill(nuevoDrill)
+    // Cargar registros del nivel seleccionado
+    const capVal  = nuevoDrill.find(d => d.campo === 'capitulo')?.valor
+    const itemVal = nuevoDrill.find(d => d.campo === 'item')?.valor
+    if (capVal) cargarRegistros(undefined, false, capVal, itemVal)
   }
   function irA(idx) {
     setDrill(prev => prev.slice(0, idx))
-    if (idx === 0) setRegistros([])
+    if (idx === 0) { setRegistros([]); _pptoCacheRef.current = null }
   }
 
   // ── Import CSV ─────────────────────────────────────────────────────────────

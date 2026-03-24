@@ -815,6 +815,28 @@ def get_resumen_presupuesto(contrato_id: int, current_user=Depends(get_current_u
         "por_capitulo": [{"capitulo": r["capitulo"], "costo": r["presupuesto"], "registros": r["registros"]} for r in caps]
     }
 
+@app.get("/presupuesto/{contrato_id}/drill-lazy")
+def get_presupuesto_drill_lazy(
+    contrato_id: int,
+    capitulo: Optional[str] = None,
+    item: Optional[str] = None,
+    papelera: bool = False,
+    current_user=Depends(get_current_user)
+):
+    """Carga lazy: sin filtros → solo capítulos. Con capitulo → ítems. Con item → registros."""
+    q = supabase.table("presupuesto").select("*").eq("contrato_id", contrato_id)
+    q = q.eq("dado_de_baja", True if papelera else False)
+    if capitulo: q = q.eq("capitulo", capitulo)
+    if item:     q = q.eq("item", item)
+    q = q.order("capitulo").order("item").order("pk_id")
+    all_rows, off = [], 0
+    while True:
+        batch = supabase_execute(q.range(off, off + 2499))
+        all_rows.extend(batch)
+        if len(batch) < 2500: break
+        off += 2500
+    return all_rows
+
 @app.get("/presupuesto/item/{item_id}")
 def get_presupuesto_item(item_id: int, current_user=Depends(get_current_user)):
     """Trae un único registro de presupuesto por ID."""
