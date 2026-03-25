@@ -584,6 +584,11 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [popupItemOpen, setPopupItemOpen] = useState(false)
   const [popupGuardando, setPopupGuardando] = useState(false)
   const [popupMsg, setPopupMsg] = useState('')
+  // ── Revisor de Tramos ─────────────────────────────────────────────────────
+  const [modalModoCapitulo, setModalModoCapitulo] = useState(null) // nombre del capítulo pendiente
+  const [modoCapSeleccion,  setModoCapSeleccion]  = useState('')   // '' | 'todos' | 'tramos'
+  const [tramoSelec,        setTramoSelec]        = useState(null) // {no_inicio, no_final, label}
+  const [tabTramo,          setTabTramo]          = useState(0)    // 0=INFO 1=NODO INI 2=NODO FIN 3=TRAMO
   // ── Comentarios ──────────────────────────────────────────────────────────
   const [modalComentario,  setModalComentario]  = useState(null) // {tipo, obligatorio, resolve}
   const [textoComentario,  setTextoComentario]  = useState('')
@@ -990,6 +995,11 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (!nivelActual || !barData?.name) return
     if (nivelActual === 'capitulo') {
       await cargarCapituloData(barData.name)
+      setModoCapSeleccion('')
+      setTramoSelec(null)
+      setTabTramo(0)
+      setModalModoCapitulo(barData.name)
+      return
     }
     setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
   }
@@ -1330,6 +1340,299 @@ async function restaurar(id) {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div>
+      {/* ── Modal Revisor de Tramos ─────────────────────────────────────────── */}
+      {modalModoCapitulo && (() => {
+        const capRegs = registros.filter(r => r.capitulo === modalModoCapitulo)
+
+        // Tramos únicos: no_inicio !== no_final
+        const tramosUnicos = []
+        const vistos = new Set()
+        capRegs.forEach(r => {
+          if (!r.no_inicio || !r.no_final) return
+          if (r.no_inicio === r.no_final) return
+          const key = `${r.no_inicio}||${r.no_final}`
+          if (!vistos.has(key)) {
+            vistos.add(key)
+            tramosUnicos.push({ no_inicio: r.no_inicio, no_final: r.no_final, label: `${r.no_inicio} → ${r.no_final}` })
+          }
+        })
+
+        // Calcular estrellas por tramo
+        const calcEstrella = (regs) => {
+          if (!regs.length) return 'vacia'
+          const estados = regs.map(r => r.revisado || 'No Revisado')
+          if (estados.some(e => e === 'No Revisado')) return 'vacia'
+          if (estados.some(e => e === 'Pendiente')) return 'roja'
+          if (estados.some(e => e === 'Verificar Campo')) return 'amarilla'
+          return 'verde'
+        }
+        const colorEstrella = (e) => e === 'verde' ? '#16A34A' : e === 'amarilla' ? '#D97706' : e === 'roja' ? '#EF4444' : t.border
+        const iconEstrella  = (e) => e === 'vacia' ? '☆' : '★'
+
+        // Registros del tramo seleccionado
+        const regsNodoIni = tramoSelec ? capRegs.filter(r => r.no_inicio === tramoSelec.no_inicio && r.no_final === tramoSelec.no_inicio) : []
+        const regsNodoFin = tramoSelec ? capRegs.filter(r => r.no_inicio === tramoSelec.no_final  && r.no_final === tramoSelec.no_final)  : []
+        const regsTramo   = tramoSelec ? capRegs.filter(r => r.no_inicio === tramoSelec.no_inicio && r.no_final === tramoSelec.no_final)   : []
+
+        const estIni   = tramoSelec ? calcEstrella(regsNodoIni) : 'vacia'
+        const estFin   = tramoSelec ? calcEstrella(regsNodoFin) : 'vacia'
+        const estTramo = tramoSelec ? calcEstrella(regsTramo)   : 'vacia'
+
+        const TAB_LABELS = ['📋 Info Tramo', '🔵 Nodo Inicio', '🔴 Nodo Fin', '📏 Tramo']
+
+        // Renderiza filas de ítems con semáforo
+        const FilaItem = ({ r }) => {
+          const est = r.revisado || 'No Revisado'
+          const clr = estadoColor(est)
+          return (
+            <div onClick={() => { zoomEnDwg(r); highlightEnDwg(r) }}
+              style={{ display:'flex', gap:'8px', alignItems:'center', padding:'8px 10px',
+                borderRadius:'8px', cursor:'pointer', background:t.bg, marginBottom:'6px',
+                border:`1px solid ${t.border}` }}>
+              <div style={{ flex:2, fontSize:'11px', color:t.text, fontWeight:'600' }}>{r.item}</div>
+              <div style={{ flex:3, fontSize:'11px', color:t.textMuted }}>{r.descripcion}</div>
+              <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
+                {[r.area_long_nod, r.ancho, r.espesor].filter(Boolean).join(' × ')}
+              </div>
+              <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
+                {r.cant_total != null ? Number(r.cant_total).toLocaleString('es-CO', {maximumFractionDigits:3}) : '—'}
+              </div>
+              <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
+                {r.vlr_unitario != null ? `$${Number(r.vlr_unitario).toLocaleString('es-CO')}` : '—'}
+              </div>
+              <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
+                {r.costo_directo != null ? `$${Number(r.costo_directo).toLocaleString('es-CO')}` : '—'}
+              </div>
+              <div style={{ display:'flex', gap:'4px' }}>
+                {[{valor:'Pendiente',label:'🔴'},{valor:'Verificar Campo',label:'🟡'},{valor:'Verificado',label:'🟢'}].map(op => (
+                  <button key={op.valor}
+                    title={op.valor}
+                    onClick={async (e) => { e.stopPropagation(); if (puedeValidar && !esSellado(r)) await cambiarEstadoDirecto(r.id, op.valor) }}
+                    style={{ background: est === op.valor ? clr : t.bgCard,
+                      border:`1.5px solid ${est === op.valor ? clr : t.border}`,
+                      borderRadius:'50%', width:'22px', height:'22px', fontSize:'11px',
+                      cursor: puedeValidar && !esSellado(r) ? 'pointer' : 'default',
+                      display:'flex', alignItems:'center', justifyContent:'center', padding:0 }}>
+                    {op.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )
+        }
+
+        const TabVacia = ({ msg }) => (
+          <div style={{ padding:'30px', textAlign:'center', color:t.textMuted, fontSize:'13px', fontStyle:'italic' }}>{msg}</div>
+        )
+
+        return (
+          <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.7)',zIndex:3500,display:'flex',alignItems:'center',justifyContent:'center' }}
+            onClick={() => { setModalModoCapitulo(null); setTramoSelec(null) }}>
+            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px',
+              padding:'24px', width: tramoSelec ? '820px' : '440px', maxWidth:'96vw',
+              maxHeight:'88vh', overflowY:'auto', boxShadow:'0 24px 64px rgba(0,0,0,0.5)',
+              transition:'width .25s' }}
+              onClick={e => e.stopPropagation()}>
+
+              {/* Header */}
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'18px' }}>
+                <div>
+                  <div style={{ fontSize:'13px', fontWeight:'800', color:t.primary }}>
+                    {tramoSelec ? `🔎 ${tramoSelec.label}` : '📂 Abrir capítulo'}
+                  </div>
+                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>{modalModoCapitulo}</div>
+                </div>
+                <button onClick={() => { setModalModoCapitulo(null); setTramoSelec(null) }}
+                  style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+              </div>
+
+              {/* Si no hay tramo seleccionado → mostrar dropdown */}
+              {!tramoSelec && (<>
+                <div style={{ marginBottom:'16px' }}>
+                  <div style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, marginBottom:'6px', letterSpacing:'0.5px' }}>
+                    ¿CÓMO QUIERES REVISAR ESTE CAPÍTULO?
+                  </div>
+                  <select value={modoCapSeleccion}
+                    onChange={e => setModoCapSeleccion(e.target.value)}
+                    style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`,
+                      borderRadius:'9px', padding:'10px 14px', color:t.text, fontSize:'13px', cursor:'pointer' }}>
+                    <option value=''>— Selecciona una opción —</option>
+                    <option value='todos'>Ver todos los registros</option>
+                    <option value='tramos'>Revisar por tramo</option>
+                  </select>
+                </div>
+
+                {/* Botón Todos */}
+                {modoCapSeleccion === 'todos' && (
+                  <button onClick={() => {
+                    setModalModoCapitulo(null)
+                    setDrill(prev => [...prev, { campo: 'capitulo', valor: modalModoCapitulo }])
+                  }}
+                    style={{ width:'100%', background:t.primary, color:'#fff', border:'none',
+                      borderRadius:'9px', padding:'11px', fontSize:'13px', fontWeight:'700', cursor:'pointer', marginBottom:'8px' }}>
+                    Ver todos los registros →
+                  </button>
+                )}
+
+                {/* Lista de tramos */}
+                {modoCapSeleccion === 'tramos' && (
+                  <div>
+                    <div style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, marginBottom:'8px', letterSpacing:'0.5px' }}>
+                      TRAMOS DISPONIBLES ({tramosUnicos.length})
+                    </div>
+                    {tramosUnicos.length === 0 && (
+                      <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'12px', fontStyle:'italic' }}>
+                        No hay tramos definidos en este capítulo
+                      </div>
+                    )}
+                    <div style={{ display:'flex', flexDirection:'column', gap:'6px', maxHeight:'320px', overflowY:'auto' }}>
+                      {tramosUnicos.map((tr, i) => {
+                        const rIni   = capRegs.filter(r => r.no_inicio === tr.no_inicio && r.no_final === tr.no_inicio)
+                        const rFin   = capRegs.filter(r => r.no_inicio === tr.no_final  && r.no_final === tr.no_final)
+                        const rTr    = capRegs.filter(r => r.no_inicio === tr.no_inicio && r.no_final === tr.no_final)
+                        const eI = calcEstrella(rIni), eF = calcEstrella(rFin), eT = calcEstrella(rTr)
+                        return (
+                          <div key={i} onClick={() => { setTramoSelec(tr); setTabTramo(0) }}
+                            style={{ display:'flex', alignItems:'center', justifyContent:'space-between',
+                              padding:'10px 14px', borderRadius:'10px', cursor:'pointer',
+                              background:t.bg, border:`1.5px solid ${t.border}`,
+                              transition:'border-color .15s' }}
+                            onMouseEnter={e => e.currentTarget.style.borderColor = t.primary}
+                            onMouseLeave={e => e.currentTarget.style.borderColor = t.border}>
+                            <div style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>{tr.label}</div>
+                            <div style={{ display:'flex', gap:'6px', alignItems:'center' }}>
+                              {[eI, eF, eT].map((e, idx) => (
+                                <span key={idx} title={['Nodo Inicio','Nodo Fin','Tramo'][idx]}
+                                  style={{ fontSize:'16px', color:colorEstrella(e) }}>{iconEstrella(e)}</span>
+                              ))}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </>)}
+
+              {/* Panel de 4 pestañas cuando hay tramo seleccionado */}
+              {tramoSelec && (<>
+                {/* Botón volver */}
+                <button onClick={() => setTramoSelec(null)}
+                  style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'7px',
+                    padding:'5px 12px', fontSize:'11px', cursor:'pointer', color:t.textMuted, marginBottom:'14px' }}>
+                  ← Volver a tramos
+                </button>
+
+                {/* Estrellas resumen */}
+                <div style={{ display:'flex', gap:'16px', alignItems:'center', background:t.bg,
+                  borderRadius:'10px', padding:'10px 16px', marginBottom:'14px' }}>
+                  {[{e:estIni,l:'Nodo Inicio'},{e:estFin,l:'Nodo Fin'},{e:estTramo,l:'Tramo'}].map(({e,l}, idx) => (
+                    <div key={idx} style={{ textAlign:'center' }}>
+                      <div style={{ fontSize:'22px', color:colorEstrella(e) }}>{iconEstrella(e)}</div>
+                      <div style={{ fontSize:'9px', color:t.textMuted, fontWeight:'700', letterSpacing:'0.4px' }}>{l.toUpperCase()}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Tabs */}
+                <div style={{ display:'flex', gap:'4px', marginBottom:'14px', borderBottom:`1px solid ${t.border}`, paddingBottom:'0' }}>
+                  {TAB_LABELS.map((label, idx) => (
+                    <button key={idx} onClick={() => setTabTramo(idx)}
+                      style={{ padding:'7px 14px', fontSize:'11px', fontWeight:'700', cursor:'pointer',
+                        background:'transparent', border:'none',
+                        borderBottom: tabTramo === idx ? `2.5px solid ${t.primary}` : '2.5px solid transparent',
+                        color: tabTramo === idx ? t.primary : t.textMuted,
+                        borderRadius:'0', transition:'all .15s' }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* TAB 0: INFO TRAMO */}
+                {tabTramo === 0 && (() => {
+                  const r = regsTramo[0] || regsNodoIni[0] || regsNodoFin[0] || {}
+                  const F = ({label, val}) => (
+                    <div style={{ background:t.bg, borderRadius:'8px', padding:'10px 12px', flex:1 }}>
+                      <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', marginBottom:'3px' }}>{label}</div>
+                      <div style={{ fontSize:'12px', color:t.text, fontWeight:'600' }}>{val || '—'}</div>
+                    </div>
+                  )
+                  return (
+                    <div>
+                      <div style={{ textAlign:'center', fontSize:'18px', fontWeight:'800', color:t.primary, marginBottom:'16px', padding:'12px', background:t.bg, borderRadius:'10px' }}>
+                        {tramoSelec.label}
+                      </div>
+                      <div style={{ display:'flex', gap:'8px', marginBottom:'8px' }}>
+                        <F label="CAPÍTULO" val={modalModoCapitulo} />
+                        <F label="COMPETENCIA" val={r.competencia} />
+                      </div>
+                      <div style={{ display:'flex', gap:'8px', marginBottom:'8px' }}>
+                        <F label="TRAMO" val={r.tramo} />
+                        <F label="CALZADA" val={r.calzada} />
+                        <F label="PK_ID" val={r.pk_id} />
+                      </div>
+                      <div style={{ display:'flex', gap:'8px', marginBottom:'8px' }}>
+                        <F label="ABS. INICIO" val={r.abs_inicio} />
+                        <F label="ABS. FINAL" val={r.abs_final} />
+                      </div>
+                      <div style={{ display:'flex', gap:'8px' }}>
+                        <F label="NODO INICIO" val={tramoSelec.no_inicio} />
+                        <F label="NODO FIN" val={tramoSelec.no_final} />
+                      </div>
+                    </div>
+                  )
+                })()}
+
+                {/* TAB 1: NODO INICIO */}
+                {tabTramo === 1 && (
+                  <div>
+                    <div style={{ display:'flex', gap:'8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, padding:'0 10px', marginBottom:'6px', letterSpacing:'0.4px' }}>
+                      <span style={{flex:2}}>ÍTEM</span><span style={{flex:3}}>DESCRIPCIÓN</span>
+                      <span style={{flex:1,textAlign:'right'}}>DIMS</span><span style={{flex:1,textAlign:'right'}}>CANT.</span>
+                      <span style={{flex:1,textAlign:'right'}}>V. UNIT.</span><span style={{flex:1,textAlign:'right'}}>C. DIRECTO</span>
+                      <span style={{flex:0.8}}></span>
+                    </div>
+                    {regsNodoIni.length === 0
+                      ? <TabVacia msg="NODO EXISTENTE SIN REPORTE DE CANTIDADES" />
+                      : regsNodoIni.map(r => <FilaItem key={r.id} r={r} />)}
+                  </div>
+                )}
+
+                {/* TAB 2: NODO FIN */}
+                {tabTramo === 2 && (
+                  <div>
+                    <div style={{ display:'flex', gap:'8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, padding:'0 10px', marginBottom:'6px', letterSpacing:'0.4px' }}>
+                      <span style={{flex:2}}>ÍTEM</span><span style={{flex:3}}>DESCRIPCIÓN</span>
+                      <span style={{flex:1,textAlign:'right'}}>DIMS</span><span style={{flex:1,textAlign:'right'}}>CANT.</span>
+                      <span style={{flex:1,textAlign:'right'}}>V. UNIT.</span><span style={{flex:1,textAlign:'right'}}>C. DIRECTO</span>
+                      <span style={{flex:0.8}}></span>
+                    </div>
+                    {regsNodoFin.length === 0
+                      ? <TabVacia msg="NODO EXISTENTE SIN REPORTE DE CANTIDADES" />
+                      : regsNodoFin.map(r => <FilaItem key={r.id} r={r} />)}
+                  </div>
+                )}
+
+                {/* TAB 3: TRAMO */}
+                {tabTramo === 3 && (
+                  <div>
+                    <div style={{ display:'flex', gap:'8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, padding:'0 10px', marginBottom:'6px', letterSpacing:'0.4px' }}>
+                      <span style={{flex:2}}>ÍTEM</span><span style={{flex:3}}>DESCRIPCIÓN</span>
+                      <span style={{flex:1,textAlign:'right'}}>DIMS</span><span style={{flex:1,textAlign:'right'}}>CANT.</span>
+                      <span style={{flex:1,textAlign:'right'}}>V. UNIT.</span><span style={{flex:1,textAlign:'right'}}>C. DIRECTO</span>
+                      <span style={{flex:0.8}}></span>
+                    </div>
+                    {regsTramo.length === 0
+                      ? <TabVacia msg="SIN CANTIDADES REPORTADAS PARA ESTE TRAMO" />
+                      : regsTramo.map(r => <FilaItem key={r.id} r={r} />)}
+                  </div>
+                )}
+              </>)}
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Modal detalle registro presupuesto */}
       {modalDetallePpto && (
         <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.65)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center' }}
