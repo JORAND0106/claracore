@@ -1250,8 +1250,6 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     { valor: 'Pendiente', color: '#D97706', label: '🟡' },
     { valor: 'Aprobado',  color: '#16A34A', label: '🟢' },
   ]
-  // Mapa para traducir estado plataforma → nombre bloque AutoCAD
-  const BLOQUE_MAP = { 'Aprobado': 'Verificado', 'Pendiente': 'Verificar Campo', 'Rechazado': 'Pendiente' }
 
 async function highlightEnDwg(registro) {
   if (!registro?.id) return
