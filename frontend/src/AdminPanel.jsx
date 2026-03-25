@@ -731,7 +731,7 @@ function SeccionLogs({ call, theme }) {
     setHistLoading(false)
   }
 
-  const fmtFecha = iso => { try { return new Date(iso).toLocaleString("es-CO", { dateStyle:"short", timeStyle:"short", timeZone:"America/Bogota" }) } catch { return iso } }
+  const fmtFecha = iso => { try { const utc = iso.endsWith("Z") ? iso : iso + "Z"; return new Date(utc).toLocaleString("es-CO", { dateStyle:"short", timeStyle:"short", timeZone:"America/Bogota" }) } catch { return iso } }
   const tdS = { padding:"8px 10px", fontSize:12, borderBottom:`1px solid ${col.border}`, color: col.textTable }
   const thS = { padding:"8px 10px", fontSize:11, fontWeight:700, color: col.textMuted, borderBottom:`1px solid ${col.border}`, textAlign:"left", whiteSpace:"nowrap" }
 
