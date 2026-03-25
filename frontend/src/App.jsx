@@ -786,7 +786,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   // ── Inserción de bloque de validación vía ClaraLink ───────────────────────
   async function lanzarClaraLinkEstado(ids, nuevoEstado) {
-    const ESTADOS_BLOQUE = ['Verificado', 'Verificar Campo', 'Pendiente']
+    const ESTADOS_BLOQUE = ['Aprobado', 'Pendiente', 'Rechazado']
     if (!ESTADOS_BLOQUE.includes(nuevoEstado)) return
     const targets = ids
       .map(id => registros.find(r => r.id === id))
@@ -1172,7 +1172,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   async function ejecutarBulkEstado() {
     if (!bulkEstado || seleccionados.size === 0) return
-    const obligatorio = bulkEstado === 'Verificar Campo' || bulkEstado === 'Pendiente'
+    const obligatorio = bulkEstado === 'Pendiente' || bulkEstado === 'Rechazado'
     const comentario = await pedirComentario('validacion', obligatorio)
     if (comentario === null) return
     setGuardandoBulk(true)
@@ -1242,14 +1242,16 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }, [pagina, registrosFiltrados.length])
 
   // ── Estilos ────────────────────────────────────────────────────────────────
-  const REVISADO_OPTS = ['No Revisado', 'Pendiente', 'Verificar Campo', 'Verificado']
-  const estadoColor = (r) => r === 'Verificado' ? '#16A34A' : r === 'Verificar Campo' ? '#D97706' : r === 'Pendiente' ? '#EF4444' : '#3B82F6'
+  const REVISADO_OPTS = ['No Revisado', 'Rechazado', 'Pendiente', 'Aprobado']
+  const estadoColor = (r) => r === 'Aprobado' ? '#16A34A' : r === 'Pendiente' ? '#D97706' : r === 'Rechazado' ? '#EF4444' : '#3B82F6'
   const SEMAFORO = [
-    { valor: 'No Revisado',     color: '#3B82F6', label: '🔵' },
-    { valor: 'Pendiente',       color: '#EF4444', label: '🔴' },
-    { valor: 'Verificar Campo', color: '#D97706', label: '🟡' },
-    { valor: 'Verificado',      color: '#16A34A', label: '🟢' },
+    { valor: 'No Revisado', color: '#3B82F6', label: '🔵' },
+    { valor: 'Rechazado', color: '#EF4444', label: '🔴' },
+    { valor: 'Pendiente', color: '#D97706', label: '🟡' },
+    { valor: 'Aprobado',  color: '#16A34A', label: '🟢' },
   ]
+  // Mapa para traducir estado plataforma → nombre bloque AutoCAD
+  const BLOQUE_MAP = { 'Aprobado': 'Verificado', 'Pendiente': 'Verificar Campo', 'Rechazado': 'Pendiente' }
 
 async function highlightEnDwg(registro) {
   if (!registro?.id) return
@@ -1287,7 +1289,7 @@ async function highlightEnDwg(registro) {
   }
 
   async function cambiarEstadoDirecto(id, nuevoEstado) {
-    const obligatorio = nuevoEstado === 'Verificar Campo' || nuevoEstado === 'Pendiente'
+    const obligatorio = nuevoEstado === 'Pendiente' || nuevoEstado === 'Rechazado'
     const comentario = await pedirComentario('validacion', obligatorio)
     if (comentario === null) return
     const token = getToken()
@@ -1404,7 +1406,7 @@ async function restaurar(id) {
                 {r.costo_directo != null ? `$${Number(r.costo_directo).toLocaleString('es-CO')}` : '—'}
               </div>
               <div style={{ display:'flex', gap:'4px' }}>
-                {[{valor:'Pendiente',label:'🔴'},{valor:'Verificar Campo',label:'🟡'},{valor:'Verificado',label:'🟢'}].map(op => (
+                {[{valor:'Rechazado',label:'🔴'},{valor:'Pendiente',label:'🟡'},{valor:'Aprobado',label:'🟢'}].map(op => (
                   <button key={op.valor}
                     title={op.valor}
                     onClick={async (e) => { e.stopPropagation(); if (puedeValidar && !esSellado(r)) await cambiarEstadoDirecto(r.id, op.valor) }}

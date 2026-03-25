@@ -1054,17 +1054,17 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
         ).in_("id", body.ids).execute().data
     info_map = {r["id"]: r for r in rows_info}
     es_interventoria = current_user.get("rol_nombre") == "Interventoría"
-    sellar = body.revisado == "Verificado" and es_interventoria
+    sellar = body.revisado == "Aprobado" and es_interventoria
     nombre_usuario = current_user.get("nombre") or current_user.get("email") or "Usuario"
     for rid in body.ids:
         data_upd = {"revisado": body.revisado, "updated_at": "now()"}
         if sellar:
             data_upd["sellado"] = True
-        if body.revisado == "Verificado":
+        if body.revisado == "Aprobado":
             data_upd["validado_por"] = nombre_usuario
             data_upd["validado_en"]  = datetime.utcnow().isoformat()
-        elif body.revisado != "Verificado":
-            # Si cambia de Verificado a otro estado, limpiar
+        elif body.revisado != "Aprobado":
+            # Si cambia de Aprobado a otro estado, limpiar
             data_upd["validado_por"] = None
             data_upd["validado_en"]  = None
         supabase.table("presupuesto").update(data_upd).eq("id", rid).execute()
@@ -1514,9 +1514,16 @@ def exportar_capitulo_excel(contrato_id: int, capitulo: str, current_user=Depend
         raise HTTPException(status_code=500, detail=str(ex))
 
 @app.post("/cad-queue/{contrato_id}/heartbeat")
-def cad_heartbeat(contrato_id: int):
-    """SicoeCAD llama esto cada 3s — sin autenticación para evitar expiración de token."""
+def cad_heartbeat(contrato_id: int, usuario_id: int = 0):
+    """SicoeCAD llama esto cada 3s — sin auth, persiste en Supabase."""
     _dwg_sessions[contrato_id] = time.time()
+    try:
+        supabase.table("cad_sessions").upsert({
+            "contrato_id": contrato_id,
+            "usuario_id": usuario_id,
+            "ultimo_heartbeat": datetime.utcnow().isoformat()
+        }, on_conflict="contrato_id,usuario_id").execute()
+    except: pass
     return {"ok": True}
 
 @app.get("/cad-queue/{contrato_id}/debug")
@@ -1544,10 +1551,25 @@ def cad_debug(contrato_id: int, current_user=Depends(get_current_user)):
 
 @app.get("/cad-queue/{contrato_id}/estado")
 def cad_estado(contrato_id: int, current_user=Depends(get_current_user)):
-    """ClaraCore web consulta si hay DWG enlazado (heartbeat < 10s)."""
+    """ClaraCore web consulta si hay DWG enlazado."""
+    # 1) Verificar memoria primero (más rápido)
     last = _dwg_sessions.get(contrato_id)
-    enlazado = last is not None and (time.time() - last) < 10
-    return {"enlazado": enlazado}
+    if last is not None and (time.time() - last) < 30:
+        return {"enlazado": True}
+    # 2) Fallback Supabase — sobrevive reinicios de Azure
+    try:
+        from datetime import timezone
+        rows = supabase.table("cad_sessions").select("ultimo_heartbeat") \
+            .eq("contrato_id", contrato_id).execute().data
+        if rows:
+            ts = rows[0]["ultimo_heartbeat"].replace("Z", "+00:00")
+            ultimo = datetime.fromisoformat(ts)
+            if ultimo.tzinfo is None:
+                ultimo = ultimo.replace(tzinfo=timezone.utc)
+            diff = (datetime.now(timezone.utc) - ultimo).total_seconds()
+            return {"enlazado": diff < 30}
+    except: pass
+    return {"enlazado": False}
 
 @app.get("/cad-queue/{contrato_id}/pendientes")
 def cad_pendientes(contrato_id: int, current_user=Depends(get_current_user)):
