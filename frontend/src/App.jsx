@@ -1136,8 +1136,27 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setGuardandoBulk(false)
     if (res.ok) {
       if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario, destinatarioComentario)
+      // Patch local — actualizar registros en memoria sin recargar
+      setRegistros(prev => prev.map(r => {
+        if (!ids.includes(r.id)) return r
+        const dim = dims.find(d => d.id === r.id)
+        const ancho   = dim?.ancho   ?? r.ancho   ?? 1
+        const espesor = dim?.espesor ?? r.espesor ?? 1
+        const area    = r.area_long_nod ?? 0
+        const vlr     = precioSeleccionado?.precio_unitario ?? r.vlr_unitario ?? 0
+        const cant    = (ancho > 0 || espesor > 0) ? Math.round(area * ancho * espesor * 10000) / 10000 : area
+        const costo   = Math.round(cant * vlr)
+        return {
+          ...r,
+          ...(editCapitulo && { capitulo: editCapitulo }),
+          ...(editItem && { item: editItem, descripcion: precioSeleccionado?.descripcion ?? r.descripcion }),
+          ...(dim && { ancho, espesor }),
+          cant_total:    cant,
+          costo_directo: costo,
+          vlr_unitario:  vlr,
+        }
+      }))
       setEditCapitulo(''); setEditItem(''); setEditDims({}); setSeleccionados(new Set()); setModalConfirm(false)
-      await recargarCapActual()
     }
   }
 
