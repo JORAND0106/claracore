@@ -1482,12 +1482,32 @@ def cad_heartbeat(contrato_id: int, current_user=Depends(get_current_user)):
     """SicoeCAD llama esto cada 3s para indicar que el DWG está abierto."""
     usuario_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
     _dwg_sessions[(contrato_id, usuario_id)] = time.time()
+    # Persistir en Supabase para sobrevivir reinicios de Azure
+    try:
+        supabase.table("cad_sessions").upsert({
+            "contrato_id": contrato_id,
+            "usuario_id": usuario_id,
+            "ultimo_heartbeat": datetime.utcnow().isoformat()
+        }, on_conflict="contrato_id,usuario_id").execute()
+    except: pass
     return {"ok": True, "ts": time.time()}
 
 @app.get("/cad-queue/{contrato_id}/estado")
 def cad_estado(contrato_id: int, current_user=Depends(get_current_user)):
     """ClaraCore web consulta si hay DWG enlazado."""
     enlazado = _dwg_activo(contrato_id)
+    if not enlazado:
+        # Fallback: consultar Supabase si la memoria se perdió por reinicio
+        try:
+            rows = supabase.table("cad_sessions").select("ultimo_heartbeat") \
+                .eq("contrato_id", contrato_id).execute().data
+            if rows:
+                from datetime import timezone
+                ultimo = datetime.fromisoformat(rows[0]["ultimo_heartbeat"])
+                # Si el último heartbeat fue hace menos de 30 segundos → enlazado
+                diff = (datetime.utcnow() - ultimo).total_seconds()
+                enlazado = diff < 30
+        except: pass
     return {"enlazado": enlazado}
 
 @app.get("/cad-queue/{contrato_id}/pendientes")

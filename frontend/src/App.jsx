@@ -600,8 +600,10 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
     if (!contratoId) return
     const check = async () => {
       try {
+        const tok = getToken()
+        if (!tok) return
         const r = await fetch(`${API}/cad-queue/${contratoId}/estado`, {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: { Authorization: `Bearer ${tok}` }
         })
         if (r.ok) { const d = await r.json(); setDwgEnlazado(d.enlazado) }
       } catch {}
