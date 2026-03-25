@@ -1836,7 +1836,7 @@ async function restaurar(id) {
         const color   = COLORES[modalComentario.tipo] || t.primary
         const valido  = !modalComentario.obligatorio || textoComentario.trim().length > 0
         return (
-          <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center' }}>
+          <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex:4000,display:'flex',alignItems:'center',justifyContent:'center' }}>
             <div style={{ background:t.bgCard,border:`1.5px solid ${color}44`,borderRadius:'16px',padding:'28px',width:'460px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}>
               <div style={{ fontSize:'15px',fontWeight:'700',color,marginBottom:'6px' }}>{TITULOS[modalComentario.tipo]}</div>
               <div style={{ fontSize:'12px',color:t.textMuted,marginBottom:'16px' }}>
@@ -1887,7 +1887,7 @@ async function restaurar(id) {
         const color   = COLORES[modalHilo.tipo] || t.primary
         const fmtFecha = iso => { try { return new Date(iso).toLocaleString('es-CO',{dateStyle:'short',timeStyle:'short'}) } catch { return iso } }
         return (
-          <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center' }}>
+          <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex:4000,display:'flex',alignItems:'center',justifyContent:'center' }}>
             <div style={{ background:t.bgCard,border:`1.5px solid ${color}44`,borderRadius:'16px',padding:'24px',width:'520px',maxWidth:'95vw',maxHeight:'80vh',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}>
               <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px' }}>
                 <div style={{ fontSize:'15px',fontWeight:'700',color }}>💬 {TITULOS[modalHilo.tipo]}</div>
