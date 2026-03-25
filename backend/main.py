@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse
 import io, requests as req_http
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,15 +20,8 @@ _dwg_sessions: dict = {}
 _DWG_TIMEOUT = 30  # segundos — margen para curl.exe
 
 def _dwg_activo(contrato_id: int, usuario_id: int = None) -> bool:
-    """Verifica si hay un DWG enlazado para el contrato, por usuario o cualquier usuario."""
-    if usuario_id and _dwg_sessions.get((contrato_id, usuario_id)):
-        ts = _dwg_sessions[(contrato_id, usuario_id)]
-        return (time.time() - ts) < _DWG_TIMEOUT
-    # Fallback: cualquier usuario del contrato con sesión activa
-    for k, ts in _dwg_sessions.items():
-        if isinstance(k, tuple) and k[0] == contrato_id and (time.time() - ts) < _DWG_TIMEOUT:
-            return True
-    return False
+    last = _dwg_sessions.get(contrato_id)
+    return last is not None and (time.time() - last) < 10
 
 load_dotenv()
 
@@ -829,6 +822,49 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
             data["costo_directo"] = round(cant * vlr, 0)
     data["updated_at"] = "now()"
     supabase.table("presupuesto").update(data).eq("id", item_id).execute()
+
+    # ── Encolar cambio de layer en CAD si cambió ítem o capítulo ──────────────
+    if "capitulo" in data or "item" in data:
+        try:
+            r = supabase.table("presupuesto").select(
+                "contrato_id, ent_handle, txt_handle, layer_ent, layer_txt, color_hex, competencia, capitulo, item, id_pol"
+            ).eq("id", item_id).execute().data
+            if r:
+                row = r[0]
+                nuevo_cap  = data.get("capitulo") or row.get("capitulo") or ""
+                nuevo_item = data.get("item")     or row.get("item")     or ""
+                comp       = row.get("competencia") or ""
+                cap6       = nuevo_cap.replace(".", "")[:5]
+                new_layer_ent = f"{cap6}_{comp}_{nuevo_item}"
+                new_layer_txt = f"txt_{cap6}_{comp}_{nuevo_item}"
+                old_id_pol = row.get("id_pol") or ""
+                if "._" in old_id_pol:
+                    sufijo = old_id_pol[old_id_pol.index("._"):]
+                else:
+                    sufijo = f"._{item_id}"
+                new_id_pol = f"{nuevo_item}{sufijo}"
+                payload_cad = {
+                    "ent_handle": row.get("ent_handle") or "",
+                    "txt_handle": row.get("txt_handle") or "",
+                    "layer_ent":  new_layer_ent,
+                    "layer_txt":  new_layer_txt,
+                    "color_hex":  row.get("color_hex") or "",
+                    "new_text":   new_id_pol,
+                }
+                supabase.table("cad_queue").insert({
+                    "contrato_id": row["contrato_id"],
+                    "tipo": "cambiar_layer",
+                    "estado": "pendiente",
+                    "payload": payload_cad
+                }).execute()
+                # Actualizar layers en presupuesto también
+                supabase.table("presupuesto").update({
+                    "layer_ent": new_layer_ent,
+                    "layer_txt": new_layer_txt,
+                    "id_pol":    new_id_pol,
+                }).eq("id", item_id).execute()
+        except: pass
+
     return {"mensaje": "Registro actualizado"}
 
 @app.put("/presupuesto/item/{item_id}/dar-baja")
@@ -982,7 +1018,7 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
             data["id_pol"] = new_id_pol
         supabase.table("presupuesto").update(data).eq("id", rid).execute()
         # ── Encolar operación CAD si cambió ítem/capítulo ──────────────────
-        if (body.capitulo is not None or body.item is not None) and _dwg_activo(contrato_id):
+        if body.capitulo is not None or body.item is not None:
             nuevo_cap  = body.capitulo or ""
             nuevo_item = body.item     or ""
             comp       = r.get("competencia") or ""
@@ -1478,36 +1514,39 @@ def exportar_capitulo_excel(contrato_id: int, capitulo: str, current_user=Depend
         raise HTTPException(status_code=500, detail=str(ex))
 
 @app.post("/cad-queue/{contrato_id}/heartbeat")
-def cad_heartbeat(contrato_id: int, current_user=Depends(get_current_user)):
-    """SicoeCAD llama esto cada 3s para indicar que el DWG está abierto."""
-    usuario_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
-    _dwg_sessions[(contrato_id, usuario_id)] = time.time()
-    # Persistir en Supabase para sobrevivir reinicios de Azure
+def cad_heartbeat(contrato_id: int):
+    """SicoeCAD llama esto cada 3s — sin autenticación para evitar expiración de token."""
+    _dwg_sessions[contrato_id] = time.time()
+    return {"ok": True}
+
+@app.get("/cad-queue/{contrato_id}/debug")
+def cad_debug(contrato_id: int, current_user=Depends(get_current_user)):
+    """Diagnóstico temporal — muestra estado de sesiones DWG."""
+    sessions_info = []
+    for k, ts in _dwg_sessions.items():
+        sessions_info.append({
+            "key": str(k),
+            "hace_segundos": round(time.time() - ts, 1),
+            "activo": (time.time() - ts) < _DWG_TIMEOUT
+        })
+    db_sessions = []
     try:
-        supabase.table("cad_sessions").upsert({
-            "contrato_id": contrato_id,
-            "usuario_id": usuario_id,
-            "ultimo_heartbeat": datetime.utcnow().isoformat()
-        }, on_conflict="contrato_id,usuario_id").execute()
-    except: pass
-    return {"ok": True, "ts": time.time()}
+        rows = supabase.table("cad_sessions").select("*").eq("contrato_id", contrato_id).execute().data
+        db_sessions = rows
+    except Exception as e:
+        db_sessions = [{"error": str(e)}]
+    return {
+        "contrato_id": contrato_id,
+        "memoria_sessions": sessions_info,
+        "supabase_sessions": db_sessions,
+        "dwg_activo": _dwg_activo(contrato_id)
+    }
 
 @app.get("/cad-queue/{contrato_id}/estado")
 def cad_estado(contrato_id: int, current_user=Depends(get_current_user)):
-    """ClaraCore web consulta si hay DWG enlazado."""
-    enlazado = _dwg_activo(contrato_id)
-    if not enlazado:
-        # Fallback: consultar Supabase si la memoria se perdió por reinicio
-        try:
-            rows = supabase.table("cad_sessions").select("ultimo_heartbeat") \
-                .eq("contrato_id", contrato_id).execute().data
-            if rows:
-                from datetime import timezone
-                ultimo = datetime.fromisoformat(rows[0]["ultimo_heartbeat"])
-                # Si el último heartbeat fue hace menos de 30 segundos → enlazado
-                diff = (datetime.utcnow() - ultimo).total_seconds()
-                enlazado = diff < 30
-        except: pass
+    """ClaraCore web consulta si hay DWG enlazado (heartbeat < 10s)."""
+    last = _dwg_sessions.get(contrato_id)
+    enlazado = last is not None and (time.time() - last) < 10
     return {"enlazado": enlazado}
 
 @app.get("/cad-queue/{contrato_id}/pendientes")
