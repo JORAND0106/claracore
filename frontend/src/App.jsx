@@ -1526,23 +1526,24 @@ async function restaurar(id) {
                 {/* Estrellas resumen */}
                 <div style={{ display:'flex', gap:'16px', alignItems:'center', background:t.bg,
                   borderRadius:'10px', padding:'10px 16px', marginBottom:'14px' }}>
-                  {[{e:estIni,l:'Nodo Inicio'},{e:estFin,l:'Nodo Fin'},{e:estTramo,l:'Tramo'}].map(({e,l}, idx) => (
+                  {[{e:estIni,l:'Nodo Inicio',sub:tramoSelec?.no_inicio},{e:estFin,l:'Nodo Fin',sub:tramoSelec?.no_final},{e:estTramo,l:'Tramo',sub:''}].map(({e,l,sub}, idx) => (
                     <div key={idx} style={{ textAlign:'center' }}>
                       <div style={{ fontSize:'22px', color:colorEstrella(e) }}>{iconEstrella(e)}</div>
                       <div style={{ fontSize:'9px', color:t.textMuted, fontWeight:'700', letterSpacing:'0.4px' }}>{l.toUpperCase()}</div>
+                      {sub && <div style={{ fontSize:'10px', color:t.primary, fontWeight:'800', marginTop:'2px' }}>{sub}</div>}
                     </div>
                   ))}
                 </div>
 
                 {/* Tabs */}
-                <div style={{ display:'flex', gap:'4px', marginBottom:'14px', borderBottom:`1px solid ${t.border}`, paddingBottom:'0' }}>
+                <div style={{ display:'flex', gap:'6px', marginBottom:'14px' }}>
                   {TAB_LABELS.map((label, idx) => (
                     <button key={idx} onClick={() => setTabTramo(idx)}
-                      style={{ padding:'7px 14px', fontSize:'11px', fontWeight:'700', cursor:'pointer',
-                        background:'transparent', border:'none',
-                        borderBottom: tabTramo === idx ? `2.5px solid ${t.primary}` : '2.5px solid transparent',
-                        color: tabTramo === idx ? t.primary : t.textMuted,
-                        borderRadius:'0', transition:'all .15s' }}>
+                      style={{ padding:'8px 16px', fontSize:'11px', fontWeight:'700', cursor:'pointer',
+                        background: tabTramo === idx ? t.primary : t.bg,
+                        border: `1.5px solid ${tabTramo === idx ? t.primary : t.border}`,
+                        color: tabTramo === idx ? '#fff' : t.textMuted,
+                        borderRadius:'20px', transition:'all .15s' }}>
                       {label}
                     </button>
                   ))}
