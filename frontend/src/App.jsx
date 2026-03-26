@@ -698,7 +698,9 @@ useEffect(() => {
   const PPTO_CACHE_TTL  = 5 * 60 * 1000  // 5 min (papelera)
   const CAP_CACHE_TTL   = 10 * 60 * 1000 // 10 min por capítulo
   const [capitulosResumen,  setCapitulosResumen]  = useState([])
-  const [loadingCapitulos,  setLoadingCapitulos]  = useState(false)  
+  const [loadingCapitulos,  setLoadingCapitulos]  = useState(false)
+  const [itemsResumen,      setItemsResumen]      = useState([])
+  const [capActivo,         setCapActivo]         = useState(null)  
 
 async function cargarRegistros(modoPapelera, forzar = false) {
     if (!contratoId) return
@@ -736,9 +738,25 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setLoadingCapitulos(false)
   }
 
-  async function cargarCapituloData(capitulo) {
+async function handleBarClick(barData) {
+    if (!nivelActual || !barData?.name) return
+    if (nivelActual === 'capitulo') {
+      await cargarItemsCapitulo(barData.name)
+      setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
+      return
+    }
+    if (nivelActual === 'item' && capActivo) {
+      await cargarCapituloData(capActivo, barData.name)
+      setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
+      return
+    }
+    setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
+  }
+  
+  async function cargarCapituloData(capitulo, item = null) {
     if (!contratoId) return
-    const cached = _pptoCachePorCap.current[capitulo]
+    const cacheKey = item ? `${capitulo}||${item}` : capitulo
+    const cached = _pptoCachePorCap.current[cacheKey]
     if (cached && (Date.now() - cached.ts) < CAP_CACHE_TTL) {
       setRegistros(prev => {
         const yaIds = new Set(prev.map(r => r.id))
@@ -749,13 +767,12 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     setLoading(true)
     try {
-      const res = await fetch(
-        `${API}/presupuesto/${contratoId}?capitulo=${encodeURIComponent(capitulo)}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      )
+      let url = `${API}/presupuesto/${contratoId}?capitulo=${encodeURIComponent(capitulo)}`
+      if (item) url += `&item=${encodeURIComponent(item)}`
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
       if (res.ok) {
         const data = await res.json()
-        _pptoCachePorCap.current[capitulo] = { data, ts: Date.now() }
+        _pptoCachePorCap.current[cacheKey] = { data, ts: Date.now() }
         setRegistros(prev => {
           const yaIds = new Set(prev.map(r => r.id))
           const nuevos = data.filter(r => !yaIds.has(r.id))
@@ -943,6 +960,15 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }, [registros, drill, busquedaTipo, busquedaV1, busquedaV2, filtroEstado, pkidsSeleccionados])
 
   const chartData = useMemo(() => {
+    if (drill.length === 1 && nivelActual === 'item' && itemsResumen.length > 0) {
+      return itemsResumen.map(c => ({
+        name: c.item,
+        label: `${c.item} · ${(c.descripcion||'').slice(0,38)}`,
+        costo: c.costo_total,
+        count: c.total_registros,
+        cantTotal: c.cant_total, und: c.und, vlrUnit: c.vlr_unitario,
+      })).sort((a,b) => a.name.localeCompare(b.name,'es',{numeric:true}))
+    }
     if (drill.length === 0 && primerNivel === 'capitulo') {
       return capitulosResumen.map(c => ({
         name: c.capitulo,

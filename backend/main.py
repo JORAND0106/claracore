@@ -800,6 +800,33 @@ def get_capitulos_presupuesto(contrato_id: int, current_user=Depends(get_current
     caps = supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
     return [{"capitulo": r["capitulo"], "costo_total": r["presupuesto"], "total_registros": r["registros"]} for r in caps]
 
+@app.get("/presupuesto/{contrato_id}/items-lista")
+def get_items_presupuesto(contrato_id: int, capitulo: str, current_user=Depends(get_current_user)):
+    """Devuelve ítems de un capítulo con costo y cantidad agregados — sin traer registros individuales."""
+    rows = supabase.table("presupuesto").select(
+        "item, descripcion, und, vlr_unitario, cant_total, costo_directo, revisado"
+    ).eq("contrato_id", contrato_id).eq("capitulo", capitulo).eq("dado_de_baja", False).execute().data
+    items = {}
+    for r in rows:
+        it = r.get("item") or ""
+        if it not in items:
+            items[it] = {
+                "item": it,
+                "descripcion": r.get("descripcion") or "",
+                "und": r.get("und") or "",
+                "vlr_unitario": r.get("vlr_unitario") or 0,
+                "cant_total": 0,
+                "costo_total": 0,
+                "total_registros": 0,
+                "revisados": []
+            }
+        items[it]["cant_total"]     += r.get("cant_total") or 0
+        items[it]["costo_total"]    += r.get("costo_directo") or 0
+        items[it]["total_registros"] += 1
+        items[it]["revisados"].append(r.get("revisado") or "No Revisado")
+    result = sorted(items.values(), key=lambda x: x["item"])
+    return result
+
 @app.get("/presupuesto/item/{item_id}")
 def get_presupuesto_item(item_id: int, current_user=Depends(get_current_user)):
     """Trae un único registro de presupuesto por ID."""
