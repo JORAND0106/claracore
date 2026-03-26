@@ -912,7 +912,12 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (pkidsSeleccionados.length > 0) {
         if (!pkidsSeleccionados.includes(r.pk_id)) return false
       }
-
+      if (busquedaTipo === 'tramo') {
+        const v1 = busquedaV1.trim().toLowerCase()
+        const v2 = busquedaV2.trim().toLowerCase()
+        if (v1 && !(r.no_inicio || '').toLowerCase().includes(v1)) return false
+        if (v2 && !(r.no_final  || '').toLowerCase().includes(v2)) return false
+      } else
       // Filtro buscador mixto
       if (busquedaTipo === 'nodo') {
         const v1 = busquedaV1.trim().toLowerCase()
@@ -2351,9 +2356,16 @@ async function restaurar(id) {
                 style={{ background:t.inputBg, border:`1.5px solid ${busquedaTipo?t.primary:t.border}`, borderRadius:'7px', padding:'5px 10px', color:busquedaTipo?t.text:t.textMuted, fontSize:'12px', cursor:'pointer' }}>
                 <option value="">🔍 Buscar por…</option>
                 <option value="nodo">🔵 Nodo</option>
+                <option value="tramo">🛣️ Tramo</option>
                 <option value="abscisa">📍 Abscisa</option>
                 <option value="idpol">🆔 ID Pol</option>
               </select>
+              {busquedaTipo === 'tramo' && (<>
+                <input value={busquedaV1} onChange={e => setBusquedaV1(e.target.value)} placeholder="Nodo Inicio del tramo…"
+                  style={{ background:t.inputBg, border:`1.5px solid ${busquedaV1?t.primary:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'160px' }} />
+                <input value={busquedaV2} onChange={e => setBusquedaV2(e.target.value)} placeholder="Nodo Fin del tramo…"
+                  style={{ background:t.inputBg, border:`1.5px solid ${busquedaV2?t.primary:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'160px' }} />
+              </>)}
               {busquedaTipo === 'nodo' && (<>
                 <input value={busquedaV1} onChange={e => setBusquedaV1(e.target.value)} placeholder="Nodo Inicial…"
                   style={{ background:t.inputBg, border:`1.5px solid ${busquedaV1?t.primary:t.border}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'12px', width:'130px' }} />
