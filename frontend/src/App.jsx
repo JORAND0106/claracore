@@ -4194,16 +4194,32 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   }
 
 async function refrescarDashDrillSilencioso(drill) {
-    // Invalida caché para que el próximo click cargue datos frescos
+    // Refresco en background — NO toca loading ni borra lo que se ve
+    const tok = getToken()
+    const params = new URLSearchParams()
+    drill.forEach(d => params.set(d.campo, d.valor))
     if (drill.length >= 2) {
       const cacheKey = `${drill[0]?.valor}|${drill[1]?.valor}`
-      if (dashTablaCache.current[cacheKey]) dashTablaCache.current[cacheKey].ts = 0
+      fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => { if (data) { dashTablaCache.current[cacheKey] = { data, ts: Date.now() } } })
+        .catch(() => {})
     } else if (drill.length === 1) {
       const cacheKey = drill[0]?.valor || '__todos__'
-      if (dashDrillCache.current[cacheKey]) dashDrillCache.current[cacheKey].ts = 0
+      fetch(`${API_URL}/cobro/${contratoIdDash}/drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data) {
+            const lista = (data.items || data).map(r => ({
+              item: r.item || r.nombre, descripcion: r.descripcion || '',
+              presupuesto: r.presupuesto || 0, cobrado: r.cobrado || 0,
+              cant_ppto: r.cant_ppto || 0, cant_cobro: r.cant_cobro || r.cant_sicoe || 0,
+            }))
+            dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
+          }
+        })
+        .catch(() => {})
     }
-    // Luego recarga normalmente (ya sin caché vigente)
-    await cargarDashDrill(drill)
   }
 
   useEffect(() => { if (contratoIdDash) { setDashDrillPag(0); cargarDashDrill(dashDrill) } }, [contratoIdDash, dashDrill])
