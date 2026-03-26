@@ -1481,7 +1481,13 @@ async function restaurar(id) {
                     ¿CÓMO QUIERES REVISAR ESTE CAPÍTULO?
                   </div>
                   <select value={modoCapSeleccion}
-                    onChange={e => setModoCapSeleccion(e.target.value)}
+                    onChange={async e => {
+                      const val = e.target.value
+                      setModoCapSeleccion(val)
+                      if (val === 'tramos' && modalModoCapitulo) {
+                        await cargarCapituloData(modalModoCapitulo)
+                      }
+                    }}
                     style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`,
                       borderRadius:'9px', padding:'10px 14px', color:t.text, fontSize:'13px', cursor:'pointer' }}>
                     <option value=''>— Selecciona una opción —</option>

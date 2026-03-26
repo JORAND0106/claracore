@@ -803,9 +803,16 @@ def get_capitulos_presupuesto(contrato_id: int, current_user=Depends(get_current
 @app.get("/presupuesto/{contrato_id}/items-lista")
 def get_items_presupuesto(contrato_id: int, capitulo: str, current_user=Depends(get_current_user)):
     """Devuelve ítems de un capítulo con costo y cantidad agregados — sin traer registros individuales."""
-    rows = supabase.table("presupuesto").select(
-        "item, descripcion, und, vlr_unitario, cant_total, costo_directo, revisado"
-    ).eq("contrato_id", contrato_id).eq("capitulo", capitulo).eq("dado_de_baja", False).execute().data
+    rows = []
+    offset = 0
+    while True:
+        batch = supabase.table("presupuesto").select(
+            "item, descripcion, und, vlr_unitario, cant_total, costo_directo, revisado"
+        ).eq("contrato_id", contrato_id).eq("capitulo", capitulo).eq("dado_de_baja", False)\
+         .range(offset, offset + 999).execute().data
+        rows.extend(batch)
+        if len(batch) < 1000: break
+        offset += 1000
     items = {}
     for r in rows:
         it = r.get("item") or ""
