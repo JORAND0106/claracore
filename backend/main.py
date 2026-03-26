@@ -1095,10 +1095,12 @@ def exportar_capitulo_excel(contrato_id: int, capitulo: str, current_user=Depend
             from collections import defaultdict
             import tempfile, os
 
+            from supabase import create_client as _create_client
+            sb = _create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
             def fetch_all(tabla, cols, filtros={}):
                 acc, offset = [], 0
                 while True:
-                    q = supabase.table(tabla).select(cols).eq("contrato_id", contrato_id).eq("capitulo", capitulo)
+                    q = sb.table(tabla).select(cols).eq("contrato_id", contrato_id).eq("capitulo", capitulo)
                     for k, v in filtros.items():
                         q = q.eq(k, v)
                     batch = q.range(offset, offset + 999).execute().data
@@ -1110,7 +1112,7 @@ def exportar_capitulo_excel(contrato_id: int, capitulo: str, current_user=Depend
             ppto_rows  = fetch_all("presupuesto", "*")
             cobro_rows = fetch_all("cobro", "*")
 
-            contrato_info = supabase.table("contratos").select(
+            contrato_info = sb.table("contratos").select(
                 "numero, contratista, interventoria, logo_contratista, logo_interventoria"
             ).eq("id", contrato_id).single().execute().data or {}
 
@@ -1471,7 +1473,8 @@ def exportar_descargar(job_id: str, current_user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Archivo no listo")
     buf = io.BytesIO(job["buf"])
     filename = job.get("filename", "ClaraCore.xlsx")
-    del _export_jobs[job_id]  # liberar memoria
+    # No eliminar aún — permite diagnóstico
+    # del _export_jobs[job_id]
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

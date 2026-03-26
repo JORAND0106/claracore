@@ -4980,11 +4980,16 @@ const [navRegistroId, setNavRegistroId] = useState(null)
                               await new Promise(r => setTimeout(r, 3000))
                               intentos++
                               btn.innerHTML = `⏳ ${intentos * 3}s...`
-                              const st = await fetch(`${API}/exportar/estado/${job_id}`, {
-                                headers: { Authorization: `Bearer ${tok}` }
-                              })
-                              if (!st.ok) break
-                              const { estado } = await st.json()
+                              let estado = ''
+                              try {
+                                const st = await fetch(`${API}/exportar/estado/${job_id}`, {
+                                  headers: { Authorization: `Bearer ${tok}` }
+                                })
+                                if (st.ok) {
+                                  const d = await st.json()
+                                  estado = d.estado || ''
+                                }
+                              } catch { continue }
                               if (estado.startsWith('error')) { alert('Error generando Excel: ' + estado); break }
                               if (estado === 'listo') {
                                 // 3) Descargar
