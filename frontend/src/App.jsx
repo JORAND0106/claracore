@@ -741,7 +741,6 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 async function handleBarClick(barData) {
     if (!nivelActual || !barData?.name) return
     if (nivelActual === 'capitulo') {
-      await cargarItemsCapitulo(barData.name)
       setModoCapSeleccion('')
       setTramoSelec(null)
       setModalModoCapitulo(barData.name)
