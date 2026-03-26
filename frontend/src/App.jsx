@@ -742,7 +742,9 @@ async function handleBarClick(barData) {
     if (!nivelActual || !barData?.name) return
     if (nivelActual === 'capitulo') {
       await cargarItemsCapitulo(barData.name)
-      setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
+      setModoCapSeleccion('')
+      setTramoSelec(null)
+      setModalModoCapitulo(barData.name)
       return
     }
     if (nivelActual === 'item' && capActivo) {
@@ -1483,7 +1485,7 @@ async function restaurar(id) {
                     style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`,
                       borderRadius:'9px', padding:'10px 14px', color:t.text, fontSize:'13px', cursor:'pointer' }}>
                     <option value=''>— Selecciona una opción —</option>
-                    <option value='todos'>Ver todos los registros</option>
+                    <option value='todos'>Ver por ítem</option>
                     <option value='tramos'>Revisar por tramo</option>
                   </select>
                 </div>
@@ -1492,7 +1494,7 @@ async function restaurar(id) {
                 {modoCapSeleccion === 'todos' && (
                   <button onClick={() => {
                     setModalModoCapitulo(null)
-                    setDrill(prev => [...prev, { campo: 'capitulo', valor: modalModoCapitulo }])
+                    setDrill([{ campo: 'capitulo', valor: modalModoCapitulo }])
                   }}
                     style={{ width:'100%', background:t.primary, color:'#fff', border:'none',
                       borderRadius:'9px', padding:'11px', fontSize:'13px', fontWeight:'700', cursor:'pointer', marginBottom:'8px' }}>
