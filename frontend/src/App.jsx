@@ -4962,18 +4962,44 @@ const [navRegistroId, setNavRegistroId] = useState(null)
                           const btn = e.currentTarget
                           if (btn.disabled) return
                           btn.disabled = true; const orig = btn.innerHTML
-                          btn.innerHTML = '⏳'; btn.style.opacity='0.6'; btn.style.cursor='wait'
+                          btn.style.opacity='0.6'; btn.style.cursor='wait'
                           const tok = getToken()
                           const cap = encodeURIComponent(dashDrill[0]?.valor || '')
-                          const url = `${API}/cobro/${usuario.contrato_id}/exportar-capitulo?capitulo=${cap}`
                           try {
-                            const res = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } })
-                            if (!res.ok) { const err = await res.json().catch(()=>({})); alert('Error: '+(err.detail||res.status)); return }
-                            const blob = await res.blob()
-                            const a = document.createElement('a')
-                            a.href = URL.createObjectURL(blob)
-                            a.download = `ClaraCore_${(dashDrill[0]?.valor||'').slice(0,30)}_${new Date().toISOString().slice(0,10)}.xlsx`
-                            a.click(); URL.revokeObjectURL(a.href)
+                            // 1) Iniciar generación en background
+                            btn.innerHTML = '⏳ Generando...'
+                            const res = await fetch(`${API}/cobro/${usuario.contrato_id}/exportar-capitulo?capitulo=${cap}`, {
+                              headers: { Authorization: `Bearer ${tok}` }
+                            })
+                            if (!res.ok) { alert('Error al iniciar exportación'); return }
+                            const { job_id } = await res.json()
+                            console.log('JOB_ID:', job_id)
+                            // 2) Polling hasta que esté listo
+                            let intentos = 0
+                            while (intentos < 60) {
+                              await new Promise(r => setTimeout(r, 3000))
+                              intentos++
+                              btn.innerHTML = `⏳ ${intentos * 3}s...`
+                              const st = await fetch(`${API}/exportar/estado/${job_id}`, {
+                                headers: { Authorization: `Bearer ${tok}` }
+                              })
+                              if (!st.ok) break
+                              const { estado } = await st.json()
+                              if (estado.startsWith('error')) { alert('Error generando Excel: ' + estado); break }
+                              if (estado === 'listo') {
+                                // 3) Descargar
+                                btn.innerHTML = '⬇️ Descargando...'
+                                const dl = await fetch(`${API}/exportar/descargar/${job_id}`, {
+                                  headers: { Authorization: `Bearer ${tok}` }
+                                })
+                                const blob = await dl.blob()
+                                const a = document.createElement('a')
+                                a.href = URL.createObjectURL(blob)
+                                a.download = `ClaraCore_${(dashDrill[0]?.valor||'').slice(0,30)}_${new Date().toISOString().slice(0,10)}.xlsx`
+                                a.click(); URL.revokeObjectURL(a.href)
+                                break
+                              }
+                            }
                           } catch { alert('Error de conexión') }
                           finally { btn.disabled=false; btn.innerHTML=orig; btn.style.opacity='1'; btn.style.cursor='pointer' }
                         }}

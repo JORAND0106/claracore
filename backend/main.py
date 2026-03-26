@@ -12,11 +12,14 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import os
 import time
+import uuid
+import threading
 from datetime import datetime, timedelta
 
 # ── Sesiones DWG activas (en memoria) ─────────────────────────────────────────
-# { contrato_id: timestamp_ultimo_heartbeat }
 _dwg_sessions: dict = {}
+# ── Jobs de exportación Excel en background ────────────────────────────────────
+_export_jobs: dict = {}  # { job_id: { "estado": "procesando"|"listo"|"error", "buf": bytes, "filename": str } }
 _DWG_TIMEOUT = 30  # segundos — margen para curl.exe
 
 def _dwg_activo(contrato_id: int, usuario_id: int = None) -> bool:
@@ -1068,23 +1071,7 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
             data_upd["validado_por"] = None
             data_upd["validado_en"]  = None
         supabase.table("presupuesto").update(data_upd).eq("id", rid).execute()
-        # ── Encolar operación CAD si DWG conectado ─────────────────────────
-        if _dwg_activo(contrato_id):
-            r = info_map.get(rid, {})
-            if r.get("x_label") and r.get("y_label"):
-                supabase.table("cad_queue").insert({
-                    "contrato_id": contrato_id,
-                    "tipo": "insertar_bloque",
-                    "estado": "pendiente",
-                    "payload": {
-                        "presupuesto_id":    rid,
-                        "x_label":           r["x_label"],
-                        "y_label":           r["y_label"],
-                        "estado":            body.revisado,
-                        "layer_txt":         r.get("layer_txt") or "",
-                        "rev_block_handle":  r.get("rev_block_handle") or "",
-                    }
-                }).execute()
+        
     registrar_log(current_user, "VALIDAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id),
         {"contrato_id": contrato_id, "cantidad_registros": len(body.ids), "estado": body.revisado})            
     return {"actualizados": len(body.ids)}
@@ -1095,423 +1082,401 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
 
 @app.get("/cobro/{contrato_id}/exportar-capitulo")
 def exportar_capitulo_excel(contrato_id: int, capitulo: str, current_user=Depends(get_current_user)):
-    try:
-        from openpyxl import Workbook
-        from openpyxl.styles import (Font, PatternFill, Alignment, Border, Side,
-                                      GradientFill)
-        from openpyxl.utils import get_column_letter
-        from openpyxl.drawing.image import Image as XLImage
-        import tempfile, os
+    """Inicia generación del Excel en background y retorna job_id inmediatamente."""
+    job_id = str(uuid.uuid4())
+    _export_jobs[job_id] = {"estado": "procesando", "buf": None, "filename": ""}
 
-        # ── 1. Datos ────────────────────────────────────────────────────────
-        def fetch_all(tabla, cols, filtros={}):
-            acc, offset = [], 0
-            while True:
-                q = supabase.table(tabla).select(cols).eq("contrato_id", contrato_id).eq("capitulo", capitulo)
-                for k, v in filtros.items():
-                    q = q.eq(k, v)
-                batch = q.range(offset, offset + 999).execute().data
-                acc.extend(batch)
-                if len(batch) < 1000: break
-                offset += 1000
-            return acc
+    def generar():
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+            from openpyxl.utils import get_column_letter
+            from openpyxl.drawing.image import Image as XLImage
+            from collections import defaultdict
+            import tempfile, os
 
-        ppto_rows = fetch_all("presupuesto", "*")
-        cobro_rows = fetch_all("cobro", "*")
+            def fetch_all(tabla, cols, filtros={}):
+                acc, offset = [], 0
+                while True:
+                    q = supabase.table(tabla).select(cols).eq("contrato_id", contrato_id).eq("capitulo", capitulo)
+                    for k, v in filtros.items():
+                        q = q.eq(k, v)
+                    batch = q.range(offset, offset + 999).execute().data
+                    acc.extend(batch)
+                    if len(batch) < 1000: break
+                    offset += 1000
+                return acc
 
-        contrato_info = supabase.table("contratos").select(
-            "numero, contratista, interventoria, logo_contratista, logo_interventoria"
-        ).eq("id", contrato_id).single().execute().data or {}
+            ppto_rows  = fetch_all("presupuesto", "*")
+            cobro_rows = fetch_all("cobro", "*")
 
-        now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
-        cap_nombre = capitulo
-        contratista = contrato_info.get("contratista", "")
-        logo_cont_url = contrato_info.get("logo_contratista", "")
-        logo_int_url  = contrato_info.get("logo_interventoria", "")
+            contrato_info = supabase.table("contratos").select(
+                "numero, contratista, interventoria, logo_contratista, logo_interventoria"
+            ).eq("id", contrato_id).single().execute().data or {}
 
-        # ── 2. Helpers de estilo ─────────────────────────────────────────────
-        COLOR_HEADER   = "1A3A5C"
-        COLOR_TITLE    = "0D2137"
-        COLOR_DEVOL    = "C0392B"
-        COLOR_PORCOBR  = "1E8449"
-        COLOR_HIST     = "7D6608"
-        COLOR_TOTAL    = "154360"
-        COLOR_ITEM_H   = "117A65"
-        COLOR_ALT      = "EBF5FB"
-        COLOR_DEVOL_BG = "FADBD8"
-        COLOR_COBR_BG  = "D5F5E3"
+            now_str     = datetime.now().strftime("%d/%m/%Y %H:%M")
+            cap_nombre  = capitulo
+            contratista = contrato_info.get("contratista", "")
+            logo_cont_url = contrato_info.get("logo_contratista", "")
+            logo_int_url  = contrato_info.get("logo_interventoria", "")
 
-        def header_style(ws, row, col, val, bg=COLOR_HEADER, fg="FFFFFF", bold=True, size=10, wrap=False, halign="center"):
-            c = ws.cell(row=row, column=col, value=val)
-            c.font = Font(name="Arial", bold=bold, color=fg, size=size)
-            c.fill = PatternFill("solid", fgColor=bg)
-            c.alignment = Alignment(horizontal=halign, vertical="center", wrap_text=wrap)
-            return c
+            COLOR_HEADER   = "1A3A5C"
+            COLOR_TITLE    = "0D2137"
+            COLOR_DEVOL    = "C0392B"
+            COLOR_PORCOBR  = "1E8449"
+            COLOR_HIST     = "7D6608"
+            COLOR_TOTAL    = "154360"
+            COLOR_ALT      = "EBF5FB"
+            COLOR_DEVOL_BG = "FADBD8"
+            COLOR_COBR_BG  = "D5F5E3"
+            COLOR_APRO     = "1E8449"
+            COLOR_PEND     = "D97706"
+            COLOR_RECH     = "C0392B"
 
-        def data_cell(ws, row, col, val, bold=False, color="000000", bg=None, halign="right", fmt=None):
-            c = ws.cell(row=row, column=col, value=val)
-            c.font = Font(name="Arial", bold=bold, color=color, size=9)
-            if bg:
+            def header_style(ws, row, col, val, bg=COLOR_HEADER, fg="FFFFFF", bold=True, size=10, wrap=False, halign="center"):
+                c = ws.cell(row=row, column=col, value=val)
+                c.font = Font(name="Arial", bold=bold, color=fg, size=size)
                 c.fill = PatternFill("solid", fgColor=bg)
-            c.alignment = Alignment(horizontal=halign, vertical="center")
-            if fmt:
-                c.number_format = fmt
-            return c
+                c.alignment = Alignment(horizontal=halign, vertical="center", wrap_text=wrap)
+                return c
 
-        def thin_border():
-            s = Side(style="thin", color="CCCCCC")
-            return Border(left=s, right=s, top=s, bottom=s)
+            def data_cell(ws, row, col, val, bold=False, color="000000", bg=None, halign="right", fmt=None):
+                c = ws.cell(row=row, column=col, value=val)
+                c.font = Font(name="Arial", bold=bold, color=color, size=9)
+                if bg: c.fill = PatternFill("solid", fgColor=bg)
+                c.alignment = Alignment(horizontal=halign, vertical="center")
+                if fmt: c.number_format = fmt
+                return c
 
-        def apply_border(ws, min_row, max_row, min_col, max_col):
-            for r in range(min_row, max_row + 1):
-                for c in range(min_col, max_col + 1):
-                    ws.cell(r, c).border = thin_border()
+            def thin_border():
+                s = Side(style="thin", color="CCCCCC")
+                return Border(left=s, right=s, top=s, bottom=s)
 
-        def set_col_widths(ws, widths):
-            for i, w in enumerate(widths, 1):
-                ws.column_dimensions[get_column_letter(i)].width = w
+            def apply_border(ws, min_row, max_row, min_col, max_col):
+                for r in range(min_row, max_row + 1):
+                    for c in range(min_col, max_col + 1):
+                        ws.cell(r, c).border = thin_border()
 
-        def add_logo(ws, url, anchor):
-            if not url: return
-            try:
-                import tempfile, os
-                r = req_http.get(url, timeout=4)
-                if r.status_code != 200: return
-                ext = ".png" if "png" in r.headers.get("content-type","") else ".jpg"
-                tmp = tempfile.mktemp(suffix=ext)
-                with open(tmp, "wb") as f: f.write(r.content)
-                img = XLImage(tmp)
-                img.height = 45; img.width = 110
-                ws.add_image(img, anchor)
-                try: os.remove(tmp)
+            def set_col_widths(ws, widths):
+                for i, w in enumerate(widths, 1):
+                    ws.column_dimensions[get_column_letter(i)].width = w
+
+            def add_logo(ws, url, anchor):
+                if not url: return
+                try:
+                    r = req_http.get(url, timeout=4)
+                    if r.status_code != 200: return
+                    ext = ".png" if "png" in r.headers.get("content-type","") else ".jpg"
+                    tmp = tempfile.mktemp(suffix=ext)
+                    with open(tmp, "wb") as f: f.write(r.content)
+                    img = XLImage(tmp)
+                    img.height = 45; img.width = 110
+                    ws.add_image(img, anchor)
+                    try: os.remove(tmp)
+                    except: pass
                 except: pass
-            except: pass
 
-        def titulo_hoja(ws, titulo, subtitulo, ncols):
-            ws.row_dimensions[1].height = 55
-            ws.row_dimensions[2].height = 18
-            ws.row_dimensions[3].height = 8
-            ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
-            c = ws.cell(1, 1, titulo)
-            c.font = Font(name="Arial", bold=True, size=10, color="FFFFFF")
-            c.fill = PatternFill("solid", fgColor=COLOR_TITLE)
-            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
-            c2 = ws.cell(2, 1, subtitulo)
-            c2.font = Font(name="Arial", size=9, color="7F8C8D")
-            c2.alignment = Alignment(horizontal="center")
-            # logos
-            add_logo(ws, logo_int_url,  "A1")
-            add_logo(ws, logo_cont_url, f"{get_column_letter(ncols-1)}1")
-
-        def fmt_cop(n):
-            return n  # guardamos el número, el formato de celda hace el resto
-
-        # ── 3. Agregar por ítem ──────────────────────────────────────────────
-        from collections import defaultdict
-
-        # Presupuesto agregado por ítem
-        p_item = defaultdict(lambda: {"cant": 0, "costo": 0, "desc": "", "vlr_unit": 0})
-        for r in ppto_rows:
-            it = r.get("item", "")
-            p_item[it]["cant"]     += r.get("cant_total") or 0
-            p_item[it]["costo"]    += r.get("costo_directo") or 0
-            if not p_item[it]["desc"]:
-                p_item[it]["desc"]     = r.get("descripcion", "")
-                p_item[it]["vlr_unit"] = r.get("vlr_unitario") or 0
-
-        # Cobro agregado por ítem
-        c_item = defaultdict(lambda: {"cant": 0, "costo": 0, "desc": ""})
-        for r in cobro_rows:
-            it = r.get("item", "")
-            c_item[it]["cant"]  += r.get("cantidad") or r.get("longitud") or 0
-            c_item[it]["costo"] += r.get("costo_directo") or 0
-            if not c_item[it]["desc"]:
-                c_item[it]["desc"] = r.get("descripcion", "")
-
-        # Completar descripción faltante desde cobro cuando ppto no tiene el ítem
-        for it in c_item:
-            if not p_item[it]["desc"] and c_item[it]["desc"]:
-                p_item[it]["desc"] = c_item[it]["desc"]
-
-        all_items = sorted(set(list(p_item.keys()) + list(c_item.keys())))
-
-        def get_estado(p_cant, p_costo, c_cant, c_costo):
-            # Cobro Histórico: sin presupuesto calculado pero con cobro — delta positivo
-            if p_cant == 0 and p_costo == 0 and c_cant > 0:
-                return "Cobro Histórico", round(c_cant, 4), round(c_costo, 0)
-            d_cant  = round(p_cant  - c_cant,  4)
-            d_costo = round(p_costo - c_costo, 0)
-            if d_costo < 0:
-                return "Devolución", d_cant, d_costo
-            return "Por cobrar", d_cant, d_costo
-
-        # ── 4. Workbook ──────────────────────────────────────────────────────
-        wb = Workbook()
-
-        # ══════════════════════════════════════════════════════════════════════
-        # HOJA 1 — Resumen Capítulo
-        # ══════════════════════════════════════════════════════════════════════
-        ws1 = wb.active
-        ws1.title = "Resumen Capítulo"
-        ws1.sheet_view.showGridLines = False
-        NCOLS1 = 9
-
-        titulo_hoja(ws1, f"RESUMEN POR CAPÍTULO — {cap_nombre}",
-                    f"Generado: {now_str}   |   {contratista}", NCOLS1)
-
-        # Cabeceras
-        hdrs1 = ["Ítem","Descripción","Cant. ClaraCore","Costo ClaraCore",
-                 "Cant. Cobrada","Costo Cobrado","Δ Cantidad","Δ Costo","Estado"]
-        ws1.row_dimensions[4].height = 30
-        for i, h in enumerate(hdrs1, 1):
-            header_style(ws1, 4, i, h, wrap=True)
-
-        # Datos
-        row = 5
-        tot_p_cant=tot_p_costo=tot_c_cant=tot_c_costo=tot_d_cant=tot_d_costo = 0
-        for it in all_items:
-            p = p_item[it]; c = c_item[it]
-            estado, d_cant, d_costo = get_estado(p["cant"], p["costo"], c["cant"], c["costo"])
-            alt = (row % 2 == 0)
-            bg = None
-            if estado == "Devolución":    bg = COLOR_DEVOL_BG
-            elif estado == "Cobro Histórico": bg = "FEF9E7"
-            else:                          bg = COLOR_COBR_BG if alt else None
-
-            estado_color = (COLOR_DEVOL if estado=="Devolución"
-                            else COLOR_HIST if estado=="Cobro Histórico"
-                            else COLOR_PORCOBR)
-
-            data_cell(ws1, row, 1, it,          bold=True, halign="left", bg=bg)
-            data_cell(ws1, row, 2, p["desc"],   halign="left", bg=bg)
-            data_cell(ws1, row, 3, round(p["cant"],2),  fmt="#,##0.00", bg=bg)
-            data_cell(ws1, row, 4, round(p["costo"],0), fmt='$#,##0', bg=bg)
-            data_cell(ws1, row, 5, round(c["cant"],2),  fmt="#,##0.00", bg=bg)
-            data_cell(ws1, row, 6, round(c["costo"],0), fmt='$#,##0', bg=bg)
-            dc = data_cell(ws1, row, 7, round(d_cant,2),  fmt="#,##0.00", bg=bg, bold=True)
-            dc.font = Font(name="Arial", bold=True, size=9,
-                           color=COLOR_DEVOL if d_cant < 0 else COLOR_PORCOBR)
-            dd = data_cell(ws1, row, 8, round(d_costo,0), fmt='$#,##0', bg=bg, bold=True)
-            dd.font = Font(name="Arial", bold=True, size=9,
-                           color=COLOR_DEVOL if d_costo < 0 else COLOR_PORCOBR)
-            est_c = data_cell(ws1, row, 9, estado, bold=True, halign="center", bg=bg)
-            est_c.font = Font(name="Arial", bold=True, size=9, color=estado_color)
-
-            tot_p_cant  += p["cant"];  tot_p_costo  += p["costo"]
-            tot_c_cant  += c["cant"];  tot_c_costo  += c["costo"]
-            tot_d_cant  += d_cant;     tot_d_costo  += d_costo
-            row += 1
-
-        # Fila totales
-        ws1.row_dimensions[row].height = 22
-        for col in range(1, NCOLS1+1):
-            c_cell = ws1.cell(row, col)
-            c_cell.fill = PatternFill("solid", fgColor=COLOR_TOTAL)
-            c_cell.font = Font(name="Arial", bold=True, color="FFFFFF", size=10)
-            c_cell.alignment = Alignment(horizontal="center", vertical="center")
-        ws1.cell(row, 1, "TOTALES CAPÍTULO")
-        ws1.cell(row, 3, round(tot_p_cant, 2)).number_format  = "#,##0.00"
-        ws1.cell(row, 4, round(tot_p_costo,0)).number_format  = '$#,##0'
-        ws1.cell(row, 5, round(tot_c_cant, 2)).number_format  = "#,##0.00"
-        ws1.cell(row, 6, round(tot_c_costo,0)).number_format  = '$#,##0'
-        ws1.cell(row, 7, round(tot_d_cant, 2)).number_format  = "#,##0.00"
-        ws1.cell(row, 8, round(tot_d_costo,0)).number_format  = '$#,##0'
-
-        apply_border(ws1, 4, row, 1, NCOLS1)
-        set_col_widths(ws1, [10, 42, 14, 16, 14, 16, 12, 16, 14])
-        ws1.freeze_panes = "A5"
-
-        # ══════════════════════════════════════════════════════════════════════
-        # HOJAS POR ÍTEM — análisis por PK_ID
-        # ══════════════════════════════════════════════════════════════════════
-        for it in all_items:
-            p = p_item[it]; c = c_item[it]
-            estado, _, _ = get_estado(p["cant"], p["costo"], c["cant"], c["costo"])
-            if estado == "Cobro Histórico": continue  # excluir
-
-            # Agregar por pk_id
-            p_pk = defaultdict(lambda: {"cant":0,"costo":0})
-            c_pk = defaultdict(lambda: {"cant":0,"costo":0})
-            for r in ppto_rows:
-                if r.get("item") != it: continue
-                pk = str(r.get("pk_id") or r.get("id_pol") or "S/N")
-                p_pk[pk]["cant"]  += r.get("cant_total") or 0
-                p_pk[pk]["costo"] += r.get("costo_directo") or 0
-            for r in cobro_rows:
-                if r.get("item") != it: continue
-                pk = str(r.get("pk_id") or "S/N")
-                c_pk[pk]["cant"]  += r.get("longitud") or r.get("cantidad") or 0
-                c_pk[pk]["costo"] += r.get("costo_directo") or 0
-
-            all_pks = sorted(set(list(p_pk.keys()) + list(c_pk.keys())))
-
-            # Separar por cobrar y devolución
-            porcobrar = [(pk, p_pk[pk], c_pk[pk]) for pk in all_pks
-                         if round(p_pk[pk]["costo"] - c_pk[pk]["costo"], 0) >= 0
-                         and not (p_pk[pk]["cant"]==0 and c_pk[pk]["cant"]>0)]
-            devolucion= [(pk, p_pk[pk], c_pk[pk]) for pk in all_pks
-                         if round(p_pk[pk]["costo"] - c_pk[pk]["costo"], 0) < 0
-                         and not (p_pk[pk]["cant"]==0 and c_pk[pk]["cant"]>0)]
-
-            sname = f"Item {it}"[:31]
-            ws = wb.create_sheet(sname)
-            ws.sheet_view.showGridLines = False
-            NCOLS = 7
-
-            desc_it = p_item[it]["desc"] or c_item[it].get("desc", "")
-            titulo_hoja(ws, f"ANÁLISIS DE COBRO — {it}  |  {desc_it}",
-                        f"{cap_nombre}   |   Generado: {now_str}", NCOLS)
-
-            # Resumen ítem (fila 4)
-            ws.row_dimensions[4].height = 20
-            sum_hdrs = ["Cant. ClaraCore","Costo ClaraCore","Cant. Cobrada",
-                        "Costo Cobrado","Δ Cantidad","Δ Costo"]
-            
-            for i, h in enumerate(sum_hdrs, 1):
-                header_style(ws, 4, i, h, bg=COLOR_ITEM_H)
-            ws.row_dimensions[5].height = 18
-            d_cant_it = round(p["cant"] - c["cant"], 2)
-            d_cost_it = round(p["costo"]- c["costo"], 0)
-            vals = [round(p["cant"],2), round(p["costo"],0),
-                    round(c["cant"],2), round(c["costo"],0),
-                    d_cant_it, d_cost_it]
-            fmts = ["#,##0.00","$#,##0","#,##0.00","$#,##0","#,##0.00","$#,##0"]
-            for i,(v,f) in enumerate(zip(vals,fmts),1):
-                cc = ws.cell(5, i, v); cc.number_format = f
-                cc.font = Font(name="Arial", bold=True, size=10,
-                               color=COLOR_DEVOL if v < 0 else COLOR_PORCOBR)
-                cc.alignment = Alignment(horizontal="center", vertical="center")
-
-            def write_pk_section(ws, start_row, titulo_sec, datos, bg_sec):
-                ws.row_dimensions[start_row].height = 20
-                ws.merge_cells(start_row=start_row, start_column=1,
-                               end_row=start_row, end_column=NCOLS)
-                c = ws.cell(start_row, 1, titulo_sec)
+            def titulo_hoja(ws, titulo, subtitulo, ncols):
+                ws.row_dimensions[1].height = 55
+                ws.row_dimensions[2].height = 18
+                ws.row_dimensions[3].height = 8
+                ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
+                c = ws.cell(1, 1, titulo)
                 c.font = Font(name="Arial", bold=True, size=10, color="FFFFFF")
-                c.fill = PatternFill("solid", fgColor=
-                    COLOR_DEVOL if "DEVOLUCIÓN" in titulo_sec else COLOR_PORCOBR)
-                c.alignment = Alignment(horizontal="left", vertical="center")
-                start_row += 1
+                c.fill = PatternFill("solid", fgColor=COLOR_TITLE)
+                c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
+                c2 = ws.cell(2, 1, subtitulo)
+                c2.font = Font(name="Arial", size=9, color="7F8C8D")
+                c2.alignment = Alignment(horizontal="center")
+                add_logo(ws, logo_int_url,  "A1")
+                add_logo(ws, logo_cont_url, f"{get_column_letter(ncols-1)}1")
 
-                # Headers
-                hdrs = ["PK_Id","Cant.ClaraCore","Costo ClaraCore",
-                        "Cant.Cobrada","Costo Cobrado","Δ Cant","Δ Costo"]
-                for i, h in enumerate(hdrs, 1):
-                    header_style(ws, start_row, i, h, bg=COLOR_HEADER)
-                start_row += 1
+            def color_revisado(estado):
+                if estado == "Aprobado":  return COLOR_APRO
+                if estado == "Pendiente": return COLOR_PEND
+                if estado == "Rechazado": return COLOR_RECH
+                return "888888"
 
-                tot_pc=tot_cc=tot_pco=tot_cco=tot_dc=tot_dco = 0
-                for pk, pp, cp in datos:
-                    dc = round(pp["cant"]  - cp["cant"],  2)
-                    dco= round(pp["costo"] - cp["costo"], 0)
-                    alt = (start_row % 2 == 0)
-                    bg = bg_sec if alt else None
-                    data_cell(ws, start_row, 1, pk,             halign="left",   bg=bg, bold=True)
-                    data_cell(ws, start_row, 2, round(pp["cant"],2),  fmt="#,##0.00", bg=bg)
-                    data_cell(ws, start_row, 3, round(pp["costo"],0), fmt='$#,##0',   bg=bg)
-                    data_cell(ws, start_row, 4, round(cp["cant"],2),  fmt="#,##0.00", bg=bg)
-                    data_cell(ws, start_row, 5, round(cp["costo"],0), fmt='$#,##0',   bg=bg)
-                    cc2 = data_cell(ws, start_row, 6, dc,  fmt="#,##0.00", bg=bg, bold=True)
-                    cc2.font = Font(name="Arial",bold=True,size=9,
-                                    color=COLOR_DEVOL if dc<0 else COLOR_PORCOBR)
-                    cc3 = data_cell(ws, start_row, 7, dco, fmt='$#,##0', bg=bg, bold=True)
-                    cc3.font = Font(name="Arial",bold=True,size=9,
-                                    color=COLOR_DEVOL if dco<0 else COLOR_PORCOBR)
-                    tot_pc+=pp["cant"]; tot_cc+=cp["cant"]
-                    tot_pco+=pp["costo"]; tot_cco+=cp["costo"]
-                    tot_dc+=dc; tot_dco+=dco
+            # ── Agregar por ítem ──────────────────────────────────────────────
+            p_item = defaultdict(lambda: {"cant":0,"costo":0,"desc":"","vlr_unit":0,"revisados":[]})
+            for r in ppto_rows:
+                it = r.get("item","")
+                p_item[it]["cant"]  += r.get("cant_total") or 0
+                p_item[it]["costo"] += r.get("costo_directo") or 0
+                if not p_item[it]["desc"]:
+                    p_item[it]["desc"]     = r.get("descripcion","")
+                    p_item[it]["vlr_unit"] = r.get("vlr_unitario") or 0
+                rev = r.get("revisado") or "No Revisado"
+                p_item[it]["revisados"].append(rev)
+
+            c_item = defaultdict(lambda: {"cant":0,"costo":0,"desc":""})
+            for r in cobro_rows:
+                it = r.get("item","")
+                c_item[it]["cant"]  += r.get("cantidad") or r.get("longitud") or 0
+                c_item[it]["costo"] += r.get("costo_directo") or 0
+                if not c_item[it]["desc"]:
+                    c_item[it]["desc"] = r.get("descripcion","")
+
+            for it in c_item:
+                if not p_item[it]["desc"] and c_item[it]["desc"]:
+                    p_item[it]["desc"] = c_item[it]["desc"]
+
+            all_items = sorted(set(list(p_item.keys()) + list(c_item.keys())))
+
+            def resumen_revisado(lista):
+                """Devuelve el estado más crítico de la lista."""
+                if not lista: return "Sin revisión"
+                if "Rechazado" in lista:  return "Rechazado"
+                if "Pendiente" in lista:  return "Pendiente"
+                if all(r == "Aprobado" for r in lista): return "Aprobado"
+                return "Parcial"
+
+            def get_estado(p_cant, p_costo, c_cant, c_costo):
+                if p_cant == 0 and p_costo == 0 and c_cant > 0:
+                    return "Cobro Histórico", round(c_cant,4), round(c_costo,0)
+                d_cant  = round(p_cant  - c_cant,  4)
+                d_costo = round(p_costo - c_costo, 0)
+                if d_costo < 0: return "Devolución", d_cant, d_costo
+                return "Por cobrar", d_cant, d_costo
+
+            wb = Workbook()
+
+            # ── Hoja 1: Resumen Capítulo ──────────────────────────────────────
+            ws1 = wb.active
+            ws1.title = "Resumen Capítulo"
+            ws1.sheet_view.showGridLines = False
+            NCOLS1 = 10
+            titulo_hoja(ws1, f"RESUMEN POR CAPÍTULO — {cap_nombre}", f"Generado: {now_str}   |   {contratista}", NCOLS1)
+            hdrs1 = ["Ítem","Descripción","Cant. ClaraCore","Costo ClaraCore","Cant. Cobrada","Costo Cobrado","Δ Cantidad","Δ Costo","Estado","Revisado"]
+            ws1.row_dimensions[4].height = 30
+            for i, h in enumerate(hdrs1, 1):
+                header_style(ws1, 4, i, h, wrap=True)
+
+            row = 5
+            tot_p_cant=tot_p_costo=tot_c_cant=tot_c_costo=tot_d_cant=tot_d_costo = 0
+            for it in all_items:
+                p = p_item[it]; c = c_item[it]
+                estado, d_cant, d_costo = get_estado(p["cant"], p["costo"], c["cant"], c["costo"])
+                rev_resumen = resumen_revisado(p["revisados"])
+                alt = (row % 2 == 0)
+                bg = (COLOR_DEVOL_BG if estado=="Devolución" else "FEF9E7" if estado=="Cobro Histórico" else COLOR_COBR_BG if alt else None)
+                estado_color = COLOR_DEVOL if estado=="Devolución" else COLOR_HIST if estado=="Cobro Histórico" else COLOR_PORCOBR
+                data_cell(ws1, row, 1, it, bold=True, halign="left", bg=bg)
+                data_cell(ws1, row, 2, p["desc"], halign="left", bg=bg)
+                data_cell(ws1, row, 3, round(p["cant"],2), fmt="#,##0.00", bg=bg)
+                data_cell(ws1, row, 4, round(p["costo"],0), fmt='$#,##0', bg=bg)
+                data_cell(ws1, row, 5, round(c["cant"],2), fmt="#,##0.00", bg=bg)
+                data_cell(ws1, row, 6, round(c["costo"],0), fmt='$#,##0', bg=bg)
+                dc_c = data_cell(ws1, row, 7, round(d_cant,2), fmt="#,##0.00", bg=bg, bold=True)
+                dc_c.font = Font(name="Arial", bold=True, size=9, color=COLOR_DEVOL if d_cant<0 else COLOR_PORCOBR)
+                dd_c = data_cell(ws1, row, 8, round(d_costo,0), fmt='$#,##0', bg=bg, bold=True)
+                dd_c.font = Font(name="Arial", bold=True, size=9, color=COLOR_DEVOL if d_costo<0 else COLOR_PORCOBR)
+                est_c = data_cell(ws1, row, 9, estado, bold=True, halign="center", bg=bg)
+                est_c.font = Font(name="Arial", bold=True, size=9, color=estado_color)
+                rev_c = data_cell(ws1, row, 10, rev_resumen, bold=True, halign="center", bg=bg)
+                rev_c.font = Font(name="Arial", bold=True, size=9, color=color_revisado(rev_resumen))
+                tot_p_cant+=p["cant"]; tot_p_costo+=p["costo"]
+                tot_c_cant+=c["cant"]; tot_c_costo+=c["costo"]
+                tot_d_cant+=d_cant;    tot_d_costo+=d_costo
+                row += 1
+
+            ws1.row_dimensions[row].height = 22
+            for col in range(1, NCOLS1+1):
+                ws1.cell(row,col).fill = PatternFill("solid", fgColor=COLOR_TOTAL)
+                ws1.cell(row,col).font = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+                ws1.cell(row,col).alignment = Alignment(horizontal="center", vertical="center")
+            ws1.cell(row,1,"TOTALES CAPÍTULO")
+            ws1.cell(row,3,round(tot_p_cant,2)).number_format  = "#,##0.00"
+            ws1.cell(row,4,round(tot_p_costo,0)).number_format = '$#,##0'
+            ws1.cell(row,5,round(tot_c_cant,2)).number_format  = "#,##0.00"
+            ws1.cell(row,6,round(tot_c_costo,0)).number_format = '$#,##0'
+            ws1.cell(row,7,round(tot_d_cant,2)).number_format  = "#,##0.00"
+            ws1.cell(row,8,round(tot_d_costo,0)).number_format = '$#,##0'
+            apply_border(ws1, 4, row, 1, NCOLS1)
+            set_col_widths(ws1, [10,42,14,16,14,16,12,16,14,14])
+            ws1.freeze_panes = "A5"
+
+            # ── Hojas por ítem ────────────────────────────────────────────────
+            for it in all_items:
+                p = p_item[it]; c = c_item[it]
+                estado, _, _ = get_estado(p["cant"], p["costo"], c["cant"], c["costo"])
+                if estado == "Cobro Histórico": continue
+
+                # Agregar por pk_id incluyendo revisado
+                p_pk = defaultdict(lambda: {"cant":0,"costo":0,"revisados":[]})
+                c_pk = defaultdict(lambda: {"cant":0,"costo":0})
+                for r in ppto_rows:
+                    if r.get("item") != it: continue
+                    pk = str(r.get("pk_id") or r.get("id_pol") or "S/N")
+                    p_pk[pk]["cant"]  += r.get("cant_total") or 0
+                    p_pk[pk]["costo"] += r.get("costo_directo") or 0
+                    p_pk[pk]["revisados"].append(r.get("revisado") or "No Revisado")
+                for r in cobro_rows:
+                    if r.get("item") != it: continue
+                    pk = str(r.get("pk_id") or "S/N")
+                    c_pk[pk]["cant"]  += r.get("longitud") or r.get("cantidad") or 0
+                    c_pk[pk]["costo"] += r.get("costo_directo") or 0
+
+                all_pks = sorted(set(list(p_pk.keys()) + list(c_pk.keys())))
+                porcobrar = [(pk,p_pk[pk],c_pk[pk]) for pk in all_pks
+                             if round(p_pk[pk]["costo"]-c_pk[pk]["costo"],0)>=0
+                             and not(p_pk[pk]["cant"]==0 and c_pk[pk]["cant"]>0)]
+                devolucion= [(pk,p_pk[pk],c_pk[pk]) for pk in all_pks
+                             if round(p_pk[pk]["costo"]-c_pk[pk]["costo"],0)<0
+                             and not(p_pk[pk]["cant"]==0 and c_pk[pk]["cant"]>0)]
+
+                sname = f"Item {it}"[:31]
+                ws = wb.create_sheet(sname)
+                ws.sheet_view.showGridLines = False
+                NCOLS = 8
+                desc_it = p_item[it]["desc"] or c_item[it].get("desc","")
+                titulo_hoja(ws, f"ANÁLISIS DE COBRO — {it}  |  {desc_it}", f"{cap_nombre}   |   Generado: {now_str}", NCOLS)
+
+                ws.row_dimensions[4].height = 20
+                sum_hdrs = ["Cant. ClaraCore","Costo ClaraCore","Cant. Cobrada","Costo Cobrado","Δ Cantidad","Δ Costo"]
+                for i, h in enumerate(sum_hdrs, 1):
+                    header_style(ws, 4, i, h, bg="1A5276", size=9)
+                vals = [round(p["cant"],2), round(p["costo"],0), round(c["cant"],2), round(c["costo"],0),
+                        round(p["cant"]-c["cant"],2), round(p["costo"]-c["costo"],0)]
+                fmts = ["#,##0.00","$#,##0","#,##0.00","$#,##0","#,##0.00","$#,##0"]
+                for i,(v,f) in enumerate(zip(vals,fmts),1):
+                    cc = ws.cell(5,i,v); cc.number_format=f
+                    cc.font = Font(name="Arial",bold=True,size=10,color=COLOR_DEVOL if v<0 else COLOR_PORCOBR)
+                    cc.alignment = Alignment(horizontal="center",vertical="center")
+
+                def write_pk_section(ws, start_row, titulo_sec, datos, bg_sec):
+                    ws.row_dimensions[start_row].height = 20
+                    ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=NCOLS)
+                    c = ws.cell(start_row,1,titulo_sec)
+                    c.font = Font(name="Arial",bold=True,size=10,color="FFFFFF")
+                    c.fill = PatternFill("solid", fgColor=COLOR_DEVOL if "DEVOLUCIÓN" in titulo_sec else COLOR_PORCOBR)
+                    c.alignment = Alignment(horizontal="left",vertical="center")
                     start_row += 1
+                    hdrs = ["PK_Id","Cant.ClaraCore","Costo ClaraCore","Cant.Cobrada","Costo Cobrado","Δ Cant","Δ Costo","Revisado"]
+                    for i, h in enumerate(hdrs, 1):
+                        header_style(ws, start_row, i, h, bg=COLOR_HEADER)
+                    start_row += 1
+                    tot_pc=tot_cc=tot_pco=tot_cco=tot_dc=tot_dco = 0
+                    for pk, pp, cp in datos:
+                        dc = round(pp["cant"]-cp["cant"],2)
+                        dco= round(pp["costo"]-cp["costo"],0)
+                        alt = (start_row % 2 == 0)
+                        bg = bg_sec if alt else None
+                        rev = resumen_revisado(pp.get("revisados",[]))
+                        data_cell(ws, start_row, 1, pk, halign="left", bg=bg, bold=True)
+                        data_cell(ws, start_row, 2, round(pp["cant"],2), fmt="#,##0.00", bg=bg)
+                        data_cell(ws, start_row, 3, round(pp["costo"],0), fmt='$#,##0', bg=bg)
+                        data_cell(ws, start_row, 4, round(cp["cant"],2), fmt="#,##0.00", bg=bg)
+                        data_cell(ws, start_row, 5, round(cp["costo"],0), fmt='$#,##0', bg=bg)
+                        cc2 = data_cell(ws, start_row, 6, dc, fmt="#,##0.00", bg=bg, bold=True)
+                        cc2.font = Font(name="Arial",bold=True,size=9,color=COLOR_DEVOL if dc<0 else COLOR_PORCOBR)
+                        cc3 = data_cell(ws, start_row, 7, dco, fmt='$#,##0', bg=bg, bold=True)
+                        cc3.font = Font(name="Arial",bold=True,size=9,color=COLOR_DEVOL if dco<0 else COLOR_PORCOBR)
+                        rev_c = data_cell(ws, start_row, 8, rev, halign="center", bg=bg, bold=True)
+                        rev_c.font = Font(name="Arial",bold=True,size=9,color=color_revisado(rev))
+                        tot_pc+=pp["cant"]; tot_cc+=cp["cant"]
+                        tot_pco+=pp["costo"]; tot_cco+=cp["costo"]
+                        tot_dc+=dc; tot_dco+=dco
+                        start_row += 1
+                    for col in range(1, NCOLS+1):
+                        ws.cell(start_row,col).fill = PatternFill("solid",fgColor="2C3E50")
+                        ws.cell(start_row,col).font = Font(name="Arial",bold=True,color="FFFFFF",size=9)
+                        ws.cell(start_row,col).alignment = Alignment(horizontal="center",vertical="center")
+                    ws.cell(start_row,1,"SUBTOTAL")
+                    ws.cell(start_row,2,round(tot_pc,2)).number_format  = "#,##0.00"
+                    ws.cell(start_row,3,round(tot_pco,0)).number_format = '$#,##0'
+                    ws.cell(start_row,4,round(tot_cc,2)).number_format  = "#,##0.00"
+                    ws.cell(start_row,5,round(tot_cco,0)).number_format = '$#,##0'
+                    ws.cell(start_row,6,round(tot_dc,2)).number_format  = "#,##0.00"
+                    ws.cell(start_row,7,round(tot_dco,0)).number_format = '$#,##0'
+                    return start_row + 2
 
-                # Subtotal
-                for col in range(1, NCOLS+1):
-                    ws.cell(start_row,col).fill = PatternFill("solid", fgColor="2C3E50")
-                    ws.cell(start_row,col).font = Font(name="Arial",bold=True,color="FFFFFF",size=9)
-                    ws.cell(start_row,col).alignment = Alignment(horizontal="center",vertical="center")
-                ws.cell(start_row,1,"SUBTOTAL")
-                ws.cell(start_row,2,round(tot_pc,2)).number_format  = "#,##0.00"
-                ws.cell(start_row,3,round(tot_pco,0)).number_format = '$#,##0'
-                ws.cell(start_row,4,round(tot_cc,2)).number_format  = "#,##0.00"
-                ws.cell(start_row,5,round(tot_cco,0)).number_format = '$#,##0'
-                ws.cell(start_row,6,round(tot_dc,2)).number_format  = "#,##0.00"
-                ws.cell(start_row,7,round(tot_dco,0)).number_format = '$#,##0'
-                return start_row + 2
+                cur_row = 7
+                if porcobrar:
+                    total_pc = sum(pp["costo"]-cp["costo"] for _,pp,cp in porcobrar)
+                    cur_row = write_pk_section(ws, cur_row, f"POR COBRAR | Total: +${round(total_pc):,}", porcobrar, "D5F5E3")
+                if devolucion:
+                    total_dv = sum(pp["costo"]-cp["costo"] for _,pp,cp in devolucion)
+                    cur_row = write_pk_section(ws, cur_row, f"DEVOLUCIÓN | Total: -${abs(round(total_dv)):,}", devolucion, "FADBD8")
 
-            cur_row = 7
-            if porcobrar:
-                total_pc = sum(pp["costo"]-cp["costo"] for _,pp,cp in porcobrar)
-                cur_row = write_pk_section(ws, cur_row,
-                    f"POR COBRAR | Total: +${round(total_pc):,}", porcobrar, "D5F5E3")
-            if devolucion:
-                total_dv = sum(pp["costo"]-cp["costo"] for _,pp,cp in devolucion)
-                cur_row = write_pk_section(ws, cur_row,
-                    f"DEVOLUCIÓN | Total: -${abs(round(total_dv)):,}", devolucion, "FADBD8")
+                apply_border(ws, 4, cur_row-2, 1, NCOLS)
+                set_col_widths(ws, [14,14,16,14,16,12,16,14])
+                ws.freeze_panes = "A8"
 
-            apply_border(ws, 4, cur_row-2, 1, NCOLS)
-            set_col_widths(ws, [14,14,16,14,16,12,16])
-            ws.freeze_panes = "A8"
+            # ── Hoja Base Cobro ───────────────────────────────────────────────
+            ws_c = wb.create_sheet("Base Cobro")
+            if cobro_rows:
+                cols_c = list(cobro_rows[0].keys())
+                hdr_font = Font(name="Arial", bold=True, color="FFFFFF", size=8)
+                hdr_fill = PatternFill("solid", fgColor=COLOR_HEADER)
+                hdr_aln  = Alignment(horizontal="center", vertical="center")
+                ws_c.append([str(h).upper() for h in cols_c])
+                for ci in range(1, len(cols_c)+1):
+                    ws_c.cell(1,ci).font=hdr_font; ws_c.cell(1,ci).fill=hdr_fill; ws_c.cell(1,ci).alignment=hdr_aln
+                for row_d in cobro_rows:
+                    ws_c.append([row_d.get(col) for col in cols_c])
+                ws_c.freeze_panes = "A2"
+                for i in range(1, len(cols_c)+1):
+                    ws_c.column_dimensions[get_column_letter(i)].width = 13
 
-        # ══════════════════════════════════════════════════════════════════════
-        # HOJA — Base Cobro (write_only para velocidad)
-        # ══════════════════════════════════════════════════════════════════════
-        ws_c = wb.create_sheet("Base Cobro")
-        if cobro_rows:
-            from openpyxl.styles import NamedStyle
-            cols_c = list(cobro_rows[0].keys())
-            hdr_font = Font(name="Arial", bold=True, color="FFFFFF", size=8)
-            hdr_fill = PatternFill("solid", fgColor=COLOR_HEADER)
-            hdr_aln  = Alignment(horizontal="center", vertical="center")
-            # Header
-            hdr_row = []
-            for h in cols_c:
-                c = ws_c.cell(row=1, column=1)  # dummy — usamos append
-                hdr_row.append(str(h).upper())
-            ws_c.append(hdr_row)
-            for ci, h in enumerate(cols_c, 1):
-                cell = ws_c.cell(1, ci)
-                cell.font = hdr_font; cell.fill = hdr_fill; cell.alignment = hdr_aln
-            # Datos sin formato alternado — mucho más rápido
-            for row_d in cobro_rows:
-                ws_c.append([row_d.get(col) for col in cols_c])
-            ws_c.freeze_panes = "A2"
-            for i in range(1, len(cols_c)+1):
-                ws_c.column_dimensions[get_column_letter(i)].width = 13
+            # ── Hoja ClaraCore Data ───────────────────────────────────────────
+            ws_p = wb.create_sheet("ClaraCore Data")
+            if ppto_rows:
+                cols_p = list(ppto_rows[0].keys())
+                ws_p.append([str(h).upper() for h in cols_p])
+                for ci in range(1, len(cols_p)+1):
+                    cell = ws_p.cell(1,ci)
+                    cell.font = Font(name="Arial", bold=True, color="FFFFFF", size=8)
+                    cell.fill = PatternFill("solid", fgColor=COLOR_TITLE)
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                for row_d in ppto_rows:
+                    ws_p.append([row_d.get(col) for col in cols_p])
+                ws_p.freeze_panes = "A2"
+                for i in range(1, len(cols_p)+1):
+                    ws_p.column_dimensions[get_column_letter(i)].width = 13
 
-        # ══════════════════════════════════════════════════════════════════════
-        # HOJA — ClaraCore Data (Presupuesto)
-        # ══════════════════════════════════════════════════════════════════════
-        ws_p = wb.create_sheet("ClaraCore Data")
-        if ppto_rows:
-            cols_p = list(ppto_rows[0].keys())
-            ws_p.append([str(h).upper() for h in cols_p])
-            for ci, h in enumerate(cols_p, 1):
-                cell = ws_p.cell(1, ci)
-                cell.font = Font(name="Arial", bold=True, color="FFFFFF", size=8)
-                cell.fill = PatternFill("solid", fgColor=COLOR_TITLE)
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-            for row_d in ppto_rows:
-                ws_p.append([row_d.get(col) for col in cols_p])
-            ws_p.freeze_panes = "A2"
-            for i in range(1, len(cols_p)+1):
-                ws_p.column_dimensions[get_column_letter(i)].width = 13
+            # ── Guardar en memoria ────────────────────────────────────────────
+            buf = io.BytesIO()
+            wb.save(buf)
+            buf.seek(0)
+            import urllib.parse
+            cap_safe = urllib.parse.quote(capitulo[:40])
+            filename = f"ClaraCore_{cap_safe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            _export_jobs[job_id]["buf"]      = buf.getvalue()
+            _export_jobs[job_id]["filename"] = filename
+            _export_jobs[job_id]["estado"]   = "listo"
 
-        # ── 5. Stream ────────────────────────────────────────────────────────
-        buf = io.BytesIO()
-        wb.save(buf)
-        buf.seek(0)
+        except Exception as ex:
+            _export_jobs[job_id]["estado"] = f"error: {str(ex)}"
 
-        import urllib.parse
-        cap_safe = urllib.parse.quote(capitulo[:40])
-        filename  = f"ClaraCore_{cap_safe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    threading.Thread(target=generar, daemon=True).start()
+    return {"job_id": job_id}
 
-        return StreamingResponse(
-            buf,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-        )
 
-    except Exception as ex:
-        raise HTTPException(status_code=500, detail=str(ex))
+@app.get("/exportar/estado/{job_id}")
+def exportar_estado(job_id: str, current_user=Depends(get_current_user)):
+    """Frontend consulta si el Excel ya está listo."""
+    job = _export_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+    return {"estado": job["estado"], "filename": job.get("filename","")}
+
+
+@app.get("/exportar/descargar/{job_id}")
+def exportar_descargar(job_id: str, current_user=Depends(get_current_user)):
+    """Descarga el Excel generado en background."""
+    job = _export_jobs.get(job_id)
+    if not job or job["estado"] != "listo":
+        raise HTTPException(status_code=404, detail="Archivo no listo")
+    buf = io.BytesIO(job["buf"])
+    filename = job.get("filename", "ClaraCore.xlsx")
+    del _export_jobs[job_id]  # liberar memoria
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 @app.post("/cad-queue/{contrato_id}/heartbeat")
 def cad_heartbeat(contrato_id: int, usuario_id: int = 0):
