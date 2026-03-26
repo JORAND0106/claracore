@@ -4106,7 +4106,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiPpto(d) }).catch(() => {})
       fetch(`${API_URL}/cobro/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiCobro(d) }).catch(() => {})
-      if (dashDrillRef.current.length > 0) refrescarDashDrillSilencioso(dashDrillRef.current)
+      if (dashDrillRef.current.length > 0 && !popupCapitulo) refrescarDashDrillSilencioso(dashDrillRef.current)
       fetch(`${API_URL}/cad-queue/${contratoIdDash}/estado`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setDwgEnlazadoDash(d.enlazado) }).catch(() => {})
       const params2 = new URLSearchParams()
