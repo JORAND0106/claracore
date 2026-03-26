@@ -587,6 +587,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   // ── Revisor de Tramos ─────────────────────────────────────────────────────
   const [modalModoCapitulo, setModalModoCapitulo] = useState(null) // nombre del capítulo pendiente
   const [modoCapSeleccion,  setModoCapSeleccion]  = useState('')   // '' | 'todos' | 'tramos'
+  const [busquedaTramo,     setBusquedaTramo]     = useState('')
   const [tramoSelec,        setTramoSelec]        = useState(null) // {no_inicio, no_final, label}
   const [tabTramo,          setTabTramo]          = useState(0)    // 0=INFO 1=NODO INI 2=NODO FIN 3=TRAMO
   // ── Comentarios ──────────────────────────────────────────────────────────
@@ -1521,8 +1522,20 @@ async function restaurar(id) {
                         No hay tramos definidos en este capítulo
                       </div>
                     )}
-                    <div style={{ display:'flex', flexDirection:'column', gap:'6px', maxHeight:'320px', overflowY:'auto' }}>
-                      {tramosUnicos.map((tr, i) => {
+                    <input
+                      value={busquedaTramo}
+                      onChange={e => setBusquedaTramo(e.target.value)}
+                      placeholder="🔍 Buscar nodo..."
+                      style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`,
+                        borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'12px',
+                        boxSizing:'border-box', marginBottom:'8px', outline:'none' }}
+                    />
+                    <div style={{ display:'flex', flexDirection:'column', gap:'6px', maxHeight:'280px', overflowY:'auto' }}>
+                      {tramosUnicos.filter(tr =>
+                        !busquedaTramo.trim() ||
+                        tr.no_inicio?.toLowerCase().includes(busquedaTramo.toLowerCase()) ||
+                        tr.no_final?.toLowerCase().includes(busquedaTramo.toLowerCase())
+                      ).map((tr, i) => {
                         const rIni   = capRegs.filter(r => r.no_inicio === tr.no_inicio && r.no_final === tr.no_inicio)
                         const rFin   = capRegs.filter(r => r.no_inicio === tr.no_final  && r.no_final === tr.no_final)
                         const rTr    = capRegs.filter(r => r.no_inicio === tr.no_inicio && r.no_final === tr.no_final)
