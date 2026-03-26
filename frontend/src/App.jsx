@@ -737,22 +737,6 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     } catch {}
     setLoadingCapitulos(false)
   }
-
-async function handleBarClick(barData) {
-    if (!nivelActual || !barData?.name) return
-    if (nivelActual === 'capitulo') {
-      setModoCapSeleccion('')
-      setTramoSelec(null)
-      setModalModoCapitulo(barData.name)
-      return
-    }
-    if (nivelActual === 'item' && capActivo) {
-      await cargarCapituloData(capActivo, barData.name)
-      setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
-      return
-    }
-    setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
-  }
   
   async function cargarCapituloData(capitulo, item = null) {
     if (!contratoId) return
@@ -1021,11 +1005,15 @@ async function handleBarClick(barData) {
   async function handleBarClick(barData) {
     if (!nivelActual || !barData?.name) return
     if (nivelActual === 'capitulo') {
-      await cargarCapituloData(barData.name)
       setModoCapSeleccion('')
       setTramoSelec(null)
       setTabTramo(0)
       setModalModoCapitulo(barData.name)
+      return
+    }
+    if (nivelActual === 'item' && capActivo) {
+      await cargarCapituloData(capActivo, barData.name)
+      setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
       return
     }
     setDrill(prev => [...prev, { campo: nivelActual, valor: barData.name }])
