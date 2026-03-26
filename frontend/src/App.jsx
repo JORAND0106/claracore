@@ -1002,6 +1002,19 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     registrosOrdenados.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA)
   , [registrosOrdenados, pagina])
 
+  async function cargarItemsCapitulo(capitulo) {
+    if (!contratoId) return
+    setItemsResumen([])
+    setCapActivo(capitulo)
+    try {
+      const res = await fetch(
+        `${API}/presupuesto/${contratoId}/items-lista?capitulo=${encodeURIComponent(capitulo)}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      )
+      if (res.ok) setItemsResumen(await res.json())
+    } catch {}
+  }
+
   async function handleBarClick(barData) {
     if (!nivelActual || !barData?.name) return
     if (nivelActual === 'capitulo') {
