@@ -1479,13 +1479,15 @@ async function restaurar(id) {
 
                 {/* Botón Todos */}
                 {modoCapSeleccion === 'todos' && (
-                  <button onClick={() => {
+                  <button onClick={async () => {
+                    const cap = modalModoCapitulo
                     setModalModoCapitulo(null)
-                    setDrill([{ campo: 'capitulo', valor: modalModoCapitulo }])
+                    await cargarItemsCapitulo(cap)
+                    setDrill([{ campo: 'capitulo', valor: cap }])
                   }}
                     style={{ width:'100%', background:t.primary, color:'#fff', border:'none',
                       borderRadius:'9px', padding:'11px', fontSize:'13px', fontWeight:'700', cursor:'pointer', marginBottom:'8px' }}>
-                    Ver todos los registros →
+                    Ver ítems →
                   </button>
                 )}
 
