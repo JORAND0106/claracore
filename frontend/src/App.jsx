@@ -1267,7 +1267,13 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setSeleccionados(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   }
   function toggleTodos() {
-    setSeleccionados(prev => prev.size === registrosFiltrados.length ? new Set() : new Set(registrosFiltrados.map(r => r.id)))
+    const idsPagina = new Set(registrosPagina.map(r => r.id))
+    const todosPaginaSeleccionados = registrosPagina.every(r => seleccionados.has(r.id))
+    if (todosPaginaSeleccionados) {
+      setSeleccionados(prev => { const n = new Set(prev); idsPagina.forEach(id => n.delete(id)); return n })
+    } else {
+      setSeleccionados(prev => { const n = new Set(prev); idsPagina.forEach(id => n.add(id)); return n })
+    }
   }
   useEffect(() => setPagina(1), [registrosFiltrados.length])
   useEffect(() => {
