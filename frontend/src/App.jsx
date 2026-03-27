@@ -1647,6 +1647,31 @@ async function restaurar(id) {
                 {/* TAB 1: NODO INICIO */}
                 {tabTramo === 1 && (
                   <div>
+                    {regsNodoIni.length > 0 && puedeValidar && (
+                      <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', padding:'6px 10px', background:t.bg, borderRadius:'8px' }}>
+                        <input type="checkbox"
+                          checked={regsNodoIni.every(r => seleccionados.has(r.id))}
+                          onChange={() => {
+                            const todos = regsNodoIni.every(r => seleccionados.has(r.id))
+                            setSeleccionados(prev => { const n = new Set(prev); regsNodoIni.forEach(r => todos ? n.delete(r.id) : n.add(r.id)); return n })
+                          }}
+                          style={{ width:'14px', height:'14px', cursor:'pointer' }} />
+                        <span style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
+                          {regsNodoIni.every(r => seleccionados.has(r.id)) ? 'Deseleccionar todos' : `Seleccionar todos (${regsNodoIni.length})`}
+                        </span>
+                        {regsNodoIni.some(r => seleccionados.has(r.id)) && (
+                          <div style={{ marginLeft:'auto', display:'flex', gap:'4px' }}>
+                            {SEMAFORO.map(s => (
+                              <button key={s.valor} onClick={() => ejecutarBulkEstado(s.valor)}
+                                title={s.valor}
+                                style={{ background:t.bgCard, border:`1.5px solid ${s.color}`, borderRadius:'6px', padding:'3px 8px', fontSize:'11px', cursor:'pointer', color:s.color, fontWeight:'700' }}>
+                                {s.label} {s.valor}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <div style={{ display:'flex', gap:'8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, padding:'0 10px', marginBottom:'6px', letterSpacing:'0.4px' }}>
                       <span style={{flex:2}}>ÍTEM</span><span style={{flex:3}}>DESCRIPCIÓN</span>
                       <span style={{flex:1,textAlign:'right'}}>DIMS</span><span style={{flex:1,textAlign:'right'}}>CANT.</span>
@@ -1662,6 +1687,31 @@ async function restaurar(id) {
                 {/* TAB 2: NODO FIN */}
                 {tabTramo === 2 && (
                   <div>
+                    {regsNodoFin.length > 0 && puedeValidar && (
+                      <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', padding:'6px 10px', background:t.bg, borderRadius:'8px' }}>
+                        <input type="checkbox"
+                          checked={regsNodoFin.every(r => seleccionados.has(r.id))}
+                          onChange={() => {
+                            const todos = regsNodoFin.every(r => seleccionados.has(r.id))
+                            setSeleccionados(prev => { const n = new Set(prev); regsNodoFin.forEach(r => todos ? n.delete(r.id) : n.add(r.id)); return n })
+                          }}
+                          style={{ width:'14px', height:'14px', cursor:'pointer' }} />
+                        <span style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
+                          {regsNodoFin.every(r => seleccionados.has(r.id)) ? 'Deseleccionar todos' : `Seleccionar todos (${regsNodoFin.length})`}
+                        </span>
+                        {regsNodoFin.some(r => seleccionados.has(r.id)) && (
+                          <div style={{ marginLeft:'auto', display:'flex', gap:'4px' }}>
+                            {SEMAFORO.map(s => (
+                              <button key={s.valor} onClick={() => ejecutarBulkEstado(s.valor)}
+                                title={s.valor}
+                                style={{ background:t.bgCard, border:`1.5px solid ${s.color}`, borderRadius:'6px', padding:'3px 8px', fontSize:'11px', cursor:'pointer', color:s.color, fontWeight:'700' }}>
+                                {s.label} {s.valor}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <div style={{ display:'flex', gap:'8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, padding:'0 10px', marginBottom:'6px', letterSpacing:'0.4px' }}>
                       <span style={{flex:2}}>ÍTEM</span><span style={{flex:3}}>DESCRIPCIÓN</span>
                       <span style={{flex:1,textAlign:'right'}}>DIMS</span><span style={{flex:1,textAlign:'right'}}>CANT.</span>
@@ -1677,6 +1727,31 @@ async function restaurar(id) {
                 {/* TAB 3: TRAMO */}
                 {tabTramo === 3 && (
                   <div>
+                    {regsTramo.length > 0 && puedeValidar && (
+                      <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', padding:'6px 10px', background:t.bg, borderRadius:'8px' }}>
+                        <input type="checkbox"
+                          checked={regsTramo.every(r => seleccionados.has(r.id))}
+                          onChange={() => {
+                            const todos = regsTramo.every(r => seleccionados.has(r.id))
+                            setSeleccionados(prev => { const n = new Set(prev); regsTramo.forEach(r => todos ? n.delete(r.id) : n.add(r.id)); return n })
+                          }}
+                          style={{ width:'14px', height:'14px', cursor:'pointer' }} />
+                        <span style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
+                          {regsTramo.every(r => seleccionados.has(r.id)) ? 'Deseleccionar todos' : `Seleccionar todos (${regsTramo.length})`}
+                        </span>
+                        {regsTramo.some(r => seleccionados.has(r.id)) && (
+                          <div style={{ marginLeft:'auto', display:'flex', gap:'4px' }}>
+                            {SEMAFORO.map(s => (
+                              <button key={s.valor} onClick={() => ejecutarBulkEstado(s.valor)}
+                                title={s.valor}
+                                style={{ background:t.bgCard, border:`1.5px solid ${s.color}`, borderRadius:'6px', padding:'3px 8px', fontSize:'11px', cursor:'pointer', color:s.color, fontWeight:'700' }}>
+                                {s.label} {s.valor}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     <div style={{ display:'flex', gap:'8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, padding:'0 10px', marginBottom:'6px', letterSpacing:'0.4px' }}>
                       <span style={{flex:2}}>ÍTEM</span><span style={{flex:3}}>DESCRIPCIÓN</span>
                       <span style={{flex:1,textAlign:'right'}}>DIMS</span><span style={{flex:1,textAlign:'right'}}>CANT.</span>

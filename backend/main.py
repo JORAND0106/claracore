@@ -811,7 +811,7 @@ def get_items_presupuesto(contrato_id: int, capitulo: str, current_user=Depends(
         ).eq("contrato_id", contrato_id).eq("capitulo", capitulo).eq("dado_de_baja", False)\
          .range(offset, offset + 999).execute().data
         rows.extend(batch)
-        if len(batch) < 1000: break
+        if len(batch) < 1000: break 
         offset += 1000
     items = {}
     for r in rows:
@@ -1135,9 +1135,21 @@ def exportar_capitulo_excel(contrato_id: int, capitulo: str, current_user=Depend
                 acc, offset = [], 0
                 while True:
                     q = sb.table(tabla).select(cols).eq("contrato_id", contrato_id).eq("capitulo", capitulo)
+                    if tabla == "presupuesto":
+                        q = q.eq("dado_de_baja", False)
                     for k, v in filtros.items():
                         q = q.eq(k, v)
-                    batch = q.range(offset, offset + 999).execute().data
+                    # Reintento ante 502 de Supabase NANO
+                    batch = []
+                    for intento in range(3):
+                        try:
+                            batch = q.range(offset, offset + 999).execute().data
+                            break
+                        except Exception:
+                            if intento < 2:
+                                import time as _t; _t.sleep(2)
+                            else:
+                                raise
                     acc.extend(batch)
                     if len(batch) < 1000: break
                     offset += 1000
@@ -1282,22 +1294,28 @@ def exportar_capitulo_excel(contrato_id: int, capitulo: str, current_user=Depend
             ws1 = wb.active
             ws1.title = "Resumen Capítulo"
             ws1.sheet_view.showGridLines = False
-            NCOLS1 = 10
+            NCOLS1 = 13
             titulo_hoja(ws1, f"RESUMEN POR CAPÍTULO — {cap_nombre}", f"Generado: {now_str}   |   {contratista}", NCOLS1)
-            hdrs1 = ["Ítem","Descripción","Cant. ClaraCore","Costo ClaraCore","Cant. Cobrada","Costo Cobrado","Δ Cantidad","Δ Costo","Estado","Revisado"]
+            hdrs1 = ["Ítem","Descripción","Cant. ClaraCore","Costo ClaraCore","Cant. Cobrada","Costo Cobrado","Δ Cantidad","Δ Costo","Estado","✅ Aprobado","🟡 Pendiente","🔴 Rechazado","⬜ No Revisado"]
             ws1.row_dimensions[4].height = 30
             for i, h in enumerate(hdrs1, 1):
                 header_style(ws1, 4, i, h, wrap=True)
 
             row = 5
             tot_p_cant=tot_p_costo=tot_c_cant=tot_c_costo=tot_d_cant=tot_d_costo = 0
+            tot_apro=tot_pend=tot_rech=tot_norev = 0
             for it in all_items:
                 p = p_item[it]; c = c_item[it]
                 estado, d_cant, d_costo = get_estado(p["cant"], p["costo"], c["cant"], c["costo"])
-                rev_resumen = resumen_revisado(p["revisados"])
+                if estado == "Cobro Histórico": continue
+                # Calcular costos por estado de revisión
+                apro = sum(r.get("costo_directo") or 0 for r in ppto_rows if r.get("item")==it and (r.get("revisado") or "No Revisado")=="Aprobado")
+                pend = sum(r.get("costo_directo") or 0 for r in ppto_rows if r.get("item")==it and (r.get("revisado") or "No Revisado")=="Pendiente")
+                rech = sum(r.get("costo_directo") or 0 for r in ppto_rows if r.get("item")==it and (r.get("revisado") or "No Revisado")=="Rechazado")
+                norev= sum(r.get("costo_directo") or 0 for r in ppto_rows if r.get("item")==it and (r.get("revisado") or "No Revisado") not in ("Aprobado","Pendiente","Rechazado"))
                 alt = (row % 2 == 0)
-                bg = (COLOR_DEVOL_BG if estado=="Devolución" else "FEF9E7" if estado=="Cobro Histórico" else COLOR_COBR_BG if alt else None)
-                estado_color = COLOR_DEVOL if estado=="Devolución" else COLOR_HIST if estado=="Cobro Histórico" else COLOR_PORCOBR
+                bg = (COLOR_DEVOL_BG if estado=="Devolución" else COLOR_COBR_BG if alt else None)
+                estado_color = COLOR_DEVOL if estado=="Devolución" else COLOR_PORCOBR
                 data_cell(ws1, row, 1, it, bold=True, halign="left", bg=bg)
                 data_cell(ws1, row, 2, p["desc"], halign="left", bg=bg)
                 data_cell(ws1, row, 3, round(p["cant"],2), fmt="#,##0.00", bg=bg)
@@ -1310,11 +1328,18 @@ def exportar_capitulo_excel(contrato_id: int, capitulo: str, current_user=Depend
                 dd_c.font = Font(name="Arial", bold=True, size=9, color=COLOR_DEVOL if d_costo<0 else COLOR_PORCOBR)
                 est_c = data_cell(ws1, row, 9, estado, bold=True, halign="center", bg=bg)
                 est_c.font = Font(name="Arial", bold=True, size=9, color=estado_color)
-                rev_c = data_cell(ws1, row, 10, rev_resumen, bold=True, halign="center", bg=bg)
-                rev_c.font = Font(name="Arial", bold=True, size=9, color=color_revisado(rev_resumen))
+                ac = data_cell(ws1, row, 10, round(apro,0), fmt='$#,##0', bg="D5F5E3" if apro>0 else bg)
+                ac.font = Font(name="Arial", size=9, color=COLOR_APRO if apro>0 else "888888")
+                pc = data_cell(ws1, row, 11, round(pend,0), fmt='$#,##0', bg="FEF9E7" if pend>0 else bg)
+                pc.font = Font(name="Arial", size=9, color=COLOR_PEND if pend>0 else "888888")
+                rc = data_cell(ws1, row, 12, round(rech,0), fmt='$#,##0', bg=COLOR_DEVOL_BG if rech>0 else bg)
+                rc.font = Font(name="Arial", size=9, color=COLOR_RECH if rech>0 else "888888")
+                nc = data_cell(ws1, row, 13, round(norev,0), fmt='$#,##0', bg=bg)
+                nc.font = Font(name="Arial", size=9, color="888888")
                 tot_p_cant+=p["cant"]; tot_p_costo+=p["costo"]
                 tot_c_cant+=c["cant"]; tot_c_costo+=c["costo"]
                 tot_d_cant+=d_cant;    tot_d_costo+=d_costo
+                tot_apro+=apro; tot_pend+=pend; tot_rech+=rech; tot_norev+=norev
                 row += 1
 
             ws1.row_dimensions[row].height = 22
@@ -1329,8 +1354,12 @@ def exportar_capitulo_excel(contrato_id: int, capitulo: str, current_user=Depend
             ws1.cell(row,6,round(tot_c_costo,0)).number_format = '$#,##0'
             ws1.cell(row,7,round(tot_d_cant,2)).number_format  = "#,##0.00"
             ws1.cell(row,8,round(tot_d_costo,0)).number_format = '$#,##0'
+            ws1.cell(row,10,round(tot_apro,0)).number_format   = '$#,##0'
+            ws1.cell(row,11,round(tot_pend,0)).number_format   = '$#,##0'
+            ws1.cell(row,12,round(tot_rech,0)).number_format   = '$#,##0'
+            ws1.cell(row,13,round(tot_norev,0)).number_format  = '$#,##0'
             apply_border(ws1, 4, row, 1, NCOLS1)
-            set_col_widths(ws1, [10,42,14,16,14,16,12,16,14,14])
+            set_col_widths(ws1, [10,42,14,16,14,16,12,16,14,14,14,14,14])
             ws1.freeze_panes = "A5"
 
             # ── Hojas por ítem ────────────────────────────────────────────────
@@ -1765,8 +1794,16 @@ def drill_comparativo(contrato_id: int, capitulo: str = None, item: str = None, 
             offset += 1000
         return acc
 
-    cobros = fetch_filtered("cobro",       "capitulo, item, pk_id, costo_directo, cantidad, longitud, descripcion", capitulo, item)
-    ppto   = fetch_filtered("presupuesto", "capitulo, item, pk_id, costo_directo, cant_total, descripcion",          capitulo, item)
+    cobros = fetch_filtered("cobro", "capitulo, item, pk_id, costo_directo, cantidad, longitud, descripcion", capitulo, item)
+    ppto_q = supabase.table("presupuesto").select("capitulo, item, pk_id, costo_directo, cant_total, descripcion").eq("contrato_id", contrato_id).eq("dado_de_baja", False)
+    if capitulo: ppto_q = ppto_q.eq("capitulo", capitulo)
+    if item:     ppto_q = ppto_q.eq("item", item)
+    ppto = []; offset = 0
+    while True:
+        batch = ppto_q.range(offset, offset + 999).execute().data
+        ppto.extend(batch)
+        if len(batch) < 1000: break
+        offset += 1000
 
     campo = "pk_id" if (capitulo and item) else ("item" if capitulo else "capitulo")
 
