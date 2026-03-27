@@ -1204,6 +1204,26 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
   }
 
+async function ejecutarBulkEstadoDirecto(estado) {
+    if (!estado || seleccionados.size === 0) return
+    const obligatorio = estado === 'Pendiente' || estado === 'Rechazado'
+    const comentario = await pedirComentario('validacion', obligatorio)
+    if (comentario === null) return
+    setGuardandoBulk(true)
+    const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ids: [...seleccionados], revisado: estado })
+    })
+    setGuardandoBulk(false)
+    if (res.ok) {
+      if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario, destinatarioComentario)
+      const idsSelec = [...seleccionados]
+      setBulkEstado(''); setSeleccionados(new Set())
+      lanzarClaraLinkEstado(idsSelec, estado)
+      setRegistros(prev => prev.map(r => idsSelec.includes(r.id) ? { ...r, revisado: estado } : r))
+    }
+  }
+
   async function ejecutarBulkEstado() {
     if (!bulkEstado || seleccionados.size === 0) return
     const obligatorio = bulkEstado === 'Pendiente' || bulkEstado === 'Rechazado'
@@ -1662,7 +1682,7 @@ async function restaurar(id) {
                         {regsNodoIni.some(r => seleccionados.has(r.id)) && (
                           <div style={{ marginLeft:'auto', display:'flex', gap:'4px' }}>
                             {SEMAFORO.map(s => (
-                              <button key={s.valor} onClick={() => ejecutarBulkEstado(s.valor)}
+                              <button key={s.valor} onClick={() => ejecutarBulkEstadoDirecto(s.valor)}
                                 title={s.valor}
                                 style={{ background:t.bgCard, border:`1.5px solid ${s.color}`, borderRadius:'6px', padding:'3px 8px', fontSize:'11px', cursor:'pointer', color:s.color, fontWeight:'700' }}>
                                 {s.label} {s.valor}
