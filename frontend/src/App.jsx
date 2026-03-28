@@ -1487,7 +1487,7 @@ async function restaurar(id) {
 
         return (
           <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.7)',zIndex:3500,display:'flex',alignItems:'center',justifyContent:'center' }}
-            onClick={() => { setModalModoCapitulo(null); setTramoSelec(null) }}>
+            onClick={(e) => { if (modalComentario) return; setModalModoCapitulo(null); setTramoSelec(null) }}>
             <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px',
               padding:'24px', width: tramoSelec ? '820px' : '440px', maxWidth:'96vw',
               maxHeight:'88vh', overflowY:'auto', boxShadow:'0 24px 64px rgba(0,0,0,0.5)',
@@ -1991,7 +1991,7 @@ async function restaurar(id) {
         const color   = COLORES[modalComentario.tipo] || t.primary
         const valido  = !modalComentario.obligatorio || textoComentario.trim().length > 0
         return (
-          <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex:4000,display:'flex',alignItems:'center',justifyContent:'center' }}>
+          <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex:6000,display:'flex',alignItems:'center',justifyContent:'center' }}>
             <div style={{ background:t.bgCard,border:`1.5px solid ${color}44`,borderRadius:'16px',padding:'28px',width:'460px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}>
               <div style={{ fontSize:'15px',fontWeight:'700',color,marginBottom:'6px' }}>{TITULOS[modalComentario.tipo]}</div>
               <div style={{ fontSize:'12px',color:t.textMuted,marginBottom:'16px' }}>
