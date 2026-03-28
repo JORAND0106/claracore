@@ -588,6 +588,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [modalModoCapitulo, setModalModoCapitulo] = useState(null) // nombre del capítulo pendiente
   const [modoCapSeleccion,  setModoCapSeleccion]  = useState('')   // '' | 'todos' | 'tramos'
   const [busquedaTramo,     setBusquedaTramo]     = useState('')
+  const [selTramoTab,       setSelTramoTab]       = useState({ ini: new Set(), fin: new Set(), tramo: new Set() })
   const [tramoSelec,        setTramoSelec]        = useState(null) // {no_inicio, no_final, label}
   const [tabTramo,          setTabTramo]          = useState(0)    // 0=INFO 1=NODO INI 2=NODO FIN 3=TRAMO
   // ── Comentarios ──────────────────────────────────────────────────────────
@@ -1664,125 +1665,120 @@ async function restaurar(id) {
                   )
                 })()}
 
-                {/* TAB 1: NODO INICIO */}
-                {tabTramo === 1 && (
-                  <div>
-                    {regsNodoIni.length > 0 && puedeValidar && (
-                      <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', padding:'6px 10px', background:t.bg, borderRadius:'8px' }}>
-                        <input type="checkbox"
-                          checked={regsNodoIni.every(r => seleccionados.has(r.id))}
-                          onChange={() => {
-                            const todos = regsNodoIni.every(r => seleccionados.has(r.id))
-                            setSeleccionados(prev => { const n = new Set(prev); regsNodoIni.forEach(r => todos ? n.delete(r.id) : n.add(r.id)); return n })
-                          }}
-                          style={{ width:'14px', height:'14px', cursor:'pointer' }} />
-                        <span style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
-                          {regsNodoIni.every(r => seleccionados.has(r.id)) ? 'Deseleccionar todos' : `Seleccionar todos (${regsNodoIni.length})`}
-                        </span>
-                        {regsNodoIni.some(r => seleccionados.has(r.id)) && (
-                          <div style={{ marginLeft:'auto', display:'flex', gap:'4px' }}>
-                            {SEMAFORO.map(s => (
-                              <button key={s.valor} onClick={() => ejecutarBulkEstadoDirecto(s.valor)}
-                                title={s.valor}
-                                style={{ background:t.bgCard, border:`1.5px solid ${s.color}`, borderRadius:'6px', padding:'3px 8px', fontSize:'11px', cursor:'pointer', color:s.color, fontWeight:'700' }}>
-                                {s.label} {s.valor}
-                              </button>
-                            ))}
-                          </div>
-                        )}
+                {/* Helper local para tabs de tramo */}
+                {[
+                  { tab: 1, regs: regsNodoIni, key: 'ini', msg: 'NODO EXISTENTE SIN REPORTE DE CANTIDADES' },
+                  { tab: 2, regs: regsNodoFin, key: 'fin', msg: 'NODO EXISTENTE SIN REPORTE DE CANTIDADES' },
+                  { tab: 3, regs: regsTramo,   key: 'tramo', msg: 'SIN CANTIDADES REPORTADAS PARA ESTE TRAMO' },
+                ].filter(t => t.tab === tabTramo).map(({ regs, key, msg }) => {
+                  const selTab = selTramoTab[key]
+                  const todosSelec = regs.length > 0 && regs.every(r => selTab.has(r.id))
+                  const algunoSelec = regs.some(r => selTab.has(r.id))
+                  const toggleTab = () => {
+                    setSelTramoTab(prev => {
+                      const n = new Set(prev[key])
+                      if (todosSelec) regs.forEach(r => n.delete(r.id))
+                      else regs.forEach(r => n.add(r.id))
+                      return { ...prev, [key]: n }
+                    })
+                  }
+                  const validarTab = async (estado) => {
+                    const ids = [...selTab]
+                    if (!ids.length) return
+                    const obligatorio = estado === 'Pendiente' || estado === 'Rechazado'
+                    const comentario = await pedirComentario('validacion', obligatorio)
+                    if (comentario === null) return
+                    const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
+                      method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                      body: JSON.stringify({ ids, revisado: estado })
+                    })
+                    if (res.ok) {
+                      if (comentario.trim()) await crearComentarios(ids, 'validacion', comentario, destinatarioComentario)
+                      lanzarClaraLinkEstado(ids, estado)
+                      setRegistros(prev => prev.map(r => ids.includes(r.id) ? { ...r, revisado: estado } : r))
+                      setSelTramoTab(prev => ({ ...prev, [key]: new Set() }))
+                    }
+                  }
+                  return (
+                    <div key={key}>
+                      {regs.length > 0 && puedeValidar && (
+                        <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', padding:'6px 10px', background:t.bg, borderRadius:'8px' }}>
+                          <input type="checkbox" checked={todosSelec} onChange={toggleTab}
+                            style={{ width:'14px', height:'14px', cursor:'pointer' }} />
+                          <span style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
+                            {todosSelec ? 'Deseleccionar todos' : `Seleccionar todos (${regs.length})`}
+                          </span>
+                          {algunoSelec && (
+                            <div style={{ marginLeft:'auto', display:'flex', gap:'4px' }}>
+                              {SEMAFORO.map(s => (
+                                <button key={s.valor} onClick={() => validarTab(s.valor)}
+                                  style={{ background:t.bgCard, border:`1.5px solid ${s.color}`, borderRadius:'6px', padding:'3px 8px', fontSize:'11px', cursor:'pointer', color:s.color, fontWeight:'700' }}>
+                                  {s.label} {s.valor}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <div style={{ display:'flex', gap:'8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, padding:'0 10px', marginBottom:'6px', letterSpacing:'0.4px' }}>
+                        <span style={{flex:2}}>ÍTEM</span><span style={{flex:3}}>DESCRIPCIÓN</span>
+                        <span style={{flex:1,textAlign:'right'}}>DIMS</span><span style={{flex:1,textAlign:'right'}}>CANT.</span>
+                        <span style={{flex:1,textAlign:'right'}}>V. UNIT.</span><span style={{flex:1,textAlign:'right'}}>C. DIRECTO</span>
+                        <span style={{flex:0.8}}></span>
                       </div>
-                    )}
-                    <div style={{ display:'flex', gap:'8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, padding:'0 10px', marginBottom:'6px', letterSpacing:'0.4px' }}>
-                      <span style={{flex:2}}>ÍTEM</span><span style={{flex:3}}>DESCRIPCIÓN</span>
-                      <span style={{flex:1,textAlign:'right'}}>DIMS</span><span style={{flex:1,textAlign:'right'}}>CANT.</span>
-                      <span style={{flex:1,textAlign:'right'}}>V. UNIT.</span><span style={{flex:1,textAlign:'right'}}>C. DIRECTO</span>
-                      <span style={{flex:0.8}}></span>
+                      {regs.length === 0
+                        ? <TabVacia msg={msg} />
+                        : regs.map(r => (
+                            <div key={r.id} onClick={() => { zoomEnDwg(r); highlightEnDwg(r) }}
+                              style={{ display:'flex', gap:'8px', alignItems:'center', padding:'8px 10px',
+                                borderRadius:'8px', cursor:'pointer',
+                                background: selTab.has(r.id) ? t.primary+'18' : t.bg,
+                                marginBottom:'6px', border:`1px solid ${selTab.has(r.id) ? t.primary : t.border}` }}>
+                              <input type="checkbox" checked={selTab.has(r.id)}
+                                onClick={e => e.stopPropagation()}
+                                onChange={() => setSelTramoTab(prev => {
+                                  const n = new Set(prev[key])
+                                  selTab.has(r.id) ? n.delete(r.id) : n.add(r.id)
+                                  return { ...prev, [key]: n }
+                                })}
+                                style={{ width:'13px', height:'13px', cursor:'pointer', flexShrink:0 }} />
+                              <div style={{ flex:2, fontSize:'11px', color:t.text, fontWeight:'600' }}>{r.item}</div>
+                              <div style={{ flex:3, fontSize:'11px', color:t.textMuted }}>{r.descripcion}</div>
+                              <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
+                                {[r.area_long_nod, r.ancho, r.espesor].filter(Boolean).join(' × ')}
+                              </div>
+                              <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
+                                {r.cant_total != null ? Number(r.cant_total).toLocaleString('es-CO', {maximumFractionDigits:3}) : '—'}
+                              </div>
+                              <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
+                                {r.vlr_unitario != null ? `$${Number(r.vlr_unitario).toLocaleString('es-CO')}` : '—'}
+                              </div>
+                              <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
+                                {r.costo_directo != null ? `$${Number(r.costo_directo).toLocaleString('es-CO')}` : '—'}
+                              </div>
+                              <div style={{ display:'flex', gap:'4px' }}>
+                                {[{valor:'Rechazado',label:'🔴'},{valor:'Pendiente',label:'🟡'},{valor:'Aprobado',label:'🟢'}].map(op => {
+                                  const est = r.revisado || 'No Revisado'
+                                  const clr = estadoColor(est)
+                                  return (
+                                    <button key={op.valor} title={op.valor}
+                                      onClick={async (e) => { e.stopPropagation(); if (puedeValidar && !esSellado(r)) await cambiarEstadoDirecto(r.id, op.valor) }}
+                                      style={{ background: est === op.valor ? clr : t.bgCard,
+                                        border:`1.5px solid ${est === op.valor ? clr : t.border}`,
+                                        borderRadius:'50%', width:'22px', height:'22px', fontSize:'11px',
+                                        cursor: puedeValidar && !esSellado(r) ? 'pointer' : 'default',
+                                        display:'flex', alignItems:'center', justifyContent:'center', padding:0 }}>
+                                      {op.label}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          ))
+                      }
                     </div>
-                    {regsNodoIni.length === 0
-                      ? <TabVacia msg="NODO EXISTENTE SIN REPORTE DE CANTIDADES" />
-                      : regsNodoIni.map(r => <FilaItem key={r.id} r={r} />)}
-                  </div>
-                )}
-
-                {/* TAB 2: NODO FIN */}
-                {tabTramo === 2 && (
-                  <div>
-                    {regsNodoFin.length > 0 && puedeValidar && (
-                      <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', padding:'6px 10px', background:t.bg, borderRadius:'8px' }}>
-                        <input type="checkbox"
-                          checked={regsNodoFin.every(r => seleccionados.has(r.id))}
-                          onChange={() => {
-                            const todos = regsNodoFin.every(r => seleccionados.has(r.id))
-                            setSeleccionados(prev => { const n = new Set(prev); regsNodoFin.forEach(r => todos ? n.delete(r.id) : n.add(r.id)); return n })
-                          }}
-                          style={{ width:'14px', height:'14px', cursor:'pointer' }} />
-                        <span style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
-                          {regsNodoFin.every(r => seleccionados.has(r.id)) ? 'Deseleccionar todos' : `Seleccionar todos (${regsNodoFin.length})`}
-                        </span>
-                        {regsNodoFin.some(r => seleccionados.has(r.id)) && (
-                          <div style={{ marginLeft:'auto', display:'flex', gap:'4px' }}>
-                            {SEMAFORO.map(s => (
-                              <button key={s.valor} onClick={() => ejecutarBulkEstado(s.valor)}
-                                title={s.valor}
-                                style={{ background:t.bgCard, border:`1.5px solid ${s.color}`, borderRadius:'6px', padding:'3px 8px', fontSize:'11px', cursor:'pointer', color:s.color, fontWeight:'700' }}>
-                                {s.label} {s.valor}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    <div style={{ display:'flex', gap:'8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, padding:'0 10px', marginBottom:'6px', letterSpacing:'0.4px' }}>
-                      <span style={{flex:2}}>ÍTEM</span><span style={{flex:3}}>DESCRIPCIÓN</span>
-                      <span style={{flex:1,textAlign:'right'}}>DIMS</span><span style={{flex:1,textAlign:'right'}}>CANT.</span>
-                      <span style={{flex:1,textAlign:'right'}}>V. UNIT.</span><span style={{flex:1,textAlign:'right'}}>C. DIRECTO</span>
-                      <span style={{flex:0.8}}></span>
-                    </div>
-                    {regsNodoFin.length === 0
-                      ? <TabVacia msg="NODO EXISTENTE SIN REPORTE DE CANTIDADES" />
-                      : regsNodoFin.map(r => <FilaItem key={r.id} r={r} />)}
-                  </div>
-                )}
-
-                {/* TAB 3: TRAMO */}
-                {tabTramo === 3 && (
-                  <div>
-                    {regsTramo.length > 0 && puedeValidar && (
-                      <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', padding:'6px 10px', background:t.bg, borderRadius:'8px' }}>
-                        <input type="checkbox"
-                          checked={regsTramo.every(r => seleccionados.has(r.id))}
-                          onChange={() => {
-                            const todos = regsTramo.every(r => seleccionados.has(r.id))
-                            setSeleccionados(prev => { const n = new Set(prev); regsTramo.forEach(r => todos ? n.delete(r.id) : n.add(r.id)); return n })
-                          }}
-                          style={{ width:'14px', height:'14px', cursor:'pointer' }} />
-                        <span style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
-                          {regsTramo.every(r => seleccionados.has(r.id)) ? 'Deseleccionar todos' : `Seleccionar todos (${regsTramo.length})`}
-                        </span>
-                        {regsTramo.some(r => seleccionados.has(r.id)) && (
-                          <div style={{ marginLeft:'auto', display:'flex', gap:'4px' }}>
-                            {SEMAFORO.map(s => (
-                              <button key={s.valor} onClick={() => ejecutarBulkEstado(s.valor)}
-                                title={s.valor}
-                                style={{ background:t.bgCard, border:`1.5px solid ${s.color}`, borderRadius:'6px', padding:'3px 8px', fontSize:'11px', cursor:'pointer', color:s.color, fontWeight:'700' }}>
-                                {s.label} {s.valor}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    <div style={{ display:'flex', gap:'8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, padding:'0 10px', marginBottom:'6px', letterSpacing:'0.4px' }}>
-                      <span style={{flex:2}}>ÍTEM</span><span style={{flex:3}}>DESCRIPCIÓN</span>
-                      <span style={{flex:1,textAlign:'right'}}>DIMS</span><span style={{flex:1,textAlign:'right'}}>CANT.</span>
-                      <span style={{flex:1,textAlign:'right'}}>V. UNIT.</span><span style={{flex:1,textAlign:'right'}}>C. DIRECTO</span>
-                      <span style={{flex:0.8}}></span>
-                    </div>
-                    {regsTramo.length === 0
-                      ? <TabVacia msg="SIN CANTIDADES REPORTADAS PARA ESTE TRAMO" />
-                      : regsTramo.map(r => <FilaItem key={r.id} r={r} />)}
-                  </div>
-                )}
+                  )
+                })}
               </>)}
             </div>
           </div>
