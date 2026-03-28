@@ -589,6 +589,8 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [modoCapSeleccion,  setModoCapSeleccion]  = useState('')   // '' | 'todos' | 'tramos'
   const [busquedaTramo,     setBusquedaTramo]     = useState('')
   const [selTramoTab,       setSelTramoTab]       = useState({ ini: new Set(), fin: new Set(), tramo: new Set() })
+  const [filtroEstrella,    setFiltroEstrella]    = useState('')  // '' | 'vacia' | 'roja' | 'amarilla' | 'verde'
+  const [filtroEstrellaTipo, setFiltroEstrellaTipo] = useState('tramo') // 'ini' | 'fin' | 'tramo'
   const [tramoSelec,        setTramoSelec]        = useState(null) // {no_inicio, no_final, label}
   const [tabTramo,          setTabTramo]          = useState(0)    // 0=INFO 1=NODO INI 2=NODO FIN 3=TRAMO
   // ── Comentarios ──────────────────────────────────────────────────────────
@@ -1546,45 +1548,113 @@ async function restaurar(id) {
                 {/* Lista de tramos */}
                 {modoCapSeleccion === 'tramos' && (
                   <div>
-                    <div style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, marginBottom:'8px', letterSpacing:'0.5px' }}>
-                      TRAMOS DISPONIBLES ({tramosUnicos.length})
+                    {/* Header con contador */}
+                    <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'12px' }}>
+                      <div style={{ fontSize:'12px', fontWeight:'800', color:t.text, letterSpacing:'0.3px' }}>
+                        TRAMOS DISPONIBLES
+                        <span style={{ marginLeft:'8px', background:t.primary+'22', color:t.primary, borderRadius:'20px', padding:'2px 10px', fontSize:'11px', fontWeight:'700' }}>
+                          {tramosUnicos.length}
+                        </span>
+                      </div>
+                      {filtroEstrella && (
+                        <button onClick={() => setFiltroEstrella('')}
+                          style={{ background:'transparent', border:'none', fontSize:'11px', color:t.textMuted, cursor:'pointer', textDecoration:'underline' }}>
+                          ✕ Limpiar filtro
+                        </button>
+                      )}
                     </div>
+
+                    {/* Buscador */}
+                    <div style={{ position:'relative', marginBottom:'10px' }}>
+                      <span style={{ position:'absolute', left:'10px', top:'50%', transform:'translateY(-50%)', fontSize:'13px', pointerEvents:'none' }}>🔍</span>
+                      <input
+                        value={busquedaTramo}
+                        onChange={e => setBusquedaTramo(e.target.value)}
+                        placeholder="Buscar por nodo inicio o fin..."
+                        style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${busquedaTramo ? t.primary : t.border}`,
+                          borderRadius:'10px', padding:'9px 12px 9px 32px', color:t.text, fontSize:'12px',
+                          boxSizing:'border-box', outline:'none', transition:'border-color .15s' }}
+                      />
+                    </div>
+
+                    {/* Filtros de estado */}
+                    <div style={{ background:t.bg, borderRadius:'10px', padding:'10px 12px', marginBottom:'10px' }}>
+                      <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', marginBottom:'8px' }}>
+                        FILTRAR POR ESTADO DE REVISIÓN
+                      </div>
+                      {/* Selector de qué revisar */}
+                      <div style={{ display:'flex', gap:'4px', marginBottom:'8px' }}>
+                        {[['ini','Nodo Ini'],['fin','Nodo Fin'],['tramo','Tramo']].map(([k,l]) => (
+                          <button key={k} onClick={() => setFiltroEstrellaTipo(k)}
+                            style={{ flex:1, padding:'5px', fontSize:'10px', fontWeight:'700', cursor:'pointer', borderRadius:'7px',
+                              background: filtroEstrellaTipo === k ? t.primary : t.bgCard,
+                              color: filtroEstrellaTipo === k ? '#fff' : t.textMuted,
+                              border: `1.5px solid ${filtroEstrellaTipo === k ? t.primary : t.border}`,
+                              transition:'all .15s' }}>
+                            {l}
+                          </button>
+                        ))}
+                      </div>
+                      {/* Botones de estado */}
+                      <div style={{ display:'flex', gap:'4px' }}>
+                        {[
+                          { key:'vacia',    label:'⬜ Sin revisar', bg:'#F1F5F9', color:'#64748B' },
+                          { key:'roja',     label:'🔴 Rechazado',  bg:'#FEE2E2', color:'#EF4444' },
+                          { key:'amarilla', label:'🟡 Pendiente',  bg:'#FEF9C3', color:'#D97706' },
+                          { key:'verde',    label:'🟢 Aprobado',   bg:'#DCFCE7', color:'#16A34A' },
+                        ].map(({ key, label, bg, color }) => (
+                          <button key={key} onClick={() => setFiltroEstrella(prev => prev === key ? '' : key)}
+                            style={{ flex:1, padding:'5px 4px', fontSize:'10px', fontWeight:'700', cursor:'pointer', borderRadius:'7px',
+                              background: filtroEstrella === key ? bg : t.bgCard,
+                              color: filtroEstrella === key ? color : t.textMuted,
+                              border: `1.5px solid ${filtroEstrella === key ? color : t.border}`,
+                              transition:'all .15s' }}>
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
                     {tramosUnicos.length === 0 && (
                       <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'12px', fontStyle:'italic' }}>
                         No hay tramos definidos en este capítulo
                       </div>
                     )}
-                    <input
-                      value={busquedaTramo}
-                      onChange={e => setBusquedaTramo(e.target.value)}
-                      placeholder="🔍 Buscar nodo..."
-                      style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`,
-                        borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'12px',
-                        boxSizing:'border-box', marginBottom:'8px', outline:'none' }}
-                    />
-                    <div style={{ display:'flex', flexDirection:'column', gap:'6px', maxHeight:'280px', overflowY:'auto' }}>
-                      {tramosUnicos.filter(tr =>
-                        !busquedaTramo.trim() ||
-                        tr.no_inicio?.toLowerCase().includes(busquedaTramo.toLowerCase()) ||
-                        tr.no_final?.toLowerCase().includes(busquedaTramo.toLowerCase())
-                      ).map((tr, i) => {
-                        const rIni   = capRegs.filter(r => r.no_inicio === tr.no_inicio && r.no_final === tr.no_inicio)
-                        const rFin   = capRegs.filter(r => r.no_inicio === tr.no_final  && r.no_final === tr.no_final)
-                        const rTr    = capRegs.filter(r => r.no_inicio === tr.no_inicio && r.no_final === tr.no_final)
+
+                    {/* Lista filtrada */}
+                    <div style={{ display:'flex', flexDirection:'column', gap:'5px', maxHeight:'260px', overflowY:'auto' }}>
+                      {tramosUnicos.filter(tr => {
+                        const busq = busquedaTramo.trim().toLowerCase()
+                        if (busq && !tr.no_inicio?.toLowerCase().includes(busq) && !tr.no_final?.toLowerCase().includes(busq)) return false
+                        if (!filtroEstrella) return true
+                        const rIni = capRegs.filter(r => r.no_inicio === tr.no_inicio && r.no_final === tr.no_inicio)
+                        const rFin = capRegs.filter(r => r.no_inicio === tr.no_final  && r.no_final === tr.no_final)
+                        const rTr  = capRegs.filter(r => r.no_inicio === tr.no_inicio && r.no_final === tr.no_final)
+                        const eMap = { ini: calcEstrella(rIni), fin: calcEstrella(rFin), tramo: calcEstrella(rTr) }
+                        return eMap[filtroEstrellaTipo] === filtroEstrella
+                      }).map((tr, i) => {
+                        const rIni = capRegs.filter(r => r.no_inicio === tr.no_inicio && r.no_final === tr.no_inicio)
+                        const rFin = capRegs.filter(r => r.no_inicio === tr.no_final  && r.no_final === tr.no_final)
+                        const rTr  = capRegs.filter(r => r.no_inicio === tr.no_inicio && r.no_final === tr.no_final)
                         const eI = calcEstrella(rIni), eF = calcEstrella(rFin), eT = calcEstrella(rTr)
                         return (
-                          <div key={i} onClick={() => { setTramoSelec(tr); setTabTramo(0) }}
+                          <div key={i} onClick={() => { setTramoSelec(tr); setTabTramo(0); setBusquedaTramo('') }}
                             style={{ display:'flex', alignItems:'center', justifyContent:'space-between',
                               padding:'10px 14px', borderRadius:'10px', cursor:'pointer',
-                              background:t.bg, border:`1.5px solid ${t.border}`,
-                              transition:'border-color .15s' }}
-                            onMouseEnter={e => e.currentTarget.style.borderColor = t.primary}
-                            onMouseLeave={e => e.currentTarget.style.borderColor = t.border}>
+                              background:t.bg, border:`1.5px solid ${t.border}`, transition:'all .15s' }}
+                            onMouseEnter={e => { e.currentTarget.style.borderColor = t.primary; e.currentTarget.style.background = t.primary+'0D' }}
+                            onMouseLeave={e => { e.currentTarget.style.borderColor = t.border; e.currentTarget.style.background = t.bg }}>
                             <div style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>{tr.label}</div>
-                            <div style={{ display:'flex', gap:'6px', alignItems:'center' }}>
-                              {[eI, eF, eT].map((e, idx) => (
-                                <span key={idx} title={['Nodo Inicio','Nodo Fin','Tramo'][idx]}
-                                  style={{ fontSize:'16px', color:colorEstrella(e) }}>{iconEstrella(e)}</span>
+                            <div style={{ display:'flex', gap:'10px', alignItems:'center' }}>
+                              {[
+                                { e: eI, label: 'NI' },
+                                { e: eF, label: 'NF' },
+                                { e: eT, label: 'TR' },
+                              ].map(({ e, label }, idx) => (
+                                <div key={idx} style={{ textAlign:'center' }}>
+                                  <div style={{ fontSize:'14px', color:colorEstrella(e), lineHeight:1 }}>{iconEstrella(e)}</div>
+                                  <div style={{ fontSize:'8px', color:t.textMuted, fontWeight:'700', letterSpacing:'0.3px' }}>{label}</div>
+                                </div>
                               ))}
                             </div>
                           </div>
