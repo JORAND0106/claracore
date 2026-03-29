@@ -2317,7 +2317,7 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
       {/* ══ MODAL CREAR CORTE ══ */}
       {showCrearCorte&&(
         <div style={{...overlayStyle,zIndex:10002}} onClick={e=>e.target===e.currentTarget&&setShowCrearCorte(false)}>
-          <div style={modalStyle(540)}>
+          <div style={{...modalStyle(540), minHeight:"min(620px,88vh)"}}>
             <div style={modalHead}>
               <div>
                 <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>Crear Nuevo Corte</div>
