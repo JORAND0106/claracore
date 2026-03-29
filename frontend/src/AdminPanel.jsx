@@ -1173,6 +1173,9 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
   const [uModoCustomP,     setUModoCustomP]     = useState(false);
   const [uCustomC,         setUCustomC]         = useState("");
   const [uCustomP,         setUCustomP]         = useState("");
+  const [filtroTexto,      setFiltroTexto]      = useState("");
+  const [filtroCapitulo,   setFiltroCapitulo]   = useState("");
+  const [filtroEstado,     setFiltroEstado]     = useState("");
 
   const col    = C(theme);
   const tdStyle = S.td(theme);
@@ -1181,6 +1184,13 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
   const COMPETENCIAS = ["EAB","ENEL-CODENSA","ETB","Gas Natural","IDU","MOVISTAR"];
 
   const fmt     = (v) => v != null ? `$${Math.round(Number(v)).toLocaleString("es-CO")}` : "—";
+  const itemsFiltrados = items.filter(i => {
+    if (filtroTexto    && !((i.descripcion||"")+" "+(i.item_numero||"")).toLowerCase().includes(filtroTexto.toLowerCase())) return false;
+    if (filtroCapitulo && (i.capitulo||"") !== filtroCapitulo) return false;
+    if (filtroEstado   && (i.estado_precio||"Pendiente") !== filtroEstado) return false;
+    return true;
+  });
+  const capitulosUnicos = [...new Set(items.map(i => i.capitulo).filter(Boolean))].sort();
   const fmtCant = (v) => v != null ? Number(v).toLocaleString("es-CO", { maximumFractionDigits: 4 }) : "—";
 
   // ── Carga ──────────────────────────────────────────────────────────────────
@@ -1190,7 +1200,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
     try { setItems(await call("GET", `/listado-precios/${contratoId}`)); }
     catch (e) { setMsg({ type:"error", text:e.message }); }
     finally { setLoading(false); }
-  }, [call, contratoId]);
+  }, [contratoId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { cargar(); }, [cargar]);
 
@@ -1265,7 +1275,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
           vals.push(cur.trim());
           return vals.map(v=>v.replace(/^"|"$/g,"").trim());
         };
-        const CAMPOS={"capitulo":"capitulo","capítulo":"capitulo","competencia":"competencia","item_numero":"item_numero","ítem":"item_numero","item":"item_numero","nro":"item_numero","descripcion":"descripcion","descripción":"descripcion","unidad":"unidad","und":"unidad","precio_unitario":"precio_unitario","precio unitario":"precio_unitario","precio":"precio_unitario","valor":"precio_unitario","valorunitario":"precio_unitario","valor unitario":"precio_unitario"};
+        const CAMPOS={"capitulo":"capitulo","capítulo":"capitulo","competencia":"competencia","item_numero":"item_numero","ítem":"item_numero","item":"item_numero","nro":"item_numero","descripcion":"descripcion","descripción":"descripcion","unidad":"unidad","und":"unidad","precio_unitario":"precio_unitario","precio unitario":"precio_unitario","precio":"precio_unitario","valor":"precio_unitario","valorunitario":"precio_unitario","valor unitario":"precio_unitario","tipo_precio":"tipo_precio","tipo de precio":"tipo_precio","tipoprecio":"tipo_precio","especificacion_tecnica":"especificacion_tecnica","especificación técnica":"especificacion_tecnica","especificacion tecnica":"especificacion_tecnica","acta_fijacion":"acta_fijacion","acta de fijación":"acta_fijacion","acta fijacion":"acta_fijacion","acta_modificatoria":"acta_modificatoria","acta modificatoria":"acta_modificatoria","observaciones":"observaciones","estado_precio":"estado_precio"};
         const rawHeaders=parseRow(lines[0]).map(h=>h.toLowerCase());
         const headers=rawHeaders.map(h=>CAMPOS[h]||h);
         const parsed=lines.slice(1).map(line=>{
@@ -1304,6 +1314,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Listado de Precios");
     XLSX.writeFile(wb, `listado_precios_${contratoId}.xlsx`);
+    call("POST", `/listado-precios/${contratoId}/log-exportar`).catch(() => {});
   };
 
   // ── Crear precio ───────────────────────────────────────────────────────────
@@ -1344,14 +1355,14 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
     popup.acta_modificatoria && popup.acta_modificatoria !== "0";
 
   // ── Estilos locales reutilizables ──────────────────────────────────────────
-  const labelStyle  = { fontSize:11, color:"#4a7a87", marginBottom:5 };
+  const labelStyle   = { fontSize:11, color:col.textSecondary, marginBottom:5 };
   const overlayStyle = { position:"fixed",inset:0,zIndex:10001,background:"rgba(5,12,18,0.92)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center" };
-  const modalStyle   = (w) => ({ width:`min(${w}px,95vw)`,maxHeight:"92vh",background:"#0b1920",borderRadius:14,border:"1px solid rgba(0,175,197,0.2)",boxShadow:"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column" });
-  const modalHead    = { padding:"18px 28px 14px",borderBottom:"1px solid rgba(0,175,197,0.12)",background:"#081318",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0 };
-  const modalScroll  = { flex:1,overflowY:"auto",padding:"22px 28px",scrollbarWidth:"thin",scrollbarColor:"#1e3a44 transparent" };
-  const modalFoot    = { padding:"14px 28px",borderTop:"1px solid rgba(0,175,197,0.1)",background:"#081318",display:"flex",justifyContent:"flex-end",gap:10,flexShrink:0 };
+  const modalStyle   = (w) => ({ width:`min(${w}px,95vw)`,maxHeight:"92vh",background:theme==="light"?"#F0F9FF":"#0b1920",borderRadius:14,border:"1px solid rgba(0,175,197,0.2)",boxShadow:"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column" });
+  const modalHead    = { padding:"18px 28px 14px",borderBottom:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)",background:theme==="light"?"#E0F2FE":"#081318",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0 };
+  const modalScroll  = { flex:1,overflowY:"auto",padding:"22px 28px",scrollbarWidth:"thin",scrollbarColor:"#1e3a44 transparent",background:theme==="light"?"#F8FAFC":"transparent" };
+  const modalFoot    = { padding:"14px 28px",borderTop:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",background:theme==="light"?"#E0F2FE":"#081318",display:"flex",justifyContent:"flex-end",gap:10,flexShrink:0 };
   const secTitle     = { fontSize:10,color:"#00afc5",fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:14 };
-  const divider      = { borderTop:"1px solid rgba(0,175,197,0.1)",paddingTop:20,marginBottom:20 };
+  const divider      = { borderTop:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",paddingTop:20,marginBottom:20 };
 
   const UnidadSelector = ({ value, onChange, modoCustom, setModoCustom, uCustom, setUCustom }) => (
     <div>
@@ -1407,11 +1418,41 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
         )}
       </div>
 
+      {/* ── Filtros ── */}
+      {items.length > 0 && !loading && (
+        <div style={{ display:"flex",gap:10,flexWrap:"wrap",marginBottom:14,alignItems:"center" }}>
+          <input style={{ ...S.input,padding:"6px 10px",fontSize:12,flex:"1 1 180px",maxWidth:260 }}
+            placeholder="🔍 Buscar descripción o ítem..." value={filtroTexto}
+            onChange={e=>setFiltroTexto(e.target.value)} />
+          <select style={{ ...S.select,minWidth:160 }} value={filtroCapitulo}
+            onChange={e=>setFiltroCapitulo(e.target.value)}>
+            <option value="">Todos los capítulos</option>
+            {capitulosUnicos.map(c=><option key={c} value={c}>{c}</option>)}
+          </select>
+          <select style={{ ...S.select,minWidth:130 }} value={filtroEstado}
+            onChange={e=>setFiltroEstado(e.target.value)}>
+            <option value="">Todos los estados</option>
+            <option value="Aprobado">✓ Aprobado</option>
+            <option value="Pendiente">⏳ Pendiente</option>
+          </select>
+          {(filtroTexto||filtroCapitulo||filtroEstado) && (
+            <button style={S.btn("ghost",true)} onClick={()=>{setFiltroTexto("");setFiltroCapitulo("");setFiltroEstado("");}}>✕ Limpiar</button>
+          )}
+          {(filtroTexto||filtroCapitulo||filtroEstado) && (
+            <span style={{ fontSize:12,color:col.textMuted }}>
+              {itemsFiltrados.length.toLocaleString("es-CO")} de {items.length.toLocaleString("es-CO")} precios
+            </span>
+          )}
+        </div>
+      )}
+
       {/* ── Grilla ── */}
       {loading ? (
         <div style={S.empty}><span style={{ color:"#00afc5" }}>Cargando...</span></div>
       ) : items.length === 0 ? (
         <div style={S.empty}>No hay precios cargados para este contrato.<br/><span style={{ fontSize:12,color:col.textMuted }}>Usa "Crear Precio" o "Importar CSV".</span></div>
+      ) : itemsFiltrados.length === 0 ? (
+        <div style={S.empty}>Ningún precio coincide con los filtros aplicados.<br/><span style={{ fontSize:12,color:col.textMuted }}>Prueba ajustando los criterios de búsqueda.</span></div>
       ) : (
         <div style={{ overflowX:"auto" }}>
           <table style={S.table}>
@@ -1423,7 +1464,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
               </tr>
             </thead>
             <tbody>
-              {items.map(item => (
+              {itemsFiltrados.map(item => (
                 <tr key={item.id} onClick={() => abrirDetalle(item)} style={{ cursor:"pointer",transition:"background 0.15s" }}
                   onMouseEnter={e => e.currentTarget.style.background="rgba(0,175,197,0.05)"}
                   onMouseLeave={e => e.currentTarget.style.background="transparent"}>
@@ -1453,8 +1494,8 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
 
             <div style={modalHead}>
               <div>
-                <div style={{ fontSize:10,color:"#4a7a87",letterSpacing:1,textTransform:"uppercase",marginBottom:3 }}>Detalle del Precio</div>
-                <div style={{ fontSize:17,fontWeight:700,color:"#e0f4f7",fontFamily:"'Rajdhani',sans-serif" }}>
+                <div style={{ fontSize:10,color:col.textSecondary,letterSpacing:1,textTransform:"uppercase",marginBottom:3 }}>Detalle del Precio</div>
+                <div style={{ fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif" }}>
                   {popup.item_numero} — {(popup.descripcion||"").substring(0,55)}{(popup.descripcion||"").length>55?"...":""}
                 </div>
               </div>

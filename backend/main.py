@@ -717,8 +717,24 @@ def bulk_precios(contrato_id: int, items: List[ListadoPrecioItem], current_user=
     """Reemplaza todos los precios del contrato con los items del CSV."""
     supabase.table("listado_precios").delete().eq("contrato_id", contrato_id).execute()
     if items:
-        rows = [{"contrato_id": contrato_id, **{k: v for k, v in item.dict().items() if v is not None}} for item in items]
+        rows = []
+        for item in items:
+            row = {"contrato_id": contrato_id, **{k: v for k, v in item.dict().items() if v is not None}}
+            if row.get("tipo_precio") == "Precio Contractual":
+                row["estado_precio"] = "Aprobado"
+                row["acta_fijacion"] = "Contractual"
+                row.pop("acta_modificatoria", None)
+            elif row.get("tipo_precio") == "Precio No Previsto":
+                try:
+                    f_val = float(row.get("acta_fijacion") or 0)
+                    m_val = float(row.get("acta_modificatoria") or 0)
+                except (ValueError, TypeError):
+                    f_val, m_val = 0, 0
+                row["estado_precio"] = "Aprobado" if (f_val > 0 and m_val > 0) else "Pendiente"
+            rows.append(row)
         supabase.table("listado_precios").insert(rows).execute()
+    registrar_log(current_user, "IMPORTAR", "PRECIOS", "listado_precios", str(contrato_id),
+                  {"cantidad": len(items)})
     return {"mensaje": f"{len(items)} items cargados"}
 
 @app.put("/listado-precios/item/{item_id}")
@@ -737,6 +753,8 @@ def update_precio(item_id: int, body: ListadoPrecioItem, current_user=Depends(ge
             f_val, m_val = 0, 0
         data["estado_precio"] = "Aprobado" if (f_val > 0 and m_val > 0) else "Pendiente"
     supabase.table("listado_precios").update(data).eq("id", item_id).execute()
+    registrar_log(current_user, "EDITAR", "PRECIOS", "listado_precios", str(item_id),
+                  {"tipo_precio": data.get("tipo_precio"), "estado_precio": data.get("estado_precio")})
     return {"ok": True}
 
 @app.delete("/listado-precios/item/{item_id}")
@@ -760,7 +778,11 @@ def crear_precio(contrato_id: int, body: ListadoPrecioItem, current_user=Depends
             f_val, m_val = 0, 0
         row["estado_precio"] = "Aprobado" if (f_val > 0 and m_val > 0) else "Pendiente"
     result = supabase.table("listado_precios").insert(row).execute()
-    return result.data[0] if result.data else {"ok": True}
+    nuevo = result.data[0] if result.data else {}
+    registrar_log(current_user, "CREAR", "PRECIOS", "listado_precios", str(nuevo.get("id", "")),
+                  {"item_numero": row.get("item_numero"), "descripcion": row.get("descripcion"),
+                   "tipo_precio": row.get("tipo_precio"), "estado_precio": row.get("estado_precio")})
+    return nuevo if nuevo else {"ok": True}
 
 @app.get("/listado-precios/item/{item_id}/stats")
 def get_precio_stats(item_id: int, current_user=Depends(get_current_user)):
@@ -817,6 +839,13 @@ def recalcular_cobros_precio(item_id: int, current_user=Depends(get_current_user
         q = q.eq("competencia", precio["competencia"])
     result = q.execute()
     return {"recalculados": len(result.data or [])}
+
+@app.post("/listado-precios/{contrato_id}/log-exportar")
+def log_exportar_precios(contrato_id: int, current_user=Depends(get_current_user)):
+    """Registra en el log que el usuario exportó el listado de precios en XLSX."""
+    registrar_log(current_user, "EXPORTAR", "PRECIOS", "listado_precios", str(contrato_id),
+                  {"formato": "xlsx"})
+    return {"ok": True}
 
 # ─────────────────────────────────────────────
 # PRESUPUESTO
