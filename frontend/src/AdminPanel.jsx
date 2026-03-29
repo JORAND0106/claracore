@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import * as XLSX from "xlsx";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = "https://claracore-backend.azurewebsites.net";
@@ -1155,193 +1156,558 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
 
 
 // ─── SECCIÓN 6: Listado de Precios ────────────────────────────────────────
-function SeccionListadoPrecios({ call, contratos, perms, theme }) {
-  const [contratoId, setContratoId] = useState("");
-  const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [editingId, setEditingId] = useState(null);
-  const [editData, setEditData] = useState({});
-  const [msg, setMsg] = useState(null);
-  const col = C(theme);
+function SeccionListadoPrecios({ call, user, perms, theme }) {
+  const contratoId = user?.contrato_id;
+  const [items,            setItems]            = useState([]);
+  const [loading,          setLoading]          = useState(false);
+  const [msg,              setMsg]              = useState(null);
+  const [popup,            setPopup]            = useState(null);
+  const [stats,            setStats]            = useState(null);
+  const [statsLoading,     setStatsLoading]     = useState(false);
+  const [saving,           setSaving]           = useState(false);
+  const [recalculando,     setRecalculando]     = useState(false);
+  const [showCrear,        setShowCrear]        = useState(false);
+  const [crearForm,        setCrearForm]        = useState({ capitulo:"",item_numero:"",descripcion:"",unidad:"",competencia:"",tipo_precio:"",precio_unitario:"",especificacion_tecnica:"",acta_fijacion:"",acta_modificatoria:"",observaciones:"" });
+  const [creating,         setCreating]         = useState(false);
+  const [uModoCustomC,     setUModoCustomC]     = useState(false);
+  const [uModoCustomP,     setUModoCustomP]     = useState(false);
+  const [uCustomC,         setUCustomC]         = useState("");
+  const [uCustomP,         setUCustomP]         = useState("");
+
+  const col    = C(theme);
   const tdStyle = S.td(theme);
 
+  const UNIDADES    = ["CM","GL","HORA","KG","KM-CARRIL","LT","M","M2","M3","M3-KM","ML","TON","TRAMO","UN","UN/ME","UND"];
+  const COMPETENCIAS = ["EAB","ENEL-CODENSA","ETB","Gas Natural","IDU","MOVISTAR"];
+
+  const fmt     = (v) => v != null ? `$${Math.round(Number(v)).toLocaleString("es-CO")}` : "—";
+  const fmtCant = (v) => v != null ? Number(v).toLocaleString("es-CO", { maximumFractionDigits: 4 }) : "—";
+
+  // ── Carga ──────────────────────────────────────────────────────────────────
   const cargar = useCallback(async () => {
     if (!contratoId) return;
     setLoading(true);
     try { setItems(await call("GET", `/listado-precios/${contratoId}`)); }
-    catch (e) { setMsg({ type: "error", text: e.message }); }
+    catch (e) { setMsg({ type:"error", text:e.message }); }
     finally { setLoading(false); }
   }, [call, contratoId]);
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  const startEdit = (item) => { setEditingId(item.id); setEditData({ ...item }); };
-  const cancelEdit = () => { setEditingId(null); setEditData({}); };
-  const saveEdit = async () => {
+  // ── Popup detalle ──────────────────────────────────────────────────────────
+  const abrirDetalle = async (item) => {
+    setPopup({ ...item });
+    setStats(null);
+    setUModoCustomP(false);
+    setUCustomP("");
+    setStatsLoading(true);
+    try { setStats(await call("GET", `/listado-precios/item/${item.id}/stats`)); }
+    catch { setStats(null); }
+    finally { setStatsLoading(false); }
+  };
+
+  const setPopupField = (k, v) => setPopup(p => ({ ...p, [k]: v }));
+
+  const cambiarTipoPopup = (tipo) => {
+    if (tipo === "Precio Contractual")
+      setPopup(p => ({ ...p, tipo_precio:tipo, acta_fijacion:"Contractual", acta_modificatoria:"", estado_precio:"Aprobado" }));
+    else
+      setPopup(p => ({ ...p, tipo_precio:tipo, acta_fijacion:"", acta_modificatoria:"", estado_precio:"Pendiente" }));
+  };
+
+  const guardarEdicion = async () => {
+    if (!popup) return;
+    setSaving(true);
     try {
-      await call("PUT", `/listado-precios/item/${editingId}`, editData);
-      setEditingId(null);
-      cargar();
-    } catch (e) { setMsg({ type: "error", text: e.message }); }
+      await call("PUT", `/listado-precios/item/${popup.id}`, popup);
+      setMsg({ type:"success", text:"✅ Precio actualizado correctamente." });
+      const [updated, freshStats] = await Promise.all([
+        call("GET", `/listado-precios/${contratoId}`),
+        call("GET", `/listado-precios/item/${popup.id}/stats`).catch(() => null),
+      ]);
+      setItems(updated || []);
+      const fresh = (updated || []).find(i => i.id === popup.id);
+      if (fresh) setPopup({ ...fresh });
+      if (freshStats) setStats(freshStats);
+    } catch (e) { setMsg({ type:"error", text:e.message }); }
+    finally { setSaving(false); }
   };
 
-  const deleteItem = async (id) => {
-    if (!window.confirm("¿Eliminar este ítem?")) return;
-    try { await call("DELETE", `/listado-precios/item/${id}`); cargar(); }
-    catch (e) { setMsg({ type: "error", text: e.message }); }
+  const recalcular = async () => {
+    if (!popup) return;
+    if (!window.confirm("¿Recalcular todos los registros de cobro de este ítem de Pendiente → Aprobado?")) return;
+    setRecalculando(true);
+    try {
+      const res = await call("POST", `/listado-precios/item/${popup.id}/recalcular`);
+      setMsg({ type:"success", text:`✅ ${res.recalculados} registros de cobro actualizados a Aprobado.` });
+    } catch (e) { setMsg({ type:"error", text:e.message }); }
+    finally { setRecalculando(false); }
   };
 
-  const downloadCSV = () => {
-    const headers = ["capitulo", "item_numero", "descripcion", "unidad", "precio_unitario"];
-    const rows = items.map(i => headers.map(h => `"${(i[h] ?? "").toString().replace(/"/g, '""')}"`).join(","));
-    const csv = [headers.join(","), ...rows].join("\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = "listado_precios.csv"; a.click();
-    URL.revokeObjectURL(url);
-  };
-
+  // ── CSV import ─────────────────────────────────────────────────────────────
   const uploadCSV = async (e) => {
     const file = e.target.files[0]; if (!file) return;
     const reader = new FileReader();
     reader.onload = async (ev) => {
       try {
-        const raw = ev.target.result.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+        const raw = ev.target.result.replace(/\r\n/g,"\n").replace(/\r/g,"\n");
         const lines = raw.split("\n").filter(l => l.trim());
-        if (lines.length < 2) { setMsg({ type: "error", text: "El CSV no tiene datos." }); return; }
-        // Detectar separador: ; o ,
+        if (lines.length < 2) { setMsg({ type:"error", text:"El CSV no tiene datos." }); return; }
         const sep = lines[0].includes(";") ? ";" : ",";
         const parseRow = (line) => {
-          const vals = []; let cur = ""; let inQ = false;
-          for (let i = 0; i < line.length; i++) {
-            const ch = line[i];
-            if (ch === '"') { inQ = !inQ; }
-            else if (ch === sep && !inQ) { vals.push(cur.trim()); cur = ""; }
-            else { cur += ch; }
+          const vals=[]; let cur=""; let inQ=false;
+          for (let i=0;i<line.length;i++){
+            const ch=line[i];
+            if(ch==='"'){inQ=!inQ;}
+            else if(ch===sep&&!inQ){vals.push(cur.trim());cur="";}
+            else{cur+=ch;}
           }
           vals.push(cur.trim());
-          return vals.map(v => v.replace(/^"|"$/g, "").trim());
+          return vals.map(v=>v.replace(/^"|"$/g,"").trim());
         };
-          const CAMPOS = {
-            "capitulo": "capitulo", "capítulo": "capitulo",
-            "competencia": "competencia",
-            "item_numero": "item_numero", "item número": "item_numero",
-            "ítem": "item_numero", "item": "item_numero", "nro": "item_numero",
-            "descripcion": "descripcion", "descripción": "descripcion",
-            "unidad": "unidad", "und": "unidad",
-            "precio_unitario": "precio_unitario", "precio unitario": "precio_unitario",
-            "precio": "precio_unitario", "valor": "precio_unitario",
-            "valorunitario": "precio_unitario", "valor unitario": "precio_unitario"
-        };
-        const rawHeaders = parseRow(lines[0]).map(h => h.toLowerCase());
-        const headers = rawHeaders.map(h => CAMPOS[h] || h);
-        const parsed = lines.slice(1).map(line => {
-          const vals = parseRow(line);
-          const obj = {};
-          headers.forEach((h, i) => { if (vals[i] !== undefined && vals[i] !== "") obj[h] = vals[i]; });
+        const CAMPOS={"capitulo":"capitulo","capítulo":"capitulo","competencia":"competencia","item_numero":"item_numero","ítem":"item_numero","item":"item_numero","nro":"item_numero","descripcion":"descripcion","descripción":"descripcion","unidad":"unidad","und":"unidad","precio_unitario":"precio_unitario","precio unitario":"precio_unitario","precio":"precio_unitario","valor":"precio_unitario","valorunitario":"precio_unitario","valor unitario":"precio_unitario"};
+        const rawHeaders=parseRow(lines[0]).map(h=>h.toLowerCase());
+        const headers=rawHeaders.map(h=>CAMPOS[h]||h);
+        const parsed=lines.slice(1).map(line=>{
+          const vals=parseRow(line); const obj={};
+          headers.forEach((h,i)=>{if(vals[i]!==undefined&&vals[i]!=="")obj[h]=vals[i];});
           return obj;
-        }).filter(r => r.descripcion || r.item_numero);
-        await call("POST", `/listado-precios/${contratoId}/bulk`, parsed);
-        setMsg({ type: "success", text: `✅ ${parsed.length} ítems cargados correctamente.` });
+        }).filter(r=>r.descripcion||r.item_numero);
+        await call("POST",`/listado-precios/${contratoId}/bulk`,parsed);
+        setMsg({type:"success",text:`✅ ${parsed.length} ítems cargados correctamente.`});
         cargar();
-      } catch (ex) { setMsg({ type: "error", text: ex.message }); }
+      } catch(ex){setMsg({type:"error",text:ex.message});}
     };
-    reader.readAsText(file, "UTF-8");
-    e.target.value = "";
+    reader.readAsText(file,"UTF-8");
+    e.target.value="";
   };
 
-  const fmt = (v) => v ? `$${Number(v).toLocaleString("es-CO", { minimumFractionDigits: 0 })}` : "—";
+  // ── XLSX export ────────────────────────────────────────────────────────────
+  const exportarXLSX = () => {
+    if (!items.length) return;
+    const data = items.map(i => ({
+      "Ítem":                   i.item_numero             || "",
+      "Capítulo":               i.capitulo                || "",
+      "Competencia":            i.competencia             || "",
+      "Descripción":            i.descripcion             || "",
+      "Unidad":                 i.unidad                  || "",
+      "Tipo de Precio":         i.tipo_precio             || "",
+      "Valor Unitario":         i.precio_unitario         || 0,
+      "Estado":                 i.estado_precio           || "",
+      "Especificación Técnica": i.especificacion_tecnica  || "",
+      "Acta de Fijación":       i.acta_fijacion           || "",
+      "Acta Modificatoria":     i.acta_modificatoria      || "",
+      "Observaciones":          i.observaciones           || "",
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws["!cols"] = [{wch:10},{wch:22},{wch:16},{wch:48},{wch:10},{wch:20},{wch:16},{wch:12},{wch:42},{wch:16},{wch:18},{wch:30}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Listado de Precios");
+    XLSX.writeFile(wb, `listado_precios_${contratoId}.xlsx`);
+  };
+
+  // ── Crear precio ───────────────────────────────────────────────────────────
+  const setCF = (k, v) => setCrearForm(p => ({ ...p, [k]: v }));
+
+  const cambiarTipoCrear = (tipo) => {
+    if (tipo === "Precio Contractual")
+      setCrearForm(p => ({ ...p, tipo_precio:tipo, acta_fijacion:"Contractual", acta_modificatoria:"" }));
+    else
+      setCrearForm(p => ({ ...p, tipo_precio:tipo, acta_fijacion:"", acta_modificatoria:"" }));
+  };
+
+  const crearPrecio = async () => {
+    const { item_numero, descripcion, unidad, tipo_precio, precio_unitario, especificacion_tecnica } = crearForm;
+    if (!item_numero||!descripcion||!unidad||!tipo_precio||!precio_unitario||!especificacion_tecnica) {
+      setMsg({ type:"error", text:"Complete todos los campos obligatorios (*)." }); return;
+    }
+    setCreating(true);
+    try {
+      await call("POST", `/listado-precios/${contratoId}/item`, {
+        ...crearForm, precio_unitario: parseFloat(crearForm.precio_unitario) || 0,
+      });
+      setMsg({ type:"success", text:"✅ Precio creado correctamente." });
+      setShowCrear(false);
+      setCrearForm({ capitulo:"",item_numero:"",descripcion:"",unidad:"",competencia:"",tipo_precio:"",precio_unitario:"",especificacion_tecnica:"",acta_fijacion:"",acta_modificatoria:"",observaciones:"" });
+      setUModoCustomC(false); setUCustomC("");
+      cargar();
+    } catch(e){ setMsg({ type:"error", text:e.message }); }
+    finally { setCreating(false); }
+  };
+
+  // ── Variables derivadas ────────────────────────────────────────────────────
+  const popupEsContractual = popup?.tipo_precio === "Precio Contractual";
+  const popupEsAprobado    = popup?.estado_precio === "Aprobado";
+  const crearEsContractual = crearForm.tipo_precio === "Precio Contractual";
+  const puedeAprobarNP     = popup && !popupEsContractual &&
+    popup.acta_fijacion && popup.acta_fijacion !== "0" &&
+    popup.acta_modificatoria && popup.acta_modificatoria !== "0";
+
+  // ── Estilos locales reutilizables ──────────────────────────────────────────
+  const labelStyle  = { fontSize:11, color:"#4a7a87", marginBottom:5 };
+  const overlayStyle = { position:"fixed",inset:0,zIndex:10001,background:"rgba(5,12,18,0.92)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center" };
+  const modalStyle   = (w) => ({ width:`min(${w}px,95vw)`,maxHeight:"92vh",background:"#0b1920",borderRadius:14,border:"1px solid rgba(0,175,197,0.2)",boxShadow:"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column" });
+  const modalHead    = { padding:"18px 28px 14px",borderBottom:"1px solid rgba(0,175,197,0.12)",background:"#081318",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0 };
+  const modalScroll  = { flex:1,overflowY:"auto",padding:"22px 28px",scrollbarWidth:"thin",scrollbarColor:"#1e3a44 transparent" };
+  const modalFoot    = { padding:"14px 28px",borderTop:"1px solid rgba(0,175,197,0.1)",background:"#081318",display:"flex",justifyContent:"flex-end",gap:10,flexShrink:0 };
+  const secTitle     = { fontSize:10,color:"#00afc5",fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:14 };
+  const divider      = { borderTop:"1px solid rgba(0,175,197,0.1)",paddingTop:20,marginBottom:20 };
+
+  const UnidadSelector = ({ value, onChange, modoCustom, setModoCustom, uCustom, setUCustom }) => (
+    <div>
+      {!modoCustom ? (
+        <select style={{ ...S.select,width:"100%" }} value={UNIDADES.includes(value)?value:(value?"__prev__":"")}
+          onChange={e => {
+            if (e.target.value === "__custom__") { setModoCustom(true); setUCustom(""); onChange(""); }
+            else if (e.target.value === "__prev__") { /* mantiene valor */ }
+            else onChange(e.target.value);
+          }}>
+          <option value="">-- Selecciona --</option>
+          {UNIDADES.map(u => <option key={u} value={u}>{u}</option>)}
+          {value && !UNIDADES.includes(value) && <option value="__prev__">{value}</option>}
+          <option value="__custom__">+ Agregar unidad...</option>
+        </select>
+      ) : (
+        <div style={{ display:"flex",gap:6 }}>
+          <input style={{ ...S.input,padding:"5px 8px",fontSize:12 }} placeholder="Nueva unidad" value={uCustom}
+            onChange={e => setUCustom(e.target.value)}
+            onKeyDown={e => { if(e.key==="Enter"&&uCustom.trim()){ onChange(uCustom.trim().toUpperCase()); setModoCustom(false); }}} />
+          <button style={S.btn("primary",true)} onClick={() => { if(uCustom.trim()){ onChange(uCustom.trim().toUpperCase()); setModoCustom(false); }}}>+</button>
+          <button style={S.btn("ghost",true)} onClick={() => setModoCustom(false)}>✕</button>
+        </div>
+      )}
+    </div>
+  );
+
+  if (!contratoId) return <div style={S.empty}>No hay contrato activo en tu sesión.</div>;
 
   return (
     <div>
-      {msg && <div style={S.alert(msg.type)}>{msg.text}<span onClick={() => setMsg(null)} style={{ float: "right", cursor: "pointer", opacity: 0.6 }}>✕</span></div>}
-
-      {/* Selector de contrato + acciones */}
-      <div style={{ ...S.card, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-        <span style={{ color: col.textSecondary, fontSize: 13, whiteSpace: "nowrap" }}>Contrato:</span>
-        <select style={{ ...S.select, flex: 1, maxWidth: 300 }} value={contratoId} onChange={e => setContratoId(e.target.value)}>
-          <option value="">-- Selecciona un contrato --</option>
-          {contratos.map(c => <option key={c.id} value={c.id}>{c.numero} — {c.contratista}</option>)}
-        </select>
-        {contratoId && (
-          <div style={{ display: "flex", gap: 8 }}>
-            {(perms?.exportar) && (
-              <button style={S.btn("ghost", true)} onClick={downloadCSV}>⬇ Descargar CSV</button>
-            )}
-            {(perms?.crear) && (
-              <label style={{ ...S.btn("primary", true), cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                ⬆ Cargar CSV
-                <input type="file" accept=".csv" style={{ display: "none" }} onChange={uploadCSV} />
-              </label>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Nota formato CSV */}
-      {contratoId && (
-        <div style={{ fontSize: 11, color: col.textMuted, marginBottom: 12, padding: "0 2px" }}>
-          Formato CSV esperado: <code style={{ color: "#00afc5" }}>capitulo, competencia, item_numero, descripcion, unidad, precio_unitario</code>. Cargar reemplaza todos los ítems del contrato.
+      {msg && (
+        <div style={S.alert(msg.type)}>
+          {msg.text}
+          <span onClick={() => setMsg(null)} style={{ float:"right",cursor:"pointer",opacity:0.6 }}>✕</span>
         </div>
       )}
 
-      {!contratoId ? (
-        <div style={S.empty}>Selecciona un contrato para ver su listado de precios.</div>
-      ) : loading ? (
-        <div style={S.empty}><span style={{ color: "#00afc5" }}>Cargando...</span></div>
+      {/* ── Barra de acciones ── */}
+      <div style={{ display:"flex",gap:10,marginBottom:20,flexWrap:"wrap",alignItems:"center" }}>
+        {perms?.crear && <button style={S.btn("primary",true)} onClick={() => setShowCrear(true)}>+ Crear Precio</button>}
+        {perms?.crear && (
+          <label style={{ ...S.btn("ghost",true),cursor:"pointer",display:"inline-flex",alignItems:"center",gap:4 }}>
+            ⬆ Importar CSV
+            <input type="file" accept=".csv" style={{ display:"none" }} onChange={uploadCSV} />
+          </label>
+        )}
+        {perms?.exportar && items.length > 0 && (
+          <button style={S.btn("ghost",true)} onClick={exportarXLSX}>⬇ Exportar XLSX</button>
+        )}
+        {items.length > 0 && (
+          <span style={{ marginLeft:"auto",fontSize:12,color:col.textMuted }}>{items.length.toLocaleString("es-CO")} precios</span>
+        )}
+      </div>
+
+      {/* ── Grilla ── */}
+      {loading ? (
+        <div style={S.empty}><span style={{ color:"#00afc5" }}>Cargando...</span></div>
       ) : items.length === 0 ? (
-        <div style={S.empty}>No hay precios cargados para este contrato.<br /><span style={{ fontSize: 12, color: col.textMuted }}>Usa "Cargar CSV" para importar el listado.</span></div>
+        <div style={S.empty}>No hay precios cargados para este contrato.<br/><span style={{ fontSize:12,color:col.textMuted }}>Usa "Crear Precio" o "Importar CSV".</span></div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <div style={{ fontSize: 11, color: col.textMuted, marginBottom: 6 }}>{items.length} ítems</div>
+        <div style={{ overflowX:"auto" }}>
           <table style={S.table}>
             <thead>
               <tr>
-                {["Capítulo", "Competencia", "Ítem", "Descripción", "Unidad", "Precio Unit.", ""].map((h, i) => (
-                  <th key={i} style={{ ...S.th, width: i === 2 ? "auto" : undefined }}>{h}</th>
+                {["Ítem","Capítulo","Descripción","Unidad","Valor Unitario","Estado"].map((h,i) => (
+                  <th key={i} style={S.th}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {items.map(item => (
-                <tr key={item.id}>
-                  {editingId === item.id ? (
-                    <>
-                      {[["capitulo", 80], ["competencia", 100], ["item_numero", 70], ["descripcion", 200], ["unidad", 60]].map(([field, w]) => (
-                        <td key={field} style={tdStyle}>
-                          <input style={{ ...S.input, padding: "4px 8px", fontSize: 12, width: w }} value={editData[field] || ""} onChange={e => setEditData(d => ({ ...d, [field]: e.target.value }))} />
-                        </td>
-                      ))}
-                      <td style={tdStyle}>
-                        <input style={{ ...S.input, padding: "4px 8px", fontSize: 12, width: 100 }} type="number" value={editData.precio_unitario || ""} onChange={e => setEditData(d => ({ ...d, precio_unitario: e.target.value }))} />
-                      </td>
-                      <td style={tdStyle}>
-                        <div style={{ display: "flex", gap: 4 }}>
-                          <button style={S.btn("success", true)} onClick={saveEdit} title="Guardar">✓</button>
-                          <button style={S.btn("ghost", true)} onClick={cancelEdit} title="Cancelar">✕</button>
-                        </div>
-                      </td>
-                    </>
-                  ) : (
-                    <>
-                      <td style={{ ...tdStyle, color: col.textMuted, fontSize: 12 }}>{item.capitulo || "—"}</td>
-                      <td style={{ ...tdStyle, color: col.textMuted, fontSize: 12 }}>{item.competencia || "—"}</td>
-                      <td style={{ ...tdStyle, color: col.textSecondary, fontWeight: 600, fontSize: 12 }}>{item.item_numero || "—"}</td>
-                      <td style={{ ...tdStyle, color: col.textTable }}>{item.descripcion}</td>
-                      <td style={{ ...tdStyle, color: col.textSecondary, fontSize: 12 }}>{item.unidad || "—"}</td>
-                      <td style={{ ...tdStyle, color: "#22c55e", fontWeight: 600, fontSize: 12, textAlign: "right" }}>{fmt(item.precio_unitario)}</td>
-                      <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
-                        <div style={{ display: "flex", gap: 4 }}>
-                          {perms?.editar && <button style={S.btn("ghost", true)} onClick={() => startEdit(item)} title="Editar">✎</button>}
-                          {perms?.eliminar && <button style={S.btn("danger", true)} onClick={() => deleteItem(item.id)} title="Eliminar">×</button>}
-                        </div>
-                      </td>
-                    </>
-                  )}
+                <tr key={item.id} onClick={() => abrirDetalle(item)} style={{ cursor:"pointer",transition:"background 0.15s" }}
+                  onMouseEnter={e => e.currentTarget.style.background="rgba(0,175,197,0.05)"}
+                  onMouseLeave={e => e.currentTarget.style.background="transparent"}>
+                  <td style={{ ...tdStyle,color:col.textSecondary,fontWeight:600,fontSize:12 }}>{item.item_numero||"—"}</td>
+                  <td style={{ ...tdStyle,color:col.textMuted,fontSize:12,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{item.capitulo||"—"}</td>
+                  <td style={{ ...tdStyle,color:col.textTable }}>{item.descripcion}</td>
+                  <td style={{ ...tdStyle,color:col.textSecondary,fontSize:12 }}>{item.unidad||"—"}</td>
+                  <td style={{ ...tdStyle,color:"#22c55e",fontWeight:600,fontSize:12,textAlign:"right" }}>
+                    {item.precio_unitario ? `$${Math.round(item.precio_unitario).toLocaleString("es-CO")}` : "—"}
+                  </td>
+                  <td style={tdStyle}>
+                    <span style={S.badge(item.estado_precio==="Aprobado"?"aprobado":"pendiente")}>
+                      {item.estado_precio||"Pendiente"}
+                    </span>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ══════════════ POPUP DETALLE ══════════════ */}
+      {popup && (
+        <div style={overlayStyle} onClick={e => e.target===e.currentTarget && setPopup(null)}>
+          <div style={modalStyle(820)}>
+
+            <div style={modalHead}>
+              <div>
+                <div style={{ fontSize:10,color:"#4a7a87",letterSpacing:1,textTransform:"uppercase",marginBottom:3 }}>Detalle del Precio</div>
+                <div style={{ fontSize:17,fontWeight:700,color:"#e0f4f7",fontFamily:"'Rajdhani',sans-serif" }}>
+                  {popup.item_numero} — {(popup.descripcion||"").substring(0,55)}{(popup.descripcion||"").length>55?"...":""}
+                </div>
+              </div>
+              <div style={{ display:"flex",alignItems:"center",gap:12 }}>
+                <span style={{ ...S.badge(popupEsAprobado?"aprobado":"pendiente"),fontSize:12,padding:"5px 14px" }}>
+                  {popupEsAprobado?"✓ Aprobado":"⏳ Pendiente"}
+                </span>
+                <button style={S.closeBtn} onClick={() => setPopup(null)}>✕</button>
+              </div>
+            </div>
+
+            <div style={modalScroll}>
+              <div style={secTitle}>Información del Precio</div>
+
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
+                <div>
+                  <div style={labelStyle}>Capítulo</div>
+                  <input style={{ ...S.input,opacity:perms?.editar?1:0.55 }} value={popup.capitulo||""} disabled={!perms?.editar} onChange={e=>setPopupField("capitulo",e.target.value)} />
+                </div>
+                <div>
+                  <div style={labelStyle}>Competencia</div>
+                  <select style={{ ...S.select,width:"100%",opacity:perms?.editar?1:0.55 }} value={popup.competencia||""} disabled={!perms?.editar} onChange={e=>setPopupField("competencia",e.target.value)}>
+                    <option value="">-- Selecciona --</option>
+                    {COMPETENCIAS.map(c=><option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
+                <div>
+                  <div style={labelStyle}>Ítem *</div>
+                  <input style={{ ...S.input,opacity:perms?.editar?1:0.55 }} value={popup.item_numero||""} disabled={!perms?.editar} onChange={e=>setPopupField("item_numero",e.target.value)} />
+                </div>
+                <div>
+                  <div style={labelStyle}>Tipo de Precio *</div>
+                  <select style={{ ...S.select,width:"100%",opacity:perms?.editar?1:0.55 }} value={popup.tipo_precio||""} disabled={!perms?.editar} onChange={e=>cambiarTipoPopup(e.target.value)}>
+                    <option value="">-- Selecciona --</option>
+                    <option value="Precio Contractual">Precio Contractual</option>
+                    <option value="Precio No Previsto">Precio No Previsto</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ marginBottom:14 }}>
+                <div style={labelStyle}>Descripción *</div>
+                <input style={{ ...S.input,opacity:perms?.editar?1:0.55 }} value={popup.descripcion||""} disabled={!perms?.editar} onChange={e=>setPopupField("descripcion",e.target.value)} />
+              </div>
+
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14,marginBottom:14 }}>
+                <div>
+                  <div style={labelStyle}>Unidad *</div>
+                  {perms?.editar ? (
+                    <UnidadSelector value={popup.unidad||""} onChange={v=>setPopupField("unidad",v)}
+                      modoCustom={uModoCustomP} setModoCustom={setUModoCustomP}
+                      uCustom={uCustomP} setUCustom={setUCustomP} />
+                  ) : (
+                    <input style={{ ...S.input,opacity:0.55 }} value={popup.unidad||""} disabled />
+                  )}
+                </div>
+                <div>
+                  <div style={labelStyle}>Valor Unitario *</div>
+                  <input style={{ ...S.input,opacity:perms?.editar?1:0.55 }} type="number" value={popup.precio_unitario||""} disabled={!perms?.editar} onChange={e=>setPopupField("precio_unitario",parseFloat(e.target.value)||0)} />
+                </div>
+                <div>
+                  <div style={labelStyle}>Costo Directo Presupuestado</div>
+                  <div style={{ ...S.input,opacity:0.5,pointerEvents:"none",color:"#22c55e",fontWeight:600 }}>
+                    {statsLoading?"Calculando...":fmt(stats?Math.round((stats.cant_presupuestada||0)*(popup.precio_unitario||0)):null)}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ marginBottom:14 }}>
+                <div style={labelStyle}>Especificación Técnica *</div>
+                <textarea style={{ ...S.input,resize:"vertical",minHeight:80,opacity:perms?.editar?1:0.55 }} value={popup.especificacion_tecnica||""} disabled={!perms?.editar} onChange={e=>setPopupField("especificacion_tecnica",e.target.value)} />
+              </div>
+
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
+                <div>
+                  <div style={labelStyle}>Acta de Fijación {!popupEsContractual?"*":""}</div>
+                  <input style={{ ...S.input,opacity:(!perms?.editar||popupEsContractual)?0.45:1 }}
+                    value={popup.acta_fijacion||""} disabled={!perms?.editar||popupEsContractual}
+                    placeholder={popupEsContractual?"Contractual (automático)":"Número de acta"}
+                    onChange={e=>setPopupField("acta_fijacion",e.target.value.replace(/[^0-9]/g,""))} />
+                </div>
+                <div>
+                  <div style={labelStyle}>Acta Modificatoria {!popupEsContractual?"*":""}</div>
+                  <input style={{ ...S.input,opacity:(!perms?.editar||popupEsContractual)?0.45:1 }}
+                    value={popup.acta_modificatoria||""} disabled={!perms?.editar||popupEsContractual}
+                    placeholder={popupEsContractual?"N/A":"Número de acta modificatoria"}
+                    onChange={e=>setPopupField("acta_modificatoria",e.target.value.replace(/[^0-9]/g,""))} />
+                </div>
+              </div>
+
+              <div style={{ marginBottom:22 }}>
+                <div style={labelStyle}>Observaciones</div>
+                <textarea style={{ ...S.input,resize:"vertical",minHeight:60,opacity:perms?.editar?1:0.55 }} value={popup.observaciones||""} disabled={!perms?.editar} onChange={e=>setPopupField("observaciones",e.target.value)} />
+              </div>
+
+              {/* Balance ppto vs cobro */}
+              <div style={divider}>
+                <div style={secTitle}>Balance Presupuesto vs Cobro</div>
+                {statsLoading ? (
+                  <div style={{ color:"#4a7a87",fontSize:13,padding:"8px 0" }}>Calculando estadísticas...</div>
+                ) : stats ? (
+                  <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12 }}>
+                    {[
+                      { label:"Presupuestado", cant:stats.cant_presupuestada, costo:stats.costo_presupuestado, color:"#00afc5", bg:"rgba(0,175,197,0.06)", border:"rgba(0,175,197,0.2)" },
+                      { label:"Cobrado",        cant:stats.cant_cobrada,       costo:stats.costo_cobrado,       color:"#22c55e", bg:"rgba(34,197,94,0.06)",  border:"rgba(34,197,94,0.2)"  },
+                      { label:stats.balance_cant>=0?"Disponible":"Excedido",
+                        cant:stats.balance_cant, costo:stats.balance_costo,
+                        color:stats.balance_cant>=0?"#22c55e":"#ef4444",
+                        bg:stats.balance_cant>=0?"rgba(34,197,94,0.06)":"rgba(239,68,68,0.06)",
+                        border:stats.balance_cant>=0?"rgba(34,197,94,0.2)":"rgba(239,68,68,0.2)" },
+                    ].map(card => (
+                      <div key={card.label} style={{ background:card.bg,border:`1px solid ${card.border}`,borderRadius:8,padding:"14px 16px" }}>
+                        <div style={{ fontSize:10,color:"#4a7a87",letterSpacing:0.8,textTransform:"uppercase",marginBottom:8 }}>{card.label}</div>
+                        <div style={{ fontSize:16,fontWeight:700,color:card.color }}>{fmtCant(card.cant)}</div>
+                        <div style={{ fontSize:11,color:"#4a7a87",marginTop:2 }}>{popup.unidad||""}</div>
+                        <div style={{ fontSize:13,fontWeight:600,color:card.color,marginTop:6 }}>{fmt(card.costo)}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ color:"#4a7a87",fontSize:13 }}>No se pudieron cargar las estadísticas.</div>
+                )}
+              </div>
+
+              {/* Validación */}
+              <div style={{ borderTop:"1px solid rgba(0,175,197,0.1)",paddingTop:20 }}>
+                <div style={secTitle}>Validación del Precio</div>
+                <div style={{ display:"flex",alignItems:"center",gap:14,flexWrap:"wrap" }}>
+                  <span style={{ ...S.badge(popupEsAprobado?"aprobado":"pendiente"),fontSize:13,padding:"6px 16px" }}>
+                    {popupEsAprobado?"✓ Precio Aprobado":"⏳ Pendiente de Aprobación"}
+                  </span>
+                  {perms?.validar && !popupEsAprobado && !popupEsContractual && (
+                    <span style={{ fontSize:12,color:puedeAprobarNP?"#22c55e":"#f59e0b" }}>
+                      {puedeAprobarNP
+                        ? "✓ Condiciones cumplidas — guarda los cambios para aprobar"
+                        : "⚠ Complete Acta de Fijación y Acta Modificatoria (número > 0) para aprobar"}
+                    </span>
+                  )}
+                  {perms?.validar && popupEsAprobado && (
+                    <button style={S.btn("primary",true)} onClick={recalcular} disabled={recalculando}>
+                      {recalculando?"Recalculando...":"⟳ Recalcular Cobros"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div style={modalFoot}>
+              <button style={S.btn("ghost")} onClick={() => setPopup(null)}>Cerrar</button>
+              {perms?.editar && (
+                <button style={S.btn("primary")} onClick={guardarEdicion} disabled={saving}>
+                  {saving?"Guardando...":"💾 Guardar cambios"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════ MODAL CREAR PRECIO ══════════════ */}
+      {showCrear && (
+        <div style={overlayStyle} onClick={e => e.target===e.currentTarget && setShowCrear(false)}>
+          <div style={modalStyle(760)}>
+
+            <div style={modalHead}>
+              <div style={{ fontSize:17,fontWeight:700,color:"#e0f4f7",fontFamily:"'Rajdhani',sans-serif" }}>Crear Nuevo Precio</div>
+              <button style={S.closeBtn} onClick={() => setShowCrear(false)}>✕</button>
+            </div>
+
+            <div style={modalScroll}>
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
+                <div>
+                  <div style={labelStyle}>Capítulo</div>
+                  <input style={S.input} value={crearForm.capitulo} onChange={e=>setCF("capitulo",e.target.value)} placeholder="Ej: 1.PRELIMINARES" />
+                </div>
+                <div>
+                  <div style={labelStyle}>Competencia</div>
+                  <select style={{ ...S.select,width:"100%" }} value={crearForm.competencia} onChange={e=>setCF("competencia",e.target.value)}>
+                    <option value="">-- Selecciona --</option>
+                    {COMPETENCIAS.map(c=><option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
+                <div>
+                  <div style={labelStyle}>Ítem *</div>
+                  <input style={S.input} value={crearForm.item_numero} onChange={e=>setCF("item_numero",e.target.value)} placeholder="Ej: 1.01" />
+                </div>
+                <div>
+                  <div style={labelStyle}>Tipo de Precio *</div>
+                  <select style={{ ...S.select,width:"100%" }} value={crearForm.tipo_precio} onChange={e=>cambiarTipoCrear(e.target.value)}>
+                    <option value="">-- Selecciona --</option>
+                    <option value="Precio Contractual">Precio Contractual</option>
+                    <option value="Precio No Previsto">Precio No Previsto</option>
+                  </select>
+                </div>
+              </div>
+
+              <div style={{ marginBottom:14 }}>
+                <div style={labelStyle}>Descripción *</div>
+                <input style={S.input} value={crearForm.descripcion} onChange={e=>setCF("descripcion",e.target.value)} />
+              </div>
+
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
+                <div>
+                  <div style={labelStyle}>Unidad *</div>
+                  <UnidadSelector value={crearForm.unidad} onChange={v=>setCF("unidad",v)}
+                    modoCustom={uModoCustomC} setModoCustom={setUModoCustomC}
+                    uCustom={uCustomC} setUCustom={setUCustomC} />
+                </div>
+                <div>
+                  <div style={labelStyle}>Valor Unitario *</div>
+                  <input style={S.input} type="number" value={crearForm.precio_unitario} onChange={e=>setCF("precio_unitario",e.target.value)} placeholder="0" />
+                </div>
+              </div>
+
+              <div style={{ marginBottom:14 }}>
+                <div style={labelStyle}>Especificación Técnica *</div>
+                <textarea style={{ ...S.input,resize:"vertical",minHeight:80 }} value={crearForm.especificacion_tecnica} onChange={e=>setCF("especificacion_tecnica",e.target.value)} />
+              </div>
+
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
+                <div>
+                  <div style={labelStyle}>Acta de Fijación {!crearEsContractual?"*":""}</div>
+                  <input style={{ ...S.input,opacity:crearEsContractual?0.45:1 }}
+                    value={crearForm.acta_fijacion} disabled={crearEsContractual}
+                    placeholder={crearEsContractual?"Contractual (automático)":"Número de acta"}
+                    onChange={e=>setCF("acta_fijacion",e.target.value.replace(/[^0-9]/g,""))} />
+                </div>
+                <div>
+                  <div style={labelStyle}>Acta Modificatoria {!crearEsContractual?"*":""}</div>
+                  <input style={{ ...S.input,opacity:crearEsContractual?0.45:1 }}
+                    value={crearForm.acta_modificatoria} disabled={crearEsContractual}
+                    placeholder={crearEsContractual?"N/A":"Número de acta modificatoria"}
+                    onChange={e=>setCF("acta_modificatoria",e.target.value.replace(/[^0-9]/g,""))} />
+                </div>
+              </div>
+
+              <div style={{ marginBottom:8 }}>
+                <div style={labelStyle}>Observaciones</div>
+                <textarea style={{ ...S.input,resize:"vertical",minHeight:60 }} value={crearForm.observaciones} onChange={e=>setCF("observaciones",e.target.value)} />
+              </div>
+            </div>
+
+            <div style={modalFoot}>
+              <button style={S.btn("ghost")} onClick={() => setShowCrear(false)}>Cancelar</button>
+              <button style={S.btn("primary")} onClick={crearPrecio} disabled={creating}>{creating?"Creando...":"✓ Crear Precio"}</button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -1480,7 +1846,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
               })()
             }
           />}
-            {tab === "precios"   && <SeccionListadoPrecios call={call} contratos={contratos} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true } : precioPerms} theme={activeTheme} />}
+            {tab === "precios"   && <SeccionListadoPrecios call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true, validar: true } : precioPerms} theme={activeTheme} />}
             {tab === "resets"    && <SeccionResets    call={call} theme={activeTheme} />}
               {tab === "logs"      && <SeccionLogs      call={call} theme={activeTheme} />}
           </div>

@@ -127,6 +127,12 @@ class ListadoPrecioItem(BaseModel):
     unidad: Optional[str] = None
     precio_unitario: Optional[float] = None
     color_hex: Optional[str] = None
+    tipo_precio: Optional[str] = None
+    especificacion_tecnica: Optional[str] = None
+    acta_fijacion: Optional[str] = None
+    acta_modificatoria: Optional[str] = None
+    observaciones: Optional[str] = None
+    estado_precio: Optional[str] = None
 
 class PresupuestoRow(BaseModel):
     pk_id: Optional[str] = None
@@ -717,14 +723,100 @@ def bulk_precios(contrato_id: int, items: List[ListadoPrecioItem], current_user=
 
 @app.put("/listado-precios/item/{item_id}")
 def update_precio(item_id: int, body: ListadoPrecioItem, current_user=Depends(get_current_user)):
-    data = body.dict(exclude_unset=True)
+    data = body.dict(exclude_none=True)
+    tipo = data.get("tipo_precio")
+    if tipo == "Precio Contractual":
+        data["estado_precio"] = "Aprobado"
+        data["acta_fijacion"] = "Contractual"
+        data.pop("acta_modificatoria", None)
+    elif tipo == "Precio No Previsto":
+        try:
+            f_val = float(data.get("acta_fijacion") or 0)
+            m_val = float(data.get("acta_modificatoria") or 0)
+        except (ValueError, TypeError):
+            f_val, m_val = 0, 0
+        data["estado_precio"] = "Aprobado" if (f_val > 0 and m_val > 0) else "Pendiente"
     supabase.table("listado_precios").update(data).eq("id", item_id).execute()
-    return {"mensaje": "Item actualizado"}
+    return {"ok": True}
 
 @app.delete("/listado-precios/item/{item_id}")
 def delete_precio(item_id: int, current_user=Depends(get_current_user)):
     supabase.table("listado_precios").delete().eq("id", item_id).execute()
-    return {"mensaje": "Item eliminado"}
+
+@app.post("/listado-precios/{contrato_id}/item")
+def crear_precio(contrato_id: int, body: ListadoPrecioItem, current_user=Depends(get_current_user)):
+    """Crea un ítem individual en el listado de precios con lógica de aprobación automática."""
+    row = body.dict(exclude_none=True)
+    row["contrato_id"] = contrato_id
+    if body.tipo_precio == "Precio Contractual":
+        row["estado_precio"] = "Aprobado"
+        row["acta_fijacion"] = "Contractual"
+        row.pop("acta_modificatoria", None)
+    else:
+        try:
+            f_val = float(row.get("acta_fijacion") or 0)
+            m_val = float(row.get("acta_modificatoria") or 0)
+        except (ValueError, TypeError):
+            f_val, m_val = 0, 0
+        row["estado_precio"] = "Aprobado" if (f_val > 0 and m_val > 0) else "Pendiente"
+    result = supabase.table("listado_precios").insert(row).execute()
+    return result.data[0] if result.data else {"ok": True}
+
+@app.get("/listado-precios/item/{item_id}/stats")
+def get_precio_stats(item_id: int, current_user=Depends(get_current_user)):
+    """Retorna cantidades y costos presupuestados, cobrados y balance para un ítem del listado."""
+    precio = supabase.table("listado_precios").select(
+        "contrato_id, capitulo, competencia, item_numero, precio_unitario"
+    ).eq("id", item_id).single().execute().data
+    if not precio:
+        raise HTTPException(status_code=404, detail="Ítem no encontrado")
+    contrato_id  = precio["contrato_id"]
+    capitulo     = precio.get("capitulo") or ""
+    competencia  = precio.get("competencia") or ""
+    item_numero  = precio.get("item_numero") or ""
+    vlr_unitario = float(precio.get("precio_unitario") or 0)
+    ppto_q = supabase.table("presupuesto").select("cant_total").eq("contrato_id", contrato_id).eq("item", item_numero).eq("tipo_ejecucion", "Presupuesto de Obra").eq("dado_de_baja", False)
+    if capitulo:
+        ppto_q = ppto_q.eq("capitulo", capitulo)
+    if competencia:
+        ppto_q = ppto_q.eq("competencia", competencia)
+    ppto_rows = ppto_q.execute().data or []
+    cant_ppto = sum(float(r.get("cant_total") or 0) for r in ppto_rows)
+    cobro_q = supabase.table("cobro").select("cantidad, costo_directo").eq("contrato_id", contrato_id).eq("item", item_numero)
+    if capitulo:
+        cobro_q = cobro_q.eq("capitulo", capitulo)
+    if competencia:
+        cobro_q = cobro_q.eq("competencia", competencia)
+    cobro_rows = cobro_q.execute().data or []
+    cant_cobro  = sum(float(r.get("cantidad") or 0) for r in cobro_rows)
+    costo_cobro = sum(float(r.get("costo_directo") or 0) for r in cobro_rows)
+    costo_ppto  = round(cant_ppto * vlr_unitario)
+    return {
+        "cant_presupuestada":  round(cant_ppto, 4),
+        "costo_presupuestado": costo_ppto,
+        "cant_cobrada":        round(cant_cobro, 4),
+        "costo_cobrado":       round(costo_cobro),
+        "balance_cant":        round(cant_ppto - cant_cobro, 4),
+        "balance_costo":       round(costo_ppto - costo_cobro),
+    }
+
+@app.post("/listado-precios/item/{item_id}/recalcular")
+def recalcular_cobros_precio(item_id: int, current_user=Depends(get_current_user)):
+    """Actualiza de Pendiente → Aprobado todos los registros de cobro de este ítem de precio."""
+    precio = supabase.table("listado_precios").select(
+        "contrato_id, capitulo, competencia, item_numero, estado_precio"
+    ).eq("id", item_id).single().execute().data
+    if not precio:
+        raise HTTPException(status_code=404, detail="Ítem no encontrado")
+    if precio.get("estado_precio") != "Aprobado":
+        raise HTTPException(status_code=400, detail="El precio debe estar Aprobado antes de recalcular cobros")
+    q = supabase.table("cobro").update({"precio_estado": "Aprobado"}).eq("contrato_id", precio["contrato_id"]).eq("item", precio["item_numero"]).eq("precio_estado", "Pendiente")
+    if precio.get("capitulo"):
+        q = q.eq("capitulo", precio["capitulo"])
+    if precio.get("competencia"):
+        q = q.eq("competencia", precio["competencia"])
+    result = q.execute()
+    return {"recalculados": len(result.data or [])}
 
 # ─────────────────────────────────────────────
 # PRESUPUESTO
