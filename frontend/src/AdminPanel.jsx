@@ -1196,7 +1196,10 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
   };
   const itemsOrdenados = [...items].sort((a, b) => {
     const cc = cmpNatural(a.capitulo, b.capitulo);
-    return cc !== 0 ? cc : cmpNatural(a.item_numero, b.item_numero);
+    if (cc !== 0) return cc;
+    const ck = (a.competencia||"").localeCompare(b.competencia||"", "es");
+    if (ck !== 0) return ck;
+    return cmpNatural(a.item_numero, b.item_numero);
   });
   const itemsFiltrados = itemsOrdenados.filter(i => {
     if (filtroTexto    && !((i.descripcion||"")+" "+(i.item_numero||"")).toLowerCase().includes(filtroTexto.toLowerCase())) return false;
@@ -1656,29 +1659,59 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
                   {statsLoading ? (
                     <div style={{color:"#4a7a87",fontSize:13,padding:"6px 0"}}>Calculando estadísticas...</div>
                   ) : stats ? (
-                    <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                      {[
-                        { label:"Presupuestado", cant:stats.cant_presupuestada, costo:stats.costo_presupuestado, color:"#00afc5", bg:"rgba(0,175,197,0.06)", border:"rgba(0,175,197,0.2)" },
-                        { label:"Cobrado",        cant:stats.cant_cobrada,       costo:stats.costo_cobrado,       color:"#22c55e", bg:"rgba(34,197,94,0.06)",  border:"rgba(34,197,94,0.2)"  },
-                        { label:stats.balance_cant>=0?"Disponible":"Excedido",
-                          cant:stats.balance_cant, costo:stats.balance_costo,
-                          color:stats.balance_cant>=0?"#22c55e":"#ef4444",
-                          bg:stats.balance_cant>=0?"rgba(34,197,94,0.06)":"rgba(239,68,68,0.06)",
-                          border:stats.balance_cant>=0?"rgba(34,197,94,0.2)":"rgba(239,68,68,0.2)" },
-                      ].map(card => (
-                        <div key={card.label} style={{background:card.bg,border:`1px solid ${card.border}`,borderRadius:8,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                          <div>
-                            <div style={{fontSize:10,color:"#4a7a87",letterSpacing:0.8,textTransform:"uppercase",marginBottom:3}}>{card.label}</div>
-                            <div style={{fontSize:18,fontWeight:700,color:card.color}}>{fmtCant(card.cant)}</div>
-                            <div style={{fontSize:11,color:"#4a7a87",marginTop:1}}>{popup.unidad||""}</div>
-                          </div>
-                          <div style={{textAlign:"right"}}>
-                            <div style={{fontSize:10,color:"#4a7a87",marginBottom:2}}>Costo Directo</div>
-                            <div style={{fontSize:15,fontWeight:700,color:card.color}}>{fmt(card.costo)}</div>
-                          </div>
+                    (() => {
+                    const CardBalance = ({label, cant, costo, color, bg, border}) => (
+                      <div style={{background:bg,border:`1px solid ${border}`,borderRadius:8,padding:"8px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                        <div>
+                          <div style={{fontSize:9,color:"#4a7a87",letterSpacing:0.8,textTransform:"uppercase",marginBottom:2}}>{label}</div>
+                          <div style={{fontSize:16,fontWeight:700,color}}>{fmtCant(cant)}</div>
+                          <div style={{fontSize:10,color:"#4a7a87",marginTop:1}}>{popup.unidad||""}</div>
                         </div>
-                      ))}
-                    </div>
+                        <div style={{textAlign:"right"}}>
+                          <div style={{fontSize:9,color:"#4a7a87",marginBottom:2}}>Costo Directo</div>
+                          <div style={{fontSize:13,fontWeight:700,color}}>{fmt(costo)}</div>
+                        </div>
+                      </div>
+                    );
+                    const bPptoCant  = stats.balance_cant;
+                    const bLiqCant   = stats.balance_liq_cant ?? 0;
+                    const hayLiq     = (stats.cant_liquidacion ?? 0) > 0;
+                    return (
+                      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                        {/* ── Grupo 1: Presupuesto vs Cobro ── */}
+                        <div style={{fontSize:9,color:"#00afc5",fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:2}}>📋 Presupuesto de Obra vs Cobro</div>
+                        <CardBalance label="Presupuestado"
+                          cant={stats.cant_presupuestada} costo={stats.costo_presupuestado}
+                          color="#00afc5" bg="rgba(0,175,197,0.06)" border="rgba(0,175,197,0.2)" />
+                        <CardBalance label="Cobrado"
+                          cant={stats.cant_cobrada} costo={stats.costo_cobrado}
+                          color="#22c55e" bg="rgba(34,197,94,0.06)" border="rgba(34,197,94,0.2)" />
+                        <CardBalance
+                          label={bPptoCant>=0?"Disponible por cobrar":"Excedido"}
+                          cant={bPptoCant} costo={stats.balance_costo}
+                          color={bPptoCant>=0?"#22c55e":"#ef4444"}
+                          bg={bPptoCant>=0?"rgba(34,197,94,0.06)":"rgba(239,68,68,0.06)"}
+                          border={bPptoCant>=0?"rgba(34,197,94,0.2)":"rgba(239,68,68,0.2)"} />
+
+                        {/* ── Grupo 2: Liquidación vs Cobro ── */}
+                        <div style={{fontSize:9,color:"#a78bfa",fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginTop:6,marginBottom:2}}>⚖️ Obra Ejecutada vs Cobro</div>
+                        <CardBalance label="Liquidación (Obra Ejecutada)"
+                          cant={stats.cant_liquidacion??0} costo={stats.costo_liquidacion??0}
+                          color="#a78bfa" bg="rgba(167,139,250,0.06)" border="rgba(167,139,250,0.2)" />
+                        <CardBalance
+                          label={bLiqCant>=0?"Por Cobrar":"Por Devolución"}
+                          cant={bLiqCant} costo={stats.balance_liq_costo??0}
+                          color={bLiqCant>=0?"#22c55e":"#f59e0b"}
+                          bg={bLiqCant>=0?"rgba(34,197,94,0.06)":"rgba(245,158,11,0.06)"}
+                          border={bLiqCant>=0?"rgba(34,197,94,0.2)":"rgba(245,158,11,0.2)"} />
+                        {!hayLiq && (
+                          <div style={{fontSize:11,color:"#4a7a87",fontStyle:"italic",textAlign:"center",paddingTop:4}}>
+                            Sin registros de Obra Ejecutada para este ítem
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()
                   ) : (
                     <div style={{color:"#4a7a87",fontSize:13}}>No se pudieron cargar las estadísticas.</div>
                   )}

@@ -2670,6 +2670,7 @@ async function restaurar(id) {
                 <th style={thStyle}><input type="checkbox" checked={seleccionados.size === registrosFiltrados.length && registrosFiltrados.length > 0} onChange={toggleTodos} /></th>
                 <th style={thStyle}>ID_POL</th>
                 <th style={thStyle}>Capítulo</th>
+                <th style={thStyle}>Competencia</th>
                 <th style={thStyle}>Ítem</th>
                 <th style={thStyle}>Descripción</th>
                 <th style={thStyle}>Und</th>
@@ -2711,6 +2712,7 @@ async function restaurar(id) {
                         style={{ width:'120px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
                         : r.capitulo}
                     </td>
+                    <td style={{ ...tdStyle, fontSize:'11px', color:t.textMuted }}>{r.competencia||'—'}</td>
                     <td style={tdStyle}>
                       {isEdit ? <input value={editValues.item} onChange={e=>setEditValues({...editValues,item:e.target.value})}
                         style={{ width:'80px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} onClick={e=>e.stopPropagation()} />

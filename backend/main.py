@@ -813,6 +813,14 @@ def get_precio_stats(item_id: int, current_user=Depends(get_current_user)):
     cant_cobro  = sum(float(r.get("cantidad") or 0) for r in cobro_rows)
     costo_cobro = sum(float(r.get("costo_directo") or 0) for r in cobro_rows)
     costo_ppto  = round(cant_ppto * vlr_unitario)
+    liq_q = supabase.table("presupuesto").select("cant_total").eq("contrato_id", contrato_id).eq("item", item_numero).eq("tipo_ejecucion", "Obra Ejecutada").eq("dado_de_baja", False)
+    if capitulo:
+        liq_q = liq_q.eq("capitulo", capitulo)
+    if competencia:
+        liq_q = liq_q.eq("competencia", competencia)
+    liq_rows = liq_q.execute().data or []
+    cant_liq  = sum(float(r.get("cant_total") or 0) for r in liq_rows)
+    costo_liq = round(cant_liq * vlr_unitario)
     return {
         "cant_presupuestada":  round(cant_ppto, 4),
         "costo_presupuestado": costo_ppto,
@@ -820,6 +828,10 @@ def get_precio_stats(item_id: int, current_user=Depends(get_current_user)):
         "costo_cobrado":       round(costo_cobro),
         "balance_cant":        round(cant_ppto - cant_cobro, 4),
         "balance_costo":       round(costo_ppto - costo_cobro),
+        "cant_liquidacion":    round(cant_liq, 4),
+        "costo_liquidacion":   costo_liq,
+        "balance_liq_cant":    round(cant_liq - cant_cobro, 4),
+        "balance_liq_costo":   round(costo_liq - costo_cobro),
     }
 
 @app.post("/listado-precios/item/{item_id}/recalcular")
