@@ -1521,7 +1521,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
       {/* ══════════════ POPUP DETALLE ══════════════ */}
       {popup && (
         <div style={overlayStyle} onClick={e => e.target===e.currentTarget && setPopup(null)}>
-          <div style={modalStyle(820)}>
+          <div style={modalStyle(1100)}>
 
             <div style={modalHead}>
               <div>
@@ -1538,161 +1538,173 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
               </div>
             </div>
 
-            <div style={modalScroll}>
-              <div style={secTitle}>Información del Precio</div>
+            <div style={{display:"flex",flex:1,overflow:"hidden"}}>
 
-              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
-                <div>
-                  <div style={labelStyle}>Capítulo</div>
-                  {perms?.editar ? (
-                    !capModoCustomP ? (
-                      <select style={selectStyle} value={capitulosUnicos.includes(popup.capitulo||"")?popup.capitulo||"":""}
-                        onChange={e=>{if(e.target.value==="__custom__"){setCapModoCustomP(true);setCapCustomP("");}else setPopupField("capitulo",e.target.value);}}>
-                        <option value="">-- Selecciona --</option>
-                        {capitulosUnicos.map(c=><option key={c} value={c}>{c}</option>)}
-                        {popup.capitulo && !capitulosUnicos.includes(popup.capitulo) && <option value={popup.capitulo}>{popup.capitulo}</option>}
-                        <option value="__custom__">+ Agregar capítulo...</option>
-                      </select>
+              {/* ── Panel izquierdo: formulario ── */}
+              <div style={{flex:"0 0 56%",padding:"14px 20px",overflowY:"auto",borderRight:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)"}}>
+                <div style={{...secTitle,marginBottom:10}}>Información del Precio</div>
+
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                  <div>
+                    <div style={labelStyle}>Capítulo</div>
+                    {perms?.editar ? (
+                      !capModoCustomP ? (
+                        <select style={selectStyle} value={capitulosUnicos.includes(popup.capitulo||"")?popup.capitulo||"":""}
+                          onChange={e=>{if(e.target.value==="__custom__"){setCapModoCustomP(true);setCapCustomP("");}else setPopupField("capitulo",e.target.value);}}>
+                          <option value="">-- Selecciona --</option>
+                          {capitulosUnicos.map(c=><option key={c} value={c}>{c}</option>)}
+                          {popup.capitulo && !capitulosUnicos.includes(popup.capitulo) && <option value={popup.capitulo}>{popup.capitulo}</option>}
+                          <option value="__custom__">+ Agregar capítulo...</option>
+                        </select>
+                      ) : (
+                        <div style={{display:"flex",gap:6}}>
+                          <input style={inputStyle} placeholder="Nuevo capítulo" value={capCustomP} onChange={e=>setCapCustomP(e.target.value)}
+                            onKeyDown={e=>{if(e.key==="Enter"&&capCustomP.trim()){setPopupField("capitulo",capCustomP.trim());setCapModoCustomP(false);}}} />
+                          <button style={S.btn("primary",true)} onClick={()=>{if(capCustomP.trim()){setPopupField("capitulo",capCustomP.trim());setCapModoCustomP(false);}}}>+</button>
+                          <button style={S.btn("ghost",true)} onClick={()=>setCapModoCustomP(false)}>✕</button>
+                        </div>
+                      )
                     ) : (
-                      <div style={{display:"flex",gap:6}}>
-                        <input style={inputStyle} placeholder="Nuevo capítulo" value={capCustomP} onChange={e=>setCapCustomP(e.target.value)}
-                          onKeyDown={e=>{if(e.key==="Enter"&&capCustomP.trim()){setPopupField("capitulo",capCustomP.trim());setCapModoCustomP(false);}}} />
-                        <button style={S.btn("primary",true)} onClick={()=>{if(capCustomP.trim()){setPopupField("capitulo",capCustomP.trim());setCapModoCustomP(false);}}}>+</button>
-                        <button style={S.btn("ghost",true)} onClick={()=>setCapModoCustomP(false)}>✕</button>
-                      </div>
-                    )
-                  ) : (
-                    <input style={{...inputStyle,opacity:0.55}} value={popup.capitulo||""} disabled />
-                  )}
-                </div>
-                <div>
-                  <div style={labelStyle}>Competencia</div>
-                  <select style={{...selectStyle,opacity:perms?.editar?1:0.55}} value={popup.competencia||""} disabled={!perms?.editar} onChange={e=>setPopupField("competencia",e.target.value)}>
-                    <option value="">-- Selecciona --</option>
-                    {COMPETENCIAS.map(c=><option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
-                <div>
-                  <div style={labelStyle}>Ítem *</div>
-                  <input style={{...inputStyle,opacity:perms?.editar?1:0.55}} value={popup.item_numero||""} disabled={!perms?.editar} onChange={e=>setPopupField("item_numero",e.target.value)} />
-                </div>
-                <div>
-                  <div style={labelStyle}>Tipo de Precio *</div>
-                  <select style={{...selectStyle,opacity:perms?.editar?1:0.55}} value={popup.tipo_precio||""} disabled={!perms?.editar} onChange={e=>cambiarTipoPopup(e.target.value)}>
-                    <option value="">-- Selecciona --</option>
-                    <option value="Precio Contractual">Precio Contractual</option>
-                    <option value="Precio No Previsto">Precio No Previsto</option>
-                  </select>
-                </div>
-              </div>
-
-              <div style={{ marginBottom:14 }}>
-                <div style={labelStyle}>Descripción *</div>
-                <input style={{...inputStyle,opacity:perms?.editar?1:0.55}} value={popup.descripcion||""} disabled={!perms?.editar} onChange={e=>setPopupField("descripcion",e.target.value)} />
-              </div>
-
-              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14,marginBottom:14 }}>
-                <div>
-                  <div style={labelStyle}>Unidad *</div>
-                  {perms?.editar ? (
-                    <UnidadSelector value={popup.unidad||""} onChange={v=>setPopupField("unidad",v)}
-                      modoCustom={uModoCustomP} setModoCustom={setUModoCustomP}
-                      uCustom={uCustomP} setUCustom={setUCustomP} />
-                  ) : (
-                    <input style={{...inputStyle,opacity:0.55}} value={popup.unidad||""} disabled />
-                  )}
-                </div>
-                <div>
-                  <div style={labelStyle}>Valor Unitario *</div>
-                  <input style={{...inputStyle,opacity:perms?.editar?1:0.55}} type="number" value={popup.precio_unitario||""} disabled={!perms?.editar} onChange={e=>setPopupField("precio_unitario",parseFloat(e.target.value)||0)} />
-                </div>
-                <div>
-                  <div style={labelStyle}>Costo Directo Presupuestado</div>
-                  <div style={{...inputStyle,opacity:0.5,pointerEvents:"none",color:"#22c55e",fontWeight:600}}>
-                    {statsLoading?"Calculando...":fmt(stats?Math.round((stats.cant_presupuestada||0)*(popup.precio_unitario||0)):null)}
+                      <input style={{...inputStyle,opacity:0.55}} value={popup.capitulo||""} disabled />
+                    )}
+                  </div>
+                  <div>
+                    <div style={labelStyle}>Competencia</div>
+                    <select style={{...selectStyle,opacity:perms?.editar?1:0.55}} value={popup.competencia||""} disabled={!perms?.editar} onChange={e=>setPopupField("competencia",e.target.value)}>
+                      <option value="">-- Selecciona --</option>
+                      {COMPETENCIAS.map(c=><option key={c} value={c}>{c}</option>)}
+                    </select>
                   </div>
                 </div>
-              </div>
 
-              <div style={{ marginBottom:14 }}>
-                <div style={labelStyle}>Especificación Técnica *</div>
-                <textarea style={{...inputStyle,resize:"vertical",minHeight:80,opacity:perms?.editar?1:0.55}} value={popup.especificacion_tecnica||""} disabled={!perms?.editar} onChange={e=>setPopupField("especificacion_tecnica",e.target.value)} />
-              </div>
-
-              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
-                <div>
-                  <div style={labelStyle}>Acta de Fijación {!popupEsContractual?"*":""}</div>
-                  <input style={{...inputStyle,opacity:(!perms?.editar||popupEsContractual)?0.45:1}}
-                    value={popup.acta_fijacion||""} disabled={!perms?.editar||popupEsContractual}
-                    placeholder={popupEsContractual?"Contractual (automático)":"Número de acta"}
-                    onChange={e=>setPopupField("acta_fijacion",e.target.value.replace(/[^0-9]/g,""))} />
-                </div>
-                <div>
-                  <div style={labelStyle}>Acta Modificatoria {!popupEsContractual?"*":""}</div>
-                  <input style={{...inputStyle,opacity:(!perms?.editar||popupEsContractual)?0.45:1}}
-                    value={popup.acta_modificatoria||""} disabled={!perms?.editar||popupEsContractual}
-                    placeholder={popupEsContractual?"N/A":"Número de acta modificatoria"}
-                    onChange={e=>setPopupField("acta_modificatoria",e.target.value.replace(/[^0-9]/g,""))} />
-                </div>
-              </div>
-
-              <div style={{ marginBottom:22 }}>
-                <div style={labelStyle}>Observaciones</div>
-                <textarea style={{...inputStyle,resize:"vertical",minHeight:60,opacity:perms?.editar?1:0.55}} value={popup.observaciones||""} disabled={!perms?.editar} onChange={e=>setPopupField("observaciones",e.target.value)} />
-              </div>
-
-              {/* Balance ppto vs cobro */}
-              <div style={divider}>
-                <div style={secTitle}>Balance Presupuesto vs Cobro</div>
-                {statsLoading ? (
-                  <div style={{ color:"#4a7a87",fontSize:13,padding:"8px 0" }}>Calculando estadísticas...</div>
-                ) : stats ? (
-                  <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12 }}>
-                    {[
-                      { label:"Presupuestado", cant:stats.cant_presupuestada, costo:stats.costo_presupuestado, color:"#00afc5", bg:"rgba(0,175,197,0.06)", border:"rgba(0,175,197,0.2)" },
-                      { label:"Cobrado",        cant:stats.cant_cobrada,       costo:stats.costo_cobrado,       color:"#22c55e", bg:"rgba(34,197,94,0.06)",  border:"rgba(34,197,94,0.2)"  },
-                      { label:stats.balance_cant>=0?"Disponible":"Excedido",
-                        cant:stats.balance_cant, costo:stats.balance_costo,
-                        color:stats.balance_cant>=0?"#22c55e":"#ef4444",
-                        bg:stats.balance_cant>=0?"rgba(34,197,94,0.06)":"rgba(239,68,68,0.06)",
-                        border:stats.balance_cant>=0?"rgba(34,197,94,0.2)":"rgba(239,68,68,0.2)" },
-                    ].map(card => (
-                      <div key={card.label} style={{ background:card.bg,border:`1px solid ${card.border}`,borderRadius:8,padding:"14px 16px" }}>
-                        <div style={{ fontSize:10,color:"#4a7a87",letterSpacing:0.8,textTransform:"uppercase",marginBottom:8 }}>{card.label}</div>
-                        <div style={{ fontSize:16,fontWeight:700,color:card.color }}>{fmtCant(card.cant)}</div>
-                        <div style={{ fontSize:11,color:"#4a7a87",marginTop:2 }}>{popup.unidad||""}</div>
-                        <div style={{ fontSize:13,fontWeight:600,color:card.color,marginTop:6 }}>{fmt(card.costo)}</div>
-                      </div>
-                    ))}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                  <div>
+                    <div style={labelStyle}>Ítem *</div>
+                    <input style={{...inputStyle,opacity:perms?.editar?1:0.55}} value={popup.item_numero||""} disabled={!perms?.editar} onChange={e=>setPopupField("item_numero",e.target.value)} />
                   </div>
-                ) : (
-                  <div style={{ color:"#4a7a87",fontSize:13 }}>No se pudieron cargar las estadísticas.</div>
-                )}
+                  <div>
+                    <div style={labelStyle}>Tipo de Precio *</div>
+                    <select style={{...selectStyle,opacity:perms?.editar?1:0.55}} value={popup.tipo_precio||""} disabled={!perms?.editar} onChange={e=>cambiarTipoPopup(e.target.value)}>
+                      <option value="">-- Selecciona --</option>
+                      <option value="Precio Contractual">Precio Contractual</option>
+                      <option value="Precio No Previsto">Precio No Previsto</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div style={{marginBottom:10}}>
+                  <div style={labelStyle}>Descripción *</div>
+                  <input style={{...inputStyle,opacity:perms?.editar?1:0.55}} value={popup.descripcion||""} disabled={!perms?.editar} onChange={e=>setPopupField("descripcion",e.target.value)} />
+                </div>
+
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10}}>
+                  <div>
+                    <div style={labelStyle}>Unidad *</div>
+                    {perms?.editar ? (
+                      <UnidadSelector value={popup.unidad||""} onChange={v=>setPopupField("unidad",v)}
+                        modoCustom={uModoCustomP} setModoCustom={setUModoCustomP}
+                        uCustom={uCustomP} setUCustom={setUCustomP} />
+                    ) : (
+                      <input style={{...inputStyle,opacity:0.55}} value={popup.unidad||""} disabled />
+                    )}
+                  </div>
+                  <div>
+                    <div style={labelStyle}>Valor Unitario *</div>
+                    <input style={{...inputStyle,opacity:perms?.editar?1:0.55}} type="number" value={popup.precio_unitario||""} disabled={!perms?.editar} onChange={e=>setPopupField("precio_unitario",parseFloat(e.target.value)||0)} />
+                  </div>
+                  <div>
+                    <div style={labelStyle}>Costo Directo</div>
+                    <div style={{...inputStyle,opacity:0.5,pointerEvents:"none",color:"#22c55e",fontWeight:600}}>
+                      {statsLoading?"...":fmt(stats?Math.round((stats.cant_presupuestada||0)*(popup.precio_unitario||0)):null)}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{marginBottom:10}}>
+                  <div style={labelStyle}>Especificación Técnica *</div>
+                  <textarea style={{...inputStyle,resize:"vertical",minHeight:54,opacity:perms?.editar?1:0.55}} value={popup.especificacion_tecnica||""} disabled={!perms?.editar} onChange={e=>setPopupField("especificacion_tecnica",e.target.value)} />
+                </div>
+
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                  <div>
+                    <div style={labelStyle}>Acta de Fijación {!popupEsContractual?"*":""}</div>
+                    <input style={{...inputStyle,opacity:(!perms?.editar||popupEsContractual)?0.45:1}}
+                      value={popup.acta_fijacion||""} disabled={!perms?.editar||popupEsContractual}
+                      placeholder={popupEsContractual?"Contractual (automático)":"Número de acta"}
+                      onChange={e=>setPopupField("acta_fijacion",e.target.value.replace(/[^0-9]/g,""))} />
+                  </div>
+                  <div>
+                    <div style={labelStyle}>Acta Modificatoria {!popupEsContractual?"*":""}</div>
+                    <input style={{...inputStyle,opacity:(!perms?.editar||popupEsContractual)?0.45:1}}
+                      value={popup.acta_modificatoria||""} disabled={!perms?.editar||popupEsContractual}
+                      placeholder={popupEsContractual?"N/A":"Número de acta modificatoria"}
+                      onChange={e=>setPopupField("acta_modificatoria",e.target.value.replace(/[^0-9]/g,""))} />
+                  </div>
+                </div>
+
+                <div>
+                  <div style={labelStyle}>Observaciones</div>
+                  <textarea style={{...inputStyle,resize:"vertical",minHeight:46,opacity:perms?.editar?1:0.55}} value={popup.observaciones||""} disabled={!perms?.editar} onChange={e=>setPopupField("observaciones",e.target.value)} />
+                </div>
               </div>
 
-              {/* Validación */}
-              <div style={{ borderTop:"1px solid rgba(0,175,197,0.1)",paddingTop:20 }}>
-                <div style={secTitle}>Validación del Precio</div>
-                <div style={{ display:"flex",alignItems:"center",gap:14,flexWrap:"wrap" }}>
-                  <span style={{ ...S.badge(popupEsAprobado?"aprobado":"pendiente"),fontSize:13,padding:"6px 16px" }}>
-                    {popupEsAprobado?"✓ Precio Aprobado":"⏳ Pendiente de Aprobación"}
-                  </span>
-                  {perms?.validar && !popupEsAprobado && !popupEsContractual && (
-                    <span style={{ fontSize:12,color:puedeAprobarNP?"#22c55e":"#f59e0b" }}>
-                      {puedeAprobarNP
-                        ? "✓ Condiciones cumplidas — guarda los cambios para aprobar"
-                        : "⚠ Complete Acta de Fijación y Acta Modificatoria (número > 0) para aprobar"}
+              {/* ── Panel derecho: balance + validación ── */}
+              <div style={{flex:"0 0 44%",padding:"14px 20px",overflowY:"auto",display:"flex",flexDirection:"column",gap:18}}>
+
+                <div>
+                  <div style={{...secTitle,marginBottom:10}}>Balance Presupuesto vs Cobro</div>
+                  {statsLoading ? (
+                    <div style={{color:"#4a7a87",fontSize:13,padding:"6px 0"}}>Calculando estadísticas...</div>
+                  ) : stats ? (
+                    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                      {[
+                        { label:"Presupuestado", cant:stats.cant_presupuestada, costo:stats.costo_presupuestado, color:"#00afc5", bg:"rgba(0,175,197,0.06)", border:"rgba(0,175,197,0.2)" },
+                        { label:"Cobrado",        cant:stats.cant_cobrada,       costo:stats.costo_cobrado,       color:"#22c55e", bg:"rgba(34,197,94,0.06)",  border:"rgba(34,197,94,0.2)"  },
+                        { label:stats.balance_cant>=0?"Disponible":"Excedido",
+                          cant:stats.balance_cant, costo:stats.balance_costo,
+                          color:stats.balance_cant>=0?"#22c55e":"#ef4444",
+                          bg:stats.balance_cant>=0?"rgba(34,197,94,0.06)":"rgba(239,68,68,0.06)",
+                          border:stats.balance_cant>=0?"rgba(34,197,94,0.2)":"rgba(239,68,68,0.2)" },
+                      ].map(card => (
+                        <div key={card.label} style={{background:card.bg,border:`1px solid ${card.border}`,borderRadius:8,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <div>
+                            <div style={{fontSize:10,color:"#4a7a87",letterSpacing:0.8,textTransform:"uppercase",marginBottom:3}}>{card.label}</div>
+                            <div style={{fontSize:18,fontWeight:700,color:card.color}}>{fmtCant(card.cant)}</div>
+                            <div style={{fontSize:11,color:"#4a7a87",marginTop:1}}>{popup.unidad||""}</div>
+                          </div>
+                          <div style={{textAlign:"right"}}>
+                            <div style={{fontSize:10,color:"#4a7a87",marginBottom:2}}>Costo Directo</div>
+                            <div style={{fontSize:15,fontWeight:700,color:card.color}}>{fmt(card.costo)}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{color:"#4a7a87",fontSize:13}}>No se pudieron cargar las estadísticas.</div>
+                  )}
+                </div>
+
+                <div style={{borderTop:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",paddingTop:14}}>
+                  <div style={{...secTitle,marginBottom:10}}>Validación del Precio</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:12,alignItems:"flex-start"}}>
+                    <span style={{...S.badge(popupEsAprobado?"aprobado":"pendiente"),fontSize:13,padding:"6px 16px"}}>
+                      {popupEsAprobado?"✓ Precio Aprobado":"⏳ Pendiente de Aprobación"}
                     </span>
-                  )}
-                  {perms?.validar && popupEsAprobado && (
-                    <button style={S.btn("primary",true)} onClick={recalcular} disabled={recalculando}>
-                      {recalculando?"Recalculando...":"⟳ Recalcular Cobros"}
-                    </button>
-                  )}
+                    {perms?.validar && !popupEsAprobado && !popupEsContractual && (
+                      <span style={{fontSize:12,color:puedeAprobarNP?"#22c55e":"#f59e0b",lineHeight:1.6}}>
+                        {puedeAprobarNP
+                          ? "✓ Condiciones cumplidas — guarda los cambios para aprobar"
+                          : "⚠ Complete Acta de Fijación y Acta Modificatoria (número > 0) para aprobar"}
+                      </span>
+                    )}
+                    {perms?.validar && popupEsAprobado && (
+                      <button style={S.btn("primary",true)} onClick={recalcular} disabled={recalculando}>
+                        {recalculando?"Recalculando...":"⟳ Recalcular Cobros"}
+                      </button>
+                    )}
+                  </div>
                 </div>
+
               </div>
             </div>
 
