@@ -2646,3 +2646,203 @@ def get_usuarios_destinatarios(current_user=Depends(get_current_user)):
         {"id": r["id"], "nombre": f"{r['nombre']} {r.get('apellidos','')}", "cargo": cargos.get(r.get("cargo_id"), "")}
         for r in rows if r["id"] != uid
     ]
+
+# ─────────────────────────────────────────────────────────────
+# SUBCONTRATISTAS
+# ─────────────────────────────────────────────────────────────
+class SubcontratistaCreate(BaseModel):
+    razon_social:    str
+    objeto_contrato: Optional[str] = None
+    nit:             Optional[str] = None
+    nombre_contacto: Optional[str] = None
+    telefono:        Optional[str] = None
+
+class CorteCreate(BaseModel):
+    tipo_periodo: str          # 'quincenal' | 'mensual'
+    consecutivo:  int
+    fecha_inicio: str          # ISO date YYYY-MM-DD
+    fecha_fin:    str
+
+class CorteUpdate(BaseModel):
+    fecha_fin: str
+
+class SubprecioCreate(BaseModel):
+    listado_precio_id:   int
+    precio_unitario_sub: float
+
+class SubprecioUpdate(BaseModel):
+    precio_unitario_sub: float
+
+@app.get("/subcontratistas/{contrato_id}")
+def listar_subcontratistas(contrato_id: int, current_user=Depends(get_current_user)):
+    rows = supabase.table("subcontratistas").select("*").eq("contrato_id", contrato_id).order("razon_social").execute().data
+    return rows or []
+
+@app.post("/subcontratistas/{contrato_id}")
+def crear_subcontratista(contrato_id: int, body: SubcontratistaCreate, current_user=Depends(get_current_user)):
+    row = {"contrato_id": contrato_id, **body.dict()}
+    result = supabase.table("subcontratistas").insert(row).execute()
+    nuevo = result.data[0] if result.data else {}
+    registrar_log(current_user, "CREAR", "SUBCONTRATISTAS", "subcontratista", str(nuevo.get("id","")),
+                  {"razon_social": body.razon_social})
+    return nuevo
+
+@app.put("/subcontratistas/{sub_id}")
+def actualizar_subcontratista(sub_id: int, body: SubcontratistaCreate, current_user=Depends(get_current_user)):
+    supabase.table("subcontratistas").update(body.dict()).eq("id", sub_id).execute()
+    registrar_log(current_user, "EDITAR", "SUBCONTRATISTAS", "subcontratista", str(sub_id),
+                  {"razon_social": body.razon_social})
+    return {"ok": True}
+
+@app.patch("/subcontratistas/{sub_id}/toggle-activo")
+def toggle_activo_subcontratista(sub_id: int, current_user=Depends(get_current_user)):
+    actual = supabase.table("subcontratistas").select("activo").eq("id", sub_id).single().execute().data
+    nuevo_estado = not (actual.get("activo") or False)
+    supabase.table("subcontratistas").update({"activo": nuevo_estado}).eq("id", sub_id).execute()
+    registrar_log(current_user, "EDITAR", "SUBCONTRATISTAS", "subcontratista", str(sub_id),
+                  {"activo": nuevo_estado})
+    return {"activo": nuevo_estado}
+
+# ── Cortes ──────────────────────────────────────────────────
+@app.get("/subcontratistas/{sub_id}/cortes")
+def listar_cortes(sub_id: int, current_user=Depends(get_current_user)):
+    rows = supabase.table("subcontratista_cortes").select("*").eq("subcontratista_id", sub_id).order("consecutivo").execute().data
+    return rows or []
+
+@app.get("/subcontratistas/{sub_id}/proximo-consecutivo")
+def proximo_consecutivo(sub_id: int, current_user=Depends(get_current_user)):
+    rows = supabase.table("subcontratista_cortes").select("consecutivo").eq("subcontratista_id", sub_id).execute().data
+    maximo = max((r["consecutivo"] for r in rows), default=0)
+    return {"proximo": maximo + 1}
+
+@app.post("/subcontratistas/{sub_id}/cortes")
+def crear_corte(sub_id: int, body: CorteCreate, current_user=Depends(get_current_user)):
+    from datetime import date
+    fi = date.fromisoformat(body.fecha_inicio)
+    ff = date.fromisoformat(body.fecha_fin)
+    if ff <= fi:
+        raise HTTPException(status_code=400, detail="La fecha fin debe ser posterior a la fecha inicio.")
+    cortes_existentes = supabase.table("subcontratista_cortes").select("fecha_inicio, fecha_fin, consecutivo")\
+        .eq("subcontratista_id", sub_id).order("consecutivo").execute().data or []
+    if cortes_existentes:
+        ultimo = cortes_existentes[-1]
+        ultimo_fin = date.fromisoformat(str(ultimo["fecha_fin"]))
+        if fi != ultimo_fin:
+            raise HTTPException(status_code=400,
+                detail=f"La fecha inicio debe ser exactamente {ultimo_fin.isoformat()} (fecha fin del corte anterior).")
+    row = {
+        "subcontratista_id": sub_id,
+        "contrato_id": supabase.table("subcontratistas").select("contrato_id").eq("id", sub_id).single().execute().data["contrato_id"],
+        "consecutivo":   body.consecutivo,
+        "tipo_periodo":  body.tipo_periodo,
+        "fecha_inicio":  body.fecha_inicio,
+        "fecha_fin":     body.fecha_fin,
+    }
+    result = supabase.table("subcontratista_cortes").insert(row).execute()
+    nuevo = result.data[0] if result.data else {}
+    registrar_log(current_user, "CREAR", "SUBCONTRATISTAS", "corte", str(nuevo.get("id","")),
+                  {"subcontratista_id": sub_id, "consecutivo": body.consecutivo})
+    return nuevo
+
+@app.put("/subcontratistas/cortes/{corte_id}")
+def actualizar_corte(corte_id: int, body: CorteUpdate, current_user=Depends(get_current_user)):
+    from datetime import date, timedelta
+    corte = supabase.table("subcontratista_cortes").select("*").eq("id", corte_id).single().execute().data
+    if not corte:
+        raise HTTPException(status_code=404, detail="Corte no encontrado.")
+    nueva_fin = date.fromisoformat(body.fecha_fin)
+    supabase.table("subcontratista_cortes").update({"fecha_fin": body.fecha_fin}).eq("id", corte_id).execute()
+    siguiente = supabase.table("subcontratista_cortes").select("*")\
+        .eq("subcontratista_id", corte["subcontratista_id"])\
+        .eq("consecutivo", corte["consecutivo"] + 1).execute().data
+    if siguiente:
+        sig = siguiente[0]
+        tipo = sig.get("tipo_periodo", corte.get("tipo_periodo", "quincenal"))
+        nueva_fi_sig = nueva_fin
+        if tipo == "quincenal":
+            nueva_ff_sig = nueva_fi_sig + timedelta(days=15)
+        else:
+            from dateutil.relativedelta import relativedelta
+            nueva_ff_sig = nueva_fi_sig + relativedelta(months=1)
+        supabase.table("subcontratista_cortes").update({
+            "fecha_inicio": nueva_fi_sig.isoformat(),
+            "fecha_fin": nueva_ff_sig.isoformat(),
+        }).eq("id", sig["id"]).execute()
+    registrar_log(current_user, "EDITAR", "SUBCONTRATISTAS", "corte", str(corte_id),
+                  {"nueva_fecha_fin": body.fecha_fin})
+    return {"ok": True}
+
+# ── Precios subcontratista ───────────────────────────────────
+@app.get("/subcontratistas/{sub_id}/precios")
+def listar_precios_sub(sub_id: int, current_user=Depends(get_current_user)):
+    rows = supabase.table("subcontratista_precios").select(
+        "*, listado_precios(capitulo, competencia, item_numero, descripcion, unidad, precio_unitario)"
+    ).eq("subcontratista_id", sub_id).execute().data
+    result = []
+    for r in (rows or []):
+        lp = r.get("listado_precios") or {}
+        result.append({
+            "id":                   r["id"],
+            "listado_precio_id":    r["listado_precio_id"],
+            "precio_unitario_sub":  r["precio_unitario_sub"],
+            "capitulo":             lp.get("capitulo", ""),
+            "competencia":          lp.get("competencia", ""),
+            "item_numero":          lp.get("item_numero", ""),
+            "descripcion":          lp.get("descripcion", ""),
+            "unidad":               lp.get("unidad", ""),
+            "precio_unitario_ref":  lp.get("precio_unitario", 0),
+        })
+    return result
+
+@app.post("/subcontratistas/{sub_id}/precios")
+def agregar_precio_sub(sub_id: int, body: SubprecioCreate, current_user=Depends(get_current_user)):
+    sub = supabase.table("subcontratistas").select("contrato_id").eq("id", sub_id).single().execute().data
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subcontratista no encontrado.")
+    existente = supabase.table("listado_precios").select("id").eq("id", body.listado_precio_id)\
+        .eq("contrato_id", sub["contrato_id"]).execute().data
+    if not existente:
+        raise HTTPException(status_code=400, detail="El ítem no pertenece al listado de precios de este contrato.")
+    row = {
+        "subcontratista_id":   sub_id,
+        "contrato_id":         sub["contrato_id"],
+        "listado_precio_id":   body.listado_precio_id,
+        "precio_unitario_sub": body.precio_unitario_sub,
+    }
+    result = supabase.table("subcontratista_precios").insert(row).execute()
+    registrar_log(current_user, "CREAR", "SUBCONTRATISTAS", "precio_sub", str(sub_id),
+                  {"listado_precio_id": body.listado_precio_id})
+    return result.data[0] if result.data else {"ok": True}
+
+@app.put("/subcontratistas/precios/{precio_id}")
+def actualizar_precio_sub(precio_id: int, body: SubprecioUpdate, current_user=Depends(get_current_user)):
+    supabase.table("subcontratista_precios").update({"precio_unitario_sub": body.precio_unitario_sub})\
+        .eq("id", precio_id).execute()
+    registrar_log(current_user, "EDITAR", "SUBCONTRATISTAS", "precio_sub", str(precio_id),
+                  {"precio_unitario_sub": body.precio_unitario_sub})
+    return {"ok": True}
+
+@app.get("/subcontratistas/{contrato_id}/alertas-corte")
+def alertas_corte(contrato_id: int, current_user=Depends(get_current_user)):
+    """Subcontratistas cuyo corte activo vence mañana o hoy."""
+    from datetime import date, timedelta
+    hoy = date.today()
+    manana = hoy + timedelta(days=1)
+    subs = supabase.table("subcontratistas").select("id, razon_social").eq("contrato_id", contrato_id)\
+        .eq("activo", True).execute().data or []
+    alertas = []
+    for s in subs:
+        cortes = supabase.table("subcontratista_cortes").select("consecutivo, fecha_fin, tipo_periodo")\
+            .eq("subcontratista_id", s["id"]).order("consecutivo", desc=True).limit(1).execute().data
+        if cortes:
+            ultimo = cortes[0]
+            ff = date.fromisoformat(str(ultimo["fecha_fin"]))
+            if ff in (hoy, manana):
+                alertas.append({
+                    "subcontratista_id": s["id"],
+                    "razon_social":      s["razon_social"],
+                    "fecha_fin":         ultimo["fecha_fin"],
+                    "consecutivo":       ultimo["consecutivo"],
+                    "vence_hoy":         ff == hoy,
+                })
+    return alertas
