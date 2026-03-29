@@ -1173,6 +1173,10 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
   const [uModoCustomP,     setUModoCustomP]     = useState(false);
   const [uCustomC,         setUCustomC]         = useState("");
   const [uCustomP,         setUCustomP]         = useState("");
+  const [capModoCustomP,   setCapModoCustomP]   = useState(false);
+  const [capCustomP,       setCapCustomP]       = useState("");
+  const [capModoCustomC,   setCapModoCustomC]   = useState(false);
+  const [capCustomC,       setCapCustomC]       = useState("");
   const [filtroTexto,      setFiltroTexto]      = useState("");
   const [filtroCapitulo,   setFiltroCapitulo]   = useState("");
   const [filtroEstado,     setFiltroEstado]     = useState("");
@@ -1184,13 +1188,23 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
   const COMPETENCIAS = ["EAB","ENEL-CODENSA","ETB","Gas Natural","IDU","MOVISTAR"];
 
   const fmt     = (v) => v != null ? `$${Math.round(Number(v)).toLocaleString("es-CO")}` : "—";
-  const itemsFiltrados = items.filter(i => {
+  const cmpNatural = (a, b) => {
+    const num = s => parseFloat((s||"").match(/^(\d+(\.\d+)?)/)?.[1] ?? "9999");
+    const na = num(a), nb = num(b);
+    if (na !== nb) return na - nb;
+    return (a||"").localeCompare(b||"", "es");
+  };
+  const itemsOrdenados = [...items].sort((a, b) => {
+    const cc = cmpNatural(a.capitulo, b.capitulo);
+    return cc !== 0 ? cc : cmpNatural(a.item_numero, b.item_numero);
+  });
+  const itemsFiltrados = itemsOrdenados.filter(i => {
     if (filtroTexto    && !((i.descripcion||"")+" "+(i.item_numero||"")).toLowerCase().includes(filtroTexto.toLowerCase())) return false;
     if (filtroCapitulo && (i.capitulo||"") !== filtroCapitulo) return false;
     if (filtroEstado   && (i.estado_precio||"Pendiente") !== filtroEstado) return false;
     return true;
   });
-  const capitulosUnicos = [...new Set(items.map(i => i.capitulo).filter(Boolean))].sort();
+  const capitulosUnicos = [...new Set(items.map(i => i.capitulo).filter(Boolean))].sort(cmpNatural);
   const fmtCant = (v) => v != null ? Number(v).toLocaleString("es-CO", { maximumFractionDigits: 4 }) : "—";
 
   // ── Carga ──────────────────────────────────────────────────────────────────
@@ -1254,6 +1268,19 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
     finally { setRecalculando(false); }
   };
 
+  // ── Plantilla CSV ──────────────────────────────────────────────────────────
+  const descargarPlantilla = () => {
+    const filas = [
+      "capitulo,competencia,item_numero,descripcion,unidad,precio_unitario,tipo_precio,especificacion_tecnica,acta_fijacion,acta_modificatoria,observaciones",
+      "1.PRELIMINARES,IDU,1.01,REPLANTEO GENERAL,M2,601,Precio Contractual,Descripción técnica del ítem,,,",
+      "2.EXCAVACIONES,IDU,2.01,EXCAVACION MECANICA,M3,4819,Precio No Previsto,Descripción técnica,15,3,Ítem adicional aprobado",
+    ].join("\n");
+    const blob = new Blob(["\uFEFF" + filas], { type:"text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href=url; a.download="plantilla_listado_precios.csv"; a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // ── CSV import ─────────────────────────────────────────────────────────────
   const uploadCSV = async (e) => {
     const file = e.target.files[0]; if (!file) return;
@@ -1295,22 +1322,22 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
   // ── XLSX export ────────────────────────────────────────────────────────────
   const exportarXLSX = () => {
     if (!items.length) return;
-    const data = items.map(i => ({
-      "Ítem":                   i.item_numero             || "",
+    const data = itemsOrdenados.map(i => ({
       "Capítulo":               i.capitulo                || "",
       "Competencia":            i.competencia             || "",
+      "Ítem":                   i.item_numero             || "",
       "Descripción":            i.descripcion             || "",
       "Unidad":                 i.unidad                  || "",
-      "Tipo de Precio":         i.tipo_precio             || "",
       "Valor Unitario":         i.precio_unitario         || 0,
       "Estado":                 i.estado_precio           || "",
+      "Tipo de Precio":         i.tipo_precio             || "",
       "Especificación Técnica": i.especificacion_tecnica  || "",
       "Acta de Fijación":       i.acta_fijacion           || "",
       "Acta Modificatoria":     i.acta_modificatoria      || "",
       "Observaciones":          i.observaciones           || "",
     }));
     const ws = XLSX.utils.json_to_sheet(data);
-    ws["!cols"] = [{wch:10},{wch:22},{wch:16},{wch:48},{wch:10},{wch:20},{wch:16},{wch:12},{wch:42},{wch:16},{wch:18},{wch:30}];
+    ws["!cols"] = [{wch:24},{wch:16},{wch:10},{wch:48},{wch:10},{wch:16},{wch:12},{wch:20},{wch:42},{wch:16},{wch:18},{wch:30}];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Listado de Precios");
     XLSX.writeFile(wb, `listado_precios_${contratoId}.xlsx`);
@@ -1356,6 +1383,8 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
 
   // ── Estilos locales reutilizables ──────────────────────────────────────────
   const labelStyle   = { fontSize:11, color:col.textSecondary, marginBottom:5 };
+  const inputStyle   = theme === "light" ? { ...S.input, background:"#FFFFFF", color:"#0d3b52", border:"1px solid #BAE6FD" } : S.input;
+  const selectStyle  = theme === "light" ? { ...S.select, background:"#FFFFFF", color:"#0d3b52", border:"1px solid #BAE6FD", width:"100%" } : { ...S.select, width:"100%" };
   const overlayStyle = { position:"fixed",inset:0,zIndex:10001,background:"rgba(5,12,18,0.92)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center" };
   const modalStyle   = (w) => ({ width:`min(${w}px,95vw)`,maxHeight:"92vh",background:theme==="light"?"#F0F9FF":"#0b1920",borderRadius:14,border:"1px solid rgba(0,175,197,0.2)",boxShadow:"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column" });
   const modalHead    = { padding:"18px 28px 14px",borderBottom:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)",background:theme==="light"?"#E0F2FE":"#081318",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0 };
@@ -1413,6 +1442,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
         {perms?.exportar && items.length > 0 && (
           <button style={S.btn("ghost",true)} onClick={exportarXLSX}>⬇ Exportar XLSX</button>
         )}
+        <button style={S.btn("ghost",true)} onClick={descargarPlantilla} title="Descarga un CSV de ejemplo con todos los campos">📋 Plantilla</button>
         {items.length > 0 && (
           <span style={{ marginLeft:"auto",fontSize:12,color:col.textMuted }}>{items.length.toLocaleString("es-CO")} precios</span>
         )}
@@ -1458,7 +1488,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
           <table style={S.table}>
             <thead>
               <tr>
-                {["Ítem","Capítulo","Descripción","Unidad","Valor Unitario","Estado"].map((h,i) => (
+                {["Capítulo","Competencia","Ítem","Descripción","Unidad","Valor Unitario","Estado"].map((h,i) => (
                   <th key={i} style={S.th}>{h}</th>
                 ))}
               </tr>
@@ -1468,8 +1498,9 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
                 <tr key={item.id} onClick={() => abrirDetalle(item)} style={{ cursor:"pointer",transition:"background 0.15s" }}
                   onMouseEnter={e => e.currentTarget.style.background="rgba(0,175,197,0.05)"}
                   onMouseLeave={e => e.currentTarget.style.background="transparent"}>
+                  <td style={{ ...tdStyle,color:col.textMuted,fontSize:12,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{item.capitulo||"—"}</td>
+                  <td style={{ ...tdStyle,color:col.textMuted,fontSize:12 }}>{item.competencia||"—"}</td>
                   <td style={{ ...tdStyle,color:col.textSecondary,fontWeight:600,fontSize:12 }}>{item.item_numero||"—"}</td>
-                  <td style={{ ...tdStyle,color:col.textMuted,fontSize:12,maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{item.capitulo||"—"}</td>
                   <td style={{ ...tdStyle,color:col.textTable }}>{item.descripcion}</td>
                   <td style={{ ...tdStyle,color:col.textSecondary,fontSize:12 }}>{item.unidad||"—"}</td>
                   <td style={{ ...tdStyle,color:"#22c55e",fontWeight:600,fontSize:12,textAlign:"right" }}>
@@ -1513,11 +1544,30 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
               <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
                 <div>
                   <div style={labelStyle}>Capítulo</div>
-                  <input style={{ ...S.input,opacity:perms?.editar?1:0.55 }} value={popup.capitulo||""} disabled={!perms?.editar} onChange={e=>setPopupField("capitulo",e.target.value)} />
+                  {perms?.editar ? (
+                    !capModoCustomP ? (
+                      <select style={selectStyle} value={capitulosUnicos.includes(popup.capitulo||"")?popup.capitulo||"":""}
+                        onChange={e=>{if(e.target.value==="__custom__"){setCapModoCustomP(true);setCapCustomP("");}else setPopupField("capitulo",e.target.value);}}>
+                        <option value="">-- Selecciona --</option>
+                        {capitulosUnicos.map(c=><option key={c} value={c}>{c}</option>)}
+                        {popup.capitulo && !capitulosUnicos.includes(popup.capitulo) && <option value={popup.capitulo}>{popup.capitulo}</option>}
+                        <option value="__custom__">+ Agregar capítulo...</option>
+                      </select>
+                    ) : (
+                      <div style={{display:"flex",gap:6}}>
+                        <input style={inputStyle} placeholder="Nuevo capítulo" value={capCustomP} onChange={e=>setCapCustomP(e.target.value)}
+                          onKeyDown={e=>{if(e.key==="Enter"&&capCustomP.trim()){setPopupField("capitulo",capCustomP.trim());setCapModoCustomP(false);}}} />
+                        <button style={S.btn("primary",true)} onClick={()=>{if(capCustomP.trim()){setPopupField("capitulo",capCustomP.trim());setCapModoCustomP(false);}}}>+</button>
+                        <button style={S.btn("ghost",true)} onClick={()=>setCapModoCustomP(false)}>✕</button>
+                      </div>
+                    )
+                  ) : (
+                    <input style={{...inputStyle,opacity:0.55}} value={popup.capitulo||""} disabled />
+                  )}
                 </div>
                 <div>
                   <div style={labelStyle}>Competencia</div>
-                  <select style={{ ...S.select,width:"100%",opacity:perms?.editar?1:0.55 }} value={popup.competencia||""} disabled={!perms?.editar} onChange={e=>setPopupField("competencia",e.target.value)}>
+                  <select style={{...selectStyle,opacity:perms?.editar?1:0.55}} value={popup.competencia||""} disabled={!perms?.editar} onChange={e=>setPopupField("competencia",e.target.value)}>
                     <option value="">-- Selecciona --</option>
                     {COMPETENCIAS.map(c=><option key={c} value={c}>{c}</option>)}
                   </select>
@@ -1527,11 +1577,11 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
               <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
                 <div>
                   <div style={labelStyle}>Ítem *</div>
-                  <input style={{ ...S.input,opacity:perms?.editar?1:0.55 }} value={popup.item_numero||""} disabled={!perms?.editar} onChange={e=>setPopupField("item_numero",e.target.value)} />
+                  <input style={{...inputStyle,opacity:perms?.editar?1:0.55}} value={popup.item_numero||""} disabled={!perms?.editar} onChange={e=>setPopupField("item_numero",e.target.value)} />
                 </div>
                 <div>
                   <div style={labelStyle}>Tipo de Precio *</div>
-                  <select style={{ ...S.select,width:"100%",opacity:perms?.editar?1:0.55 }} value={popup.tipo_precio||""} disabled={!perms?.editar} onChange={e=>cambiarTipoPopup(e.target.value)}>
+                  <select style={{...selectStyle,opacity:perms?.editar?1:0.55}} value={popup.tipo_precio||""} disabled={!perms?.editar} onChange={e=>cambiarTipoPopup(e.target.value)}>
                     <option value="">-- Selecciona --</option>
                     <option value="Precio Contractual">Precio Contractual</option>
                     <option value="Precio No Previsto">Precio No Previsto</option>
@@ -1541,7 +1591,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
 
               <div style={{ marginBottom:14 }}>
                 <div style={labelStyle}>Descripción *</div>
-                <input style={{ ...S.input,opacity:perms?.editar?1:0.55 }} value={popup.descripcion||""} disabled={!perms?.editar} onChange={e=>setPopupField("descripcion",e.target.value)} />
+                <input style={{...inputStyle,opacity:perms?.editar?1:0.55}} value={popup.descripcion||""} disabled={!perms?.editar} onChange={e=>setPopupField("descripcion",e.target.value)} />
               </div>
 
               <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14,marginBottom:14 }}>
@@ -1552,16 +1602,16 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
                       modoCustom={uModoCustomP} setModoCustom={setUModoCustomP}
                       uCustom={uCustomP} setUCustom={setUCustomP} />
                   ) : (
-                    <input style={{ ...S.input,opacity:0.55 }} value={popup.unidad||""} disabled />
+                    <input style={{...inputStyle,opacity:0.55}} value={popup.unidad||""} disabled />
                   )}
                 </div>
                 <div>
                   <div style={labelStyle}>Valor Unitario *</div>
-                  <input style={{ ...S.input,opacity:perms?.editar?1:0.55 }} type="number" value={popup.precio_unitario||""} disabled={!perms?.editar} onChange={e=>setPopupField("precio_unitario",parseFloat(e.target.value)||0)} />
+                  <input style={{...inputStyle,opacity:perms?.editar?1:0.55}} type="number" value={popup.precio_unitario||""} disabled={!perms?.editar} onChange={e=>setPopupField("precio_unitario",parseFloat(e.target.value)||0)} />
                 </div>
                 <div>
                   <div style={labelStyle}>Costo Directo Presupuestado</div>
-                  <div style={{ ...S.input,opacity:0.5,pointerEvents:"none",color:"#22c55e",fontWeight:600 }}>
+                  <div style={{...inputStyle,opacity:0.5,pointerEvents:"none",color:"#22c55e",fontWeight:600}}>
                     {statsLoading?"Calculando...":fmt(stats?Math.round((stats.cant_presupuestada||0)*(popup.precio_unitario||0)):null)}
                   </div>
                 </div>
@@ -1569,20 +1619,20 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
 
               <div style={{ marginBottom:14 }}>
                 <div style={labelStyle}>Especificación Técnica *</div>
-                <textarea style={{ ...S.input,resize:"vertical",minHeight:80,opacity:perms?.editar?1:0.55 }} value={popup.especificacion_tecnica||""} disabled={!perms?.editar} onChange={e=>setPopupField("especificacion_tecnica",e.target.value)} />
+                <textarea style={{...inputStyle,resize:"vertical",minHeight:80,opacity:perms?.editar?1:0.55}} value={popup.especificacion_tecnica||""} disabled={!perms?.editar} onChange={e=>setPopupField("especificacion_tecnica",e.target.value)} />
               </div>
 
               <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
                 <div>
                   <div style={labelStyle}>Acta de Fijación {!popupEsContractual?"*":""}</div>
-                  <input style={{ ...S.input,opacity:(!perms?.editar||popupEsContractual)?0.45:1 }}
+                  <input style={{...inputStyle,opacity:(!perms?.editar||popupEsContractual)?0.45:1}}
                     value={popup.acta_fijacion||""} disabled={!perms?.editar||popupEsContractual}
                     placeholder={popupEsContractual?"Contractual (automático)":"Número de acta"}
                     onChange={e=>setPopupField("acta_fijacion",e.target.value.replace(/[^0-9]/g,""))} />
                 </div>
                 <div>
                   <div style={labelStyle}>Acta Modificatoria {!popupEsContractual?"*":""}</div>
-                  <input style={{ ...S.input,opacity:(!perms?.editar||popupEsContractual)?0.45:1 }}
+                  <input style={{...inputStyle,opacity:(!perms?.editar||popupEsContractual)?0.45:1}}
                     value={popup.acta_modificatoria||""} disabled={!perms?.editar||popupEsContractual}
                     placeholder={popupEsContractual?"N/A":"Número de acta modificatoria"}
                     onChange={e=>setPopupField("acta_modificatoria",e.target.value.replace(/[^0-9]/g,""))} />
@@ -1591,7 +1641,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
 
               <div style={{ marginBottom:22 }}>
                 <div style={labelStyle}>Observaciones</div>
-                <textarea style={{ ...S.input,resize:"vertical",minHeight:60,opacity:perms?.editar?1:0.55 }} value={popup.observaciones||""} disabled={!perms?.editar} onChange={e=>setPopupField("observaciones",e.target.value)} />
+                <textarea style={{...inputStyle,resize:"vertical",minHeight:60,opacity:perms?.editar?1:0.55}} value={popup.observaciones||""} disabled={!perms?.editar} onChange={e=>setPopupField("observaciones",e.target.value)} />
               </div>
 
               {/* Balance ppto vs cobro */}
@@ -1664,7 +1714,10 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
           <div style={modalStyle(760)}>
 
             <div style={modalHead}>
-              <div style={{ fontSize:17,fontWeight:700,color:"#e0f4f7",fontFamily:"'Rajdhani',sans-serif" }}>Crear Nuevo Precio</div>
+              <div>
+                <div style={{ fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif" }}>Crear Nuevo Precio</div>
+                <div style={{ fontSize:11,color:col.textSecondary,marginTop:2 }}>Complete los campos para agregar un precio al listado</div>
+              </div>
               <button style={S.closeBtn} onClick={() => setShowCrear(false)}>✕</button>
             </div>
 
@@ -1672,11 +1725,25 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
               <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
                 <div>
                   <div style={labelStyle}>Capítulo</div>
-                  <input style={S.input} value={crearForm.capitulo} onChange={e=>setCF("capitulo",e.target.value)} placeholder="Ej: 1.PRELIMINARES" />
+                  {!capModoCustomC ? (
+                    <select style={selectStyle} value={capitulosUnicos.includes(crearForm.capitulo)?crearForm.capitulo:""}
+                      onChange={e=>{if(e.target.value==="__custom__"){setCapModoCustomC(true);setCapCustomC("");}else setCF("capitulo",e.target.value);}}>
+                      <option value="">-- Selecciona --</option>
+                      {capitulosUnicos.map(c=><option key={c} value={c}>{c}</option>)}
+                      <option value="__custom__">+ Agregar capítulo...</option>
+                    </select>
+                  ) : (
+                    <div style={{display:"flex",gap:6}}>
+                      <input style={inputStyle} placeholder="Nuevo capítulo" value={capCustomC} onChange={e=>setCapCustomC(e.target.value)}
+                        onKeyDown={e=>{if(e.key==="Enter"&&capCustomC.trim()){setCF("capitulo",capCustomC.trim());setCapModoCustomC(false);}}} />
+                      <button style={S.btn("primary",true)} onClick={()=>{if(capCustomC.trim()){setCF("capitulo",capCustomC.trim());setCapModoCustomC(false);}}}>+</button>
+                      <button style={S.btn("ghost",true)} onClick={()=>setCapModoCustomC(false)}>✕</button>
+                    </div>
+                  )}
                 </div>
                 <div>
                   <div style={labelStyle}>Competencia</div>
-                  <select style={{ ...S.select,width:"100%" }} value={crearForm.competencia} onChange={e=>setCF("competencia",e.target.value)}>
+                  <select style={selectStyle} value={crearForm.competencia} onChange={e=>setCF("competencia",e.target.value)}>
                     <option value="">-- Selecciona --</option>
                     {COMPETENCIAS.map(c=><option key={c} value={c}>{c}</option>)}
                   </select>
@@ -1686,11 +1753,11 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
               <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
                 <div>
                   <div style={labelStyle}>Ítem *</div>
-                  <input style={S.input} value={crearForm.item_numero} onChange={e=>setCF("item_numero",e.target.value)} placeholder="Ej: 1.01" />
+                  <input style={inputStyle} value={crearForm.item_numero} onChange={e=>setCF("item_numero",e.target.value)} placeholder="Ej: 1.01" />
                 </div>
                 <div>
                   <div style={labelStyle}>Tipo de Precio *</div>
-                  <select style={{ ...S.select,width:"100%" }} value={crearForm.tipo_precio} onChange={e=>cambiarTipoCrear(e.target.value)}>
+                  <select style={selectStyle} value={crearForm.tipo_precio} onChange={e=>cambiarTipoCrear(e.target.value)}>
                     <option value="">-- Selecciona --</option>
                     <option value="Precio Contractual">Precio Contractual</option>
                     <option value="Precio No Previsto">Precio No Previsto</option>
@@ -1700,7 +1767,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
 
               <div style={{ marginBottom:14 }}>
                 <div style={labelStyle}>Descripción *</div>
-                <input style={S.input} value={crearForm.descripcion} onChange={e=>setCF("descripcion",e.target.value)} />
+                <input style={inputStyle} value={crearForm.descripcion} onChange={e=>setCF("descripcion",e.target.value)} />
               </div>
 
               <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
@@ -1712,26 +1779,26 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
                 </div>
                 <div>
                   <div style={labelStyle}>Valor Unitario *</div>
-                  <input style={S.input} type="number" value={crearForm.precio_unitario} onChange={e=>setCF("precio_unitario",e.target.value)} placeholder="0" />
+                  <input style={inputStyle} type="number" value={crearForm.precio_unitario} onChange={e=>setCF("precio_unitario",e.target.value)} placeholder="0" />
                 </div>
               </div>
 
               <div style={{ marginBottom:14 }}>
                 <div style={labelStyle}>Especificación Técnica *</div>
-                <textarea style={{ ...S.input,resize:"vertical",minHeight:80 }} value={crearForm.especificacion_tecnica} onChange={e=>setCF("especificacion_tecnica",e.target.value)} />
+                <textarea style={{...inputStyle,resize:"vertical",minHeight:80}} value={crearForm.especificacion_tecnica} onChange={e=>setCF("especificacion_tecnica",e.target.value)} />
               </div>
 
               <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
                 <div>
                   <div style={labelStyle}>Acta de Fijación {!crearEsContractual?"*":""}</div>
-                  <input style={{ ...S.input,opacity:crearEsContractual?0.45:1 }}
+                  <input style={{...inputStyle,opacity:crearEsContractual?0.45:1}}
                     value={crearForm.acta_fijacion} disabled={crearEsContractual}
                     placeholder={crearEsContractual?"Contractual (automático)":"Número de acta"}
                     onChange={e=>setCF("acta_fijacion",e.target.value.replace(/[^0-9]/g,""))} />
                 </div>
                 <div>
                   <div style={labelStyle}>Acta Modificatoria {!crearEsContractual?"*":""}</div>
-                  <input style={{ ...S.input,opacity:crearEsContractual?0.45:1 }}
+                  <input style={{...inputStyle,opacity:crearEsContractual?0.45:1}}
                     value={crearForm.acta_modificatoria} disabled={crearEsContractual}
                     placeholder={crearEsContractual?"N/A":"Número de acta modificatoria"}
                     onChange={e=>setCF("acta_modificatoria",e.target.value.replace(/[^0-9]/g,""))} />
@@ -1740,10 +1807,9 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
 
               <div style={{ marginBottom:8 }}>
                 <div style={labelStyle}>Observaciones</div>
-                <textarea style={{ ...S.input,resize:"vertical",minHeight:60 }} value={crearForm.observaciones} onChange={e=>setCF("observaciones",e.target.value)} />
+                <textarea style={{...inputStyle,resize:"vertical",minHeight:60}} value={crearForm.observaciones} onChange={e=>setCF("observaciones",e.target.value)} />
               </div>
             </div>
-
             <div style={modalFoot}>
               <button style={S.btn("ghost")} onClick={() => setShowCrear(false)}>Cancelar</button>
               <button style={S.btn("primary")} onClick={crearPrecio} disabled={creating}>{creating?"Creando...":"✓ Crear Precio"}</button>
