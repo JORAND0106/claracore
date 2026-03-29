@@ -1208,7 +1208,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
     return true;
   });
   const capitulosUnicos = [...new Set(items.map(i => i.capitulo).filter(Boolean))].sort(cmpNatural);
-  const fmtCant = (v) => v != null ? Number(v).toLocaleString("es-CO", { maximumFractionDigits: 4 }) : "—";
+  const fmtCant = (v) => v != null ? Number(v).toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
 
   // ── Carga ──────────────────────────────────────────────────────────────────
   const cargar = useCallback(async () => {
