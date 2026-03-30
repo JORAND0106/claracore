@@ -88,6 +88,8 @@ class ContratoCreate(BaseModel):
     interventoria: Optional[str] = None
     logo_contratista: Optional[str] = None
     logo_interventoria: Optional[str] = None
+    aiu: Optional[float] = None
+    iva: Optional[float] = None
 
 class PermisoUpdate(BaseModel):
     cargo_id: int
@@ -118,6 +120,8 @@ class ContratoUpdate(BaseModel):
     logo_contratista: Optional[str] = None
     logo_interventoria: Optional[str] = None
     fase: Optional[str] = None  # 'PRESUPUESTO' | 'LIQUIDACION'
+    aiu: Optional[float] = None
+    iva: Optional[float] = None
 
 class ListadoPrecioItem(BaseModel):
     capitulo: Optional[str] = None
@@ -133,6 +137,7 @@ class ListadoPrecioItem(BaseModel):
     acta_modificatoria: Optional[str] = None
     observaciones: Optional[str] = None
     estado_precio: Optional[str] = None
+    tipo_calculo:  Optional[str] = None
 
 class PresupuestoRow(BaseModel):
     pk_id: Optional[str] = None
@@ -2762,8 +2767,9 @@ def actualizar_corte(corte_id: int, body: CorteUpdate, current_user=Depends(get_
         if tipo == "quincenal":
             nueva_ff_sig = nueva_fi_sig + timedelta(days=15)
         else:
-            from dateutil.relativedelta import relativedelta
-            nueva_ff_sig = nueva_fi_sig + relativedelta(months=1)
+            import calendar
+            dias_mes = calendar.monthrange(nueva_fi_sig.year, nueva_fi_sig.month)[1]
+            nueva_ff_sig = nueva_fi_sig + timedelta(days=dias_mes)
         supabase.table("subcontratista_cortes").update({
             "fecha_inicio": nueva_fi_sig.isoformat(),
             "fecha_fin": nueva_ff_sig.isoformat(),

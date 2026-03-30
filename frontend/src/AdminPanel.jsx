@@ -968,7 +968,7 @@ function SeccionResets({ call, theme }) {
 
 // ─── SECCIÓN 5: Contratos ──────────────────────────────────────────────────
 function SeccionContratos({ call, contratos, recargarContratos, perms = { crear: false, editar: false } }) {
-  const FORM_VACIO = { numero: '', objeto: '', contratista: '', nit: '', interventoria: '', logo_contratista: '', logo_interventoria: '' };
+  const FORM_VACIO = { numero: '', objeto: '', contratista: '', nit: '', interventoria: '', logo_contratista: '', logo_interventoria: '', aiu: '', iva: '' };
   const [form, setForm] = useState(FORM_VACIO);
   const [editandoId, setEditandoId] = useState(null); // null = crear, number = editar
   const [saving, setSaving] = useState(false);
@@ -991,6 +991,8 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
       interventoria: c.interventoria || '',
       logo_contratista: c.logo_contratista || '',
       logo_interventoria: c.logo_interventoria || '',
+      aiu: c.aiu != null ? String(c.aiu) : '',
+      iva: c.iva != null ? String(c.iva) : '',
     });
     setMsg(null);
   }
@@ -1061,6 +1063,30 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
           <input style={inp} placeholder="Ej: 900.123.456-7" value={form.nit} onChange={e => setForm(f => ({ ...f, nit: e.target.value }))} />
           <label style={lbl}>INTERVENTORÍA</label>
           <input style={inp} placeholder="Razón social interventoría" value={form.interventoria} onChange={e => setForm(f => ({ ...f, interventoria: e.target.value }))} />
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:0 }}>
+            <div>
+              <label style={lbl}>AIU (%)</label>
+              <input style={inp} type="number" step="0.0001" min="0" max="1" placeholder="Ej: 0.25 → 25%"
+                value={form.aiu}
+                onChange={e => setForm(f => ({ ...f, aiu: e.target.value }))} />
+              {form.aiu !== '' && !isNaN(parseFloat(form.aiu)) && (
+                <div style={{ fontSize:11, color:'#00afc5', marginTop:-8, marginBottom:8 }}>
+                  = {(parseFloat(form.aiu)*100).toFixed(4).replace(/\.?0+$/,'')}%
+                </div>
+              )}
+            </div>
+            <div>
+              <label style={lbl}>IVA (%)</label>
+              <input style={inp} type="number" step="0.0001" min="0" max="1" placeholder="Ej: 0.19 → 19%"
+                value={form.iva}
+                onChange={e => setForm(f => ({ ...f, iva: e.target.value }))} />
+              {form.iva !== '' && !isNaN(parseFloat(form.iva)) && (
+                <div style={{ fontSize:11, color:'#00afc5', marginTop:-8, marginBottom:8 }}>
+                  = {(parseFloat(form.iva)*100).toFixed(4).replace(/\.?0+$/,'')}%
+                </div>
+              )}
+            </div>
+          </div>
           <label style={lbl}>LOGO CONTRATISTA</label>
           <label style={{ display: 'block', background: '#0a1628', border: '2px dashed #1E3A5F', borderRadius: 8, padding: 12, textAlign: 'center', cursor: 'pointer', color: '#4a7a87', fontSize: 12, marginBottom: 12 }}>
             {form.logo_contratista ? '✅ Logo cargado' : '📂 Cargar logo contratista'}
@@ -1167,7 +1193,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
   const [saving,           setSaving]           = useState(false);
   const [recalculando,     setRecalculando]     = useState(false);
   const [showCrear,        setShowCrear]        = useState(false);
-  const [crearForm,        setCrearForm]        = useState({ capitulo:"",item_numero:"",descripcion:"",unidad:"",competencia:"",tipo_precio:"",precio_unitario:"",especificacion_tecnica:"",acta_fijacion:"",acta_modificatoria:"",observaciones:"" });
+  const [crearForm,        setCrearForm]        = useState({ capitulo:"",item_numero:"",descripcion:"",unidad:"",competencia:"",tipo_precio:"",precio_unitario:"",especificacion_tecnica:"",acta_fijacion:"",acta_modificatoria:"",observaciones:"",tipo_calculo:"" });
   const [creating,         setCreating]         = useState(false);
   const [uModoCustomC,     setUModoCustomC]     = useState(false);
   const [uModoCustomP,     setUModoCustomP]     = useState(false);
@@ -1358,8 +1384,8 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
   };
 
   const crearPrecio = async () => {
-    const { item_numero, descripcion, unidad, tipo_precio, precio_unitario, especificacion_tecnica } = crearForm;
-    if (!item_numero||!descripcion||!unidad||!tipo_precio||!precio_unitario||!especificacion_tecnica) {
+    const { item_numero, descripcion, unidad, tipo_precio, precio_unitario, especificacion_tecnica, tipo_calculo } = crearForm;
+    if (!item_numero||!descripcion||!unidad||!tipo_precio||!precio_unitario||!especificacion_tecnica||!tipo_calculo) {
       setMsg({ type:"error", text:"Complete todos los campos obligatorios (*)." }); return;
     }
     setCreating(true);
@@ -1850,6 +1876,22 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
                 </div>
               </div>
 
+              <div style={{ marginBottom:14 }}>
+                <div style={labelStyle}>Tipo de Cálculo *</div>
+                <select style={selectStyle} value={crearForm.tipo_calculo} onChange={e=>setCF("tipo_calculo",e.target.value)}>
+                  <option value="">-- Selecciona --</option>
+                  <option value="AIU">AIU</option>
+                  <option value="IVA">IVA</option>
+                </select>
+              </div>
+              <div style={{ marginBottom:10 }}>
+                <div style={labelStyle}>Tipo de Cálculo *</div>
+                <select style={{...selectStyle,opacity:perms?.editar?1:0.55}} value={popup.tipo_calculo||""} disabled={!perms?.editar} onChange={e=>setPopupField("tipo_calculo",e.target.value)}>
+                  <option value="">-- Selecciona --</option>
+                  <option value="AIU">AIU</option>
+                  <option value="IVA">IVA</option>
+                </select>
+              </div>
               <div style={{ marginBottom:8 }}>
                 <div style={labelStyle}>Observaciones</div>
                 <textarea style={{...inputStyle,resize:"vertical",minHeight:60}} value={crearForm.observaciones} onChange={e=>setCF("observaciones",e.target.value)} />
