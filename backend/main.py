@@ -2653,6 +2653,129 @@ def get_usuarios_destinatarios(current_user=Depends(get_current_user)):
     ]
 
 # ─────────────────────────────────────────────────────────────
+# ACTAS
+# ─────────────────────────────────────────────────────────────
+class ActaTipoCreate(BaseModel):
+    nombre:   str
+    es_cobro: bool = False
+
+class ActaCreate(BaseModel):
+    consecutivo:            int
+    tipo_acta_id:           Optional[int]   = None
+    tipo_grupo:             str             = "administrativa"
+    observacion:            Optional[str]   = None
+    asignado_a:             Optional[int]   = None
+    fecha_asignacion:       Optional[str]   = None
+    enlace:                 Optional[str]   = None
+    numero_rpo:             Optional[int]   = None
+    fecha_inicio:           Optional[str]   = None
+    fecha_fin:              Optional[str]   = None
+    valor_comp_ambiental:   Optional[float] = 0
+    calificacion_ambiental: Optional[float] = None
+    valor_comp_social:      Optional[float] = 0
+    calificacion_social:    Optional[float] = None
+    valor_comp_pmt:         Optional[float] = 0
+    calificacion_pmt:       Optional[float] = None
+    valor_cobrado_adicional:Optional[float] = 0
+    ajuste_iccp:            Optional[float] = 0
+    ajuste_icociv:          Optional[float] = 0
+    ajuste_ipc:             Optional[float] = 0
+    pct_proyectado_ajustes: Optional[float] = None
+
+@app.get("/actas-tipos/{contrato_id}")
+def get_actas_tipos(contrato_id: int, current_user=Depends(get_current_user)):
+    rows = supabase.table("actas_tipos").select("*")\
+        .or_(f"contrato_id.is.null,contrato_id.eq.{contrato_id}")\
+        .order("nombre").execute().data
+    return rows or []
+
+@app.post("/actas-tipos/{contrato_id}")
+def crear_acta_tipo(contrato_id: int, body: ActaTipoCreate, current_user=Depends(get_current_user)):
+    existente = supabase.table("actas_tipos").select("id").eq("nombre", body.nombre).execute().data
+    if existente:
+        return existente[0]
+    result = supabase.table("actas_tipos").insert({
+        "nombre": body.nombre, "es_cobro": body.es_cobro, "contrato_id": contrato_id
+    }).execute()
+    return result.data[0] if result.data else {"ok": True}
+
+@app.get("/actas/{contrato_id}/lista")
+def listar_actas(contrato_id: int, current_user=Depends(get_current_user)):
+    rows = supabase.table("actas").select(
+        "*, actas_tipos(nombre, es_cobro), usuarios(nombre, apellidos)"
+    ).eq("contrato_id", contrato_id).order("consecutivo", desc=True).execute().data
+    result = []
+    for r in (rows or []):
+        tipo = r.get("actas_tipos") or {}
+        usr  = r.get("usuarios") or {}
+        adj  = (r.get("ajuste_iccp") or 0) + (r.get("ajuste_icociv") or 0) + (r.get("ajuste_ipc") or 0)
+        total = (r.get("valor_comp_ambiental") or 0) + (r.get("valor_comp_social") or 0) + \
+                (r.get("valor_comp_pmt") or 0) + (r.get("valor_cobrado_adicional") or 0) + adj
+        result.append({**r,
+            "tipo_nombre":       tipo.get("nombre", ""),
+            "es_cobro":          tipo.get("es_cobro", False),
+            "asignado_nombre":   f"{usr.get('nombre','')} {usr.get('apellidos','')}".strip(),
+            "valor_total_ajustes": adj,
+            "valor_total_acta":    total,
+        })
+    return result
+
+@app.get("/actas/{contrato_id}/proximo-consecutivo")
+def proximo_consecutivo_acta(contrato_id: int, current_user=Depends(get_current_user)):
+    rows = supabase.table("actas").select("consecutivo").eq("contrato_id", contrato_id).execute().data
+    maximo = max((r["consecutivo"] for r in rows), default=0)
+    return {"proximo": maximo + 1}
+
+@app.get("/actas/{contrato_id}/usuarios-contrato")
+def usuarios_del_contrato(contrato_id: int, current_user=Depends(get_current_user)):
+    uc = supabase.table("usuario_contratos").select("usuario_id").eq("contrato_id", contrato_id).execute().data or []
+    ids_uc = [r["usuario_id"] for r in uc]
+    usuarios_principal = supabase.table("usuarios").select("id, nombre, apellidos, cargo_id")\
+        .eq("contrato_id", contrato_id).execute().data or []
+    ids_principal = [u["id"] for u in usuarios_principal]
+    todos_ids = list(set(ids_uc + ids_principal))
+    if not todos_ids:
+        return []
+    users = supabase.table("usuarios").select("id, nombre, apellidos").in_("id", todos_ids).execute().data or []
+    return users
+
+@app.post("/actas/{contrato_id}")
+def crear_acta(contrato_id: int, body: ActaCreate, current_user=Depends(get_current_user)):
+    row = {"contrato_id": contrato_id, **{k: v for k, v in body.dict().items() if v is not None}}
+    result = supabase.table("actas").insert(row).execute()
+    nuevo = result.data[0] if result.data else {}
+    registrar_log(current_user, "CREAR", "ACTAS", "acta", str(nuevo.get("id","")),
+                  {"consecutivo": body.consecutivo, "tipo_grupo": body.tipo_grupo})
+    return nuevo
+
+@app.put("/actas/{acta_id}")
+def actualizar_acta(acta_id: int, body: ActaCreate, current_user=Depends(get_current_user)):
+    data = {k: v for k, v in body.dict().items() if v is not None}
+    supabase.table("actas").update({**data, "updated_at": "now()"}).eq("id", acta_id).execute()
+    registrar_log(current_user, "EDITAR", "ACTAS", "acta", str(acta_id), {})
+    return {"ok": True}
+
+@app.get("/actas/{acta_id}/financiero")
+def acta_financiero(acta_id: int, current_user=Depends(get_current_user)):
+    acta = supabase.table("actas").select("contrato_id, numero_rpo, tipo_grupo")\
+        .eq("id", acta_id).single().execute().data
+    if not acta or acta.get("tipo_grupo") != "cobro":
+        return {"resumen": [], "capitulos": []}
+    contrato_id = acta["contrato_id"]
+    caps = supabase.table("listado_precios").select("capitulo").eq("contrato_id", contrato_id)\
+        .execute().data or []
+    caps_unicos = list(dict.fromkeys([r["capitulo"] for r in caps if r.get("capitulo")]))
+    resumen = [
+        {"estado": "Aprobado",                    "aiu": 0, "iva": 0},
+        {"estado": "Pendiente",                   "aiu": 0, "iva": 0},
+        {"estado": "Pendiente aprobación precio", "aiu": 0, "iva": 0},
+        {"estado": "Rechazado",                   "aiu": 0, "iva": 0},
+    ]
+    capitulos = [{"capitulo": c, "aprobado": 0, "pendiente": 0, "pendiente_precio": 0,
+                  "no_revisado": 0, "rechazado": 0} for c in caps_unicos]
+    return {"resumen": resumen, "capitulos": capitulos}
+
+# ─────────────────────────────────────────────────────────────
 # SUBCONTRATISTAS
 # ─────────────────────────────────────────────────────────────
 class SubcontratistaCreate(BaseModel):
