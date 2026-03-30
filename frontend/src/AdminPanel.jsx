@@ -2567,8 +2567,9 @@ function SeccionActas({ call, user, perms, theme }) {
           </div>
         </div>
       )}
-    </div>
+        </div>
   );
+}
 
 // ─── SECCIÓN 7: Subcontratistas ───────────────────────────────────────────
 function SeccionSubcontratistas({ call, user, perms, theme }) {
