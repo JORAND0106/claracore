@@ -2083,35 +2083,6 @@ function SeccionActas({ call, user, perms, theme }) {
     finally{setCreandoTipo(false);}
   };
 
-      <div style={{position:"relative"}}>
-        <div onClick={onToggle} style={{...iS,cursor:"pointer",padding:"8px 12px",display:"flex",alignItems:"center",gap:8}}>
-          <span>📅</span><span style={{fontSize:13,color:value?col.textPrimary:col.textMuted}}>{disp(value)}</span>
-        </div>
-        {isOpen&&(
-          <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:10010,background:theme==="light"?"#fff":"#0b1920",border:"1px solid rgba(0,175,197,0.3)",borderRadius:10,padding:14,boxShadow:"0 20px 50px rgba(0,0,0,0.5)",minWidth:260}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-              <button style={{...S.btn("ghost",true),padding:"4px 10px"}} onClick={()=>setVd(new Date(y,m-1,1))}>◄</button>
-              <span style={{fontSize:14,fontWeight:700,color:col.textPrimary}}>{MES[m]} <span style={{color:"#00afc5"}}>{y}</span></span>
-              <button style={{...S.btn("ghost",true),padding:"4px 10px"}} onClick={()=>setVd(new Date(y,m+1,1))}>►</button>
-            </div>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:6}}>
-              {["dom","lun","mar","mié","jue","vie","sáb"].map(d=><div key={d} style={{textAlign:"center",fontSize:9,color:"#4a7a87",fontWeight:700,padding:"2px 0"}}>{d}</div>)}
-              {dias.map((d,i)=>{
-                if(!d) return <div key={i}/>;
-                const h=new Date().toISOString().slice(0,10),di=iso(d),iS2=di===value,iH=di===h;
-                return <div key={i} onClick={()=>{onChange(di);onToggle();}} style={{textAlign:"center",padding:"5px 2px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:iS2?700:400,background:iS2?"#00afc5":iH?"rgba(0,175,197,0.15)":"transparent",color:iS2?"#081318":col.textPrimary,border:iH&&!iS2?"1px solid rgba(0,175,197,0.4)":"1px solid transparent"}} onMouseEnter={e=>{if(!iS2)e.currentTarget.style.background="rgba(0,175,197,0.1)";}} onMouseLeave={e=>{if(!iS2)e.currentTarget.style.background=iH?"rgba(0,175,197,0.15)":"transparent";}}>{d}</div>;
-              })}
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between",borderTop:"1px solid rgba(0,175,197,0.1)",paddingTop:8}}>
-              <button style={{...S.btn("ghost",true),fontSize:10}} onClick={()=>{onChange(new Date().toISOString().slice(0,10));onToggle();}}>↖ hoy</button>
-              <button style={{...S.btn("danger",true),fontSize:10}} onClick={()=>{onChange("");onToggle();}}>— borrar</button>
-              <button style={{...S.btn("ghost",true),fontSize:10}} onClick={onToggle}>✕ cerrar</button>
-            </div>
-          </div>
-        )}
-      </div>
-  };
-
   // Componente fila de valor + calificación
   const CompRow = ({label,fVal,fCal,obj,setObj,editable}) => (
     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:12}}>
