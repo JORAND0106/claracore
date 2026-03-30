@@ -1020,8 +1020,12 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     if (!form.numero || !form.contratista) { setMsg({ type: 'error', text: 'Número y contratista son obligatorios' }); return; }
     setSaving(true); setMsg(null);
     try {
+      const payload = { ...form,
+        aiu: form.aiu !== '' ? parseFloat(form.aiu) : null,
+        iva: form.iva !== '' ? parseFloat(form.iva) : null,
+      };
       if (editandoId) {
-        await call("PUT", `/contratos/${editandoId}`, form);
+        await call("PUT", `/contratos/${editandoId}`, payload);
         setMsg({ type: 'success', text: 'Contrato actualizado correctamente' });
       } else {
         await call("POST", "/contratos", form);
@@ -1300,9 +1304,9 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
   // ── Plantilla CSV ──────────────────────────────────────────────────────────
   const descargarPlantilla = () => {
     const filas = [
-      "capitulo,competencia,item_numero,descripcion,unidad,precio_unitario,tipo_precio,especificacion_tecnica,acta_fijacion,acta_modificatoria,observaciones",
-      "1.PRELIMINARES,IDU,1.01,REPLANTEO GENERAL,M2,601,Precio Contractual,Descripción técnica del ítem,,,",
-      "2.EXCAVACIONES,IDU,2.01,EXCAVACION MECANICA,M3,4819,Precio No Previsto,Descripción técnica,15,3,Ítem adicional aprobado",
+      "capitulo,competencia,item_numero,descripcion,unidad,precio_unitario,tipo_precio,especificacion_tecnica,acta_fijacion,acta_modificatoria,observaciones,tipo_calculo",
+      "1.PRELIMINARES,IDU,1.01,REPLANTEO GENERAL,M2,601,Precio Contractual,Descripción técnica del ítem,,,AIU",
+      "2.EXCAVACIONES,IDU,2.01,EXCAVACION MECANICA,M3,4819,Precio No Previsto,Descripción técnica,15,3,Ítem adicional aprobado,IVA",
     ].join("\n");
     const blob = new Blob(["\uFEFF" + filas], { type:"text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -1364,9 +1368,10 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
       "Acta de Fijación":       i.acta_fijacion           || "",
       "Acta Modificatoria":     i.acta_modificatoria      || "",
       "Observaciones":          i.observaciones           || "",
+      "Tipo de Cálculo":        i.tipo_calculo            || "",
     }));
     const ws = XLSX.utils.json_to_sheet(data);
-    ws["!cols"] = [{wch:24},{wch:16},{wch:10},{wch:48},{wch:10},{wch:16},{wch:12},{wch:20},{wch:42},{wch:16},{wch:18},{wch:30}];
+    ws["!cols"] = [{wch:24},{wch:16},{wch:10},{wch:48},{wch:10},{wch:16},{wch:12},{wch:20},{wch:42},{wch:16},{wch:18},{wch:30},{wch:14}];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Listado de Precios");
     XLSX.writeFile(wb, `listado_precios_${contratoId}.xlsx`);
@@ -1671,6 +1676,14 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
                   </div>
                 </div>
 
+                <div style={{marginBottom:10}}>
+                  <div style={labelStyle}>Tipo de Cálculo *</div>
+                  <select style={{...selectStyle,opacity:perms?.editar?1:0.55}} value={popup.tipo_calculo||""} disabled={!perms?.editar} onChange={e=>setPopupField("tipo_calculo",e.target.value)}>
+                    <option value="">-- Selecciona --</option>
+                    <option value="AIU">AIU</option>
+                    <option value="IVA">IVA</option>
+                  </select>
+                </div>
                 <div>
                   <div style={labelStyle}>Observaciones</div>
                   <textarea style={{...inputStyle,resize:"vertical",minHeight:46,opacity:perms?.editar?1:0.55}} value={popup.observaciones||""} disabled={!perms?.editar} onChange={e=>setPopupField("observaciones",e.target.value)} />
@@ -1884,14 +1897,6 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
                   <option value="IVA">IVA</option>
                 </select>
               </div>
-              <div style={{ marginBottom:10 }}>
-                <div style={labelStyle}>Tipo de Cálculo *</div>
-                <select style={{...selectStyle,opacity:perms?.editar?1:0.55}} value={popup.tipo_calculo||""} disabled={!perms?.editar} onChange={e=>setPopupField("tipo_calculo",e.target.value)}>
-                  <option value="">-- Selecciona --</option>
-                  <option value="AIU">AIU</option>
-                  <option value="IVA">IVA</option>
-                </select>
-              </div>
               <div style={{ marginBottom:8 }}>
                 <div style={labelStyle}>Observaciones</div>
                 <textarea style={{...inputStyle,resize:"vertical",minHeight:60}} value={crearForm.observaciones} onChange={e=>setCF("observaciones",e.target.value)} />
@@ -1901,6 +1906,48 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
               <button style={S.btn("ghost")} onClick={() => setShowCrear(false)}>Cancelar</button>
               <button style={S.btn("primary")} onClick={crearPrecio} disabled={creating}>{creating?"Creando...":"✓ Crear Precio"}</button>
             </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── CalPicker: selector de fecha reutilizable (nivel módulo) ─────────────
+function ActasCalPicker({ value, onChange, isOpen, onToggle, theme }) {
+  const col = C(theme);
+  const [vd, setVd] = useState(() => value ? new Date(value + "T12:00:00") : new Date());
+  const MES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const y = vd.getFullYear(), m = vd.getMonth();
+  const fd = new Date(y,m,1).getDay(), dim = new Date(y,m+1,0).getDate();
+  const dias = [...Array(fd).fill(null), ...Array.from({length:dim},(_,i) => i+1)];
+  const iso = d => `${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+  const disp = v => v ? `${parseInt(v.split("-")[2])} ${MES[parseInt(v.split("-")[1])-1]}, ${v.split("-")[0]}` : "Seleccionar fecha";
+  const iS = theme==="light" ? {...S.input,background:"#FFFFFF",color:"#0d3b52",border:"1px solid #BAE6FD"} : S.input;
+  return (
+    <div style={{position:"relative"}}>
+      <div onClick={onToggle} style={{...iS,cursor:"pointer",padding:"8px 12px",display:"flex",alignItems:"center",gap:8}}>
+        <span>📅</span><span style={{fontSize:13,color:value?col.textPrimary:col.textMuted}}>{disp(value)}</span>
+      </div>
+      {isOpen && (
+        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:10010,background:theme==="light"?"#fff":"#0b1920",border:"1px solid rgba(0,175,197,0.3)",borderRadius:10,padding:14,boxShadow:"0 20px 50px rgba(0,0,0,0.5)",minWidth:260}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <button style={{...S.btn("ghost",true),padding:"4px 10px"}} onClick={()=>setVd(new Date(y,m-1,1))}>◄</button>
+            <span style={{fontSize:14,fontWeight:700,color:col.textPrimary}}>{MES[m]} <span style={{color:"#00afc5"}}>{y}</span></span>
+            <button style={{...S.btn("ghost",true),padding:"4px 10px"}} onClick={()=>setVd(new Date(y,m+1,1))}>►</button>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:6}}>
+            {["dom","lun","mar","mié","jue","vie","sáb"].map(d=><div key={d} style={{textAlign:"center",fontSize:9,color:"#4a7a87",fontWeight:700,padding:"2px 0"}}>{d}</div>)}
+            {dias.map((d,i) => {
+              if (!d) return <div key={i}/>;
+              const h=new Date().toISOString().slice(0,10), di=iso(d), isSel=di===value, isHoy=di===h;
+              return <div key={i} onClick={()=>{onChange(di);onToggle();}} style={{textAlign:"center",padding:"5px 2px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:isSel?700:400,background:isSel?"#00afc5":isHoy?"rgba(0,175,197,0.15)":"transparent",color:isSel?"#081318":col.textPrimary,border:isHoy&&!isSel?"1px solid rgba(0,175,197,0.4)":"1px solid transparent"}} onMouseEnter={e=>{if(!isSel)e.currentTarget.style.background="rgba(0,175,197,0.1)";}} onMouseLeave={e=>{if(!isSel)e.currentTarget.style.background=isHoy?"rgba(0,175,197,0.15)":"transparent";}}>{d}</div>;
+            })}
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",borderTop:"1px solid rgba(0,175,197,0.1)",paddingTop:8}}>
+            <button style={{...S.btn("ghost",true),fontSize:10}} onClick={()=>{onChange(new Date().toISOString().slice(0,10));onToggle();}}>↖ hoy</button>
+            <button style={{...S.btn("danger",true),fontSize:10}} onClick={()=>{onChange("");onToggle();}}>— borrar</button>
+            <button style={{...S.btn("ghost",true),fontSize:10}} onClick={onToggle}>✕ cerrar</button>
           </div>
         </div>
       )}
@@ -1931,6 +1978,7 @@ function SeccionActas({ call, user, perms, theme }) {
   const [nuevoTipoNom,   setNuevoTipoNom]   = useState("");
   const [nuevoTipoEC,    setNuevoTipoEC]    = useState(false);
   const [creandoTipo,    setCreandoTipo]    = useState(false);
+  const [tabCrear,  setTabCrear]  = useState("datos");
   const [calFi,  setCalFi]  = useState(false);
   const [calFf,  setCalFf]  = useState(false);
   const [calFa,  setCalFa]  = useState(false);
@@ -2035,14 +2083,6 @@ function SeccionActas({ call, user, perms, theme }) {
     finally{setCreandoTipo(false);}
   };
 
-  const CalPicker = ({value,onChange,isOpen,onToggle}) => {
-    const [vd,setVd] = useState(()=>value?new Date(value+"T12:00:00"):new Date());
-    const MES=["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-    const y=vd.getFullYear(),m=vd.getMonth(),fd=new Date(y,m,1).getDay(),dim=new Date(y,m+1,0).getDate();
-    const dias=[...Array(fd).fill(null),...Array.from({length:dim},(_,i)=>i+1)];
-    const iso=d=>`${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-    const disp=v=>v?`${parseInt(v.split("-")[2])} ${MES[parseInt(v.split("-")[1])-1]}, ${v.split("-")[0]}`:"Seleccionar fecha";
-    return (
       <div style={{position:"relative"}}>
         <div onClick={onToggle} style={{...iS,cursor:"pointer",padding:"8px 12px",display:"flex",alignItems:"center",gap:8}}>
           <span>📅</span><span style={{fontSize:13,color:value?col.textPrimary:col.textMuted}}>{disp(value)}</span>
@@ -2070,7 +2110,6 @@ function SeccionActas({ call, user, perms, theme }) {
           </div>
         )}
       </div>
-    );
   };
 
   // Componente fila de valor + calificación
@@ -2139,7 +2178,7 @@ function SeccionActas({ call, user, perms, theme }) {
           </div>
           <div>
             <div style={lS}>Fecha de Asignación</div>
-            <CalPicker value={obj.fecha_asignacion||""} onChange={v=>setObj(f=>({...f,fecha_asignacion:v}))} isOpen={cFa} onToggle={()=>{setCFa(o=>!o);setCFi(false);setCFf(false);}}/>
+            <ActasCalPicker value={obj.fecha_asignacion||""} onChange={v=>setObj(f=>({...f,fecha_asignacion:v}))} isOpen={cFa} onToggle={()=>{setCFa(o=>!o);setCFi(false);setCFf(false);}} theme={theme}/>
           </div>
         </div>
         <div style={{marginBottom:esCobro?14:0}}>
@@ -2157,11 +2196,11 @@ function SeccionActas({ call, user, perms, theme }) {
                 </div>
                 <div>
                   <div style={lS}>Fecha Inicio</div>
-                  <CalPicker value={obj.fecha_inicio||""} onChange={v=>setObj(f=>({...f,fecha_inicio:v}))} isOpen={cFi} onToggle={()=>{setCFi(o=>!o);setCFf(false);setCFa(false);}}/>
+                  <ActasCalPicker value={obj.fecha_inicio||""} onChange={v=>setObj(f=>({...f,fecha_inicio:v}))} isOpen={cFi} onToggle={()=>{setCFi(o=>!o);setCFf(false);setCFa(false);}} theme={theme}/>
                 </div>
                 <div>
                   <div style={lS}>Fecha Fin</div>
-                  <CalPicker value={obj.fecha_fin||""} onChange={v=>setObj(f=>({...f,fecha_fin:v}))} isOpen={cFf} onToggle={()=>{setCFf(o=>!o);setCFi(false);setCFa(false);}}/>
+                  <ActasCalPicker value={obj.fecha_fin||""} onChange={v=>setObj(f=>({...f,fecha_fin:v}))} isOpen={cFf} onToggle={()=>{setCFf(o=>!o);setCFi(false);setCFa(false);}} theme={theme}/>
                 </div>
               </div>
             </div>
@@ -2177,9 +2216,9 @@ function SeccionActas({ call, user, perms, theme }) {
     return (
       <div>
         <div style={sT}>Componentes</div>
-        <CompRow label="Valor Comp. Ambiental" fVal="valor_comp_ambiental" fCal="calificacion_ambiental" obj={obj} setObj={setObj} editable={editable}/>
-        <CompRow label="Valor Comp. Social"    fVal="valor_comp_social"    fCal="calificacion_social"    obj={obj} setObj={setObj} editable={editable}/>
-        <CompRow label="Valor Comp. PMT"       fVal="valor_comp_pmt"       fCal="calificacion_pmt"       obj={obj} setObj={setObj} editable={editable}/>
+        {CompRow({label:"Valor Comp. Ambiental", fVal:"valor_comp_ambiental", fCal:"calificacion_ambiental", obj, setObj, editable})}
+        {CompRow({label:"Valor Comp. Social",    fVal:"valor_comp_social",    fCal:"calificacion_social",    obj, setObj, editable})}
+        {CompRow({label:"Valor Comp. PMT",       fVal:"valor_comp_pmt",       fCal:"calificacion_pmt",       obj, setObj, editable})}
         <div style={{marginBottom:14}}>
           <div style={lS}>Valor Cobrado Adicional</div>
           <input style={{...iS,opacity:editable?1:0.65}} type="number" value={obj.valor_cobrado_adicional||0} disabled={!editable} onChange={e=>setObj(f=>({...f,valor_cobrado_adicional:parseFloat(e.target.value)||0}))}/>
@@ -2283,11 +2322,36 @@ function SeccionActas({ call, user, perms, theme }) {
               <button style={S.closeBtn} onClick={()=>setShowCrear(false)}>✕</button>
             </div>
             <div style={mSc}>
-              <CamposComunes obj={form} setObj={setForm} isEdit={false} cFi={calFi} setCFi={setCalFi} cFf={calFf} setCFf={setCalFf} cFa={calFa} setCFa={setCalFa}/>
+              {CamposComunes({obj:form, setObj:setForm, isEdit:false, cFi:calFi, setCFi:setCalFi, cFf:calFf, setCFf:setCalFf, cFa:calFa, setCFa:setCalFa})}
               {form.tipo_grupo==="cobro"&&(
                 <div style={{borderTop:"1px solid rgba(0,175,197,0.12)",paddingTop:14,marginTop:4}}>
-                  <div style={sT}>Componentes y Ajustes</div>
-                  <TabComponentes obj={form} setObj={setForm} editable={true}/>
+                  <div style={{display:"flex",gap:0,borderBottom:"1px solid rgba(0,175,197,0.12)",marginBottom:14}}>
+                    {[["datos","📋 Datos RPO"],["componentes","⚙️ Componentes y Ajustes"]].map(([id,label])=>(
+                      <button key={id} onClick={()=>setTabCrear(id)}
+                        style={{padding:"8px 16px",border:"none",background:"transparent",cursor:"pointer",fontSize:12,fontWeight:tabCrear===id?700:400,color:tabCrear===id?"#00afc5":col.textMuted,borderBottom:tabCrear===id?"2px solid #00afc5":"2px solid transparent",transition:"all 0.15s"}}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {tabCrear==="datos"&&(
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
+                      <div>
+                        <div style={secTitle}>N° RPO</div>
+                        <input style={inputStyle} type="number" value={form.numero_rpo||""} onChange={e=>setForm(f=>({...f,numero_rpo:e.target.value}))} placeholder="Ej: 5"/>
+                      </div>
+                      <div>
+                        <div style={secTitle}>Fecha Inicio</div>
+                        <ActasCalPicker value={form.fecha_inicio||""} onChange={v=>setForm(f=>({...f,fecha_inicio:v}))} isOpen={calFi} onToggle={()=>{setCalFi(o=>!o);setCalFf(false);setCalFa(false);}} theme={theme}/>
+                      </div>
+                      <div>
+                        <div style={secTitle}>Fecha Fin</div>
+                        <ActasCalPicker value={form.fecha_fin||""} onChange={v=>setForm(f=>({...f,fecha_fin:v}))} isOpen={calFf} onToggle={()=>{setCalFf(o=>!o);setCalFi(false);setCalFa(false);}} theme={theme}/>
+                      </div>
+                    </div>
+                  )}
+                  {tabCrear==="componentes"&&(
+                    TabComponentes({obj:form, setObj:setForm, editable:true})
+                  )}
                 </div>
               )}
             </div>
@@ -2360,7 +2424,7 @@ function SeccionActas({ call, user, perms, theme }) {
                     <div>
                       <div style={lS}>Fecha de Asignación</div>
                       {perms?.editar?(
-                        <CalPicker value={editForm.fecha_asignacion||""} onChange={v=>setEditForm(f=>({...f,fecha_asignacion:v}))} isOpen={calEFa} onToggle={()=>setCalEFa(o=>!o)}/>
+                        <ActasCalPicker value={editForm.fecha_asignacion||""} onChange={v=>setEditForm(f=>({...f,fecha_asignacion:v}))} isOpen={calEFa} onToggle={()=>setCalEFa(o=>!o)} theme={theme}/>
                       ):(
                         <div style={{...iS,opacity:0.7,pointerEvents:"none"}}>{detalle.fecha_asignacion||"—"}</div>
                       )}
@@ -2390,14 +2454,14 @@ function SeccionActas({ call, user, perms, theme }) {
                     </div>
                     <div>
                       <div style={lS}>Fecha Inicio</div>
-                      {perms?.editar?<CalPicker value={editForm.fecha_inicio||""} onChange={v=>setEditForm(f=>({...f,fecha_inicio:v}))} isOpen={calEFi} onToggle={()=>{setCalEFi(o=>!o);setCalEFf(false);}}/>:<div style={{...iS,opacity:0.65,pointerEvents:"none"}}>{detalle.fecha_inicio||"—"}</div>}
+                      {perms?.editar?<ActasCalPicker value={editForm.fecha_inicio||""} onChange={v=>setEditForm(f=>({...f,fecha_inicio:v}))} isOpen={calEFi} onToggle={()=>{setCalEFi(o=>!o);setCalEFf(false);}} theme={theme}/>:<div style={{...iS,opacity:0.65,pointerEvents:"none"}}>{detalle.fecha_inicio||"—"}</div>}
                     </div>
                     <div>
                       <div style={lS}>Fecha Fin</div>
-                      {perms?.editar?<CalPicker value={editForm.fecha_fin||""} onChange={v=>setEditForm(f=>({...f,fecha_fin:v}))} isOpen={calEFf} onToggle={()=>{setCalEFf(o=>!o);setCalEFi(false);}}/>:<div style={{...iS,opacity:0.65,pointerEvents:"none"}}>{detalle.fecha_fin||"—"}</div>}
+                      {perms?.editar?<ActasCalPicker value={editForm.fecha_fin||""} onChange={v=>setEditForm(f=>({...f,fecha_fin:v}))} isOpen={calEFf} onToggle={()=>{setCalEFf(o=>!o);setCalEFi(false);}} theme={theme}/>:<div style={{...iS,opacity:0.65,pointerEvents:"none"}}>{detalle.fecha_fin||"—"}</div>}
                     </div>
                   </div>
-                  <TabComponentes obj={editForm} setObj={setEditForm} editable={!!perms?.editar}/>
+                  {TabComponentes({obj:editForm, setObj:setEditForm, editable:!!perms?.editar})}
                 </div>
               )}
 
@@ -2505,7 +2569,6 @@ function SeccionActas({ call, user, perms, theme }) {
       )}
     </div>
   );
-}
 
 // ─── SECCIÓN 7: Subcontratistas ───────────────────────────────────────────
 function SeccionSubcontratistas({ call, user, perms, theme }) {
