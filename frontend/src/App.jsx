@@ -1668,7 +1668,7 @@ async function restaurar(id) {
               {/* Panel de 4 pestañas cuando hay tramo seleccionado */}
               {tramoSelec && (<>
                 {/* Botón volver */}
-                <button onClick={() => setTramoSelec(null)}
+                <button onClick={() => { setTramoSelec(null); cargarRegistros(verPapelera, true) }}
                   style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'7px',
                     padding:'5px 12px', fontSize:'11px', cursor:'pointer', color:t.textMuted, marginBottom:'14px' }}>
                   ← Volver a tramos

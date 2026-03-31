@@ -1824,7 +1824,7 @@ def pkid_tabla(contrato_id: int, capitulo: str = None, item: str = None, current
     """Tabla comparativa detallada por PK_ID con cantidades"""
     try:
         q_c = supabase.table("cobro").select("pk_id, costo_directo, longitud, cantidad").eq("contrato_id", contrato_id)
-        q_p = supabase.table("presupuesto").select("pk_id, cant_total, costo_directo, descripcion").eq("contrato_id", contrato_id)
+        q_p = supabase.table("presupuesto").select("pk_id, cant_total, costo_directo, descripcion").eq("contrato_id", contrato_id).eq("dado_de_baja", False)
         if item:
             q_c = q_c.eq("item", item)
             q_p = q_p.eq("item", item)
@@ -1882,7 +1882,7 @@ def pkid_detalle(contrato_id: int, pk_id: str = None, item: str = None, capitulo
     try:
         q_p = supabase.table("presupuesto").select(
             "id_pol, no_inicio, no_final, cant_total, costo_directo, descripcion, item"
-        ).eq("contrato_id", contrato_id)
+        ).eq("contrato_id", contrato_id).eq("dado_de_baja", False)
         q_c = supabase.table("cobro").select(
             "registro, tramo_inicio, tramo_final, cantidad, longitud, costo_directo, descripcion, item, acta, calzada"
         ).eq("contrato_id", contrato_id)
