@@ -3461,6 +3461,16 @@ async function cargarRegistros() {
   )
 }
 
+// ─── MÓDULO SICOE OBRA ────────────────────────────────────────────────────────
+function ModuloSicoeObra({ t, usuario, token, s }) {
+  return (
+    <div style={{ padding: '20px' }}>
+      <h2 style={{ color: t.text }}>🏗️ SICOE Obra</h2>
+      <p style={{ color: t.textMuted }}>Módulo en construcción...</p>
+    </div>
+  )
+}
+
 // ─── MÓDULO PLANO SEMÁFORO ────────────────────────────────────────────────────
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
 function ModuloPlanoSemaforo({ t, usuario, token }) {
@@ -4786,6 +4796,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
             ['dashboard',    '🏠', 'Dashboard'],
             ['presupuesto',  '📋', 'Presupuesto'],
             ['cobro',        '💰', 'SICOE'],
+            ['sicoe_obra',   '🏗️', 'SICOE Obra'],
             ['almacen',      '🏪', 'Almacén'],
             ['gantt',        '📅', 'Gantt'],
             ['semaforo',     '🗺️', 'Plano Semáforo'],
@@ -6086,6 +6097,8 @@ const [navRegistroId, setNavRegistroId] = useState(null)
 
 {/* ── MÓDULO SICOE ── */}
         {moduloActivo === 'cobro' && <ModuloCobro t={t} usuario={usuario} token={getToken()} s={s} />}
+
+        {moduloActivo === 'sicoe_obra' && <ModuloSicoeObra t={t} usuario={usuario} token={getToken()} s={s} />}
 
         {/* ── Módulos próximamente ── */}
         {['almacen','gantt'].includes(moduloActivo) && (
