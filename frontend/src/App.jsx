@@ -3463,10 +3463,136 @@ async function cargarRegistros() {
 
 // ─── MÓDULO SICOE OBRA ────────────────────────────────────────────────────────
 function ModuloSicoeObra({ t, usuario, token, s }) {
+  const API_URL = import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net'
+  const contrato_id = usuario?.contrato_id
+
+  const [reportes, setReportes] = React.useState([])
+  const [loading, setLoading] = React.useState(true)
+  const [filtroEstado, setFiltroEstado] = React.useState('todos')
+  const [modalNuevoReporte, setModalNuevoReporte] = React.useState(false)
+
+  const ESTADOS = ['Borrador','Sin Asignar Ítem','Aprobados','Pendientes','Rechazados','No Objeto de Cobro','En Papelera']
+  const ESTADO_COLORS = {
+    'Borrador': '#6B7280',
+    'Sin Asignar Ítem': '#F59E0B',
+    'Aprobados': '#10B981',
+    'Pendientes': '#3B82F6',
+    'Rechazados': '#EF4444',
+    'No Objeto de Cobro': '#8B5CF6',
+    'En Papelera': '#374151',
+  }
+
+  const perm = (usuario?.permisos || []).find(p => p.funcion_nombre === 'Reporte de Cantidades')
+  const puedeCrear = perm?.crear
+  const puedeEditar = perm?.editar
+
+  const cargarReportes = async () => {
+    setLoading(true)
+    try {
+      const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      const data = await r.json()
+      setReportes(Array.isArray(data) ? data : [])
+    } catch(e) { setReportes([]) }
+    setLoading(false)
+  }
+
+  React.useEffect(() => { if (contrato_id) cargarReportes() }, [contrato_id])
+
+  const reportesFiltrados = filtroEstado === 'todos'
+    ? reportes
+    : reportes.filter(r => r.estado === filtroEstado)
+
   return (
-    <div style={{ padding: '20px' }}>
-      <h2 style={{ color: t.text }}>🏗️ SICOE Obra</h2>
-      <p style={{ color: t.textMuted }}>Módulo en construcción...</p>
+    <div>
+      {/* ── Header ── */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px' }}>
+        <div>
+          <h2 style={{ margin:0, color:t.text, fontSize:'20px', fontWeight:'800' }}>🏗️ SICOE Obra</h2>
+          <p style={{ margin:0, color:t.textMuted, fontSize:'13px' }}>Reporte de cantidades de campo</p>
+        </div>
+        {puedeCrear && (
+          <button onClick={() => setModalNuevoReporte(true)} style={{
+            background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
+            padding:'10px 20px', fontWeight:'700', fontSize:'13px', cursor:'pointer'
+          }}>+ Nuevo Reporte</button>
+        )}
+      </div>
+
+      {/* ── Filtros estado ── */}
+      <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', marginBottom:'16px' }}>
+        {['todos', ...ESTADOS].map(e => (
+          <button key={e} onClick={() => setFiltroEstado(e)} style={{
+            background: filtroEstado === e ? t.primary : t.bgCard,
+            color: filtroEstado === e ? '#fff' : t.textMuted,
+            border: `1px solid ${filtroEstado === e ? t.primary : t.border}`,
+            borderRadius:'20px', padding:'4px 14px', fontSize:'12px',
+            fontWeight: filtroEstado === e ? '700' : '400', cursor:'pointer'
+          }}>{e === 'todos' ? 'Todos' : e}</button>
+        ))}
+      </div>
+
+      {/* ── Grid reportes ── */}
+      <div style={{ background:t.bgCard, borderRadius:'12px', border:`1px solid ${t.border}`, overflow:'hidden' }}>
+        {/* Header grid */}
+        <div style={{ display:'grid', gridTemplateColumns:'80px 100px 1fr 140px 140px 120px 120px', gap:'8px',
+          padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
+          fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>
+          <div>N° REP.</div><div>FECHA</div><div>ACTIVIDAD</div>
+          <div>ABSCISADO</div><div>SUBCONTRATISTA</div><div>COSTO DIR.</div><div>ESTADO</div>
+        </div>
+
+        {/* Filas */}
+        {loading ? (
+          <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>Cargando reportes...</div>
+        ) : reportesFiltrados.length === 0 ? (
+          <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>
+            {filtroEstado === 'todos' ? 'No hay reportes aún. ¡Crea el primero!' : `No hay reportes en estado "${filtroEstado}"`}
+          </div>
+        ) : reportesFiltrados.map(rep => (
+          <div key={rep.id} style={{ display:'grid', gridTemplateColumns:'80px 100px 1fr 140px 140px 120px 120px',
+            gap:'8px', padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
+            fontSize:'13px', color:t.text, cursor:'pointer',
+            transition:'background 0.15s' }}
+            onMouseEnter={e => e.currentTarget.style.background = t.bg}
+            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+            <div style={{ fontWeight:'700', color:t.primary }}>#{rep.numero_reporte}</div>
+            <div style={{ color:t.textMuted, fontSize:'12px' }}>
+              {rep.created_at ? new Date(rep.created_at+'Z').toLocaleDateString('es-CO') : '—'}
+            </div>
+            <div style={{ fontWeight:'600' }}>{rep.descripcion_actividad}</div>
+            <div style={{ fontSize:'12px', color:t.textMuted }}>
+              {rep.abs_inicio ?? '—'} → {rep.abs_final ?? '—'}
+            </div>
+            <div style={{ fontSize:'12px' }}>{rep.subcontratista_nombre || '—'}</div>
+            <div style={{ fontSize:'12px', color:'#10B981' }}>—</div>
+            <div>
+              <span style={{
+                background: (ESTADO_COLORS[rep.estado] || '#6B7280') + '22',
+                color: ESTADO_COLORS[rep.estado] || '#6B7280',
+                border: `1px solid ${ESTADO_COLORS[rep.estado] || '#6B7280'}44`,
+                borderRadius:'12px', padding:'2px 10px', fontSize:'11px', fontWeight:'600'
+              }}>{rep.estado}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Modal nuevo reporte - placeholder */}
+      {modalNuevoReporte && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:1000,
+          display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <div style={{ background:t.bgCard, borderRadius:'16px', padding:'32px',
+            color:t.text, minWidth:'300px', textAlign:'center' }}>
+            <h3 style={{ margin:'0 0 16px' }}>🚧 Formulario en construcción</h3>
+            <button onClick={() => setModalNuevoReporte(false)} style={{
+              background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
+              padding:'8px 20px', cursor:'pointer', fontWeight:'700'
+            }}>Cerrar</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

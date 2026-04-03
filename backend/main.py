@@ -2975,3 +2975,120 @@ def alertas_corte(contrato_id: int, current_user=Depends(get_current_user)):
                     "vence_hoy":         ff == hoy,
                 })
     return alertas
+
+# ─────────────────────────────────────────────
+# SICOE OBRA
+# ─────────────────────────────────────────────
+
+@app.get("/sicoe-obra/{contrato_id}/reportes")
+def listar_reportes_obra(contrato_id: int, current_user=Depends(get_current_user)):
+    def _q():
+        return supabase.table("so_reportes")\
+            .select("*, subcontratistas(nombre)")\
+            .eq("contrato_id", contrato_id)\
+            .order("created_at", desc=True).execute().data
+    rows = supabase_execute(_q)
+    for r in rows:
+        sub = r.pop("subcontratistas", None)
+        r["subcontratista_nombre"] = sub["nombre"] if sub else None
+    return rows
+
+@app.get("/sicoe-obra/{contrato_id}/pk-ids")
+def listar_pk_ids(contrato_id: int, current_user=Depends(get_current_user)):
+    def _q():
+        return supabase.table("pk_ids")\
+            .select("*")\
+            .eq("contrato_id", contrato_id)\
+            .order("pk_id").execute().data
+    return supabase_execute(_q)
+
+@app.get("/sicoe-obra/{contrato_id}/subcontratistas-activos")
+def listar_subcontratistas_activos(contrato_id: int, current_user=Depends(get_current_user)):
+    def _q():
+        return supabase.table("subcontratistas")\
+            .select("id, nombre")\
+            .eq("contrato_id", contrato_id)\
+            .eq("activo", True)\
+            .order("nombre").execute().data
+    return supabase_execute(_q)
+
+@app.get("/sicoe-obra/{contrato_id}/inspectores")
+def listar_inspectores(contrato_id: int, current_user=Depends(get_current_user)):
+    def _q():
+        return supabase.table("usuarios")\
+            .select("id, nombre, apellidos, cargos(nombre), roles(nombre)")\
+            .eq("contrato_id", contrato_id)\
+            .eq("aprobado", True).execute().data
+    rows = supabase_execute(_q)
+    result = []
+    for u in rows:
+        cargo = (u.get("cargos") or {}).get("nombre", "")
+        rol = (u.get("roles") or {}).get("nombre", "")
+        if "inspector" in cargo.lower() and rol.lower() == "contratista":
+            result.append({
+                "id": u["id"],
+                "nombre": f"{u.get('nombre','')} {u.get('apellidos','')}".strip()
+            })
+    return result
+
+@app.get("/sicoe-obra/{contrato_id}/capitulos")
+def listar_capitulos_obra(contrato_id: int, current_user=Depends(get_current_user)):
+    def _q():
+        return supabase.table("listado_precios")\
+            .select("capitulo")\
+            .eq("contrato_id", contrato_id)\
+            .execute().data
+    rows = supabase_execute(_q)
+    caps = sorted(set(r["capitulo"] for r in rows if r.get("capitulo")))
+    return [{"capitulo": c} for c in caps]
+
+@app.get("/sicoe-obra/{contrato_id}/nodos")
+def listar_nodos_obra(contrato_id: int, capitulo: str = None, current_user=Depends(get_current_user)):
+    def _q():
+        q = supabase.table("presupuesto")\
+            .select("nodo_ini, nodo_fin")\
+            .eq("contrato_id", contrato_id)\
+            .eq("dado_de_baja", False)
+        if capitulo:
+            q = q.eq("capitulo", capitulo)
+        return q.execute().data
+    rows = supabase_execute(_q)
+    nodos = set()
+    for r in rows:
+        if r.get("nodo_ini"): nodos.add(r["nodo_ini"])
+        if r.get("nodo_fin"): nodos.add(r["nodo_fin"])
+    return sorted(list(nodos))
+
+class ReporteCreate(BaseModel):
+    descripcion_actividad: str
+    subcontratista_id: Optional[int] = None
+    inspector_id: Optional[int] = None
+    capitulo: str
+    pk_id_id: Optional[int] = None
+    civ: Optional[str] = None
+    tramo: Optional[str] = None
+    infraestructura: Optional[str] = None
+    calzada: Optional[str] = None
+    ubicacion: Optional[str] = None
+    coord_lat: Optional[float] = None
+    coord_lng: Optional[float] = None
+    margen: Optional[str] = None
+    abs_inicio: Optional[float] = None
+    abs_final: Optional[float] = None
+    nodo_ini: Optional[str] = None
+    nodo_fin: Optional[str] = None
+
+@app.post("/sicoe-obra/{contrato_id}/reportes")
+def crear_reporte_obra(contrato_id: int, body: ReporteCreate, current_user=Depends(get_current_user)):
+    def _num():
+        return supabase.rpc("siguiente_numero_reporte", {"p_contrato_id": contrato_id}).execute().data
+    numero = supabase_execute(_num)
+    data = body.dict()
+    data["contrato_id"] = contrato_id
+    data["numero_reporte"] = numero
+    data["estado"] = "Borrador"
+    data["creado_por"] = current_user["id"]
+    def _ins():
+        return supabase.table("so_reportes").insert(data).execute().data
+    result = supabase_execute(_ins)
+    return result[0] if result else {}
