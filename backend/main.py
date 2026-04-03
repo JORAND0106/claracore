@@ -253,6 +253,21 @@ class CambiarPassword(BaseModel):
     nueva_password: str
 
 # ─────────────────────────────────────────────
+# HELPER SUPABASE CON REINTENTOS
+# ─────────────────────────────────────────────
+def supabase_execute(fn, retries=3, delay=0.5):
+    import time
+    last_err = None
+    for i in range(retries):
+        try:
+            return fn()
+        except Exception as e:
+            last_err = e
+            if i < retries - 1:
+                time.sleep(delay)
+    raise last_err
+
+# ─────────────────────────────────────────────
 # SISTEMA DE LOGS
 # ─────────────────────────────────────────────
 def registrar_log(usuario, accion, modulo, entidad_tipo=None, entidad_id=None, detalle=None, resultado="ok"):
@@ -3042,10 +3057,13 @@ def listar_capitulos_obra(contrato_id: int, current_user=Depends(get_current_use
         return supabase.table("listado_precios")\
             .select("capitulo")\
             .eq("contrato_id", contrato_id)\
-            .neq("dado_de_baja", True)\
             .execute().data
     rows = supabase_execute(_q)
-    caps = sorted(set(r["capitulo"] for r in rows if r.get("capitulo")))
+    import re
+    def orden_capitulo(c):
+        m = re.match(r'^(\d+)', c)
+        return (int(m.group(1)) if m else 9999, c)
+    caps = sorted(set(r["capitulo"] for r in rows if r.get("capitulo")), key=orden_capitulo)
     return [{"capitulo": c} for c in caps]
 
 @app.get("/sicoe-obra/{contrato_id}/next-reporte")
