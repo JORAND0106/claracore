@@ -3657,8 +3657,18 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       .then(r => r.json()).then(d => setSubcontratistas(Array.isArray(d) ? d : []))
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs })
       .then(r => r.json()).then(d => setInspectores(Array.isArray(d) ? d : []))
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/capitulos`, { headers: hdrs })
-      .then(r => r.json()).then(d => setCapitulos(Array.isArray(d) ? d : []))
+    fetch(`${API_URL}/presupuesto/${contrato_id}/capitulos-lista`, { headers: hdrs })
+      .then(r => r.json()).then(d => {
+        if (Array.isArray(d)) {
+          const caps = [...new Set(d.map(r => r.capitulo).filter(Boolean))]
+          const sorted = caps.sort((a, b) => {
+            const na = parseInt(a.match(/^(\d+)/)?.[1] || '9999')
+            const nb = parseInt(b.match(/^(\d+)/)?.[1] || '9999')
+            return na - nb
+          })
+          setCapitulos(sorted.map(c => ({ capitulo: c })))
+        }
+      })
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs })
       .then(r => r.json()).then(d => setPkIds(Array.isArray(d) ? d : []))
   }, [])
