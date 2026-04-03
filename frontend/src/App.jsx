@@ -3466,10 +3466,10 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const API_URL = import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net'
   const contrato_id = usuario?.contrato_id
 
-  const [reportes, setReportes] = React.useState([])
-  const [loading, setLoading] = React.useState(true)
-  const [filtroEstado, setFiltroEstado] = React.useState('todos')
-  const [modalNuevoReporte, setModalNuevoReporte] = React.useState(false)
+  const [reportes, setReportes] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [filtroEstado, setFiltroEstado] = useState('todos')
+  const [modalNuevoReporte, setModalNuevoReporte] = useState(false)
 
   const ESTADOS = ['Borrador','Sin Asignar Ítem','Aprobados','Pendientes','Rechazados','No Objeto de Cobro','En Papelera']
   const ESTADO_COLORS = {
@@ -3498,7 +3498,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
     setLoading(false)
   }
 
-  React.useEffect(() => { if (contrato_id) cargarReportes() }, [contrato_id])
+  useEffect(() => { if (contrato_id) cargarReportes() }, [contrato_id])
 
   const reportesFiltrados = filtroEstado === 'todos'
     ? reportes
