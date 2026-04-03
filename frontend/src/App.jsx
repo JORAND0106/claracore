@@ -3657,7 +3657,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       .then(r => r.json()).then(d => setSubcontratistas(Array.isArray(d) ? d : []))
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs })
       .then(r => r.json()).then(d => setInspectores(Array.isArray(d) ? d : []))
-    fetch(`${API_URL}/presupuesto/${contrato_id}/capitulos-lista`, { headers: hdrs })
+    fetch(`${API_URL}/listado-precios/${contrato_id}`, { headers: hdrs })
       .then(r => r.json()).then(d => {
         if (Array.isArray(d)) {
           const caps = [...new Set(d.map(r => r.capitulo).filter(Boolean))]
