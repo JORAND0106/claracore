@@ -3844,7 +3844,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         </div>
 
         {/* Contenido */}
-        <div style={{ flex:1, overflowY:'auto', padding:'24px' }}>
+        <div style={{ flex:1, overflowY:'visible', padding:'24px' }}>
 
           {/* ── TAB 0: Info General ── */}
           {tabActivo === 0 && (
@@ -4288,7 +4288,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:2000,
           display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}>
           <div style={{ background:t.bgCard, borderRadius:'16px', width:'100%', maxWidth:'700px',
-            height:'500px', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+            height:'500px', display:'flex', flexDirection:'column', overflow:'visible' }}>
             <div style={{ padding:'16px 20px', borderBottom:`1px solid ${t.border}`,
               display:'flex', justifyContent:'space-between', alignItems:'center' }}>
               <div style={{ fontWeight:'700', color:t.text }}>🗺️ Seleccionar PK_ID en el mapa</div>
