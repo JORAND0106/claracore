@@ -4272,8 +4272,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 const map = new mapboxgl.Map({
                   container: el,
                   style: 'mapbox://styles/mapbox/dark-v11',
-                  center: [-74.065, 4.71],
-                  zoom: 13,
+                  center: [-74.0389, 4.768],
+                  zoom: 15,
                   accessToken: MAPBOX_TOKEN
                 })
                 mapaPkInstance.current = map
@@ -4288,23 +4288,29 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                         paint: { 'line-color':'#00A896', 'line-width':1.5 } })
                       map.addLayer({ id:'pkids-hover', type:'fill', source:'pkids',
                         paint: { 'fill-color':'#F59E0B', 'fill-opacity':0.6 },
-                        filter: ['==', 'PK_ID', ''] })
+                        filter: ['==', 'Layer', ''] })
                       map.on('click', 'pkids-fill', (e) => {
                         const feat = e.features[0]; if (!feat) return
-                        const pkIdVal = String(feat.properties.PK_ID || feat.properties.pk_id || '')
-                        const found = pkIds.find(p => String(p.pk_id) === pkIdVal)
-                        if (found) { selPkId(found); setCoordLat(e.lngLat.lat); setCoordLng(e.lngLat.lng) }
-                        else { setPkBusqueda(pkIdVal) }
+                        const pkIdVal = String(feat.properties.Layer || feat.properties.PK_ID || feat.properties.pk_id || '').trim()
+                        const found = pkIds.find(p => String(p.pk_id).trim() === pkIdVal)
+                        if (found) {
+                          selPkId(found)
+                          setCoordLat(e.lngLat.lat)
+                          setCoordLng(e.lngLat.lng)
+                        } else {
+                          setPkBusqueda(pkIdVal)
+                          setPkSeleccionado(null)
+                        }
                         setModalMapaPk(false)
                         if (mapaPkInstance.current) { mapaPkInstance.current.remove(); mapaPkInstance.current = null }
                       })
                       map.on('mouseenter', 'pkids-fill', (e) => {
                         map.getCanvas().style.cursor = 'pointer'
-                        map.setFilter('pkids-hover', ['==', 'PK_ID', String(e.features[0]?.properties?.PK_ID || '')])
+                        map.setFilter('pkids-hover', ['==', 'Layer', String(e.features[0]?.properties?.Layer || '')])
                       })
                       map.on('mouseleave', 'pkids-fill', () => {
                         map.getCanvas().style.cursor = ''
-                        map.setFilter('pkids-hover', ['==', 'PK_ID', ''])
+                        map.setFilter('pkids-hover', ['==', 'Layer', ''])
                       })
                     })
                 })
