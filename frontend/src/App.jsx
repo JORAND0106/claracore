@@ -3608,6 +3608,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const [inspBusqueda, setInspBusqueda] = useState('')
   const [inspSeleccionado, setInspSeleccionado] = useState(null)
   const [inspDropOpen, setInspDropOpen] = useState(false)
+  const [capDropOpen, setCapDropOpen] = useState(false)
   const [capitulos, setCapitulos] = useState([])
   const [capituloSel, setCapituloSel] = useState('')
   const [pkIds, setPkIds] = useState([])
