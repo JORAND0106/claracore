@@ -3646,7 +3646,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   // Datos TAB 4 - Puntos topográficos
   const [puntos, setPuntos] = useState([{punto:'', norte:'', este:'', cota:'', descripcion:''}])
 
-  const hdrs = { Authorization: `Bearer ${token}` }
+  const hdrs = { Authorization: `Bearer ${getToken()}` }
 
   const [numeroReporte, setNumeroReporte] = useState(null)
 
