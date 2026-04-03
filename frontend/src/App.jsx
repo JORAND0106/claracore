@@ -3582,7 +3582,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
       {/* ── Modal Nuevo Reporte ── */}
       {modalNuevoReporte && (
         <ModalNuevoReporte
-          t={t} usuario={usuario} token={token}
+          t={t} usuario={usuario} token={getToken()}
           API_URL={API_URL} contrato_id={contrato_id}
           onClose={() => setModalNuevoReporte(false)}
           onGuardado={() => { setModalNuevoReporte(false); cargarReportes() }}
@@ -4272,7 +4272,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 const map = new mapboxgl.Map({
                   container: el,
                   style: 'mapbox://styles/mapbox/dark-v11',
-                  center: [-74.0389, 4.768],
+                  center: [-74.031242, 4.760271],
                   zoom: 15,
                   accessToken: MAPBOX_TOKEN
                 })
