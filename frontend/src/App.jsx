@@ -3844,7 +3844,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         </div>
 
         {/* Contenido */}
-        <div style={{ flex:1, overflowY:'visible', padding:'24px' }}>
+        <div style={{ flex:1, overflowY:'auto', padding:'24px' }}>
 
           {/* ── TAB 0: Info General ── */}
           {tabActivo === 0 && (
@@ -3926,9 +3926,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   placeholder="Buscar capítulo..."
                   style={inpStyle(errores.capitulo)} />
                 {capDropOpen && (
-                  <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard,
-                    border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:20,
-                    maxHeight:'400px', overflowY:'scroll', boxShadow:'0 8px 24px rgba(0,0,0,0.3)' }}>
+                  <div style={{ position:'fixed', top:'auto', left:'auto', background:t.bgCard,
+                    border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:9999,
+                    maxHeight:'300px', overflowY:'auto', width:'500px', boxShadow:'0 8px 24px rgba(0,0,0,0.3)' }}>
                     {capitulos
                       .filter(c => !capBusqueda || c.capitulo.toLowerCase().includes(capBusqueda.toLowerCase()))
                       .map(c => (
