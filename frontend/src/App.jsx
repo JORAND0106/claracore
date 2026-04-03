@@ -3579,20 +3579,658 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
         ))}
       </div>
 
-      {/* Modal nuevo reporte - placeholder */}
+      {/* ── Modal Nuevo Reporte ── */}
       {modalNuevoReporte && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.5)', zIndex:1000,
-          display:'flex', alignItems:'center', justifyContent:'center' }}>
-          <div style={{ background:t.bgCard, borderRadius:'16px', padding:'32px',
-            color:t.text, minWidth:'300px', textAlign:'center' }}>
-            <h3 style={{ margin:'0 0 16px' }}>🚧 Formulario en construcción</h3>
-            <button onClick={() => setModalNuevoReporte(false)} style={{
-              background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
-              padding:'8px 20px', cursor:'pointer', fontWeight:'700'
-            }}>Cerrar</button>
+        <ModalNuevoReporte
+          t={t} usuario={usuario} token={token}
+          API_URL={API_URL} contrato_id={contrato_id}
+          onClose={() => setModalNuevoReporte(false)}
+          onGuardado={() => { setModalNuevoReporte(false); cargarReportes() }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── MODAL NUEVO REPORTE ──────────────────────────────────────────────────────
+function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, onGuardado }) {
+  const [tabActivo, setTabActivo] = React.useState(0)
+  const [guardando, setGuardando] = React.useState(false)
+  const [errores, setErrores] = React.useState({})
+
+  // Datos TAB 1
+  const [descripcion, setDescripcion] = React.useState('')
+  const [subcontratistas, setSubcontratistas] = React.useState([])
+  const [subBusqueda, setSubBusqueda] = React.useState('')
+  const [subSeleccionado, setSubSeleccionado] = React.useState(null)
+  const [subDropOpen, setSubDropOpen] = React.useState(false)
+  const [inspectores, setInspectores] = React.useState([])
+  const [inspBusqueda, setInspBusqueda] = React.useState('')
+  const [inspSeleccionado, setInspSeleccionado] = React.useState(null)
+  const [inspDropOpen, setInspDropOpen] = React.useState(false)
+  const [capitulos, setCapitulos] = React.useState([])
+  const [capituloSel, setCapituloSel] = React.useState('')
+  const [pkIds, setPkIds] = React.useState([])
+  const [pkBusqueda, setPkBusqueda] = React.useState('')
+  const [pkSeleccionado, setPkSeleccionado] = React.useState(null)
+  const [pkDropOpen, setPkDropOpen] = React.useState(false)
+  const [margen, setMargen] = React.useState('')
+  const [absInicio, setAbsInicio] = React.useState('')
+  const [absFinal, setAbsFinal] = React.useState('')
+  const [nodos, setNodos] = React.useState([])
+  const [nodoIni, setNodoIni] = React.useState('')
+  const [nodoFin, setNodoFin] = React.useState('')
+  const [nodoIniSugg, setNodoIniSugg] = React.useState([])
+  const [nodoFinSugg, setNodoFinSugg] = React.useState([])
+  const [nodoIniWarn, setNodoIniWarn] = React.useState(false)
+  const [nodoFinWarn, setNodoFinWarn] = React.useState(false)
+  const [coordLat, setCoordLat] = React.useState(null)
+  const [coordLng, setCoordLng] = React.useState(null)
+
+  // Datos TAB 2 - Plantillas
+  const [plantillas, setPlantillas] = React.useState([])
+  const [plantillaSel, setPlantillaSel] = React.useState(null)
+  const [modalCrearPlantilla, setModalCrearPlantilla] = React.useState(false)
+  const [nuevaPlantillaNombre, setNuevaPlantillaNombre] = React.useState('')
+  const [nuevaPlantillaItems, setNuevaPlantillaItems] = React.useState([{nombre:'', descripcion:''}])
+
+  // Datos TAB 3 - Registros
+  const [registros, setRegistros] = React.useState([])
+  const [modalRegistro, setModalRegistro] = React.useState(null) // índice del registro abierto
+
+  // Datos TAB 4 - Puntos topográficos
+  const [puntos, setPuntos] = React.useState([{punto:'', norte:'', este:'', cota:'', descripcion:''}])
+
+  const hdrs = { Authorization: `Bearer ${token}` }
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs })
+      .then(r => r.json()).then(d => setSubcontratistas(Array.isArray(d) ? d : []))
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs })
+      .then(r => r.json()).then(d => setInspectores(Array.isArray(d) ? d : []))
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/capitulos`, { headers: hdrs })
+      .then(r => r.json()).then(d => setCapitulos(Array.isArray(d) ? d : []))
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs })
+      .then(r => r.json()).then(d => setPkIds(Array.isArray(d) ? d : []))
+  }, [])
+
+  React.useEffect(() => {
+    if (!capituloSel) { setNodos([]); return }
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/nodos?capitulo=${encodeURIComponent(capituloSel)}`, { headers: hdrs })
+      .then(r => r.json()).then(d => setNodos(Array.isArray(d) ? d : []))
+    // Cargar plantillas del capítulo
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/plantillas?capitulo=${encodeURIComponent(capituloSel)}`, { headers: hdrs })
+      .then(r => r.json()).then(d => setPlantillas(Array.isArray(d) ? d : []))
+  }, [capituloSel])
+
+  const selPkId = (pk) => {
+    setPkSeleccionado(pk)
+    setPkBusqueda(pk.pk_id)
+    setPkDropOpen(false)
+    setCoordLat(null); setCoordLng(null)
+  }
+
+  const pkFiltrados = pkIds.filter(p =>
+    p.pk_id.toLowerCase().includes(pkBusqueda.toLowerCase()) ||
+    (p.ubicacion||'').toLowerCase().includes(pkBusqueda.toLowerCase())
+  ).slice(0, 20)
+
+  const subFiltrados = subcontratistas.filter(s =>
+    s.nombre.toLowerCase().includes(subBusqueda.toLowerCase())
+  )
+  const inspFiltrados = inspectores.filter(i =>
+    i.nombre.toLowerCase().includes(inspBusqueda.toLowerCase())
+  )
+
+  const validarTab1 = () => {
+    const e = {}
+    if (!descripcion.trim()) e.descripcion = 'Requerido'
+    if (!subSeleccionado) e.sub = 'Requerido'
+    if (!inspSeleccionado) e.insp = 'Requerido'
+    if (!capituloSel) e.capitulo = 'Requerido'
+    if (!pkSeleccionado) e.pk = 'Requerido'
+    if (!margen) e.margen = 'Requerido'
+    if (absInicio === '') e.absInicio = 'Requerido'
+    if (absFinal === '') e.absFinal = 'Requerido'
+    if (!nodoIni.trim()) e.nodoIni = 'Requerido'
+    if (!nodoFin.trim()) e.nodoFin = 'Requerido'
+    setErrores(e)
+    return Object.keys(e).length === 0
+  }
+
+  const aplicarPlantilla = (plantilla) => {
+    setPlantillaSel(plantilla)
+    if (plantilla?.items?.length) {
+      setRegistros(plantilla.items.map(item => ({
+        nombre: item.nombre,
+        descripcion: '',
+        longitud: '', ancho: '', espesor: '', cantidad: '',
+        cantidad_total: null,
+        unidad: '',
+        observacion: '',
+        foto_url: null, foto_numero: null, foto_descripcion: '',
+        grafico_url: null, grafico_numero: null, grafico_descripcion: '',
+        _fotoOk: false, _grafOk: false
+      })))
+    }
+  }
+
+  const calcTotal = (reg) => {
+    const vals = [reg.longitud, reg.ancho, reg.espesor, reg.cantidad]
+      .map(v => parseFloat(v)).filter(v => !isNaN(v) && v !== 0)
+    if (vals.length === 0) return null
+    return vals.reduce((a, b) => a * b, 1)
+  }
+
+  const agregarRegistro = () => {
+    setRegistros(prev => [...prev, {
+      nombre: '', descripcion: '', longitud: '', ancho: '', espesor: '', cantidad: '',
+      cantidad_total: null, unidad: '', observacion: '',
+      foto_url: null, foto_numero: null, foto_descripcion: '',
+      grafico_url: null, grafico_numero: null, grafico_descripcion: '',
+      _fotoOk: false, _grafOk: false
+    }])
+  }
+
+  const agregarPunto = () => setPuntos(prev => [...prev, {punto:'', norte:'', este:'', cota:'', descripcion:''}])
+
+  const guardarReporte = async () => {
+    if (!validarTab1()) { setTabActivo(0); return }
+    if (registros.length === 0) { alert('Debe tener al menos un registro en el TAB 3'); setTabActivo(2); return }
+    setGuardando(true)
+    try {
+      const body = {
+        descripcion_actividad: descripcion,
+        subcontratista_id: subSeleccionado?.id || null,
+        inspector_id: inspSeleccionado?.id || null,
+        capitulo: capituloSel,
+        pk_id_id: pkSeleccionado?.id || null,
+        civ: pkSeleccionado?.civ || null,
+        tramo: pkSeleccionado?.tramo || null,
+        infraestructura: pkSeleccionado?.infraestructura || null,
+        calzada: pkSeleccionado?.calzada || null,
+        ubicacion: pkSeleccionado?.ubicacion || null,
+        coord_lat: coordLat, coord_lng: coordLng,
+        margen, abs_inicio: parseFloat(absInicio), abs_final: parseFloat(absFinal),
+        nodo_ini: nodoIni, nodo_fin: nodoFin,
+      }
+      const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
+        method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+      const reporte = await r.json()
+      if (!reporte.id) throw new Error('Sin ID')
+      // Guardar registros
+      for (const reg of registros) {
+        const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-registro`, { method:'POST', headers: hdrs })
+          .then(x => x.json())
+        await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros`, {
+          method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reporte_id: reporte.id, numero_registro: numR.numero,
+            nombre: reg.nombre, descripcion: reg.observacion,
+            longitud: parseFloat(reg.longitud)||null, ancho: parseFloat(reg.ancho)||null,
+            espesor: parseFloat(reg.espesor)||null, cantidad: parseFloat(reg.cantidad)||null,
+            cantidad_total: reg.cantidad_total,
+            unidad: reg.unidad, observacion: reg.observacion,
+            foto_url: reg.foto_url, foto_numero: reg.foto_numero, foto_descripcion: reg.foto_descripcion,
+            grafico_url: reg.grafico_url, grafico_numero: reg.grafico_numero, grafico_descripcion: reg.grafico_descripcion,
+          })
+        })
+      }
+      // Guardar puntos topográficos
+      const puntosValidos = puntos.filter(p => p.norte || p.este)
+      if (puntosValidos.length > 0) {
+        await fetch(`${API_URL}/sicoe-obra/${contrato_id}/puntos-topograficos`, {
+          method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reporte_id: reporte.id, puntos: puntosValidos })
+        })
+      }
+      onGuardado()
+    } catch(e) {
+      alert('Error guardando reporte: ' + e.message)
+    }
+    setGuardando(false)
+  }
+
+  const inpStyle = (err) => ({
+    width: '100%', padding: '8px 12px', borderRadius: '8px', fontSize: '13px',
+    background: t.bg, color: t.text, boxSizing: 'border-box',
+    border: `1px solid ${err ? '#EF4444' : t.border}`, outline: 'none'
+  })
+
+  const TABS = ['📋 Info General', '📄 Plantilla', '📝 Registros', '📍 Topografía']
+
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:1000,
+      display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}>
+      <div style={{ background:t.bgCard, borderRadius:'16px', width:'100%', maxWidth:'780px',
+        maxHeight:'90vh', display:'flex', flexDirection:'column', overflow:'hidden',
+        boxShadow:'0 25px 60px rgba(0,0,0,0.4)' }}>
+
+        {/* Header */}
+        <div style={{ padding:'20px 24px', borderBottom:`1px solid ${t.border}`,
+          display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div>
+            <div style={{ fontWeight:'800', fontSize:'16px', color:t.text }}>🏗️ Nuevo Reporte de Cantidades</div>
+            <div style={{ fontSize:'12px', color:t.textMuted }}>Todos los campos son obligatorios</div>
+          </div>
+          <button onClick={onClose} style={{ background:'transparent', border:'none',
+            fontSize:'20px', cursor:'pointer', color:t.textMuted }}>✕</button>
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display:'flex', borderBottom:`1px solid ${t.border}`, padding:'0 24px' }}>
+          {TABS.map((tab, i) => (
+            <button key={i} onClick={() => i <= tabActivo && setTabActivo(i)} style={{
+              background:'transparent', border:'none', borderBottom: tabActivo===i ? `2px solid ${t.primary}` : '2px solid transparent',
+              padding:'12px 16px', fontSize:'13px', fontWeight: tabActivo===i ? '700' : '400',
+              color: tabActivo===i ? t.primary : i > tabActivo ? t.border : t.textMuted,
+              cursor: i <= tabActivo ? 'pointer' : 'default'
+            }}>{tab}</button>
+          ))}
+        </div>
+
+        {/* Contenido */}
+        <div style={{ flex:1, overflowY:'auto', padding:'24px' }}>
+
+          {/* ── TAB 0: Info General ── */}
+          {tabActivo === 0 && (
+            <div style={{ display:'flex', flexDirection:'column', gap:'16px' }}>
+
+              {/* Descripción */}
+              <div>
+                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                  DESCRIPCIÓN ACTIVIDAD *
+                </label>
+                <textarea value={descripcion} onChange={e => setDescripcion(e.target.value)}
+                  rows={2} placeholder="Nombre descriptivo del reporte..."
+                  style={{ ...inpStyle(errores.descripcion), resize:'vertical' }} />
+                {errores.descripcion && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.descripcion}</span>}
+              </div>
+
+              {/* Subcontratista */}
+              <div style={{ position:'relative' }}>
+                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                  SUBCONTRATISTA *
+                </label>
+                <input value={subSeleccionado ? subSeleccionado.nombre : subBusqueda}
+                  onChange={e => { setSubBusqueda(e.target.value); setSubSeleccionado(null); setSubDropOpen(true) }}
+                  onFocus={() => setSubDropOpen(true)}
+                  placeholder="Buscar subcontratista..." style={inpStyle(errores.sub)} />
+                {subDropOpen && subFiltrados.length > 0 && (
+                  <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard,
+                    border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:10, maxHeight:'160px', overflowY:'auto' }}>
+                    {subFiltrados.map(s => (
+                      <div key={s.id} onClick={() => { setSubSeleccionado(s); setSubBusqueda(''); setSubDropOpen(false) }}
+                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:'13px', color:t.text,
+                          borderBottom:`1px solid ${t.border}` }}
+                        onMouseEnter={e => e.currentTarget.style.background = t.bg}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                        {s.nombre}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {errores.sub && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.sub}</span>}
+              </div>
+
+              {/* Inspector */}
+              <div style={{ position:'relative' }}>
+                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                  INSPECTOR *
+                </label>
+                <input value={inspSeleccionado ? inspSeleccionado.nombre : inspBusqueda}
+                  onChange={e => { setInspBusqueda(e.target.value); setInspSeleccionado(null); setInspDropOpen(true) }}
+                  onFocus={() => setInspDropOpen(true)}
+                  placeholder="Buscar inspector de obra..." style={inpStyle(errores.insp)} />
+                {inspDropOpen && inspFiltrados.length > 0 && (
+                  <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard,
+                    border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:10, maxHeight:'160px', overflowY:'auto' }}>
+                    {inspFiltrados.map(i => (
+                      <div key={i.id} onClick={() => { setInspSeleccionado(i); setInspBusqueda(''); setInspDropOpen(false) }}
+                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:'13px', color:t.text,
+                          borderBottom:`1px solid ${t.border}` }}
+                        onMouseEnter={e => e.currentTarget.style.background = t.bg}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                        {i.nombre}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {errores.insp && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.insp}</span>}
+              </div>
+
+              {/* Capítulo */}
+              <div>
+                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                  CAPÍTULO *
+                </label>
+                <select value={capituloSel} onChange={e => setCapituloSel(e.target.value)} style={inpStyle(errores.capitulo)}>
+                  <option value=''>-- Seleccionar capítulo --</option>
+                  {capitulos.map(c => <option key={c.capitulo} value={c.capitulo}>{c.capitulo}</option>)}
+                </select>
+                {errores.capitulo && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.capitulo}</span>}
+              </div>
+
+              {/* PK_ID */}
+              <div style={{ position:'relative' }}>
+                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                  LOCALIZACIÓN (PK_ID) *
+                </label>
+                <input value={pkSeleccionado ? pkSeleccionado.pk_id : pkBusqueda}
+                  onChange={e => { setPkBusqueda(e.target.value); setPkSeleccionado(null); setPkDropOpen(true) }}
+                  onFocus={() => setPkDropOpen(true)}
+                  placeholder="Buscar PK_ID o ubicación..." style={inpStyle(errores.pk)} />
+                {pkDropOpen && pkFiltrados.length > 0 && (
+                  <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard,
+                    border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:10, maxHeight:'200px', overflowY:'auto' }}>
+                    {pkFiltrados.map(pk => (
+                      <div key={pk.id} onClick={() => selPkId(pk)}
+                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:'13px', color:t.text,
+                          borderBottom:`1px solid ${t.border}` }}
+                        onMouseEnter={e => e.currentTarget.style.background = t.bg}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                        <span style={{ fontWeight:'700', color:t.primary }}>{pk.pk_id}</span>
+                        <span style={{ color:t.textMuted, marginLeft:'8px', fontSize:'11px' }}>
+                          {pk.infraestructura} · {pk.calzada} · {pk.ubicacion}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {pkSeleccionado && (
+                  <div style={{ marginTop:'6px', padding:'8px 12px', background:t.bg,
+                    borderRadius:'6px', fontSize:'11px', color:t.textMuted }}>
+                    📍 CIV: {pkSeleccionado.civ} · {pkSeleccionado.tramo} · {pkSeleccionado.infraestructura} · {pkSeleccionado.calzada}
+                  </div>
+                )}
+                {errores.pk && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.pk}</span>}
+              </div>
+
+              {/* Margen */}
+              <div>
+                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                  MARGEN *
+                </label>
+                <select value={margen} onChange={e => setMargen(e.target.value)} style={inpStyle(errores.margen)}>
+                  <option value=''>-- Seleccionar --</option>
+                  {['Izquierda','Central','Derecha','Única','Otro'].map(m =>
+                    <option key={m} value={m}>{m}</option>)}
+                </select>
+                {errores.margen && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.margen}</span>}
+              </div>
+
+              {/* Abscisado */}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
+                <div>
+                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                    ABS. INICIAL *
+                  </label>
+                  <input type='number' step='0.01' value={absInicio}
+                    onChange={e => setAbsInicio(e.target.value)}
+                    placeholder='0.00' style={inpStyle(errores.absInicio)} />
+                  {errores.absInicio && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.absInicio}</span>}
+                </div>
+                <div>
+                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                    ABS. FINAL *
+                  </label>
+                  <input type='number' step='0.01' value={absFinal}
+                    onChange={e => setAbsFinal(e.target.value)}
+                    placeholder='0.00' style={inpStyle(errores.absFinal)} />
+                  {errores.absFinal && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.absFinal}</span>}
+                </div>
+              </div>
+
+              {/* Nodos */}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
+                <div>
+                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                    NODO INICIAL *
+                  </label>
+                  <input value={nodoIni}
+                    onChange={e => {
+                      setNodoIni(e.target.value)
+                      setNodoIniWarn(false)
+                      if (e.target.value.length > 1)
+                        setNodoIniSugg(nodos.filter(n => n.toLowerCase().includes(e.target.value.toLowerCase())).slice(0,8))
+                      else setNodoIniSugg([])
+                    }}
+                    onBlur={() => {
+                      if (nodoIni && !nodos.includes(nodoIni)) setNodoIniWarn(true)
+                      setTimeout(() => setNodoIniSugg([]), 200)
+                    }}
+                    placeholder='Nodo inicial...' style={inpStyle(errores.nodoIni)} />
+                  {nodoIniSugg.length > 0 && (
+                    <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', zIndex:10 }}>
+                      {nodoIniSugg.map(n => (
+                        <div key={n} onClick={() => { setNodoIni(n); setNodoIniSugg([]); setNodoIniWarn(false) }}
+                          style={{ padding:'6px 10px', cursor:'pointer', fontSize:'12px', color:t.text }}>
+                          {n}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {nodoIniWarn && <span style={{ color:'#F59E0B', fontSize:'11px' }}>⚠️ Nodo no existe en presupuesto</span>}
+                  {errores.nodoIni && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.nodoIni}</span>}
+                </div>
+                <div>
+                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                    NODO FINAL *
+                  </label>
+                  <input value={nodoFin}
+                    onChange={e => {
+                      setNodoFin(e.target.value)
+                      setNodoFinWarn(false)
+                      if (e.target.value.length > 1)
+                        setNodoFinSugg(nodos.filter(n => n.toLowerCase().includes(e.target.value.toLowerCase())).slice(0,8))
+                      else setNodoFinSugg([])
+                    }}
+                    onBlur={() => {
+                      if (nodoFin && !nodos.includes(nodoFin)) setNodoFinWarn(true)
+                      setTimeout(() => setNodoFinSugg([]), 200)
+                    }}
+                    placeholder='Nodo final...' style={inpStyle(errores.nodoFin)} />
+                  {nodoFinSugg.length > 0 && (
+                    <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', zIndex:10 }}>
+                      {nodoFinSugg.map(n => (
+                        <div key={n} onClick={() => { setNodoFin(n); setNodoFinSugg([]); setNodoFinWarn(false) }}
+                          style={{ padding:'6px 10px', cursor:'pointer', fontSize:'12px', color:t.text }}>
+                          {n}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {nodoFinWarn && <span style={{ color:'#F59E0B', fontSize:'11px' }}>⚠️ Nodo no existe en presupuesto</span>}
+                  {errores.nodoFin && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.nodoFin}</span>}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── TAB 1: Plantilla ── */}
+          {tabActivo === 1 && (
+            <div>
+              {!capituloSel && (
+                <div style={{ padding:'30px', textAlign:'center', color:t.textMuted }}>
+                  Selecciona un capítulo en el TAB 1 para ver las plantillas disponibles.
+                </div>
+              )}
+              {capituloSel && (
+                <div style={{ display:'flex', flexDirection:'column', gap:'16px' }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                    <div style={{ fontSize:'13px', color:t.textMuted }}>
+                      Plantillas para: <strong style={{ color:t.text }}>{capituloSel}</strong>
+                    </div>
+                    <button onClick={() => setModalCrearPlantilla(true)} style={{
+                      background:'transparent', border:`1px solid ${t.primary}`, color:t.primary,
+                      borderRadius:'6px', padding:'6px 14px', fontSize:'12px', cursor:'pointer', fontWeight:'600'
+                    }}>+ Crear Plantilla</button>
+                  </div>
+                  {plantillas.length === 0 ? (
+                    <div style={{ padding:'30px', textAlign:'center', color:t.textMuted, background:t.bg, borderRadius:'8px' }}>
+                      No hay plantillas para este capítulo. Puedes continuar sin plantilla o crear una.
+                    </div>
+                  ) : (
+                    <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
+                      {plantillas.map(p => (
+                        <div key={p.id} onClick={() => aplicarPlantilla(p)}
+                          style={{ padding:'14px', borderRadius:'10px', cursor:'pointer',
+                            border: `2px solid ${plantillaSel?.id === p.id ? t.primary : t.border}`,
+                            background: plantillaSel?.id === p.id ? t.primary+'11' : t.bg }}>
+                          <div style={{ fontWeight:'700', color:t.text, marginBottom:'6px' }}>{p.nombre}</div>
+                          <div style={{ display:'flex', gap:'6px', flexWrap:'wrap' }}>
+                            {(p.items||[]).map((item, i) => (
+                              <span key={i} style={{ background:t.border, color:t.textMuted,
+                                borderRadius:'4px', padding:'2px 8px', fontSize:'11px' }}>{item.nombre}</span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {plantillaSel && (
+                    <div style={{ padding:'10px 14px', background:'#10B98122', border:'1px solid #10B981',
+                      borderRadius:'8px', fontSize:'12px', color:'#10B981' }}>
+                      ✅ Plantilla "{plantillaSel.nombre}" aplicada — {registros.length} actividades cargadas en TAB 3
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── TAB 2: Registros ── */}
+          {tabActivo === 2 && (
+            <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
+              {registros.length === 0 && (
+                <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, background:t.bg, borderRadius:'8px' }}>
+                  No hay actividades. Agrega una o aplica una plantilla en el TAB anterior.
+                </div>
+              )}
+              {/* Grid header */}
+              {registros.length > 0 && (
+                <div style={{ display:'grid', gridTemplateColumns:'60px 1fr 100px 40px 40px',
+                  gap:'8px', fontSize:'11px', fontWeight:'700', color:t.textMuted,
+                  padding:'0 8px', letterSpacing:'0.5px' }}>
+                  <div>N° REG.</div><div>NOMBRE / DESCRIPCIÓN</div><div>CANT. TOTAL</div><div>📸</div><div>📐</div>
+                </div>
+              )}
+              {registros.map((reg, idx) => (
+                <div key={idx} onClick={() => setModalRegistro(idx)}
+                  style={{ display:'grid', gridTemplateColumns:'60px 1fr 100px 40px 40px',
+                    gap:'8px', padding:'10px 8px', borderRadius:'8px', cursor:'pointer',
+                    border:`1px solid ${t.border}`, background:t.bg,
+                    alignItems:'center' }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = t.primary}
+                  onMouseLeave={e => e.currentTarget.style.borderColor = t.border}>
+                  <div style={{ fontWeight:'700', color:t.primary, fontSize:'13px' }}>#{idx+1}</div>
+                  <div>
+                    <div style={{ fontWeight:'600', fontSize:'13px', color:t.text }}>
+                      {reg.nombre || <span style={{ color:t.textMuted, fontStyle:'italic' }}>Sin nombre</span>}
+                    </div>
+                    <div style={{ fontSize:'11px', color:t.textMuted }}>
+                      {reg.observacion || <span style={{ fontStyle:'italic' }}>Click para diligenciar...</span>}
+                    </div>
+                  </div>
+                  <div style={{ fontWeight:'700', color: reg.cantidad_total ? '#10B981' : t.textMuted, fontSize:'13px' }}>
+                    {reg.cantidad_total != null ? Number(reg.cantidad_total).toFixed(2) : '—'}
+                  </div>
+                  <div style={{ fontSize:'16px' }}>{reg._fotoOk ? '✅' : '⬜'}</div>
+                  <div style={{ fontSize:'16px' }}>{reg._grafOk ? '✅' : '⬜'}</div>
+                </div>
+              ))}
+              <button onClick={agregarRegistro} style={{
+                background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted,
+                borderRadius:'8px', padding:'10px', fontSize:'13px', cursor:'pointer', width:'100%'
+              }}>+ Agregar actividad</button>
+            </div>
+          )}
+
+          {/* ── TAB 3: Topografía ── */}
+          {tabActivo === 3 && (
+            <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
+              <div style={{ fontSize:'13px', color:t.textMuted }}>
+                Registra las coordenadas levantadas en campo. Opcional — puedes importar desde CSV.
+              </div>
+              {/* Header grid */}
+              <div style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr',
+                gap:'8px', fontSize:'11px', fontWeight:'700', color:t.textMuted,
+                padding:'0 8px', letterSpacing:'0.5px' }}>
+                <div>PUNTO</div><div>NORTE</div><div>ESTE</div><div>COTA</div><div>DESCRIPCIÓN</div>
+              </div>
+              {puntos.map((p, idx) => (
+                <div key={idx} style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr', gap:'8px' }}>
+                  {['punto','norte','este','cota','descripcion'].map(campo => (
+                    <input key={campo} value={p[campo]}
+                      onChange={e => {
+                        const arr = [...puntos]; arr[idx] = {...arr[idx], [campo]: e.target.value}; setPuntos(arr)
+                      }}
+                      type={['norte','este','cota'].includes(campo) ? 'number' : 'text'}
+                      step='0.000001'
+                      placeholder={campo.charAt(0).toUpperCase()+campo.slice(1)}
+                      style={inpStyle(false)} />
+                  ))}
+                </div>
+              ))}
+              <div style={{ display:'flex', gap:'8px' }}>
+                <button onClick={agregarPunto} style={{
+                  background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted,
+                  borderRadius:'8px', padding:'8px 16px', fontSize:'12px', cursor:'pointer'
+                }}>+ Agregar punto</button>
+                <label style={{
+                  background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted,
+                  borderRadius:'8px', padding:'8px 16px', fontSize:'12px', cursor:'pointer'
+                }}>
+                  📂 Importar CSV
+                  <input type='file' accept='.csv' style={{ display:'none' }} onChange={e => {
+                    const file = e.target.files[0]; if (!file) return
+                    const reader = new FileReader()
+                    reader.onload = ev => {
+                      const lines = ev.target.result.split('\n').filter(l => l.trim())
+                      const rows = lines.slice(1).map(l => {
+                        const cols = l.split(',')
+                        return { punto:cols[0]||'', norte:cols[1]||'', este:cols[2]||'', cota:cols[3]||'', descripcion:cols[4]||'' }
+                      })
+                      if (rows.length) setPuntos(rows)
+                    }
+                    reader.readAsText(file)
+                  }} />
+                </label>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding:'16px 24px', borderTop:`1px solid ${t.border}`,
+          display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <button onClick={onClose} style={{
+            background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
+            borderRadius:'8px', padding:'8px 20px', cursor:'pointer', fontSize:'13px'
+          }}>Cancelar</button>
+          <div style={{ display:'flex', gap:'8px' }}>
+            {tabActivo < 3 && (
+              <button onClick={() => {
+                if (tabActivo === 0 && !validarTab1()) return
+                if (tabActivo === 2 && registros.length === 0) { alert('Debe tener al menos un registro'); return }
+                setTabActivo(tabActivo + 1)
+              }} style={{
+                background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
+                padding:'8px 24px', cursor:'pointer', fontWeight:'700', fontSize:'13px'
+              }}>Siguiente →</button>
+            )}
+            {tabActivo === 3 && (
+              <button onClick={guardarReporte} disabled={guardando} style={{
+                background: guardando ? t.border : '#10B981', color:'#fff', border:'none',
+                borderRadius:'8px', padding:'8px 24px', cursor: guardando ? 'not-allowed' : 'pointer',
+                fontWeight:'700', fontSize:'13px'
+              }}>{guardando ? 'Guardando...' : '✅ Guardar y Enviar'}</button>
+            )}
           </div>
         </div>
-      )}
+      </div>
     </div>
   )
 }

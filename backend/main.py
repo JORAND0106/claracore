@@ -3092,3 +3092,118 @@ def crear_reporte_obra(contrato_id: int, body: ReporteCreate, current_user=Depen
         return supabase.table("so_reportes").insert(data).execute().data
     result = supabase_execute(_ins)
     return result[0] if result else {}
+
+@app.get("/sicoe-obra/{contrato_id}/plantillas")
+def listar_plantillas(contrato_id: int, capitulo: str = None, current_user=Depends(get_current_user)):
+    def _q():
+        q = supabase.table("so_plantillas").select("*, so_plantilla_items(*)").eq("contrato_id", contrato_id)
+        if capitulo:
+            q = q.eq("capitulo", capitulo)
+        return q.order("nombre").execute().data
+    rows = supabase_execute(_q)
+    for r in rows:
+        r["items"] = r.pop("so_plantilla_items", [])
+    return rows
+
+class PlantillaItem(BaseModel):
+    nombre: str
+    descripcion: Optional[str] = None
+    orden: int = 0
+
+class PlantillaCreate(BaseModel):
+    nombre: str
+    capitulo: str
+    items: List[PlantillaItem] = []
+
+@app.post("/sicoe-obra/{contrato_id}/plantillas")
+def crear_plantilla(contrato_id: int, body: PlantillaCreate, current_user=Depends(get_current_user)):
+    def _ins():
+        return supabase.table("so_plantillas").insert({
+            "contrato_id": contrato_id,
+            "nombre": body.nombre,
+            "capitulo": body.capitulo,
+            "creado_por": current_user["id"]
+        }).execute().data
+    plantilla = supabase_execute(_ins)
+    if not plantilla:
+        raise HTTPException(status_code=500, detail="Error creando plantilla")
+    pid = plantilla[0]["id"]
+    if body.items:
+        def _items():
+            return supabase.table("so_plantilla_items").insert([
+                {"plantilla_id": pid, "nombre": it.nombre, "descripcion": it.descripcion, "orden": it.orden}
+                for it in body.items
+            ]).execute().data
+        supabase_execute(_items)
+    return plantilla[0]
+
+@app.post("/sicoe-obra/{contrato_id}/next-registro")
+def next_numero_registro(contrato_id: int, current_user=Depends(get_current_user)):
+    def _q():
+        return supabase.rpc("siguiente_numero_registro", {"p_contrato_id": contrato_id}).execute().data
+    numero = supabase_execute(_q)
+    return {"numero": numero}
+
+@app.post("/sicoe-obra/{contrato_id}/next-foto")
+def next_numero_foto(contrato_id: int, current_user=Depends(get_current_user)):
+    def _q():
+        return supabase.rpc("siguiente_numero_foto", {"p_contrato_id": contrato_id}).execute().data
+    return {"numero": supabase_execute(_q)}
+
+@app.post("/sicoe-obra/{contrato_id}/next-grafico")
+def next_numero_grafico(contrato_id: int, current_user=Depends(get_current_user)):
+    def _q():
+        return supabase.rpc("siguiente_numero_grafico", {"p_contrato_id": contrato_id}).execute().data
+    return {"numero": supabase_execute(_q)}
+
+class RegistroCreate(BaseModel):
+    reporte_id: int
+    numero_registro: int
+    nombre: Optional[str] = None
+    descripcion: Optional[str] = None
+    longitud: Optional[float] = None
+    ancho: Optional[float] = None
+    espesor: Optional[float] = None
+    cantidad: Optional[float] = None
+    cantidad_total: Optional[float] = None
+    unidad: Optional[str] = None
+    observacion: Optional[str] = None
+    foto_url: Optional[str] = None
+    foto_numero: Optional[int] = None
+    foto_descripcion: Optional[str] = None
+    grafico_url: Optional[str] = None
+    grafico_numero: Optional[int] = None
+    grafico_descripcion: Optional[str] = None
+
+@app.post("/sicoe-obra/{contrato_id}/registros")
+def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(get_current_user)):
+    data = body.dict()
+    data["contrato_id"] = contrato_id
+    def _ins():
+        return supabase.table("so_registros").insert(data).execute().data
+    result = supabase_execute(_ins)
+    return result[0] if result else {}
+
+class PuntoTopo(BaseModel):
+    punto: Optional[str] = None
+    norte: Optional[float] = None
+    este: Optional[float] = None
+    cota: Optional[float] = None
+    descripcion: Optional[str] = None
+
+class PuntosCreate(BaseModel):
+    reporte_id: int
+    puntos: List[PuntoTopo]
+
+@app.post("/sicoe-obra/{contrato_id}/puntos-topograficos")
+def crear_puntos(contrato_id: int, body: PuntosCreate, current_user=Depends(get_current_user)):
+    rows = []
+    for p in body.puntos:
+        d = p.dict()
+        d["contrato_id"] = contrato_id
+        d["reporte_id"] = body.reporte_id
+        d["creado_por"] = current_user["id"]
+        rows.append(d)
+    def _ins():
+        return supabase.table("so_puntos_topograficos").insert(rows).execute().data
+    return supabase_execute(_ins)
