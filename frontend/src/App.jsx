@@ -3912,14 +3912,35 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               </div>
 
               {/* Capítulo */}
-              <div>
+              <div style={{ position:'relative' }}>
                 <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                   CAPÍTULO *
                 </label>
-                <select value={capituloSel} onChange={e => setCapituloSel(e.target.value)} style={inpStyle(errores.capitulo)}>
-                  <option value=''>-- Seleccionar capítulo --</option>
-                  {capitulos.map(c => <option key={c.capitulo} value={c.capitulo}>{c.capitulo}</option>)}
-                </select>
+                <div onClick={() => setCapDropOpen(v => !v)}
+                  style={{ ...inpStyle(errores.capitulo), cursor:'pointer', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <span style={{ color: capituloSel ? t.text : t.textMuted }}>
+                    {capituloSel || '-- Seleccionar capítulo --'}
+                  </span>
+                  <span style={{ color:t.textMuted }}>▾</span>
+                </div>
+                {capDropOpen && (
+                  <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard,
+                    border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:20,
+                    maxHeight:'220px', overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.2)' }}>
+                    {capitulos.map(c => (
+                      <div key={c.capitulo} onClick={() => { setCapituloSel(c.capitulo); setCapDropOpen(false) }}
+                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:'13px',
+                          color: capituloSel === c.capitulo ? t.primary : t.text,
+                          fontWeight: capituloSel === c.capitulo ? '700' : '400',
+                          borderBottom:`1px solid ${t.border}`,
+                          background: capituloSel === c.capitulo ? t.primary+'11' : 'transparent' }}
+                        onMouseEnter={e => e.currentTarget.style.background = t.bg}
+                        onMouseLeave={e => e.currentTarget.style.background = capituloSel === c.capitulo ? t.primary+'11' : 'transparent'}>
+                        {c.capitulo}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {errores.capitulo && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.capitulo}</span>}
               </div>
 
