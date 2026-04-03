@@ -3579,85 +3579,6 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
         ))}
       </div>
 
-{/* ── Modal Mapa PK_ID ── */}
-      {modalMapaPk && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:2000,
-          display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}>
-          <div style={{ background:t.bgCard, borderRadius:'16px', width:'100%', maxWidth:'700px',
-            height:'500px', display:'flex', flexDirection:'column', overflow:'hidden' }}>
-            <div style={{ padding:'16px 20px', borderBottom:`1px solid ${t.border}`,
-              display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <div style={{ fontWeight:'700', color:t.text }}>🗺️ Seleccionar PK_ID en el mapa</div>
-              <div style={{ fontSize:'12px', color:t.textMuted }}>Haz click en un polígono para seleccionarlo</div>
-              <button onClick={() => setModalMapaPk(false)} style={{
-                background:'transparent', border:'none', fontSize:'20px', cursor:'pointer', color:t.textMuted }}>✕</button>
-            </div>
-            <div style={{ flex:1, position:'relative' }}>
-              <div ref={el => {
-                if (!el || mapaPkInstance.current) return
-                mapaPkRef.current = el
-                const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
-                const map = new mapboxgl.Map({
-                  container: el,
-                  style: 'mapbox://styles/mapbox/dark-v11',
-                  center: [-74.065, 4.71],
-                  zoom: 13,
-                  accessToken: MAPBOX_TOKEN
-                })
-                mapaPkInstance.current = map
-                map.on('load', () => {
-                  fetch('/pOLIGONOS_1551t_Project_Feat.json')
-                    .then(r => r.json())
-                    .then(geojson => {
-                      map.addSource('pkids', { type:'geojson', data: geojson })
-                      map.addLayer({
-                        id: 'pkids-fill', type:'fill', source:'pkids',
-                        paint: { 'fill-color': '#0077B6', 'fill-opacity': 0.3 }
-                      })
-                      map.addLayer({
-                        id: 'pkids-outline', type:'line', source:'pkids',
-                        paint: { 'line-color': '#00A896', 'line-width': 1.5 }
-                      })
-                      map.addLayer({
-                        id: 'pkids-hover', type:'fill', source:'pkids',
-                        paint: { 'fill-color': '#F59E0B', 'fill-opacity': 0.6 },
-                        filter: ['==', 'PK_ID', '']
-                      })
-                      map.on('click', 'pkids-fill', (e) => {
-                        const feat = e.features[0]
-                        if (!feat) return
-                        const pkIdVal = String(feat.properties.PK_ID || feat.properties.pk_id || '')
-                        const found = pkIds.find(p => String(p.pk_id) === pkIdVal)
-                        if (found) {
-                          selPkId(found)
-                          setCoordLat(e.lngLat.lat)
-                          setCoordLng(e.lngLat.lng)
-                        } else {
-                          setPkBusqueda(pkIdVal)
-                        }
-                        setModalMapaPk(false)
-                        if (mapaPkInstance.current) {
-                          mapaPkInstance.current.remove()
-                          mapaPkInstance.current = null
-                        }
-                      })
-                      map.on('mouseenter', 'pkids-fill', (e) => {
-                        map.getCanvas().style.cursor = 'pointer'
-                        const pkIdVal = String(e.features[0]?.properties?.PK_ID || '')
-                        map.setFilter('pkids-hover', ['==', 'PK_ID', pkIdVal])
-                      })
-                      map.on('mouseleave', 'pkids-fill', () => {
-                        map.getCanvas().style.cursor = ''
-                        map.setFilter('pkids-hover', ['==', 'PK_ID', ''])
-                      })
-                    })
-                })
-              }} style={{ width:'100%', height:'100%' }} />
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ── Modal Nuevo Reporte ── */}
       {modalNuevoReporte && (
         <ModalNuevoReporte
@@ -4327,6 +4248,71 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           </div>
         </div>
       </div>
+
+      {/* ── Modal Mapa PK_ID ── */}
+      {modalMapaPk && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:2000,
+          display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}>
+          <div style={{ background:t.bgCard, borderRadius:'16px', width:'100%', maxWidth:'700px',
+            height:'500px', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+            <div style={{ padding:'16px 20px', borderBottom:`1px solid ${t.border}`,
+              display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div style={{ fontWeight:'700', color:t.text }}>🗺️ Seleccionar PK_ID en el mapa</div>
+              <div style={{ fontSize:'12px', color:t.textMuted }}>Haz click en un polígono para seleccionarlo</div>
+              <button onClick={() => {
+                setModalMapaPk(false)
+                if (mapaPkInstance.current) { mapaPkInstance.current.remove(); mapaPkInstance.current = null }
+              }} style={{ background:'transparent', border:'none', fontSize:'20px', cursor:'pointer', color:t.textMuted }}>✕</button>
+            </div>
+            <div style={{ flex:1, position:'relative' }}>
+              <div ref={el => {
+                if (!el || mapaPkInstance.current) return
+                mapaPkRef.current = el
+                const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
+                const map = new mapboxgl.Map({
+                  container: el,
+                  style: 'mapbox://styles/mapbox/dark-v11',
+                  center: [-74.065, 4.71],
+                  zoom: 13,
+                  accessToken: MAPBOX_TOKEN
+                })
+                mapaPkInstance.current = map
+                map.on('load', () => {
+                  fetch('/pOLIGONOS_1551t_Project_Feat.json')
+                    .then(r => r.json())
+                    .then(geojson => {
+                      map.addSource('pkids', { type:'geojson', data: geojson })
+                      map.addLayer({ id:'pkids-fill', type:'fill', source:'pkids',
+                        paint: { 'fill-color':'#0077B6', 'fill-opacity':0.3 } })
+                      map.addLayer({ id:'pkids-outline', type:'line', source:'pkids',
+                        paint: { 'line-color':'#00A896', 'line-width':1.5 } })
+                      map.addLayer({ id:'pkids-hover', type:'fill', source:'pkids',
+                        paint: { 'fill-color':'#F59E0B', 'fill-opacity':0.6 },
+                        filter: ['==', 'PK_ID', ''] })
+                      map.on('click', 'pkids-fill', (e) => {
+                        const feat = e.features[0]; if (!feat) return
+                        const pkIdVal = String(feat.properties.PK_ID || feat.properties.pk_id || '')
+                        const found = pkIds.find(p => String(p.pk_id) === pkIdVal)
+                        if (found) { selPkId(found); setCoordLat(e.lngLat.lat); setCoordLng(e.lngLat.lng) }
+                        else { setPkBusqueda(pkIdVal) }
+                        setModalMapaPk(false)
+                        if (mapaPkInstance.current) { mapaPkInstance.current.remove(); mapaPkInstance.current = null }
+                      })
+                      map.on('mouseenter', 'pkids-fill', (e) => {
+                        map.getCanvas().style.cursor = 'pointer'
+                        map.setFilter('pkids-hover', ['==', 'PK_ID', String(e.features[0]?.properties?.PK_ID || '')])
+                      })
+                      map.on('mouseleave', 'pkids-fill', () => {
+                        map.getCanvas().style.cursor = ''
+                        map.setFilter('pkids-hover', ['==', 'PK_ID', ''])
+                      })
+                    })
+                })
+              }} style={{ width:'100%', height:'100%' }} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
