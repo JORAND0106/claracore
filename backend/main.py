@@ -43,7 +43,13 @@ app.add_middleware(
     allow_credentials=True,
 )
 
-supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+_SUPABASE_URL = os.getenv("SUPABASE_URL")
+_SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+def get_supabase():
+    return create_client(_SUPABASE_URL, _SUPABASE_KEY)
+
+supabase = get_supabase()
 security = HTTPBearer()
 
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -265,6 +271,11 @@ def supabase_execute(fn, retries=3, delay=0.5):
             last_err = e
             if i < retries - 1:
                 time.sleep(delay)
+                try:
+                    global supabase
+                    supabase = get_supabase()
+                except Exception:
+                    pass
     raise last_err
 
 # ─────────────────────────────────────────────
@@ -2210,14 +2221,17 @@ def get_cobro_chart(
 
 @app.get("/cobro/{contrato_id}/resumen")
 def get_resumen_cobro(contrato_id: int, current_user=Depends(get_current_user)):
-    res      = supabase.table("vista_cobro_resumen").select("*").eq("contrato_id", contrato_id).execute().data
-    por_acta = supabase.table("vista_cobro_por_acta").select("*").eq("contrato_id", contrato_id).execute().data
-    por_cap  = supabase.table("vista_cobro_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
+    def _res():      return supabase.table("vista_cobro_resumen").select("*").eq("contrato_id", contrato_id).execute().data
+    def _acta():     return supabase.table("vista_cobro_por_acta").select("*").eq("contrato_id", contrato_id).execute().data
+    def _cap():      return supabase.table("vista_cobro_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
+    def _ppto():     return supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
+    res      = supabase_execute(_res)
+    por_acta = supabase_execute(_acta)
+    por_cap  = supabase_execute(_cap)
     total    = res[0].get("total_cobrado", 0) if res else 0
     actas    = sorted(set(r["acta"] for r in por_acta if r.get("acta")))
     # Comparativo por capítulo
-    ppto_caps = {r["capitulo"]: r["presupuesto"] for r in
-                 supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data}
+    ppto_caps = {r["capitulo"]: r["presupuesto"] for r in supabase_execute(_ppto)}
     cobro_caps = {r["capitulo"]: r.get("cobrado") or r.get("costo") or 0 for r in por_cap}
     caps = sorted(set(list(ppto_caps.keys()) + list(cobro_caps.keys())))
     comparativo = [{"capitulo": c, "presupuesto": ppto_caps.get(c,0), "cobrado": cobro_caps.get(c,0),
@@ -2999,13 +3013,13 @@ def alertas_corte(contrato_id: int, current_user=Depends(get_current_user)):
 def listar_reportes_obra(contrato_id: int, current_user=Depends(get_current_user)):
     def _q():
         return supabase.table("so_reportes")\
-            .select("*, subcontratistas(nombre)")\
+            .select("*, subcontratistas(razon_social)")\
             .eq("contrato_id", contrato_id)\
             .order("created_at", desc=True).execute().data
     rows = supabase_execute(_q)
     for r in rows:
         sub = r.pop("subcontratistas", None)
-        r["subcontratista_nombre"] = sub["nombre"] if sub else None
+        r["subcontratista_nombre"] = sub["razon_social"] if sub else None
     return rows
 
 @app.get("/sicoe-obra/{contrato_id}/pk-ids")
@@ -3083,7 +3097,7 @@ def next_numero_reporte(contrato_id: int, current_user=Depends(get_current_user)
 def listar_nodos_obra(contrato_id: int, capitulo: str = None, current_user=Depends(get_current_user)):
     def _q():
         q = supabase.table("presupuesto")\
-            .select("nodo_ini, nodo_fin")\
+            .select("no_inicio, no_final")\
             .eq("contrato_id", contrato_id)\
             .eq("dado_de_baja", False)
         if capitulo:

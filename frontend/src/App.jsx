@@ -3609,6 +3609,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const [inspSeleccionado, setInspSeleccionado] = useState(null)
   const [inspDropOpen, setInspDropOpen] = useState(false)
   const [capDropOpen, setCapDropOpen] = useState(false)
+  const [capBusqueda, setCapBusqueda] = useState('')
   const [capitulos, setCapitulos] = useState([])
   const [capituloSel, setCapituloSel] = useState('')
   const [pkIds, setPkIds] = useState([])
@@ -3917,30 +3918,41 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                   CAPÍTULO *
                 </label>
-                <div onClick={() => setCapDropOpen(v => !v)}
-                  style={{ ...inpStyle(errores.capitulo), cursor:'pointer', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                  <span style={{ color: capituloSel ? t.text : t.textMuted }}>
-                    {capituloSel || '-- Seleccionar capítulo --'}
-                  </span>
-                  <span style={{ color:t.textMuted }}>▾</span>
-                </div>
+                <input
+                  value={capituloSel || capBusqueda}
+                  onChange={e => { setCapBusqueda(e.target.value); setCapituloSel(''); setCapDropOpen(true) }}
+                  onFocus={() => setCapDropOpen(true)}
+                  onBlur={() => setTimeout(() => setCapDropOpen(false), 200)}
+                  placeholder="Buscar capítulo..."
+                  style={inpStyle(errores.capitulo)} />
                 {capDropOpen && (
                   <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard,
                     border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:20,
-                    maxHeight:'220px', overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.2)' }}>
-                    {capitulos.map(c => (
-                      <div key={c.capitulo} onClick={() => { setCapituloSel(c.capitulo); setCapDropOpen(false) }}
-                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:'13px',
-                          color: capituloSel === c.capitulo ? t.primary : t.text,
-                          fontWeight: capituloSel === c.capitulo ? '700' : '400',
-                          borderBottom:`1px solid ${t.border}`,
-                          background: capituloSel === c.capitulo ? t.primary+'11' : 'transparent' }}
-                        onMouseEnter={e => e.currentTarget.style.background = t.bg}
-                        onMouseLeave={e => e.currentTarget.style.background = capituloSel === c.capitulo ? t.primary+'11' : 'transparent'}>
-                        {c.capitulo}
+                    maxHeight:'260px', overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.3)' }}>
+                    {capitulos
+                      .filter(c => !capBusqueda || c.capitulo.toLowerCase().includes(capBusqueda.toLowerCase()))
+                      .map(c => (
+                        <div key={c.capitulo}
+                          onMouseDown={() => { setCapituloSel(c.capitulo); setCapBusqueda(''); setCapDropOpen(false) }}
+                          style={{ padding:'8px 12px', cursor:'pointer', fontSize:'13px',
+                            color: capituloSel === c.capitulo ? t.primary : t.text,
+                            fontWeight: capituloSel === c.capitulo ? '700' : '400',
+                            borderBottom:`1px solid ${t.border}`,
+                            background: capituloSel === c.capitulo ? t.primary+'11' : 'transparent' }}
+                          onMouseEnter={e => e.currentTarget.style.background = t.bg}
+                          onMouseLeave={e => e.currentTarget.style.background = capituloSel === c.capitulo ? t.primary+'11' : 'transparent'}>
+                          {c.capitulo}
+                        </div>
+                      ))}
+                    {capitulos.filter(c => !capBusqueda || c.capitulo.toLowerCase().includes(capBusqueda.toLowerCase())).length === 0 && (
+                      <div style={{ padding:'12px', color:t.textMuted, fontSize:'13px', textAlign:'center' }}>
+                        No se encontró el capítulo
                       </div>
-                    ))}
+                    )}
                   </div>
+                )}
+                {capituloSel && (
+                  <div style={{ fontSize:'11px', color:'#10B981', marginTop:'4px' }}>✅ {capituloSel}</div>
                 )}
                 {errores.capitulo && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.capitulo}</span>}
               </div>
