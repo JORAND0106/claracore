@@ -3119,8 +3119,8 @@ def listar_nodos_obra(contrato_id: int, capitulo: str = None, current_user=Depen
     rows = supabase_execute(_q)
     nodos = set()
     for r in rows:
-        if r.get("nodo_ini"): nodos.add(r["nodo_ini"])
-        if r.get("nodo_fin"): nodos.add(r["nodo_fin"])
+        if r.get("no_inicio"): nodos.add(r["no_inicio"])
+        if r.get("no_final"): nodos.add(r["no_final"])
     return sorted(list(nodos))
 
 class ReporteCreate(BaseModel):

@@ -4293,6 +4293,86 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         </div>
       </div>
 
+{/* ── Modal Crear Plantilla ── */}
+      {modalCrearPlantilla && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:2000,
+          display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}>
+          <div style={{ background:t.bgCard, borderRadius:'16px', width:'100%', maxWidth:'560px',
+            maxHeight:'80vh', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+            <div style={{ padding:'16px 20px', borderBottom:`1px solid ${t.border}`,
+              display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div style={{ fontWeight:'700', color:t.text }}>📄 Nueva Plantilla — {capituloSel}</div>
+              <button onClick={() => setModalCrearPlantilla(false)} style={{
+                background:'transparent', border:'none', fontSize:'20px', cursor:'pointer', color:t.textMuted }}>✕</button>
+            </div>
+            <div style={{ flex:1, overflowY:'auto', padding:'20px', display:'flex', flexDirection:'column', gap:'16px' }}>
+              <div>
+                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                  NOMBRE DE LA PLANTILLA *
+                </label>
+                <input value={nuevaPlantillaNombre} onChange={e => setNuevaPlantillaNombre(e.target.value)}
+                  placeholder="Ej: Tubería alcantarillado..." style={{
+                    width:'100%', padding:'8px 12px', borderRadius:'8px', fontSize:'13px',
+                    background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box'
+                  }} />
+              </div>
+              <div>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
+                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted }}>ACTIVIDADES *</label>
+                  <button onClick={() => setNuevaPlantillaItems(prev => [...prev, {nombre:'', descripcion:''}])}
+                    style={{ background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
+                      borderRadius:'6px', padding:'4px 10px', fontSize:'12px', cursor:'pointer' }}>+ Agregar</button>
+                </div>
+                {nuevaPlantillaItems.map((item, idx) => (
+                  <div key={idx} style={{ display:'grid', gridTemplateColumns:'1fr 1fr 28px', gap:'8px', marginBottom:'8px' }}>
+                    <input value={item.nombre}
+                      onChange={e => { const a=[...nuevaPlantillaItems]; a[idx]={...a[idx],nombre:e.target.value}; setNuevaPlantillaItems(a) }}
+                      placeholder="Nombre actividad..." style={{
+                        padding:'7px 10px', borderRadius:'6px', fontSize:'12px',
+                        background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none'
+                      }} />
+                    <input value={item.descripcion}
+                      onChange={e => { const a=[...nuevaPlantillaItems]; a[idx]={...a[idx],descripcion:e.target.value}; setNuevaPlantillaItems(a) }}
+                      placeholder="Descripción..." style={{
+                        padding:'7px 10px', borderRadius:'6px', fontSize:'12px',
+                        background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none'
+                      }} />
+                    <button onClick={() => setNuevaPlantillaItems(prev => prev.filter((_,i) => i!==idx))}
+                      style={{ background:'transparent', border:'none', color:'#EF4444', cursor:'pointer', fontSize:'16px' }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{ padding:'16px 20px', borderTop:`1px solid ${t.border}`, display:'flex', justifyContent:'flex-end', gap:'8px' }}>
+              <button onClick={() => setModalCrearPlantilla(false)} style={{
+                background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
+                borderRadius:'8px', padding:'8px 20px', cursor:'pointer', fontSize:'13px' }}>Cancelar</button>
+              <button onClick={async () => {
+                if (!nuevaPlantillaNombre.trim()) { alert('Nombre requerido'); return }
+                const items = nuevaPlantillaItems.filter(i => i.nombre.trim())
+                if (items.length === 0) { alert('Agrega al menos una actividad'); return }
+                try {
+                  const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/plantillas`, {
+                    method:'POST', headers:{...hdrs,'Content-Type':'application/json'},
+                    body: JSON.stringify({ nombre: nuevaPlantillaNombre, capitulo: capituloSel, items })
+                  })
+                  if (r.ok) {
+                    const nueva = await r.json()
+                    setPlantillas(prev => [...prev, {...nueva, items}])
+                    setNuevaPlantillaNombre('')
+                    setNuevaPlantillaItems([{nombre:'', descripcion:''}])
+                    setModalCrearPlantilla(false)
+                  }
+                } catch(e) { alert('Error guardando plantilla') }
+              }} style={{
+                background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
+                padding:'8px 20px', cursor:'pointer', fontWeight:'700', fontSize:'13px'
+              }}>Guardar Plantilla</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Modal Mapa PK_ID ── */}
       {modalMapaPk && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:2000,
