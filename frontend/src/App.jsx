@@ -4360,6 +4360,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
                 <div>
                   <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>📸 FOTO OBRA *</label>
+                  {registros[modalRegistro].foto_url && (
+                    <img src={registros[modalRegistro].foto_url} style={{ width:'100%', borderRadius:'8px', marginBottom:'8px', maxHeight:'150px', objectFit:'cover' }} />
+                  )}
                   <input type='file' accept='image/*' onChange={async e => {
                     const file = e.target.files[0]; if (!file) return
                     const fd = new FormData(); fd.append('file', file)
@@ -4376,6 +4379,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 </div>
                 <div>
                   <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>📐 GRÁFICO *</label>
+                  {registros[modalRegistro].grafico_url && (
+                    <img src={registros[modalRegistro].grafico_url} style={{ width:'100%', borderRadius:'8px', marginBottom:'8px', maxHeight:'150px', objectFit:'cover' }} />
+                  )}
                   <input type='file' accept='image/*' onChange={async e => {
                     const file = e.target.files[0]; if (!file) return
                     const fd = new FormData(); fd.append('file', file)
