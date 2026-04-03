@@ -951,8 +951,14 @@ def get_filtros_presupuesto(
 
 @app.get("/presupuesto/{contrato_id}/resumen")
 def get_resumen_presupuesto(contrato_id: int, current_user=Depends(get_current_user)):
-    res  = supabase.table("vista_ppto_resumen").select("*").eq("contrato_id", contrato_id).execute().data
-    caps = supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
+    try:
+        res  = supabase.table("vista_ppto_resumen").select("*").eq("contrato_id", contrato_id).execute().data
+    except Exception:
+        res = []
+    try:
+        caps = supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
+    except Exception:
+        caps = []
     total = res[0].get("total_ppto", 0) if res else 0
     regs  = res[0].get("total_registros", 0) if res else 0
     return {
@@ -2642,12 +2648,15 @@ def get_notificaciones_enviadas(
 def get_no_leidas_count(current_user=Depends(get_current_user)):
     """Conteo de notificaciones no leídas — solo mensajes raíz."""
     uid = int(current_user.get("sub", 0))
-    result = supabase.table("notificaciones").select("id", count="exact") \
-        .eq("destinatario_id", uid) \
-        .eq("leido", False) \
-        .is_("padre_id", "null") \
-        .execute()
-    return {"count": result.count or 0}
+    try:
+        result = supabase.table("notificaciones").select("id", count="exact") \
+            .eq("destinatario_id", uid) \
+            .eq("leido", False) \
+            .is_("padre_id", "null") \
+            .execute()
+        return {"count": result.count or 0}
+    except Exception:
+        return {"count": 0}
 
 @app.get("/notificaciones/{notif_id}/hilo")
 def get_hilo(notif_id: int, current_user=Depends(get_current_user)):
