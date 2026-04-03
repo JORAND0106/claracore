@@ -3186,7 +3186,7 @@ def crear_plantilla(contrato_id: int, body: PlantillaCreate, current_user=Depend
             "contrato_id": contrato_id,
             "nombre": body.nombre,
             "capitulo": body.capitulo,
-            "creado_por": current_user["id"]
+            "creado_por": int(current_user.get("sub", 0) or current_user.get("id", 0))
         }).execute().data
     plantilla = supabase_execute(_ins)
     if not plantilla:

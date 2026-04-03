@@ -4293,6 +4293,116 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         </div>
       </div>
 
+{/* ── Modal Detalle Registro ── */}
+      {modalRegistro !== null && registros[modalRegistro] && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:2000,
+          display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}>
+          <div style={{ background:t.bgCard, borderRadius:'16px', width:'100%', maxWidth:'620px',
+            maxHeight:'85vh', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+            <div style={{ padding:'16px 20px', borderBottom:`1px solid ${t.border}`,
+              display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div style={{ fontWeight:'700', color:t.text }}>📝 Registro #{modalRegistro + 1}</div>
+              <button onClick={() => setModalRegistro(null)} style={{
+                background:'transparent', border:'none', fontSize:'20px', cursor:'pointer', color:t.textMuted }}>✕</button>
+            </div>
+            <div style={{ flex:1, overflowY:'auto', padding:'20px', display:'flex', flexDirection:'column', gap:'14px' }}>
+              {/* Nombre */}
+              <div>
+                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>NOMBRE ACTIVIDAD</label>
+                <input value={registros[modalRegistro].nombre || ''}
+                  onChange={e => { const a=[...registros]; a[modalRegistro]={...a[modalRegistro], nombre:e.target.value}; setRegistros(a) }}
+                  placeholder="Nombre de la actividad..."
+                  style={{ width:'100%', padding:'8px 12px', borderRadius:'8px', fontSize:'13px', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }} />
+              </div>
+              {/* Dimensiones */}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'10px' }}>
+                {[['longitud','Longitud'],['ancho','Ancho'],['espesor','Espesor'],['cantidad','Cantidad (x N)']].map(([campo, label]) => (
+                  <div key={campo}>
+                    <label style={{ fontSize:'11px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>{label}</label>
+                    <input type='number' step='0.01' value={registros[modalRegistro][campo] || ''}
+                      onChange={e => {
+                        const a=[...registros]
+                        a[modalRegistro]={...a[modalRegistro], [campo]: e.target.value}
+                        const vals = ['longitud','ancho','espesor','cantidad']
+                          .map(c => parseFloat(a[modalRegistro][c])).filter(v => !isNaN(v) && v !== 0)
+                        a[modalRegistro].cantidad_total = vals.length ? vals.reduce((x,y)=>x*y,1) : null
+                        setRegistros(a)
+                      }}
+                      placeholder='0'
+                      style={{ width:'100%', padding:'8px 10px', borderRadius:'8px', fontSize:'13px', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }} />
+                  </div>
+                ))}
+              </div>
+              {/* Cantidad total */}
+              <div style={{ padding:'10px 14px', background:t.bg, borderRadius:'8px', display:'flex', justifyContent:'space-between' }}>
+                <span style={{ fontSize:'13px', color:t.textMuted, fontWeight:'600' }}>CANTIDAD TOTAL</span>
+                <span style={{ fontSize:'16px', fontWeight:'800', color:'#10B981' }}>
+                  {registros[modalRegistro].cantidad_total != null ? Number(registros[modalRegistro].cantidad_total).toFixed(4) : '—'}
+                </span>
+              </div>
+              {/* Unidad */}
+              <div>
+                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>UNIDAD</label>
+                <input value={registros[modalRegistro].unidad || ''}
+                  onChange={e => { const a=[...registros]; a[modalRegistro]={...a[modalRegistro], unidad:e.target.value}; setRegistros(a) }}
+                  placeholder="m, m², m³, und..."
+                  style={{ width:'100%', padding:'8px 12px', borderRadius:'8px', fontSize:'13px', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }} />
+              </div>
+              {/* Observación */}
+              <div>
+                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>OBSERVACIÓN *</label>
+                <textarea value={registros[modalRegistro].observacion || ''}
+                  onChange={e => { const a=[...registros]; a[modalRegistro]={...a[modalRegistro], observacion:e.target.value}; setRegistros(a) }}
+                  rows={3} placeholder="Descripción detallada de la actividad..."
+                  style={{ width:'100%', padding:'8px 12px', borderRadius:'8px', fontSize:'13px', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box', resize:'vertical' }} />
+              </div>
+              {/* Fotos */}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
+                <div>
+                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>📸 FOTO OBRA *</label>
+                  <input type='file' accept='image/*' onChange={async e => {
+                    const file = e.target.files[0]; if (!file) return
+                    const fd = new FormData(); fd.append('file', file)
+                    try {
+                      const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-foto`, { method:'POST', headers: hdrs }).then(x=>x.json())
+                      fd.append('numero', numR.numero)
+                      fd.append('descripcion', registros[modalRegistro].observacion || `Foto-${numR.numero}`)
+                      const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-foto`, { method:'POST', headers: hdrs, body: fd })
+                      const data = await r.json()
+                      const a=[...registros]; a[modalRegistro]={...a[modalRegistro], foto_url: data.url, foto_numero: numR.numero, _fotoOk: true}; setRegistros(a)
+                    } catch(e) { alert('Error subiendo foto') }
+                  }} style={{ width:'100%', fontSize:'12px' }} />
+                  {registros[modalRegistro]._fotoOk && <div style={{ color:'#10B981', fontSize:'12px', marginTop:'4px' }}>✅ Foto cargada</div>}
+                </div>
+                <div>
+                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>📐 GRÁFICO *</label>
+                  <input type='file' accept='image/*' onChange={async e => {
+                    const file = e.target.files[0]; if (!file) return
+                    const fd = new FormData(); fd.append('file', file)
+                    try {
+                      const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-grafico`, { method:'POST', headers: hdrs }).then(x=>x.json())
+                      fd.append('numero', numR.numero)
+                      fd.append('descripcion', registros[modalRegistro].observacion || `Grafico-${numR.numero}`)
+                      const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers: hdrs, body: fd })
+                      const data = await r.json()
+                      const a=[...registros]; a[modalRegistro]={...a[modalRegistro], grafico_url: data.url, grafico_numero: numR.numero, _grafOk: true}; setRegistros(a)
+                    } catch(e) { alert('Error subiendo gráfico') }
+                  }} style={{ width:'100%', fontSize:'12px' }} />
+                  {registros[modalRegistro]._grafOk && <div style={{ color:'#10B981', fontSize:'12px', marginTop:'4px' }}>✅ Gráfico cargado</div>}
+                </div>
+              </div>
+            </div>
+            {/* Footer */}
+            <div style={{ padding:'14px 20px', borderTop:`1px solid ${t.border}`, display:'flex', justifyContent:'flex-end' }}>
+              <button onClick={() => setModalRegistro(null)} style={{
+                background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
+                padding:'8px 24px', cursor:'pointer', fontWeight:'700', fontSize:'13px'
+              }}>✅ Guardar Registro</button>
+            </div>
+          </div>
+        </div>
+      )}
+
 {/* ── Modal Crear Plantilla ── */}
       {modalCrearPlantilla && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', zIndex:2000,
