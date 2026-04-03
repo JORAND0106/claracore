@@ -3657,8 +3657,24 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       .then(r => r.json()).then(d => setSubcontratistas(Array.isArray(d) ? d : []))
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs })
       .then(r => r.json()).then(d => setInspectores(Array.isArray(d) ? d : []))
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/capitulos`, { headers: hdrs })
-      .then(r => r.json()).then(d => setCapitulos(Array.isArray(d) ? d : []))
+    fetch(`https://wsyukpubadxyjoxozcay.supabase.co/rest/v1/listado_precios?select=capitulo&contrato_id=eq.${contrato_id}`, {
+        headers: {
+          'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzeXVrcHViYWR4eWpveG96Y2F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MDg5MDY5NTksImV4cCI6MjAyNDQ4Mjk1OX0.pPLdriMWMHSIEzMWlEKnlb5V0bgOlVWjDYPwxIxbYHs',
+          'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzeXVrcHViYWR4eWpveG96Y2F5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MDg5MDY5NTksImV4cCI6MjAyNDQ4Mjk1OX0.pPLdriMWMHSIEzMWlEKnlb5V0bgOlVWjDYPwxIxbYHs'
+        }
+      })
+      .then(r => r.json())
+      .then(d => {
+        if (Array.isArray(d)) {
+          const caps = [...new Set(d.map(r => r.capitulo).filter(Boolean))]
+          const sorted = caps.sort((a, b) => {
+            const na = parseInt(a.match(/^(\d+)/)?.[1] || '9999')
+            const nb = parseInt(b.match(/^(\d+)/)?.[1] || '9999')
+            return na - nb
+          })
+          setCapitulos(sorted.map(c => ({ capitulo: c })))
+        }
+      })
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs })
       .then(r => r.json()).then(d => setPkIds(Array.isArray(d) ? d : []))
   }, [])
