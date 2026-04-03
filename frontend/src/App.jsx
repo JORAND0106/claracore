@@ -3928,7 +3928,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 {capDropOpen && (
                   <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard,
                     border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:20,
-                    maxHeight:'260px', overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.3)' }}>
+                    maxHeight:'400px', overflowY:'scroll', boxShadow:'0 8px 24px rgba(0,0,0,0.3)' }}>
                     {capitulos
                       .filter(c => !capBusqueda || c.capitulo.toLowerCase().includes(capBusqueda.toLowerCase()))
                       .map(c => (
