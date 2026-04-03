@@ -3643,7 +3643,11 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   const hdrs = { Authorization: `Bearer ${token}` }
 
+  const [numeroReporte, setNumeroReporte] = useState(null)
+
   useEffect(() => {
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-reporte`, { headers: hdrs })
+      .then(r => r.json()).then(d => setNumeroReporte(d.siguiente))
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs })
       .then(r => r.json()).then(d => setSubcontratistas(Array.isArray(d) ? d : []))
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs })
@@ -3812,7 +3816,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         <div style={{ padding:'20px 24px', borderBottom:`1px solid ${t.border}`,
           display:'flex', alignItems:'center', justifyContent:'space-between' }}>
           <div>
-            <div style={{ fontWeight:'800', fontSize:'16px', color:t.text }}>🏗️ Nuevo Reporte de Cantidades</div>
+            <div style={{ fontWeight:'800', fontSize:'16px', color:t.text }}>
+              🏗️ Nuevo Reporte de Cantidades
+              {numeroReporte && <span style={{ marginLeft:'10px', color:t.primary, fontSize:'14px' }}>#{numeroReporte}</span>}
+            </div>
             <div style={{ fontSize:'12px', color:t.textMuted }}>Todos los campos son obligatorios</div>
           </div>
           <button onClick={onClose} style={{ background:'transparent', border:'none',
@@ -3913,56 +3920,67 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 {errores.capitulo && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.capitulo}</span>}
               </div>
 
-              {/* PK_ID */}
-              <div style={{ position:'relative' }}>
-                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
-                  LOCALIZACIÓN (PK_ID) *
-                </label>
-                <input value={pkSeleccionado ? pkSeleccionado.pk_id : pkBusqueda}
-                  onChange={e => { setPkBusqueda(e.target.value); setPkSeleccionado(null); setPkDropOpen(true) }}
-                  onFocus={() => setPkDropOpen(true)}
-                  placeholder="Buscar PK_ID o ubicación..." style={inpStyle(errores.pk)} />
-                {pkDropOpen && pkFiltrados.length > 0 && (
-                  <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard,
-                    border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:10, maxHeight:'200px', overflowY:'auto' }}>
-                    {pkFiltrados.map(pk => (
-                      <div key={pk.id} onClick={() => selPkId(pk)}
-                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:'13px', color:t.text,
-                          borderBottom:`1px solid ${t.border}` }}
-                        onMouseEnter={e => e.currentTarget.style.background = t.bg}
-                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                        <span style={{ fontWeight:'700', color:t.primary }}>{pk.pk_id}</span>
-                        <span style={{ color:t.textMuted, marginLeft:'8px', fontSize:'11px' }}>
-                          {pk.infraestructura} · {pk.calzada} · {pk.ubicacion}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {pkSeleccionado && (
-                  <div style={{ marginTop:'6px', padding:'8px 12px', background:t.bg,
-                    borderRadius:'6px', fontSize:'11px', color:t.textMuted }}>
-                    📍 CIV: {pkSeleccionado.civ} · {pkSeleccionado.tramo} · {pkSeleccionado.infraestructura} · {pkSeleccionado.calzada}
-                  </div>
-                )}
-                {errores.pk && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.pk}</span>}
+              {/* Localización + Margen en fila */}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 180px', gap:'12px', alignItems:'start' }}>
+                {/* PK_ID */}
+                <div style={{ position:'relative' }}>
+                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                    LOCALIZACIÓN (PK_ID) *
+                  </label>
+                  <input value={pkSeleccionado ? pkSeleccionado.pk_id : pkBusqueda}
+                    onChange={e => { setPkBusqueda(e.target.value); setPkSeleccionado(null); setPkDropOpen(true) }}
+                    onFocus={() => setPkDropOpen(true)}
+                    placeholder="Buscar PK_ID o ubicación..." style={inpStyle(errores.pk)} />
+                  {pkDropOpen && pkFiltrados.length > 0 && (
+                    <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard,
+                      border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:10, maxHeight:'200px', overflowY:'auto' }}>
+                      {pkFiltrados.map(pk => (
+                        <div key={pk.id} onClick={() => selPkId(pk)}
+                          style={{ padding:'8px 12px', cursor:'pointer', fontSize:'13px', color:t.text,
+                            borderBottom:`1px solid ${t.border}` }}
+                          onMouseEnter={e => e.currentTarget.style.background = t.bg}
+                          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                          <span style={{ fontWeight:'700', color:t.primary }}>{pk.pk_id}</span>
+                          <span style={{ color:t.textMuted, marginLeft:'8px', fontSize:'11px' }}>
+                            {pk.infraestructura} · {pk.calzada} · {pk.ubicacion}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {pkSeleccionado && (
+                    <div style={{ marginTop:'6px', padding:'8px 12px', background:t.bg,
+                      borderRadius:'6px', fontSize:'11px', color:t.textMuted }}>
+                      📍 CIV: {pkSeleccionado.civ} · {pkSeleccionado.tramo} · {pkSeleccionado.infraestructura} · {pkSeleccionado.calzada}
+                    </div>
+                  )}
+                  {errores.pk && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.pk}</span>}
+                </div>
+
+                {/* Margen */}
+                <div>
+                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                    MARGEN *
+                  </label>
+                  <select value={margen.startsWith('Otro:') ? 'Otro' : margen}
+                    onChange={e => setMargen(e.target.value === 'Otro' ? 'Otro: ' : e.target.value)}
+                    style={inpStyle(errores.margen)}>
+                    <option value=''>-- Seleccionar --</option>
+                    {['Izquierda','Central','Derecha','Única','Otro'].map(m =>
+                      <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  {margen.startsWith('Otro:') && (
+                    <input value={margen.replace('Otro: ','')}
+                      onChange={e => setMargen('Otro: ' + e.target.value)}
+                      placeholder='Especificar...'
+                      style={{ ...inpStyle(false), marginTop:'6px' }} />
+                  )}
+                  {errores.margen && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.margen}</span>}
+                </div>
               </div>
 
-              {/* Margen */}
-              <div>
-                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
-                  MARGEN *
-                </label>
-                <select value={margen} onChange={e => setMargen(e.target.value)} style={inpStyle(errores.margen)}>
-                  <option value=''>-- Seleccionar --</option>
-                  {['Izquierda','Central','Derecha','Única','Otro'].map(m =>
-                    <option key={m} value={m}>{m}</option>)}
-                </select>
-                {errores.margen && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.margen}</span>}
-              </div>
-
-              {/* Abscisado */}
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
+              {/* Abscisado + Nodos en una sola fila */}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'12px' }}>
                 <div>
                   <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                     ABS. INICIAL *
@@ -3981,18 +3999,13 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     placeholder='0.00' style={inpStyle(errores.absFinal)} />
                   {errores.absFinal && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.absFinal}</span>}
                 </div>
-              </div>
-
-              {/* Nodos */}
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
                 <div>
                   <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                     NODO INICIAL *
                   </label>
                   <input value={nodoIni}
                     onChange={e => {
-                      setNodoIni(e.target.value)
-                      setNodoIniWarn(false)
+                      setNodoIni(e.target.value); setNodoIniWarn(false)
                       if (e.target.value.length > 1)
                         setNodoIniSugg(nodos.filter(n => n.toLowerCase().includes(e.target.value.toLowerCase())).slice(0,8))
                       else setNodoIniSugg([])
@@ -4003,16 +4016,14 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     }}
                     placeholder='Nodo inicial...' style={inpStyle(errores.nodoIni)} />
                   {nodoIniSugg.length > 0 && (
-                    <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', zIndex:10 }}>
+                    <div style={{ position:'absolute', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', zIndex:10 }}>
                       {nodoIniSugg.map(n => (
                         <div key={n} onClick={() => { setNodoIni(n); setNodoIniSugg([]); setNodoIniWarn(false) }}
-                          style={{ padding:'6px 10px', cursor:'pointer', fontSize:'12px', color:t.text }}>
-                          {n}
-                        </div>
+                          style={{ padding:'6px 10px', cursor:'pointer', fontSize:'12px', color:t.text }}>{n}</div>
                       ))}
                     </div>
                   )}
-                  {nodoIniWarn && <span style={{ color:'#F59E0B', fontSize:'11px' }}>⚠️ Nodo no existe en presupuesto</span>}
+                  {nodoIniWarn && <span style={{ color:'#F59E0B', fontSize:'11px' }}>⚠️ No existe en presupuesto</span>}
                   {errores.nodoIni && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.nodoIni}</span>}
                 </div>
                 <div>
@@ -4021,8 +4032,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   </label>
                   <input value={nodoFin}
                     onChange={e => {
-                      setNodoFin(e.target.value)
-                      setNodoFinWarn(false)
+                      setNodoFin(e.target.value); setNodoFinWarn(false)
                       if (e.target.value.length > 1)
                         setNodoFinSugg(nodos.filter(n => n.toLowerCase().includes(e.target.value.toLowerCase())).slice(0,8))
                       else setNodoFinSugg([])
@@ -4033,16 +4043,14 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     }}
                     placeholder='Nodo final...' style={inpStyle(errores.nodoFin)} />
                   {nodoFinSugg.length > 0 && (
-                    <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', zIndex:10 }}>
+                    <div style={{ position:'absolute', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', zIndex:10 }}>
                       {nodoFinSugg.map(n => (
                         <div key={n} onClick={() => { setNodoFin(n); setNodoFinSugg([]); setNodoFinWarn(false) }}
-                          style={{ padding:'6px 10px', cursor:'pointer', fontSize:'12px', color:t.text }}>
-                          {n}
-                        </div>
+                          style={{ padding:'6px 10px', cursor:'pointer', fontSize:'12px', color:t.text }}>{n}</div>
                       ))}
                     </div>
                   )}
-                  {nodoFinWarn && <span style={{ color:'#F59E0B', fontSize:'11px' }}>⚠️ Nodo no existe en presupuesto</span>}
+                  {nodoFinWarn && <span style={{ color:'#F59E0B', fontSize:'11px' }}>⚠️ No existe en presupuesto</span>}
                   {errores.nodoFin && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.nodoFin}</span>}
                 </div>
               </div>

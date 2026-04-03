@@ -3006,25 +3006,30 @@ def listar_pk_ids(contrato_id: int, current_user=Depends(get_current_user)):
 def listar_subcontratistas_activos(contrato_id: int, current_user=Depends(get_current_user)):
     def _q():
         return supabase.table("subcontratistas")\
-            .select("id, nombre")\
+            .select("id, razon_social")\
             .eq("contrato_id", contrato_id)\
             .eq("activo", True)\
-            .order("nombre").execute().data
-    return supabase_execute(_q)
+            .order("razon_social").execute().data
+    rows = supabase_execute(_q)
+    for r in rows:
+        r["nombre"] = r.pop("razon_social", "")
+    return rows
 
 @app.get("/sicoe-obra/{contrato_id}/inspectores")
 def listar_inspectores(contrato_id: int, current_user=Depends(get_current_user)):
     def _q():
         return supabase.table("usuarios")\
-            .select("id, nombre, apellidos, cargos(nombre), roles(nombre)")\
+            .select("id, nombre, apellidos, cargo_id, rol_id")\
             .eq("contrato_id", contrato_id)\
-            .eq("aprobado", True).execute().data
+            .eq("estado", "aprobado").execute().data
     rows = supabase_execute(_q)
+    cargos = {c["id"]: c["nombre"] for c in supabase.table("cargos").select("id, nombre").execute().data}
+    roles = {r["id"]: r["nombre"] for r in supabase.table("roles").select("id, nombre").execute().data}
     result = []
     for u in rows:
-        cargo = (u.get("cargos") or {}).get("nombre", "")
-        rol = (u.get("roles") or {}).get("nombre", "")
-        if "inspector" in cargo.lower() and rol.lower() == "contratista":
+        cargo_nombre = cargos.get(u.get("cargo_id"), "")
+        rol_nombre = roles.get(u.get("rol_id"), "")
+        if "inspector" in cargo_nombre.lower() and rol_nombre.lower() == "contratista":
             result.append({
                 "id": u["id"],
                 "nombre": f"{u.get('nombre','')} {u.get('apellidos','')}".strip()
@@ -3037,10 +3042,24 @@ def listar_capitulos_obra(contrato_id: int, current_user=Depends(get_current_use
         return supabase.table("listado_precios")\
             .select("capitulo")\
             .eq("contrato_id", contrato_id)\
+            .neq("dado_de_baja", True)\
             .execute().data
     rows = supabase_execute(_q)
     caps = sorted(set(r["capitulo"] for r in rows if r.get("capitulo")))
     return [{"capitulo": c} for c in caps]
+
+@app.get("/sicoe-obra/{contrato_id}/next-reporte")
+def next_numero_reporte(contrato_id: int, current_user=Depends(get_current_user)):
+    def _q():
+        rows = supabase.table("so_reportes")\
+            .select("numero_reporte")\
+            .eq("contrato_id", contrato_id)\
+            .order("numero_reporte", desc=True)\
+            .limit(1).execute().data
+        return rows
+    rows = supabase_execute(_q)
+    ultimo = rows[0]["numero_reporte"] if rows else 0
+    return {"siguiente": ultimo + 1}
 
 @app.get("/sicoe-obra/{contrato_id}/nodos")
 def listar_nodos_obra(contrato_id: int, capitulo: str = None, current_user=Depends(get_current_user)):
