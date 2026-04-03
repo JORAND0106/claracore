@@ -3594,56 +3594,56 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
 
 // ─── MODAL NUEVO REPORTE ──────────────────────────────────────────────────────
 function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, onGuardado }) {
-  const [tabActivo, setTabActivo] = React.useState(0)
-  const [guardando, setGuardando] = React.useState(false)
-  const [errores, setErrores] = React.useState({})
+  const [tabActivo, setTabActivo] = useState(0)
+  const [guardando, setGuardando] = useState(false)
+  const [errores, setErrores] = useState({})
 
   // Datos TAB 1
-  const [descripcion, setDescripcion] = React.useState('')
-  const [subcontratistas, setSubcontratistas] = React.useState([])
-  const [subBusqueda, setSubBusqueda] = React.useState('')
-  const [subSeleccionado, setSubSeleccionado] = React.useState(null)
-  const [subDropOpen, setSubDropOpen] = React.useState(false)
-  const [inspectores, setInspectores] = React.useState([])
-  const [inspBusqueda, setInspBusqueda] = React.useState('')
-  const [inspSeleccionado, setInspSeleccionado] = React.useState(null)
-  const [inspDropOpen, setInspDropOpen] = React.useState(false)
-  const [capitulos, setCapitulos] = React.useState([])
-  const [capituloSel, setCapituloSel] = React.useState('')
-  const [pkIds, setPkIds] = React.useState([])
-  const [pkBusqueda, setPkBusqueda] = React.useState('')
-  const [pkSeleccionado, setPkSeleccionado] = React.useState(null)
-  const [pkDropOpen, setPkDropOpen] = React.useState(false)
-  const [margen, setMargen] = React.useState('')
-  const [absInicio, setAbsInicio] = React.useState('')
-  const [absFinal, setAbsFinal] = React.useState('')
-  const [nodos, setNodos] = React.useState([])
-  const [nodoIni, setNodoIni] = React.useState('')
-  const [nodoFin, setNodoFin] = React.useState('')
-  const [nodoIniSugg, setNodoIniSugg] = React.useState([])
-  const [nodoFinSugg, setNodoFinSugg] = React.useState([])
-  const [nodoIniWarn, setNodoIniWarn] = React.useState(false)
-  const [nodoFinWarn, setNodoFinWarn] = React.useState(false)
-  const [coordLat, setCoordLat] = React.useState(null)
-  const [coordLng, setCoordLng] = React.useState(null)
+  const [descripcion, setDescripcion] = useState('')
+  const [subcontratistas, setSubcontratistas] = useState([])
+  const [subBusqueda, setSubBusqueda] = useState('')
+  const [subSeleccionado, setSubSeleccionado] = useState(null)
+  const [subDropOpen, setSubDropOpen] = useState(false)
+  const [inspectores, setInspectores] = useState([])
+  const [inspBusqueda, setInspBusqueda] = useState('')
+  const [inspSeleccionado, setInspSeleccionado] = useState(null)
+  const [inspDropOpen, setInspDropOpen] = useState(false)
+  const [capitulos, setCapitulos] = useState([])
+  const [capituloSel, setCapituloSel] = useState('')
+  const [pkIds, setPkIds] = useState([])
+  const [pkBusqueda, setPkBusqueda] = useState('')
+  const [pkSeleccionado, setPkSeleccionado] = useState(null)
+  const [pkDropOpen, setPkDropOpen] = useState(false)
+  const [margen, setMargen] = useState('')
+  const [absInicio, setAbsInicio] = useState('')
+  const [absFinal, setAbsFinal] = useState('')
+  const [nodos, setNodos] = useState([])
+  const [nodoIni, setNodoIni] = useState('')
+  const [nodoFin, setNodoFin] = useState('')
+  const [nodoIniSugg, setNodoIniSugg] = useState([])
+  const [nodoFinSugg, setNodoFinSugg] = useState([])
+  const [nodoIniWarn, setNodoIniWarn] = useState(false)
+  const [nodoFinWarn, setNodoFinWarn] = useState(false)
+  const [coordLat, setCoordLat] = useState(null)
+  const [coordLng, setCoordLng] = useState(null)
 
   // Datos TAB 2 - Plantillas
-  const [plantillas, setPlantillas] = React.useState([])
-  const [plantillaSel, setPlantillaSel] = React.useState(null)
-  const [modalCrearPlantilla, setModalCrearPlantilla] = React.useState(false)
-  const [nuevaPlantillaNombre, setNuevaPlantillaNombre] = React.useState('')
-  const [nuevaPlantillaItems, setNuevaPlantillaItems] = React.useState([{nombre:'', descripcion:''}])
+  const [plantillas, setPlantillas] = useState([])
+  const [plantillaSel, setPlantillaSel] = useState(null)
+  const [modalCrearPlantilla, setModalCrearPlantilla] = useState(false)
+  const [nuevaPlantillaNombre, setNuevaPlantillaNombre] = useState('')
+  const [nuevaPlantillaItems, setNuevaPlantillaItems] = useState([{nombre:'', descripcion:''}])
 
   // Datos TAB 3 - Registros
-  const [registros, setRegistros] = React.useState([])
-  const [modalRegistro, setModalRegistro] = React.useState(null) // índice del registro abierto
+  const [registros, setRegistros] = useState([])
+  const [modalRegistro, setModalRegistro] = useState(null) // índice del registro abierto
 
   // Datos TAB 4 - Puntos topográficos
-  const [puntos, setPuntos] = React.useState([{punto:'', norte:'', este:'', cota:'', descripcion:''}])
+  const [puntos, setPuntos] = useState([{punto:'', norte:'', este:'', cota:'', descripcion:''}])
 
   const hdrs = { Authorization: `Bearer ${token}` }
 
-  React.useEffect(() => {
+  useEffect(() => {
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs })
       .then(r => r.json()).then(d => setSubcontratistas(Array.isArray(d) ? d : []))
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs })
@@ -3654,7 +3654,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       .then(r => r.json()).then(d => setPkIds(Array.isArray(d) ? d : []))
   }, [])
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (!capituloSel) { setNodos([]); return }
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/nodos?capitulo=${encodeURIComponent(capituloSel)}`, { headers: hdrs })
       .then(r => r.json()).then(d => setNodos(Array.isArray(d) ? d : []))
