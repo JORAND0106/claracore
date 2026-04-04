@@ -3151,7 +3151,7 @@ def crear_reporte_obra(contrato_id: int, body: ReporteCreate, current_user=Depen
     data["contrato_id"] = contrato_id
     data["numero_reporte"] = numero
     data["estado"] = "Borrador"
-    data["creado_por"] = current_user["id"]
+    data["creado_por"] = int(current_user.get("sub") or current_user.get("id", 0))
     def _ins():
         return supabase.table("so_reportes").insert(data).execute().data
     result = supabase_execute(_ins)

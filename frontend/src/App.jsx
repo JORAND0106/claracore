@@ -3698,6 +3698,16 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   useEffect(() => {
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-reporte`, { headers: hdrs })
       .then(r => r.json()).then(d => setNumeroReporte(d.siguiente))
+    // Crear borrador automáticamente al abrir
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
+      method: 'POST',
+      headers: { ...hdrs, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        descripcion_actividad: 'Borrador',
+        capitulo: 'Sin asignar',
+        estado: 'Borrador'
+      })
+    }).then(r => r.json()).then(d => { if (d.id) setBorradorId(d.id) })
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs })
       .then(r => r.json()).then(d => setSubcontratistas(Array.isArray(d) ? d : []))
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs })
@@ -4507,7 +4517,23 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             {/* Footer */}
             <div style={{ padding:'14px 20px', borderTop:`1px solid ${t.border}`, display:'flex', justifyContent:'flex-end' }}>
               <button onClick={() => {
-                if (!registros[modalRegistro]._fotoOk) {
+                const reg = registros[modalRegistro]
+                const dims = ['longitud','ancho','espesor','cantidad']
+                  .map(c => parseFloat(reg[c])).filter(v => !isNaN(v) && v > 0)
+                if (dims.length === 0) {
+                  alert('Debe diligenciar al menos un campo de dimensiones (Longitud, Ancho, Espesor o Cantidad)')
+                  return
+                }
+                const unidadFinal = reg.unidad === 'Otro' ? reg.unidadOtro : reg.unidad
+                if (!unidadFinal || !unidadFinal.trim()) {
+                  alert('La unidad es obligatoria')
+                  return
+                }
+                if (!reg.observacion || !reg.observacion.trim()) {
+                  alert('La observación es obligatoria')
+                  return
+                }
+                if (!reg._fotoOk) {
                   alert('La foto de obra es obligatoria')
                   return
                 }
