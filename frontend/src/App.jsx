@@ -4481,7 +4481,16 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 if (tabActivo === 2) {
                   if (registros.length === 0) { alert('Debe tener al menos un registro'); return }
                   try {
-                    if (borradorId) {
+                    let idParaGuardar = borradorId
+                    if (!idParaGuardar) {
+                      const rb = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
+                        method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ descripcion_actividad: descripcion||'Borrador', capitulo: capituloSel||'Sin asignar', estado: 'Borrador' })
+                      })
+                      const db = await rb.json()
+                      if (db.id) { setBorradorId(db.id); idParaGuardar = db.id }
+                    }
+                    if (idParaGuardar) {
                       const nuevosRegistros = [...registros]
                       for (let i = 0; i < registros.length; i++) {
                         const reg = registros[i]
@@ -4511,7 +4520,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                         }
                       }
                       setRegistros(nuevosRegistros)
-                    }
+                    }}
                   } catch(err) { console.error('Error guardando registros:', err) }
                 }
                 setTabActivo(tabActivo + 1)
