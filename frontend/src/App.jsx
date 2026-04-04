@@ -4330,10 +4330,16 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     onChange={e => { const a=[...registros]; a[modalRegistro]={...a[modalRegistro], unidad:e.target.value}; setRegistros(a) }}
                     style={{ width:'100%', padding:'8px 10px', borderRadius:'8px', fontSize:'13px', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }}>
                     <option value=''>--</option>
-                    {[...new Set((listadoPrecios||[]).map(p => p.und).filter(Boolean))].sort().map(u => (
+                    {['m','m²','m³','ml','und','kg','ton','gl','vje','día','mes','Otro'].map(u => (
                       <option key={u} value={u}>{u}</option>
                     ))}
                   </select>
+                  {registros[modalRegistro].unidad === 'Otro' && (
+                    <input value={registros[modalRegistro].unidadOtro || ''}
+                      onChange={e => { const a=[...registros]; a[modalRegistro]={...a[modalRegistro], unidadOtro:e.target.value}; setRegistros(a) }}
+                      placeholder="Especificar unidad..."
+                      style={{ width:'100%', padding:'6px 10px', borderRadius:'6px', fontSize:'12px', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', marginTop:'4px' }} />
+                  )}
                 </div>
               </div>
               {/* Cantidad total */}
