@@ -3758,8 +3758,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           }).catch(() => {})
       }
       if (reporteInicial.pk_id_id) {
-        const pk = pkIds.find(p => p.id === reporteInicial.pk_id_id)
-        if (pk) selPkId(pk)
+        // pkIds puede no estar cargado aún, guardamos para cargarlo después
+        setPkBusqueda(String(reporteInicial.pk_id_id))
       }
       if (reporteInicial.registros?.length) setRegistros(reporteInicial.registros.map(r => ({
         id: r.id,
@@ -3777,6 +3777,14 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       })))
     }
   }, [])
+
+// Cargar PK_ID del borrador una vez que pkIds esté disponible
+  useEffect(() => {
+    if (reporteInicial?.pk_id_id && pkIds.length > 0) {
+      const pk = pkIds.find(p => p.id === reporteInicial.pk_id_id)
+      if (pk) selPkId(pk)
+    }
+  }, [pkIds])
 
   useEffect(() => {
     if (!capituloSel) { setNodos([]); return }
@@ -4473,39 +4481,37 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 if (tabActivo === 2) {
                   if (registros.length === 0) { alert('Debe tener al menos un registro'); return }
                   try {
-                  if (borradorId) {
-                    for (const reg of registros) {
-                      const regBody = {
-                        reporte_id: borradorId,
-                        nombre: reg.nombre, descripcion: reg.observacion,
-                        longitud: parseFloat(reg.longitud)||null, ancho: parseFloat(reg.ancho)||null,
-                        espesor: parseFloat(reg.espesor)||null, cantidad: parseFloat(reg.cantidad)||null,
-                        cantidad_total: reg.cantidad_total, unidad: reg.unidad === 'Otro' ? reg.unidadOtro : reg.unidad,
-                        foto_url: reg.foto_url, foto_numero: reg.foto_numero, foto_descripcion: reg.foto_descripcion,
-                        grafico_url: reg.grafico_url, grafico_numero: reg.grafico_numero
-                      }
-                      if (reg.id) {
-                        // Actualizar registro existente
-                        await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}`, {
-                          method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
-                          body: JSON.stringify(regBody)
-                        })
-                      } else {
-                        // Insertar registro nuevo
-                        const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-registro`, { method:'POST', headers: hdrs }).then(x=>x.json())
-                        const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros`, {
-                          method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ ...regBody, numero_registro: numR.numero, contrato_id })
-                        })
-                        const d = await r.json()
-                        if (d.id) {
-                          setRegistros(prev => prev.map((r, i) => 
-                            r === reg ? { ...r, id: d.id, numero_registro: d.numero_registro } : r
-                          ))
+                    if (borradorId) {
+                      const nuevosRegistros = [...registros]
+                      for (let i = 0; i < registros.length; i++) {
+                        const reg = registros[i]
+                        const regBody = {
+                          reporte_id: borradorId,
+                          nombre: reg.nombre, descripcion: reg.observacion,
+                          longitud: parseFloat(reg.longitud)||null, ancho: parseFloat(reg.ancho)||null,
+                          espesor: parseFloat(reg.espesor)||null, cantidad: parseFloat(reg.cantidad)||null,
+                          cantidad_total: reg.cantidad_total,
+                          unidad: reg.unidad === 'Otro' ? (reg.unidadOtro||'') : reg.unidad,
+                          foto_url: reg.foto_url||null, foto_numero: reg.foto_numero||null,
+                          grafico_url: reg.grafico_url||null, grafico_numero: reg.grafico_numero||null
+                        }
+                        if (reg.id) {
+                          await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}`, {
+                            method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
+                            body: JSON.stringify(regBody)
+                          })
+                        } else {
+                          const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-registro`, { method:'POST', headers: hdrs }).then(x=>x.json())
+                          const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros`, {
+                            method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ ...regBody, numero_registro: numR.numero, contrato_id })
+                          })
+                          const d = await r.json()
+                          if (d.id) nuevosRegistros[i] = { ...reg, id: d.id, numero_registro: d.numero_registro }
                         }
                       }
+                      setRegistros(nuevosRegistros)
                     }
-                  }
                   } catch(err) { console.error('Error guardando registros:', err) }
                 }
                 setTabActivo(tabActivo + 1)

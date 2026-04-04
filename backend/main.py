@@ -3329,7 +3329,7 @@ class RegistroCreate(BaseModel):
 @app.put("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
 def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, current_user=Depends(get_current_user)):
     data = body.dict()
-    data["updated_at"] = "now()"
+    data.pop("updated_at", None)
     def _upd():
         return supabase.table("so_reportes").update(data)\
             .eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
