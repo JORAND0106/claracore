@@ -3561,7 +3561,7 @@ const cargarReportes = async () => {
                 const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
                 const data = await r.json()
                 setReporteEditando(data)
-                setModalNuevoReporte(true)
+                setTimeout(() => setModalNuevoReporte(true), 50)
               }
             }}
             onMouseEnter={e => e.currentTarget.style.background = t.bg}
@@ -4471,8 +4471,9 @@ useEffect(() => {
                     nodo_ini: nodoIni, nodo_fin: nodoFin,
                     estado: 'Borrador'
                   }
-                  if (borradorId) {
-                    await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${borradorId}`, {
+                  let idConfirmado = borradorId
+                  if (idConfirmado) {
+                    await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idConfirmado}`, {
                       method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
                       body: JSON.stringify(body)
                     })
@@ -4482,13 +4483,13 @@ useEffect(() => {
                       body: JSON.stringify(body)
                     })
                     const d = await r.json()
-                    if (d.id) setBorradorId(d.id)
+                    if (d.id) { setBorradorId(d.id); idConfirmado = d.id }
                   }
                 }
                 if (tabActivo === 2) {
                   if (registros.length === 0) { alert('Debe tener al menos un registro'); return }
                   try {
-                    let idParaGuardar = borradorId
+                    let idParaGuardar = idConfirmado || borradorId
                     if (!idParaGuardar) {
                       const rb = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
                         method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
