@@ -4472,6 +4472,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 }
                 if (tabActivo === 2) {
                   if (registros.length === 0) { alert('Debe tener al menos un registro'); return }
+                  try {
                   if (borradorId) {
                     for (const reg of registros) {
                       const regBody = {
@@ -4505,6 +4506,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                       }
                     }
                   }
+                  } catch(err) { console.error('Error guardando registros:', err) }
                 }
                 setTabActivo(tabActivo + 1)
               }} style={{
