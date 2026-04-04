@@ -3592,6 +3592,42 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   )
 }
 
+function GaleriaFotos({ contrato_id, API_URL, hdrs, tipo, fechaDesde, fechaHasta, onSelect }) {
+  const [fotos, setFotos] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    const params = new URLSearchParams({ tipo })
+    if (fechaDesde) params.append('desde', fechaDesde)
+    if (fechaHasta) params.append('hasta', fechaHasta)
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/galeria?${params}`, { headers: hdrs })
+      .then(r => r.json())
+      .then(d => { setFotos(Array.isArray(d) ? d : []); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [fechaDesde, fechaHasta])
+
+  if (loading) return <div style={{ textAlign:'center', padding:'20px', color:'#6B7280' }}>Cargando galería...</div>
+  if (fotos.length === 0) return <div style={{ textAlign:'center', padding:'20px', color:'#6B7280' }}>No hay imágenes en este rango de fechas.</div>
+
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'10px' }}>
+      {fotos.map((f, i) => (
+        <div key={i} onClick={() => onSelect(f.url, f.numero)}
+          style={{ cursor:'pointer', borderRadius:'8px', overflow:'hidden', border:'2px solid transparent',
+            transition:'border 0.15s' }}
+          onMouseEnter={e => e.currentTarget.style.borderColor = '#0077B6'}
+          onMouseLeave={e => e.currentTarget.style.borderColor = 'transparent'}>
+          <img src={f.url} style={{ width:'100%', height:'100px', objectFit:'cover' }} />
+          <div style={{ padding:'4px 6px', fontSize:'11px', color:'#6B7280', background:'#1E293B' }}>
+            #{String(f.numero).padStart(4,'0')} — {f.descripcion || ''}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ─── MODAL NUEVO REPORTE ──────────────────────────────────────────────────────
 function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, onGuardado }) {
   const [tabActivo, setTabActivo] = useState(0)
@@ -3644,7 +3680,12 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const [modalRegistro, setModalRegistro] = useState(null)
   const [reporteGraficoUrl, setReporteGraficoUrl] = useState(null)
   const [reporteGraficoNumero, setReporteGraficoNumero] = useState(null)
-  const [modalGaleria, setModalGaleria] = useState(false) // índice del registro abierto
+  const [modalGaleria, setModalGaleria] = useState(false)
+  const [modalGaleriaGrafico, setModalGaleriaGrafico] = useState(false)
+  const [galeriaFechaDesde, setGaleriaFechaDesde] = useState('')
+  const [galeriaFechaHasta, setGaleriaFechaHasta] = useState('')
+  const [galeriaGraficoFechaDesde, setGaleriaGraficoFechaDesde] = useState('')
+  const [galeriaGraficoFechaHasta, setGaleriaGraficoFechaHasta] = useState('') // índice del registro abierto
 
   // Datos TAB 4 - Puntos topográficos
   const [puntos, setPuntos] = useState([{punto:'', norte:'', este:'', cota:'', descripcion:''}])
@@ -4175,15 +4216,15 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               )}
               {/* Grid header */}
               {registros.length > 0 && (
-                <div style={{ display:'grid', gridTemplateColumns:'60px 1fr 100px 40px 40px',
+                <div style={{ display:'grid', gridTemplateColumns:'60px 1fr 100px 40px',
                   gap:'8px', fontSize:'11px', fontWeight:'700', color:t.textMuted,
                   padding:'0 8px', letterSpacing:'0.5px' }}>
-                  <div>N° REG.</div><div>NOMBRE / DESCRIPCIÓN</div><div>CANT. TOTAL</div><div>📸</div><div>📐</div>
+                  <div>N° REG.</div><div>NOMBRE / DESCRIPCIÓN</div><div>CANT. TOTAL</div><div>📸</div>
                 </div>
               )}
               {registros.map((reg, idx) => (
                 <div key={idx} onClick={() => setModalRegistro(idx)}
-                  style={{ display:'grid', gridTemplateColumns:'60px 1fr 100px 40px 40px',
+                  style={{ display:'grid', gridTemplateColumns:'60px 1fr 100px 40px',
                     gap:'8px', padding:'10px 8px', borderRadius:'8px', cursor:'pointer',
                     border:`1px solid ${t.border}`, background:t.bg,
                     alignItems:'center' }}
@@ -4202,7 +4243,6 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     {reg.cantidad_total != null ? Number(reg.cantidad_total).toFixed(2) : '—'}
                   </div>
                   <div style={{ fontSize:'16px' }}>{reg._fotoOk ? '✅' : '⬜'}</div>
-                  <div style={{ fontSize:'16px' }}>{reg._grafOk ? '✅' : '⬜'}</div>
                 </div>
               ))}
               <button onClick={agregarRegistro} style={{
@@ -4225,6 +4265,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 {reporteGraficoUrl && (
                   <img src={reporteGraficoUrl} style={{ width:'100%', borderRadius:'8px', marginBottom:'8px', maxHeight:'200px', objectFit:'cover' }} />
                 )}
+                <button onClick={() => setModalGaleriaGrafico(true)} style={{
+                  background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
+                  borderRadius:'6px', padding:'5px 12px', fontSize:'11px', cursor:'pointer', marginBottom:'6px'
+                }}>🖼️ Usar gráfico de galería</button>
                 <input type='file' accept='image/*' onChange={async e => {
                   const file = e.target.files[0]; if (!file) return
                   const fd = new FormData(); fd.append('file', file)
@@ -4447,6 +4491,79 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
                 padding:'8px 24px', cursor:'pointer', fontWeight:'700', fontSize:'13px'
               }}>✅ Guardar Registro</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+{/* ── Modal Galería Fotos ── */}
+      {modalGaleria && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:3000,
+          display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}>
+          <div style={{ background:t.bgCard, borderRadius:'16px', width:'100%', maxWidth:'700px',
+            maxHeight:'80vh', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+            <div style={{ padding:'16px 20px', borderBottom:`1px solid ${t.border}`,
+              display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div style={{ fontWeight:'700', color:t.text }}>🖼️ Galería de Fotos</div>
+              <button onClick={() => setModalGaleria(false)} style={{
+                background:'transparent', border:'none', fontSize:'20px', cursor:'pointer', color:t.textMuted }}>✕</button>
+            </div>
+            <div style={{ padding:'16px', borderBottom:`1px solid ${t.border}`, display:'flex', gap:'8px', alignItems:'center' }}>
+              <label style={{ fontSize:'12px', color:t.textMuted }}>Desde:</label>
+              <input type='date' onChange={e => setGaleriaFechaDesde(e.target.value)}
+                style={{ padding:'6px 10px', borderRadius:'6px', fontSize:'12px', background:t.bg, color:t.text, border:`1px solid ${t.border}` }} />
+              <label style={{ fontSize:'12px', color:t.textMuted }}>Hasta:</label>
+              <input type='date' onChange={e => setGaleriaFechaHasta(e.target.value)}
+                style={{ padding:'6px 10px', borderRadius:'6px', fontSize:'12px', background:t.bg, color:t.text, border:`1px solid ${t.border}` }} />
+            </div>
+            <div style={{ flex:1, overflowY:'auto', padding:'16px' }}>
+              <GaleriaFotos
+                contrato_id={contrato_id} API_URL={API_URL} hdrs={hdrs}
+                tipo="foto"
+                fechaDesde={galeriaFechaDesde} fechaHasta={galeriaFechaHasta}
+                onSelect={(url, numero) => {
+                  const a=[...registros]
+                  a[modalRegistro]={...a[modalRegistro], foto_url: url, foto_numero: numero, _fotoOk: true}
+                  setRegistros(a)
+                  setModalGaleria(false)
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal Galería Gráficos ── */}
+      {modalGaleriaGrafico && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:3000,
+          display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}>
+          <div style={{ background:t.bgCard, borderRadius:'16px', width:'100%', maxWidth:'700px',
+            maxHeight:'80vh', display:'flex', flexDirection:'column', overflow:'hidden' }}>
+            <div style={{ padding:'16px 20px', borderBottom:`1px solid ${t.border}`,
+              display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div style={{ fontWeight:'700', color:t.text }}>📐 Galería de Gráficos</div>
+              <button onClick={() => setModalGaleriaGrafico(false)} style={{
+                background:'transparent', border:'none', fontSize:'20px', cursor:'pointer', color:t.textMuted }}>✕</button>
+            </div>
+            <div style={{ padding:'16px', borderBottom:`1px solid ${t.border}`, display:'flex', gap:'8px', alignItems:'center' }}>
+              <label style={{ fontSize:'12px', color:t.textMuted }}>Desde:</label>
+              <input type='date' onChange={e => setGaleriaGraficoFechaDesde(e.target.value)}
+                style={{ padding:'6px 10px', borderRadius:'6px', fontSize:'12px', background:t.bg, color:t.text, border:`1px solid ${t.border}` }} />
+              <label style={{ fontSize:'12px', color:t.textMuted }}>Hasta:</label>
+              <input type='date' onChange={e => setGaleriaGraficoFechaHasta(e.target.value)}
+                style={{ padding:'6px 10px', borderRadius:'6px', fontSize:'12px', background:t.bg, color:t.text, border:`1px solid ${t.border}` }} />
+            </div>
+            <div style={{ flex:1, overflowY:'auto', padding:'16px' }}>
+              <GaleriaFotos
+                contrato_id={contrato_id} API_URL={API_URL} hdrs={hdrs}
+                tipo="grafico"
+                fechaDesde={galeriaGraficoFechaDesde} fechaHasta={galeriaGraficoFechaHasta}
+                onSelect={(url, numero) => {
+                  setReporteGraficoUrl(url)
+                  setReporteGraficoNumero(numero)
+                  setModalGaleriaGrafico(false)
+                }}
+              />
             </div>
           </div>
         </div>

@@ -3237,6 +3237,26 @@ async def upload_grafico(contrato_id: int, file: UploadFile = File(...), numero:
     )
     return {"url": result["secure_url"], "numero": numero}
 
+@app.get("/sicoe-obra/{contrato_id}/galeria")
+def galeria_imagenes(contrato_id: int, tipo: str = "foto", desde: str = None, hasta: str = None, current_user=Depends(get_current_user)):
+    def _q():
+        q = supabase.table("so_registros")\
+            .select("foto_url, foto_numero, foto_descripcion, grafico_url, grafico_numero, grafico_descripcion, created_at")\
+            .eq("contrato_id", contrato_id)
+        if desde:
+            q = q.gte("created_at", desde)
+        if hasta:
+            q = q.lte("created_at", hasta + "T23:59:59")
+        return q.order("created_at", desc=True).execute().data
+    rows = supabase_execute(_q)
+    result = []
+    for r in rows:
+        if tipo == "foto" and r.get("foto_url"):
+            result.append({"url": r["foto_url"], "numero": r["foto_numero"], "descripcion": r.get("foto_descripcion","")})
+        elif tipo == "grafico" and r.get("grafico_url"):
+            result.append({"url": r["grafico_url"], "numero": r["grafico_numero"], "descripcion": r.get("grafico_descripcion","")})
+    return result
+
 @app.post("/sicoe-obra/{contrato_id}/next-foto")
 def next_numero_foto(contrato_id: int, current_user=Depends(get_current_user)):
     def _q():
