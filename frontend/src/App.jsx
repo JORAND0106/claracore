@@ -3736,6 +3736,29 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       })
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs })
       .then(r => r.json()).then(d => setPkIds(Array.isArray(d) ? d : []))
+// Precargar borrador si existe
+    if (reporteInicial) {
+      setDescripcion(reporteInicial.descripcion_actividad !== 'Borrador' ? reporteInicial.descripcion_actividad : '')
+      setCapituloSel(reporteInicial.capitulo !== 'Sin asignar' ? reporteInicial.capitulo : '')
+      setMargen(reporteInicial.margen || '')
+      setAbsInicio(reporteInicial.abs_inicio ?? '')
+      setAbsFinal(reporteInicial.abs_final ?? '')
+      setNodoIni(reporteInicial.nodo_ini || '')
+      setNodoFin(reporteInicial.nodo_fin || '')
+      if (reporteInicial.registros?.length) setRegistros(reporteInicial.registros.map(r => ({
+        nombre: r.nombre || '', descripcion: r.descripcion || '',
+        longitud: r.longitud || '', ancho: r.ancho || '',
+        espesor: r.espesor || '', cantidad: r.cantidad || '',
+        cantidad_total: r.cantidad_total, unidad: r.unidad || '',
+        observacion: r.descripcion || '',
+        foto_url: r.foto_url, foto_numero: r.foto_numero, _fotoOk: !!r.foto_url,
+        grafico_url: r.grafico_url, grafico_numero: r.grafico_numero, _grafOk: !!r.grafico_url
+      })))
+      if (reporteInicial.puntos?.length) setPuntos(reporteInicial.puntos.map(p => ({
+        punto: p.punto || '', norte: p.norte || '', este: p.este || '',
+        cota: p.cota || '', descripcion: p.descripcion || ''
+      })))
+    }
   }, [])
 
   useEffect(() => {
@@ -7783,26 +7806,3 @@ if (contratos.length > 1) {
     </>
   )
 }
-// Si viene un borrador, precargarlo
-    if (reporteInicial) {
-      setDescripcion(reporteInicial.descripcion_actividad !== 'Borrador' ? reporteInicial.descripcion_actividad : '')
-      setCapituloSel(reporteInicial.capitulo !== 'Sin asignar' ? reporteInicial.capitulo : '')
-      setMargen(reporteInicial.margen || '')
-      setAbsInicio(reporteInicial.abs_inicio ?? '')
-      setAbsFinal(reporteInicial.abs_final ?? '')
-      setNodoIni(reporteInicial.nodo_ini || '')
-      setNodoFin(reporteInicial.nodo_fin || '')
-      if (reporteInicial.registros?.length) setRegistros(reporteInicial.registros.map(r => ({
-        nombre: r.nombre || '', descripcion: r.descripcion || '',
-        longitud: r.longitud || '', ancho: r.ancho || '',
-        espesor: r.espesor || '', cantidad: r.cantidad || '',
-        cantidad_total: r.cantidad_total, unidad: r.unidad || '',
-        observacion: r.descripcion || '',
-        foto_url: r.foto_url, foto_numero: r.foto_numero, _fotoOk: !!r.foto_url,
-        grafico_url: r.grafico_url, grafico_numero: r.grafico_numero, _grafOk: !!r.grafico_url
-      })))
-      if (reporteInicial.puntos?.length) setPuntos(reporteInicial.puntos.map(p => ({
-        punto: p.punto || '', norte: p.norte || '', este: p.este || '',
-        cota: p.cota || '', descripcion: p.descripcion || ''
-      })))
-    }
