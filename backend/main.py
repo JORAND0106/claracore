@@ -3057,6 +3057,14 @@ def listar_subcontratistas_activos(contrato_id: int, current_user=Depends(get_cu
         r["nombre"] = r.pop("razon_social", "")
     return rows
 
+@app.get("/usuarios/{usuario_id}")
+def obtener_usuario(usuario_id: int, current_user=Depends(get_current_user)):
+    def _q():
+        return supabase.table("usuarios").select("id, nombre, apellidos")\
+            .eq("id", usuario_id).execute().data
+    rows = supabase_execute(_q)
+    return rows[0] if rows else {}
+
 @app.get("/sicoe-obra/{contrato_id}/inspectores")
 def listar_inspectores(contrato_id: int, current_user=Depends(get_current_user)):
     def _q():

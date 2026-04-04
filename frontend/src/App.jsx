@@ -3748,6 +3748,19 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       setAbsFinal(reporteInicial.abs_final ?? '')
       setNodoIni(reporteInicial.nodo_ini || '')
       setNodoFin(reporteInicial.nodo_fin || '')
+      if (reporteInicial.subcontratista_id) {
+        setSubSeleccionado({ id: reporteInicial.subcontratista_id, nombre: reporteInicial.subcontratista_nombre || '' })
+      }
+      if (reporteInicial.inspector_id) {
+        fetch(`${API_URL}/usuarios/${reporteInicial.inspector_id}`, { headers: hdrs })
+          .then(r => r.json()).then(u => {
+            if (u.id) setInspSeleccionado({ id: u.id, nombre: `${u.nombre} ${u.apellidos}`.trim() })
+          }).catch(() => {})
+      }
+      if (reporteInicial.pk_id_id) {
+        const pk = pkIds.find(p => p.id === reporteInicial.pk_id_id)
+        if (pk) selPkId(pk)
+      }
       if (reporteInicial.registros?.length) setRegistros(reporteInicial.registros.map(r => ({
         nombre: r.nombre || '', descripcion: r.descripcion || '',
         longitud: r.longitud || '', ancho: r.ancho || '',
