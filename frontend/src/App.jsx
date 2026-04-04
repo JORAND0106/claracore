@@ -4502,7 +4502,7 @@ useEffect(() => {
                       for (let i = 0; i < registros.length; i++) {
                         const reg = registros[i]
                         const regBody = {
-                          reporte_id: borradorId,
+                          reporte_id: idParaGuardar,
                           nombre: reg.nombre, descripcion: reg.observacion,
                           longitud: parseFloat(reg.longitud)||null, ancho: parseFloat(reg.ancho)||null,
                           espesor: parseFloat(reg.espesor)||null, cantidad: parseFloat(reg.cantidad)||null,
