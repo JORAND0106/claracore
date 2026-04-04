@@ -3470,6 +3470,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const [loading, setLoading] = useState(true)
   const [filtroEstado, setFiltroEstado] = useState('todos')
   const [modalNuevoReporte, setModalNuevoReporte] = useState(false)
+  const [reporteEditando, setReporteEditando] = useState(null)
 
   const ESTADOS = ['Borrador','Sin Asignar Ítem','Aprobados','Pendientes','Rechazados','No Objeto de Cobro','En Papelera']
   const ESTADO_COLORS = {
@@ -3555,6 +3556,14 @@ const cargarReportes = async () => {
             gap:'8px', padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
             fontSize:'13px', color:t.text, cursor:'pointer',
             transition:'background 0.15s' }}
+            onClick={async () => {
+              if (rep.estado === 'Borrador') {
+                const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
+                const data = await r.json()
+                setReporteEditando(data)
+                setModalNuevoReporte(true)
+              }
+            }}
             onMouseEnter={e => e.currentTarget.style.background = t.bg}
             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
             <div style={{ fontWeight:'700', color:t.primary }}>#{rep.numero_reporte}</div>
@@ -3584,8 +3593,9 @@ const cargarReportes = async () => {
         <ModalNuevoReporte
           t={t} usuario={usuario} token={getToken()}
           API_URL={API_URL} contrato_id={contrato_id}
-          onClose={() => setModalNuevoReporte(false)}
-          onGuardado={() => { setModalNuevoReporte(false); cargarReportes() }}
+          reporteInicial={reporteEditando}
+          onClose={() => { setModalNuevoReporte(false); setReporteEditando(null) }}
+          onGuardado={() => { setModalNuevoReporte(false); setReporteEditando(null); cargarReportes() }}
         />
       )}
     </div>
@@ -3629,7 +3639,7 @@ function GaleriaFotos({ contrato_id, API_URL, hdrs, tipo, fechaDesde, fechaHasta
 }
 
 // ─── MODAL NUEVO REPORTE ──────────────────────────────────────────────────────
-function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, onGuardado }) {
+function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, onGuardado, reporteInicial }) {
   const [tabActivo, setTabActivo] = useState(0)
   const [guardando, setGuardando] = useState(false)
   const [errores, setErrores] = useState({})
@@ -3693,7 +3703,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const hdrs = { Authorization: `Bearer ${getToken()}` }
 
   const [numeroReporte, setNumeroReporte] = useState(null)
-  const [borradorId, setBorradorId] = useState(null)
+  const [borradorId, setBorradorId] = useState(reporteInicial?.id || null)
 
   useEffect(() => {
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-reporte`, { headers: hdrs })
@@ -7773,3 +7783,26 @@ if (contratos.length > 1) {
     </>
   )
 }
+// Si viene un borrador, precargarlo
+    if (reporteInicial) {
+      setDescripcion(reporteInicial.descripcion_actividad !== 'Borrador' ? reporteInicial.descripcion_actividad : '')
+      setCapituloSel(reporteInicial.capitulo !== 'Sin asignar' ? reporteInicial.capitulo : '')
+      setMargen(reporteInicial.margen || '')
+      setAbsInicio(reporteInicial.abs_inicio ?? '')
+      setAbsFinal(reporteInicial.abs_final ?? '')
+      setNodoIni(reporteInicial.nodo_ini || '')
+      setNodoFin(reporteInicial.nodo_fin || '')
+      if (reporteInicial.registros?.length) setRegistros(reporteInicial.registros.map(r => ({
+        nombre: r.nombre || '', descripcion: r.descripcion || '',
+        longitud: r.longitud || '', ancho: r.ancho || '',
+        espesor: r.espesor || '', cantidad: r.cantidad || '',
+        cantidad_total: r.cantidad_total, unidad: r.unidad || '',
+        observacion: r.descripcion || '',
+        foto_url: r.foto_url, foto_numero: r.foto_numero, _fotoOk: !!r.foto_url,
+        grafico_url: r.grafico_url, grafico_numero: r.grafico_numero, _grafOk: !!r.grafico_url
+      })))
+      if (reporteInicial.puntos?.length) setPuntos(reporteInicial.puntos.map(p => ({
+        punto: p.punto || '', norte: p.norte || '', este: p.este || '',
+        cota: p.cota || '', descripcion: p.descripcion || ''
+      })))
+    }

@@ -3142,6 +3142,36 @@ class ReporteCreate(BaseModel):
     nodo_ini: Optional[str] = None
     nodo_fin: Optional[str] = None
 
+@app.get("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
+def obtener_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
+    def _r():
+        return supabase.table("so_reportes").select("*, subcontratistas(razon_social)")\
+            .eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
+    def _reg():
+        return supabase.table("so_registros").select("*")\
+            .eq("reporte_id", reporte_id).order("id").execute().data
+    def _pts():
+        return supabase.table("so_puntos_topograficos").select("*")\
+            .eq("reporte_id", reporte_id).order("id").execute().data
+    reporte = supabase_execute(_r)
+    if not reporte:
+        raise HTTPException(status_code=404, detail="Reporte no encontrado")
+    r = reporte[0]
+    sub = r.pop("subcontratistas", None)
+    r["subcontratista_nombre"] = sub["razon_social"] if sub else None
+    r["registros"] = supabase_execute(_reg)
+    r["puntos"] = supabase_execute(_pts)
+    return r
+
+@app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
+def eliminar_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
+    def _del():
+        return supabase.table("so_reportes").delete()\
+            .eq("id", reporte_id).eq("contrato_id", contrato_id)\
+            .eq("estado", "Borrador").execute().data
+    supabase_execute(_del)
+    return {"ok": True}
+
 @app.post("/sicoe-obra/{contrato_id}/reportes")
 def crear_reporte_obra(contrato_id: int, body: ReporteCreate, current_user=Depends(get_current_user)):
     def _num():
