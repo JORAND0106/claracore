@@ -3641,7 +3641,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   // Datos TAB 3 - Registros
   const [registros, setRegistros] = useState([])
-  const [modalRegistro, setModalRegistro] = useState(null) // índice del registro abierto
+  const [modalRegistro, setModalRegistro] = useState(null)
+  const [reporteGraficoUrl, setReporteGraficoUrl] = useState(null)
+  const [reporteGraficoNumero, setReporteGraficoNumero] = useState(null)
+  const [modalGaleria, setModalGaleria] = useState(false) // índice del registro abierto
 
   // Datos TAB 4 - Puntos topográficos
   const [puntos, setPuntos] = useState([{punto:'', norte:'', este:'', cota:'', descripcion:''}])
@@ -4206,6 +4209,37 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted,
                 borderRadius:'8px', padding:'10px', fontSize:'13px', cursor:'pointer', width:'100%'
               }}>+ Agregar actividad</button>
+
+              {/* Gráfico único del reporte */}
+              <div style={{ marginTop:'8px', padding:'16px', background:t.bg, borderRadius:'12px', border:`1px solid ${t.border}` }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
+                  <label style={{ fontSize:'12px', fontWeight:'700', color:t.textMuted }}>
+                    📐 GRÁFICO DEL REPORTE
+                    {reporteGraficoNumero && <span style={{ color:t.primary, marginLeft:'8px' }}>#{String(reporteGraficoNumero).padStart(4,'0')}</span>}
+                  </label>
+                  <span style={{ fontSize:'11px', color:'#F59E0B' }}>Opcional — obligatorio en validación</span>
+                </div>
+                <div style={{ fontSize:'11px', color:t.textMuted, marginBottom:'8px' }}>
+                  💡 Un solo gráfico aplica para todas las actividades de este reporte.
+                </div>
+                {reporteGraficoUrl && (
+                  <img src={reporteGraficoUrl} style={{ width:'100%', borderRadius:'8px', marginBottom:'8px', maxHeight:'200px', objectFit:'cover' }} />
+                )}
+                <input type='file' accept='image/*' onChange={async e => {
+                  const file = e.target.files[0]; if (!file) return
+                  const fd = new FormData(); fd.append('file', file)
+                  try {
+                    const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-grafico`, { method:'POST', headers: hdrs }).then(x=>x.json())
+                    fd.append('numero', numR.numero)
+                    fd.append('descripcion', `Grafico-Reporte-${numR.numero}`)
+                    const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers: hdrs, body: fd })
+                    const data = await r.json()
+                    setReporteGraficoUrl(data.url)
+                    setReporteGraficoNumero(numR.numero)
+                  } catch(e) { alert('Error subiendo gráfico') }
+                }} style={{ width:'100%', fontSize:'12px' }} />
+                {reporteGraficoUrl && <div style={{ color:'#10B981', fontSize:'12px', marginTop:'4px' }}>✅ Gráfico #{String(reporteGraficoNumero).padStart(4,'0')} cargado</div>}
+              </div>
             </div>
           )}
 
@@ -4377,6 +4411,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 {registros[modalRegistro].foto_url && (
                   <img src={registros[modalRegistro].foto_url} style={{ width:'100%', borderRadius:'8px', marginBottom:'8px', maxHeight:'220px', objectFit:'cover' }} />
                 )}
+                <button onClick={() => setModalGaleria(true)} style={{
+                  background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
+                  borderRadius:'6px', padding:'5px 12px', fontSize:'11px', cursor:'pointer', marginBottom:'6px'
+                }}>🖼️ Usar foto de galería</button>                
                 <input type='file' accept='image/*' onChange={async e => {
                   const file = e.target.files[0]; if (!file) return
                   const fd = new FormData(); fd.append('file', file)
