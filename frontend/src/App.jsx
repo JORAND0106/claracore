@@ -3762,6 +3762,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         if (pk) selPkId(pk)
       }
       if (reporteInicial.registros?.length) setRegistros(reporteInicial.registros.map(r => ({
+        id: r.id,
         nombre: r.nombre || '', descripcion: r.descripcion || '',
         longitud: r.longitud || '', ancho: r.ancho || '',
         espesor: r.espesor || '', cantidad: r.cantidad || '',
@@ -4435,9 +4436,76 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           }}>🗑️ Cancelar / Eliminar borrador</button>
           <div style={{ display:'flex', gap:'8px' }}>
             {tabActivo < 3 && (
-              <button onClick={() => {
-                if (tabActivo === 0 && !validarTab1()) return
-                if (tabActivo === 2 && registros.length === 0) { alert('Debe tener al menos un registro'); return }
+              <button onClick={async () => {
+                if (tabActivo === 0) {
+                  if (!validarTab1()) return
+                  // Guardar/actualizar reporte en borrador
+                  const body = {
+                    descripcion_actividad: descripcion,
+                    subcontratista_id: subSeleccionado?.id || null,
+                    inspector_id: inspSeleccionado?.id || null,
+                    capitulo: capituloSel,
+                    pk_id_id: pkSeleccionado?.id || null,
+                    civ: pkSeleccionado?.civ || null,
+                    tramo: pkSeleccionado?.tramo || null,
+                    infraestructura: pkSeleccionado?.infraestructura || null,
+                    calzada: pkSeleccionado?.calzada || null,
+                    ubicacion: pkSeleccionado?.ubicacion || null,
+                    coord_lat: coordLat, coord_lng: coordLng,
+                    margen, abs_inicio: parseFloat(absInicio), abs_final: parseFloat(absFinal),
+                    nodo_ini: nodoIni, nodo_fin: nodoFin,
+                    estado: 'Borrador'
+                  }
+                  if (borradorId) {
+                    await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${borradorId}`, {
+                      method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
+                      body: JSON.stringify(body)
+                    })
+                  } else {
+                    const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
+                      method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
+                      body: JSON.stringify(body)
+                    })
+                    const d = await r.json()
+                    if (d.id) setBorradorId(d.id)
+                  }
+                }
+                if (tabActivo === 2) {
+                  if (registros.length === 0) { alert('Debe tener al menos un registro'); return }
+                  if (borradorId) {
+                    for (const reg of registros) {
+                      const regBody = {
+                        reporte_id: borradorId,
+                        nombre: reg.nombre, descripcion: reg.observacion,
+                        longitud: parseFloat(reg.longitud)||null, ancho: parseFloat(reg.ancho)||null,
+                        espesor: parseFloat(reg.espesor)||null, cantidad: parseFloat(reg.cantidad)||null,
+                        cantidad_total: reg.cantidad_total, unidad: reg.unidad === 'Otro' ? reg.unidadOtro : reg.unidad,
+                        foto_url: reg.foto_url, foto_numero: reg.foto_numero, foto_descripcion: reg.foto_descripcion,
+                        grafico_url: reg.grafico_url, grafico_numero: reg.grafico_numero
+                      }
+                      if (reg.id) {
+                        // Actualizar registro existente
+                        await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}`, {
+                          method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
+                          body: JSON.stringify(regBody)
+                        })
+                      } else {
+                        // Insertar registro nuevo
+                        const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-registro`, { method:'POST', headers: hdrs }).then(x=>x.json())
+                        const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros`, {
+                          method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ ...regBody, numero_registro: numR.numero, contrato_id })
+                        })
+                        const d = await r.json()
+                        if (d.id) {
+                          setRegistros(prev => prev.map((r, i) => 
+                            r === reg ? { ...r, id: d.id, numero_registro: d.numero_registro } : r
+                          ))
+                        }
+                      }
+                    }
+                  }
+                }
                 setTabActivo(tabActivo + 1)
               }} style={{
                 background:t.primary, color:'#fff', border:'none', borderRadius:'8px',

@@ -3326,6 +3326,23 @@ class RegistroCreate(BaseModel):
     grafico_numero: Optional[int] = None
     grafico_descripcion: Optional[str] = None
 
+@app.put("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
+def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, current_user=Depends(get_current_user)):
+    data = {k: v for k, v in body.dict().items() if v is not None}
+    data["updated_at"] = "now()"
+    def _upd():
+        return supabase.table("so_reportes").update(data)\
+            .eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
+    return supabase_execute(_upd)
+
+@app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}")
+def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate, current_user=Depends(get_current_user)):
+    data = {k: v for k, v in body.dict().items() if v is not None}
+    def _upd():
+        return supabase.table("so_registros").update(data)\
+            .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
+    return supabase_execute(_upd)
+
 @app.post("/sicoe-obra/{contrato_id}/registros")
 def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(get_current_user)):
     data = body.dict()
