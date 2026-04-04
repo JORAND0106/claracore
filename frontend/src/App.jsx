@@ -3705,86 +3705,93 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const [numeroReporte, setNumeroReporte] = useState(null)
   const [borradorId, setBorradorId] = useState(reporteInicial?.id || null)
 
-  useEffect(() => {
-    if (!reporteInicial) {
-      fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-reporte`, { headers: hdrs })
-        .then(r => r.json()).then(d => setNumeroReporte(d.siguiente))
-      fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
-        method: 'POST',
-        headers: { ...hdrs, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          descripcion_actividad: 'Borrador',
-          capitulo: 'Sin asignar',
-          estado: 'Borrador'
-        })
-      }).then(r => r.json()).then(d => { if (d.id) setBorradorId(d.id) })
-    } else {
-      setNumeroReporte(reporteInicial.numero_reporte)
-    }
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs })
-      .then(r => r.json()).then(d => setSubcontratistas(Array.isArray(d) ? d : []))
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs })
-      .then(r => r.json()).then(d => setInspectores(Array.isArray(d) ? d : []))
-    fetch(`${API_URL}/listado-precios/${contrato_id}`, { headers: hdrs })
-      .then(r => r.json()).then(d => {
-        if (Array.isArray(d)) {
-          const caps = [...new Set(d.map(r => r.capitulo).filter(Boolean))]
-          const sorted = caps.sort((a, b) => {
-            const na = parseInt(a.match(/^(\d+)/)?.[1] || '9999')
-            const nb = parseInt(b.match(/^(\d+)/)?.[1] || '9999')
-            return na - nb
-          })
-          setCapitulos(sorted.map(c => ({ capitulo: c })))
-        }
+useEffect(() => {
+    const tok = getToken()
+    const h = { Authorization: `Bearer ${tok}` }
+    
+    Promise.all([
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-reporte`, { headers: h }).then(r=>r.json()),
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: h }).then(r=>r.json()),
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: h }).then(r=>r.json()),
+      fetch(`${API_URL}/listado-precios/${contrato_id}`, { headers: h }).then(r=>r.json()),
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: h }).then(r=>r.json()),
+    ]).then(([next, subs, insps, precios, pks]) => {
+      if (!reporteInicial) {
+        setNumeroReporte(next.siguiente)
+        // Crear borrador nuevo solo si NO estamos editando
+        fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
+          method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ descripcion_actividad: 'Borrador', capitulo: 'Sin asignar', estado: 'Borrador' })
+        }).then(r=>r.json()).then(d => { if (d.id) setBorradorId(d.id) })
+      } else {
+        setNumeroReporte(reporteInicial.numero_reporte)
+      }
+      setSubcontratistas(Array.isArray(subs) ? subs : [])
+      setInspectores(Array.isArray(insps) ? insps : [])
+      setCapitulos(() => {
+        if (!Array.isArray(precios)) return []
+        const caps = [...new Set(precios.map(p=>p.capitulo).filter(Boolean))]
+        return caps.sort((a,b) => {
+          const na = parseInt(a.match(/^(\d+)/)?.[1]||'9999')
+          const nb = parseInt(b.match(/^(\d+)/)?.[1]||'9999')
+          return na-nb
+        }).map(c=>({capitulo:c}))
       })
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs })
-      .then(r => r.json()).then(d => setPkIds(Array.isArray(d) ? d : []))
-// Precargar borrador si existe
-    if (reporteInicial) {
-      setDescripcion(reporteInicial.descripcion_actividad !== 'Borrador' ? reporteInicial.descripcion_actividad : '')
-      setCapituloSel(reporteInicial.capitulo !== 'Sin asignar' ? reporteInicial.capitulo : '')
-      setMargen(reporteInicial.margen || '')
-      setAbsInicio(reporteInicial.abs_inicio ?? '')
-      setAbsFinal(reporteInicial.abs_final ?? '')
-      setNodoIni(reporteInicial.nodo_ini || '')
-      setNodoFin(reporteInicial.nodo_fin || '')
-      if (reporteInicial.subcontratista_id) {
-        setSubSeleccionado({ id: reporteInicial.subcontratista_id, nombre: reporteInicial.subcontratista_nombre || '' })
-      }
-      if (reporteInicial.inspector_id) {
-        fetch(`${API_URL}/usuarios/${reporteInicial.inspector_id}`, { headers: hdrs })
-          .then(r => r.json()).then(u => {
-            if (u.id) setInspSeleccionado({ id: u.id, nombre: `${u.nombre} ${u.apellidos}`.trim() })
-          }).catch(() => {})
-      }
-      if (reporteInicial.pk_id_id) {
-        // pkIds puede no estar cargado aún, guardamos para cargarlo después
-        setPkBusqueda(String(reporteInicial.pk_id_id))
-      }
-      if (reporteInicial.registros?.length) setRegistros(reporteInicial.registros.map(r => ({
-        id: r.id,
-        nombre: r.nombre || '', descripcion: r.descripcion || '',
-        longitud: r.longitud || '', ancho: r.ancho || '',
-        espesor: r.espesor || '', cantidad: r.cantidad || '',
-        cantidad_total: r.cantidad_total, unidad: r.unidad || '',
-        observacion: r.descripcion || '',
-        foto_url: r.foto_url, foto_numero: r.foto_numero, _fotoOk: !!r.foto_url,
-        grafico_url: r.grafico_url, grafico_numero: r.grafico_numero, _grafOk: !!r.grafico_url
-      })))
-      if (reporteInicial.puntos?.length) setPuntos(reporteInicial.puntos.map(p => ({
-        punto: p.punto || '', norte: p.norte || '', este: p.este || '',
-        cota: p.cota || '', descripcion: p.descripcion || ''
-      })))
-    }
-  }, [])
+      const pksArr = Array.isArray(pks) ? pks : []
+      setPkIds(pksArr)
 
-// Cargar PK_ID del borrador una vez que pkIds esté disponible
-  useEffect(() => {
-    if (reporteInicial?.pk_id_id && pkIds.length > 0) {
-      const pk = pkIds.find(p => p.id === reporteInicial.pk_id_id)
-      if (pk) selPkId(pk)
-    }
-  }, [pkIds])
+      // Precargar borrador DESPUÉS de tener todas las listas
+      if (reporteInicial) {
+        setDescripcion(reporteInicial.descripcion_actividad !== 'Borrador' ? reporteInicial.descripcion_actividad : '')
+        setCapituloSel(reporteInicial.capitulo !== 'Sin asignar' ? reporteInicial.capitulo : '')
+        setMargen(reporteInicial.margen || '')
+        setAbsInicio(reporteInicial.abs_inicio ?? '')
+        setAbsFinal(reporteInicial.abs_final ?? '')
+        setNodoIni(reporteInicial.nodo_ini || '')
+        setNodoFin(reporteInicial.nodo_fin || '')
+        if (reporteInicial.subcontratista_id) {
+          setSubSeleccionado({ id: reporteInicial.subcontratista_id, nombre: reporteInicial.subcontratista_nombre || '' })
+        }
+        if (reporteInicial.pk_id_id) {
+          const pk = pksArr.find(p => p.id === reporteInicial.pk_id_id)
+          if (pk) selPkId(pk)
+        }
+        if (reporteInicial.registros?.length) {
+          setRegistros(reporteInicial.registros.map(r => ({
+            id: r.id,
+            nombre: r.nombre || '',
+            descripcion: r.descripcion || '',
+            longitud: r.longitud || '',
+            ancho: r.ancho || '',
+            espesor: r.espesor || '',
+            cantidad: r.cantidad || '',
+            cantidad_total: r.cantidad_total,
+            unidad: r.unidad || '',
+            observacion: r.descripcion || '',
+            foto_url: r.foto_url,
+            foto_numero: r.foto_numero,
+            _fotoOk: !!r.foto_url,
+            grafico_url: r.grafico_url,
+            grafico_numero: r.grafico_numero,
+            _grafOk: !!r.grafico_url
+          })))
+        }
+        if (reporteInicial.puntos?.length) {
+          setPuntos(reporteInicial.puntos.map(p => ({
+            punto: p.punto || '', norte: p.norte || '',
+            este: p.este || '', cota: p.cota || '',
+            descripcion: p.descripcion || ''
+          })))
+        }
+        if (reporteInicial.inspector_id) {
+          fetch(`${API_URL}/usuarios/${reporteInicial.inspector_id}`, { headers: h })
+            .then(r=>r.json()).then(u => {
+              if (u.id) setInspSeleccionado({ id: u.id, nombre: `${u.nombre} ${u.apellidos}`.trim() })
+            }).catch(()=>{})
+        }
+      }
+    })
+  }, [])
 
   useEffect(() => {
     if (!capituloSel) { setNodos([]); return }
