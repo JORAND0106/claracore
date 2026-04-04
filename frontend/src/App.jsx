@@ -3486,12 +3486,12 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const puedeCrear = perm?.crear
   const puedeEditar = perm?.editar
 
-  const cargarReportes = async () => {
+const cargarReportes = async () => {
     setLoading(true)
     try {
       const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
-        headers: { Authorization: `Bearer ${token}` }
-      })
+        headers: { Authorization: `Bearer ${getToken()}` }
+      })  
       const data = await r.json()
       setReportes(Array.isArray(data) ? data : [])
     } catch(e) { setReportes([]) }
