@@ -4301,7 +4301,14 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             maxHeight:'85vh', display:'flex', flexDirection:'column', overflow:'hidden' }}>
             <div style={{ padding:'16px 20px', borderBottom:`1px solid ${t.border}`,
               display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <div style={{ fontWeight:'700', color:t.text }}>📝 Registro #{modalRegistro + 1}</div>
+              <div>
+                <div style={{ fontWeight:'700', color:t.text }}>📝 Registro #{String(modalRegistro + 1).padStart(3,'0')}</div>
+                {registros[modalRegistro].nombre && (
+                  <div style={{ fontSize:'12px', color:t.primary, fontWeight:'600', marginTop:'2px' }}>
+                    📋 {registros[modalRegistro].nombre}
+                  </div>
+                )}
+              </div>
               <button onClick={() => setModalRegistro(null)} style={{
                 background:'transparent', border:'none', fontSize:'20px', cursor:'pointer', color:t.textMuted }}>✕</button>
             </div>
@@ -4357,51 +4364,48 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   rows={3} placeholder="Descripción detallada de la actividad..."
                   style={{ width:'100%', padding:'8px 12px', borderRadius:'8px', fontSize:'13px', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box', resize:'vertical' }} />
               </div>
-              {/* Fotos */}
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
-                <div>
-                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>📸 FOTO OBRA *</label>
-                  {registros[modalRegistro].foto_url && (
-                    <img src={registros[modalRegistro].foto_url} style={{ width:'100%', borderRadius:'8px', marginBottom:'8px', maxHeight:'150px', objectFit:'cover' }} />
-                  )}
-                  <input type='file' accept='image/*' onChange={async e => {
-                    const file = e.target.files[0]; if (!file) return
-                    const fd = new FormData(); fd.append('file', file)
-                    try {
-                      const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-foto`, { method:'POST', headers: hdrs }).then(x=>x.json())
-                      fd.append('numero', numR.numero)
-                      fd.append('descripcion', registros[modalRegistro].observacion || `Foto-${numR.numero}`)
-                      const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-foto`, { method:'POST', headers: hdrs, body: fd })
-                      const data = await r.json()
-                      const a=[...registros]; a[modalRegistro]={...a[modalRegistro], foto_url: data.url, foto_numero: numR.numero, _fotoOk: true}; setRegistros(a)
-                    } catch(e) { alert('Error subiendo foto') }
-                  }} style={{ width:'100%', fontSize:'12px' }} />
-                  {registros[modalRegistro]._fotoOk && <div style={{ color:'#10B981', fontSize:'12px', marginTop:'4px' }}>✅ Foto cargada</div>}
+              {/* Foto obra - ancho completo */}
+              <div>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'4px' }}>
+                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted }}>
+                    📸 FOTO OBRA * 
+                    {registros[modalRegistro].foto_numero && (
+                      <span style={{ color:t.primary, marginLeft:'8px' }}>#{String(registros[modalRegistro].foto_numero).padStart(4,'0')}</span>
+                    )}
+                  </label>
                 </div>
-                <div>
-                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>📐 GRÁFICO *</label>
-                  {registros[modalRegistro].grafico_url && (
-                    <img src={registros[modalRegistro].grafico_url} style={{ width:'100%', borderRadius:'8px', marginBottom:'8px', maxHeight:'150px', objectFit:'cover' }} />
-                  )}
-                  <input type='file' accept='image/*' onChange={async e => {
-                    const file = e.target.files[0]; if (!file) return
-                    const fd = new FormData(); fd.append('file', file)
-                    try {
-                      const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-grafico`, { method:'POST', headers: hdrs }).then(x=>x.json())
-                      fd.append('numero', numR.numero)
-                      fd.append('descripcion', registros[modalRegistro].observacion || `Grafico-${numR.numero}`)
-                      const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers: hdrs, body: fd })
-                      const data = await r.json()
-                      const a=[...registros]; a[modalRegistro]={...a[modalRegistro], grafico_url: data.url, grafico_numero: numR.numero, _grafOk: true}; setRegistros(a)
-                    } catch(e) { alert('Error subiendo gráfico') }
-                  }} style={{ width:'100%', fontSize:'12px' }} />
-                  {registros[modalRegistro]._grafOk && <div style={{ color:'#10B981', fontSize:'12px', marginTop:'4px' }}>✅ Gráfico cargado</div>}
-                </div>
+                {registros[modalRegistro].foto_url && (
+                  <img src={registros[modalRegistro].foto_url} style={{ width:'100%', borderRadius:'8px', marginBottom:'8px', maxHeight:'220px', objectFit:'cover' }} />
+                )}
+                <input type='file' accept='image/*' onChange={async e => {
+                  const file = e.target.files[0]; if (!file) return
+                  const fd = new FormData(); fd.append('file', file)
+                  try {
+                    const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-foto`, { method:'POST', headers: hdrs }).then(x=>x.json())
+                    fd.append('numero', numR.numero)
+                    fd.append('descripcion', registros[modalRegistro].observacion || `Foto-${numR.numero}`)
+                    const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-foto`, { method:'POST', headers: hdrs, body: fd })
+                    const data = await r.json()
+                    const a=[...registros]; a[modalRegistro]={...a[modalRegistro], foto_url: data.url, foto_numero: numR.numero, _fotoOk: true}; setRegistros(a)
+                  } catch(e) { alert('Error subiendo foto') }
+                }} style={{ width:'100%', fontSize:'12px' }} />
+                {!registros[modalRegistro]._fotoOk && (
+                  <div style={{ color:'#F59E0B', fontSize:'11px', marginTop:'4px' }}>⚠️ La foto es obligatoria para guardar el registro</div>
+                )}
+                {registros[modalRegistro]._fotoOk && (
+                  <div style={{ color:'#10B981', fontSize:'12px', marginTop:'4px' }}>✅ Foto #{String(registros[modalRegistro].foto_numero).padStart(4,'0')} cargada</div>
+                )}
               </div>
             </div>
             {/* Footer */}
             <div style={{ padding:'14px 20px', borderTop:`1px solid ${t.border}`, display:'flex', justifyContent:'flex-end' }}>
-              <button onClick={() => setModalRegistro(null)} style={{
+              <button onClick={() => {
+                if (!registros[modalRegistro]._fotoOk) {
+                  alert('La foto de obra es obligatoria')
+                  return
+                }
+                setModalRegistro(null)
+              }} style={{
                 background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
                 padding:'8px 24px', cursor:'pointer', fontWeight:'700', fontSize:'13px'
               }}>✅ Guardar Registro</button>
