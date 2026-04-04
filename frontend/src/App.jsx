@@ -3561,7 +3561,7 @@ const cargarReportes = async () => {
                 const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
                 const data = await r.json()
                 setReporteEditando(data)
-                setTimeout(() => setModalNuevoReporte(true), 50)
+                setModalNuevoReporte(true)
               }
             }}
             onMouseEnter={e => e.currentTarget.style.background = t.bg}
@@ -3704,95 +3704,77 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   const [numeroReporte, setNumeroReporte] = useState(null)
   const [borradorId, setBorradorId] = useState(reporteInicial?.id || null)
-  const borradorIdRef = useRef(reporteInicial?.id || null)
-  const setBorrador = (id) => { setBorradorId(id); borradorIdRef.current = id }
 
-useEffect(() => {
-    const tok = getToken()
-    const h = { Authorization: `Bearer ${tok}` }
-    
-    Promise.all([
-      fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-reporte`, { headers: h }).then(r=>r.json()),
-      fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: h }).then(r=>r.json()),
-      fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: h }).then(r=>r.json()),
-      fetch(`${API_URL}/listado-precios/${contrato_id}`, { headers: h }).then(r=>r.json()),
-      fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: h }).then(r=>r.json()),
-    ]).then(([next, subs, insps, precios, pks]) => {
-      if (!reporteInicial) {
-        setNumeroReporte(next.siguiente)
-        // Crear borrador nuevo solo si NO estamos editando
-        fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
-          method: 'POST', headers: { ...h, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ descripcion_actividad: 'Borrador', capitulo: 'Sin asignar', estado: 'Borrador' })
-        }).then(r=>r.json()).then(d => { if (d.id) setBorradorId(d.id) })
-      } else {
-        setNumeroReporte(reporteInicial.numero_reporte)
-      }
-      setSubcontratistas(Array.isArray(subs) ? subs : [])
-      setInspectores(Array.isArray(insps) ? insps : [])
-      setCapitulos(() => {
-        if (!Array.isArray(precios)) return []
-        const caps = [...new Set(precios.map(p=>p.capitulo).filter(Boolean))]
-        return caps.sort((a,b) => {
-          const na = parseInt(a.match(/^(\d+)/)?.[1]||'9999')
-          const nb = parseInt(b.match(/^(\d+)/)?.[1]||'9999')
-          return na-nb
-        }).map(c=>({capitulo:c}))
+  useEffect(() => {
+    if (!reporteInicial) {
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-reporte`, { headers: hdrs })
+        .then(r => r.json()).then(d => setNumeroReporte(d.siguiente))
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
+        method: 'POST',
+        headers: { ...hdrs, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          descripcion_actividad: 'Borrador',
+          capitulo: 'Sin asignar',
+          estado: 'Borrador'
+        })
+      }).then(r => r.json()).then(d => { if (d.id) setBorradorId(d.id) })
+    } else {
+      setNumeroReporte(reporteInicial.numero_reporte)
+    }
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs })
+      .then(r => r.json()).then(d => setSubcontratistas(Array.isArray(d) ? d : []))
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs })
+      .then(r => r.json()).then(d => setInspectores(Array.isArray(d) ? d : []))
+    fetch(`${API_URL}/listado-precios/${contrato_id}`, { headers: hdrs })
+      .then(r => r.json()).then(d => {
+        if (Array.isArray(d)) {
+          const caps = [...new Set(d.map(r => r.capitulo).filter(Boolean))]
+          const sorted = caps.sort((a, b) => {
+            const na = parseInt(a.match(/^(\d+)/)?.[1] || '9999')
+            const nb = parseInt(b.match(/^(\d+)/)?.[1] || '9999')
+            return na - nb
+          })
+          setCapitulos(sorted.map(c => ({ capitulo: c })))
+        }
       })
-      const pksArr = Array.isArray(pks) ? pks : []
-      setPkIds(pksArr)
-
-      // Precargar borrador DESPUÉS de tener todas las listas
-      if (reporteInicial) {
-        setDescripcion(reporteInicial.descripcion_actividad !== 'Borrador' ? reporteInicial.descripcion_actividad : '')
-        setCapituloSel(reporteInicial.capitulo !== 'Sin asignar' ? reporteInicial.capitulo : '')
-        setMargen(reporteInicial.margen || '')
-        setAbsInicio(reporteInicial.abs_inicio ?? '')
-        setAbsFinal(reporteInicial.abs_final ?? '')
-        setNodoIni(reporteInicial.nodo_ini || '')
-        setNodoFin(reporteInicial.nodo_fin || '')
-        if (reporteInicial.subcontratista_id) {
-          setSubSeleccionado({ id: reporteInicial.subcontratista_id, nombre: reporteInicial.subcontratista_nombre || '' })
-        }
-        if (reporteInicial.pk_id_id) {
-          const pk = pksArr.find(p => p.id === reporteInicial.pk_id_id)
-          if (pk) selPkId(pk)
-        }
-        if (reporteInicial.registros?.length) {
-          setRegistros(reporteInicial.registros.map(r => ({
-            id: r.id,
-            nombre: r.nombre || '',
-            descripcion: r.descripcion || '',
-            longitud: r.longitud || '',
-            ancho: r.ancho || '',
-            espesor: r.espesor || '',
-            cantidad: r.cantidad || '',
-            cantidad_total: r.cantidad_total,
-            unidad: r.unidad || '',
-            observacion: r.descripcion || '',
-            foto_url: r.foto_url,
-            foto_numero: r.foto_numero,
-            _fotoOk: !!r.foto_url,
-            grafico_url: r.grafico_url,
-            grafico_numero: r.grafico_numero,
-            _grafOk: !!r.grafico_url
-          })))
-        }
-        if (reporteInicial.puntos?.length) {
-          setPuntos(reporteInicial.puntos.map(p => ({
-            punto: p.punto || '', norte: p.norte || '',
-            este: p.este || '', cota: p.cota || '',
-            descripcion: p.descripcion || ''
-          })))
-        }
-        if (reporteInicial.inspector_id) {
-          fetch(`${API_URL}/usuarios/${reporteInicial.inspector_id}`, { headers: h })
-            .then(r=>r.json()).then(u => {
-              if (u.id) setInspSeleccionado({ id: u.id, nombre: `${u.nombre} ${u.apellidos}`.trim() })
-            }).catch(()=>{})
-        }
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs })
+      .then(r => r.json()).then(d => setPkIds(Array.isArray(d) ? d : []))
+// Precargar borrador si existe
+    if (reporteInicial) {
+      setDescripcion(reporteInicial.descripcion_actividad !== 'Borrador' ? reporteInicial.descripcion_actividad : '')
+      setCapituloSel(reporteInicial.capitulo !== 'Sin asignar' ? reporteInicial.capitulo : '')
+      setMargen(reporteInicial.margen || '')
+      setAbsInicio(reporteInicial.abs_inicio ?? '')
+      setAbsFinal(reporteInicial.abs_final ?? '')
+      setNodoIni(reporteInicial.nodo_ini || '')
+      setNodoFin(reporteInicial.nodo_fin || '')
+      if (reporteInicial.subcontratista_id) {
+        setSubSeleccionado({ id: reporteInicial.subcontratista_id, nombre: reporteInicial.subcontratista_nombre || '' })
       }
-    })
+      if (reporteInicial.inspector_id) {
+        fetch(`${API_URL}/usuarios/${reporteInicial.inspector_id}`, { headers: hdrs })
+          .then(r => r.json()).then(u => {
+            if (u.id) setInspSeleccionado({ id: u.id, nombre: `${u.nombre} ${u.apellidos}`.trim() })
+          }).catch(() => {})
+      }
+      if (reporteInicial.pk_id_id) {
+        const pk = pkIds.find(p => p.id === reporteInicial.pk_id_id)
+        if (pk) selPkId(pk)
+      }
+      if (reporteInicial.registros?.length) setRegistros(reporteInicial.registros.map(r => ({
+        nombre: r.nombre || '', descripcion: r.descripcion || '',
+        longitud: r.longitud || '', ancho: r.ancho || '',
+        espesor: r.espesor || '', cantidad: r.cantidad || '',
+        cantidad_total: r.cantidad_total, unidad: r.unidad || '',
+        observacion: r.descripcion || '',
+        foto_url: r.foto_url, foto_numero: r.foto_numero, _fotoOk: !!r.foto_url,
+        grafico_url: r.grafico_url, grafico_numero: r.grafico_numero, _grafOk: !!r.grafico_url
+      })))
+      if (reporteInicial.puntos?.length) setPuntos(reporteInicial.puntos.map(p => ({
+        punto: p.punto || '', norte: p.norte || '', este: p.este || '',
+        cota: p.cota || '', descripcion: p.descripcion || ''
+      })))
+    }
   }, [])
 
   useEffect(() => {
@@ -4453,86 +4435,9 @@ useEffect(() => {
           }}>🗑️ Cancelar / Eliminar borrador</button>
           <div style={{ display:'flex', gap:'8px' }}>
             {tabActivo < 3 && (
-              <button onClick={async () => {
-                if (tabActivo === 0) {
-                  if (!validarTab1()) return
-                  // Guardar/actualizar reporte en borrador
-                  const body = {
-                    descripcion_actividad: descripcion,
-                    subcontratista_id: subSeleccionado?.id || null,
-                    inspector_id: inspSeleccionado?.id || null,
-                    capitulo: capituloSel,
-                    pk_id_id: pkSeleccionado?.id || null,
-                    civ: pkSeleccionado?.civ || null,
-                    tramo: pkSeleccionado?.tramo || null,
-                    infraestructura: pkSeleccionado?.infraestructura || null,
-                    calzada: pkSeleccionado?.calzada || null,
-                    ubicacion: pkSeleccionado?.ubicacion || null,
-                    coord_lat: coordLat, coord_lng: coordLng,
-                    margen, abs_inicio: parseFloat(absInicio), abs_final: parseFloat(absFinal),
-                    nodo_ini: nodoIni, nodo_fin: nodoFin,
-                    estado: 'Borrador'
-                  }
-                  let idConfirmado = borradorId
-                  if (idConfirmado) {
-                    await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idConfirmado}`, {
-                      method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
-                      body: JSON.stringify(body)
-                    })
-                  } else {
-                    const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
-                      method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
-                      body: JSON.stringify(body)
-                    })
-                    const d = await r.json()
-                    if (d.id) { setBorradorId(d.id); idConfirmado = d.id }
-                  }
-                }
-                if (tabActivo === 2) {
-                  if (registros.length === 0) { alert('Debe tener al menos un registro'); return }
-                  try {
-                    let idParaGuardar = idConfirmado || borradorId
-                    if (!idParaGuardar) {
-                      const rb = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
-                        method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ descripcion_actividad: descripcion||'Borrador', capitulo: capituloSel||'Sin asignar', estado: 'Borrador' })
-                      })
-                      const db = await rb.json()
-                      if (db.id) { setBorradorId(db.id); idParaGuardar = db.id }
-                    }
-                    if (idParaGuardar) {
-                      const nuevosRegistros = [...registros]
-                      for (let i = 0; i < registros.length; i++) {
-                        const reg = registros[i]
-                        const regBody = {
-                          reporte_id: idParaGuardar,
-                          nombre: reg.nombre, descripcion: reg.observacion,
-                          longitud: parseFloat(reg.longitud)||null, ancho: parseFloat(reg.ancho)||null,
-                          espesor: parseFloat(reg.espesor)||null, cantidad: parseFloat(reg.cantidad)||null,
-                          cantidad_total: reg.cantidad_total,
-                          unidad: reg.unidad === 'Otro' ? (reg.unidadOtro||'') : reg.unidad,
-                          foto_url: reg.foto_url||null, foto_numero: reg.foto_numero||null,
-                          grafico_url: reg.grafico_url||null, grafico_numero: reg.grafico_numero||null
-                        }
-                        if (reg.id) {
-                          await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}`, {
-                            method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
-                            body: JSON.stringify(regBody)
-                          })
-                        } else {
-                          const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-registro`, { method:'POST', headers: hdrs }).then(x=>x.json())
-                          const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros`, {
-                            method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ ...regBody, numero_registro: numR.numero, contrato_id })
-                          })
-                          const d = await r.json()
-                          if (d.id) nuevosRegistros[i] = { ...reg, id: d.id, numero_registro: d.numero_registro }
-                        }
-                      }
-                      setRegistros(nuevosRegistros)
-                    }
-                  } catch(err) { console.error('Error guardando registros:', err) }
-                }
+              <button onClick={() => {
+                if (tabActivo === 0 && !validarTab1()) return
+                if (tabActivo === 2 && registros.length === 0) { alert('Debe tener al menos un registro'); return }
                 setTabActivo(tabActivo + 1)
               }} style={{
                 background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
