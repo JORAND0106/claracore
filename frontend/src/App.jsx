@@ -4306,16 +4306,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 background:'transparent', border:'none', fontSize:'20px', cursor:'pointer', color:t.textMuted }}>✕</button>
             </div>
             <div style={{ flex:1, overflowY:'auto', padding:'20px', display:'flex', flexDirection:'column', gap:'14px' }}>
-              {/* Nombre */}
-              <div>
-                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>NOMBRE ACTIVIDAD</label>
-                <input value={registros[modalRegistro].nombre || ''}
-                  onChange={e => { const a=[...registros]; a[modalRegistro]={...a[modalRegistro], nombre:e.target.value}; setRegistros(a) }}
-                  placeholder="Nombre de la actividad..."
-                  style={{ width:'100%', padding:'8px 12px', borderRadius:'8px', fontSize:'13px', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }} />
-              </div>
-              {/* Dimensiones */}
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'10px' }}>
+              {/* Dimensiones + Unidad en una sola fila */}
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr', gap:'10px' }}>
                 {[['longitud','Longitud'],['ancho','Ancho'],['espesor','Espesor'],['cantidad','Cantidad (x N)']].map(([campo, label]) => (
                   <div key={campo}>
                     <label style={{ fontSize:'11px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>{label}</label>
@@ -4332,6 +4324,17 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                       style={{ width:'100%', padding:'8px 10px', borderRadius:'8px', fontSize:'13px', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }} />
                   </div>
                 ))}
+                <div>
+                  <label style={{ fontSize:'11px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>Unidad</label>
+                  <select value={registros[modalRegistro].unidad || ''}
+                    onChange={e => { const a=[...registros]; a[modalRegistro]={...a[modalRegistro], unidad:e.target.value}; setRegistros(a) }}
+                    style={{ width:'100%', padding:'8px 10px', borderRadius:'8px', fontSize:'13px', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }}>
+                    <option value=''>--</option>
+                    {[...new Set((listadoPrecios||[]).map(p => p.und).filter(Boolean))].sort().map(u => (
+                      <option key={u} value={u}>{u}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
               {/* Cantidad total */}
               <div style={{ padding:'10px 14px', background:t.bg, borderRadius:'8px', display:'flex', justifyContent:'space-between' }}>
@@ -4339,14 +4342,6 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 <span style={{ fontSize:'16px', fontWeight:'800', color:'#10B981' }}>
                   {registros[modalRegistro].cantidad_total != null ? Number(registros[modalRegistro].cantidad_total).toFixed(4) : '—'}
                 </span>
-              </div>
-              {/* Unidad */}
-              <div>
-                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>UNIDAD</label>
-                <input value={registros[modalRegistro].unidad || ''}
-                  onChange={e => { const a=[...registros]; a[modalRegistro]={...a[modalRegistro], unidad:e.target.value}; setRegistros(a) }}
-                  placeholder="m, m², m³, und..."
-                  style={{ width:'100%', padding:'8px 12px', borderRadius:'8px', fontSize:'13px', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }} />
               </div>
               {/* Observación */}
               <div>

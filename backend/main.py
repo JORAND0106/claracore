@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 import io, requests as req_http
 from fastapi.middleware.cors import CORSMiddleware
@@ -3207,6 +3207,35 @@ def next_numero_registro(contrato_id: int, current_user=Depends(get_current_user
         return supabase.rpc("siguiente_numero_registro", {"p_contrato_id": contrato_id}).execute().data
     numero = supabase_execute(_q)
     return {"numero": numero}
+
+import cloudinary
+import cloudinary.uploader
+
+@app.post("/sicoe-obra/{contrato_id}/upload-foto")
+async def upload_foto(contrato_id: int, file: UploadFile = File(...), numero: int = Form(...), descripcion: str = Form(""), current_user=Depends(get_current_user)):
+    cloudinary.config(cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"), api_key=os.getenv("CLOUDINARY_API_KEY"), api_secret=os.getenv("CLOUDINARY_API_SECRET"))
+    contents = await file.read()
+    result = cloudinary.uploader.upload(
+        contents,
+        folder=f"claracore/{contrato_id}/fotos",
+        public_id=f"foto_{numero}",
+        overwrite=True,
+        resource_type="image"
+    )
+    return {"url": result["secure_url"], "numero": numero}
+
+@app.post("/sicoe-obra/{contrato_id}/upload-grafico")
+async def upload_grafico(contrato_id: int, file: UploadFile = File(...), numero: int = Form(...), descripcion: str = Form(""), current_user=Depends(get_current_user)):
+    cloudinary.config(cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"), api_key=os.getenv("CLOUDINARY_API_KEY"), api_secret=os.getenv("CLOUDINARY_API_SECRET"))
+    contents = await file.read()
+    result = cloudinary.uploader.upload(
+        contents,
+        folder=f"claracore/{contrato_id}/graficos",
+        public_id=f"grafico_{numero}",
+        overwrite=True,
+        resource_type="image"
+    )
+    return {"url": result["secure_url"], "numero": numero}
 
 @app.post("/sicoe-obra/{contrato_id}/next-foto")
 def next_numero_foto(contrato_id: int, current_user=Depends(get_current_user)):
