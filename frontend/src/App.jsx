@@ -3706,18 +3706,21 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const [borradorId, setBorradorId] = useState(reporteInicial?.id || null)
 
   useEffect(() => {
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-reporte`, { headers: hdrs })
-      .then(r => r.json()).then(d => setNumeroReporte(d.siguiente))
-    // Crear borrador automáticamente al abrir
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
-      method: 'POST',
-      headers: { ...hdrs, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        descripcion_actividad: 'Borrador',
-        capitulo: 'Sin asignar',
-        estado: 'Borrador'
-      })
-    }).then(r => r.json()).then(d => { if (d.id) setBorradorId(d.id) })
+    if (!reporteInicial) {
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-reporte`, { headers: hdrs })
+        .then(r => r.json()).then(d => setNumeroReporte(d.siguiente))
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
+        method: 'POST',
+        headers: { ...hdrs, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          descripcion_actividad: 'Borrador',
+          capitulo: 'Sin asignar',
+          estado: 'Borrador'
+        })
+      }).then(r => r.json()).then(d => { if (d.id) setBorradorId(d.id) })
+    } else {
+      setNumeroReporte(reporteInicial.numero_reporte)
+    }
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs })
       .then(r => r.json()).then(d => setSubcontratistas(Array.isArray(d) ? d : []))
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs })
