@@ -3693,6 +3693,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const hdrs = { Authorization: `Bearer ${getToken()}` }
 
   const [numeroReporte, setNumeroReporte] = useState(null)
+  const [borradorId, setBorradorId] = useState(null)
 
   useEffect(() => {
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-reporte`, { headers: hdrs })
@@ -3802,6 +3803,19 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     if (registros.length === 0) { alert('Debe tener al menos un registro en el TAB 3'); setTabActivo(2); return }
     setGuardando(true)
     try {
+      // Crear borrador primero si no existe
+      if (!borradorId) {
+        const bRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
+          method:'POST', headers:{...hdrs,'Content-Type':'application/json'},
+          body: JSON.stringify({
+            descripcion_actividad: descripcion || 'Borrador',
+            capitulo: capituloSel,
+            estado: 'Borrador'
+          })
+        })
+        const bData = await bRes.json()
+        if (bData.id) setBorradorId(bData.id)
+      }
       const body = {
         descripcion_actividad: descripcion,
         subcontratista_id: subSeleccionado?.id || null,
@@ -4294,13 +4308,13 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 Registra las coordenadas levantadas en campo. Opcional — puedes importar desde CSV.
               </div>
               {/* Header grid */}
-              <div style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr',
+              <div style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr 28px',
                 gap:'8px', fontSize:'11px', fontWeight:'700', color:t.textMuted,
                 padding:'0 8px', letterSpacing:'0.5px' }}>
                 <div>PUNTO</div><div>NORTE</div><div>ESTE</div><div>COTA</div><div>DESCRIPCIÓN</div>
               </div>
               {puntos.map((p, idx) => (
-                <div key={idx} style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr', gap:'8px' }}>
+                <div key={idx} style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr 28px', gap:'8px', alignItems:'center' }}>
                   {['punto','norte','este','cota','descripcion'].map(campo => (
                     <input key={campo} value={p[campo]}
                       onChange={e => {
@@ -4311,6 +4325,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                       placeholder={campo.charAt(0).toUpperCase()+campo.slice(1)}
                       style={inpStyle(false)} />
                   ))}
+                  <button onClick={() => setPuntos(prev => prev.filter((_,i) => i!==idx))}
+                    style={{ background:'transparent', border:'none', color:'#EF4444', cursor:'pointer', fontSize:'16px', padding:0 }}>✕</button>
                 </div>
               ))}
               <div style={{ display:'flex', gap:'8px' }}>
@@ -4345,10 +4361,19 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         {/* Footer */}
         <div style={{ padding:'16px 24px', borderTop:`1px solid ${t.border}`,
           display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <button onClick={onClose} style={{
+          <button onClick={async () => {
+            if (borradorId) {
+              if (window.confirm('¿Deseas eliminar este borrador?')) {
+                await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${borradorId}`, {
+                  method:'DELETE', headers: hdrs
+                })
+              } else return
+            }
+            onClose()
+          }} style={{
             background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
             borderRadius:'8px', padding:'8px 20px', cursor:'pointer', fontSize:'13px'
-          }}>Cancelar</button>
+          }}>🗑️ Cancelar / Eliminar borrador</button>
           <div style={{ display:'flex', gap:'8px' }}>
             {tabActivo < 3 && (
               <button onClick={() => {
