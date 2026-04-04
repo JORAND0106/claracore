@@ -3704,6 +3704,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   const [numeroReporte, setNumeroReporte] = useState(null)
   const [borradorId, setBorradorId] = useState(reporteInicial?.id || null)
+  const borradorIdRef = useRef(reporteInicial?.id || null)
+  const setBorrador = (id) => { setBorradorId(id); borradorIdRef.current = id }
 
 useEffect(() => {
     const tok = getToken()
