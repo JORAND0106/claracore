@@ -4520,7 +4520,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                         }
                       }
                       setRegistros(nuevosRegistros)
-                    }}
+                    }
                   } catch(err) { console.error('Error guardando registros:', err) }
                 }
                 setTabActivo(tabActivo + 1)
