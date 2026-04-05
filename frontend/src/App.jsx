@@ -3562,12 +3562,13 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || graficoReporte?.grafico_url || null)
   const API = API_URL
 
-  // Cargar capitulos al montar — usa listado-precios completo para traer todos los capítulos
+  // Cargar TODO el listado de precios una sola vez — fuente única para capítulos, competencias e ítems
   useEffect(() => {
     fetch(`${API}/listado-precios/${contrato_id}`, { headers: hdrs })
       .then(r => r.json())
       .then(d => {
         if (Array.isArray(d)) {
+          setTodosLosItems(d)
           const caps = [...new Set(d.map(r => r.capitulo).filter(Boolean))]
           const sorted = caps.sort((a, b) => {
             const na = parseInt(a.match(/^(\d+)/)?.[1] || '9999')
@@ -3627,33 +3628,31 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   const tieneCoordenadas = (reporte.puntos || []).length > 0
 
-  // Cargar todos los ítems del capítulo/competencia al cambiar filtros
+  // Filtrar ítems y competencias client-side cuando cambia capítulo o competencia
   useEffect(() => {
-    if (!capituloHoja) return
-    const params = new URLSearchParams({ q: '' })
-    params.append('capitulo', capituloHoja)
-    if (competencia) params.append('competencia', competencia)
-    fetch(`${API}/sicoe-obra/${contrato_id}/listado-precios-busqueda?${params}`, { headers: hdrs })
-      .then(r => r.json())
-      .then(data => {
-        const arr = Array.isArray(data) ? data : []
-        setTodosLosItems(arr)
-        const comps = [...new Set(arr.map(i => i.competencia).filter(Boolean))]
-        setCompetencias(comps)
-      })
-      .catch(() => {})
-  }, [capituloHoja, competencia])
+    if (!todosLosItems.length) return
+    const porCap = capituloHoja
+      ? todosLosItems.filter(i => i.capitulo === capituloHoja)
+      : todosLosItems
+    const comps = [...new Set(porCap.map(i => i.competencia).filter(Boolean))].sort()
+    setCompetencias(comps)
+    const porComp = competencia ? porCap.filter(i => i.competencia === competencia) : porCap
+    setItemsLista(porComp.slice(0, 50))
+    setMostrarLista(false)
+  }, [capituloHoja, competencia, todosLosItems])
 
-  // Filtrar ítems localmente al escribir (sin nueva llamada API)
+  // Filtrar ítems por texto client-side
   useEffect(() => {
     if (itemSel && itemBusqueda === itemSel.descripcion) return
-    if (!itemBusqueda) { setItemsLista(todosLosItems.slice(0, 50)); setMostrarLista(todosLosItems.length > 0); return }
-    const filtrados = todosLosItems.filter(i =>
+    const porCap = capituloHoja ? todosLosItems.filter(i => i.capitulo === capituloHoja) : todosLosItems
+    const porComp = competencia ? porCap.filter(i => i.competencia === competencia) : porCap
+    if (!itemBusqueda) { setItemsLista(porComp.slice(0, 50)); setMostrarLista(false); return }
+    const filtrados = porComp.filter(i =>
       `${i.item_numero} ${i.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase())
     ).slice(0, 50)
     setItemsLista(filtrados)
     setMostrarLista(filtrados.length > 0)
-  }, [itemBusqueda, todosLosItems])
+  }, [itemBusqueda, todosLosItems, capituloHoja, competencia])
 
   const seleccionarItem = (item) => {
     setItemSel(item)
