@@ -3333,7 +3333,8 @@ def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, c
     def _upd():
         return supabase.table("so_reportes").update(data)\
             .eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
-    return supabase_execute(_upd)
+    result = supabase_execute(_upd)
+    return result[0] if result else {}
 
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}")
 def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate, current_user=Depends(get_current_user)):
@@ -3342,6 +3343,14 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         return supabase.table("so_registros").update(data)\
             .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
     return supabase_execute(_upd)
+
+@app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/registros")
+def eliminar_registros_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
+    def _del():
+        return supabase.table("so_registros").delete()\
+            .eq("reporte_id", reporte_id).eq("contrato_id", contrato_id).execute().data
+    supabase_execute(_del)
+    return {"ok": True}
 
 @app.post("/sicoe-obra/{contrato_id}/registros")
 def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(get_current_user)):

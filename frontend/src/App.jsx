@@ -3757,10 +3757,6 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             if (u.id) setInspSeleccionado({ id: u.id, nombre: `${u.nombre} ${u.apellidos}`.trim() })
           }).catch(() => {})
       }
-      if (reporteInicial.pk_id_id) {
-        const pk = pkIds.find(p => p.id === reporteInicial.pk_id_id)
-        if (pk) selPkId(pk)
-      }
       if (reporteInicial.registros?.length) setRegistros(reporteInicial.registros.map(r => ({
         nombre: r.nombre || '', descripcion: r.descripcion || '',
         longitud: r.longitud || '', ancho: r.ancho || '',
@@ -3776,6 +3772,13 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       })))
     }
   }, [])
+
+  useEffect(() => {
+    if (reporteInicial?.pk_id_id && pkIds.length > 0 && !pkSeleccionado) {
+      const pk = pkIds.find(p => p.id === reporteInicial.pk_id_id)
+      if (pk) selPkId(pk)
+    }
+  }, [pkIds])
 
   useEffect(() => {
     if (!capituloSel) { setNodos([]); return }
@@ -3862,18 +3865,21 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     if (registros.length === 0) { alert('Debe tener al menos un registro en el TAB 3'); setTabActivo(2); return }
     setGuardando(true)
     try {
-      // Crear borrador primero si no existe
-      if (!borradorId) {
+      // Usar variable local para evitar problemas de closure con el estado asíncrono
+      let idParaGuardar = borradorId
+      if (!idParaGuardar) {
         const bRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
-          method:'POST', headers:{...hdrs,'Content-Type':'application/json'},
+          method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             descripcion_actividad: descripcion || 'Borrador',
-            capitulo: capituloSel,
+            capitulo: capituloSel || 'Sin asignar',
             estado: 'Borrador'
           })
         })
         const bData = await bRes.json()
-        if (bData.id) setBorradorId(bData.id)
+        if (!bData.id) throw new Error('No se pudo crear el borrador')
+        idParaGuardar = bData.id
+        setBorradorId(bData.id)
       }
       const body = {
         descripcion_actividad: descripcion,
@@ -3890,20 +3896,22 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         margen, abs_inicio: parseFloat(absInicio), abs_final: parseFloat(absFinal),
         nodo_ini: nodoIni, nodo_fin: nodoFin,
       }
-      const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
-        method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
+      // Actualizar el borrador existente en lugar de crear uno nuevo
+      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}`, {
+        method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       })
-      const reporte = await r.json()
-      if (!reporte.id) throw new Error('Sin ID')
-      // Guardar registros
+      // Eliminar registros anteriores y reinsertar los actuales
+      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}/registros`, {
+        method: 'DELETE', headers: hdrs
+      })
       for (const reg of registros) {
-        const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-registro`, { method:'POST', headers: hdrs })
+        const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-registro`, { method: 'POST', headers: hdrs })
           .then(x => x.json())
         await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros`, {
           method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            reporte_id: reporte.id, numero_registro: numR.numero,
+            reporte_id: idParaGuardar, numero_registro: numR.numero,
             nombre: reg.nombre, descripcion: reg.observacion,
             longitud: parseFloat(reg.longitud)||null, ancho: parseFloat(reg.ancho)||null,
             espesor: parseFloat(reg.espesor)||null, cantidad: parseFloat(reg.cantidad)||null,
@@ -3919,7 +3927,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       if (puntosValidos.length > 0) {
         await fetch(`${API_URL}/sicoe-obra/${contrato_id}/puntos-topograficos`, {
           method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reporte_id: reporte.id, puntos: puntosValidos })
+          body: JSON.stringify({ reporte_id: idParaGuardar, puntos: puntosValidos })
         })
       }
       onGuardado()
