@@ -3552,7 +3552,55 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [buscando,       setBuscando]       = useState(false)
   const [competencias,   setCompetencias]   = useState([])
   const [itemListadoId,  setItemListadoId]  = useState(null)
+  const [capituloHoja,   setCapituloHoja]   = useState(registro.capitulo || reporte.capitulo || '')
+  const [listaCapitulos, setListaCapitulos] = useState([])
+  const [todosLosItems,  setTodosLosItems]  = useState([])
+  const [fotoLocal,      setFotoLocal]      = useState(registro.foto_url || null)
+  const [uploadingFoto,  setUploadingFoto]  = useState(false)
+  const [uploadingGraf,  setUploadingGraf]  = useState(false)
+  const graficoReporte = reporte.registros?.find(r => r.grafico_url) || null
+  const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || graficoReporte?.grafico_url || null)
   const API = API_URL
+
+  // Cargar capitulos al montar
+  useEffect(() => {
+    fetch(`${API}/sicoe-obra/${contrato_id}/capitulos`, { headers: hdrs })
+      .then(r => r.json())
+      .then(d => setListaCapitulos(Array.isArray(d) ? d.map(c => c.capitulo) : []))
+      .catch(() => {})
+  }, [])
+
+  // Subir foto
+  const subirFoto = async (file) => {
+    setUploadingFoto(true)
+    try {
+      const numRes = await fetch(`${API}/sicoe-obra/${contrato_id}/next-foto`, { method:'POST', headers: hdrs }).then(r => r.json())
+      const fd = new FormData(); fd.append('file', file); fd.append('numero', numRes.numero); fd.append('descripcion', '')
+      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-foto`, { method:'POST', headers:{ Authorization: hdrs.Authorization }, body: fd }).then(r => r.json())
+      await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
+        method:'PUT', headers: hdrs,
+        body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, foto_url: res.url, foto_numero: res.numero })
+      })
+      setFotoLocal(res.url)
+    } catch(e) { alert('Error subiendo foto') }
+    setUploadingFoto(false)
+  }
+
+  // Subir gráfico
+  const subirGrafico = async (file) => {
+    setUploadingGraf(true)
+    try {
+      const numRes = await fetch(`${API}/sicoe-obra/${contrato_id}/next-grafico`, { method:'POST', headers: hdrs }).then(r => r.json())
+      const fd = new FormData(); fd.append('file', file); fd.append('numero', numRes.numero); fd.append('descripcion', '')
+      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers:{ Authorization: hdrs.Authorization }, body: fd }).then(r => r.json())
+      await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
+        method:'PUT', headers: hdrs,
+        body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, grafico_url: res.url, grafico_numero: res.numero })
+      })
+      setGrafLocal(res.url)
+    } catch(e) { alert('Error subiendo gráfico') }
+    setUploadingGraf(false)
+  }
 
   const calcCantTotal = (l, a, e, c) => {
     const lv = l !== '' && l !== null && l !== undefined ? parseFloat(l) : 1
@@ -3569,35 +3617,33 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   const tieneCoordenadas = (reporte.puntos || []).length > 0
 
-  // Cargar competencias únicas del capítulo
+  // Cargar todos los ítems del capítulo/competencia al cambiar filtros
   useEffect(() => {
-    if (!reporte.capitulo) return
-    fetch(`${API}/sicoe-obra/${contrato_id}/listado-precios-busqueda?capitulo=${encodeURIComponent(reporte.capitulo)}&q=`, { headers: hdrs })
+    if (!capituloHoja) return
+    const params = new URLSearchParams({ q: '' })
+    params.append('capitulo', capituloHoja)
+    if (competencia) params.append('competencia', competencia)
+    fetch(`${API}/sicoe-obra/${contrato_id}/listado-precios-busqueda?${params}`, { headers: hdrs })
       .then(r => r.json())
       .then(data => {
-        const comps = [...new Set((data || []).map(i => i.competencia).filter(Boolean))]
+        const arr = Array.isArray(data) ? data : []
+        setTodosLosItems(arr)
+        const comps = [...new Set(arr.map(i => i.competencia).filter(Boolean))]
         setCompetencias(comps)
       })
       .catch(() => {})
-  }, [reporte.capitulo])
+  }, [capituloHoja, competencia])
 
-  // Buscar ítems al escribir
+  // Filtrar ítems localmente al escribir (sin nueva llamada API)
   useEffect(() => {
-    if (!itemBusqueda || itemBusqueda.length < 2) { setItemsLista([]); return }
     if (itemSel && itemBusqueda === itemSel.descripcion) return
-    setBuscando(true)
-    const delay = setTimeout(() => {
-      const params = new URLSearchParams({ q: itemBusqueda })
-      if (reporte.capitulo) params.append('capitulo', reporte.capitulo)
-      if (competencia)      params.append('competencia', competencia)
-      fetch(`${API}/sicoe-obra/${contrato_id}/listado-precios-busqueda?${params}`, { headers: hdrs })
-        .then(r => r.json())
-        .then(data => { setItemsLista(Array.isArray(data) ? data : []); setMostrarLista(true) })
-        .catch(() => {})
-        .finally(() => setBuscando(false))
-    }, 350)
-    return () => clearTimeout(delay)
-  }, [itemBusqueda, competencia])
+    if (!itemBusqueda) { setItemsLista(todosLosItems.slice(0, 50)); setMostrarLista(todosLosItems.length > 0); return }
+    const filtrados = todosLosItems.filter(i =>
+      `${i.item_numero} ${i.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase())
+    ).slice(0, 50)
+    setItemsLista(filtrados)
+    setMostrarLista(filtrados.length > 0)
+  }, [itemBusqueda, todosLosItems])
 
   const seleccionarItem = (item) => {
     setItemSel(item)
@@ -3693,19 +3739,28 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           )}
         </div>
         <div style={{ fontSize:'11px', color:t.textMuted }}>
-          {registro.created_at ? new Date(registro.created_at + 'Z').toLocaleDateString('es-CO') : ''}
+          {(() => { try { const ts=registro.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()}
         </div>
       </div>
 
       {/* ─ Sección: Asignación de Ítem ─ */}
       {puedeEditar && (
         <div style={{ background:t.bg, borderRadius:'10px', padding:'16px', marginBottom:'16px', border:`1px solid ${C.borde}` }}>
-          <div style={{ fontSize:'11px', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>🔖 Asignación de Ítem</div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 2fr', gap:'12px' }}>
+          <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>🔖 Asignación de Ítem</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 2fr', gap:'12px' }}>
+            {/* Capítulo */}
+            <div>
+              <div style={{ fontSize:'10px', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Capítulo</div>
+              <select value={capituloHoja} onChange={e => { setCapituloHoja(e.target.value); setCompetencia(''); setItemSel(null); setItemBusqueda('') }}
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px' }}>
+                <option value="">— Selecciona —</option>
+                {listaCapitulos.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
             {/* Competencia */}
             <div>
               <div style={{ fontSize:'10px', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Competencia</div>
-              <select value={competencia} onChange={e => { setCompetencia(e.target.value); setItemSel(null); setItemBusqueda(''); setItemsLista([]) }}
+              <select value={competencia} onChange={e => { setCompetencia(e.target.value); setItemSel(null); setItemBusqueda('') }}
                 style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px' }}>
                 <option value="">— Todas —</option>
                 {competencias.map(c => <option key={c} value={c}>{c}</option>)}
@@ -3814,31 +3869,59 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       </div>
 
       {/* ─ Sección: Registros Fotográficos ─ */}
-      {(registro.foto_url || registro.grafico_url) && (
-        <div style={{ marginBottom:'16px' }}>
-          <div style={{ fontSize:'11px', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>📷 Registros Fotográficos</div>
-          <div style={{ display:'grid', gridTemplateColumns: registro.foto_url && registro.grafico_url ? '1fr 1fr' : '1fr', gap:'12px' }}>
-            {registro.foto_url && (
-              <div style={{ borderRadius:'8px', overflow:'hidden', border:`1px solid ${C.borde}` }}>
-                <img src={registro.foto_url} alt="Foto" style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }} />
+      <div style={{ marginBottom:'16px' }}>
+        <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>📷 Registros Fotográficos</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
+          {/* Foto de obra */}
+          <div style={{ borderRadius:'8px', overflow:'hidden', border:`1px solid ${C.borde}` }}>
+            {fotoLocal ? (
+              <>
+                <img src={fotoLocal} alt="Foto" style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }} />
                 <div style={{ padding:'6px 10px', fontSize:'11px', color:t.textMuted, background:t.bg }}>
                   📷 Foto #{registro.foto_numero ? String(registro.foto_numero).padStart(4,'0') : '—'}
-                  {registro.foto_descripcion ? ` — ${registro.foto_descripcion}` : ''}
                 </div>
-              </div>
+              </>
+            ) : (
+              <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'160px', background:t.bg, cursor:'pointer', gap:'8px' }}>
+                {uploadingFoto
+                  ? <span style={{ color:t.textMuted, fontSize:'12px' }}>⏳ Subiendo...</span>
+                  : <>
+                      <span style={{ fontSize:'32px' }}>📷</span>
+                      <span style={{ fontSize:'12px', color:t.textMuted }}>Foto de obra</span>
+                      <span style={{ fontSize:'11px', color:t.primary, fontWeight:'600' }}>Toca para cargar</span>
+                    </>
+                }
+                <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto}
+                  onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
+              </label>
             )}
-            {registro.grafico_url && (
-              <div style={{ borderRadius:'8px', overflow:'hidden', border:`1px solid ${C.borde}` }}>
-                <img src={registro.grafico_url} alt="Gráfico" style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }} />
+          </div>
+          {/* Gráfico del reporte */}
+          <div style={{ borderRadius:'8px', overflow:'hidden', border:`1px solid ${C.borde}` }}>
+            {grafLocal ? (
+              <>
+                <img src={grafLocal} alt="Gráfico" style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }} />
                 <div style={{ padding:'6px 10px', fontSize:'11px', color:t.textMuted, background:t.bg }}>
-                  📐 Gráfico #{registro.grafico_numero ? String(registro.grafico_numero).padStart(4,'0') : '—'}
-                  {registro.grafico_descripcion ? ` — ${registro.grafico_descripcion}` : ''}
+                  📐 Gráfico (compartido del reporte)
                 </div>
-              </div>
+              </>
+            ) : (
+              <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'160px', background:t.bg, cursor:'pointer', gap:'8px' }}>
+                {uploadingGraf
+                  ? <span style={{ color:t.textMuted, fontSize:'12px' }}>⏳ Subiendo...</span>
+                  : <>
+                      <span style={{ fontSize:'32px' }}>📐</span>
+                      <span style={{ fontSize:'12px', color:t.textMuted }}>Gráfico del reporte</span>
+                      <span style={{ fontSize:'11px', color:t.primary, fontWeight:'600' }}>Toca para cargar</span>
+                    </>
+                }
+                <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
+                  onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f) }} />
+              </label>
             )}
           </div>
         </div>
-      )}
+      </div>
 
       {/* ─ Acciones finales ─ */}
       {puedeEditar && (
@@ -4113,6 +4196,16 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               <div style={{ fontSize:'12px', color:'#ffffff99', fontWeight:'600' }}>
                 Reporte #{reporte.numero_reporte} · {reporte.capitulo} · {reporte.subcontratista_nombre || '—'}
               </div>
+              {(() => {
+                const pF = ts => { if (!ts) return null; try { const n = /Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?null:d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) } catch{return null} }
+                const fc = pF(reporte.created_at), fm = pF(reporte.updated_at)
+                return (
+                  <div style={{ marginTop:'4px', display:'flex', gap:'16px', flexWrap:'wrap' }}>
+                    {fc && <span style={{ fontSize:'11px', color:'#ffffffCC' }}>📅 {fc}{reporte.nombre_creador ? ` · ${reporte.nombre_creador}` : ''}</span>}
+                    {fm && reporte.nombre_modificador && <span style={{ fontSize:'11px', color:'#ffffffAA' }}>✏️ {fm} · {reporte.nombre_modificador}</span>}
+                  </div>
+                )
+              })()}
             </div>
           </div>
           <button onClick={onClose} style={{ background:'rgba(255,255,255,0.2)', border:'none', color:'#fff', borderRadius:'50%', width:'34px', height:'34px', fontSize:'18px', cursor:'pointer', fontWeight:'900', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
@@ -4175,34 +4268,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:'12px' }}>
                   <div>
                     <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase' }}>📋 Identificación del Reporte</div>
-                    {(() => {
-                      const parseFecha = (ts) => {
-                        if (!ts) return null
-                        try {
-                          const norm = /Z$|[+-]\d{2}:\d{2}$/.test(ts) ? ts : ts + 'Z'
-                          const d = new Date(norm)
-                          return isNaN(d) ? null : d.toLocaleDateString('es-CO', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'})
-                        } catch { return null }
-                      }
-                      const fechaCreacion    = parseFecha(reporte.created_at)
-                      const fechaModificacion = parseFecha(reporte.updated_at)
-                      return (
-                        <div style={{ marginTop:'4px', display:'flex', flexDirection:'column', gap:'2px' }}>
-                          {fechaCreacion && (
-                            <div style={{ fontSize:'11px', color:t.textMuted }}>
-                              📅 Creado: <strong style={{ color:t.text }}>{fechaCreacion}</strong>
-                              {reporte.nombre_creador ? <span> · {reporte.nombre_creador}</span> : ''}
-                            </div>
-                          )}
-                          {fechaModificacion && reporte.nombre_modificador && (
-                            <div style={{ fontSize:'11px', color:t.textMuted }}>
-                              ✏️ Modificado: <strong style={{ color:t.text }}>{fechaModificacion}</strong>
-                              {reporte.nombre_modificador ? <span> · {reporte.nombre_modificador}</span> : ''}
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })()}
                   </div>
                   {puedeEditar && (
                     <div style={{ display:'flex', gap:'8px' }}>
