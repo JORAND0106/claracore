@@ -3461,6 +3461,674 @@ async function cargarRegistros() {
   )
 }
 
+// ─── HOJA REGISTRO ────────────────────────────────────────────────────────────
+function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, seleccionado, onToggleSeleccion, onItemAsignado, hdrs }) {
+  const [competencia,    setCompetencia]    = useState(registro.competencia    || '')
+  const [itemBusqueda,   setItemBusqueda]   = useState(registro.item_descripcion || '')
+  const [itemsLista,     setItemsLista]     = useState([])
+  const [itemSel,        setItemSel]        = useState(registro.item_numero ? { item_numero: registro.item_numero, descripcion: registro.item_descripcion, und: registro.unidad, precio_unitario: registro.vlr_unitario, id: null } : null)
+  const [mostrarLista,   setMostrarLista]   = useState(false)
+  const [longitud,       setLongitud]       = useState(registro.longitud   ?? '')
+  const [ancho,          setAncho]          = useState(registro.ancho      ?? '')
+  const [espesor,        setEspesor]        = useState(registro.espesor    ?? '')
+  const [cantidad,       setCantidad]       = useState(registro.cantidad   ?? '')
+  const [guardando,      setGuardando]      = useState(false)
+  const [asignando,      setAsignando]      = useState(false)
+  const [buscando,       setBuscando]       = useState(false)
+  const [competencias,   setCompetencias]   = useState([])
+  const [itemListadoId,  setItemListadoId]  = useState(null)
+  const API = API_URL
+
+  const calcCantTotal = (l, a, e, c) => {
+    const lv = l !== '' && l !== null && l !== undefined ? parseFloat(l) : 1
+    const av = a !== '' && a !== null && a !== undefined ? parseFloat(a) : 1
+    const ev = e !== '' && e !== null && e !== undefined ? parseFloat(e) : 1
+    const cv = c !== '' && c !== null && c !== undefined ? parseFloat(c) : 0
+    if (isNaN(lv) || isNaN(av) || isNaN(ev) || isNaN(cv)) return 0
+    return Math.round(lv * av * ev * cv * 100) / 100
+  }
+
+  const cantTotal   = calcCantTotal(longitud, ancho, espesor, cantidad)
+  const vlrUnitario = itemSel?.precio_unitario ?? registro.vlr_unitario ?? 0
+  const costoDirecto = Math.round(cantTotal * vlrUnitario * 100) / 100
+
+  const tieneCoordenadas = (reporte.puntos || []).length > 0
+
+  // Cargar competencias únicas del capítulo
+  useEffect(() => {
+    if (!reporte.capitulo) return
+    fetch(`${API}/sicoe-obra/${contrato_id}/listado-precios-busqueda?capitulo=${encodeURIComponent(reporte.capitulo)}&q=`, { headers: hdrs })
+      .then(r => r.json())
+      .then(data => {
+        const comps = [...new Set((data || []).map(i => i.competencia).filter(Boolean))]
+        setCompetencias(comps)
+      })
+      .catch(() => {})
+  }, [reporte.capitulo])
+
+  // Buscar ítems al escribir
+  useEffect(() => {
+    if (!itemBusqueda || itemBusqueda.length < 2) { setItemsLista([]); return }
+    if (itemSel && itemBusqueda === itemSel.descripcion) return
+    setBuscando(true)
+    const delay = setTimeout(() => {
+      const params = new URLSearchParams({ q: itemBusqueda })
+      if (reporte.capitulo) params.append('capitulo', reporte.capitulo)
+      if (competencia)      params.append('competencia', competencia)
+      fetch(`${API}/sicoe-obra/${contrato_id}/listado-precios-busqueda?${params}`, { headers: hdrs })
+        .then(r => r.json())
+        .then(data => { setItemsLista(Array.isArray(data) ? data : []); setMostrarLista(true) })
+        .catch(() => {})
+        .finally(() => setBuscando(false))
+    }, 350)
+    return () => clearTimeout(delay)
+  }, [itemBusqueda, competencia])
+
+  const seleccionarItem = (item) => {
+    setItemSel(item)
+    setItemListadoId(item.id)
+    setItemBusqueda(item.descripcion)
+    setItemsLista([])
+    setMostrarLista(false)
+  }
+
+  const guardarDimensiones = async () => {
+    setGuardando(true)
+    try {
+      await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
+        method: 'PUT', headers: hdrs,
+        body: JSON.stringify({
+          reporte_id:     registro.reporte_id,
+          numero_registro: registro.numero_registro,
+          longitud:  longitud !== '' ? parseFloat(longitud) : null,
+          ancho:     ancho    !== '' ? parseFloat(ancho)    : null,
+          espesor:   espesor  !== '' ? parseFloat(espesor)  : null,
+          cantidad:  cantidad !== '' ? parseFloat(cantidad) : null,
+          cantidad_total: cantTotal,
+        })
+      })
+    } catch(e) {}
+    setGuardando(false)
+  }
+
+  const asignarItem = async () => {
+    if (!itemListadoId && !itemSel?.id) return
+    setAsignando(true)
+    try {
+      // 1. Guardar dimensiones primero para que el backend use cantidad_total correcta
+      await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
+        method: 'PUT', headers: hdrs,
+        body: JSON.stringify({
+          reporte_id: registro.reporte_id,
+          numero_registro: registro.numero_registro,
+          longitud:  longitud !== '' ? parseFloat(longitud) : null,
+          ancho:     ancho    !== '' ? parseFloat(ancho)    : null,
+          espesor:   espesor  !== '' ? parseFloat(espesor)  : null,
+          cantidad:  cantidad !== '' ? parseFloat(cantidad) : null,
+          cantidad_total: cantTotal,
+        })
+      })
+      // 2. Asignar ítem
+      await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/asignar-item`, {
+        method: 'PUT', headers: hdrs,
+        body: JSON.stringify({ item_listado_id: itemListadoId || itemSel?.id, competencia: competencia || null })
+      })
+      onItemAsignado()
+    } catch(e) {}
+    setAsignando(false)
+  }
+
+  const C = { borde: t.border, label: t.textMuted }
+  const fmtD = v => v != null ? new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format(v) : '—'
+
+  const CampoRO = ({ label, valor, color }) => (
+    <div>
+      <div style={{ fontSize:'10px', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+      <div style={{ fontSize:'13px', color: color || t.text, fontWeight:'600', background:t.bgCard, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${C.borde}` }}>
+        {valor ?? <span style={{ color:C.label, fontStyle:'italic' }}>—</span>}
+      </div>
+    </div>
+  )
+
+  const CampoEdit = ({ label, value, onChange, placeholder }) => (
+    <div>
+      <div style={{ fontSize:'10px', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+      <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder || ''}
+        style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+    </div>
+  )
+
+  return (
+    <div style={{
+      background: t.bgCard, borderRadius:'12px', border:`2px solid ${seleccionado ? '#8B5CF6' : C.borde}`,
+      padding:'20px', position:'relative', transition:'border 0.15s'
+    }}>
+      {/* ─ Header de la hoja ─ */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'16px' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+          {puedeEditar && (
+            <input type="checkbox" checked={seleccionado} onChange={onToggleSeleccion}
+              style={{ width:'16px', height:'16px', cursor:'pointer', accentColor:'#8B5CF6' }} />
+          )}
+          <span style={{ fontSize:'15px', fontWeight:'800', color:t.primary }}>📄 Registro #{registro.numero_registro}</span>
+          {registro.item_numero && (
+            <span style={{ background:`${t.primary}22`, color:t.primary, border:`1px solid ${t.primary}44`, borderRadius:'12px', padding:'2px 10px', fontSize:'11px', fontWeight:'700' }}>
+              {registro.item_numero}
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize:'11px', color:t.textMuted }}>
+          {registro.created_at ? new Date(registro.created_at + 'Z').toLocaleDateString('es-CO') : ''}
+        </div>
+      </div>
+
+      {/* ─ Sección: Asignación de Ítem ─ */}
+      {puedeEditar && (
+        <div style={{ background:t.bg, borderRadius:'10px', padding:'16px', marginBottom:'16px', border:`1px solid ${C.borde}` }}>
+          <div style={{ fontSize:'11px', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>🔖 Asignación de Ítem</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 2fr', gap:'12px' }}>
+            {/* Competencia */}
+            <div>
+              <div style={{ fontSize:'10px', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Competencia</div>
+              <select value={competencia} onChange={e => { setCompetencia(e.target.value); setItemSel(null); setItemBusqueda(''); setItemsLista([]) }}
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px' }}>
+                <option value="">— Todas —</option>
+                {competencias.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            {/* Búsqueda de ítem */}
+            <div style={{ position:'relative' }}>
+              <div style={{ fontSize:'10px', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>
+                Ítem {buscando ? '⏳' : ''}
+              </div>
+              <input
+                value={itemBusqueda}
+                onChange={e => { setItemBusqueda(e.target.value); setItemSel(null); setItemListadoId(null) }}
+                onFocus={() => itemsLista.length > 0 && setMostrarLista(true)}
+                placeholder="Buscar por descripción..."
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }}
+              />
+              {mostrarLista && itemsLista.length > 0 && (
+                <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:100, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', maxHeight:'200px', overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }}>
+                  {itemsLista.map(item => (
+                    <div key={item.id} onClick={() => seleccionarItem(item)}
+                      style={{ padding:'8px 12px', cursor:'pointer', borderBottom:`1px solid ${t.border}`, transition:'background 0.1s' }}
+                      onMouseEnter={e => e.currentTarget.style.background = t.bg}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                      <div style={{ fontSize:'12px', fontWeight:'700', color:t.primary }}>{item.item_numero}</div>
+                      <div style={{ fontSize:'11px', color:t.text }}>{item.descripcion}</div>
+                      <div style={{ fontSize:'11px', color:t.textMuted }}>{item.und} · {fmtD(item.precio_unitario)}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          {/* Ítem seleccionado — info auto */}
+          {itemSel && (
+            <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:'10px', marginTop:'12px' }}>
+              <CampoRO label="Descripción"    valor={itemSel.descripcion} />
+              <CampoRO label="Unidad"         valor={itemSel.und} />
+              <CampoRO label="Vlr. Unitario"  valor={fmtD(itemSel.precio_unitario)} color='#10B981' />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ─ Sección: Dimensiones y Cantidades ─ */}
+      <div style={{ marginBottom:'16px' }}>
+        <div style={{ fontSize:'11px', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📏 Dimensiones y Cantidades</div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(130px,1fr))', gap:'10px' }}>
+          {puedeEditar ? (
+            <>
+              <CampoEdit label="Longitud"  value={longitud}  onChange={setLongitud}  placeholder="m" />
+              <CampoEdit label="Ancho"     value={ancho}     onChange={setAncho}     placeholder="m" />
+              <CampoEdit label="Espesor"   value={espesor}   onChange={setEspesor}   placeholder="m" />
+              <CampoEdit label="Cantidad"  value={cantidad}  onChange={setCantidad}  placeholder="und" />
+            </>
+          ) : (
+            <>
+              <CampoRO label="Longitud"  valor={registro.longitud} />
+              <CampoRO label="Ancho"     valor={registro.ancho} />
+              <CampoRO label="Espesor"   valor={registro.espesor} />
+              <CampoRO label="Cantidad"  valor={registro.cantidad} />
+            </>
+          )}
+          <CampoRO label="Cantidad Total"  valor={cantTotal.toFixed(2)} color={t.primary} />
+          <CampoRO label="Vlr. Unitario"   valor={vlrUnitario ? fmtD(vlrUnitario) : null} />
+          <CampoRO label="Costo Directo"   valor={costoDirecto ? fmtD(costoDirecto) : null} color='#10B981' />
+        </div>
+        {registro.observacion && (
+          <div style={{ marginTop:'10px' }}>
+            <CampoRO label="Observación" valor={registro.observacion} />
+          </div>
+        )}
+      </div>
+
+      {/* ─ Sección: Coordenadas Topográficas ─ */}
+      <div style={{ marginBottom:'16px' }}>
+        <div style={{ fontSize:'11px', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'8px' }}>📐 Coordenadas Topográficas</div>
+        {!tieneCoordenadas ? (
+          <div style={{ background:'#EF444415', border:'1px solid #EF444444', borderRadius:'8px', padding:'12px 16px', color:'#EF4444', fontSize:'12px', fontWeight:'600' }}>
+            ⚠️ Sin coordenadas topográficas. El topógrafo debe diligenciarlas en la Portada antes de asignar el ítem.
+          </div>
+        ) : (
+          <div style={{ overflowX:'auto' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
+              <thead>
+                <tr style={{ background:t.bg }}>
+                  {['Punto','Norte','Este','Cota','Descripción'].map(h => (
+                    <th key={h} style={{ padding:'6px 10px', textAlign:'left', color:t.textMuted, fontWeight:'700', fontSize:'10px', textTransform:'uppercase', letterSpacing:'0.5px' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(reporte.puntos || []).map((p, i) => (
+                  <tr key={i} style={{ borderBottom:`1px solid ${C.borde}` }}>
+                    <td style={{ padding:'6px 10px', color:t.text, fontWeight:'700' }}>{p.punto || '—'}</td>
+                    <td style={{ padding:'6px 10px', color:t.text }}>{p.norte ?? '—'}</td>
+                    <td style={{ padding:'6px 10px', color:t.text }}>{p.este  ?? '—'}</td>
+                    <td style={{ padding:'6px 10px', color:t.text }}>{p.cota  ?? '—'}</td>
+                    <td style={{ padding:'6px 10px', color:t.textMuted }}>{p.descripcion || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* ─ Sección: Registros Fotográficos ─ */}
+      {(registro.foto_url || registro.grafico_url) && (
+        <div style={{ marginBottom:'16px' }}>
+          <div style={{ fontSize:'11px', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>📷 Registros Fotográficos</div>
+          <div style={{ display:'grid', gridTemplateColumns: registro.foto_url && registro.grafico_url ? '1fr 1fr' : '1fr', gap:'12px' }}>
+            {registro.foto_url && (
+              <div style={{ borderRadius:'8px', overflow:'hidden', border:`1px solid ${C.borde}` }}>
+                <img src={registro.foto_url} alt="Foto" style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }} />
+                <div style={{ padding:'6px 10px', fontSize:'11px', color:t.textMuted, background:t.bg }}>
+                  📷 Foto #{registro.foto_numero ? String(registro.foto_numero).padStart(4,'0') : '—'}
+                  {registro.foto_descripcion ? ` — ${registro.foto_descripcion}` : ''}
+                </div>
+              </div>
+            )}
+            {registro.grafico_url && (
+              <div style={{ borderRadius:'8px', overflow:'hidden', border:`1px solid ${C.borde}` }}>
+                <img src={registro.grafico_url} alt="Gráfico" style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }} />
+                <div style={{ padding:'6px 10px', fontSize:'11px', color:t.textMuted, background:t.bg }}>
+                  📐 Gráfico #{registro.grafico_numero ? String(registro.grafico_numero).padStart(4,'0') : '—'}
+                  {registro.grafico_descripcion ? ` — ${registro.grafico_descripcion}` : ''}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ─ Acciones finales ─ */}
+      {puedeEditar && (
+        <div style={{ display:'flex', gap:'10px', justifyContent:'flex-end', paddingTop:'12px', borderTop:`1px solid ${C.borde}` }}>
+          <button onClick={guardarDimensiones} disabled={guardando} style={{
+            background: t.bgCard, border:`1px solid ${C.borde}`, color:t.text,
+            borderRadius:'8px', padding:'8px 18px', fontSize:'12px', fontWeight:'700',
+            cursor:'pointer', opacity: guardando ? 0.6 : 1
+          }}>{guardando ? 'Guardando...' : '💾 Guardar Dimensiones'}</button>
+          <button
+            onClick={asignarItem}
+            disabled={!itemListadoId || !tieneCoordenadas || asignando}
+            title={!tieneCoordenadas ? 'Se requieren coordenadas topográficas' : !itemListadoId ? 'Selecciona un ítem primero' : ''}
+            style={{
+              background: !itemListadoId || !tieneCoordenadas ? '#374151' : t.primary,
+              color: '#fff', border:'none', borderRadius:'8px',
+              padding:'8px 18px', fontSize:'12px', fontWeight:'700',
+              cursor: !itemListadoId || !tieneCoordenadas ? 'not-allowed' : 'pointer',
+              opacity: asignando ? 0.6 : 1
+            }}>{asignando ? 'Asignando...' : registro.item_numero ? '🔄 Reasignar Ítem' : '✅ Asignar Ítem'}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── CARPETA REPORTE ──────────────────────────────────────────────────────────
+function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar }) {
+  const [reporte, setReporte]                     = useState(repoProp)
+  const [registros, setRegistros]                 = useState(repoProp.registros || [])
+  const [tabActiva, setTabActiva]                 = useState('portada')
+  const [enlaceSoporte, setEnlaceSoporte]         = useState(repoProp.enlace_soporte || '')
+  const [guardandoEnlace, setGuardandoEnlace]     = useState(false)
+  const [modalMapbox, setModalMapbox]             = useState(false)
+  const [seleccionados, setSeleccionados]         = useState([])
+  const [modalMover, setModalMover]               = useState(false)
+  const [reportesDisponibles, setReportesDisponibles] = useState([])
+  const [reporteDestino, setReporteDestino]       = useState('')
+  const [moviendoReg, setMoviendoReg]             = useState(false)
+  const [creandoReg, setCreandoReg]               = useState(false)
+
+  const perm        = (usuario?.permisos || []).find(p => p.funcion_nombre === 'Reporte de Cantidades')
+  const puedeEditar = perm?.editar
+  const hdrs        = { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' }
+
+  // Ítems asignados únicos — cada uno genera un tab
+  const itemsAsignados = [...new Set(registros.filter(r => r.item_numero).map(r => r.item_numero))]
+  const regsSinAsignar = registros.filter(r => !r.item_numero)
+
+  const recargar = async () => {
+    try {
+      const res  = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`, { headers: hdrs })
+      const data = await res.json()
+      setReporte(data)
+      setRegistros(data.registros || [])
+    } catch(e) {}
+  }
+
+  const guardarEnlace = async () => {
+    setGuardandoEnlace(true)
+    try {
+      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`, {
+        method: 'PUT', headers: hdrs,
+        body: JSON.stringify({ ...reporte, enlace_soporte: enlaceSoporte })
+      })
+      setReporte(r => ({ ...r, enlace_soporte: enlaceSoporte }))
+    } catch(e) {}
+    setGuardandoEnlace(false)
+  }
+
+  const crearNuevoRegistro = async () => {
+    setCreandoReg(true)
+    try {
+      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/nuevo-registro`, { method: 'POST', headers: hdrs })
+      await recargar()
+      setTabActiva('sin_asignar')
+    } catch(e) {}
+    setCreandoReg(false)
+  }
+
+  const cargarReportesParaMover = async () => {
+    try {
+      const res  = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, { headers: hdrs })
+      const data = await res.json()
+      setReportesDisponibles((data || []).filter(r => r.id !== reporte.id && r.estado !== 'Borrador'))
+    } catch(e) {}
+  }
+
+  const ejecutarMover = async () => {
+    if (!reporteDestino || seleccionados.length === 0) return
+    setMoviendoReg(true)
+    try {
+      await Promise.all(seleccionados.map(rid =>
+        fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${rid}/mover-a/${reporteDestino}`, { method: 'PUT', headers: hdrs })
+      ))
+      setSeleccionados([])
+      setModalMover(false)
+      setReporteDestino('')
+      await recargar()
+    } catch(e) {}
+    setMoviendoReg(false)
+  }
+
+  const toggleSeleccion = (rid) => {
+    setSeleccionados(prev => prev.includes(rid) ? prev.filter(x => x !== rid) : [...prev, rid])
+  }
+
+  // ─ Colores del tema de la carpeta ─
+  const C = {
+    carpetaFondo:   '#1A2332',
+    carpetaHeader:  '#F59E0B',
+    tabActivo:      t.primary,
+    tabInactivo:    t.bgCard,
+    hoja:           t.bg,
+    borde:          t.border,
+  }
+
+  // ─ Campo de info del reporte (para portada y hojas) ─
+  const CampoInfo = ({ label, valor, full = false }) => (
+    <div style={{ gridColumn: full ? '1 / -1' : undefined }}>
+      <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.8px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+      <div style={{ fontSize:'13px', color:t.text, fontWeight:'600', background:t.bgCard, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${C.borde}` }}>
+        {valor || <span style={{ color:t.textMuted, fontStyle:'italic' }}>—</span>}
+      </div>
+    </div>
+  )
+
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:9000, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'16px', overflowY:'auto' }}>
+      <div style={{ width:'100%', maxWidth:'1100px', background:C.carpetaFondo, borderRadius:'16px', border:`2px solid ${C.carpetaHeader}`, boxShadow:'0 24px 80px rgba(0,0,0,0.6)', minHeight:'80vh', display:'flex', flexDirection:'column' }}>
+
+        {/* ─ Header tipo carpeta ─ */}
+        <div style={{ background:`linear-gradient(135deg, ${C.carpetaHeader}, #D97706)`, borderRadius:'14px 14px 0 0', padding:'16px 24px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+            <span style={{ fontSize:'28px' }}>📁</span>
+            <div>
+              <div style={{ fontSize:'18px', fontWeight:'900', color:'#000' }}>
+                {reporte.descripcion_actividad || `Reporte #${reporte.numero_reporte}`}
+              </div>
+              <div style={{ fontSize:'12px', color:'#00000099', fontWeight:'600' }}>
+                Reporte #{reporte.numero_reporte} · {reporte.capitulo} · {reporte.subcontratista_nombre || '—'}
+              </div>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background:'rgba(0,0,0,0.2)', border:'none', color:'#000', borderRadius:'50%', width:'34px', height:'34px', fontSize:'18px', cursor:'pointer', fontWeight:'900', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
+        </div>
+
+        {/* ─ Tab bar horizontal ─ */}
+        <div style={{ display:'flex', gap:'4px', padding:'12px 16px 0', background:'#0F1923', borderBottom:`1px solid ${C.borde}`, overflowX:'auto' }}>
+          {[
+            { key: 'portada',      label: '📋 Portada' },
+            { key: 'sin_asignar',  label: `📄 Sin Asignar Ítem${regsSinAsignar.length > 0 ? ` (${regsSinAsignar.length})` : ''}` },
+            ...itemsAsignados.map(it => ({ key: it, label: `🔖 ${it}` }))
+          ].map(tab => (
+            <button key={tab.key} onClick={() => setTabActiva(tab.key)} style={{
+              background:    tabActiva === tab.key ? C.tabActivo : 'transparent',
+              color:         tabActiva === tab.key ? '#fff' : t.textMuted,
+              border:        `1px solid ${tabActiva === tab.key ? C.tabActivo : C.borde}`,
+              borderBottom:  tabActiva === tab.key ? `1px solid ${C.tabActivo}` : '1px solid transparent',
+              borderRadius:  '8px 8px 0 0', padding:'8px 16px', fontSize:'12px',
+              fontWeight:    tabActiva === tab.key ? '700' : '400',
+              cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.15s'
+            }}>{tab.label}</button>
+          ))}
+
+          {/* Botones de acción */}
+          <div style={{ marginLeft:'auto', display:'flex', gap:'8px', paddingBottom:'8px' }}>
+            {puedeEditar && seleccionados.length > 0 && (
+              <button onClick={() => { cargarReportesParaMover(); setModalMover(true) }} style={{
+                background:'#8B5CF6', color:'#fff', border:'none', borderRadius:'8px',
+                padding:'6px 14px', fontSize:'12px', fontWeight:'700', cursor:'pointer'
+              }}>↗ Mover ({seleccionados.length})</button>
+            )}
+            {puedeEditar && (
+              <button onClick={crearNuevoRegistro} disabled={creandoReg} style={{
+                background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
+                padding:'6px 14px', fontSize:'12px', fontWeight:'700', cursor:'pointer', opacity: creandoReg ? 0.6 : 1
+              }}>{creandoReg ? '...' : '+ Nuevo Registro'}</button>
+            )}
+          </div>
+        </div>
+
+        {/* ─ Contenido del tab ─ */}
+        <div style={{ flex:1, padding:'24px', overflowY:'auto' }}>
+
+          {/* ── TAB PORTADA ── */}
+          {tabActiva === 'portada' && (
+            <div>
+              {/* Bloque info general */}
+              <div style={{ marginBottom:'20px' }}>
+                <div style={{ fontSize:'11px', fontWeight:'800', color:C.carpetaHeader, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📍 Información del Reporte</div>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(200px,1fr))', gap:'10px' }}>
+                  <CampoInfo label="Nombre del Reporte"  valor={reporte.descripcion_actividad} />
+                  <CampoInfo label="Subcontratista"      valor={reporte.subcontratista_nombre} />
+                  <CampoInfo label="Inspector"           valor={reporte.inspector_nombre} />
+                  <CampoInfo label="Capítulo"            valor={reporte.capitulo} />
+                  <div>
+                    <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.8px', textTransform:'uppercase', marginBottom:'2px' }}>PK_ID</div>
+                    <div style={{ display:'flex', alignItems:'center', gap:'8px', background:t.bgCard, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${C.borde}` }}>
+                      <span style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>{reporte.pk_id_id || '—'}</span>
+                      {reporte.coord_lat && reporte.coord_lng && (
+                        <button onClick={() => setModalMapbox(true)} title="Ver en mapa" style={{ background:'none', border:'none', cursor:'pointer', fontSize:'18px', lineHeight:1 }}>📍</button>
+                      )}
+                    </div>
+                  </div>
+                  <CampoInfo label="CIV"             valor={reporte.civ} />
+                  <CampoInfo label="Tramo"           valor={reporte.tramo} />
+                  <CampoInfo label="Costado"         valor={reporte.calzada} />
+                  <CampoInfo label="Infraestructura" valor={reporte.infraestructura} />
+                  <CampoInfo label="Latitud"         valor={reporte.coord_lat} />
+                  <CampoInfo label="Longitud"        valor={reporte.coord_lng} />
+                  <CampoInfo label="Abscisado Ini."  valor={reporte.abs_inicio} />
+                  <CampoInfo label="Abscisado Fin."  valor={reporte.abs_final} />
+                  <CampoInfo label="Nodo Inicial"    valor={reporte.nodo_ini} />
+                  <CampoInfo label="Nodo Final"      valor={reporte.nodo_fin} />
+                </div>
+              </div>
+
+              {/* Bloque Acta / Corte / Semana */}
+              <div style={{ marginBottom:'20px' }}>
+                <div style={{ fontSize:'11px', fontWeight:'800', color:C.carpetaHeader, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📑 Seguimiento Contractual</div>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(200px,1fr))', gap:'10px' }}>
+                  <CampoInfo label="Acta RPO"  valor={reporte.acta_rpo_numero ? `RPO #${reporte.acta_rpo_numero}` : null} />
+                  <CampoInfo label="Corte"     valor={reporte.corte_numero    ? `Corte #${reporte.corte_numero}` : null} />
+                  <CampoInfo label="Semana"    valor={reporte.semana_numero   ? `Semana ${reporte.semana_numero} · ${reporte.semana_periodo || ''}` : null} />
+                </div>
+              </div>
+
+              {/* Bloque Topografía */}
+              {(reporte.puntos || []).length > 0 && (
+                <div style={{ marginBottom:'20px' }}>
+                  <div style={{ fontSize:'11px', fontWeight:'800', color:C.carpetaHeader, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📐 Puntos Topográficos</div>
+                  <div style={{ overflowX:'auto' }}>
+                    <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
+                      <thead>
+                        <tr style={{ background:'#0F1923' }}>
+                          {['Punto','Norte','Este','Cota','Descripción'].map(h => (
+                            <th key={h} style={{ padding:'8px 12px', textAlign:'left', color:t.textMuted, fontWeight:'700', fontSize:'10px', letterSpacing:'0.5px', textTransform:'uppercase' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(reporte.puntos || []).map((p, i) => (
+                          <tr key={i} style={{ borderBottom:`1px solid ${C.borde}` }}>
+                            <td style={{ padding:'7px 12px', color:t.text, fontWeight:'700' }}>{p.punto || '—'}</td>
+                            <td style={{ padding:'7px 12px', color:t.text }}>{p.norte ?? '—'}</td>
+                            <td style={{ padding:'7px 12px', color:t.text }}>{p.este ?? '—'}</td>
+                            <td style={{ padding:'7px 12px', color:t.text }}>{p.cota ?? '—'}</td>
+                            <td style={{ padding:'7px 12px', color:t.textMuted }}>{p.descripcion || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Bloque Enlace Soporte */}
+              <div>
+                <div style={{ fontSize:'11px', fontWeight:'800', color:C.carpetaHeader, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>🔗 Enlace de Soporte</div>
+                <div style={{ display:'flex', gap:'10px', alignItems:'center' }}>
+                  <input
+                    value={enlaceSoporte}
+                    onChange={e => setEnlaceSoporte(e.target.value)}
+                    placeholder="https://drive.google.com/... o enlace al repositorio de soportes"
+                    style={{ flex:1, background:t.bgCard, border:`1px solid ${C.borde}`, borderRadius:'8px', padding:'10px 14px', color:t.text, fontSize:'13px' }}
+                  />
+                  {enlaceSoporte && (
+                    <a href={enlaceSoporte} target="_blank" rel="noreferrer" style={{ padding:'10px 14px', background:'#0077B622', color:t.primary, borderRadius:'8px', fontSize:'12px', fontWeight:'700', textDecoration:'none', border:`1px solid ${t.primary}44` }}>↗ Abrir</a>
+                  )}
+                  <button onClick={guardarEnlace} disabled={guardandoEnlace} style={{
+                    background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
+                    padding:'10px 18px', fontSize:'12px', fontWeight:'700', cursor:'pointer', opacity: guardandoEnlace ? 0.6 : 1
+                  }}>{guardandoEnlace ? 'Guardando...' : 'Guardar'}</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── TAB SIN ASIGNAR ÍTEM ── */}
+          {tabActiva === 'sin_asignar' && (
+            <div style={{ display:'flex', flexDirection:'column', gap:'20px' }}>
+              {regsSinAsignar.length === 0 ? (
+                <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>
+                  ✅ Todos los registros tienen ítem asignado
+                </div>
+              ) : regsSinAsignar.map(reg => (
+                <HojaRegistro
+                  key={reg.id} t={t} usuario={usuario} API_URL={API_URL}
+                  contrato_id={contrato_id} reporte={reporte} registro={reg}
+                  puedeEditar={puedeEditar}
+                  seleccionado={seleccionados.includes(reg.id)}
+                  onToggleSeleccion={() => toggleSeleccion(reg.id)}
+                  onItemAsignado={recargar}
+                  hdrs={hdrs}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* ── TABS POR ÍTEM ── */}
+          {itemsAsignados.map(itemNum => tabActiva === itemNum && (
+            <div key={itemNum} style={{ display:'flex', flexDirection:'column', gap:'20px' }}>
+              {registros.filter(r => r.item_numero === itemNum).map(reg => (
+                <HojaRegistro
+                  key={reg.id} t={t} usuario={usuario} API_URL={API_URL}
+                  contrato_id={contrato_id} reporte={reporte} registro={reg}
+                  puedeEditar={puedeEditar}
+                  seleccionado={seleccionados.includes(reg.id)}
+                  onToggleSeleccion={() => toggleSeleccion(reg.id)}
+                  onItemAsignado={recargar}
+                  hdrs={hdrs}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ─ Mini modal Mapbox ─ */}
+      {modalMapbox && reporte.coord_lat && reporte.coord_lng && (
+        <div style={{ position:'fixed', inset:0, zIndex:10000, background:'rgba(0,0,0,0.6)', display:'flex', alignItems:'center', justifyContent:'center' }} onClick={() => setModalMapbox(false)}>
+          <div style={{ background:t.bgCard, borderRadius:'16px', overflow:'hidden', width:'520px', boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ padding:'14px 20px', display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom:`1px solid ${t.border}` }}>
+              <span style={{ fontWeight:'700', color:t.text, fontSize:'14px' }}>📍 PK_ID {reporte.pk_id_id} — Ubicación</span>
+              <button onClick={() => setModalMapbox(false)} style={{ background:'none', border:'none', color:t.textMuted, fontSize:'18px', cursor:'pointer' }}>✕</button>
+            </div>
+            <iframe
+              title="mapa"
+              width="520" height="360"
+              style={{ border:'none', display:'block' }}
+              src={`https://www.openstreetmap.org/export/embed.html?bbox=${reporte.coord_lng - 0.002},${reporte.coord_lat - 0.002},${reporte.coord_lng + 0.002},${reporte.coord_lat + 0.002}&layer=mapnik&marker=${reporte.coord_lat},${reporte.coord_lng}`}
+            />
+            <div style={{ padding:'10px 20px', display:'flex', gap:'16px', fontSize:'12px', color:t.textMuted }}>
+              <span>Lat: <strong style={{ color:t.text }}>{reporte.coord_lat}</strong></span>
+              <span>Lng: <strong style={{ color:t.text }}>{reporte.coord_lng}</strong></span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─ Modal Mover Registros ─ */}
+      {modalMover && (
+        <div style={{ position:'fixed', inset:0, zIndex:10000, background:'rgba(0,0,0,0.6)', display:'flex', alignItems:'center', justifyContent:'center' }} onClick={() => setModalMover(false)}>
+          <div style={{ background:t.bgCard, borderRadius:'16px', padding:'28px', width:'420px', boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize:'16px', fontWeight:'800', color:t.text, marginBottom:'16px' }}>↗ Mover {seleccionados.length} registro(s) a otro reporte</div>
+            <div style={{ fontSize:'12px', color:t.textMuted, marginBottom:'8px' }}>Reporte destino:</div>
+            <select value={reporteDestino} onChange={e => setReporteDestino(e.target.value)} style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px', color:t.text, fontSize:'13px', marginBottom:'20px' }}>
+              <option value="">— Selecciona reporte —</option>
+              {reportesDisponibles.map(r => (
+                <option key={r.id} value={r.id}>#{r.numero_reporte} — {r.descripcion_actividad || '(sin nombre)'}</option>
+              ))}
+            </select>
+            <div style={{ display:'flex', gap:'10px' }}>
+              <button onClick={() => setModalMover(false)} style={{ flex:1, background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px', color:t.textMuted, cursor:'pointer', fontWeight:'600' }}>Cancelar</button>
+              <button onClick={ejecutarMover} disabled={!reporteDestino || moviendoReg} style={{ flex:1, background:'#8B5CF6', color:'#fff', border:'none', borderRadius:'8px', padding:'10px', fontWeight:'700', cursor:'pointer', opacity: !reporteDestino || moviendoReg ? 0.6 : 1 }}>{moviendoReg ? 'Moviendo...' : 'Confirmar Mover'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── MÓDULO SICOE OBRA ────────────────────────────────────────────────────────
 function ModuloSicoeObra({ t, usuario, token, s }) {
   const API_URL = import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net'
@@ -3469,8 +4137,10 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const [reportes, setReportes] = useState([])
   const [loading, setLoading] = useState(true)
   const [filtroEstado, setFiltroEstado] = useState('todos')
-  const [modalNuevoReporte, setModalNuevoReporte] = useState(false)
-  const [reporteEditando, setReporteEditando] = useState(null)
+  const [modalNuevoReporte, setModalNuevoReporte]   = useState(false)
+  const [reporteEditando, setReporteEditando]         = useState(null)
+  const [modalCarpeta, setModalCarpeta]               = useState(false)
+  const [reporteSeleccionado, setReporteSeleccionado] = useState(null)
 
   const ESTADOS = ['Borrador','Sin Asignar Ítem','Aprobados','Pendientes','Rechazados','No Objeto de Cobro','En Papelera']
   const ESTADO_COLORS = {
@@ -3484,8 +4154,82 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   }
 
   const perm = (usuario?.permisos || []).find(p => p.funcion_nombre === 'Reporte de Cantidades')
-  const puedeCrear = perm?.crear
+  const puedeCrear  = perm?.crear
   const puedeEditar = perm?.editar
+
+  const [semanaVigente,     setSemanaVigente]     = useState(null)
+  const [semanaProxima,     setSemanaProxima]      = useState(null)
+  const [alertaSemana,      setAlertaSemana]       = useState(false)
+  const [modalSemana,       setModalSemana]        = useState(false)
+  const [modalIniciarSem,   setModalIniciarSem]    = useState(false)
+  const [nSemanas,          setNSemanas]           = useState(4)
+  const [semFechaInicio,    setSemFechaInicio]     = useState('')
+  const [semDiaCorte,       setSemDiaCorte]        = useState(4) // 4 = viernes
+  const [semCantInicial,    setSemCantInicial]     = useState(8)
+  const [creandoSemanas,    setCreandoSemanas]     = useState(false)
+  const [extendiendo,       setExtendiendo]        = useState(false)
+
+  const hdrsJSON = { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' }
+
+  const cargarSemanaVigente = async () => {
+    try {
+      const res  = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/semana-vigente`, { headers: { Authorization: `Bearer ${getToken()}` } })
+      const data = await res.json()
+      setSemanaVigente(data.vigente || null)
+      setSemanaProxima(data.proxima || null)
+      if (data.vigente) {
+        const hoy    = new Date()
+        const fin    = new Date(data.vigente.fecha_fin + 'T23:59:59')
+        const diffMs = fin - hoy
+        const diffDias = diffMs / (1000 * 60 * 60 * 24)
+        setAlertaSemana(!data.proxima && diffDias <= 2)
+      } else {
+        setAlertaSemana(false)
+      }
+    } catch(e) {}
+  }
+
+  const crearSemanasIniciales = async () => {
+    if (!semFechaInicio) return
+    setCreandoSemanas(true)
+    try {
+      const semanas = []
+      let fechaBase = new Date(semFechaInicio + 'T00:00:00')
+      for (let i = 0; i < semCantInicial; i++) {
+        const fIni = new Date(fechaBase)
+        fIni.setDate(fechaBase.getDate() + i * 7)
+        const fFin = new Date(fIni)
+        fFin.setDate(fIni.getDate() + 6)
+        semanas.push({
+          numero_semana: i + 1,
+          fecha_inicio:  fIni.toISOString().slice(0, 10),
+          fecha_fin:     fFin.toISOString().slice(0, 10),
+          dia_corte:     parseInt(semDiaCorte),
+        })
+      }
+      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/semanas`, {
+        method: 'POST', headers: hdrsJSON, body: JSON.stringify(semanas)
+      })
+      setModalIniciarSem(false)
+      cargarSemanaVigente()
+    } catch(e) {}
+    setCreandoSemanas(false)
+  }
+
+  const extenderSemanas = async () => {
+    setExtendiendo(true)
+    try {
+      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/semanas/extender?n_semanas=${nSemanas}`, {
+        method: 'POST', headers: hdrsJSON
+      })
+      setModalSemana(false)
+      setAlertaSemana(false)
+      cargarSemanaVigente()
+    } catch(e) {}
+    setExtendiendo(false)
+  }
+
+  useEffect(() => { if (contrato_id) cargarSemanaVigente() }, [contrato_id])
 
 const cargarReportes = async () => {
     setLoading(true)
@@ -3500,6 +4244,20 @@ const cargarReportes = async () => {
   }
 
   useEffect(() => { if (contrato_id) cargarReportes() }, [contrato_id])
+
+  useEffect(() => {
+    if (!contrato_id) return
+    const intervalo = setInterval(async () => {
+      try {
+        const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
+          headers: { Authorization: `Bearer ${getToken()}` }
+        })
+        const data = await r.json()
+        setReportes(Array.isArray(data) ? data : [])
+      } catch(e) {}
+    }, 10000)
+    return () => clearInterval(intervalo)
+  }, [contrato_id])
 
   const reportesFiltrados = filtroEstado === 'todos'
     ? reportes
@@ -3520,6 +4278,47 @@ const cargarReportes = async () => {
           }}>+ Nuevo Reporte</button>
         )}
       </div>
+
+      {/* ── Banner semana sin configurar ── */}
+      {!semanaVigente && !alertaSemana && puedeEditar && (
+        <div style={{ background:'#0077B615', border:'1px solid #0077B644', borderRadius:'10px', padding:'12px 16px', marginBottom:'16px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div>
+            <span style={{ fontWeight:'700', color:'#0077B6', fontSize:'13px' }}>📅 Sin semanas configuradas</span>
+            <span style={{ color:t.textMuted, fontSize:'12px', marginLeft:'10px' }}>Configura el calendario semanal del contrato para activar el seguimiento.</span>
+          </div>
+          <button onClick={() => setModalIniciarSem(true)} style={{ background:'#0077B6', color:'#fff', border:'none', borderRadius:'8px', padding:'7px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer', whiteSpace:'nowrap' }}>
+            Configurar semanas
+          </button>
+        </div>
+      )}
+
+      {/* ── Banner alerta semana por vencer ── */}
+      {alertaSemana && semanaVigente && (
+        <div style={{ background:'#EF444415', border:'1px solid #EF444444', borderRadius:'10px', padding:'12px 16px', marginBottom:'16px', display:'flex', alignItems:'center', justifyContent:'space-between', gap:'12px' }}>
+          <div>
+            <span style={{ fontWeight:'700', color:'#EF4444', fontSize:'13px' }}>⚠️ Semana {semanaVigente.numero_semana} vence el {semanaVigente.fecha_fin}</span>
+            <span style={{ color:t.textMuted, fontSize:'12px', marginLeft:'10px' }}>No hay semana siguiente configurada. Extiende el contrato.</span>
+          </div>
+          <button onClick={() => setModalSemana(true)} style={{ background:'#EF4444', color:'#fff', border:'none', borderRadius:'8px', padding:'7px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer', whiteSpace:'nowrap' }}>
+            Extender semanas
+          </button>
+        </div>
+      )}
+
+      {/* ── Indicador semana activa ── */}
+      {semanaVigente && !alertaSemana && (
+        <div style={{ background:'#10B98115', border:'1px solid #10B98133', borderRadius:'10px', padding:'8px 16px', marginBottom:'16px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <span style={{ fontSize:'12px', color:'#10B981', fontWeight:'600' }}>
+            📅 Semana {semanaVigente.numero_semana} activa · {semanaVigente.fecha_inicio} → {semanaVigente.fecha_fin}
+            {semanaProxima && <span style={{ color:t.textMuted, fontWeight:'400', marginLeft:'12px' }}>· Próxima: Sem. {semanaProxima.numero_semana}</span>}
+          </span>
+          {puedeEditar && (
+            <button onClick={() => setModalSemana(true)} style={{ background:'transparent', border:`1px solid #10B98133`, color:'#10B981', borderRadius:'6px', padding:'4px 12px', fontSize:'11px', fontWeight:'600', cursor:'pointer' }}>
+              + Extender
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ── Filtros estado ── */}
       <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', marginBottom:'16px' }}>
@@ -3562,6 +4361,11 @@ const cargarReportes = async () => {
                 const data = await r.json()
                 setReporteEditando(data)
                 setModalNuevoReporte(true)
+              } else if (puedeEditar && rep.estado === 'Sin Asignar Ítem') {
+                const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
+                const data = await r.json()
+                setReporteSeleccionado(data)
+                setModalCarpeta(true)
               }
             }}
             onMouseEnter={e => e.currentTarget.style.background = t.bg}
@@ -3587,6 +4391,83 @@ const cargarReportes = async () => {
           </div>
         ))}
       </div>
+
+      {/* ── Modal Configurar Semanas Iniciales ── */}
+      {modalIniciarSem && (
+        <div style={{ position:'fixed', inset:0, zIndex:9500, background:'rgba(0,0,0,0.6)', display:'flex', alignItems:'center', justifyContent:'center' }}
+          onClick={() => setModalIniciarSem(false)}>
+          <div style={{ background:t.bgCard, borderRadius:'16px', padding:'28px', width:'440px', boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize:'16px', fontWeight:'800', color:t.text, marginBottom:'20px' }}>📅 Configurar Semanas del Contrato</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:'14px' }}>
+              <div>
+                <div style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, marginBottom:'4px' }}>FECHA DE INICIO DE LA SEMANA 1</div>
+                <input type="date" value={semFechaInicio} onChange={e => setSemFechaInicio(e.target.value)}
+                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'9px 12px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+              </div>
+              <div>
+                <div style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, marginBottom:'4px' }}>DÍA DE CORTE SEMANAL</div>
+                <select value={semDiaCorte} onChange={e => setSemDiaCorte(e.target.value)}
+                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'9px 12px', color:t.text, fontSize:'13px' }}>
+                  {['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'].map((d, i) => (
+                    <option key={i} value={i}>{d}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, marginBottom:'4px' }}>CANTIDAD DE SEMANAS INICIALES</div>
+                <input type="number" min="1" max="52" value={semCantInicial} onChange={e => setSemCantInicial(parseInt(e.target.value))}
+                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'9px 12px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+                <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'4px' }}>Podrás extender más semanas cuando sea necesario.</div>
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:'10px', marginTop:'24px' }}>
+              <button onClick={() => setModalIniciarSem(false)} style={{ flex:1, background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px', color:t.textMuted, cursor:'pointer', fontWeight:'600' }}>Cancelar</button>
+              <button onClick={crearSemanasIniciales} disabled={!semFechaInicio || creandoSemanas} style={{ flex:1, background:t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'10px', fontWeight:'700', cursor:'pointer', opacity: !semFechaInicio || creandoSemanas ? 0.6 : 1 }}>
+                {creandoSemanas ? 'Creando...' : `Crear ${semCantInicial} semanas`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal Extender Semanas ── */}
+      {modalSemana && (
+        <div style={{ position:'fixed', inset:0, zIndex:9500, background:'rgba(0,0,0,0.6)', display:'flex', alignItems:'center', justifyContent:'center' }}
+          onClick={() => setModalSemana(false)}>
+          <div style={{ background:t.bgCard, borderRadius:'16px', padding:'28px', width:'380px', boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize:'16px', fontWeight:'800', color:t.text, marginBottom:'8px' }}>📅 Extender Semanas</div>
+            {semanaVigente && (
+              <div style={{ fontSize:'12px', color:t.textMuted, marginBottom:'20px' }}>
+                Última semana configurada: <strong style={{ color:t.text }}>Sem. {semanaVigente.numero_semana}</strong> · vence {semanaVigente.fecha_fin}
+              </div>
+            )}
+            <div>
+              <div style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, marginBottom:'6px' }}>¿CUÁNTAS SEMANAS ADICIONALES?</div>
+              <input type="number" min="1" max="52" value={nSemanas} onChange={e => setNSemanas(parseInt(e.target.value))}
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px 12px', color:t.text, fontSize:'24px', fontWeight:'800', textAlign:'center', boxSizing:'border-box' }} />
+              <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'6px', textAlign:'center' }}>
+                Se crearán con el mismo día de corte, continuando consecutivamente.
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:'10px', marginTop:'24px' }}>
+              <button onClick={() => setModalSemana(false)} style={{ flex:1, background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px', color:t.textMuted, cursor:'pointer', fontWeight:'600' }}>Cancelar</button>
+              <button onClick={extenderSemanas} disabled={extendiendo || nSemanas < 1} style={{ flex:1, background:t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'10px', fontWeight:'700', cursor:'pointer', opacity: extendiendo ? 0.6 : 1 }}>
+                {extendiendo ? 'Creando...' : `Agregar ${nSemanas} semanas`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Carpeta Reporte ── */}
+      {modalCarpeta && reporteSeleccionado && (
+        <CarpetaReporte
+          t={t} usuario={usuario} API_URL={API_URL} contrato_id={contrato_id}
+          reporte={reporteSeleccionado}
+          onClose={() => { setModalCarpeta(false); setReporteSeleccionado(null) }}
+          onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); cargarReportes() }}
+        />
+      )}
 
       {/* ── Modal Nuevo Reporte ── */}
       {modalNuevoReporte && (

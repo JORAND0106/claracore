@@ -3147,6 +3147,11 @@ class ReporteCreate(BaseModel):
     abs_final: Optional[float] = None
     nodo_ini: Optional[str] = None
     nodo_fin: Optional[str] = None
+    estado: Optional[str] = None
+    enlace_soporte: Optional[str] = None
+    semana_id: Optional[int] = None
+    acta_rpo_id: Optional[int] = None
+    corte_id: Optional[int] = None
 
 @app.get("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
 def obtener_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
@@ -3167,6 +3172,69 @@ def obtener_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_
     r["subcontratista_nombre"] = sub["razon_social"] if sub else None
     r["registros"] = supabase_execute(_reg)
     r["puntos"] = supabase_execute(_pts)
+
+    # Resolver nombre del inspector
+    inspector_id = r.get("inspector_id")
+    if inspector_id:
+        def _insp():
+            return supabase.table("usuarios")\
+                .select("nombre, apellidos")\
+                .eq("id", inspector_id).single().execute().data
+        try:
+            insp = supabase_execute(_insp)
+            r["inspector_nombre"] = f"{insp.get('nombre','')} {insp.get('apellidos','')}".strip() if insp else None
+        except:
+            r["inspector_nombre"] = None
+    else:
+        r["inspector_nombre"] = None
+
+    # Resolver número de acta RPO
+    if r.get("acta_rpo_id"):
+        def _acta():
+            return supabase.table("actas")\
+                .select("numero_rpo").eq("id", r["acta_rpo_id"]).single().execute().data
+        try:
+            acta = supabase_execute(_acta)
+            r["acta_rpo_numero"] = acta.get("numero_rpo") if acta else None
+        except:
+            r["acta_rpo_numero"] = None
+    else:
+        r["acta_rpo_numero"] = None
+
+    # Resolver consecutivo de corte
+    if r.get("corte_id"):
+        def _corte():
+            return supabase.table("subcontratista_cortes")\
+                .select("consecutivo").eq("id", r["corte_id"]).single().execute().data
+        try:
+            corte = supabase_execute(_corte)
+            r["corte_numero"] = corte.get("consecutivo") if corte else None
+        except:
+            r["corte_numero"] = None
+    else:
+        r["corte_numero"] = None
+
+    # Resolver número y período de semana
+    if r.get("semana_id"):
+        def _sem():
+            return supabase.table("so_semanas")\
+                .select("numero_semana, fecha_inicio, fecha_fin")\
+                .eq("id", r["semana_id"]).single().execute().data
+        try:
+            sem = supabase_execute(_sem)
+            if sem:
+                r["semana_numero"]  = sem.get("numero_semana")
+                r["semana_periodo"] = f"{sem.get('fecha_inicio','')} → {sem.get('fecha_fin','')}"
+            else:
+                r["semana_numero"] = None
+                r["semana_periodo"] = None
+        except:
+            r["semana_numero"] = None
+            r["semana_periodo"] = None
+    else:
+        r["semana_numero"] = None
+        r["semana_periodo"] = None
+
     return r
 
 @app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
@@ -3323,6 +3391,15 @@ class RegistroCreate(BaseModel):
     grafico_url: Optional[str] = None
     grafico_numero: Optional[int] = None
     grafico_descripcion: Optional[str] = None
+    competencia: Optional[str] = None
+    item_numero: Optional[str] = None
+    item_descripcion: Optional[str] = None
+    vlr_unitario: Optional[float] = None
+    costo_directo: Optional[float] = None
+    enlace_soporte: Optional[str] = None
+    semana_id: Optional[int] = None
+    acta_rpo_id: Optional[int] = None
+    corte_id: Optional[int] = None
 
 @app.put("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
 def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, current_user=Depends(get_current_user)):
@@ -3381,4 +3458,234 @@ def crear_puntos(contrato_id: int, body: PuntosCreate, current_user=Depends(get_
         rows.append(d)
     def _ins():
         return supabase.table("so_puntos_topograficos").insert(rows).execute().data
+    return supabase_execute(_ins)
+
+# ─── SICOE OBRA: Búsqueda de ítems del listado de precios ────────────────────
+@app.get("/sicoe-obra/{contrato_id}/listado-precios-busqueda")
+def buscar_items_listado(contrato_id: int, q: str = "", capitulo: str = None, competencia: str = None, current_user=Depends(get_current_user)):
+    def _q():
+        query = supabase.table("listado_precios")\
+            .select("id, capitulo, competencia, item_numero, descripcion, und, precio_unitario")\
+            .eq("contrato_id", contrato_id)
+        if capitulo:
+            query = query.eq("capitulo", capitulo)
+        if competencia:
+            query = query.eq("competencia", competencia)
+        if q:
+            query = query.ilike("descripcion", f"%{q}%")
+        return query.order("item_numero").limit(50).execute().data
+    return supabase_execute(_q)
+
+# ─── SICOE OBRA: Asignar ítem a registro ─────────────────────────────────────
+class AsignarItemBody(BaseModel):
+    item_listado_id: int
+    competencia: Optional[str] = None
+
+@app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/asignar-item")
+def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemBody, current_user=Depends(get_current_user)):
+    from datetime import date
+    today = date.today().isoformat()
+
+    # 1. Info del ítem del listado de precios
+    def _item():
+        return supabase.table("listado_precios")\
+            .select("capitulo, competencia, item_numero, descripcion, und, precio_unitario")\
+            .eq("id", body.item_listado_id).single().execute().data
+    item = supabase_execute(_item)
+    if not item:
+        raise HTTPException(status_code=404, detail="Ítem no encontrado en listado de precios")
+
+    # 2. Registro actual para cantidad_total y reporte_id
+    def _reg():
+        return supabase.table("so_registros")\
+            .select("cantidad_total, reporte_id")\
+            .eq("id", registro_id).single().execute().data
+    registro = supabase_execute(_reg)
+    if not registro:
+        raise HTTPException(status_code=404, detail="Registro no encontrado")
+
+    cant_total = float(registro.get("cantidad_total") or 0)
+    vlr_unit   = float(item.get("precio_unitario") or 0)
+    costo_dir  = round(cant_total * vlr_unit, 2)
+    reporte_id = registro["reporte_id"]
+
+    # 3. Reporte para subcontratista_id y valores previos
+    def _rep():
+        return supabase.table("so_reportes")\
+            .select("subcontratista_id, acta_rpo_id, corte_id, semana_id")\
+            .eq("id", reporte_id).single().execute().data
+    reporte = supabase_execute(_rep)
+
+    # 4. Auto-detectar acta RPO vigente (la más reciente del contrato)
+    acta_rpo_id = reporte.get("acta_rpo_id")
+    if not acta_rpo_id:
+        def _acta():
+            return supabase.table("actas")\
+                .select("id, numero_rpo")\
+                .eq("contrato_id", contrato_id)\
+                .order("id", desc=True).limit(1).execute().data
+        actas = supabase_execute(_acta)
+        acta_rpo_id = actas[0]["id"] if actas else None
+
+    # 5. Auto-detectar corte vigente del subcontratista por fecha
+    corte_id = reporte.get("corte_id")
+    sub_id   = reporte.get("subcontratista_id")
+    if not corte_id and sub_id:
+        def _corte():
+            return supabase.table("subcontratista_cortes")\
+                .select("id, consecutivo")\
+                .eq("subcontratista_id", sub_id)\
+                .lte("fecha_inicio", today)\
+                .gte("fecha_fin", today)\
+                .limit(1).execute().data
+        cortes = supabase_execute(_corte)
+        corte_id = cortes[0]["id"] if cortes else None
+
+    # 6. Auto-detectar semana vigente por fecha
+    semana_id = reporte.get("semana_id")
+    if not semana_id:
+        def _sem():
+            return supabase.table("so_semanas")\
+                .select("id, numero_semana")\
+                .eq("contrato_id", contrato_id)\
+                .eq("estado", "activa")\
+                .lte("fecha_inicio", today)\
+                .gte("fecha_fin", today)\
+                .limit(1).execute().data
+        sems = supabase_execute(_sem)
+        semana_id = sems[0]["id"] if sems else None
+
+    # 7. Actualizar registro con ítem asignado
+    def _upd_reg():
+        return supabase.table("so_registros").update({
+            "competencia":      body.competencia or item.get("competencia"),
+            "item_numero":      item.get("item_numero"),
+            "item_descripcion": item.get("descripcion"),
+            "vlr_unitario":     vlr_unit,
+            "costo_directo":    costo_dir,
+            "unidad":           item.get("und"),
+            "semana_id":        semana_id,
+            "acta_rpo_id":      acta_rpo_id,
+            "corte_id":         corte_id,
+        }).eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
+    supabase_execute(_upd_reg)
+
+    # 8. Propagar acta/corte/semana al reporte si no los tenía
+    def _upd_rep():
+        return supabase.table("so_reportes").update({
+            "acta_rpo_id": acta_rpo_id,
+            "corte_id":    corte_id,
+            "semana_id":   semana_id,
+        }).eq("id", reporte_id).execute().data
+    supabase_execute(_upd_rep)
+
+    return {
+        "ok": True, "vlr_unitario": vlr_unit, "costo_directo": costo_dir,
+        "semana_id": semana_id, "acta_rpo_id": acta_rpo_id, "corte_id": corte_id
+    }
+
+# ─── SICOE OBRA: Nuevo registro en blanco dentro de un reporte existente ─────
+@app.post("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/nuevo-registro")
+def nuevo_registro_en_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
+    def _num():
+        return supabase.rpc("siguiente_numero_registro", {"p_contrato_id": contrato_id}).execute().data
+    numero = supabase_execute(_num)
+    def _ins():
+        return supabase.table("so_registros").insert({
+            "contrato_id":    contrato_id,
+            "reporte_id":     reporte_id,
+            "numero_registro": numero,
+        }).execute().data
+    result = supabase_execute(_ins)
+    return result[0] if result else {}
+
+# ─── SICOE OBRA: Mover registro a otro reporte ───────────────────────────────
+@app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/mover-a/{nuevo_reporte_id}")
+def mover_registro(contrato_id: int, registro_id: int, nuevo_reporte_id: int, current_user=Depends(get_current_user)):
+    def _ver():
+        return supabase.table("so_reportes")\
+            .select("id").eq("id", nuevo_reporte_id)\
+            .eq("contrato_id", contrato_id).execute().data
+    if not supabase_execute(_ver):
+        raise HTTPException(status_code=404, detail="Reporte destino no encontrado en este contrato")
+    def _upd():
+        return supabase.table("so_registros")\
+            .update({"reporte_id": nuevo_reporte_id})\
+            .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
+    supabase_execute(_upd)
+    return {"ok": True}
+
+# ─── SICOE OBRA: Semanas ──────────────────────────────────────────────────────
+class SemanaCreate(BaseModel):
+    numero_semana: int
+    fecha_inicio:  str
+    fecha_fin:     str
+    dia_corte:     int  # 0=Lunes … 6=Domingo
+
+@app.get("/sicoe-obra/{contrato_id}/semanas")
+def listar_semanas(contrato_id: int, current_user=Depends(get_current_user)):
+    def _q():
+        return supabase.table("so_semanas")\
+            .select("*").eq("contrato_id", contrato_id)\
+            .order("numero_semana").execute().data
+    return supabase_execute(_q)
+
+@app.post("/sicoe-obra/{contrato_id}/semanas")
+def crear_semanas(contrato_id: int, body: List[SemanaCreate], current_user=Depends(get_current_user)):
+    rows = [{"contrato_id": contrato_id, **s.dict()} for s in body]
+    def _ins():
+        return supabase.table("so_semanas").insert(rows).execute().data
+    return supabase_execute(_ins)
+
+@app.get("/sicoe-obra/{contrato_id}/semana-vigente")
+def semana_vigente(contrato_id: int, current_user=Depends(get_current_user)):
+    from datetime import date
+    today = date.today().isoformat()
+    def _vig():
+        return supabase.table("so_semanas")\
+            .select("*").eq("contrato_id", contrato_id).eq("estado", "activa")\
+            .lte("fecha_inicio", today).gte("fecha_fin", today)\
+            .limit(1).execute().data
+    def _prox():
+        return supabase.table("so_semanas")\
+            .select("*").eq("contrato_id", contrato_id).eq("estado", "activa")\
+            .gt("fecha_inicio", today)\
+            .order("fecha_inicio").limit(1).execute().data
+    vigente = supabase_execute(_vig)
+    proxima = supabase_execute(_prox)
+    return {
+        "vigente": vigente[0] if vigente else None,
+        "proxima": proxima[0] if proxima else None
+    }
+
+@app.post("/sicoe-obra/{contrato_id}/semanas/extender")
+def extender_semanas(contrato_id: int, n_semanas: int, current_user=Depends(get_current_user)):
+    """Agrega n_semanas adicionales continuando desde la última semana existente"""
+    from datetime import date, timedelta
+    def _ultima():
+        return supabase.table("so_semanas")\
+            .select("numero_semana, fecha_fin, dia_corte")\
+            .eq("contrato_id", contrato_id)\
+            .order("numero_semana", desc=True).limit(1).execute().data
+    rows = supabase_execute(_ultima)
+    if not rows:
+        raise HTTPException(status_code=400, detail="No hay semanas base. Crea la primera semana primero.")
+    ultima     = rows[0]
+    ultimo_num = ultima["numero_semana"]
+    dia_corte  = ultima["dia_corte"]
+    fecha_base = date.fromisoformat(ultima["fecha_fin"])
+    nuevas = []
+    for i in range(1, n_semanas + 1):
+        f_ini = fecha_base + timedelta(days=(i - 1) * 7 + 1)
+        f_fin = fecha_base + timedelta(days=i * 7)
+        nuevas.append({
+            "contrato_id":   contrato_id,
+            "numero_semana": ultimo_num + i,
+            "fecha_inicio":  f_ini.isoformat(),
+            "fecha_fin":     f_fin.isoformat(),
+            "dia_corte":     dia_corte,
+            "estado":        "activa"
+        })
+    def _ins():
+        return supabase.table("so_semanas").insert(nuevas).execute().data
     return supabase_execute(_ins)
