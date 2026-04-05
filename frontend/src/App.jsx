@@ -3896,10 +3896,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         margen, abs_inicio: parseFloat(absInicio), abs_final: parseFloat(absFinal),
         nodo_ini: nodoIni, nodo_fin: nodoFin,
       }
-      // Actualizar el borrador existente en lugar de crear uno nuevo
+      // Actualizar el borrador y cambiar estado en un solo PUT
       await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}`, {
         method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+        body: JSON.stringify({ ...body, estado: 'Sin Asignar Ítem' })
       })
       // Eliminar registros anteriores y reinsertar los actuales
       await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}/registros`, {
@@ -3930,10 +3930,6 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           body: JSON.stringify({ reporte_id: idParaGuardar, puntos: puntosValidos })
         })
       }
-      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}`, {
-        method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...body, estado: 'Sin Asignar Ítem' })
-      })
       onGuardado()
     } catch(e) {
       alert('Error guardando reporte: ' + e.message)
