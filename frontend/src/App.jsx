@@ -3930,6 +3930,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           body: JSON.stringify({ reporte_id: idParaGuardar, puntos: puntosValidos })
         })
       }
+      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}`, {
+        method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, estado: 'Sin Asignar Ítem' })
+      })
       onGuardado()
     } catch(e) {
       alert('Error guardando reporte: ' + e.message)

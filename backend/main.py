@@ -5,7 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List, Optional
-from supabase import create_client
+from supabase import create_client, ClientOptions
+import httpx
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timedelta
@@ -46,13 +47,12 @@ app.add_middleware(
 _SUPABASE_URL = os.getenv("SUPABASE_URL")
 _SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-import threading
-_supabase_local = threading.local()
-
 def get_supabase():
-    if not hasattr(_supabase_local, 'client'):
-        _supabase_local.client = create_client(_SUPABASE_URL, _SUPABASE_KEY)
-    return _supabase_local.client
+    return create_client(
+        _SUPABASE_URL,
+        _SUPABASE_KEY,
+        options=ClientOptions(httpx_client=httpx.Client(http2=False))
+    )
 
 supabase = get_supabase()
 security = HTTPBearer()
@@ -272,14 +272,12 @@ def supabase_execute(fn, retries=3, delay=0.5):
     for i in range(retries):
         try:
             global supabase
-            supabase = get_supabase()
+            supabase = create_client(_SUPABASE_URL, _SUPABASE_KEY)
             return fn()
         except Exception as e:
             last_err = e
             if i < retries - 1:
                 time.sleep(delay)
-                if hasattr(_supabase_local, 'client'):
-                    del _supabase_local.client
     raise last_err
 
 # ─────────────────────────────────────────────
