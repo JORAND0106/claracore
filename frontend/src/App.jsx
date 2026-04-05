@@ -3832,10 +3832,24 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(130px,1fr))', gap:'10px' }}>
           {puedeEditar ? (
             <>
-              <CampoEdit label="Longitud"  value={longitud}  onChange={setLongitud}  placeholder="m" />
-              <CampoEdit label="Ancho"     value={ancho}     onChange={setAncho}     placeholder="m" />
-              <CampoEdit label="Espesor"   value={espesor}   onChange={setEspesor}   placeholder="m" />
-              <CampoEdit label="Cantidad"  value={cantidad}  onChange={setCantidad}  placeholder="und" />
+              {[
+                ['Longitud', longitud, setLongitud, 'm'],
+                ['Ancho',    ancho,    setAncho,    'm'],
+                ['Espesor',  espesor,  setEspesor,  'm'],
+                ['Cantidad', cantidad, setCantidad, 'und'],
+              ].map(([label, val, setter, ph]) => (
+                <div key={label}>
+                  <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+                  <input
+                    value={val}
+                    onChange={e => setter(e.target.value)}
+                    placeholder={ph}
+                    type="number"
+                    step="any"
+                    style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }}
+                  />
+                </div>
+              ))}
             </>
           ) : (
             <>
