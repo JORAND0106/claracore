@@ -3796,8 +3796,10 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [reporte, setReporte]                     = useState(repoProp)
   const [registros, setRegistros]                 = useState(repoProp.registros || [])
   const [tabActiva, setTabActiva]                 = useState('portada')
-  const [enlaceSoporte, setEnlaceSoporte]         = useState(repoProp.enlace_soporte || '')
   const [guardandoEnlace, setGuardandoEnlace]     = useState(false)
+  const parseEnlaces = (raw) => { if (!raw) return []; try { const p = JSON.parse(raw); return Array.isArray(p) ? p : [raw] } catch { return raw ? [raw] : [] } }
+  const [enlaces, setEnlaces]                      = useState(() => parseEnlaces(repoProp.enlace_soporte))
+  const [enlaceInput, setEnlaceInput]              = useState('')
   const [modalMapbox, setModalMapbox]             = useState(false)
   const [seleccionados, setSeleccionados]         = useState([])
   const [modalMover, setModalMover]               = useState(false)
@@ -3815,6 +3817,15 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [editAbsFinal, setEditAbsFinal]            = useState(repoProp.abs_final ?? '')
   const [editNodoIni, setEditNodoIni]              = useState(repoProp.nodo_ini || '')
   const [editNodoFin, setEditNodoFin]              = useState(repoProp.nodo_fin || '')
+  const [editSubId, setEditSubId]                  = useState(repoProp.subcontratista_id || '')
+  const [editInspId, setEditInspId]                = useState(repoProp.inspector_id || '')
+  const [editCapitulo, setEditCapitulo]            = useState(repoProp.capitulo || '')
+  const [editLat, setEditLat]                      = useState(repoProp.coord_lat ?? '')
+  const [editLng, setEditLng]                      = useState(repoProp.coord_lng ?? '')
+  const [listaSubs, setListaSubs]                  = useState([])
+  const [listaInsp, setListaInsp]                  = useState([])
+  const [listaCaps, setListaCaps]                  = useState([])
+  const [listasLoaded, setListasLoaded]            = useState(false)
 
   const perm        = (usuario?.permisos || []).find(p => p.funcion_nombre === 'Reporte de Cantidades')
   const puedeEditar = perm?.editar
@@ -3852,6 +3863,23 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setGuardandoTopo(false)
   }
 
+  const activarEdicion = async () => {
+    if (!listasLoaded) {
+      try {
+        const [subs, insp, caps] = await Promise.all([
+          fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs }).then(r => r.json()),
+          fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs }).then(r => r.json()),
+          fetch(`${API_URL}/sicoe-obra/${contrato_id}/capitulos`, { headers: hdrs }).then(r => r.json()),
+        ])
+        setListaSubs(Array.isArray(subs) ? subs : [])
+        setListaInsp(Array.isArray(insp) ? insp : [])
+        setListaCaps(Array.isArray(caps) ? caps : [])
+        setListasLoaded(true)
+      } catch(e) {}
+    }
+    setModoEdicion(true)
+  }
+
   const guardarEdicion = async () => {
     setGuardandoEdicion(true)
     try {
@@ -3860,10 +3888,15 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         body: JSON.stringify({
           ...reporte,
           descripcion_actividad: editDesc,
+          subcontratista_id: editSubId ? parseInt(editSubId) : null,
+          inspector_id:      editInspId ? parseInt(editInspId) : null,
+          capitulo:          editCapitulo || reporte.capitulo,
           abs_inicio: editAbsInicio !== '' ? parseFloat(editAbsInicio) : null,
           abs_final:  editAbsFinal  !== '' ? parseFloat(editAbsFinal)  : null,
           nodo_ini:   editNodoIni || null,
           nodo_fin:   editNodoFin || null,
+          coord_lat:  editLat !== '' ? parseFloat(editLat) : null,
+          coord_lng:  editLng !== '' ? parseFloat(editLng) : null,
         })
       })
       await recargar()
@@ -3872,16 +3905,33 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setGuardandoEdicion(false)
   }
 
-  const guardarEnlace = async () => {
+  const agregarEnlace = async () => {
+    if (!enlaceInput) return
+    try { new URL(enlaceInput) } catch { return }
     setGuardandoEnlace(true)
+    try {
+      const nuevos = [...enlaces, enlaceInput]
+      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`, {
+        method: 'PUT', headers: hdrs,
+        body: JSON.stringify({ ...reporte, enlace_soporte: JSON.stringify(nuevos) })
+      })
+      setEnlaces(nuevos)
+      setEnlaceInput('')
+      setReporte(r => ({ ...r, enlace_soporte: JSON.stringify(nuevos) }))
+    } catch(e) {}
+    setGuardandoEnlace(false)
+  }
+
+  const eliminarEnlace = async (idx) => {
+    const nuevos = enlaces.filter((_, i) => i !== idx)
     try {
       await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`, {
         method: 'PUT', headers: hdrs,
-        body: JSON.stringify({ ...reporte, enlace_soporte: enlaceSoporte })
+        body: JSON.stringify({ ...reporte, enlace_soporte: JSON.stringify(nuevos) })
       })
-      setReporte(r => ({ ...r, enlace_soporte: enlaceSoporte }))
+      setEnlaces(nuevos)
+      setReporte(r => ({ ...r, enlace_soporte: JSON.stringify(nuevos) }))
     } catch(e) {}
-    setGuardandoEnlace(false)
   }
 
   const crearNuevoRegistro = async () => {
@@ -4031,7 +4081,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           <button onClick={guardarEdicion} disabled={guardandoEdicion} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'5px 14px', fontSize:'11px', fontWeight:'700', cursor:'pointer', opacity:guardandoEdicion?0.6:1 }}>{guardandoEdicion?'Guardando...':'💾 Guardar'}</button>
                         </>
                       ) : (
-                        <button onClick={() => setModoEdicion(true)} style={{ background:'transparent', border:`1px solid ${t.primary}`, color:t.primary, borderRadius:'6px', padding:'5px 14px', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>✏️ Editar</button>
+                        <button onClick={activarEdicion} style={{ background:'transparent', border:`1px solid ${t.primary}`, color:t.primary, borderRadius:'6px', padding:'5px 14px', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>✏️ Editar</button>
                       )}
                     </div>
                   )}
@@ -4046,9 +4096,37 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 </div>
                 {/* Subcontratista | Inspector | Capítulo */}
                 <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px' }}>
-                  <CampoInfo label="Subcontratista" valor={reporte.subcontratista_nombre} />
-                  <CampoInfo label="Inspector"       valor={reporte.inspector_nombre} />
-                  <CampoInfo label="Capítulo"        valor={reporte.capitulo} />
+                  {modoEdicion ? (
+                    <>
+                      <div>
+                        <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Subcontratista</div>
+                        <select value={editSubId} onChange={e => setEditSubId(e.target.value)} style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px' }}>
+                          <option value="">— Sin subcontratista —</option>
+                          {listaSubs.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Inspector</div>
+                        <select value={editInspId} onChange={e => setEditInspId(e.target.value)} style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px' }}>
+                          <option value="">— Sin inspector —</option>
+                          {listaInsp.map(i => <option key={i.id} value={i.id}>{i.nombre}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Capítulo</div>
+                        <select value={editCapitulo} onChange={e => setEditCapitulo(e.target.value)} style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px' }}>
+                          <option value="">— Selecciona —</option>
+                          {listaCaps.map(c => <option key={c.capitulo} value={c.capitulo}>{c.capitulo}</option>)}
+                        </select>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <CampoInfo label="Subcontratista" valor={reporte.subcontratista_nombre} />
+                      <CampoInfo label="Inspector"       valor={reporte.inspector_nombre} />
+                      <CampoInfo label="Capítulo"        valor={reporte.capitulo} />
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -4074,8 +4152,23 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 {/* Infraestructura | Latitud | Longitud */}
                 <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:'10px', marginBottom:'10px' }}>
                   <CampoInfo label="Infraestructura" valor={reporte.infraestructura} />
-                  <CampoInfo label="Latitud"         valor={reporte.coord_lat} />
-                  <CampoInfo label="Longitud"        valor={reporte.coord_lng} />
+                  {modoEdicion ? (
+                    <>
+                      <div>
+                        <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Latitud</div>
+                        <input type="number" step="0.000001" value={editLat} onChange={e => setEditLat(e.target.value)} placeholder="Ej: 4.710989" style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+                      </div>
+                      <div>
+                        <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Longitud</div>
+                        <input type="number" step="0.000001" value={editLng} onChange={e => setEditLng(e.target.value)} placeholder="Ej: -74.072092" style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <CampoInfo label="Latitud"  valor={reporte.coord_lat} />
+                      <CampoInfo label="Longitud" valor={reporte.coord_lng} />
+                    </>
+                  )}
                 </div>
                 {/* Abscisado y Nodos */}
                 <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'10px' }}>
@@ -4200,37 +4293,55 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
               {/* GRUPO 5 — Biblioteca de Soportes */}
               <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
-                <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'4px' }}>🔗 Enlace de Soporte</div>
-                <div style={{ fontSize:'11px', color:t.textMuted, marginBottom:'12px' }}>Repositorio externo de soportes documentales (Drive, SharePoint, etc.)</div>
-                <div style={{ display:'flex', gap:'10px', alignItems:'center' }}>
+                <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'4px' }}>🔗 Biblioteca de Soportes</div>
+                <div style={{ fontSize:'11px', color:t.textMuted, marginBottom:'12px' }}>Agrega los enlaces a tus repositorios externos (Drive, SharePoint, OneDrive, etc.)</div>
+
+                {/* Input para nuevo enlace */}
+                <div style={{ display:'flex', gap:'8px', alignItems:'center', marginBottom:'12px' }}>
                   <input
-                    value={enlaceSoporte}
-                    onChange={e => setEnlaceSoporte(e.target.value)}
+                    value={enlaceInput}
+                    onChange={e => setEnlaceInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') agregarEnlace() }}
                     placeholder="https://drive.google.com/..."
                     style={{ flex:1, background:t.bg, border:`1px solid ${(() => {
-                      if (!enlaceSoporte) return t.border
-                      try { new URL(enlaceSoporte); return '#10B981' } catch { return '#EF4444' }
-                    })()}`, borderRadius:'8px', padding:'10px 14px', color:t.text, fontSize:'13px' }}
+                      if (!enlaceInput) return t.border
+                      try { new URL(enlaceInput); return '#10B981' } catch { return '#EF4444' }
+                    })()}`, borderRadius:'8px', padding:'9px 14px', color:t.text, fontSize:'13px' }}
                   />
-                  {enlaceSoporte && (() => { try { new URL(enlaceSoporte); return true } catch { return false } })() && (
-                    <a href={enlaceSoporte} target="_blank" rel="noreferrer"
-                      style={{ padding:'10px 14px', background:`${t.primary}22`, color:t.primary, borderRadius:'8px', fontSize:'12px', fontWeight:'700', textDecoration:'none', border:`1px solid ${t.primary}44`, whiteSpace:'nowrap' }}>
-                      ↗ Abrir
-                    </a>
-                  )}
                   <button
-                    onClick={guardarEnlace}
-                    disabled={guardandoEnlace || (!!enlaceSoporte && (() => { try { new URL(enlaceSoporte); return false } catch { return true } })())}
-                    title={enlaceSoporte && (() => { try { new URL(enlaceSoporte); return false } catch { return true } })() ? 'El enlace no es una URL válida' : ''}
-                    style={{
-                      background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
-                      padding:'10px 18px', fontSize:'12px', fontWeight:'700', cursor:'pointer',
-                      opacity: guardandoEnlace || (!!enlaceSoporte && (() => { try { new URL(enlaceSoporte); return false } catch { return true } })()) ? 0.5 : 1,
-                      whiteSpace:'nowrap'
-                    }}>{guardandoEnlace ? 'Guardando...' : '💾 Guardar'}</button>
+                    onClick={agregarEnlace}
+                    disabled={guardandoEnlace || !enlaceInput || (() => { try { new URL(enlaceInput); return false } catch { return true } })()} 
+                    style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'9px 18px', fontSize:'12px', fontWeight:'700', cursor:'pointer', whiteSpace:'nowrap',
+                      opacity: guardandoEnlace || !enlaceInput || (() => { try { new URL(enlaceInput); return false } catch { return true } })() ? 0.5 : 1 }}>
+                    {guardandoEnlace ? '...' : '+ Agregar'}
+                  </button>
                 </div>
-                {enlaceSoporte && (() => { try { new URL(enlaceSoporte); return false } catch { return true } })() && (
-                  <div style={{ fontSize:'11px', color:'#EF4444', marginTop:'6px' }}>⚠️ Ingresa una URL válida (debe comenzar con https://)</div>
+                {enlaceInput && (() => { try { new URL(enlaceInput); return false } catch { return true } })() && (
+                  <div style={{ fontSize:'11px', color:'#EF4444', marginBottom:'8px' }}>⚠️ Ingresa una URL válida (debe comenzar con https://)</div>
+                )}
+
+                {/* Lista de enlaces guardados */}
+                {enlaces.length === 0 ? (
+                  <div style={{ textAlign:'center', padding:'16px', color:t.textMuted, fontSize:'12px', fontStyle:'italic', border:`1px dashed ${t.border}`, borderRadius:'8px' }}>
+                    Sin soportes agregados aún
+                  </div>
+                ) : (
+                  <div style={{ display:'flex', flexDirection:'column', gap:'6px' }}>
+                    {enlaces.map((url, idx) => (
+                      <div key={idx} style={{ display:'flex', alignItems:'center', gap:'8px', background:t.bg, borderRadius:'8px', padding:'8px 12px', border:`1px solid ${t.border}` }}>
+                        <span style={{ fontSize:'14px' }}>🔗</span>
+                        <a href={url} target="_blank" rel="noreferrer"
+                          style={{ flex:1, color:t.primary, fontSize:'12px', fontWeight:'600', textDecoration:'none', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
+                          title={url}>{url}</a>
+                        <a href={url} target="_blank" rel="noreferrer"
+                          style={{ padding:'4px 10px', background:`${t.primary}22`, color:t.primary, borderRadius:'6px', fontSize:'11px', fontWeight:'700', textDecoration:'none', whiteSpace:'nowrap', border:`1px solid ${t.primary}33` }}>
+                          ↗ Abrir
+                        </a>
+                        <button onClick={() => eliminarEnlace(idx)}
+                          style={{ background:'transparent', border:'none', color:'#EF4444', cursor:'pointer', fontSize:'16px', padding:'0 4px', flexShrink:0 }}>✕</button>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
 
