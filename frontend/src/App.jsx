@@ -3461,6 +3461,81 @@ async function cargarRegistros() {
   )
 }
 
+// ─── HOJA REGIS// ─── MAPA PORTADA ─────────────────────────────────────────────────────────────
+function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t }) {
+  const containerRef = useRef(null)
+  const mapRef       = useRef(null)
+  const markerRef    = useRef(null)
+  const modoRef      = useRef(modoEdicion)
+  useEffect(() => { modoRef.current = modoEdicion }, [modoEdicion])
+
+  useEffect(() => {
+    if (!containerRef.current) return
+    mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
+    const hasCoords = lat != null && lat !== '' && !isNaN(parseFloat(lat))
+    const cLat = hasCoords ? parseFloat(lat) : 4.71
+    const cLng = hasCoords ? parseFloat(lng) : -74.07
+    const map = new mapboxgl.Map({
+      container: containerRef.current,
+      style: 'mapbox://styles/mapbox/streets-v12',
+      center: [cLng, cLat],
+      zoom: hasCoords ? 15 : 11
+    })
+    map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+    mapRef.current = map
+    if (hasCoords) {
+      markerRef.current = new mapboxgl.Marker({ color: '#0077B6' })
+        .setLngLat([cLng, cLat]).addTo(map)
+    }
+    map.on('click', e => {
+      if (!modoRef.current) return
+      const nLat = e.lngLat.lat.toFixed(7)
+      const nLng = e.lngLat.lng.toFixed(7)
+      if (markerRef.current) {
+        markerRef.current.setLngLat([parseFloat(nLng), parseFloat(nLat)])
+      } else {
+        markerRef.current = new mapboxgl.Marker({ color: '#0077B6' })
+          .setLngLat([parseFloat(nLng), parseFloat(nLat)]).addTo(mapRef.current)
+      }
+      onCoordsChange(nLat, nLng)
+    })
+    return () => { map.remove(); mapRef.current = null; markerRef.current = null }
+  }, [])
+
+  useEffect(() => {
+    if (!mapRef.current) return
+    const la = parseFloat(lat), lo = parseFloat(lng)
+    if (isNaN(la) || isNaN(lo)) return
+    if (markerRef.current) {
+      markerRef.current.setLngLat([lo, la])
+    } else {
+      markerRef.current = new mapboxgl.Marker({ color: '#0077B6' })
+        .setLngLat([lo, la]).addTo(mapRef.current)
+    }
+    mapRef.current.flyTo({ center: [lo, la], zoom: 15, duration: 800 })
+  }, [lat, lng])
+
+  const hasCoords = lat != null && lat !== '' && !isNaN(parseFloat(lat))
+  return (
+    <div style={{ position:'relative', width:'100%', height:'100%', minHeight:'340px', borderRadius:'10px', overflow:'hidden', border:`1px solid ${t.border}` }}>
+      <div ref={containerRef} style={{ width:'100%', height:'100%', minHeight:'340px' }} />
+      {!hasCoords && (
+        <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:`${t.bgCard}EE`, gap:'8px', pointerEvents:'none' }}>
+          <span style={{ fontSize:'36px' }}>📍</span>
+          <span style={{ fontSize:'12px', color:t.textMuted, textAlign:'center', padding:'0 20px' }}>
+            {modoEdicion ? 'Haz clic en el mapa para fijar las coordenadas' : 'Sin coordenadas geográficas'}
+          </span>
+        </div>
+      )}
+      {modoEdicion && hasCoords && (
+        <div style={{ position:'absolute', bottom:'36px', left:'50%', transform:'translateX(-50%)', background:'rgba(0,0,0,0.75)', color:'#fff', borderRadius:'20px', padding:'5px 14px', fontSize:'11px', fontWeight:'600', whiteSpace:'nowrap', pointerEvents:'none' }}>
+          🖱️ Clic en el mapa para actualizar la ubicación
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── HOJA REGISTRO ────────────────────────────────────────────────────────────
 function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, seleccionado, onToggleSeleccion, onItemAsignado, hdrs }) {
   const [competencia,    setCompetencia]    = useState(registro.competencia    || '')
@@ -3800,7 +3875,12 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const parseEnlaces = (raw) => { if (!raw) return []; try { const p = JSON.parse(raw); return Array.isArray(p) ? p : [raw] } catch { return raw ? [raw] : [] } }
   const [enlaces, setEnlaces]                      = useState(() => parseEnlaces(repoProp.enlace_soporte))
   const [enlaceInput, setEnlaceInput]              = useState('')
-  const [modalMapbox, setModalMapbox]             = useState(false)
+  const [editPkId, setEditPkId]                   = useState(repoProp.pk_id_id || '')
+  const [editCivLocal, setEditCivLocal]            = useState(repoProp.civ || '')
+  const [editTramoLocal, setEditTramoLocal]        = useState(repoProp.tramo || '')
+  const [editCalzadaLocal, setEditCalzadaLocal]    = useState(repoProp.calzada || '')
+  const [editInfraLocal, setEditInfraLocal]        = useState(repoProp.infraestructura || '')
+  const [listaPkIds, setListaPkIds]               = useState([])
   const [seleccionados, setSeleccionados]         = useState([])
   const [modalMover, setModalMover]               = useState(false)
   const [reportesDisponibles, setReportesDisponibles] = useState([])
@@ -3845,35 +3925,57 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   }
 
   const guardarTopografia = async () => {
+    const puntosValidos = puntosEdit.filter(p => String(p.norte).trim() || String(p.este).trim())
+    if (puntosValidos.length === 0) {
+      alert('Debes ingresar al menos un punto con Norte o Este para guardar.')
+      return
+    }
     setGuardandoTopo(true)
     try {
-      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/puntos-topograficos`, {
+      const delRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/puntos-topograficos`, {
         method: 'DELETE', headers: hdrs
       })
-      const puntosValidos = puntosEdit.filter(p => p.norte || p.este)
-      if (puntosValidos.length > 0) {
-        await fetch(`${API_URL}/sicoe-obra/${contrato_id}/puntos-topograficos`, {
-          method: 'POST', headers: hdrs,
-          body: JSON.stringify({ reporte_id: reporte.id, puntos: puntosValidos })
-        })
+      if (!delRes.ok) throw new Error(`Error eliminando puntos: ${delRes.status}`)
+      const postRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/puntos-topograficos`, {
+        method: 'POST', headers: hdrs,
+        body: JSON.stringify({ reporte_id: reporte.id, puntos: puntosValidos })
+      })
+      if (!postRes.ok) {
+        const err = await postRes.json().catch(() => ({}))
+        throw new Error(err.detail || `Error guardando puntos: ${postRes.status}`)
       }
       await recargar()
       setEditandoTopo(false)
-    } catch(e) {}
+    } catch(e) {
+      alert(`No se pudo guardar la topografía: ${e.message}`)
+    }
     setGuardandoTopo(false)
+  }
+
+  const onPkChange = (pkId) => {
+    setEditPkId(pkId)
+    const pk = listaPkIds.find(p => p.id === parseInt(pkId))
+    if (pk) {
+      setEditCivLocal(pk.civ || '')
+      setEditTramoLocal(pk.tramo || '')
+      setEditCalzadaLocal(pk.calzada || '')
+      setEditInfraLocal(pk.infraestructura || '')
+    }
   }
 
   const activarEdicion = async () => {
     if (!listasLoaded) {
       try {
-        const [subs, insp, caps] = await Promise.all([
+        const [subs, insp, caps, pks] = await Promise.all([
           fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs }).then(r => r.json()),
           fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs }).then(r => r.json()),
           fetch(`${API_URL}/sicoe-obra/${contrato_id}/capitulos`, { headers: hdrs }).then(r => r.json()),
+          fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs }).then(r => r.json()),
         ])
         setListaSubs(Array.isArray(subs) ? subs : [])
         setListaInsp(Array.isArray(insp) ? insp : [])
         setListaCaps(Array.isArray(caps) ? caps : [])
+        setListaPkIds(Array.isArray(pks) ? pks : [])
         setListasLoaded(true)
       } catch(e) {}
     }
@@ -3891,6 +3993,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           subcontratista_id: editSubId ? parseInt(editSubId) : null,
           inspector_id:      editInspId ? parseInt(editInspId) : null,
           capitulo:          editCapitulo || reporte.capitulo,
+          pk_id_id:          editPkId ? parseInt(editPkId) : (reporte.pk_id_id || null),
+          civ:               editCivLocal || reporte.civ || null,
+          tramo:             editTramoLocal || reporte.tramo || null,
+          calzada:           editCalzadaLocal || reporte.calzada || null,
+          infraestructura:   editInfraLocal || reporte.infraestructura || null,
           abs_inicio: editAbsInicio !== '' ? parseFloat(editAbsInicio) : null,
           abs_final:  editAbsFinal  !== '' ? parseFloat(editAbsFinal)  : null,
           nodo_ini:   editNodoIni || null,
@@ -4068,10 +4175,34 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:'12px' }}>
                   <div>
                     <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase' }}>📋 Identificación del Reporte</div>
-                    <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'3px' }}>
-                      {reporte.created_at ? new Date(reporte.created_at+'Z').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : ''}
-                      {reporte.nombre_creador ? ` · Creado por ${reporte.nombre_creador}` : ''}
-                    </div>
+                    {(() => {
+                      const parseFecha = (ts) => {
+                        if (!ts) return null
+                        try {
+                          const norm = /Z$|[+-]\d{2}:\d{2}$/.test(ts) ? ts : ts + 'Z'
+                          const d = new Date(norm)
+                          return isNaN(d) ? null : d.toLocaleDateString('es-CO', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'})
+                        } catch { return null }
+                      }
+                      const fechaCreacion    = parseFecha(reporte.created_at)
+                      const fechaModificacion = parseFecha(reporte.updated_at)
+                      return (
+                        <div style={{ marginTop:'4px', display:'flex', flexDirection:'column', gap:'2px' }}>
+                          {fechaCreacion && (
+                            <div style={{ fontSize:'11px', color:t.textMuted }}>
+                              📅 Creado: <strong style={{ color:t.text }}>{fechaCreacion}</strong>
+                              {reporte.nombre_creador ? <span> · {reporte.nombre_creador}</span> : ''}
+                            </div>
+                          )}
+                          {fechaModificacion && reporte.nombre_modificador && (
+                            <div style={{ fontSize:'11px', color:t.textMuted }}>
+                              ✏️ Modificado: <strong style={{ color:t.text }}>{fechaModificacion}</strong>
+                              {reporte.nombre_modificador ? <span> · {reporte.nombre_modificador}</span> : ''}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
                   </div>
                   {puedeEditar && (
                     <div style={{ display:'flex', gap:'8px' }}>
@@ -4133,67 +4264,114 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               {/* GRUPO 3 — Localización */}
               <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
                 <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📍 Localización</div>
-                {/* PK_ID | CIV | Tramo | Costado */}
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'10px', marginBottom:'10px' }}>
-                  <div>
-                    <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>PK_ID</div>
-                    <div style={{ display:'flex', alignItems:'center', gap:'6px', background:t.bg, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${t.border}` }}>
-                      <span style={{ fontSize:'13px', fontWeight:'700', color:t.text, flex:1 }}>{reporte.pk_id_valor || reporte.pk_id_id || '—'}</span>
-                      <button
-                        onClick={() => { if (reporte.coord_lat != null || reporte.coord_lng != null) setModalMapbox(true) }}
-                        title={reporte.coord_lat != null ? 'Ver ubicación en mapa' : 'Sin coordenadas geográficas — selecciona en el mapa al crear el reporte'}
-                        style={{ background:'none', border:'none', cursor: reporte.coord_lat != null ? 'pointer' : 'default', fontSize:'16px', lineHeight:1, padding:'0', flexShrink:0, opacity: reporte.coord_lat != null ? 1 : 0.3 }}>📍</button>
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
+
+                  {/* Columna izquierda — campos */}
+                  <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+                    {/* PK_ID */}
+                    <div>
+                      <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>PK_ID</div>
+                      {modoEdicion ? (
+                        <select value={editPkId} onChange={e => onPkChange(e.target.value)}
+                          style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px' }}>
+                          <option value="">— Selecciona PK_ID —</option>
+                          {listaPkIds.map(pk => (
+                            <option key={pk.id} value={pk.id}>{pk.pk_id} · {pk.civ} · {pk.tramo}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div style={{ background:t.bg, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${t.border}`, fontSize:'13px', fontWeight:'700', color:t.text }}>
+                          {reporte.pk_id_valor || reporte.pk_id_id || '—'}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* CIV | Tramo */}
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px' }}>
+                      <CampoInfo label="CIV"   valor={modoEdicion ? (editCivLocal || reporte.civ) : reporte.civ} />
+                      <CampoInfo label="Tramo" valor={modoEdicion ? (editTramoLocal || reporte.tramo) : reporte.tramo} />
+                    </div>
+
+                    {/* Costado | Infraestructura */}
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px' }}>
+                      <CampoInfo label="Costado"        valor={modoEdicion ? (editCalzadaLocal || reporte.calzada) : reporte.calzada} />
+                      <CampoInfo label="Infraestructura" valor={modoEdicion ? (editInfraLocal || reporte.infraestructura) : reporte.infraestructura} />
+                    </div>
+
+                    {/* Latitud | Longitud */}
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px' }}>
+                      {modoEdicion ? (
+                        <>
+                          <div>
+                            <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Latitud</div>
+                            <input type="number" step="0.0000001" value={editLat} onChange={e => setEditLat(e.target.value)} placeholder="4.710989"
+                              style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+                          </div>
+                          <div>
+                            <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Longitud</div>
+                            <input type="number" step="0.0000001" value={editLng} onChange={e => setEditLng(e.target.value)} placeholder="-74.072092"
+                              style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <CampoInfo label="Latitud"  valor={reporte.coord_lat} />
+                          <CampoInfo label="Longitud" valor={reporte.coord_lng} />
+                        </>
+                      )}
+                    </div>
+
+                    {/* Abscisado | Nodos */}
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px' }}>
+                      {modoEdicion ? (
+                        <>
+                          {[['Abs. Inicio', editAbsInicio, setEditAbsInicio, 'number'],
+                            ['Abs. Final',  editAbsFinal,  setEditAbsFinal,  'number']
+                          ].map(([label, val, setter, type]) => (
+                            <div key={label}>
+                              <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+                              <input type={type} value={val} onChange={e => setter(e.target.value)}
+                                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+                            </div>
+                          ))}
+                        </>
+                      ) : (
+                        <>
+                          <CampoInfo label="Abs. Inicio" valor={reporte.abs_inicio} />
+                          <CampoInfo label="Abs. Final"  valor={reporte.abs_final} />
+                        </>
+                      )}
+                    </div>
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'8px' }}>
+                      {modoEdicion ? (
+                        <>
+                          {[['Nodo Inicial', editNodoIni, setEditNodoIni, 'text'],
+                            ['Nodo Final',   editNodoFin, setEditNodoFin, 'text']
+                          ].map(([label, val, setter, type]) => (
+                            <div key={label}>
+                              <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+                              <input type={type} value={val} onChange={e => setter(e.target.value)}
+                                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+                            </div>
+                          ))}
+                        </>
+                      ) : (
+                        <>
+                          <CampoInfo label="Nodo Inicial" valor={reporte.nodo_ini} />
+                          <CampoInfo label="Nodo Final"   valor={reporte.nodo_fin} />
+                        </>
+                      )}
                     </div>
                   </div>
-                  <CampoInfo label="CIV"     valor={reporte.civ} />
-                  <CampoInfo label="Tramo"   valor={reporte.tramo} />
-                  <CampoInfo label="Costado" valor={reporte.calzada} />
-                </div>
-                {/* Infraestructura | Latitud | Longitud */}
-                <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:'10px', marginBottom:'10px' }}>
-                  <CampoInfo label="Infraestructura" valor={reporte.infraestructura} />
-                  {modoEdicion ? (
-                    <>
-                      <div>
-                        <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Latitud</div>
-                        <input type="number" step="0.000001" value={editLat} onChange={e => setEditLat(e.target.value)} placeholder="Ej: 4.710989" style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
-                      </div>
-                      <div>
-                        <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Longitud</div>
-                        <input type="number" step="0.000001" value={editLng} onChange={e => setEditLng(e.target.value)} placeholder="Ej: -74.072092" style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <CampoInfo label="Latitud"  valor={reporte.coord_lat} />
-                      <CampoInfo label="Longitud" valor={reporte.coord_lng} />
-                    </>
-                  )}
-                </div>
-                {/* Abscisado y Nodos */}
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'10px' }}>
-                  {modoEdicion ? (
-                    <>
-                      {[['Abs. Inicio', editAbsInicio, setEditAbsInicio, 'number'],
-                        ['Abs. Final',  editAbsFinal,  setEditAbsFinal,  'number'],
-                        ['Nodo Inicial',editNodoIni,   setEditNodoIni,   'text'],
-                        ['Nodo Final',  editNodoFin,   setEditNodoFin,   'text']
-                      ].map(([label, val, setter, type]) => (
-                        <div key={label}>
-                          <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
-                          <input type={type} value={val} onChange={e => setter(e.target.value)}
-                            style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
-                        </div>
-                      ))}
-                    </>
-                  ) : (
-                    <>
-                      <CampoInfo label="Abs. Inicio"  valor={reporte.abs_inicio} />
-                      <CampoInfo label="Abs. Final"   valor={reporte.abs_final} />
-                      <CampoInfo label="Nodo Inicial" valor={reporte.nodo_ini} />
-                      <CampoInfo label="Nodo Final"   valor={reporte.nodo_fin} />
-                    </>
-                  )}
+
+                  {/* Columna derecha — Mapa */}
+                  <MapaPortada
+                    lat={modoEdicion ? editLat : reporte.coord_lat}
+                    lng={modoEdicion ? editLng : reporte.coord_lng}
+                    modoEdicion={modoEdicion}
+                    onCoordsChange={(la, lo) => { setEditLat(la); setEditLng(lo) }}
+                    t={t}
+                  />
                 </div>
               </div>
 
@@ -4387,28 +4565,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           ))}
         </div>
       </div>
-
-      {/* ─ Mini modal Mapbox ─ */}
-      {modalMapbox && reporte.coord_lat && reporte.coord_lng && (
-        <div style={{ position:'fixed', inset:0, zIndex:10000, background:'rgba(0,0,0,0.6)', display:'flex', alignItems:'center', justifyContent:'center' }} onClick={() => setModalMapbox(false)}>
-          <div style={{ background:t.bgCard, borderRadius:'16px', overflow:'hidden', width:'520px', boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }} onClick={e => e.stopPropagation()}>
-            <div style={{ padding:'14px 20px', display:'flex', justifyContent:'space-between', alignItems:'center', borderBottom:`1px solid ${t.border}` }}>
-              <span style={{ fontWeight:'700', color:t.text, fontSize:'14px' }}>📍 PK_ID {reporte.pk_id_id} — Ubicación</span>
-              <button onClick={() => setModalMapbox(false)} style={{ background:'none', border:'none', color:t.textMuted, fontSize:'18px', cursor:'pointer' }}>✕</button>
-            </div>
-            <iframe
-              title="mapa"
-              width="520" height="360"
-              style={{ border:'none', display:'block' }}
-              src={`https://www.openstreetmap.org/export/embed.html?bbox=${reporte.coord_lng - 0.002},${reporte.coord_lat - 0.002},${reporte.coord_lng + 0.002},${reporte.coord_lat + 0.002}&layer=mapnik&marker=${reporte.coord_lat},${reporte.coord_lng}`}
-            />
-            <div style={{ padding:'10px 20px', display:'flex', gap:'16px', fontSize:'12px', color:t.textMuted }}>
-              <span>Lat: <strong style={{ color:t.text }}>{reporte.coord_lat}</strong></span>
-              <span>Lng: <strong style={{ color:t.text }}>{reporte.coord_lng}</strong></span>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ─ Modal Mover Registros ─ */}
       {modalMover && (

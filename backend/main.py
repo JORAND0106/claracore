@@ -3182,6 +3182,21 @@ def obtener_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_
     r["registros"] = supabase_execute(_reg)
     r["puntos"] = supabase_execute(_pts)
 
+    # Resolver nombre del modificador
+    modificado_por = r.get("modificado_por")
+    if modificado_por:
+        def _modif():
+            return supabase.table("usuarios")\
+                .select("nombre, apellidos")\
+                .eq("id", modificado_por).single().execute().data
+        try:
+            modif = supabase_execute(_modif)
+            r["nombre_modificador"] = f"{modif.get('nombre','')} {modif.get('apellidos','')}".strip() if modif else None
+        except:
+            r["nombre_modificador"] = None
+    else:
+        r["nombre_modificador"] = None
+
     # Resolver nombre del creador
     creado_por = r.get("creado_por")
     if creado_por:
@@ -3429,6 +3444,8 @@ class RegistroCreate(BaseModel):
 def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, current_user=Depends(get_current_user)):
     data = body.dict()
     data.pop("updated_at", None)
+    data["updated_at"]     = "now()"
+    data["modificado_por"] = int(current_user.get("sub") or current_user.get("id", 0))
     def _upd():
         return supabase.table("so_reportes").update(data)\
             .eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
@@ -3486,7 +3503,7 @@ def crear_puntos(contrato_id: int, body: PuntosCreate, current_user=Depends(get_
         d = p.dict()
         d["contrato_id"] = contrato_id
         d["reporte_id"] = body.reporte_id
-        d["creado_por"] = current_user["id"]
+        d["creado_por"] = int(current_user.get("sub") or current_user.get("id", 0))
         rows.append(d)
     def _ins():
         return supabase.table("so_puntos_topograficos").insert(rows).execute().data
