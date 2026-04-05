@@ -3805,6 +3805,16 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [reporteDestino, setReporteDestino]       = useState('')
   const [moviendoReg, setMoviendoReg]             = useState(false)
   const [creandoReg, setCreandoReg]               = useState(false)
+  const [puntosEdit, setPuntosEdit]               = useState((repoProp.puntos || []).map(p => ({...p})))
+  const [editandoTopo, setEditandoTopo]            = useState(false)
+  const [guardandoTopo, setGuardandoTopo]          = useState(false)
+  const [modoEdicion, setModoEdicion]              = useState(false)
+  const [guardandoEdicion, setGuardandoEdicion]    = useState(false)
+  const [editDesc, setEditDesc]                    = useState(repoProp.descripcion_actividad || '')
+  const [editAbsInicio, setEditAbsInicio]          = useState(repoProp.abs_inicio ?? '')
+  const [editAbsFinal, setEditAbsFinal]            = useState(repoProp.abs_final ?? '')
+  const [editNodoIni, setEditNodoIni]              = useState(repoProp.nodo_ini || '')
+  const [editNodoFin, setEditNodoFin]              = useState(repoProp.nodo_fin || '')
 
   const perm        = (usuario?.permisos || []).find(p => p.funcion_nombre === 'Reporte de Cantidades')
   const puedeEditar = perm?.editar
@@ -3821,6 +3831,45 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       setReporte(data)
       setRegistros(data.registros || [])
     } catch(e) {}
+  }
+
+  const guardarTopografia = async () => {
+    setGuardandoTopo(true)
+    try {
+      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/puntos-topograficos`, {
+        method: 'DELETE', headers: hdrs
+      })
+      const puntosValidos = puntosEdit.filter(p => p.norte || p.este)
+      if (puntosValidos.length > 0) {
+        await fetch(`${API_URL}/sicoe-obra/${contrato_id}/puntos-topograficos`, {
+          method: 'POST', headers: hdrs,
+          body: JSON.stringify({ reporte_id: reporte.id, puntos: puntosValidos })
+        })
+      }
+      await recargar()
+      setEditandoTopo(false)
+    } catch(e) {}
+    setGuardandoTopo(false)
+  }
+
+  const guardarEdicion = async () => {
+    setGuardandoEdicion(true)
+    try {
+      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`, {
+        method: 'PUT', headers: hdrs,
+        body: JSON.stringify({
+          ...reporte,
+          descripcion_actividad: editDesc,
+          abs_inicio: editAbsInicio !== '' ? parseFloat(editAbsInicio) : null,
+          abs_final:  editAbsFinal  !== '' ? parseFloat(editAbsFinal)  : null,
+          nodo_ini:   editNodoIni || null,
+          nodo_fin:   editNodoFin || null,
+        })
+      })
+      await recargar()
+      setModoEdicion(false)
+    } catch(e) {}
+    setGuardandoEdicion(false)
   }
 
   const guardarEnlace = async () => {
@@ -3966,13 +4015,34 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
               {/* GRUPO 2 — Identificación del Reporte */}
               <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
-                <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📋 Identificación del Reporte</div>
+                <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:'12px' }}>
+                  <div>
+                    <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase' }}>📋 Identificación del Reporte</div>
+                    <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'3px' }}>
+                      {reporte.created_at ? new Date(reporte.created_at+'Z').toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : ''}
+                      {reporte.nombre_creador ? ` · Creado por ${reporte.nombre_creador}` : ''}
+                    </div>
+                  </div>
+                  {puedeEditar && (
+                    <div style={{ display:'flex', gap:'8px' }}>
+                      {modoEdicion ? (
+                        <>
+                          <button onClick={() => setModoEdicion(false)} style={{ background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted, borderRadius:'6px', padding:'5px 12px', fontSize:'11px', fontWeight:'600', cursor:'pointer' }}>Cancelar</button>
+                          <button onClick={guardarEdicion} disabled={guardandoEdicion} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'5px 14px', fontSize:'11px', fontWeight:'700', cursor:'pointer', opacity:guardandoEdicion?0.6:1 }}>{guardandoEdicion?'Guardando...':'💾 Guardar'}</button>
+                        </>
+                      ) : (
+                        <button onClick={() => setModoEdicion(true)} style={{ background:'transparent', border:`1px solid ${t.primary}`, color:t.primary, borderRadius:'6px', padding:'5px 14px', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>✏️ Editar</button>
+                      )}
+                    </div>
+                  )}
+                </div>
                 {/* Nombre full width */}
                 <div style={{ marginBottom:'10px' }}>
                   <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Nombre del Reporte</div>
-                  <div style={{ fontSize:'14px', color:t.text, fontWeight:'700', background:t.bg, borderRadius:'6px', padding:'8px 12px', border:`1px solid ${t.border}` }}>
-                    {reporte.descripcion_actividad || <span style={{ color:t.textMuted, fontStyle:'italic' }}>—</span>}
-                  </div>
+                  {modoEdicion
+                    ? <input value={editDesc} onChange={e => setEditDesc(e.target.value)} style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'8px 12px', color:t.text, fontSize:'13px', fontWeight:'600', boxSizing:'border-box' }} />
+                    : <div style={{ fontSize:'14px', color:t.text, fontWeight:'700', background:t.bg, borderRadius:'6px', padding:'8px 12px', border:`1px solid ${t.border}` }}>{reporte.descripcion_actividad || <span style={{ color:t.textMuted, fontStyle:'italic' }}>—</span>}</div>
+                  }
                 </div>
                 {/* Subcontratista | Inspector | Capítulo */}
                 <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px' }}>
@@ -3991,10 +4061,10 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>PK_ID</div>
                     <div style={{ display:'flex', alignItems:'center', gap:'6px', background:t.bg, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${t.border}` }}>
                       <span style={{ fontSize:'13px', fontWeight:'700', color:t.text, flex:1 }}>{reporte.pk_id_valor || reporte.pk_id_id || '—'}</span>
-                      {(reporte.coord_lat || reporte.coord_lng) && (
-                        <button onClick={() => setModalMapbox(true)} title="Ver ubicación en mapa"
-                          style={{ background:'none', border:'none', cursor:'pointer', fontSize:'16px', lineHeight:1, padding:'0', flexShrink:0 }}>📍</button>
-                      )}
+                      <button
+                        onClick={() => { if (reporte.coord_lat != null || reporte.coord_lng != null) setModalMapbox(true) }}
+                        title={reporte.coord_lat != null ? 'Ver ubicación en mapa' : 'Sin coordenadas geográficas — selecciona en el mapa al crear el reporte'}
+                        style={{ background:'none', border:'none', cursor: reporte.coord_lat != null ? 'pointer' : 'default', fontSize:'16px', lineHeight:1, padding:'0', flexShrink:0, opacity: reporte.coord_lat != null ? 1 : 0.3 }}>📍</button>
                     </div>
                   </div>
                   <CampoInfo label="CIV"     valor={reporte.civ} />
@@ -4009,19 +4079,98 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 </div>
                 {/* Abscisado y Nodos */}
                 <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'10px' }}>
-                  <CampoInfo label="Abs. Inicio"  valor={reporte.abs_inicio} />
-                  <CampoInfo label="Abs. Final"   valor={reporte.abs_final} />
-                  <CampoInfo label="Nodo Inicial" valor={reporte.nodo_ini} />
-                  <CampoInfo label="Nodo Final"   valor={reporte.nodo_fin} />
+                  {modoEdicion ? (
+                    <>
+                      {[['Abs. Inicio', editAbsInicio, setEditAbsInicio, 'number'],
+                        ['Abs. Final',  editAbsFinal,  setEditAbsFinal,  'number'],
+                        ['Nodo Inicial',editNodoIni,   setEditNodoIni,   'text'],
+                        ['Nodo Final',  editNodoFin,   setEditNodoFin,   'text']
+                      ].map(([label, val, setter, type]) => (
+                        <div key={label}>
+                          <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+                          <input type={type} value={val} onChange={e => setter(e.target.value)}
+                            style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+                        </div>
+                      ))}
+                    </>
+                  ) : (
+                    <>
+                      <CampoInfo label="Abs. Inicio"  valor={reporte.abs_inicio} />
+                      <CampoInfo label="Abs. Final"   valor={reporte.abs_final} />
+                      <CampoInfo label="Nodo Inicial" valor={reporte.nodo_ini} />
+                      <CampoInfo label="Nodo Final"   valor={reporte.nodo_fin} />
+                    </>
+                  )}
                 </div>
               </div>
 
               {/* GRUPO 4 — Coordenadas Topográficas (siempre visible) */}
               <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
-                <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📐 Coordenadas Topográficas</div>
-                {(reporte.puntos || []).length === 0 ? (
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'12px' }}>
+                  <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase' }}>📐 Coordenadas Topográficas</div>
+                  {puedeEditar && !editandoTopo && (
+                    <button onClick={() => { setPuntosEdit((reporte.puntos||[]).map(p=>({...p}))); setEditandoTopo(true) }}
+                      style={{ background:'transparent', border:`1px solid ${t.primary}`, color:t.primary, borderRadius:'6px', padding:'5px 14px', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
+                      ✏️ Editar Topografía
+                    </button>
+                  )}
+                  {editandoTopo && (
+                    <div style={{ display:'flex', gap:'8px' }}>
+                      <button onClick={() => setEditandoTopo(false)} style={{ background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted, borderRadius:'6px', padding:'5px 12px', fontSize:'11px', fontWeight:'600', cursor:'pointer' }}>Cancelar</button>
+                      <button onClick={guardarTopografia} disabled={guardandoTopo} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'5px 14px', fontSize:'11px', fontWeight:'700', cursor:'pointer', opacity:guardandoTopo?0.6:1 }}>
+                        {guardandoTopo ? 'Guardando...' : '💾 Guardar Topografía'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {editandoTopo ? (
+                  <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+                    <div style={{ fontSize:'12px', color:t.textMuted }}>Registra las coordenadas levantadas en campo. Puedes importar desde CSV (Punto, Norte, Este, Cota, Descripción).</div>
+                    <div style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr 28px', gap:'8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, padding:'0 4px', letterSpacing:'0.5px', textTransform:'uppercase' }}>
+                      <div>Punto</div><div>Norte</div><div>Este</div><div>Cota</div><div>Descripción</div><div></div>
+                    </div>
+                    {puntosEdit.map((p, idx) => (
+                      <div key={idx} style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr 28px', gap:'8px', alignItems:'center' }}>
+                        {['punto','norte','este','cota','descripcion'].map(campo => (
+                          <input key={campo} value={p[campo] ?? ''} onChange={e => {
+                            const arr = [...puntosEdit]; arr[idx] = {...arr[idx], [campo]: e.target.value}; setPuntosEdit(arr)
+                          }}
+                          type={['norte','este','cota'].includes(campo) ? 'number' : 'text'}
+                          step='0.000001'
+                          placeholder={campo.charAt(0).toUpperCase()+campo.slice(1)}
+                          style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'12px', width:'100%', boxSizing:'border-box' }} />
+                        ))}
+                        <button onClick={() => setPuntosEdit(prev => prev.filter((_,i) => i!==idx))}
+                          style={{ background:'transparent', border:'none', color:'#EF4444', cursor:'pointer', fontSize:'16px', padding:0 }}>✕</button>
+                      </div>
+                    ))}
+                    <div style={{ display:'flex', gap:'8px' }}>
+                      <button onClick={() => setPuntosEdit(prev => [...prev, {punto:'',norte:'',este:'',cota:'',descripcion:''}])}
+                        style={{ background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted, borderRadius:'8px', padding:'7px 16px', fontSize:'12px', cursor:'pointer' }}>
+                        + Agregar punto
+                      </button>
+                      <label style={{ background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted, borderRadius:'8px', padding:'7px 16px', fontSize:'12px', cursor:'pointer' }}>
+                        📂 Importar CSV
+                        <input type='file' accept='.csv' style={{ display:'none' }} onChange={e => {
+                          const file = e.target.files[0]; if (!file) return
+                          const reader = new FileReader()
+                          reader.onload = ev => {
+                            const lines = ev.target.result.split('\n').filter(l => l.trim())
+                            const rows = lines.slice(1).map(l => {
+                              const cols = l.split(',')
+                              return { punto:cols[0]||'', norte:cols[1]||'', este:cols[2]||'', cota:cols[3]||'', descripcion:cols[4]||'' }
+                            })
+                            if (rows.length) setPuntosEdit(rows)
+                          }
+                          reader.readAsText(file)
+                        }} />
+                      </label>
+                    </div>
+                  </div>
+                ) : (reporte.puntos || []).length === 0 ? (
                   <div style={{ background:'#EF444415', border:'1px solid #EF444433', borderRadius:'8px', padding:'12px 16px', color:'#EF4444', fontSize:'12px', fontWeight:'600', textAlign:'center' }}>
-                    ⚠️ Sin coordenadas registradas. El topógrafo debe diligenciar esta información — es obligatoria para asignar ítems.
+                    ⚠️ Sin coordenadas registradas. Haz clic en "Editar Topografía" para ingresarlas — obligatorio para asignar ítems.
                   </div>
                 ) : (
                   <div style={{ overflowX:'auto' }}>
@@ -5024,33 +5173,18 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                     LOCALIZACIÓN (PK_ID) *
                   </label>
-                  <div style={{ display:'flex', gap:'6px' }}>
-                    <input value={pkSeleccionado ? pkSeleccionado.pk_id : pkBusqueda}
-                      onChange={e => { setPkBusqueda(e.target.value); setPkSeleccionado(null); setPkDropOpen(true) }}
-                      onFocus={() => setPkDropOpen(true)}
-                      placeholder="Buscar PK_ID o ubicación..." style={{ ...inpStyle(errores.pk), flex:1 }} />
-                    <button onClick={() => setModalMapaPk(true)} type="button" title="Seleccionar en mapa" style={{
+                  <div style={{ display:'flex', gap:'6px', alignItems:'center' }}>
+                    <div style={{ ...inpStyle(errores.pk), flex:1, display:'flex', alignItems:'center', minHeight:'38px', cursor:'default' }}>
+                      {pkSeleccionado
+                        ? <span style={{ fontWeight:'800', color:t.primary, fontSize:'14px' }}>{pkSeleccionado.pk_id}</span>
+                        : <span style={{ color:t.textMuted, fontStyle:'italic', fontSize:'12px' }}>Selecciona el punto tocando el mapa →</span>
+                      }
+                    </div>
+                    <button onClick={() => setModalMapaPk(true)} type="button" title="Seleccionar PK_ID en el mapa" style={{
                       background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
-                      padding:'0 12px', cursor:'pointer', fontSize:'16px', flexShrink:0
+                      padding:'0 14px', cursor:'pointer', fontSize:'16px', flexShrink:0, height:'38px'
                     }}>🗺️</button>
                   </div>
-                  {pkDropOpen && pkFiltrados.length > 0 && (
-                    <div style={{ position:'absolute', top:'100%', left:0, right:0, background:t.bgCard,
-                      border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:10, maxHeight:'200px', overflowY:'auto' }}>
-                      {pkFiltrados.map(pk => (
-                        <div key={pk.id} onClick={() => selPkId(pk)}
-                          style={{ padding:'8px 12px', cursor:'pointer', fontSize:'13px', color:t.text,
-                            borderBottom:`1px solid ${t.border}` }}
-                          onMouseEnter={e => e.currentTarget.style.background = t.bg}
-                          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                          <span style={{ fontWeight:'700', color:t.primary }}>{pk.pk_id}</span>
-                          <span style={{ color:t.textMuted, marginLeft:'8px', fontSize:'11px' }}>
-                            {pk.infraestructura} · {pk.calzada} · {pk.ubicacion}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                   {pkSeleccionado && (
                     <div style={{ marginTop:'6px', padding:'8px 12px', background:t.bg,
                       borderRadius:'6px', fontSize:'11px', color:t.textMuted }}>

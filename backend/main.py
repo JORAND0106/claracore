@@ -3182,6 +3182,21 @@ def obtener_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_
     r["registros"] = supabase_execute(_reg)
     r["puntos"] = supabase_execute(_pts)
 
+    # Resolver nombre del creador
+    creado_por = r.get("creado_por")
+    if creado_por:
+        def _creador():
+            return supabase.table("usuarios")\
+                .select("nombre, apellidos")\
+                .eq("id", creado_por).single().execute().data
+        try:
+            creador = supabase_execute(_creador)
+            r["nombre_creador"] = f"{creador.get('nombre','')} {creador.get('apellidos','')}".strip() if creador else None
+        except:
+            r["nombre_creador"] = None
+    else:
+        r["nombre_creador"] = None
+
     # Resolver nombre del inspector
     inspector_id = r.get("inspector_id")
     if inspector_id:
@@ -3455,6 +3470,14 @@ class PuntoTopo(BaseModel):
 class PuntosCreate(BaseModel):
     reporte_id: int
     puntos: List[PuntoTopo]
+
+@app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/puntos-topograficos")
+def eliminar_puntos_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
+    def _del():
+        return supabase.table("so_puntos_topograficos").delete()\
+            .eq("reporte_id", reporte_id).eq("contrato_id", contrato_id).execute().data
+    supabase_execute(_del)
+    return {"ok": True}
 
 @app.post("/sicoe-obra/{contrato_id}/puntos-topograficos")
 def crear_puntos(contrato_id: int, body: PuntosCreate, current_user=Depends(get_current_user)):
