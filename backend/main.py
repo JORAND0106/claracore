@@ -3532,107 +3532,114 @@ class AsignarItemBody(BaseModel):
 
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/asignar-item")
 def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemBody, current_user=Depends(get_current_user)):
-    from datetime import date
-    today = date.today().isoformat()
+    try:
+        from datetime import date
+        today = date.today().isoformat()
 
-    # 1. Info del ítem del listado de precios
-    def _item():
-        return supabase.table("listado_precios")\
-            .select("capitulo, competencia, item_numero, descripcion, und, precio_unitario")\
-            .eq("id", body.item_listado_id).single().execute().data
-    item = supabase_execute(_item)
-    if not item:
-        raise HTTPException(status_code=404, detail="Ítem no encontrado en listado de precios")
+        def _item():
+            return supabase.table("listado_precios")\
+                .select("capitulo, competencia, item_numero, descripcion, unidad, precio_unitario")\
+                .eq("id", body.item_listado_id).single().execute().data
+        item = supabase_execute(_item)
+        if not item:
+            raise HTTPException(status_code=404, detail="Ítem no encontrado en listado de precios")
 
-    # 2. Registro actual para cantidad_total y reporte_id
-    def _reg():
-        return supabase.table("so_registros")\
-            .select("cantidad_total, reporte_id")\
-            .eq("id", registro_id).single().execute().data
-    registro = supabase_execute(_reg)
-    if not registro:
-        raise HTTPException(status_code=404, detail="Registro no encontrado")
+        def _reg():
+            return supabase.table("so_registros")\
+                .select("cantidad_total, reporte_id")\
+                .eq("id", registro_id).single().execute().data
+        registro = supabase_execute(_reg)
+        if not registro:
+            raise HTTPException(status_code=404, detail="Registro no encontrado")
 
-    cant_total = float(registro.get("cantidad_total") or 0)
-    vlr_unit   = float(item.get("precio_unitario") or 0)
-    costo_dir  = round(cant_total * vlr_unit, 2)
-    reporte_id = registro["reporte_id"]
+        cant_total = float(registro.get("cantidad_total") or 0)
+        vlr_unit   = float(item.get("precio_unitario") or 0)
+        costo_dir  = round(cant_total * vlr_unit, 2)
+        reporte_id = registro["reporte_id"]
 
-    # 3. Reporte para subcontratista_id y valores previos
-    def _rep():
-        return supabase.table("so_reportes")\
-            .select("subcontratista_id, acta_rpo_id, corte_id, semana_id")\
-            .eq("id", reporte_id).single().execute().data
-    reporte = supabase_execute(_rep)
+        def _rep():
+            return supabase.table("so_reportes")\
+                .select("subcontratista_id, acta_rpo_id, corte_id, semana_id")\
+                .eq("id", reporte_id).single().execute().data
+        reporte = supabase_execute(_rep) or {}
 
-    # 4. Auto-detectar acta RPO vigente (la más reciente del contrato)
-    acta_rpo_id = reporte.get("acta_rpo_id")
-    if not acta_rpo_id:
-        def _acta():
-            return supabase.table("actas")\
-                .select("id, numero_rpo")\
-                .eq("contrato_id", contrato_id)\
-                .order("id", desc=True).limit(1).execute().data
-        actas = supabase_execute(_acta)
-        acta_rpo_id = actas[0]["id"] if actas else None
+        acta_rpo_id = reporte.get("acta_rpo_id")
+        if not acta_rpo_id:
+            try:
+                def _acta():
+                    return supabase.table("actas")\
+                        .select("id, numero_rpo")\
+                        .eq("contrato_id", contrato_id)\
+                        .order("id", desc=True).limit(1).execute().data
+                actas = supabase_execute(_acta)
+                acta_rpo_id = actas[0]["id"] if actas else None
+            except:
+                acta_rpo_id = None
 
-    # 5. Auto-detectar corte vigente del subcontratista por fecha
-    corte_id = reporte.get("corte_id")
-    sub_id   = reporte.get("subcontratista_id")
-    if not corte_id and sub_id:
-        def _corte():
-            return supabase.table("subcontratista_cortes")\
-                .select("id, consecutivo")\
-                .eq("subcontratista_id", sub_id)\
-                .lte("fecha_inicio", today)\
-                .gte("fecha_fin", today)\
-                .limit(1).execute().data
-        cortes = supabase_execute(_corte)
-        corte_id = cortes[0]["id"] if cortes else None
+        corte_id = reporte.get("corte_id")
+        sub_id   = reporte.get("subcontratista_id")
+        if not corte_id and sub_id:
+            try:
+                def _corte():
+                    return supabase.table("subcontratista_cortes")\
+                        .select("id, consecutivo")\
+                        .eq("subcontratista_id", sub_id)\
+                        .lte("fecha_inicio", today)\
+                        .gte("fecha_fin", today)\
+                        .limit(1).execute().data
+                cortes = supabase_execute(_corte)
+                corte_id = cortes[0]["id"] if cortes else None
+            except:
+                corte_id = None
 
-    # 6. Auto-detectar semana vigente por fecha
-    semana_id = reporte.get("semana_id")
-    if not semana_id:
-        def _sem():
-            return supabase.table("so_semanas")\
-                .select("id, numero_semana")\
-                .eq("contrato_id", contrato_id)\
-                .eq("estado", "activa")\
-                .lte("fecha_inicio", today)\
-                .gte("fecha_fin", today)\
-                .limit(1).execute().data
-        sems = supabase_execute(_sem)
-        semana_id = sems[0]["id"] if sems else None
+        semana_id = reporte.get("semana_id")
+        if not semana_id:
+            try:
+                def _sem():
+                    return supabase.table("so_semanas")\
+                        .select("id, numero_semana")\
+                        .eq("contrato_id", contrato_id)\
+                        .eq("estado", "activa")\
+                        .lte("fecha_inicio", today)\
+                        .gte("fecha_fin", today)\
+                        .limit(1).execute().data
+                sems = supabase_execute(_sem)
+                semana_id = sems[0]["id"] if sems else None
+            except:
+                semana_id = None
 
-    # 7. Actualizar registro con ítem asignado
-    def _upd_reg():
-        return supabase.table("so_registros").update({
-            "competencia":      body.competencia or item.get("competencia"),
-            "item_numero":      item.get("item_numero"),
-            "item_descripcion": item.get("descripcion"),
-            "vlr_unitario":     vlr_unit,
-            "costo_directo":    costo_dir,
-            "unidad":           item.get("und"),
-            "semana_id":        semana_id,
-            "acta_rpo_id":      acta_rpo_id,
-            "corte_id":         corte_id,
-        }).eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
-    supabase_execute(_upd_reg)
+        def _upd_reg():
+            return supabase.table("so_registros").update({
+                "competencia":      body.competencia or item.get("competencia"),
+                "item_numero":      item.get("item_numero"),
+                "item_descripcion": item.get("descripcion"),
+                "vlr_unitario":     vlr_unit,
+                "costo_directo":    costo_dir,
+                "unidad":           item.get("unidad"),
+                "semana_id":        semana_id,
+                "acta_rpo_id":      acta_rpo_id,
+                "corte_id":         corte_id,
+            }).eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
+        supabase_execute(_upd_reg)
 
-    # 8. Propagar acta/corte/semana al reporte y cambiar estado a 'No Revisados'
-    def _upd_rep():
-        return supabase.table("so_reportes").update({
-            "acta_rpo_id": acta_rpo_id,
-            "corte_id":    corte_id,
-            "semana_id":   semana_id,
-            "estado":      "No Revisados",
-        }).eq("id", reporte_id).execute().data
-    supabase_execute(_upd_rep)
+        def _upd_rep():
+            return supabase.table("so_reportes").update({
+                "acta_rpo_id": acta_rpo_id,
+                "corte_id":    corte_id,
+                "semana_id":   semana_id,
+                "estado":      "No Revisados",
+            }).eq("id", reporte_id).execute().data
+        supabase_execute(_upd_rep)
 
-    return {
-        "ok": True, "vlr_unitario": vlr_unit, "costo_directo": costo_dir,
-        "semana_id": semana_id, "acta_rpo_id": acta_rpo_id, "corte_id": corte_id
-    }
+        return {
+            "ok": True, "vlr_unitario": vlr_unit, "costo_directo": costo_dir,
+            "semana_id": semana_id, "acta_rpo_id": acta_rpo_id, "corte_id": corte_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error asignando ítem: {str(e)}")
 
 # ─── SICOE OBRA: Nuevo registro en blanco dentro de un reporte existente ─────
 @app.post("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/nuevo-registro")
