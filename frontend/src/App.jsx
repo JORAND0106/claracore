@@ -3614,10 +3614,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }
 
   const calcCantTotal = (l, a, e, c) => {
-    const lv = l !== '' && l !== null && l !== undefined ? parseFloat(l) : 1
-    const av = a !== '' && a !== null && a !== undefined ? parseFloat(a) : 1
-    const ev = e !== '' && e !== null && e !== undefined ? parseFloat(e) : 1
-    const cv = c !== '' && c !== null && c !== undefined ? parseFloat(c) : 0
+    const isEmpty = v => v === '' || v === null || v === undefined
+    if (isEmpty(l) && isEmpty(a) && isEmpty(e) && isEmpty(c)) return 0
+    const lv = !isEmpty(l) ? parseFloat(l) : 1
+    const av = !isEmpty(a) ? parseFloat(a) : 1
+    const ev = !isEmpty(e) ? parseFloat(e) : 1
+    const cv = !isEmpty(c) ? parseFloat(c) : 1
     if (isNaN(lv) || isNaN(av) || isNaN(ev) || isNaN(cv)) return 0
     return Math.round(lv * av * ev * cv * 100) / 100
   }
@@ -3807,7 +3809,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           {itemSel && (
             <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:'10px', marginTop:'12px' }}>
               <CampoRO label="Descripción"    valor={itemSel.descripcion} />
-              <CampoRO label="Unidad"         valor={itemSel.und} />
+              <CampoRO label="Unidad"         valor={itemSel.und || itemSel.unidad || itemSel.um || null} />
               <CampoRO label="Vlr. Unitario"  valor={fmtD(itemSel.precio_unitario)} color='#10B981' />
             </div>
           )}
