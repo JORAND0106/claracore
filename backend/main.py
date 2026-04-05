@@ -3619,12 +3619,13 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
         }).eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
     supabase_execute(_upd_reg)
 
-    # 8. Propagar acta/corte/semana al reporte si no los tenía
+    # 8. Propagar acta/corte/semana al reporte y cambiar estado a 'No Revisados'
     def _upd_rep():
         return supabase.table("so_reportes").update({
             "acta_rpo_id": acta_rpo_id,
             "corte_id":    corte_id,
             "semana_id":   semana_id,
+            "estado":      "No Revisados",
         }).eq("id", reporte_id).execute().data
     supabase_execute(_upd_rep)
 

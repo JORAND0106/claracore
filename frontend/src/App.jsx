@@ -3684,11 +3684,13 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }
 
   const asignarItem = async () => {
-    if (!itemListadoId && !itemSel?.id) return
+    const idItem = itemListadoId || itemSel?.id
+    if (!idItem) { alert('Selecciona un ítem del listado de precios antes de asignar.'); return }
+    if (!tieneCoordenadas) { alert('Se requieren coordenadas topográficas. Diligéncialas en la Portada primero.'); return }
     setAsignando(true)
     try {
-      // 1. Guardar dimensiones primero para que el backend use cantidad_total correcta
-      await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
+      // 1. Guardar dimensiones
+      const dimRes = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
         method: 'PUT', headers: hdrs,
         body: JSON.stringify({
           reporte_id: registro.reporte_id,
@@ -3700,13 +3702,21 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           cantidad_total: cantTotal,
         })
       })
-      // 2. Asignar ítem
-      await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/asignar-item`, {
+      if (!dimRes.ok) throw new Error(`Error guardando dimensiones: ${dimRes.status}`)
+
+      // 2. Asignar ítem → backend cambia reporte a 'No Revisados'
+      const asigRes = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/asignar-item`, {
         method: 'PUT', headers: hdrs,
-        body: JSON.stringify({ item_listado_id: itemListadoId || itemSel?.id, competencia: competencia || null })
+        body: JSON.stringify({ item_listado_id: idItem, competencia: competencia || null })
       })
+      if (!asigRes.ok) {
+        const err = await asigRes.json().catch(() => ({}))
+        throw new Error(err.detail || `Error asignando ítem: ${asigRes.status}`)
+      }
       onItemAsignado()
-    } catch(e) {}
+    } catch(e) {
+      alert(`No se pudo asignar el ítem: ${e.message}`)
+    }
     setAsignando(false)
   }
 
@@ -4212,8 +4222,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 const fc = pF(reporte.created_at), fm = pF(reporte.updated_at)
                 return (
                   <div style={{ marginTop:'4px', display:'flex', gap:'16px', flexWrap:'wrap' }}>
-                    {fc && <span style={{ fontSize:'11px', color:'#ffffffCC' }}>📅 {fc}{reporte.nombre_creador ? ` · ${reporte.nombre_creador}` : ''}</span>}
-                    {fm && reporte.nombre_modificador && <span style={{ fontSize:'11px', color:'#ffffffAA' }}>✏️ {fm} · {reporte.nombre_modificador}</span>}
+                    {fc && <span style={{ fontSize:'13px', color:'#ffffffCC' }}>📅 {fc}{reporte.nombre_creador ? ` · ${reporte.nombre_creador}` : ''}</span>}
+                    {fm && reporte.nombre_modificador && <span style={{ fontSize:'13px', color:'#ffffffAA' }}>✏️ {fm} · {reporte.nombre_modificador}</span>}
                   </div>
                 )
               })()}
@@ -4678,10 +4688,11 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const [modalCarpeta, setModalCarpeta]               = useState(false)
   const [reporteSeleccionado, setReporteSeleccionado] = useState(null)
 
-  const ESTADOS = ['Borrador','Sin Asignar Ítem','Aprobados','Pendientes','Rechazados','No Objeto de Cobro','En Papelera']
+  const ESTADOS = ['Borrador','Sin Asignar Ítem','No Revisados','Aprobados','Pendientes','Rechazados','No Objeto de Cobro','En Papelera']
   const ESTADO_COLORS = {
     'Borrador': '#6B7280',
     'Sin Asignar Ítem': '#F59E0B',
+    'No Revisados': '#0077B6',
     'Aprobados': '#10B981',
     'Pendientes': '#3B82F6',
     'Rechazados': '#EF4444',
@@ -4897,7 +4908,7 @@ const cargarReportes = async () => {
                 const data = await r.json()
                 setReporteEditando(data)
                 setModalNuevoReporte(true)
-              } else if (puedeEditar && rep.estado === 'Sin Asignar Ítem') {
+              } else if (puedeEditar && (rep.estado === 'Sin Asignar Ítem' || rep.estado === 'No Revisados')) {
                 const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
                 const data = await r.json()
                 setReporteSeleccionado(data)
