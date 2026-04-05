@@ -3514,7 +3514,7 @@ def crear_puntos(contrato_id: int, body: PuntosCreate, current_user=Depends(get_
 def buscar_items_listado(contrato_id: int, q: str = "", capitulo: str = None, competencia: str = None, current_user=Depends(get_current_user)):
     def _q():
         query = supabase.table("listado_precios")\
-            .select("id, capitulo, competencia, item_numero, descripcion, und, precio_unitario")\
+            .select("id, capitulo, competencia, item_numero, descripcion, unidad, precio_unitario")\
             .eq("contrato_id", contrato_id)
         if capitulo:
             query = query.eq("capitulo", capitulo)

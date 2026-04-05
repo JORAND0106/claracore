@@ -3541,7 +3541,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [competencia,    setCompetencia]    = useState(registro.competencia    || '')
   const [itemBusqueda,   setItemBusqueda]   = useState(registro.item_descripcion || '')
   const [itemsLista,     setItemsLista]     = useState([])
-  const [itemSel,        setItemSel]        = useState(registro.item_numero ? { item_numero: registro.item_numero, descripcion: registro.item_descripcion, und: registro.unidad, precio_unitario: registro.vlr_unitario, id: null } : null)
+  const [itemSel,        setItemSel]        = useState(registro.item_numero ? { item_numero: registro.item_numero, descripcion: registro.item_descripcion, unidad: registro.unidad, precio_unitario: registro.vlr_unitario, id: null } : null)
   const [mostrarLista,   setMostrarLista]   = useState(false)
   const [longitud,       setLongitud]       = useState(registro.longitud   ?? '')
   const [ancho,          setAncho]          = useState(registro.ancho      ?? '')
@@ -3809,7 +3809,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           {itemSel && (
             <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:'10px', marginTop:'12px' }}>
               <CampoRO label="Descripción"    valor={itemSel.descripcion} />
-              <CampoRO label="Unidad"         valor={itemSel.und || itemSel.unidad || itemSel.um || null} />
+              <CampoRO label="Unidad"         valor={itemSel.unidad || null} />
               <CampoRO label="Vlr. Unitario"  valor={fmtD(itemSel.precio_unitario)} color='#10B981' />
             </div>
           )}
