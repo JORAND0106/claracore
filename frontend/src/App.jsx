@@ -3562,11 +3562,21 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || graficoReporte?.grafico_url || null)
   const API = API_URL
 
-  // Cargar capitulos al montar
+  // Cargar capitulos al montar — usa listado-precios completo para traer todos los capítulos
   useEffect(() => {
-    fetch(`${API}/sicoe-obra/${contrato_id}/capitulos`, { headers: hdrs })
+    fetch(`${API}/listado-precios/${contrato_id}`, { headers: hdrs })
       .then(r => r.json())
-      .then(d => setListaCapitulos(Array.isArray(d) ? d.map(c => c.capitulo) : []))
+      .then(d => {
+        if (Array.isArray(d)) {
+          const caps = [...new Set(d.map(r => r.capitulo).filter(Boolean))]
+          const sorted = caps.sort((a, b) => {
+            const na = parseInt(a.match(/^(\d+)/)?.[1] || '9999')
+            const nb = parseInt(b.match(/^(\d+)/)?.[1] || '9999')
+            return na - nb
+          })
+          setListaCapitulos(sorted)
+        }
+      })
       .catch(() => {})
   }, [])
 
