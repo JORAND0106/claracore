@@ -3874,12 +3874,12 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   // ─ Colores del tema de la carpeta ─
   const C = {
-    carpetaFondo:   '#1A2332',
-    carpetaHeader:  '#F59E0B',
-    tabActivo:      t.primary,
-    tabInactivo:    t.bgCard,
-    hoja:           t.bg,
-    borde:          t.border,
+    carpetaFondo:  t.bg,
+    carpetaHeader: t.primary,
+    tabActivo:     t.primary,
+    tabInactivo:   t.bgCard,
+    hoja:          t.bg,
+    borde:         t.border,
   }
 
   // ─ Campo de info del reporte (para portada y hojas) ─
@@ -3897,19 +3897,19 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       <div style={{ width:'100%', maxWidth:'1100px', background:C.carpetaFondo, borderRadius:'16px', border:`2px solid ${C.carpetaHeader}`, boxShadow:'0 24px 80px rgba(0,0,0,0.6)', minHeight:'80vh', display:'flex', flexDirection:'column' }}>
 
         {/* ─ Header tipo carpeta ─ */}
-        <div style={{ background:`linear-gradient(135deg, ${C.carpetaHeader}, #D97706)`, borderRadius:'14px 14px 0 0', padding:'16px 24px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <div style={{ background:`linear-gradient(135deg, ${t.primary}, ${t.primary}BB)`, borderRadius:'14px 14px 0 0', padding:'16px 24px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
           <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
             <span style={{ fontSize:'28px' }}>📁</span>
             <div>
-              <div style={{ fontSize:'18px', fontWeight:'900', color:'#000' }}>
+              <div style={{ fontSize:'18px', fontWeight:'900', color:'#fff' }}>
                 {reporte.descripcion_actividad || `Reporte #${reporte.numero_reporte}`}
               </div>
-              <div style={{ fontSize:'12px', color:'#00000099', fontWeight:'600' }}>
+              <div style={{ fontSize:'12px', color:'#ffffff99', fontWeight:'600' }}>
                 Reporte #{reporte.numero_reporte} · {reporte.capitulo} · {reporte.subcontratista_nombre || '—'}
               </div>
             </div>
           </div>
-          <button onClick={onClose} style={{ background:'rgba(0,0,0,0.2)', border:'none', color:'#000', borderRadius:'50%', width:'34px', height:'34px', fontSize:'18px', cursor:'pointer', fontWeight:'900', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
+          <button onClick={onClose} style={{ background:'rgba(255,255,255,0.2)', border:'none', color:'#fff', borderRadius:'50%', width:'34px', height:'34px', fontSize:'18px', cursor:'pointer', fontWeight:'900', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
         </div>
 
         {/* ─ Tab bar horizontal ─ */}
@@ -3952,95 +3952,139 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
           {/* ── TAB PORTADA ── */}
           {tabActiva === 'portada' && (
-            <div>
-              {/* Bloque info general */}
-              <div style={{ marginBottom:'20px' }}>
-                <div style={{ fontSize:'11px', fontWeight:'800', color:C.carpetaHeader, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📍 Información del Reporte</div>
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(200px,1fr))', gap:'10px' }}>
-                  <CampoInfo label="Nombre del Reporte"  valor={reporte.descripcion_actividad} />
-                  <CampoInfo label="Subcontratista"      valor={reporte.subcontratista_nombre} />
-                  <CampoInfo label="Inspector"           valor={reporte.inspector_nombre} />
-                  <CampoInfo label="Capítulo"            valor={reporte.capitulo} />
+            <div style={{ display:'flex', flexDirection:'column', gap:'20px' }}>
+
+              {/* GRUPO 1 — Seguimiento Contractual (primero) */}
+              <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
+                <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📑 Seguimiento Contractual</div>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px' }}>
+                  <CampoInfo label="Acta RPO" valor={reporte.acta_rpo_numero ? `RPO #${reporte.acta_rpo_numero}` : null} />
+                  <CampoInfo label="Corte"    valor={reporte.corte_numero    ? `Corte #${reporte.corte_numero}` : null} />
+                  <CampoInfo label="Semana"   valor={reporte.semana_numero   ? `Semana ${reporte.semana_numero}${reporte.semana_periodo ? ' · ' + reporte.semana_periodo : ''}` : null} />
+                </div>
+              </div>
+
+              {/* GRUPO 2 — Identificación del Reporte */}
+              <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
+                <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📋 Identificación del Reporte</div>
+                {/* Nombre full width */}
+                <div style={{ marginBottom:'10px' }}>
+                  <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Nombre del Reporte</div>
+                  <div style={{ fontSize:'14px', color:t.text, fontWeight:'700', background:t.bg, borderRadius:'6px', padding:'8px 12px', border:`1px solid ${t.border}` }}>
+                    {reporte.descripcion_actividad || <span style={{ color:t.textMuted, fontStyle:'italic' }}>—</span>}
+                  </div>
+                </div>
+                {/* Subcontratista | Inspector | Capítulo */}
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px' }}>
+                  <CampoInfo label="Subcontratista" valor={reporte.subcontratista_nombre} />
+                  <CampoInfo label="Inspector"       valor={reporte.inspector_nombre} />
+                  <CampoInfo label="Capítulo"        valor={reporte.capitulo} />
+                </div>
+              </div>
+
+              {/* GRUPO 3 — Localización */}
+              <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
+                <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📍 Localización</div>
+                {/* PK_ID | CIV | Tramo | Costado */}
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'10px', marginBottom:'10px' }}>
                   <div>
-                    <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.8px', textTransform:'uppercase', marginBottom:'2px' }}>PK_ID</div>
-                    <div style={{ display:'flex', alignItems:'center', gap:'8px', background:t.bgCard, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${C.borde}` }}>
-                      <span style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>{reporte.pk_id_id || '—'}</span>
-                      {reporte.coord_lat && reporte.coord_lng && (
-                        <button onClick={() => setModalMapbox(true)} title="Ver en mapa" style={{ background:'none', border:'none', cursor:'pointer', fontSize:'18px', lineHeight:1 }}>📍</button>
+                    <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>PK_ID</div>
+                    <div style={{ display:'flex', alignItems:'center', gap:'6px', background:t.bg, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${t.border}` }}>
+                      <span style={{ fontSize:'13px', fontWeight:'700', color:t.text, flex:1 }}>{reporte.pk_id_valor || reporte.pk_id_id || '—'}</span>
+                      {(reporte.coord_lat || reporte.coord_lng) && (
+                        <button onClick={() => setModalMapbox(true)} title="Ver ubicación en mapa"
+                          style={{ background:'none', border:'none', cursor:'pointer', fontSize:'16px', lineHeight:1, padding:'0', flexShrink:0 }}>📍</button>
                       )}
                     </div>
                   </div>
-                  <CampoInfo label="CIV"             valor={reporte.civ} />
-                  <CampoInfo label="Tramo"           valor={reporte.tramo} />
-                  <CampoInfo label="Costado"         valor={reporte.calzada} />
+                  <CampoInfo label="CIV"     valor={reporte.civ} />
+                  <CampoInfo label="Tramo"   valor={reporte.tramo} />
+                  <CampoInfo label="Costado" valor={reporte.calzada} />
+                </div>
+                {/* Infraestructura | Latitud | Longitud */}
+                <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:'10px', marginBottom:'10px' }}>
                   <CampoInfo label="Infraestructura" valor={reporte.infraestructura} />
                   <CampoInfo label="Latitud"         valor={reporte.coord_lat} />
                   <CampoInfo label="Longitud"        valor={reporte.coord_lng} />
-                  <CampoInfo label="Abscisado Ini."  valor={reporte.abs_inicio} />
-                  <CampoInfo label="Abscisado Fin."  valor={reporte.abs_final} />
-                  <CampoInfo label="Nodo Inicial"    valor={reporte.nodo_ini} />
-                  <CampoInfo label="Nodo Final"      valor={reporte.nodo_fin} />
+                </div>
+                {/* Abscisado y Nodos */}
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'10px' }}>
+                  <CampoInfo label="Abs. Inicio"  valor={reporte.abs_inicio} />
+                  <CampoInfo label="Abs. Final"   valor={reporte.abs_final} />
+                  <CampoInfo label="Nodo Inicial" valor={reporte.nodo_ini} />
+                  <CampoInfo label="Nodo Final"   valor={reporte.nodo_fin} />
                 </div>
               </div>
 
-              {/* Bloque Acta / Corte / Semana */}
-              <div style={{ marginBottom:'20px' }}>
-                <div style={{ fontSize:'11px', fontWeight:'800', color:C.carpetaHeader, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📑 Seguimiento Contractual</div>
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(200px,1fr))', gap:'10px' }}>
-                  <CampoInfo label="Acta RPO"  valor={reporte.acta_rpo_numero ? `RPO #${reporte.acta_rpo_numero}` : null} />
-                  <CampoInfo label="Corte"     valor={reporte.corte_numero    ? `Corte #${reporte.corte_numero}` : null} />
-                  <CampoInfo label="Semana"    valor={reporte.semana_numero   ? `Semana ${reporte.semana_numero} · ${reporte.semana_periodo || ''}` : null} />
-                </div>
-              </div>
-
-              {/* Bloque Topografía */}
-              {(reporte.puntos || []).length > 0 && (
-                <div style={{ marginBottom:'20px' }}>
-                  <div style={{ fontSize:'11px', fontWeight:'800', color:C.carpetaHeader, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📐 Puntos Topográficos</div>
+              {/* GRUPO 4 — Coordenadas Topográficas (siempre visible) */}
+              <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
+                <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📐 Coordenadas Topográficas</div>
+                {(reporte.puntos || []).length === 0 ? (
+                  <div style={{ background:'#EF444415', border:'1px solid #EF444433', borderRadius:'8px', padding:'12px 16px', color:'#EF4444', fontSize:'12px', fontWeight:'600', textAlign:'center' }}>
+                    ⚠️ Sin coordenadas registradas. El topógrafo debe diligenciar esta información — es obligatoria para asignar ítems.
+                  </div>
+                ) : (
                   <div style={{ overflowX:'auto' }}>
                     <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
                       <thead>
-                        <tr style={{ background:'#0F1923' }}>
+                        <tr style={{ background:t.bg }}>
                           {['Punto','Norte','Este','Cota','Descripción'].map(h => (
-                            <th key={h} style={{ padding:'8px 12px', textAlign:'left', color:t.textMuted, fontWeight:'700', fontSize:'10px', letterSpacing:'0.5px', textTransform:'uppercase' }}>{h}</th>
+                            <th key={h} style={{ padding:'7px 12px', textAlign:'left', color:t.textMuted, fontWeight:'700', fontSize:'10px', letterSpacing:'0.5px', textTransform:'uppercase' }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {(reporte.puntos || []).map((p, i) => (
-                          <tr key={i} style={{ borderBottom:`1px solid ${C.borde}` }}>
+                        {reporte.puntos.map((p, i) => (
+                          <tr key={i} style={{ borderBottom:`1px solid ${t.border}` }}>
                             <td style={{ padding:'7px 12px', color:t.text, fontWeight:'700' }}>{p.punto || '—'}</td>
                             <td style={{ padding:'7px 12px', color:t.text }}>{p.norte ?? '—'}</td>
-                            <td style={{ padding:'7px 12px', color:t.text }}>{p.este ?? '—'}</td>
-                            <td style={{ padding:'7px 12px', color:t.text }}>{p.cota ?? '—'}</td>
+                            <td style={{ padding:'7px 12px', color:t.text }}>{p.este  ?? '—'}</td>
+                            <td style={{ padding:'7px 12px', color:t.text }}>{p.cota  ?? '—'}</td>
                             <td style={{ padding:'7px 12px', color:t.textMuted }}>{p.descripcion || '—'}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
 
-              {/* Bloque Enlace Soporte */}
-              <div>
-                <div style={{ fontSize:'11px', fontWeight:'800', color:C.carpetaHeader, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>🔗 Enlace de Soporte</div>
+              {/* GRUPO 5 — Biblioteca de Soportes */}
+              <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
+                <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'4px' }}>🔗 Enlace de Soporte</div>
+                <div style={{ fontSize:'11px', color:t.textMuted, marginBottom:'12px' }}>Repositorio externo de soportes documentales (Drive, SharePoint, etc.)</div>
                 <div style={{ display:'flex', gap:'10px', alignItems:'center' }}>
                   <input
                     value={enlaceSoporte}
                     onChange={e => setEnlaceSoporte(e.target.value)}
-                    placeholder="https://drive.google.com/... o enlace al repositorio de soportes"
-                    style={{ flex:1, background:t.bgCard, border:`1px solid ${C.borde}`, borderRadius:'8px', padding:'10px 14px', color:t.text, fontSize:'13px' }}
+                    placeholder="https://drive.google.com/..."
+                    style={{ flex:1, background:t.bg, border:`1px solid ${(() => {
+                      if (!enlaceSoporte) return t.border
+                      try { new URL(enlaceSoporte); return '#10B981' } catch { return '#EF4444' }
+                    })()}`, borderRadius:'8px', padding:'10px 14px', color:t.text, fontSize:'13px' }}
                   />
-                  {enlaceSoporte && (
-                    <a href={enlaceSoporte} target="_blank" rel="noreferrer" style={{ padding:'10px 14px', background:'#0077B622', color:t.primary, borderRadius:'8px', fontSize:'12px', fontWeight:'700', textDecoration:'none', border:`1px solid ${t.primary}44` }}>↗ Abrir</a>
+                  {enlaceSoporte && (() => { try { new URL(enlaceSoporte); return true } catch { return false } })() && (
+                    <a href={enlaceSoporte} target="_blank" rel="noreferrer"
+                      style={{ padding:'10px 14px', background:`${t.primary}22`, color:t.primary, borderRadius:'8px', fontSize:'12px', fontWeight:'700', textDecoration:'none', border:`1px solid ${t.primary}44`, whiteSpace:'nowrap' }}>
+                      ↗ Abrir
+                    </a>
                   )}
-                  <button onClick={guardarEnlace} disabled={guardandoEnlace} style={{
-                    background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
-                    padding:'10px 18px', fontSize:'12px', fontWeight:'700', cursor:'pointer', opacity: guardandoEnlace ? 0.6 : 1
-                  }}>{guardandoEnlace ? 'Guardando...' : 'Guardar'}</button>
+                  <button
+                    onClick={guardarEnlace}
+                    disabled={guardandoEnlace || (!!enlaceSoporte && (() => { try { new URL(enlaceSoporte); return false } catch { return true } })())}
+                    title={enlaceSoporte && (() => { try { new URL(enlaceSoporte); return false } catch { return true } })() ? 'El enlace no es una URL válida' : ''}
+                    style={{
+                      background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
+                      padding:'10px 18px', fontSize:'12px', fontWeight:'700', cursor:'pointer',
+                      opacity: guardandoEnlace || (!!enlaceSoporte && (() => { try { new URL(enlaceSoporte); return false } catch { return true } })()) ? 0.5 : 1,
+                      whiteSpace:'nowrap'
+                    }}>{guardandoEnlace ? 'Guardando...' : '💾 Guardar'}</button>
                 </div>
+                {enlaceSoporte && (() => { try { new URL(enlaceSoporte); return false } catch { return true } })() && (
+                  <div style={{ fontSize:'11px', color:'#EF4444', marginTop:'6px' }}>⚠️ Ingresa una URL válida (debe comenzar con https://)</div>
+                )}
               </div>
+
             </div>
           )}
 

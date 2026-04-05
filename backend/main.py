@@ -3156,7 +3156,7 @@ class ReporteCreate(BaseModel):
 @app.get("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
 def obtener_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
     def _r():
-        return supabase.table("so_reportes").select("*, subcontratistas(razon_social)")\
+        return supabase.table("so_reportes").select("*, subcontratistas(razon_social), pk_ids(pk_id, civ, tramo, infraestructura, calzada, abs_inicio, abs_final)")\
             .eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
     def _reg():
         return supabase.table("so_registros").select("*")\
@@ -3170,6 +3170,15 @@ def obtener_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_
     r = reporte[0]
     sub = r.pop("subcontratistas", None)
     r["subcontratista_nombre"] = sub["razon_social"] if sub else None
+    pk = r.pop("pk_ids", None)
+    if pk:
+        r["pk_id_valor"]    = pk.get("pk_id")
+        r["civ"]            = r.get("civ")     or pk.get("civ")
+        r["tramo"]          = r.get("tramo")   or pk.get("tramo")
+        r["infraestructura"]= r.get("infraestructura") or pk.get("infraestructura")
+        r["calzada"]        = r.get("calzada") or pk.get("calzada")
+    else:
+        r["pk_id_valor"] = None
     r["registros"] = supabase_execute(_reg)
     r["puntos"] = supabase_execute(_pts)
 
