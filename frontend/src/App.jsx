@@ -3536,6 +3536,290 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t }) {
   )
 }
 
+// ─── HELPER: NIVEL DE VALIDACIÓN ─────────────────────────────────────────────
+function determinarNivelValidacion(usuario) {
+  const rol     = (usuario?.rol || '').toLowerCase()
+  const cargo   = (usuario?.cargo_nombre || usuario?.cargo || '').toLowerCase()
+  const modulos = usuario?.permisos_modulos || []
+
+  const modRpt  = modulos.find(m =>
+    (m.modulo_nombre || m.nombre || '').toLowerCase().includes('reporte de cantidades')
+  )
+  const puedeValidar = !!(modRpt?.puede_validar ?? modRpt?.validar)
+  const puedeEditar  = !!(modRpt?.puede_editar  ?? modRpt?.editar)
+
+  const esContratista   = rol === 'contratista'
+  const esInterventoria = rol === 'interventoría' || rol === 'interventoria'
+  const esSubRol        = rol === 'subcontratista'
+
+  let nivelValidacion = null
+
+  if (esContratista && puedeValidar &&
+      (cargo.includes('inspector') || cargo.includes('topógrafo') || cargo.includes('topografo'))) {
+    nivelValidacion = 1
+  } else if (esContratista && puedeEditar && puedeValidar && cargo.includes('residente')) {
+    nivelValidacion = 2
+  } else if (esInterventoria && puedeValidar) {
+    nivelValidacion = 3
+  }
+
+  const esApoyoTecnico  = esInterventoria && !puedeValidar &&
+                          (cargo.includes('apoyo') || cargo.includes('técnico') || cargo.includes('tecnico'))
+  const esSubcontratista = esSubRol || cargo.includes('subcontratista')
+
+  const verValoresEconomicos = !(nivelValidacion === 1 || esApoyoTecnico)
+
+  const rolOrigen = esInterventoria ? 'interventoria'
+                  : esSubRol        ? 'subcontratista'
+                  : 'contratista'
+
+  return { nivelValidacion, esApoyoTecnico, esSubcontratista, verValoresEconomicos, rolOrigen }
+}
+
+// ─── POPUP COMENTARIO VALIDACIÓN ─────────────────────────────────────────────
+const ETIQUETAS_VALIDACION = [
+  '01. Ensayos de Laboratorio',
+  '02. Certificados de Calidad',
+  '03. Información y/o Entrega Topografía',
+  '04. Entrega en obra',
+  '05. Informe o Concepto Especialista',
+  '06. Incluida dentro del precio',
+  '07. Reportado en actas anteriores',
+  '08. Pendiente por aprobación de precio',
+  '09. Actividad sin concluir',
+  '10. Precio no corresponde con la actividad',
+  '11. Actualizar información',
+  '12. Reproceso',
+  '13. Actividad no ejecutada',
+  '14. Relacionada con Balance de Obra',
+]
+
+const COLOR_ESTADO = { Aprobado: '#16a34a', Pendiente: '#d97706', Rechazado: '#dc2626', 'No Objeto de Cobro': '#dc2626' }
+
+function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL, hdrs,
+                                     estadoValidando, nivelValidacion, obligatorio,
+                                     onConfirmar, onCancelar }) {
+  const [usuarios,      setUsuarios]      = useState([])
+  const [destinatarios, setDestinatarios] = useState([])
+  const [etiqueta,      setEtiqueta]      = useState('')
+  const [asunto,        setAsunto]        = useState('')
+  const [mensaje,       setMensaje]       = useState('')
+  const [enlaceInput,   setEnlaceInput]   = useState('')
+  const [enlaces,       setEnlaces]       = useState([])
+  const [error,         setError]         = useState('')
+
+  const esObligatorio = obligatorio || estadoValidando === 'Pendiente' || estadoValidando === 'Rechazado' || estadoValidando === 'No Objeto de Cobro'
+  const colorEstado   = COLOR_ESTADO[estadoValidando] || t.primary
+
+  useEffect(() => {
+    fetch(`${API_URL}/admin/usuarios-contrato/${contrato_id}`, { headers: hdrs })
+      .then(r => r.json())
+      .then(d => setUsuarios(Array.isArray(d) ? d : []))
+      .catch(() => {})
+  }, [])
+
+  const toggleDestinatario = u => {
+    setDestinatarios(prev =>
+      prev.find(d => d.id === u.id) ? prev.filter(d => d.id !== u.id) : [...prev, u]
+    )
+  }
+
+  const agregarEnlace = () => {
+    const url = enlaceInput.trim()
+    if (!url) return
+    try { new URL(url) } catch { setError('URL no válida'); return }
+    setEnlaces(prev => [...prev, url])
+    setEnlaceInput('')
+    setError('')
+  }
+
+  const validar = () => {
+    if (esObligatorio) {
+      if (!destinatarios.length) { setError('Selecciona al menos un destinatario.'); return false }
+      if (!etiqueta)             { setError('Selecciona una etiqueta de observación.'); return false }
+      if (!asunto.trim())        { setError('El asunto es obligatorio.'); return false }
+      if (!mensaje.trim())       { setError('El mensaje es obligatorio.'); return false }
+    }
+    setError('')
+    return true
+  }
+
+  const confirmar = () => {
+    if (!validar()) return
+    onConfirmar({ destinatarios, etiqueta, asunto, mensaje, enlaces })
+  }
+
+  const confirmarSinComentario = () => {
+    onConfirmar(null)
+  }
+
+  const iS = {
+    width: '100%', background: t.inputBg, border: `1.5px solid ${t.inputBorder}`,
+    borderRadius: '10px', padding: '10px 13px', color: t.text, fontSize: '13px',
+    outline: 'none', boxSizing: 'border-box',
+  }
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 2000,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }} onClick={onCancelar}>
+      <div style={{
+        background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '20px',
+        width: '520px', maxWidth: '96vw', maxHeight: '90vh', overflowY: 'auto',
+        boxShadow: '0 24px 80px rgba(0,0,0,0.4)', display: 'flex', flexDirection: 'column',
+      }} onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div style={{ padding: '20px 24px 16px', borderBottom: `1px solid ${t.border}`,
+                      display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: colorEstado, flexShrink: 0 }} />
+          <div>
+            <div style={{ fontSize: '13px', fontWeight: '700', color: t.text }}>
+              Comentario de validación
+            </div>
+            <div style={{ fontSize: '11px', color: colorEstado, fontWeight: '600', marginTop: '2px' }}>
+              Estado: {estadoValidando} · Nivel {nivelValidacion}
+            </div>
+          </div>
+          <button onClick={onCancelar} style={{ marginLeft: 'auto', background: 'none', border: 'none',
+            fontSize: '18px', color: t.textMuted, cursor: 'pointer', lineHeight: 1 }}>✕</button>
+        </div>
+
+        {/* Body */}
+        <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+
+          {/* Destinatarios */}
+          <div>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '8px' }}>
+              PARA {esObligatorio && <span style={{ color: '#dc2626' }}>*</span>}
+            </div>
+            <div style={{ maxHeight: '140px', overflowY: 'auto', border: `1.5px solid ${t.inputBorder}`,
+                          borderRadius: '10px', padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              {usuarios.length === 0 && (
+                <div style={{ fontSize: '12px', color: t.textMuted, padding: '4px' }}>Cargando usuarios…</div>
+              )}
+              {usuarios.map(u => {
+                const sel = !!destinatarios.find(d => d.id === u.id)
+                return (
+                  <div key={u.id} onClick={() => toggleDestinatario(u)}
+                    style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '5px 8px',
+                             borderRadius: '8px', cursor: 'pointer', background: sel ? `${colorEstado}18` : 'transparent',
+                             border: sel ? `1px solid ${colorEstado}55` : '1px solid transparent' }}>
+                    <div style={{ width: '16px', height: '16px', borderRadius: '4px', flexShrink: 0,
+                                  border: `2px solid ${sel ? colorEstado : t.inputBorder}`,
+                                  background: sel ? colorEstado : 'transparent',
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {sel && <span style={{ color: '#fff', fontSize: '10px', lineHeight: 1 }}>✓</span>}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: '12px', fontWeight: '600', color: t.text,
+                                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {u.nombre} {u.apellidos || ''}
+                      </div>
+                      <div style={{ fontSize: '10px', color: t.textMuted }}>{u.cargo_nombre || u.cargo || ''}</div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Etiqueta */}
+          <div>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
+              ETIQUETA {esObligatorio && <span style={{ color: '#dc2626' }}>*</span>}
+            </div>
+            <select value={etiqueta} onChange={e => setEtiqueta(e.target.value)} style={iS}>
+              <option value=''>— Selecciona una etiqueta —</option>
+              {ETIQUETAS_VALIDACION.map(et => (
+                <option key={et} value={et}>{et}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Asunto */}
+          <div>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
+              ASUNTO {esObligatorio && <span style={{ color: '#dc2626' }}>*</span>}
+            </div>
+            <input value={asunto} onChange={e => setAsunto(e.target.value)} style={iS}
+                   placeholder='Resumen breve del comentario' />
+          </div>
+
+          {/* Mensaje */}
+          <div>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
+              MENSAJE {esObligatorio && <span style={{ color: '#dc2626' }}>*</span>}
+            </div>
+            <textarea value={mensaje} onChange={e => setMensaje(e.target.value)}
+                      rows={4} style={{ ...iS, resize: 'vertical', fontFamily: 'inherit' }}
+                      placeholder='Detalle del comentario…' />
+          </div>
+
+          {/* Enlaces */}
+          <div>
+            <div style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
+              ENLACES <span style={{ fontWeight: '400', textTransform: 'none' }}>(opcional)</span>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input value={enlaceInput} onChange={e => setEnlaceInput(e.target.value)}
+                     onKeyDown={e => e.key === 'Enter' && agregarEnlace()}
+                     style={{ ...iS, flex: 1 }} placeholder='https://…' />
+              <button onClick={agregarEnlace}
+                style={{ padding: '10px 14px', background: t.primary, color: '#fff', border: 'none',
+                         borderRadius: '10px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                + Agregar
+              </button>
+            </div>
+            {enlaces.length > 0 && (
+              <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {enlaces.map((url, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px',
+                                        fontSize: '11px', color: t.primary }}>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{url}</span>
+                    <button onClick={() => setEnlaces(prev => prev.filter((_, j) => j !== i))}
+                      style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer',
+                               fontSize: '13px', lineHeight: 1, padding: 0, flexShrink: 0 }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Error */}
+          {error && (
+            <div style={{ fontSize: '12px', color: '#dc2626', background: '#dc262612',
+                          borderRadius: '8px', padding: '8px 12px' }}>{error}</div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: '16px 24px', borderTop: `1px solid ${t.border}`,
+                      display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+          <button onClick={onCancelar}
+            style={{ padding: '10px 18px', background: 'none', border: `1.5px solid ${t.border}`,
+                     borderRadius: '10px', color: t.textMuted, fontSize: '13px', cursor: 'pointer' }}>
+            Cancelar
+          </button>
+          {!esObligatorio && (
+            <button onClick={confirmarSinComentario}
+              style={{ padding: '10px 18px', background: `${colorEstado}22`, border: `1.5px solid ${colorEstado}55`,
+                       borderRadius: '10px', color: colorEstado, fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
+              Confirmar sin comentario
+            </button>
+          )}
+          <button onClick={confirmar}
+            style={{ padding: '10px 18px', background: colorEstado, border: 'none',
+                     borderRadius: '10px', color: '#fff', fontSize: '13px', fontWeight: '700', cursor: 'pointer' }}>
+            Confirmar con comentario
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── HOJA REGISTRO ────────────────────────────────────────────────────────────
 function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, seleccionado, onToggleSeleccion, onItemAsignado, hdrs }) {
   const [competencia,    setCompetencia]    = useState(registro.competencia    || '')
@@ -3565,7 +3849,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [modalGaleriaHoja, setModalGaleriaHoja] = useState(false)
   const graficoReporte = reporte.registros?.find(r => r.grafico_url) || null
   const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || graficoReporte?.grafico_url || null)
+  const [mostrarPopupValidacion, setMostrarPopupValidacion] = useState(false)
+  const [estadoValidando,        setEstadoValidando]        = useState('')
   const API = API_URL
+  const nivelInfo = determinarNivelValidacion(usuario)
 
   // Paso 1: cargar capítulos al montar desde el listado completo (fuente confiable)
   // Si ya hay capítulo preseleccionado, también carga sus ítems de inmediato
@@ -3735,6 +4022,71 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       alert(`No se pudieron guardar los cambios: ${e.message}`)
     }
     setGuardando(false)
+  }
+
+  const ejecutarValidacion = (estado) => {
+    const esAprobado = estado === 'Aprobado'
+    setEstadoValidando(estado)
+    // Aprobado sin obligatorio puede confirmarse directo, pero abrimos popup para dar opción
+    setMostrarPopupValidacion(true)
+  }
+
+  const confirmarValidacion = async (comentarioData) => {
+    setMostrarPopupValidacion(false)
+    const nivel = nivelInfo.nivelValidacion
+    if (!nivel) return
+    const sufijo = nivel === 1 ? 'validar-nivel1' : nivel === 2 ? 'validar-nivel2' : 'validar-nivel3'
+    const body = { estado: estadoValidando }
+    if (comentarioData) body.comentario_data = comentarioData
+    if (nivel === 2 && registro.nivel2_objeto_pago_sub !== undefined) {
+      body.objeto_pago_sub = registro.nivel2_objeto_pago_sub
+    }
+    try {
+      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/${sufijo}`, {
+        method: 'PUT', headers: hdrs, body: JSON.stringify(body)
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || `Error ${res.status}`)
+      }
+      onItemAsignado()
+    } catch(e) {
+      alert(`No se pudo aplicar la validación: ${e.message}`)
+    }
+  }
+
+  const actualizarObjetoPagoSub = async (valor) => {
+    try {
+      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/validar-nivel2`, {
+        method: 'PUT', headers: hdrs,
+        body: JSON.stringify({ estado: registro.nivel2_estado || 'Pendiente', objeto_pago_sub: valor })
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || `Error ${res.status}`)
+      }
+      onItemAsignado()
+    } catch(e) {
+      alert(`Error actualizando objeto de pago: ${e.message}`)
+    }
+  }
+
+  const solicitarReversion = async () => {
+    const motivo = prompt('Motivo de la solicitud de reversión:')
+    if (motivo === null) return
+    try {
+      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/solicitar-reversion`, {
+        method: 'PUT', headers: hdrs,
+        body: JSON.stringify({ comentario_data: { mensaje: motivo, tipo: 'solicitud_reversion' } })
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || `Error ${res.status}`)
+      }
+      onItemAsignado()
+    } catch(e) {
+      alert(`Error al solicitar reversión: ${e.message}`)
+    }
   }
 
   const C = { borde: t.border, label: t.textMuted }
@@ -3922,8 +4274,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             </>
           )}
           <CampoRO label="Cantidad Total"  valor={cantTotal.toFixed(2)} color={t.primary} />
-          <CampoRO label="Vlr. Unitario"   valor={vlrUnitario ? fmtD(vlrUnitario) : null} />
-          <CampoRO label="Costo Directo"   valor={costoDirecto ? fmtD(costoDirecto) : null} color='#10B981' />
+          {nivelInfo.verValoresEconomicos && (
+            <CampoRO label="Vlr. Unitario"   valor={vlrUnitario ? fmtD(vlrUnitario) : null} />
+          )}
+          {nivelInfo.verValoresEconomicos && (
+            <CampoRO label="Costo Directo"   valor={costoDirecto ? fmtD(costoDirecto) : null} color='#10B981' />
+          )}
         </div>
         <div style={{ marginTop:'10px' }}>
           {puedeEditar ? (
@@ -4078,6 +4434,146 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         </div>
       )}
 
+      {/* ─ Sección: Validación ─ */}
+      {nivelInfo.nivelValidacion && (() => {
+        const nv  = nivelInfo.nivelValidacion
+        const bloqueado = !!registro.bloqueado
+        const estadoActual = nv === 1 ? registro.nivel1_estado
+                           : nv === 2 ? registro.nivel2_estado
+                           : registro.nivel3_estado
+        const BTNS = [
+          { estado: 'Aprobado',  icon: '✅', color: '#16a34a' },
+          { estado: 'Pendiente', icon: '🟡', color: '#d97706' },
+          { estado: 'Rechazado', icon: '🔴', color: '#dc2626' },
+          ...(nv === 2 ? [{ estado: 'No Objeto de Cobro', icon: '🚫', color: '#374151' }] : []),
+        ]
+        return (
+          <div style={{ marginBottom:'16px', background:t.bg, borderRadius:'10px', padding:'16px', border:`1px solid ${C.borde}` }}>
+            <div style={{ fontSize:'11px', fontWeight:'800', color:t.textMuted, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>
+              🚦 Validación · Nivel {nv}
+              {bloqueado && <span style={{ marginLeft:'8px', background:'#dc262615', color:'#dc2626', border:'1px solid #dc262633', borderRadius:'12px', padding:'2px 10px', fontSize:'10px' }}>🔒 Bloqueado</span>}
+            </div>
+            <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+              {BTNS.map(({ estado, icon, color }) => {
+                const activo = estadoActual === estado || (estado === 'No Objeto de Cobro' && estadoActual === 'Rechazado' && registro.nivel2_objeto_pago_sub === false)
+                return (
+                  <button key={estado} disabled={bloqueado}
+                    onClick={() => ejecutarValidacion(estado)}
+                    style={{
+                      padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '700',
+                      cursor: bloqueado ? 'not-allowed' : 'pointer', opacity: bloqueado ? 0.5 : 1,
+                      background: activo ? `${color}22` : 'transparent',
+                      color, border: activo ? `2.5px solid ${color}` : `1.5px solid ${color}55`,
+                      transition: 'all 0.15s',
+                    }}>
+                    {icon} {estado}
+                  </button>
+                )
+              })}
+              {nv === 3 && bloqueado && (
+                <button onClick={solicitarReversion}
+                  style={{ padding:'8px 16px', borderRadius:'8px', fontSize:'12px', fontWeight:'700',
+                           cursor:'pointer', background:'#7c3aed15', color:'#7c3aed',
+                           border:'1.5px solid #7c3aed55' }}>
+                  ↩️ Solicitar Reversión
+                </button>
+              )}
+            </div>
+            {nv === 2 && (
+              <div style={{ marginTop:'12px', display:'flex', alignItems:'center', gap:'8px' }}>
+                <input type="checkbox" id={`obj-pago-sub-${registro.id}`}
+                  checked={!!registro.nivel2_objeto_pago_sub}
+                  disabled={bloqueado}
+                  onChange={e => actualizarObjetoPagoSub(e.target.checked)}
+                  style={{ width:'16px', height:'16px', accentColor:'#8B5CF6', cursor: bloqueado ? 'not-allowed' : 'pointer' }} />
+                <label htmlFor={`obj-pago-sub-${registro.id}`}
+                  style={{ fontSize:'12px', fontWeight:'600', color:t.text, cursor: bloqueado ? 'not-allowed' : 'pointer' }}>
+                  Objeto de pago al subcontratista
+                </label>
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
+      {/* ─ Sección: Validación Sub ─ */}
+      {nivelInfo.esSubcontratista && (() => {
+        const bloqueado   = !!registro.bloqueado
+        const estadoActual = registro.sub_estado || 'No Revisado'
+        const COLOR_SUB   = { Aprobado:'#16a34a', Pendiente:'#d97706', Rechazado:'#dc2626', 'No Revisado':'#3B82F6' }
+        const BTNS_SUB    = [
+          { estado:'Aprobado',  icon:'✅', color:'#16a34a' },
+          { estado:'Pendiente', icon:'🟡', color:'#d97706' },
+          { estado:'Rechazado', icon:'🔴', color:'#dc2626' },
+        ]
+        const ejecutarValidacionSub = async (estado) => {
+          try {
+            const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/validar-sub`, {
+              method: 'PUT', headers: hdrs, body: JSON.stringify({ estado })
+            })
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}))
+              throw new Error(err.detail || `Error ${res.status}`)
+            }
+            onItemAsignado()
+          } catch(e) {
+            alert(`No se pudo aplicar la validación: ${e.message}`)
+          }
+        }
+        return (
+          <div style={{ marginBottom:'16px', background:t.bg, borderRadius:'10px', padding:'16px', border:`1px solid ${C.borde}` }}>
+            <div style={{ fontSize:'11px', fontWeight:'800', color:'#8B5CF6', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>
+              🔨 Mi Validación
+              {bloqueado && !registro.nivel2_objeto_pago_sub && (
+                <span style={{ marginLeft:'8px', background:'#dc262615', color:'#dc2626', border:'1px solid #dc262633', borderRadius:'12px', padding:'2px 8px', fontSize:'10px' }}>No objeto de pago</span>
+              )}
+            </div>
+            <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'12px' }}>
+              <span style={{ fontSize:'12px', color:t.textMuted }}>Estado actual:</span>
+              <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'12px', fontWeight:'700', color: COLOR_SUB[estadoActual] || '#3B82F6' }}>
+                <span style={{ width:'10px', height:'10px', borderRadius:'50%', background: COLOR_SUB[estadoActual] || '#3B82F6' }} />
+                {estadoActual}
+              </span>
+            </div>
+            {registro.nivel2_objeto_pago_sub ? (
+              <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+                {BTNS_SUB.map(({ estado, icon, color }) => {
+                  const activo = estadoActual === estado
+                  return (
+                    <button key={estado}
+                      onClick={() => ejecutarValidacionSub(estado)}
+                      style={{
+                        padding:'8px 16px', borderRadius:'8px', fontSize:'12px', fontWeight:'700',
+                        cursor:'pointer', background: activo ? `${color}22` : 'transparent',
+                        color, border: activo ? `2.5px solid ${color}` : `1.5px solid ${color}55`,
+                      }}>
+                      {icon} {estado}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <div style={{ fontSize:'12px', color:t.textMuted, fontStyle:'italic' }}>
+                Este registro no está marcado como objeto de pago al subcontratista.
+              </div>
+            )}
+          </div>
+        )
+      })()}
+
+      {/* ─ Popup validación ─ */}
+      {mostrarPopupValidacion && (
+        <PopupComentarioValidacion
+          t={t} usuario={usuario} registro={registro}
+          contrato_id={contrato_id} API_URL={API} hdrs={hdrs}
+          estadoValidando={estadoValidando}
+          nivelValidacion={nivelInfo.nivelValidacion}
+          obligatorio={estadoValidando !== 'Aprobado'}
+          onConfirmar={confirmarValidacion}
+          onCancelar={() => setMostrarPopupValidacion(false)}
+        />
+      )}
+
       {/* ─ Acciones finales ─ */}
       {puedeEditar && (
         <div style={{ display:'flex', justifyContent:'flex-end', paddingTop:'12px', borderTop:`1px solid ${C.borde}` }}>
@@ -4133,14 +4629,28 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [listaInsp, setListaInsp]                  = useState([])
   const [listaCaps, setListaCaps]                  = useState([])
   const [listasLoaded, setListasLoaded]            = useState(false)
+  const [modalComentarios, setModalComentarios]    = useState(null)   // { reg } o null
+  const [comentariosData, setComentariosData]      = useState([])
+  const [loadingComentarios, setLoadingComentarios] = useState(false)
+  const [popupMasivo, setPopupMasivo]              = useState(null)   // { estado } o null
+  const [msgMasivo, setMsgMasivo]                  = useState('')
+  const [ejecutandoMasivo, setEjecutandoMasivo]    = useState(false)
 
   const perm        = (usuario?.permisos || []).find(p => p.funcion_nombre === 'Reporte de Cantidades')
   const puedeEditar = perm?.editar
   const hdrs        = { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' }
+  const nivelInfo   = determinarNivelValidacion(usuario)
+
+  // Para subcontratistas: solo registros con objeto_pago_sub y subcontratista coincidente
+  const subIdEnCarpeta   = usuario?.subcontratista_id ?? usuario?.sub_id ?? null
+  const registrosVisibles = nivelInfo.esSubcontratista
+    ? registros.filter(r => r.nivel2_objeto_pago_sub === true &&
+        (subIdEnCarpeta === null || r.subcontratista_id === subIdEnCarpeta))
+    : registros
 
   // Ítems asignados únicos — cada uno genera un tab
-  const itemsAsignados = [...new Set(registros.filter(r => r.item_numero).map(r => r.item_numero))]
-  const regsSinAsignar = registros.filter(r => !r.item_numero)
+  const itemsAsignados = [...new Set(registrosVisibles.filter(r => r.item_numero).map(r => r.item_numero))]
+  const regsSinAsignar = registrosVisibles.filter(r => !r.item_numero)
 
   const recargar = async () => {
     try {
@@ -4406,6 +4916,124 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   <CampoInfo label="Semana"   valor={reporte.semana_numero   ? `Semana ${reporte.semana_numero}${reporte.semana_periodo ? ' · ' + reporte.semana_periodo : ''}` : null} />
                 </div>
               </div>
+
+              {/* PANEL — Validación Masiva (solo nivel 2 y 3) */}
+              {(nivelInfo.nivelValidacion === 2 || nivelInfo.nivelValidacion === 3) && (() => {
+                const nv        = nivelInfo.nivelValidacion
+                const campoEst  = nv === 2 ? 'nivel2_estado' : 'nivel3_estado'
+                const conteo    = { 'No Revisado': 0, 'Aprobado': 0, 'Pendiente': 0, 'Rechazado': 0 }
+                registros.forEach(r => {
+                  const est = r[campoEst] || 'No Revisado'
+                  if (conteo[est] !== undefined) conteo[est]++
+                  else conteo['No Revisado']++
+                })
+                const todosSeleccionados = registros.length > 0 && registros.every(r => seleccionados.includes(r.id))
+
+                const ejecutarMasivo = async (estado, comentarioData) => {
+                  setPopupMasivo(null)
+                  setEjecutandoMasivo(true)
+                  setMsgMasivo('')
+                  const sufijo   = nv === 2 ? 'validar-masivo-nivel2' : 'validar-masivo-nivel3'
+                  const body     = { estado, ids_registros: registros.map(r => r.id) }
+                  if (comentarioData) body.comentario_data = comentarioData
+                  try {
+                    const res  = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/${sufijo}`, {
+                      method: 'PUT', headers: hdrs, body: JSON.stringify(body)
+                    })
+                    const data = await res.json()
+                    if (!res.ok) throw new Error(data.detail || `Error ${res.status}`)
+                    setMsgMasivo(`✅ ${data.actualizados} actualizado(s), ${data.omitidos} omitido(s) por no cumplir el nivel anterior.`)
+                    recargar()
+                  } catch(e) {
+                    setMsgMasivo(`❌ ${e.message}`)
+                  }
+                  setEjecutandoMasivo(false)
+                }
+
+                const BTNS_MASIVOS = [
+                  { estado:'Aprobado',  icon:'✅', color:'#16a34a' },
+                  { estado:'Pendiente', icon:'🟡', color:'#d97706' },
+                  { estado:'Rechazado', icon:'🔴', color:'#dc2626' },
+                ]
+                const COLOR_CNT = { 'No Revisado':'#3B82F6', 'Aprobado':'#10B981', 'Pendiente':'#F59E0B', 'Rechazado':'#EF4444' }
+
+                return (
+                  <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
+                    <div style={{ fontSize:'11px', fontWeight:'800', color:'#7c3aed', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'14px' }}>
+                      ⚡ Validación Masiva · Nivel {nv}
+                    </div>
+
+                    {/* Conteo de estados */}
+                    <div style={{ display:'flex', gap:'10px', flexWrap:'wrap', marginBottom:'14px' }}>
+                      {Object.entries(conteo).map(([est, cnt]) => (
+                        <div key={est} style={{ display:'flex', alignItems:'center', gap:'6px', background:t.bg,
+                                                border:`1px solid ${t.border}`, borderRadius:'20px', padding:'4px 12px' }}>
+                          <span style={{ width:'8px', height:'8px', borderRadius:'50%', background: COLOR_CNT[est], flexShrink:0 }} />
+                          <span style={{ fontSize:'11px', fontWeight:'700', color:t.text }}>{cnt}</span>
+                          <span style={{ fontSize:'10px', color:t.textMuted }}>{est}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Checkbox seleccionar todos */}
+                    <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'14px' }}>
+                      <input type="checkbox" id="sel-todos-masivo"
+                        checked={todosSeleccionados}
+                        onChange={() => {
+                          if (todosSeleccionados) setSeleccionados([])
+                          else setSeleccionados(registros.map(r => r.id))
+                        }}
+                        style={{ width:'16px', height:'16px', accentColor:'#7c3aed', cursor:'pointer' }} />
+                      <label htmlFor="sel-todos-masivo"
+                        style={{ fontSize:'12px', fontWeight:'600', color:t.text, cursor:'pointer' }}>
+                        Seleccionar todos los registros del reporte ({registros.length})
+                      </label>
+                    </div>
+
+                    {/* Botones de acción masiva */}
+                    <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+                      {BTNS_MASIVOS.map(({ estado, icon, color }) => (
+                        <button key={estado}
+                          disabled={ejecutandoMasivo}
+                          onClick={() => {
+                            if (estado === 'Aprobado') {
+                              ejecutarMasivo(estado, null)
+                            } else {
+                              setPopupMasivo({ estado })
+                            }
+                          }}
+                          style={{ padding:'8px 16px', borderRadius:'8px', fontSize:'12px', fontWeight:'700',
+                                   cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
+                                   opacity: ejecutandoMasivo ? 0.6 : 1,
+                                   background:`${color}18`, color, border:`1.5px solid ${color}55` }}>
+                          {icon} {estado} todos
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Mensaje resultado */}
+                    {msgMasivo && (
+                      <div style={{ marginTop:'12px', fontSize:'12px', color:t.text, background:t.bg,
+                                    borderRadius:'8px', padding:'10px 14px', border:`1px solid ${t.border}` }}>
+                        {msgMasivo}
+                      </div>
+                    )}
+
+                    {/* Popup comentario para acciones masivas */}
+                    {popupMasivo && (
+                      <PopupComentarioValidacion
+                        t={t} usuario={usuario} registro={registros[0] || {}}
+                        contrato_id={contrato_id} API_URL={API_URL} hdrs={hdrs}
+                        estadoValidando={popupMasivo.estado}
+                        nivelValidacion={nv}
+                        obligatorio={true}
+                        onConfirmar={comentarioData => ejecutarMasivo(popupMasivo.estado, comentarioData)}
+                        onCancelar={() => setPopupMasivo(null)}
+                      />
+                    )}
+                  </div>
+                )
+              })()}
 
               {/* GRUPO 2 — Identificación del Reporte */}
               <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
@@ -4759,9 +5387,16 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           {/* ── TABS POR ÍTEM ── */}
           {itemsAsignados.map(itemNum => tabActiva === itemNum && (
             <div key={itemNum} style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
-              {registros.filter(r => r.item_numero === itemNum).map(reg => {
+              {registrosVisibles.filter(r => r.item_numero === itemNum).map(reg => {
                 const expandido = registroExpandido === reg.id
                 const fechaReg = (() => { try { const ts=reg.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()
+                const colorNivel = st => st === 'Aprobado' ? '#10B981' : st === 'Pendiente' ? '#F59E0B' : st === 'Rechazado' ? '#EF4444' : st === 'No Objeto de Cobro' ? '#374151' : '#3B82F6'
+                const nivelesInfo = [
+                  { emoji:'👷',  label:'N1', estado: reg.nivel1_estado || 'No Revisado' },
+                  { emoji:'🏗️', label:'N2', estado: reg.nivel2_estado || 'No Revisado' },
+                  { emoji:'🏛️', label:'N3', estado: reg.nivel3_estado || 'No Revisado' },
+                  { emoji:'🔨', label:'Sub', estado: reg.sub_estado || 'No Revisado' },
+                ]
                 return (
                   <div key={reg.id}>
                     <div
@@ -4777,10 +5412,38 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                       <span style={{ fontWeight:'800', color:'#D97706', fontSize:'13px', flexShrink:0 }}>
                         📄 Registro #{reg.numero_registro}
                       </span>
-                      <span style={{ color:t.textMuted, fontSize:'12px', fontStyle: reg.observacion ? 'normal' : 'italic', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'400px', flex:1 }}>
+                      <span style={{ color:t.textMuted, fontSize:'12px', fontStyle: reg.observacion ? 'normal' : 'italic', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'300px', flex:1 }}>
                         {reg.observacion || 'Sin observación'}
                       </span>
                       <span style={{ color:t.textMuted, fontSize:'11px', flexShrink:0 }}>{fechaReg}</span>
+                      {/* Íconos de validación */}
+                      <div style={{ display:'flex', gap:'6px', alignItems:'center', flexShrink:0 }} onClick={e => e.stopPropagation()}>
+                        {nivelesInfo.map(({ emoji, label, estado }) => (
+                          <div key={label} title={`${label}: ${estado}`}
+                            style={{ display:'flex', alignItems:'center', gap:'3px' }}>
+                            <span style={{ fontSize:'13px', lineHeight:1 }}>{emoji}</span>
+                            <span style={{ width:'8px', height:'8px', borderRadius:'50%', background: colorNivel(estado), flexShrink:0 }} />
+                          </div>
+                        ))}
+                      </div>
+                      {/* Burbuja de comentarios */}
+                      <button
+                        onClick={e => {
+                          e.stopPropagation()
+                          const rolOrigen = determinarNivelValidacion(usuario).rolOrigen
+                          setModalComentarios({ reg, rolOrigen })
+                          setComentariosData([])
+                          setLoadingComentarios(true)
+                          fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}/comentarios?rol_solicitante=${rolOrigen}`, { headers: hdrs })
+                            .then(r => r.json())
+                            .then(d => { setComentariosData(Array.isArray(d) ? d : []); setLoadingComentarios(false) })
+                            .catch(() => setLoadingComentarios(false))
+                        }}
+                        style={{ background:'none', border:'none', cursor:'pointer', padding:'2px 4px',
+                                 fontSize:'15px', color:t.textMuted, flexShrink:0, lineHeight:1 }}
+                        title="Ver comentarios">
+                        💬
+                      </button>
                       <span style={{ color:t.textMuted, fontSize:'12px', flexShrink:0 }}>{expandido ? '▲' : '▼'}</span>
                     </div>
                     {expandido && (
@@ -4803,6 +5466,92 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           ))}
         </div>
       </div>
+
+      {/* ─ Modal Comentarios ─ */}
+      {modalComentarios && (
+        <div style={{ position:'fixed', inset:0, zIndex:10200, background:'rgba(0,0,0,0.6)',
+                      display:'flex', alignItems:'center', justifyContent:'center' }}
+          onClick={() => setModalComentarios(null)}>
+          <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'20px',
+                        width:'560px', maxWidth:'96vw', maxHeight:'85vh', display:'flex', flexDirection:'column',
+                        boxShadow:'0 24px 80px rgba(0,0,0,0.4)' }}
+            onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div style={{ padding:'18px 24px', borderBottom:`1px solid ${t.border}`,
+                          display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <div>
+                <div style={{ fontSize:'14px', fontWeight:'800', color:t.text }}>
+                  💬 Comentarios · Registro #{modalComentarios.reg.numero_registro}
+                </div>
+                <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>
+                  {loadingComentarios ? 'Cargando…' : `${comentariosData.length} comentario(s)`}
+                </div>
+              </div>
+              <button onClick={() => setModalComentarios(null)}
+                style={{ background:'none', border:'none', fontSize:'18px', color:t.textMuted, cursor:'pointer' }}>✕</button>
+            </div>
+            {/* Body */}
+            <div style={{ overflowY:'auto', flex:1, padding:'16px 24px',
+                          display:'flex', flexDirection:'column', gap:'14px' }}>
+              {loadingComentarios && (
+                <div style={{ textAlign:'center', color:t.textMuted, fontSize:'13px', padding:'24px 0' }}>
+                  ⏳ Cargando comentarios…
+                </div>
+              )}
+              {!loadingComentarios && comentariosData.length === 0 && (
+                <div style={{ textAlign:'center', color:t.textMuted, fontSize:'13px', padding:'24px 0', fontStyle:'italic' }}>
+                  No hay comentarios para este registro.
+                </div>
+              )}
+              {!loadingComentarios && comentariosData.map((c, i) => {
+                const fechaCom = (() => { try { const ts=c.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleString('es-CO',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) } catch{return ''} })()
+                const enlacesList = Array.isArray(c.enlaces) ? c.enlaces : []
+                return (
+                  <div key={c.id || i} style={{ background:t.bg, borderRadius:'12px', padding:'14px 16px',
+                                                border:`1px solid ${t.border}` }}>
+                    <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:'8px', marginBottom:'8px' }}>
+                      <div>
+                        <span style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>
+                          {c.autor?.nombre || c.autor_id || 'Usuario'}
+                        </span>
+                        {c.etiqueta && (
+                          <span style={{ marginLeft:'8px', fontSize:'10px', fontWeight:'700', color:'#7c3aed',
+                                         background:'#7c3aed15', border:'1px solid #7c3aed33',
+                                         borderRadius:'10px', padding:'2px 8px' }}>
+                            {c.etiqueta}
+                          </span>
+                        )}
+                      </div>
+                      <span style={{ fontSize:'10px', color:t.textMuted, whiteSpace:'nowrap', flexShrink:0 }}>{fechaCom}</span>
+                    </div>
+                    {c.asunto && (
+                      <div style={{ fontSize:'12px', fontWeight:'700', color:t.text, marginBottom:'4px' }}>
+                        {c.asunto}
+                      </div>
+                    )}
+                    {c.mensaje && (
+                      <div style={{ fontSize:'12px', color:t.text, lineHeight:'1.5', marginBottom: enlacesList.length ? '8px' : 0 }}>
+                        {c.mensaje}
+                      </div>
+                    )}
+                    {enlacesList.length > 0 && (
+                      <div style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
+                        {enlacesList.map((url, j) => (
+                          <a key={j} href={url} target="_blank" rel="noopener noreferrer"
+                            style={{ fontSize:'11px', color:'#3B82F6', textDecoration:'underline',
+                                     overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                            🔗 {url}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─ Modal Mover Registros ─ */}
       {modalMover && (
@@ -4855,6 +5604,10 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const perm = (usuario?.permisos || []).find(p => p.funcion_nombre === 'Reporte de Cantidades')
   const puedeCrear  = perm?.crear
   const puedeEditar = perm?.editar
+  const nivelInfo   = determinarNivelValidacion(usuario)
+  const esSub       = nivelInfo.esSubcontratista
+  // subcontratista_id del usuario para filtrar (puede venir como campo directo o en el objeto)
+  const subIdUsuario = usuario?.subcontratista_id ?? usuario?.sub_id ?? null
 
   const [semanaVigente,     setSemanaVigente]     = useState(null)
   const [semanaProxima,     setSemanaProxima]      = useState(null)
@@ -4958,9 +5711,17 @@ const cargarReportes = async () => {
     return () => clearInterval(intervalo)
   }, [contrato_id])
 
-  const reportesFiltrados = filtroEstado === 'todos'
-    ? reportes
-    : reportes.filter(r => r.estado === filtroEstado)
+  const reportesFiltrados = (() => {
+    const porEstado = filtroEstado === 'todos' ? reportes : reportes.filter(r => r.estado === filtroEstado)
+    if (!esSub) return porEstado
+    // Subcontratista: solo reportes que le pertenecen (nivel reporte o al menos un registro suyo con objeto_pago)
+    return porEstado.filter(rep => {
+      if (subIdUsuario && rep.subcontratista_id === subIdUsuario) return true
+      return (rep.registros || []).some(r =>
+        r.subcontratista_id === subIdUsuario && r.nivel2_objeto_pago_sub === true
+      )
+    })
+  })()
 
   return (
     <div>
@@ -5055,12 +5816,12 @@ const cargarReportes = async () => {
             fontSize:'13px', color:t.text, cursor:'pointer',
             transition:'background 0.15s' }}
             onClick={async () => {
-              if (rep.estado === 'Borrador') {
+              if (!esSub && rep.estado === 'Borrador') {
                 const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
                 const data = await r.json()
                 setReporteEditando(data)
                 setModalNuevoReporte(true)
-              } else if (puedeEditar && (rep.estado === 'Sin Asignar Ítem' || rep.estado === 'No Revisados')) {
+              } else if (esSub || puedeEditar) {
                 const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
                 const data = await r.json()
                 setReporteSeleccionado(data)

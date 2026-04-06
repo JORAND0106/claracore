@@ -3842,3 +3842,476 @@ def extender_semanas(contrato_id: int, n_semanas: int, current_user=Depends(get_
     def _ins():
         return supabase.table("so_semanas").insert(nuevas).execute().data
     return supabase_execute(_ins)
+
+
+# ─── SICOE OBRA: Validación de Registros ─────────────────────────────────────
+
+class ValidarNivel1Body(BaseModel):
+    estado: str
+    comentario_data: Optional[dict] = None
+
+class ValidarNivel2Body(BaseModel):
+    estado: str
+    objeto_pago_sub: Optional[bool] = None
+    comentario_data: Optional[dict] = None
+
+class ValidarNivel3Body(BaseModel):
+    estado: str
+    comentario_data: Optional[dict] = None
+
+class ValidarSubBody(BaseModel):
+    estado: str
+
+class SolicitarReversionBody(BaseModel):
+    comentario_data: dict
+
+class AceptarReversionBody(BaseModel):
+    aceptar: bool
+
+class ComentarioCreate(BaseModel):
+    rol_origen: Optional[str] = None
+    confidencialidad: Optional[str] = None
+    destinatarios: Optional[list] = None
+    etiqueta: Optional[str] = None
+    asunto: Optional[str] = None
+    mensaje: Optional[str] = None
+    enlaces: Optional[list] = None
+    cantidad_verificada: Optional[float] = None
+    tipo: Optional[str] = None
+    nivel_validacion: Optional[int] = None
+    padre_id: Optional[int] = None
+
+class ValidarMasivoNivel2Body(BaseModel):
+    estado: str
+    ids_registros: List[int]
+    objeto_pago_sub: Optional[bool] = None
+    comentario_data: Optional[dict] = None
+
+class ValidarMasivoNivel3Body(BaseModel):
+    estado: str
+    ids_registros: List[int]
+    comentario_data: Optional[dict] = None
+
+
+def _insertar_comentario(contrato_id: int, registro_id: int, autor_id: int,
+                         comentario_data: dict, tipo_override: str = None):
+    """Inserta un comentario en so_registro_comentarios calculando confidencialidad."""
+    destinatarios = comentario_data.get("destinatarios") or []
+    rol_origen = comentario_data.get("rol_origen", "")
+
+    if not destinatarios:
+        confidencialidad = "publico"
+    else:
+        roles_dest = {d.get("rol") for d in destinatarios if isinstance(d, dict) and d.get("rol")}
+        if len(roles_dest) == 1 and rol_origen in roles_dest:
+            if rol_origen == "contratista":
+                confidencialidad = "contratista_interno"
+            elif rol_origen == "interventoria":
+                confidencialidad = "interventoria_interna"
+            else:
+                confidencialidad = "privado"
+        else:
+            confidencialidad = "cruzado"
+
+    row = {
+        "registro_id":        registro_id,
+        "contrato_id":        contrato_id,
+        "autor_id":           autor_id,
+        "rol_origen":         rol_origen,
+        "confidencialidad":   confidencialidad,
+        "destinatarios":      destinatarios,
+        "etiqueta":           comentario_data.get("etiqueta"),
+        "asunto":             comentario_data.get("asunto"),
+        "mensaje":            comentario_data.get("mensaje"),
+        "enlaces":            comentario_data.get("enlaces") or [],
+        "cantidad_verificada": comentario_data.get("cantidad_verificada"),
+        "tipo":               tipo_override or comentario_data.get("tipo"),
+        "nivel_validacion":   comentario_data.get("nivel_validacion"),
+        "padre_id":           comentario_data.get("padre_id"),
+    }
+
+    def _ins():
+        return supabase.table("so_registro_comentarios").insert(row).execute().data
+    return supabase_execute(_ins)
+
+
+@app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/validar-nivel1")
+def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
+                   current_user=Depends(get_current_user)):
+    ESTADOS = {"Aprobado", "Pendiente", "Rechazado"}
+    if body.estado not in ESTADOS:
+        raise HTTPException(status_code=422, detail=f"Estado inválido. Acepta: {ESTADOS}")
+    if body.estado in ("Pendiente", "Rechazado") and not body.comentario_data:
+        raise HTTPException(status_code=422,
+            detail="Se requiere comentario_data cuando el estado es Pendiente o Rechazado.")
+    try:
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        update = {
+            "nivel1_estado":     body.estado,
+            "nivel1_usuario_id": autor_id,
+            "nivel1_fecha":      datetime.utcnow().isoformat(),
+        }
+        def _upd():
+            return supabase.table("so_registros")\
+                .update(update).eq("id", registro_id)\
+                .eq("contrato_id", contrato_id).execute().data
+        supabase_execute(_upd)
+        if body.comentario_data:
+            _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data)
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/validar-nivel2")
+def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
+                   current_user=Depends(get_current_user)):
+    ESTADOS = {"Aprobado", "Pendiente", "Rechazado", "No Objeto de Cobro"}
+    if body.estado not in ESTADOS:
+        raise HTTPException(status_code=422, detail=f"Estado inválido. Acepta: {ESTADOS}")
+    try:
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        # Verificar nivel1
+        def _get():
+            return supabase.table("so_registros")\
+                .select("nivel1_estado").eq("id", registro_id)\
+                .eq("contrato_id", contrato_id).limit(1).execute().data
+        rows = supabase_execute(_get)
+        if not rows or rows[0].get("nivel1_estado") != "Aprobado":
+            raise HTTPException(status_code=422,
+                detail="El registro debe estar aprobado por Nivel 1 primero.")
+
+        estado_real = body.estado
+        if body.estado == "No Objeto de Cobro":
+            estado_real = "Rechazado"
+            if not body.comentario_data:
+                raise HTTPException(status_code=422,
+                    detail="Se requiere comentario_data para 'No Objeto de Cobro'.")
+
+        if body.estado in ("Pendiente", "Rechazado") and not body.comentario_data:
+            raise HTTPException(status_code=422,
+                detail="Se requiere comentario_data cuando el estado es Pendiente o Rechazado.")
+
+        update = {
+            "nivel2_estado":     estado_real,
+            "nivel2_usuario_id": autor_id,
+            "nivel2_fecha":      datetime.utcnow().isoformat(),
+        }
+        if body.objeto_pago_sub is not None:
+            update["nivel2_objeto_pago_sub"] = body.objeto_pago_sub
+
+        def _upd():
+            return supabase.table("so_registros")\
+                .update(update).eq("id", registro_id)\
+                .eq("contrato_id", contrato_id).execute().data
+        supabase_execute(_upd)
+        if body.comentario_data:
+            _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data)
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/validar-nivel3")
+def validar_nivel3(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
+                   current_user=Depends(get_current_user)):
+    ESTADOS = {"Aprobado", "Pendiente", "Rechazado"}
+    if body.estado not in ESTADOS:
+        raise HTTPException(status_code=422, detail=f"Estado inválido. Acepta: {ESTADOS}")
+    if body.estado in ("Pendiente", "Rechazado") and not body.comentario_data:
+        raise HTTPException(status_code=422,
+            detail="Se requiere comentario_data cuando el estado es Pendiente o Rechazado.")
+    try:
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        # Verificar nivel2
+        def _get():
+            return supabase.table("so_registros")\
+                .select("nivel2_estado").eq("id", registro_id)\
+                .eq("contrato_id", contrato_id).limit(1).execute().data
+        rows = supabase_execute(_get)
+        if not rows or rows[0].get("nivel2_estado") != "Aprobado":
+            raise HTTPException(status_code=422,
+                detail="El registro debe estar aprobado por Nivel 2 primero.")
+
+        update = {
+            "nivel3_estado":     body.estado,
+            "nivel3_usuario_id": autor_id,
+            "nivel3_fecha":      datetime.utcnow().isoformat(),
+        }
+        if body.estado == "Aprobado":
+            update["bloqueado"] = True
+
+        def _upd():
+            return supabase.table("so_registros")\
+                .update(update).eq("id", registro_id)\
+                .eq("contrato_id", contrato_id).execute().data
+        supabase_execute(_upd)
+        if body.comentario_data:
+            _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data)
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/validar-sub")
+def validar_sub(contrato_id: int, registro_id: int, body: ValidarSubBody,
+                current_user=Depends(get_current_user)):
+    ESTADOS = {"Aprobado", "Pendiente", "Rechazado"}
+    if body.estado not in ESTADOS:
+        raise HTTPException(status_code=422, detail=f"Estado inválido. Acepta: {ESTADOS}")
+    try:
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        # Verificar nivel2_objeto_pago_sub
+        def _get():
+            return supabase.table("so_registros")\
+                .select("nivel2_objeto_pago_sub").eq("id", registro_id)\
+                .eq("contrato_id", contrato_id).limit(1).execute().data
+        rows = supabase_execute(_get)
+        if not rows or not rows[0].get("nivel2_objeto_pago_sub"):
+            raise HTTPException(status_code=422,
+                detail="El registro no es objeto de pago a subcontratista (nivel2_objeto_pago_sub debe ser True).")
+
+        update = {
+            "sub_estado":     body.estado,
+            "sub_usuario_id": autor_id,
+            "sub_fecha":      datetime.utcnow().isoformat(),
+        }
+        def _upd():
+            return supabase.table("so_registros")\
+                .update(update).eq("id", registro_id)\
+                .eq("contrato_id", contrato_id).execute().data
+        supabase_execute(_upd)
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/solicitar-reversion")
+def solicitar_reversion(contrato_id: int, registro_id: int, body: SolicitarReversionBody,
+                        current_user=Depends(get_current_user)):
+    try:
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        def _get():
+            return supabase.table("so_registros")\
+                .select("nivel3_estado, bloqueado").eq("id", registro_id)\
+                .eq("contrato_id", contrato_id).limit(1).execute().data
+        rows = supabase_execute(_get)
+        if not rows:
+            raise HTTPException(status_code=404, detail="Registro no encontrado.")
+        reg = rows[0]
+        if reg.get("nivel3_estado") != "Aprobado" or not reg.get("bloqueado"):
+            raise HTTPException(status_code=422,
+                detail="El registro debe estar en nivel3 Aprobado y bloqueado para solicitar reversión.")
+
+        def _upd():
+            return supabase.table("so_registros")\
+                .update({"solicitud_reversion": True}).eq("id", registro_id)\
+                .eq("contrato_id", contrato_id).execute().data
+        supabase_execute(_upd)
+        _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
+                             tipo_override="solicitud_reversion")
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/aceptar-reversion")
+def aceptar_reversion(contrato_id: int, registro_id: int, body: AceptarReversionBody,
+                      current_user=Depends(get_current_user)):
+    try:
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        def _get():
+            return supabase.table("so_registros")\
+                .select("solicitud_reversion").eq("id", registro_id)\
+                .eq("contrato_id", contrato_id).limit(1).execute().data
+        rows = supabase_execute(_get)
+        if not rows or not rows[0].get("solicitud_reversion"):
+            raise HTTPException(status_code=422,
+                detail="No existe una solicitud de reversión activa para este registro.")
+
+        if body.aceptar:
+            update = {
+                "bloqueado":          False,
+                "solicitud_reversion": False,
+                "nivel3_estado":      "No Revisado",
+                "nivel3_usuario_id":  None,
+                "nivel3_fecha":       None,
+            }
+        else:
+            update = {"solicitud_reversion": False}
+
+        def _upd():
+            return supabase.table("so_registros")\
+                .update(update).eq("id", registro_id)\
+                .eq("contrato_id", contrato_id).execute().data
+        supabase_execute(_upd)
+
+        if body.aceptar:
+            comentario_data = {
+                "tipo":    "aceptar_reversion",
+                "mensaje": "Reversión aceptada.",
+            }
+            _insertar_comentario(contrato_id, registro_id, autor_id, comentario_data,
+                                 tipo_override="aceptar_reversion")
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sicoe-obra/{contrato_id}/registros/{registro_id}/comentarios")
+def crear_comentario(contrato_id: int, registro_id: int, body: ComentarioCreate,
+                     current_user=Depends(get_current_user)):
+    try:
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        comentario_data = body.dict()
+        _insertar_comentario(contrato_id, registro_id, autor_id, comentario_data)
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sicoe-obra/{contrato_id}/registros/{registro_id}/comentarios")
+def listar_comentarios(contrato_id: int, registro_id: int, rol_solicitante: str,
+                       current_user=Depends(get_current_user)):
+    try:
+        def _get():
+            return supabase.table("so_registro_comentarios")\
+                .select("*, autor:autor_id(nombre)")\
+                .eq("registro_id", registro_id)\
+                .eq("contrato_id", contrato_id)\
+                .order("created_at", desc=False).execute().data
+        comentarios = supabase_execute(_get)
+
+        # Filtrar por confidencialidad según el rol del solicitante
+        excluir = set()
+        if rol_solicitante in ("interventoria", "subcontratista"):
+            excluir.add("contratista_interno")
+        if rol_solicitante in ("contratista", "subcontratista"):
+            excluir.add("interventoria_interna")
+
+        resultado = [c for c in comentarios if c.get("confidencialidad") not in excluir]
+        return resultado
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/validar-masivo-nivel2")
+def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivoNivel2Body,
+                          current_user=Depends(get_current_user)):
+    ESTADOS = {"Aprobado", "Pendiente", "Rechazado", "No Objeto de Cobro"}
+    if body.estado not in ESTADOS:
+        raise HTTPException(status_code=422, detail=f"Estado inválido. Acepta: {ESTADOS}")
+
+    estado_real = body.estado
+    if body.estado == "No Objeto de Cobro":
+        estado_real = "Rechazado"
+        if not body.comentario_data:
+            raise HTTPException(status_code=422,
+                detail="Se requiere comentario_data para 'No Objeto de Cobro'.")
+    if body.estado in ("Pendiente", "Rechazado") and not body.comentario_data:
+        raise HTTPException(status_code=422,
+            detail="Se requiere comentario_data cuando el estado es Pendiente o Rechazado.")
+
+    try:
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        actualizados = 0
+        omitidos = 0
+
+        for reg_id in body.ids_registros:
+            def _get(rid=reg_id):
+                return supabase.table("so_registros")\
+                    .select("nivel1_estado").eq("id", rid)\
+                    .eq("contrato_id", contrato_id).limit(1).execute().data
+            rows = supabase_execute(_get)
+            if not rows or rows[0].get("nivel1_estado") != "Aprobado":
+                omitidos += 1
+                continue
+
+            update = {
+                "nivel2_estado":     estado_real,
+                "nivel2_usuario_id": autor_id,
+                "nivel2_fecha":      datetime.utcnow().isoformat(),
+            }
+            if body.objeto_pago_sub is not None:
+                update["nivel2_objeto_pago_sub"] = body.objeto_pago_sub
+
+            def _upd(rid=reg_id, upd=update):
+                return supabase.table("so_registros")\
+                    .update(upd).eq("id", rid)\
+                    .eq("contrato_id", contrato_id).execute().data
+            supabase_execute(_upd)
+
+            if body.comentario_data:
+                _insertar_comentario(contrato_id, reg_id, autor_id, body.comentario_data)
+            actualizados += 1
+
+        return {"actualizados": actualizados, "omitidos": omitidos}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/validar-masivo-nivel3")
+def validar_masivo_nivel3(contrato_id: int, reporte_id: int, body: ValidarMasivoNivel3Body,
+                          current_user=Depends(get_current_user)):
+    ESTADOS = {"Aprobado", "Pendiente", "Rechazado"}
+    if body.estado not in ESTADOS:
+        raise HTTPException(status_code=422, detail=f"Estado inválido. Acepta: {ESTADOS}")
+    if body.estado in ("Pendiente", "Rechazado") and not body.comentario_data:
+        raise HTTPException(status_code=422,
+            detail="Se requiere comentario_data cuando el estado es Pendiente o Rechazado.")
+    try:
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        actualizados = 0
+        omitidos = 0
+
+        for reg_id in body.ids_registros:
+            def _get(rid=reg_id):
+                return supabase.table("so_registros")\
+                    .select("nivel2_estado").eq("id", rid)\
+                    .eq("contrato_id", contrato_id).limit(1).execute().data
+            rows = supabase_execute(_get)
+            if not rows or rows[0].get("nivel2_estado") != "Aprobado":
+                omitidos += 1
+                continue
+
+            update = {
+                "nivel3_estado":     body.estado,
+                "nivel3_usuario_id": autor_id,
+                "nivel3_fecha":      datetime.utcnow().isoformat(),
+            }
+            if body.estado == "Aprobado":
+                update["bloqueado"] = True
+
+            def _upd(rid=reg_id, upd=update):
+                return supabase.table("so_registros")\
+                    .update(upd).eq("id", rid)\
+                    .eq("contrato_id", contrato_id).execute().data
+            supabase_execute(_upd)
+
+            if body.comentario_data:
+                _insertar_comentario(contrato_id, reg_id, autor_id, body.comentario_data)
+            actualizados += 1
+
+        return {"actualizados": actualizados, "omitidos": omitidos}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
