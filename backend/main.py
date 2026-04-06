@@ -3509,6 +3509,25 @@ def crear_puntos(contrato_id: int, body: PuntosCreate, current_user=Depends(get_
         return supabase.table("so_puntos_topograficos").insert(rows).execute().data
     return supabase_execute(_ins)
 
+# ─── SICOE OBRA: Verificar acta RPO vigente ──────────────────────────────────
+@app.get("/sicoe-obra/{contrato_id}/acta-rpo-vigente")
+def get_acta_rpo_vigente(contrato_id: int, current_user=Depends(get_current_user)):
+    try:
+        from datetime import date
+        today = date.today().isoformat()
+        def _q():
+            return supabase.table("actas")\
+                .select("id, numero_rpo, fecha_inicio, fecha_fin")\
+                .eq("contrato_id", contrato_id)\
+                .eq("tipo_grupo", "cobro")\
+                .lte("fecha_inicio", today)\
+                .gte("fecha_fin", today)\
+                .order("id", desc=True).limit(1).execute().data
+        actas = supabase_execute(_q)
+        return actas[0] if actas else None
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ─── SICOE OBRA: Búsqueda de ítems del listado de precios ────────────────────
 @app.get("/sicoe-obra/{contrato_id}/listado-precios-busqueda")
 def buscar_items_listado(contrato_id: int, q: str = "", capitulo: str = None, competencia: str = None, current_user=Depends(get_current_user)):
@@ -3563,18 +3582,21 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
                 .eq("id", reporte_id).single().execute().data
         reporte = supabase_execute(_rep) or {}
 
+        # 4. Detectar acta RPO vigente por período — obligatorio para asignar
         acta_rpo_id = reporte.get("acta_rpo_id")
         if not acta_rpo_id:
-            try:
-                def _acta():
-                    return supabase.table("actas")\
-                        .select("id, numero_rpo")\
-                        .eq("contrato_id", contrato_id)\
-                        .order("id", desc=True).limit(1).execute().data
-                actas = supabase_execute(_acta)
-                acta_rpo_id = actas[0]["id"] if actas else None
-            except:
-                acta_rpo_id = None
+            def _acta():
+                return supabase.table("actas")\
+                    .select("id, numero_rpo")\
+                    .eq("contrato_id", contrato_id)\
+                    .eq("tipo_grupo", "cobro")\
+                    .lte("fecha_inicio", today)\
+                    .gte("fecha_fin", today)\
+                    .order("id", desc=True).limit(1).execute().data
+            actas = supabase_execute(_acta)
+            acta_rpo_id = actas[0]["id"] if actas else None
+        if not acta_rpo_id:
+            raise HTTPException(status_code=422, detail="No existe un Acta RPO vigente para la fecha de hoy. Crea el acta en el módulo administrativo antes de asignar ítems.")
 
         corte_id = reporte.get("corte_id")
         sub_id   = reporte.get("subcontratista_id")

@@ -2003,6 +2003,7 @@ function SeccionActas({ call, user, perms, theme }) {
   const mSc = {flex:1,overflowY:"auto",padding:"22px 28px",scrollbarWidth:"thin",scrollbarColor:"#1e3a44 transparent",background:theme==="light"?"#F8FAFC":"transparent"};
   const mF  = {padding:"14px 28px",borderTop:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",background:theme==="light"?"#E0F2FE":"#081318",display:"flex",justifyContent:"flex-end",gap:10,flexShrink:0};
   const sT  = {fontSize:10,color:"#00afc5",fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:10};
+  const secTitle = sT;
   const fmt = (v) => v!=null?`$${Math.round(Number(v)).toLocaleString("es-CO")}`:"$0";
   const fmtP= (v) => v&&v!==""?`${(parseFloat(v)*100).toFixed(2).replace(/\.?0+$/,"")}%`:"—";
 

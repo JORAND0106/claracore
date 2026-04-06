@@ -3557,7 +3557,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [todosLosItems,  setTodosLosItems]  = useState([])
   const [fotoLocal,      setFotoLocal]      = useState(registro.foto_url || null)
   const [uploadingFoto,  setUploadingFoto]  = useState(false)
-  const [uploadingGraf,  setUploadingGraf]  = useState(false)
+  const [uploadingGraf,    setUploadingGraf]    = useState(false)
+  const [modalGaleriaHoja, setModalGaleriaHoja] = useState(false)
   const graficoReporte = reporte.registros?.find(r => r.grafico_url) || null
   const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || graficoReporte?.grafico_url || null)
   const API = API_URL
@@ -3667,19 +3668,22 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const guardarDimensiones = async () => {
     setGuardando(true)
     try {
-      await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
+      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
         method: 'PUT', headers: hdrs,
         body: JSON.stringify({
-          reporte_id:     registro.reporte_id,
+          reporte_id:      registro.reporte_id,
           numero_registro: registro.numero_registro,
-          longitud:  longitud !== '' ? parseFloat(longitud) : null,
-          ancho:     ancho    !== '' ? parseFloat(ancho)    : null,
-          espesor:   espesor  !== '' ? parseFloat(espesor)  : null,
-          cantidad:  cantidad !== '' ? parseFloat(cantidad) : null,
-          cantidad_total: cantTotal,
+          longitud:        longitud !== '' ? parseFloat(longitud) : null,
+          ancho:           ancho    !== '' ? parseFloat(ancho)    : null,
+          espesor:         espesor  !== '' ? parseFloat(espesor)  : null,
+          cantidad:        cantidad !== '' ? parseFloat(cantidad) : null,
+          cantidad_total:  cantTotal,
         })
       })
-    } catch(e) {}
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    } catch(e) {
+      alert(`No se pudieron guardar las dimensiones: ${e.message}`)
+    }
     setGuardando(false)
   }
 
@@ -3689,6 +3693,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     if (!tieneCoordenadas) { alert('Se requieren coordenadas topográficas. Diligéncialas en la Portada primero.'); return }
     setAsignando(true)
     try {
+      // 0. Verificar acta RPO vigente
+      const actaRes = await fetch(`${API}/sicoe-obra/${contrato_id}/acta-rpo-vigente`, { headers: hdrs })
+      const actaData = await actaRes.json()
+      if (!actaData || !actaData.id) {
+        alert('⚠️ No existe un Acta RPO vigente para la fecha de hoy.\n\nCrea el Acta RPO en el módulo administrativo antes de asignar ítems.')
+        setAsignando(false)
+        return
+      }
       // 1. Guardar dimensiones
       const dimRes = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
         method: 'PUT', headers: hdrs,
@@ -3746,21 +3758,31 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       padding:'20px', position:'relative', transition:'border 0.15s'
     }}>
       {/* ─ Header de la hoja ─ */}
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'16px' }}>
-        <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
-          {puedeEditar && (
-            <input type="checkbox" checked={seleccionado} onChange={onToggleSeleccion}
-              style={{ width:'16px', height:'16px', cursor:'pointer', accentColor:'#8B5CF6' }} />
-          )}
-          <span style={{ fontSize:'15px', fontWeight:'800', color:t.primary }}>📄 Registro #{registro.numero_registro}</span>
-          {registro.item_numero && (
-            <span style={{ background:`${t.primary}22`, color:t.primary, border:`1px solid ${t.primary}44`, borderRadius:'12px', padding:'2px 10px', fontSize:'11px', fontWeight:'700' }}>
-              {registro.item_numero}
-            </span>
-          )}
+      <div style={{ marginBottom:'16px' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'8px' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+            {puedeEditar && (
+              <input type="checkbox" checked={seleccionado} onChange={onToggleSeleccion}
+                style={{ width:'16px', height:'16px', cursor:'pointer', accentColor:'#8B5CF6' }} />
+            )}
+            <span style={{ fontSize:'15px', fontWeight:'800', color:t.primary }}>📄 Registro #{registro.numero_registro}</span>
+            {registro.item_numero && (
+              <span style={{ background:`${t.primary}22`, color:t.primary, border:`1px solid ${t.primary}44`, borderRadius:'12px', padding:'2px 10px', fontSize:'11px', fontWeight:'700' }}>
+                {registro.item_numero}
+              </span>
+            )}
+          </div>
+          <div style={{ fontSize:'11px', color:t.textMuted }}>
+            {(() => { try { const ts=registro.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()}
+          </div>
         </div>
-        <div style={{ fontSize:'11px', color:t.textMuted }}>
-          {(() => { try { const ts=registro.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()}
+        <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+          <span style={{ display:'flex', alignItems:'center', gap:'5px', background: reporte.acta_rpo_numero ? `${t.primary}15` : '#EF444415', border:`1px solid ${reporte.acta_rpo_numero ? t.primary+'33' : '#EF444433'}`, borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color: reporte.acta_rpo_numero ? t.primary : '#EF4444' }}>
+            📋 {reporte.acta_rpo_numero ? `RPO #${reporte.acta_rpo_numero}` : 'Sin Acta RPO'}
+          </span>
+          <span style={{ display:'flex', alignItems:'center', gap:'5px', background:`${t.textMuted}15`, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
+            📄 {reporte.corte_numero ? `Corte #${reporte.corte_numero}` : 'Sin Corte'}
+          </span>
         </div>
       </div>
 
@@ -3912,23 +3934,35 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             {fotoLocal ? (
               <>
                 <img src={fotoLocal} alt="Foto" style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }} />
-                <div style={{ padding:'6px 10px', fontSize:'11px', color:t.textMuted, background:t.bg }}>
-                  📷 Foto #{registro.foto_numero ? String(registro.foto_numero).padStart(4,'0') : '—'}
+                <div style={{ padding:'6px 10px', fontSize:'11px', color:t.textMuted, background:t.bg, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <span>📷 Foto #{registro.foto_numero ? String(registro.foto_numero).padStart(4,'0') : '—'}</span>
+                  {puedeEditar && (
+                    <label style={{ cursor:'pointer', color:t.primary, fontSize:'11px', fontWeight:'600' }}>
+                      Cambiar
+                      <input type="file" accept="image/*" style={{ display:'none' }} onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
+                    </label>
+                  )}
                 </div>
               </>
             ) : (
-              <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'160px', background:t.bg, cursor:'pointer', gap:'8px' }}>
-                {uploadingFoto
-                  ? <span style={{ color:t.textMuted, fontSize:'12px' }}>⏳ Subiendo...</span>
-                  : <>
-                      <span style={{ fontSize:'32px' }}>📷</span>
-                      <span style={{ fontSize:'12px', color:t.textMuted }}>Foto de obra</span>
-                      <span style={{ fontSize:'11px', color:t.primary, fontWeight:'600' }}>Toca para cargar</span>
-                    </>
-                }
-                <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto}
-                  onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
-              </label>
+              <div style={{ display:'flex', flexDirection:'column', background:t.bg, borderRadius:'8px', overflow:'hidden', height:'160px' }}>
+                <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flex:1, cursor:'pointer', gap:'6px', borderBottom:`1px solid ${t.border}` }}>
+                  {uploadingFoto
+                    ? <span style={{ color:t.textMuted, fontSize:'12px' }}>⏳ Subiendo...</span>
+                    : <>
+                        <span style={{ fontSize:'28px' }}>📷</span>
+                        <span style={{ fontSize:'11px', color:t.textMuted }}>Nueva foto</span>
+                        <span style={{ fontSize:'11px', color:t.primary, fontWeight:'600' }}>Toca para cargar</span>
+                      </>
+                  }
+                  <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto}
+                    onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
+                </label>
+                <button onClick={() => setModalGaleriaHoja(true)}
+                  style={{ padding:'8px', background:'transparent', border:'none', color:t.primary, fontSize:'11px', fontWeight:'600', cursor:'pointer' }}>
+                  🖼️ Usar foto de la galería
+                </button>
+              </div>
             )}
           </div>
           {/* Gráfico del reporte */}
@@ -3957,6 +3991,36 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           </div>
         </div>
       </div>
+
+      {/* ─ Modal galería foto ─ */}
+      {modalGaleriaHoja && (
+        <div style={{ position:'fixed', inset:0, zIndex:10500, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'center', justifyContent:'center' }}
+          onClick={() => setModalGaleriaHoja(false)}>
+          <div style={{ background:t.bgCard, borderRadius:'16px', padding:'24px', width:'560px', maxHeight:'80vh', overflow:'hidden', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
+              <span style={{ fontWeight:'800', color:t.text, fontSize:'15px' }}>🖼️ Galería de Fotos</span>
+              <button onClick={() => setModalGaleriaHoja(false)} style={{ background:'none', border:'none', color:t.textMuted, fontSize:'18px', cursor:'pointer' }}>✕</button>
+            </div>
+            <div style={{ overflowY:'auto', flex:1 }}>
+              <GaleriaFotos
+                contrato_id={contrato_id} API_URL={API} hdrs={hdrs}
+                tipo="foto" fechaDesde="" fechaHasta=""
+                onSelect={async (url, numero) => {
+                  try {
+                    await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
+                      method:'PUT', headers: hdrs,
+                      body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, foto_url: url, foto_numero: numero })
+                    })
+                    setFotoLocal(url)
+                  } catch(e) { alert('Error asignando foto de galería') }
+                  setModalGaleriaHoja(false)
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ─ Acciones finales ─ */}
       {puedeEditar && (
