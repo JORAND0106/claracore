@@ -2309,7 +2309,7 @@ function SeccionActas({ call, user, perms, theme }) {
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
                       <div>
                         <div style={secTitle}>N° RPO</div>
-                        <input style={inputStyle} type="number" value={form.numero_rpo||""} onChange={e=>setForm(f=>({...f,numero_rpo:e.target.value}))} placeholder="Ej: 5"/>
+                        <input style={iS} type="number" value={form.numero_rpo||""} onChange={e=>setForm(f=>({...f,numero_rpo:e.target.value}))} placeholder="Ej: 5"/>
                       </div>
                       <div>
                         <div style={secTitle}>Fecha Inicio</div>
