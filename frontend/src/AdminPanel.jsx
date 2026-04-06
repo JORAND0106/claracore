@@ -2042,11 +2042,31 @@ function SeccionActas({ call, user, perms, theme }) {
     if (!form.tipo_acta_id){setMsg({type:"error",text:"Selecciona el tipo de acta."});return;}
     setCreating(true);
     try {
+      const toInt   = v => (v===""||v===null||v===undefined)?null:(parseInt(v)||null);
+      const toFloat = v => (v===""||v===null||v===undefined)?null:(parseFloat(v)||0);
+      const toFloatNull = v => (v===""||v===null||v===undefined)?null:parseFloat(v);
       await call("POST",`/actas/${contratoId}`,{
-        ...form, consecutivo:parseInt(form.consecutivo)||1,
-        tipo_acta_id:parseInt(form.tipo_acta_id)||null,
-        asignado_a:form.asignado_a?parseInt(form.asignado_a):null,
-        numero_rpo:form.numero_rpo?parseInt(form.numero_rpo):null,
+        consecutivo:            parseInt(form.consecutivo)||1,
+        tipo_acta_id:           toInt(form.tipo_acta_id),
+        tipo_grupo:             form.tipo_grupo||"administrativa",
+        observacion:            form.observacion||null,
+        asignado_a:             toInt(form.asignado_a),
+        fecha_asignacion:       form.fecha_asignacion||null,
+        enlace:                 form.enlace||null,
+        numero_rpo:             toInt(form.numero_rpo),
+        fecha_inicio:           form.fecha_inicio||null,
+        fecha_fin:              form.fecha_fin||null,
+        valor_comp_ambiental:   toFloat(form.valor_comp_ambiental),
+        calificacion_ambiental: toFloatNull(form.calificacion_ambiental),
+        valor_comp_social:      toFloat(form.valor_comp_social),
+        calificacion_social:    toFloatNull(form.calificacion_social),
+        valor_comp_pmt:         toFloat(form.valor_comp_pmt),
+        calificacion_pmt:       toFloatNull(form.calificacion_pmt),
+        valor_cobrado_adicional:toFloat(form.valor_cobrado_adicional),
+        ajuste_iccp:            toFloat(form.ajuste_iccp),
+        ajuste_icociv:          toFloat(form.ajuste_icociv),
+        ajuste_ipc:             toFloat(form.ajuste_ipc),
+        pct_proyectado_ajustes: toFloatNull(form.pct_proyectado_ajustes),
       });
       setMsg({type:"success",text:"✅ Acta creada."}); setShowCrear(false); cargar();
     } catch(e){setMsg({type:"error",text:e.message});}
