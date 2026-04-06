@@ -3557,6 +3557,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [todosLosItems,  setTodosLosItems]  = useState([])
   const [fotoLocal,      setFotoLocal]      = useState(registro.foto_url || null)
   const [uploadingFoto,  setUploadingFoto]  = useState(false)
+  const [observacion,    setObservacion]    = useState(registro.observacion || '')
+  const [subcontratistaSel, setSubcontratistaSel] = useState(registro.subcontratista_id || reporte.subcontratista_id || '')
+  const [listaSubs,      setListaSubs]      = useState([])
+  const [editandoSub,    setEditandoSub]    = useState(false)
   const [uploadingGraf,    setUploadingGraf]    = useState(false)
   const [modalGaleriaHoja, setModalGaleriaHoja] = useState(false)
   const graficoReporte = reporte.registros?.find(r => r.grafico_url) || null
@@ -3657,6 +3661,13 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     setMostrarLista(filtrados.length > 0)
   }, [itemBusqueda, todosLosItems, capituloHoja, competencia])
 
+  useEffect(() => {
+    if (!editandoSub || listaSubs.length > 0) return
+    fetch(`${API}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs })
+      .then(r => r.json()).then(d => setListaSubs(Array.isArray(d) ? d : [])).catch(() => {})
+  }, [editandoSub])
+
+
   const seleccionarItem = (item) => {
     setItemSel(item)
     setItemListadoId(item.id)
@@ -3665,10 +3676,16 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     setMostrarLista(false)
   }
 
-  const guardarDimensiones = async () => {
+  const guardarCambios = async () => {
+    const idItem = itemListadoId
+    if (idItem && !tieneCoordenadas) {
+      alert('Se requieren coordenadas topográficas. Diligéncialas en la Portada primero.')
+      return
+    }
     setGuardando(true)
     try {
-      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
+      // 1. Guardar dimensiones + observacion
+      const dimRes = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
         method: 'PUT', headers: hdrs,
         body: JSON.stringify({
           reporte_id:      registro.reporte_id,
@@ -3678,58 +3695,35 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           espesor:         espesor  !== '' ? parseFloat(espesor)  : null,
           cantidad:        cantidad !== '' ? parseFloat(cantidad) : null,
           cantidad_total:  cantTotal,
-        })
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    } catch(e) {
-      alert(`No se pudieron guardar las dimensiones: ${e.message}`)
-    }
-    setGuardando(false)
-  }
-
-  const asignarItem = async () => {
-    const idItem = itemListadoId || itemSel?.id
-    if (!idItem) { alert('Selecciona un ítem del listado de precios antes de asignar.'); return }
-    if (!tieneCoordenadas) { alert('Se requieren coordenadas topográficas. Diligéncialas en la Portada primero.'); return }
-    setAsignando(true)
-    try {
-      // 0. Verificar acta RPO vigente
-      const actaRes = await fetch(`${API}/sicoe-obra/${contrato_id}/acta-rpo-vigente`, { headers: hdrs })
-      const actaData = await actaRes.json()
-      if (!actaData || !actaData.id) {
-        alert('⚠️ No existe un Acta RPO vigente para la fecha de hoy.\n\nCrea el Acta RPO en el módulo administrativo antes de asignar ítems.')
-        setAsignando(false)
-        return
-      }
-      // 1. Guardar dimensiones
-      const dimRes = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
-        method: 'PUT', headers: hdrs,
-        body: JSON.stringify({
-          reporte_id: registro.reporte_id,
-          numero_registro: registro.numero_registro,
-          longitud:  longitud !== '' ? parseFloat(longitud) : null,
-          ancho:     ancho    !== '' ? parseFloat(ancho)    : null,
-          espesor:   espesor  !== '' ? parseFloat(espesor)  : null,
-          cantidad:  cantidad !== '' ? parseFloat(cantidad) : null,
-          cantidad_total: cantTotal,
+          observacion:     observacion || null,
         })
       })
       if (!dimRes.ok) throw new Error(`Error guardando dimensiones: ${dimRes.status}`)
 
-      // 2. Asignar ítem → backend cambia reporte a 'No Revisados'
-      const asigRes = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/asignar-item`, {
-        method: 'PUT', headers: hdrs,
-        body: JSON.stringify({ item_listado_id: idItem, competencia: competencia || null })
-      })
-      if (!asigRes.ok) {
-        const err = await asigRes.json().catch(() => ({}))
-        throw new Error(err.detail || `Error asignando ítem: ${asigRes.status}`)
+      // 2. Si hay ítem nuevo seleccionado, verificar acta RPO y asignar
+      if (idItem) {
+        const actaRes = await fetch(`${API}/sicoe-obra/${contrato_id}/acta-rpo-vigente`, { headers: hdrs })
+        const actaData = await actaRes.json()
+        if (!actaData || !actaData.id) {
+          alert('⚠️ No existe un Acta RPO vigente para la fecha de hoy.\n\nCrea el Acta RPO en el módulo administrativo antes de asignar ítems.')
+          setGuardando(false)
+          return
+        }
+        const asigRes = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/asignar-item`, {
+          method: 'PUT', headers: hdrs,
+          body: JSON.stringify({ item_listado_id: idItem, competencia: competencia || null })
+        })
+        if (!asigRes.ok) {
+          const err = await asigRes.json().catch(() => ({}))
+          throw new Error(err.detail || `Error asignando ítem: ${asigRes.status}`)
+        }
       }
+
       onItemAsignado()
     } catch(e) {
-      alert(`No se pudo asignar el ítem: ${e.message}`)
+      alert(`No se pudieron guardar los cambios: ${e.message}`)
     }
-    setAsignando(false)
+    setGuardando(false)
   }
 
   const C = { borde: t.border, label: t.textMuted }
@@ -3783,6 +3777,41 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           <span style={{ display:'flex', alignItems:'center', gap:'5px', background:`${t.textMuted}15`, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
             📄 {reporte.corte_numero ? `Corte #${reporte.corte_numero}` : 'Sin Corte'}
           </span>
+          {puedeEditar ? (
+            editandoSub ? (
+              <span style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+                <select value={subcontratistaSel} onChange={e => setSubcontratistaSel(e.target.value)}
+                  style={{ background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'3px 8px', color:t.text, fontSize:'11px' }}>
+                  <option value="">— Sin subcontratista —</option>
+                  {listaSubs.map(s => <option key={s.id} value={s.id}>{s.razon_social}</option>)}
+                </select>
+                <button onClick={async () => {
+                  try {
+                    await fetch(`${API}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`, {
+                      method:'PUT', headers:hdrs,
+                      body: JSON.stringify({ ...reporte, subcontratista_id: subcontratistaSel ? parseInt(subcontratistaSel) : null })
+                    })
+                    onItemAsignado()
+                  } catch(e) { alert(`Error al guardar: ${e.message}`) }
+                  setEditandoSub(false)
+                }} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'3px 10px', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
+                  Guardar
+                </button>
+                <button onClick={() => setEditandoSub(false)}
+                  style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'3px 8px', fontSize:'11px', color:t.textMuted, cursor:'pointer' }}>
+                  ✕
+                </button>
+              </span>
+            ) : (
+              <span onClick={() => setEditandoSub(true)} style={{ display:'flex', alignItems:'center', gap:'5px', background:'#8B5CF615', border:'1px solid #8B5CF633', borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color:'#8B5CF6', cursor:'pointer' }}>
+                🏢 {reporte.subcontratista_nombre || 'Sin subcontratista'} ✏️
+              </span>
+            )
+          ) : (
+            <span style={{ display:'flex', alignItems:'center', gap:'5px', background:'#8B5CF615', border:'1px solid #8B5CF633', borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color:'#8B5CF6' }}>
+              🏢 {reporte.subcontratista_nombre || 'Sin subcontratista'}
+            </span>
+          )}
         </div>
       </div>
 
@@ -3885,11 +3914,21 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           <CampoRO label="Vlr. Unitario"   valor={vlrUnitario ? fmtD(vlrUnitario) : null} />
           <CampoRO label="Costo Directo"   valor={costoDirecto ? fmtD(costoDirecto) : null} color='#10B981' />
         </div>
-        {registro.observacion && (
-          <div style={{ marginTop:'10px' }}>
-            <CampoRO label="Observación" valor={registro.observacion} />
-          </div>
-        )}
+        <div style={{ marginTop:'10px' }}>
+          {puedeEditar ? (
+            <div>
+              <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Observación</div>
+              <textarea
+                value={observacion}
+                onChange={e => setObservacion(e.target.value)}
+                rows={2}
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box', resize:'vertical' }}
+              />
+            </div>
+          ) : (
+            <CampoRO label="Observación" valor={observacion || null} />
+          )}
+        </div>
       </div>
 
       {/* ─ Sección: Coordenadas Topográficas ─ */}
@@ -4024,24 +4063,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       {/* ─ Acciones finales ─ */}
       {puedeEditar && (
-        <div style={{ display:'flex', gap:'10px', justifyContent:'flex-end', paddingTop:'12px', borderTop:`1px solid ${C.borde}` }}>
-          <button onClick={guardarDimensiones} disabled={guardando} style={{
-            background: t.bgCard, border:`1px solid ${C.borde}`, color:t.text,
-            borderRadius:'8px', padding:'8px 18px', fontSize:'12px', fontWeight:'700',
-            cursor:'pointer', opacity: guardando ? 0.6 : 1
-          }}>{guardando ? 'Guardando...' : '💾 Guardar Dimensiones'}</button>
-          <button
-            onClick={asignarItem}
-            disabled={!itemListadoId || !tieneCoordenadas || asignando}
-            title={!tieneCoordenadas ? 'Se requieren coordenadas topográficas' : !itemListadoId ? 'Selecciona un ítem primero' : ''}
-            style={{
-              background: !itemListadoId || !tieneCoordenadas ? '#374151' : t.primary,
-              color: '#fff', border:'none', borderRadius:'8px',
-              padding:'8px 18px', fontSize:'12px', fontWeight:'700',
-              cursor: !itemListadoId || !tieneCoordenadas ? 'not-allowed' : 'pointer',
-              opacity: asignando ? 0.6 : 1
-            }}>{asignando ? 'Asignando...' : registro.item_numero ? '🔄 Reasignar Ítem' : '✅ Asignar Ítem'}
-          </button>
+        <div style={{ display:'flex', justifyContent:'flex-end', paddingTop:'12px', borderTop:`1px solid ${C.borde}` }}>
+          <button onClick={guardarCambios} disabled={guardando} style={{
+            background: t.primary, color:'#fff', border:'none',
+            borderRadius:'8px', padding:'8px 22px', fontSize:'12px', fontWeight:'700',
+            cursor: guardando ? 'not-allowed' : 'pointer', opacity: guardando ? 0.6 : 1
+          }}>{guardando ? 'Guardando...' : '💾 Guardar Cambios'}</button>
         </div>
       )}
     </div>
@@ -4064,6 +4091,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [editInfraLocal, setEditInfraLocal]        = useState(repoProp.infraestructura || '')
   const [listaPkIds, setListaPkIds]               = useState([])
   const [seleccionados, setSeleccionados]         = useState([])
+  const [registroExpandido, setRegistroExpandido] = useState(null)
   const [modalMover, setModalMover]               = useState(false)
   const [reportesDisponibles, setReportesDisponibles] = useState([])
   const [reporteDestino, setReporteDestino]       = useState('')
@@ -4713,18 +4741,47 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
           {/* ── TABS POR ÍTEM ── */}
           {itemsAsignados.map(itemNum => tabActiva === itemNum && (
-            <div key={itemNum} style={{ display:'flex', flexDirection:'column', gap:'20px' }}>
-              {registros.filter(r => r.item_numero === itemNum).map(reg => (
-                <HojaRegistro
-                  key={reg.id} t={t} usuario={usuario} API_URL={API_URL}
-                  contrato_id={contrato_id} reporte={reporte} registro={reg}
-                  puedeEditar={puedeEditar}
-                  seleccionado={seleccionados.includes(reg.id)}
-                  onToggleSeleccion={() => toggleSeleccion(reg.id)}
-                  onItemAsignado={recargar}
-                  hdrs={hdrs}
-                />
-              ))}
+            <div key={itemNum} style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
+              {registros.filter(r => r.item_numero === itemNum).map(reg => {
+                const expandido = registroExpandido === reg.id
+                const fechaReg = (() => { try { const ts=reg.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()
+                return (
+                  <div key={reg.id}>
+                    <div
+                      onClick={() => setRegistroExpandido(expandido ? null : reg.id)}
+                      style={{ display:'flex', alignItems:'center', gap:'10px', background:t.bgCard, border:`1px solid ${expandido ? t.primary+'66' : t.border}`, borderRadius: expandido ? '10px 10px 0 0' : '10px', padding:'10px 16px', cursor:'pointer', transition:'border 0.15s' }}
+                    >
+                      {puedeEditar && (
+                        <input type="checkbox" checked={seleccionados.includes(reg.id)}
+                          onClick={e => e.stopPropagation()}
+                          onChange={() => toggleSeleccion(reg.id)}
+                          style={{ width:'15px', height:'15px', accentColor:'#8B5CF6', flexShrink:0 }} />
+                      )}
+                      <span style={{ fontWeight:'800', color:t.primary, fontSize:'13px', flexShrink:0 }}>
+                        📄 Registro #{reg.numero_registro}
+                      </span>
+                      <span style={{ color:t.textMuted, fontSize:'12px', fontStyle: reg.observacion ? 'normal' : 'italic', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'400px', flex:1 }}>
+                        {reg.observacion || 'Sin observación'}
+                      </span>
+                      <span style={{ color:t.textMuted, fontSize:'11px', flexShrink:0 }}>{fechaReg}</span>
+                      <span style={{ color:t.textMuted, fontSize:'12px', flexShrink:0 }}>{expandido ? '▲' : '▼'}</span>
+                    </div>
+                    {expandido && (
+                      <div style={{ border:`1px solid ${t.primary+'66'}`, borderTop:'none', borderRadius:'0 0 10px 10px', overflow:'hidden' }}>
+                        <HojaRegistro
+                          key={reg.id} t={t} usuario={usuario} API_URL={API_URL}
+                          contrato_id={contrato_id} reporte={reporte} registro={reg}
+                          puedeEditar={puedeEditar}
+                          seleccionado={seleccionados.includes(reg.id)}
+                          onToggleSeleccion={() => toggleSeleccion(reg.id)}
+                          onItemAsignado={recargar}
+                          hdrs={hdrs}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           ))}
         </div>
