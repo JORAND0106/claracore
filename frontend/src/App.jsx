@@ -3539,7 +3539,7 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t }) {
 // ─── HOJA REGISTRO ────────────────────────────────────────────────────────────
 function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, seleccionado, onToggleSeleccion, onItemAsignado, hdrs }) {
   const [competencia,    setCompetencia]    = useState(registro.competencia    || '')
-  const [itemBusqueda,   setItemBusqueda]   = useState(registro.item_descripcion || '')
+  const [itemBusqueda,   setItemBusqueda]   = useState(registro.item_numero || '')
   const [itemsLista,     setItemsLista]     = useState([])
   const [itemSel,        setItemSel]        = useState(registro.item_numero ? { item_numero: registro.item_numero, descripcion: registro.item_descripcion, unidad: registro.unidad, precio_unitario: registro.vlr_unitario, id: null } : null)
   const [mostrarLista,   setMostrarLista]   = useState(false)
@@ -3567,15 +3567,13 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || graficoReporte?.grafico_url || null)
   const API = API_URL
 
-  // Cargar TODO el listado de precios una sola vez — fuente única para capítulos, competencias e ítems
+  // Paso 1: cargar solo capítulos al montar — liviano y rápido
   useEffect(() => {
-    fetch(`${API}/listado-precios/${contrato_id}`, { headers: hdrs })
+    fetch(`${API}/sicoe-obra/${contrato_id}/capitulos`, { headers: hdrs })
       .then(r => r.json())
       .then(d => {
         if (Array.isArray(d)) {
-          setTodosLosItems(d)
-          const caps = [...new Set(d.map(r => r.capitulo).filter(Boolean))]
-          const sorted = caps.sort((a, b) => {
+          const sorted = [...d].sort((a, b) => {
             const na = parseInt(a.match(/^(\d+)/)?.[1] || '9999')
             const nb = parseInt(b.match(/^(\d+)/)?.[1] || '9999')
             return na - nb
@@ -3585,6 +3583,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       })
       .catch(() => {})
   }, [])
+
+  // Paso 2: cuando el usuario selecciona un capítulo (o ya viene preseleccionado), cargar solo esos ítems
+  useEffect(() => {
+    if (!capituloHoja) { setTodosLosItems([]); setCompetencias([]); setItemsLista([]); return }
+    fetch(`${API}/sicoe-obra/${contrato_id}/listado-precios-busqueda?capitulo=${encodeURIComponent(capituloHoja)}&q=`, { headers: hdrs })
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d)) setTodosLosItems(d) })
+      .catch(() => {})
+  }, [capituloHoja])
 
   // Subir foto
   const subirFoto = async (file) => {
@@ -3635,31 +3642,27 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   const tieneCoordenadas = (reporte.puntos || []).length > 0
 
-  // Filtrar ítems y competencias client-side cuando cambia capítulo o competencia
+  // Derivar competencias y lista de ítems cuando cambian los ítems del capítulo o la competencia seleccionada
   useEffect(() => {
     if (!todosLosItems.length) return
-    const porCap = capituloHoja
-      ? todosLosItems.filter(i => i.capitulo === capituloHoja)
-      : todosLosItems
-    const comps = [...new Set(porCap.map(i => i.competencia).filter(Boolean))].sort()
+    const comps = [...new Set(todosLosItems.map(i => i.competencia).filter(Boolean))].sort()
     setCompetencias(comps)
-    const porComp = competencia ? porCap.filter(i => i.competencia === competencia) : porCap
+    const porComp = competencia ? todosLosItems.filter(i => i.competencia === competencia) : todosLosItems
     setItemsLista(porComp.slice(0, 50))
     setMostrarLista(false)
-  }, [capituloHoja, competencia, todosLosItems])
+  }, [competencia, todosLosItems])
 
   // Filtrar ítems por texto client-side
   useEffect(() => {
-    if (itemSel && itemBusqueda === itemSel.descripcion) return
-    const porCap = capituloHoja ? todosLosItems.filter(i => i.capitulo === capituloHoja) : todosLosItems
-    const porComp = competencia ? porCap.filter(i => i.competencia === competencia) : porCap
+    if (itemSel && itemBusqueda === itemSel.item_numero) return
+    const porComp = competencia ? todosLosItems.filter(i => i.competencia === competencia) : todosLosItems
     if (!itemBusqueda) { setItemsLista(porComp.slice(0, 50)); setMostrarLista(false); return }
     const filtrados = porComp.filter(i =>
       `${i.item_numero} ${i.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase())
     ).slice(0, 50)
     setItemsLista(filtrados)
     setMostrarLista(filtrados.length > 0)
-  }, [itemBusqueda, todosLosItems, capituloHoja, competencia])
+  }, [itemBusqueda, todosLosItems, competencia])
 
   useEffect(() => {
     if (!editandoSub || listaSubs.length > 0) return
@@ -3671,7 +3674,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const seleccionarItem = (item) => {
     setItemSel(item)
     setItemListadoId(item.id)
-    setItemBusqueda(item.descripcion)
+    setItemBusqueda(item.item_numero)
     setItemsLista([])
     setMostrarLista(false)
   }
@@ -3847,7 +3850,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 value={itemBusqueda}
                 onChange={e => { setItemBusqueda(e.target.value); setItemSel(null); setItemListadoId(null) }}
                 onFocus={() => itemsLista.length > 0 && setMostrarLista(true)}
-                placeholder="Buscar por descripción..."
+                placeholder="Buscar por número o descripción..."
                 style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }}
               />
               {mostrarLista && itemsLista.length > 0 && (
