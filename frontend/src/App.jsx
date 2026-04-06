@@ -3567,24 +3567,32 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || graficoReporte?.grafico_url || null)
   const API = API_URL
 
-  // Paso 1: cargar solo capítulos al montar — liviano y rápido
+  // Paso 1: cargar capítulos al montar desde el listado completo (fuente confiable)
+  // Si ya hay capítulo preseleccionado, también carga sus ítems de inmediato
   useEffect(() => {
-    fetch(`${API}/sicoe-obra/${contrato_id}/capitulos`, { headers: hdrs })
+    const sortCaps = caps => [...caps].sort((a, b) => {
+      const na = parseInt(a.match(/^(\d+)/)?.[1] || '9999')
+      const nb = parseInt(b.match(/^(\d+)/)?.[1] || '9999')
+      return na - nb
+    })
+    fetch(`${API}/listado-precios/${contrato_id}`, { headers: hdrs })
       .then(r => r.json())
       .then(d => {
-        if (Array.isArray(d)) {
-          const sorted = [...d].sort((a, b) => {
-            const na = parseInt(a.match(/^(\d+)/)?.[1] || '9999')
-            const nb = parseInt(b.match(/^(\d+)/)?.[1] || '9999')
-            return na - nb
-          })
-          setListaCapitulos(sorted)
-        }
+        if (!Array.isArray(d)) return
+        const caps = [...new Set(d.map(i => i.capitulo).filter(Boolean))]
+        setListaCapitulos(sortCaps(caps))
       })
       .catch(() => {})
+
+    if (capituloHoja) {
+      fetch(`${API}/sicoe-obra/${contrato_id}/listado-precios-busqueda?capitulo=${encodeURIComponent(capituloHoja)}&q=`, { headers: hdrs })
+        .then(r => r.json())
+        .then(d => { if (Array.isArray(d)) setTodosLosItems(d) })
+        .catch(() => {})
+    }
   }, [])
 
-  // Paso 2: cuando el usuario selecciona un capítulo (o ya viene preseleccionado), cargar solo esos ítems
+  // Paso 2: cuando el usuario cambia de capítulo, cargar los ítems de ese capítulo
   useEffect(() => {
     if (!capituloHoja) { setTodosLosItems([]); setCompetencias([]); setItemsLista([]); return }
     fetch(`${API}/sicoe-obra/${contrato_id}/listado-precios-busqueda?capitulo=${encodeURIComponent(capituloHoja)}&q=`, { headers: hdrs })
@@ -4752,7 +4760,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   <div key={reg.id}>
                     <div
                       onClick={() => setRegistroExpandido(expandido ? null : reg.id)}
-                      style={{ display:'flex', alignItems:'center', gap:'10px', background:t.bgCard, border:`1px solid ${expandido ? t.primary+'66' : t.border}`, borderRadius: expandido ? '10px 10px 0 0' : '10px', padding:'10px 16px', cursor:'pointer', transition:'border 0.15s' }}
+                      style={{ display:'flex', alignItems:'center', gap:'10px', background:'#D9770626', border:`1px solid ${expandido ? '#D97706' : '#D9770644'}`, borderLeft:'3px solid #D97706', borderRadius: expandido ? '10px 10px 0 0' : '10px', padding:'10px 16px', cursor:'pointer', transition:'border 0.15s' }}
                     >
                       {puedeEditar && (
                         <input type="checkbox" checked={seleccionados.includes(reg.id)}
@@ -4760,7 +4768,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           onChange={() => toggleSeleccion(reg.id)}
                           style={{ width:'15px', height:'15px', accentColor:'#8B5CF6', flexShrink:0 }} />
                       )}
-                      <span style={{ fontWeight:'800', color:t.primary, fontSize:'13px', flexShrink:0 }}>
+                      <span style={{ fontWeight:'800', color:'#D97706', fontSize:'13px', flexShrink:0 }}>
                         📄 Registro #{reg.numero_registro}
                       </span>
                       <span style={{ color:t.textMuted, fontSize:'12px', fontStyle: reg.observacion ? 'normal' : 'italic', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'400px', flex:1 }}>

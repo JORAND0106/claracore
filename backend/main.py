@@ -3439,6 +3439,22 @@ class RegistroCreate(BaseModel):
     semana_id: Optional[int] = None
     acta_rpo_id: Optional[int] = None
     corte_id: Optional[int] = None
+    pk_id_id: Optional[int] = None
+    civ: Optional[str] = None
+    tramo: Optional[str] = None
+    infraestructura: Optional[str] = None
+    calzada: Optional[str] = None
+    ubicacion: Optional[str] = None
+    coord_lat: Optional[float] = None
+    coord_lng: Optional[float] = None
+    abs_inicio: Optional[float] = None
+    abs_final: Optional[float] = None
+    nodo_ini: Optional[str] = None
+    nodo_fin: Optional[str] = None
+    subcontratista_id: Optional[int] = None
+    inspector_id: Optional[int] = None
+    creado_por_reg: Optional[int] = None
+    modificado_por_reg: Optional[int] = None
 
 @app.put("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
 def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, current_user=Depends(get_current_user)):
@@ -3472,6 +3488,24 @@ def eliminar_registros_reporte(contrato_id: int, reporte_id: int, current_user=D
 def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(get_current_user)):
     data = body.dict()
     data["contrato_id"] = contrato_id
+    data["creado_por_reg"] = int(current_user.get("sub") or current_user.get("id", 0))
+    try:
+        def _rep():
+            return supabase.table("so_reportes").select(
+                "pk_id_id,civ,tramo,infraestructura,calzada,ubicacion,"
+                "coord_lat,coord_lng,abs_inicio,abs_final,nodo_ini,nodo_fin,"
+                "subcontratista_id,inspector_id"
+            ).eq("id", body.reporte_id).eq("contrato_id", contrato_id).limit(1).execute().data
+        rep_rows = supabase_execute(_rep)
+        if rep_rows:
+            rep = rep_rows[0]
+            for campo in ("pk_id_id","civ","tramo","infraestructura","calzada","ubicacion",
+                          "coord_lat","coord_lng","abs_inicio","abs_final",
+                          "nodo_ini","nodo_fin","subcontratista_id","inspector_id"):
+                if rep.get(campo) is not None:
+                    data[campo] = rep[campo]
+    except Exception:
+        pass
     def _ins():
         return supabase.table("so_registros").insert(data).execute().data
     result = supabase_execute(_ins)
@@ -3681,18 +3715,58 @@ def nuevo_registro_en_reporte(contrato_id: int, reporte_id: int, current_user=De
 # ─── SICOE OBRA: Mover registro a otro reporte ───────────────────────────────
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/mover-a/{nuevo_reporte_id}")
 def mover_registro(contrato_id: int, registro_id: int, nuevo_reporte_id: int, current_user=Depends(get_current_user)):
-    def _ver():
-        return supabase.table("so_reportes")\
-            .select("id").eq("id", nuevo_reporte_id)\
-            .eq("contrato_id", contrato_id).execute().data
-    if not supabase_execute(_ver):
-        raise HTTPException(status_code=404, detail="Reporte destino no encontrado en este contrato")
-    def _upd():
-        return supabase.table("so_registros")\
-            .update({"reporte_id": nuevo_reporte_id})\
-            .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
-    supabase_execute(_upd)
-    return {"ok": True}
+    try:
+        # 1. Verificar que el reporte destino existe en el contrato
+        def _ver_dest():
+            return supabase.table("so_reportes")\
+                .select("id").eq("id", nuevo_reporte_id)\
+                .eq("contrato_id", contrato_id).execute().data
+        if not supabase_execute(_ver_dest):
+            raise HTTPException(status_code=404, detail="Reporte destino no encontrado en este contrato")
+
+        # 2. Leer el registro para obtener el reporte_id origen
+        def _reg():
+            return supabase.table("so_registros")\
+                .select("reporte_id").eq("id", registro_id)\
+                .eq("contrato_id", contrato_id).limit(1).execute().data
+        reg_rows = supabase_execute(_reg)
+        if not reg_rows:
+            raise HTTPException(status_code=404, detail="Registro no encontrado")
+        reporte_origen_id = reg_rows[0]["reporte_id"]
+
+        # 3. Leer campos de localización del reporte ORIGEN
+        campos_loc = ("pk_id_id","civ","tramo","infraestructura","calzada","ubicacion",
+                      "coord_lat","coord_lng","abs_inicio","abs_final",
+                      "nodo_ini","nodo_fin","subcontratista_id","inspector_id","creado_por")
+        def _rep_orig():
+            return supabase.table("so_reportes")\
+                .select(",".join(campos_loc))\
+                .eq("id", reporte_origen_id).eq("contrato_id", contrato_id)\
+                .limit(1).execute().data
+        rep_rows = supabase_execute(_rep_orig)
+        loc_data = {}
+        if rep_rows:
+            rep = rep_rows[0]
+            for campo in campos_loc:
+                if rep.get(campo) is not None:
+                    loc_data[campo] = rep[campo]
+
+        # 4. Actualizar el registro: nuevo reporte_id + datos de localización del origen tatuados
+        update_data = {
+            "reporte_id": nuevo_reporte_id,
+            "modificado_por_reg": int(current_user.get("sub") or current_user.get("id", 0)),
+            **{k: v for k, v in loc_data.items() if k != "creado_por"},
+        }
+        def _upd():
+            return supabase.table("so_registros")\
+                .update(update_data)\
+                .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
+        supabase_execute(_upd)
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ─── SICOE OBRA: Semanas ──────────────────────────────────────────────────────
 class SemanaCreate(BaseModel):
