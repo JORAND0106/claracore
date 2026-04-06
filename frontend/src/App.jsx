@@ -3987,10 +3987,16 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 <div style={{ padding:'6px 10px', fontSize:'11px', color:t.textMuted, background:t.bg, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                   <span>📷 Foto #{registro.foto_numero ? String(registro.foto_numero).padStart(4,'0') : '—'}</span>
                   {puedeEditar && (
-                    <label style={{ cursor:'pointer', color:t.primary, fontSize:'11px', fontWeight:'600' }}>
-                      Cambiar
-                      <input type="file" accept="image/*" style={{ display:'none' }} onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
-                    </label>
+                    <div style={{ display:'flex', gap:'8px' }}>
+                      <label style={{ cursor:'pointer', color:t.primary, fontSize:'11px', fontWeight:'600' }}>
+                        Cambiar
+                        <input type="file" accept="image/*" style={{ display:'none' }} onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
+                      </label>
+                      <button onClick={() => setModalGaleriaHoja(true)}
+                        style={{ cursor:'pointer', color:t.primary, fontSize:'11px', fontWeight:'600', background:'none', border:'none', padding:0 }}>
+                        📷 Galería
+                      </button>
+                    </div>
                   )}
                 </div>
               </>
