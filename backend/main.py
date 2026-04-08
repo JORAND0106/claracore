@@ -3035,19 +3035,25 @@ def listar_reportes_obra(contrato_id: int, current_user=Depends(get_current_user
 
     semana_map = {}
     if semana_ids:
-        def _sems():
-            return supabase.table("so_semanas").select("id, numero_semana")\
-                .in_("id", semana_ids).execute().data
-        for s in supabase_execute(_sems):
-            semana_map[s["id"]] = s["numero_semana"]
+        try:
+            def _sems():
+                return supabase.table("so_semanas").select("id, numero_semana")\
+                    .in_("id", semana_ids).execute().data
+            for s in supabase_execute(_sems):
+                semana_map[s["id"]] = s["numero_semana"]
+        except Exception:
+            pass
 
     acta_map = {}
     if acta_ids:
-        def _actas():
-            return supabase.table("actas").select("id, numero_rpo, consecutivo")\
-                .in_("id", acta_ids).execute().data
-        for a in supabase_execute(_actas):
-            acta_map[a["id"]] = a
+        try:
+            def _actas():
+                return supabase.table("actas").select("id, numero_rpo, consecutivo")\
+                    .in_("id", acta_ids).execute().data
+            for a in supabase_execute(_actas):
+                acta_map[a["id"]] = a
+        except Exception:
+            pass
 
     for r in rows:
         sub = r.pop("subcontratistas", None)

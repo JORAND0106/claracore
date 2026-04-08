@@ -5708,10 +5708,11 @@ const cargarReportes = async () => {
     try {
       const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
         headers: { Authorization: `Bearer ${getToken()}` }
-      })  
+      })
       const data = await r.json()
+      console.log('[SICOE reportes] status:', r.status, 'isArray:', Array.isArray(data), 'length:', Array.isArray(data) ? data.length : data)
       setReportes(Array.isArray(data) ? data : [])
-    } catch(e) { setReportes([]) }
+    } catch(e) { console.error('[SICOE reportes] fetch error:', e); setReportes([]) }
     setLoading(false)
   }
 
