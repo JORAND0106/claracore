@@ -2256,8 +2256,8 @@ function SeccionActas({ call, user, perms, theme }) {
         {perms?.crear&&<button style={S.btn("primary",true)} onClick={abrirCrear}>+ Crear Acta</button>}
         <select style={{...S.select,minWidth:160}} value={filtroGrupo} onChange={e=>setFiltroGrupo(e.target.value)}>
           <option value="">Todas las actas</option>
-          <option value="cobro">📋 Cobro (RPO)</option>
-          <option value="administrativa">📁 Administrativas</option>
+          <option value="RPO">📋 RPO</option>
+          <option value="Administrativas">📁 Administrativas</option>
         </select>
         {actas.length>0&&<span style={{marginLeft:"auto",fontSize:12,color:col.textMuted}}>{actasFiltradas.length} actas</span>}
       </div>
@@ -2285,7 +2285,7 @@ function SeccionActas({ call, user, perms, theme }) {
                   <td style={{...tdStyle,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.tipo_nombre||"—"}</td>
                   <td style={{...tdStyle,fontSize:11,color:col.textMuted,whiteSpace:"nowrap"}}>{a.fecha_inicio&&a.fecha_fin?`${a.fecha_inicio} → ${a.fecha_fin}`:"—"}</td>
                   <td style={tdStyle}>
-                    <span style={S.badge(a.tipo_grupo==="cobro"?"aprobado":"pendiente")}>{a.tipo_grupo==="cobro"?"Cobro":"Admin"}</span>
+                    <span style={S.badge(a.tipo_grupo==="RPO"?"aprobado":"pendiente")}>{a.tipo_grupo||"—"}</span>
                   </td>
                   <td style={{...tdStyle,textAlign:"right",fontSize:12}}>{fmt(a.valor_comp_ambiental)}</td>
                   <td style={{...tdStyle,textAlign:"right",fontSize:12}}>{fmt(a.valor_comp_social)}</td>
@@ -2374,8 +2374,8 @@ function SeccionActas({ call, user, perms, theme }) {
                 )}
               </div>
               <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                <span style={{...S.badge(detalle.tipo_grupo==="cobro"?"aprobado":"pendiente"),fontSize:12,padding:"5px 14px"}}>
-                  {detalle.tipo_grupo==="cobro"?"📋 Cobro":"📁 Administrativa"}
+                <span style={{...S.badge(detalle.tipo_grupo==="RPO"?"aprobado":"pendiente"),fontSize:12,padding:"5px 14px"}}>
+                  {detalle.tipo_grupo==="RPO"?"📋 RPO":"📁 Administrativas"}
                 </span>
                 <button style={S.closeBtn} onClick={()=>setDetalle(null)}>✕</button>
               </div>
