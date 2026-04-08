@@ -5812,7 +5812,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
       )}
 
       {/* ── Barra de filtros ── */}
-      <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'12px 16px', marginBottom:'16px' }}>
+      <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'12px 16px', marginBottom:'16px', position:'sticky', top:0, zIndex:10 }}>
         {/* Fila 1 — Búsqueda principal */}
         <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center' }}>
           <input placeholder="N° Reporte" type="number" value={filtros.numero_reporte} onChange={e => setF('numero_reporte', e.target.value)}
@@ -5878,11 +5878,12 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
       </div>
 
       {/* ── Grid reportes ── */}
-      <div style={{ background:t.bgCard, borderRadius:'12px', border:`1px solid ${t.border}`, overflow:'hidden' }}>
-        {/* Header grid */}
+      <div style={{ background:t.bgCard, borderRadius:'12px', border:`1px solid ${t.border}` }}>
+        {/* Header grid — sticky */}
         <div style={{ display:'grid', gridTemplateColumns:'80px 80px 100px 1fr 160px 120px 120px', gap:'8px',
           padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
-          fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>
+          fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px',
+          position:'sticky', top:0, zIndex:9, background:t.bgCard, borderRadius:'12px 12px 0 0' }}>
           <div>N° REP.</div><div>SEMANA</div><div>ACTA RPO</div>
           <div>DESCRIPCIÓN</div><div>SUBCONTRATISTA</div><div>CAPÍTULO</div><div>ESTADO</div>
         </div>

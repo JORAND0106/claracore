@@ -3248,14 +3248,21 @@ def buscar_reportes_obra(
         except Exception:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
-    # Resolver acta_id desde numero_rpo
+    # Resolver acta_id desde numero_rpo (con fallback a consecutivo)
     acta_id_filtro = None
     if acta_rpo is not None:
         try:
             def _acta_id():
-                return supabase.table("actas").select("id")\
+                # Intentar por numero_rpo primero
+                rows = supabase.table("actas").select("id")\
                     .eq("contrato_id", contrato_id)\
                     .eq("numero_rpo", acta_rpo).execute().data
+                if not rows:
+                    # Fallback: buscar por consecutivo
+                    rows = supabase.table("actas").select("id")\
+                        .eq("contrato_id", contrato_id)\
+                        .eq("consecutivo", acta_rpo).execute().data
+                return rows
             acta_rows = supabase_execute(_acta_id)
             if acta_rows:
                 acta_id_filtro = acta_rows[0]["id"]
