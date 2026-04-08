@@ -5582,16 +5582,21 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const contrato_id = usuario?.contrato_id
 
   const [reportes, setReportes] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [cargando, setCargando] = useState(false)
+  const [hayMas, setHayMas] = useState(false)
+  const [offsetActual, setOffsetActual] = useState(0)
   const [filtros, setFiltros] = useState({
-    busqueda: '', item: '', semana: '', acta_rpo: '',
-    subcontratista_id: '', inspector_id: '',
+    numero_reporte: '', numero_registro: '',
+    semana: '', acta_rpo: '',
+    subcontratista_id: '', capitulo: '', item: '',
     tramo: '', costado: '', pk_id: '',
     abs_inicio: '', abs_final: '', estado: '',
   })
-  const [filtrosLocExpanded, setFiltrosLocExpanded] = useState(false)
+  const [filtrosAvanzados, setFiltrosAvanzados] = useState(false)
   const [filtroSubcList, setFiltroSubcList] = useState([])
-  const [filtroInspList, setFiltroInspList] = useState([])
+  const [filtroCapList, setFiltroCapList] = useState([])
+  const [filtroTramoList, setFiltroTramoList] = useState([])
+  const [filtroCostadoList, setFiltroCostadoList] = useState([])
   const [modalNuevoReporte, setModalNuevoReporte]   = useState(false)
   const [reporteEditando, setReporteEditando]         = useState(null)
   const [modalCarpeta, setModalCarpeta]               = useState(false)
@@ -5696,96 +5701,54 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
     const hdrs = { Authorization: `Bearer ${getToken()}` }
     Promise.all([
       fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs }).then(r => r.json()).catch(() => []),
-      fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs }).then(r => r.json()).catch(() => []),
-    ]).then(([subc, insp]) => {
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos`, { headers: hdrs }).then(r => r.json()).catch(() => []),
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/tramoscostados`, { headers: hdrs }).then(r => r.json()).catch(() => ({})),
+    ]).then(([subc, caps, tc]) => {
       setFiltroSubcList(Array.isArray(subc) ? subc : [])
-      setFiltroInspList(Array.isArray(insp) ? insp : [])
+      setFiltroCapList(Array.isArray(caps) ? caps : [])
+      setFiltroTramoList(Array.isArray(tc?.tramos) ? tc.tramos : [])
+      setFiltroCostadoList(Array.isArray(tc?.costados) ? tc.costados : [])
     })
   }, [contrato_id])
 
-const cargarReportes = async () => {
-    setLoading(true)
+  const buscarReportes = async (nuevosFiltros, nuevoOffset = 0) => {
+    setCargando(true)
     try {
-      const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
+      const params = new URLSearchParams()
+      const ef = { ...nuevosFiltros }
+      if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
+      Object.entries(ef).forEach(([k, v]) => { if (v !== '' && v != null) params.append(k, v) })
+      params.append('offset', nuevoOffset)
+      params.append('limit', 50)
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/buscar?${params}`, {
         headers: { Authorization: `Bearer ${getToken()}` }
       })
-      const data = await r.json()
-      console.log('[SICOE reportes] status:', r.status, 'isArray:', Array.isArray(data), 'length:', Array.isArray(data) ? data.length : data)
-      setReportes(Array.isArray(data) ? data : [])
-    } catch(e) { console.error('[SICOE reportes] fetch error:', e); setReportes([]) }
-    setLoading(false)
+      const data = await res.json()
+      const lista = Array.isArray(data.reportes) ? data.reportes : []
+      if (nuevoOffset === 0) {
+        setReportes(lista)
+      } else {
+        setReportes(prev => [...prev, ...lista])
+      }
+      setHayMas(!!data.hay_mas)
+      setOffsetActual(nuevoOffset + 50)
+      // Auto-abrir cuando búsqueda por N° Registro devuelve resultado único
+      if (nuevosFiltros.numero_registro && lista.length === 1) {
+        const rep = lista[0]
+        const r2 = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
+        const detalle = await r2.json()
+        setReporteSeleccionado(detalle)
+        setModalCarpeta(true)
+      }
+    } catch(e) {}
+    setCargando(false)
   }
 
-  useEffect(() => { if (contrato_id) cargarReportes() }, [contrato_id])
-
-  useEffect(() => {
-    if (!contrato_id) return
-    const intervalo = setInterval(async () => {
-      try {
-        const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
-          headers: { Authorization: `Bearer ${getToken()}` }
-        })
-        const data = await r.json()
-        setReportes(Array.isArray(data) ? data : [])
-      } catch(e) {}
-    }, 10000)
-    return () => clearInterval(intervalo)
-  }, [contrato_id])
-
-  const reportesFiltrados = useMemo(() => {
-    let base = [...reportes].sort((a, b) => (a.numero_reporte || 0) - (b.numero_reporte || 0))
-    // Subcontratista: solo reportes que le pertenecen
-    if (esSub) {
-      base = base.filter(rep => {
-        if (subIdUsuario && rep.subcontratista_id === subIdUsuario) return true
-        return (rep.registros || []).some(r =>
-          r.subcontratista_id === subIdUsuario && r.nivel2_objeto_pago_sub === true
-        )
-      })
-    }
-    return base.filter(rep => {
-      if (filtros.busqueda) {
-        const q = filtros.busqueda.toLowerCase()
-        const enReporte = String(rep.numero_reporte).includes(q)
-        const enRegistros = (rep.registros || []).some(r => String(r.numero_registro).includes(q))
-        if (!enReporte && !enRegistros) return false
-      }
-      if (filtros.item) {
-        const match = (rep.registros || []).some(r => r.item_numero?.toLowerCase().includes(filtros.item.toLowerCase()))
-        if (!match) return false
-      }
-      if (filtros.semana && rep.semana_numero !== Number(filtros.semana)) return false
-      if (filtros.acta_rpo && rep.acta_rpo !== Number(filtros.acta_rpo)) return false
-      if (filtros.subcontratista_id && rep.subcontratista_id !== Number(filtros.subcontratista_id)) return false
-      if (filtros.inspector_id) {
-        const match = (rep.registros || []).some(r => r.inspector_id === Number(filtros.inspector_id))
-        if (!match) return false
-      }
-      if (filtros.tramo && rep.tramo !== filtros.tramo) return false
-      if (filtros.costado && rep.calzada !== filtros.costado) return false
-      if (filtros.pk_id && String(rep.pk_id_id) !== String(filtros.pk_id)) return false
-      if (filtros.abs_inicio && rep.abs_inicio < Number(filtros.abs_inicio)) return false
-      if (filtros.abs_final && rep.abs_final > Number(filtros.abs_final)) return false
-      if (filtros.estado && rep.estado !== filtros.estado) return false
-      return true
-    })
-  }, [reportes, filtros, esSub, subIdUsuario])
-
-  const opcionesSemana = useMemo(() =>
-    [...new Set(reportes.map(r => r.semana_numero).filter(Boolean))].sort((a, b) => a - b)
-  , [reportes])
-  const opcionesActaRpo = useMemo(() =>
-    [...new Set(reportes.map(r => r.acta_rpo).filter(Boolean))].sort((a, b) => a - b)
-  , [reportes])
-  const opcionesTramo = useMemo(() =>
-    [...new Set(reportes.map(r => r.tramo).filter(Boolean))].sort()
-  , [reportes])
-  const opcionesCostado = useMemo(() =>
-    [...new Set(reportes.map(r => r.calzada).filter(Boolean))].sort()
-  , [reportes])
+  useEffect(() => { if (contrato_id) buscarReportes(filtros, 0) }, [contrato_id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const hayFiltrosActivos = Object.values(filtros).some(v => v !== '')
-  const limpiarFiltros = () => setFiltros({ busqueda:'', item:'', semana:'', acta_rpo:'', subcontratista_id:'', inspector_id:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'' })
+  const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'' }
+  const limpiarFiltros = () => { setFiltros(filtrosVacios); buscarReportes(filtrosVacios, 0) }
   const setF = (k, v) => setFiltros(prev => ({ ...prev, [k]: v }))
 
   const inpStyle = { background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: '7px', padding: '5px 9px', color: t.text, fontSize: '12px', outline: 'none' }
@@ -5852,18 +5815,14 @@ const cargarReportes = async () => {
       <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'12px 16px', marginBottom:'16px' }}>
         {/* Fila 1 — Búsqueda principal */}
         <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center' }}>
-          <input placeholder="Buscar N° Reporte o Registro" value={filtros.busqueda} onChange={e => setF('busqueda', e.target.value)}
-            style={{ ...inpStyle, width:'200px' }} />
-          <input placeholder="Ítem" value={filtros.item} onChange={e => setF('item', e.target.value)}
+          <input placeholder="N° Reporte" type="number" value={filtros.numero_reporte} onChange={e => setF('numero_reporte', e.target.value)}
             style={{ ...inpStyle, width:'100px' }} />
-          <select value={filtros.semana} onChange={e => setF('semana', e.target.value)} style={selStyle}>
-            <option value="">Semana…</option>
-            {opcionesSemana.map(s => <option key={s} value={s}>Sem. {s}</option>)}
-          </select>
-          <select value={filtros.acta_rpo} onChange={e => setF('acta_rpo', e.target.value)} style={selStyle}>
-            <option value="">Acta RPO…</option>
-            {opcionesActaRpo.map(a => <option key={a} value={a}>RPO {a}</option>)}
-          </select>
+          <input placeholder="N° Registro" type="number" value={filtros.numero_registro} onChange={e => setF('numero_registro', e.target.value)}
+            style={{ ...inpStyle, width:'100px' }} />
+          <input placeholder="Semana" type="number" value={filtros.semana} onChange={e => setF('semana', e.target.value)}
+            style={{ ...inpStyle, width:'80px' }} />
+          <input placeholder="Acta RPO" type="number" value={filtros.acta_rpo} onChange={e => setF('acta_rpo', e.target.value)}
+            style={{ ...inpStyle, width:'90px' }} />
           <select value={filtros.subcontratista_id} onChange={e => setF('subcontratista_id', e.target.value)} style={selStyle}>
             <option value="">Subcontratista…</option>
             {filtroSubcList.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
@@ -5873,9 +5832,9 @@ const cargarReportes = async () => {
             {ESTADOS.map(e => <option key={e} value={e}>{e}</option>)}
           </select>
           <div style={{ marginLeft:'auto', display:'flex', gap:'6px', alignItems:'center' }}>
-            <button onClick={() => setFiltrosLocExpanded(v => !v)}
+            <button onClick={() => setFiltrosAvanzados(v => !v)}
               style={{ ...selStyle, background:'transparent', cursor:'pointer', whiteSpace:'nowrap', color:t.textMuted }}>
-              Localización {filtrosLocExpanded ? '▲' : '▼'}
+              Filtros avanzados {filtrosAvanzados ? '▲' : '▼'}
             </button>
             {hayFiltrosActivos && (
               <button onClick={limpiarFiltros}
@@ -5883,30 +5842,37 @@ const cargarReportes = async () => {
                 Limpiar
               </button>
             )}
+            <button onClick={() => buscarReportes(filtros, 0)}
+              style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'7px', padding:'5px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
+              Buscar
+            </button>
           </div>
         </div>
-        {/* Fila 2 — Localización (colapsable) */}
-        {filtrosLocExpanded && (
+        {/* Fila 2 — Filtros avanzados (colapsable) */}
+        {filtrosAvanzados && (
           <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'8px', paddingTop:'8px', borderTop:`1px solid ${t.border}` }}>
+            <select value={filtros.capitulo} onChange={e => setF('capitulo', e.target.value)} style={selStyle}>
+              <option value="">Capítulo…</option>
+              {filtroCapList.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <input
+              placeholder={filtros.capitulo ? 'Ítem' : 'Ítem (Capítulo — Ítem)'}
+              value={filtros.item} onChange={e => setF('item', e.target.value)}
+              style={{ ...inpStyle, width:'160px' }} />
             <select value={filtros.tramo} onChange={e => setF('tramo', e.target.value)} style={selStyle}>
               <option value="">Tramo…</option>
-              {opcionesTramo.map(v => <option key={v} value={v}>{v}</option>)}
+              {filtroTramoList.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
             <select value={filtros.costado} onChange={e => setF('costado', e.target.value)} style={selStyle}>
               <option value="">Costado…</option>
-              {opcionesCostado.map(v => <option key={v} value={v}>{v}</option>)}
+              {filtroCostadoList.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
-            {/* TODO: PK_ID con mapa Mapbox */}
-            <input placeholder="PK ID" value={filtros.pk_id} onChange={e => setF('pk_id', e.target.value)}
-              style={{ ...inpStyle, width:'90px' }} />
             <input placeholder="Abs. Inicio" type="number" value={filtros.abs_inicio} onChange={e => setF('abs_inicio', e.target.value)}
               style={{ ...inpStyle, width:'100px' }} />
             <input placeholder="Abs. Final" type="number" value={filtros.abs_final} onChange={e => setF('abs_final', e.target.value)}
               style={{ ...inpStyle, width:'100px' }} />
-            <select value={filtros.inspector_id} onChange={e => setF('inspector_id', e.target.value)} style={selStyle}>
-              <option value="">Inspector…</option>
-              {filtroInspList.map(i => <option key={i.id} value={i.id}>{i.nombre}</option>)}
-            </select>
+            <input placeholder="PK ID" value={filtros.pk_id} onChange={e => setF('pk_id', e.target.value)}
+              style={{ ...inpStyle, width:'80px' }} />
           </div>
         )}
       </div>
@@ -5922,13 +5888,13 @@ const cargarReportes = async () => {
         </div>
 
         {/* Filas */}
-        {loading ? (
+        {cargando && reportes.length === 0 ? (
           <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>Cargando reportes...</div>
-        ) : reportesFiltrados.length === 0 ? (
+        ) : reportes.length === 0 ? (
           <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>
             {hayFiltrosActivos ? 'Sin resultados para los filtros aplicados.' : 'No hay reportes aún. ¡Crea el primero!'}
           </div>
-        ) : reportesFiltrados.map(rep => (
+        ) : reportes.map(rep => (
           <div key={rep.id} style={{ display:'grid', gridTemplateColumns:'80px 80px 100px 1fr 160px 120px 120px',
             gap:'8px', padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
             fontSize:'13px', color:t.text, cursor:'pointer',
@@ -5968,6 +5934,22 @@ const cargarReportes = async () => {
             </div>
           </div>
         ))}
+
+        {/* Footer: cargar más / spinner / fin */}
+        {reportes.length > 0 && (
+          <div style={{ padding:'12px 16px', textAlign:'center', borderTop:`1px solid ${t.border}` }}>
+            {cargando ? (
+              <span style={{ fontSize:'12px', color:t.textMuted }}>Cargando...</span>
+            ) : hayMas ? (
+              <button onClick={() => buscarReportes(filtros, offsetActual)}
+                style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'7px 20px', fontSize:'12px', color:t.textMuted, cursor:'pointer', fontWeight:'600' }}>
+                ⬇ Cargar 50 reportes más
+              </button>
+            ) : (
+              <span style={{ fontSize:'11px', color:t.textMuted }}>— Todos los reportes cargados —</span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Modal Configurar Semanas Iniciales ── */}
@@ -6043,7 +6025,7 @@ const cargarReportes = async () => {
           t={t} usuario={usuario} API_URL={API_URL} contrato_id={contrato_id}
           reporte={reporteSeleccionado}
           onClose={() => { setModalCarpeta(false); setReporteSeleccionado(null) }}
-          onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); cargarReportes() }}
+          onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); buscarReportes(filtros, 0) }}
         />
       )}
 
@@ -6054,7 +6036,7 @@ const cargarReportes = async () => {
           API_URL={API_URL} contrato_id={contrato_id}
           reporteInicial={reporteEditando}
           onClose={() => { setModalNuevoReporte(false); setReporteEditando(null) }}
-          onGuardado={() => { setModalNuevoReporte(false); setReporteEditando(null); cargarReportes() }}
+          onGuardado={() => { setModalNuevoReporte(false); setReporteEditando(null); buscarReportes(filtros, 0) }}
         />
       )}
     </div>
