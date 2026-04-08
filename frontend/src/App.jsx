@@ -5583,7 +5583,15 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
 
   const [reportes, setReportes] = useState([])
   const [loading, setLoading] = useState(true)
-  const [filtroEstado, setFiltroEstado] = useState('todos')
+  const [filtros, setFiltros] = useState({
+    busqueda: '', item: '', semana: '', acta_rpo: '',
+    subcontratista_id: '', inspector_id: '',
+    tramo: '', costado: '', pk_id: '',
+    abs_inicio: '', abs_final: '', estado: '',
+  })
+  const [filtrosLocExpanded, setFiltrosLocExpanded] = useState(false)
+  const [filtroSubcList, setFiltroSubcList] = useState([])
+  const [filtroInspList, setFiltroInspList] = useState([])
   const [modalNuevoReporte, setModalNuevoReporte]   = useState(false)
   const [reporteEditando, setReporteEditando]         = useState(null)
   const [modalCarpeta, setModalCarpeta]               = useState(false)
@@ -5683,6 +5691,18 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
 
   useEffect(() => { if (contrato_id) cargarSemanaVigente() }, [contrato_id])
 
+  useEffect(() => {
+    if (!contrato_id) return
+    const hdrs = { Authorization: `Bearer ${getToken()}` }
+    Promise.all([
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs }).then(r => r.json()).catch(() => []),
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs }).then(r => r.json()).catch(() => []),
+    ]).then(([subc, insp]) => {
+      setFiltroSubcList(Array.isArray(subc) ? subc : [])
+      setFiltroInspList(Array.isArray(insp) ? insp : [])
+    })
+  }, [contrato_id])
+
 const cargarReportes = async () => {
     setLoading(true)
     try {
@@ -5711,17 +5731,64 @@ const cargarReportes = async () => {
     return () => clearInterval(intervalo)
   }, [contrato_id])
 
-  const reportesFiltrados = (() => {
-    const porEstado = filtroEstado === 'todos' ? reportes : reportes.filter(r => r.estado === filtroEstado)
-    if (!esSub) return porEstado
-    // Subcontratista: solo reportes que le pertenecen (nivel reporte o al menos un registro suyo con objeto_pago)
-    return porEstado.filter(rep => {
-      if (subIdUsuario && rep.subcontratista_id === subIdUsuario) return true
-      return (rep.registros || []).some(r =>
-        r.subcontratista_id === subIdUsuario && r.nivel2_objeto_pago_sub === true
-      )
+  const reportesFiltrados = useMemo(() => {
+    let base = [...reportes].sort((a, b) => (a.numero_reporte || 0) - (b.numero_reporte || 0))
+    // Subcontratista: solo reportes que le pertenecen
+    if (esSub) {
+      base = base.filter(rep => {
+        if (subIdUsuario && rep.subcontratista_id === subIdUsuario) return true
+        return (rep.registros || []).some(r =>
+          r.subcontratista_id === subIdUsuario && r.nivel2_objeto_pago_sub === true
+        )
+      })
+    }
+    return base.filter(rep => {
+      if (filtros.busqueda) {
+        const q = filtros.busqueda.toLowerCase()
+        const enReporte = String(rep.numero_reporte).includes(q)
+        const enRegistros = (rep.registros || []).some(r => String(r.numero_registro).includes(q))
+        if (!enReporte && !enRegistros) return false
+      }
+      if (filtros.item) {
+        const match = (rep.registros || []).some(r => r.item_numero?.toLowerCase().includes(filtros.item.toLowerCase()))
+        if (!match) return false
+      }
+      if (filtros.semana && rep.semana_numero !== Number(filtros.semana)) return false
+      if (filtros.acta_rpo && rep.acta_rpo !== Number(filtros.acta_rpo)) return false
+      if (filtros.subcontratista_id && rep.subcontratista_id !== Number(filtros.subcontratista_id)) return false
+      if (filtros.inspector_id) {
+        const match = (rep.registros || []).some(r => r.inspector_id === Number(filtros.inspector_id))
+        if (!match) return false
+      }
+      if (filtros.tramo && rep.tramo !== filtros.tramo) return false
+      if (filtros.costado && rep.calzada !== filtros.costado) return false
+      if (filtros.pk_id && String(rep.pk_id_id) !== String(filtros.pk_id)) return false
+      if (filtros.abs_inicio && rep.abs_inicio < Number(filtros.abs_inicio)) return false
+      if (filtros.abs_final && rep.abs_final > Number(filtros.abs_final)) return false
+      if (filtros.estado && rep.estado !== filtros.estado) return false
+      return true
     })
-  })()
+  }, [reportes, filtros, esSub, subIdUsuario])
+
+  const opcionesSemana = useMemo(() =>
+    [...new Set(reportes.map(r => r.semana_numero).filter(Boolean))].sort((a, b) => a - b)
+  , [reportes])
+  const opcionesActaRpo = useMemo(() =>
+    [...new Set(reportes.map(r => r.acta_rpo).filter(Boolean))].sort((a, b) => a - b)
+  , [reportes])
+  const opcionesTramo = useMemo(() =>
+    [...new Set(reportes.map(r => r.tramo).filter(Boolean))].sort()
+  , [reportes])
+  const opcionesCostado = useMemo(() =>
+    [...new Set(reportes.map(r => r.calzada).filter(Boolean))].sort()
+  , [reportes])
+
+  const hayFiltrosActivos = Object.values(filtros).some(v => v !== '')
+  const limpiarFiltros = () => setFiltros({ busqueda:'', item:'', semana:'', acta_rpo:'', subcontratista_id:'', inspector_id:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'' })
+  const setF = (k, v) => setFiltros(prev => ({ ...prev, [k]: v }))
+
+  const inpStyle = { background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: '7px', padding: '5px 9px', color: t.text, fontSize: '12px', outline: 'none' }
+  const selStyle = { ...inpStyle, cursor: 'pointer' }
 
   return (
     <div>
@@ -5780,27 +5847,77 @@ const cargarReportes = async () => {
         </div>
       )}
 
-      {/* ── Filtros estado ── */}
-      <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', marginBottom:'16px' }}>
-        {['todos', ...ESTADOS].map(e => (
-          <button key={e} onClick={() => setFiltroEstado(e)} style={{
-            background: filtroEstado === e ? t.primary : t.bgCard,
-            color: filtroEstado === e ? '#fff' : t.textMuted,
-            border: `1px solid ${filtroEstado === e ? t.primary : t.border}`,
-            borderRadius:'20px', padding:'4px 14px', fontSize:'12px',
-            fontWeight: filtroEstado === e ? '700' : '400', cursor:'pointer'
-          }}>{e === 'todos' ? 'Todos' : e}</button>
-        ))}
+      {/* ── Barra de filtros ── */}
+      <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'12px 16px', marginBottom:'16px' }}>
+        {/* Fila 1 — Búsqueda principal */}
+        <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center' }}>
+          <input placeholder="Buscar N° Reporte o Registro" value={filtros.busqueda} onChange={e => setF('busqueda', e.target.value)}
+            style={{ ...inpStyle, width:'200px' }} />
+          <input placeholder="Ítem" value={filtros.item} onChange={e => setF('item', e.target.value)}
+            style={{ ...inpStyle, width:'100px' }} />
+          <select value={filtros.semana} onChange={e => setF('semana', e.target.value)} style={selStyle}>
+            <option value="">Semana…</option>
+            {opcionesSemana.map(s => <option key={s} value={s}>Sem. {s}</option>)}
+          </select>
+          <select value={filtros.acta_rpo} onChange={e => setF('acta_rpo', e.target.value)} style={selStyle}>
+            <option value="">Acta RPO…</option>
+            {opcionesActaRpo.map(a => <option key={a} value={a}>RPO {a}</option>)}
+          </select>
+          <select value={filtros.subcontratista_id} onChange={e => setF('subcontratista_id', e.target.value)} style={selStyle}>
+            <option value="">Subcontratista…</option>
+            {filtroSubcList.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+          </select>
+          <select value={filtros.estado} onChange={e => setF('estado', e.target.value)} style={selStyle}>
+            <option value="">Estado…</option>
+            {ESTADOS.map(e => <option key={e} value={e}>{e}</option>)}
+          </select>
+          <div style={{ marginLeft:'auto', display:'flex', gap:'6px', alignItems:'center' }}>
+            <button onClick={() => setFiltrosLocExpanded(v => !v)}
+              style={{ ...selStyle, background:'transparent', cursor:'pointer', whiteSpace:'nowrap', color:t.textMuted }}>
+              Localización {filtrosLocExpanded ? '▲' : '▼'}
+            </button>
+            {hayFiltrosActivos && (
+              <button onClick={limpiarFiltros}
+                style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'7px', padding:'5px 12px', fontSize:'12px', color:t.textMuted, cursor:'pointer' }}>
+                Limpiar
+              </button>
+            )}
+          </div>
+        </div>
+        {/* Fila 2 — Localización (colapsable) */}
+        {filtrosLocExpanded && (
+          <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'8px', paddingTop:'8px', borderTop:`1px solid ${t.border}` }}>
+            <select value={filtros.tramo} onChange={e => setF('tramo', e.target.value)} style={selStyle}>
+              <option value="">Tramo…</option>
+              {opcionesTramo.map(v => <option key={v} value={v}>{v}</option>)}
+            </select>
+            <select value={filtros.costado} onChange={e => setF('costado', e.target.value)} style={selStyle}>
+              <option value="">Costado…</option>
+              {opcionesCostado.map(v => <option key={v} value={v}>{v}</option>)}
+            </select>
+            {/* TODO: PK_ID con mapa Mapbox */}
+            <input placeholder="PK ID" value={filtros.pk_id} onChange={e => setF('pk_id', e.target.value)}
+              style={{ ...inpStyle, width:'90px' }} />
+            <input placeholder="Abs. Inicio" type="number" value={filtros.abs_inicio} onChange={e => setF('abs_inicio', e.target.value)}
+              style={{ ...inpStyle, width:'100px' }} />
+            <input placeholder="Abs. Final" type="number" value={filtros.abs_final} onChange={e => setF('abs_final', e.target.value)}
+              style={{ ...inpStyle, width:'100px' }} />
+            <select value={filtros.inspector_id} onChange={e => setF('inspector_id', e.target.value)} style={selStyle}>
+              <option value="">Inspector…</option>
+              {filtroInspList.map(i => <option key={i.id} value={i.id}>{i.nombre}</option>)}
+            </select>
+          </div>
+        )}
       </div>
 
       {/* ── Grid reportes ── */}
       <div style={{ background:t.bgCard, borderRadius:'12px', border:`1px solid ${t.border}`, overflow:'hidden' }}>
         {/* Header grid */}
-        <div style={{ display:'grid', gridTemplateColumns:'80px 100px 1fr 140px 140px 120px 120px', gap:'8px',
+        <div style={{ display:'grid', gridTemplateColumns:'80px 80px 100px 1fr 160px 120px 120px', gap:'8px',
           padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
           fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>
-          <div>N° REP.</div><div>FECHA</div><div>ACTIVIDAD</div>
-          <div>ABSCISADO</div><div>SUBCONTRATISTA</div><div>COSTO DIR.</div><div>ESTADO</div>
+          <div>N° REP.</div><div>SEMANA</div><div>ACTA RPO</div>
+          <div>DESCRIPCIÓN</div><div>SUBCONTRATISTA</div><div>CAPÍTULO</div><div>ESTADO</div>
         </div>
 
         {/* Filas */}
@@ -5808,10 +5925,10 @@ const cargarReportes = async () => {
           <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>Cargando reportes...</div>
         ) : reportesFiltrados.length === 0 ? (
           <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>
-            {filtroEstado === 'todos' ? 'No hay reportes aún. ¡Crea el primero!' : `No hay reportes en estado "${filtroEstado}"`}
+            {hayFiltrosActivos ? 'Sin resultados para los filtros aplicados.' : 'No hay reportes aún. ¡Crea el primero!'}
           </div>
         ) : reportesFiltrados.map(rep => (
-          <div key={rep.id} style={{ display:'grid', gridTemplateColumns:'80px 100px 1fr 140px 140px 120px 120px',
+          <div key={rep.id} style={{ display:'grid', gridTemplateColumns:'80px 80px 100px 1fr 160px 120px 120px',
             gap:'8px', padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
             fontSize:'13px', color:t.text, cursor:'pointer',
             transition:'background 0.15s' }}
@@ -5832,14 +5949,14 @@ const cargarReportes = async () => {
             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
             <div style={{ fontWeight:'700', color:t.primary }}>#{rep.numero_reporte}</div>
             <div style={{ color:t.textMuted, fontSize:'12px' }}>
-              {rep.created_at ? new Date(rep.created_at+'Z').toLocaleDateString('es-CO') : '—'}
+              {rep.semana_numero != null ? `Sem. ${rep.semana_numero}` : '—'}
+            </div>
+            <div style={{ color:t.textMuted, fontSize:'12px' }}>
+              {rep.acta_rpo != null ? `RPO ${rep.acta_rpo}` : '—'}
             </div>
             <div style={{ fontWeight:'600' }}>{rep.descripcion_actividad}</div>
-            <div style={{ fontSize:'12px', color:t.textMuted }}>
-              {rep.abs_inicio ?? '—'} → {rep.abs_final ?? '—'}
-            </div>
             <div style={{ fontSize:'12px' }}>{rep.subcontratista_nombre || '—'}</div>
-            <div style={{ fontSize:'12px', color:'#10B981' }}>—</div>
+            <div style={{ fontSize:'11px', color:t.textMuted }}>{rep.capitulo || '—'}</div>
             <div>
               <span style={{
                 background: (ESTADO_COLORS[rep.estado] || '#6B7280') + '22',
