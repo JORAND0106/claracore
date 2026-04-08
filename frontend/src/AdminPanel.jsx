@@ -2275,12 +2275,12 @@ function SeccionActas({ call, user, perms, theme }) {
         <div ref={topScrollRef} onScroll={syncFromTop} style={{overflowX:"auto",overflowY:"hidden",height:12,marginBottom:2}}>
           <div style={{minWidth:1100,height:1}}/>
         </div>
-        <div ref={botScrollRef} onScroll={syncFromBot} style={{overflowX:"auto"}}>
+        <div ref={botScrollRef} onScroll={syncFromBot} style={{overflowX:"auto",overflowY:"auto",maxHeight:"calc(92vh - 210px)"}}>
           <table style={{...S.table,minWidth:1100}}>
             <thead>
               <tr>
                 {["N° Acta","RPO","Tipo de Acta","Período","Grupo","Comp. Amb.","Comp. Soc.","Comp. PMT","Ajustes Obra","Val. Adic.","Total Acta"].map((h,i)=>(
-                  <th key={i} style={{...S.th,whiteSpace:"nowrap"}}>{h}</th>
+                  <th key={i} style={{...S.th,whiteSpace:"nowrap",position:"sticky",top:0,zIndex:2}}>{h}</th>
                 ))}
               </tr>
             </thead>
