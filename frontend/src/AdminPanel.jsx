@@ -1986,6 +1986,11 @@ function SeccionActas({ call, user, perms, theme }) {
   const [calEFf, setCalEFf] = useState(false);
   const [calEFa, setCalEFa] = useState(false);
 
+  const topScrollRef = useRef(null);
+  const botScrollRef = useRef(null);
+  const syncFromTop  = () => { if (botScrollRef.current) botScrollRef.current.scrollLeft = topScrollRef.current.scrollLeft; };
+  const syncFromBot  = () => { if (topScrollRef.current) topScrollRef.current.scrollLeft = botScrollRef.current.scrollLeft; };
+
   const FV = { consecutivo:1,tipo_acta_id:"",tipo_grupo:"administrativa",observacion:"",
     asignado_a:"",fecha_asignacion:"",enlace:"",numero_rpo:"",fecha_inicio:"",fecha_fin:"",
     valor_comp_ambiental:0,calificacion_ambiental:"",valor_comp_social:0,calificacion_social:"",
@@ -1998,7 +2003,7 @@ function SeccionActas({ call, user, perms, theme }) {
   const iS  = theme==="light"?{...S.input,background:"#FFFFFF",color:"#0d3b52",border:"1px solid #BAE6FD"}:S.input;
   const sS  = theme==="light"?{...S.select,background:"#FFFFFF",color:"#0d3b52",border:"1px solid #BAE6FD",width:"100%"}:{...S.select,width:"100%"};
   const ovS = {position:"fixed",inset:0,zIndex:10001,background:"rgba(5,12,18,0.92)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center"};
-  const mS  = (w)=>({width:`min(${w}px,95vw)`,maxHeight:"92vh",background:theme==="light"?"#F0F9FF":"#0b1920",borderRadius:14,border:"1px solid rgba(0,175,197,0.2)",boxShadow:"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column"});
+  const mS  = ()=>({width:"95vw",maxHeight:"90vh",background:theme==="light"?"#F0F9FF":"#0b1920",borderRadius:14,border:"1px solid rgba(0,175,197,0.2)",boxShadow:"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column"});
   const mH  = {padding:"18px 28px 14px",borderBottom:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)",background:theme==="light"?"#E0F2FE":"#081318",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0};
   const mSc = {flex:1,overflowY:"auto",padding:"22px 28px",scrollbarWidth:"thin",scrollbarColor:"#1e3a44 transparent",background:theme==="light"?"#F8FAFC":"transparent"};
   const mF  = {padding:"14px 28px",borderTop:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",background:theme==="light"?"#E0F2FE":"#081318",display:"flex",justifyContent:"flex-end",gap:10,flexShrink:0};
@@ -2266,7 +2271,11 @@ function SeccionActas({ call, user, perms, theme }) {
       {loading?(<div style={S.empty}><span style={{color:"#00afc5"}}>Cargando...</span></div>
       ):actas.length===0?(<div style={S.empty}>No hay actas registradas.<br/><span style={{fontSize:12,color:col.textMuted}}>Usa "Crear Acta" para agregar una.</span></div>
       ):(
-        <div style={{overflowX:"auto"}}>
+        <>
+        <div ref={topScrollRef} onScroll={syncFromTop} style={{overflowX:"auto",overflowY:"hidden",height:12,marginBottom:2}}>
+          <div style={{minWidth:1100,height:1}}/>
+        </div>
+        <div ref={botScrollRef} onScroll={syncFromBot} style={{overflowX:"auto"}}>
           <table style={{...S.table,minWidth:1100}}>
             <thead>
               <tr>
@@ -2298,12 +2307,13 @@ function SeccionActas({ call, user, perms, theme }) {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {/* ══ MODAL CREAR ══ */}
       {showCrear&&(
         <div style={ovS} onClick={e=>e.target===e.currentTarget&&setShowCrear(false)}>
-          <div style={{...mS(720),minHeight:"min(600px,88vh)"}}>
+          <div style={{...mS(),minHeight:"min(600px,88vh)"}}>
             <div style={mH}>
               <div>
                 <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>Crear Nueva Acta</div>
@@ -2358,7 +2368,7 @@ function SeccionActas({ call, user, perms, theme }) {
       {/* ══ POPUP DETALLE ══ */}
       {detalle&&(
         <div style={ovS} onClick={e=>e.target===e.currentTarget&&setDetalle(null)}>
-          <div style={mS(detalle.es_cobro?980:700)}>
+          <div style={mS()}>
             <div style={mH}>
               <div>
                 <div style={{fontSize:10,color:col.textSecondary,letterSpacing:1,textTransform:"uppercase",marginBottom:2}}>
