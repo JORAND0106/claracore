@@ -3024,17 +3024,37 @@ def alertas_corte(contrato_id: int, current_user=Depends(get_current_user)):
 def listar_reportes_obra(contrato_id: int, current_user=Depends(get_current_user)):
     def _q():
         return supabase.table("so_reportes")\
-            .select("*, subcontratistas(razon_social), so_semanas(numero_semana), actas(numero_rpo, consecutivo)")\
+            .select("*, subcontratistas(razon_social)")\
             .eq("contrato_id", contrato_id)\
             .order("numero_reporte", desc=False).execute().data
     rows = supabase_execute(_q)
+
+    # Batch-resolve semana_numero y acta_rpo (las FKs no están expuestas como JOINs implícitos en PostgREST)
+    semana_ids = list({r["semana_id"] for r in rows if r.get("semana_id")})
+    acta_ids   = list({r["acta_rpo_id"] for r in rows if r.get("acta_rpo_id")})
+
+    semana_map = {}
+    if semana_ids:
+        def _sems():
+            return supabase.table("so_semanas").select("id, numero_semana")\
+                .in_("id", semana_ids).execute().data
+        for s in supabase_execute(_sems):
+            semana_map[s["id"]] = s["numero_semana"]
+
+    acta_map = {}
+    if acta_ids:
+        def _actas():
+            return supabase.table("actas").select("id, numero_rpo, consecutivo")\
+                .in_("id", acta_ids).execute().data
+        for a in supabase_execute(_actas):
+            acta_map[a["id"]] = a
+
     for r in rows:
         sub = r.pop("subcontratistas", None)
         r["subcontratista_nombre"] = sub["razon_social"] if sub else None
-        sem = r.pop("so_semanas", None)
-        r["semana_numero"] = sem["numero_semana"] if sem else None
-        acta = r.pop("actas", None)
-        r["acta_rpo"] = acta["numero_rpo"] if acta else None
+        r["semana_numero"]    = semana_map.get(r.get("semana_id"))
+        acta = acta_map.get(r.get("acta_rpo_id"))
+        r["acta_rpo"]         = acta["numero_rpo"] if acta else None
         r["acta_consecutivo"] = acta["consecutivo"] if acta else None
     return rows
 
