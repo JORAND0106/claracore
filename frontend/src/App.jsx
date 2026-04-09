@@ -5601,6 +5601,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const [analisis, setAnalisis] = useState(null)
   const [cargandoAnalisis, setCargandoAnalisis] = useState(false)
   const [panelExpandido, setPanelExpandido] = useState(false)
+  const [busquedaRealizada, setBusquedaRealizada] = useState(false)
   const [sugerenciasItem, setSugerenciasItem] = useState([])
   const [mostrarSugsItem, setMostrarSugsItem] = useState(false)
   const [modalNuevoReporte, setModalNuevoReporte]   = useState(false)
@@ -5738,6 +5739,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
       }
       setHayMas(!!data.hay_mas)
       setOffsetActual(nuevoOffset + 50)
+      setBusquedaRealizada(true)
       // Auto-abrir cuando búsqueda por N° Registro devuelve resultado único
       if (nuevosFiltros.numero_registro && lista.length === 1) {
         const rep = lista[0]
@@ -5749,8 +5751,6 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
     } catch(e) {}
     setCargando(false)
   }
-
-  useEffect(() => { if (contrato_id) buscarReportes(filtros, 0) }, [contrato_id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const fmtPesos = v => '$' + Math.round(v || 0).toLocaleString('es-CO')
 
@@ -6135,9 +6135,13 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
         {/* Filas */}
         {cargando && reportes.length === 0 ? (
           <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>Cargando reportes...</div>
+        ) : !busquedaRealizada ? (
+          <div style={{ padding:'48px', textAlign:'center', color:t.textMuted, fontSize:'14px' }}>
+            🔍 Usa los filtros y presiona <strong>Buscar</strong> para ver los reportes
+          </div>
         ) : reportes.length === 0 ? (
           <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>
-            {hayFiltrosActivos ? 'Sin resultados para los filtros aplicados.' : 'No hay reportes aún. ¡Crea el primero!'}
+            Sin resultados para los filtros aplicados.
           </div>
         ) : reportes.map(rep => (
           <div key={rep.id} style={{ display:'grid', gridTemplateColumns:'80px 80px 100px 1fr 160px 120px 120px',
@@ -8695,6 +8699,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
     p.ver && ADMIN_FUNCIONES.includes(p.funcion_nombre?.toLowerCase())
   )
   const canAdmin = esDeveloper || usuario?.cargo_nombre === 'Administrador' || tienePermisoAdmin
+  const tienePermisoSicoeObra = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Reporte de Cantidades' && p.ver)
 
   const s = {
     app: { fontFamily: "'Segoe UI', sans-serif", background: t.bg, minHeight: '100vh', color: t.text },
@@ -8824,14 +8829,14 @@ const [navRegistroId, setNavRegistroId] = useState(null)
 
           {/* Items del menú */}
           {[
-            ['dashboard',    '🏠', 'Dashboard'],
-            ['presupuesto',  '📋', 'Presupuesto'],
-            ['cobro',        '💰', 'SICOE'],
-            ['sicoe_obra',   '🏗️', 'SICOE Obra'],
-            ['almacen',      '🏪', 'Almacén'],
-            ['gantt',        '📅', 'Gantt'],
-            ['semaforo',     '🗺️', 'Plano Semáforo'],
-          ].map(([key, icon, label]) => (
+            ['dashboard',    '🏠', 'Dashboard',      true],
+            ['presupuesto',  '📋', 'Presupuesto',    true],
+            ['cobro',        '💰', 'SICOE',          true],
+            ['sicoe_obra',   '🏗️', 'SICOE Obra',    tienePermisoSicoeObra],
+            ['almacen',      '🏪', 'Almacén',        true],
+            ['gantt',        '📅', 'Gantt',           true],
+            ['semaforo',     '🗺️', 'Plano Semáforo', true],
+          ].filter(([,,, visible]) => visible).map(([key, icon, label]) => (
             <button key={key} onClick={() => { setModuloActivo(key); setMenuAbierto(false) }} style={{
               background: moduloActivo === key ? t.primary+'22' : 'none',
               border: 'none',

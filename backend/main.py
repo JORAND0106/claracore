@@ -3627,14 +3627,21 @@ def filtros_capitulos_reportes(
         m = re.match(r'^(\d+)', c)
         return (int(m.group(1)) if m else 9999, c)
 
-    # Sin filtros → lista completa (limit 10000 para superar default 1000 de Supabase)
+    # Sin filtros → lista completa con paginación
     if acta_rpo is None and semana is None and subcontratista_id is None:
-        def _q():
-            return supabase.table("so_reportes").select("capitulo")\
-                .eq("contrato_id", contrato_id)\
-                .not_.is_("capitulo", "null").limit(10000).execute().data
-        rows = supabase_execute(_q)
-        return sorted({r["capitulo"] for r in rows if r.get("capitulo")}, key=orden_cap)
+        todos: list = []
+        off = 0
+        while True:
+            def _q(o=off):
+                return supabase.table("so_reportes").select("capitulo")\
+                    .eq("contrato_id", contrato_id)\
+                    .not_.is_("capitulo", "null").range(o, o + 999).execute().data
+            batch = supabase_execute(_q)
+            todos.extend(batch)
+            if len(batch) < 1000:
+                break
+            off += 1000
+        return sorted({r["capitulo"] for r in todos if r.get("capitulo")}, key=orden_cap)
 
     # Resolver acta_id
     acta_id = None
@@ -3689,21 +3696,28 @@ def filtros_capitulos_reportes(
         except Exception:
             return []
 
-    # Obtener capítulos desde so_reportes
+    # Obtener capítulos desde so_reportes (paginado)
     try:
         _rep_ids_l = reporte_ids
         _sub_id_l  = subcontratista_id
-        def _caps():
-            q = supabase.table("so_reportes").select("capitulo")\
-                .eq("contrato_id", contrato_id)\
-                .not_.is_("capitulo", "null")
-            if _sub_id_l is not None:
-                q = q.eq("subcontratista_id", _sub_id_l)
-            if _rep_ids_l is not None:
-                q = q.in_("id", _rep_ids_l)
-            return q.execute().data
-        cap_rows = supabase_execute(_caps)
-        return sorted({r["capitulo"] for r in cap_rows if r.get("capitulo")}, key=orden_cap)
+        cap_todos: list = []
+        off2 = 0
+        while True:
+            def _caps(o=off2):
+                q = supabase.table("so_reportes").select("capitulo")\
+                    .eq("contrato_id", contrato_id)\
+                    .not_.is_("capitulo", "null")
+                if _sub_id_l is not None:
+                    q = q.eq("subcontratista_id", _sub_id_l)
+                if _rep_ids_l is not None:
+                    q = q.in_("id", _rep_ids_l)
+                return q.range(o, o + 999).execute().data
+            batch = supabase_execute(_caps)
+            cap_todos.extend(batch)
+            if len(batch) < 1000:
+                break
+            off2 += 1000
+        return sorted({r["capitulo"] for r in cap_todos if r.get("capitulo")}, key=orden_cap)
     except Exception:
         return []
 
@@ -3771,30 +3785,37 @@ def filtros_items_registros(
         except Exception:
             return []
 
-    # Obtener items desde so_registros
+    # Obtener items desde so_registros (paginado)
     try:
         _acta_id_l   = acta_id
         _semana_id_l = semana_id
         _rep_ids_l   = reporte_ids_filter
         _q_l         = q
-        def _items():
-            qr = supabase.table("so_registros")\
-                .select("item_numero, item_descripcion")\
-                .eq("contrato_id", contrato_id)\
-                .not_.is_("item_numero", "null")
-            if _acta_id_l is not None:
-                qr = qr.eq("acta_rpo_id", _acta_id_l)
-            if _semana_id_l is not None:
-                qr = qr.eq("semana_id", _semana_id_l)
-            if _rep_ids_l is not None:
-                qr = qr.in_("reporte_id", _rep_ids_l)
-            if _q_l:
-                qr = qr.or_(f"item_numero.ilike.%{_q_l}%,item_descripcion.ilike.%{_q_l}%")
-            return qr.limit(500).execute().data
-        item_rows = supabase_execute(_items)
+        item_todos: list = []
+        off3 = 0
+        while True:
+            def _items(o=off3):
+                qr = supabase.table("so_registros")\
+                    .select("item_numero, item_descripcion")\
+                    .eq("contrato_id", contrato_id)\
+                    .not_.is_("item_numero", "null")
+                if _acta_id_l is not None:
+                    qr = qr.eq("acta_rpo_id", _acta_id_l)
+                if _semana_id_l is not None:
+                    qr = qr.eq("semana_id", _semana_id_l)
+                if _rep_ids_l is not None:
+                    qr = qr.in_("reporte_id", _rep_ids_l)
+                if _q_l:
+                    qr = qr.or_(f"item_numero.ilike.%{_q_l}%,item_descripcion.ilike.%{_q_l}%")
+                return qr.range(o, o + 999).execute().data
+            batch = supabase_execute(_items)
+            item_todos.extend(batch)
+            if len(batch) < 1000:
+                break
+            off3 += 1000
         # Deduplicar por item_numero, conservar descripcion
         seen: dict = {}
-        for r in item_rows:
+        for r in item_todos:
             num = r.get("item_numero")
             if not num:
                 continue
