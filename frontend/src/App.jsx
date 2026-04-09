@@ -5600,6 +5600,9 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const [filtroCostadoList, setFiltroCostadoList] = useState([])
   const [analisis, setAnalisis] = useState(null)
   const [cargandoAnalisis, setCargandoAnalisis] = useState(false)
+  const [panelExpandido, setPanelExpandido] = useState(false)
+  const [sugerenciasItem, setSugerenciasItem] = useState([])
+  const [mostrarSugsItem, setMostrarSugsItem] = useState(false)
   const [modalNuevoReporte, setModalNuevoReporte]   = useState(false)
   const [reporteEditando, setReporteEditando]         = useState(null)
   const [modalCarpeta, setModalCarpeta]               = useState(false)
@@ -5764,7 +5767,9 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/analisis?${params}`, {
         headers: { Authorization: `Bearer ${getToken()}` }
       })
-      setAnalisis(await res.json())
+      const data = await res.json()
+      setAnalisis(data)
+      if (data?.grupos?.length > 0) setPanelExpandido(true)
     } catch(e) { setAnalisis(null) }
     setCargandoAnalisis(false)
   }
@@ -5795,12 +5800,33 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const limpiarFiltros = () => {
     setFiltros(filtrosVacios)
     setFiltroItemList([])
+    setSugerenciasItem([])
+    setMostrarSugsItem(false)
     setAnalisis(null)
+    setPanelExpandido(false)
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos`, { headers: { Authorization: `Bearer ${getToken()}` } })
       .then(r => r.json()).then(caps => setFiltroCapList(Array.isArray(caps) ? caps : [])).catch(() => {})
     buscarReportes(filtrosVacios, 0)
   }
   const setF = (k, v) => setFiltros(prev => ({ ...prev, [k]: v }))
+
+  const buscarItems = async (texto) => {
+    if (!texto || texto.length < 1) { setSugerenciasItem([]); return }
+    try {
+      const params = new URLSearchParams({ q: texto })
+      if (filtros.capitulo)         params.append('capitulo', filtros.capitulo)
+      if (filtros.acta_rpo)         params.append('acta_rpo', filtros.acta_rpo)
+      if (filtros.semana)           params.append('semana', filtros.semana)
+      if (filtros.subcontratista_id) params.append('subcontratista_id', filtros.subcontratista_id)
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/items?${params}`, {
+        headers: { Authorization: `Bearer ${getToken()}` }
+      })
+      const data = await res.json()
+      const list = Array.isArray(data) ? data : []
+      setSugerenciasItem(list)
+      setMostrarSugsItem(list.length > 0)
+    } catch(e) { setSugerenciasItem([]) }
+  }
 
   const inpStyle = { background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: '7px', padding: '5px 9px', color: t.text, fontSize: '12px', outline: 'none' }
   const selStyle = { ...inpStyle, cursor: 'pointer' }
@@ -5865,16 +5891,17 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
       {/* ── Panel de análisis ── */}
       <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', marginBottom:'16px', overflow:'hidden' }}>
         {cargandoAnalisis ? (
-          <div style={{ padding:'18px', textAlign:'center', color:t.textMuted, fontSize:'13px' }}>Calculando análisis...</div>
+          <div style={{ padding:'14px 16px', textAlign:'center', color:t.textMuted, fontSize:'13px' }}>Calculando análisis...</div>
         ) : analisis && analisis.grupos.length > 0 ? (
           <>
-            <div style={{ padding:'10px 16px', borderBottom:`1px solid ${t.border}`, display:'flex', alignItems:'center', gap:'8px', background:t.bg }}>
-              <span style={{ fontSize:'13px', fontWeight:'800', color:t.text }}>📊 {analisis.encabezado}</span>
-              <span style={{ marginLeft:'auto', fontSize:'11px', color:t.textMuted }}>
+            <div onClick={() => setPanelExpandido(v => !v)} style={{ padding:'10px 16px', borderBottom: panelExpandido ? `1px solid ${t.border}` : 'none', display:'flex', alignItems:'center', gap:'8px', background:'#1E293B', cursor:'pointer', userSelect:'none' }}>
+              <span style={{ fontSize:'13px', fontWeight:'800', color:'#F1F5F9' }}>📊 {analisis.encabezado}</span>
+              <span style={{ marginLeft:'auto', fontSize:'11px', color:'#94A3B8' }}>
                 {analisis.total_registros.toLocaleString()} regs · {fmtPesos(analisis.total_costo_directo)}
               </span>
+              <span style={{ fontSize:'12px', color:'#94A3B8' }}>{panelExpandido ? '▲' : '▼'}</span>
             </div>
-            <div style={{ overflowX:'auto' }}>
+            {panelExpandido && <div style={{ overflowX:'auto' }}>
               {analisis.modo === 'capitulo_items' ? (
                 // ── Tabla por ítems ────────────────────────────────────────
                 <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
@@ -5991,11 +6018,11 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
                   </tfoot>
                 </table>
               )}
-            </div>
+            </div>}
           </>
         ) : (
-          <div style={{ padding:'18px', textAlign:'center', color:t.textMuted, fontSize:'13px' }}>
-            Aplica un filtro y presiona Buscar para ver el análisis
+          <div style={{ padding:'14px 16px', textAlign:'center', color:t.textMuted, fontSize:'13px' }}>
+            Aplica un filtro y presiona <strong>Buscar</strong> para ver el análisis
           </div>
         )}
       </div>
@@ -6054,17 +6081,28 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
               <option value="">Capítulo…</option>
               {filtroCapList.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
-            {filtroItemList.length > 0 ? (
-              <select value={filtros.item} onChange={e => setF('item', e.target.value)} style={{ ...selStyle, minWidth:'160px' }}>
-                <option value="">Ítem…</option>
-                {filtroItemList.map(i => <option key={i} value={i}>{i}</option>)}
-              </select>
-            ) : (
+            <div style={{ position:'relative' }}>
               <input
-                placeholder={filtros.capitulo ? 'Ítem' : 'Ítem (Capítulo → Ítem)'}
-                value={filtros.item} onChange={e => setF('item', e.target.value)}
-                style={{ ...inpStyle, width:'160px' }} />
-            )}
+                placeholder="Ítem…"
+                value={filtros.item}
+                onChange={e => { setF('item', e.target.value); buscarItems(e.target.value) }}
+                onFocus={() => { if (sugerenciasItem.length > 0) setMostrarSugsItem(true) }}
+                onBlur={() => setTimeout(() => setMostrarSugsItem(false), 150)}
+                style={{ ...inpStyle, width:'200px' }}
+              />
+              {mostrarSugsItem && sugerenciasItem.length > 0 && (
+                <div style={{ position:'absolute', top:'100%', left:0, zIndex:50, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', minWidth:'320px', maxHeight:'240px', overflowY:'auto', boxShadow:'0 4px 16px #0004', marginTop:'2px' }}>
+                  {sugerenciasItem.map(s => (
+                    <div key={s.item_numero}
+                      onMouseDown={() => { setF('item', s.item_numero); setSugerenciasItem([]); setMostrarSugsItem(false) }}
+                      style={{ padding:'7px 12px', cursor:'pointer', fontSize:'12px', borderBottom:`1px solid ${t.border}22`, display:'flex', gap:'8px', alignItems:'baseline' }}>
+                      <span style={{ color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{s.item_numero}</span>
+                      <span style={{ color:t.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.item_descripcion}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
             <select value={filtros.tramo} onChange={e => setF('tramo', e.target.value)} style={selStyle}>
               <option value="">Tramo…</option>
               {filtroTramoList.map(v => <option key={v} value={v}>{v}</option>)}
