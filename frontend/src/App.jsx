@@ -2423,35 +2423,37 @@ async function restaurar(id) {
             })() : nivelActual === 'capitulo' ? (() => {
               // ── Barras verticales para capítulos ──
               const maxVal = Math.max(...chartData.map(d => d.costo), 1)
-              const BAR_W=22, GAP=10, PAD_L=8, PAD_R=8, H=200, PAD_T=14, PAD_B=28
-              const totalW = PAD_L + chartData.length*(BAR_W+GAP) + PAD_R
+              const BAR_W=60, GAP=30, PAD_L=12, PAD_R=12, H=220, PAD_T=14, PAD_B=72
+              const colW = BAR_W + GAP
+              const totalW = Math.max(PAD_L + chartData.length * colW + PAD_R, 600)
               const scaleH = v => PAD_T + (1-v/maxVal)*(H-PAD_T-PAD_B)
               return (
-                <div style={{ overflowX:'auto' }}>
-                  <svg width={Math.max(totalW,400)} height={H} style={{ overflow:'visible', display:'block' }}>
+                <div style={{ overflowX:'auto', width:'100%' }}>
+                  <svg width={totalW} height={H} style={{ overflow:'visible', display:'block', minWidth:'100%' }}>
                     {[0,25,50,75,100].map(pct => {
                       const y = PAD_T+(1-pct/100)*(H-PAD_T-PAD_B)
-                      return <line key={pct} x1={PAD_L} x2={totalW} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="3,3"/>
+                      return <line key={pct} x1={PAD_L} x2={totalW-PAD_R} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="3,3"/>
                     })}
                     {chartData.map((d,i) => {
                       const color = PALETA_BARRAS[i%PALETA_BARRAS.length]
-                      const x = PAD_L+i*(BAR_W+GAP)
+                      const x = PAD_L + i * colW
                       const y = scaleH(d.costo)
                       const h = H-PAD_B-y
-                      const nomCorto = String(d.name).length>10 ? String(d.name).slice(0,10)+'…' : String(d.name)
+                      const nom = String(d.name).length>18 ? String(d.name).slice(0,18)+'…' : String(d.name)
                       return (
                         <g key={d.name} onClick={() => handleBarClick(d)} style={{ cursor:'pointer' }}>
                           <rect x={x} y={y} width={BAR_W} height={Math.max(h,2)} fill={color} rx="3" opacity="0.85"
                             onMouseEnter={e => { e.currentTarget.style.opacity='1'; const tip=document.getElementById(`tip-cobro-cap-${i}`); if(tip) tip.style.display='block' }}
                             onMouseLeave={e => { e.currentTarget.style.opacity='0.85'; const tip=document.getElementById(`tip-cobro-cap-${i}`); if(tip) tip.style.display='none' }}
                           />
-                          <text x={x+BAR_W/2} y={H-10} textAnchor="middle" fontSize="7" fill={t.textMuted}>{nomCorto}</text>
+                          <text x={x+BAR_W/2} y={H-PAD_B+14} textAnchor="end" fontSize="9" fill={t.textMuted}
+                            transform={`rotate(-35,${x+BAR_W/2},${H-PAD_B+14})`}>{nom}</text>
                           <g id={`tip-cobro-cap-${i}`} style={{display:'none',pointerEvents:'none'}}>
-                            <rect x={Math.min(x-10,totalW-180)} y={y-46} width="175" height="40" rx="5" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
-                            <text x={Math.min(x-10,totalW-180)+10} y={y-30} fontSize="10" fontWeight="700" fill={t.text}>
+                            <rect x={Math.min(x-10,totalW-PAD_R-180)} y={Math.max(y-46,4)} width="175" height="40" rx="5" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
+                            <text x={Math.min(x-10,totalW-PAD_R-180)+10} y={Math.max(y-46,4)+16} fontSize="10" fontWeight="700" fill={t.text}>
                               {String(d.name).length>24?String(d.name).slice(0,24)+'…':String(d.name)}
                             </text>
-                            <text x={Math.min(x-10,totalW-180)+10} y={y-14} fontSize="10" fill={t.textMuted}>
+                            <text x={Math.min(x-10,totalW-PAD_R-180)+10} y={Math.max(y-46,4)+32} fontSize="10" fill={t.textMuted}>
                               <tspan fontWeight="700" fill={color}>{fmt(d.costo)}</tspan>
                               <tspan> · {d.count} reg.</tspan>
                             </text>
@@ -3301,32 +3303,34 @@ async function cargarRegistros() {
               )
             })() : nivelActual === 'capitulo' ? (() => {
               const maxVal = Math.max(...chartData.map(d => d.costo), 1)
-              const BAR_W=50, GAP=12, PAD_L=8, PAD_R=8, H=220, PAD_T=14, PAD_B=28
-              const totalW = PAD_L + chartData.length*(BAR_W+GAP) + PAD_R
+              const BAR_W=60, GAP=30, PAD_L=12, PAD_R=12, H=220, PAD_T=14, PAD_B=72
+              const colW = BAR_W + GAP
+              const totalW = Math.max(PAD_L + chartData.length * colW + PAD_R, 600)
               const scaleH = v => PAD_T + (1-v/maxVal)*(H-PAD_T-PAD_B)
               return (
-                <div style={{ overflowX:'auto' }}>
-                  <svg width={Math.max(totalW,400)} height={H} style={{ overflow:'visible', display:'block' }}>
+                <div style={{ overflowX:'auto', width:'100%' }}>
+                  <svg width={totalW} height={H} style={{ overflow:'visible', display:'block', minWidth:'100%' }}>
                     {[0,25,50,75,100].map(pct => {
                       const y = PAD_T+(1-pct/100)*(H-PAD_T-PAD_B)
-                      return <line key={pct} x1={PAD_L} x2={Math.max(totalW,400)} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="3,3"/>
+                      return <line key={pct} x1={PAD_L} x2={totalW-PAD_R} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="3,3"/>
                     })}
                     {chartData.map((d,i) => {
                       const color = PALETA[i%PALETA.length]
-                      const x = PAD_L+i*(BAR_W+GAP)
+                      const x = PAD_L + i * colW
                       const y = scaleH(d.costo)
                       const h = H-PAD_B-y
-                      const nomCorto = String(d.name).length>10 ? String(d.name).slice(0,10)+'…' : String(d.name)
+                      const nom = String(d.name).length>18 ? String(d.name).slice(0,18)+'…' : String(d.name)
                       return (
                         <g key={d.name} onClick={() => handleBarClick(d)} style={{ cursor:'pointer' }}>
                           <rect x={x} y={y} width={BAR_W} height={Math.max(h,2)} fill={color} rx="3" opacity="0.85"
                             onMouseEnter={e => { e.currentTarget.style.opacity='1'; const tip=document.getElementById(`tip-scobro-${i}`); if(tip) tip.style.display='block' }}
                             onMouseLeave={e => { e.currentTarget.style.opacity='0.85'; const tip=document.getElementById(`tip-scobro-${i}`); if(tip) tip.style.display='none' }}/>
-                          <text x={x+BAR_W/2} y={H-10} textAnchor="middle" fontSize="7" fill={t.textMuted}>{nomCorto}</text>
+                          <text x={x+BAR_W/2} y={H-PAD_B+14} textAnchor="end" fontSize="9" fill={t.textMuted}
+                            transform={`rotate(-35,${x+BAR_W/2},${H-PAD_B+14})`}>{nom}</text>
                           <g id={`tip-scobro-${i}`} style={{display:'none',pointerEvents:'none'}}>
-                            <rect x={Math.min(x-10,Math.max(totalW,400)-190)} y={Math.max(y-50,0)} width="185" height="42" rx="5" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
-                            <text x={Math.min(x-10,Math.max(totalW,400)-190)+10} y={Math.max(y-50,0)+16} fontSize="10" fontWeight="700" fill={t.text}>{String(d.name).length>24?String(d.name).slice(0,24)+'…':String(d.name)}</text>
-                            <text x={Math.min(x-10,Math.max(totalW,400)-190)+10} y={Math.max(y-50,0)+32} fontSize="10" fill={t.textMuted}>
+                            <rect x={Math.min(x-10,totalW-PAD_R-190)} y={Math.max(y-50,0)} width="185" height="42" rx="5" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
+                            <text x={Math.min(x-10,totalW-PAD_R-190)+10} y={Math.max(y-50,0)+16} fontSize="10" fontWeight="700" fill={t.text}>{String(d.name).length>24?String(d.name).slice(0,24)+'…':String(d.name)}</text>
+                            <text x={Math.min(x-10,totalW-PAD_R-190)+10} y={Math.max(y-50,0)+32} fontSize="10" fill={t.textMuted}>
                               <tspan fontWeight="700" fill={color}>{fmt(d.costo)}</tspan><tspan> · {d.count} reg.</tspan>
                             </text>
                           </g>
