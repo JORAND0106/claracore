@@ -3467,13 +3467,18 @@ def analisis_registros_obra(
     rep_ids_found = list({r["reporte_id"] for r in registros if r.get("reporte_id")})
     reporte_map: dict = {}
     if rep_ids_found:
-        try:
-            def _ri():
-                return supabase.table("so_reportes").select("id, capitulo, estado")\
-                    .in_("id", rep_ids_found).execute().data
-            for r in supabase_execute(_ri):
-                reporte_map[r["id"]] = r
-        except Exception: pass
+        # Procesar en lotes de 500 para no exceder límites de URL con .in_()
+        _cid_l = contrato_id
+        for chunk_start in range(0, len(rep_ids_found), 500):
+            chunk = rep_ids_found[chunk_start:chunk_start + 500]
+            try:
+                def _ri(ids=chunk):
+                    return supabase.table("so_reportes").select("id, capitulo, estado")\
+                        .eq("contrato_id", _cid_l).in_("id", ids).execute().data
+                for r in supabase_execute(_ri):
+                    reporte_map[r["id"]] = r
+            except Exception:
+                pass
 
     # ── 6. Agrupar según modo ─────────────────────────────────────────────────
     grupos: dict = {}

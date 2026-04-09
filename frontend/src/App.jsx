@@ -5769,7 +5769,6 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
       })
       const data = await res.json()
       setAnalisis(data)
-      if (data?.grupos?.length > 0) setPanelExpandido(true)
     } catch(e) { setAnalisis(null) }
     setCargandoAnalisis(false)
   }
