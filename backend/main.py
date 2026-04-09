@@ -3367,18 +3367,181 @@ def filtros_semanas(contrato_id: int, current_user=Depends(get_current_user)):
 
 
 @app.get("/sicoe-obra/{contrato_id}/filtros/capitulos")
-def filtros_capitulos_reportes(contrato_id: int, current_user=Depends(get_current_user)):
-    def _q():
-        return supabase.table("so_reportes").select("capitulo")\
-            .eq("contrato_id", contrato_id)\
-            .not_.is_("capitulo", "null").execute().data
-    rows = supabase_execute(_q)
+def filtros_capitulos_reportes(
+    contrato_id: int,
+    acta_rpo: Optional[int] = None,
+    semana: Optional[int] = None,
+    subcontratista_id: Optional[int] = None,
+    current_user=Depends(get_current_user)
+):
     import re
     def orden_cap(c):
         m = re.match(r'^(\d+)', c)
         return (int(m.group(1)) if m else 9999, c)
-    caps = sorted({r["capitulo"] for r in rows if r.get("capitulo")}, key=orden_cap)
-    return caps
+
+    # Sin filtros → lista completa
+    if acta_rpo is None and semana is None and subcontratista_id is None:
+        def _q():
+            return supabase.table("so_reportes").select("capitulo")\
+                .eq("contrato_id", contrato_id)\
+                .not_.is_("capitulo", "null").execute().data
+        rows = supabase_execute(_q)
+        return sorted({r["capitulo"] for r in rows if r.get("capitulo")}, key=orden_cap)
+
+    # Resolver acta_id
+    acta_id = None
+    if acta_rpo is not None:
+        try:
+            def _ai():
+                rows = supabase.table("actas").select("id")\
+                    .eq("contrato_id", contrato_id).eq("numero_rpo", acta_rpo).execute().data
+                if not rows:
+                    rows = supabase.table("actas").select("id")\
+                        .eq("contrato_id", contrato_id).eq("consecutivo", acta_rpo).execute().data
+                return rows
+            acta_rows = supabase_execute(_ai)
+            if not acta_rows:
+                return []
+            acta_id = acta_rows[0]["id"]
+        except Exception:
+            return []
+
+    # Resolver semana_id
+    semana_id = None
+    if semana is not None:
+        try:
+            def _si():
+                return supabase.table("so_semanas").select("id")\
+                    .eq("contrato_id", contrato_id).eq("numero_semana", semana).execute().data
+            sem_rows = supabase_execute(_si)
+            if not sem_rows:
+                return []
+            semana_id = sem_rows[0]["id"]
+        except Exception:
+            return []
+
+    # Obtener reporte_ids desde so_registros si hay filtro de acta o semana
+    reporte_ids = None
+    if acta_id is not None or semana_id is not None:
+        try:
+            _acta_id_l = acta_id
+            _semana_id_l = semana_id
+            def _regs():
+                q = supabase.table("so_registros").select("reporte_id")\
+                    .eq("contrato_id", contrato_id)
+                if _acta_id_l is not None:
+                    q = q.eq("acta_rpo_id", _acta_id_l)
+                if _semana_id_l is not None:
+                    q = q.eq("semana_id", _semana_id_l)
+                return q.execute().data
+            reg_rows = supabase_execute(_regs)
+            reporte_ids = list({r["reporte_id"] for r in reg_rows if r.get("reporte_id")})
+            if not reporte_ids:
+                return []
+        except Exception:
+            return []
+
+    # Obtener capítulos desde so_reportes
+    try:
+        _rep_ids_l = reporte_ids
+        _sub_id_l  = subcontratista_id
+        def _caps():
+            q = supabase.table("so_reportes").select("capitulo")\
+                .eq("contrato_id", contrato_id)\
+                .not_.is_("capitulo", "null")
+            if _sub_id_l is not None:
+                q = q.eq("subcontratista_id", _sub_id_l)
+            if _rep_ids_l is not None:
+                q = q.in_("id", _rep_ids_l)
+            return q.execute().data
+        cap_rows = supabase_execute(_caps)
+        return sorted({r["capitulo"] for r in cap_rows if r.get("capitulo")}, key=orden_cap)
+    except Exception:
+        return []
+
+
+@app.get("/sicoe-obra/{contrato_id}/filtros/items")
+def filtros_items_registros(
+    contrato_id: int,
+    capitulo: Optional[str] = None,
+    acta_rpo: Optional[int] = None,
+    semana: Optional[int] = None,
+    subcontratista_id: Optional[int] = None,
+    current_user=Depends(get_current_user)
+):
+    # Resolver acta_id
+    acta_id = None
+    if acta_rpo is not None:
+        try:
+            def _ai():
+                rows = supabase.table("actas").select("id")\
+                    .eq("contrato_id", contrato_id).eq("numero_rpo", acta_rpo).execute().data
+                if not rows:
+                    rows = supabase.table("actas").select("id")\
+                        .eq("contrato_id", contrato_id).eq("consecutivo", acta_rpo).execute().data
+                return rows
+            acta_rows = supabase_execute(_ai)
+            if not acta_rows:
+                return []
+            acta_id = acta_rows[0]["id"]
+        except Exception:
+            return []
+
+    # Resolver semana_id
+    semana_id = None
+    if semana is not None:
+        try:
+            def _si():
+                return supabase.table("so_semanas").select("id")\
+                    .eq("contrato_id", contrato_id).eq("numero_semana", semana).execute().data
+            sem_rows = supabase_execute(_si)
+            if not sem_rows:
+                return []
+            semana_id = sem_rows[0]["id"]
+        except Exception:
+            return []
+
+    # Resolver reporte_ids si hay filtro de capitulo o subcontratista
+    reporte_ids_filter = None
+    if capitulo is not None or subcontratista_id is not None:
+        try:
+            _cap_l = capitulo
+            _sub_l = subcontratista_id
+            def _reps():
+                q = supabase.table("so_reportes").select("id")\
+                    .eq("contrato_id", contrato_id)
+                if _cap_l is not None:
+                    q = q.eq("capitulo", _cap_l)
+                if _sub_l is not None:
+                    q = q.eq("subcontratista_id", _sub_l)
+                return q.execute().data
+            rep_rows = supabase_execute(_reps)
+            reporte_ids_filter = list({r["id"] for r in rep_rows if r.get("id")})
+            if not reporte_ids_filter:
+                return []
+        except Exception:
+            return []
+
+    # Obtener item_numero desde so_registros
+    try:
+        _acta_id_l  = acta_id
+        _semana_id_l = semana_id
+        _rep_ids_l  = reporte_ids_filter
+        def _items():
+            q = supabase.table("so_registros").select("item_numero")\
+                .eq("contrato_id", contrato_id)\
+                .not_.is_("item_numero", "null")
+            if _acta_id_l is not None:
+                q = q.eq("acta_rpo_id", _acta_id_l)
+            if _semana_id_l is not None:
+                q = q.eq("semana_id", _semana_id_l)
+            if _rep_ids_l is not None:
+                q = q.in_("reporte_id", _rep_ids_l)
+            return q.execute().data
+        item_rows = supabase_execute(_items)
+        return sorted({r["item_numero"] for r in item_rows if r.get("item_numero")})
+    except Exception:
+        return []
 
 
 @app.get("/sicoe-obra/{contrato_id}/filtros/tramoscostados")

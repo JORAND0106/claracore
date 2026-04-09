@@ -5595,6 +5595,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const [filtrosAvanzados, setFiltrosAvanzados] = useState(false)
   const [filtroSubcList, setFiltroSubcList] = useState([])
   const [filtroCapList, setFiltroCapList] = useState([])
+  const [filtroItemList, setFiltroItemList] = useState([])
   const [filtroTramoList, setFiltroTramoList] = useState([])
   const [filtroCostadoList, setFiltroCostadoList] = useState([])
   const [modalNuevoReporte, setModalNuevoReporte]   = useState(false)
@@ -5746,9 +5747,36 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
 
   useEffect(() => { if (contrato_id) buscarReportes(filtros, 0) }, [contrato_id]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const actualizarFiltrosDisponibles = async (filtrosActivos) => {
+    const hdrs = { Authorization: `Bearer ${getToken()}` }
+    const params = new URLSearchParams()
+    if (filtrosActivos.acta_rpo)          params.append('acta_rpo', filtrosActivos.acta_rpo)
+    if (filtrosActivos.semana)            params.append('semana', filtrosActivos.semana)
+    if (filtrosActivos.subcontratista_id) params.append('subcontratista_id', filtrosActivos.subcontratista_id)
+    try {
+      const caps = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos?${params}`, { headers: hdrs }).then(r => r.json())
+      setFiltroCapList(Array.isArray(caps) ? caps : [])
+    } catch(e) {}
+    if (filtrosActivos.capitulo) {
+      params.append('capitulo', filtrosActivos.capitulo)
+      try {
+        const items = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/items?${params}`, { headers: hdrs }).then(r => r.json())
+        setFiltroItemList(Array.isArray(items) ? items : [])
+      } catch(e) {}
+    } else {
+      setFiltroItemList([])
+    }
+  }
+
   const hayFiltrosActivos = Object.values(filtros).some(v => v !== '')
   const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'' }
-  const limpiarFiltros = () => { setFiltros(filtrosVacios); buscarReportes(filtrosVacios, 0) }
+  const limpiarFiltros = () => {
+    setFiltros(filtrosVacios)
+    setFiltroItemList([])
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos`, { headers: { Authorization: `Bearer ${getToken()}` } })
+      .then(r => r.json()).then(caps => setFiltroCapList(Array.isArray(caps) ? caps : [])).catch(() => {})
+    buscarReportes(filtrosVacios, 0)
+  }
   const setF = (k, v) => setFiltros(prev => ({ ...prev, [k]: v }))
 
   const inpStyle = { background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: '7px', padding: '5px 9px', color: t.text, fontSize: '12px', outline: 'none' }
@@ -5819,11 +5847,19 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
             style={{ ...inpStyle, width:'100px' }} />
           <input placeholder="N° Registro" type="number" value={filtros.numero_registro} onChange={e => setF('numero_registro', e.target.value)}
             style={{ ...inpStyle, width:'100px' }} />
-          <input placeholder="Semana" type="number" value={filtros.semana} onChange={e => setF('semana', e.target.value)}
+          <input placeholder="Semana" type="number" value={filtros.semana}
+            onChange={e => setF('semana', e.target.value)}
+            onBlur={e => actualizarFiltrosDisponibles({ ...filtros, semana: e.target.value })}
             style={{ ...inpStyle, width:'80px' }} />
-          <input placeholder="Acta RPO" type="number" value={filtros.acta_rpo} onChange={e => setF('acta_rpo', e.target.value)}
+          <input placeholder="Acta RPO" type="number" value={filtros.acta_rpo}
+            onChange={e => setF('acta_rpo', e.target.value)}
+            onBlur={e => actualizarFiltrosDisponibles({ ...filtros, acta_rpo: e.target.value })}
             style={{ ...inpStyle, width:'90px' }} />
-          <select value={filtros.subcontratista_id} onChange={e => setF('subcontratista_id', e.target.value)} style={selStyle}>
+          <select value={filtros.subcontratista_id} onChange={e => {
+            const v = e.target.value
+            setF('subcontratista_id', v)
+            actualizarFiltrosDisponibles({ ...filtros, subcontratista_id: v })
+          }} style={selStyle}>
             <option value="">Subcontratista…</option>
             {filtroSubcList.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
           </select>
@@ -5851,14 +5887,25 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
         {/* Fila 2 — Filtros avanzados (colapsable) */}
         {filtrosAvanzados && (
           <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'8px', paddingTop:'8px', borderTop:`1px solid ${t.border}` }}>
-            <select value={filtros.capitulo} onChange={e => setF('capitulo', e.target.value)} style={selStyle}>
+            <select value={filtros.capitulo} onChange={e => {
+              const v = e.target.value
+              setF('capitulo', v)
+              actualizarFiltrosDisponibles({ ...filtros, capitulo: v })
+            }} style={selStyle}>
               <option value="">Capítulo…</option>
               {filtroCapList.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
-            <input
-              placeholder={filtros.capitulo ? 'Ítem' : 'Ítem (Capítulo — Ítem)'}
-              value={filtros.item} onChange={e => setF('item', e.target.value)}
-              style={{ ...inpStyle, width:'160px' }} />
+            {filtroItemList.length > 0 ? (
+              <select value={filtros.item} onChange={e => setF('item', e.target.value)} style={{ ...selStyle, minWidth:'160px' }}>
+                <option value="">Ítem…</option>
+                {filtroItemList.map(i => <option key={i} value={i}>{i}</option>)}
+              </select>
+            ) : (
+              <input
+                placeholder={filtros.capitulo ? 'Ítem' : 'Ítem (Capítulo → Ítem)'}
+                value={filtros.item} onChange={e => setF('item', e.target.value)}
+                style={{ ...inpStyle, width:'160px' }} />
+            )}
             <select value={filtros.tramo} onChange={e => setF('tramo', e.target.value)} style={selStyle}>
               <option value="">Tramo…</option>
               {filtroTramoList.map(v => <option key={v} value={v}>{v}</option>)}
