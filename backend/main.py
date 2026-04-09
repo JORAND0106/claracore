@@ -3377,7 +3377,18 @@ def analisis_registros_obra(
               "total_costo_directo":0,"total_registros":0,
               "total_aprobados":0,"total_pendientes":0,"total_rechazados":0}
 
-    # ── 1. Resolver acta_id y semana_id con sus metadatos ────────────────────
+    # ── 1. Determinar modo jerárquico ─────────────────────────────────────────
+    tiene_contexto = bool(acta_rpo or semana)
+    if tiene_contexto and not capitulo and not item:
+        modo = "acta_semana"
+    elif tiene_contexto and capitulo and not item:
+        modo = "capitulo_items"
+    elif item:
+        modo = "item_detalle"
+    else:
+        modo = "general"
+
+    # ── 2. Resolver acta_id y semana_id con sus metadatos ────────────────────
     acta_id = None; acta_info = None
     if acta_rpo is not None:
         try:
@@ -3403,7 +3414,7 @@ def analisis_registros_obra(
             if sr: semana_id = sr[0]["id"]; semana_info = sr[0]
         except Exception: pass
 
-    # ── 2. Resolver reporte_ids desde filtros a nivel reporte ────────────────
+    # ── 3. Resolver reporte_ids desde filtros a nivel reporte ────────────────
     reporte_ids_base = None
     has_rep_f = any([capitulo, subcontratista_id, tramo, costado, estado,
                      abs_inicio is not None, abs_final is not None])
@@ -3429,12 +3440,12 @@ def analisis_registros_obra(
                 return _empty
         except Exception: pass
 
-    # ── 3. Obtener registros ─────────────────────────────────────────────────
+    # ── 4. Obtener registros ─────────────────────────────────────────────────
     try:
         _a_l=acta_id; _s_l=semana_id; _it_l=item; _rp_l=reporte_ids_base
         def _regs():
             q = supabase.table("so_registros")\
-                .select("reporte_id, costo_directo, cantidad_total, item_numero")\
+                .select("reporte_id, costo_directo, cantidad_total, item_numero, item_descripcion, unidad, acta_rpo_id")\
                 .eq("contrato_id", contrato_id)
             if _a_l is not None:  q = q.eq("acta_rpo_id", _a_l)
             if _s_l is not None:  q = q.eq("semana_id", _s_l)
@@ -3445,7 +3456,7 @@ def analisis_registros_obra(
     except Exception:
         registros = []
 
-    # ── 4. Batch-resolve capitulo y estado desde so_reportes ─────────────────
+    # ── 5. Batch-resolve capitulo y estado desde so_reportes ─────────────────
     rep_ids_found = list({r["reporte_id"] for r in registros if r.get("reporte_id")})
     reporte_map: dict = {}
     if rep_ids_found:
@@ -3457,56 +3468,115 @@ def analisis_registros_obra(
                 reporte_map[r["id"]] = r
         except Exception: pass
 
-    # ── 5. Agrupar por capítulo ───────────────────────────────────────────────
+    # ── 6. Agrupar según modo ─────────────────────────────────────────────────
     grupos: dict = {}
-    for reg in registros:
-        rep = reporte_map.get(reg.get("reporte_id")) or {}
-        cap = rep.get("capitulo") or "Sin capítulo"
-        est = rep.get("estado") or ""
-        if cap not in grupos:
-            grupos[cap] = {"capitulo": cap, "costo_directo": 0.0,
-                           "total_registros": 0, "aprobados": 0,
-                           "pendientes": 0, "rechazados": 0}
-        grupos[cap]["costo_directo"]   += float(reg.get("costo_directo") or 0)
-        grupos[cap]["total_registros"] += 1
-        if   est == "Aprobados":  grupos[cap]["aprobados"]  += 1
-        elif est == "Pendientes": grupos[cap]["pendientes"] += 1
-        elif est == "Rechazados": grupos[cap]["rechazados"] += 1
+
+    if modo in ("acta_semana", "general"):
+        for reg in registros:
+            rep = reporte_map.get(reg.get("reporte_id")) or {}
+            cap = rep.get("capitulo") or "Sin capítulo"
+            est = rep.get("estado") or ""
+            if cap not in grupos:
+                grupos[cap] = {"label": cap, "costo_directo": 0.0,
+                               "total_registros": 0, "aprobados": 0,
+                               "pendientes": 0, "rechazados": 0}
+            grupos[cap]["costo_directo"]   += float(reg.get("costo_directo") or 0)
+            grupos[cap]["total_registros"] += 1
+            if   est == "Aprobados":  grupos[cap]["aprobados"]  += 1
+            elif est == "Pendientes": grupos[cap]["pendientes"] += 1
+            elif est == "Rechazados": grupos[cap]["rechazados"] += 1
+
+    elif modo == "capitulo_items":
+        for reg in registros:
+            rep = reporte_map.get(reg.get("reporte_id")) or {}
+            est = rep.get("estado") or ""
+            it  = reg.get("item_numero") or "Sin ítem"
+            if it not in grupos:
+                grupos[it] = {
+                    "label":           it,
+                    "descripcion":     reg.get("item_descripcion") or "",
+                    "cantidad_total":  0.0,
+                    "unidad":          reg.get("unidad") or "",
+                    "costo_directo":   0.0,
+                    "total_registros": 0,
+                    "aprobados": 0, "pendientes": 0, "rechazados": 0,
+                }
+            if not grupos[it]["descripcion"] and reg.get("item_descripcion"):
+                grupos[it]["descripcion"] = reg["item_descripcion"]
+            if not grupos[it]["unidad"] and reg.get("unidad"):
+                grupos[it]["unidad"] = reg["unidad"]
+            grupos[it]["cantidad_total"] += float(reg.get("cantidad_total") or 0)
+            grupos[it]["costo_directo"]  += float(reg.get("costo_directo") or 0)
+            grupos[it]["total_registros"] += 1
+            if   est == "Aprobados":  grupos[it]["aprobados"]  += 1
+            elif est == "Pendientes": grupos[it]["pendientes"] += 1
+            elif est == "Rechazados": grupos[it]["rechazados"] += 1
+
+    elif modo == "item_detalle":
+        acta_ids_found = list({r.get("acta_rpo_id") for r in registros if r.get("acta_rpo_id")})
+        acta_map_local: dict = {}
+        if acta_ids_found:
+            try:
+                def _am():
+                    return supabase.table("actas").select("id, numero_rpo, consecutivo")\
+                        .in_("id", acta_ids_found).execute().data
+                for a in supabase_execute(_am):
+                    acta_map_local[a["id"]] = a
+            except Exception: pass
+        for reg in registros:
+            rep = reporte_map.get(reg.get("reporte_id")) or {}
+            est = rep.get("estado") or ""
+            cap = rep.get("capitulo") or "Sin capítulo"
+            a_id = reg.get("acta_rpo_id")
+            a    = acta_map_local.get(a_id) or {}
+            nr   = a.get("numero_rpo") or a.get("consecutivo") or "?"
+            label = f"RPO {nr}"
+            key   = f"{label}||{cap}"
+            if key not in grupos:
+                grupos[key] = {
+                    "label": label, "capitulo": cap,
+                    "cantidad_total": 0.0, "costo_directo": 0.0,
+                    "total_registros": 0,
+                    "aprobados": 0, "pendientes": 0, "rechazados": 0,
+                }
+            grupos[key]["cantidad_total"] += float(reg.get("cantidad_total") or 0)
+            grupos[key]["costo_directo"]  += float(reg.get("costo_directo") or 0)
+            grupos[key]["total_registros"] += 1
+            if   est == "Aprobados":  grupos[key]["aprobados"]  += 1
+            elif est == "Pendientes": grupos[key]["pendientes"] += 1
+            elif est == "Rechazados": grupos[key]["rechazados"] += 1
 
     grupos_list = sorted(grupos.values(), key=lambda g: g["costo_directo"], reverse=True)
     for g in grupos_list:
         g["costo_directo"] = round(g["costo_directo"], 2)
+        if "cantidad_total" in g:
+            g["cantidad_total"] = round(g["cantidad_total"], 3)
 
-    # ── 6. Modo y encabezado ─────────────────────────────────────────────────
-    if acta_rpo is not None:
-        modo = "acta"
-        nr = (acta_info or {}).get("numero_rpo") or acta_rpo
-        encabezado = f"Acta RPO {nr}"
-    elif semana is not None:
-        modo = "semana"
-        if semana_info:
-            encabezado = (f"Semana {semana_info['numero_semana']} | "
-                          f"{semana_info['fecha_inicio']} → {semana_info['fecha_fin']}")
+    # ── 7. Encabezado ─────────────────────────────────────────────────────────
+    if modo == "acta_semana":
+        if acta_rpo is not None:
+            nr = (acta_info or {}).get("numero_rpo") or acta_rpo
+            encabezado = f"Acta RPO {nr}"
         else:
-            encabezado = f"Semana {semana}"
-    elif item:
-        modo = "item"
+            if semana_info:
+                encabezado = (f"Semana {semana_info['numero_semana']} | "
+                              f"{semana_info['fecha_inicio']} → {semana_info['fecha_fin']}")
+            else:
+                encabezado = f"Semana {semana}"
+    elif modo == "capitulo_items":
+        prefix = ""
+        if acta_rpo is not None:
+            nr = (acta_info or {}).get("numero_rpo") or acta_rpo
+            prefix = f"Acta RPO {nr}"
+        elif semana is not None:
+            sn = (semana_info or {}).get("numero_semana") or semana
+            prefix = f"Semana {sn}"
+        encabezado = f"{prefix} — {capitulo}" if prefix else (capitulo or "Ítems")
+    elif modo == "item_detalle":
         encabezado = f"Ítem: {item}"
-    elif subcontratista_id:
-        modo = "subcontratista"
-        encabezado = f"Subcontratista #{subcontratista_id}"
-        try:
-            _sub_id_l = subcontratista_id
-            def _subc():
-                return supabase.table("subcontratistas").select("razon_social")\
-                    .eq("id", _sub_id_l).single().execute().data
-            sc = supabase_execute(_subc)
-            if sc and sc.get("razon_social"):
-                encabezado = sc["razon_social"]
-        except Exception: pass
-    else:
-        modo = "general"
+    else:  # general
         partes = []
+        if subcontratista_id: partes.append(f"Subc. #{subcontratista_id}")
         if capitulo:   partes.append(f"Cap.: {capitulo}")
         if tramo:      partes.append(f"Tramo: {tramo}")
         if costado:    partes.append(f"Costado: {costado}")
@@ -3515,11 +3585,11 @@ def analisis_registros_obra(
         if abs_final  is not None: partes.append(f"Abs. ≤ {abs_final}")
         encabezado = " · ".join(partes) if partes else "Todos los registros"
 
-    tc = round(sum(g["costo_directo"]   for g in grupos_list), 2)
-    tr = sum(g["total_registros"] for g in grupos_list)
-    ta = sum(g["aprobados"]       for g in grupos_list)
-    tp = sum(g["pendientes"]      for g in grupos_list)
-    trj = sum(g["rechazados"]     for g in grupos_list)
+    tc  = round(sum(g["costo_directo"]   for g in grupos_list), 2)
+    tr  = sum(g["total_registros"] for g in grupos_list)
+    ta  = sum(g["aprobados"]       for g in grupos_list)
+    tp  = sum(g["pendientes"]      for g in grupos_list)
+    trj = sum(g["rechazados"]      for g in grupos_list)
 
     return {"modo": modo, "encabezado": encabezado, "grupos": grupos_list,
             "total_costo_directo": tc, "total_registros": tr,

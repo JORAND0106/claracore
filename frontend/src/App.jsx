@@ -5875,40 +5875,122 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
               </span>
             </div>
             <div style={{ overflowX:'auto' }}>
-              <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
-                <thead>
-                  <tr style={{ color:t.textMuted, fontSize:'11px', fontWeight:'700', letterSpacing:'0.4px' }}>
-                    <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>CAPÍTULO</th>
-                    <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>COSTO DIRECTO</th>
-                    <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>REGS.</th>
-                    <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>✅ APOB.</th>
-                    <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>⏳ PEND.</th>
-                    <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>❌ RECH.</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {analisis.grupos.map(g => (
-                    <tr key={g.capitulo} style={{ borderBottom:`1px solid ${t.border}22` }}>
-                      <td style={{ padding:'6px 16px', color:t.text, fontWeight:'600' }}>{g.capitulo}</td>
-                      <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>
-                      <td style={{ padding:'6px 16px', textAlign:'right', color:t.textMuted }}>{g.total_registros}</td>
-                      <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados || '—'}</td>
-                      <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes || '—'}</td>
-                      <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados || '—'}</td>
+              {analisis.modo === 'capitulo_items' ? (
+                // ── Tabla por ítems ────────────────────────────────────────
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
+                  <thead>
+                    <tr style={{ color:t.textMuted, fontSize:'11px', fontWeight:'700', letterSpacing:'0.4px' }}>
+                      <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>ÍTEM</th>
+                      <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>DESCRIPCIÓN</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>CANTIDAD</th>
+                      <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>UND</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>COSTO DIRECTO</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>✅</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>⏳</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>❌</th>
                     </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
-                    <td style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
-                    <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>
-                    <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
-                    <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados || '—'}</td>
-                    <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes || '—'}</td>
-                    <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados || '—'}</td>
-                  </tr>
-                </tfoot>
-              </table>
+                  </thead>
+                  <tbody>
+                    {analisis.grupos.map(g => (
+                      <tr key={g.label} style={{ borderBottom:`1px solid ${t.border}22` }}>
+                        <td style={{ padding:'6px 16px', color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{g.label}</td>
+                        <td style={{ padding:'6px 16px', color:t.text, fontSize:'11px', maxWidth:'220px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{g.descripcion}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})}</td>
+                        <td style={{ padding:'6px 16px', color:t.textMuted, fontSize:'11px' }}>{g.unidad}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados || '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes || '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
+                      <td colSpan={4} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados || '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes || '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados || '—'}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              ) : analisis.modo === 'item_detalle' ? (
+                // ── Tabla por acta + capítulo ──────────────────────────────
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
+                  <thead>
+                    <tr style={{ color:t.textMuted, fontSize:'11px', fontWeight:'700', letterSpacing:'0.4px' }}>
+                      <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>ACTA RPO</th>
+                      <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>CAPÍTULO</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>CANTIDAD</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>COSTO DIRECTO</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>REGS.</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>✅</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>⏳</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>❌</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {analisis.grupos.map(g => (
+                      <tr key={`${g.label}-${g.capitulo}`} style={{ borderBottom:`1px solid ${t.border}22` }}>
+                        <td style={{ padding:'6px 16px', color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{g.label}</td>
+                        <td style={{ padding:'6px 16px', color:t.text, fontSize:'11px' }}>{g.capitulo}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:t.textMuted }}>{g.total_registros}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados || '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes || '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
+                      <td colSpan={3} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados || '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes || '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados || '—'}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              ) : (
+                // ── Tabla por capítulos (acta_semana + general) ────────────
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
+                  <thead>
+                    <tr style={{ color:t.textMuted, fontSize:'11px', fontWeight:'700', letterSpacing:'0.4px' }}>
+                      <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>CAPÍTULO</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>COSTO DIRECTO</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>REGS.</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>✅ APOB.</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>⏳ PEND.</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>❌ RECH.</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {analisis.grupos.map(g => (
+                      <tr key={g.label} style={{ borderBottom:`1px solid ${t.border}22` }}>
+                        <td style={{ padding:'6px 16px', color:t.text, fontWeight:'600' }}>{g.label}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:t.textMuted }}>{g.total_registros}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados || '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes || '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
+                      <td style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados || '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes || '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados || '—'}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
             </div>
           </>
         ) : (
