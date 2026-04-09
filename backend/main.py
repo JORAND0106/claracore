@@ -3358,6 +3358,174 @@ def buscar_reportes_obra(
     return {"reportes": rows, "total": len(rows), "offset": offset, "limit": limit, "hay_mas": hay_mas}
 
 
+@app.get("/sicoe-obra/{contrato_id}/analisis")
+def analisis_registros_obra(
+    contrato_id:      int,
+    acta_rpo:         Optional[int]   = None,
+    semana:           Optional[int]   = None,
+    subcontratista_id: Optional[int]  = None,
+    capitulo:         Optional[str]   = None,
+    item:             Optional[str]   = None,
+    tramo:            Optional[str]   = None,
+    costado:          Optional[str]   = None,
+    abs_inicio:       Optional[float] = None,
+    abs_final:        Optional[float] = None,
+    estado:           Optional[str]   = None,
+    current_user=Depends(get_current_user)
+):
+    _empty = {"modo":"general","encabezado":"Sin resultados","grupos":[],
+              "total_costo_directo":0,"total_registros":0,
+              "total_aprobados":0,"total_pendientes":0,"total_rechazados":0}
+
+    # ── 1. Resolver acta_id y semana_id con sus metadatos ────────────────────
+    acta_id = None; acta_info = None
+    if acta_rpo is not None:
+        try:
+            def _ai():
+                rows = supabase.table("actas").select("id, numero_rpo, consecutivo")\
+                    .eq("contrato_id", contrato_id).eq("numero_rpo", acta_rpo).execute().data
+                if not rows:
+                    rows = supabase.table("actas").select("id, numero_rpo, consecutivo")\
+                        .eq("contrato_id", contrato_id).eq("consecutivo", acta_rpo).execute().data
+                return rows
+            ar = supabase_execute(_ai)
+            if ar: acta_id = ar[0]["id"]; acta_info = ar[0]
+        except Exception: pass
+
+    semana_id = None; semana_info = None
+    if semana is not None:
+        try:
+            def _si():
+                return supabase.table("so_semanas")\
+                    .select("id, numero_semana, fecha_inicio, fecha_fin")\
+                    .eq("contrato_id", contrato_id).eq("numero_semana", semana).execute().data
+            sr = supabase_execute(_si)
+            if sr: semana_id = sr[0]["id"]; semana_info = sr[0]
+        except Exception: pass
+
+    # ── 2. Resolver reporte_ids desde filtros a nivel reporte ────────────────
+    reporte_ids_base = None
+    has_rep_f = any([capitulo, subcontratista_id, tramo, costado, estado,
+                     abs_inicio is not None, abs_final is not None])
+    if has_rep_f:
+        try:
+            _cap_l=capitulo; _sub_l=subcontratista_id; _tr_l=tramo
+            _cos_l=costado;  _est_l=estado
+            _ai_l=abs_inicio; _af_l=abs_final
+            def _reps():
+                q = supabase.table("so_reportes").select("id")\
+                    .eq("contrato_id", contrato_id)
+                if _cap_l:  q = q.eq("capitulo", _cap_l)
+                if _sub_l:  q = q.eq("subcontratista_id", _sub_l)
+                if _tr_l:   q = q.eq("tramo", _tr_l)
+                if _cos_l:  q = q.eq("calzada", _cos_l)
+                if _est_l:  q = q.eq("estado", _est_l)
+                if _ai_l is not None: q = q.gte("abs_inicio", _ai_l)
+                if _af_l is not None: q = q.lte("abs_final", _af_l)
+                return q.execute().data
+            rr = supabase_execute(_reps)
+            reporte_ids_base = list({r["id"] for r in rr if r.get("id")})
+            if not reporte_ids_base:
+                return _empty
+        except Exception: pass
+
+    # ── 3. Obtener registros ─────────────────────────────────────────────────
+    try:
+        _a_l=acta_id; _s_l=semana_id; _it_l=item; _rp_l=reporte_ids_base
+        def _regs():
+            q = supabase.table("so_registros")\
+                .select("reporte_id, costo_directo, cantidad_total, item_numero")\
+                .eq("contrato_id", contrato_id)
+            if _a_l is not None:  q = q.eq("acta_rpo_id", _a_l)
+            if _s_l is not None:  q = q.eq("semana_id", _s_l)
+            if _it_l:             q = q.ilike("item_numero", f"%{_it_l}%")
+            if _rp_l is not None: q = q.in_("reporte_id", _rp_l)
+            return q.execute().data
+        registros = supabase_execute(_regs)
+    except Exception:
+        registros = []
+
+    # ── 4. Batch-resolve capitulo y estado desde so_reportes ─────────────────
+    rep_ids_found = list({r["reporte_id"] for r in registros if r.get("reporte_id")})
+    reporte_map: dict = {}
+    if rep_ids_found:
+        try:
+            def _ri():
+                return supabase.table("so_reportes").select("id, capitulo, estado")\
+                    .in_("id", rep_ids_found).execute().data
+            for r in supabase_execute(_ri):
+                reporte_map[r["id"]] = r
+        except Exception: pass
+
+    # ── 5. Agrupar por capítulo ───────────────────────────────────────────────
+    grupos: dict = {}
+    for reg in registros:
+        rep = reporte_map.get(reg.get("reporte_id")) or {}
+        cap = rep.get("capitulo") or "Sin capítulo"
+        est = rep.get("estado") or ""
+        if cap not in grupos:
+            grupos[cap] = {"capitulo": cap, "costo_directo": 0.0,
+                           "total_registros": 0, "aprobados": 0,
+                           "pendientes": 0, "rechazados": 0}
+        grupos[cap]["costo_directo"]   += float(reg.get("costo_directo") or 0)
+        grupos[cap]["total_registros"] += 1
+        if   est == "Aprobados":  grupos[cap]["aprobados"]  += 1
+        elif est == "Pendientes": grupos[cap]["pendientes"] += 1
+        elif est == "Rechazados": grupos[cap]["rechazados"] += 1
+
+    grupos_list = sorted(grupos.values(), key=lambda g: g["costo_directo"], reverse=True)
+    for g in grupos_list:
+        g["costo_directo"] = round(g["costo_directo"], 2)
+
+    # ── 6. Modo y encabezado ─────────────────────────────────────────────────
+    if acta_rpo is not None:
+        modo = "acta"
+        nr = (acta_info or {}).get("numero_rpo") or acta_rpo
+        encabezado = f"Acta RPO {nr}"
+    elif semana is not None:
+        modo = "semana"
+        if semana_info:
+            encabezado = (f"Semana {semana_info['numero_semana']} | "
+                          f"{semana_info['fecha_inicio']} → {semana_info['fecha_fin']}")
+        else:
+            encabezado = f"Semana {semana}"
+    elif item:
+        modo = "item"
+        encabezado = f"Ítem: {item}"
+    elif subcontratista_id:
+        modo = "subcontratista"
+        encabezado = f"Subcontratista #{subcontratista_id}"
+        try:
+            _sub_id_l = subcontratista_id
+            def _subc():
+                return supabase.table("subcontratistas").select("razon_social")\
+                    .eq("id", _sub_id_l).single().execute().data
+            sc = supabase_execute(_subc)
+            if sc and sc.get("razon_social"):
+                encabezado = sc["razon_social"]
+        except Exception: pass
+    else:
+        modo = "general"
+        partes = []
+        if capitulo:   partes.append(f"Cap.: {capitulo}")
+        if tramo:      partes.append(f"Tramo: {tramo}")
+        if costado:    partes.append(f"Costado: {costado}")
+        if estado:     partes.append(f"Estado: {estado}")
+        if abs_inicio is not None: partes.append(f"Abs. ≥ {abs_inicio}")
+        if abs_final  is not None: partes.append(f"Abs. ≤ {abs_final}")
+        encabezado = " · ".join(partes) if partes else "Todos los registros"
+
+    tc = round(sum(g["costo_directo"]   for g in grupos_list), 2)
+    tr = sum(g["total_registros"] for g in grupos_list)
+    ta = sum(g["aprobados"]       for g in grupos_list)
+    tp = sum(g["pendientes"]      for g in grupos_list)
+    trj = sum(g["rechazados"]     for g in grupos_list)
+
+    return {"modo": modo, "encabezado": encabezado, "grupos": grupos_list,
+            "total_costo_directo": tc, "total_registros": tr,
+            "total_aprobados": ta, "total_pendientes": tp, "total_rechazados": trj}
+
+
 @app.get("/sicoe-obra/{contrato_id}/filtros/semanas")
 def filtros_semanas(contrato_id: int, current_user=Depends(get_current_user)):
     def _q():

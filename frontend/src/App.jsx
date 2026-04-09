@@ -5598,6 +5598,8 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const [filtroItemList, setFiltroItemList] = useState([])
   const [filtroTramoList, setFiltroTramoList] = useState([])
   const [filtroCostadoList, setFiltroCostadoList] = useState([])
+  const [analisis, setAnalisis] = useState(null)
+  const [cargandoAnalisis, setCargandoAnalisis] = useState(false)
   const [modalNuevoReporte, setModalNuevoReporte]   = useState(false)
   const [reporteEditando, setReporteEditando]         = useState(null)
   const [modalCarpeta, setModalCarpeta]               = useState(false)
@@ -5747,6 +5749,26 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
 
   useEffect(() => { if (contrato_id) buscarReportes(filtros, 0) }, [contrato_id]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const fmtPesos = v => '$' + Math.round(v || 0).toLocaleString('es-CO')
+
+  const cargarAnalisis = async (nuevosFiltros) => {
+    const hayFiltros = Object.values(nuevosFiltros).some(v => v !== '')
+    if (!hayFiltros) { setAnalisis(null); return }
+    setCargandoAnalisis(true)
+    try {
+      const params = new URLSearchParams()
+      const ef = { ...nuevosFiltros }
+      if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
+      const camposAnalisis = ['acta_rpo','semana','subcontratista_id','capitulo','item','tramo','costado','abs_inicio','abs_final','estado']
+      camposAnalisis.forEach(k => { if (ef[k] !== '' && ef[k] != null) params.append(k, ef[k]) })
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/analisis?${params}`, {
+        headers: { Authorization: `Bearer ${getToken()}` }
+      })
+      setAnalisis(await res.json())
+    } catch(e) { setAnalisis(null) }
+    setCargandoAnalisis(false)
+  }
+
   const actualizarFiltrosDisponibles = async (filtrosActivos) => {
     const hdrs = { Authorization: `Bearer ${getToken()}` }
     const params = new URLSearchParams()
@@ -5773,6 +5795,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const limpiarFiltros = () => {
     setFiltros(filtrosVacios)
     setFiltroItemList([])
+    setAnalisis(null)
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos`, { headers: { Authorization: `Bearer ${getToken()}` } })
       .then(r => r.json()).then(caps => setFiltroCapList(Array.isArray(caps) ? caps : [])).catch(() => {})
     buscarReportes(filtrosVacios, 0)
@@ -5839,6 +5862,62 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
         </div>
       )}
 
+      {/* ── Panel de análisis ── */}
+      <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', marginBottom:'16px', overflow:'hidden' }}>
+        {cargandoAnalisis ? (
+          <div style={{ padding:'18px', textAlign:'center', color:t.textMuted, fontSize:'13px' }}>Calculando análisis...</div>
+        ) : analisis && analisis.grupos.length > 0 ? (
+          <>
+            <div style={{ padding:'10px 16px', borderBottom:`1px solid ${t.border}`, display:'flex', alignItems:'center', gap:'8px', background:t.bg }}>
+              <span style={{ fontSize:'13px', fontWeight:'800', color:t.text }}>📊 {analisis.encabezado}</span>
+              <span style={{ marginLeft:'auto', fontSize:'11px', color:t.textMuted }}>
+                {analisis.total_registros.toLocaleString()} regs · {fmtPesos(analisis.total_costo_directo)}
+              </span>
+            </div>
+            <div style={{ overflowX:'auto' }}>
+              <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
+                <thead>
+                  <tr style={{ color:t.textMuted, fontSize:'11px', fontWeight:'700', letterSpacing:'0.4px' }}>
+                    <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>CAPÍTULO</th>
+                    <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>COSTO DIRECTO</th>
+                    <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>REGS.</th>
+                    <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>✅ APOB.</th>
+                    <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>⏳ PEND.</th>
+                    <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>❌ RECH.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {analisis.grupos.map(g => (
+                    <tr key={g.capitulo} style={{ borderBottom:`1px solid ${t.border}22` }}>
+                      <td style={{ padding:'6px 16px', color:t.text, fontWeight:'600' }}>{g.capitulo}</td>
+                      <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>
+                      <td style={{ padding:'6px 16px', textAlign:'right', color:t.textMuted }}>{g.total_registros}</td>
+                      <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados || '—'}</td>
+                      <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes || '—'}</td>
+                      <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
+                    <td style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
+                    <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>
+                    <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
+                    <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados || '—'}</td>
+                    <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes || '—'}</td>
+                    <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados || '—'}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </>
+        ) : (
+          <div style={{ padding:'18px', textAlign:'center', color:t.textMuted, fontSize:'13px' }}>
+            Aplica un filtro y presiona Buscar para ver el análisis
+          </div>
+        )}
+      </div>
+
       {/* ── Barra de filtros ── */}
       <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'12px 16px', marginBottom:'16px', position:'sticky', top:0, zIndex:10 }}>
         {/* Fila 1 — Búsqueda principal */}
@@ -5872,13 +5951,11 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
               style={{ ...selStyle, background:'transparent', cursor:'pointer', whiteSpace:'nowrap', color:t.textMuted }}>
               Filtros avanzados {filtrosAvanzados ? '▲' : '▼'}
             </button>
-            {hayFiltrosActivos && (
-              <button onClick={limpiarFiltros}
-                style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'7px', padding:'5px 12px', fontSize:'12px', color:t.textMuted, cursor:'pointer' }}>
-                Limpiar
-              </button>
-            )}
-            <button onClick={() => buscarReportes(filtros, 0)}
+            <button onClick={limpiarFiltros}
+              style={{ background:'#EF4444', color:'#fff', border:'none', borderRadius:'7px', padding:'5px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
+              Limpiar
+            </button>
+            <button onClick={() => { buscarReportes(filtros, 0); cargarAnalisis(filtros) }}
               style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'7px', padding:'5px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
               Buscar
             </button>
