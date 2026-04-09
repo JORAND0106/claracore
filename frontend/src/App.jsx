@@ -1070,7 +1070,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const headers = parseCSVLine(firstLine, sep).map(h => h.replace(/^"|"$/g,'').trim().toUpperCase())
 
     const MAP = {
-      'PK_ID':'pk_id','PK_ID':'pk_id',
+      'PK_ID':'pk_id',
       'CAPITULO':'capitulo','CAPÍTULO':'capitulo','COMPETENCIA':'competencia',
       'ITEM':'item','ÍTEM':'item',
       'DESCRIPCION':'descripcion','DESCRIPCIÓN':'descripcion',
@@ -1092,7 +1092,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       'OBSERVACIÓN':'observacion','OBSERVACION':'observacion',
       'ENTHANDLE':'ent_handle','ENT_HANDLE':'ent_handle',
       'TXTHANDLE':'txt_handle','TXT_HANDLE':'txt_handle',
-      'LAYERENT':'layer_ent','LAYER_ENT':'layer_ent','LAYERENT':'layer_ent',
+      'LAYERENT':'layer_ent','LAYER_ENT':'layer_ent',
       'LAYERTXT':'layer_txt','LAYER_TXT':'layer_txt',
       'COLORHEX':'color_hex','COLOR_HEX':'color_hex',
       'GUID':'guid',
