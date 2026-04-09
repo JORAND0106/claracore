@@ -3271,6 +3271,26 @@ def buscar_reportes_obra(
         except Exception:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
+        # Buscar reporte_ids via so_registros.acta_rpo_id (más fiable que so_reportes.acta_rpo_id)
+        try:
+            _acta_id_local = acta_id_filtro
+            def _regs_acta():
+                return supabase.table("so_registros").select("reporte_id")\
+                    .eq("contrato_id", contrato_id)\
+                    .eq("acta_rpo_id", _acta_id_local).execute().data
+            reg_acta_rows = supabase_execute(_regs_acta)
+            ids_via_reg = list({r["reporte_id"] for r in reg_acta_rows if r.get("reporte_id")})
+            if ids_via_reg:
+                if reporte_ids_from_reg is not None:
+                    reporte_ids_from_reg = list(set(reporte_ids_from_reg) & set(ids_via_reg))
+                else:
+                    reporte_ids_from_reg = ids_via_reg
+                if not reporte_ids_from_reg:
+                    return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+                acta_id_filtro = None  # ya cubierto por reporte_ids_from_reg
+        except Exception:
+            pass  # fallback: filtrar por acta_rpo_id directo en so_reportes
+
     def _q():
         q = supabase.table("so_reportes").select("*, subcontratistas(razon_social)")\
             .eq("contrato_id", contrato_id)
