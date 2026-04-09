@@ -8295,7 +8295,7 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0 }) {
+function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0, fontSize = 'normal', onFontSize }) {
   const [moduloActivo, setModuloActivo] = useState('dashboard')
   const [menuAbierto, setMenuAbierto] = useState(false)
   const [tabInferior, setTabInferior] = useState('gantt')
@@ -8783,6 +8783,14 @@ const [navRegistroId, setNavRegistroId] = useState(null)
               </button>
             ))}
           </div>
+          <div style={{ display:'flex', gap:'2px', alignItems:'center', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'4px 6px' }}>
+            {[['pequena','A',11],['normal','A',14],['grande','A',17]].map(([key, lbl, sz]) => (
+              <button key={key} onClick={() => onFontSize && onFontSize(key)}
+                style={{ background: fontSize===key ? t.primary : 'transparent', color: fontSize===key ? '#fff' : t.textMuted, border:'none', borderRadius:'14px', padding:'2px 7px', fontSize:`${sz}px`, cursor:'pointer', fontWeight: fontSize===key ? '700' : '400', lineHeight:1.2, transition:'all 0.2s' }}>
+                {lbl}
+              </button>
+            ))}
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <span style={{ fontSize: '13px', color: t.textMuted }}>
               👤 {usuario?.nombre}
@@ -9113,8 +9121,8 @@ const [navRegistroId, setNavRegistroId] = useState(null)
                   const scaleH = (v) => PAD_T + (1 - v/maxVal) * (H - PAD_T - PAD_B)
 
                   return (
-                    <div style={{ overflowX:'auto', overflowY:'visible' }}>
-                      <svg width="100%" viewBox={`0 0 ${Math.max(totalW, 400)} ${H}`} style={{ overflow:'visible', display:'block', height:'260px' }}>
+                    <div style={{ overflowX:'auto', overflowY:'visible', width:'100%' }}>
+                      <svg width={Math.max(totalW, 400)} height={H} viewBox={`0 0 ${Math.max(totalW, 400)} ${H}`} style={{ overflow:'visible', display:'block', minWidth:'100%' }}>
                         {/* Líneas de referencia */}
                         {[0,25,50,75,100].map(pct => {
                           const y = PAD_T + (1-pct/100)*(H-PAD_T-PAD_B)
@@ -10189,10 +10197,13 @@ const [navRegistroId, setNavRegistroId] = useState(null)
   )
 }
 
+const FONT_SIZES = { pequena: '12px', normal: '14px', grande: '16px' }
+
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [themeMode, setThemeMode] = useState('auto')
   const [activeTheme, setActiveTheme] = useState(getAutoTheme())
+  const [fontSize, setFontSize] = useState(() => localStorage.getItem('claracore_font_size') || 'normal')
   const [modal, setModal] = useState(null)
   const [usuario, setUsuario] = useState(() => {
     try { return JSON.parse(localStorage.getItem('cc_usuario')) } catch { return null }
@@ -10226,6 +10237,15 @@ export default function App() {
   function handleTheme(mode) {
     setThemeMode(mode)
     setActiveTheme(mode === 'auto' ? getAutoTheme() : mode)
+  }
+
+  useEffect(() => {
+    document.documentElement.style.setProperty('--font-size-base', FONT_SIZES[fontSize])
+  }, [fontSize])
+
+  const cambiarFuente = (tamano) => {
+    localStorage.setItem('claracore_font_size', tamano)
+    setFontSize(tamano)
   }
 
   const [pendingUser, setPendingUser] = useState(null)
@@ -10476,6 +10496,7 @@ if (contratos.length > 1) {
       <Dashboard t={t} activeTheme={activeTheme} themeMode={themeMode}
         onTheme={handleTheme} usuario={usuario} setUsuario={setUsuario} onLogout={handleLogout}
         topOffset={bannerMsg ? 44 : 0}
+        fontSize={fontSize} onFontSize={cambiarFuente}
       />
     </>
   )
