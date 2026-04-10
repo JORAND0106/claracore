@@ -593,6 +593,13 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [filtroEstrellaTipo, setFiltroEstrellaTipo] = useState('tramo') // 'ini' | 'fin' | 'tramo'
   const [tramoSelec,        setTramoSelec]        = useState(null) // {no_inicio, no_final, label}
   const [tabTramo,          setTabTramo]          = useState(0)    // 0=INFO 1=NODO INI 2=NODO FIN 3=TRAMO
+  // ── Agregar cantidad / Revisor tramos extras ─────────────────────────────
+  const [comentariosTramo,   setComentariosTramo]   = useState({})
+  const [modoSeleccionClon,  setModoSeleccionClon]  = useState(false)
+  const [clonBase,           setClonBase]           = useState(null)
+  const [modalAgregarCant,   setModalAgregarCant]   = useState(false)
+  const [nuevaCant,          setNuevaCant]          = useState({ itemBusq:'', itemSel:null, area_long_nod:'', ancho:'', espesor:'' })
+  const [guardandoNuevaCant, setGuardandoNuevaCant] = useState(false)
   // ── Comentarios ──────────────────────────────────────────────────────────
   const [modalComentario,  setModalComentario]  = useState(null) // {tipo, obligatorio, resolve}
   const [textoComentario,  setTextoComentario]  = useState('')
@@ -1425,8 +1432,8 @@ async function restaurar(id) {
           if (!regs.length) return 'vacia'
           const estados = regs.map(r => r.revisado || 'No Revisado')
           if (estados.some(e => e === 'No Revisado')) return 'vacia'
-          if (estados.some(e => e === 'Pendiente')) return 'roja'
-          if (estados.some(e => e === 'Verificar Campo')) return 'amarilla'
+          if (estados.some(e => e === 'Rechazado')) return 'roja'
+          if (estados.some(e => e === 'Pendiente' || e === 'Verificar Campo')) return 'amarilla'
           return 'verde'
         }
         const colorEstrella = (e) => e === 'verde' ? '#16A34A' : e === 'amarilla' ? '#D97706' : e === 'roja' ? '#EF4444' : t.border
@@ -1490,7 +1497,7 @@ async function restaurar(id) {
 
         return (
           <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.7)',zIndex:3500,display:'flex',alignItems:'center',justifyContent:'center' }}
-            onClick={(e) => { if (modalComentario) return; setModalModoCapitulo(null); setTramoSelec(null) }}>
+            onClick={(e) => { if (modalComentario) return; setModalModoCapitulo(null); setTramoSelec(null); setModoSeleccionClon(false); setClonBase(null) }}>
             <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px',
               padding:'24px', width: tramoSelec ? '820px' : '440px', maxWidth:'96vw',
               maxHeight:'88vh', overflowY:'auto', boxShadow:'0 24px 64px rgba(0,0,0,0.5)',
@@ -1505,8 +1512,16 @@ async function restaurar(id) {
                   </div>
                   <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>{modalModoCapitulo}</div>
                 </div>
-                <button onClick={() => { setModalModoCapitulo(null); setTramoSelec(null) }}
-                  style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
+                  {puedeEditar && (
+                    <button onClick={() => { setModoSeleccionClon(true); setClonBase(null) }}
+                      style={{ background:t.primary+'22', color:t.primary, border:`1px solid ${t.primary}`, borderRadius:'8px', padding:'5px 12px', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
+                      ＋ Agregar cantidad
+                    </button>
+                  )}
+                  <button onClick={() => { setModalModoCapitulo(null); setTramoSelec(null); setModoSeleccionClon(false); setClonBase(null) }}
+                    style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                </div>
               </div>
 
               {/* Si no hay tramo seleccionado → mostrar dropdown */}
@@ -1521,6 +1536,13 @@ async function restaurar(id) {
                       setModoCapSeleccion(val)
                       if (val === 'tramos' && modalModoCapitulo) {
                         await cargarCapituloData(modalModoCapitulo)
+                        const capIds = registros.filter(r => r.capitulo === modalModoCapitulo).map(r => r.id)
+                        if (capIds.length) {
+                          const res = await fetch(`${API}/presupuesto/${contratoId}/comentarios-validacion?ids=${capIds.join(',')}`, {
+                            headers: { Authorization: `Bearer ${token}` }
+                          })
+                          if (res.ok) setComentariosTramo(await res.json())
+                        }
                       }
                     }}
                     style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`,
@@ -1667,6 +1689,13 @@ async function restaurar(id) {
 
               {/* Panel de 4 pestañas cuando hay tramo seleccionado */}
               {tramoSelec && (<>
+                {/* Banner modo selección clon */}
+                {modoSeleccionClon && (
+                  <div style={{ background:t.primary+'20', border:`1px solid ${t.primary}`, borderRadius:'8px', padding:'8px 12px', marginBottom:'10px', fontSize:'12px', color:t.primary, fontWeight:'700', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                    <span>🎯 Haz clic en un registro para clonar su posición</span>
+                    <button onClick={() => setModoSeleccionClon(false)} style={{ background:'transparent', border:'none', cursor:'pointer', color:t.primary, fontWeight:'800', fontSize:'13px' }}>Cancelar</button>
+                  </div>
+                )}
                 {/* Botón volver */}
                 <button onClick={() => { setTramoSelec(null); cargarRegistros(verPapelera, true) }}
                   style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'7px',
@@ -1799,50 +1828,109 @@ async function restaurar(id) {
                       {regs.length === 0
                         ? <TabVacia msg={msg} />
                         : regs.map(r => (
-                            <div key={r.id} onClick={() => { zoomEnDwg(r); highlightEnDwg(r) }}
-                              style={{ display:'flex', gap:'8px', alignItems:'center', padding:'8px 10px',
-                                borderRadius:'8px', cursor:'pointer',
-                                background: selTab.has(r.id) ? t.primary+'18' : t.bg,
-                                marginBottom:'6px', border:`1px solid ${selTab.has(r.id) ? t.primary : t.border}` }}>
-                              <input type="checkbox" checked={selTab.has(r.id)}
-                                onClick={e => e.stopPropagation()}
-                                onChange={() => setSelTramoTab(prev => {
-                                  const n = new Set(prev[key])
-                                  selTab.has(r.id) ? n.delete(r.id) : n.add(r.id)
-                                  return { ...prev, [key]: n }
-                                })}
-                                style={{ width:'13px', height:'13px', cursor:'pointer', flexShrink:0 }} />
-                              <div style={{ flex:2, fontSize:'11px', color:t.text, fontWeight:'600' }}>{r.item}</div>
-                              <div style={{ flex:3, fontSize:'11px', color:t.textMuted }}>{r.descripcion}</div>
-                              <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
-                                {[r.area_long_nod, r.ancho, r.espesor].filter(Boolean).join(' × ')}
-                              </div>
-                              <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
-                                {r.cant_total != null ? Number(r.cant_total).toLocaleString('es-CO', {maximumFractionDigits:3}) : '—'}
-                              </div>
-                              <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
-                                {r.vlr_unitario != null ? `$${Number(r.vlr_unitario).toLocaleString('es-CO')}` : '—'}
-                              </div>
-                              <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
-                                {r.costo_directo != null ? `$${Number(r.costo_directo).toLocaleString('es-CO')}` : '—'}
-                              </div>
-                              <div style={{ display:'flex', gap:'4px' }}>
-                                {[{valor:'Rechazado',label:'🔴'},{valor:'Pendiente',label:'🟡'},{valor:'Aprobado',label:'🟢'}].map(op => {
-                                  const est = r.revisado || 'No Revisado'
-                                  const clr = estadoColor(est)
-                                  return (
-                                    <button key={op.valor} title={op.valor}
-                                      onClick={async (e) => { e.stopPropagation(); if (puedeValidar && !esSellado(r)) await cambiarEstadoDirecto(r.id, op.valor) }}
-                                      style={{ background: est === op.valor ? clr : t.bgCard,
-                                        border:`1.5px solid ${est === op.valor ? clr : t.border}`,
-                                        borderRadius:'50%', width:'22px', height:'22px', fontSize:'11px',
-                                        cursor: puedeValidar && !esSellado(r) ? 'pointer' : 'default',
-                                        display:'flex', alignItems:'center', justifyContent:'center', padding:0 }}>
-                                      {op.label}
+                            <div key={r.id}
+                              style={{ borderRadius:'8px', marginBottom:'6px',
+                                border:`1px solid ${modoSeleccionClon ? t.primary : selTab.has(r.id) ? t.primary : t.border}`,
+                                background: modoSeleccionClon ? t.primary+'10' : selTab.has(r.id) ? t.primary+'18' : t.bg }}>
+                              <div onClick={() => {
+                                  if (modoSeleccionClon) {
+                                    setClonBase(r)
+                                    setModoSeleccionClon(false)
+                                    setNuevaCant({ itemBusq:'', itemSel:null, area_long_nod:'', ancho:'', espesor:'' })
+                                    setModalAgregarCant(true)
+                                  } else {
+                                    zoomEnDwg(r); highlightEnDwg(r)
+                                  }
+                                }}
+                                style={{ display:'flex', gap:'8px', alignItems:'center', padding:'8px 10px', cursor:'pointer' }}>
+                                <input type="checkbox" checked={selTab.has(r.id)}
+                                  onClick={e => e.stopPropagation()}
+                                  onChange={() => setSelTramoTab(prev => {
+                                    const n = new Set(prev[key])
+                                    selTab.has(r.id) ? n.delete(r.id) : n.add(r.id)
+                                    return { ...prev, [key]: n }
+                                  })}
+                                  style={{ width:'13px', height:'13px', cursor:'pointer', flexShrink:0 }} />
+                                <div style={{ flex:2, fontSize:'11px', color:t.text, fontWeight:'600' }}>{r.item}</div>
+                                <div style={{ flex:3, fontSize:'11px', color:t.textMuted }}>{r.descripcion}</div>
+                                {/* Dims — editable cuando puedeEditar */}
+                                <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
+                                  {puedeEditar && editDims[r.id] !== undefined ? (
+                                    <div style={{ display:'flex', flexDirection:'column', gap:'2px', alignItems:'flex-end' }} onClick={e => e.stopPropagation()}>
+                                      <input type="number" placeholder="ancho" value={editDims[r.id].ancho ?? ''}
+                                        onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], ancho: e.target.value } }))}
+                                        style={{ width:'52px', fontSize:'10px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 4px', color:t.text, textAlign:'right' }} />
+                                      <input type="number" placeholder="esp" value={editDims[r.id].espesor ?? ''}
+                                        onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], espesor: e.target.value } }))}
+                                        style={{ width:'52px', fontSize:'10px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 4px', color:t.text, textAlign:'right' }} />
+                                    </div>
+                                  ) : (
+                                    <span onClick={puedeEditar ? (e) => { e.stopPropagation(); setEditDims(p => ({ ...p, [r.id]: { ancho: r.ancho ?? '', espesor: r.espesor ?? '' } })) } : undefined}
+                                      title={puedeEditar ? 'Clic para editar dims' : undefined}
+                                      style={{ cursor: puedeEditar ? 'pointer' : 'default', textDecoration: puedeEditar ? 'underline dotted' : 'none' }}>
+                                      {[r.area_long_nod, r.ancho, r.espesor].filter(v => v != null && v !== '').join(' × ') || '—'}
+                                    </span>
+                                  )}
+                                </div>
+                                <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
+                                  {r.cant_total != null ? Number(r.cant_total).toLocaleString('es-CO', {maximumFractionDigits:3}) : '—'}
+                                </div>
+                                <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
+                                  {r.vlr_unitario != null ? `$${Number(r.vlr_unitario).toLocaleString('es-CO')}` : '—'}
+                                </div>
+                                <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
+                                  {r.costo_directo != null ? `$${Number(r.costo_directo).toLocaleString('es-CO')}` : '—'}
+                                </div>
+                                <div style={{ display:'flex', gap:'4px', alignItems:'center' }}>
+                                  {/* Botón guardar dims */}
+                                  {puedeEditar && editDims[r.id] !== undefined && (
+                                    <button onClick={async (e) => {
+                                      e.stopPropagation()
+                                      const d = editDims[r.id]
+                                      const res = await fetch(`${API}/presupuesto/item/${r.id}`, {
+                                        method: 'PUT',
+                                        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                                        body: JSON.stringify({
+                                          ancho:   d.ancho   !== '' ? Number(d.ancho)   : null,
+                                          espesor: d.espesor !== '' ? Number(d.espesor) : null,
+                                        })
+                                      })
+                                      if (res.ok) {
+                                        const updated = await res.json()
+                                        setRegistros(prev => prev.map(x => x.id === r.id ? updated : x))
+                                        setEditDims(p => { const n = {...p}; delete n[r.id]; return n })
+                                      }
+                                    }}
+                                    style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'3px 8px', fontSize:'11px', cursor:'pointer', fontWeight:'700', flexShrink:0 }}>
+                                      ✓
                                     </button>
-                                  )
-                                })}
+                                  )}
+                                  {[{valor:'Rechazado',label:'🔴'},{valor:'Pendiente',label:'🟡'},{valor:'Aprobado',label:'🟢'}].map(op => {
+                                    const est = r.revisado || 'No Revisado'
+                                    const clr = estadoColor(est)
+                                    return (
+                                      <button key={op.valor} title={op.valor}
+                                        onClick={async (e) => { e.stopPropagation(); if (puedeValidar && !esSellado(r)) await cambiarEstadoDirecto(r.id, op.valor) }}
+                                        style={{ background: est === op.valor ? clr : t.bgCard,
+                                          border:`1.5px solid ${est === op.valor ? clr : t.border}`,
+                                          borderRadius:'50%', width:'22px', height:'22px', fontSize:'11px',
+                                          cursor: puedeValidar && !esSellado(r) ? 'pointer' : 'default',
+                                          display:'flex', alignItems:'center', justifyContent:'center', padding:0 }}>
+                                        {op.label}
+                                      </button>
+                                    )
+                                  })}
+                                </div>
                               </div>
+                              {/* Comentario de validación (C1) */}
+                              {comentariosTramo[r.id] && (
+                                <div style={{ padding:'0 10px 6px 36px', fontSize:'10px', color:t.textMuted, fontStyle:'italic' }}>
+                                  💬 {comentariosTramo[r.id].mensaje}
+                                  <span style={{ marginLeft:'8px', color:t.primary, fontWeight:'600', fontStyle:'normal' }}>
+                                    — {comentariosTramo[r.id].usuario_nombre}
+                                  </span>
+                                </div>
+                              )}
                             </div>
                           ))
                       }
@@ -1850,6 +1938,152 @@ async function restaurar(id) {
                   )
                 })}
               </>)}
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Modal agregar cantidad */}
+      {modalAgregarCant && clonBase && (() => {
+        const preciosFilt = listadoPrecios.filter(p =>
+          !nuevaCant.itemBusq ||
+          p.item_numero?.toLowerCase().includes(nuevaCant.itemBusq.toLowerCase()) ||
+          p.descripcion?.toLowerCase().includes(nuevaCant.itemBusq.toLowerCase())
+        ).slice(0, 20)
+        const _area  = parseFloat(nuevaCant.area_long_nod) || 0
+        const _ancho = parseFloat(nuevaCant.ancho)         || 0
+        const _esp   = parseFloat(nuevaCant.espesor)       || 0
+        const _vlr   = parseFloat(nuevaCant.itemSel?.precio_unitario) || 0
+        const _cant  = (_ancho || _esp) ? _area * _ancho * _esp : _area
+        const _costo = Math.round(_cant * _vlr)
+        const puedeGuardar = nuevaCant.itemSel && _area > 0
+        const InpLabel = ({label, val, onChange, type='number'}) => (
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', marginBottom:'3px' }}>{label}</div>
+            <input type={type} value={val} onChange={onChange}
+              style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'7px', padding:'7px 10px', color:t.text, fontSize:'12px' }} />
+          </div>
+        )
+        return (
+          <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.75)', zIndex:4000, display:'flex', alignItems:'center', justifyContent:'center' }}
+            onClick={() => { setModalAgregarCant(false) }}>
+            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'14px', padding:'22px', width:'480px', maxWidth:'96vw', maxHeight:'88vh', overflowY:'auto', boxShadow:'0 24px 64px rgba(0,0,0,0.55)' }}
+              onClick={e => e.stopPropagation()}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
+                <div style={{ fontSize:'13px', fontWeight:'800', color:t.primary }}>＋ Agregar cantidad</div>
+                <button onClick={() => setModalAgregarCant(false)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+              </div>
+
+              {/* Referencia clon */}
+              <div style={{ background:t.bg, borderRadius:'8px', padding:'8px 12px', marginBottom:'14px', fontSize:'11px', color:t.textMuted }}>
+                <span style={{ fontWeight:'700', color:t.text }}>Posición clonada: </span>
+                {clonBase.no_inicio} → {clonBase.no_final}
+                {clonBase.tramo ? ` · ${clonBase.tramo}` : ''}
+              </div>
+
+              {/* Búsqueda ítem */}
+              <div style={{ marginBottom:'12px' }}>
+                <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', marginBottom:'4px' }}>ÍTEM DEL LISTADO DE PRECIOS</div>
+                <input value={nuevaCant.itemBusq}
+                  onChange={e => setNuevaCant(p => ({ ...p, itemBusq: e.target.value, itemSel: null }))}
+                  placeholder="Buscar por número o descripción..."
+                  style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${nuevaCant.itemSel ? t.primary : t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'12px' }} />
+                {nuevaCant.itemBusq && !nuevaCant.itemSel && (
+                  <div style={{ border:`1px solid ${t.border}`, borderRadius:'8px', marginTop:'4px', maxHeight:'160px', overflowY:'auto', background:t.bgCard }}>
+                    {preciosFilt.length === 0
+                      ? <div style={{ padding:'10px 12px', fontSize:'11px', color:t.textMuted }}>Sin resultados</div>
+                      : preciosFilt.map(p => (
+                        <div key={p.item_numero} onClick={() => setNuevaCant(prev => ({ ...prev, itemSel: p, itemBusq: `${p.item_numero} — ${p.descripcion}` }))}
+                          style={{ padding:'8px 12px', fontSize:'11px', cursor:'pointer', borderBottom:`1px solid ${t.border}` }}
+                          onMouseEnter={e => e.currentTarget.style.background = t.primary+'15'}
+                          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                          <span style={{ fontWeight:'700', color:t.text }}>{p.item_numero}</span>
+                          <span style={{ color:t.textMuted, marginLeft:'8px' }}>{p.descripcion}</span>
+                          <span style={{ color:t.primary, marginLeft:'8px', fontSize:'10px' }}>{p.unidad} · ${Number(p.precio_unitario || 0).toLocaleString('es-CO')}</span>
+                        </div>
+                      ))
+                    }
+                  </div>
+                )}
+                {nuevaCant.itemSel && (
+                  <div style={{ marginTop:'6px', fontSize:'11px', color:t.primary, fontWeight:'600' }}>
+                    ✓ {nuevaCant.itemSel.und || nuevaCant.itemSel.unidad} · ${Number(nuevaCant.itemSel.precio_unitario || 0).toLocaleString('es-CO')}
+                  </div>
+                )}
+              </div>
+
+              {/* Dims */}
+              <div style={{ display:'flex', gap:'8px', marginBottom:'12px' }}>
+                <InpLabel label="LONGITUD / ÁREA" val={nuevaCant.area_long_nod} onChange={e => setNuevaCant(p => ({ ...p, area_long_nod: e.target.value }))} />
+                <InpLabel label="ANCHO" val={nuevaCant.ancho} onChange={e => setNuevaCant(p => ({ ...p, ancho: e.target.value }))} />
+                <InpLabel label="ESPESOR" val={nuevaCant.espesor} onChange={e => setNuevaCant(p => ({ ...p, espesor: e.target.value }))} />
+              </div>
+
+              {/* Totales calculados */}
+              {_area > 0 && nuevaCant.itemSel && (
+                <div style={{ display:'flex', gap:'8px', marginBottom:'16px' }}>
+                  <div style={{ flex:1, background:t.bg, borderRadius:'8px', padding:'8px 12px' }}>
+                    <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>CANT. CALCULADA</div>
+                    <div style={{ fontSize:'14px', fontWeight:'800', color:t.text, marginTop:'2px' }}>{_cant.toLocaleString('es-CO', {maximumFractionDigits:3})}</div>
+                  </div>
+                  <div style={{ flex:1, background:t.bg, borderRadius:'8px', padding:'8px 12px' }}>
+                    <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>COSTO DIRECTO</div>
+                    <div style={{ fontSize:'14px', fontWeight:'800', color:t.primary, marginTop:'2px' }}>${_costo.toLocaleString('es-CO')}</div>
+                  </div>
+                </div>
+              )}
+
+              <button disabled={!puedeGuardar || guardandoNuevaCant}
+                onClick={async () => {
+                  if (!puedeGuardar) return
+                  setGuardandoNuevaCant(true)
+                  try {
+                    const p = nuevaCant.itemSel
+                    const body = {
+                      item:          p.item_numero,
+                      descripcion:   p.descripcion,
+                      und:           p.und || p.unidad,
+                      vlr_unitario:  p.precio_unitario,
+                      area_long_nod: _area || null,
+                      ancho:         _ancho || null,
+                      espesor:       _esp || null,
+                      capitulo:      clonBase.capitulo,
+                      competencia:   clonBase.competencia,
+                      calzada:       clonBase.calzada,
+                      tramo:         clonBase.tramo,
+                      abs_inicio:    clonBase.abs_inicio,
+                      abs_final:     clonBase.abs_final,
+                      no_inicio:     clonBase.no_inicio,
+                      no_final:      clonBase.no_final,
+                      tipo_ejecucion: clonBase.tipo_ejecucion,
+                      tipo_entidad:  clonBase.tipo_entidad,
+                      id_pol_base:   clonBase.id_pol,
+                      layer_ent:     clonBase.layer_ent,
+                      layer_txt:     clonBase.layer_txt,
+                      x_label:       clonBase.x_label,
+                      y_label:       clonBase.y_label,
+                    }
+                    const res = await fetch(`${API}/presupuesto/${contratoId}/agregar-cantidad`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                      body: JSON.stringify(body)
+                    })
+                    if (res.ok) {
+                      const newRow = await res.json()
+                      setRegistros(prev => [...prev, newRow])
+                      setModalAgregarCant(false)
+                      setClonBase(null)
+                      setNuevaCant({ itemBusq:'', itemSel:null, area_long_nod:'', ancho:'', espesor:'' })
+                    } else {
+                      alert('Error al agregar cantidad')
+                    }
+                  } finally {
+                    setGuardandoNuevaCant(false)
+                  }
+                }}
+                style={{ width:'100%', background: puedeGuardar ? t.primary : t.border, color:'#fff', border:'none', borderRadius:'9px', padding:'11px', fontSize:'13px', fontWeight:'700', cursor: puedeGuardar ? 'pointer' : 'default', opacity: guardandoNuevaCant ? 0.7 : 1 }}>
+                {guardandoNuevaCant ? 'Guardando...' : '＋ Agregar cantidad'}
+              </button>
             </div>
           </div>
         )

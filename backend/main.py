@@ -218,6 +218,32 @@ class PresupuestoBulkEstado(BaseModel):
     ids: List[int]
     revisado: str
 
+class AgregarCantidadBody(BaseModel):
+    # Nuevo ítem
+    item: str
+    descripcion: str
+    und: str
+    vlr_unitario: float
+    area_long_nod: Optional[float] = None
+    ancho: Optional[float] = None
+    espesor: Optional[float] = None
+    # Heredado del clon base
+    capitulo: str
+    competencia: Optional[str] = None
+    calzada: Optional[str] = None
+    tramo: Optional[str] = None
+    abs_inicio: Optional[str] = None
+    abs_final: Optional[str] = None
+    no_inicio: Optional[str] = None
+    no_final: Optional[str] = None
+    tipo_ejecucion: Optional[str] = None
+    tipo_entidad: Optional[str] = None
+    id_pol_base: Optional[str] = None
+    layer_ent: Optional[str] = None
+    layer_txt: Optional[str] = None
+    x_label: Optional[float] = None
+    y_label: Optional[float] = None
+
 class CadQueueCreate(BaseModel):
     tipo: str        # cambiar_layer | insertar_bloque
     payload: dict
@@ -1074,7 +1100,8 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
                 }).eq("id", item_id).execute()
         except: pass
 
-    return {"mensaje": "Registro actualizado"}
+    updated = supabase.table("presupuesto").select("*").eq("id", item_id).execute().data
+    return updated[0] if updated else {"mensaje": "Registro actualizado"}
 
 @app.put("/presupuesto/item/{item_id}/dar-baja")
 def dar_baja_presupuesto(item_id: int, current_user=Depends(get_current_user)):
@@ -1153,6 +1180,83 @@ def restaurar_presupuesto(item_id: int, current_user=Depends(get_current_user)):
             "layer_txt": new_ltxt,
         }).eq("id", item_id).execute()
     return {"ok": True}
+
+@app.post("/presupuesto/{contrato_id}/agregar-cantidad")
+def agregar_cantidad(contrato_id: int, body: AgregarCantidadBody, current_user=Depends(get_current_user)):
+    """Inserta una nueva cantidad clonando la posición de un registro existente."""
+    area  = float(body.area_long_nod or 0)
+    ancho = float(body.ancho or 0)
+    esp   = float(body.espesor or 0)
+    vlr   = float(body.vlr_unitario or 0)
+    cant  = round(area * ancho * esp, 2) if (ancho or esp) else round(area, 2)
+    costo = round(cant * vlr, 0)
+
+    # Construir nuevo id_pol: {nuevo_item}_{consecutivo}
+    base = body.id_pol_base or ""
+    if "._" in base:
+        sufijo = base[base.index("._") + 2:]
+    elif "_" in base:
+        sufijo = base.rsplit("_", 1)[-1]
+    else:
+        sufijo = "1"
+    new_id_pol = f"{body.item}_{sufijo}"
+
+    row = {
+        "contrato_id": contrato_id,
+        "capitulo":      body.capitulo,
+        "competencia":   body.competencia,
+        "item":          body.item,
+        "descripcion":   body.descripcion,
+        "und":           body.und,
+        "calzada":       body.calzada,
+        "tramo":         body.tramo,
+        "abs_inicio":    body.abs_inicio,
+        "abs_final":     body.abs_final,
+        "no_inicio":     body.no_inicio,
+        "no_final":      body.no_final,
+        "vlr_unitario":  vlr,
+        "area_long_nod": body.area_long_nod,
+        "ancho":         body.ancho,
+        "espesor":       body.espesor,
+        "cant_total":    cant,
+        "costo_directo": costo,
+        "tipo_ejecucion": body.tipo_ejecucion,
+        "tipo_entidad":  body.tipo_entidad,
+        "id_pol":        new_id_pol,
+        "layer_ent":     body.layer_ent or "",
+        "layer_txt":     body.layer_txt or "",
+        "x_label":       body.x_label,
+        "y_label":       body.y_label,
+        "dado_de_baja":  False,
+        "revisado":      "No Revisado",
+    }
+    inserted = supabase.table("presupuesto").insert(row).execute().data
+    if not inserted:
+        raise HTTPException(status_code=500, detail="Error al insertar cantidad")
+    new_row = inserted[0]
+
+    # Encolar CAD: create_label
+    try:
+        supabase.table("cad_queue").insert({
+            "contrato_id": contrato_id,
+            "tipo":        "create_label",
+            "estado":      "pendiente",
+            "payload": {
+                "id_pol":       new_id_pol,
+                "layer_ent":    body.layer_ent or "",
+                "layer_txt":    body.layer_txt or "",
+                "x_label":      body.x_label,
+                "y_label":      body.y_label,
+                "descripcion":  body.descripcion,
+                "unidad":       body.und,
+                "cant_total":   cant,
+                "costo_directo": costo,
+            }
+        }).execute()
+    except Exception:
+        pass
+
+    return new_row
 
 @app.post("/presupuesto/{contrato_id}/bulk")
 def bulk_presupuesto(contrato_id: int, items: List[PresupuestoRow], mode: str = "append", current_user=Depends(get_current_user)):
@@ -2461,6 +2565,28 @@ def comentarios_resumen(contrato_id: int, ids: str, current_user=Depends(get_cur
             result[pid][tipo]["count"] += 1
         else:
             result[pid][tipo]["replies"] = True
+    return result
+
+@app.get("/presupuesto/{contrato_id}/comentarios-validacion")
+def comentarios_validacion_batch(contrato_id: int, ids: str, current_user=Depends(get_current_user)):
+    """Devuelve el comentario de validacion más reciente (sin hijos) por cada presupuesto_id."""
+    id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+    if not id_list:
+        return {}
+    rows = supabase.table("comentarios").select(
+        "presupuesto_id, mensaje, usuario_nombre, created_at"
+    ).in_("presupuesto_id", id_list).eq("tipo", "validacion").is_("parent_id", "null").order(
+        "created_at", desc=True
+    ).execute().data
+    result = {}
+    for r in rows:
+        pid = r["presupuesto_id"]
+        if pid not in result:
+            result[pid] = {
+                "mensaje": r["mensaje"],
+                "usuario_nombre": r["usuario_nombre"],
+                "created_at": r["created_at"],
+            }
     return result
 
 @app.get("/presupuesto/{presupuesto_id}/comentarios")
