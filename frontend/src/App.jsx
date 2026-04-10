@@ -6009,13 +6009,13 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
       fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs }).then(r => r.json()).catch(() => []),
       fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos`, { headers: hdrs }).then(r => r.json()).catch(() => []),
       fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/tramoscostados`, { headers: hdrs }).then(r => r.json()).catch(() => ({})),
-      fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/actas`, { headers: hdrs }).then(r => r.json()).catch(() => []),
+      fetch(`${API_URL}/actas/${contrato_id}/lista`, { headers: hdrs }).then(r => r.json()).catch(() => []),
     ]).then(([subc, caps, tc, actas]) => {
       setFiltroSubcList(Array.isArray(subc) ? subc : [])
       setFiltroCapList(Array.isArray(caps) ? caps : [])
       setFiltroTramoList(Array.isArray(tc?.tramos) ? tc.tramos : [])
       setFiltroCostadoList(Array.isArray(tc?.costados) ? tc.costados : [])
-      setFiltroActaList(Array.isArray(actas) ? actas : [])
+      setFiltroActaList(Array.isArray(actas) ? actas.filter(a => a.numero_rpo != null).map(a => ({ id: a.id, numero_rpo: a.numero_rpo })) : [])
     })
   }, [contrato_id])
 
