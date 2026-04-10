@@ -3425,7 +3425,7 @@ def buscar_reportes_obra(
         if subcontratista_id is not None:
             q = q.eq("subcontratista_id", subcontratista_id)
         if capitulo:
-            q = q.ilike("capitulo", f"%{capitulo}%")
+            q = q.eq("capitulo", capitulo)
         if tramo:
             q = q.eq("tramo", tramo)
         if costado:
@@ -3473,6 +3473,40 @@ def buscar_reportes_obra(
                 acta_map[a["id"]] = a
         except Exception:
             pass
+    # Batch-resolve per-cargo estado_max desde so_registros
+    reporte_ids_batch = [r["id"] for r in rows]
+    if reporte_ids_batch:
+        try:
+            _rb_l = reporte_ids_batch
+            def _reg_estados():
+                return supabase.table("so_registros")\
+                    .select("reporte_id, nivel1_estado, nivel2_estado, nivel3_estado, sub_estado")\
+                    .in_("reporte_id", _rb_l).execute().data
+            reg_estados = supabase_execute(_reg_estados)
+            cargo_map = {r["id"]: {"n1": [], "n2": [], "n3": [], "sub": []} for r in rows}
+            for reg in reg_estados:
+                rid = reg.get("reporte_id")
+                if rid in cargo_map:
+                    cargo_map[rid]["n1"].append(reg.get("nivel1_estado") or "No Revisado")
+                    cargo_map[rid]["n2"].append(reg.get("nivel2_estado") or "No Revisado")
+                    cargo_map[rid]["n3"].append(reg.get("nivel3_estado") or "No Revisado")
+                    cargo_map[rid]["sub"].append(reg.get("sub_estado") or "No Revisado")
+            def _worst(estados):
+                if not estados: return "No Revisado"
+                if "Rechazado" in estados: return "Rechazado"
+                if "Pendiente" in estados: return "Pendiente"
+                if all(e == "Aprobado" for e in estados): return "Aprobado"
+                return "No Revisado"
+            for r in rows:
+                m = cargo_map.get(r["id"], {})
+                r["nivel1_estado_max"] = _worst(m.get("n1", []))
+                r["nivel2_estado_max"] = _worst(m.get("n2", []))
+                r["nivel3_estado_max"] = _worst(m.get("n3", []))
+                r["sub_estado_max"]    = _worst(m.get("sub", []))
+        except Exception:
+            for r in rows:
+                r["nivel1_estado_max"] = r["nivel2_estado_max"] = r["nivel3_estado_max"] = r["sub_estado_max"] = None
+
     for r in rows:
         sub = r.pop("subcontratistas", None)
         r["subcontratista_nombre"] = sub["razon_social"] if sub else None
@@ -3574,7 +3608,7 @@ def analisis_registros_obra(
         while True:
             def _regs(o=off):
                 q = supabase.table("so_registros")\
-                    .select("reporte_id, costo_directo, cantidad_total, item_numero, item_descripcion, unidad, acta_rpo_id")\
+                    .select("reporte_id, costo_directo, cantidad_total, item_numero, item_descripcion, unidad, acta_rpo_id, nivel1_estado, nivel2_estado, nivel3_estado")\
                     .eq("contrato_id", contrato_id)
                 if _a_l is not None:  q = q.eq("acta_rpo_id", _a_l)
                 if _s_l is not None:  q = q.eq("semana_id", _s_l)
@@ -3607,27 +3641,37 @@ def analisis_registros_obra(
                 pass
 
     # ── 6. Agrupar según modo ─────────────────────────────────────────────────
+    def _estado_efectivo(reg):
+        n3 = reg.get("nivel3_estado") or ""
+        n2 = reg.get("nivel2_estado") or ""
+        n1 = reg.get("nivel1_estado") or ""
+        if "Rechazado" in (n3, n2, n1): return "Rechazado"
+        if "Pendiente" in (n3, n2, n1): return "Pendiente"
+        if n1 == "Aprobado" and n2 == "Aprobado" and n3 == "Aprobado": return "Aprobado"
+        return "No Revisado"
+
     grupos: dict = {}
 
     if modo in ("acta_semana", "general"):
         for reg in registros:
             rep = reporte_map.get(reg.get("reporte_id")) or {}
             cap = rep.get("capitulo") or "Sin capítulo"
-            est = rep.get("estado") or ""
+            ee  = _estado_efectivo(reg)
+            cd  = float(reg.get("costo_directo") or 0)
             if cap not in grupos:
                 grupos[cap] = {"label": cap, "costo_directo": 0.0,
-                               "total_registros": 0, "aprobados": 0,
-                               "pendientes": 0, "rechazados": 0}
-            grupos[cap]["costo_directo"]   += float(reg.get("costo_directo") or 0)
+                               "total_registros": 0, "aprobados": 0.0,
+                               "pendientes": 0.0, "rechazados": 0.0}
+            grupos[cap]["costo_directo"]   += cd
             grupos[cap]["total_registros"] += 1
-            if   est == "Aprobados":  grupos[cap]["aprobados"]  += 1
-            elif est == "Pendientes": grupos[cap]["pendientes"] += 1
-            elif est == "Rechazados": grupos[cap]["rechazados"] += 1
+            if   ee == "Aprobado":   grupos[cap]["aprobados"]  += cd
+            elif ee == "Pendiente":  grupos[cap]["pendientes"] += cd
+            elif ee == "Rechazado":  grupos[cap]["rechazados"] += cd
 
     elif modo == "capitulo_items":
         for reg in registros:
-            rep = reporte_map.get(reg.get("reporte_id")) or {}
-            est = rep.get("estado") or ""
+            ee  = _estado_efectivo(reg)
+            cd  = float(reg.get("costo_directo") or 0)
             it  = reg.get("item_numero") or "Sin ítem"
             if it not in grupos:
                 grupos[it] = {
@@ -3637,18 +3681,18 @@ def analisis_registros_obra(
                     "unidad":          reg.get("unidad") or "",
                     "costo_directo":   0.0,
                     "total_registros": 0,
-                    "aprobados": 0, "pendientes": 0, "rechazados": 0,
+                    "aprobados": 0.0, "pendientes": 0.0, "rechazados": 0.0,
                 }
             if not grupos[it]["descripcion"] and reg.get("item_descripcion"):
                 grupos[it]["descripcion"] = reg["item_descripcion"]
             if not grupos[it]["unidad"] and reg.get("unidad"):
                 grupos[it]["unidad"] = reg["unidad"]
             grupos[it]["cantidad_total"] += float(reg.get("cantidad_total") or 0)
-            grupos[it]["costo_directo"]  += float(reg.get("costo_directo") or 0)
+            grupos[it]["costo_directo"]  += cd
             grupos[it]["total_registros"] += 1
-            if   est == "Aprobados":  grupos[it]["aprobados"]  += 1
-            elif est == "Pendientes": grupos[it]["pendientes"] += 1
-            elif est == "Rechazados": grupos[it]["rechazados"] += 1
+            if   ee == "Aprobado":   grupos[it]["aprobados"]  += cd
+            elif ee == "Pendiente":  grupos[it]["pendientes"] += cd
+            elif ee == "Rechazado":  grupos[it]["rechazados"] += cd
 
     elif modo == "item_detalle":
         acta_ids_found = list({r.get("acta_rpo_id") for r in registros if r.get("acta_rpo_id")})
@@ -3662,9 +3706,10 @@ def analisis_registros_obra(
                     acta_map_local[a["id"]] = a
             except Exception: pass
         for reg in registros:
-            rep = reporte_map.get(reg.get("reporte_id")) or {}
-            est = rep.get("estado") or ""
-            cap = rep.get("capitulo") or "Sin capítulo"
+            rep  = reporte_map.get(reg.get("reporte_id")) or {}
+            ee   = _estado_efectivo(reg)
+            cd   = float(reg.get("costo_directo") or 0)
+            cap  = rep.get("capitulo") or "Sin capítulo"
             a_id = reg.get("acta_rpo_id")
             a    = acta_map_local.get(a_id) or {}
             nr   = a.get("numero_rpo") or a.get("consecutivo") or "?"
@@ -3675,14 +3720,14 @@ def analisis_registros_obra(
                     "label": label, "capitulo": cap,
                     "cantidad_total": 0.0, "costo_directo": 0.0,
                     "total_registros": 0,
-                    "aprobados": 0, "pendientes": 0, "rechazados": 0,
+                    "aprobados": 0.0, "pendientes": 0.0, "rechazados": 0.0,
                 }
             grupos[key]["cantidad_total"] += float(reg.get("cantidad_total") or 0)
-            grupos[key]["costo_directo"]  += float(reg.get("costo_directo") or 0)
+            grupos[key]["costo_directo"]  += cd
             grupos[key]["total_registros"] += 1
-            if   est == "Aprobados":  grupos[key]["aprobados"]  += 1
-            elif est == "Pendientes": grupos[key]["pendientes"] += 1
-            elif est == "Rechazados": grupos[key]["rechazados"] += 1
+            if   ee == "Aprobado":   grupos[key]["aprobados"]  += cd
+            elif ee == "Pendiente":  grupos[key]["pendientes"] += cd
+            elif ee == "Rechazado":  grupos[key]["rechazados"] += cd
 
     if modo == "acta_semana":
         grupos_list = sorted(grupos.values(), key=lambda g: g["label"])
@@ -3743,6 +3788,16 @@ def filtros_semanas(contrato_id: int, current_user=Depends(get_current_user)):
         return supabase.table("so_semanas").select("id, numero_semana")\
             .eq("contrato_id", contrato_id).order("numero_semana").execute().data
     return supabase_execute(_q)
+
+
+@app.get("/sicoe-obra/{contrato_id}/filtros/actas")
+def filtros_actas(contrato_id: int, current_user=Depends(get_current_user)):
+    def _q():
+        return supabase.table("actas").select("id, numero_rpo")\
+            .eq("contrato_id", contrato_id).not_.is_("numero_rpo", "null")\
+            .order("numero_rpo").execute().data
+    rows = supabase_execute(_q)
+    return [{"numero_rpo": r["numero_rpo"]} for r in rows if r.get("numero_rpo") is not None]
 
 
 @app.get("/sicoe-obra/{contrato_id}/filtros/capitulos")

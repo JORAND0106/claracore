@@ -5887,6 +5887,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
     subcontratista_id: '', capitulo: '', item: '',
     tramo: '', costado: '', pk_id: '',
     abs_inicio: '', abs_final: '', estado: '',
+    cargo: '', estado_registro: '',
   })
   const [filtrosAvanzados, setFiltrosAvanzados] = useState(false)
   const [filtroSubcList, setFiltroSubcList] = useState([])
@@ -5894,6 +5895,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const [filtroItemList, setFiltroItemList] = useState([])
   const [filtroTramoList, setFiltroTramoList] = useState([])
   const [filtroCostadoList, setFiltroCostadoList] = useState([])
+  const [filtroActaList, setFiltroActaList] = useState([])
   const [analisis, setAnalisis] = useState(null)
   const [cargandoAnalisis, setCargandoAnalisis] = useState(false)
   const [panelExpandido, setPanelExpandido] = useState(false)
@@ -6006,11 +6008,13 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
       fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs }).then(r => r.json()).catch(() => []),
       fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos`, { headers: hdrs }).then(r => r.json()).catch(() => []),
       fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/tramoscostados`, { headers: hdrs }).then(r => r.json()).catch(() => ({})),
-    ]).then(([subc, caps, tc]) => {
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/actas`, { headers: hdrs }).then(r => r.json()).catch(() => []),
+    ]).then(([subc, caps, tc, actas]) => {
       setFiltroSubcList(Array.isArray(subc) ? subc : [])
       setFiltroCapList(Array.isArray(caps) ? caps : [])
       setFiltroTramoList(Array.isArray(tc?.tramos) ? tc.tramos : [])
       setFiltroCostadoList(Array.isArray(tc?.costados) ? tc.costados : [])
+      setFiltroActaList(Array.isArray(actas) ? actas : [])
     })
   }, [contrato_id])
 
@@ -6091,7 +6095,30 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   }
 
   const hayFiltrosActivos = Object.values(filtros).some(v => v !== '')
-  const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'' }
+  const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'', cargo:'', estado_registro:'' }
+  const reportesMostrados = useMemo(() => {
+    if (!filtros.cargo && !filtros.estado_registro) return reportes
+    return reportes.filter(rep => {
+      const est = filtros.estado_registro
+      if (!est) return true
+      const cargoMap = {
+        'Subcontratista': 'sub_estado_max',
+        'Inspector':      'nivel1_estado_max',
+        'Residente':      'nivel2_estado_max',
+        'Interventoría':  'nivel3_estado_max',
+      }
+      if (filtros.cargo) {
+        const campo = cargoMap[filtros.cargo]
+        return rep[campo] === est
+      }
+      const n3 = rep.nivel3_estado_max, n2 = rep.nivel2_estado_max, n1 = rep.nivel1_estado_max
+      const effMax = [n3, n2, n1].includes('Rechazado') ? 'Rechazado'
+        : [n3, n2, n1].includes('Pendiente') ? 'Pendiente'
+        : (n1 === 'Aprobado' && n2 === 'Aprobado' && n3 === 'Aprobado') ? 'Aprobado'
+        : 'No Revisado'
+      return effMax === est
+    })
+  }, [reportes, filtros.cargo, filtros.estado_registro])
   const limpiarFiltros = () => {
     setFiltros(filtrosVacios)
     setFiltroItemList([])
@@ -6220,9 +6247,9 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})}</td>
                         <td style={{ padding:'6px 16px', color:t.textMuted, fontSize:'11px' }}>{g.unidad}</td>
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados || '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes || '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados || '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados ? fmtPesos(g.aprobados) : '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes ? fmtPesos(g.pendientes) : '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados ? fmtPesos(g.rechazados) : '—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -6230,9 +6257,9 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
                     <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
                       <td colSpan={4} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados || '—'}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes || '—'}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados || '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? fmtPesos(analisis.total_aprobados) : '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? fmtPesos(analisis.total_pendientes) : '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados ? fmtPesos(analisis.total_rechazados) : '—'}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -6259,9 +6286,9 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})}</td>
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.textMuted }}>{g.total_registros}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados || '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes || '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados || '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados ? fmtPesos(g.aprobados) : '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes ? fmtPesos(g.pendientes) : '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados ? fmtPesos(g.rechazados) : '—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -6270,9 +6297,9 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
                       <td colSpan={3} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados || '—'}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes || '—'}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados || '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? fmtPesos(analisis.total_aprobados) : '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? fmtPesos(analisis.total_pendientes) : '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados ? fmtPesos(analisis.total_rechazados) : '—'}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -6291,13 +6318,20 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
                   </thead>
                   <tbody>
                     {analisis.grupos.map(g => (
-                      <tr key={g.label} style={{ borderBottom:`1px solid ${t.border}22` }}>
+                      <tr key={g.label} onClick={() => {
+                        const newF = { ...filtros, capitulo: g.label }
+                        setFiltros(newF)
+                        buscarReportes(newF, 0)
+                        cargarAnalisis(newF)
+                      }} style={{ borderBottom:`1px solid ${t.border}22`, cursor:'pointer' }}
+                      onMouseEnter={e => e.currentTarget.style.background = t.bg + '88'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                         <td style={{ padding:'6px 16px', color:t.text, fontWeight:'600' }}>{g.label}</td>
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.textMuted }}>{g.total_registros}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados || '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes || '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados || '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados ? fmtPesos(g.aprobados) : '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes ? fmtPesos(g.pendientes) : '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados ? fmtPesos(g.rechazados) : '—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -6306,9 +6340,9 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
                       <td style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados || '—'}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes || '—'}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados || '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? fmtPesos(analisis.total_aprobados) : '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? fmtPesos(analisis.total_pendientes) : '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados ? fmtPesos(analisis.total_rechazados) : '—'}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -6334,10 +6368,14 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
             onChange={e => setF('semana', e.target.value)}
             onBlur={e => actualizarFiltrosDisponibles({ ...filtros, semana: e.target.value })}
             style={{ ...inpStyle, width:'80px' }} />
-          <input placeholder="Acta RPO" type="number" value={filtros.acta_rpo}
-            onChange={e => setF('acta_rpo', e.target.value)}
-            onBlur={e => actualizarFiltrosDisponibles({ ...filtros, acta_rpo: e.target.value })}
-            style={{ ...inpStyle, width:'90px' }} />
+          <select value={filtros.acta_rpo} onChange={e => {
+            const v = e.target.value
+            setF('acta_rpo', v)
+            actualizarFiltrosDisponibles({ ...filtros, acta_rpo: v })
+          }} style={selStyle}>
+            <option value="">Acta RPO…</option>
+            {filtroActaList.map(a => <option key={a.numero_rpo} value={a.numero_rpo}>RPO {a.numero_rpo}</option>)}
+          </select>
           <select value={filtros.subcontratista_id} onChange={e => {
             const v = e.target.value
             setF('subcontratista_id', v)
@@ -6412,6 +6450,14 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
               style={{ ...inpStyle, width:'100px' }} />
             <input placeholder="PK ID" value={filtros.pk_id} onChange={e => setF('pk_id', e.target.value)}
               style={{ ...inpStyle, width:'80px' }} />
+            <select value={filtros.cargo} onChange={e => setF('cargo', e.target.value)} style={selStyle}>
+              <option value="">Cargo…</option>
+              {['Subcontratista','Inspector','Residente','Interventoría'].map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select value={filtros.estado_registro} onChange={e => setF('estado_registro', e.target.value)} style={selStyle}>
+              <option value="">Estado Registro…</option>
+              {['Aprobado','Pendiente','Rechazado','No Revisado'].map(e => <option key={e} value={e}>{e}</option>)}
+            </select>
           </div>
         )}
       </div>
@@ -6438,7 +6484,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
           <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>
             Sin resultados para los filtros aplicados.
           </div>
-        ) : reportes.map(rep => (
+        ) : reportesMostrados.map(rep => (
           <div key={rep.id} style={{ display:'grid', gridTemplateColumns:'80px 80px 100px 1fr 160px 120px 120px',
             gap:'8px', padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
             fontSize:'13px', color:t.text, cursor:'pointer',
