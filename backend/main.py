@@ -3642,12 +3642,15 @@ def analisis_registros_obra(
 
     # ── 6. Agrupar según modo ─────────────────────────────────────────────────
     def _estado_efectivo(reg):
-        n3 = reg.get("nivel3_estado") or ""
-        n2 = reg.get("nivel2_estado") or ""
-        n1 = reg.get("nivel1_estado") or ""
-        if "Rechazado" in (n3, n2, n1): return "Rechazado"
-        if "Pendiente" in (n3, n2, n1): return "Pendiente"
-        if n1 == "Aprobado" and n2 == "Aprobado" and n3 == "Aprobado": return "Aprobado"
+        niveles = [
+            reg.get("nivel1_estado") or "",
+            reg.get("nivel2_estado") or "",
+            reg.get("nivel3_estado") or "",
+        ]
+        if "Rechazado" in niveles: return "Rechazado"
+        if "Pendiente" in niveles: return "Pendiente"
+        activos = [n for n in niveles if n]
+        if activos and all(n == "Aprobado" for n in activos): return "Aprobado"
         return "No Revisado"
 
     grupos: dict = {}
