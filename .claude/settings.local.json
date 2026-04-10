@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(powershell -File .df.ps1)",
-      "Bash(powershell -Command \".\\\\df.ps1 'fix popup tramos item width dims nowrap comentarios hilo'\")"
+      "Bash(powershell -Command \".\\\\df.ps1 'fix popup tramos item width dims nowrap comentarios hilo'\")",
+      "Bash(awk 'NR>=5880 && NR<=6000 || NR>=6280 && NR<=6320' backend/main.py)",
+      "Bash(az webapp:*)",
+      "Bash(ls *.sh *.bat *.ps1)"
     ]
   }
 }
