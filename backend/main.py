@@ -3563,6 +3563,9 @@ def analisis_registros_obra(
             if ar: acta_id = ar[0]["id"]; acta_info = ar[0]
         except Exception: pass
 
+    if acta_rpo is not None and acta_id is None:
+        return _empty
+
     semana_id = None; semana_info = None
     if semana is not None:
         try:
@@ -3573,6 +3576,9 @@ def analisis_registros_obra(
             sr = supabase_execute(_si)
             if sr: semana_id = sr[0]["id"]; semana_info = sr[0]
         except Exception: pass
+
+    if semana is not None and semana_id is None:
+        return _empty
 
     # ── 3. Resolver reporte_ids desde filtros a nivel reporte ────────────────
     reporte_ids_base = None
@@ -3732,8 +3738,13 @@ def analisis_registros_obra(
             elif ee == "Pendiente":  grupos[key]["pendientes"] += cd
             elif ee == "Rechazado":  grupos[key]["rechazados"] += cd
 
-    if modo == "acta_semana":
-        grupos_list = sorted(grupos.values(), key=lambda g: g["label"])
+    import re as _re
+    def _cap_sort_key(label):
+        m = _re.match(r'^(\d+)', label or "")
+        return (0, int(m.group(1)), label) if m else (1, 0, label)
+
+    if modo in ("acta_semana", "general", "capitulo_items"):
+        grupos_list = sorted(grupos.values(), key=lambda g: _cap_sort_key(g["label"]))
     else:
         grupos_list = sorted(grupos.values(), key=lambda g: g["costo_directo"], reverse=True)
     for g in grupos_list:
