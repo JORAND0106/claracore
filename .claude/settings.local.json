@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(powershell -File .df.ps1)"
+      "Bash(powershell -File .df.ps1)",
+      "Bash(powershell -Command \".\\\\df.ps1 'fix popup tramos item width dims nowrap comentarios hilo'\")"
     ]
   }
 }

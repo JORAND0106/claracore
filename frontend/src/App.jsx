@@ -606,9 +606,10 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [destinatarioComentario, setDestinatarioComentario] = useState('')
   const [usuariosDestinatarios,  setUsuariosDestinatarios]  = useState([])
   const [comentariosPorId, setComentariosPorId] = useState({})
-  const [modalHilo,        setModalHilo]        = useState(null) // {registroId, tipo, data}
-  const [hiloLoading,      setHiloLoading]      = useState(false)
-  const [respuestaTexto,   setRespuestaTexto]   = useState('')
+  const [modalHilo,           setModalHilo]           = useState(null) // {registroId, tipo, data}
+  const [hiloLoading,         setHiloLoading]         = useState(false)
+  const [respuestaTexto,      setRespuestaTexto]      = useState('')
+  const [nuevoComentTexto,    setNuevoComentTexto]    = useState('')
   
   // ── Enlace DWG ──────────────────────────────────────────────────────────── 
   const [dwgEnlazado, setDwgEnlazado] = useState(false)
@@ -1311,6 +1312,19 @@ async function ejecutarBulkEstadoDirecto(estado) {
     if (ids?.length) cargarComentariosResumen(ids)
   }, [pagina, registrosFiltrados.length])
 
+  // Cargar comentarios de validación al entrar a un tramo (solo registros con estado)
+  useEffect(() => {
+    if (!tramoSelec || !modalModoCapitulo || !contratoId) return
+    const capRegs = registros.filter(r => r.capitulo === modalModoCapitulo)
+    const idsConEstado = capRegs
+      .filter(r => r.revisado && r.revisado !== 'No Revisado')
+      .map(r => r.id)
+    if (!idsConEstado.length) return
+    fetch(`${API}/presupuesto/${contratoId}/comentarios-validacion?ids=${idsConEstado.join(',')}`, {
+      headers: { Authorization: `Bearer ${getToken()}` }
+    }).then(r => r.ok ? r.json() : {}).then(data => setComentariosTramo(prev => ({ ...prev, ...data }))).catch(() => {})
+  }, [tramoSelec, modalModoCapitulo])
+
   // ── Estilos ────────────────────────────────────────────────────────────────
   const REVISADO_OPTS = ['No Revisado', 'Rechazado', 'Pendiente', 'Aprobado']
   const estadoColor = (r) => r === 'Aprobado' ? '#16A34A' : r === 'Pendiente' ? '#D97706' : r === 'Rechazado' ? '#EF4444' : '#3B82F6'
@@ -1820,8 +1834,8 @@ async function restaurar(id) {
                         </div>
                       )}
                       <div style={{ display:'flex', gap:'8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, padding:'0 10px', marginBottom:'6px', letterSpacing:'0.4px' }}>
-                        <span style={{flex:2}}>ÍTEM</span><span style={{flex:3}}>DESCRIPCIÓN</span>
-                        <span style={{flex:1,textAlign:'right'}}>DIMS</span><span style={{flex:1,textAlign:'right'}}>CANT.</span>
+                        <span style={{width:'80px',flexShrink:0}}>ÍTEM</span><span style={{flex:3}}>DESCRIPCIÓN</span>
+                        <span style={{minWidth:'120px',textAlign:'right',whiteSpace:'nowrap'}}>DIMS</span><span style={{flex:1,textAlign:'right'}}>CANT.</span>
                         <span style={{flex:1,textAlign:'right'}}>V. UNIT.</span><span style={{flex:1,textAlign:'right'}}>C. DIRECTO</span>
                         <span style={{flex:0.8}}></span>
                       </div>
@@ -1851,10 +1865,10 @@ async function restaurar(id) {
                                     return { ...prev, [key]: n }
                                   })}
                                   style={{ width:'13px', height:'13px', cursor:'pointer', flexShrink:0 }} />
-                                <div style={{ flex:2, fontSize:'11px', color:t.text, fontWeight:'600' }}>{r.item}</div>
+                                <div style={{ width:'80px', flexShrink:0, fontSize:'11px', color:t.text, fontWeight:'600' }}>{r.item}</div>
                                 <div style={{ flex:3, fontSize:'11px', color:t.textMuted }}>{r.descripcion}</div>
                                 {/* Dims — editable cuando puedeEditar */}
-                                <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
+                                <div style={{ minWidth:'120px', fontSize:'11px', color:t.textMuted, textAlign:'right', whiteSpace:'nowrap' }}>
                                   {puedeEditar && editDims[r.id] !== undefined ? (
                                     <div style={{ display:'flex', flexDirection:'column', gap:'2px', alignItems:'flex-end' }} onClick={e => e.stopPropagation()}>
                                       <input type="number" placeholder="ancho" value={editDims[r.id].ancho ?? ''}
@@ -1867,7 +1881,7 @@ async function restaurar(id) {
                                   ) : (
                                     <span onClick={puedeEditar ? (e) => { e.stopPropagation(); setEditDims(p => ({ ...p, [r.id]: { ancho: r.ancho ?? '', espesor: r.espesor ?? '' } })) } : undefined}
                                       title={puedeEditar ? 'Clic para editar dims' : undefined}
-                                      style={{ cursor: puedeEditar ? 'pointer' : 'default', textDecoration: puedeEditar ? 'underline dotted' : 'none' }}>
+                                      style={{ cursor: puedeEditar ? 'pointer' : 'default', textDecoration: puedeEditar ? 'underline dotted' : 'none', whiteSpace:'nowrap' }}>
                                       {[r.area_long_nod, r.ancho, r.espesor].filter(v => v != null && v !== '').join(' × ') || '—'}
                                     </span>
                                   )}
@@ -1922,13 +1936,25 @@ async function restaurar(id) {
                                   })}
                                 </div>
                               </div>
-                              {/* Comentario de validación (C1) */}
+                              {/* Comentario de validación — clic para ver hilo */}
                               {comentariosTramo[r.id] && (
-                                <div style={{ padding:'0 10px 6px 36px', fontSize:'10px', color:t.textMuted, fontStyle:'italic' }}>
-                                  💬 {comentariosTramo[r.id].mensaje}
-                                  <span style={{ marginLeft:'8px', color:t.primary, fontWeight:'600', fontStyle:'normal' }}>
+                                <div onClick={() => abrirHilo(r.id, 'validacion')}
+                                  style={{ padding:'4px 10px 7px 36px', fontSize:'10px', color:t.textMuted,
+                                    cursor:'pointer', borderTop:`1px solid ${t.border}`,
+                                    background:t.bg+'80', borderRadius:'0 0 8px 8px' }}>
+                                  <span style={{ fontStyle:'italic' }}>
+                                    💬 {comentariosTramo[r.id].mensaje.length > 80
+                                      ? comentariosTramo[r.id].mensaje.slice(0, 80) + '…'
+                                      : comentariosTramo[r.id].mensaje}
+                                  </span>
+                                  <span style={{ marginLeft:'8px', color:t.primary, fontWeight:'600' }}>
                                     — {comentariosTramo[r.id].usuario_nombre}
                                   </span>
+                                  {comentariosTramo[r.id].created_at && (
+                                    <span style={{ marginLeft:'6px', color:t.textMuted, fontSize:'9px' }}>
+                                      {(() => { try { return new Date(comentariosTramo[r.id].created_at).toLocaleDateString('es-CO',{dateStyle:'short'}) } catch { return '' } })()}
+                                    </span>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -2346,11 +2372,11 @@ async function restaurar(id) {
             <div style={{ background:t.bgCard,border:`1.5px solid ${color}44`,borderRadius:'16px',padding:'24px',width:'520px',maxWidth:'95vw',maxHeight:'80vh',display:'flex',flexDirection:'column',boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}>
               <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px' }}>
                 <div style={{ fontSize:'15px',fontWeight:'700',color }}>💬 {TITULOS[modalHilo.tipo]}</div>
-                <button onClick={() => setModalHilo(null)} style={{ background:'transparent',border:'none',fontSize:'18px',cursor:'pointer',color:t.textMuted }}>✕</button>
+                <button onClick={() => { setModalHilo(null); setNuevoComentTexto('') }} style={{ background:'transparent',border:'none',fontSize:'18px',cursor:'pointer',color:t.textMuted }}>✕</button>
               </div>
-              <div style={{ overflowY:'auto',flex:1,display:'flex',flexDirection:'column',gap:'12px',paddingRight:'4px' }}>
+              <div style={{ overflowY:'auto',flex:1,display:'flex',flexDirection:'column',gap:'12px',paddingRight:'4px',minHeight:0 }}>
                 {hiloLoading ? <div style={{ textAlign:'center',padding:'30px',color:t.textMuted }}>Cargando...</div>
-                : modalHilo.data.length === 0 ? <div style={{ textAlign:'center',padding:'30px',color:t.textMuted }}>Sin comentarios</div>
+                : modalHilo.data.length === 0 ? <div style={{ textAlign:'center',padding:'20px',color:t.textMuted,fontSize:'13px' }}>Sin comentarios aún</div>
                 : modalHilo.data.map(c => (
                   <div key={c.id} style={{ background:t.bg,borderRadius:'10px',padding:'12px',border:`1px solid ${color}33` }}>
                     <div style={{ display:'flex',justifyContent:'space-between',marginBottom:'6px' }}>
@@ -2381,6 +2407,38 @@ async function restaurar(id) {
                     </div>
                   </div>
                 ))}
+              </div>
+              {/* Campo nuevo comentario top-level */}
+              <div style={{ marginTop:'12px', borderTop:`1px solid ${t.border}`, paddingTop:'12px', display:'flex', gap:'6px', alignItems:'center' }}>
+                <input value={nuevoComentTexto} onChange={e => setNuevoComentTexto(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); document.getElementById('btn-nuevo-coment')?.click() } }}
+                  placeholder="Nuevo comentario de validación..."
+                  style={{ flex:1, background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'7px', padding:'7px 10px', fontSize:'12px', color:t.text }} />
+                <button id="btn-nuevo-coment" disabled={!nuevoComentTexto.trim()}
+                  onClick={async () => {
+                    if (!nuevoComentTexto.trim()) return
+                    await fetch(`${API}/presupuesto/${contratoId}/comentarios/bulk`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getToken()}` },
+                      body: JSON.stringify({
+                        presupuesto_ids: [modalHilo.registroId],
+                        tipo: modalHilo.tipo,
+                        mensaje: nuevoComentTexto.trim(),
+                        usuario_nombre: usuario?.nombre || 'Usuario',
+                      })
+                    })
+                    const msg = nuevoComentTexto.trim()
+                    setNuevoComentTexto('')
+                    await abrirHilo(modalHilo.registroId, modalHilo.tipo)
+                    // Actualizar resumen en popup de tramos
+                    setComentariosTramo(prev => ({
+                      ...prev,
+                      [modalHilo.registroId]: { mensaje: msg, usuario_nombre: usuario?.nombre || 'Usuario', created_at: new Date().toISOString() }
+                    }))
+                  }}
+                  style={{ background: nuevoComentTexto.trim() ? color : '#999', color:'#fff', border:'none', borderRadius:'7px', padding:'7px 14px', fontSize:'12px', cursor: nuevoComentTexto.trim() ? 'pointer' : 'default', fontWeight:'700', flexShrink:0 }}>
+                  ↩
+                </button>
               </div>
             </div>
           </div>
