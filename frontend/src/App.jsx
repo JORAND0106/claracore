@@ -5902,6 +5902,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const [busquedaRealizada, setBusquedaRealizada] = useState(false)
   const [sugerenciasItem, setSugerenciasItem] = useState([])
   const [mostrarSugsItem, setMostrarSugsItem] = useState(false)
+  const [mostrarSugsActa, setMostrarSugsActa] = useState(false)
   const [modalNuevoReporte, setModalNuevoReporte]   = useState(false)
   const [reporteEditando, setReporteEditando]         = useState(null)
   const [modalCarpeta, setModalCarpeta]               = useState(false)
@@ -6368,14 +6369,28 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
             onChange={e => setF('semana', e.target.value)}
             onBlur={e => actualizarFiltrosDisponibles({ ...filtros, semana: e.target.value })}
             style={{ ...inpStyle, width:'80px' }} />
-          <select value={filtros.acta_rpo} onChange={e => {
-            const v = e.target.value
-            setF('acta_rpo', v)
-            actualizarFiltrosDisponibles({ ...filtros, acta_rpo: v })
-          }} style={selStyle}>
-            <option value="">Acta RPO…</option>
-            {filtroActaList.map(a => <option key={a.numero_rpo} value={a.numero_rpo}>RPO {a.numero_rpo}</option>)}
-          </select>
+          <div style={{ position:'relative' }}>
+            <input placeholder="Acta RPO" type="number" value={filtros.acta_rpo}
+              onChange={e => { setF('acta_rpo', e.target.value); setMostrarSugsActa(true) }}
+              onFocus={() => { if (filtroActaList.length > 0) setMostrarSugsActa(true) }}
+              onBlur={() => setTimeout(() => setMostrarSugsActa(false), 150)}
+              style={{ ...inpStyle, width:'90px' }} />
+            {mostrarSugsActa && filtroActaList.filter(a => !filtros.acta_rpo || String(a.numero_rpo).startsWith(String(filtros.acta_rpo))).length > 0 && (
+              <div style={{ position:'absolute', top:'100%', left:0, zIndex:50, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', minWidth:'120px', maxHeight:'200px', overflowY:'auto', boxShadow:'0 4px 16px #0004', marginTop:'2px' }}>
+                {filtroActaList.filter(a => !filtros.acta_rpo || String(a.numero_rpo).startsWith(String(filtros.acta_rpo))).map(a => (
+                  <div key={a.numero_rpo}
+                    onMouseDown={() => {
+                      setF('acta_rpo', String(a.numero_rpo))
+                      setMostrarSugsActa(false)
+                      actualizarFiltrosDisponibles({ ...filtros, acta_rpo: String(a.numero_rpo) })
+                    }}
+                    style={{ padding:'7px 12px', cursor:'pointer', fontSize:'12px', borderBottom:`1px solid ${t.border}22`, color:t.primary, fontWeight:'600' }}>
+                    RPO {a.numero_rpo}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           <select value={filtros.subcontratista_id} onChange={e => {
             const v = e.target.value
             setF('subcontratista_id', v)
