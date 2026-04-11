@@ -6105,7 +6105,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const hayFiltrosActivos = Object.values(filtros).some(v => v !== '')
   const [capasValidacion, setCapasValidacion] = useState([])
   const [capaTemp, setCapaTemp] = useState({ cargo: '', estado: '' })
-  const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'', cargo:'', estado_registro:'' }
+  const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'' }
   const reportesMostrados = useMemo(() => {
     if (capasValidacion.length <= 1) return reportes
     const cargoMap = {
