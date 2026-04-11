@@ -3642,12 +3642,12 @@ def analisis_registros_obra(
 
     # ── 1. Determinar modo jerárquico ─────────────────────────────────────────
     tiene_contexto = bool(acta_rpo or semana)
-    if tiene_contexto and not capitulo and not item:
-        modo = "acta_semana"
-    elif tiene_contexto and capitulo and not item:
-        modo = "capitulo_items"
-    elif item:
+    if item:
         modo = "item_detalle"
+    elif capitulo:
+        modo = "capitulo_items"
+    elif tiene_contexto:
+        modo = "acta_semana"
     else:
         modo = "general"
 

@@ -6129,14 +6129,15 @@ const limpiarFiltros = () => {
     setReportes([])
     setAnalisis(null)
     setFiltroItemList([])
-      setSugerenciasItem([])
-      setMostrarSugsItem(false)
-      setAnalisis(null)
-      setPanelExpandido(false)
-      fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos`, { headers: { Authorization: `Bearer ${getToken()}` } })
-        .then(r => r.json()).then(caps => setFiltroCapList(Array.isArray(caps) ? caps : [])).catch(() => {})
-      buscarReportes(filtrosVacios, 0)
-    }
+    setSugerenciasItem([])
+    setMostrarSugsItem(false)
+    setPanelExpandido(false)
+    setBusquedaRealizada(false)
+    setHayMas(false)
+    setOffsetActual(0)
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos`, { headers: { Authorization: `Bearer ${getToken()}` } })
+      .then(r => r.json()).then(caps => setFiltroCapList(Array.isArray(caps) ? caps : [])).catch(() => {})
+  }
   const setF = (k, v) => setFiltros(prev => ({ ...prev, [k]: v }))
 
   const buscarItems = async (texto) => {
