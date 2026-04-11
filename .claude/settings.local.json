@@ -7,7 +7,9 @@
       "Bash(az webapp:*)",
       "Bash(ls *.sh *.bat *.ps1)",
       "Bash(powershell -File df.ps1 \"fix SeccionUsuarios: remove polling, add subcontratista assignment, sin-acceso screen, verificar-inactividad endpoint\")",
-      "Bash(powershell -File df.ps1 \"fix: revert subcontratista_id from usuarios SELECT — migration pendiente\")"
+      "Bash(powershell -File df.ps1 \"fix: revert subcontratista_id from usuarios SELECT — migration pendiente\")",
+      "Bash(python3 -)",
+      "Bash(py -3 -c ':*)"
     ]
   }
 }
