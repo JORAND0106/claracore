@@ -6103,17 +6103,20 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const [capaTemp, setCapaTemp] = useState({ cargo: '', estado: '' })
   const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'', cargo:'', estado_registro:'' }
   const reportesMostrados = useMemo(() => {
-      if (capasValidacion.length === 0) return reportes
-      const cargoMap = {
-        'Subcontratista': 'sub_estado_max',
-        'Inspector':      'nivel1_estado_max',
-        'Residente':      'nivel2_estado_max',
-        'Interventoría':  'nivel3_estado_max',
-      }
-      return reportes.filter(rep =>
-        capasValidacion.every(capa => rep[cargoMap[capa.cargo]] === capa.estado)
-      )
-    }, [reportes, capasValidacion])   
+    if (capasValidacion.length === 0) return reportes
+    const cargoMap = {
+      'Subcontratista': 'sub_estados',
+      'Inspector':      'nivel1_estados',
+      'Residente':      'nivel2_estados',
+      'Interventoría':  'nivel3_estados',
+    }
+    return reportes.filter(rep =>
+      capasValidacion.every(capa => {
+        const estados = rep[cargoMap[capa.cargo]] || []
+        return estados.includes(capa.estado)
+      })
+    )
+  }, [reportes, capasValidacion]) 
     const limpiarFiltros = () => {
       setCapasValidacion([])
           setCapaTemp({ cargo: '', estado: '' })

@@ -3564,21 +3564,15 @@ def buscar_reportes_obra(
                     cargo_map[rid]["n2"].append(reg.get("nivel2_estado") or "No Revisado")
                     cargo_map[rid]["n3"].append(reg.get("nivel3_estado") or "No Revisado")
                     cargo_map[rid]["sub"].append(reg.get("sub_estado") or "No Revisado")
-            def _worst(estados):
-                if not estados: return "No Revisado"
-                if "Rechazado" in estados: return "Rechazado"
-                if "Pendiente" in estados: return "Pendiente"
-                if all(e == "Aprobado" for e in estados): return "Aprobado"
-                return "No Revisado"
             for r in rows:
                 m = cargo_map.get(r["id"], {})
-                r["nivel1_estado_max"] = _worst(m.get("n1", []))
-                r["nivel2_estado_max"] = _worst(m.get("n2", []))
-                r["nivel3_estado_max"] = _worst(m.get("n3", []))
-                r["sub_estado_max"]    = _worst(m.get("sub", []))
+                r["nivel1_estados"] = list(set(m.get("n1", [])))
+                r["nivel2_estados"] = list(set(m.get("n2", [])))
+                r["nivel3_estados"] = list(set(m.get("n3", [])))
+                r["sub_estados"]    = list(set(m.get("sub", [])))
         except Exception:
             for r in rows:
-                r["nivel1_estado_max"] = r["nivel2_estado_max"] = r["nivel3_estado_max"] = r["sub_estado_max"] = None
+                r["nivel1_estados"] = r["nivel2_estados"] = r["nivel3_estados"] = r["sub_estados"] = []
 
     for r in rows:
         sub = r.pop("subcontratistas", None)
