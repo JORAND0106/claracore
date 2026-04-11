@@ -8339,7 +8339,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
     const params = new URLSearchParams()
     if (dashDrill[0]) params.set('capitulo', dashDrill[0].valor)
     if (dashDrill[1]) params.set('item', dashDrill[1].valor)
-    fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-colores-drill?${params}`, {
+    fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-colores?${params}`, {
       headers: { Authorization: `Bearer ${tok}` }
     }).then(r => r.ok ? r.json() : {}).then(setMiniMapaColores).catch(() => {})
   }, [contratoIdDash, dashDrill])
@@ -8349,9 +8349,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
     setAnalisisLoading(true); setAnalisisData(null); setAnalisisPag(0)
     const tok = getToken()
     try {
-      const url = nivel === 'capitulo'
-        ? `${API_URL}/cobro/${contratoIdDash}/drill`
-        : `${API_URL}/cobro/${contratoIdDash}/analisis-items`
+      const url = `${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill`
       const res = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } })
       if (res.ok) {
         const data = await res.json()
@@ -8379,7 +8377,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
     const params = new URLSearchParams()
     if (analisisSeleccion.capitulo) params.set('capitulo', analisisSeleccion.capitulo)
     if (analisisSeleccion.item)     params.set('item', analisisSeleccion.item)
-    fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-colores-drill?${params}`, {
+    fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-colores?${params}`, {
       headers: { Authorization: `Bearer ${tok}` }
     }).then(r => r.ok ? r.json() : {}).then(setAnalisisMapaColores).catch(() => {})
   }, [contratoIdDash, analisisSeleccion])
@@ -8391,7 +8389,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
     const params = new URLSearchParams({ pk_id: pkid })
     if (analisisSeleccion.capitulo) params.set('capitulo', analisisSeleccion.capitulo)
     if (analisisSeleccion.item)     params.set('item', analisisSeleccion.item)
-    const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-detalle?${params}`, {
+    const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-detalle?${params}`, {
       headers: { Authorization: `Bearer ${tok}` }
     })
     setAnalisisMapaPopup({ pkid, data: res.ok ? await res.json() : null })
@@ -8433,7 +8431,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
     const params = new URLSearchParams()
     if (liqSeleccion.capitulo) params.set('capitulo', liqSeleccion.capitulo)
     if (liqSeleccion.item)     params.set('item', liqSeleccion.item)
-    fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-colores-liquidacion?${params}`, {
+    fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-colores?${params}`, {
       headers: { Authorization: `Bearer ${tok}` }
     }).then(r => r.ok ? r.json() : {}).then(setLiqMapaColores).catch(() => {})
   }, [contratoIdDash, liqSeleccion])
@@ -8445,7 +8443,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
     const params = new URLSearchParams({ pk_id: pkid })
     if (liqSeleccion.capitulo) params.set('capitulo', liqSeleccion.capitulo)
     if (liqSeleccion.item)     params.set('item', liqSeleccion.item)
-    const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-detalle?${params}`, {
+    const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-detalle?${params}`, {
       headers: { Authorization: `Bearer ${tok}` }
     })
     setLiqMapaPopup({ pkid, data: res.ok ? await res.json() : null })

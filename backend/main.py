@@ -4152,7 +4152,7 @@ def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_us
         while True:
             def _regs(o=off):
                 return supabase.table("so_registros")\
-                    .select("reporte_id, costo_directo, cantidad_total, acta_rpo_id, actas(numero_rpo)")\
+                    .select("reporte_id, costo_directo, cantidad_total, acta_rpo_id")\
                     .eq("contrato_id", contrato_id)\
                     .eq("nivel3_estado", "Aprobado")\
                     .range(o, o + 999).execute().data
@@ -4173,15 +4173,27 @@ def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_us
             for r in supabase_execute(_reps):
                 reporte_map[r["id"]] = r.get("capitulo") or "Sin capítulo"
 
-        # 3. Total cobrado
+        # 3. Resolver numero_rpo desde actas
+        acta_ids = list({r["acta_rpo_id"] for r in registros if r.get("acta_rpo_id")})
+        acta_map = {}
+        if acta_ids:
+            for chunk_start in range(0, len(acta_ids), 500):
+                chunk = acta_ids[chunk_start:chunk_start + 500]
+                def _actas(ids=chunk):
+                    return supabase.table("actas")\
+                        .select("id, numero_rpo").in_("id", ids).execute().data
+                for a in supabase_execute(_actas):
+                    acta_map[a["id"]] = a.get("numero_rpo") or a["id"]
+
+        # 4. Total cobrado
         total_cobrado = sum(float(r.get("costo_directo") or 0) for r in registros)
 
-        # 4. Acumulado por acta RPO
+        # 5. Acumulado por acta RPO
         acta_agg = {}
         for r in registros:
-            acta_join = r.get("actas") or {}
-            nr = acta_join.get("numero_rpo")
-            if not nr: continue
+            aid = r.get("acta_rpo_id")
+            if not aid: continue
+            nr = acta_map.get(aid, aid)
             acta_agg[nr] = acta_agg.get(nr, 0) + float(r.get("costo_directo") or 0)
         por_acta = [{"acta": nr, "cobrado": round(v, 2)} for nr, v in sorted(acta_agg.items(), key=lambda x: x[0])]
 
@@ -4547,12 +4559,22 @@ def dashboard_pkid_detalle_obra(
             reporte_ids_filtered = [r["id"] for r in supabase_execute(_reps)]
 
         q_c = supabase.table("so_registros")\
-            .select("id, tramo, nodo_ini, nodo_fin, cantidad_total, costo_directo, item_descripcion, item_numero, acta_rpo_id, calzada, actas(numero_rpo)")\
+            .select("id, tramo, nodo_ini, nodo_fin, cantidad_total, costo_directo, item_descripcion, item_numero, acta_rpo_id, calzada")\
             .eq("contrato_id", contrato_id).eq("nivel3_estado", "Aprobado")
         if pkid_id_val: q_c = q_c.eq("pk_id_id", pkid_id_val)
         if item: q_c = q_c.ilike("item_numero", f"%{item}%")
         if reporte_ids_filtered is not None: q_c = q_c.in_("reporte_id", reporte_ids_filtered)
         cobro_rows = q_c.execute().data or []
+
+        # Resolver numero_rpo para cada registro
+        acta_ids2 = list({r["acta_rpo_id"] for r in cobro_rows if r.get("acta_rpo_id")})
+        acta_map2 = {}
+        if acta_ids2:
+            def _am2():
+                return supabase.table("actas").select("id, numero_rpo")\
+                    .in_("id", acta_ids2).execute().data
+            for a in supabase_execute(_am2):
+                acta_map2[a["id"]] = a.get("numero_rpo") or a["id"]
 
         cobro_fmt = []
         for r in cobro_rows:
@@ -4565,7 +4587,7 @@ def dashboard_pkid_detalle_obra(
                 "costo_directo": float(r.get("costo_directo") or 0),
                 "descripcion": r.get("item_descripcion") or "",
                 "item": r.get("item_numero") or "",
-                "acta": (r.get("actas") or {}).get("numero_rpo"),
+                "acta": acta_map2.get(r.get("acta_rpo_id")),
                 "calzada": r.get("calzada") or "",
             })
 
