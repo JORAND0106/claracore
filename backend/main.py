@@ -489,7 +489,10 @@ def get_mi_usuario(current_user=Depends(get_current_user)):
         if r.data: rol_nombre = r.data[0]["nombre"]
     permisos = []
     if u.get("cargo_id"):
-        permisos_raw = supabase.table("permisos").select("*").eq("cargo_id", u["cargo_id"]).execute().data
+        try:
+            permisos_raw = supabase.table("permisos").select("*").eq("cargo_id", u["cargo_id"]).execute().data
+        except Exception:
+            permisos_raw = []
         funciones_map = {f["id"]: f["nombre"] for f in supabase.table("funciones").select("id, nombre").execute().data}
         permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
     # C3: Subcontratista sin subcontratista asignado → sin acceso
@@ -1954,9 +1957,12 @@ def cad_estado(contrato_id: int, current_user=Depends(get_current_user)):
 @app.get("/cad-queue/{contrato_id}/pendientes")
 def cad_pendientes(contrato_id: int, current_user=Depends(get_current_user)):
     """SicoeCAD descarga las operaciones pendientes."""
-    rows = supabase.table("cad_queue").select("*") \
-        .eq("contrato_id", contrato_id).eq("estado", "pendiente") \
-        .order("id").limit(50).execute().data
+    try:
+        rows = supabase.table("cad_queue").select("*") \
+            .eq("contrato_id", contrato_id).eq("estado", "pendiente") \
+            .order("id").limit(50).execute().data
+    except Exception:
+        return []
     return rows
 
 @app.post("/cad-queue/{contrato_id}/highlight-registro")

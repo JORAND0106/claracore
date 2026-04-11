@@ -6121,11 +6121,13 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
       })
     )
   }, [reportes, capasValidacion]) 
-    const limpiarFiltros = () => {
-      setCapasValidacion([])
-          setCapaTemp({ cargo: '', estado: '' })
-          setFiltros(filtrosVacios)
-          setFiltroItemList([])
+const limpiarFiltros = () => {
+    setCapasValidacion([])
+    setCapaTemp({ cargo: '', estado: '' })
+    setFiltros(filtrosVacios)
+    setReportes([])
+    setAnalisis(null)
+    setFiltroItemList([])
       setSugerenciasItem([])
       setMostrarSugsItem(false)
       setAnalisis(null)
