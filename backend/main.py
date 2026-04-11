@@ -3396,6 +3396,8 @@ def buscar_reportes_obra(
     abs_inicio: Optional[float] = None,
     abs_final: Optional[float] = None,
     estado: Optional[str] = None,
+    cargo: Optional[str] = None,
+    estado_validacion: Optional[str] = None,
     offset: int = 0,
     limit: int = 50,
     current_user=Depends(get_current_user)
@@ -3573,6 +3575,18 @@ def buscar_reportes_obra(
         except Exception:
             for r in rows:
                 r["nivel1_estados"] = r["nivel2_estados"] = r["nivel3_estados"] = r["sub_estados"] = []
+
+    # Filtrar por cargo + estado_validacion (primera capa enviada desde el frontend)
+    if cargo and estado_validacion:
+        _cargo_field_map = {
+            'Inspector':      'nivel1_estados',
+            'Residente':      'nivel2_estados',
+            'Interventoría':  'nivel3_estados',
+            'Subcontratista': 'sub_estados',
+        }
+        _field = _cargo_field_map.get(cargo)
+        if _field:
+            rows = [r for r in rows if estado_validacion in r.get(_field, [])]
 
     for r in rows:
         sub = r.pop("subcontratistas", None)

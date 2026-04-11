@@ -6026,6 +6026,10 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
       const ef = { ...nuevosFiltros }
       if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
       Object.entries(ef).forEach(([k, v]) => { if (v !== '' && v != null) params.append(k, v) })
+      if (capasValidacion.length > 0) {
+        params.append('cargo', capasValidacion[0].cargo)
+        params.append('estado_validacion', capasValidacion[0].estado)
+      }
       params.append('offset', nuevoOffset)
       params.append('limit', 50)
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/buscar?${params}`, {
@@ -6103,7 +6107,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const [capaTemp, setCapaTemp] = useState({ cargo: '', estado: '' })
   const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'', cargo:'', estado_registro:'' }
   const reportesMostrados = useMemo(() => {
-    if (capasValidacion.length === 0) return reportes
+    if (capasValidacion.length <= 1) return reportes
     const cargoMap = {
       'Subcontratista': 'sub_estados',
       'Inspector':      'nivel1_estados',
@@ -6111,7 +6115,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
       'Interventoría':  'nivel3_estados',
     }
     return reportes.filter(rep =>
-      capasValidacion.every(capa => {
+      capasValidacion.slice(1).every(capa => {
         const estados = rep[cargoMap[capa.cargo]] || []
         return estados.includes(capa.estado)
       })
