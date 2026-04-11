@@ -6100,22 +6100,22 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const [capaTemp, setCapaTemp] = useState({ cargo: '', estado: '' })
   const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'', cargo:'', estado_registro:'' }
   const reportesMostrados = useMemo(() => {
-  if (capasValidacion.length === 0) return reportes
-  const cargoMap = {
-    'Subcontratista': 'sub_estado_max',
-    'Inspector':      'nivel1_estado_max',
-    'Residente':      'nivel2_estado_max',
-    'Interventoría':  'nivel3_estado_max',
-  }
-  return reportes.filter(rep =>
-    capasValidacion.every(capa => rep[cargoMap[capa.cargo]] === capa.estado)
-  )
-  }, [reportes, capasValidacion])
+      if (capasValidacion.length === 0) return reportes
+      const cargoMap = {
+        'Subcontratista': 'sub_estado_max',
+        'Inspector':      'nivel1_estado_max',
+        'Residente':      'nivel2_estado_max',
+        'Interventoría':  'nivel3_estado_max',
+      }
+      return reportes.filter(rep =>
+        capasValidacion.every(capa => rep[cargoMap[capa.cargo]] === capa.estado)
+      )
+    }, [reportes, capasValidacion])   
     const limpiarFiltros = () => {
-      setFiltros(filtrosVacios)
       setCapasValidacion([])
-      setCapaTemp({ cargo: '', estado: '' })
-      setFiltroItemList([])
+          setCapaTemp({ cargo: '', estado: '' })
+          setFiltros(filtrosVacios)
+          setFiltroItemList([])
       setSugerenciasItem([])
       setMostrarSugsItem(false)
       setAnalisis(null)
@@ -6394,7 +6394,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
           </select>
           <select value={filtros.estado} onChange={e => setF('estado', e.target.value)} style={selStyle}>
             <option value="">Estado…</option>
-            {ESTADOS.map(e => <option key={e} value={e}>{e}</option>)}
+            {['Borrador','Sin Asignar Ítem','No Objeto de Cobro','En Papelera'].map(e => <option key={e} value={e}>{e}</option>)}
           </select>
           <div style={{ marginLeft:'auto', display:'flex', gap:'6px', alignItems:'center' }}>
             <button onClick={() => setFiltrosAvanzados(v => !v)}
@@ -6412,6 +6412,28 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
           </div>
         </div>
         {/* Fila 2 — Filtros avanzados (colapsable) */}
+        <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'8px', paddingTop:'8px', borderTop:`1px solid ${t.border}` }}>
+          <span style={{ fontSize:'12px', color:t.textMuted, fontWeight:'600' }}>Validación:</span>
+          <select value={capaTemp.cargo} onChange={e => setCapaTemp(p => ({ ...p, cargo: e.target.value }))} style={selStyle}>
+            <option value="">Cargo…</option>
+            {['Subcontratista','Inspector','Residente','Interventoría'].map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select value={capaTemp.estado} onChange={e => setCapaTemp(p => ({ ...p, estado: e.target.value }))} style={selStyle}>
+            <option value="">Estado…</option>
+            {['Aprobado','Pendiente','Rechazado','No Revisado'].map(e => <option key={e} value={e}>{e}</option>)}
+          </select>
+          <button disabled={!capaTemp.cargo || !capaTemp.estado}
+            onClick={() => { setCapasValidacion(p => [...p, capaTemp]); setCapaTemp({ cargo:'', estado:'' }) }}
+            style={{ background:(!capaTemp.cargo || !capaTemp.estado) ? t.border : t.primary, color:'#fff', border:'none', borderRadius:'7px', padding:'5px 12px', fontSize:'12px', fontWeight:'700', cursor:(!capaTemp.cargo || !capaTemp.estado) ? 'not-allowed' : 'pointer' }}>
+            ＋ Agregar
+          </button>
+          {capasValidacion.map((c, i) => (
+            <span key={i} style={{ background:'rgba(0,175,197,0.12)', border:'1px solid rgba(0,175,197,0.3)', borderRadius:'6px', padding:'3px 10px', fontSize:'12px', color:'#00afc5', display:'flex', alignItems:'center', gap:'6px' }}>
+              {c.cargo}: {c.estado}
+              <span onClick={() => setCapasValidacion(p => p.filter((_,j) => j !== i))} style={{ cursor:'pointer', color:'#ef4444', fontWeight:'700' }}>×</span>
+            </span>
+          ))}
+        </div>
         {filtrosAvanzados && (
           <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'8px', paddingTop:'8px', borderTop:`1px solid ${t.border}` }}>
             <select value={filtros.capitulo} onChange={e => {
