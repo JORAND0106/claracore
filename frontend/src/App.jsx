@@ -6019,16 +6019,16 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
     })
   }, [contrato_id])
 
-  const buscarReportes = async (nuevosFiltros, nuevoOffset = 0) => {
+  const buscarReportes = async (nuevosFiltros, nuevoOffset = 0, capas = []) => {
     setCargando(true)
     try {
       const params = new URLSearchParams()
       const ef = { ...nuevosFiltros }
       if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
       Object.entries(ef).forEach(([k, v]) => { if (v !== '' && v != null) params.append(k, v) })
-      if (capasValidacion.length > 0) {
-        params.append('cargo', capasValidacion[0].cargo)
-        params.append('estado_validacion', capasValidacion[0].estado)
+      if (capas.length > 0) {
+        params.append('cargo', capas[0].cargo)
+        params.append('estado_validacion', capas[0].estado)
       }
       params.append('offset', nuevoOffset)
       params.append('limit', 50)
@@ -6419,7 +6419,7 @@ const limpiarFiltros = () => {
               style={{ background:'#EF4444', color:'#fff', border:'none', borderRadius:'7px', padding:'5px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
               Limpiar
             </button>
-            <button onClick={() => { buscarReportes(filtros, 0); cargarAnalisis(filtros, capasValidacion) }}
+            <button onClick={() => { buscarReportes(filtros, 0, capasValidacion); cargarAnalisis(filtros, capasValidacion) }}
               style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'7px', padding:'5px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
               Buscar
             </button>
