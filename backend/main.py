@@ -3709,7 +3709,9 @@ def analisis_registros_obra(
                 return _empty
         except Exception: pass
 
-    # ── 3b. Filtrar por cargo + estado_validacion sobre so_registros ────────────
+    # ── 3b. Resolver campo de validación para paso 4 ─────────────────────────
+    _val_campo_l = None
+    _val_estado_l = None
     if cargo and estado_validacion:
         _campo_db_map_a = {
             'Inspector':      'nivel1_estado',
@@ -3717,28 +3719,16 @@ def analisis_registros_obra(
             'Interventoría':  'nivel3_estado',
             'Subcontratista': 'sub_estado',
         }
-        _campo_db_a = _campo_db_map_a.get(cargo)
-        if _campo_db_a:
-            _ev_a = estado_validacion
-            def _val_a():
-                return supabase.table("so_registros").select("reporte_id")\
-                    .eq("contrato_id", contrato_id)\
-                    .eq(_campo_db_a, _ev_a).execute().data
-            rows_val_a = supabase_execute(_val_a)
-            ids_val_a = list({r["reporte_id"] for r in rows_val_a if r.get("reporte_id")})
-            if not ids_val_a:
-                return _empty
-            if reporte_ids_base is not None:
-                reporte_ids_base = list(set(reporte_ids_base) & set(ids_val_a))
-            else:
-                reporte_ids_base = ids_val_a
-            if not reporte_ids_base:
-                return _empty
+        _c = _campo_db_map_a.get(cargo)
+        if _c:
+            _val_campo_l = _c
+            _val_estado_l = estado_validacion
 
     # ── 4. Obtener registros (paginado para superar límite 1000 de Supabase) ──
     registros = []
     try:
         _a_l=acta_id; _s_l=semana_id; _it_l=item; _rp_l=reporte_ids_base
+        _vc_l=_val_campo_l; _ve_l=_val_estado_l
         off = 0
         while True:
             def _regs(o=off):
@@ -3749,6 +3739,7 @@ def analisis_registros_obra(
                 if _s_l is not None:  q = q.eq("semana_id", _s_l)
                 if _it_l:             q = q.ilike("item_numero", f"%{_it_l}%")
                 if _rp_l is not None: q = q.in_("reporte_id", _rp_l)
+                if _vc_l and _ve_l:   q = q.eq(_vc_l, _ve_l)
                 return q.range(o, o + 999).execute().data
             batch = supabase_execute(_regs)
             registros.extend(batch)
