@@ -6096,41 +6096,34 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   }
 
   const hayFiltrosActivos = Object.values(filtros).some(v => v !== '')
+  const [capasValidacion, setCapasValidacion] = useState([])
+  const [capaTemp, setCapaTemp] = useState({ cargo: '', estado: '' })
   const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'', cargo:'', estado_registro:'' }
   const reportesMostrados = useMemo(() => {
-    if (!filtros.cargo && !filtros.estado_registro) return reportes
-    return reportes.filter(rep => {
-      const est = filtros.estado_registro
-      if (!est) return true
-      const cargoMap = {
-        'Subcontratista': 'sub_estado_max',
-        'Inspector':      'nivel1_estado_max',
-        'Residente':      'nivel2_estado_max',
-        'Interventoría':  'nivel3_estado_max',
-      }
-      if (filtros.cargo) {
-        const campo = cargoMap[filtros.cargo]
-        return rep[campo] === est
-      }
-      const n3 = rep.nivel3_estado_max, n2 = rep.nivel2_estado_max, n1 = rep.nivel1_estado_max
-      const effMax = [n3, n2, n1].includes('Rechazado') ? 'Rechazado'
-        : [n3, n2, n1].includes('Pendiente') ? 'Pendiente'
-        : (n1 === 'Aprobado' && n2 === 'Aprobado' && n3 === 'Aprobado') ? 'Aprobado'
-        : 'No Revisado'
-      return effMax === est
-    })
-  }, [reportes, filtros.cargo, filtros.estado_registro])
-  const limpiarFiltros = () => {
-    setFiltros(filtrosVacios)
-    setFiltroItemList([])
-    setSugerenciasItem([])
-    setMostrarSugsItem(false)
-    setAnalisis(null)
-    setPanelExpandido(false)
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos`, { headers: { Authorization: `Bearer ${getToken()}` } })
-      .then(r => r.json()).then(caps => setFiltroCapList(Array.isArray(caps) ? caps : [])).catch(() => {})
-    buscarReportes(filtrosVacios, 0)
+  if (capasValidacion.length === 0) return reportes
+  const cargoMap = {
+    'Subcontratista': 'sub_estado_max',
+    'Inspector':      'nivel1_estado_max',
+    'Residente':      'nivel2_estado_max',
+    'Interventoría':  'nivel3_estado_max',
   }
+  return reportes.filter(rep =>
+    capasValidacion.every(capa => rep[cargoMap[capa.cargo]] === capa.estado)
+  )
+  }, [reportes, capasValidacion])
+    const limpiarFiltros = () => {
+      setFiltros(filtrosVacios)
+      setCapasValidacion([])
+      setCapaTemp({ cargo: '', estado: '' })
+      setFiltroItemList([])
+      setSugerenciasItem([])
+      setMostrarSugsItem(false)
+      setAnalisis(null)
+      setPanelExpandido(false)
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos`, { headers: { Authorization: `Bearer ${getToken()}` } })
+        .then(r => r.json()).then(caps => setFiltroCapList(Array.isArray(caps) ? caps : [])).catch(() => {})
+      buscarReportes(filtrosVacios, 0)
+    }
   const setF = (k, v) => setFiltros(prev => ({ ...prev, [k]: v }))
 
   const buscarItems = async (texto) => {
@@ -6465,14 +6458,6 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
               style={{ ...inpStyle, width:'100px' }} />
             <input placeholder="PK ID" value={filtros.pk_id} onChange={e => setF('pk_id', e.target.value)}
               style={{ ...inpStyle, width:'80px' }} />
-            <select value={filtros.cargo} onChange={e => setF('cargo', e.target.value)} style={selStyle}>
-              <option value="">Cargo…</option>
-              {['Subcontratista','Inspector','Residente','Interventoría'].map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-            <select value={filtros.estado_registro} onChange={e => setF('estado_registro', e.target.value)} style={selStyle}>
-              <option value="">Estado Registro…</option>
-              {['Aprobado','Pendiente','Rechazado','No Revisado'].map(e => <option key={e} value={e}>{e}</option>)}
-            </select>
           </div>
         )}
       </div>

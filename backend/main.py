@@ -622,9 +622,8 @@ def todos_usuarios(current_user=Depends(get_current_user)):
         u["cargo_nombre"] = cargos.get(u.get("cargo_id"), "Sin cargo")
         u["rol_nombre"] = roles.get(u.get("rol_id"), "Sin rol")
         u["contrato_numero"] = contratos.get(u.get("contrato_id"), "Sin contrato")
-    # Desarrollador es invisible para otros cargos, pero visible para sí mismo
+
         caller_id = int(current_user["sub"])
-        # Obtener datos del caller para saber su cargo y contrato
         caller_data = supabase.table("usuarios").select("cargo_id, contrato_id").eq("id", caller_id).execute().data
         caller_cargo = ""
         caller_contrato = None
@@ -635,16 +634,13 @@ def todos_usuarios(current_user=Depends(get_current_user)):
                 if c: caller_cargo = c[0]["nombre"].lower()
             caller_contrato = caller_data[0].get("contrato_id")
 
-            # Paso 1: filtro por contrato si es Administrador
-            if caller_cargo == "administrador" and caller_contrato:
-                filtered = [u for u in result.data if u.get("contrato_id") == caller_contrato]
-            else:
-                filtered = list(result.data)
+        if caller_cargo == "administrador" and caller_contrato:
+            filtered = [u for u in result.data if u.get("contrato_id") == caller_contrato]
+        else:
+            filtered = list(result.data)
 
-            # Paso 2: Desarrollador siempre invisible para todos, excepto para sí mismo
-            filtered = [u for u in filtered if u.get("cargo_nombre", "").lower() != "desarrollador" or u["id"] == caller_id]
-
-            return filtered
+        filtered = [u for u in filtered if u.get("cargo_nombre", "").lower() != "desarrollador" or u["id"] == caller_id]
+        return filtered
 
 @app.put("/admin/usuarios/{usuario_id}")
 def actualizar_usuario(usuario_id: int, body: UsuarioUpdate, current_user=Depends(get_current_user)):
