@@ -6,7 +6,8 @@
       "Bash(awk 'NR>=5880 && NR<=6000 || NR>=6280 && NR<=6320' backend/main.py)",
       "Bash(az webapp:*)",
       "Bash(ls *.sh *.bat *.ps1)",
-      "Bash(powershell -File df.ps1 \"fix SeccionUsuarios: remove polling, add subcontratista assignment, sin-acceso screen, verificar-inactividad endpoint\")"
+      "Bash(powershell -File df.ps1 \"fix SeccionUsuarios: remove polling, add subcontratista assignment, sin-acceso screen, verificar-inactividad endpoint\")",
+      "Bash(powershell -File df.ps1 \"fix: revert subcontratista_id from usuarios SELECT — migration pendiente\")"
     ]
   }
 }

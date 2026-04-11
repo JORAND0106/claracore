@@ -613,7 +613,7 @@ def obtener_permisos(cargo_id: int, current_user=Depends(get_current_user)):
 @app.get("/admin/todos-usuarios")
 def todos_usuarios(current_user=Depends(get_current_user)):
     result = supabase.table("usuarios").select(
-        "id, nombre, apellidos, email, activo, cargo_id, rol_id, contrato_id, subcontratista_id, estado, created_at"
+        "id, nombre, apellidos, email, activo, cargo_id, rol_id, contrato_id, estado, created_at"
     ).order("nombre").execute()
     cargos = {c["id"]: c["nombre"] for c in supabase.table("cargos").select("id, nombre").execute().data}
     roles = {r["id"]: r["nombre"] for r in supabase.table("roles").select("id, nombre").execute().data}
