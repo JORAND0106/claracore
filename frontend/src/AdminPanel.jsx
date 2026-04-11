@@ -228,6 +228,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
   const [expandido, setExpandido] = useState(null);
   const [ucContratos, setUcContratos] = useState({});
   const [addingContrato, setAddingContrato] = useState({});
+  const [subcontratistas, setSubcontratistas] = useState({});
 
   const col = C(theme);
 
@@ -250,6 +251,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
           rol_id: u.rol_id || "",
           contrato_id: u.contrato_id || "",
           estado: u.estado || "",
+          subcontratista_id: u.subcontratista_id || "",
         };
       });
       setEdits(prev => {
@@ -262,9 +264,10 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
     } finally { if (!silent) setLoading(false); }
   }, [call]);
 
-  useEffect(() => { cargar(); }, [cargar]);
-  // Auto-refresh silencioso cada 30 s — detecta nuevos usuarios sin recargar página
-  usePolling(() => cargar(true), 30000);
+  useEffect(() => {
+    cargar();
+    call("POST", "/admin/verificar-inactividad").catch(() => {});
+  }, [cargar]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setEdit = (uid, field, val) => setEdits(e => ({ ...e, [uid]: { ...e[uid], [field]: val } }));
 
@@ -273,10 +276,11 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
     const e = edits[uid];
     // Convertir "" a null para campos int — Pydantic rechaza string vacío en Optional[int]
     const payload = {
-      cargo_id:    e.cargo_id    ? parseInt(e.cargo_id)    : null,
-      rol_id:      e.rol_id      ? parseInt(e.rol_id)      : null,
-      contrato_id: e.contrato_id ? parseInt(e.contrato_id) : null,
-      estado:      e.estado      || null,
+      cargo_id:          e.cargo_id          ? parseInt(e.cargo_id)          : null,
+      rol_id:            e.rol_id            ? parseInt(e.rol_id)            : null,
+      contrato_id:       e.contrato_id       ? parseInt(e.contrato_id)       : null,
+      estado:            e.estado            || null,
+      subcontratista_id: e.subcontratista_id ? parseInt(e.subcontratista_id) : null,
     };
     try {
       await call("PUT", `/admin/usuarios/${uid}`, payload);
@@ -298,6 +302,10 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
     if (expandido === uid) { setExpandido(null); return; }
     setExpandido(uid);
     cargarUcContratos(uid);
+    const u = usuarios.find(x => x.id === uid);
+    if (u && u.cargo_nombre && u.cargo_nombre.toLowerCase() === 'subcontratista') {
+      cargarSubcontratistas(uid, u.contrato_id);
+    }
   };
 
   const agregarContrato = async (uid) => {
@@ -316,6 +324,23 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
     try {
       await call("DELETE", `/admin/usuario-contratos/${uid}/${cid}`);
       cargarUcContratos(uid);
+    } catch (e) { setMsg({ type: "error", text: e.message }); }
+  };
+
+  const cargarSubcontratistas = async (uid, contrato_id) => {
+    if (!contrato_id) return;
+    try {
+      const data = await call("GET", `/subcontratistas/${contrato_id}`);
+      setSubcontratistas(p => ({ ...p, [uid]: data }));
+    } catch { setSubcontratistas(p => ({ ...p, [uid]: [] })); }
+  };
+
+  const asignarSubcontratista = async (uid, subcontratista_id) => {
+    try {
+      await call("PUT", `/admin/usuarios/${uid}`, { subcontratista_id: subcontratista_id ? parseInt(subcontratista_id) : null });
+      setMsg({ type: "success", text: "Subcontratista asignado." });
+      setEdit(uid, "subcontratista_id", subcontratista_id);
+      cargar(true);
     } catch (e) { setMsg({ type: "error", text: e.message }); }
   };
 
@@ -419,6 +444,34 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
                         </select>
                         <button style={S.btn("primary", true)} onClick={() => agregarContrato(u.id)}>Asignar</button>
                       </div>
+                      {u.cargo_nombre && u.cargo_nombre.toLowerCase() === 'subcontratista' && (
+                        <div style={{ marginTop: 16, borderTop: "1px solid rgba(0,175,197,0.15)", paddingTop: 12 }}>
+                          <div style={{ fontSize: 12, color: "#00afc5", marginBottom: 8, fontWeight: 600 }}>
+                            Subcontratista asignado:
+                          </div>
+                          {u.subcontratista_id ? (
+                            <div style={{ fontSize: 12, color: col.textSecondary, marginBottom: 8 }}>
+                              Actual: {(subcontratistas[u.id] || []).find(s => s.id === u.subcontratista_id)?.razon_social || `ID ${u.subcontratista_id}`}
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 12, color: "#f59e0b", marginBottom: 8 }}>Sin subcontratista asignado — el usuario no tiene acceso.</div>
+                          )}
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <select style={{ ...S.select, minWidth: 220 }}
+                              value={edits[u.id]?.subcontratista_id || ""}
+                              onChange={e => setEdit(u.id, "subcontratista_id", e.target.value)}>
+                              <option value="">Sin subcontratista</option>
+                              {(subcontratistas[u.id] || []).map(s => (
+                                <option key={s.id} value={s.id}>{s.razon_social}</option>
+                              ))}
+                            </select>
+                            <button style={S.btn("primary", true)}
+                              onClick={() => asignarSubcontratista(u.id, edits[u.id]?.subcontratista_id)}>
+                              Asignar
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 )}

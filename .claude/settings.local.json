@@ -5,7 +5,8 @@
       "Bash(powershell -Command \".\\\\df.ps1 'fix popup tramos item width dims nowrap comentarios hilo'\")",
       "Bash(awk 'NR>=5880 && NR<=6000 || NR>=6280 && NR<=6320' backend/main.py)",
       "Bash(az webapp:*)",
-      "Bash(ls *.sh *.bat *.ps1)"
+      "Bash(ls *.sh *.bat *.ps1)",
+      "Bash(powershell -File df.ps1 \"fix SeccionUsuarios: remove polling, add subcontratista assignment, sin-acceso screen, verificar-inactividad endpoint\")"
     ]
   }
 }

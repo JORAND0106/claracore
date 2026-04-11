@@ -10822,7 +10822,24 @@ if (contratos.length > 1) {
     setUsuario(null)
   }
 
-  if (usuario) return (
+  if (usuario) {
+    const _esPrivilegiado = ['Desarrollador', 'Administrador'].includes(usuario.cargo_nombre)
+    if (!_esPrivilegiado && (!usuario.permisos || usuario.permisos.length === 0)) return (
+      <div style={{ minHeight: '100vh', background: t.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '12px' }}>
+        <div style={{ fontSize: '48px' }}>🔒</div>
+        <div style={{ fontSize: '20px', fontWeight: '700', color: t.text }}>Sin acceso</div>
+        <div style={{ fontSize: '14px', color: t.textMuted, textAlign: 'center', maxWidth: '340px', lineHeight: 1.6 }}>
+          Tu cargo no tiene permisos asignados. Contacta al administrador.
+        </div>
+        <div style={{ fontSize: '12px', color: t.textMuted, marginTop: '4px' }}>
+          {usuario.nombre} {usuario.apellidos} · {usuario.email}
+        </div>
+        <button onClick={handleLogout} style={{ marginTop: '12px', background: t.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '10px 24px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>
+          Cerrar sesión
+        </button>
+      </div>
+    )
+    return (
     <>
     {hayNuevaVersion && (
         <div style={{
@@ -10885,7 +10902,8 @@ if (contratos.length > 1) {
         fontSize={fontSize} onFontSize={cambiarFuente}
       />
     </>
-  )
+    )
+  }
 
   return (
     <>

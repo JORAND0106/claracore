@@ -117,6 +117,7 @@ class UsuarioUpdate(BaseModel):
     rol_id: Optional[int] = None
     contrato_id: Optional[int] = None
     estado: Optional[str] = None
+    subcontratista_id: Optional[int] = None
 
 class UsuarioContratoCreate(BaseModel):
     usuario_id: int
@@ -413,6 +414,9 @@ def login(request: LoginRequest):
         permisos_raw = supabase.table("permisos").select("*").eq("cargo_id", usuario["cargo_id"]).execute().data
         funciones_map = {f["id"]: f["nombre"] for f in supabase.table("funciones").select("id, nombre").execute().data}
         permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
+    # C3: Subcontratista sin subcontratista asignado → sin acceso
+    if cargo_nombre and cargo_nombre.lower() == 'subcontratista' and not usuario.get('subcontratista_id'):
+        permisos = []
 
     registrar_log(
         {"sub": str(usuario["id"]), "nombre": usuario.get("nombre",""),
@@ -440,6 +444,7 @@ def login(request: LoginRequest):
             "logo_interventoria": logo_interventoria,
             "estado": usuario.get("estado"),
             "activo": usuario.get("activo"),
+            "subcontratista_id": usuario.get("subcontratista_id"),
             "permisos": permisos,
         }
     }
@@ -487,11 +492,15 @@ def get_mi_usuario(current_user=Depends(get_current_user)):
         permisos_raw = supabase.table("permisos").select("*").eq("cargo_id", u["cargo_id"]).execute().data
         funciones_map = {f["id"]: f["nombre"] for f in supabase.table("funciones").select("id, nombre").execute().data}
         permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
+    # C3: Subcontratista sin subcontratista asignado → sin acceso
+    if cargo_nombre and cargo_nombre.lower() == 'subcontratista' and not u.get('subcontratista_id'):
+        permisos = []
     return {
         "id": u["id"], "nombre": u["nombre"], "apellidos": u.get("apellidos"),
         "email": u["email"], "cargo_id": u.get("cargo_id"), "cargo_nombre": cargo_nombre,
         "rol_id": u.get("rol_id"), "rol_nombre": rol_nombre,
         "contrato_id": u.get("contrato_id"), "estado": u.get("estado"), "activo": u.get("activo"),
+        "subcontratista_id": u.get("subcontratista_id"),
         "permisos": permisos,
     }
 
@@ -604,7 +613,7 @@ def obtener_permisos(cargo_id: int, current_user=Depends(get_current_user)):
 @app.get("/admin/todos-usuarios")
 def todos_usuarios(current_user=Depends(get_current_user)):
     result = supabase.table("usuarios").select(
-        "id, nombre, apellidos, email, activo, cargo_id, rol_id, contrato_id, estado, created_at"
+        "id, nombre, apellidos, email, activo, cargo_id, rol_id, contrato_id, subcontratista_id, estado, created_at"
     ).order("nombre").execute()
     cargos = {c["id"]: c["nombre"] for c in supabase.table("cargos").select("id, nombre").execute().data}
     roles = {r["id"]: r["nombre"] for r in supabase.table("roles").select("id, nombre").execute().data}
@@ -670,6 +679,49 @@ def actualizar_usuario(usuario_id: int, body: UsuarioUpdate, current_user=Depend
         del detalle_log["contrato_id"]
     registrar_log(current_user, "EDITAR", "USUARIOS", "usuario", str(usuario_id), detalle_log)
     return {"mensaje": "Usuario actualizado"}
+
+@app.post("/admin/verificar-inactividad")
+def verificar_inactividad(current_user=Depends(get_current_user)):
+    """Marca como pendiente a usuarios aprobados con >7 días sin iniciar sesión."""
+    from datetime import datetime, timedelta, timezone
+    CARGOS_EXCLUIDOS = {'director', 'gerencia', 'supervisor externo', 'desarrollador', 'administrador'}
+    ahora = datetime.now(timezone.utc)
+    limite = ahora - timedelta(days=7)
+    usuarios_raw = supabase.table("usuarios").select("id, cargo_id, estado").eq("estado", "aprobado").execute().data
+    if not usuarios_raw:
+        return {"afectados": 0}
+    cargos = {c["id"]: c["nombre"].lower() for c in supabase.table("cargos").select("id, nombre").execute().data}
+    candidatos = [u for u in usuarios_raw if cargos.get(u.get("cargo_id"), "") not in CARGOS_EXCLUIDOS]
+    if not candidatos:
+        return {"afectados": 0}
+    cand_ids = [u["id"] for u in candidatos]
+    logs = supabase.table("logs").select("usuario_id, created_at").eq("accion", "LOGIN").in_("usuario_id", cand_ids).order("created_at", desc=True).execute().data
+    last_login = {}
+    for log in logs:
+        uid = log["usuario_id"]
+        if uid not in last_login:
+            last_login[uid] = log["created_at"]
+    afectados = 0
+    for u in candidatos:
+        uid = u["id"]
+        last = last_login.get(uid)
+        inactivo = False
+        if last is None:
+            inactivo = True
+        else:
+            try:
+                last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
+                if last_dt < limite:
+                    inactivo = True
+            except Exception:
+                pass
+        if inactivo:
+            supabase.table("usuarios").update({"estado": "pendiente", "activo": False}).eq("id", uid).execute()
+            afectados += 1
+    registrar_log(current_user, "VERIFICAR_INACTIVIDAD", "USUARIOS", None, None, {"afectados": afectados})
+    return {"afectados": afectados}
 
 @app.get("/admin/usuario-contratos/{usuario_id}")
 def get_usuario_contratos(usuario_id: int, current_user=Depends(get_current_user)):
