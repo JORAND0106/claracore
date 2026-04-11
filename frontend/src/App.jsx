@@ -8772,9 +8772,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     const tok = getToken()
     fetch(`${API_URL}/presupuesto/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
       .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiPpto(d) })
-    fetch(`${API_URL}/cobro/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
-      .then(r => { console.log('cobro resumen status:', r.status); return r.ok ? r.json() : null })
-      .then(d => { console.log('cobro resumen data:', d); if(d) setKpiCobro(d) })
+    fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-resumen`, { headers: { Authorization:`Bearer ${tok}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if(d) setKpiCobro(d) })
   }, [contratoIdDash])
 
 // ── Auto-refresh dashboard cada 30 segundos ───────────────────────────────
@@ -8787,7 +8787,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       const tok = getToken()
       fetch(`${API_URL}/presupuesto/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiPpto(d) }).catch(() => {})
-      fetch(`${API_URL}/cobro/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
+      fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-resumen`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiCobro(d) }).catch(() => {})
       if (dashDrillRef.current.length > 0 && !popupCapitulo) refrescarDashDrillSilencioso(dashDrillRef.current)
       fetch(`${API_URL}/cad-queue/${contratoIdDash}/estado`, { headers: { Authorization:`Bearer ${tok}` } })
@@ -8795,7 +8795,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       const params2 = new URLSearchParams()
       if (dashDrillRef.current[0]) params2.set('capitulo', dashDrillRef.current[0].valor)
       if (dashDrillRef.current[1]) params2.set('item', dashDrillRef.current[1].valor)
-      fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-colores-drill?${params2}`, {
+      fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-colores?${params2}`, {
         headers: { Authorization: `Bearer ${tok}` }
       }).then(r => r.ok ? r.json() : {}).then(setMiniMapaColores).catch(() => {})
     }
@@ -8819,14 +8819,14 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         setDashTabla(cached.data)             // instantáneo desde caché
         setDashTablaLoad(false)
         // refresco silencioso en background
-        fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+        fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
           .then(r => r.ok ? r.json() : null)
           .then(data => { if (data) { dashTablaCache.current[cacheKey] = { data, ts: Date.now() }; setDashTabla(data) } })
           .catch(() => {})
         return
       }
       setDashTablaLoad(true); setDashTabla(null)
-      const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+      const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
       if (res.ok) {
         const data = await res.json()
         dashTablaCache.current[cacheKey] = { data, ts: Date.now() }
@@ -8845,7 +8845,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       setDashData(cached.data)               // instantáneo desde caché
       setDashLoading(false)
       // refresco silencioso en background
-      fetch(`${API_URL}/cobro/${contratoIdDash}/drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+      fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null)
         .then(data => {
           if (data) {
@@ -8862,7 +8862,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       return
     }
     setDashLoading(true)
-    const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+    const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
     if (res.ok) {
       const data = await res.json()
       const lista = (data.items || data).map(r => ({
@@ -8883,13 +8883,13 @@ async function refrescarDashDrillSilencioso(drill) {
     drill.forEach(d => params.set(d.campo, d.valor))
     if (drill.length >= 2) {
       const cacheKey = `${drill[0]?.valor}|${drill[1]?.valor}`
-      fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+      fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null)
         .then(data => { if (data) { dashTablaCache.current[cacheKey] = { data, ts: Date.now() } } })
         .catch(() => {})
     } else if (drill.length === 1) {
       const cacheKey = drill[0]?.valor || '__todos__'
-      fetch(`${API_URL}/cobro/${contratoIdDash}/drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+      fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null)
         .then(data => {
           if (data) {
@@ -8914,7 +8914,7 @@ async function refrescarDashDrillSilencioso(drill) {
     const params = new URLSearchParams({ pk_id: pkid })
     if (dashDrill[1]) params.set('item', dashDrill[1].valor)
     if (dashDrill[0]) params.set('capitulo', dashDrill[0].valor)
-    const res = await fetch(`${API_URL}/cobro/${contratoIdDash}/pkid-detalle?${params}`, {
+    const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-detalle?${params}`, {
       headers: { Authorization: `Bearer ${tok}` }
     })
     const data = res.ok ? await res.json() : null
@@ -9400,19 +9400,19 @@ const [navRegistroId, setNavRegistroId] = useState(null)
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
                   <div>
                     <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                    <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>💰 Cobro por Acta</div>
+                    <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>💰 Obra por Acta RPO</div>
                     <button onClick={() => setPanelFoco(p => p === 'cobro-acta' ? null : 'cobro-acta')}
                       style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'14px', padding:'0' }}
                       title="Expandir panel">
                       {panelFoco === 'cobro-acta' ? '⊠' : '⤢'}
                     </button>
                   </div>
-                    <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Acumulado por número de acta</div>
+                    <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Acumulado por Acta RPO</div>
                   </div>
                   <div style={{ fontSize:'16px', fontWeight:'800', color:t.primary }}>{fmtD(cobro)}</div>
                 </div>
                 {porActa.length === 0 ? (
-                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin datos de cobro</div>
+                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin datos de obra</div>
                 ) : (() => {
                   const W = 860, H = 160, PAD = 8
                   const maxVal = Math.max(...porActa.map(a => a.cobrado), 1)
@@ -9508,7 +9508,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
               <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, gridColumn:'1 / -1' }}>
                 <div style={{ marginBottom:'14px' }}>
                   <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                    <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>📊 Presupuesto vs Cobro</div>
+                    <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>📊 Presupuesto vs Obra</div>
                     <button onClick={() => setPanelFoco(p => p === 'ppto-cobro' ? null : 'ppto-cobro')}
                       style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'14px', padding:'0' }}
                       title="Expandir panel">
@@ -9586,7 +9586,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
                                   </text>
                                   <rect x={Math.min(x-10,totalW-220)+10} y={Math.min(yP,yC)-24} width="8" height="8" rx="1" fill={colorC}/>
                                   <text x={Math.min(x-10,totalW-220)+22} y={Math.min(yP,yC)-17} fontSize="10" fill={t.textMuted}>
-                                    Cobro: <tspan fontWeight="700" fill={colorC}>{fmtD(cap.cobrado)}</tspan>
+                                    Obra: <tspan fontWeight="700" fill={colorC}>{fmtD(cap.cobrado)}</tspan>
                                   </text>
                                 </g>
                               </g>
@@ -9600,7 +9600,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
                           <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#0077B6' }}/> Presupuesto
                         </div>
                         <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'11px', color:t.textMuted }}>
-                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#00A896' }}/> Cobro
+                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#00A896' }}/> Obra Aprobada
                         </div>
                         <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'11px', color:t.textMuted }}>
                           <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#DC2626' }}/> Sobrecosto
