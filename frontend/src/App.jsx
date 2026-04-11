@@ -6567,7 +6567,7 @@ const limpiarFiltros = () => {
             {cargando ? (
               <span style={{ fontSize:'12px', color:t.textMuted }}>Cargando...</span>
             ) : hayMas ? (
-              <button onClick={() => buscarReportes(filtros, offsetActual)}
+              <button onClick={() => buscarReportes(filtros, offsetActual, capasValidacion)}
                 style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'7px 20px', fontSize:'12px', color:t.textMuted, cursor:'pointer', fontWeight:'600' }}>
                 ⬇ Cargar 50 reportes más
               </button>

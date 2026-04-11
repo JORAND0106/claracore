@@ -3439,6 +3439,32 @@ def buscar_reportes_obra(
         if not reporte_ids_from_reg:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
+    # Filtrar por cargo + estado_validacion ANTES de paginar
+    if cargo and estado_validacion:
+        _campo_db_map = {
+            'Inspector':      'nivel1_estado',
+            'Residente':      'nivel2_estado',
+            'Interventoría':  'nivel3_estado',
+            'Subcontratista': 'sub_estado',
+        }
+        _campo_db_local = _campo_db_map.get(cargo)
+        if _campo_db_local:
+            _ev_local = estado_validacion
+            def _val():
+                return supabase.table("so_registros").select("reporte_id")\
+                    .eq("contrato_id", contrato_id)\
+                    .eq(_campo_db_local, _ev_local).execute().data
+            rows_val = supabase_execute(_val)
+            ids_val = list({r["reporte_id"] for r in rows_val if r.get("reporte_id")})
+            if not ids_val:
+                return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+            if reporte_ids_from_reg is not None:
+                reporte_ids_from_reg = list(set(reporte_ids_from_reg) & set(ids_val))
+            else:
+                reporte_ids_from_reg = ids_val
+            if not reporte_ids_from_reg:
+                return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+
     # Resolver semana_id desde numero_semana
     semana_id_filtro = None
     if semana is not None:
@@ -3581,18 +3607,6 @@ def buscar_reportes_obra(
         except Exception:
             for r in rows:
                 r["nivel1_estados"] = r["nivel2_estados"] = r["nivel3_estados"] = r["sub_estados"] = []
-
-    # Filtrar por cargo + estado_validacion (primera capa enviada desde el frontend)
-    if cargo and estado_validacion:
-        _cargo_field_map = {
-            'Inspector':      'nivel1_estados',
-            'Residente':      'nivel2_estados',
-            'Interventoría':  'nivel3_estados',
-            'Subcontratista': 'sub_estados',
-        }
-        _field = _cargo_field_map.get(cargo)
-        if _field:
-            rows = [r for r in rows if estado_validacion in r.get(_field, [])]
 
     for r in rows:
         sub = r.pop("subcontratistas", None)
