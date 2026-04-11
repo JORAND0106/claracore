@@ -4347,6 +4347,10 @@ class RegistroCreate(BaseModel):
 @app.put("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
 def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, current_user=Depends(get_current_user)):
     data = body.dict()
+    for _campo in ('pk_id_id','civ','tramo','infraestructura','calzada','costado',
+                   'ubicacion','coord_lat','coord_lng','abs_inicio','abs_final',
+                   'nodo_ini','nodo_fin','margen'):
+        data.pop(_campo, None)
     data.pop("updated_at", None)
     data["updated_at"]     = "now()"
     data["modificado_por"] = int(current_user.get("sub") or current_user.get("id", 0))

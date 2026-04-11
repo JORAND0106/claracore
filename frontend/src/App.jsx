@@ -6747,6 +6747,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const [puntos, setPuntos] = useState([{punto:'', norte:'', este:'', cota:'', descripcion:''}])
 
   const hdrs = { Authorization: `Bearer ${getToken()}` }
+  const modoEdicion = !!reporteInicial
 
   const [numeroReporte, setNumeroReporte] = useState(null)
   const [borradorId, setBorradorId] = useState(reporteInicial?.id || null)
@@ -6860,12 +6861,14 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     if (!subSeleccionado) e.sub = 'Requerido'
     if (!inspSeleccionado) e.insp = 'Requerido'
     if (!capituloSel) e.capitulo = 'Requerido'
-    if (!pkSeleccionado) e.pk = 'Requerido'
-    if (!margen) e.margen = 'Requerido'
-    if (absInicio === '') e.absInicio = 'Requerido'
-    if (absFinal === '') e.absFinal = 'Requerido'
-    if (!nodoIni.trim()) e.nodoIni = 'Requerido'
-    if (!nodoFin.trim()) e.nodoFin = 'Requerido'
+    if (!modoEdicion) {
+      if (!pkSeleccionado) e.pk = 'Requerido'
+      if (!margen) e.margen = 'Requerido'
+      if (absInicio === '') e.absInicio = 'Requerido'
+      if (absFinal === '') e.absFinal = 'Requerido'
+      if (!nodoIni.trim()) e.nodoIni = 'Requerido'
+      if (!nodoFin.trim()) e.nodoFin = 'Requerido'
+    }
     setErrores(e)
     return Object.keys(e).length === 0
   }
@@ -7143,48 +7146,62 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 {/* PK_ID */}
                 <div style={{ position:'relative' }}>
                   <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
-                    LOCALIZACIÓN (PK_ID) *
+                    LOCALIZACIÓN (PK_ID){!modoEdicion && ' *'}
                   </label>
-                  <div style={{ display:'flex', gap:'6px', alignItems:'center' }}>
-                    <div style={{ ...inpStyle(errores.pk), flex:1, display:'flex', alignItems:'center', minHeight:'38px', cursor:'default' }}>
-                      {pkSeleccionado
-                        ? <span style={{ fontWeight:'800', color:t.primary, fontSize:'14px' }}>{pkSeleccionado.pk_id}</span>
-                        : <span style={{ color:t.textMuted, fontStyle:'italic', fontSize:'12px' }}>Selecciona el punto tocando el mapa →</span>
-                      }
+                  {modoEdicion ? (
+                    <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'12px', color:t.textMuted }}>
+                      📍 CIV: {reporteInicial.civ || '—'} · {reporteInicial.tramo || '—'} · {reporteInicial.infraestructura || '—'} · {reporteInicial.calzada || '—'}
                     </div>
-                    <button onClick={() => setModalMapaPk(true)} type="button" title="Seleccionar PK_ID en el mapa" style={{
-                      background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
-                      padding:'0 14px', cursor:'pointer', fontSize:'16px', flexShrink:0, height:'38px'
-                    }}>🗺️</button>
-                  </div>
-                  {pkSeleccionado && (
-                    <div style={{ marginTop:'6px', padding:'8px 12px', background:t.bg,
-                      borderRadius:'6px', fontSize:'11px', color:t.textMuted }}>
-                      📍 CIV: {pkSeleccionado.civ} · {pkSeleccionado.tramo} · {pkSeleccionado.infraestructura} · {pkSeleccionado.calzada}
-                    </div>
+                  ) : (
+                    <>
+                      <div style={{ display:'flex', gap:'6px', alignItems:'center' }}>
+                        <div style={{ ...inpStyle(errores.pk), flex:1, display:'flex', alignItems:'center', minHeight:'38px', cursor:'default' }}>
+                          {pkSeleccionado
+                            ? <span style={{ fontWeight:'800', color:t.primary, fontSize:'14px' }}>{pkSeleccionado.pk_id}</span>
+                            : <span style={{ color:t.textMuted, fontStyle:'italic', fontSize:'12px' }}>Selecciona el punto tocando el mapa →</span>
+                          }
+                        </div>
+                        <button onClick={() => setModalMapaPk(true)} type="button" title="Seleccionar PK_ID en el mapa" style={{
+                          background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
+                          padding:'0 14px', cursor:'pointer', fontSize:'16px', flexShrink:0, height:'38px'
+                        }}>🗺️</button>
+                      </div>
+                      {pkSeleccionado && (
+                        <div style={{ marginTop:'6px', padding:'8px 12px', background:t.bg,
+                          borderRadius:'6px', fontSize:'11px', color:t.textMuted }}>
+                          📍 CIV: {pkSeleccionado.civ} · {pkSeleccionado.tramo} · {pkSeleccionado.infraestructura} · {pkSeleccionado.calzada}
+                        </div>
+                      )}
+                      {errores.pk && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.pk}</span>}
+                    </>
                   )}
-                  {errores.pk && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.pk}</span>}
                 </div>
 
                 {/* Margen */}
                 <div>
                   <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
-                    MARGEN *
+                    MARGEN{!modoEdicion && ' *'}
                   </label>
-                  <select value={margen.startsWith('Otro:') ? 'Otro' : margen}
-                    onChange={e => setMargen(e.target.value === 'Otro' ? 'Otro: ' : e.target.value)}
-                    style={inpStyle(errores.margen)}>
-                    <option value=''>-- Seleccionar --</option>
-                    {['Izquierda','Central','Derecha','Única','Otro'].map(m =>
-                      <option key={m} value={m}>{m}</option>)}
-                  </select>
-                  {margen.startsWith('Otro:') && (
-                    <input value={margen.replace('Otro: ','')}
-                      onChange={e => setMargen('Otro: ' + e.target.value)}
-                      placeholder='Especificar...'
-                      style={{ ...inpStyle(false), marginTop:'6px' }} />
+                  {modoEdicion ? (
+                    <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'13px', color:t.textMuted }}>{margen || '—'}</div>
+                  ) : (
+                    <>
+                      <select value={margen.startsWith('Otro:') ? 'Otro' : margen}
+                        onChange={e => setMargen(e.target.value === 'Otro' ? 'Otro: ' : e.target.value)}
+                        style={inpStyle(errores.margen)}>
+                        <option value=''>-- Seleccionar --</option>
+                        {['Izquierda','Central','Derecha','Única','Otro'].map(m =>
+                          <option key={m} value={m}>{m}</option>)}
+                      </select>
+                      {margen.startsWith('Otro:') && (
+                        <input value={margen.replace('Otro: ','')}
+                          onChange={e => setMargen('Otro: ' + e.target.value)}
+                          placeholder='Especificar...'
+                          style={{ ...inpStyle(false), marginTop:'6px' }} />
+                      )}
+                      {errores.margen && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.margen}</span>}
+                    </>
                   )}
-                  {errores.margen && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.margen}</span>}
                 </div>
               </div>
 
@@ -7192,75 +7209,87 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'12px' }}>
                 <div>
                   <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
-                    ABS. INICIAL *
+                    ABS. INICIAL{!modoEdicion && ' *'}
                   </label>
-                  <input type='number' step='0.01' value={absInicio}
-                    onChange={e => setAbsInicio(e.target.value)}
-                    placeholder='0.00' style={inpStyle(errores.absInicio)} />
-                  {errores.absInicio && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.absInicio}</span>}
+                  {modoEdicion
+                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'13px', color:t.textMuted }}>{absInicio !== '' ? absInicio : '—'}</div>
+                    : <><input type='number' step='0.01' value={absInicio} onChange={e => setAbsInicio(e.target.value)} placeholder='0.00' style={inpStyle(errores.absInicio)} />
+                       {errores.absInicio && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.absInicio}</span>}</>
+                  }
                 </div>
                 <div>
                   <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
-                    ABS. FINAL *
+                    ABS. FINAL{!modoEdicion && ' *'}
                   </label>
-                  <input type='number' step='0.01' value={absFinal}
-                    onChange={e => setAbsFinal(e.target.value)}
-                    placeholder='0.00' style={inpStyle(errores.absFinal)} />
-                  {errores.absFinal && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.absFinal}</span>}
+                  {modoEdicion
+                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'13px', color:t.textMuted }}>{absFinal !== '' ? absFinal : '—'}</div>
+                    : <><input type='number' step='0.01' value={absFinal} onChange={e => setAbsFinal(e.target.value)} placeholder='0.00' style={inpStyle(errores.absFinal)} />
+                       {errores.absFinal && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.absFinal}</span>}</>
+                  }
                 </div>
                 <div>
                   <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
-                    NODO INICIAL *
+                    NODO INICIAL{!modoEdicion && ' *'}
                   </label>
-                  <input value={nodoIni}
-                    onChange={e => {
-                      setNodoIni(e.target.value); setNodoIniWarn(false)
-                      if (e.target.value.length > 1)
-                        setNodoIniSugg(nodos.filter(n => n.toLowerCase().includes(e.target.value.toLowerCase())).slice(0,8))
-                      else setNodoIniSugg([])
-                    }}
-                    onBlur={() => {
-                      if (nodoIni && !nodos.includes(nodoIni)) setNodoIniWarn(true)
-                      setTimeout(() => setNodoIniSugg([]), 200)
-                    }}
-                    placeholder='Nodo inicial...' style={inpStyle(errores.nodoIni)} />
-                  {nodoIniSugg.length > 0 && (
-                    <div style={{ position:'absolute', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', zIndex:10 }}>
-                      {nodoIniSugg.map(n => (
-                        <div key={n} onClick={() => { setNodoIni(n); setNodoIniSugg([]); setNodoIniWarn(false) }}
-                          style={{ padding:'6px 10px', cursor:'pointer', fontSize:'12px', color:t.text }}>{n}</div>
-                      ))}
-                    </div>
-                  )}
-                  {nodoIniWarn && <span style={{ color:'#F59E0B', fontSize:'11px' }}>⚠️ No existe en presupuesto</span>}
-                  {errores.nodoIni && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.nodoIni}</span>}
+                  {modoEdicion
+                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'13px', color:t.textMuted }}>{nodoIni || '—'}</div>
+                    : <>
+                        <input value={nodoIni}
+                          onChange={e => {
+                            setNodoIni(e.target.value); setNodoIniWarn(false)
+                            if (e.target.value.length > 1)
+                              setNodoIniSugg(nodos.filter(n => n.toLowerCase().includes(e.target.value.toLowerCase())).slice(0,8))
+                            else setNodoIniSugg([])
+                          }}
+                          onBlur={() => {
+                            if (nodoIni && !nodos.includes(nodoIni)) setNodoIniWarn(true)
+                            setTimeout(() => setNodoIniSugg([]), 200)
+                          }}
+                          placeholder='Nodo inicial...' style={inpStyle(errores.nodoIni)} />
+                        {nodoIniSugg.length > 0 && (
+                          <div style={{ position:'absolute', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', zIndex:10 }}>
+                            {nodoIniSugg.map(n => (
+                              <div key={n} onClick={() => { setNodoIni(n); setNodoIniSugg([]); setNodoIniWarn(false) }}
+                                style={{ padding:'6px 10px', cursor:'pointer', fontSize:'12px', color:t.text }}>{n}</div>
+                            ))}
+                          </div>
+                        )}
+                        {nodoIniWarn && <span style={{ color:'#F59E0B', fontSize:'11px' }}>⚠️ No existe en presupuesto</span>}
+                        {errores.nodoIni && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.nodoIni}</span>}
+                      </>
+                  }
                 </div>
                 <div>
                   <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
-                    NODO FINAL *
+                    NODO FINAL{!modoEdicion && ' *'}
                   </label>
-                  <input value={nodoFin}
-                    onChange={e => {
-                      setNodoFin(e.target.value); setNodoFinWarn(false)
-                      if (e.target.value.length > 1)
-                        setNodoFinSugg(nodos.filter(n => n.toLowerCase().includes(e.target.value.toLowerCase())).slice(0,8))
-                      else setNodoFinSugg([])
-                    }}
-                    onBlur={() => {
-                      if (nodoFin && !nodos.includes(nodoFin)) setNodoFinWarn(true)
-                      setTimeout(() => setNodoFinSugg([]), 200)
-                    }}
-                    placeholder='Nodo final...' style={inpStyle(errores.nodoFin)} />
-                  {nodoFinSugg.length > 0 && (
-                    <div style={{ position:'absolute', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', zIndex:10 }}>
-                      {nodoFinSugg.map(n => (
-                        <div key={n} onClick={() => { setNodoFin(n); setNodoFinSugg([]); setNodoFinWarn(false) }}
-                          style={{ padding:'6px 10px', cursor:'pointer', fontSize:'12px', color:t.text }}>{n}</div>
-                      ))}
-                    </div>
-                  )}
-                  {nodoFinWarn && <span style={{ color:'#F59E0B', fontSize:'11px' }}>⚠️ No existe en presupuesto</span>}
-                  {errores.nodoFin && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.nodoFin}</span>}
+                  {modoEdicion
+                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'13px', color:t.textMuted }}>{nodoFin || '—'}</div>
+                    : <>
+                        <input value={nodoFin}
+                          onChange={e => {
+                            setNodoFin(e.target.value); setNodoFinWarn(false)
+                            if (e.target.value.length > 1)
+                              setNodoFinSugg(nodos.filter(n => n.toLowerCase().includes(e.target.value.toLowerCase())).slice(0,8))
+                            else setNodoFinSugg([])
+                          }}
+                          onBlur={() => {
+                            if (nodoFin && !nodos.includes(nodoFin)) setNodoFinWarn(true)
+                            setTimeout(() => setNodoFinSugg([]), 200)
+                          }}
+                          placeholder='Nodo final...' style={inpStyle(errores.nodoFin)} />
+                        {nodoFinSugg.length > 0 && (
+                          <div style={{ position:'absolute', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', zIndex:10 }}>
+                            {nodoFinSugg.map(n => (
+                              <div key={n} onClick={() => { setNodoFin(n); setNodoFinSugg([]); setNodoFinWarn(false) }}
+                                style={{ padding:'6px 10px', cursor:'pointer', fontSize:'12px', color:t.text }}>{n}</div>
+                            ))}
+                          </div>
+                        )}
+                        {nodoFinWarn && <span style={{ color:'#F59E0B', fontSize:'11px' }}>⚠️ No existe en presupuesto</span>}
+                        {errores.nodoFin && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.nodoFin}</span>}
+                      </>
+                  }
                 </div>
               </div>
             </div>
