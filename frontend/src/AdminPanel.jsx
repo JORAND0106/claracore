@@ -267,7 +267,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
   useEffect(() => {
     cargar();
     call("POST", "/admin/verificar-inactividad").catch(() => {});
-  }, [cargar]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setEdit = (uid, field, val) => setEdits(e => ({ ...e, [uid]: { ...e[uid], [field]: val } }));
 
@@ -975,8 +975,6 @@ function SeccionResets({ call, theme }) {
   }, [call]);
 
   useEffect(() => { cargar(); }, [cargar]);
-  // Auto-refresh cada 30 s — el admin ve solicitudes nuevas sin recargar
-  usePolling(() => cargar(true), 30000);
 
   const autorizar = async (id) => {
     const temp = tempPasswords[id];

@@ -663,6 +663,31 @@ def actualizar_usuario(usuario_id: int, body: UsuarioUpdate, current_user=Depend
     elif body.estado == "rechazado":
         data["activo"] = False
     supabase.table("usuarios").update(data).eq("id", usuario_id).execute()
+    # Resetear contador de inactividad: insertar LOGIN sintético al reactivar un usuario
+    if body.estado == "aprobado":
+        try:
+            u_data = supabase.table("usuarios").select("nombre, apellidos, cargo_id, contrato_id").eq("id", usuario_id).execute().data
+            u_nombre = ""
+            u_contrato_id = None
+            if u_data:
+                u = u_data[0]
+                u_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip()
+                u_contrato_id = u.get("contrato_id")
+            supabase.table("logs").insert({
+                "usuario_id":   usuario_id,
+                "usuario_nombre": u_nombre,
+                "cargo_nombre": "",
+                "contrato_id":  u_contrato_id,
+                "contrato_numero": None,
+                "accion":       "LOGIN",
+                "modulo":       "AUTH",
+                "entidad_tipo": "usuario",
+                "entidad_id":   str(usuario_id),
+                "detalle":      {"origen": "Reactivación por administrador"},
+                "resultado":    "ok",
+            }).execute()
+        except Exception:
+            pass
     # Enriquecer detalle con nombres legibles
     detalle_log = dict(data)
     if "cargo_id" in detalle_log:
