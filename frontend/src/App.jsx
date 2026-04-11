@@ -6055,8 +6055,8 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
 
   const fmtPesos = v => '$' + Math.round(v || 0).toLocaleString('es-CO')
 
-  const cargarAnalisis = async (nuevosFiltros) => {
-    const hayFiltros = Object.values(nuevosFiltros).some(v => v !== '')
+  const cargarAnalisis = async (nuevosFiltros, capas = []) => {
+    const hayFiltros = Object.values(nuevosFiltros).some(v => v !== '') || capas.length > 0
     if (!hayFiltros) { setAnalisis(null); return }
     setCargandoAnalisis(true)
     try {
@@ -6065,6 +6065,9 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
       if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
       const camposAnalisis = ['acta_rpo','semana','subcontratista_id','capitulo','item','tramo','costado','abs_inicio','abs_final','estado']
       camposAnalisis.forEach(k => { if (ef[k] !== '' && ef[k] != null) params.append(k, ef[k]) })
+      if (capasValidacion.length > 0) {
+        params.append('capas', JSON.stringify(capasValidacion))
+      }
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/analisis?${params}`, {
         headers: { Authorization: `Bearer ${getToken()}` }
       })
@@ -6251,9 +6254,11 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
                     <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
                       <td colSpan={4} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? fmtPesos(analisis.total_aprobados) : '—'}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? fmtPesos(analisis.total_pendientes) : '—'}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados ? fmtPesos(analisis.total_rechazados) : '—'}</td>
+                      {capasValidacion.length === 0 && <>
+                        <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? fmtPesos(analisis.total_aprobados) : '—'}</td>
+                        <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? fmtPesos(analisis.total_pendientes) : '—'}</td>
+                        <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados ? fmtPesos(analisis.total_rechazados) : '—'}</td>
+                      </>}
                     </tr>
                   </tfoot>
                 </table>
@@ -6405,7 +6410,7 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
               style={{ background:'#EF4444', color:'#fff', border:'none', borderRadius:'7px', padding:'5px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
               Limpiar
             </button>
-            <button onClick={() => { buscarReportes(filtros, 0); cargarAnalisis(filtros) }}
+            <button onClick={() => { buscarReportes(filtros, 0); cargarAnalisis(filtros, capasValidacion) }}
               style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'7px', padding:'5px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
               Buscar
             </button>
