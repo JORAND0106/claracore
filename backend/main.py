@@ -5106,6 +5106,503 @@ def validar_sub(contrato_id: int, registro_id: int, body: ValidarSubBody,
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# SICOE-OBRA — Dashboard endpoints (reemplazan /cobro/ leyendo so_registros)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/sicoe-obra/{contrato_id}/dashboard-resumen")
+def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_user)):
+    """
+    Reemplaza /cobro/{contrato_id}/resumen para el Dashboard.
+    Fuente: so_registros WHERE nivel3_estado='Aprobado' + actas + presupuesto.
+    Retorna misma forma que el endpoint de cobro para compatibilidad con frontend.
+    """
+    try:
+        # 1. Obtener registros aprobados paginados
+        registros = []
+        off = 0
+        while True:
+            def _regs(o=off):
+                return supabase.table("so_registros")\
+                    .select("reporte_id, costo_directo, cantidad_total, acta_rpo_id, pk_id_id")\
+                    .eq("contrato_id", contrato_id)\
+                    .eq("nivel3_estado", "Aprobado")\
+                    .range(o, o + 999).execute().data
+            batch = supabase_execute(_regs)
+            registros.extend(batch)
+            if len(batch) < 1000: break
+            off += 1000
+
+        # 2. Resolver capitulo desde so_reportes
+        rep_ids = list({r["reporte_id"] for r in registros if r.get("reporte_id")})
+        reporte_map = {}
+        for chunk_start in range(0, len(rep_ids), 500):
+            chunk = rep_ids[chunk_start:chunk_start + 500]
+            def _reps(ids=chunk):
+                return supabase.table("so_reportes")\
+                    .select("id, capitulo").eq("contrato_id", contrato_id)\
+                    .in_("id", ids).execute().data
+            for r in supabase_execute(_reps):
+                reporte_map[r["id"]] = r.get("capitulo") or "Sin capítulo"
+
+        # 3. Resolver numero_rpo desde actas
+        acta_ids = list({r["acta_rpo_id"] for r in registros if r.get("acta_rpo_id")})
+        acta_map = {}
+        if acta_ids:
+            for chunk_start in range(0, len(acta_ids), 500):
+                chunk = acta_ids[chunk_start:chunk_start + 500]
+                def _actas(ids=chunk):
+                    return supabase.table("actas")\
+                        .select("id, numero_rpo").in_("id", ids).execute().data
+                for a in supabase_execute(_actas):
+                    acta_map[a["id"]] = a.get("numero_rpo") or a["id"]
+
+        # 4. Total cobrado
+        total_cobrado = sum(float(r.get("costo_directo") or 0) for r in registros)
+
+        # 5. Acumulado por acta RPO
+        acta_agg = {}
+        for r in registros:
+            aid = r.get("acta_rpo_id")
+            if not aid: continue
+            nr = acta_map.get(aid, aid)
+            acta_agg[nr] = acta_agg.get(nr, 0) + float(r.get("costo_directo") or 0)
+        por_acta = [{"acta": nr, "cobrado": round(v, 2)} for nr, v in sorted(acta_agg.items(), key=lambda x: x[0])]
+
+        # 6. Presupuesto por capítulo (vista existente)
+        def _ppto():
+            return supabase.table("vista_ppto_por_capitulo")\
+                .select("*").eq("contrato_id", contrato_id).execute().data
+        ppto_raw = supabase_execute(_ppto)
+        ppto_caps = {r["capitulo"]: float(r.get("presupuesto") or 0) for r in ppto_raw}
+        ppto_total = sum(ppto_caps.values())
+
+        # 7. Obra por capítulo
+        obra_caps = {}
+        for r in registros:
+            cap = reporte_map.get(r.get("reporte_id"), "Sin capítulo")
+            obra_caps[cap] = obra_caps.get(cap, 0) + float(r.get("costo_directo") or 0)
+
+        caps = sorted(set(list(ppto_caps.keys()) + list(obra_caps.keys())))
+        comparativo = [
+            {
+                "capitulo": c,
+                "presupuesto": ppto_caps.get(c, 0),
+                "cobrado": round(obra_caps.get(c, 0), 2),
+                "delta": round(ppto_caps.get(c, 0) - obra_caps.get(c, 0), 2),
+                "consumo_pct": round(obra_caps.get(c, 0) / ppto_caps.get(c, 0) * 100, 1) if ppto_caps.get(c, 0) else 0,
+            }
+            for c in caps
+        ]
+
+        return {
+            "total_presupuesto": ppto_total,
+            "total_cobrado": round(total_cobrado, 2),
+            "delta": round(ppto_total - total_cobrado, 2),
+            "consumo_pct": round(total_cobrado / ppto_total * 100, 1) if ppto_total else 0,
+            "actas": sorted(acta_agg.keys()),
+            "comparativo_capitulos": comparativo,
+            "por_acta": por_acta,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sicoe-obra/{contrato_id}/dashboard-drill")
+def dashboard_drill_obra(
+    contrato_id: int,
+    capitulo: Optional[str] = None,
+    item: Optional[str] = None,
+    current_user=Depends(get_current_user)
+):
+    """
+    Reemplaza /cobro/{contrato_id}/drill para el Dashboard.
+    Retorna misma forma: {campo, items: [{nombre, descripcion, presupuesto, cobrado, delta, pct, cant_ppto, cant_cobro}]}
+    """
+    try:
+        # 1. Resolver reporte_ids por capitulo
+        reporte_ids = None
+        reporte_cap_map = {}
+        if capitulo:
+            def _reps():
+                return supabase.table("so_reportes")\
+                    .select("id, capitulo").eq("contrato_id", contrato_id)\
+                    .eq("capitulo", capitulo).execute().data
+            reps = supabase_execute(_reps)
+            reporte_ids = [r["id"] for r in reps]
+            for r in reps: reporte_cap_map[r["id"]] = r.get("capitulo")
+            if not reporte_ids:
+                return {"campo": "item" if capitulo else "capitulo", "items": []}
+        else:
+            def _allreps():
+                return supabase.table("so_reportes")\
+                    .select("id, capitulo").eq("contrato_id", contrato_id).execute().data
+            for r in supabase_execute(_allreps()):
+                reporte_cap_map[r["id"]] = r.get("capitulo")
+
+        # 2. Obtener registros aprobados
+        registros = []
+        off = 0
+        while True:
+            def _regs(o=off):
+                q = supabase.table("so_registros")\
+                    .select("reporte_id, costo_directo, cantidad_total, item_numero, item_descripcion, pk_id_id")\
+                    .eq("contrato_id", contrato_id)\
+                    .eq("nivel3_estado", "Aprobado")
+                if reporte_ids is not None:
+                    q = q.in_("reporte_id", reporte_ids)
+                if item:
+                    q = q.ilike("item_numero", f"%{item}%")
+                return q.range(o, o + 999).execute().data
+            batch = supabase_execute(_regs)
+            registros.extend(batch)
+            if len(batch) < 1000: break
+            off += 1000
+
+        # 3. Presupuesto
+        q_p = supabase.table("presupuesto")\
+            .select("capitulo, item, descripcion, costo_directo, cant_total")\
+            .eq("contrato_id", contrato_id).eq("dado_de_baja", False)
+        if capitulo: q_p = q_p.eq("capitulo", capitulo)
+        if item: q_p = q_p.eq("item", item)
+        ppto = []
+        off = 0
+        while True:
+            batch = q_p.range(off, off + 999).execute().data
+            ppto.extend(batch)
+            if len(batch) < 1000: break
+            off += 1000
+
+        # 4. Determinar campo de agrupación
+        campo = "item" if capitulo else "capitulo"
+
+        # 5. Agregar presupuesto
+        agg_p = {}; agg_p_cant = {}; desc_map = {}
+        for r in ppto:
+            k = r.get(campo) or "(sin valor)"
+            agg_p[k] = agg_p.get(k, 0) + float(r.get("costo_directo") or 0)
+            agg_p_cant[k] = agg_p_cant.get(k, 0) + float(r.get("cant_total") or 0)
+            if campo == "item" and r.get("descripcion") and k not in desc_map:
+                desc_map[k] = r["descripcion"]
+
+        # 6. Agregar obra aprobada
+        agg_c = {}; agg_c_cant = {}
+        for r in registros:
+            if campo == "item":
+                k = r.get("item_numero") or "(sin valor)"
+                if k not in desc_map and r.get("item_descripcion"):
+                    desc_map[k] = r["item_descripcion"]
+            else:
+                k = reporte_cap_map.get(r.get("reporte_id"), "Sin capítulo")
+            agg_c[k] = agg_c.get(k, 0) + float(r.get("costo_directo") or 0)
+            agg_c_cant[k] = agg_c_cant.get(k, 0) + float(r.get("cantidad_total") or 0)
+
+        keys = sorted(set(list(agg_p.keys()) + list(agg_c.keys())), key=lambda x: str(x))
+        result = []
+        for k in keys:
+            p = agg_p.get(k, 0); c = agg_c.get(k, 0)
+            result.append({
+                "nombre": k, "descripcion": desc_map.get(k, ""),
+                "presupuesto": p, "cobrado": round(c, 2),
+                "delta": round(p - c, 2),
+                "pct": round(c / p * 100, 1) if p else 0,
+                "cant_ppto": round(agg_p_cant.get(k, 0), 3),
+                "cant_cobro": round(agg_c_cant.get(k, 0), 3),
+            })
+        return {"campo": campo, "items": result}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sicoe-obra/{contrato_id}/dashboard-pkid-tabla")
+def dashboard_pkid_tabla_obra(
+    contrato_id: int,
+    capitulo: Optional[str] = None,
+    item: Optional[str] = None,
+    current_user=Depends(get_current_user)
+):
+    """
+    Reemplaza /cobro/{contrato_id}/pkid-tabla para el Dashboard.
+    Retorna misma forma: {rows: [{pk_id, cant_ppto, costo_ppto, cant_sicoe, costo_sicoe, delta_cant, delta_costo}]}
+    """
+    try:
+        # 1. Resolver reporte_ids
+        reporte_ids = None
+        if capitulo:
+            def _reps():
+                return supabase.table("so_reportes")\
+                    .select("id").eq("contrato_id", contrato_id)\
+                    .eq("capitulo", capitulo).execute().data
+            reporte_ids = [r["id"] for r in supabase_execute(_reps)]
+            if not reporte_ids:
+                return {"rows": [], "por_cobrar": 0, "devolucion": 0, "descripcion_item": ""}
+
+        # 2. Registros aprobados con pk_id_id
+        registros = []
+        off = 0
+        while True:
+            def _regs(o=off):
+                q = supabase.table("so_registros")\
+                    .select("pk_id_id, costo_directo, cantidad_total, item_numero")\
+                    .eq("contrato_id", contrato_id)\
+                    .eq("nivel3_estado", "Aprobado")
+                if reporte_ids is not None: q = q.in_("reporte_id", reporte_ids)
+                if item: q = q.ilike("item_numero", f"%{item}%")
+                return q.range(o, o + 999).execute().data
+            batch = supabase_execute(_regs)
+            registros.extend(batch)
+            if len(batch) < 1000: break
+            off += 1000
+
+        # 3. Resolver pk_id string desde pk_ids
+        pkid_ids = list({r["pk_id_id"] for r in registros if r.get("pk_id_id")})
+        pkid_str_map = {}
+        for chunk_start in range(0, len(pkid_ids), 500):
+            chunk = pkid_ids[chunk_start:chunk_start + 500]
+            def _pks(ids=chunk):
+                return supabase.table("pk_ids").select("id, pk_id").in_("id", ids).execute().data
+            for p in supabase_execute(_pks):
+                pkid_str_map[p["id"]] = p.get("pk_id") or str(p["id"])
+
+        # 4. Presupuesto por pk_id
+        q_p = supabase.table("presupuesto")\
+            .select("pk_id, cant_total, costo_directo, descripcion")\
+            .eq("contrato_id", contrato_id).eq("dado_de_baja", False)
+        if item: q_p = q_p.eq("item", item)
+        elif capitulo: q_p = q_p.eq("capitulo", capitulo)
+        ppto = []
+        off = 0
+        while True:
+            batch = q_p.range(off, off + 999).execute().data
+            ppto.extend(batch)
+            if len(batch) < 1000: break
+            off += 1000
+
+        agg_p = {}
+        for r in ppto:
+            k = r.get("pk_id") or "(sin pk)"
+            if k not in agg_p: agg_p[k] = {"cant": 0.0, "costo": 0.0, "desc": ""}
+            agg_p[k]["cant"] += float(r.get("cant_total") or 0)
+            agg_p[k]["costo"] += float(r.get("costo_directo") or 0)
+            if not agg_p[k]["desc"] and r.get("descripcion"):
+                agg_p[k]["desc"] = r["descripcion"]
+
+        agg_c = {}
+        for r in registros:
+            k = pkid_str_map.get(r.get("pk_id_id"), "(sin pk)")
+            if k not in agg_c: agg_c[k] = {"cant": 0.0, "costo": 0.0}
+            agg_c[k]["cant"] += float(r.get("cantidad_total") or 0)
+            agg_c[k]["costo"] += float(r.get("costo_directo") or 0)
+
+        keys = sorted(set(list(agg_p.keys()) + list(agg_c.keys())), key=lambda x: str(x))
+        rows = []
+        for k in keys:
+            p = agg_p.get(k, {"cant": 0.0, "costo": 0.0})
+            c = agg_c.get(k, {"cant": 0.0, "costo": 0.0})
+            rows.append({
+                "pk_id": k,
+                "cant_ppto": round(p["cant"], 3), "costo_ppto": round(p["costo"], 0),
+                "cant_sicoe": round(c["cant"], 3), "costo_sicoe": round(c["costo"], 0),
+                "delta_cant": round(p["cant"] - c["cant"], 3),
+                "delta_costo": round(p["costo"] - c["costo"], 0),
+                "descripcion": p.get("desc", ""),
+            })
+
+        desc_item = ""
+        if item:
+            d = supabase.table("presupuesto").select("descripcion")\
+                .eq("contrato_id", contrato_id).eq("item", item)\
+                .not_.is_("descripcion", "null").limit(1).execute().data
+            if d: desc_item = d[0].get("descripcion") or ""
+
+        por_cobrar = sum(r["delta_costo"] for r in rows if r["delta_costo"] > 0)
+        devolucion = sum(abs(r["delta_costo"]) for r in rows if r["delta_costo"] < 0)
+        return {"rows": rows, "por_cobrar": por_cobrar, "devolucion": devolucion, "descripcion_item": desc_item}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sicoe-obra/{contrato_id}/dashboard-pkid-colores")
+def dashboard_pkid_colores_obra(
+    contrato_id: int,
+    capitulo: Optional[str] = None,
+    item: Optional[str] = None,
+    current_user=Depends(get_current_user)
+):
+    """
+    Reemplaza /cobro/{contrato_id}/pkid-colores-drill para el mini-mapa semáforo del Dashboard.
+    Retorna misma forma: {pk_id: {cobrado, presupuesto, pct, sobrecosto}}
+    """
+    try:
+        reporte_ids = None
+        if capitulo:
+            def _reps():
+                return supabase.table("so_reportes")\
+                    .select("id").eq("contrato_id", contrato_id)\
+                    .eq("capitulo", capitulo).execute().data
+            reporte_ids = [r["id"] for r in supabase_execute(_reps)]
+
+        # Registros aprobados
+        registros = []
+        off = 0
+        while True:
+            def _regs(o=off):
+                q = supabase.table("so_registros")\
+                    .select("pk_id_id, costo_directo")\
+                    .eq("contrato_id", contrato_id)\
+                    .eq("nivel3_estado", "Aprobado")
+                if reporte_ids is not None: q = q.in_("reporte_id", reporte_ids)
+                if item: q = q.ilike("item_numero", f"%{item}%")
+                return q.range(o, o + 999).execute().data
+            batch = supabase_execute(_regs)
+            registros.extend(batch)
+            if len(batch) < 1000: break
+            off += 1000
+
+        pkid_ids = list({r["pk_id_id"] for r in registros if r.get("pk_id_id")})
+        pkid_str_map = {}
+        for chunk_start in range(0, len(pkid_ids), 500):
+            chunk = pkid_ids[chunk_start:chunk_start + 500]
+            def _pks(ids=chunk):
+                return supabase.table("pk_ids").select("id, pk_id").in_("id", ids).execute().data
+            for p in supabase_execute(_pks):
+                pkid_str_map[p["id"]] = p.get("pk_id") or str(p["id"])
+
+        cobro_agg = {}
+        for r in registros:
+            k = pkid_str_map.get(r.get("pk_id_id"))
+            if k: cobro_agg[k] = cobro_agg.get(k, 0) + float(r.get("costo_directo") or 0)
+
+        q_p = supabase.table("presupuesto")\
+            .select("pk_id, costo_directo").eq("contrato_id", contrato_id)
+        if item: q_p = q_p.eq("item", item)
+        elif capitulo: q_p = q_p.eq("capitulo", capitulo)
+        try:
+            ppto_rows = q_p.execute().data
+        except Exception:
+            ppto_rows = []
+        ppto_agg = {}
+        for r in ppto_rows:
+            k = str(r.get("pk_id") or "").strip()
+            if k: ppto_agg[k] = ppto_agg.get(k, 0) + float(r.get("costo_directo") or 0)
+
+        result = {}
+        for pk in set(list(cobro_agg.keys()) + list(ppto_agg.keys())):
+            c = cobro_agg.get(pk, 0); p = ppto_agg.get(pk, 0)
+            result[pk] = {
+                "cobrado": round(c, 2), "presupuesto": round(p, 2),
+                "pct": round(c / p * 100, 1) if p else 0,
+                "sobrecosto": c > p,
+            }
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sicoe-obra/{contrato_id}/dashboard-pkid-detalle")
+def dashboard_pkid_detalle_obra(
+    contrato_id: int,
+    pk_id: Optional[str] = None,
+    item: Optional[str] = None,
+    capitulo: Optional[str] = None,
+    current_user=Depends(get_current_user)
+):
+    """
+    Reemplaza /cobro/{contrato_id}/pkid-detalle para el popup de detalle por PK_ID.
+    Retorna misma forma: {ppto, cobro, totales}
+    """
+    try:
+        # Presupuesto
+        q_p = supabase.table("presupuesto")\
+            .select("id_pol, no_inicio, no_final, cant_total, costo_directo, descripcion, item")\
+            .eq("contrato_id", contrato_id).eq("dado_de_baja", False)
+        if pk_id: q_p = q_p.eq("pk_id", pk_id)
+        if item: q_p = q_p.eq("item", item)
+        elif capitulo: q_p = q_p.eq("capitulo", capitulo)
+        ppto = q_p.execute().data or []
+
+        # Resolver pk_id_id desde string pk_id
+        pkid_id_val = None
+        if pk_id:
+            def _pk():
+                return supabase.table("pk_ids").select("id")\
+                    .eq("pk_id", pk_id).limit(1).execute().data
+            res = supabase_execute(_pk)
+            if res: pkid_id_val = res[0]["id"]
+
+        # Registros aprobados para este pk_id
+        reporte_ids_filtered = None
+        if capitulo and not item:
+            def _reps():
+                return supabase.table("so_reportes")\
+                    .select("id").eq("contrato_id", contrato_id)\
+                    .eq("capitulo", capitulo).execute().data
+            reporte_ids_filtered = [r["id"] for r in supabase_execute(_reps)]
+
+        q_c = supabase.table("so_registros")\
+            .select("id, tramo, nodo_ini, nodo_fin, cantidad_total, costo_directo, item_descripcion, item_numero, acta_rpo_id, calzada")\
+            .eq("contrato_id", contrato_id).eq("nivel3_estado", "Aprobado")
+        if pkid_id_val: q_c = q_c.eq("pk_id_id", pkid_id_val)
+        if item: q_c = q_c.ilike("item_numero", f"%{item}%")
+        if reporte_ids_filtered is not None: q_c = q_c.in_("reporte_id", reporte_ids_filtered)
+        cobro_rows = q_c.execute().data or []
+
+        # Resolver numero_rpo para cada registro
+        acta_ids2 = list({r["acta_rpo_id"] for r in cobro_rows if r.get("acta_rpo_id")})
+        acta_map2 = {}
+        if acta_ids2:
+            def _am2():
+                return supabase.table("actas").select("id, numero_rpo")\
+                    .in_("id", acta_ids2).execute().data
+            for a in supabase_execute(_am2):
+                acta_map2[a["id"]] = a.get("numero_rpo") or a["id"]
+
+        cobro_fmt = []
+        for r in cobro_rows:
+            cobro_fmt.append({
+                "registro": r.get("id"),
+                "tramo_inicio": r.get("nodo_ini"),
+                "tramo_final": r.get("nodo_fin"),
+                "cantidad": float(r.get("cantidad_total") or 0),
+                "longitud": float(r.get("cantidad_total") or 0),
+                "costo_directo": float(r.get("costo_directo") or 0),
+                "descripcion": r.get("item_descripcion") or "",
+                "item": r.get("item_numero") or "",
+                "acta": acta_map2.get(r.get("acta_rpo_id")),
+                "calzada": r.get("calzada") or "",
+            })
+
+        cant_ppto  = sum(float(r.get("cant_total") or 0) for r in ppto)
+        costo_ppto = sum(float(r.get("costo_directo") or 0) for r in ppto)
+        cant_cobro  = sum(float(r.get("cantidad_total") or 0) for r in cobro_rows)
+        costo_cobro = sum(float(r.get("costo_directo") or 0) for r in cobro_rows)
+
+        return {
+            "ppto": ppto,
+            "cobro": cobro_fmt,
+            "totales": {
+                "cant_ppto":   round(cant_ppto, 2),
+                "costo_ppto":  round(costo_ppto, 0),
+                "cant_cobro":  round(cant_cobro, 2),
+                "costo_cobro": round(costo_cobro, 0),
+                "delta_cant":  round(cant_ppto - cant_cobro, 2),
+                "delta_costo": round(costo_ppto - costo_cobro, 0),
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/solicitar-reversion")
 def solicitar_reversion(contrato_id: int, registro_id: int, body: SolicitarReversionBody,
                         current_user=Depends(get_current_user)):
