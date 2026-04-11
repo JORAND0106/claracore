@@ -3632,6 +3632,8 @@ def analisis_registros_obra(
     abs_inicio:       Optional[float] = None,
     abs_final:        Optional[float] = None,
     estado:           Optional[str]   = None,
+    cargo:            Optional[str]   = None,
+    estado_validacion: Optional[str]  = None,
     current_user=Depends(get_current_user)
 ):
     _empty = {"modo":"general","encabezado":"Sin resultados","grupos":[],
@@ -3706,6 +3708,32 @@ def analisis_registros_obra(
             if not reporte_ids_base:
                 return _empty
         except Exception: pass
+
+    # ── 3b. Filtrar por cargo + estado_validacion sobre so_registros ────────────
+    if cargo and estado_validacion:
+        _campo_db_map_a = {
+            'Inspector':      'nivel1_estado',
+            'Residente':      'nivel2_estado',
+            'Interventoría':  'nivel3_estado',
+            'Subcontratista': 'sub_estado',
+        }
+        _campo_db_a = _campo_db_map_a.get(cargo)
+        if _campo_db_a:
+            _ev_a = estado_validacion
+            def _val_a():
+                return supabase.table("so_registros").select("reporte_id")\
+                    .eq("contrato_id", contrato_id)\
+                    .eq(_campo_db_a, _ev_a).execute().data
+            rows_val_a = supabase_execute(_val_a)
+            ids_val_a = list({r["reporte_id"] for r in rows_val_a if r.get("reporte_id")})
+            if not ids_val_a:
+                return _empty
+            if reporte_ids_base is not None:
+                reporte_ids_base = list(set(reporte_ids_base) & set(ids_val_a))
+            else:
+                reporte_ids_base = ids_val_a
+            if not reporte_ids_base:
+                return _empty
 
     # ── 4. Obtener registros (paginado para superar límite 1000 de Supabase) ──
     registros = []

@@ -6069,8 +6069,9 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
       if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
       const camposAnalisis = ['acta_rpo','semana','subcontratista_id','capitulo','item','tramo','costado','abs_inicio','abs_final','estado']
       camposAnalisis.forEach(k => { if (ef[k] !== '' && ef[k] != null) params.append(k, ef[k]) })
-      if (capasValidacion.length > 0) {
-        params.append('capas', JSON.stringify(capasValidacion))
+      if (capas.length > 0) {
+        params.append('cargo', capas[0].cargo)
+        params.append('estado_validacion', capas[0].estado)
       }
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/analisis?${params}`, {
         headers: { Authorization: `Bearer ${getToken()}` }
@@ -6329,8 +6330,8 @@ const limpiarFiltros = () => {
                       <tr key={g.label} onClick={() => {
                         const newF = { ...filtros, capitulo: g.label }
                         setFiltros(newF)
-                        buscarReportes(newF, 0)
-                        cargarAnalisis(newF)
+                        buscarReportes(newF, 0, capasValidacion)
+                        cargarAnalisis(newF, capasValidacion)
                       }} style={{ borderBottom:`1px solid ${t.border}22`, cursor:'pointer' }}
                       onMouseEnter={e => e.currentTarget.style.background = t.bg + '88'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
