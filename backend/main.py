@@ -4152,7 +4152,7 @@ def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_us
         while True:
             def _regs(o=off):
                 return supabase.table("so_registros")\
-                    .select("reporte_id, costo_directo, cantidad_total, acta_rpo_id")\
+                    .select("reporte_id, capitulo, costo_directo, cantidad_total, acta_rpo_id")\
                     .eq("contrato_id", contrato_id)\
                     .eq("nivel3_estado", "Aprobado")\
                     .range(o, o + 999).execute().data
@@ -4208,7 +4208,7 @@ def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_us
         # 7. Obra por capítulo
         obra_caps = {}
         for r in registros:
-            cap = reporte_map.get(r.get("reporte_id"), "Sin capítulo")
+            cap = r.get("capitulo") or reporte_map.get(r.get("reporte_id"), "Sin capítulo")
             obra_caps[cap] = obra_caps.get(cap, 0) + float(r.get("costo_directo") or 0)
 
         caps = sorted(set(list(ppto_caps.keys()) + list(obra_caps.keys())))

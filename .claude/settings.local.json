@@ -9,7 +9,21 @@
       "Bash(powershell -File df.ps1 \"fix SeccionUsuarios: remove polling, add subcontratista assignment, sin-acceso screen, verificar-inactividad endpoint\")",
       "Bash(powershell -File df.ps1 \"fix: revert subcontratista_id from usuarios SELECT — migration pendiente\")",
       "Bash(python3 -)",
-      "Bash(py -3 -c ':*)"
+      "Bash(py -3 -c ':*)",
+      "Bash(python validar_reportes.py)",
+      "Bash(python migrar_reportes_fix.py)",
+      "Bash(set PYTHONIOENCODING=utf-8)",
+      "Bash(python -X utf8 migrar_reportes_fix.py)",
+      "Bash(python -X utf8 -c ':*)",
+      "Bash(python -X utf8 migrar_semanas.py)",
+      "Bash(python -X utf8 recuperar_reportes.py)",
+      "Bash(python -X utf8 migrar_registros_completo.py)",
+      "Read(//c/Users/JORAND/AppData/Local/Temp/claude/c--Users-JORAND-OneDrive-Aplicaciones-y-Macros-Programaci-n-Visual-Studio-Software-ClaraCore/e18b9c6a-a648-4e8b-8e58-02619d1f64c6/tasks/**)",
+      "Bash(tasklist)",
+      "Bash(python -X utf8 diagnosticar_capitulo.py)",
+      "Bash(python -X utf8 recuperar_registros.py)",
+      "Bash(python3 -c ':*)",
+      "Bash(python -c ':*)"
     ]
   }
 }
