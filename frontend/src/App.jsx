@@ -8071,8 +8071,8 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0, fontSize = 'normal', onFontSize }) {
   const [moduloActivo, setModuloActivo] = useState('dashboard')
-  const [navReporteId, setNavReporteId] = useState(null)
-  const [navRegistroNumero, setNavRegistroNumero] = useState(null)
+  const [dashCarpetaReporte, setDashCarpetaReporte] = useState(null)
+  const [dashRegistroNumero, setDashRegistroNumero] = useState(null)
   const [menuAbierto, setMenuAbierto] = useState(false)
   const [tabInferior, setTabInferior] = useState('gantt')
   const [analisis, setAnalisis] = useState('financiero')
@@ -9797,7 +9797,11 @@ const [navRegistroId, setNavRegistroId] = useState(null)
                               {cobro.length === 0
                                 ? <tr><td colSpan={5} style={{...tdS, textAlign:'center', color:t.textMuted}}>Sin registros</td></tr>
                                 : cobro.map((r,i) => (
-                                  <tr key={i} style={{ cursor:'pointer' }} onClick={() => { setNavReporteId(r.reporte_id); setModuloActivo('sicoe_obra') }}>
+                                  <tr key={i} style={{ cursor:'pointer' }} onClick={async () => {
+                                    const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/reportes/${r.reporte_id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
+                                    const data = await res.json()
+                                    if (data?.id) { setDashCarpetaReporte({ ...data, _autoRegistro: r.registro }); setDashRegistroNumero(r.registro) }
+                                  }}>
                                     <td style={{...tdS, fontWeight:'600', color:'#00A896', textDecoration:'underline'}}>{r.registro || '—'}</td>
                                     <td style={tdS}>{r.acta || '—'}</td>
                                     <td style={tdS}>{r.tramo_inicio || '—'}</td>
@@ -9909,10 +9913,21 @@ const [navRegistroId, setNavRegistroId] = useState(null)
         )}
 
         {/* ── MÓDULO PRESUPUESTO ── */}
+        {dashCarpetaReporte && (
+          <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.6)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}>
+            <CarpetaReporte
+              t={t} usuario={usuario} API_URL={API_URL} contrato_id={contratoIdDash}
+              reporte={dashCarpetaReporte}
+              actasList={[]}
+              onClose={() => { setDashCarpetaReporte(null); setDashRegistroNumero(null) }}
+              onActualizar={() => { setDashCarpetaReporte(null); setDashRegistroNumero(null) }}
+            />
+          </div>
+        )}
         {moduloActivo === 'presupuesto' && <ModuloPresupuesto t={t} usuario={usuario} token={getToken()} s={s} navRegistroId={navRegistroId} onNavRegistroConsumed={() => setNavRegistroId(null)} />}
 
 
-        {moduloActivo === 'sicoe_obra' && <ModuloSicoeObra t={t} usuario={usuario} token={getToken()} s={s} navReporteId={navReporteId} navRegistroNumero={navRegistroNumero} onNavReporteConsumed={() => { setNavReporteId(null); setNavRegistroNumero(null) }} />}
+        {moduloActivo === 'sicoe_obra' && <ModuloSicoeObra t={t} usuario={usuario} token={getToken()} s={s} />}
 
         {/* ── Módulos próximamente ── */}
         {['almacen','gantt'].includes(moduloActivo) && (
