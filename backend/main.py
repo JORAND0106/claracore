@@ -4531,7 +4531,7 @@ def dashboard_pkid_detalle_obra(
 
         # Registros aprobados para este pk_id
         q_c = supabase.table("so_registros")\
-            .select("id, tramo, nodo_ini, nodo_fin, cantidad_total, costo_directo, item_descripcion, item_numero, acta_rpo_id, calzada, reporte_id")\
+            .select("id, numero_registro, tramo, nodo_ini, nodo_fin, cantidad_total, costo_directo, item_descripcion, item_numero, acta_rpo_id, calzada, reporte_id")\
             .eq("contrato_id", contrato_id).eq("nivel3_estado", "Aprobado")
         if pkid_id_val: q_c = q_c.eq("pk_id_id", pkid_id_val)
         if capitulo and not item: q_c = q_c.eq("capitulo", capitulo)
@@ -4551,7 +4551,9 @@ def dashboard_pkid_detalle_obra(
         cobro_fmt = []
         for r in cobro_rows:
             cobro_fmt.append({
-                "registro": r.get("id"),
+                "registro": r.get("numero_registro"),
+                "registro_id": r.get("id"),
+                "reporte_id": r.get("reporte_id"),
                 "tramo_inicio": r.get("nodo_ini"),
                 "tramo_final": r.get("nodo_fin"),
                 "cantidad": float(r.get("cantidad_total") or 0),

@@ -9800,7 +9800,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
                                   <tr key={i} style={{ cursor:'pointer' }} onClick={async () => {
                                     const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/reportes/${r.reporte_id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
                                     const data = await res.json()
-                                    if (data?.id) { setDashCarpetaReporte({ ...data, _autoRegistro: r.registro }); setDashRegistroNumero(r.registro) }
+                                    if (data?.id) { setDashCarpetaReporte({ ...data, _autoRegistro: r.registro_id }); setDashRegistroNumero(r.registro_id) }
                                   }}>
                                     <td style={{...tdS, fontWeight:'600', color:'#00A896', textDecoration:'underline'}}>{r.registro || '—'}</td>
                                     <td style={tdS}>{r.acta || '—'}</td>
