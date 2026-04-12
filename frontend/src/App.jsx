@@ -3506,7 +3506,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
 }
 
 // ─── HOJA REGISTRO ────────────────────────────────────────────────────────────
-function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, seleccionado, onToggleSeleccion, onItemAsignado, hdrs }) {
+function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, seleccionado, onToggleSeleccion, onItemAsignado, hdrs, actasList = [] }) {
   const [competencia,    setCompetencia]    = useState(registro.competencia    || '')
   const [itemBusqueda,   setItemBusqueda]   = useState(registro.item_numero || '')
   const [itemsLista,     setItemsLista]     = useState([])
@@ -3819,12 +3819,18 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           </div>
         </div>
         <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
-          <span style={{ display:'flex', alignItems:'center', gap:'5px', background: reporte.acta_rpo_numero ? `${t.primary}15` : '#EF444415', border:`1px solid ${reporte.acta_rpo_numero ? t.primary+'33' : '#EF444433'}`, borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color: reporte.acta_rpo_numero ? t.primary : '#EF4444' }}>
-            📋 {reporte.acta_rpo_numero ? `RPO #${reporte.acta_rpo_numero}` : 'Sin Acta RPO'}
-          </span>
-          <span style={{ display:'flex', alignItems:'center', gap:'5px', background:`${t.textMuted}15`, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
-            📄 {reporte.corte_numero ? `Corte #${reporte.corte_numero}` : 'Sin Corte'}
-          </span>
+          {(() => {
+            const actaNum = reporte.acta_rpo_numero ?? actasList.find(a => a.id === registro.acta_rpo_id)?.numero_rpo ?? null
+            const corteNum = reporte.corte_numero ?? registro.corte_id ?? null
+            return (<>
+              <span style={{ display:'flex', alignItems:'center', gap:'5px', background: actaNum ? `${t.primary}15` : '#EF444415', border:`1px solid ${actaNum ? t.primary+'33' : '#EF444433'}`, borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color: actaNum ? t.primary : '#EF4444' }}>
+                📋 {actaNum ? `RPO #${actaNum}` : 'Sin Acta RPO'}
+              </span>
+              <span style={{ display:'flex', alignItems:'center', gap:'5px', background:`${t.textMuted}15`, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
+                📄 {corteNum ? `Corte #${corteNum}` : 'Sin Corte'}
+              </span>
+            </>)
+          })()}
           {puedeEditar ? (
             editandoSub ? (
               <span style={{ display:'flex', alignItems:'center', gap:'6px' }}>
@@ -4274,7 +4280,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 }
 
 // ─── CARPETA REPORTE ──────────────────────────────────────────────────────────
-function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar }) {
+function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [] }) {
   const [reporte, setReporte]                     = useState(repoProp)
   const [registros, setRegistros]                 = useState(repoProp.registros || [])
   const [tabActiva, setTabActiva]                 = useState('portada')
@@ -4592,16 +4598,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           {tabActiva === 'portada' && (
             <div style={{ display:'flex', flexDirection:'column', gap:'20px' }}>
 
-              {/* GRUPO 1 — Seguimiento Contractual (primero) */}
-              <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
-                <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📑 Seguimiento Contractual</div>
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px' }}>
-                  <CampoInfo label="Acta RPO" valor={reporte.acta_rpo_numero ? `RPO #${reporte.acta_rpo_numero}` : null} />
-                  <CampoInfo label="Corte"    valor={reporte.corte_numero    ? `Corte #${reporte.corte_numero}` : null} />
-                  <CampoInfo label="Semana"   valor={reporte.semana_numero   ? `Semana ${reporte.semana_numero}${reporte.semana_periodo ? ' · ' + reporte.semana_periodo : ''}` : null} />
-                </div>
-              </div>
-
               {/* PANEL — Validación Masiva (solo nivel 2 y 3) */}
               {(nivelInfo.nivelValidacion === 2 || nivelInfo.nivelValidacion === 3) && (() => {
                 const nv        = nivelInfo.nivelValidacion
@@ -4746,40 +4742,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     ? <input value={editDesc} onChange={e => setEditDesc(e.target.value)} style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'8px 12px', color:t.text, fontSize:'13px', fontWeight:'600', boxSizing:'border-box' }} />
                     : <div style={{ fontSize:'14px', color:t.text, fontWeight:'700', background:t.bg, borderRadius:'6px', padding:'8px 12px', border:`1px solid ${t.border}` }}>{reporte.descripcion_actividad || <span style={{ color:t.textMuted, fontStyle:'italic' }}>—</span>}</div>
                   }
-                </div>
-                {/* Subcontratista | Inspector | Capítulo */}
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px' }}>
-                  {modoEdicion ? (
-                    <>
-                      <div>
-                        <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Subcontratista</div>
-                        <select value={editSubId} onChange={e => setEditSubId(e.target.value)} style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px' }}>
-                          <option value="">— Sin subcontratista —</option>
-                          {listaSubs.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Inspector</div>
-                        <select value={editInspId} onChange={e => setEditInspId(e.target.value)} style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px' }}>
-                          <option value="">— Sin inspector —</option>
-                          {listaInsp.map(i => <option key={i.id} value={i.id}>{i.nombre}</option>)}
-                        </select>
-                      </div>
-                      <div>
-                        <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Capítulo</div>
-                        <select value={editCapitulo} onChange={e => setEditCapitulo(e.target.value)} style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px' }}>
-                          <option value="">— Selecciona —</option>
-                          {listaCaps.map(c => <option key={c.capitulo} value={c.capitulo}>{c.capitulo}</option>)}
-                        </select>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <CampoInfo label="Subcontratista" valor={reporte.subcontratista_nombre} />
-                      <CampoInfo label="Inspector"       valor={reporte.inspector_nombre} />
-                      <CampoInfo label="Capítulo"        valor={reporte.capitulo} />
-                    </>
-                  )}
                 </div>
               </div>
 
@@ -5059,7 +5021,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 <HojaRegistro
                   key={reg.id} t={t} usuario={usuario} API_URL={API_URL}
                   contrato_id={contrato_id} reporte={reporte} registro={reg}
-                  puedeEditar={puedeEditar}
+                  puedeEditar={puedeEditar} actasList={actasList}
                   seleccionado={seleccionados.includes(reg.id)}
                   onToggleSeleccion={() => toggleSeleccion(reg.id)}
                   onItemAsignado={recargar}
@@ -5136,7 +5098,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                         <HojaRegistro
                           key={reg.id} t={t} usuario={usuario} API_URL={API_URL}
                           contrato_id={contrato_id} reporte={reporte} registro={reg}
-                          puedeEditar={puedeEditar}
+                          puedeEditar={puedeEditar} actasList={actasList}
                           seleccionado={seleccionados.includes(reg.id)}
                           onToggleSeleccion={() => toggleSeleccion(reg.id)}
                           onItemAsignado={recargar}
@@ -6040,7 +6002,7 @@ const limpiarFiltros = () => {
       {modalCarpeta && reporteSeleccionado && (
         <CarpetaReporte
           t={t} usuario={usuario} API_URL={API_URL} contrato_id={contrato_id}
-          reporte={reporteSeleccionado}
+          reporte={reporteSeleccionado} actasList={filtroActaList}
           onClose={() => { setModalCarpeta(false); setReporteSeleccionado(null) }}
           onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); buscarReportes(filtros, 0) }}
         />
