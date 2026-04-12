@@ -8088,6 +8088,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [moduloActivo, setModuloActivo] = useState('dashboard')
   const [dashCarpetaReporte, setDashCarpetaReporte] = useState(null)
   const [dashRegistroNumero, setDashRegistroNumero] = useState(null)
+  const [dashDetallePpto, setDashDetallePpto] = useState(null)
   const [menuAbierto, setMenuAbierto] = useState(false)
   const [tabInferior, setTabInferior] = useState('gantt')
   const [analisis, setAnalisis] = useState('financiero')
@@ -9785,8 +9786,8 @@ const [navRegistroId, setNavRegistroId] = useState(null)
                               {ppto.length === 0
                                 ? <tr><td colSpan={5} style={{...tdS, textAlign:'center', color:t.textMuted}}>Sin registros</td></tr>
                                 : ppto.map((r,i) => (
-                                  <tr key={i}>
-                                    <td style={{...tdS, fontWeight:'600', color:t.primary}}>{r.id_pol || '—'}</td>
+                                  <tr key={i} style={{ cursor:'pointer' }} onClick={() => setDashDetallePpto(r)}>
+                                    <td style={{...tdS, fontWeight:'600', color:t.primary, textDecoration:'underline'}}>{r.id_pol || '—'}</td>
                                     <td style={tdS}>{r.no_inicio || '—'}</td>
                                     <td style={tdS}>{r.no_final || '—'}</td>
                                     <td style={{...tdS, textAlign:'right'}}>{fmtN(r.cant_total)}</td>
@@ -9928,6 +9929,33 @@ const [navRegistroId, setNavRegistroId] = useState(null)
         )}
 
         {/* ── MÓDULO PRESUPUESTO ── */}
+        {dashDetallePpto && (
+          <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.6)', zIndex:10000, display:'flex', alignItems:'center', justifyContent:'center' }}
+            onClick={() => setDashDetallePpto(null)}>
+            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'500px', maxWidth:'96vw', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
+              onClick={e => e.stopPropagation()}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
+                <div style={{ fontSize:'16px', fontWeight:'700', color:t.primary }}>📋 {dashDetallePpto.id_pol || '—'}</div>
+                <button onClick={() => setDashDetallePpto(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+              </div>
+              <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+                {[
+                  ['Nodo Inicio', dashDetallePpto.no_inicio],
+                  ['Nodo Final',  dashDetallePpto.no_final],
+                  ['Cantidad',    dashDetallePpto.cant_total],
+                  ['Costo Directo', new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(dashDetallePpto.costo_directo || 0)],
+                  ['Ítem', dashDetallePpto.item],
+                  ['Descripción', dashDetallePpto.descripcion],
+                ].map(([label, val]) => val ? (
+                  <div key={label} style={{ display:'flex', justifyContent:'space-between', gap:'12px', borderBottom:`1px solid ${t.border}`, paddingBottom:'8px' }}>
+                    <span style={{ fontSize:'12px', color:t.textMuted, fontWeight:'600' }}>{label}</span>
+                    <span style={{ fontSize:'12px', color:t.text, textAlign:'right' }}>{val}</span>
+                  </div>
+                ) : null)}
+              </div>
+            </div>
+          </div>
+        )}
         {dashCarpetaReporte && (
           <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.6)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}>
             <CarpetaReporte
