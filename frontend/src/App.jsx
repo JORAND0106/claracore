@@ -4301,10 +4301,13 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     if (!repoProp?._autoRegistro) return
     const id = Number(repoProp._autoRegistro)
     setRegistroExpandido(id)
+    const reg = (repoProp.registros || []).find(r => r.id === id)
+    const tabTarget = reg?.item_numero || 'sin_asignar'
+    setTabActiva(tabTarget)
     setTimeout(() => {
       const el = document.getElementById(`registro-${id}`)
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }, 500)
+    }, 300)
   }, [repoProp?._autoRegistro])
   const [modalMover, setModalMover]               = useState(false)
   const [reportesDisponibles, setReportesDisponibles] = useState([])
