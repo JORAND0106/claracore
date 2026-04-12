@@ -3111,32 +3111,14 @@ def filtros_items_registros(
         except Exception:
             return []
 
-    # Resolver reporte_ids si hay filtro de capitulo o subcontratista
-    reporte_ids_filter = None
-    if capitulo is not None or subcontratista_id is not None:
-        try:
-            _cap_l = capitulo
-            _sub_l = subcontratista_id
-            def _reps():
-                q = supabase.table("so_reportes").select("id")\
-                    .eq("contrato_id", contrato_id)
-                if _cap_l is not None:
-                    q = q.eq("capitulo", _cap_l)
-                if _sub_l is not None:
-                    q = q.eq("subcontratista_id", _sub_l)
-                return q.execute().data
-            rep_rows = supabase_execute(_reps)
-            reporte_ids_filter = list({r["id"] for r in rep_rows if r.get("id")})
-            if not reporte_ids_filter:
-                return []
-        except Exception:
-            return []
-
     # Obtener items desde so_registros (paginado)
+    # capitulo y subcontratista_id se filtran directamente en so_registros,
+    # igual que el endpoint /analisis, para garantizar coherencia entre panel y autocomplete
     try:
         _acta_id_l   = acta_id
         _semana_id_l = semana_id
-        _rep_ids_l   = reporte_ids_filter
+        _cap_l       = capitulo
+        _sub_l       = subcontratista_id
         _q_l         = q
         item_todos: list = []
         off3 = 0
@@ -3150,8 +3132,10 @@ def filtros_items_registros(
                     qr = qr.eq("acta_rpo_id", _acta_id_l)
                 if _semana_id_l is not None:
                     qr = qr.eq("semana_id", _semana_id_l)
-                if _rep_ids_l is not None:
-                    qr = qr.in_("reporte_id", _rep_ids_l)
+                if _cap_l is not None:
+                    qr = qr.eq("capitulo", _cap_l)
+                if _sub_l is not None:
+                    qr = qr.eq("subcontratista_id", _sub_l)
                 if _q_l:
                     qr = qr.or_(f"item_numero.ilike.%{_q_l}%,item_descripcion.ilike.%{_q_l}%")
                 return qr.range(o, o + 999).execute().data
