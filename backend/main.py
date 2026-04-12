@@ -2259,7 +2259,7 @@ def listar_reportes_obra(contrato_id: int, current_user=Depends(get_current_user
         return supabase.table("so_reportes")\
             .select("*, subcontratistas(razon_social)")\
             .eq("contrato_id", contrato_id)\
-            .order("numero_reporte", desc=False).execute().data
+            .order("numero_reporte", desc=True).execute().data
     rows = supabase_execute(_q)
 
     # Batch-resolve semana_numero y acta_rpo (las FKs no están expuestas como JOINs implícitos en PostgREST)
@@ -2712,19 +2712,18 @@ def analisis_registros_obra(
         return _empty
 
     # ── 3. Resolver reporte_ids desde filtros a nivel reporte ────────────────
+    # capitulo y subcontratista_id se filtran directamente en so_registros (paso 4)
+    _cap_l = capitulo; _sub_l = subcontratista_id
     reporte_ids_base = None
-    has_rep_f = any([capitulo, subcontratista_id, tramo, costado, estado,
+    has_rep_f = any([tramo, costado, estado,
                      abs_inicio is not None, abs_final is not None])
     if has_rep_f:
         try:
-            _cap_l=capitulo; _sub_l=subcontratista_id; _tr_l=tramo
-            _cos_l=costado;  _est_l=estado
+            _tr_l=tramo; _cos_l=costado; _est_l=estado
             _ai_l=abs_inicio; _af_l=abs_final
             def _reps():
                 q = supabase.table("so_reportes").select("id")\
                     .eq("contrato_id", contrato_id)
-                if _cap_l:  q = q.eq("capitulo", _cap_l)
-                if _sub_l:  q = q.eq("subcontratista_id", _sub_l)
                 if _tr_l:   q = q.eq("tramo", _tr_l)
                 if _cos_l:  q = q.eq("calzada", _cos_l)
                 if _est_l:  q = q.eq("estado", _est_l)
@@ -2761,11 +2760,13 @@ def analisis_registros_obra(
         while True:
             def _regs(o=off):
                 q = supabase.table("so_registros")\
-                    .select("reporte_id, costo_directo, cantidad_total, item_numero, item_descripcion, unidad, acta_rpo_id, nivel1_estado, nivel2_estado, nivel3_estado")\
+                    .select("reporte_id, costo_directo, cantidad_total, item_numero, item_descripcion, unidad, acta_rpo_id, nivel1_estado, nivel2_estado, nivel3_estado, capitulo, subcontratista_id")\
                     .eq("contrato_id", contrato_id)
                 if _a_l is not None:  q = q.eq("acta_rpo_id", _a_l)
                 if _s_l is not None:  q = q.eq("semana_id", _s_l)
                 if _it_l:             q = q.ilike("item_numero", f"%{_it_l}%")
+                if _cap_l:            q = q.eq("capitulo", _cap_l)
+                if _sub_l is not None: q = q.eq("subcontratista_id", _sub_l)
                 if _rp_l is not None: q = q.in_("reporte_id", _rp_l)
                 if _vc_l and _ve_l:   q = q.eq(_vc_l, _ve_l)
                 return q.range(o, o + 999).execute().data
@@ -2811,8 +2812,7 @@ def analisis_registros_obra(
 
     if modo in ("acta_semana", "general"):
         for reg in registros:
-            rep = reporte_map.get(reg.get("reporte_id")) or {}
-            cap = rep.get("capitulo") or "Sin capítulo"
+            cap = reg.get("capitulo") or "Sin capítulo"
             ee  = _estado_efectivo(reg)
             cd  = float(reg.get("costo_directo") or 0)
             if cap not in grupos:
@@ -2863,10 +2863,9 @@ def analisis_registros_obra(
                     acta_map_local[a["id"]] = a
             except Exception: pass
         for reg in registros:
-            rep  = reporte_map.get(reg.get("reporte_id")) or {}
             ee   = _estado_efectivo(reg)
             cd   = float(reg.get("costo_directo") or 0)
-            cap  = rep.get("capitulo") or "Sin capítulo"
+            cap  = reg.get("capitulo") or "Sin capítulo"
             a_id = reg.get("acta_rpo_id")
             a    = acta_map_local.get(a_id) or {}
             nr   = a.get("numero_rpo") or a.get("consecutivo") or "?"
