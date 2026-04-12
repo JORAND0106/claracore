@@ -5447,7 +5447,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       const params = new URLSearchParams()
       const ef = { ...nuevosFiltros }
       if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
-      const camposAnalisis = ['acta_rpo','semana','subcontratista_id','capitulo','item','tramo','costado','abs_inicio','abs_final','estado']
+      const camposAnalisis = ['acta_rpo','semana','subcontratista_id','capitulo','item','tramo','costado','abs_inicio','abs_final','estado','numero_reporte','numero_registro','pk_id']
       camposAnalisis.forEach(k => { if (ef[k] !== '' && ef[k] != null) params.append(k, ef[k]) })
       if (capas.length > 0) {
         params.append('cargo', capas[0].cargo)
@@ -5782,13 +5782,21 @@ const limpiarFiltros = () => {
           </div>
           <select value={filtros.subcontratista_id} onChange={e => {
             const v = e.target.value
-            setF('subcontratista_id', v)
-            actualizarFiltrosDisponibles({ ...filtros, subcontratista_id: v })
+            const nf = { ...filtros, subcontratista_id: v }
+            setFiltros(nf)
+            actualizarFiltrosDisponibles(nf)
+            buscarReportes(nf, 0, capasValidacion)
+            cargarAnalisis(nf, capasValidacion)
           }} style={selStyle}>
             <option value="">Subcontratista…</option>
             {filtroSubcList.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
           </select>
-          <select value={filtros.estado} onChange={e => setF('estado', e.target.value)} style={selStyle}>
+          <select value={filtros.estado} onChange={e => {
+            const nf = { ...filtros, estado: e.target.value }
+            setFiltros(nf)
+            buscarReportes(nf, 0, capasValidacion)
+            cargarAnalisis(nf, capasValidacion)
+          }} style={selStyle}>
             <option value="">Estado…</option>
             {['Borrador','Sin Asignar Ítem','No Objeto de Cobro','En Papelera'].map(e => <option key={e} value={e}>{e}</option>)}
           </select>
@@ -5834,8 +5842,11 @@ const limpiarFiltros = () => {
           <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'8px', paddingTop:'8px', borderTop:`1px solid ${t.border}` }}>
             <select value={filtros.capitulo} onChange={e => {
               const v = e.target.value
-              setF('capitulo', v)
-              actualizarFiltrosDisponibles({ ...filtros, capitulo: v })
+              const nf = { ...filtros, capitulo: v }
+              setFiltros(nf)
+              actualizarFiltrosDisponibles(nf)
+              buscarReportes(nf, 0, capasValidacion)
+              cargarAnalisis(nf, capasValidacion)
             }} style={selStyle}>
               <option value="">Capítulo…</option>
               {filtroCapList.map(c => <option key={c} value={c}>{c}</option>)}
@@ -5853,7 +5864,14 @@ const limpiarFiltros = () => {
                 <div style={{ position:'absolute', top:'100%', left:0, zIndex:50, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', minWidth:'320px', maxHeight:'240px', overflowY:'auto', boxShadow:'0 4px 16px #0004', marginTop:'2px' }}>
                   {sugerenciasItem.map(s => (
                     <div key={s.item_numero}
-                      onMouseDown={() => { setF('item', s.item_numero); setSugerenciasItem([]); setMostrarSugsItem(false) }}
+                      onMouseDown={() => {
+                        const nf = { ...filtros, item: s.item_numero }
+                        setFiltros(nf)
+                        setSugerenciasItem([])
+                        setMostrarSugsItem(false)
+                        buscarReportes(nf, 0, capasValidacion)
+                        cargarAnalisis(nf, capasValidacion)
+                      }}
                       style={{ padding:'7px 12px', cursor:'pointer', fontSize:'12px', borderBottom:`1px solid ${t.border}22`, display:'flex', gap:'8px', alignItems:'baseline' }}>
                       <span style={{ color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{s.item_numero}</span>
                       <span style={{ color:t.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.item_descripcion}</span>
