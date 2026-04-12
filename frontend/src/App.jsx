@@ -4299,7 +4299,12 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   useEffect(() => {
     if (!repoProp?._autoRegistro) return
-    setRegistroExpandido(Number(repoProp._autoRegistro))
+    const id = Number(repoProp._autoRegistro)
+    setRegistroExpandido(id)
+    setTimeout(() => {
+      const el = document.getElementById(`registro-${id}`)
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 500)
   }, [repoProp?._autoRegistro])
   const [modalMover, setModalMover]               = useState(false)
   const [reportesDisponibles, setReportesDisponibles] = useState([])
@@ -5050,7 +5055,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   { emoji:'🔨', label:'Sub', estado: reg.sub_estado || 'No Revisado' },
                 ]
                 return (
-                  <div key={reg.id}>
+                  <div key={reg.id} id={`registro-${reg.id}`}>
                     <div
                       onClick={() => setRegistroExpandido(expandido ? null : reg.id)}
                       style={{ display:'flex', alignItems:'center', gap:'10px', background:'#D9770626', border:`1px solid ${expandido ? '#D97706' : '#D9770644'}`, borderLeft:'3px solid #D97706', borderRadius: expandido ? '10px 10px 0 0' : '10px', padding:'10px 16px', cursor:'pointer', transition:'border 0.15s' }}
