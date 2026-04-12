@@ -23,7 +23,8 @@
       "Bash(python -X utf8 diagnosticar_capitulo.py)",
       "Bash(python -X utf8 recuperar_registros.py)",
       "Bash(python3 -c ':*)",
-      "Bash(python -c ':*)"
+      "Bash(python -c ':*)",
+      "Bash(python Bubble/actualizar_pkid_foto.py)"
     ]
   }
 }

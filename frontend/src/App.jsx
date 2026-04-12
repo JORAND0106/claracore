@@ -4296,6 +4296,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [listaPkIds, setListaPkIds]               = useState([])
   const [seleccionados, setSeleccionados]         = useState([])
   const [registroExpandido, setRegistroExpandido] = useState(null)
+
+  useEffect(() => {
+    if (!repoProp?._autoRegistro) return
+    setRegistroExpandido(Number(repoProp._autoRegistro))
+  }, [repoProp?._autoRegistro])
   const [modalMover, setModalMover]               = useState(false)
   const [reportesDisponibles, setReportesDisponibles] = useState([])
   const [reporteDestino, setReporteDestino]       = useState('')
@@ -5224,7 +5229,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 }
 
 // ─── MÓDULO SICOE OBRA ────────────────────────────────────────────────────────
-function ModuloSicoeObra({ t, usuario, token, s }) {
+function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistroNumero = null, onNavReporteConsumed }) {
   const API_URL = import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net'
   const contrato_id = usuario?.contrato_id
 
@@ -5258,6 +5263,15 @@ function ModuloSicoeObra({ t, usuario, token, s }) {
   const [reporteEditando, setReporteEditando]         = useState(null)
   const [modalCarpeta, setModalCarpeta]               = useState(false)
   const [reporteSeleccionado, setReporteSeleccionado] = useState(null)
+
+  useEffect(() => {
+    if (!navReporteId) return
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${navReporteId}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(data => { if (data?.id) { setReporteSeleccionado({ ...data, _autoRegistro: navRegistroNumero }); setModalCarpeta(true) } })
+      .catch(() => {})
+    onNavReporteConsumed?.()
+  }, [navReporteId])
 
   const ESTADOS = ['Borrador','Sin Asignar Ítem','No Revisados','Aprobados','Pendientes','Rechazados','No Objeto de Cobro','En Papelera']
   const ESTADO_COLORS = {
@@ -8057,6 +8071,8 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0, fontSize = 'normal', onFontSize }) {
   const [moduloActivo, setModuloActivo] = useState('dashboard')
+  const [navReporteId, setNavReporteId] = useState(null)
+  const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const [menuAbierto, setMenuAbierto] = useState(false)
   const [tabInferior, setTabInferior] = useState('gantt')
   const [analisis, setAnalisis] = useState('financiero')
@@ -9781,8 +9797,8 @@ const [navRegistroId, setNavRegistroId] = useState(null)
                               {cobro.length === 0
                                 ? <tr><td colSpan={5} style={{...tdS, textAlign:'center', color:t.textMuted}}>Sin registros</td></tr>
                                 : cobro.map((r,i) => (
-                                  <tr key={i}>
-                                    <td style={{...tdS, fontWeight:'600', color:'#00A896'}}>{r.registro || '—'}</td>
+                                  <tr key={i} style={{ cursor:'pointer' }} onClick={() => { setNavReporteId(r.reporte_id); setModuloActivo('sicoe_obra') }}>
+                                    <td style={{...tdS, fontWeight:'600', color:'#00A896', textDecoration:'underline'}}>{r.registro || '—'}</td>
                                     <td style={tdS}>{r.acta || '—'}</td>
                                     <td style={tdS}>{r.tramo_inicio || '—'}</td>
                                     <td style={tdS}>{r.tramo_final || '—'}</td>
@@ -9896,7 +9912,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
         {moduloActivo === 'presupuesto' && <ModuloPresupuesto t={t} usuario={usuario} token={getToken()} s={s} navRegistroId={navRegistroId} onNavRegistroConsumed={() => setNavRegistroId(null)} />}
 
 
-        {moduloActivo === 'sicoe_obra' && <ModuloSicoeObra t={t} usuario={usuario} token={getToken()} s={s} />}
+        {moduloActivo === 'sicoe_obra' && <ModuloSicoeObra t={t} usuario={usuario} token={getToken()} s={s} navReporteId={navReporteId} navRegistroNumero={navRegistroNumero} onNavReporteConsumed={() => { setNavReporteId(null); setNavRegistroNumero(null) }} />}
 
         {/* ── Módulos próximamente ── */}
         {['almacen','gantt'].includes(moduloActivo) && (

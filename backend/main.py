@@ -2579,7 +2579,7 @@ def buscar_reportes_obra(
             q = q.eq("acta_rpo_id", acta_id_filtro)
         if reporte_ids_from_reg is not None:
             q = q.in_("id", reporte_ids_from_reg)
-        return q.order("numero_reporte", desc=False).range(offset, offset + limit).execute().data
+        return q.order("numero_reporte", desc=True).range(offset, offset + limit).execute().data
 
     rows = supabase_execute(_q)
     hay_mas = len(rows) > limit
@@ -4249,20 +4249,10 @@ def dashboard_drill_obra(
     Retorna misma forma: {campo, items: [{nombre, descripcion, presupuesto, cobrado, delta, pct, cant_ppto, cant_cobro}]}
     """
     try:
-        # 1. Resolver reporte_ids por capitulo
+        # 1. Resolver reporte_ids por capitulo — ahora capitulo vive en so_registros
         reporte_ids = None
         reporte_cap_map = {}
-        if capitulo:
-            def _reps():
-                return supabase.table("so_reportes")\
-                    .select("id, capitulo").eq("contrato_id", contrato_id)\
-                    .eq("capitulo", capitulo).execute().data
-            reps = supabase_execute(_reps)
-            reporte_ids = [r["id"] for r in reps]
-            for r in reps: reporte_cap_map[r["id"]] = r.get("capitulo")
-            if not reporte_ids:
-                return {"campo": "item" if capitulo else "capitulo", "items": []}
-        else:
+        if not capitulo:
             def _allreps():
                 return supabase.table("so_reportes")\
                     .select("id, capitulo").eq("contrato_id", contrato_id).execute().data
@@ -4275,11 +4265,11 @@ def dashboard_drill_obra(
         while True:
             def _regs(o=off):
                 q = supabase.table("so_registros")\
-                    .select("reporte_id, costo_directo, cantidad_total, item_numero, item_descripcion, pk_id_id")\
+                    .select("reporte_id, capitulo, costo_directo, cantidad_total, item_numero, item_descripcion, pk_id_id")\
                     .eq("contrato_id", contrato_id)\
                     .eq("nivel3_estado", "Aprobado")
-                if reporte_ids is not None:
-                    q = q.in_("reporte_id", reporte_ids)
+                if capitulo:
+                    q = q.eq("capitulo", capitulo)
                 if item:
                     q = q.ilike("item_numero", f"%{item}%")
                 return q.range(o, o + 999).execute().data
@@ -4322,7 +4312,7 @@ def dashboard_drill_obra(
                 if k not in desc_map and r.get("item_descripcion"):
                     desc_map[k] = r["item_descripcion"]
             else:
-                k = reporte_cap_map.get(r.get("reporte_id"), "Sin capítulo")
+                k = r.get("capitulo") or reporte_cap_map.get(r.get("reporte_id"), "Sin capítulo")
             agg_c[k] = agg_c.get(k, 0) + float(r.get("costo_directo") or 0)
             agg_c_cant[k] = agg_c_cant.get(k, 0) + float(r.get("cantidad_total") or 0)
 
@@ -4359,15 +4349,6 @@ def dashboard_pkid_tabla_obra(
     try:
         # 1. Resolver reporte_ids
         reporte_ids = None
-        if capitulo:
-            def _reps():
-                return supabase.table("so_reportes")\
-                    .select("id").eq("contrato_id", contrato_id)\
-                    .eq("capitulo", capitulo).execute().data
-            reporte_ids = [r["id"] for r in supabase_execute(_reps)]
-            if not reporte_ids:
-                return {"rows": [], "por_cobrar": 0, "devolucion": 0, "descripcion_item": ""}
-
         # 2. Registros aprobados con pk_id_id
         registros = []
         off = 0
@@ -4377,7 +4358,7 @@ def dashboard_pkid_tabla_obra(
                     .select("pk_id_id, pk_ids(pk_id), costo_directo, cantidad_total, item_numero")\
                     .eq("contrato_id", contrato_id)\
                     .eq("nivel3_estado", "Aprobado")
-                if reporte_ids is not None: q = q.in_("reporte_id", reporte_ids)
+                if capitulo: q = q.eq("capitulo", capitulo)
                 if item: q = q.ilike("item_numero", f"%{item}%")
                 return q.range(o, o + 999).execute().data
             batch = supabase_execute(_regs)
@@ -4475,7 +4456,7 @@ def dashboard_pkid_colores_obra(
                     .select("pk_id_id, pk_ids(pk_id), costo_directo")\
                     .eq("contrato_id", contrato_id)\
                     .eq("nivel3_estado", "Aprobado")
-                if reporte_ids is not None: q = q.in_("reporte_id", reporte_ids)
+                if capitulo: q = q.eq("capitulo", capitulo)
                 if item: q = q.ilike("item_numero", f"%{item}%")
                 return q.range(o, o + 999).execute().data
             batch = supabase_execute(_regs)
@@ -4549,20 +4530,12 @@ def dashboard_pkid_detalle_obra(
             if res: pkid_id_val = res[0]["id"]
 
         # Registros aprobados para este pk_id
-        reporte_ids_filtered = None
-        if capitulo and not item:
-            def _reps():
-                return supabase.table("so_reportes")\
-                    .select("id").eq("contrato_id", contrato_id)\
-                    .eq("capitulo", capitulo).execute().data
-            reporte_ids_filtered = [r["id"] for r in supabase_execute(_reps)]
-
         q_c = supabase.table("so_registros")\
-            .select("id, tramo, nodo_ini, nodo_fin, cantidad_total, costo_directo, item_descripcion, item_numero, acta_rpo_id, calzada")\
+            .select("id, tramo, nodo_ini, nodo_fin, cantidad_total, costo_directo, item_descripcion, item_numero, acta_rpo_id, calzada, reporte_id")\
             .eq("contrato_id", contrato_id).eq("nivel3_estado", "Aprobado")
         if pkid_id_val: q_c = q_c.eq("pk_id_id", pkid_id_val)
+        if capitulo and not item: q_c = q_c.eq("capitulo", capitulo)
         if item: q_c = q_c.ilike("item_numero", f"%{item}%")
-        if reporte_ids_filtered is not None: q_c = q_c.in_("reporte_id", reporte_ids_filtered)
         cobro_rows = q_c.execute().data or []
 
         # Resolver numero_rpo para cada registro
@@ -4588,6 +4561,7 @@ def dashboard_pkid_detalle_obra(
                 "item": r.get("item_numero") or "",
                 "acta": acta_map2.get(r.get("acta_rpo_id")),
                 "calzada": r.get("calzada") or "",
+                "reporte_id": r.get("reporte_id"),
             })
 
         cant_ppto  = sum(float(r.get("cant_total") or 0) for r in ppto)
