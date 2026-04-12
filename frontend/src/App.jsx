@@ -3000,10 +3000,13 @@ async function restaurar(id) {
                         </button>
                       </div>
                     </td>
-                    <td style={{ ...tdStyle,fontWeight:'600',color:t.primary,cursor:'pointer',textDecoration:'underline' }}
-                      onClick={e => { e.stopPropagation(); setModalDetallePpto(r) }}
-                      title="Ver detalle">
-                      {r.id_pol||r.pk_id||'-'}
+                    <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
+                      <span
+                        onClick={() => setModalDetallePpto(r)}
+                        title="Ver detalle"
+                        style={{ fontWeight:'600', color:t.primary, cursor:'pointer', textDecoration:'underline' }}>
+                        {r.id_pol||r.pk_id||'-'}
+                      </span>
                     </td>
                     <td style={tdStyle}>
                       {isEdit ? <input value={editValues.capitulo} onChange={e=>setEditValues({...editValues,capitulo:e.target.value})}
