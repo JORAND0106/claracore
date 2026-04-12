@@ -4513,7 +4513,7 @@ def dashboard_pkid_detalle_obra(
     try:
         # Presupuesto
         q_p = supabase.table("presupuesto")\
-            .select("id_pol, no_inicio, no_final, cant_total, costo_directo, descripcion, item")\
+            .select("id_pol, no_inicio, no_final, cant_total, costo_directo, descripcion, item, ent_handle, x_label, y_label")\
             .eq("contrato_id", contrato_id).eq("dado_de_baja", False)
         if pk_id: q_p = q_p.eq("pk_id", pk_id)
         if item: q_p = q_p.eq("item", item)

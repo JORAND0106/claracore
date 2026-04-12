@@ -9936,7 +9936,25 @@ const [navRegistroId, setNavRegistroId] = useState(null)
               onClick={e => e.stopPropagation()}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
                 <div style={{ fontSize:'16px', fontWeight:'700', color:t.primary }}>📋 {dashDetallePpto.id_pol || '—'}</div>
-                <button onClick={() => setDashDetallePpto(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
+                  {dashDetallePpto.x_label && dashDetallePpto.y_label && (
+                    <button onClick={() => {
+                      const r = dashDetallePpto
+                      const esTablet = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+                      if (!esTablet && window.__claralink_disponible) {
+                        window.location.href = `claralink://zoom?x=${r.x_label}&y=${r.y_label}&radio=20&handle=${r.ent_handle||''}`
+                      } else {
+                        fetch(`${API_URL}/cad-queue/${contratoIdDash}/highlight-registro`, {
+                          method:'POST', headers:{'Content-Type':'application/json', Authorization:`Bearer ${getToken()}`},
+                          body: JSON.stringify({ presupuesto_id: r.id })
+                        }).catch(()=>{})
+                      }
+                    }} style={{ background:t.primary, border:'none', borderRadius:'8px', padding:'6px 14px', color:'#fff', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
+                      🎯 Ver en AutoCAD
+                    </button>
+                  )}
+                  <button onClick={() => setDashDetallePpto(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                </div>
               </div>
               <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
                 {[
