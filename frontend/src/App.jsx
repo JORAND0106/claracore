@@ -9940,13 +9940,10 @@ const [navRegistroId, setNavRegistroId] = useState(null)
                   <button onClick={() => {
                     const r = dashDetallePpto
                     const esTablet = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-                    if (!esTablet && window.__claralink_disponible && r.x_label && r.y_label) {
+                    if (!esTablet && r.x_label && r.y_label) {
                       window.location.href = `claralink://zoom?x=${r.x_label}&y=${r.y_label}&radio=20&handle=${r.ent_handle||''}`
-                    } else if (r.id) {
-                      fetch(`${API_URL}/cad-queue/${contratoIdDash}/highlight-registro`, {
-                        method:'POST', headers:{'Content-Type':'application/json', Authorization:`Bearer ${getToken()}`},
-                        body: JSON.stringify({ presupuesto_id: r.id })
-                      }).catch(()=>{})
+                    } else if (dwgEnlazadoDash && popupPkid?.pkid) {
+                      enviarZoomPkid(popupPkid.pkid)
                     }
                   }} style={{ background:t.primary, border:'none', borderRadius:'8px', padding:'6px 14px', color:'#fff', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
                     🎯 Ver en AutoCAD
