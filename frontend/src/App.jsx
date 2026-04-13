@@ -5360,6 +5360,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
           fecha_inicio:  fIni.toISOString().slice(0, 10),
           fecha_fin:     fFin.toISOString().slice(0, 10),
           dia_corte:     parseInt(semDiaCorte),
+          estado:        'activa',
         })
       }
       await fetch(`${API_URL}/sicoe-obra/${contrato_id}/semanas`, {
@@ -6005,7 +6006,7 @@ const limpiarFiltros = () => {
               </div>
               <div>
                 <div style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, marginBottom:'4px' }}>CANTIDAD DE SEMANAS INICIALES</div>
-                <input type="number" min="1" max="52" value={semCantInicial} onChange={e => setSemCantInicial(parseInt(e.target.value))}
+                <input type="number" min="1" max="520" value={semCantInicial} onChange={e => setSemCantInicial(parseInt(e.target.value))}
                   style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'9px 12px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
                 <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'4px' }}>Podrás extender más semanas cuando sea necesario.</div>
               </div>

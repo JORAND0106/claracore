@@ -3800,6 +3800,7 @@ class SemanaCreate(BaseModel):
     fecha_inicio:  str
     fecha_fin:     str
     dia_corte:     int  # 0=Lunes … 6=Domingo
+    estado:        str = "activa"
 
 @app.get("/sicoe-obra/{contrato_id}/semanas")
 def listar_semanas(contrato_id: int, current_user=Depends(get_current_user)):
