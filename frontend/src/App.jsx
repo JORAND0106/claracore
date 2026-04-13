@@ -4306,9 +4306,51 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 }
 
 // ─── CARPETA REPORTE ──────────────────────────────────────────────────────────
-function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [] }) {
+function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [], filtroValidacion = null }) {
   const [reporte, setReporte]                     = useState(repoProp)
   const [registros, setRegistros]                 = useState(repoProp.registros || [])
+
+  // Mapa cargo_id → campo de nivel en so_registros
+  const CARGO_NIVEL_CAMPO = {54:'nivel1_estado',44:'nivel2_estado',
+    56:'nivel2_estado',50:'nivel3_estado',58:'nivel3_estado'}
+  const CARGO_NIVEL_PREREQ = {
+    'nivel2_estado': 'nivel1_estado',
+    'nivel3_estado': 'nivel2_estado',
+  }
+
+  // Determinar si hay un filtro de validación activo para este usuario
+  const camponivelActivo = filtroValidacion
+    ? CARGO_NIVEL_CAMPO[filtroValidacion.cargo_id] || null
+    : null
+  const estadoFiltroActivo = filtroValidacion?.estado || null
+  const prereqCampo = camponivelActivo ? CARGO_NIVEL_PREREQ[camponivelActivo] : null
+
+  // Estado: mostrar solo pendientes o todos
+  const [soloMisPendientes, setSoloMisPendientes] = useState(
+    !!(camponivelActivo && estadoFiltroActivo)
+  )
+
+  // Función que determina si un registro cumple el filtro de validación activo
+  const registroCumpleFiltro = (reg) => {
+    if (!camponivelActivo || !estadoFiltroActivo) return true
+    // Verificar prerrequisito
+    if (prereqCampo && reg[prereqCampo] !== 'Aprobado') return false
+    // Verificar estado del nivel
+    const estadoActual = reg[camponivelActivo] || 'No Revisado'
+    if (estadoFiltroActivo === 'No Revisado') {
+      return estadoActual === 'No Revisado' || estadoActual === null
+    }
+    return estadoActual === estadoFiltroActivo
+  }
+
+  // Registros filtrados según el toggle
+  const registrosMostrados = soloMisPendientes
+    ? registros.filter(registroCumpleFiltro)
+    : registros
+
+  // Conteo de pendientes para mostrar en el badge del toggle
+  const cantPendientes = registros.filter(registroCumpleFiltro).length
+
   const [tabActiva, setTabActiva]                 = useState('portada')
   const [guardandoEnlace, setGuardandoEnlace]     = useState(false)
   const parseEnlaces = (raw) => { if (!raw) return []; try { const p = JSON.parse(raw); return Array.isArray(p) ? p : [raw] } catch { return raw ? [raw] : [] } }
@@ -6128,6 +6170,7 @@ const limpiarFiltros = () => {
         <CarpetaReporte
           t={t} usuario={usuario} API_URL={API_URL} contrato_id={contrato_id}
           reporte={reporteSeleccionado} actasList={filtroActaList}
+          filtroValidacion={capasValidacion.length > 0 ? capasValidacion[0] : null}
           onClose={() => { setModalCarpeta(false); setReporteSeleccionado(null) }}
           onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); buscarReportes(filtros, 0) }}
         />
