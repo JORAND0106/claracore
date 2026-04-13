@@ -18,7 +18,6 @@ router = APIRouter(tags=["informes"])
 def inf_subcontratistas(contrato_id: int, current_user=Depends(_get_user)):
     rows = _sb.table("subcontratistas")\
         .select("id, razon_social, nit, nombre_contacto, telefono")\
-        .eq("contrato_id", contrato_id)\
         .order("razon_social").execute().data
     return rows or []
 
@@ -26,7 +25,6 @@ def inf_subcontratistas(contrato_id: int, current_user=Depends(_get_user)):
 def inf_cortes(contrato_id: int, sub_id: int, current_user=Depends(_get_user)):
     rows = _sb.table("subcontratista_cortes").select("*")\
         .eq("subcontratista_id", sub_id)\
-        .eq("contrato_id", contrato_id)\
         .order("consecutivo").execute().data
     return rows or []
 

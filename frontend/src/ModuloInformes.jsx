@@ -67,18 +67,34 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   }
 
   // ── Descarga ───────────────────────────────────────────────────────────────
-  async function descargar(url, filename, key) {
+  async function obtenerBlob(url, key) {
     setDescargando(p => ({ ...p, [key]: true })); setError(null)
     try {
       const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
-      if (!r.ok) throw new Error('Error generando PDF')
-      const blob = await r.blob()
-      const a    = document.createElement('a')
-      a.href     = URL.createObjectURL(blob)
-      a.download = filename; a.click()
-      URL.revokeObjectURL(a.href)
-    } catch (e) { setError(e.message) }
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}))
+        throw new Error(err.detail || `Error ${r.status} generando PDF`)
+      }
+      return await r.blob()
+    } catch (e) { setError(e.message); return null }
     finally { setDescargando(p => ({ ...p, [key]: false })) }
+  }
+
+  async function verPDF(url, key) {
+    const blob = await obtenerBlob(url, key)
+    if (!blob) return
+    const blobUrl = URL.createObjectURL(blob)
+    window.open(blobUrl, '_blank')
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+  }
+
+  async function descargarPDF(url, filename, key) {
+    const blob = await obtenerBlob(url, key)
+    if (!blob) return
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = filename; a.click()
+    URL.revokeObjectURL(a.href)
   }
 
   const fmtFecha = d => d
@@ -215,17 +231,29 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                   CC-SUB-001 · Resumen de cantidades por ítem + firmas
                 </div>
               </div>
+              <div style={{ display:'flex', gap:'8px' }}>
               <button
                 style={btnPdf('#0077B6', descargando['corte'])}
-                onClick={() => descargar(
+                onClick={() => verPDF(
+                  `${API}/informes/${contratoId}/pdf/corte-subcontratista/${corteId}`,
+                  'corte_prev'
+                )}
+                disabled={descargando['corte'] || descargando['corte_prev']}
+              >
+                {descargando['corte_prev'] ? '⏳...' : '👁 Vista Previa'}
+              </button>
+              <button
+                style={btnPdf('#005a8e', descargando['corte'])}
+                onClick={() => descargarPDF(
                   `${API}/informes/${contratoId}/pdf/corte-subcontratista/${corteId}`,
                   `CC-SUB-001_Corte${corteSel.consecutivo}.pdf`,
                   'corte'
                 )}
-                disabled={descargando['corte']}
+                disabled={descargando['corte'] || descargando['corte_prev']}
               >
-                {descargando['corte'] ? '⏳ Generando...' : '⬇️ Descargar PDF'}
+                {descargando['corte'] ? '⏳...' : '⬇️'}
               </button>
+            </div>
             </div>
 
             {/* CC-SUB-002 — uno por ítem */}
@@ -256,17 +284,29 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                           [{item.unidad}]
                         </span>
                       </div>
+                      <div style={{ display:'flex', gap:'8px' }}>
                       <button
-                        style={btnPdf('#00A896', descargando[key])}
-                        onClick={() => descargar(
+                        style={btnPdf('#00A896', descargando[key+'_prev'])}
+                        onClick={() => verPDF(
+                          `${API}/informes/${contratoId}/pdf/memoria-item/${corteId}?item_numero=${encodeURIComponent(item.item_numero)}`,
+                          key+'_prev'
+                        )}
+                        disabled={descargando[key] || descargando[key+'_prev']}
+                      >
+                        {descargando[key+'_prev'] ? '⏳...' : '👁 Ver'}
+                      </button>
+                      <button
+                        style={btnPdf('#007a6e', descargando[key])}
+                        onClick={() => descargarPDF(
                           `${API}/informes/${contratoId}/pdf/memoria-item/${corteId}?item_numero=${encodeURIComponent(item.item_numero)}`,
                           `CC-SUB-002_Corte${corteSel.consecutivo}_${(item.item_numero||'').replace('/','_')}.pdf`,
                           key
                         )}
-                        disabled={descargando[key]}
+                        disabled={descargando[key] || descargando[key+'_prev']}
                       >
-                        {descargando[key] ? '⏳ Generando...' : '⬇️ Memoria PDF'}
+                        {descargando[key] ? '⏳...' : '⬇️'}
                       </button>
+                    </div>
                     </div>
                   )
                 })
