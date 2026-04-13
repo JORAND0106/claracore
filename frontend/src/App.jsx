@@ -10005,7 +10005,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
 
         {moduloActivo === 'sicoe_obra' && <ModuloSicoeObra t={t} usuario={usuario} token={getToken()} s={s} />}
 
-        {moduloActivo === 'informes' && <ModuloInformes t={t} usuario={usuario} token={getToken()} s={s} />}
+        {moduloActivo === 'informes' && <ModuloInformes t={t} usuario={usuario} token={getToken()} s={s} fontSize={fontSize} />}
 
         {/* ── Módulos próximamente ── */}
         {['almacen','gantt'].includes(moduloActivo) && (

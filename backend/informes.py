@@ -36,7 +36,6 @@ def inf_subcontratistas(contrato_id: int, current_user=Depends(_get_user)):
     rows = _sb.table("subcontratistas")\
         .select("id, razon_social, nit, nombre_contacto, telefono")\
         .eq("contrato_id", contrato_id)\
-        .eq("activo", True)\
         .order("razon_social").execute().data
     return rows or []
 
