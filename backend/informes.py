@@ -157,6 +157,43 @@ def pdf_memoria_item(
     return Response(content=pdf_bytes, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
+# ── Preview / desarrollo ───────────────────────────────────────────────────────
+
+@router.get("/preview/corte-sub-001")
+def preview_corte_sub():
+    contrato = {
+        "numero": "IDU-1551-2017",
+        "objeto": "Mantenimiento y rehabilitación de la malla vial local",
+        "contratista": "CONSORCIO CONCRESCOL INZIGNIA",
+        "nit": "901.234.567-8",
+        "interventoria": "SETEC INGENIEROS CONSULTORES",
+        "logo_contratista": None
+    }
+    sub = {
+        "razon_social": "SOILING SAS",
+        "nit": "900.512.882-1",
+        "nombre_contacto": "Carlos Soiling",
+        "objeto_contrato": "Excavaciones y perforaciones"
+    }
+    corte = {
+        "consecutivo": 5,
+        "fecha_inicio": "2026-03-18",
+        "fecha_fin": "2026-04-01",
+        "tipo_periodo": "quincenal"
+    }
+    items = [
+        {"item_numero": "NP-491", "item_descripcion": "PERFORACIÓN PREBARRENADO EN DIAMETRO 3\" HASTA 12M", "unidad": "ML", "cantidad": 144.0, "vlr_unitario_sub": 144716, "costo_directo": 20839104},
+        {"item_numero": "NP-492", "item_descripcion": "EXCAVACIÓN MANUAL EN MATERIAL COMÚN", "unidad": "M3", "cantidad": 38.5, "vlr_unitario_sub": 85000, "costo_directo": 3272500},
+        {"item_numero": "NP-493", "item_descripcion": "RELLENO COMPACTADO CON MATERIAL SELECCIONADO", "unidad": "M3", "cantidad": 22.0, "vlr_unitario_sub": 120000, "costo_directo": 2640000},
+        {"item_numero": "NP-494", "item_descripcion": "SUMINISTRO E INSTALACIÓN TUBERÍA PVC D=8\"", "unidad": "ML", "cantidad": 65.0, "vlr_unitario_sub": 195000, "costo_directo": 12675000},
+        {"item_numero": "NP-495", "item_descripcion": "CONCRETO DE LIMPIEZA f'c=140 kg/cm2", "unidad": "M3", "cantidad": 8.2, "vlr_unitario_sub": 380000, "costo_directo": 3116000},
+    ]
+    total_costo = sum(i["costo_directo"] for i in items)
+    html = _html_corte_sub(contrato, sub, corte, items, total_costo, "Jorge Andrés Jaimes", "Desarrollador / Controlador de Obra")
+    pdf_bytes = _to_pdf(html)
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": "inline; filename=preview_CC-SUB-001.pdf"})
+
 # ── Utilidades ─────────────────────────────────────────────────────────────────
 
 def _to_pdf(html: str) -> bytes:
