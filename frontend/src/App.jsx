@@ -5422,10 +5422,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   // Auto-buscar al montar con el filtro de validación del cargo del usuario
   useEffect(() => {
     if (!contrato_id) return
-    const capasIniciales = nivelInfo.nivelValidacion && cargoNombreUsuario
-      ? [{ cargo: cargoNombreUsuario, estado: 'No Revisado' }]
-      : []
-    if (capasIniciales.length > 0) {
+    const CARGO_ID_NIVEL = {54:1, 44:2, 56:2, 50:3, 58:3}
+    if (cargoIdUsuario && CARGO_ID_NIVEL[cargoIdUsuario]) {
+      const capasIniciales = [{
+        cargo_id: cargoIdUsuario,
+        cargo_nombre: cargoNombreUsuario,
+        estado: 'No Revisado'
+      }]
       buscarReportes(filtros, 0, capasIniciales)
       cargarAnalisis(filtros, capasIniciales)
     }
@@ -5439,7 +5442,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
       Object.entries(ef).forEach(([k, v]) => { if (v !== '' && v != null) params.append(k, v) })
       if (capas.length > 0) {
-        params.append('cargo', capas[0].cargo)
+        params.append('cargo_id', capas[0].cargo_id)
         params.append('estado_validacion', capas[0].estado)
       }
       params.append('offset', nuevoOffset)
@@ -5482,7 +5485,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       const camposAnalisis = ['acta_rpo','semana','subcontratista_id','capitulo','item','tramo','costado','abs_inicio','abs_final','estado','numero_reporte','numero_registro','pk_id']
       camposAnalisis.forEach(k => { if (ef[k] !== '' && ef[k] != null) params.append(k, ef[k]) })
       if (capas.length > 0) {
-        params.append('cargo', capas[0].cargo)
+        params.append('cargo_id', capas[0].cargo_id)
         params.append('estado_validacion', capas[0].estado)
       }
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/analisis?${params}`, {
@@ -5516,22 +5519,22 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   }
 
   const hayFiltrosActivos = Object.values(filtros).some(v => v !== '')
-  // Capa de validación por defecto según el cargo del usuario logueado
+  const cargoIdUsuario     = usuario?.cargo_id || null
   const cargoNombreUsuario = usuario?.cargo_nombre || usuario?.cargo || ''
+
   const defaultCapasValidacion = useMemo(() => {
-    const nv = nivelInfo.nivelValidacion
-    if (!nv || !cargoNombreUsuario) return []
-    return [{ cargo: cargoNombreUsuario, estado: 'No Revisado' }]
-  }, [nivelInfo.nivelValidacion, cargoNombreUsuario])
+    const CARGO_ID_NIVEL = {54:1, 44:2, 56:2, 50:3, 58:3}
+    if (!cargoIdUsuario || !CARGO_ID_NIVEL[cargoIdUsuario]) return []
+    return [{ cargo_id: cargoIdUsuario, cargo_nombre: cargoNombreUsuario, estado: 'No Revisado' }]
+  }, [cargoIdUsuario, cargoNombreUsuario])
 
   const [capasValidacion, setCapasValidacion] = useState(() => {
-    const nv = nivelInfo.nivelValidacion
-    if (!nv || !cargoNombreUsuario) return []
-    return [{ cargo: cargoNombreUsuario, estado: 'No Revisado' }]
+    const CARGO_ID_NIVEL = {54:1, 44:2, 56:2, 50:3, 58:3}
+    if (!cargoIdUsuario || !CARGO_ID_NIVEL[cargoIdUsuario]) return []
+    return [{ cargo_id: cargoIdUsuario, cargo_nombre: cargoNombreUsuario, estado: 'No Revisado' }]
   })
-  const [capaTemp, setCapaTemp] = useState({ cargo: '', estado: '' })
+  const [capaTemp, setCapaTemp] = useState({ cargo_id: '', cargo_nombre: '', estado: '' })
 
-  // Cargos disponibles para el dropdown de validación
   const [cargosValidacionList, setCargosValidacionList] = useState([])
   useEffect(() => {
     if (!contrato_id) return
@@ -5542,11 +5545,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       .catch(() => {})
   }, [contrato_id])
 
-  // Si el usuario tiene nivel asignado, solo ve su propio cargo en el dropdown
+  const CARGO_ID_NIVEL_VALIDO = {54:1, 44:2, 56:2, 50:3, 58:3}
   const cargosDisponiblesEnFiltro = useMemo(() => {
-    if (!nivelInfo.nivelValidacion) return cargosValidacionList  // Dev/Admin: ve todos
-    return cargosValidacionList.filter(c => c === cargoNombreUsuario)
-  }, [cargosValidacionList, nivelInfo.nivelValidacion, cargoNombreUsuario])
+    if (!cargoIdUsuario || !CARGO_ID_NIVEL_VALIDO[cargoIdUsuario]) {
+      return cargosValidacionList  // Dev/Admin: ve todos
+    }
+    return cargosValidacionList.filter(c => c.id === cargoIdUsuario)
+  }, [cargosValidacionList, cargoIdUsuario])
   const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'' }
   const reportesMostrados = useMemo(() => {
     if (capasValidacion.length <= 1) return reportes
@@ -5565,7 +5570,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   }, [reportes, capasValidacion]) 
 const limpiarFiltros = () => {
     setCapasValidacion(defaultCapasValidacion)
-    setCapaTemp({ cargo: '', estado: '' })
+    setCapaTemp({ cargo_id: '', cargo_nombre: '', estado: '' })
     setFiltros(filtrosVacios)
     setReportes([])
     setAnalisis(null)
@@ -5879,22 +5884,34 @@ const limpiarFiltros = () => {
         {/* Fila 2 — Filtros avanzados (colapsable) */}
         <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'8px', paddingTop:'8px', borderTop:`1px solid ${t.border}` }}>
           <span style={{ fontSize:'12px', color:t.textMuted, fontWeight:'600' }}>Validación:</span>
-          <select value={capaTemp.cargo} onChange={e => setCapaTemp(p => ({ ...p, cargo: e.target.value }))} style={selStyle}>
+          <select value={capaTemp.cargo_id}
+            onChange={e => {
+              const sel = cargosDisponiblesEnFiltro.find(c => c.id === parseInt(e.target.value))
+              setCapaTemp(p => ({ ...p,
+                cargo_id: sel ? sel.id : '',
+                cargo_nombre: sel ? sel.nombre : ''
+              }))
+            }} style={selStyle}>
             <option value="">Cargo…</option>
-            {cargosDisponiblesEnFiltro.map(c => <option key={c} value={c}>{c}</option>)}
+            {cargosDisponiblesEnFiltro.map(c => (
+              <option key={c.id} value={c.id}>{c.nombre}</option>
+            ))}
           </select>
           <select value={capaTemp.estado} onChange={e => setCapaTemp(p => ({ ...p, estado: e.target.value }))} style={selStyle}>
             <option value="">Estado…</option>
             {['Aprobado','Pendiente','Rechazado','No Revisado'].map(e => <option key={e} value={e}>{e}</option>)}
           </select>
-          <button disabled={!capaTemp.cargo || !capaTemp.estado}
-            onClick={() => { setCapasValidacion(p => [...p, capaTemp]); setCapaTemp({ cargo:'', estado:'' }) }}
-            style={{ background:(!capaTemp.cargo || !capaTemp.estado) ? t.border : t.primary, color:'#fff', border:'none', borderRadius:'7px', padding:'5px 12px', fontSize:'12px', fontWeight:'700', cursor:(!capaTemp.cargo || !capaTemp.estado) ? 'not-allowed' : 'pointer' }}>
+          <button disabled={!capaTemp.cargo_id || !capaTemp.estado}
+            onClick={() => {
+              setCapasValidacion(p => [...p, capaTemp])
+              setCapaTemp({ cargo_id: '', cargo_nombre: '', estado: '' })
+            }}
+            style={{ background:(!capaTemp.cargo_id || !capaTemp.estado) ? t.border : t.primary, color:'#fff', border:'none', borderRadius:'7px', padding:'5px 12px', fontSize:'12px', fontWeight:'700', cursor:(!capaTemp.cargo_id || !capaTemp.estado) ? 'not-allowed' : 'pointer' }}>
             ＋ Agregar
           </button>
           {capasValidacion.map((c, i) => (
             <span key={i} style={{ background:'rgba(0,175,197,0.12)', border:'1px solid rgba(0,175,197,0.3)', borderRadius:'6px', padding:'3px 10px', fontSize:'12px', color:'#00afc5', display:'flex', alignItems:'center', gap:'6px' }}>
-              {c.cargo}: {c.estado}
+              {c.cargo_nombre}: {c.estado}
               <span onClick={() => setCapasValidacion(p => p.filter((_,j) => j !== i))} style={{ cursor:'pointer', color:'#ef4444', fontWeight:'700' }}>×</span>
             </span>
           ))}

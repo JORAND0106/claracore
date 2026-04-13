@@ -356,6 +356,20 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
 from informes import router as informes_router
 app.include_router(informes_router, prefix="/informes")
 
+# ── Mapa de cargo_id → campo de validación en so_registros ───────────────────
+CARGO_ID_NIVEL_MAP = {
+    54: 'nivel1_estado',   # Inspector de Obra
+    44: 'nivel2_estado',   # Residente de Obra
+    56: 'nivel2_estado',   # Director de Obra
+    50: 'nivel3_estado',   # Residente de Interventoría
+    58: 'nivel3_estado',   # Director de Interventoría
+}
+
+CARGO_NIVEL_PRERREQUISITO = {
+    'nivel2_estado': ('nivel1_estado', 'Aprobado'),
+    'nivel3_estado': ('nivel2_estado', 'Aprobado'),
+}
+
 # ─────────────────────────────────────────────
 # RUTAS PÚBLICAS
 # ─────────────────────────────────────────────
@@ -2413,43 +2427,30 @@ class ReporteCreate(BaseModel):
 
 @app.get("/sicoe-obra/{contrato_id}/cargos-validacion")
 def cargos_con_validacion(contrato_id: int, current_user=Depends(get_current_user)):
-    """Retorna cargos con permiso validar=True en 'Reporte de Cantidades',
-    con al menos un usuario aprobado en el contrato. Excluye Desarrollador."""
     try:
-        def _funcion():
-            return supabase.table("funciones").select("id")\
-                .ilike("nombre", "%Reporte de Cantidades%").execute().data
-        funcion_rows = supabase_execute(_funcion)
-        if not funcion_rows:
-            return []
-        funcion_id = funcion_rows[0]["id"]
-
-        def _permisos():
-            return supabase.table("permisos").select("cargo_id")\
-                .eq("funcion_id", funcion_id).eq("validar", True).execute().data
-        cargo_ids_perm = [r["cargo_id"] for r in supabase_execute(_permisos)]
-        if not cargo_ids_perm:
-            return []
+        # Cargos que están en CARGO_ID_NIVEL_MAP y tienen usuarios aprobados
+        cargo_ids_nivel = list(CARGO_ID_NIVEL_MAP.keys())
 
         def _cargos():
             return supabase.table("cargos").select("id, nombre")\
-                .in_("id", cargo_ids_perm)\
-                .neq("nombre", "Desarrollador").execute().data
+                .in_("id", cargo_ids_nivel).execute().data
         cargos_rows = supabase_execute(_cargos)
         cargo_id_nombre = {r["id"]: r["nombre"] for r in cargos_rows}
-        if not cargo_id_nombre:
-            return []
 
         def _usuarios():
             return supabase.table("usuarios").select("cargo_id")\
                 .eq("contrato_id", contrato_id)\
                 .eq("estado", "aprobado")\
-                .in_("cargo_id", list(cargo_id_nombre.keys())).execute().data
+                .in_("cargo_id", cargo_ids_nivel).execute().data
         usuarios_rows = supabase_execute(_usuarios)
         cargos_activos = {r["cargo_id"] for r in usuarios_rows}
 
-        return [cargo_id_nombre[cid] for cid in cargo_id_nombre if cid in cargos_activos]
-    except Exception:
+        return [
+            {"id": cid, "nombre": cargo_id_nombre[cid]}
+            for cid in cargo_ids_nivel
+            if cid in cargos_activos and cid in cargo_id_nombre
+        ]
+    except Exception as e:
         return []
 
 
@@ -2469,7 +2470,7 @@ def buscar_reportes_obra(
     abs_inicio: Optional[float] = None,
     abs_final: Optional[float] = None,
     estado: Optional[str] = None,
-    cargo: Optional[str] = None,
+    cargo_id: Optional[int] = None,
     estado_validacion: Optional[str] = None,
     offset: int = 0,
     limit: int = 50,
@@ -2506,48 +2507,36 @@ def buscar_reportes_obra(
         if not reporte_ids_from_reg:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
-    # Filtrar por cargo + estado_validacion ANTES de paginar
-    if cargo and estado_validacion:
-        _campo_db_map = {
-            'Inspector':                      'nivel1_estado',
-            'Residente':                      'nivel2_estado',
-            'Interventoría':                  'nivel3_estado',
-            'Subcontratista':                 'sub_estado',
-            'Inspector de Obra':              'nivel1_estado',
-            'Residente de Obra':              'nivel2_estado',
-            'Director de Obra':               'nivel2_estado',
-            'Residente de Interventoría':     'nivel3_estado',
-            'Director de Interventoría':      'nivel3_estado',
-        }
-        _campo_db_local = _campo_db_map.get(cargo)
-        if _campo_db_local:
-            _nivel_l  = _campo_db_local
-            _ev_l     = estado_validacion
+    # Filtrar por cargo_id + estado_validacion ANTES de paginar
+    if cargo_id is not None and estado_validacion:
+        _nivel_l = CARGO_ID_NIVEL_MAP.get(cargo_id)
+        if _nivel_l:
+            _ev_l = estado_validacion
+            _prereq = CARGO_NIVEL_PRERREQUISITO.get(_nivel_l)
 
             def _val():
                 q = supabase.table("so_registros").select("reporte_id")\
                     .eq("contrato_id", contrato_id)
-                # Prerrequisito de nivel
-                if _nivel_l == 'nivel2_estado':
-                    q = q.eq("nivel1_estado", "Aprobado")
-                elif _nivel_l == 'nivel3_estado':
-                    q = q.eq("nivel2_estado", "Aprobado")
-                # Filtro de estado (NULL = No Revisado)
+                if _prereq:
+                    q = q.eq(_prereq[0], _prereq[1])
                 if _ev_l == 'No Revisado':
                     q = q.or_(f"{_nivel_l}.is.null,{_nivel_l}.eq.No Revisado")
                 else:
                     q = q.eq(_nivel_l, _ev_l)
                 return q.execute().data
+
             rows_val = supabase_execute(_val)
             ids_val = list({r["reporte_id"] for r in rows_val if r.get("reporte_id")})
             if not ids_val:
-                return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+                return {"reportes": [], "total": 0, "offset": offset,
+                        "limit": limit, "hay_mas": False}
             if reporte_ids_from_reg is not None:
                 reporte_ids_from_reg = list(set(reporte_ids_from_reg) & set(ids_val))
             else:
                 reporte_ids_from_reg = ids_val
             if not reporte_ids_from_reg:
-                return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+                return {"reportes": [], "total": 0, "offset": offset,
+                        "limit": limit, "hay_mas": False}
 
     # Resolver semana_id desde numero_semana
     semana_id_filtro = None
@@ -2716,7 +2705,7 @@ def analisis_registros_obra(
     abs_inicio:       Optional[float] = None,
     abs_final:        Optional[float] = None,
     estado:           Optional[str]   = None,
-    cargo:            Optional[str]   = None,
+    cargo_id:         Optional[int]   = None,
     estado_validacion: Optional[str]  = None,
     current_user=Depends(get_current_user)
 ):
@@ -2795,28 +2784,19 @@ def analisis_registros_obra(
     # ── 3b. Resolver campo de validación para paso 4 ─────────────────────────
     _val_campo_l = None
     _val_estado_l = None
-    if cargo and estado_validacion:
-        _campo_db_map_a = {
-            'Inspector':                      'nivel1_estado',
-            'Residente':                      'nivel2_estado',
-            'Interventoría':                  'nivel3_estado',
-            'Subcontratista':                 'sub_estado',
-            'Inspector de Obra':              'nivel1_estado',
-            'Residente de Obra':              'nivel2_estado',
-            'Director de Obra':               'nivel2_estado',
-            'Residente de Interventoría':     'nivel3_estado',
-            'Director de Interventoría':      'nivel3_estado',
-        }
-        _c = _campo_db_map_a.get(cargo)
+    _val_prereq_l = None
+    if cargo_id is not None and estado_validacion:
+        _c = CARGO_ID_NIVEL_MAP.get(cargo_id)
         if _c:
-            _val_campo_l = _c
+            _val_campo_l  = _c
             _val_estado_l = estado_validacion
+            _val_prereq_l = CARGO_NIVEL_PRERREQUISITO.get(_c)
 
     # ── 4. Obtener registros (paginado para superar límite 1000 de Supabase) ──
     registros = []
     try:
         _a_l=acta_id; _s_l=semana_id; _it_l=item; _rp_l=reporte_ids_base
-        _vc_l=_val_campo_l; _ve_l=_val_estado_l
+        _vc_l=_val_campo_l; _ve_l=_val_estado_l; _vp_l=_val_prereq_l
         off = 0
         while True:
             def _regs(o=off):
@@ -2830,10 +2810,8 @@ def analisis_registros_obra(
                 if _sub_l is not None: q = q.eq("subcontratista_id", _sub_l)
                 if _rp_l is not None: q = q.in_("reporte_id", _rp_l)
                 if _vc_l and _ve_l:
-                    if _vc_l == 'nivel2_estado':
-                        q = q.eq("nivel1_estado", "Aprobado")
-                    elif _vc_l == 'nivel3_estado':
-                        q = q.eq("nivel2_estado", "Aprobado")
+                    if _vp_l:
+                        q = q.eq(_vp_l[0], _vp_l[1])
                     if _ve_l == 'No Revisado':
                         q = q.or_(f"{_vc_l}.is.null,{_vc_l}.eq.No Revisado")
                     else:
