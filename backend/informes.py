@@ -1,29 +1,12 @@
-import os, io
+import io
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from supabase import create_client
 from xhtml2pdf import pisa
-import jwt as pyjwt
+from main import supabase as _sb, get_current_user as _get_user
 
 router = APIRouter(tags=["informes"])
-
-# ── Cliente Supabase independiente (evita import circular con main.py) ──────────
-_SB_URL = os.getenv("SUPABASE_URL", "")
-_SB_KEY = os.getenv("SUPABASE_KEY", "")
-_sb     = create_client(_SB_URL, _SB_KEY) if (_SB_URL and _SB_KEY) else None
-
-_JWT_SECRET = os.getenv("JWT_SECRET", "")
-_bearer     = HTTPBearer()
-
-def _get_user(creds: HTTPAuthorizationCredentials = Depends(_bearer)):
-    try:
-        payload = pyjwt.decode(creds.credentials, _JWT_SECRET, algorithms=["HS256"])
-        return payload
-    except Exception:
-        raise HTTPException(status_code=401, detail="Token inválido")
 
 # ── REGISTRO DE FORMATOS ────────────────────────────────────────────────────────
 # CC-SUB-001 : Corte Subcontratista
