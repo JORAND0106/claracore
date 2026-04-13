@@ -3246,8 +3246,11 @@ function determinarNivelValidacion(usuario) {
   const esSubRol        = rol === 'subcontratista'
 
   let nivelValidacion = null
+  const esDev = cargo.includes('desarrollador')
 
-  if (esContratista && puedeValidar &&
+  if (esDev) {
+    nivelValidacion = 1  // Dev ve nivel Inspector por defecto para capacitación
+  } else if (esContratista && puedeValidar &&
       (cargo.includes('inspector') || cargo.includes('topógrafo') || cargo.includes('topografo'))) {
     nivelValidacion = 1
   } else if (esContratista && puedeEditar && puedeValidar && cargo.includes('residente')) {
