@@ -490,29 +490,36 @@ def registro_usuario(usuario: UsuarioRegistro):
 
 @app.get("/usuarios/me")
 def get_mi_usuario(current_user=Depends(get_current_user)):
-    """Devuelve el perfil actualizado del usuario en sesión. Usado para polling de sesión en tiempo real."""
+    """Devuelve el perfil actualizado del usuario en sesión."""
     uid = int(current_user["sub"])
-    result = supabase.table("usuarios").select("*").eq("id", uid).execute()
+    sb = get_supabase()
+    try:
+        result = sb.table("usuarios").select("*").eq("id", uid).execute()
+    except Exception:
+        raise HTTPException(status_code=503, detail="Base de datos no disponible")
     if not result.data:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     u = result.data[0]
     cargo_nombre = None
     if u.get("cargo_id"):
-        r = supabase.table("cargos").select("nombre").eq("id", u["cargo_id"]).execute()
-        if r.data: cargo_nombre = r.data[0]["nombre"]
+        try:
+            r = sb.table("cargos").select("nombre").eq("id", u["cargo_id"]).execute()
+            if r.data: cargo_nombre = r.data[0]["nombre"]
+        except Exception: pass
     rol_nombre = None
     if u.get("rol_id"):
-        r = supabase.table("roles").select("nombre").eq("id", u["rol_id"]).execute()
-        if r.data: rol_nombre = r.data[0]["nombre"]
+        try:
+            r = sb.table("roles").select("nombre").eq("id", u["rol_id"]).execute()
+            if r.data: rol_nombre = r.data[0]["nombre"]
+        except Exception: pass
     permisos = []
     if u.get("cargo_id"):
         try:
-            permisos_raw = supabase.table("permisos").select("*").eq("cargo_id", u["cargo_id"]).execute().data
+            permisos_raw = sb.table("permisos").select("*").eq("cargo_id", u["cargo_id"]).execute().data
+            funciones_map = {f["id"]: f["nombre"] for f in sb.table("funciones").select("id, nombre").execute().data}
+            permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
         except Exception:
             permisos_raw = []
-        funciones_map = {f["id"]: f["nombre"] for f in supabase.table("funciones").select("id, nombre").execute().data}
-        permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
-    # C3: Subcontratista sin subcontratista asignado → sin acceso
     if cargo_nombre and cargo_nombre.lower() == 'subcontratista' and not u.get('subcontratista_id'):
         permisos = []
     return {

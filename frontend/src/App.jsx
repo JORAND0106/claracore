@@ -10352,7 +10352,7 @@ export default function App() {
           setBannerMsg(`⚡ Tu ${msgs.join(', ')} fue actualizado por el administrador.`)
         }
       } catch { /* silencioso */ }
-    }, 15000)
+    }, 60000)
     return () => clearInterval(id)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
