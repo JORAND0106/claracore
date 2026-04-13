@@ -4,7 +4,13 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from xhtml2pdf import pisa
-from main import supabase as _sb, get_current_user as _get_user
+from main import get_current_user as _get_user
+from supabase import create_client as _create_client
+import os as _os
+_sb = _create_client(
+    _os.getenv("SUPABASE_URL", ""),
+    _os.getenv("SUPABASE_KEY", "")
+)
 
 router = APIRouter(tags=["informes"])
 
