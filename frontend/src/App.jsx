@@ -5466,6 +5466,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     if (!contrato_id) return
     const CARGO_ID_NIVEL = {54:1, 44:2, 56:2, 50:3, 58:3}
     if (cargoIdUsuario && CARGO_ID_NIVEL[cargoIdUsuario]) {
+      // Usuario con nivel de validación → busca pre-filtrado por su cargo
       const capasIniciales = [{
         cargo_id: cargoIdUsuario,
         cargo_nombre: cargoNombreUsuario,
@@ -5473,6 +5474,9 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       }]
       buscarReportes(filtros, 0, capasIniciales)
       cargarAnalisis(filtros, capasIniciales)
+    } else {
+      // Desarrollador / Admin / cargo sin nivel → busca sin filtro de validación
+      buscarReportes(filtros, 0, [])
     }
   }, [contrato_id])
 
@@ -5597,15 +5601,16 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'' }
   const reportesMostrados = useMemo(() => {
     if (capasValidacion.length <= 1) return reportes
-    const cargoMap = {
-      'Subcontratista': 'sub_estados',
-      'Inspector':      'nivel1_estados',
-      'Residente':      'nivel2_estados',
-      'Interventoría':  'nivel3_estados',
+    const cargoIdMap = {
+      54: 'nivel1_estados',
+      44: 'nivel2_estados',
+      56: 'nivel2_estados',
+      50: 'nivel3_estados',
+      58: 'nivel3_estados',
     }
     return reportes.filter(rep =>
       capasValidacion.slice(1).every(capa => {
-        const estados = rep[cargoMap[capa.cargo]] || []
+        const estados = rep[cargoIdMap[capa.cargo_id]] || []
         return estados.includes(capa.estado)
       })
     )

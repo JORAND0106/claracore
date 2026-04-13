@@ -299,7 +299,7 @@ def supabase_execute(fn, retries=3, delay=0.5):
     for i in range(retries):
         try:
             global supabase
-            supabase = create_client(_SUPABASE_URL, _SUPABASE_KEY)
+            supabase = get_supabase()
             return fn()
         except Exception as e:
             last_err = e
@@ -4288,7 +4288,7 @@ def dashboard_drill_obra(
             def _allreps():
                 return supabase.table("so_reportes")\
                     .select("id, capitulo").eq("contrato_id", contrato_id).execute().data
-            for r in supabase_execute(_allreps()):
+            for r in supabase_execute(_allreps):
                 reporte_cap_map[r["id"]] = r.get("capitulo")
 
         # 2. Obtener registros aprobados
