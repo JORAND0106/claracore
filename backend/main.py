@@ -295,14 +295,14 @@ class CambiarPassword(BaseModel):
 # ─────────────────────────────────────────────
 def supabase_execute(fn, retries=3, delay=0.5):
     import time
+    global supabase
     last_err = None
     for i in range(retries):
         try:
-            global supabase
-            supabase = get_supabase()
             return fn()
         except Exception as e:
             last_err = e
+            supabase = get_supabase()
             if i < retries - 1:
                 time.sleep(delay)
     raise last_err
@@ -4178,64 +4178,14 @@ def validar_sub(contrato_id: int, registro_id: int, body: ValidarSubBody,
 
 @app.get("/sicoe-obra/{contrato_id}/dashboard-resumen")
 def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_user)):
-    """
-    Reemplaza /cobro/{contrato_id}/resumen para el Dashboard.
-    Fuente: so_registros WHERE nivel3_estado='Aprobado' + actas + presupuesto.
-    Retorna misma forma que el endpoint de cobro para compatibilidad con frontend.
-    """
     try:
-        # 1. Obtener registros aprobados paginados
-        registros = []
-        off = 0
-        while True:
-            def _regs(o=off):
-                return supabase.table("so_registros")\
-                    .select("reporte_id, capitulo, costo_directo, cantidad_total, acta_rpo_id")\
-                    .eq("contrato_id", contrato_id)\
-                    .eq("nivel3_estado", "Aprobado")\
-                    .range(o, o + 999).execute().data
-            batch = supabase_execute(_regs)
-            registros.extend(batch)
-            if len(batch) < 1000: break
-            off += 1000
+        # 1. Resumen desde vista (una sola query)
+        def _resumen():
+            return supabase.table("vista_dashboard_resumen")\
+                .select("*").eq("contrato_id", contrato_id).execute().data
+        rows = supabase_execute(_resumen)
 
-        # 2. Resolver capitulo desde so_reportes
-        rep_ids = list({r["reporte_id"] for r in registros if r.get("reporte_id")})
-        reporte_map = {}
-        for chunk_start in range(0, len(rep_ids), 500):
-            chunk = rep_ids[chunk_start:chunk_start + 500]
-            def _reps(ids=chunk):
-                return supabase.table("so_reportes")\
-                    .select("id, capitulo").eq("contrato_id", contrato_id)\
-                    .in_("id", ids).execute().data
-            for r in supabase_execute(_reps):
-                reporte_map[r["id"]] = r.get("capitulo") or "Sin capítulo"
-
-        # 3. Resolver numero_rpo desde actas
-        acta_ids = list({r["acta_rpo_id"] for r in registros if r.get("acta_rpo_id")})
-        acta_map = {}
-        if acta_ids:
-            for chunk_start in range(0, len(acta_ids), 500):
-                chunk = acta_ids[chunk_start:chunk_start + 500]
-                def _actas(ids=chunk):
-                    return supabase.table("actas")\
-                        .select("id, numero_rpo").in_("id", ids).execute().data
-                for a in supabase_execute(_actas):
-                    acta_map[a["id"]] = a.get("numero_rpo") or a["id"]
-
-        # 4. Total cobrado
-        total_cobrado = sum(float(r.get("costo_directo") or 0) for r in registros)
-
-        # 5. Acumulado por acta RPO
-        acta_agg = {}
-        for r in registros:
-            aid = r.get("acta_rpo_id")
-            if not aid: continue
-            nr = acta_map.get(aid, aid)
-            acta_agg[nr] = acta_agg.get(nr, 0) + float(r.get("costo_directo") or 0)
-        por_acta = [{"acta": nr, "cobrado": round(v, 2)} for nr, v in sorted(acta_agg.items(), key=lambda x: x[0])]
-
-        # 6. Presupuesto por capítulo (vista existente)
+        # 2. Presupuesto por capítulo
         def _ppto():
             return supabase.table("vista_ppto_por_capitulo")\
                 .select("*").eq("contrato_id", contrato_id).execute().data
@@ -4243,11 +4193,20 @@ def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_us
         ppto_caps = {r["capitulo"]: float(r.get("presupuesto") or 0) for r in ppto_raw}
         ppto_total = sum(ppto_caps.values())
 
-        # 7. Obra por capítulo
+        # 3. Agregar en Python (datos ya resumidos)
+        total_cobrado = sum(float(r.get("costo_directo") or 0) for r in rows)
+
+        acta_agg = {}
         obra_caps = {}
-        for r in registros:
-            cap = r.get("capitulo") or reporte_map.get(r.get("reporte_id"), "Sin capítulo")
-            obra_caps[cap] = obra_caps.get(cap, 0) + float(r.get("costo_directo") or 0)
+        for r in rows:
+            cap = r.get("capitulo") or "Sin capítulo"
+            cd  = float(r.get("costo_directo") or 0)
+            obra_caps[cap] = obra_caps.get(cap, 0) + cd
+            nr = r.get("numero_rpo")
+            if nr:
+                acta_agg[nr] = acta_agg.get(nr, 0) + cd
+
+        por_acta = [{"acta": nr, "cobrado": round(v, 2)} for nr, v in sorted(acta_agg.items(), key=lambda x: x[0])]
 
         caps = sorted(set(list(ppto_caps.keys()) + list(obra_caps.keys())))
         comparativo = [

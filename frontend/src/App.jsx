@@ -6469,8 +6469,21 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           body: JSON.stringify({
             descripcion_actividad: descripcion || 'Borrador',
             capitulo: capituloSel || 'Sin asignar',
-            estado: 'Borrador'
-          })
+            estado: 'Borrador',
+            pk_id_id: pkSeleccionado?.id || null,
+            civ: pkSeleccionado?.civ || null,
+            tramo: pkSeleccionado?.tramo || null,
+            infraestructura: pkSeleccionado?.infraestructura || null,
+            calzada: pkSeleccionado?.calzada || null,
+            ubicacion: pkSeleccionado?.ubicacion || null,
+            coord_lat: coordLat || null,
+            coord_lng: coordLng || null,
+            margen: margen || null,
+            abs_inicio: parseFloat(absInicio) || null,
+            abs_final: parseFloat(absFinal) || null,
+            nodo_ini: nodoIni || null,
+            nodo_fin: nodoFin || null,
+        })
         })
         const bData = await bRes.json()
         if (!bData.id) throw new Error('No se pudo crear el borrador')
