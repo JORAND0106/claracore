@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import AdminPanel from './AdminPanel'
+import ModuloInformes from './ModuloInformes'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 
@@ -8647,6 +8648,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
             ['dashboard',    '🏠', 'Dashboard',      true],
             ['presupuesto',  '📋', 'Presupuesto',    true],
             ['sicoe_obra',   '🏗️', 'SICOE Obra',    tienePermisoSicoeObra],
+            ['informes',     '📄', 'Informes',       true],
             ['almacen',      '🏪', 'Almacén',        true],
             ['gantt',        '📅', 'Gantt',           true],
             ['semaforo',     '🗺️', 'Plano Semáforo', true],
@@ -10002,6 +10004,8 @@ const [navRegistroId, setNavRegistroId] = useState(null)
 
 
         {moduloActivo === 'sicoe_obra' && <ModuloSicoeObra t={t} usuario={usuario} token={getToken()} s={s} />}
+
+        {moduloActivo === 'informes' && <ModuloInformes t={t} usuario={usuario} token={getToken()} s={s} />}
 
         {/* ── Módulos próximamente ── */}
         {['almacen','gantt'].includes(moduloActivo) && (

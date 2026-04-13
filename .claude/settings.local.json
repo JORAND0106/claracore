@@ -24,7 +24,11 @@
       "Bash(python -X utf8 recuperar_registros.py)",
       "Bash(python3 -c ':*)",
       "Bash(python -c ':*)",
-      "Bash(python Bubble/actualizar_pkid_foto.py)"
+      "Bash(python Bubble/actualizar_pkid_foto.py)",
+      "Bash(python -)",
+      "Bash(python Bubble/migrar_registros_ad.py)",
+      "Bash(python Bubble/migrar_registros_ad_fase2.py)",
+      "Bash(python Bubble/migrar_reportes_ad.py)"
     ]
   }
 }

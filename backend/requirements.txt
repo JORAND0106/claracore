@@ -10,3 +10,4 @@ openpyxl
 requests
 cloudinary
 python-multipart
+xhtml2pdf

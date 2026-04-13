@@ -353,6 +353,9 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     except JWTError:
         raise HTTPException(status_code=401, detail="Token inválido")
 
+from informes import router as informes_router
+app.include_router(informes_router, prefix="/informes")
+
 # ─────────────────────────────────────────────
 # RUTAS PÚBLICAS
 # ─────────────────────────────────────────────
