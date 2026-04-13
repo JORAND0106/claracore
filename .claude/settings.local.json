@@ -28,7 +28,18 @@
       "Bash(python -)",
       "Bash(python Bubble/migrar_registros_ad.py)",
       "Bash(python Bubble/migrar_registros_ad_fase2.py)",
-      "Bash(python Bubble/migrar_reportes_ad.py)"
+      "Bash(python Bubble/migrar_reportes_ad.py)",
+      "Bash(awk -F: '$2 <= 1490')",
+      "Bash(awk -F: '{if \\($1+0 <= 1490\\) print}')",
+      "Bash(awk -F: '{if \\($1+0 >= 542 && $1+0 <= 1900\\) print}')",
+      "Bash(awk -F: '{if \\($1+0 >= 542 && $1+0 <= 2200\\) print}')",
+      "Bash(awk -F: '{if \\($1+0 >= 542 && $1+0 <= 600\\) print}')",
+      "Bash(awk -F: '{if \\($1+0 >= 2200 && $1+0 <= 3200\\) print}')",
+      "Bash(awk -F: '{if \\($1+0 >= 2100 && $1+0 <= 3200\\) print}')",
+      "Bash(awk -F: '{if \\($1+0 >= 4294\\) print}')",
+      "Bash(awk -F: '{if \\($1+0 >= 4294 && $1+0 <= 6096\\) print}')",
+      "Bash(awk -F: '{if \\($1+0 >= 2000 && $1+0 <= 6100\\) print}')",
+      "Bash(python -m py_compile backend/main.py)"
     ]
   }
 }

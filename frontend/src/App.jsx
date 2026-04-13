@@ -704,6 +704,7 @@ useEffect(() => {
   const puedeEditar  = esDeveloper || (_permPpto?.editar   ?? false)
   const puedeValidar = esDeveloper || (_permPpto?.validar  ?? false)
   const puedeEliminar = esDeveloper || (_permPpto?.eliminar ?? false)
+  const nivelInfo    = determinarNivelValidacion(usuario)
   const esSellado = (r) => r?.sellado === true
   const [verPapelera, setVerPapelera] = useState(false)
   const _pptoCacheRef   = useRef(null)   // { data, ts, papelera } – solo para papelera
@@ -1482,12 +1483,16 @@ async function restaurar(id) {
               <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
                 {r.cant_total != null ? Number(r.cant_total).toLocaleString('es-CO', {maximumFractionDigits:3}) : '—'}
               </div>
+              {nivelInfo.verValoresEconomicos && (
               <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
                 {r.vlr_unitario != null ? `$${Number(r.vlr_unitario).toLocaleString('es-CO')}` : '—'}
               </div>
+              )}
+              {nivelInfo.verValoresEconomicos && (
               <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
                 {r.costo_directo != null ? `$${Number(r.costo_directo).toLocaleString('es-CO')}` : '—'}
               </div>
+              )}
               <div style={{ display:'flex', gap:'4px' }}>
                 {[{valor:'Rechazado',label:'🔴'},{valor:'Pendiente',label:'🟡'},{valor:'Aprobado',label:'🟢'}].map(op => (
                   <button key={op.valor}
@@ -1890,12 +1895,16 @@ async function restaurar(id) {
                                 <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
                                   {r.cant_total != null ? Number(r.cant_total).toLocaleString('es-CO', {maximumFractionDigits:3}) : '—'}
                                 </div>
+                                {nivelInfo.verValoresEconomicos && (
                                 <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
                                   {r.vlr_unitario != null ? `$${Number(r.vlr_unitario).toLocaleString('es-CO')}` : '—'}
                                 </div>
+                                )}
+                                {nivelInfo.verValoresEconomicos && (
                                 <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
                                   {r.costo_directo != null ? `$${Number(r.costo_directo).toLocaleString('es-CO')}` : '—'}
                                 </div>
+                                )}
                                 <div style={{ display:'flex', gap:'4px', alignItems:'center' }}>
                                   {/* Botón guardar dims */}
                                   {puedeEditar && editDims[r.id] !== undefined && (
@@ -2156,10 +2165,12 @@ async function restaurar(id) {
                     <F label="ESPESOR" val={fmtN(r.espesor)} flex={0.6}/>
                     <F label="CANT. TOTAL" val={fmtN(r.cant_total)} flex={0.6}/>
                   </Row>
+                  {nivelInfo.verValoresEconomicos && (
                   <Row>
                     <F label="VLR. UNITARIO" val={fmt(r.vlr_unitario)}/>
                     <F label="COSTO DIRECTO" val={fmt(r.costo_directo)}/>
                   </Row>
+                  )}
                   <Row><F label="TRAMO" val={r.tramo}/><F label="CALZADA" val={r.calzada}/><F label="PK" val={r.pk_id} flex={0.5}/></Row>
                   {/* Acciones desde buzón */}
                   {modalDetallePptoEditable && (puedeEditar || puedeEliminar) && !esSellado(r) && (
@@ -3044,12 +3055,16 @@ async function restaurar(id) {
                         : fmtN(r.espesor)}
                     </td>
                     <td style={{ ...tdStyle,textAlign:'right',fontWeight:'600' }}>{fmtN(r.cant_total)}</td>
+                    {nivelInfo.verValoresEconomicos && (
                     <td style={{ ...tdStyle,textAlign:'right' }}>
                       {isEdit ? <input type="number" value={editValues.vlr_unitario} onChange={e=>setEditValues({...editValues,vlr_unitario:e.target.value})}
                         style={{ width:'90px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
                         : fmt(r.vlr_unitario)}
                     </td>
+                    )}
+                    {nivelInfo.verValoresEconomicos && (
                     <td style={{ ...tdStyle,textAlign:'right',fontWeight:'700',color:t.primary }}>{fmt(r.costo_directo)}</td>
+                    )}
                     <td style={tdStyle} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', gap:'6px', alignItems:'center', justifyContent:'center' }}>
                         {SEMAFORO.map(s => {
@@ -5404,6 +5419,18 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     })
   }, [contrato_id])
 
+  // Auto-buscar al montar con el filtro de validación del cargo del usuario
+  useEffect(() => {
+    if (!contrato_id) return
+    const capasIniciales = nivelInfo.nivelValidacion && cargoNombreUsuario
+      ? [{ cargo: cargoNombreUsuario, estado: 'No Revisado' }]
+      : []
+    if (capasIniciales.length > 0) {
+      buscarReportes(filtros, 0, capasIniciales)
+      cargarAnalisis(filtros, capasIniciales)
+    }
+  }, [contrato_id])
+
   const buscarReportes = async (nuevosFiltros, nuevoOffset = 0, capas = []) => {
     setCargando(true)
     try {
@@ -5489,8 +5516,37 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   }
 
   const hayFiltrosActivos = Object.values(filtros).some(v => v !== '')
-  const [capasValidacion, setCapasValidacion] = useState([])
+  // Capa de validación por defecto según el cargo del usuario logueado
+  const cargoNombreUsuario = usuario?.cargo_nombre || usuario?.cargo || ''
+  const defaultCapasValidacion = useMemo(() => {
+    const nv = nivelInfo.nivelValidacion
+    if (!nv || !cargoNombreUsuario) return []
+    return [{ cargo: cargoNombreUsuario, estado: 'No Revisado' }]
+  }, [nivelInfo.nivelValidacion, cargoNombreUsuario])
+
+  const [capasValidacion, setCapasValidacion] = useState(() => {
+    const nv = nivelInfo.nivelValidacion
+    if (!nv || !cargoNombreUsuario) return []
+    return [{ cargo: cargoNombreUsuario, estado: 'No Revisado' }]
+  })
   const [capaTemp, setCapaTemp] = useState({ cargo: '', estado: '' })
+
+  // Cargos disponibles para el dropdown de validación
+  const [cargosValidacionList, setCargosValidacionList] = useState([])
+  useEffect(() => {
+    if (!contrato_id) return
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/cargos-validacion`,
+      { headers: { Authorization: `Bearer ${getToken()}` } })
+      .then(r => r.json())
+      .then(data => setCargosValidacionList(Array.isArray(data) ? data : []))
+      .catch(() => {})
+  }, [contrato_id])
+
+  // Si el usuario tiene nivel asignado, solo ve su propio cargo en el dropdown
+  const cargosDisponiblesEnFiltro = useMemo(() => {
+    if (!nivelInfo.nivelValidacion) return cargosValidacionList  // Dev/Admin: ve todos
+    return cargosValidacionList.filter(c => c === cargoNombreUsuario)
+  }, [cargosValidacionList, nivelInfo.nivelValidacion, cargoNombreUsuario])
   const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'' }
   const reportesMostrados = useMemo(() => {
     if (capasValidacion.length <= 1) return reportes
@@ -5508,7 +5564,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     )
   }, [reportes, capasValidacion]) 
 const limpiarFiltros = () => {
-    setCapasValidacion([])
+    setCapasValidacion(defaultCapasValidacion)
     setCapaTemp({ cargo: '', estado: '' })
     setFiltros(filtrosVacios)
     setReportes([])
@@ -5825,7 +5881,7 @@ const limpiarFiltros = () => {
           <span style={{ fontSize:'12px', color:t.textMuted, fontWeight:'600' }}>Validación:</span>
           <select value={capaTemp.cargo} onChange={e => setCapaTemp(p => ({ ...p, cargo: e.target.value }))} style={selStyle}>
             <option value="">Cargo…</option>
-            {['Subcontratista','Inspector','Residente','Interventoría'].map(c => <option key={c} value={c}>{c}</option>)}
+            {cargosDisponiblesEnFiltro.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
           <select value={capaTemp.estado} onChange={e => setCapaTemp(p => ({ ...p, estado: e.target.value }))} style={selStyle}>
             <option value="">Estado…</option>

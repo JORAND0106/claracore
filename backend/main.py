@@ -2332,19 +2332,13 @@ def obtener_usuario(usuario_id: int, current_user=Depends(get_current_user)):
 
 @app.get("/sicoe-obra/{contrato_id}/inspectores")
 def listar_inspectores(contrato_id: int, current_user=Depends(get_current_user)):
-    def _q():
-        return supabase.table("so_registros")\
-            .select("inspector_id")\
-            .eq("contrato_id", contrato_id)\
-            .not_.is_("inspector_id", "null").execute().data
-    rows = supabase_execute(_q)
-    ids = list({r["inspector_id"] for r in rows if r.get("inspector_id")})
-    if not ids:
-        return []
     def _u():
         return supabase.table("usuarios")\
             .select("id, nombre, apellidos")\
-            .in_("id", ids).execute().data
+            .eq("contrato_id", contrato_id)\
+            .eq("estado", "aprobado")\
+            .eq("cargo_id", 54)\
+            .order("nombre").execute().data
     usuarios = supabase_execute(_u)
     return [{"id": u["id"], "nombre": f"{u.get('nombre','')} {u.get('apellidos','')}".strip()} for u in usuarios]
 
@@ -2417,6 +2411,48 @@ class ReporteCreate(BaseModel):
     acta_rpo_id: Optional[int] = None
     corte_id: Optional[int] = None
 
+@app.get("/sicoe-obra/{contrato_id}/cargos-validacion")
+def cargos_con_validacion(contrato_id: int, current_user=Depends(get_current_user)):
+    """Retorna cargos con permiso validar=True en 'Reporte de Cantidades',
+    con al menos un usuario aprobado en el contrato. Excluye Desarrollador."""
+    try:
+        def _funcion():
+            return supabase.table("funciones").select("id")\
+                .ilike("nombre", "%Reporte de Cantidades%").execute().data
+        funcion_rows = supabase_execute(_funcion)
+        if not funcion_rows:
+            return []
+        funcion_id = funcion_rows[0]["id"]
+
+        def _permisos():
+            return supabase.table("permisos").select("cargo_id")\
+                .eq("funcion_id", funcion_id).eq("validar", True).execute().data
+        cargo_ids_perm = [r["cargo_id"] for r in supabase_execute(_permisos)]
+        if not cargo_ids_perm:
+            return []
+
+        def _cargos():
+            return supabase.table("cargos").select("id, nombre")\
+                .in_("id", cargo_ids_perm)\
+                .neq("nombre", "Desarrollador").execute().data
+        cargos_rows = supabase_execute(_cargos)
+        cargo_id_nombre = {r["id"]: r["nombre"] for r in cargos_rows}
+        if not cargo_id_nombre:
+            return []
+
+        def _usuarios():
+            return supabase.table("usuarios").select("cargo_id")\
+                .eq("contrato_id", contrato_id)\
+                .eq("estado", "aprobado")\
+                .in_("cargo_id", list(cargo_id_nombre.keys())).execute().data
+        usuarios_rows = supabase_execute(_usuarios)
+        cargos_activos = {r["cargo_id"] for r in usuarios_rows}
+
+        return [cargo_id_nombre[cid] for cid in cargo_id_nombre if cid in cargos_activos]
+    except Exception:
+        return []
+
+
 @app.get("/sicoe-obra/{contrato_id}/reportes/buscar")
 def buscar_reportes_obra(
     contrato_id: int,
@@ -2473,18 +2509,35 @@ def buscar_reportes_obra(
     # Filtrar por cargo + estado_validacion ANTES de paginar
     if cargo and estado_validacion:
         _campo_db_map = {
-            'Inspector':      'nivel1_estado',
-            'Residente':      'nivel2_estado',
-            'Interventoría':  'nivel3_estado',
-            'Subcontratista': 'sub_estado',
+            'Inspector':                      'nivel1_estado',
+            'Residente':                      'nivel2_estado',
+            'Interventoría':                  'nivel3_estado',
+            'Subcontratista':                 'sub_estado',
+            'Inspector de Obra':              'nivel1_estado',
+            'Residente de Obra':              'nivel2_estado',
+            'Director de Obra':               'nivel2_estado',
+            'Residente de Interventoría':     'nivel3_estado',
+            'Director de Interventoría':      'nivel3_estado',
         }
         _campo_db_local = _campo_db_map.get(cargo)
         if _campo_db_local:
-            _ev_local = estado_validacion
+            _nivel_l  = _campo_db_local
+            _ev_l     = estado_validacion
+
             def _val():
-                return supabase.table("so_registros").select("reporte_id")\
-                    .eq("contrato_id", contrato_id)\
-                    .eq(_campo_db_local, _ev_local).execute().data
+                q = supabase.table("so_registros").select("reporte_id")\
+                    .eq("contrato_id", contrato_id)
+                # Prerrequisito de nivel
+                if _nivel_l == 'nivel2_estado':
+                    q = q.eq("nivel1_estado", "Aprobado")
+                elif _nivel_l == 'nivel3_estado':
+                    q = q.eq("nivel2_estado", "Aprobado")
+                # Filtro de estado (NULL = No Revisado)
+                if _ev_l == 'No Revisado':
+                    q = q.or_(f"{_nivel_l}.is.null,{_nivel_l}.eq.No Revisado")
+                else:
+                    q = q.eq(_nivel_l, _ev_l)
+                return q.execute().data
             rows_val = supabase_execute(_val)
             ids_val = list({r["reporte_id"] for r in rows_val if r.get("reporte_id")})
             if not ids_val:
@@ -2744,10 +2797,15 @@ def analisis_registros_obra(
     _val_estado_l = None
     if cargo and estado_validacion:
         _campo_db_map_a = {
-            'Inspector':      'nivel1_estado',
-            'Residente':      'nivel2_estado',
-            'Interventoría':  'nivel3_estado',
-            'Subcontratista': 'sub_estado',
+            'Inspector':                      'nivel1_estado',
+            'Residente':                      'nivel2_estado',
+            'Interventoría':                  'nivel3_estado',
+            'Subcontratista':                 'sub_estado',
+            'Inspector de Obra':              'nivel1_estado',
+            'Residente de Obra':              'nivel2_estado',
+            'Director de Obra':               'nivel2_estado',
+            'Residente de Interventoría':     'nivel3_estado',
+            'Director de Interventoría':      'nivel3_estado',
         }
         _c = _campo_db_map_a.get(cargo)
         if _c:
@@ -2771,7 +2829,15 @@ def analisis_registros_obra(
                 if _cap_l:            q = q.eq("capitulo", _cap_l)
                 if _sub_l is not None: q = q.eq("subcontratista_id", _sub_l)
                 if _rp_l is not None: q = q.in_("reporte_id", _rp_l)
-                if _vc_l and _ve_l:   q = q.eq(_vc_l, _ve_l)
+                if _vc_l and _ve_l:
+                    if _vc_l == 'nivel2_estado':
+                        q = q.eq("nivel1_estado", "Aprobado")
+                    elif _vc_l == 'nivel3_estado':
+                        q = q.eq("nivel2_estado", "Aprobado")
+                    if _ve_l == 'No Revisado':
+                        q = q.or_(f"{_vc_l}.is.null,{_vc_l}.eq.No Revisado")
+                    else:
+                        q = q.eq(_vc_l, _ve_l)
                 return q.range(o, o + 999).execute().data
             batch = supabase_execute(_regs)
             registros.extend(batch)
