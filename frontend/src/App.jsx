@@ -5345,46 +5345,40 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   }
 
   const crearSemanasIniciales = async () => {
-    if (!semFechaInicio) return
-    setCreandoSemanas(true)
-    try {
-      const semanas = []
-      let fechaBase = new Date(semFechaInicio + 'T00:00:00')
-      for (let i = 0; i < semCantInicial; i++) {
-        const fIni = new Date(fechaBase)
-        fIni.setDate(fechaBase.getDate() + i * 7)
-        const fFin = new Date(fIni)
-        fFin.setDate(fIni.getDate() + 6)
-        semanas.push({
-          numero_semana: i + 1,
-          fecha_inicio:  fIni.toISOString().slice(0, 10),
-          fecha_fin:     fFin.toISOString().slice(0, 10),
-          dia_corte:     parseInt(semDiaCorte),
-          estado:        'activa',
-        })
-      }
-      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/semanas`, {
-        method: 'POST', headers: hdrsJSON, body: JSON.stringify(semanas)
+  if (!semFechaInicio) return
+  setCreandoSemanas(true)
+  try {
+    const semanas = []
+    let fechaBase = new Date(semFechaInicio + 'T00:00:00')
+    for (let i = 0; i < semCantInicial; i++) {
+      const fIni = new Date(fechaBase)
+      fIni.setDate(fechaBase.getDate() + i * 7)
+      const fFin = new Date(fIni)
+      fFin.setDate(fIni.getDate() + 6)
+      semanas.push({
+        numero_semana: i + 1,
+        fecha_inicio:  fIni.toISOString().slice(0, 10),
+        fecha_fin:     fFin.toISOString().slice(0, 10),
+        dia_corte:     parseInt(semDiaCorte),
+        estado:        'activa',
       })
-      setModalIniciarSem(false)
-      cargarSemanaVigente()
-    } catch(e) {}
+    }
+    const CHUNK = 50
+    for (let c = 0; c < semanas.length; c += CHUNK) {
+      const lote = semanas.slice(c, c + CHUNK)
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/semanas`, {
+        method: 'POST', headers: hdrsJSON, body: JSON.stringify(lote)
+      })
+      if (!res.ok) throw new Error(`Error en lote ${c/CHUNK + 1}: ${res.status}`)
+    }
+    setModalIniciarSem(false)
+    cargarSemanaVigente()
+  } catch(e) {
+    alert('Error creando semanas: ' + e.message)
+  } finally {
     setCreandoSemanas(false)
   }
-
-  const extenderSemanas = async () => {
-    setExtendiendo(true)
-    try {
-      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/semanas/extender?n_semanas=${nSemanas}`, {
-        method: 'POST', headers: hdrsJSON
-      })
-      setModalSemana(false)
-      setAlertaSemana(false)
-      cargarSemanaVigente()
-    } catch(e) {}
-    setExtendiendo(false)
-  }
-
+}
   useEffect(() => { if (contrato_id) cargarSemanaVigente() }, [contrato_id])
 
   useEffect(() => {
