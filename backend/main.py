@@ -299,7 +299,7 @@ def supabase_execute(fn, retries=3, delay=0.5):
     for i in range(retries):
         try:
             global supabase
-            supabase = get_supabase()
+            supabase = create_client(_SUPABASE_URL, _SUPABASE_KEY)
             return fn()
         except Exception as e:
             last_err = e
