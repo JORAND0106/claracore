@@ -3,9 +3,9 @@ import { useState, useEffect } from 'react'
 const API = 'https://claracore-backend.azurewebsites.net'
 
 const FS = {
-  small:  { base: 11, sub: 10, title: 17, section: 10 },
-  normal: { base: 13, sub: 11, title: 20, section: 11 },
-  large:  { base: 15, sub: 13, title: 23, section: 12 },
+  small:  { base: 13, sub: 12, title: 20, section: 12 },
+  normal: { base: 16, sub: 14, title: 24, section: 13 },
+  large:  { base: 20, sub: 17, title: 30, section: 15 },
 }
 
 export default function ModuloInformes({ t, usuario, token, s, fontSize = 'normal' }) {
