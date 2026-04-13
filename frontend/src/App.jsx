@@ -6463,6 +6463,27 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     try {
       // Usar variable local para evitar problemas de closure con el estado asíncrono
       let idParaGuardar = borradorId
+      // Guardar localización si el reporte ya existía como borrador
+      if (borradorId && pkSeleccionado) {
+          await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}/localizacion`, {
+              method: 'PATCH', headers: { ...hdrs, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  pk_id_id: pkSeleccionado?.id || null,
+                  civ: pkSeleccionado?.civ || null,
+                  tramo: pkSeleccionado?.tramo || null,
+                  infraestructura: pkSeleccionado?.infraestructura || null,
+                  calzada: pkSeleccionado?.calzada || null,
+                  ubicacion: pkSeleccionado?.ubicacion || null,
+                  coord_lat: coordLat || null,
+                  coord_lng: coordLng || null,
+                  margen: margen || null,
+                  abs_inicio: parseFloat(absInicio) || null,
+                  abs_final: parseFloat(absFinal) || null,
+                  nodo_ini: nodoIni || null,
+                  nodo_fin: nodoFin || null,
+              })
+          })
+      }            
       if (!idParaGuardar) {
         const bRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
           method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },

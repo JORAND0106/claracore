@@ -3545,6 +3545,28 @@ def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, c
     result = supabase_execute(_upd)
     return result[0] if result else {}
 
+@app.patch("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/localizacion")
+def actualizar_localizacion_borrador(contrato_id: int, reporte_id: int, body: dict, current_user=Depends(get_current_user)):
+    """Solo actualiza localización si el reporte está en Borrador."""
+    def _check():
+        return supabase.table("so_reportes").select("estado")\
+            .eq("id", reporte_id).eq("contrato_id", contrato_id).single().execute().data
+    reporte = supabase_execute(_check)
+    if not reporte or reporte.get("estado") != "Borrador":
+        raise HTTPException(status_code=400, detail="Solo se puede actualizar localización en Borrador")
+    campos = {k: v for k, v in body.items() if k in (
+        'pk_id_id','civ','tramo','infraestructura','calzada',
+        'ubicacion','coord_lat','coord_lng','abs_inicio','abs_final',
+        'nodo_ini','nodo_fin','margen'
+    )}
+    if not campos:
+        raise HTTPException(status_code=400, detail="Sin campos de localización")
+    def _upd():
+        return supabase.table("so_reportes").update(campos)\
+            .eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
+    result = supabase_execute(_upd)
+    return result[0] if result else {}
+
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}")
 def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate, current_user=Depends(get_current_user)):
     data = {k: v for k, v in body.dict().items() if v is not None}
