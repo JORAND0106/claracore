@@ -31,8 +31,6 @@ load_dotenv()
 
 app = FastAPI(title="ClaraCore API")
 
-_mantenimiento = {"activo": False, "mensaje": "", "activado_en": None}  # v2
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -375,23 +373,6 @@ CARGO_NIVEL_PRERREQUISITO = {
 # ─────────────────────────────────────────────
 # RUTAS PÚBLICAS
 # ─────────────────────────────────────────────
-
-@app.get("/mantenimiento")
-def get_mantenimiento():
-    return _mantenimiento
-
-@app.post("/mantenimiento")
-def activar_mantenimiento(body: dict):
-    global _mantenimiento
-    secret = body.get("secret", "")
-    if secret != "claracore_deploy_2026":
-        raise HTTPException(status_code=403, detail="No autorizado")
-    _mantenimiento = {
-        "activo": body.get("activo", True),
-        "mensaje": body.get("mensaje", "Actualización del sistema en curso. Por favor guarda tu trabajo."),
-        "activado_en": datetime.utcnow().isoformat()
-    }
-    return _mantenimiento
 
 @app.get("/")
 def root():

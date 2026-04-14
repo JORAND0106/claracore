@@ -614,8 +614,6 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   
   // ── Enlace DWG ──────────────────────────────────────────────────────────── 
   const [dwgEnlazado, setDwgEnlazado] = useState(false)
-  const [mantenimiento, setMantenimiento] = useState(null)
-  const [cuentaRegresiva, setCuentaRegresiva] = useState(null)
   useEffect(() => {
     if (!contratoId) return
     const check = async () => {
@@ -10476,7 +10474,7 @@ export default function App() {
       } catch { /* silencioso */ }
     }, 60000)
     return () => clearInterval(id)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps--
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
 useEffect(() => {
     const ping = () => fetch('https://claracore-backend.azurewebsites.net/').catch(() => {})
@@ -10485,14 +10483,22 @@ useEffect(() => {
     return () => clearInterval(iv)
   }, [])
 
-useEffect(() => {
+  const [mantenimiento, setMantenimiento] = useState(null)
+  const [cuentaRegresiva, setCuentaRegresiva] = useState(null)
+
+  useEffect(() => {
     const checkMant = async () => {
       try {
         const r = await fetch(`${API}/mantenimiento`)
         if (r.ok) {
           const d = await r.json()
-          if (d.activo) { setMantenimiento(d); setCuentaRegresiva(20) }
-          else { setMantenimiento(null); setCuentaRegresiva(null) }
+          if (d.activo) {
+            setMantenimiento(d)
+            setCuentaRegresiva(20)
+          } else {
+            setMantenimiento(null)
+            setCuentaRegresiva(null)
+          }
         }
       } catch {}
     }
@@ -10504,8 +10510,8 @@ useEffect(() => {
   useEffect(() => {
     if (cuentaRegresiva === null) return
     if (cuentaRegresiva <= 0) { window.location.reload(); return }
-    const timer = setTimeout(() => setCuentaRegresiva(v => v - 1), 1000)
-    return () => clearTimeout(timer)
+    const t = setTimeout(() => setCuentaRegresiva(v => v - 1), 1000)
+    return () => clearTimeout(t)
   }, [cuentaRegresiva])
 
   async function handleLoginOk(u, token) {
