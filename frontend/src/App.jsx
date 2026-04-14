@@ -4236,7 +4236,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               const err = await res.json().catch(() => ({}))
               throw new Error(err.detail || `Error ${res.status}`)
             }
-            onItemAsignado()
+            setToastMsg(`✅ Registro ${estadoValidando.toLowerCase()} correctamente`)
+            setTimeout(() => { setToastMsg(null); onItemAsignado() }, 2500)
           } catch(e) {
             alert(`No se pudo aplicar la validación: ${e.message}`)
           }

@@ -4061,7 +4061,54 @@ def _insertar_comentario(contrato_id: int, registro_id: int, autor_id: int,
 
     def _ins():
         return supabase.table("so_registro_comentarios").insert(row).execute().data
-    return supabase_execute(_ins)
+    supabase_execute(_ins)
+
+    enlaces_nuevos = comentario_data.get("enlaces") or []
+    if enlaces_nuevos:
+        try:
+            def _get_reg():
+                return supabase.table("so_registros").select("enlace_soporte")\
+                    .eq("id", registro_id).eq("contrato_id", contrato_id)\
+                    .limit(1).execute().data
+            reg_rows = supabase_execute(_get_reg)
+            existing_raw = reg_rows[0].get("enlace_soporte") if reg_rows else None
+            try:
+                existing = json.loads(existing_raw) if existing_raw else []
+                if not isinstance(existing, list): existing = [existing_raw]
+            except Exception:
+                existing = [existing_raw] if existing_raw else []
+            merged = existing + [e for e in enlaces_nuevos if e not in existing]
+            def _upd_reg():
+                return supabase.table("so_registros")\
+                    .update({"enlace_soporte": json.dumps(merged)})\
+                    .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
+            supabase_execute(_upd_reg)
+        except Exception:
+            pass
+
+    # Si el comentario tiene enlaces, acumularlos en so_registros.enlace_soporte
+    enlaces_nuevos = comentario_data.get("enlaces") or []
+    if enlaces_nuevos:
+        try:
+            def _get_reg():
+                return supabase.table("so_registros").select("enlace_soporte")\
+                    .eq("id", registro_id).eq("contrato_id", contrato_id)\
+                    .limit(1).execute().data
+            reg_rows = supabase_execute(_get_reg)
+            existing_raw = reg_rows[0].get("enlace_soporte") if reg_rows else None
+            try:
+                existing = json.loads(existing_raw) if existing_raw else []
+                if not isinstance(existing, list): existing = [existing_raw]
+            except Exception:
+                existing = [existing_raw] if existing_raw else []
+            merged = existing + [e for e in enlaces_nuevos if e not in existing]
+            def _upd_reg():
+                return supabase.table("so_registros")\
+                    .update({"enlace_soporte": json.dumps(merged)})\
+                    .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
+            supabase_execute(_upd_reg)
+        except Exception:
+            pass  # No bloquear la validación si falla el merge de enlaces
 
 
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/validar-nivel1")
@@ -4088,6 +4135,23 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
         if body.comentario_data:
             _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
                                  tipo_override="validacion")
+            destinatarios = body.comentario_data.get("destinatarios") or []
+            for dest in destinatarios:
+                dest_id = dest.get("id") if isinstance(dest, dict) else None
+                if dest_id:
+                    try:
+                        def _notif(did=dest_id):
+                            return supabase.table("notificaciones").insert({
+                                "usuario_id": did,
+                                "contrato_id": contrato_id,
+                                "tipo": "validacion",
+                                "titulo": f"Validación Nivel 1: {body.estado}",
+                                "mensaje": body.comentario_data.get("mensaje", ""),
+                                "leida": False
+                            }).execute().data
+                        supabase_execute(_notif)
+                    except Exception:
+                        pass
         return {"ok": True}
     except HTTPException:
         raise
