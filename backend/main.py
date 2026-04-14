@@ -2536,7 +2536,7 @@ def buscar_reportes_obra(
             ids_val = list({r["reporte_id"] for r in rows_val if r.get("reporte_id")})
             # Cuando hay filtro de validación, excluir reportes en estados que no
             # deben ser visibles para niveles de validación
-            _ESTADOS_EXCLUIDOS_VALIDACION = {'Borrador', 'Sin Asignar Ítem', 'No Objeto de Cobro', 'En Papelera'}
+            _ESTADOS_EXCLUIDOS_VALIDACION = {'Borrador', 'Sin Asignar Ítem', 'No Objeto de Cobro', 'En Papelera', 'Aprobados', 'Rechazados', 'Pendientes'}
             if ids_val:
                 def _filter_estados():
                     return supabase.table("so_reportes").select("id, estado")\

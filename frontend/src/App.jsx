@@ -3274,11 +3274,14 @@ function determinarNivelValidacion(usuario) {
     nivelValidacion = 3
   }
 
-  const esApoyoTecnico  = esInterventoria && !puedeValidar &&
-                          (cargo.includes('apoyo') || cargo.includes('técnico') || cargo.includes('tecnico'))
-  const esSubcontratista = esSubRol || cargo.includes('subcontratista')
+  const esOperativoContratista   = rol === 'operativo contratista'
+  const esOperativoInterventoria = rol === 'operativo interventoría' || rol === 'operativo interventoria'
+  const esOperativo              = esOperativoContratista || esOperativoInterventoria
+  const esApoyoTecnico           = esInterventoria && !puedeValidar &&
+                                   (cargo.includes('apoyo') || cargo.includes('técnico') || cargo.includes('tecnico'))
+  const esSubcontratista         = esSubRol || cargo.includes('subcontratista')
 
-  const verValoresEconomicos = !(nivelValidacion === 1 || esApoyoTecnico)
+  const verValoresEconomicos = !(esOperativo || esApoyoTecnico)
 
   const rolOrigen = esInterventoria ? 'interventoria'
                   : esSubRol        ? 'subcontratista'
@@ -5934,7 +5937,10 @@ const limpiarFiltros = () => {
             cargarAnalisis(nf, capasValidacion)
           }} style={selStyle}>
             <option value="">Estado…</option>
-            {['Borrador','Sin Asignar Ítem','No Objeto de Cobro','En Papelera'].map(e => <option key={e} value={e}>{e}</option>)}
+            {(puedeEditar
+              ? ['Borrador','Sin Asignar Ítem','No Revisados','Aprobados','Pendientes','Rechazados','No Objeto de Cobro','En Papelera']
+              : ['No Revisados','Aprobados','Pendientes','Rechazados']
+            ).map(e => <option key={e} value={e}>{e}</option>)}
           </select>
           <div style={{ marginLeft:'auto', display:'flex', gap:'6px', alignItems:'center' }}>
             <button onClick={() => setFiltrosAvanzados(v => !v)}
