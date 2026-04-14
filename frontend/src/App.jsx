@@ -10476,7 +10476,7 @@ export default function App() {
       } catch { /* silencioso */ }
     }, 60000)
     return () => clearInterval(id)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps--
 
 useEffect(() => {
     const ping = () => fetch('https://claracore-backend.azurewebsites.net/').catch(() => {})

@@ -31,7 +31,7 @@ load_dotenv()
 
 app = FastAPI(title="ClaraCore API")
 
-_mantenimiento = {"activo": False, "mensaje": "", "activado_en": None}
+_mantenimiento = {"activo": False, "mensaje": "", "activado_en": None}  # v2
 
 app.add_middleware(
     CORSMiddleware,
