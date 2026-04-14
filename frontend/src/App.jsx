@@ -5384,6 +5384,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   }
 
   const perm = (usuario?.permisos || []).find(p => p.funcion_nombre === 'Reporte de Cantidades')
+  const puedeVer    = perm?.ver || nivelInfo.nivelValidacion !== null
   const puedeCrear  = perm?.crear
   const puedeEditar = perm?.editar
   const nivelInfo   = determinarNivelValidacion(usuario)
@@ -6078,7 +6079,7 @@ const limpiarFiltros = () => {
                 const data = await r.json()
                 setReporteEditando(data)
                 setModalNuevoReporte(true)
-              } else if (esSub || puedeEditar) {
+              } else if (esSub || puedeVer) {
                 const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
                 const data = await r.json()
                 setReporteSeleccionado(data)

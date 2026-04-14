@@ -821,7 +821,7 @@ def check_reset_autorizado(email: str):
 
 @app.post("/auth/cambiar-password-temporal")
 def cambiar_password_temporal(body: CambiarPassword):
-    solicitud = supabase.table("password_reset_requests").select("*").eq("email", body.email).eq("estado", "autorizado").execute()
+    solicitud = supabase.table("password_reset_requests").select("*").eq("email", body.email).eq("estado", "autorizado").order("id", desc=True).limit(1).execute()
     if not solicitud.data:
         raise HTTPException(status_code=403, detail="No tienes autorización para cambiar la contraseña")
     s = solicitud.data[0]
@@ -2534,6 +2534,15 @@ def buscar_reportes_obra(
 
             rows_val = supabase_execute(_val)
             ids_val = list({r["reporte_id"] for r in rows_val if r.get("reporte_id")})
+            # Cuando hay filtro de validación, excluir reportes en estados que no
+            # deben ser visibles para niveles de validación
+            _ESTADOS_EXCLUIDOS_VALIDACION = {'Borrador', 'Sin Asignar Ítem', 'No Objeto de Cobro', 'En Papelera'}
+            if ids_val:
+                def _filter_estados():
+                    return supabase.table("so_reportes").select("id, estado")\
+                        .in_("id", ids_val).execute().data
+                _rep_estados = supabase_execute(_filter_estados)
+                ids_val = [r["id"] for r in _rep_estados if r.get("estado") not in _ESTADOS_EXCLUIDOS_VALIDACION]
             if not ids_val:
                 return {"reportes": [], "total": 0, "offset": offset,
                         "limit": limit, "hay_mas": False}
