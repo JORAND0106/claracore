@@ -5982,7 +5982,7 @@ const limpiarFiltros = () => {
             <option value="">Subcontratista…</option>
             {filtroSubcList.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
           </select>
-          <select value={filtros.estado} onChange={e => {
+          {(puedeEditar || !nivelInfo.nivelValidacion) && <select value={filtros.estado} onChange={e => {
             const nf = { ...filtros, estado: e.target.value }
             setFiltros(nf)
             buscarReportes(nf, 0, capasValidacion)
@@ -5993,7 +5993,7 @@ const limpiarFiltros = () => {
               ? ['Borrador','Sin Asignar Ítem','No Revisados','Aprobados','Pendientes','Rechazados','No Objeto de Cobro','En Papelera']
               : ['No Revisados','Aprobados','Pendientes','Rechazados']
             ).map(e => <option key={e} value={e}>{e}</option>)}
-          </select>
+          </select>}
           <div style={{ marginLeft:'auto', display:'flex', gap:'6px', alignItems:'center' }}>
             <button onClick={() => setFiltrosAvanzados(v => !v)}
               style={{ ...selStyle, background:'transparent', cursor:'pointer', whiteSpace:'nowrap', color:t.textMuted }}>

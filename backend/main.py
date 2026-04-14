@@ -2546,13 +2546,15 @@ def buscar_reportes_obra(
             ids_val = list({r["reporte_id"] for r in rows_val if r.get("reporte_id")})
             # Cuando hay filtro de validación, excluir reportes en estados que no
             # deben ser visibles para niveles de validación
-            _ESTADOS_EXCLUIDOS_VALIDACION = {'Borrador', 'Sin Asignar Ítem', 'No Objeto de Cobro', 'En Papelera', 'Aprobados', 'Rechazados', 'Pendientes'}
+            _ESTADOS_SIEMPRE_EXCLUIDOS = {'Borrador', 'Sin Asignar Ítem', 'En Papelera'}
+            if _ev_l == 'No Revisado':
+                _ESTADOS_SIEMPRE_EXCLUIDOS.update({'Aprobados', 'Rechazados', 'Pendientes', 'No Objeto de Cobro'})
             if ids_val:
                 def _filter_estados():
                     return supabase.table("so_reportes").select("id, estado")\
                         .in_("id", ids_val).execute().data
                 _rep_estados = supabase_execute(_filter_estados)
-                ids_val = [r["id"] for r in _rep_estados if r.get("estado") not in _ESTADOS_EXCLUIDOS_VALIDACION]
+                ids_val = [r["id"] for r in _rep_estados if r.get("estado") not in _ESTADOS_SIEMPRE_EXCLUIDOS]
             if not ids_val:
                 return {"reportes": [], "total": 0, "offset": offset,
                         "limit": limit, "hay_mas": False}
@@ -2853,13 +2855,15 @@ def analisis_registros_obra(
     rep_ids_found = list({r["reporte_id"] for r in registros if r.get("reporte_id")})
     # Si hay filtro de validación activo, excluir reportes en estados no visibles
     if _val_campo_l and rep_ids_found:
-        _ESTADOS_EXCLUIDOS_VALIDACION = {'Borrador', 'Sin Asignar Ítem', 'No Objeto de Cobro', 'En Papelera', 'Aprobados', 'Rechazados', 'Pendientes'}
+        _ESTADOS_SIEMPRE_EXCLUIDOS = {'Borrador', 'Sin Asignar Ítem', 'En Papelera'}
+        if _val_estado_l == 'No Revisado':
+            _ESTADOS_SIEMPRE_EXCLUIDOS.update({'Aprobados', 'Rechazados', 'Pendientes', 'No Objeto de Cobro'})
         _cid_excl = contrato_id
         def _excl(ids=rep_ids_found):
             return supabase.table("so_reportes").select("id, estado")\
                 .eq("contrato_id", _cid_excl).in_("id", ids).execute().data
         _rep_estados_excl = supabase_execute(_excl)
-        _ids_permitidos = {r["id"] for r in _rep_estados_excl if r.get("estado") not in _ESTADOS_EXCLUIDOS_VALIDACION}
+        _ids_permitidos = {r["id"] for r in _rep_estados_excl if r.get("estado") not in _ESTADOS_SIEMPRE_EXCLUIDOS}
         registros = [r for r in registros if r.get("reporte_id") in _ids_permitidos]
         rep_ids_found = list({r["reporte_id"] for r in registros if r.get("reporte_id")})
     reporte_map: dict = {}
