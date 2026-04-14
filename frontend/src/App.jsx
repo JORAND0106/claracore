@@ -3248,13 +3248,12 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t }) {
 function determinarNivelValidacion(usuario) {
   const rol     = (usuario?.rol_nombre || usuario?.rol || '').toLowerCase()
   const cargo   = (usuario?.cargo_nombre || usuario?.cargo || '').toLowerCase()
-  const modulos = usuario?.permisos_modulos || []
-
-  const modRpt  = modulos.find(m =>
-    (m.modulo_nombre || m.nombre || '').toLowerCase().includes('reporte de cantidades')
+  const permisos = usuario?.permisos || []
+  const permRpt  = permisos.find(p =>
+    (p.funcion_nombre || '').toLowerCase().includes('reporte de cantidades')
   )
-  const puedeValidar = !!(modRpt?.puede_validar ?? modRpt?.validar)
-  const puedeEditar  = !!(modRpt?.puede_editar  ?? modRpt?.editar)
+  const puedeValidar = !!(permRpt?.validar)
+  const puedeEditar  = !!(permRpt?.editar)
 
   const esContratista   = rol === 'contratista' || rol === 'operativo contratista'
   const esInterventoria = rol === 'interventoría' || rol === 'interventoria' || rol === 'operativo interventoría' || rol === 'operativo interventoria'
