@@ -8577,13 +8577,18 @@ async function enviarZoomPkid(pkid) {
   }
 
 const [navRegistroId, setNavRegistroId] = useState(null)
+const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
   function handleNavegar(notif) {
     if (!notif?.modulo) return
     const modMap = { PRESUPUESTO:'presupuesto', COBRO:'sicoe_obra', AUTH:'dashboard' }
-    setModuloActivo(modMap[notif.modulo] || 'dashboard')
+    const modulo = notif.modulo?.toLowerCase()
+    setModuloActivo(modMap[notif.modulo] || modulo || 'dashboard')
     if (notif.entidad_id && notif.modulo === 'PRESUPUESTO') {
       setNavRegistroId(parseInt(notif.entidad_id))
+    }
+    if (notif.entidad_id && modulo === 'sicoe_obra' && notif.entidad_tipo === 'registro') {
+      setNavRegistroNumero(parseInt(notif.entidad_id))
     }
   }
     useEffect(() => {
@@ -10243,7 +10248,7 @@ const [navRegistroId, setNavRegistroId] = useState(null)
         {moduloActivo === 'presupuesto' && <ModuloPresupuesto t={t} usuario={usuario} token={getToken()} s={s} navRegistroId={navRegistroId} onNavRegistroConsumed={() => setNavRegistroId(null)} />}
 
 
-        {moduloActivo === 'sicoe_obra' && <ModuloSicoeObra t={t} usuario={usuario} token={getToken()} s={s} />}
+        {moduloActivo === 'sicoe_obra' && <ModuloSicoeObra t={t} usuario={usuario} token={getToken()} s={s} navRegistroNumero={navRegistroNumero} onNavReporteConsumed={() => setNavRegistroNumero(null)} />}
 
         {moduloActivo === 'informes' && <ModuloInformes t={t} usuario={usuario} token={getToken()} s={s} fontSize={fontSize} />}
 
