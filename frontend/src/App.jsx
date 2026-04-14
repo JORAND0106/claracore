@@ -4298,19 +4298,20 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         <div style={{ display:'flex', justifyContent:'flex-end', paddingTop:'12px', borderTop:`1px solid ${C.borde}` }}>
           {toastMsg && (
             <div style={{
-              position:'fixed', bottom:'32px', left:'50%', transform:'translateX(-50%)',
-              background:'#0F6E56', color:'#E1F5EE', borderRadius:'10px',
-              padding:'12px 20px', display:'flex', alignItems:'center', gap:'10px',
-              zIndex:9999, minWidth:'260px', pointerEvents:'none',
+              position:'fixed', top:'50%', left:'50%',
+              transform:'translateX(-50%) translateY(-50%)',
+              background:'#0F6E56', color:'#E1F5EE', borderRadius:'16px',
+              padding:'28px 40px', display:'flex', alignItems:'center', gap:'20px',
+              zIndex:9999, minWidth:'420px', pointerEvents:'none',
               animation:'fadeUp 0.3s ease'
             }}>
-              <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+              <svg width="40" height="40" viewBox="0 0 20 20" fill="none">
                 <circle cx="10" cy="10" r="9" stroke="#9FE1CB" strokeWidth="1.5"/>
                 <path d="M6 10l3 3 5-5" stroke="#9FE1CB" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
               <div>
-                <p style={{margin:0, fontSize:'13px', fontWeight:'500', color:'#E1F5EE'}}>Cambios guardados</p>
-                <p style={{margin:0, fontSize:'11px', color:'#9FE1CB'}}>{toastMsg}</p>
+                <p style={{margin:0, fontSize:'22px', fontWeight:'700', color:'#E1F5EE'}}>Cambios guardados</p>
+                <p style={{margin:0, fontSize:'16px', color:'#9FE1CB', marginTop:'4px'}}>{toastMsg}</p>
               </div>
             </div>
           )}
