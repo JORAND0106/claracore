@@ -3652,7 +3652,7 @@ def get_acta_rpo_vigente(contrato_id: int, current_user=Depends(get_current_user
             return supabase.table("actas")\
                 .select("id, numero_rpo, fecha_inicio, fecha_fin")\
                 .eq("contrato_id", contrato_id)\
-                .eq("tipo_grupo", "cobro")\
+                .eq("tipo_grupo", "RPO")\
                 .lte("fecha_inicio", today)\
                 .gte("fecha_fin", today)\
                 .order("id", desc=True).limit(1).execute().data
@@ -3673,8 +3673,8 @@ def buscar_items_listado(contrato_id: int, q: str = "", capitulo: str = None, co
         if competencia:
             query = query.eq("competencia", competencia)
         if q:
-            query = query.ilike("descripcion", f"%{q}%")
-        return query.order("item_numero").limit(50).execute().data
+            query = query.or_(f"descripcion.ilike.%{q}%,item_numero.ilike.%{q}%")
+        return query.order("item_numero").limit(200).execute().data
     return supabase_execute(_q)
 
 # ─── SICOE OBRA: Asignar ítem a registro ─────────────────────────────────────
@@ -3722,7 +3722,7 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
                 return supabase.table("actas")\
                     .select("id, numero_rpo")\
                     .eq("contrato_id", contrato_id)\
-                    .eq("tipo_grupo", "cobro")\
+                    .eq("tipo_grupo", "RPO")\
                     .lte("fecha_inicio", today)\
                     .gte("fecha_fin", today)\
                     .order("id", desc=True).limit(1).execute().data
@@ -3765,6 +3765,7 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
 
         def _upd_reg():
             return supabase.table("so_registros").update({
+                "capitulo":         item.get("capitulo"),
                 "competencia":      body.competencia or item.get("competencia"),
                 "item_numero":      item.get("item_numero"),
                 "item_descripcion": item.get("descripcion"),
@@ -4264,58 +4265,33 @@ def dashboard_drill_obra(
     item: Optional[str] = None,
     current_user=Depends(get_current_user)
 ):
-    """
-    Reemplaza /cobro/{contrato_id}/drill para el Dashboard.
-    Retorna misma forma: {campo, items: [{nombre, descripcion, presupuesto, cobrado, delta, pct, cant_ppto, cant_cobro}]}
-    """
     try:
-        # 1. Resolver reporte_ids por capitulo — ahora capitulo vive en so_registros
-        reporte_ids = None
-        reporte_cap_map = {}
-        if not capitulo:
-            def _allreps():
-                return supabase.table("so_reportes")\
-                    .select("id, capitulo").eq("contrato_id", contrato_id).execute().data
-            for r in supabase_execute(_allreps):
-                reporte_cap_map[r["id"]] = r.get("capitulo")
-
-        # 2. Obtener registros aprobados
-        registros = []
-        off = 0
-        while True:
-            def _regs(o=off):
-                q = supabase.table("so_registros")\
-                    .select("reporte_id, capitulo, costo_directo, cantidad_total, item_numero, item_descripcion, pk_id_id")\
-                    .eq("contrato_id", contrato_id)\
-                    .eq("nivel3_estado", "Aprobado")
-                if capitulo:
-                    q = q.eq("capitulo", capitulo)
-                if item:
-                    q = q.ilike("item_numero", f"%{item}%")
-                return q.range(o, o + 999).execute().data
-            batch = supabase_execute(_regs)
-            registros.extend(batch)
-            if len(batch) < 1000: break
-            off += 1000
-
-        # 3. Presupuesto
-        q_p = supabase.table("presupuesto")\
-            .select("capitulo, item, descripcion, costo_directo, cant_total")\
-            .eq("contrato_id", contrato_id).eq("dado_de_baja", False)
-        if capitulo: q_p = q_p.eq("capitulo", capitulo)
-        if item: q_p = q_p.eq("item", item)
-        ppto = []
-        off = 0
-        while True:
-            batch = q_p.range(off, off + 999).execute().data
-            ppto.extend(batch)
-            if len(batch) < 1000: break
-            off += 1000
-
-        # 4. Determinar campo de agrupación
         campo = "item" if capitulo else "capitulo"
 
-        # 5. Agregar presupuesto
+        # 1. Obra aprobada desde vista
+        if capitulo:
+            def _obra():
+                q = supabase.table("vista_dashboard_drill_item")\
+                    .select("*").eq("contrato_id", contrato_id)\
+                    .eq("capitulo", capitulo)
+                if item: q = q.ilike("item_numero", f"%{item}%")
+                return q.execute().data
+        else:
+            def _obra():
+                return supabase.table("vista_dashboard_drill_capitulo")\
+                    .select("*").eq("contrato_id", contrato_id).execute().data
+        obra_rows = supabase_execute(_obra)
+
+        # 2. Presupuesto desde vista
+        def _ppto():
+            q = supabase.table("vista_dashboard_ppto_drill")\
+                .select("*").eq("contrato_id", contrato_id)
+            if capitulo: q = q.eq("capitulo", capitulo)
+            if item: q = q.eq("item", item)
+            return q.execute().data
+        ppto = supabase_execute(_ppto)
+
+        # 3. Agregar presupuesto
         agg_p = {}; agg_p_cant = {}; desc_map = {}
         for r in ppto:
             k = r.get(campo) or "(sin valor)"
@@ -4324,17 +4300,17 @@ def dashboard_drill_obra(
             if campo == "item" and r.get("descripcion") and k not in desc_map:
                 desc_map[k] = r["descripcion"]
 
-        # 6. Agregar obra aprobada
+        # 4. Agregar obra
         agg_c = {}; agg_c_cant = {}
-        for r in registros:
+        for r in obra_rows:
             if campo == "item":
                 k = r.get("item_numero") or "(sin valor)"
                 if k not in desc_map and r.get("item_descripcion"):
                     desc_map[k] = r["item_descripcion"]
             else:
-                k = r.get("capitulo") or reporte_cap_map.get(r.get("reporte_id"), "Sin capítulo")
-            agg_c[k] = agg_c.get(k, 0) + float(r.get("costo_directo") or 0)
-            agg_c_cant[k] = agg_c_cant.get(k, 0) + float(r.get("cantidad_total") or 0)
+                k = r.get("capitulo") or "Sin capítulo"
+            agg_c[k] = agg_c.get(k, 0) + float(r.get("cobrado") or 0)
+            agg_c_cant[k] = agg_c_cant.get(k, 0) + float(r.get("cant_cobro") or 0)
 
         keys = sorted(set(list(agg_p.keys()) + list(agg_c.keys())), key=lambda x: str(x))
         result = []

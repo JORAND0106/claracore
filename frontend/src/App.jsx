@@ -3562,6 +3562,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || graficoReporte?.grafico_url || null)
   const [mostrarPopupValidacion, setMostrarPopupValidacion] = useState(false)
   const [estadoValidando,        setEstadoValidando]        = useState('')
+  const [toastMsg,               setToastMsg]               = useState(null)
   const API = API_URL
   const nivelInfo = determinarNivelValidacion(usuario)
 
@@ -3728,7 +3729,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         }
       }
 
-      onItemAsignado()
+      setToastMsg(itemSel ? `Ítem ${itemSel.item_numero} asignado correctamente` : 'Cambios guardados')
+      setTimeout(() => { setToastMsg(null); onItemAsignado() }, 2800)
     } catch(e) {
       alert(`No se pudieron guardar los cambios: ${e.message}`)
     }
@@ -4294,6 +4296,25 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       {/* ─ Acciones finales ─ */}
       {puedeEditar && (
         <div style={{ display:'flex', justifyContent:'flex-end', paddingTop:'12px', borderTop:`1px solid ${C.borde}` }}>
+          {toastMsg && (
+            <div style={{
+              position:'fixed', bottom:'32px', left:'50%', transform:'translateX(-50%)',
+              background:'#0F6E56', color:'#E1F5EE', borderRadius:'10px',
+              padding:'12px 20px', display:'flex', alignItems:'center', gap:'10px',
+              zIndex:9999, minWidth:'260px', pointerEvents:'none',
+              animation:'fadeUp 0.3s ease'
+            }}>
+              <svg width="18" height="18" viewBox="0 0 20 20" fill="none">
+                <circle cx="10" cy="10" r="9" stroke="#9FE1CB" strokeWidth="1.5"/>
+                <path d="M6 10l3 3 5-5" stroke="#9FE1CB" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              <div>
+                <p style={{margin:0, fontSize:'13px', fontWeight:'500', color:'#E1F5EE'}}>Cambios guardados</p>
+                <p style={{margin:0, fontSize:'11px', color:'#9FE1CB'}}>{toastMsg}</p>
+              </div>
+            </div>
+          )}
+          <style>{`@keyframes fadeUp { from { opacity:0; transform:translateX(-50%) translateY(12px) } to { opacity:1; transform:translateX(-50%) translateY(0) } }`}</style>
           <button onClick={guardarCambios} disabled={guardando} style={{
             background: t.primary, color:'#fff', border:'none',
             borderRadius:'8px', padding:'8px 22px', fontSize:'12px', fontWeight:'700',
