@@ -5132,6 +5132,13 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   )
                 })()}
                 {/* Lista de enlaces guardados */}
+                {enlaces.length === 0 ? (
+                  <div style={{ textAlign:'center', padding:'16px', color:t.textMuted, fontSize:'12px', fontStyle:'italic', border:`1px dashed ${t.border}`, borderRadius:'8px' }}>
+                    Sin soportes agregados aún
+                  </div>
+                ) : (
+                  <div style={{ display:'flex', flexDirection:'column', gap:'6px' }}>
+                    {enlaces.map((url, idx) => (
                       <div key={idx} style={{ display:'flex', alignItems:'center', gap:'8px', background:t.bg, borderRadius:'8px', padding:'8px 12px', border:`1px solid ${t.border}` }}>
                         <span style={{ fontSize:'14px' }}>🔗</span>
                         <a href={url} target="_blank" rel="noreferrer"
