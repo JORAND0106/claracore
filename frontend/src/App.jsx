@@ -3246,7 +3246,7 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t }) {
 
 // ─── HELPER: NIVEL DE VALIDACIÓN ─────────────────────────────────────────────
 function determinarNivelValidacion(usuario) {
-  const rol     = (usuario?.rol || '').toLowerCase()
+  const rol     = (usuario?.rol_nombre || usuario?.rol || '').toLowerCase()
   const cargo   = (usuario?.cargo_nombre || usuario?.cargo || '').toLowerCase()
   const modulos = usuario?.permisos_modulos || []
 
