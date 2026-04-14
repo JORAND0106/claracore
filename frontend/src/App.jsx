@@ -5500,10 +5500,11 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       }]
       buscarReportes(filtros, 0, capasIniciales)
       cargarAnalisis(filtros, capasIniciales)
-    } else {
-      // Desarrollador / Admin / cargo sin nivel → busca sin filtro de validación
+    } else if (puedeEditar) {
+      // Solo usuarios con permiso editar ven todo sin filtro de validación
       buscarReportes(filtros, 0, [])
     }
+    // Operativos sin capa de validación → grilla vacía hasta que apliquen filtro
   }, [contrato_id])
 
   const buscarReportes = async (nuevosFiltros, nuevoOffset = 0, capas = []) => {
@@ -5824,7 +5825,7 @@ const limpiarFiltros = () => {
                   <tfoot>
                     <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
                       <td colSpan={3} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>
+                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
                       <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? fmtPesos(analisis.total_aprobados) : '—'}</td>
                       <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? fmtPesos(analisis.total_pendientes) : '—'}</td>
