@@ -10478,14 +10478,14 @@ export default function App() {
     return () => clearInterval(id)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps--
 
-useEffect(() => {
+  useEffect(() => {
     const ping = () => fetch('https://claracore-backend.azurewebsites.net/').catch(() => {})
     ping()
     const iv = setInterval(ping, 8 * 60 * 1000)
     return () => clearInterval(iv)
   }, [])
 
-useEffect(() => {
+  useEffect(() => {
     const checkMant = async () => {
       try {
         const r = await fetch(`${API}/mantenimiento`)
