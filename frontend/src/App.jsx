@@ -3956,7 +3956,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr 1fr', gap:'10px', marginTop:'12px' }}>
               <CampoRO label="Descripción"    valor={itemSel.descripcion} />
               <CampoRO label="Unidad"         valor={itemSel.unidad || null} />
-              <CampoRO label="Vlr. Unitario"  valor={fmtD(itemSel.precio_unitario)} color='#10B981' />
+              {nivelInfo.verValoresEconomicos && <CampoRO label="Vlr. Unitario"  valor={fmtD(itemSel.precio_unitario)} color='#10B981' />}
             </div>
           )}
         </div>
@@ -4662,12 +4662,25 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           <button onClick={onClose} style={{ background:'rgba(255,255,255,0.2)', border:'none', color:'#fff', borderRadius:'50%', width:'34px', height:'34px', fontSize:'18px', cursor:'pointer', fontWeight:'900', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
         </div>
 
+        {/* ─ Botón volver al panel ─ */}
+        {filtroValidacion && (
+          <div style={{ padding:'6px 16px', background:'#0F1923', borderBottom:`1px solid ${C.borde}` }}>
+            <button onClick={onClose} style={{ background:'transparent', border:`1px solid ${C.borde}`, borderRadius:'6px', padding:'4px 12px', fontSize:'11px', color:'#94A3B8', cursor:'pointer' }}>
+              ← Volver al panel
+            </button>
+          </div>
+        )}
         {/* ─ Tab bar horizontal ─ */}
         <div style={{ display:'flex', gap:'4px', padding:'12px 16px 0', background:'#0F1923', borderBottom:`1px solid ${C.borde}`, overflowX:'auto' }}>
           {[
             { key: 'portada',      label: '📋 Portada' },
             { key: 'sin_asignar',  label: `📄 Sin Asignar Ítem${regsSinAsignar.length > 0 ? ` (${regsSinAsignar.length})` : ''}` },
-            ...itemsAsignados.map(it => ({ key: it, label: `🔖 ${it}` }))
+            ...itemsAsignados.map(it => {
+              const tienePendiente = camponivelActivo && registros.some(r =>
+                r.item_numero === it && (r[camponivelActivo] === 'No Revisado' || r[camponivelActivo] == null)
+              )
+              return { key: it, label: `${tienePendiente ? '🔴' : '🔖'} ${it}` }
+            })
           ].map(tab => (
             <button key={tab.key} onClick={() => setTabActiva(tab.key)} style={{
               background:    tabActiva === tab.key ? C.tabActivo : 'transparent',
