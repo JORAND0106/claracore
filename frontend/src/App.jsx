@@ -5801,7 +5801,7 @@ const limpiarFiltros = () => {
                       <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>ACTA RPO</th>
                       <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>CAPÍTULO</th>
                       <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>CANTIDAD</th>
-                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>COSTO DIRECTO</th>
+                      {nivelInfo.verValoresEconomicos && <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>COSTO DIRECTO</th>}
                       <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>REGS.</th>
                       <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>✅</th>
                       <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>⏳</th>
@@ -5868,7 +5868,7 @@ const limpiarFiltros = () => {
                   <tfoot>
                     <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
                       <td style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>
+                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
                       <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? fmtPesos(analisis.total_aprobados) : '—'}</td>
                       <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? fmtPesos(analisis.total_pendientes) : '—'}</td>
