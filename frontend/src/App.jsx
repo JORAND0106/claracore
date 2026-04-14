@@ -3752,7 +3752,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     if (!nivel) return
     const sufijo = nivel === 1 ? 'validar-nivel1' : nivel === 2 ? 'validar-nivel2' : 'validar-nivel3'
     const body = { estado: estadoValidando }
-    if (comentarioData) body.comentario_data = comentarioData
+    if (comentarioData) body.comentario_data = { ...comentarioData, rol_origen: nivelInfo.rolOrigen }
     if (nivel === 2 && registro.nivel2_objeto_pago_sub !== undefined) {
       body.objeto_pago_sub = registro.nivel2_objeto_pago_sub
     }

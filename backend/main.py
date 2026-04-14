@@ -4138,7 +4138,8 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
                 .eq("contrato_id", contrato_id).execute().data
         supabase_execute(_upd)
         if body.comentario_data:
-            _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data)
+            _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
+                                 tipo_override="validacion")
         return {"ok": True}
     except HTTPException:
         raise
@@ -4181,7 +4182,8 @@ def validar_nivel3(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
                 .eq("contrato_id", contrato_id).execute().data
         supabase_execute(_upd)
         if body.comentario_data:
-            _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data)
+            _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
+                                 tipo_override="validacion")
         return {"ok": True}
     except HTTPException:
         raise
