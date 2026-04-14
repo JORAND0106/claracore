@@ -3732,7 +3732,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       }
 
       setToastMsg(itemSel ? `Ítem ${itemSel.item_numero} asignado correctamente` : 'Cambios guardados')
-      setTimeout(() => { setToastMsg(null); onItemAsignado() }, 2800)
+      setTimeout(() => { setToastMsg(null); onItemAsignado() }, 200)
     } catch(e) {
       alert(`No se pudieron guardar los cambios: ${e.message}`)
     }
@@ -5278,90 +5278,84 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       </div>
 
       {/* ─ Modal Comentarios ─ */}
-      {modalComentarios && (
-        <div style={{ position:'fixed', inset:0, zIndex:10200, background:'rgba(0,0,0,0.6)',
-                      display:'flex', alignItems:'center', justifyContent:'center' }}
-          onClick={() => setModalComentarios(null)}>
-          <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'20px',
-                        width:'560px', maxWidth:'96vw', maxHeight:'85vh', display:'flex', flexDirection:'column',
-                        boxShadow:'0 24px 80px rgba(0,0,0,0.4)' }}
-            onClick={e => e.stopPropagation()}>
-            {/* Header */}
-            <div style={{ padding:'18px 24px', borderBottom:`1px solid ${t.border}`,
-                          display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-              <div>
-                <div style={{ fontSize:'14px', fontWeight:'800', color:t.text }}>
+      {modalComentarios && (() => {
+        const color = '#10B981'
+        const fmtFecha = iso => { try { return new Date(/Z$|[+-]\d{2}:\d{2}$/.test(iso)?iso:iso+'Z').toLocaleString('es-CO',{dateStyle:'short',timeStyle:'short'}) } catch { return iso } }
+        const rolOrigen = modalComentarios.rolOrigen
+        return (
+          <div style={{ position:'fixed', inset:0, zIndex:10200, background:'rgba(0,0,0,0.6)', display:'flex', alignItems:'center', justifyContent:'center' }}
+            onClick={() => setModalComentarios(null)}>
+            <div style={{ background:t.bgCard, border:`1.5px solid ${color}44`, borderRadius:'16px', padding:'24px', width:'560px', maxWidth:'96vw', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
+              onClick={e => e.stopPropagation()}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
+                <div style={{ fontSize:'15px', fontWeight:'700', color }}>
                   💬 Comentarios · Registro #{modalComentarios.reg.numero_registro}
                 </div>
-                <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>
-                  {loadingComentarios ? 'Cargando…' : `${comentariosData.length} comentario(s)`}
-                </div>
+                <button onClick={() => setModalComentarios(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
               </div>
-              <button onClick={() => setModalComentarios(null)}
-                style={{ background:'none', border:'none', fontSize:'18px', color:t.textMuted, cursor:'pointer' }}>✕</button>
-            </div>
-            {/* Body */}
-            <div style={{ overflowY:'auto', flex:1, padding:'16px 24px',
-                          display:'flex', flexDirection:'column', gap:'14px' }}>
-              {loadingComentarios && (
-                <div style={{ textAlign:'center', color:t.textMuted, fontSize:'13px', padding:'24px 0' }}>
-                  ⏳ Cargando comentarios…
-                </div>
-              )}
-              {!loadingComentarios && comentariosData.length === 0 && (
-                <div style={{ textAlign:'center', color:t.textMuted, fontSize:'13px', padding:'24px 0', fontStyle:'italic' }}>
-                  No hay comentarios para este registro.
-                </div>
-              )}
-              {!loadingComentarios && comentariosData.map((c, i) => {
-                const fechaCom = (() => { try { const ts=c.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleString('es-CO',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) } catch{return ''} })()
-                const enlacesList = Array.isArray(c.enlaces) ? c.enlaces : []
-                return (
-                  <div key={c.id || i} style={{ background:t.bg, borderRadius:'12px', padding:'14px 16px',
-                                                border:`1px solid ${t.border}` }}>
-                    <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:'8px', marginBottom:'8px' }}>
-                      <div>
-                        <span style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>
-                          {c.autor?.nombre || c.autor_id || 'Usuario'}
-                        </span>
-                        {c.etiqueta && (
-                          <span style={{ marginLeft:'8px', fontSize:'10px', fontWeight:'700', color:'#7c3aed',
-                                         background:'#7c3aed15', border:'1px solid #7c3aed33',
-                                         borderRadius:'10px', padding:'2px 8px' }}>
-                            {c.etiqueta}
-                          </span>
-                        )}
+              <div style={{ overflowY:'auto', flex:1, display:'flex', flexDirection:'column', gap:'12px', paddingRight:'4px', minHeight:0 }}>
+                {loadingComentarios
+                  ? <div style={{ textAlign:'center', padding:'30px', color:t.textMuted }}>Cargando...</div>
+                  : comentariosData.length === 0
+                  ? <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'13px' }}>Sin comentarios aún</div>
+                  : comentariosData.map(c => (
+                    <div key={c.id} style={{ background:t.bg, borderRadius:'10px', padding:'12px', border:`1px solid ${color}33` }}>
+                      <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
+                        <span style={{ fontSize:'12px', fontWeight:'700', color }}>{c.autor?.nombre || 'Usuario'}</span>
+                        <span style={{ fontSize:'10px', color:t.textMuted }}>{fmtFecha(c.created_at)}</span>
                       </div>
-                      <span style={{ fontSize:'10px', color:t.textMuted, whiteSpace:'nowrap', flexShrink:0 }}>{fechaCom}</span>
+                      {c.etiqueta && <span style={{ fontSize:'10px', background:`${color}22`, color, borderRadius:'10px', padding:'2px 8px', marginBottom:'6px', display:'inline-block' }}>{c.etiqueta}</span>}
+                      {c.asunto && <div style={{ fontSize:'12px', fontWeight:'700', color:t.text, marginBottom:'3px' }}>{c.asunto}</div>}
+                      <div style={{ fontSize:'13px', color:t.text, lineHeight:1.5 }}>{c.mensaje}</div>
+                      {(c.enlaces||[]).length > 0 && (
+                        <div style={{ marginTop:'6px', display:'flex', flexDirection:'column', gap:'3px' }}>
+                          {c.enlaces.map((url,i) => <a key={i} href={url} target="_blank" rel="noreferrer" style={{ fontSize:'11px', color:color }}>🔗 {url}</a>)}
+                        </div>
+                      )}
+                      {/* Respuestas anidadas */}
+                      {(c.respuestas||[]).length > 0 && (
+                        <div style={{ marginTop:'10px', paddingLeft:'12px', borderLeft:`2px solid ${color}44`, display:'flex', flexDirection:'column', gap:'8px' }}>
+                          {c.respuestas.map(r => (
+                            <div key={r.id}>
+                              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'3px' }}>
+                                <span style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted }}>{r.autor?.nombre || 'Usuario'}</span>
+                                <span style={{ fontSize:'10px', color:t.textMuted }}>{fmtFecha(r.created_at)}</span>
+                              </div>
+                              <div style={{ fontSize:'12px', color:t.text }}>{r.mensaje}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {/* Responder */}
+                      <div style={{ marginTop:'10px', display:'flex', gap:'6px', alignItems:'center' }}>
+                        <input
+                          placeholder="Responder..."
+                          onKeyDown={async e => {
+                            if (e.key === 'Enter' && e.target.value.trim()) {
+                              const msg = e.target.value.trim()
+                              e.target.value = ''
+                              await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${modalComentarios.reg.id}/comentarios/${c.id}/respuesta`, {
+                                method:'POST', headers:{...hdrs,'Content-Type':'application/json'},
+                                body: JSON.stringify({ mensaje: msg, rol_origen: rolOrigen })
+                              })
+                              setLoadingComentarios(true)
+                              const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${modalComentarios.reg.id}/comentarios?rol_solicitante=${rolOrigen}`, { headers: hdrs })
+                              if (res.ok) setComentariosData(await res.json())
+                              setLoadingComentarios(false)
+                            }
+                          }}
+                          style={{ flex:1, background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', fontSize:'12px', color:t.text }}
+                        />
+                        <span style={{ fontSize:'10px', color:t.textMuted }}>↵ Enter</span>
+                      </div>
                     </div>
-                    {c.asunto && (
-                      <div style={{ fontSize:'12px', fontWeight:'700', color:t.text, marginBottom:'4px' }}>
-                        {c.asunto}
-                      </div>
-                    )}
-                    {c.mensaje && (
-                      <div style={{ fontSize:'12px', color:t.text, lineHeight:'1.5', marginBottom: enlacesList.length ? '8px' : 0 }}>
-                        {c.mensaje}
-                      </div>
-                    )}
-                    {enlacesList.length > 0 && (
-                      <div style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
-                        {enlacesList.map((url, j) => (
-                          <a key={j} href={url} target="_blank" rel="noopener noreferrer"
-                            style={{ fontSize:'11px', color:'#3B82F6', textDecoration:'underline',
-                                     overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                            🔗 {url}
-                          </a>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+                  ))
+                }
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* ─ Modal Mover Registros ─ */}
       {modalMover && (

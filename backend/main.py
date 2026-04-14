@@ -3260,7 +3260,7 @@ def obtener_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_
         return supabase.table("so_reportes").select("*, subcontratistas(razon_social), pk_ids(pk_id, civ, tramo, infraestructura, calzada, abs_inicio, abs_final)")\
             .eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
     def _reg():
-        return supabase.table("so_registros").select("*, so_registro_comentarios(id)")\
+        return supabase.table("so_registros").select("*")\
             .eq("reporte_id", reporte_id).order("id").execute().data
     def _pts():
         return supabase.table("so_puntos_topograficos").select("*")\
@@ -3281,9 +3281,22 @@ def obtener_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_
     else:
         r["pk_id_valor"] = None
     regs_raw = supabase_execute(_reg)
+    reg_ids = [reg["id"] for reg in regs_raw if reg.get("id")]
+    num_comentarios_map = {}
+    if reg_ids:
+        try:
+            def _cnt():
+                return supabase.table("so_registro_comentarios")\
+                    .select("registro_id")\
+                    .in_("registro_id", reg_ids).execute().data
+            cnt_rows = supabase_execute(_cnt)
+            for row in cnt_rows:
+                rid = row["registro_id"]
+                num_comentarios_map[rid] = num_comentarios_map.get(rid, 0) + 1
+        except Exception:
+            pass
     for reg in regs_raw:
-        comentarios = reg.pop("so_registro_comentarios", []) or []
-        reg["num_comentarios"] = len(comentarios)
+        reg["num_comentarios"] = num_comentarios_map.get(reg["id"], 0)
     r["registros"] = regs_raw
     r["puntos"] = supabase_execute(_pts)
 
@@ -4067,54 +4080,6 @@ def _insertar_comentario(contrato_id: int, registro_id: int, autor_id: int,
         return supabase.table("so_registro_comentarios").insert(row).execute().data
     supabase_execute(_ins)
 
-    enlaces_nuevos = comentario_data.get("enlaces") or []
-    if enlaces_nuevos:
-        try:
-            def _get_reg():
-                return supabase.table("so_registros").select("enlace_soporte")\
-                    .eq("id", registro_id).eq("contrato_id", contrato_id)\
-                    .limit(1).execute().data
-            reg_rows = supabase_execute(_get_reg)
-            existing_raw = reg_rows[0].get("enlace_soporte") if reg_rows else None
-            try:
-                existing = json.loads(existing_raw) if existing_raw else []
-                if not isinstance(existing, list): existing = [existing_raw]
-            except Exception:
-                existing = [existing_raw] if existing_raw else []
-            merged = existing + [e for e in enlaces_nuevos if e not in existing]
-            def _upd_reg():
-                return supabase.table("so_registros")\
-                    .update({"enlace_soporte": json.dumps(merged)})\
-                    .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
-            supabase_execute(_upd_reg)
-        except Exception:
-            pass
-
-    # Si el comentario tiene enlaces, acumularlos en so_registros.enlace_soporte
-    enlaces_nuevos = comentario_data.get("enlaces") or []
-    if enlaces_nuevos:
-        try:
-            def _get_reg():
-                return supabase.table("so_registros").select("enlace_soporte")\
-                    .eq("id", registro_id).eq("contrato_id", contrato_id)\
-                    .limit(1).execute().data
-            reg_rows = supabase_execute(_get_reg)
-            existing_raw = reg_rows[0].get("enlace_soporte") if reg_rows else None
-            try:
-                existing = json.loads(existing_raw) if existing_raw else []
-                if not isinstance(existing, list): existing = [existing_raw]
-            except Exception:
-                existing = [existing_raw] if existing_raw else []
-            merged = existing + [e for e in enlaces_nuevos if e not in existing]
-            def _upd_reg():
-                return supabase.table("so_registros")\
-                    .update({"enlace_soporte": json.dumps(merged)})\
-                    .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
-            supabase_execute(_upd_reg)
-        except Exception:
-            pass  # No bloquear la validación si falla el merge de enlaces
-
-
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/validar-nivel1")
 def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
                    current_user=Depends(get_current_user)):
@@ -4131,6 +4096,22 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
             "nivel1_usuario_id": autor_id,
             "nivel1_fecha":      datetime.utcnow().isoformat(),
         }
+        # Actualizar modificado_por en so_reportes para reflejar la validación
+        try:
+            def _get_rep_id():
+                return supabase.table("so_registros").select("reporte_id")\
+                    .eq("id", registro_id).eq("contrato_id", contrato_id)\
+                    .limit(1).execute().data
+            rep_rows = supabase_execute(_get_rep_id)
+            if rep_rows:
+                rep_id = rep_rows[0]["reporte_id"]
+                def _upd_rep():
+                    return supabase.table("so_reportes")\
+                        .update({"modificado_por": autor_id, "updated_at": datetime.utcnow().isoformat()})\
+                        .eq("id", rep_id).eq("contrato_id", contrato_id).execute().data
+                supabase_execute(_upd_rep)
+        except Exception:
+            pass
         def _upd():
             return supabase.table("so_registros")\
                 .update(update).eq("id", registro_id)\
@@ -4146,12 +4127,16 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
                     try:
                         def _notif(did=dest_id):
                             return supabase.table("notificaciones").insert({
-                                "usuario_id": did,
+                                "destinatario_id": did,
+                                "remitente_id": autor_id,
                                 "contrato_id": contrato_id,
                                 "tipo": "validacion",
-                                "titulo": f"Validación Nivel 1: {body.estado}",
+                                "modulo": "sicoe_obra",
+                                "entidad_tipo": "registro",
+                                "entidad_id": str(registro_id),
+                                "asunto": f"Validación Nivel 1: {body.estado}",
                                 "mensaje": body.comentario_data.get("mensaje", ""),
-                                "leida": False
+                                "leido": False
                             }).execute().data
                         supabase_execute(_notif)
                     except Exception:
@@ -4773,6 +4758,30 @@ def crear_comentario(contrato_id: int, registro_id: int, body: ComentarioCreate,
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/sicoe-obra/{contrato_id}/registros/{registro_id}/comentarios/{comentario_id}/respuesta")
+def responder_comentario_registro(contrato_id: int, registro_id: int, comentario_id: int,
+                                   body: dict, current_user=Depends(get_current_user)):
+    try:
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        def _ins():
+            return supabase.table("so_registro_comentarios").insert({
+                "registro_id":    registro_id,
+                "contrato_id":    contrato_id,
+                "autor_id":       autor_id,
+                "padre_id":       comentario_id,
+                "mensaje":        body.get("mensaje", ""),
+                "tipo":           "validacion",
+                "confidencialidad": "cruzado",
+                "rol_origen":     body.get("rol_origen", ""),
+                "destinatarios":  [],
+                "etiqueta":       None,
+                "asunto":         None,
+                "enlaces":        [],
+            }).execute().data
+        supabase_execute(_ins)
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/sicoe-obra/{contrato_id}/registros/{registro_id}/comentarios")
 def listar_comentarios(contrato_id: int, registro_id: int, rol_solicitante: str,
@@ -4780,11 +4789,24 @@ def listar_comentarios(contrato_id: int, registro_id: int, rol_solicitante: str,
     try:
         def _get():
             return supabase.table("so_registro_comentarios")\
-                .select("*, autor:autor_id(nombre)")\
+                .select("*")\
                 .eq("registro_id", registro_id)\
                 .eq("contrato_id", contrato_id)\
                 .order("created_at", desc=False).execute().data
         comentarios = supabase_execute(_get)
+        autor_ids = list({c["autor_id"] for c in comentarios if c.get("autor_id")})
+        autor_map = {}
+        if autor_ids:
+            try:
+                def _autores():
+                    return supabase.table("usuarios").select("id, nombre, apellidos")\
+                        .in_("id", autor_ids).execute().data
+                for u in supabase_execute(_autores):
+                    autor_map[u["id"]] = f"{u.get('nombre','')} {u.get('apellidos','')or ''}".strip()
+            except Exception:
+                pass
+        for c in comentarios:
+            c["autor"] = {"nombre": autor_map.get(c.get("autor_id"), "Usuario")}
 
         # Filtrar por confidencialidad según el rol del solicitante
         excluir = set()
@@ -4793,8 +4815,13 @@ def listar_comentarios(contrato_id: int, registro_id: int, rol_solicitante: str,
         if rol_solicitante in ("contratista", "subcontratista"):
             excluir.add("interventoria_interna")
 
-        resultado = [c for c in comentarios if c.get("confidencialidad") not in excluir]
-        return resultado
+        filtrados = [c for c in comentarios if c.get("confidencialidad") not in excluir]
+        # Agrupar: padres con sus respuestas anidadas
+        padres = [c for c in filtrados if not c.get("padre_id")]
+        hijos  = [c for c in filtrados if c.get("padre_id")]
+        for p in padres:
+            p["respuestas"] = [h for h in hijos if h.get("padre_id") == p["id"]]
+        return padres
     except HTTPException:
         raise
     except Exception as e:
