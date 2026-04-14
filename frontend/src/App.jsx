@@ -5813,7 +5813,7 @@ const limpiarFiltros = () => {
                         <td style={{ padding:'6px 16px', color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{g.label}</td>
                         <td style={{ padding:'6px 16px', color:t.text, fontSize:'11px' }}>{g.capitulo}</td>
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>
+                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>}
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.textMuted }}>{g.total_registros}</td>
                         <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados ? fmtPesos(g.aprobados) : '—'}</td>
                         <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes ? fmtPesos(g.pendientes) : '—'}</td>
@@ -5838,7 +5838,7 @@ const limpiarFiltros = () => {
                   <thead>
                     <tr style={{ color:t.textMuted, fontSize:'11px', fontWeight:'700', letterSpacing:'0.4px' }}>
                       <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>CAPÍTULO</th>
-                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>COSTO DIRECTO</th>
+                      {nivelInfo.verValoresEconomicos && <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>COSTO DIRECTO</th>}
                       <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>REGS.</th>
                       <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>✅ APOB.</th>
                       <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>⏳ PEND.</th>
@@ -5856,7 +5856,7 @@ const limpiarFiltros = () => {
                       onMouseEnter={e => e.currentTarget.style.background = t.bg + '88'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                         <td style={{ padding:'6px 16px', color:t.text, fontWeight:'600' }}>{g.label}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>
+                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>}
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.textMuted }}>{g.total_registros}</td>
                         <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados ? fmtPesos(g.aprobados) : '—'}</td>
                         <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes ? fmtPesos(g.pendientes) : '—'}</td>
