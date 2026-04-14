@@ -5247,9 +5247,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                             .catch(() => setLoadingComentarios(false))
                         }}
                         style={{ background:'none', border:'none', cursor:'pointer', padding:'2px 4px',
-                                 fontSize:'15px', color:t.textMuted, flexShrink:0, lineHeight:1 }}
-                        title="Ver comentarios">
-                        💬
+                                 fontSize:'15px', color: reg.num_comentarios > 0 ? '#10B981' : t.textMuted, flexShrink:0, lineHeight:1, position:'relative' }}
+                        title={`Ver comentarios${reg.num_comentarios > 0 ? ` (${reg.num_comentarios})` : ''}`}>
+                        💬{reg.num_comentarios > 0 && <span style={{ fontSize:'9px', fontWeight:'800', color:'#10B981', marginLeft:'1px' }}>{reg.num_comentarios}</span>}
                       </button>
                       {reg.enlace_soporte && (() => { try { const p = JSON.parse(reg.enlace_soporte); return Array.isArray(p) ? p.length > 0 : !!reg.enlace_soporte } catch { return !!reg.enlace_soporte } })() && (
                         <span title="Tiene soportes adjuntos" style={{ fontSize:'13px', flexShrink:0 }}>📎</span>

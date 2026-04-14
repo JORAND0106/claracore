@@ -3260,7 +3260,7 @@ def obtener_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_
         return supabase.table("so_reportes").select("*, subcontratistas(razon_social), pk_ids(pk_id, civ, tramo, infraestructura, calzada, abs_inicio, abs_final)")\
             .eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
     def _reg():
-        return supabase.table("so_registros").select("*")\
+        return supabase.table("so_registros").select("*, so_registro_comentarios(id)")\
             .eq("reporte_id", reporte_id).order("id").execute().data
     def _pts():
         return supabase.table("so_puntos_topograficos").select("*")\
@@ -3280,7 +3280,11 @@ def obtener_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_
         r["calzada"]        = r.get("calzada") or pk.get("calzada")
     else:
         r["pk_id_valor"] = None
-    r["registros"] = supabase_execute(_reg)
+    regs_raw = supabase_execute(_reg)
+    for reg in regs_raw:
+        comentarios = reg.pop("so_registro_comentarios", []) or []
+        reg["num_comentarios"] = len(comentarios)
+    r["registros"] = regs_raw
     r["puntos"] = supabase_execute(_pts)
 
     # Resolver nombre del modificador
