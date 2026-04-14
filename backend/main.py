@@ -31,6 +31,8 @@ load_dotenv()
 
 app = FastAPI(title="ClaraCore API")
 
+_mantenimiento = {"activo": False, "mensaje": "", "activado_en": None}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -373,6 +375,23 @@ CARGO_NIVEL_PRERREQUISITO = {
 # ─────────────────────────────────────────────
 # RUTAS PÚBLICAS
 # ─────────────────────────────────────────────
+
+@app.get("/mantenimiento")
+def get_mantenimiento():
+    return _mantenimiento
+
+@app.post("/mantenimiento")
+def activar_mantenimiento(body: dict):
+    global _mantenimiento
+    secret = body.get("secret", "")
+    if secret != "claracore_deploy_2026":
+        raise HTTPException(status_code=403, detail="No autorizado")
+    _mantenimiento = {
+        "activo": body.get("activo", True),
+        "mensaje": body.get("mensaje", "Actualización del sistema en curso. Por favor guarda tu trabajo."),
+        "activado_en": datetime.utcnow().isoformat()
+    }
+    return _mantenimiento
 
 @app.get("/")
 def root():
@@ -4086,7 +4105,8 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
                 .eq("contrato_id", contrato_id).execute().data
         supabase_execute(_upd)
         if body.comentario_data:
-            _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data)
+            _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
+                                 tipo_override="validacion")
         return {"ok": True}
     except HTTPException:
         raise

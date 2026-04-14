@@ -614,6 +614,8 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   
   // ── Enlace DWG ──────────────────────────────────────────────────────────── 
   const [dwgEnlazado, setDwgEnlazado] = useState(false)
+  const [mantenimiento, setMantenimiento] = useState(null)
+  const [cuentaRegresiva, setCuentaRegresiva] = useState(null)
   useEffect(() => {
     if (!contratoId) return
     const check = async () => {
@@ -10483,6 +10485,29 @@ useEffect(() => {
     return () => clearInterval(iv)
   }, [])
 
+useEffect(() => {
+    const checkMant = async () => {
+      try {
+        const r = await fetch(`${API}/mantenimiento`)
+        if (r.ok) {
+          const d = await r.json()
+          if (d.activo) { setMantenimiento(d); setCuentaRegresiva(20) }
+          else { setMantenimiento(null); setCuentaRegresiva(null) }
+        }
+      } catch {}
+    }
+    checkMant()
+    const iv = setInterval(checkMant, 10000)
+    return () => clearInterval(iv)
+  }, [])
+
+  useEffect(() => {
+    if (cuentaRegresiva === null) return
+    if (cuentaRegresiva <= 0) { window.location.reload(); return }
+    const timer = setTimeout(() => setCuentaRegresiva(v => v - 1), 1000)
+    return () => clearTimeout(timer)
+  }, [cuentaRegresiva])
+
   async function handleLoginOk(u, token) {
     try {
       const res = await fetch(`${API}/admin/usuario-contratos/${u.id}`, {
@@ -10564,6 +10589,24 @@ if (contratos.length > 1) {
     )
     return (
     <>
+    {mantenimiento?.activo && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 99999,
+          background: '#DC2626', color: '#fff',
+          padding: '12px 24px', display: 'flex', alignItems: 'center', gap: '16px',
+          boxShadow: '0 4px 20px rgba(220,38,38,0.5)', fontFamily: 'inherit'
+        }}>
+          <span style={{ fontSize: '20px' }}>🚨</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: '800', fontSize: '14px' }}>Actualización obligatoria del sistema</div>
+            <div style={{ fontSize: '12px', opacity: 0.9, marginTop: '2px' }}>{mantenimiento.mensaje} · Disculpa las molestias.</div>
+          </div>
+          <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: '8px 18px', textAlign: 'center', minWidth: '80px' }}>
+            <div style={{ fontSize: '28px', fontWeight: '900', lineHeight: 1 }}>{cuentaRegresiva}</div>
+            <div style={{ fontSize: '10px', opacity: 0.8 }}>segundos</div>
+          </div>
+        </div>
+      )}
     {hayNuevaVersion && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, zIndex: 99999,
