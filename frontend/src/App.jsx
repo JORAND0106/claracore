@@ -3256,8 +3256,8 @@ function determinarNivelValidacion(usuario) {
   const puedeValidar = !!(modRpt?.puede_validar ?? modRpt?.validar)
   const puedeEditar  = !!(modRpt?.puede_editar  ?? modRpt?.editar)
 
-  const esContratista   = rol === 'contratista'
-  const esInterventoria = rol === 'interventoría' || rol === 'interventoria'
+  const esContratista   = rol === 'contratista' || rol === 'operativo contratista'
+  const esInterventoria = rol === 'interventoría' || rol === 'interventoria' || rol === 'operativo interventoría' || rol === 'operativo interventoria'
   const esSubRol        = rol === 'subcontratista'
 
   let nivelValidacion = null
@@ -3901,7 +3901,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       </div>
 
       {/* ─ Sección: Asignación de Ítem ─ */}
-      {puedeEditar && (
+      {(puedeEditar || nivelInfo.nivelValidacion) && (
         <div style={{ background:t.bg, borderRadius:'10px', padding:'16px', marginBottom:'16px', border:`1px solid ${C.borde}` }}>
           <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>🔖 Asignación de Ítem</div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 2fr', gap:'12px' }}>
@@ -5184,13 +5184,23 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                       <span style={{ color:t.textMuted, fontSize:'11px', flexShrink:0 }}>{fechaReg}</span>
                       {/* Íconos de validación */}
                       <div style={{ display:'flex', gap:'6px', alignItems:'center', flexShrink:0 }} onClick={e => e.stopPropagation()}>
-                        {nivelesInfo.map(({ emoji, label, estado }) => (
-                          <div key={label} title={`${label}: ${estado}`}
-                            style={{ display:'flex', alignItems:'center', gap:'3px' }}>
-                            <span style={{ fontSize:'13px', lineHeight:1 }}>{emoji}</span>
-                            <span style={{ width:'8px', height:'8px', borderRadius:'50%', background: colorNivel(estado), flexShrink:0 }} />
-                          </div>
-                        ))}
+                        {nivelesInfo.map(({ emoji, label, estado }) => {
+                          const esMiNivel = nivelInfo.nivelValidacion === 1 && label === 'N1'
+                            || nivelInfo.nivelValidacion === 2 && label === 'N2'
+                            || nivelInfo.nivelValidacion === 3 && label === 'N3'
+                          const sinRevisar = estado === 'No Revisado'
+                          return (
+                            <div key={label} title={`${label}: ${estado}`}
+                              style={{ display:'flex', alignItems:'center', gap:'3px',
+                                background: esMiNivel && sinRevisar ? '#3B82F620' : 'transparent',
+                                border: esMiNivel && sinRevisar ? '1px solid #3B82F6' : '1px solid transparent',
+                                borderRadius:'10px', padding:'1px 5px' }}>
+                              <span style={{ fontSize:'13px', lineHeight:1 }}>{emoji}</span>
+                              <span style={{ width:'8px', height:'8px', borderRadius:'50%', background: colorNivel(estado), flexShrink:0 }} />
+                              {esMiNivel && sinRevisar && <span style={{ fontSize:'9px', fontWeight:'800', color:'#3B82F6' }}>SIN REV.</span>}
+                            </div>
+                          )
+                        })}
                       </div>
                       {/* Burbuja de comentarios */}
                       <button
