@@ -4783,6 +4783,56 @@ def responder_comentario_registro(contrato_id: int, registro_id: int, comentario
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/sicoe-obra/{contrato_id}/registros/{registro_id}/reporte")
+def get_reporte_de_registro(contrato_id: int, registro_id: int, current_user=Depends(get_current_user)):
+    try:
+        def _get():
+            return supabase.table("so_registros").select("reporte_id")\
+                .eq("id", registro_id).eq("contrato_id", contrato_id)\
+                .limit(1).execute().data
+        rows = supabase_execute(_get)
+        if not rows:
+            raise HTTPException(status_code=404, detail="Registro no encontrado")
+        reporte_id = rows[0]["reporte_id"]
+        # Reusar el endpoint existente
+        from fastapi import Request
+        def _rep():
+            return supabase.table("so_reportes")\
+                .select("*, subcontratistas(razon_social)")\
+                .eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
+        def _reg():
+            return supabase.table("so_registros").select("*")\
+                .eq("reporte_id", reporte_id).order("id").execute().data
+        reporte = supabase_execute(_rep)
+        if not reporte:
+            raise HTTPException(status_code=404, detail="Reporte no encontrado")
+        r = reporte[0]
+        sub = r.pop("subcontratistas", None)
+        r["subcontratista_nombre"] = sub["razon_social"] if sub else None
+        regs_raw = supabase_execute(_reg)
+        reg_ids = [reg["id"] for reg in regs_raw if reg.get("id")]
+        num_comentarios_map = {}
+        if reg_ids:
+            try:
+                def _cnt():
+                    return supabase.table("so_registro_comentarios")\
+                        .select("registro_id").in_("registro_id", reg_ids).execute().data
+                for row in supabase_execute(_cnt):
+                    rid = row["registro_id"]
+                    num_comentarios_map[rid] = num_comentarios_map.get(rid, 0) + 1
+            except Exception:
+                pass
+        for reg in regs_raw:
+            reg["num_comentarios"] = num_comentarios_map.get(reg["id"], 0)
+        r["registros"] = regs_raw
+        r["puntos"] = []
+        return r
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/sicoe-obra/{contrato_id}/registros/{registro_id}/comentarios")
 def listar_comentarios(contrato_id: int, registro_id: int, rol_solicitante: str,
                        current_user=Depends(get_current_user)):

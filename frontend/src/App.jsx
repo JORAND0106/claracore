@@ -8579,16 +8579,30 @@ async function enviarZoomPkid(pkid) {
 const [navRegistroId, setNavRegistroId] = useState(null)
 const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
-  function handleNavegar(notif) {
+  async function handleNavegar(notif) {
     if (!notif?.modulo) return
-    const modMap = { PRESUPUESTO:'presupuesto', COBRO:'sicoe_obra', AUTH:'dashboard' }
     const modulo = notif.modulo?.toLowerCase()
+    if (notif.entidad_id && modulo === 'sicoe_obra' && notif.entidad_tipo === 'registro') {
+      // Buscar el reporte que contiene este registro
+      try {
+        const tok = getToken()
+        const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash || usuario?.contrato_id}/registros/${notif.entidad_id}/reporte`, {
+          headers: { Authorization: `Bearer ${tok}` }
+        })
+        if (res.ok) {
+          const data = await res.json()
+          if (data?.id) {
+            setDashCarpetaReporte({ ...data, _autoRegistro: parseInt(notif.entidad_id) })
+            setDashRegistroNumero(parseInt(notif.entidad_id))
+          }
+        }
+      } catch {}
+      return
+    }
+    const modMap = { PRESUPUESTO:'presupuesto', COBRO:'sicoe_obra', AUTH:'dashboard' }
     setModuloActivo(modMap[notif.modulo] || modulo || 'dashboard')
     if (notif.entidad_id && notif.modulo === 'PRESUPUESTO') {
       setNavRegistroId(parseInt(notif.entidad_id))
-    }
-    if (notif.entidad_id && modulo === 'sicoe_obra' && notif.entidad_tipo === 'registro') {
-      setNavRegistroNumero(parseInt(notif.entidad_id))
     }
   }
     useEffect(() => {
