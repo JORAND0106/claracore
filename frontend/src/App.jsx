@@ -3325,7 +3325,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
   const colorEstado   = COLOR_ESTADO[estadoValidando] || t.primary
 
   useEffect(() => {
-    fetch(`${API_URL}/admin/usuarios-contrato/${contrato_id}`, { headers: hdrs })
+    fetch(`${API_URL}/actas/${contrato_id}/usuarios-contrato`, { headers: hdrs })
       .then(r => r.json())
       .then(d => setUsuarios(Array.isArray(d) ? d : []))
       .catch(() => {})
@@ -5100,14 +5100,38 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   <div style={{ fontSize:'11px', color:'#EF4444', marginBottom:'8px' }}>⚠️ Ingresa una URL válida (debe comenzar con https://)</div>
                 )}
 
+                {/* Soportes desde registros */}
+                {(() => {
+                  const enlacesRegs = registros.flatMap(r => {
+                    const raw = r.enlace_soporte
+                    if (!raw) return []
+                    try {
+                      const parsed = JSON.parse(raw)
+                      const urls = Array.isArray(parsed) ? parsed : [raw]
+                      return urls.map(url => ({ url, numero: r.numero_registro }))
+                    } catch { return raw ? [{ url: raw, numero: r.numero_registro }] : [] }
+                  })
+                  if (enlacesRegs.length === 0) return null
+                  return (
+                    <div style={{ display:'flex', flexDirection:'column', gap:'6px', marginBottom:'12px' }}>
+                      <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase' }}>Desde registros</div>
+                      {enlacesRegs.map((item, idx) => (
+                        <div key={idx} style={{ display:'flex', alignItems:'center', gap:'8px', background:t.bg, borderRadius:'8px', padding:'8px 12px', border:`1px solid ${t.border}` }}>
+                          <span style={{ fontSize:'14px' }}>📎</span>
+                          <a href={item.url} target="_blank" rel="noreferrer"
+                            style={{ flex:1, color:t.primary, fontSize:'12px', fontWeight:'600', textDecoration:'none', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
+                            title={item.url}>{item.url}</a>
+                          <span style={{ fontSize:'11px', color:t.textMuted, whiteSpace:'nowrap', flexShrink:0 }}>Reg. #{item.numero}</span>
+                          <a href={item.url} target="_blank" rel="noreferrer"
+                            style={{ padding:'4px 10px', background:`${t.primary}22`, color:t.primary, borderRadius:'6px', fontSize:'11px', fontWeight:'700', textDecoration:'none', whiteSpace:'nowrap', border:`1px solid ${t.primary}33` }}>
+                            ↗ Abrir
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })()}
                 {/* Lista de enlaces guardados */}
-                {enlaces.length === 0 ? (
-                  <div style={{ textAlign:'center', padding:'16px', color:t.textMuted, fontSize:'12px', fontStyle:'italic', border:`1px dashed ${t.border}`, borderRadius:'8px' }}>
-                    Sin soportes agregados aún
-                  </div>
-                ) : (
-                  <div style={{ display:'flex', flexDirection:'column', gap:'6px' }}>
-                    {enlaces.map((url, idx) => (
                       <div key={idx} style={{ display:'flex', alignItems:'center', gap:'8px', background:t.bg, borderRadius:'8px', padding:'8px 12px', border:`1px solid ${t.border}` }}>
                         <span style={{ fontSize:'14px' }}>🔗</span>
                         <a href={url} target="_blank" rel="noreferrer"
@@ -5219,6 +5243,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                         title="Ver comentarios">
                         💬
                       </button>
+                      {reg.enlace_soporte && (() => { try { const p = JSON.parse(reg.enlace_soporte); return Array.isArray(p) ? p.length > 0 : !!reg.enlace_soporte } catch { return !!reg.enlace_soporte } })() && (
+                        <span title="Tiene soportes adjuntos" style={{ fontSize:'13px', flexShrink:0 }}>📎</span>
+                      )}
                       <span style={{ color:t.textMuted, fontSize:'12px', flexShrink:0 }}>{expandido ? '▲' : '▼'}</span>
                     </div>
                     {expandido && (
