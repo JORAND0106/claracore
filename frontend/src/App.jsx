@@ -6003,7 +6003,11 @@ const limpiarFiltros = () => {
               style={{ background:'#EF4444', color:'#fff', border:'none', borderRadius:'7px', padding:'5px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
               Limpiar
             </button>
-            <button onClick={() => { buscarReportes(filtros, 0, capasValidacion); cargarAnalisis(filtros, capasValidacion) }}
+            <button onClick={() => {
+              const hayFiltros = Object.values(filtros).some(v => v !== '') || capasValidacion.length > 0
+              if (!hayFiltros && nivelInfo.nivelValidacion) return
+              buscarReportes(filtros, 0, capasValidacion); cargarAnalisis(filtros, capasValidacion)
+            }}
               style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'7px', padding:'5px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
               Buscar
             </button>
