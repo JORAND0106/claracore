@@ -5590,20 +5590,44 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         params.append('cargo_id', capas[0].cargo_id)
         params.append('estado_validacion', capas[0].estado)
       }
-      params.append('offset', nuevoOffset)
-      params.append('limit', 50)
-      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/buscar?${params}`, {
-        headers: { Authorization: `Bearer ${getToken()}` }
-      })
-      const data = await res.json()
-      const lista = Array.isArray(data.reportes) ? data.reportes : []
-      if (nuevoOffset === 0) {
-        setReportes(lista)
-      } else {
-        setReportes(prev => [...prev, ...lista])
+      const baseParams = new URLSearchParams(params)
+      const PAGE_SIZE = 50
+      const fetchPage = async (offset) => {
+        const p = new URLSearchParams(baseParams)
+        p.set('offset', String(offset))
+        p.set('limit', String(PAGE_SIZE))
+        const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/buscar?${p}`, {
+          headers: { Authorization: `Bearer ${getToken()}` }
+        })
+        return res.json()
       }
-      setHayMas(!!data.hay_mas)
-      setOffsetActual(nuevoOffset + 50)
+
+      let data = await fetchPage(nuevoOffset)
+      let lista = Array.isArray(data.reportes) ? data.reportes : []
+
+      // En modo validación por nivel, cargar todas las páginas para que
+      // panel dinámico y grilla comparen exactamente el mismo universo.
+      if (capas.length > 0 && nuevoOffset === 0) {
+        let off = PAGE_SIZE
+        while (data.hay_mas) {
+          data = await fetchPage(off)
+          const parte = Array.isArray(data.reportes) ? data.reportes : []
+          if (parte.length === 0) break
+          lista = [...lista, ...parte]
+          off += PAGE_SIZE
+        }
+        setReportes(lista)
+        setHayMas(false)
+        setOffsetActual(lista.length)
+      } else {
+        if (nuevoOffset === 0) {
+          setReportes(lista)
+        } else {
+          setReportes(prev => [...prev, ...lista])
+        }
+        setHayMas(!!data.hay_mas)
+        setOffsetActual(nuevoOffset + PAGE_SIZE)
+      }
       setBusquedaRealizada(true)
       // Auto-abrir cuando búsqueda por N° Registro devuelve resultado único
       if (nuevosFiltros.numero_registro && lista.length === 1) {

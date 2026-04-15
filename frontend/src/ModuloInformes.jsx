@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 
-const API = import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net'
+const API_RAW = import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net'
+const ES_LOCAL = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname)
+const API = ES_LOCAL ? '' : API_RAW
 const API_FALLBACK = 'https://claracore-backend.azurewebsites.net'
 
 const FS = {
@@ -10,6 +12,14 @@ const FS = {
 }
 
 export default function ModuloInformes({ t, usuario, token, s, fontSize = 'normal' }) {
+  const getAuthToken = () =>
+    token ||
+    localStorage.getItem('token') ||
+    localStorage.getItem('access_token') ||
+    sessionStorage.getItem('token') ||
+    sessionStorage.getItem('access_token') ||
+    ''
+
   const toPath = (pathOrUrl) => {
     if (!pathOrUrl) return ''
     if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) {
@@ -56,9 +66,14 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   // ── Cargar subcontratistas ─────────────────────────────────────────────────
   useEffect(() => {
     if (!contratoId) return
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada. Ingresa de nuevo para generar informes.')
+      return
+    }
     setCargandoSub(true); setError(null)
     fetchConFallback(`/informes/${contratoId}/subcontratistas`,
-      { headers: { Authorization: `Bearer ${token}` } })
+      { headers: { Authorization: `Bearer ${authToken}` } })
       .then(r => r.json())
       .then(d => { setSubs(Array.isArray(d) ? d : []) })
       .catch(() => setError('Error cargando subcontratistas'))
@@ -70,9 +85,14 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     const id = e.target.value
     setSubId(id); setCorteId(''); setCortes([]); setItems([]); setError(null)
     if (!id) return
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada. Ingresa de nuevo para generar informes.')
+      return
+    }
     setCargandoCor(true)
     fetchConFallback(`/informes/${contratoId}/cortes/${id}`,
-      { headers: { Authorization: `Bearer ${token}` } })
+      { headers: { Authorization: `Bearer ${authToken}` } })
       .then(r => r.json())
       .then(d => setCortes(Array.isArray(d) ? d : []))
       .catch(() => setError('Error cargando cortes'))
@@ -84,9 +104,14 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     const id = e.target.value
     setCorteId(id); setItems([]); setError(null)
     if (!id) return
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada. Ingresa de nuevo para generar informes.')
+      return
+    }
     setCargandoIt(true)
     fetchConFallback(`/informes/${contratoId}/items-corte/${id}`,
-      { headers: { Authorization: `Bearer ${token}` } })
+      { headers: { Authorization: `Bearer ${authToken}` } })
       .then(r => r.json())
       .then(d => setItems(Array.isArray(d) ? d : []))
       .catch(() => setError('Error cargando ítems'))
@@ -97,7 +122,9 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   async function obtenerBlob(path, key) {
     setDescargando(p => ({ ...p, [key]: true })); setError(null)
     try {
-      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${token}` } })
+      const authToken = getAuthToken()
+      if (!authToken) throw new Error('Sesion no autenticada. Ingresa de nuevo para generar informes.')
+      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
       if (!r.ok) {
         const err = await r.json().catch(() => ({}))
         throw new Error(err.detail || `Error ${r.status} generando PDF`)
