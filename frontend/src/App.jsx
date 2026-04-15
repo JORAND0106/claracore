@@ -8789,6 +8789,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   )
   const canAdmin = esDeveloper || usuario?.cargo_nombre === 'Administrador' || tienePermisoAdmin
   const tienePermisoSicoeObra = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Reporte de Cantidades' && p.ver)
+  const tienePermisoDashboard   = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Dashboard' && p.ver)
+  const tienePermisoPresupuesto = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Presupuesto' && p.ver)
 
   const s = {
     app: { fontFamily: "'Segoe UI', sans-serif", background: t.bg, minHeight: '100vh', color: t.text },
@@ -8926,8 +8928,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
           {/* Items del menú */}
           {[
-            ['dashboard',    '🏠', 'Dashboard',      true],
-            ['presupuesto',  '📋', 'Presupuesto',    true],
+            ['dashboard',    '🏠', 'Dashboard',      tienePermisoDashboard],
+            ['presupuesto',  '📋', 'Presupuesto',    tienePermisoPresupuesto],
             ['sicoe_obra',   '🏗️', 'SICOE Obra',    tienePermisoSicoeObra],
             ['informes',     '📄', 'Informes',       true],
             ['almacen',      '🏪', 'Almacén',        true],
