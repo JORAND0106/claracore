@@ -47,6 +47,8 @@ app.add_middleware(
         "https://www.claracore.co",
         "http://localhost:5173",
         "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
     ],
     allow_methods=["*"],
     allow_headers=["*"],
@@ -391,6 +393,8 @@ app.include_router(informes_router, prefix="/informes")
 CARGO_ID_NIVEL_MAP = {
     54: 'nivel1_estado',   # Inspector de Obra
     44: 'nivel2_estado',   # Residente de Obra
+    45: 'nivel2_estado',   # Cargo migrado Bubble (nivel 2)
+    51: 'nivel2_estado',   # Cargo migrado Bubble (nivel 2)
     56: 'nivel2_estado',   # Director de Obra
     50: 'nivel3_estado',   # Residente de Interventoría
     58: 'nivel3_estado',   # Director de Interventoría
@@ -407,9 +411,20 @@ CARGO_NIVEL_PRERREQUISITO = {
 
 @app.post("/frase-del-dia")
 def frase_del_dia(body: dict, current_user=Depends(get_current_user)):
+    frases_fallback = [
+        {"frase": "El avance de hoy construye el resultado de mañana.", "autor": "ClaraCore", "tipo": "motivadora"},
+        {"frase": "La disciplina diaria convierte grandes obras en realidad.", "autor": "ClaraCore", "tipo": "reflexiva"},
+        {"frase": "Todo tiene su tiempo, y todo lo que se quiere debajo del cielo tiene su hora.", "autor": "Eclesiastés 3:1", "tipo": "bíblica"},
+        {"frase": "La calidad no se improvisa: se decide en cada detalle.", "autor": "ClaraCore", "tipo": "reflexiva"},
+        {"frase": "Mantente firme: cada paso bien hecho cuenta.", "autor": "ClaraCore", "tipo": "motivadora"},
+    ]
+    def _fallback():
+        idx = datetime.utcnow().toordinal() % len(frases_fallback)
+        return frases_fallback[idx]
+
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY no configurada")
+        return _fallback()
     nombre = body.get("nombre", "un profesional")
     turno  = body.get("turno", "día")
     dia    = body.get("dia", "hoy")
@@ -433,14 +448,23 @@ def frase_del_dia(body: dict, current_user=Depends(get_current_user)):
         )
         data = res.json()
         if "content" not in data:
-            raise HTTPException(status_code=500, detail=str(data))
+            return _fallback()
         import json as _json
         texto = data["content"][0]["text"]
-        return _json.loads(texto.replace("```json","").replace("```","").strip())
+        try:
+            parsed = _json.loads(texto.replace("```json","").replace("```","").strip())
+        except Exception:
+            return _fallback()
+        if not isinstance(parsed, dict) or not parsed.get("frase"):
+            return _fallback()
+        parsed["autor"] = parsed.get("autor") or "ClaraCore"
+        parsed["tipo"] = parsed.get("tipo") if parsed.get("tipo") in ["reflexiva", "motivadora", "bíblica"] else "reflexiva"
+        return parsed
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"WARNING /frase-del-dia fallback por error: {e}", flush=True)
+        return _fallback()
 
 @app.get("/")
 def root():
@@ -622,17 +646,23 @@ def listar_categorias(current_user=Depends(get_current_user)):
 @app.get("/funciones")
 def listar_funciones(current_user=Depends(get_current_user)):
     funciones = supabase.table("funciones").select("*").order("nombre").execute().data or []
-    existe_dashboard = any((f.get("nombre") or "").strip().lower() == "dashboard" for f in funciones)
-    if not existe_dashboard:
+    existentes = {(f.get("nombre") or "").strip().lower() for f in funciones}
+    # Se asegura solo Dashboard (requerimiento urgente actual).
+    requeridas = [
+        {"codigo": "DASHBOARD", "nombre": "Dashboard", "modulo": "Dashboard"},
+    ]
+    for req in requeridas:
+        nombre_funcion = req["nombre"]
+        if nombre_funcion.lower() in existentes:
+            continue
         try:
-            supabase.table("funciones").insert({
-                "nombre": "Dashboard",
-                "descripcion": "Acceso al módulo de dashboard"
-            }).execute()
-            funciones = supabase.table("funciones").select("*").order("nombre").execute().data or []
-        except Exception:
-            # Si no puede insertar por permisos/constraint, devolvemos la lista actual sin romper el flujo.
-            pass
+            supabase.table("funciones").insert(req).execute()
+            existentes.add(nombre_funcion.lower())
+        except Exception as e:
+            # No rompemos el endpoint si falla la creación automática,
+            # pero dejamos traza para diagnóstico.
+            print(f"WARNING /funciones: no se pudo crear '{nombre_funcion}': {e}", flush=True)
+    funciones = supabase.table("funciones").select("*").order("nombre").execute().data or []
     return funciones
 
 @app.post("/contratos")
@@ -2779,7 +2809,20 @@ def buscar_reportes_obra(
         if estado:
             q = q.eq("estado", estado)
         elif cargo_id is not None and CARGO_ID_NIVEL_MAP.get(cargo_id):
-            q = q.not_.in_("estado", ["Borrador", "Sin Asignar Ítem", "En Papelera"])
+            # Mantener coherencia con /analisis:
+            # para No Revisado, excluir estados de reporte que no deben entrar al resumen.
+            if estado_validacion in ("No Revisado", "No Revisados"):
+                q = q.not_.in_("estado", [
+                    "Borrador",
+                    "Sin Asignar Ítem",
+                    "En Papelera",
+                    "Aprobados",
+                    "Rechazados",
+                    "Pendientes",
+                    "No Objeto de Cobro",
+                ])
+            else:
+                q = q.not_.in_("estado", ["Borrador", "Sin Asignar Ítem", "En Papelera"])
         if semana_id_filtro is not None:
             q = q.eq("semana_id", semana_id_filtro)
         if acta_id_filtro is not None:
@@ -2969,7 +3012,6 @@ def analisis_registros_obra(
     _val_estado_l = None
     _val_prereq_l = None
     if cargo_id is not None and estado_validacion:
-        print(f"DEBUG analisis: cargo_id={cargo_id} estado_validacion={estado_validacion}", flush=True)
         _c = CARGO_ID_NIVEL_MAP.get(cargo_id)
         if _c:
             _val_campo_l  = _c
@@ -2996,8 +3038,8 @@ def analisis_registros_obra(
                 if _vc_l and _ve_l:
                     if _vp_l:
                         q = q.eq(_vp_l[0], _vp_l[1])
-                    if _ve_l == 'No Revisado':
-                        q = q.eq(_vc_l, 'No Revisado')\
+                    if _ve_l in ('No Revisado', 'No Revisados'):
+                        q = q.or_(f"{_vc_l}.is.null,{_vc_l}.eq.No Revisado")\
                              .not_.is_("item_numero", "null").neq("item_numero", "")
                     else:
                         q = q.eq(_vc_l, _ve_l)

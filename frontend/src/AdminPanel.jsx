@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
-const API = "https://claracore-backend.azurewebsites.net";
+const API = import.meta.env.VITE_API_URL || "https://claracore-backend.azurewebsites.net";
 
 const ACCIONES = ["ver", "crear", "editar", "eliminar", "validar", "exportar"];
 
@@ -722,7 +722,7 @@ function SeccionPermisos({ call, cargos, theme }) {
 // ─── SECCIÓN LOGS ─────────────────────────────────────────────────────────────
 function SeccionLogs({ call, theme }) {
   const col = C(theme)
-  const API = "https://claracore-backend.azurewebsites.net"
+  const API = import.meta.env.VITE_API_URL || "https://claracore-backend.azurewebsites.net"
   const token = localStorage.getItem("cc_token") || sessionStorage.getItem("cc_token")
 
   const [logs,          setLogs]          = useState([])

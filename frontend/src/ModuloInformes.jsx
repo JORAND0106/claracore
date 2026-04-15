@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 
-const API = 'https://claracore-backend.azurewebsites.net'
+const API = import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net'
 
 const FS = {
   small:  { base: 13, sub: 12, title: 20, section: 12 },

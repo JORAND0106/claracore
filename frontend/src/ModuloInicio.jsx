@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 
-const API_ANTHROPIC = 'https://claracore-backend.azurewebsites.net/frase-del-dia'
+const API_BASE = import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net'
+const API_ANTHROPIC = `${API_BASE}/frase-del-dia`
 
 // ─── Escala de fuentes — sincronizada con FONT_SIZES de App.jsx ───────────────
 const FS = {
@@ -162,12 +163,37 @@ function StatCard({ icono, valor, label, color, t, fs, delay = 0 }) {
 // ─── Frase del día ────────────────────────────────────────────────────────────
 function FraseDelDia({ t, fs, usuario }) {
   const storageKey = `claracore_frase_${usuario?.id || 'guest'}`
+  const FRASES_FALLBACK = [
+    { frase: 'El avance de hoy construye el resultado de mañana.', autor: 'ClaraCore', tipo: 'motivadora' },
+    { frase: 'La disciplina diaria convierte grandes obras en realidad.', autor: 'ClaraCore', tipo: 'reflexiva' },
+    { frase: 'La calidad no se improvisa: se decide en cada detalle.', autor: 'ClaraCore', tipo: 'reflexiva' },
+    { frase: 'Mantente firme: cada paso bien hecho cuenta.', autor: 'ClaraCore', tipo: 'motivadora' },
+    { frase: 'La constancia convierte lo difícil en posible.', autor: 'ClaraCore', tipo: 'motivadora' },
+    { frase: 'Donde otros ven obstáculos, un equipo firme ve oportunidades de mejora.', autor: 'ClaraCore', tipo: 'reflexiva' },
+    { frase: 'La excelencia no es un acto, es un hábito diario.', autor: 'ClaraCore', tipo: 'motivadora' },
+    { frase: 'Tu trabajo de hoy es la confianza de muchos mañana.', autor: 'ClaraCore', tipo: 'reflexiva' },
+    { frase: 'No te rindas: la obra más sólida se levanta bloque a bloque.', autor: 'ClaraCore', tipo: 'motivadora' },
+    { frase: 'Hazlo bien, aunque nadie mire; eso también construye carácter.', autor: 'ClaraCore', tipo: 'reflexiva' },
+    { frase: 'Todo tiene su tiempo, y todo lo que se quiere debajo del cielo tiene su hora.', autor: 'Eclesiastés 3:1', tipo: 'bíblica' },
+    { frase: 'Todo lo puedo en Cristo que me fortalece.', autor: 'Filipenses 4:13', tipo: 'bíblica' },
+    { frase: 'Porque yo sé los planes que tengo para ustedes, planes de bienestar y no de calamidad.', autor: 'Jeremías 29:11', tipo: 'bíblica' },
+    { frase: 'Encomienda al Señor tus obras, y tus pensamientos serán afirmados.', autor: 'Proverbios 16:3', tipo: 'bíblica' },
+    { frase: 'Esfuérzate y sé valiente; no temas ni desmayes.', autor: 'Josué 1:9', tipo: 'bíblica' },
+    { frase: 'Los que esperan en el Señor tendrán nuevas fuerzas; levantarán alas como las águilas.', autor: 'Isaías 40:31', tipo: 'bíblica' },
+    { frase: 'Fiel es Dios, que no dejará que sean probados más de lo que pueden resistir.', autor: '1 Corintios 10:13', tipo: 'bíblica' },
+    { frase: 'El corazón del hombre piensa su camino, mas el Señor endereza sus pasos.', autor: 'Proverbios 16:9', tipo: 'bíblica' },
+  ]
+  const fallbackLocal = (fraseActual = null) => {
+    const pool = FRASES_FALLBACK.filter(f => !fraseActual || f.frase !== fraseActual.frase)
+    const source = pool.length > 0 ? pool : FRASES_FALLBACK
+    const idx = Math.floor(Math.random() * source.length)
+    return source[idx]
+  }
   const [estado, setEstado]   = useState('idle')
   const [frase, setFrase]     = useState(null)
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
-    return // temporal — activar cuando el backend esté listo
     try {
       const guardado = JSON.parse(localStorage.getItem(storageKey) || 'null')
       if (guardado?.rechazado) return
@@ -197,15 +223,21 @@ function FraseDelDia({ t, fs, usuario }) {
         },
         body: JSON.stringify({ nombre: usuario?.nombre || '', turno, dia })
       })
+      if (!res.ok) throw new Error(`frase-del-dia status ${res.status}`)
       const data = await res.json()
-      const texto = data.content?.[0]?.text || ''
-      const parsed = JSON.parse(texto.replace(/```json|```/g, '').trim())
+      const parsedApi =
+        (data && typeof data === 'object' && data.frase) ? data : null
+      const parsed = parsedApi || fallbackLocal(frase)
       setFrase(parsed)
       setEstado('visible')
       setTimeout(() => setVisible(true), 100)
       localStorage.setItem(storageKey, JSON.stringify({ aceptado: true, fecha: hoyISO(), frase: parsed }))
     } catch {
-      setEstado('error')
+      const parsed = fallbackLocal(frase)
+      setFrase(parsed)
+      setEstado('visible')
+      setTimeout(() => setVisible(true), 100)
+      localStorage.setItem(storageKey, JSON.stringify({ aceptado: true, fecha: hoyISO(), frase: parsed }))
     }
   }
 

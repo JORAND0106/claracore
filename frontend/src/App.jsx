@@ -6,7 +6,8 @@ import ModuloInicio from './ModuloInicio'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 
-const API = 'https://claracore-backend.azurewebsites.net'
+const API_BASE = import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net'
+const API = API_BASE
 
 const themes = {
   light: {
@@ -541,7 +542,7 @@ function PresupuestoTooltip({ active, payload, t, color, fmt }) {
 
 // ─── MÓDULO PRESUPUESTO ───────────────────────────────────────────────────────
 function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRegistroConsumed }) {
-  const API = 'https://claracore-backend.azurewebsites.net'
+  const API = API_BASE
   const contratoId = usuario?.contrato_id
 
   // ── Estado ─────────────────────────────────────────────────────────────────
@@ -5397,7 +5398,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
 // ─── MÓDULO SICOE OBRA ────────────────────────────────────────────────────────
 function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistroNumero = null, onNavReporteConsumed }) {
-  const API_URL = import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net'
+  const API_URL = API_BASE
   const contrato_id = usuario?.contrato_id
 
   const [reportes, setReportes] = useState([])
@@ -7585,7 +7586,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 // ─── MÓDULO PLANO SEMÁFORO ────────────────────────────────────────────────────
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
 function ModuloPlanoSemaforo({ t, usuario, token }) {
-  const API = 'https://claracore-backend.azurewebsites.net'
+  const API = API_BASE
   const contratoId = usuario?.contrato_id
   const mapRef = useRef(null)
   const mapInstance = useRef(null)
@@ -8044,7 +8045,7 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
 
 // ─── BUZÓN DE NOTIFICACIONES ──────────────────────────────────────────────────
 function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
-  const API = 'https://claracore-backend.azurewebsites.net'
+  const API = API_BASE
   const [abierto,       setAbierto]       = useState(false)
   const [tab,           setTab]           = useState('recibidos')
   const [recibidos,     setRecibidos]     = useState([])
@@ -8435,7 +8436,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [zoomingPkid,    setZoomingPkid]    = useState(false)
   const [dwgEnlazadoDash, setDwgEnlazadoDash] = useState(false)
   const miniMapaRef = useRef(null)
-  const API_URL = 'https://claracore-backend.azurewebsites.net'
+  const API_URL = API_BASE
   const contratoIdDash = usuario?.contrato_id
 
   useEffect(() => {
@@ -8797,7 +8798,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const canAdmin = esDeveloper || usuario?.cargo_nombre === 'Administrador' || tienePermisoAdmin
   const tienePermisoSicoeObra = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Reporte de Cantidades' && p.ver)
   const tienePermisoDashboard   = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Dashboard' && p.ver)
-  const tienePermisoPresupuesto = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Presupuesto' && p.ver)
+  const tienePermisoPresupuesto = esDeveloper || (usuario?.permisos || []).some(p => {
+    const nombre = (p.funcion_nombre || '').toLowerCase()
+    return nombre === 'editar registros presupuesto' && p.ver
+  })
 
   const s = {
     app: { fontFamily: "'Segoe UI', sans-serif", background: t.bg, minHeight: '100vh', color: t.text },
@@ -10523,7 +10527,7 @@ export default function App() {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
 useEffect(() => {
-    const ping = () => fetch('https://claracore-backend.azurewebsites.net/').catch(() => {})
+    const ping = () => fetch(`${API_BASE}/`).catch(() => {})
     ping()
     const iv = setInterval(ping, 8 * 60 * 1000)
     return () => clearInterval(iv)
@@ -10531,6 +10535,7 @@ useEffect(() => {
 
   const [mantenimiento, setMantenimiento] = useState(null)
   const [cuentaRegresiva, setCuentaRegresiva] = useState(null)
+  const [esperandoFinMantenimiento, setEsperandoFinMantenimiento] = useState(false)
 
   useEffect(() => {
     const checkMant = async () => {
@@ -10540,6 +10545,7 @@ useEffect(() => {
           const d = await r.json()
           if (d.activo) {
             setMantenimiento(d)
+            setEsperandoFinMantenimiento(false)
             setCuentaRegresiva(prev => {
               const serverValue = Number.isFinite(d.segundos_restantes) ? d.segundos_restantes : null
               if (serverValue === null) return prev ?? 20
@@ -10547,6 +10553,10 @@ useEffect(() => {
               return Math.min(prev, serverValue)
             })
           } else {
+            if (mantenimiento?.activo || esperandoFinMantenimiento) {
+              window.location.reload()
+              return
+            }
             setMantenimiento(null)
             setCuentaRegresiva(null)
           }
@@ -10556,11 +10566,15 @@ useEffect(() => {
     checkMant()
     const iv = setInterval(checkMant, 10000)
     return () => clearInterval(iv)
-  }, [])
+  }, [mantenimiento?.activo, esperandoFinMantenimiento])
 
   useEffect(() => {
     if (cuentaRegresiva === null) return
-    if (cuentaRegresiva <= 0) { window.location.reload(); return }
+    if (cuentaRegresiva <= 0) {
+      setCuentaRegresiva(0)
+      setEsperandoFinMantenimiento(true)
+      return
+    }
     const t = setTimeout(() => setCuentaRegresiva(v => v - 1), 1000)
     return () => clearTimeout(t)
   }, [cuentaRegresiva])
@@ -10660,7 +10674,11 @@ if (contratos.length > 1) {
           <span style={{ fontSize: '20px' }}>🚨</span>
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: '800', fontSize: '14px' }}>Actualización obligatoria del sistema</div>
-            <div style={{ fontSize: '12px', opacity: 0.9, marginTop: '2px' }}>{mantenimiento.mensaje} · Disculpa las molestias.</div>
+            <div style={{ fontSize: '12px', opacity: 0.9, marginTop: '2px' }}>
+              {esperandoFinMantenimiento
+                ? 'Terminando actualización del backend... recargaremos automáticamente al finalizar.'
+                : `${mantenimiento.mensaje} · Disculpa las molestias.`}
+            </div>
           </div>
           <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: '8px 18px', textAlign: 'center', minWidth: '80px' }}>
             <div style={{ fontSize: '28px', fontWeight: '900', lineHeight: 1 }}>{cuentaRegresiva}</div>
