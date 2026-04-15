@@ -45,11 +45,13 @@ app.add_middleware(
     allow_origins=[
         "https://claracore.co",
         "https://www.claracore.co",
+        "https://app.claracore.co",
         "http://localhost:5173",
         "http://localhost:5174",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5174",
     ],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
@@ -2672,6 +2674,9 @@ def buscar_reportes_obra(
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
     # Filtrar por cargo_id + estado_validacion ANTES de paginar
+    _nivel_l = None
+    _ev_l = None
+    _prereq = None
     if cargo_id is not None and estado_validacion:
         _nivel_l = CARGO_ID_NIVEL_MAP.get(cargo_id)
         if _nivel_l:
@@ -2808,21 +2813,9 @@ def buscar_reportes_obra(
             q = q.lte("abs_final", abs_final)
         if estado:
             q = q.eq("estado", estado)
-        elif cargo_id is not None and CARGO_ID_NIVEL_MAP.get(cargo_id):
-            # Mantener coherencia con /analisis:
-            # para No Revisado, excluir estados de reporte que no deben entrar al resumen.
-            if estado_validacion in ("No Revisado", "No Revisados"):
-                q = q.not_.in_("estado", [
-                    "Borrador",
-                    "Sin Asignar Ítem",
-                    "En Papelera",
-                    "Aprobados",
-                    "Rechazados",
-                    "Pendientes",
-                    "No Objeto de Cobro",
-                ])
-            else:
-                q = q.not_.in_("estado", ["Borrador", "Sin Asignar Ítem", "En Papelera"])
+        # Importante: para validaciones por nivel, el universo debe definirse por
+        # estado de so_registros (nivelX_estado), no por estado de so_reportes.
+        # Solo se filtra por estado de reporte cuando el usuario lo pide explícitamente.
         if semana_id_filtro is not None:
             q = q.eq("semana_id", semana_id_filtro)
         if acta_id_filtro is not None:
@@ -2882,10 +2875,37 @@ def buscar_reportes_obra(
         try:
             _rb_l = reporte_ids_batch
             def _reg_estados():
-                return supabase.table("so_registros")\
-                    .select("reporte_id, nivel1_estado, nivel2_estado, nivel3_estado, sub_estado")\
-                    .in_("reporte_id", _rb_l)\
-                    .limit(5000).execute().data
+                q = supabase.table("so_registros")\
+                    .select("reporte_id, nivel1_estado, nivel2_estado, nivel3_estado, sub_estado, semana_id, acta_rpo_id, item_numero, capitulo, subcontratista_id, tramo, margen")\
+                    .in_("reporte_id", _rb_l)
+
+                # Mantener coherencia con el universo filtrado de grilla/panel
+                if semana_id_filtro is not None:
+                    q = q.eq("semana_id", semana_id_filtro)
+                if acta_id_filtro is not None:
+                    q = q.eq("acta_rpo_id", acta_id_filtro)
+                if capitulo:
+                    q = q.eq("capitulo", capitulo)
+                if subcontratista_id is not None:
+                    q = q.eq("subcontratista_id", subcontratista_id)
+                if item:
+                    q = q.ilike("item_numero", f"%{item}%")
+                if tramo:
+                    q = q.eq("tramo", tramo)
+                if costado:
+                    q = q.eq("margen", costado)
+
+                # Validación por nivel (nivel 1/2/3) — misma lógica que filtros principales
+                if _nivel_l and _ev_l:
+                    if _prereq:
+                        q = q.eq(_prereq[0], _prereq[1])
+                    if _ev_l in ("No Revisado", "No Revisados"):
+                        q = q.or_(f"{_nivel_l}.is.null,{_nivel_l}.eq.No Revisado")\
+                             .not_.is_("item_numero", "null").neq("item_numero", "")
+                    else:
+                        q = q.eq(_nivel_l, _ev_l)
+
+                return q.limit(5000).execute().data
             reg_estados = supabase_execute(_reg_estados)
             cargo_map = {r["id"]: {"n1": [], "n2": [], "n3": [], "sub": [], "count": 0} for r in rows}
             for reg in reg_estados:
@@ -3055,17 +3075,6 @@ def analisis_registros_obra(
 
     # ── 5. Batch-resolve capitulo y estado desde so_reportes ─────────────────
     rep_ids_found = list({r["reporte_id"] for r in registros if r.get("reporte_id")})
-    # Si hay filtro de validación activo, excluir reportes en estados no visibles
-    if _val_campo_l and rep_ids_found and _val_estado_l in ('No Revisado', 'No Revisados'):
-        _ESTADOS_EXCLUIR = {'Borrador', 'Sin Asignar Ítem', 'En Papelera', 'Aprobados', 'Rechazados', 'Pendientes', 'No Objeto de Cobro'}
-        _cid_excl = contrato_id
-        def _excl(ids=rep_ids_found):
-            return supabase.table("so_reportes").select("id, estado")\
-                .eq("contrato_id", _cid_excl).in_("id", ids).execute().data
-        _rep_estados_excl = supabase_execute(_excl)
-        _ids_permitidos = {r["id"] for r in _rep_estados_excl if r.get("estado") not in _ESTADOS_EXCLUIR}
-        registros = [r for r in registros if r.get("reporte_id") in _ids_permitidos]
-        rep_ids_found = list({r["reporte_id"] for r in registros if r.get("reporte_id")})
     reporte_map: dict = {}
     if rep_ids_found:
         # Procesar en lotes de 500 para no exceder límites de URL con .in_()

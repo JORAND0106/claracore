@@ -225,28 +225,29 @@ def _fm(n):
 BASE_CSS = """
 @page {
     size: letter;
-    margin: 1.5cm 1.5cm 2cm 1.5cm;
+    margin: 1.2cm 1.2cm 1.4cm 1.2cm;
 }
 body { font-family: Arial, sans-serif; font-size: 8pt; color: #1a1a2e; }
 table { border-collapse: collapse; }
 .w100 { width: 100%; }
-.hdr-outer { width: 100%; border: 2px solid #0077B6; margin-bottom: 8px; }
-.hdr-logo  { width: 110px; border-right: 1px solid #0077B6; padding: 6px; text-align: center; vertical-align: middle; }
-.hdr-logo img { max-width: 100px; max-height: 55px; }
-.hdr-main  { padding: 6px 10px; vertical-align: top; }
-.doc-title { font-size: 12pt; font-weight: bold; color: #0077B6; }
-.doc-code  { font-size: 7pt; color: #888; letter-spacing: 1px; margin: 2px 0 5px 0; }
+.hdr-outer { width: 100%; border: 1px solid #9ca3af; margin-bottom: 6px; }
+.hdr-logo  { width: 150px; border-right: 1px solid #9ca3af; padding: 6px; text-align: center; vertical-align: middle; }
+.hdr-logo img { max-width: 138px; max-height: 48px; }
+.hdr-main  { padding: 5px 8px; vertical-align: middle; text-align: center; }
+.doc-title { font-size: 10.5pt; font-weight: bold; color: #111827; text-transform: uppercase; }
+.doc-code  { font-size: 10pt; font-weight: bold; color: #374151; margin: 2px 0 4px 0; text-align: center; }
 .lbl { color: #555; font-weight: normal; }
 .val { font-weight: bold; color: #1a1a2e; }
 .section-bar {
-    background: #0077B6; color: white;
+    background: #e5e7eb; color: #111827;
     font-size: 8pt; font-weight: bold;
+    border: 1px solid #9ca3af;
     padding: 3px 8px; margin: 6px 0 3px 0;
 }
 .data-th {
-    background: #dbeafe; color: #1e40af;
+    background: #f3f4f6; color: #111827;
     font-weight: bold; padding: 4px 5px;
-    border: 1px solid #93c5fd; text-align: center;
+    border: 1px solid #9ca3af; text-align: center;
     font-size: 7.5pt;
 }
 .data-td {
@@ -257,9 +258,9 @@ table { border-collapse: collapse; }
 }
 .even { background: #f8fafc; }
 .total-td {
-    background: #0077B6; color: white;
+    background: #e5e7eb; color: #111827;
     font-weight: bold; padding: 4px 5px;
-    border: 1px solid #005a8e; font-size: 7.5pt;
+    border: 1px solid #9ca3af; font-size: 7.5pt;
 }
 .firma-linea { border-top: 1px solid #333; margin-top: 55px; margin-bottom: 4px; }
 .firma-nombre { font-weight: bold; font-size: 8pt; }
@@ -267,24 +268,33 @@ table { border-collapse: collapse; }
 .firma-dato   { font-size: 7pt; color: #333; }
 .foto-caption { font-size: 7pt; color: #555; margin-top: 3px; text-align: center; }
 .sep { border: none; border-top: 1px solid #e2e8f0; margin: 4px 0; }
+.doc-meta td { border: 1px solid #9ca3af; padding: 3px 5px; font-size: 7.4pt; vertical-align: top; }
+.doc-footer {
+    margin-top: 8px;
+    border-top: 1px solid #9ca3af;
+    padding-top: 4px;
+    font-size: 6.7pt;
+    color: #4b5563;
+    text-align: center;
+}
 """
 
 # ── Template CC-SUB-001 ────────────────────────────────────────────────────────
 
 def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo):
-    now      = datetime.now().strftime("%d/%m/%Y %H:%M")
-    logo_td  = f'<img src="{contrato["logo_contratista"]}" />' if contrato.get("logo_contratista") else "<span style='font-size:7pt;color:#0077B6'>SIN LOGO</span>"
+    now      = datetime.now().strftime("%d %b %y, %I:%M %p")
+    logo_td  = f'<img src="{contrato["logo_contratista"]}" />' if contrato.get("logo_contratista") else "<span style='font-size:7pt;color:#6b7280'>LOGO CONTRATISTA</span>"
 
     filas = ""
     for i, item in enumerate(items):
         cls = "even" if i % 2 == 0 else ""
         filas += f"""<tr class="{cls}">
             <td class="data-td" style="text-align:center">{item['item_numero']}</td>
-            <td class="data-td">{item['item_descripcion']}</td>
             <td class="data-td" style="text-align:center">{item['unidad']}</td>
             <td class="data-td" style="text-align:right">{_fn(item['cantidad'])}</td>
             <td class="data-td" style="text-align:right">{_fm(item['vlr_unitario_sub'])}</td>
             <td class="data-td" style="text-align:right">{_fm(item['costo_directo'])}</td>
+            <td class="data-td">{item['item_descripcion']}</td>
         </tr>"""
 
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/>
@@ -293,43 +303,39 @@ def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, us
 </style></head><body>
 
 <!-- ENCABEZADO -->
-<table class="w100 hdr-outer"><tr>
-  <td class="hdr-logo">{logo_td}</td>
-  <td class="hdr-main">
-    <div class="doc-title">CORTE SUBCONTRATISTA</div>
-    <div class="doc-code">CC-SUB-001 &nbsp;|&nbsp; {now}</div>
-    <hr class="sep"/>
-    <table class="w100"><tr>
-      <td><span class="lbl">CONTRATO: </span><span class="val">{contrato.get('numero','')}</span></td>
-      <td><span class="lbl">CONTRATISTA: </span><span class="val">{contrato.get('contratista','')}</span></td>
-      <td><span class="lbl">NIT: </span><span class="val">{contrato.get('nit','')}</span></td>
-    </tr><tr>
-      <td><span class="lbl">INTERVENTORÍA: </span><span class="val">{contrato.get('interventoria','')}</span></td>
-      <td><span class="lbl">SUBCONTRATISTA: </span><span class="val">{sub.get('razon_social','')}</span></td>
-      <td><span class="lbl">NIT SUB: </span><span class="val">{sub.get('nit','')}</span></td>
-    </tr><tr>
-      <td><span class="lbl">N° CORTE: </span><span class="val">{corte.get('consecutivo','')}</span></td>
-      <td colspan="2"><span class="lbl">PERÍODO: </span><span class="val">{_fd(corte.get('fecha_inicio'))} → {_fd(corte.get('fecha_fin'))}</span>
-        &nbsp;&nbsp;<span class="lbl">TIPO: </span><span class="val">{(corte.get('tipo_periodo','') or '').upper()}</span></td>
-    </tr></table>
-  </td>
-</tr></table>
+<table class="w100 hdr-outer">
+  <tr>
+    <td class="hdr-logo">{logo_td}</td>
+    <td class="hdr-main" style="border-right:1px solid #9ca3af"><div class="doc-title">INFORME CORTE DE SUB CONTRATISTA</div></td>
+    <td class="hdr-main" style="width:190px;border-right:1px solid #9ca3af"><div class="doc-code">UNION TEMPORAL MURCON</div></td>
+    <td class="hdr-main" style="width:95px"><div class="doc-code">SICOE</div></td>
+  </tr>
+</table>
+<table class="w100 doc-meta">
+  <tr>
+    <td style="width:25%"><span class="lbl">CONTRATO</span><br/><span class="val">{contrato.get('numero','')}</span></td>
+    <td style="width:20%"><span class="lbl">FECHA:</span><br/><span class="val">{now}</span></td>
+    <td style="width:40%"><span class="lbl">SUB CONTRATISTA:</span><br/><span class="val">{(sub.get('razon_social','') or '').upper()}</span></td>
+    <td style="width:15%"><span class="lbl">CORTE</span><br/><span class="val">{corte.get('consecutivo','')}</span></td>
+  </tr>
+</table>
 
 <!-- CANTIDADES -->
 <div class="section-bar">CANTIDADES APROBADAS POR SUBCONTRATISTA</div>
 <table class="w100">
   <tr>
-    <th class="data-th" style="width:8%">ÍTEM</th>
+    <th class="data-th" style="width:10%">ITEM</th>
+    <th class="data-th" style="width:8%">UNIDAD</th>
+    <th class="data-th" style="width:12%">CANTIDAD</th>
+    <th class="data-th" style="width:16%">VALOR UNIT.</th>
+    <th class="data-th" style="width:18%">COSTO DIR.</th>
     <th class="data-th" style="width:36%">DESCRIPCIÓN</th>
-    <th class="data-th" style="width:6%">UND</th>
-    <th class="data-th" style="width:10%">CANTIDAD</th>
-    <th class="data-th" style="width:18%">VLR UNIT SUB</th>
-    <th class="data-th" style="width:18%">COSTO DIRECTO SUB</th>
   </tr>
   {filas}
   <tr>
-    <td class="total-td" colspan="5" style="text-align:right;padding-right:10px">TOTAL COSTO DIRECTO SUBCONTRATISTA</td>
+    <td class="total-td" colspan="4" style="text-align:right;padding-right:10px">SUB TOTAL:</td>
     <td class="total-td" style="text-align:right">{_fm(total_costo)}</td>
+    <td class="total-td"></td>
   </tr>
 </table>
 
@@ -359,13 +365,16 @@ def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, us
     </td>
   </tr></table>
 </div>
+<div class="doc-footer">
+  Documento institucional de control interno. Prohibida su reproduccion parcial o total sin autorizacion escrita.
+</div>
 
 </body></html>"""
 
 # ── Template CC-SUB-002 ────────────────────────────────────────────────────────
 
 def _html_memoria_item(contrato, sub, corte, item_info, registros, usuario_nombre, usuario_cargo):
-    now     = datetime.now().strftime("%d/%m/%Y %H:%M")
+    now     = datetime.now().strftime("%d %b %Y")
     logo_td = f'<img src="{contrato["logo_contratista"]}" />' if contrato.get("logo_contratista") else "<span style='font-size:7pt;color:#0077B6'>SIN LOGO</span>"
 
     total_cant = sum(float(r.get("cantidad_total") or 0) for r in registros)
@@ -379,20 +388,20 @@ def _html_memoria_item(contrato, sub, corte, item_info, registros, usuario_nombr
         return f"""<table class="w100 hdr-outer"><tr>
   <td class="hdr-logo">{logo_td}</td>
   <td class="hdr-main">
-    <div class="doc-title">MEMORIAS CORTE SUBCONTRATISTA</div>
-    <div class="doc-code">CC-SUB-002 &nbsp;|&nbsp; {now}</div>
-    <hr class="sep"/>
-    <table class="w100"><tr>
-      <td><span class="lbl">CONTRATO: </span><span class="val">{contrato.get('numero','')}</span></td>
-      <td><span class="lbl">CONTRATISTA: </span><span class="val">{contrato.get('contratista','')}</span></td>
-      <td><span class="lbl">NIT: </span><span class="val">{contrato.get('nit','')}</span></td>
+    <div class="doc-title">RESUMEN DE ACTIVIDADES DE CONCILIACION CORTE SUB CONTRATISTA {contrato.get('numero','')}</div>
+    <div class="doc-code">CC-SUB-002</div>
+    <table class="w100 doc-meta"><tr>
+      <td style="width:27%"><span class="lbl">CONTRATO</span><br/><span class="val">{contrato.get('numero','')}</span></td>
+      <td style="width:25%"><span class="lbl">SUB CONTRATISTA</span><br/><span class="val">{sub.get('razon_social','')}</span></td>
+      <td style="width:25%"><span class="lbl">SUPERVISOR</span><br/><span class="val">{sub.get('nombre_contacto','')}</span></td>
+      <td style="width:23%"><span class="lbl">FECHA</span><br/><span class="val">{now}</span></td>
     </tr><tr>
-      <td><span class="lbl">INTERVENTORÍA: </span><span class="val">{contrato.get('interventoria','')}</span></td>
-      <td><span class="lbl">SUBCONTRATISTA: </span><span class="val">{sub.get('razon_social','')}</span></td>
-      <td><span class="lbl">N° CORTE: </span><span class="val">{corte.get('consecutivo','')} &nbsp; PERÍODO: {_fd(corte.get('fecha_inicio'))} → {_fd(corte.get('fecha_fin'))}</span></td>
+      <td><span class="lbl">ITEM</span><br/><span class="val">{item_info['item_numero']}</span></td>
+      <td><span class="lbl">UND</span><br/><span class="val">{item_info['unidad']}</span></td>
+      <td><span class="lbl">CORTE</span><br/><span class="val">{corte.get('consecutivo','')}</span></td>
+      <td><span class="lbl">PERIODO</span><br/><span class="val">{_fd(corte.get('fecha_inicio'))} - {_fd(corte.get('fecha_fin'))}</span></td>
     </tr><tr>
-      <td colspan="3"><span class="lbl">ÍTEM: </span><span class="val">{item_info['item_numero']} — {item_info['item_descripcion']}</span>
-      &nbsp;&nbsp;<span class="lbl">UND: </span><span class="val">{item_info['unidad']}</span></td>
+      <td colspan="4"><span class="lbl">DESCRIPCION</span><br/><span class="val">{item_info['item_descripcion']}</span></td>
     </tr></table>
   </td>
 </tr></table>"""
@@ -448,6 +457,7 @@ def _html_memoria_item(contrato, sub, corte, item_info, registros, usuario_nombr
                 <td class="total-td"></td>
             </tr>"""
         body += "</table>"
+        body += '<div class="doc-footer">Documento institucional de control interno. Prohibida su reproduccion parcial o total sin autorizacion escrita.</div>'
 
         # Página de fotos correspondiente a este bloque
         if ci < len(chunks_foto):
@@ -471,6 +481,7 @@ def _html_memoria_item(contrato, sub, corte, item_info, registros, usuario_nombr
                     body += '<td style="width:33%"></td>'
                 body += "</tr>"
             body += "</table>"
+            body += '<div class="doc-footer">Documento institucional de control interno. Prohibida su reproduccion parcial o total sin autorizacion escrita.</div>'
 
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/>
 <style>{BASE_CSS}</style></head><body>
