@@ -2530,31 +2530,43 @@ def buscar_reportes_obra(
         if _nivel_l:
             _ev_l = estado_validacion
             _prereq = CARGO_NIVEL_PRERREQUISITO.get(_nivel_l)
+            _tramo_v = tramo; _costado_v = costado; _cap_v = capitulo
+            _sub_v = subcontratista_id; _item_v = item
 
-            def _val():
-                q = supabase.table("so_registros").select("reporte_id")\
-                    .eq("contrato_id", contrato_id)
-                if _prereq:
-                    q = q.eq(_prereq[0], _prereq[1])
-                if _ev_l == 'No Revisado':
-                    q = q.or_(f"{_nivel_l}.is.null,{_nivel_l}.eq.No Revisado")
-                else:
-                    q = q.eq(_nivel_l, _ev_l)
-                return q.execute().data
+            # Paginación real: solo traer los reporte_id DISTINTOS de la página actual
+            _needed = offset + limit + 1
+            _seen_rids = set()
+            _pag_offset = 0
+            _pag_size = 1000
+            ids_val = []
 
-            rows_val = supabase_execute(_val)
-            ids_val = list({r["reporte_id"] for r in rows_val if r.get("reporte_id")})
-            # Cuando hay filtro de validación, excluir reportes en estados que no
-            # deben ser visibles para niveles de validación
-            _ESTADOS_SIEMPRE_EXCLUIDOS = {'Borrador', 'Sin Asignar Ítem', 'En Papelera'}
-            if _ev_l in ('No Revisado', 'No Revisados'):
-                _ESTADOS_SIEMPRE_EXCLUIDOS.update({'Aprobados', 'Rechazados', 'Pendientes', 'No Objeto de Cobro'})
-            if ids_val:
-                def _filter_estados():
-                    return supabase.table("so_reportes").select("id, estado")\
-                        .in_("id", ids_val).execute().data
-                _rep_estados = supabase_execute(_filter_estados)
-                ids_val = [r["id"] for r in _rep_estados if r.get("estado") not in _ESTADOS_SIEMPRE_EXCLUIDOS]
+            while len(_seen_rids) < _needed:
+                def _val_page(off=_pag_offset):
+                    q = supabase.table("so_registros").select("reporte_id")\
+                        .eq("contrato_id", contrato_id)
+                    if _prereq:
+                        q = q.eq(_prereq[0], _prereq[1])
+                    if _ev_l == 'No Revisado':
+                        q = q.or_(f"{_nivel_l}.is.null,{_nivel_l}.eq.No Revisado")\
+                             .not_.is_("item_numero", "null").neq("item_numero", "")
+                    else:
+                        q = q.eq(_nivel_l, _ev_l)
+                    if _tramo_v:   q = q.eq("tramo", _tramo_v)
+                    if _costado_v: q = q.eq("margen", _costado_v)
+                    if _cap_v:     q = q.eq("capitulo", _cap_v)
+                    if _sub_v:     q = q.eq("subcontratista_id", _sub_v)
+                    if _item_v:    q = q.ilike("item_numero", f"%{_item_v}%")
+                    return q.range(off, off + _pag_size - 1).execute().data
+                _page = supabase_execute(_val_page)
+                for r in _page:
+                    rid = r.get("reporte_id")
+                    if rid and rid not in _seen_rids:
+                        _seen_rids.add(rid)
+                        ids_val.append(rid)
+                if len(_page) < _pag_size:
+                    break
+                _pag_offset += _pag_size
+
             if not ids_val:
                 return {"reportes": [], "total": 0, "offset": offset,
                         "limit": limit, "hay_mas": False}
@@ -2625,7 +2637,12 @@ def buscar_reportes_obra(
         except Exception:
             pass  # fallback: filtrar por acta_rpo_id directo en so_reportes
 
-    def _q():
+    # PostgREST envía .in_() como parámetro URL; listas grandes superan el límite
+    # de longitud del servidor y se truncan silenciosamente. Se divide en chunks
+    # para garantizar que todos los IDs se filtren correctamente.
+    _IDS_CHUNK_SIZE = 200
+
+    def _build_q(ids_chunk=None):
         q = supabase.table("so_reportes").select("*, subcontratistas(razon_social)")\
             .eq("contrato_id", contrato_id)
         if numero_reporte is not None:
@@ -2644,15 +2661,36 @@ def buscar_reportes_obra(
             q = q.lte("abs_final", abs_final)
         if estado:
             q = q.eq("estado", estado)
+        elif cargo_id is not None and CARGO_ID_NIVEL_MAP.get(cargo_id):
+            q = q.not_.in_("estado", ["Borrador", "Sin Asignar Ítem", "En Papelera"])
         if semana_id_filtro is not None:
             q = q.eq("semana_id", semana_id_filtro)
         if acta_id_filtro is not None:
             q = q.eq("acta_rpo_id", acta_id_filtro)
-        if reporte_ids_from_reg is not None:
-            q = q.in_("id", reporte_ids_from_reg)
-        return q.order("numero_reporte", desc=True).range(offset, offset + limit).execute().data
+        if ids_chunk is not None:
+            q = q.in_("id", ids_chunk)
+        return q
 
-    rows = supabase_execute(_q)
+    # Paginación real: solo traer la página solicitada
+    all_rows = []
+    if reporte_ids_from_reg is not None:
+        # Tomar solo el slice de IDs que corresponde a esta página
+        ids_pagina = reporte_ids_from_reg[offset:offset + limit + 1]
+        if ids_pagina:
+            def _qpage(c=ids_pagina):
+                return _build_q(c)\
+                    .order("numero_reporte", desc=True)\
+                    .limit(limit + 1).execute().data
+            all_rows = supabase_execute(_qpage)
+    else:
+        def _qall():
+            return _build_q(None)\
+                .order("numero_reporte", desc=True)\
+                .range(offset, offset + limit).execute().data
+        all_rows = supabase_execute(_qall)
+
+    all_rows.sort(key=lambda r: (r.get("numero_reporte") or 0), reverse=True)
+    rows = all_rows[:limit + 1]
     hay_mas = len(rows) > limit
     rows = rows[:limit]
 
@@ -2687,9 +2725,10 @@ def buscar_reportes_obra(
             def _reg_estados():
                 return supabase.table("so_registros")\
                     .select("reporte_id, nivel1_estado, nivel2_estado, nivel3_estado, sub_estado")\
-                    .in_("reporte_id", _rb_l).execute().data
+                    .in_("reporte_id", _rb_l)\
+                    .limit(5000).execute().data
             reg_estados = supabase_execute(_reg_estados)
-            cargo_map = {r["id"]: {"n1": [], "n2": [], "n3": [], "sub": []} for r in rows}
+            cargo_map = {r["id"]: {"n1": [], "n2": [], "n3": [], "sub": [], "count": 0} for r in rows}
             for reg in reg_estados:
                 rid = reg.get("reporte_id")
                 if rid in cargo_map:
@@ -2697,12 +2736,14 @@ def buscar_reportes_obra(
                     cargo_map[rid]["n2"].append(reg.get("nivel2_estado") or "No Revisado")
                     cargo_map[rid]["n3"].append(reg.get("nivel3_estado") or "No Revisado")
                     cargo_map[rid]["sub"].append(reg.get("sub_estado") or "No Revisado")
+                    cargo_map[rid]["count"] += 1
             for r in rows:
                 m = cargo_map.get(r["id"], {})
                 r["nivel1_estados"] = list(set(m.get("n1", [])))
                 r["nivel2_estados"] = list(set(m.get("n2", [])))
                 r["nivel3_estados"] = list(set(m.get("n3", [])))
                 r["sub_estados"]    = list(set(m.get("sub", [])))
+                r["num_registros"] = m.get("count", 0)
         except Exception:
             for r in rows:
                 r["nivel1_estados"] = r["nivel2_estados"] = r["nivel3_estados"] = r["sub_estados"] = []
@@ -2854,16 +2895,14 @@ def analisis_registros_obra(
     # ── 5. Batch-resolve capitulo y estado desde so_reportes ─────────────────
     rep_ids_found = list({r["reporte_id"] for r in registros if r.get("reporte_id")})
     # Si hay filtro de validación activo, excluir reportes en estados no visibles
-    if _val_campo_l and rep_ids_found:
-        _ESTADOS_SIEMPRE_EXCLUIDOS = {'Borrador', 'Sin Asignar Ítem', 'En Papelera'}
-        if _val_estado_l in ('No Revisado', 'No Revisados'):
-            _ESTADOS_SIEMPRE_EXCLUIDOS.update({'Aprobados', 'Rechazados', 'Pendientes', 'No Objeto de Cobro'})
+    if _val_campo_l and rep_ids_found and _val_estado_l in ('No Revisado', 'No Revisados'):
+        _ESTADOS_EXCLUIR = {'Borrador', 'Sin Asignar Ítem', 'En Papelera', 'Aprobados', 'Rechazados', 'Pendientes', 'No Objeto de Cobro'}
         _cid_excl = contrato_id
         def _excl(ids=rep_ids_found):
             return supabase.table("so_reportes").select("id, estado")\
                 .eq("contrato_id", _cid_excl).in_("id", ids).execute().data
         _rep_estados_excl = supabase_execute(_excl)
-        _ids_permitidos = {r["id"] for r in _rep_estados_excl if r.get("estado") not in _ESTADOS_SIEMPRE_EXCLUIDOS}
+        _ids_permitidos = {r["id"] for r in _rep_estados_excl if r.get("estado") not in _ESTADOS_EXCLUIR}
         registros = [r for r in registros if r.get("reporte_id") in _ids_permitidos]
         rep_ids_found = list({r["reporte_id"] for r in registros if r.get("reporte_id")})
     reporte_map: dict = {}

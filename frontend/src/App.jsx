@@ -5408,6 +5408,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const [cargandoAnalisis, setCargandoAnalisis] = useState(false)
   const [panelExpandido, setPanelExpandido] = useState(false)
   const [busquedaRealizada, setBusquedaRealizada] = useState(false)
+  const [busquedaAmplia, setBusquedaAmplia] = useState(false)
   const [sugerenciasItem, setSugerenciasItem] = useState([])
   const [mostrarSugsItem, setMostrarSugsItem] = useState(false)
   const [mostrarSugsActa, setMostrarSugsActa] = useState(false)
@@ -5560,6 +5561,10 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
 
   const buscarReportes = async (nuevosFiltros, nuevoOffset = 0, capas = []) => {
     setCargando(true)
+    const esBusquedaAmplia = capas.length > 0 && 
+      Object.values(nuevosFiltros).every(v => v === '' || v == null)
+    if (esBusquedaAmplia) setBusquedaAmplia(true)
+    else setBusquedaAmplia(false)
     try {
       const params = new URLSearchParams()
       const ef = { ...nuevosFiltros }
@@ -6121,7 +6126,14 @@ const limpiarFiltros = () => {
 
         {/* Filas */}
         {cargando && reportes.length === 0 ? (
-          <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>Cargando reportes...</div>
+          <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>
+            {busquedaAmplia
+              ? <span>⏳ <strong>Búsqueda amplia detectada</strong> — esto puede tomar unos segundos.<br/>
+                  <span style={{fontSize:'12px'}}>Combina filtros adicionales para resultados más rápidos.</span>
+                </span>
+              : 'Cargando reportes...'
+            }
+          </div>
         ) : !busquedaRealizada ? (
           <div style={{ padding:'48px', textAlign:'center', color:t.textMuted, fontSize:'14px' }}>
             🔍 Usa los filtros y presiona <strong>Buscar</strong> para ver los reportes
