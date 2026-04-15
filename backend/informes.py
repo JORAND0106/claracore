@@ -105,7 +105,12 @@ def pdf_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(_get_use
         html      = _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)
         pdf_bytes = _to_pdf(html)
     except Exception as e:
-        raise HTTPException(500, f"Error generando PDF corte: {str(e)}")
+        # Modo supervivencia: si el formato enriquecido falla, devolver PDF simple sin logo.
+        try:
+            html_simple = _html_corte_sub_fallback(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)
+            pdf_bytes = _to_pdf(html_simple)
+        except Exception as e2:
+            raise HTTPException(500, f"Error generando PDF corte: {str(e)} | fallback: {str(e2)}")
     sub_safe  = (sub.get("razon_social","sub") or "sub")[:20].replace(" ","_")
     filename  = f"CC-SUB-001_Corte{corte['consecutivo']}_{sub_safe}.pdf"
     return Response(content=pdf_bytes, media_type="application/pdf",
@@ -410,6 +415,50 @@ def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, us
   Documento institucional de control interno. Prohibida su reproduccion parcial o total sin autorizacion escrita.
 </div>
 
+</body></html>"""
+
+def _html_corte_sub_fallback(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo):
+    """Plantilla simple y estable (sin logo ni layout complejo) para no bloquear operación."""
+    filas = ""
+    for item in items:
+        filas += f"""<tr>
+          <td style="border:1px solid #999;padding:4px">{_h(item.get('item_numero',''))}</td>
+          <td style="border:1px solid #999;padding:4px">{_h(item.get('item_descripcion',''))}</td>
+          <td style="border:1px solid #999;padding:4px;text-align:center">{_h(item.get('unidad',''))}</td>
+          <td style="border:1px solid #999;padding:4px;text-align:right">{_fn(item.get('cantidad',0))}</td>
+          <td style="border:1px solid #999;padding:4px;text-align:right">{_fm(item.get('vlr_unitario_sub',0))}</td>
+          <td style="border:1px solid #999;padding:4px;text-align:right">{_fm(item.get('costo_directo',0))}</td>
+        </tr>"""
+
+    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/></head>
+<body style="font-family:Arial,sans-serif;font-size:9pt;color:#111">
+  <h2 style="margin:0 0 6px 0">INFORME CORTE DE SUB CONTRATISTA (MODO SEGURO)</h2>
+  <div style="margin-bottom:8px">
+    <b>Contrato:</b> {_h(contrato.get('numero',''))} &nbsp;|&nbsp;
+    <b>Subcontratista:</b> {_h(sub.get('razon_social',''))} &nbsp;|&nbsp;
+    <b>Corte:</b> {_h(corte.get('consecutivo',''))}
+  </div>
+  <table style="width:100%;border-collapse:collapse">
+    <tr style="background:#eee">
+      <th style="border:1px solid #999;padding:4px">Item</th>
+      <th style="border:1px solid #999;padding:4px">Descripcion</th>
+      <th style="border:1px solid #999;padding:4px">Und</th>
+      <th style="border:1px solid #999;padding:4px">Cantidad</th>
+      <th style="border:1px solid #999;padding:4px">Vlr Unit.</th>
+      <th style="border:1px solid #999;padding:4px">Costo Dir.</th>
+    </tr>
+    {filas}
+    <tr>
+      <td colspan="5" style="border:1px solid #999;padding:4px;text-align:right"><b>SUB TOTAL</b></td>
+      <td style="border:1px solid #999;padding:4px;text-align:right"><b>{_fm(total_costo)}</b></td>
+    </tr>
+  </table>
+  <div style="margin-top:14px">
+    <b>Generado por:</b> {_h(usuario_nombre)} - {_h(usuario_cargo)}
+  </div>
+  <div style="margin-top:10px;font-size:7pt;color:#555">
+    Documento institucional de control interno. Prohibida su reproduccion parcial o total sin autorizacion escrita.
+  </div>
 </body></html>"""
 
 # ── Template CC-SUB-002 ────────────────────────────────────────────────────────
