@@ -4448,7 +4448,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const puedeEditar = perm?.editar
   const hdrs        = { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' }
   const nivelInfo   = determinarNivelValidacion(usuario)
-  console.log('ROL:', usuario?.rol_nombre, '| verValores:', nivelInfo.verValoresEconomicos)
   
   // Para subcontratistas: solo registros con objeto_pago_sub y subcontratista coincidente
   const subIdEnCarpeta   = usuario?.subcontratista_id ?? usuario?.sub_id ?? null
