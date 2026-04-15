@@ -2931,7 +2931,8 @@ def analisis_registros_obra(
                     if _vp_l:
                         q = q.eq(_vp_l[0], _vp_l[1])
                     if _ve_l == 'No Revisado':
-                        q = q.or_(f"{_vc_l}.is.null,{_vc_l}.eq.No Revisado")
+                        q = q.or_(f"{_vc_l}.is.null,{_vc_l}.eq.No Revisado")\
+                             .not_.is_("item_numero", "null").neq("item_numero", "")
                     else:
                         q = q.eq(_vc_l, _ve_l)
                 return q.range(o, o + 999).execute().data
@@ -2993,14 +2994,15 @@ def analisis_registros_obra(
             cd  = float(reg.get("costo_directo") or 0)
             if cap not in grupos:
                 grupos[cap] = {"label": cap, "costo_directo": 0.0,
-                               "total_registros": 0, "aprobados": 0.0,
-                               "pendientes": 0.0, "rechazados": 0.0,
+                               "total_registros": 0, "no_revisados": 0,
+                               "aprobados": 0.0, "pendientes": 0.0, "rechazados": 0.0,
                                "aprobados_count": 0, "pendientes_count": 0, "rechazados_count": 0}
             grupos[cap]["costo_directo"]   += cd
             grupos[cap]["total_registros"] += 1
             if   ee == "Aprobado":   grupos[cap]["aprobados"]  += cd; grupos[cap]["aprobados_count"]  += 1
             elif ee == "Pendiente":  grupos[cap]["pendientes"] += cd; grupos[cap]["pendientes_count"] += 1
             elif ee == "Rechazado":  grupos[cap]["rechazados"] += cd; grupos[cap]["rechazados_count"] += 1
+            else:                    grupos[cap]["no_revisados"] += 1
 
     elif modo == "capitulo_items":
         for reg in registros:
@@ -3015,6 +3017,7 @@ def analisis_registros_obra(
                     "unidad":          reg.get("unidad") or "",
                     "costo_directo":   0.0,
                     "total_registros": 0,
+                    "no_revisados": 0,
                     "aprobados": 0.0, "pendientes": 0.0, "rechazados": 0.0,
                     "aprobados_count": 0, "pendientes_count": 0, "rechazados_count": 0,
                 }
@@ -3028,6 +3031,7 @@ def analisis_registros_obra(
             if   ee == "Aprobado":   grupos[it]["aprobados"]  += cd; grupos[it]["aprobados_count"]  += 1
             elif ee == "Pendiente":  grupos[it]["pendientes"] += cd; grupos[it]["pendientes_count"] += 1
             elif ee == "Rechazado":  grupos[it]["rechazados"] += cd; grupos[it]["rechazados_count"] += 1
+            else:                    grupos[it]["no_revisados"] += 1
 
     elif modo == "item_detalle":
         acta_ids_found = list({r.get("acta_rpo_id") for r in registros if r.get("acta_rpo_id")})
@@ -3118,9 +3122,11 @@ def analisis_registros_obra(
     ta_c  = sum(g.get("aprobados_count",  0) for g in grupos_list)
     tp_c  = sum(g.get("pendientes_count", 0) for g in grupos_list)
     trj_c = sum(g.get("rechazados_count", 0) for g in grupos_list)
+    tnr   = sum(g.get("no_revisados",     0) for g in grupos_list)
 
     return {"modo": modo, "encabezado": encabezado, "grupos": grupos_list,
             "total_costo_directo": tc, "total_registros": tr,
+            "total_no_revisados": tnr,
             "total_aprobados": ta, "total_pendientes": tp, "total_rechazados": trj,
             "total_aprobados_count": ta_c, "total_pendientes_count": tp_c, "total_rechazados_count": trj_c}
 
