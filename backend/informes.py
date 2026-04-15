@@ -1,6 +1,7 @@
 import io
 import base64
 import urllib.request
+import html
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -203,7 +204,9 @@ def preview_corte_sub():
 
 def _to_pdf(html: str) -> bytes:
     buf = io.BytesIO()
-    pisa.CreatePDF(io.StringIO(html), dest=buf)
+    result = pisa.CreatePDF(io.StringIO(html), dest=buf)
+    if getattr(result, "err", 0):
+        raise ValueError("xhtml2pdf reporto errores al renderizar el HTML")
     buf.seek(0)
     return buf.read()
 
@@ -252,6 +255,10 @@ def _fm(n):
     if n is None: return "—"
     try:    return f"$ {float(n):,.0f}"
     except: return str(n)
+
+def _h(v):
+    """Escape de caracteres especiales para HTML/PDF."""
+    return html.escape("" if v is None else str(v), quote=True)
 
 # ── CSS base (compatible xhtml2pdf) ────────────────────────────────────────────
 
@@ -323,12 +330,12 @@ def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, us
     for i, item in enumerate(items):
         cls = "even" if i % 2 == 0 else ""
         filas += f"""<tr class="{cls}">
-            <td class="data-td" style="text-align:center">{item['item_numero']}</td>
-            <td class="data-td" style="text-align:center">{item['unidad']}</td>
+            <td class="data-td" style="text-align:center">{_h(item.get('item_numero',''))}</td>
+            <td class="data-td" style="text-align:center">{_h(item.get('unidad',''))}</td>
             <td class="data-td" style="text-align:right">{_fn(item['cantidad'])}</td>
             <td class="data-td" style="text-align:right">{_fm(item['vlr_unitario_sub'])}</td>
             <td class="data-td" style="text-align:right">{_fm(item['costo_directo'])}</td>
-            <td class="data-td">{item['item_descripcion']}</td>
+            <td class="data-td">{_h(item.get('item_descripcion',''))}</td>
         </tr>"""
 
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/>
@@ -347,10 +354,10 @@ def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, us
 </table>
 <table class="w100 doc-meta">
   <tr>
-    <td style="width:25%"><span class="lbl">CONTRATO</span><br/><span class="val">{contrato.get('numero','')}</span></td>
-    <td style="width:20%"><span class="lbl">FECHA:</span><br/><span class="val">{now}</span></td>
-    <td style="width:40%"><span class="lbl">SUB CONTRATISTA:</span><br/><span class="val">{(sub.get('razon_social','') or '').upper()}</span></td>
-    <td style="width:15%"><span class="lbl">CORTE</span><br/><span class="val">{corte.get('consecutivo','')}</span></td>
+    <td style="width:25%"><span class="lbl">CONTRATO</span><br/><span class="val">{_h(contrato.get('numero',''))}</span></td>
+    <td style="width:20%"><span class="lbl">FECHA:</span><br/><span class="val">{_h(now)}</span></td>
+    <td style="width:40%"><span class="lbl">SUB CONTRATISTA:</span><br/><span class="val">{_h((sub.get('razon_social','') or '').upper())}</span></td>
+    <td style="width:15%"><span class="lbl">CORTE</span><br/><span class="val">{_h(corte.get('consecutivo',''))}</span></td>
   </tr>
 </table>
 
@@ -375,7 +382,7 @@ def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, us
 
 <!-- FIRMAS — siempre en nueva hoja -->
 <div class="firmas-section">
-  <div class="section-bar">FIRMAS Y APROBACIONES — CORTE N° {corte.get('consecutivo','')}</div>
+  <div class="section-bar">FIRMAS Y APROBACIONES — CORTE N° {_h(corte.get('consecutivo',''))}</div>
   <p style="font-size:7.5pt;color:#555;margin:6px 0 0 0">
     El presente corte certifica las cantidades de obra ejecutadas y aprobadas por el subcontratista
     en el período comprendido entre el {_fd(corte.get('fecha_inicio'))} y el {_fd(corte.get('fecha_fin'))}.
@@ -383,8 +390,8 @@ def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, us
   <table class="w100" style="margin-top:20px"><tr>
     <td style="width:33%;text-align:center;padding:0 12px">
       <div class="firma-linea"></div>
-      <div class="firma-nombre">{usuario_nombre}</div>
-      <div class="firma-cargo">{usuario_cargo}</div>
+      <div class="firma-nombre">{_h(usuario_nombre)}</div>
+      <div class="firma-cargo">{_h(usuario_cargo)}</div>
     </td>
     <td style="width:33%;text-align:center;padding:0 12px">
       <div class="firma-linea"></div>
@@ -393,9 +400,9 @@ def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, us
     </td>
     <td style="width:33%;text-align:center;padding:0 12px">
       <div class="firma-linea"></div>
-      <div class="firma-nombre">{sub.get('nombre_contacto','')}</div>
+      <div class="firma-nombre">{_h(sub.get('nombre_contacto',''))}</div>
       <div class="firma-cargo">SUBCONTRATISTA</div>
-      <div class="firma-dato">{sub.get('razon_social','')}</div>
+      <div class="firma-dato">{_h(sub.get('razon_social',''))}</div>
     </td>
   </tr></table>
 </div>

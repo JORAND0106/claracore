@@ -2939,7 +2939,6 @@ def buscar_reportes_obra(
     # sin registros coincidentes para evitar descuadres panel/grilla.
     if _nivel_l and _ev_l:
         rows = [r for r in rows if (r.get("num_registros") or 0) > 0]
-        hay_mas = False  # tras el recorte local, se evita paginación inconsistente en UI
 
     return {"reportes": rows, "total": len(rows), "offset": offset, "limit": limit, "hay_mas": hay_mas}
 
