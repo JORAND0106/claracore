@@ -5557,7 +5557,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   // Auto-buscar al montar con el filtro de validación del cargo del usuario
   useEffect(() => {
     if (!contrato_id) return
-    const CARGO_ID_NIVEL = {54:1, 44:2, 56:2, 50:3, 58:3}
+    const CARGO_ID_NIVEL = {54:1, 44:2, 45:2, 51:2, 56:2, 50:3, 58:3}
     if (cargoIdUsuario && CARGO_ID_NIVEL[cargoIdUsuario]) {
       // Usuario con nivel de validación → busca pre-filtrado por su cargo
       const capasIniciales = [{
@@ -5689,7 +5689,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       .catch(() => {})
   }, [contrato_id])
 
-  const CARGO_ID_NIVEL_VALIDO = {54:1, 44:2, 56:2, 50:3, 58:3}
+  const CARGO_ID_NIVEL_VALIDO = {54:1, 44:2, 45:2, 51:2, 56:2, 50:3, 58:3}
   const cargosDisponiblesEnFiltro = useMemo(() => {
     if (!cargoIdUsuario || !CARGO_ID_NIVEL_VALIDO[cargoIdUsuario]) {
       return cargosValidacionList  // Dev/Admin: ve todos
@@ -5898,6 +5898,7 @@ const limpiarFiltros = () => {
                       <td colSpan={3} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{analisis.total_no_revisados ?? '—'}</td>
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? fmtPesos(analisis.total_aprobados) : '—'}</td>}
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? fmtPesos(analisis.total_pendientes) : '—'}</td>}
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados ? fmtPesos(analisis.total_rechazados) : '—'}</td>}
@@ -5912,6 +5913,7 @@ const limpiarFiltros = () => {
                       <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>CAPÍTULO</th>
                       {nivelInfo.verValoresEconomicos && <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>COSTO DIRECTO</th>}
                       <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>REGS.</th>
+                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>🔵 SIN REV.</th>
                       {nivelInfo.verValoresEconomicos && <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>✅ APOB.</th>}
                       {nivelInfo.verValoresEconomicos && <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>⏳ PEND.</th>}
                       {nivelInfo.verValoresEconomicos && <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>❌ RECH.</th>}
@@ -5930,6 +5932,7 @@ const limpiarFiltros = () => {
                         <td style={{ padding:'6px 16px', color:t.text, fontWeight:'600' }}>{g.label}</td>
                         {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>}
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.textMuted }}>{g.total_registros}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.no_revisados ?? '—'}</td>
                         {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados ? fmtPesos(g.aprobados) : '—'}</td>}
                         {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes ? fmtPesos(g.pendientes) : '—'}</td>}
                         {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados ? fmtPesos(g.rechazados) : '—'}</td>}
