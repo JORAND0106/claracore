@@ -5854,9 +5854,9 @@ const limpiarFiltros = () => {
                       <td colSpan={4} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
                       {capasValidacion.length === 0 && <>
-                        <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? fmtPesos(analisis.total_aprobados) : '—'}</td>
-                        <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? fmtPesos(analisis.total_pendientes) : '—'}</td>
-                        <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados ? fmtPesos(analisis.total_rechazados) : '—'}</td>
+                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? fmtPesos(analisis.total_aprobados) : '—'}</td>}
+                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? fmtPesos(analisis.total_pendientes) : '—'}</td>}
+                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados ? fmtPesos(analisis.total_rechazados) : '—'}</td>}
                       </>}
                     </tr>
                   </tfoot>
@@ -5909,9 +5909,9 @@ const limpiarFiltros = () => {
                       <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>CAPÍTULO</th>
                       {nivelInfo.verValoresEconomicos && <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>COSTO DIRECTO</th>}
                       <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>REGS.</th>
-                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>✅ APOB.</th>
-                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>⏳ PEND.</th>
-                      <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>❌ RECH.</th>
+                      {nivelInfo.verValoresEconomicos && <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>✅ APOB.</th>}
+                      {nivelInfo.verValoresEconomicos && <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>⏳ PEND.</th>}
+                      {nivelInfo.verValoresEconomicos && <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>❌ RECH.</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -5927,9 +5927,9 @@ const limpiarFiltros = () => {
                         <td style={{ padding:'6px 16px', color:t.text, fontWeight:'600' }}>{g.label}</td>
                         {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>}
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.textMuted }}>{g.total_registros}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados ? fmtPesos(g.aprobados) : '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes ? fmtPesos(g.pendientes) : '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados ? fmtPesos(g.rechazados) : '—'}</td>
+                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados ? fmtPesos(g.aprobados) : '—'}</td>}
+                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes ? fmtPesos(g.pendientes) : '—'}</td>}
+                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados ? fmtPesos(g.rechazados) : '—'}</td>}
                       </tr>
                     ))}
                   </tbody>
