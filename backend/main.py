@@ -2547,7 +2547,7 @@ def buscar_reportes_obra(
             # Cuando hay filtro de validación, excluir reportes en estados que no
             # deben ser visibles para niveles de validación
             _ESTADOS_SIEMPRE_EXCLUIDOS = {'Borrador', 'Sin Asignar Ítem', 'En Papelera'}
-            if _ev_l == 'No Revisado':
+            if _ev_l in ('No Revisado', 'No Revisados'):
                 _ESTADOS_SIEMPRE_EXCLUIDOS.update({'Aprobados', 'Rechazados', 'Pendientes', 'No Objeto de Cobro'})
             if ids_val:
                 def _filter_estados():
@@ -2856,7 +2856,7 @@ def analisis_registros_obra(
     # Si hay filtro de validación activo, excluir reportes en estados no visibles
     if _val_campo_l and rep_ids_found:
         _ESTADOS_SIEMPRE_EXCLUIDOS = {'Borrador', 'Sin Asignar Ítem', 'En Papelera'}
-        if _val_estado_l == 'No Revisado':
+        if _val_estado_l in ('No Revisado', 'No Revisados'):
             _ESTADOS_SIEMPRE_EXCLUIDOS.update({'Aprobados', 'Rechazados', 'Pendientes', 'No Objeto de Cobro'})
         _cid_excl = contrato_id
         def _excl(ids=rep_ids_found):

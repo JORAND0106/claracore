@@ -6116,7 +6116,7 @@ const limpiarFiltros = () => {
           fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px',
           position:'sticky', top:0, zIndex:9, background:t.bgCard, borderRadius:'12px 12px 0 0' }}>
           <div>N° REP.</div><div>SEMANA</div><div>ACTA RPO</div>
-          <div>DESCRIPCIÓN</div><div>SUBCONTRATISTA</div><div>CAPÍTULO</div><div>ESTADO</div>
+          <div>DESCRIPCIÓN</div><div>SUBCONTRATISTA</div><div>CAPÍTULO</div><div>REGS.</div>
         </div>
 
         {/* Filas */}
@@ -6160,13 +6160,8 @@ const limpiarFiltros = () => {
             <div style={{ fontWeight:'600' }}>{rep.descripcion_actividad}</div>
             <div style={{ fontSize:'12px' }}>{rep.subcontratista_nombre || '—'}</div>
             <div style={{ fontSize:'11px', color:t.textMuted }}>{rep.capitulo || '—'}</div>
-            <div>
-              <span style={{
-                background: (ESTADO_COLORS[rep.estado] || '#6B7280') + '22',
-                color: ESTADO_COLORS[rep.estado] || '#6B7280',
-                border: `1px solid ${ESTADO_COLORS[rep.estado] || '#6B7280'}44`,
-                borderRadius:'12px', padding:'2px 10px', fontSize:'11px', fontWeight:'600'
-              }}>{rep.estado}</span>
+            <div style={{ fontSize:'12px', color:t.textMuted, textAlign:'right', fontWeight:'600' }}>
+              {rep.num_registros != null ? rep.num_registros : '—'}
             </div>
           </div>
         ))}
