@@ -3268,9 +3268,11 @@ function determinarNivelValidacion(usuario) {
   } else if (esContratista && puedeValidar &&
       (cargo.includes('inspector') || cargo.includes('topógrafo') || cargo.includes('topografo'))) {
     nivelValidacion = 1
-  } else if (esContratista && puedeEditar && puedeValidar && cargo.includes('residente')) {
+  } else if (esContratista && puedeValidar &&
+      (cargo.includes('residente') || cargo.includes('director de obra'))) {
     nivelValidacion = 2
-  } else if (esInterventoria && puedeValidar) {
+  } else if (esInterventoria && !esOperativoInterventoria && puedeValidar &&
+      (cargo.includes('residente') || cargo.includes('director'))) {
     nivelValidacion = 3
   }
 
@@ -3280,14 +3282,15 @@ function determinarNivelValidacion(usuario) {
   const esApoyoTecnico           = esInterventoria && !puedeValidar &&
                                    (cargo.includes('apoyo') || cargo.includes('técnico') || cargo.includes('tecnico'))
   const esSubcontratista         = esSubRol || cargo.includes('subcontratista')
+  const esSoloComentarista       = esOperativoInterventoria  // puede ver y comentar, no valida ni edita
 
-  const verValoresEconomicos = !(esOperativo || esApoyoTecnico)
+  const verValoresEconomicos = !(esOperativo || esApoyoTecnico || esSoloComentarista)
 
   const rolOrigen = esInterventoria ? 'interventoria'
                   : esSubRol        ? 'subcontratista'
                   : 'contratista'
 
-  return { nivelValidacion, esApoyoTecnico, esSubcontratista, verValoresEconomicos, rolOrigen }
+  return { nivelValidacion, puedeEditar, puedeValidar, esApoyoTecnico, esSubcontratista, esSoloComentarista, verValoresEconomicos, rolOrigen }
 }
 
 // ─── POPUP COMENTARIO VALIDACIÓN ─────────────────────────────────────────────
