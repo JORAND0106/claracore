@@ -8987,17 +8987,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
 
 
-{/* ── MÓDULO DASHBOARD ── */}
-          {moduloActivo === 'inicio' && <ModuloInicio t={t} usuario={usuario} />}
-            <div style={{ fontSize:'48px' }}>👋</div>
-            <div style={{ fontSize:'22px', fontWeight:'800', color:t.text }}>Bienvenido, {usuario?.nombre}</div>
-            <div style={{ fontSize:'14px', color:t.textMuted }}>Selecciona un módulo del menú para comenzar.</div>
-            <div style={{ marginTop:'24px', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px 32px', maxWidth:'480px', textAlign:'center' }}>
-              <div style={{ fontSize:'12px', fontWeight:'700', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'8px' }}>📢 Novedades</div>
-              <div style={{ fontSize:'13px', color:t.textMuted, lineHeight:1.6 }}>Próximamente aquí encontrarás noticias, actualizaciones y comunicados del equipo ClaraCore.</div>
-            </div>
-          </div>
-        )}
+        {moduloActivo === 'inicio' && <ModuloInicio t={t} usuario={usuario} />}
         {moduloActivo === 'dashboard' && (() => {
           const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
           const fmtM = n => { if(!n) return '$0'; if(n>=1e9) return `$${(n/1e9).toFixed(1)}B`; if(n>=1e6) return `$${(n/1e6).toFixed(1)}M`; if(n>=1e3) return `$${(n/1e3).toFixed(0)}K`; return `$${Math.round(n)}` }
