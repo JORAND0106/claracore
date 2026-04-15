@@ -1,4 +1,6 @@
 import io
+import base64
+import urllib.request
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -98,8 +100,11 @@ def pdf_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(_get_use
     usuario_nombre = f"{current_user.get('nombre','')} {current_user.get('apellidos','')}".strip() or "—"
     usuario_cargo  = current_user.get("cargo_nombre", "—") or "—"
 
-    html      = _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)
-    pdf_bytes = _to_pdf(html)
+    try:
+        html      = _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)
+        pdf_bytes = _to_pdf(html)
+    except Exception as e:
+        raise HTTPException(500, f"Error generando PDF corte: {str(e)}")
     sub_safe  = (sub.get("razon_social","sub") or "sub")[:20].replace(" ","_")
     filename  = f"CC-SUB-001_Corte{corte['consecutivo']}_{sub_safe}.pdf"
     return Response(content=pdf_bytes, media_type="application/pdf",
@@ -202,6 +207,34 @@ def _to_pdf(html: str) -> bytes:
     buf.seek(0)
     return buf.read()
 
+def _logo_data_uri(url: Optional[str]) -> Optional[str]:
+    """Descarga logo remoto y lo convierte a data URI; si falla, retorna None."""
+    if not url:
+        return None
+    u = str(url).strip()
+    if not (u.startswith("http://") or u.startswith("https://")):
+        return None
+    try:
+        with urllib.request.urlopen(u, timeout=4) as r:
+            content_type = (r.headers.get("Content-Type") or "").lower()
+            if "png" in content_type:
+                mime = "image/png"
+            elif "jpeg" in content_type or "jpg" in content_type:
+                mime = "image/jpeg"
+            elif "gif" in content_type:
+                mime = "image/gif"
+            elif "webp" in content_type:
+                mime = "image/webp"
+            else:
+                mime = "image/png"
+            raw = r.read()
+            if not raw:
+                return None
+            b64 = base64.b64encode(raw).decode("ascii")
+            return f"data:{mime};base64,{b64}"
+    except Exception:
+        return None
+
 def _fd(d):
     """Formatea fecha ISO → dd/mm/yyyy."""
     if not d: return "—"
@@ -283,7 +316,8 @@ table { border-collapse: collapse; }
 
 def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo):
     now      = datetime.now().strftime("%d %b %y, %I:%M %p")
-    logo_td  = f'<img src="{contrato["logo_contratista"]}" />' if contrato.get("logo_contratista") else "<span style='font-size:7pt;color:#6b7280'>LOGO CONTRATISTA</span>"
+    logo_src = _logo_data_uri(contrato.get("logo_contratista"))
+    logo_td  = f'<img src="{logo_src}" />' if logo_src else "<span style='font-size:7pt;color:#6b7280'>LOGO CONTRATISTA</span>"
 
     filas = ""
     for i, item in enumerate(items):
