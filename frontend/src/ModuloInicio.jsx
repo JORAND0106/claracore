@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 
-const API_ANTHROPIC = 'https://api.anthropic.com/v1/messages'
+const API_ANTHROPIC = 'https://claracore-backend.azurewebsites.net/frase-del-dia'
 
 // ─── Escala de fuentes — sincronizada con FONT_SIZES de App.jsx ───────────────
 const FS = {
@@ -187,17 +187,14 @@ function FraseDelDia({ t, fs, usuario }) {
     const turno = hora < 12 ? 'mañana' : hora < 18 ? 'tarde' : 'noche'
     const dia   = new Date().toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })
     try {
+      const token = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
       const res = await fetch(API_ANTHROPIC, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 300,
-          messages: [{
-            role: 'user',
-            content: `Genera una frase inspiradora, reflexiva o bíblica para ${usuario?.nombre || 'un profesional'} que trabaja en construcción de obras públicas. Hoy es ${dia}, en la ${turno}. La frase puede ser de un autor reconocido, de la Biblia, o un pensamiento original. Hazla única y diferente a las de otros días. Responde SOLO en este formato JSON sin ningún texto adicional ni backticks: {"frase":"texto de la frase","autor":"nombre del autor o fuente","tipo":"reflexiva|motivadora|bíblica"}`
-          }]
-        })
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ nombre: usuario?.nombre || '', turno, dia })
       })
       const data = await res.json()
       const texto = data.content?.[0]?.text || ''
