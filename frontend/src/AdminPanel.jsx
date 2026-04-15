@@ -569,7 +569,7 @@ function SeccionCargos({ call, cargos, recargarCargos, theme }) {
   );
 }
 
-// ─── SECCIÓN 3: Matriz de permisos ─────────────────────────────────────────
+// ─── SECCIÓN 3: Control de accesos ─────────────────────────────────────────
 function SeccionPermisos({ call, cargos, theme }) {
   const [cargoId, setCargoId] = useState("");
   const [funciones, setFunciones] = useState([]);
@@ -675,7 +675,7 @@ function SeccionPermisos({ call, cargos, theme }) {
         </div>
       )}
       {!cargoId ? (
-        <div style={S.empty}>Selecciona un cargo para configurar su matriz de permisos.</div>
+        <div style={S.empty}>Selecciona un cargo para configurar su control de accesos.</div>
       ) : loading ? (
         <div style={S.empty}><div style={{ color: "#00afc5" }}>Cargando permisos...</div></div>
       ) : funciones.length === 0 ? (
@@ -3312,7 +3312,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
   const TABS_TODOS = [
     { id: "usuarios",  label: "Gestión de Usuarios" },
     { id: "cargos",    label: "Gestión de cargos"   },
-    { id: "permisos",  label: "Matriz de permisos"  },
+    { id: "permisos",  label: "Control de accesos"  },
     { id: "contratos", label: "Contratos"            },
     { id: "precios",          label: "Listado de Precios"   },
     { id: "subcontratistas",  label: "Subcontratistas"       },
@@ -3327,7 +3327,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
   const TITULOS = {
     usuarios:  { title: "Gestión de usuarios",    sub: "Administra cargos, roles, contratos y estados" },
     cargos:    { title: "Gestión de cargos",      sub: "Crea y elimina cargos del sistema" },
-    permisos:  { title: "Matriz de permisos",     sub: "Configura qué puede hacer cada cargo" },
+    permisos:  { title: "Control de accesos",     sub: "Configura qué puede hacer cada cargo" },
     contratos: { title: "Contratos",              sub: "Crea y gestiona contratos del sistema" },
     precios:          { title: "Listado de Precios",    sub: "Edita, carga y descarga el listado de precios por contrato" },
     subcontratistas:  { title: "Subcontratistas",       sub: "Gestión de subcontratistas, cortes de facturación y precios por contrato" },

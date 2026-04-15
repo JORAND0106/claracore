@@ -590,7 +590,19 @@ def listar_categorias(current_user=Depends(get_current_user)):
 
 @app.get("/funciones")
 def listar_funciones(current_user=Depends(get_current_user)):
-    return supabase.table("funciones").select("*").order("nombre").execute().data
+    funciones = supabase.table("funciones").select("*").order("nombre").execute().data or []
+    existe_dashboard = any((f.get("nombre") or "").strip().lower() == "dashboard" for f in funciones)
+    if not existe_dashboard:
+        try:
+            supabase.table("funciones").insert({
+                "nombre": "Dashboard",
+                "descripcion": "Acceso al módulo de dashboard"
+            }).execute()
+            funciones = supabase.table("funciones").select("*").order("nombre").execute().data or []
+        except Exception:
+            # Si no puede insertar por permisos/constraint, devolvemos la lista actual sin romper el flujo.
+            pass
+    return funciones
 
 @app.post("/contratos")
 def crear_contrato(contrato: ContratoCreate, current_user=Depends(get_current_user)):
@@ -2904,6 +2916,7 @@ def analisis_registros_obra(
     _val_estado_l = None
     _val_prereq_l = None
     if cargo_id is not None and estado_validacion:
+        print(f"DEBUG analisis: cargo_id={cargo_id} estado_validacion={estado_validacion}", flush=True)
         _c = CARGO_ID_NIVEL_MAP.get(cargo_id)
         if _c:
             _val_campo_l  = _c
@@ -2931,7 +2944,7 @@ def analisis_registros_obra(
                     if _vp_l:
                         q = q.eq(_vp_l[0], _vp_l[1])
                     if _ve_l == 'No Revisado':
-                        q = q.or_(f"{_vc_l}.is.null,{_vc_l}.eq.No Revisado")\
+                        q = q.eq(_vc_l, 'No Revisado')\
                              .not_.is_("item_numero", "null").neq("item_numero", "")
                     else:
                         q = q.eq(_vc_l, _ve_l)
@@ -2941,8 +2954,9 @@ def analisis_registros_obra(
             if len(batch) < 1000:
                 break
             off += 1000
-    except Exception:
-        registros = []
+    except Exception as e:
+        if not registros:
+            registros = []
 
     # ── 5. Batch-resolve capitulo y estado desde so_reportes ─────────────────
     rep_ids_found = list({r["reporte_id"] for r in registros if r.get("reporte_id")})
@@ -2974,6 +2988,14 @@ def analisis_registros_obra(
 
     # ── 6. Agrupar según modo ─────────────────────────────────────────────────
     def _estado_efectivo(reg):
+        # Si hay filtro de validación activo, usar solo el estado del nivel filtrado
+        if _vc_l:
+            estado = reg.get(_vc_l) or ""
+            if estado == "Aprobado":  return "Aprobado"
+            if estado == "Pendiente": return "Pendiente"
+            if estado == "Rechazado": return "Rechazado"
+            return "No Revisado"
+        # Sin filtro: estado global del registro
         niveles = [
             reg.get("nivel1_estado") or "",
             reg.get("nivel2_estado") or "",
