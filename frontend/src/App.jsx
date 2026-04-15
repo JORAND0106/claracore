@@ -4019,6 +4019,17 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         </div>
       </div>
 
+      {/* ─ Sección: Abscisado y Nodos ─ */}
+      <div style={{ marginBottom:'16px' }}>
+        <div style={{ fontSize:'11px', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📍 Abscisado y Nodos</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'10px' }}>
+          <CampoRO label="Abs. Inicio"  valor={registro.abs_inicio} />
+          <CampoRO label="Abs. Final"   valor={registro.abs_final} />
+          <CampoRO label="Nodo Inicio"  valor={registro.no_inicio} />
+          <CampoRO label="Nodo Final"   valor={registro.no_final} />
+        </div>
+      </div>    
+
       {/* ─ Sección: Coordenadas Topográficas ─ */}
       <div style={{ marginBottom:'16px' }}>
         <div style={{ fontSize:'11px', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'8px' }}>📐 Coordenadas Topográficas</div>
@@ -5831,9 +5842,9 @@ const limpiarFiltros = () => {
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})}</td>
                         <td style={{ padding:'6px 16px', color:t.textMuted, fontSize:'11px' }}>{g.unidad}</td>
                         {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>}
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados ? fmtPesos(g.aprobados) : '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes ? fmtPesos(g.pendientes) : '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados ? fmtPesos(g.rechazados) : '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados ? (nivelInfo.verValoresEconomicos ? fmtPesos(g.aprobados) : g.aprobados_count ?? '—') : '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes ? (nivelInfo.verValoresEconomicos ? fmtPesos(g.pendientes) : g.pendientes_count ?? '—') : '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados ? (nivelInfo.verValoresEconomicos ? fmtPesos(g.rechazados) : g.rechazados_count ?? '—') : '—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -5872,9 +5883,9 @@ const limpiarFiltros = () => {
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})}</td>
                         {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>}
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.textMuted }}>{g.total_registros}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados ? fmtPesos(g.aprobados) : '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes ? fmtPesos(g.pendientes) : '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados ? fmtPesos(g.rechazados) : '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados ? (nivelInfo.verValoresEconomicos ? fmtPesos(g.aprobados) : `${g.aprobados_count ?? 0} regs`) : '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes ? (nivelInfo.verValoresEconomicos ? fmtPesos(g.pendientes) : `${g.pendientes_count ?? 0} regs`) : '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados ? (nivelInfo.verValoresEconomicos ? fmtPesos(g.rechazados) : `${g.rechazados_count ?? 0} regs`) : '—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -5883,9 +5894,9 @@ const limpiarFiltros = () => {
                       <td colSpan={3} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? fmtPesos(analisis.total_aprobados) : '—'}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? fmtPesos(analisis.total_pendientes) : '—'}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados ? fmtPesos(analisis.total_rechazados) : '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? (nivelInfo.verValoresEconomicos ? fmtPesos(analisis.total_aprobados) : `${analisis.total_aprobados_count ?? 0} regs`) : '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? (nivelInfo.verValoresEconomicos ? fmtPesos(analisis.total_pendientes) : `${analisis.total_pendientes_count ?? 0} regs`) : '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados ? (nivelInfo.verValoresEconomicos ? fmtPesos(analisis.total_rechazados) : `${analisis.total_rechazados_count ?? 0} regs`) : '—'}</td>
                     </tr>
                   </tfoot>
                 </table>

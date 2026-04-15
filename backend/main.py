@@ -2498,29 +2498,44 @@ def buscar_reportes_obra(
         if not reporte_ids_from_reg:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
-    if capitulo:
-        def _cap():
-            return supabase.table("so_registros").select("reporte_id")\
-                .eq("contrato_id", contrato_id)\
-                .eq("capitulo", capitulo).execute().data
-        rows_cap = supabase_execute(_cap)
-        ids_cap = list({r["reporte_id"] for r in rows_cap if r.get("reporte_id")})
-        if not ids_cap:
+    # ── Filtros sobre so_reportes (tramo, costado, abs) ── igual que panel dinámico
+    has_rep_f = any([tramo, costado, abs_inicio is not None, abs_final is not None])
+    if has_rep_f:
+        def _reps_f():
+            q = supabase.table("so_reportes").select("id")\
+                .eq("contrato_id", contrato_id)
+            if tramo:                  q = q.eq("tramo", tramo)
+            if costado:                q = q.eq("calzada", costado)
+            if abs_inicio is not None: q = q.gte("abs_inicio", abs_inicio)
+            if abs_final  is not None: q = q.lte("abs_final", abs_final)
+            return q.limit(50000).execute().data
+        ids_rep_f = list({r["id"] for r in supabase_execute(_reps_f) if r.get("id")})
+        if not ids_rep_f:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
         if reporte_ids_from_reg is not None:
-            reporte_ids_from_reg = list(set(reporte_ids_from_reg) & set(ids_cap))
+            reporte_ids_from_reg = list(set(reporte_ids_from_reg) & set(ids_rep_f))
         else:
-            reporte_ids_from_reg = ids_cap
+            reporte_ids_from_reg = ids_rep_f
         if not reporte_ids_from_reg:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-        rows_item = supabase_execute(_item)
-        ids_item = list({r["reporte_id"] for r in rows_item if r.get("reporte_id")})
-        if not ids_item:
+
+    # ── Filtros sobre so_registros (capitulo, item, subcontratista) ── igual que panel dinámico
+    has_reg_f = any([capitulo, item, subcontratista_id is not None])
+    if has_reg_f:
+        def _regs_f():
+            q = supabase.table("so_registros").select("reporte_id")\
+                .eq("contrato_id", contrato_id)
+            if capitulo:                    q = q.eq("capitulo", capitulo)
+            if item:                        q = q.ilike("item_numero", f"%{item}%")
+            if subcontratista_id is not None: q = q.eq("subcontratista_id", subcontratista_id)
+            return q.limit(50000).execute().data
+        ids_reg_f = list({r["reporte_id"] for r in supabase_execute(_regs_f) if r.get("reporte_id")})
+        if not ids_reg_f:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
         if reporte_ids_from_reg is not None:
-            reporte_ids_from_reg = list(set(reporte_ids_from_reg) & set(ids_item))
+            reporte_ids_from_reg = list(set(reporte_ids_from_reg) & set(ids_reg_f))
         else:
-            reporte_ids_from_reg = ids_item
+            reporte_ids_from_reg = ids_reg_f
         if not reporte_ids_from_reg:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
@@ -2540,7 +2555,7 @@ def buscar_reportes_obra(
             _pag_size = 1000
             ids_val = []
 
-            while len(_seen_rids) < _needed:
+            while True:
                 def _val_page(off=_pag_offset):
                     q = supabase.table("so_registros").select("reporte_id")\
                         .eq("contrato_id", contrato_id)
@@ -2671,26 +2686,25 @@ def buscar_reportes_obra(
             q = q.in_("id", ids_chunk)
         return q
 
-    # Paginación real: solo traer la página solicitada
+    # Chunking completo para garantizar todos los IDs
     all_rows = []
     if reporte_ids_from_reg is not None:
-        # Tomar solo el slice de IDs que corresponde a esta página
-        ids_pagina = reporte_ids_from_reg[offset:offset + limit + 1]
-        if ids_pagina:
-            def _qpage(c=ids_pagina):
-                return _build_q(c)\
-                    .order("numero_reporte", desc=True)\
-                    .limit(limit + 1).execute().data
-            all_rows = supabase_execute(_qpage)
+        seen_ids = set()
+        for i in range(0, len(reporte_ids_from_reg), 200):
+            _chunk = reporte_ids_from_reg[i:i + 200]
+            def _qc(c=_chunk):
+                return _build_q(c).limit(1000).execute().data
+            for row in supabase_execute(_qc):
+                if row["id"] not in seen_ids:
+                    seen_ids.add(row["id"])
+                    all_rows.append(row)
     else:
         def _qall():
-            return _build_q(None)\
-                .order("numero_reporte", desc=True)\
-                .range(offset, offset + limit).execute().data
+            return _build_q(None).limit(5000).execute().data
         all_rows = supabase_execute(_qall)
 
     all_rows.sort(key=lambda r: (r.get("numero_reporte") or 0), reverse=True)
-    rows = all_rows[:limit + 1]
+    rows = all_rows[offset:offset + limit + 1]
     hay_mas = len(rows) > limit
     rows = rows[:limit]
 
@@ -2943,12 +2957,13 @@ def analisis_registros_obra(
             if cap not in grupos:
                 grupos[cap] = {"label": cap, "costo_directo": 0.0,
                                "total_registros": 0, "aprobados": 0.0,
-                               "pendientes": 0.0, "rechazados": 0.0}
+                               "pendientes": 0.0, "rechazados": 0.0,
+                               "aprobados_count": 0, "pendientes_count": 0, "rechazados_count": 0}
             grupos[cap]["costo_directo"]   += cd
             grupos[cap]["total_registros"] += 1
-            if   ee == "Aprobado":   grupos[cap]["aprobados"]  += cd
-            elif ee == "Pendiente":  grupos[cap]["pendientes"] += cd
-            elif ee == "Rechazado":  grupos[cap]["rechazados"] += cd
+            if   ee == "Aprobado":   grupos[cap]["aprobados"]  += cd; grupos[cap]["aprobados_count"]  += 1
+            elif ee == "Pendiente":  grupos[cap]["pendientes"] += cd; grupos[cap]["pendientes_count"] += 1
+            elif ee == "Rechazado":  grupos[cap]["rechazados"] += cd; grupos[cap]["rechazados_count"] += 1
 
     elif modo == "capitulo_items":
         for reg in registros:
@@ -2964,6 +2979,7 @@ def analisis_registros_obra(
                     "costo_directo":   0.0,
                     "total_registros": 0,
                     "aprobados": 0.0, "pendientes": 0.0, "rechazados": 0.0,
+                    "aprobados_count": 0, "pendientes_count": 0, "rechazados_count": 0,
                 }
             if not grupos[it]["descripcion"] and reg.get("item_descripcion"):
                 grupos[it]["descripcion"] = reg["item_descripcion"]
@@ -2972,9 +2988,9 @@ def analisis_registros_obra(
             grupos[it]["cantidad_total"] += float(reg.get("cantidad_total") or 0)
             grupos[it]["costo_directo"]  += cd
             grupos[it]["total_registros"] += 1
-            if   ee == "Aprobado":   grupos[it]["aprobados"]  += cd
-            elif ee == "Pendiente":  grupos[it]["pendientes"] += cd
-            elif ee == "Rechazado":  grupos[it]["rechazados"] += cd
+            if   ee == "Aprobado":   grupos[it]["aprobados"]  += cd; grupos[it]["aprobados_count"]  += 1
+            elif ee == "Pendiente":  grupos[it]["pendientes"] += cd; grupos[it]["pendientes_count"] += 1
+            elif ee == "Rechazado":  grupos[it]["rechazados"] += cd; grupos[it]["rechazados_count"] += 1
 
     elif modo == "item_detalle":
         acta_ids_found = list({r.get("acta_rpo_id") for r in registros if r.get("acta_rpo_id")})
@@ -3062,10 +3078,14 @@ def analisis_registros_obra(
     ta  = sum(g["aprobados"]       for g in grupos_list)
     tp  = sum(g["pendientes"]      for g in grupos_list)
     trj = sum(g["rechazados"]      for g in grupos_list)
+    ta_c  = sum(g.get("aprobados_count",  0) for g in grupos_list)
+    tp_c  = sum(g.get("pendientes_count", 0) for g in grupos_list)
+    trj_c = sum(g.get("rechazados_count", 0) for g in grupos_list)
 
     return {"modo": modo, "encabezado": encabezado, "grupos": grupos_list,
             "total_costo_directo": tc, "total_registros": tr,
-            "total_aprobados": ta, "total_pendientes": tp, "total_rechazados": trj}
+            "total_aprobados": ta, "total_pendientes": tp, "total_rechazados": trj,
+            "total_aprobados_count": ta_c, "total_pendientes_count": tp_c, "total_rechazados_count": trj_c}
 
 
 @app.get("/sicoe-obra/{contrato_id}/filtros/semanas")
