@@ -1,9 +1,11 @@
 import io
-import base64
-import urllib.request
+import logging
 import html
+import re
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
+
+_log = logging.getLogger("uvicorn.error")
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from xhtml2pdf import pisa
@@ -16,6 +18,22 @@ _sb = _create_client(
 )
 
 router = APIRouter(tags=["informes"])
+
+
+def _safe_filename_part(s: object) -> str:
+    """Nombre de archivo ASCII seguro para cabecera Content-Disposition."""
+    t = re.sub(r"[^\w.\-]+", "_", str(s if s is not None else "").strip())
+    return (t or "x")[:80]
+
+
+def _row(table: str, select: str, **eq: Any) -> Optional[Dict[str, Any]]:
+    """Una fila o None; evita excepciones de PostgREST por `.single()` sin resultados."""
+    q = _sb.table(table).select(select)
+    for k, v in eq.items():
+        q = q.eq(k, v)
+    rows = q.limit(1).execute().data or []
+    return rows[0] if rows else None
+
 
 # ── REGISTRO DE FORMATOS ────────────────────────────────────────────────────────
 # CC-SUB-001 : Corte Subcontratista
@@ -53,33 +71,38 @@ def inf_items_corte(contrato_id: int, corte_id: int, current_user=Depends(_get_u
             seen[k] = r
     return list(seen.values())
 
-# ── CC-SUB-001 : Corte Subcontratista ─────────────────────────────────────────
 
-@router.get("/{contrato_id}/pdf/corte-subcontratista/{corte_id}")
-def pdf_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(_get_user)):
-    contrato = _sb.table("contratos")\
-        .select("numero, objeto, contratista, nit, interventoria, logo_contratista")\
-        .eq("id", contrato_id).single().execute().data
+def _contexto_corte_sub(contrato_id: int, corte_id: int, current_user: dict) -> Dict[str, Any]:
+    """Datos compartidos por vista previa (JSON) y PDF."""
+    contrato = _row(
+        "contratos",
+        "numero, objeto, contratista, nit, interventoria, logo_contratista",
+        id=contrato_id,
+    )
     if not contrato:
         raise HTTPException(404, "Contrato no encontrado")
 
-    corte = _sb.table("subcontratista_cortes").select("*")\
-        .eq("id", corte_id).single().execute().data
+    corte = _row("subcontratista_cortes", "*", id=corte_id)
     if not corte:
         raise HTTPException(404, "Corte no encontrado")
 
-    sub = _sb.table("subcontratistas")\
-        .select("razon_social, nit, nombre_contacto, objeto_contrato")\
-        .eq("id", corte["subcontratista_id"]).single().execute().data or {}
+    sub_id = corte.get("subcontratista_id")
+    if sub_id is None:
+        raise HTTPException(400, "Corte sin subcontratista asociado (subcontratista_id nulo)")
+
+    sub = _row(
+        "subcontratistas",
+        "razon_social, nit, nombre_contacto, objeto_contrato",
+        id=sub_id,
+    ) or {}
 
     registros = _sb.table("so_registros")\
-        .select("item_numero, item_descripcion, unidad, cantidad_total, vlr_unitario_sub, costo_directo_sub")\
+        .select("item_numero, item_descripcion, unidad, cantidad_total, vlr_unitario_sub")\
         .eq("contrato_id", contrato_id)\
         .eq("corte_id", corte_id)\
         .eq("sub_estado", "Aprobado")\
         .execute().data or []
 
-    # Agrupar por ítem
     items_map = {}
     for r in registros:
         k = r.get("item_numero") or "SIN_ITEM"
@@ -89,56 +112,58 @@ def pdf_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(_get_use
                 "item_descripcion": r.get("item_descripcion", ""),
                 "unidad":           r.get("unidad", ""),
                 "cantidad":         0.0,
-                "vlr_unitario_sub": float(r.get("vlr_unitario_sub") or 0),
+                "vlr_unitario_sub": 0.0,
                 "costo_directo":    0.0,
             }
-        items_map[k]["cantidad"]      += float(r.get("cantidad_total") or 0)
-        items_map[k]["costo_directo"] += float(r.get("costo_directo_sub") or 0)
+        items_map[k]["cantidad"] += _sf(r.get("cantidad_total"), 0.0)
+        vu = _sf(r.get("vlr_unitario_sub"), 0.0)
+        if items_map[k]["vlr_unitario_sub"] == 0.0 and vu != 0.0:
+            items_map[k]["vlr_unitario_sub"] = vu
 
-    items       = list(items_map.values())
-    total_costo = sum(i["costo_directo"] for i in items)
+    for _k, it in items_map.items():
+        it["costo_directo"] = _sf(it.get("cantidad"), 0.0) * _sf(it.get("vlr_unitario_sub"), 0.0)
+
+    items = list(items_map.values())
+    total_costo = sum(_sf(i.get("costo_directo"), 0.0) for i in items)
 
     usuario_nombre = f"{current_user.get('nombre','')} {current_user.get('apellidos','')}".strip() or "—"
-    usuario_cargo  = current_user.get("cargo_nombre", "—") or "—"
+    usuario_cargo = current_user.get("cargo_nombre", "—") or "—"
 
-    try:
-        html      = _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)
-        pdf_bytes = _to_pdf(html)
-    except Exception as e:
-        # Modo supervivencia: si el formato enriquecido falla, devolver PDF simple sin logo.
-        try:
-            html_simple = _html_corte_sub_fallback(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)
-            pdf_bytes = _to_pdf(html_simple)
-        except Exception as e2:
-            raise HTTPException(500, f"Error generando PDF corte: {str(e)} | fallback: {str(e2)}")
-    sub_safe  = (sub.get("razon_social","sub") or "sub")[:20].replace(" ","_")
-    filename  = f"CC-SUB-001_Corte{corte['consecutivo']}_{sub_safe}.pdf"
-    return Response(content=pdf_bytes, media_type="application/pdf",
-                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+    return {
+        "contrato": contrato,
+        "sub": sub,
+        "corte": corte,
+        "items": items,
+        "total_costo": total_costo,
+        "usuario_nombre": usuario_nombre,
+        "usuario_cargo": usuario_cargo,
+    }
 
-# ── CC-SUB-002 : Memorias Corte Subcontratista ─────────────────────────────────
 
-@router.get("/{contrato_id}/pdf/memoria-item/{corte_id}")
-def pdf_memoria_item(
-    contrato_id: int,
-    corte_id:    int,
-    item_numero: str = Query(...),
-    current_user=Depends(_get_user)
-):
-    contrato = _sb.table("contratos")\
-        .select("numero, objeto, contratista, nit, interventoria, logo_contratista")\
-        .eq("id", contrato_id).single().execute().data
+def _contexto_memoria_item(
+    contrato_id: int, corte_id: int, item_numero: str, current_user: dict
+) -> Dict[str, Any]:
+    contrato = _row(
+        "contratos",
+        "numero, objeto, contratista, nit, interventoria, logo_contratista",
+        id=contrato_id,
+    )
     if not contrato:
         raise HTTPException(404, "Contrato no encontrado")
 
-    corte = _sb.table("subcontratista_cortes").select("*")\
-        .eq("id", corte_id).single().execute().data
+    corte = _row("subcontratista_cortes", "*", id=corte_id)
     if not corte:
         raise HTTPException(404, "Corte no encontrado")
 
-    sub = _sb.table("subcontratistas")\
-        .select("razon_social, nit, nombre_contacto, objeto_contrato")\
-        .eq("id", corte["subcontratista_id"]).single().execute().data or {}
+    mem_sub_id = corte.get("subcontratista_id")
+    if mem_sub_id is None:
+        raise HTTPException(400, "Corte sin subcontratista asociado (subcontratista_id nulo)")
+
+    sub = _row(
+        "subcontratistas",
+        "razon_social, nit, nombre_contacto, objeto_contrato",
+        id=mem_sub_id,
+    ) or {}
 
     registros = _sb.table("so_registros")\
         .select("numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, longitud, ancho, espesor, cantidad, cantidad_total, observacion, foto_url, foto_numero, item_numero, item_descripcion, unidad")\
@@ -159,14 +184,104 @@ def pdf_memoria_item(
     }
 
     usuario_nombre = f"{current_user.get('nombre','')} {current_user.get('apellidos','')}".strip() or "—"
-    usuario_cargo  = current_user.get("cargo_nombre", "—") or "—"
+    usuario_cargo = current_user.get("cargo_nombre", "—") or "—"
+
+    return {
+        "contrato": contrato,
+        "sub": sub,
+        "corte": corte,
+        "item_info": item_info,
+        "registros": registros,
+        "usuario_nombre": usuario_nombre,
+        "usuario_cargo": usuario_cargo,
+    }
+
+
+# ── CC-SUB-001 : Corte Subcontratista ─────────────────────────────────────────
+
+@router.get("/{contrato_id}/datos/corte-subcontratista/{corte_id}")
+def datos_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(_get_user)):
+    """Vista previa en cliente (JSON); no genera PDF."""
+    ctx = _contexto_corte_sub(contrato_id, corte_id, current_user)
+    return {"formato": "CC-SUB-001", **ctx}
+
+
+@router.get("/{contrato_id}/datos/memoria-item/{corte_id}")
+def datos_memoria_item(
+    contrato_id: int,
+    corte_id: int,
+    item_numero: str = Query(...),
+    current_user=Depends(_get_user),
+):
+    """Detalle memoria por ítem para vista previa en cliente (JSON)."""
+    ctx = _contexto_memoria_item(contrato_id, corte_id, item_numero, current_user)
+    return {"formato": "CC-SUB-002", **ctx}
+
+
+@router.get("/{contrato_id}/pdf/corte-subcontratista/{corte_id}")
+def pdf_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(_get_user)):
+    try:
+        ctx = _contexto_corte_sub(contrato_id, corte_id, current_user)
+        contrato = ctx["contrato"]
+        sub = ctx["sub"]
+        corte = ctx["corte"]
+        items = ctx["items"]
+        total_costo = ctx["total_costo"]
+        usuario_nombre = ctx["usuario_nombre"]
+        usuario_cargo = ctx["usuario_cargo"]
+
+        try:
+            html      = _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)
+            pdf_bytes = _to_pdf(html)
+        except Exception as e:
+            try:
+                html_simple = _html_corte_sub_fallback(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)
+                pdf_bytes = _to_pdf(html_simple)
+            except Exception as e2:
+                _log.exception("pdf_corte_sub: fallo plantilla y fallback PDF")
+                raise HTTPException(500, f"Error generando PDF corte: {str(e)} | fallback: {str(e2)}")
+
+        consecutivo = corte.get("consecutivo") or corte.get("id") or corte_id
+        sub_part = _safe_filename_part((sub.get("razon_social") or "sub")[:24])
+        fname = _safe_filename_part(f"CC-SUB-001_Corte{consecutivo}_{sub_part}.pdf")
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("pdf_corte_sub: error no controlado")
+        raise HTTPException(500, f"Error interno corte-sub: {repr(e)}")
+
+# ── CC-SUB-002 : Memorias Corte Subcontratista ─────────────────────────────────
+
+@router.get("/{contrato_id}/pdf/memoria-item/{corte_id}")
+def pdf_memoria_item(
+    contrato_id: int,
+    corte_id:    int,
+    item_numero: str = Query(...),
+    current_user=Depends(_get_user)
+):
+    ctx = _contexto_memoria_item(contrato_id, corte_id, item_numero, current_user)
+    contrato = ctx["contrato"]
+    sub = ctx["sub"]
+    corte = ctx["corte"]
+    item_info = ctx["item_info"]
+    registros = ctx["registros"]
+    usuario_nombre = ctx["usuario_nombre"]
+    usuario_cargo = ctx["usuario_cargo"]
 
     html      = _html_memoria_item(contrato, sub, corte, item_info, registros, usuario_nombre, usuario_cargo)
     pdf_bytes = _to_pdf(html)
-    item_safe = item_numero.replace("/","-").replace(" ","")
-    filename  = f"CC-SUB-002_Corte{corte['consecutivo']}_{item_safe}.pdf"
-    return Response(content=pdf_bytes, media_type="application/pdf",
-                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+    item_safe = _safe_filename_part(item_numero.replace("/", "-").replace(" ", ""))
+    fname = _safe_filename_part(f"CC-SUB-002_Corte{corte.get('consecutivo', '')}_{item_safe}.pdf")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 # ── Preview / desarrollo ───────────────────────────────────────────────────────
 
@@ -208,40 +323,16 @@ def preview_corte_sub():
 # ── Utilidades ─────────────────────────────────────────────────────────────────
 
 def _to_pdf(html: str) -> bytes:
+    """Genera PDF. xhtml2pdf a veces marca `err` por advertencias aun con salida válida."""
     buf = io.BytesIO()
     result = pisa.CreatePDF(io.StringIO(html), dest=buf)
-    if getattr(result, "err", 0):
-        raise ValueError("xhtml2pdf reporto errores al renderizar el HTML")
     buf.seek(0)
-    return buf.read()
-
-def _logo_data_uri(url: Optional[str]) -> Optional[str]:
-    """Descarga logo remoto y lo convierte a data URI; si falla, retorna None."""
-    if not url:
-        return None
-    u = str(url).strip()
-    if not (u.startswith("http://") or u.startswith("https://")):
-        return None
-    try:
-        with urllib.request.urlopen(u, timeout=4) as r:
-            content_type = (r.headers.get("Content-Type") or "").lower()
-            if "png" in content_type:
-                mime = "image/png"
-            elif "jpeg" in content_type or "jpg" in content_type:
-                mime = "image/jpeg"
-            elif "gif" in content_type:
-                mime = "image/gif"
-            elif "webp" in content_type:
-                mime = "image/webp"
-            else:
-                mime = "image/png"
-            raw = r.read()
-            if not raw:
-                return None
-            b64 = base64.b64encode(raw).decode("ascii")
-            return f"data:{mime};base64,{b64}"
-    except Exception:
-        return None
+    out = buf.read()
+    if not out:
+        raise ValueError("xhtml2pdf no produjo bytes (PDF vacío)")
+    if getattr(result, "err", 0):
+        _log.warning("xhtml2pdf reportó advertencias (err=%s); se devuelve PDF de %s bytes", result.err, len(out))
+    return out
 
 def _fd(d):
     """Formatea fecha ISO → dd/mm/yyyy."""
@@ -254,6 +345,18 @@ def _fn(n, dec=2):
     if n is None: return "—"
     try:    return f"{float(n):,.{dec}f}"
     except: return str(n)
+
+def _sf(n, default=0.0):
+    """Convierte a float sin romper el endpoint (strings, comas, vacíos)."""
+    if n is None or n == "":
+        return float(default)
+    try:
+        return float(n)
+    except Exception:
+        try:
+            return float(str(n).replace(",", "").replace(" ", "").strip())
+        except Exception:
+            return float(default)
 
 def _fm(n):
     """Formatea como moneda colombiana."""
@@ -327,28 +430,14 @@ table { border-collapse: collapse; }
 # ── Template CC-SUB-001 ────────────────────────────────────────────────────────
 
 def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo):
-    now      = datetime.now().strftime("%d %b %y, %I:%M %p")
-    logo_src = _logo_data_uri(contrato.get("logo_contratista"))
-    logo_td  = f'<img src="{logo_src}" />' if logo_src else "<span style='font-size:7pt;color:#6b7280'>LOGO CONTRATISTA</span>"
+    now = datetime.now().strftime("%d %b %y, %I:%M %p")
+    # Sin logo en PDF: evita descargas y <img> (xhtml2pdf es frágil con imágenes/data URI largas).
+    logo_td = "<span style='font-size:7pt;color:#6b7280'>LOGO CONTRATISTA</span>"
 
-    filas = ""
-    for i, item in enumerate(items):
-        cls = "even" if i % 2 == 0 else ""
-        filas += f"""<tr class="{cls}">
-            <td class="data-td" style="text-align:center">{_h(item.get('item_numero',''))}</td>
-            <td class="data-td" style="text-align:center">{_h(item.get('unidad',''))}</td>
-            <td class="data-td" style="text-align:right">{_fn(item['cantidad'])}</td>
-            <td class="data-td" style="text-align:right">{_fm(item['vlr_unitario_sub'])}</td>
-            <td class="data-td" style="text-align:right">{_fm(item['costo_directo'])}</td>
-            <td class="data-td">{_h(item.get('item_descripcion',''))}</td>
-        </tr>"""
+    ROWS_PER_PAGE = 40
 
-    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/>
-<style>{BASE_CSS}
-.firmas-section {{ page-break-before: always; }}
-</style></head><body>
-
-<!-- ENCABEZADO -->
+    def bloque_encabezado():
+        return f"""
 <table class="w100 hdr-outer">
   <tr>
     <td class="hdr-logo">{logo_td}</td>
@@ -364,9 +453,23 @@ def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, us
     <td style="width:40%"><span class="lbl">SUB CONTRATISTA:</span><br/><span class="val">{_h((sub.get('razon_social','') or '').upper())}</span></td>
     <td style="width:15%"><span class="lbl">CORTE</span><br/><span class="val">{_h(corte.get('consecutivo',''))}</span></td>
   </tr>
+  <tr>
+    <td colspan="2"><span class="lbl">CONTRATISTA:</span><br/><span class="val">{_h(contrato.get('contratista',''))}</span></td>
+    <td colspan="2"><span class="lbl">INTERVENTORÍA:</span><br/><span class="val">{_h(contrato.get('interventoria',''))}</span></td>
+  </tr>
+  <tr>
+    <td colspan="4"><span class="lbl">NIT SUB:</span><br/><span class="val">{_h(sub.get('nit',''))}</span></td>
+  </tr>
 </table>
+"""
 
-<!-- CANTIDADES -->
+    chunks = [items[i:i + ROWS_PER_PAGE] for i in range(0, len(items), ROWS_PER_PAGE)] or [[]]
+    tablas = ""
+    for ci, chunk in enumerate(chunks):
+        if ci > 0:
+            tablas += "<pdf:nextpage />"
+        tablas += bloque_encabezado()
+        tablas += """
 <div class="section-bar">CANTIDADES APROBADAS POR SUBCONTRATISTA</div>
 <table class="w100">
   <tr>
@@ -377,13 +480,32 @@ def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, us
     <th class="data-th" style="width:18%">COSTO DIR.</th>
     <th class="data-th" style="width:36%">DESCRIPCIÓN</th>
   </tr>
-  {filas}
+"""
+        for i, item in enumerate(chunk):
+            cls = "even" if i % 2 == 0 else ""
+            tablas += f"""<tr class="{cls}">
+            <td class="data-td" style="text-align:center">{_h(item.get('item_numero',''))}</td>
+            <td class="data-td" style="text-align:center">{_h(item.get('unidad',''))}</td>
+            <td class="data-td" style="text-align:right">{_fn(item.get('cantidad'))}</td>
+            <td class="data-td" style="text-align:right">{_fm(item.get('vlr_unitario_sub'))}</td>
+            <td class="data-td" style="text-align:right">{_fm(item.get('costo_directo'))}</td>
+            <td class="data-td">{_h(item.get('item_descripcion',''))}</td>
+        </tr>"""
+        if ci == len(chunks) - 1:
+            tablas += f"""
   <tr>
     <td class="total-td" colspan="4" style="text-align:right;padding-right:10px">SUB TOTAL:</td>
     <td class="total-td" style="text-align:right">{_fm(total_costo)}</td>
     <td class="total-td"></td>
   </tr>
-</table>
+"""
+        tablas += "</table>"
+
+    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/>
+<style>{BASE_CSS}
+.firmas-section {{ page-break-before: always; }}
+</style></head><body>
+{tablas}
 
 <!-- FIRMAS — siempre en nueva hoja -->
 <div class="firmas-section">
@@ -464,8 +586,9 @@ def _html_corte_sub_fallback(contrato, sub, corte, items, total_costo, usuario_n
 # ── Template CC-SUB-002 ────────────────────────────────────────────────────────
 
 def _html_memoria_item(contrato, sub, corte, item_info, registros, usuario_nombre, usuario_cargo):
-    now     = datetime.now().strftime("%d %b %Y")
-    logo_td = f'<img src="{contrato["logo_contratista"]}" />' if contrato.get("logo_contratista") else "<span style='font-size:7pt;color:#0077B6'>SIN LOGO</span>"
+    now = datetime.now().strftime("%d %b %Y")
+    # Sin logo remoto en PDF (URLs en <img> suelen romper el renderizado).
+    logo_td = "<span style='font-size:7pt;color:#6b7280'>LOGO CONTRATISTA</span>"
 
     total_cant = sum(float(r.get("cantidad_total") or 0) for r in registros)
 

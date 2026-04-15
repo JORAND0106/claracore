@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form
-from fastapi.responses import StreamingResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import StreamingResponse, JSONResponse
 import io, requests as req_http
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -12,6 +13,8 @@ from jose import jwt, JWTError
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import os
+import logging
+import traceback
 import time
 import uuid
 import threading
@@ -57,6 +60,22 @@ app.add_middleware(
     allow_credentials=True,
 )
 
+_log_api = logging.getLogger("uvicorn.error")
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_to_json(request: Request, exc: Exception):
+    """Evita HTML genérico 'Internal Server Error'; el front puede mostrar `detail` en JSON."""
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    if isinstance(exc, RequestValidationError):
+        return JSONResponse(status_code=422, content={"detail": exc.errors()})
+    _log_api.exception("Error no manejado: %s %s", request.method, request.url.path)
+    debug = os.getenv("CLARACORE_DEBUG", "").lower() in ("1", "true", "yes")
+    detail = traceback.format_exc() if debug else f"{type(exc).__name__}: {exc}"
+    return JSONResponse(status_code=500, content={"detail": detail})
+
+
 _SUPABASE_URL = os.getenv("SUPABASE_URL")
 _SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
@@ -72,7 +91,7 @@ security = HTTPBearer()
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
-EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES"))
+EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES") or "10080")
 
 # ─────────────────────────────────────────────
 # MODELOS

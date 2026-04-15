@@ -8,6 +8,7 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net'
 const API = API_BASE
+const TEST_MODE = String(import.meta.env.VITE_TEST_MODE || '').toLowerCase() === 'true'
 
 const themes = {
   light: {
@@ -37,6 +38,29 @@ function capitalize(str) {
 
 function getToken() {
   return localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
+}
+
+function TestModeBadge() {
+  if (!TEST_MODE) return null
+  return (
+    <div style={{
+      position: 'fixed',
+      top: 12,
+      right: 12,
+      zIndex: 100000,
+      background: '#F59E0B',
+      color: '#111827',
+      border: '1px solid #D97706',
+      borderRadius: '999px',
+      padding: '6px 12px',
+      fontSize: '11px',
+      fontWeight: '800',
+      letterSpacing: '0.4px',
+      boxShadow: '0 4px 14px rgba(0,0,0,0.2)'
+    }}>
+      ENTORNO LOCAL DE PRUEBA
+    </div>
+  )
 }
 
 // ─── MODAL BASE ───────────────────────────────────────────────────────────────
@@ -10688,6 +10712,7 @@ if (contratos.length > 1) {
     )
     return (
     <>
+    <TestModeBadge />
     {mantenimiento?.activo && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, zIndex: 99999,
@@ -10776,6 +10801,7 @@ if (contratos.length > 1) {
 
   return (
     <>
+      <TestModeBadge />
       <LandingPage t={t} activeTheme={activeTheme} themeMode={themeMode}
         onTheme={handleTheme}
         onLogin={() => setModal('login')}

@@ -1,5 +1,12 @@
 Set-Location $PSScriptRoot
 
+Write-Host "ADVERTENCIA: este comando despliega backend en PRODUCCION." -ForegroundColor Yellow
+$confirm = Read-Host "Escribe DEPLOY para continuar (o Enter para cancelar)"
+if ($confirm -ne "DEPLOY") {
+    Write-Host "Deploy cancelado por seguridad." -ForegroundColor DarkYellow
+    exit 1
+}
+
 Write-Host "Activando modo mantenimiento..." -ForegroundColor Yellow
 try {
     $body = '{"secret":"claracore_deploy_2026","activo":true,"segundos":180,"mensaje":"Actualizacion del sistema en curso. Por favor guarda tu trabajo antes de continuar."}'

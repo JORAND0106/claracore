@@ -11,9 +11,35 @@ const FS = {
   large:  { base: 20, sub: 17, title: 30, section: 15 },
 }
 
+function fmtMoney(n) {
+  if (n == null || n === '') return '—'
+  const x = Number(n)
+  if (Number.isNaN(x)) return String(n)
+  return `$ ${x.toLocaleString('es-CO', { maximumFractionDigits: 0 })}`
+}
+
+function fmtQty(n) {
+  if (n == null || n === '') return '—'
+  const x = Number(n)
+  if (Number.isNaN(x)) return String(n)
+  return x.toLocaleString('es-CO', { minimumFractionDigits: 0, maximumFractionDigits: 4 })
+}
+
+function fmtFechaIso(d) {
+  if (!d) return '—'
+  try {
+    const s = String(d).slice(0, 10)
+    return new Date(s + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
+  } catch {
+    return String(d)
+  }
+}
+
 export default function ModuloInformes({ t, usuario, token, s, fontSize = 'normal' }) {
   const getAuthToken = () =>
     token ||
+    localStorage.getItem('cc_token') ||
+    sessionStorage.getItem('cc_token') ||
     localStorage.getItem('token') ||
     localStorage.getItem('access_token') ||
     sessionStorage.getItem('token') ||
@@ -46,6 +72,22 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     }
   }
 
+  async function leerErrorRespuesta(r) {
+    const raw = await r.text()
+    try {
+      const err = JSON.parse(raw)
+      let detail = err.detail
+      if (Array.isArray(detail)) {
+        detail = detail.map((x) => (typeof x === 'object' && x != null ? (x.msg || JSON.stringify(x)) : String(x))).join(' ')
+      } else if (detail != null && typeof detail === 'object') {
+        detail = JSON.stringify(detail)
+      }
+      return detail || raw.trim().slice(0, 600) || `HTTP ${r.status}`
+    } catch {
+      return raw.trim().slice(0, 900) || `HTTP ${r.status}`
+    }
+  }
+
   const f          = FS[fontSize] || FS.normal
   const contratoId = usuario?.contrato_id
 
@@ -57,13 +99,15 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   const [cargandoSub, setCargandoSub] = useState(false)
   const [cargandoCor, setCargandoCor] = useState(false)
   const [cargandoIt,  setCargandoIt]  = useState(false)
-  const [descargando, setDescargando] = useState({})
   const [error,       setError]       = useState(null)
+
+  /** Vista previa solo en plataforma (JSON → modal). Sin PDF ni descarga. */
+  const [vistaPrevia, setVistaPrevia] = useState(null)
+  // null | { fase:'cargando', tipo } | { fase:'ok', tipo, datos } | { fase:'error', tipo, mensaje }
 
   const subSel   = subs.find(s => String(s.id) === subId)   || null
   const corteSel = cortes.find(c => String(c.id) === corteId) || null
 
-  // ── Cargar subcontratistas ─────────────────────────────────────────────────
   useEffect(() => {
     if (!contratoId) return
     const authToken = getAuthToken()
@@ -80,7 +124,6 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
       .finally(() => setCargandoSub(false))
   }, [contratoId])
 
-  // ── Al cambiar subcontratista ──────────────────────────────────────────────
   function onSubChange(e) {
     const id = e.target.value
     setSubId(id); setCorteId(''); setCortes([]); setItems([]); setError(null)
@@ -99,7 +142,6 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
       .finally(() => setCargandoCor(false))
   }
 
-  // ── Al cambiar corte ───────────────────────────────────────────────────────
   function onCorteChange(e) {
     const id = e.target.value
     setCorteId(id); setItems([]); setError(null)
@@ -118,52 +160,63 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
       .finally(() => setCargandoIt(false))
   }
 
-  // ── Descarga ───────────────────────────────────────────────────────────────
-  async function obtenerBlob(path, key) {
-    setDescargando(p => ({ ...p, [key]: true })); setError(null)
-    try {
-      const authToken = getAuthToken()
-      if (!authToken) throw new Error('Sesion no autenticada. Ingresa de nuevo para generar informes.')
-      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({}))
-        throw new Error(err.detail || `Error ${r.status} generando PDF`)
-      }
-      return await r.blob()
-    } catch (e) {
-      const msg = String(e?.message || '')
-      if (msg.toLowerCase().includes('failed to fetch')) {
-        setError(`No se pudo conectar al servidor de informes. Verifica red/CORS/API (${API} | ${API_FALLBACK}).`)
-      } else {
-        setError(msg || 'Error desconocido generando PDF')
-      }
-      return null
+  async function abrirVistaPreviaCorte() {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
     }
-    finally { setDescargando(p => ({ ...p, [key]: false })) }
+    setVistaPrevia({ fase: 'cargando', tipo: 'corte' })
+    setError(null)
+    try {
+      const r = await fetchConFallback(
+        `/informes/${contratoId}/datos/corte-subcontratista/${corteId}`,
+        { headers: { Authorization: `Bearer ${authToken}` } }
+      )
+      if (!r.ok) {
+        const msg = await leerErrorRespuesta(r)
+        setVistaPrevia({ fase: 'error', tipo: 'corte', mensaje: msg })
+        return
+      }
+      const datos = await r.json()
+      setVistaPrevia({ fase: 'ok', tipo: 'corte', datos })
+    } catch (e) {
+      const msg = String(e?.message || e)
+      setVistaPrevia({ fase: 'error', tipo: 'corte', mensaje: msg })
+    }
   }
 
-  async function verPDF(path, key) {
-    const blob = await obtenerBlob(path, key)
-    if (!blob) return
-    const blobUrl = URL.createObjectURL(blob)
-    window.open(blobUrl, '_blank')
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
-  }
-
-  async function descargarPDF(path, filename, key) {
-    const blob = await obtenerBlob(path, key)
-    if (!blob) return
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = filename; a.click()
-    URL.revokeObjectURL(a.href)
+  async function abrirVistaPreviaMemoria(itemNumero) {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    setVistaPrevia({ fase: 'cargando', tipo: 'memoria', itemNumero })
+    setError(null)
+    try {
+      const q = encodeURIComponent(itemNumero)
+      const r = await fetchConFallback(
+        `/informes/${contratoId}/datos/memoria-item/${corteId}?item_numero=${q}`,
+        { headers: { Authorization: `Bearer ${authToken}` } }
+      )
+      if (!r.ok) {
+        const msg = await leerErrorRespuesta(r)
+        setVistaPrevia({ fase: 'error', tipo: 'memoria', mensaje: msg, itemNumero })
+        return
+      }
+      const datos = await r.json()
+      setVistaPrevia({ fase: 'ok', tipo: 'memoria', datos, itemNumero })
+    } catch (e) {
+      const msg = String(e?.message || e)
+      setVistaPrevia({ fase: 'error', tipo: 'memoria', mensaje: msg, itemNumero })
+    }
   }
 
   const fmtFecha = d => d
     ? new Date(d + 'T12:00:00').toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric' })
     : '?'
 
-  // ── Estilos ────────────────────────────────────────────────────────────────
   const card = {
     background: t.card, borderRadius: '12px',
     border: `1px solid ${t.border}`, padding: '20px', marginBottom: '14px',
@@ -189,9 +242,9 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     fontSize: f.sub + 'px', color: t.textMuted,
     display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '4px 10px'
   }
-  const btnPdf = (color, dis) => ({
+  const btnVer = (dis) => ({
     padding: '8px 16px', borderRadius: '7px', border: 'none',
-    background: dis ? t.border : color, color: 'white',
+    background: dis ? t.border : t.primary, color: 'white',
     fontWeight: '700', fontSize: f.sub + 'px',
     cursor: dis ? 'not-allowed' : 'pointer', opacity: dis ? 0.6 : 1,
     whiteSpace: 'nowrap', flexShrink: 0
@@ -208,17 +261,24 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     background: t.bg
   }
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  const th = {
+    textAlign: 'left', padding: '8px 10px', borderBottom: `1px solid ${t.border}`,
+    fontSize: f.sub + 'px', color: t.textMuted, fontWeight: '700'
+  }
+  const td = {
+    padding: '8px 10px', borderBottom: `1px solid ${t.border}44`,
+    fontSize: f.sub + 'px', color: t.text, verticalAlign: 'top'
+  }
+
   return (
     <div style={{ maxWidth: '1080px', margin: '0 auto', padding: '8px' }}>
 
-      {/* Título */}
       <div style={{ marginBottom: '18px' }}>
         <div style={{ fontSize: f.title + 'px', fontWeight: '800', color: t.text }}>
           Informes
         </div>
         <div style={{ fontSize: f.sub + 'px', color: t.textMuted, marginTop: '2px' }}>
-          Centro de formatos de control documental del subcontratista
+          Memorias de soporte: vista previa dentro de la plataforma (sin descarga de PDF).
         </div>
       </div>
 
@@ -229,16 +289,14 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
         </div>
       )}
 
-      {/* ── CARD CORTE SUBCONTRATISTA ── */}
       <div style={card}>
         <div style={sectionTitle}>
           Formato activo: Corte Subcontratista
         </div>
         <div style={{ color: t.textMuted, fontSize: f.sub + 'px', marginBottom: '14px' }}>
-          Plantilla alineada al formato institucional de informe y memorias para corte de subcontratista.
+          Usa «Vista previa» para revisar el contenido aquí. No se genera ni descarga PDF desde esta pantalla.
         </div>
 
-        {/* Subcontratista */}
         <div style={{ marginBottom: '14px' }}>
           <label style={label}>Subcontratista</label>
           <select
@@ -263,7 +321,6 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
           )}
         </div>
 
-        {/* Corte */}
         {subId && (
           <div style={{ marginBottom: '14px' }}>
             <label style={label}>Corte</label>
@@ -292,50 +349,32 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
           </div>
         )}
 
-        {/* Botones de descarga */}
         {corteId && (
           <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
 
-            {/* CC-SUB-001 */}
             <div style={itemRow}>
               <div>
                 <div style={{ fontWeight: '700', color: t.text, fontSize: f.base + 'px' }}>
-                  Informe de Corte
+                  Informe de Corte (CC-SUB-001)
                 </div>
                 <div style={{ fontSize: f.sub + 'px', color: t.textMuted }}>
-                  CC-SUB-001 · Resumen por item + subtotal + aprobaciones
+                  Resumen por ítem, subtotal y datos de contrato / subcontratista
                 </div>
               </div>
-              <div style={{ display:'flex', gap:'8px' }}>
               <button
-                style={btnPdf('#0077B6', descargando['corte'])}
-                onClick={() => verPDF(
-                  `/informes/${contratoId}/pdf/corte-subcontratista/${corteId}`,
-                  'corte_prev'
-                )}
-                disabled={descargando['corte'] || descargando['corte_prev']}
+                type="button"
+                style={btnVer(vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte')}
+                onClick={abrirVistaPreviaCorte}
+                disabled={vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte'}
               >
-                {descargando['corte_prev'] ? '⏳...' : '👁 Vista Previa'}
+                {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte' ? '⏳ Cargando…' : '📋 Vista previa'}
               </button>
-                  <button
-                style={btnPdf('#005a8e', descargando['corte'])}
-                onClick={() => descargarPDF(
-                  `/informes/${contratoId}/pdf/corte-subcontratista/${corteId}`,
-                  `CC-SUB-001_Corte${corteSel.consecutivo}.pdf`,
-                  'corte'
-                )}
-                disabled={descargando['corte'] || descargando['corte_prev']}
-              >
-                {descargando['corte'] ? '⏳...' : '⬇ Descargar'}
-              </button>
-            </div>
             </div>
 
-            {/* CC-SUB-002 — uno por ítem */}
             <div>
               <div style={{ fontSize: f.sub + 'px', fontWeight: '700', color: t.textMuted,
                             letterSpacing: '0.8px', textTransform: 'uppercase', marginBottom: '8px' }}>
-                Memorias Corte Subcontratista (CC-SUB-002) — un PDF por item
+                Memorias por ítem (CC-SUB-002)
               </div>
               {cargandoIt ? (
                 <div style={{ color: t.textMuted, fontSize: f.sub + 'px' }}>Cargando ítems...</div>
@@ -345,7 +384,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                 </div>
               ) : (
                 items.map(item => {
-                  const key = `mem_${item.item_numero}`
+                  const busy = vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'memoria' && vistaPrevia?.itemNumero === item.item_numero
                   return (
                     <div key={item.item_numero} style={itemRow}>
                       <div style={{ minWidth: 0 }}>
@@ -359,29 +398,14 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                           [{item.unidad}]
                         </span>
                       </div>
-                      <div style={{ display:'flex', gap:'8px' }}>
                       <button
-                        style={btnPdf('#00A896', descargando[key+'_prev'])}
-                        onClick={() => verPDF(
-                          `/informes/${contratoId}/pdf/memoria-item/${corteId}?item_numero=${encodeURIComponent(item.item_numero)}`,
-                          key+'_prev'
-                        )}
-                        disabled={descargando[key] || descargando[key+'_prev']}
+                        type="button"
+                        style={btnVer(busy)}
+                        onClick={() => abrirVistaPreviaMemoria(item.item_numero)}
+                        disabled={busy}
                       >
-                        {descargando[key+'_prev'] ? '⏳...' : '👁 Ver'}
+                        {busy ? '⏳…' : '📋 Vista previa'}
                       </button>
-                      <button
-                        style={btnPdf('#007a6e', descargando[key])}
-                        onClick={() => descargarPDF(
-                          `/informes/${contratoId}/pdf/memoria-item/${corteId}?item_numero=${encodeURIComponent(item.item_numero)}`,
-                          `CC-SUB-002_Corte${corteSel.consecutivo}_${(item.item_numero||'').replace('/','_')}.pdf`,
-                          key
-                        )}
-                        disabled={descargando[key] || descargando[key+'_prev']}
-                      >
-                        {descargando[key] ? '⏳...' : '⬇ Descargar'}
-                      </button>
-                    </div>
                     </div>
                   )
                 })
@@ -412,6 +436,184 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
           </div>
         </div>
       </div>
+
+      {/* Modal vista previa (solo HTML en app; no PDF) */}
+      {vistaPrevia && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed', inset: 0, zIndex: 10000,
+            background: 'rgba(15, 23, 42, 0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px',
+          }}
+          onClick={() => setVistaPrevia(null)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              width: '100%', maxWidth: '960px', maxHeight: '90vh', overflow: 'auto',
+              background: t.card, color: t.text,
+              borderRadius: '14px', border: `1px solid ${t.border}`,
+              boxShadow: '0 24px 48px rgba(0,0,0,0.25)', padding: '20px 22px',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '16px' }}>
+              <div>
+                <div style={{ fontSize: f.title - 2 + 'px', fontWeight: '800' }}>
+                  {vistaPrevia.tipo === 'corte' ? 'Vista previa · CC-SUB-001' : `Vista previa · CC-SUB-002 · ${vistaPrevia.itemNumero || ''}`}
+                </div>
+                <div style={{ fontSize: f.sub + 'px', color: t.textMuted, marginTop: '4px' }}>
+                  Solo consulta en plataforma. No hay archivo PDF ni botón de descarga.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setVistaPrevia(null)}
+                style={{
+                  flexShrink: 0, padding: '8px 14px', borderRadius: '8px', border: `1px solid ${t.border}`,
+                  background: t.bg, color: t.text, fontWeight: '700', cursor: 'pointer',
+                }}
+              >
+                Cerrar
+              </button>
+            </div>
+
+            {vistaPrevia.fase === 'cargando' && (
+              <div style={{ padding: '32px', textAlign: 'center', color: t.textMuted }}>Cargando datos…</div>
+            )}
+
+            {vistaPrevia.fase === 'error' && (
+              <div style={{ padding: '16px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', color: '#b91c1c', fontSize: f.sub + 'px' }}>
+                {vistaPrevia.mensaje}
+              </div>
+            )}
+
+            {vistaPrevia.fase === 'ok' && vistaPrevia.tipo === 'corte' && vistaPrevia.datos && (
+              <div style={{ fontSize: f.sub + 'px' }}>
+                {(() => {
+                  const d = vistaPrevia.datos
+                  const c = d.contrato || {}
+                  const su = d.sub || {}
+                  const co = d.corte || {}
+                  return (
+                    <>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px', marginBottom: '16px' }}>
+                        <div><span style={{ color: t.textMuted }}>Contrato</span><br /><b>{c.numero || '—'}</b></div>
+                        <div><span style={{ color: t.textMuted }}>Contratista</span><br />{c.contratista || '—'}</div>
+                        <div><span style={{ color: t.textMuted }}>Interventoría</span><br />{c.interventoria || '—'}</div>
+                        <div><span style={{ color: t.textMuted }}>Subcontratista</span><br /><b>{(su.razon_social || '').toUpperCase()}</b></div>
+                        <div><span style={{ color: t.textMuted }}>NIT sub</span><br />{su.nit || '—'}</div>
+                        <div><span style={{ color: t.textMuted }}>Corte N°</span><br /><b>{co.consecutivo ?? '—'}</b></div>
+                        <div><span style={{ color: t.textMuted }}>Período</span><br />
+                          {fmtFechaIso(co.fecha_inicio)} → {fmtFechaIso(co.fecha_fin)}
+                        </div>
+                      </div>
+                      <div style={{ marginBottom: '12px', color: t.textMuted }}>
+                        Generado en sesión: <b style={{ color: t.text }}>{d.usuario_nombre}</b> · {d.usuario_cargo || '—'}
+                      </div>
+                      <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                          <thead>
+                            <tr>
+                              <th style={th}>Ítem</th>
+                              <th style={th}>Und</th>
+                              <th style={{ ...th, textAlign: 'right' }}>Cantidad</th>
+                              <th style={{ ...th, textAlign: 'right' }}>Vlr unit.</th>
+                              <th style={{ ...th, textAlign: 'right' }}>Costo dir.</th>
+                              <th style={th}>Descripción</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(d.items || []).map((row, i) => (
+                              <tr key={i}>
+                                <td style={td}>{row.item_numero}</td>
+                                <td style={td}>{row.unidad}</td>
+                                <td style={{ ...td, textAlign: 'right' }}>{fmtQty(row.cantidad)}</td>
+                                <td style={{ ...td, textAlign: 'right' }}>{fmtMoney(row.vlr_unitario_sub)}</td>
+                                <td style={{ ...td, textAlign: 'right' }}>{fmtMoney(row.costo_directo)}</td>
+                                <td style={td}>{row.item_descripcion}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div style={{ marginTop: '14px', textAlign: 'right', fontWeight: '800', fontSize: f.base + 'px' }}>
+                        Subtotal: {fmtMoney(d.total_costo)}
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+            )}
+
+            {vistaPrevia.fase === 'ok' && vistaPrevia.tipo === 'memoria' && vistaPrevia.datos && (
+              <div style={{ fontSize: f.sub + 'px' }}>
+                {(() => {
+                  const d = vistaPrevia.datos
+                  const c = d.contrato || {}
+                  const su = d.sub || {}
+                  const co = d.corte || {}
+                  const ii = d.item_info || {}
+                  const regs = d.registros || []
+                  return (
+                    <>
+                      <div style={{ marginBottom: '12px' }}>
+                        <b style={{ fontSize: f.base + 'px', color: t.primary }}>{ii.item_numero}</b>
+                        <span style={{ marginLeft: '8px' }}>{ii.item_descripcion}</span>
+                        <span style={{ color: t.textMuted, marginLeft: '8px' }}>[{ii.unidad}]</span>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '8px', marginBottom: '14px' }}>
+                        <div><span style={{ color: t.textMuted }}>Contrato</span><br />{c.numero || '—'}</div>
+                        <div><span style={{ color: t.textMuted }}>Subcontratista</span><br />{su.razon_social || '—'}</div>
+                        <div><span style={{ color: t.textMuted }}>Corte</span><br />{co.consecutivo ?? '—'}</div>
+                        <div><span style={{ color: t.textMuted }}>Período</span><br />{fmtFechaIso(co.fecha_inicio)} → {fmtFechaIso(co.fecha_fin)}</div>
+                      </div>
+                      <div style={{ marginBottom: '12px', color: t.textMuted }}>
+                        Sesión: <b style={{ color: t.text }}>{d.usuario_nombre}</b> · {d.usuario_cargo || '—'}
+                      </div>
+                      <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: f.sub - 1 + 'px' }}>
+                          <thead>
+                            <tr>
+                              <th style={th}>N°</th>
+                              <th style={th}>Abs ini</th>
+                              <th style={th}>Abs fin</th>
+                              <th style={th}>PK</th>
+                              <th style={th}>Calzada</th>
+                              <th style={{ ...th, textAlign: 'right' }}>L</th>
+                              <th style={{ ...th, textAlign: 'right' }}>A</th>
+                              <th style={{ ...th, textAlign: 'right' }}>E</th>
+                              <th style={{ ...th, textAlign: 'right' }}>Cant</th>
+                              <th style={th}>Obs.</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {regs.map((r, i) => (
+                              <tr key={i}>
+                                <td style={td}>{r.numero_registro ?? '—'}</td>
+                                <td style={td}>{r.abs_inicio ?? '—'}</td>
+                                <td style={td}>{r.abs_final ?? '—'}</td>
+                                <td style={td}>{(r.pk_ids && r.pk_ids.pk_id) != null ? r.pk_ids.pk_id : '—'}</td>
+                                <td style={td}>{r.calzada ?? '—'}</td>
+                                <td style={{ ...td, textAlign: 'right' }}>{fmtQty(r.longitud)}</td>
+                                <td style={{ ...td, textAlign: 'right' }}>{fmtQty(r.ancho)}</td>
+                                <td style={{ ...td, textAlign: 'right' }}>{fmtQty(r.espesor)}</td>
+                                <td style={{ ...td, textAlign: 'right' }}>{fmtQty(r.cantidad ?? r.cantidad_total)}</td>
+                                <td style={td}>{r.observacion || '—'}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
