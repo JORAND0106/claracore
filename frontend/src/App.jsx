@@ -10540,7 +10540,12 @@ useEffect(() => {
           const d = await r.json()
           if (d.activo) {
             setMantenimiento(d)
-            setCuentaRegresiva(20)
+            setCuentaRegresiva(prev => {
+              const serverValue = Number.isFinite(d.segundos_restantes) ? d.segundos_restantes : null
+              if (serverValue === null) return prev ?? 20
+              if (prev === null) return serverValue
+              return Math.min(prev, serverValue)
+            })
           } else {
             setMantenimiento(null)
             setCuentaRegresiva(null)
@@ -10624,6 +10629,10 @@ if (contratos.length > 1) {
 
   if (usuario) {
     const _esPrivilegiado = ['Desarrollador', 'Administrador'].includes(usuario.cargo_nombre)
+    const maintenanceBannerHeight = mantenimiento?.activo ? 74 : 0
+    const updateBannerHeight = hayNuevaVersion ? 74 : 0
+    const infoBannerHeight = bannerMsg ? 44 : 0
+    const totalTopOffset = maintenanceBannerHeight + updateBannerHeight + infoBannerHeight
     if (!_esPrivilegiado && (!usuario.permisos || usuario.permisos.length === 0)) return (
       <div style={{ minHeight: '100vh', background: t.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '12px' }}>
         <div style={{ fontSize: '48px' }}>🔒</div>
@@ -10661,7 +10670,7 @@ if (contratos.length > 1) {
       )}
     {hayNuevaVersion && (
         <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 99999,
+          position: 'fixed', top: maintenanceBannerHeight, left: 0, right: 0, zIndex: 99999,
           background: 'linear-gradient(90deg, #0077B6, #00B4C6)',
           padding: '12px 24px', display: 'flex', alignItems: 'center',
           justifyContent: 'space-between', boxShadow: '0 2px 16px rgba(0,0,0,0.3)'
@@ -10709,14 +10718,14 @@ if (contratos.length > 1) {
         </div>
       )}
       {bannerMsg && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 99999, background: '#0f2038', borderBottom: '2px solid #00afc5', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '13px', color: '#e0f4f7', boxShadow: '0 2px 12px rgba(0,0,0,0.4)' }}>
+        <div style={{ position: 'fixed', top: maintenanceBannerHeight + updateBannerHeight, left: 0, right: 0, zIndex: 99999, background: '#0f2038', borderBottom: '2px solid #00afc5', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '13px', color: '#e0f4f7', boxShadow: '0 2px 12px rgba(0,0,0,0.4)' }}>
           <span>⚡ {bannerMsg}</span>
           <button onClick={() => setBannerMsg(null)} style={{ background: 'transparent', border: 'none', color: '#8acdd8', cursor: 'pointer', fontSize: '16px', lineHeight: 1 }}>✕</button>
         </div>
       )}
       <Dashboard t={t} activeTheme={activeTheme} themeMode={themeMode}
         onTheme={handleTheme} usuario={usuario} setUsuario={setUsuario} onLogout={handleLogout}
-        topOffset={bannerMsg ? 44 : 0}
+        topOffset={totalTopOffset}
         fontSize={fontSize} onFontSize={cambiarFuente}
       />
     </>

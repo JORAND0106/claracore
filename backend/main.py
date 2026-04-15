@@ -22,12 +22,21 @@ _dwg_sessions: dict = {}
 # ── Jobs de exportación Excel en background ────────────────────────────────────
 _export_jobs: dict = {}  # { job_id: { "estado": "procesando"|"listo"|"error", "buf": bytes, "filename": str } }
 _DWG_TIMEOUT = 30  # segundos — margen para curl.exe
+_MAINTENANCE_SECRET = os.getenv("MAINTENANCE_SECRET", "claracore_deploy_2026")
+_MAINTENANCE_DEFAULT_SECONDS = int(os.getenv("MAINTENANCE_COUNTDOWN_SECONDS", "25"))
+_maintenance_state = {
+    "activo": False,
+    "mensaje": "Actualización del sistema en curso. Por favor guarda tu trabajo antes de continuar.",
+    "expires_at": None,
+}
 
 def _dwg_activo(contrato_id: int, usuario_id: int = None) -> bool:
     last = _dwg_sessions.get(contrato_id)
     return last is not None and (time.time() - last) < 10
 
 load_dotenv()
+_MAINTENANCE_SECRET = os.getenv("MAINTENANCE_SECRET", _MAINTENANCE_SECRET)
+_MAINTENANCE_DEFAULT_SECONDS = int(os.getenv("MAINTENANCE_COUNTDOWN_SECONDS", str(_MAINTENANCE_DEFAULT_SECONDS)))
 
 app = FastAPI(title="ClaraCore API")
 
@@ -289,6 +298,28 @@ class CambiarPassword(BaseModel):
     email: str
     contrasena_temporal: str
     nueva_password: str
+
+class MantenimientoRequest(BaseModel):
+    secret: str
+    activo: bool
+    mensaje: Optional[str] = None
+    segundos: Optional[int] = None
+
+def _estado_mantenimiento():
+    now = time.time()
+    if _maintenance_state["activo"] and _maintenance_state["expires_at"] is not None and now >= _maintenance_state["expires_at"]:
+        _maintenance_state["activo"] = False
+        _maintenance_state["expires_at"] = None
+
+    restantes = None
+    if _maintenance_state["activo"] and _maintenance_state["expires_at"] is not None:
+        restantes = max(0, int(_maintenance_state["expires_at"] - now))
+
+    return {
+        "activo": _maintenance_state["activo"],
+        "mensaje": _maintenance_state["mensaje"],
+        "segundos_restantes": restantes,
+    }
 
 # ─────────────────────────────────────────────
 # HELPER SUPABASE CON REINTENTOS
@@ -841,6 +872,28 @@ def agregar_usuario_contrato(body: UsuarioContratoCreate, current_user=Depends(g
 def quitar_usuario_contrato(usuario_id: int, contrato_id: int, current_user=Depends(get_current_user)):
     supabase.table("usuario_contratos").delete().eq("usuario_id", usuario_id).eq("contrato_id", contrato_id).execute()
     return {"mensaje": "Contrato removido"}
+
+@app.get("/mantenimiento")
+def get_mantenimiento():
+    return _estado_mantenimiento()
+
+@app.post("/mantenimiento")
+def set_mantenimiento(body: MantenimientoRequest):
+    if body.secret != _MAINTENANCE_SECRET:
+        raise HTTPException(status_code=403, detail="Secret inválido")
+
+    if body.activo:
+        segundos = body.segundos if (body.segundos is not None and body.segundos > 0) else _MAINTENANCE_DEFAULT_SECONDS
+        _maintenance_state["activo"] = True
+        _maintenance_state["mensaje"] = body.mensaje or _maintenance_state["mensaje"]
+        _maintenance_state["expires_at"] = time.time() + segundos
+    else:
+        _maintenance_state["activo"] = False
+        _maintenance_state["expires_at"] = None
+        if body.mensaje:
+            _maintenance_state["mensaje"] = body.mensaje
+
+    return _estado_mantenimiento()
 
 @app.post("/auth/refresh")
 def refresh_token(current_user=Depends(get_current_user)):

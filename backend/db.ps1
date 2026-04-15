@@ -2,7 +2,7 @@ Set-Location $PSScriptRoot
 
 Write-Host "Activando modo mantenimiento..." -ForegroundColor Yellow
 try {
-    $body = '{"secret":"claracore_deploy_2026","activo":true,"mensaje":"Actualizacion del sistema en curso. Por favor guarda tu trabajo antes de continuar."}'
+    $body = '{"secret":"claracore_deploy_2026","activo":true,"segundos":25,"mensaje":"Actualizacion del sistema en curso. Por favor guarda tu trabajo antes de continuar."}'
     Invoke-RestMethod -Uri "https://claracore-backend.azurewebsites.net/mantenimiento" -Method POST -Body $body -ContentType "application/json" | Out-Null
     Write-Host "Modo mantenimiento activado. Esperando 25 segundos..." -ForegroundColor Yellow
     Start-Sleep -Seconds 25
