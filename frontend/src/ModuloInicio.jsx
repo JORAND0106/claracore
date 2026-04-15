@@ -165,8 +165,9 @@ function FraseDelDia({ t, fs, usuario }) {
   const [estado, setEstado]   = useState('idle')
   const [frase, setFrase]     = useState(null)
   const [visible, setVisible] = useState(false)
-  
+
   useEffect(() => {
+    return // temporal — activar cuando el backend esté listo
     try {
       const guardado = JSON.parse(localStorage.getItem(storageKey) || 'null')
       if (guardado?.rechazado) return

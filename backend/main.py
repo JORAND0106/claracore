@@ -376,7 +376,9 @@ CARGO_NIVEL_PRERREQUISITO = {
 
 @app.post("/frase-del-dia")
 def frase_del_dia(body: dict, current_user=Depends(get_current_user)):
-    import httpx
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY no configurada")
     nombre = body.get("nombre", "un profesional")
     turno  = body.get("turno", "día")
     dia    = body.get("dia", "hoy")
@@ -384,24 +386,28 @@ def frase_del_dia(body: dict, current_user=Depends(get_current_user)):
         res = httpx.post(
             "https://api.anthropic.com/v1/messages",
             headers={
-                "x-api-key": os.getenv("ANTHROPIC_API_KEY"),
+                "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
             json={
-                "model": "claude-haiku-4-5-20251001",
+                "model": "claude-haiku-4-5",
                 "max_tokens": 300,
                 "messages": [{
                     "role": "user",
-                    "content": f"Genera una frase inspiradora, reflexiva o bíblica para {nombre} que trabaja en construcción de obras públicas. Hoy es {dia}, en la {turno}. La frase puede ser de un autor reconocido, de la Biblia, o un pensamiento original. Hazla única y diferente a las de otros días. Responde SOLO en este formato JSON sin ningún texto adicional ni backticks: {{\"frase\":\"texto de la frase\",\"autor\":\"nombre del autor o fuente\",\"tipo\":\"reflexiva|motivadora|bíblica\"}}"
+                    "content": f"Genera una frase inspiradora, reflexiva o bíblica para {nombre} que trabaja en construcción de obras públicas. Hoy es {dia}, en la {turno}. Responde SOLO en este formato JSON sin backticks ni texto adicional: {{\"frase\":\"texto\",\"autor\":\"fuente\",\"tipo\":\"reflexiva|motivadora|bíblica\"}}"
                 }]
             },
-            timeout=15.0
+            timeout=20.0
         )
         data = res.json()
-        texto = data["content"][0]["text"]
+        if "content" not in data:
+            raise HTTPException(status_code=500, detail=str(data))
         import json as _json
+        texto = data["content"][0]["text"]
         return _json.loads(texto.replace("```json","").replace("```","").strip())
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
