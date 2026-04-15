@@ -5894,9 +5894,9 @@ const limpiarFiltros = () => {
                       <td colSpan={3} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? (nivelInfo.verValoresEconomicos ? fmtPesos(analisis.total_aprobados) : `${analisis.total_aprobados_count ?? 0} regs`) : '—'}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? (nivelInfo.verValoresEconomicos ? fmtPesos(analisis.total_pendientes) : `${analisis.total_pendientes_count ?? 0} regs`) : '—'}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados ? (nivelInfo.verValoresEconomicos ? fmtPesos(analisis.total_rechazados) : `${analisis.total_rechazados_count ?? 0} regs`) : '—'}</td>
+                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? fmtPesos(analisis.total_aprobados) : '—'}</td>}
+                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? fmtPesos(analisis.total_pendientes) : '—'}</td>}
+                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados ? fmtPesos(analisis.total_rechazados) : '—'}</td>}
                     </tr>
                   </tfoot>
                 </table>
