@@ -2,6 +2,7 @@ import io
 import logging
 import html
 import math
+import os as _os
 import re
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -11,9 +12,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from xhtml2pdf import pisa
 from main import get_current_user as _get_user
-print("INFORMES CARGADO - SIN AUTH", flush=True)
 from supabase import create_client as _create_client
-import os as _os
+
+# ClaraCore Documentación (CCD): código único por tipo de formato (gestión documental).
+CODIGO_FORMATO_CCD_CC_SUB_001 = "CC-SUB-001"
 _sb = _create_client(
     _os.getenv("SUPABASE_URL", ""),
     _os.getenv("SUPABASE_KEY", "")
@@ -28,6 +30,35 @@ def _safe_filename_part(s: object) -> str:
     raw = str(s if s is not None else "").strip()
     t = re.sub(r"[^A-Za-z0-9._\-]+", "_", raw)
     return (t or "x")[:80]
+
+
+def _nombre_archivo_cc_sub_001(corte: dict, sub: dict, corte_id: int) -> str:
+    """Patrón CCD: {CODIGO}_Corte_{n}_{Subcontratista}.pdf (ASCII seguro)."""
+    co = corte.get("consecutivo")
+    if co is None or co == "":
+        co = corte.get("id") if corte.get("id") is not None else corte_id
+    try:
+        num = f"{int(float(str(co))):02d}"
+    except Exception:
+        num = _safe_filename_part(str(co))[:12] or "00"
+    sub_nom = _safe_filename_part((sub.get("razon_social") or "sub")[:56])
+    base = f"{CODIGO_FORMATO_CCD_CC_SUB_001}_Corte_{num}_{sub_nom}.pdf"
+    return _safe_filename_part(base.replace(".pdf", "")) + ".pdf"
+
+
+def _html_logo_contratista(contrato: dict) -> str:
+    """Logo del contratista (URL en BD). xhtml2pdf intenta cargar la URL; si falla, queda placeholder."""
+    url = contrato.get("logo_contratista")
+    if url is None or str(url).strip() == "":
+        return (
+            '<div style="width:100%;height:42px;display:flex;align-items:center;justify-content:center;'
+            'font-size:6.5pt;color:#94a3b8;border:1px dashed #cbd5e1;">LOGO</div>'
+        )
+    u = html.escape(str(url).strip(), quote=True)
+    return (
+        f'<img src="{u}" alt="" style="max-width:132px;max-height:46px;display:block;margin:0 auto;'
+        'object-fit:contain;" />'
+    )
 
 
 def _row(table: str, select: str, **eq: Any) -> Optional[Dict[str, Any]]:
@@ -306,9 +337,7 @@ def pdf_corte_sub(contrato_id: int, corte_id: int, current_user: dict = {}):
                     detail="PDF corte: " + " | ".join(errs)[:900] + f" | garantizado: {e!s}"[:1200],
                 ) from e
 
-        consecutivo = corte.get("consecutivo") or corte.get("id") or corte_id
-        sub_part = _safe_filename_part((sub.get("razon_social") or "sub")[:24])
-        fname = _safe_filename_part(f"CC-SUB-001_Corte{consecutivo}_{sub_part}.pdf")
+        fname = _nombre_archivo_cc_sub_001(corte, sub, corte_id)
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
@@ -571,103 +600,114 @@ def _corte_consecutivo_fmt(corte: dict) -> str:
 
 
 def _html_cc_sub_v1_plain(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo) -> str:
-    """CC-SUB-001 según maqueta PNG: encabezado 3 col, metadatos + contratista/interventoría, tabla 7 col, firmas."""
+    """CC-SUB-001 compacto: encabezado y metadatos reducidos, tabla optimizada y 3 firmas."""
     bd = "border:1px solid #9ca3af"
-    bd_blk = "border:1px solid #374151"
+    bd_blk = "border:1px solid #1f2937"
+    codigo_ccd = CODIGO_FORMATO_CCD_CC_SUB_001
+    logo_html = _html_logo_contratista(contrato)
     filas: list[str] = []
     for item in items:
         cap = (item.get("capitulo") or "").strip() or "—"
+        desc = str(item.get("item_descripcion", "") or "").lower()
         filas.append(
             "<tr>"
-            f"<td style=\"{bd};padding:3px 4px;font-size:7.5pt;vertical-align:top\">{_h(cap)}</td>"
-            f"<td style=\"{bd};padding:3px 4px;font-size:7.5pt;vertical-align:top\">{_h(item.get('item_numero', ''))}</td>"
-            f"<td style=\"{bd};padding:3px 4px;font-size:7.5pt;text-align:left\">{_h(item.get('item_descripcion', ''))}</td>"
-            f"<td style=\"{bd};padding:3px 4px;font-size:7.5pt;text-align:center\">{_h(item.get('unidad', ''))}</td>"
-            f"<td style=\"{bd};padding:3px 4px;font-size:7.5pt;text-align:right\">{_fm(item.get('vlr_unitario_sub'))}</td>"
-            f"<td style=\"{bd};padding:3px 4px;font-size:7.5pt;text-align:right\">{_fn(item.get('cantidad'))}</td>"
-            f"<td style=\"{bd};padding:3px 4px;font-size:7.5pt;text-align:right\">{_fm(item.get('costo_directo'))}</td>"
+            f"<td style=\"{bd};padding:2px 3px;font-size:7pt;vertical-align:top\">{_h(cap)}</td>"
+            f"<td style=\"{bd};padding:2px 3px;font-size:7pt;vertical-align:top\">{_h(item.get('item_numero', ''))}</td>"
+            f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:left\">{_h(desc)}</td>"
+            f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:center\">{_h(item.get('unidad', ''))}</td>"
+            f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:right\">{_fm(item.get('vlr_unitario_sub'))}</td>"
+            f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:right\">{_fn(item.get('cantidad'))}</td>"
+            f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:right\">{_fm(item.get('costo_directo'))}</td>"
             "</tr>"
         )
     body_rows = "".join(filas) if filas else (
-        f"<tr><td colspan=\"7\" style=\"{bd};padding:6px;font-size:7.5pt;color:#6b7280\">"
+        f"<tr><td colspan=\"7\" style=\"{bd};padding:5px;font-size:7pt;color:#6b7280\">"
         "Sin ítems con estado Aprobado en este corte.</td></tr>"
     )
 
     fecha_gen = _fmt_informe_fecha_generacion()
-    sello = _sello_verificado_por(usuario_nombre)
     corte_lbl = _corte_consecutivo_fmt(corte)
     contratista_nom = _h(str(contrato.get("contratista") or ""))
     interv = _h(str(contrato.get("interventoria") or ""))
     nit_raw = str(contrato.get("nit") or "").strip()
-    nit_linea = f'<br/><span style="font-size:7pt;color:#444;">NIT: {_h(nit_raw)}</span>' if nit_raw else ""
-    linea_firma = "border-top:1px solid #111;margin-top:28px;padding-top:2px;min-height:20px"
+    nit_en_valor = f' <span style="font-size:6.5pt;color:#444;">(NIT: {_h(nit_raw)})</span>' if nit_raw else ""
+    rep_sub = _h(str(sub.get("nombre_contacto") or sub.get("razon_social") or "—"))
+    linea_firma = "border-top:1px solid #111;margin-top:20px;padding-top:2px;min-height:16px"
+    lbl = "font-size:6pt;font-weight:bold;color:#111;text-transform:uppercase;letter-spacing:0.2px;"
+    und = "border-bottom:1px solid #1f2937;font-size:7pt;padding:1px 0 2px 0;margin-top:1px;"
 
-    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>CC-SUB-001</title>
+    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>{codigo_ccd}</title>
 <style type="text/css">
-@page {{ size: letter; margin: 10mm 12mm; }}
+@page {{ size: letter; margin: 8mm 10mm; }}
 </style></head>
-<body style="margin:0;padding:6px;font-family:Arial,Helvetica,sans-serif;font-size:8pt;color:#111;">
+<body style="margin:0;padding:4px;font-family:Arial,Helvetica,sans-serif;font-size:7.5pt;color:#111;">
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd_blk}">
 <tr>
-<td style="width:18%;{bd};vertical-align:middle;height:54px;text-align:center;background:#fafafa">&nbsp;</td>
-<td style="width:50%;{bd};vertical-align:middle;text-align:center;font-weight:bold;font-size:10pt;padding:6px;">
+<td style="width:20%;{bd_blk};vertical-align:middle;padding:2px;text-align:center;background:#fff">
+{logo_html}
+</td>
+<td style="width:48%;{bd_blk};vertical-align:middle;text-align:center;font-weight:bold;font-size:8.2pt;padding:3px 5px;line-height:1.1;height:32px;">
 INFORME CORTE DE SUB CONTRATISTA
 </td>
-<td style="width:32%;{bd};vertical-align:middle;text-align:center;padding:6px;">
-<div style="font-weight:bold;font-size:8pt;">UNION TEMPORAL MURCON</div>
-<div style="color:#1e40af;font-weight:bold;font-size:13pt;letter-spacing:0.5px;margin-top:2px;">SICOE</div>
+<td style="width:32%;{bd_blk};vertical-align:middle;text-align:center;padding:3px 5px;">
+<div style="color:#1e3a8a;font-weight:bold;font-size:12.5pt;letter-spacing:0.5px;line-height:1;">{_h(codigo_ccd)}</div>
+<div style="font-size:8.5pt;color:#1e3a8a;font-weight:bold;margin-top:2px;">CCD · ClaraCore</div>
 </td>
 </tr>
-<tr><td colspan="3" style="padding:0;">
-<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+<tr><td colspan="3" style="padding:0;border:none;">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd_blk};background:#fff">
+<tr><td style="padding:2px 6px;border:none;">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:none;">
 <tr>
-<td style="width:25%;{bd};padding:5px 6px;vertical-align:top;">
-<span style="font-weight:bold;font-size:7pt;">CONTRATO:</span><br/>
-<span style="font-size:8pt;">{_h(contrato.get('numero', ''))}</span>
+<td style="width:25%;padding:0 5px 2px 0;border:none;vertical-align:top;">
+<div style="{lbl}">CONTRATO</div>
+<div style="{und}">{_h(contrato.get('numero', ''))}</div>
 </td>
-<td style="width:25%;{bd};padding:5px 6px;vertical-align:top;">
-<span style="font-weight:bold;font-size:7pt;">FECHA:</span><br/>
-<span style="font-size:8pt;">{_h(fecha_gen)}</span>
+<td style="width:25%;padding:0 5px 2px 0;border:none;vertical-align:top;">
+<div style="{lbl}">FECHA</div>
+<div style="{und}">{_h(fecha_gen)}</div>
 </td>
-<td style="width:25%;{bd};padding:5px 6px;vertical-align:top;">
-<span style="font-weight:bold;font-size:7pt;">SUB CONTRATISTA:</span><br/>
-<span style="font-size:8pt;">{_h(sub.get('razon_social', ''))}</span>
+<td style="width:25%;padding:0 5px 2px 0;border:none;vertical-align:top;">
+<div style="{lbl}">SUB CONTRATISTA</div>
+<div style="{und}">{_h(sub.get('razon_social', ''))}</div>
 </td>
-<td style="width:25%;{bd};padding:5px 6px;vertical-align:top;">
-<span style="font-weight:bold;font-size:7pt;">CORTE:</span><br/>
-<span style="font-size:8pt;">{_h(corte_lbl)}</span>
+<td style="width:25%;padding:0 0 2px 0;border:none;vertical-align:top;">
+<div style="{lbl}">CORTE</div>
+<div style="{und}">{_h(corte_lbl)}</div>
 </td>
 </tr>
 <tr>
-<td colspan="2" style="{bd};padding:5px 6px;vertical-align:top;">
-<span style="font-weight:bold;font-size:7pt;">CONTRATISTA:</span><br/>
-<span style="font-size:8pt;">{contratista_nom}</span>{nit_linea}
+<td colspan="2" style="padding:3px 5px 1px 0;border:none;vertical-align:top;">
+<div style="{lbl}">CONTRATISTA</div>
+<div style="{und}">{contratista_nom}{nit_en_valor}</div>
 </td>
-<td colspan="2" style="{bd};padding:5px 6px;vertical-align:top;">
-<span style="font-weight:bold;font-size:7pt;">INTERVENTORÍA:</span><br/>
-<span style="font-size:8pt;">{interv}</span>
+<td colspan="2" style="padding:3px 0 1px 0;border:none;vertical-align:top;">
+<div style="{lbl}">INTERVENTORÍA</div>
+<div style="{und}">{interv}</div>
 </td>
 </tr>
+</table>
+</td></tr>
 </table>
 </td></tr>
 <tr><td colspan="3" style="padding:0;">
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
 <thead>
-<tr style="background:#eeeeee;">
-<th style="{bd};padding:4px 3px;font-size:7pt;font-weight:bold;text-align:center;">CAPITULO</th>
-<th style="{bd};padding:4px 3px;font-size:7pt;font-weight:bold;text-align:center;">ITEM</th>
-<th style="{bd};padding:4px 3px;font-size:7pt;font-weight:bold;text-align:center;width:32%;">DESCRIPCIÓN</th>
-<th style="{bd};padding:4px 3px;font-size:7pt;font-weight:bold;text-align:center;">UNIDAD</th>
-<th style="{bd};padding:4px 3px;font-size:7pt;font-weight:bold;text-align:center;">VALOR UNIT.</th>
-<th style="{bd};padding:4px 3px;font-size:7pt;font-weight:bold;text-align:center;">CANTIDAD</th>
-<th style="{bd};padding:4px 3px;font-size:7pt;font-weight:bold;text-align:center;">COSTO DIR</th>
+<tr style="background:#e8e8e8;">
+<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:16%;">CAPITULO</th>
+<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:8%;">ITEM</th>
+<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:left;width:40%;">DESCRIPCIÓN</th>
+<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:6%;">UNIDAD</th>
+<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:10%;">VALOR UNIT.</th>
+<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:9%;">CANTIDAD</th>
+<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:11%;">COSTO DIR</th>
 </tr>
 </thead>
 <tbody>
 {body_rows}
 <tr style="background:#dbeafe;">
-<td colspan="5" style="{bd};text-align:right;padding:5px 8px;font-weight:bold;font-size:8pt;">SUB TOTAL:</td>
-<td colspan="2" style="{bd};text-align:right;padding:5px 8px;font-weight:bold;font-size:8pt;">{_fm(total_costo)}</td>
+<td colspan="5" style="{bd};text-align:right;padding:4px 6px;font-weight:bold;font-size:7.5pt;">SUB TOTAL:</td>
+<td colspan="2" style="{bd};text-align:right;padding:4px 6px;font-weight:bold;font-size:7.5pt;">{_fm(total_costo)}</td>
 </tr>
 </tbody>
 </table>
@@ -675,28 +715,25 @@ INFORME CORTE DE SUB CONTRATISTA
 <tr><td colspan="3" style="padding:0;">
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
 <tr>
-<td style="width:25%;{bd};padding:8px 6px;vertical-align:top;font-size:7pt;">
-<div style="font-weight:bold;margin-bottom:4px;">Residente de Costos:</div>
+<td style="width:33.33%;{bd};padding:6px 5px;vertical-align:top;font-size:6.5pt;">
+<div style="font-weight:bold;margin-bottom:2px;">Residente de Costos:</div>
 <div style="{linea_firma}"></div>
-<div style="margin-top:4px;font-size:7.5pt;font-weight:bold;">{_h(usuario_nombre)}</div>
+<div style="margin-top:3px;font-size:7pt;font-weight:bold;">{_h(usuario_nombre)}</div>
 </td>
-<td style="width:25%;{bd};padding:8px 6px;vertical-align:top;font-size:6.5pt;line-height:1.35;">
-{_h(sello)}
-</td>
-<td style="width:25%;{bd};padding:8px 6px;vertical-align:top;font-size:7pt;">
-<div style="font-weight:bold;margin-bottom:4px;">Ingeniero/a Residente:</div>
+<td style="width:33.33%;{bd};padding:6px 5px;vertical-align:top;font-size:6.5pt;">
+<div style="font-weight:bold;margin-bottom:2px;">Residente de Obra:</div>
 <div style="{linea_firma}"></div>
 </td>
-<td style="width:25%;{bd};padding:8px 6px;vertical-align:top;font-size:7pt;">
-<div style="font-weight:bold;margin-bottom:4px;">Sub Contratista:</div>
+<td style="width:33.33%;{bd};padding:6px 5px;vertical-align:top;font-size:6.5pt;">
+<div style="font-weight:bold;margin-bottom:2px;">Sub Contratista:</div>
 <div style="{linea_firma}"></div>
-<div style="margin-top:4px;font-size:7.5pt;">{_h(sub.get('razon_social', ''))}</div>
+<div style="margin-top:3px;font-size:7pt;">{rep_sub}</div>
 </td>
 </tr>
 </table>
 </td></tr>
 </table>
-<p style="font-size:6.5pt;color:#64748b;margin-top:8px;text-align:center;">
+<p style="font-size:6pt;color:#64748b;margin-top:6px;text-align:center;">
 Período del corte: {_h(_fd(corte.get('fecha_inicio')))} — {_h(_fd(corte.get('fecha_fin')))} · Generado ClaraCore · {_h(usuario_cargo)}
 </p>
 </body></html>"""
