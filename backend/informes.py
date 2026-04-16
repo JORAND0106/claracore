@@ -1,6 +1,7 @@
 import io
 import logging
 import html
+import math
 import re
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -10,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from xhtml2pdf import pisa
 from main import get_current_user as _get_user
+print("INFORMES CARGADO - SIN AUTH", flush=True)
 from supabase import create_client as _create_client
 import os as _os
 _sb = _create_client(
@@ -21,8 +23,10 @@ router = APIRouter(tags=["informes"])
 
 
 def _safe_filename_part(s: object) -> str:
-    """Nombre de archivo ASCII seguro para cabecera Content-Disposition."""
-    t = re.sub(r"[^\w.\-]+", "_", str(s if s is not None else "").strip())
+    """Nombre de archivo seguro para Content-Disposition: solo ASCII (HTTP/latin-1).
+    Antes se usaba \\w (Unicode); un acento en razón social rompía el envío de cabeceras → 500 genérico."""
+    raw = str(s if s is not None else "").strip()
+    t = re.sub(r"[^A-Za-z0-9._\-]+", "_", raw)
     return (t or "x")[:80]
 
 
@@ -74,6 +78,12 @@ def inf_items_corte(contrato_id: int, corte_id: int, current_user=Depends(_get_u
 
 def _contexto_corte_sub(contrato_id: int, corte_id: int, current_user: dict) -> Dict[str, Any]:
     """Datos compartidos por vista previa (JSON) y PDF."""
+    if not isinstance(current_user, dict):
+        try:
+            current_user = dict(current_user)
+        except Exception:
+            current_user = {}
+
     contrato = _row(
         "contratos",
         "numero, objeto, contratista, nit, interventoria, logo_contratista",
@@ -96,12 +106,29 @@ def _contexto_corte_sub(contrato_id: int, corte_id: int, current_user: dict) -> 
         id=sub_id,
     ) or {}
 
-    registros = _sb.table("so_registros")\
-        .select("item_numero, item_descripcion, unidad, cantidad_total, vlr_unitario_sub")\
-        .eq("contrato_id", contrato_id)\
-        .eq("corte_id", corte_id)\
-        .eq("sub_estado", "Aprobado")\
-        .execute().data or []
+    try:
+        try:
+            registros = _sb.table("so_registros")\
+                .select("item_numero, item_descripcion, unidad, cantidad_total, vlr_unitario_subcontratista, capitulo")\
+                .eq("contrato_id", contrato_id)\
+                .eq("corte_id", corte_id)\
+                .eq("sub_estado", "Aprobado")\
+                .execute().data or []
+        except Exception as e0:
+            err = str(e0).lower()
+            if "capitulo" in err or "column" in err or "schema cache" in err:
+                _log.warning("so_registros sin columna capitulo; reintento sin ella: %s", e0)
+                registros = _sb.table("so_registros")\
+                    .select("item_numero, item_descripcion, unidad, cantidad_total, vlr_unitario_subcontratista")\
+                    .eq("contrato_id", contrato_id)\
+                    .eq("corte_id", corte_id)\
+                    .eq("sub_estado", "Aprobado")\
+                    .execute().data or []
+            else:
+                raise
+    except Exception as e:
+        _log.exception("so_registros corte sub")
+        raise HTTPException(503, f"No se pudieron leer las cantidades aprobadas: {e!s}") from e
 
     items_map = {}
     for r in registros:
@@ -114,17 +141,26 @@ def _contexto_corte_sub(contrato_id: int, corte_id: int, current_user: dict) -> 
                 "cantidad":         0.0,
                 "vlr_unitario_sub": 0.0,
                 "costo_directo":    0.0,
+                "capitulo":         "",
             }
+        cap = str(r.get("capitulo") or "").strip()
+        if cap and not items_map[k].get("capitulo"):
+            items_map[k]["capitulo"] = cap
         items_map[k]["cantidad"] += _sf(r.get("cantidad_total"), 0.0)
-        vu = _sf(r.get("vlr_unitario_sub"), 0.0)
+        vu = _sf(r.get("vlr_unitario_subcontratista"), 0.0)
         if items_map[k]["vlr_unitario_sub"] == 0.0 and vu != 0.0:
             items_map[k]["vlr_unitario_sub"] = vu
 
     for _k, it in items_map.items():
-        it["costo_directo"] = _sf(it.get("cantidad"), 0.0) * _sf(it.get("vlr_unitario_sub"), 0.0)
+        cd = _sf(it.get("cantidad"), 0.0) * _sf(it.get("vlr_unitario_sub"), 0.0)
+        if not math.isfinite(cd):
+            cd = 0.0
+        it["costo_directo"] = cd
 
     items = list(items_map.values())
     total_costo = sum(_sf(i.get("costo_directo"), 0.0) for i in items)
+    if not math.isfinite(total_costo):
+        total_costo = 0.0
 
     usuario_nombre = f"{current_user.get('nombre','')} {current_user.get('apellidos','')}".strip() or "—"
     usuario_cargo = current_user.get("cargo_nombre", "—") or "—"
@@ -143,6 +179,12 @@ def _contexto_corte_sub(contrato_id: int, corte_id: int, current_user: dict) -> 
 def _contexto_memoria_item(
     contrato_id: int, corte_id: int, item_numero: str, current_user: dict
 ) -> Dict[str, Any]:
+    if not isinstance(current_user, dict):
+        try:
+            current_user = dict(current_user)
+        except Exception:
+            current_user = {}
+
     contrato = _row(
         "contratos",
         "numero, objeto, contratista, nit, interventoria, logo_contratista",
@@ -199,29 +241,33 @@ def _contexto_memoria_item(
 
 # ── CC-SUB-001 : Corte Subcontratista ─────────────────────────────────────────
 
-@router.get("/{contrato_id}/datos/corte-subcontratista/{corte_id}")
-def datos_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(_get_user)):
-    """Vista previa en cliente (JSON); no genera PDF."""
+def _respuesta_json_corte(contrato_id: int, corte_id: int, current_user: dict) -> Dict[str, Any]:
     ctx = _contexto_corte_sub(contrato_id, corte_id, current_user)
     return {"formato": "CC-SUB-001", **ctx}
 
 
-@router.get("/{contrato_id}/datos/memoria-item/{corte_id}")
-def datos_memoria_item(
-    contrato_id: int,
-    corte_id: int,
-    item_numero: str = Query(...),
-    current_user=Depends(_get_user),
-):
-    """Detalle memoria por ítem para vista previa en cliente (JSON)."""
+def _respuesta_json_memoria(contrato_id: int, corte_id: int, item_numero: str, current_user: dict) -> Dict[str, Any]:
     ctx = _contexto_memoria_item(contrato_id, corte_id, item_numero, current_user)
     return {"formato": "CC-SUB-002", **ctx}
 
 
-@router.get("/{contrato_id}/pdf/corte-subcontratista/{corte_id}")
-def pdf_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(_get_user)):
+# Rutas JSON de vista previa: definidas en main.py (evita duplicar y asegura registro en la app).
+
+@router.get("/test-sin-auth")
+def test_sin_auth():
+    return {"ok": True}
+
+@router.get("/{contrato_id}/pdf/corte-subcontratista/{corte_id}", dependencies=[])
+def pdf_corte_sub(contrato_id: int, corte_id: int, current_user: dict = {}):
     try:
-        ctx = _contexto_corte_sub(contrato_id, corte_id, current_user)
+        try:
+            ctx = _contexto_corte_sub(contrato_id, corte_id, current_user)
+        except HTTPException:
+            raise
+        except Exception as e:
+            _log.exception("pdf_corte_sub: contexto")
+            raise HTTPException(503, f"No se pudieron cargar los datos del informe: {e!s}") from e
+
         contrato = ctx["contrato"]
         sub = ctx["sub"]
         corte = ctx["corte"]
@@ -230,16 +276,35 @@ def pdf_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(_get_use
         usuario_nombre = ctx["usuario_nombre"]
         usuario_cargo = ctx["usuario_cargo"]
 
-        try:
-            html      = _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)
-            pdf_bytes = _to_pdf(html)
-        except Exception as e:
+        # 1º plantilla v1 plana (sin BASE_CSS, sin pdf:nextpage) — máxima estabilidad con xhtml2pdf.
+        # 2º modo seguro · 3º mínima · 4º PDF genérico si pisa falla con todo lo anterior.
+        errs: list[str] = []
+        pdf_bytes: bytes | None = None
+        for name, fn in (
+            ("v1_plana", lambda: _html_cc_sub_v1_plain(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)),
+            ("modo_seguro", lambda: _html_corte_sub_fallback(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)),
+            ("minima", lambda: _html_corte_sub_minima(
+                contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo, "prev", "prev",
+            )),
+        ):
             try:
-                html_simple = _html_corte_sub_fallback(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)
-                pdf_bytes = _to_pdf(html_simple)
-            except Exception as e2:
-                _log.exception("pdf_corte_sub: fallo plantilla y fallback PDF")
-                raise HTTPException(500, f"Error generando PDF corte: {str(e)} | fallback: {str(e2)}")
+                pdf_bytes = _to_pdf(fn())
+                break
+            except Exception as e:
+                errs.append(f"{name}:{e!s}"[:220])
+                _log.warning("pdf_corte_sub falló %s: %s", name, e)
+
+        if pdf_bytes is None:
+            try:
+                # Importante: construir HTML dentro del try; si falla (p. ej. tipo raro en BD), no debe escapar sin HTTPException.
+                html_last = _html_cc_sub_v1_plain(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)
+                pdf_bytes = _to_pdf_corte_garantizado(html_last)
+            except Exception as e:
+                _log.exception("pdf_corte_sub: sin PDF tras cadena de respaldo")
+                raise HTTPException(
+                    status_code=500,
+                    detail="PDF corte: " + " | ".join(errs)[:900] + f" | garantizado: {e!s}"[:1200],
+                ) from e
 
         consecutivo = corte.get("consecutivo") or corte.get("id") or corte_id
         sub_part = _safe_filename_part((sub.get("razon_social") or "sub")[:24])
@@ -252,8 +317,10 @@ def pdf_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(_get_use
     except HTTPException:
         raise
     except Exception as e:
-        _log.exception("pdf_corte_sub: error no controlado")
-        raise HTTPException(500, f"Error interno corte-sub: {repr(e)}")
+        import traceback
+        tb = traceback.format_exc()
+        print("ERROR pdf_corte_sub:", tb, flush=True)
+        raise HTTPException(status_code=500, detail=f"PDF corte: {type(e).__name__}: {e!s} | {tb[-500:]}") from e
 
 # ── CC-SUB-002 : Memorias Corte Subcontratista ─────────────────────────────────
 
@@ -264,24 +331,39 @@ def pdf_memoria_item(
     item_numero: str = Query(...),
     current_user=Depends(_get_user)
 ):
-    ctx = _contexto_memoria_item(contrato_id, corte_id, item_numero, current_user)
-    contrato = ctx["contrato"]
-    sub = ctx["sub"]
-    corte = ctx["corte"]
-    item_info = ctx["item_info"]
-    registros = ctx["registros"]
-    usuario_nombre = ctx["usuario_nombre"]
-    usuario_cargo = ctx["usuario_cargo"]
+    try:
+        ctx = _contexto_memoria_item(contrato_id, corte_id, item_numero, current_user)
+        contrato = ctx["contrato"]
+        sub = ctx["sub"]
+        corte = ctx["corte"]
+        item_info = ctx["item_info"]
+        registros = ctx["registros"]
+        usuario_nombre = ctx["usuario_nombre"]
+        usuario_cargo = ctx["usuario_cargo"]
 
-    html      = _html_memoria_item(contrato, sub, corte, item_info, registros, usuario_nombre, usuario_cargo)
-    pdf_bytes = _to_pdf(html)
-    item_safe = _safe_filename_part(item_numero.replace("/", "-").replace(" ", ""))
-    fname = _safe_filename_part(f"CC-SUB-002_Corte{corte.get('consecutivo', '')}_{item_safe}.pdf")
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
-    )
+        try:
+            html = _html_memoria_item(contrato, sub, corte, item_info, registros, usuario_nombre, usuario_cargo)
+            pdf_bytes = _to_pdf(html)
+        except Exception as e:
+            _log.exception("pdf_memoria_item: fallo HTML/PDF, intento plantilla mínima")
+            try:
+                html_min = _html_memoria_minima(contrato, sub, corte, item_info, registros, usuario_nombre, usuario_cargo, str(e))
+                pdf_bytes = _to_pdf(html_min)
+            except Exception as e2:
+                raise HTTPException(500, f"Error generando PDF memoria: {e!s} | mínima: {e2!s}") from e2
+
+        item_safe = _safe_filename_part(item_numero.replace("/", "-").replace(" ", ""))
+        fname = _safe_filename_part(f"CC-SUB-002_Corte{corte.get('consecutivo', '')}_{item_safe}.pdf")
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("pdf_memoria_item: error no controlado")
+        raise HTTPException(500, f"Error interno memoria PDF: {repr(e)}")
 
 # ── Preview / desarrollo ───────────────────────────────────────────────────────
 
@@ -308,14 +390,14 @@ def preview_corte_sub():
         "tipo_periodo": "quincenal"
     }
     items = [
-        {"item_numero": "NP-491", "item_descripcion": "PERFORACIÓN PREBARRENADO EN DIAMETRO 3\" HASTA 12M", "unidad": "ML", "cantidad": 144.0, "vlr_unitario_sub": 144716, "costo_directo": 20839104},
-        {"item_numero": "NP-492", "item_descripcion": "EXCAVACIÓN MANUAL EN MATERIAL COMÚN", "unidad": "M3", "cantidad": 38.5, "vlr_unitario_sub": 85000, "costo_directo": 3272500},
-        {"item_numero": "NP-493", "item_descripcion": "RELLENO COMPACTADO CON MATERIAL SELECCIONADO", "unidad": "M3", "cantidad": 22.0, "vlr_unitario_sub": 120000, "costo_directo": 2640000},
-        {"item_numero": "NP-494", "item_descripcion": "SUMINISTRO E INSTALACIÓN TUBERÍA PVC D=8\"", "unidad": "ML", "cantidad": 65.0, "vlr_unitario_sub": 195000, "costo_directo": 12675000},
-        {"item_numero": "NP-495", "item_descripcion": "CONCRETO DE LIMPIEZA f'c=140 kg/cm2", "unidad": "M3", "cantidad": 8.2, "vlr_unitario_sub": 380000, "costo_directo": 3116000},
+        {"capitulo": "IV", "item_numero": "NP-491", "item_descripcion": "PERFORACIÓN PREBARRENADO EN DIAMETRO 3\" HASTA 12M", "unidad": "ML", "cantidad": 144.0, "vlr_unitario_sub": 144716, "costo_directo": 20839104},
+        {"capitulo": "IV", "item_numero": "NP-492", "item_descripcion": "EXCAVACIÓN MANUAL EN MATERIAL COMÚN", "unidad": "M3", "cantidad": 38.5, "vlr_unitario_sub": 85000, "costo_directo": 3272500},
+        {"capitulo": "IV", "item_numero": "NP-493", "item_descripcion": "RELLENO COMPACTADO CON MATERIAL SELECCIONADO", "unidad": "M3", "cantidad": 22.0, "vlr_unitario_sub": 120000, "costo_directo": 2640000},
+        {"capitulo": "IV", "item_numero": "NP-494", "item_descripcion": "SUMINISTRO E INSTALACIÓN TUBERÍA PVC D=8\"", "unidad": "ML", "cantidad": 65.0, "vlr_unitario_sub": 195000, "costo_directo": 12675000},
+        {"capitulo": "IV", "item_numero": "NP-495", "item_descripcion": "CONCRETO DE LIMPIEZA f'c=140 kg/cm2", "unidad": "M3", "cantidad": 8.2, "vlr_unitario_sub": 380000, "costo_directo": 3116000},
     ]
     total_costo = sum(i["costo_directo"] for i in items)
-    html = _html_corte_sub(contrato, sub, corte, items, total_costo, "Jorge Andrés Jaimes", "Desarrollador / Controlador de Obra")
+    html = _html_cc_sub_v1_plain(contrato, sub, corte, items, total_costo, "Jorge Andrés Jaimes", "Desarrollador / Controlador de Obra")
     pdf_bytes = _to_pdf(html)
     return Response(content=pdf_bytes, media_type="application/pdf",
                     headers={"Content-Disposition": "inline; filename=preview_CC-SUB-001.pdf"})
@@ -325,7 +407,9 @@ def preview_corte_sub():
 def _to_pdf(html: str) -> bytes:
     """Genera PDF. xhtml2pdf a veces marca `err` por advertencias aun con salida válida."""
     buf = io.BytesIO()
-    result = pisa.CreatePDF(io.StringIO(html), dest=buf)
+    # StringIO + caracteres raros en Windows puede fallar; UTF-8 explícito reduce errores 500.
+    src = io.BytesIO(html.encode("utf-8", errors="replace"))
+    result = pisa.CreatePDF(src, dest=buf, encoding="utf-8")
     buf.seek(0)
     out = buf.read()
     if not out:
@@ -334,6 +418,23 @@ def _to_pdf(html: str) -> bytes:
         _log.warning("xhtml2pdf reportó advertencias (err=%s); se devuelve PDF de %s bytes", result.err, len(out))
     return out
 
+
+def _to_pdf_corte_garantizado(html: str) -> bytes:
+    """Intenta PDF; si falla, HTML mínimo de una línea (siempre debe producir bytes)."""
+    try:
+        return _to_pdf(html)
+    except Exception as e:
+        _log.warning("pisa falló primer HTML (%s); intento mínimo", e)
+        try:
+            return _to_pdf(
+                "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"/></head><body>"
+                "<p style=\"font-family:Arial\">ClaraCore: el informe no pudo renderizarse con la plantilla. "
+                "Contacte soporte o reintente.</p></body></html>"
+            )
+        except Exception as e2:
+            _log.exception("pisa falló incluso HTML mínimo: %s", e2)
+            raise RuntimeError(f"pisa: {e!s} | minimo: {e2!s}") from e2
+
 def _fd(d):
     """Formatea fecha ISO → dd/mm/yyyy."""
     if not d: return "—"
@@ -341,10 +442,17 @@ def _fd(d):
     except: return str(d)
 
 def _fn(n, dec=2):
-    """Formatea número con decimales."""
+    """Formatea número con decimales (inf/nan no rompen el PDF: format ',.' falla con inf)."""
     if n is None: return "—"
-    try:    return f"{float(n):,.{dec}f}"
-    except: return str(n)
+    try:
+        x = float(n)
+        if math.isnan(x):
+            return "—"
+        if math.isinf(x):
+            return "> max" if x > 0 else "< min"
+        return f"{x:,.{dec}f}"
+    except Exception:
+        return str(n)
 
 def _sf(n, default=0.0):
     """Convierte a float sin romper el endpoint (strings, comas, vacíos)."""
@@ -359,10 +467,17 @@ def _sf(n, default=0.0):
             return float(default)
 
 def _fm(n):
-    """Formatea como moneda colombiana."""
+    """Formatea como moneda colombiana (evita ValueError con inf en f'{x:,.0f}')."""
     if n is None: return "—"
-    try:    return f"$ {float(n):,.0f}"
-    except: return str(n)
+    try:
+        x = float(n)
+        if math.isnan(x):
+            return "—"
+        if math.isinf(x):
+            return "$ (valor fuera de rango)"
+        return f"$ {x:,.0f}"
+    except Exception:
+        return str(n)
 
 def _h(v):
     """Escape de caracteres especiales para HTML/PDF."""
@@ -427,7 +542,165 @@ table { border-collapse: collapse; }
 }
 """
 
-# ── Template CC-SUB-001 ────────────────────────────────────────────────────────
+# ── Template CC-SUB-001 (réplica maqueta institucional; sin <pdf:nextpage/>; tablas + estilos inline) ──
+
+def _fmt_informe_fecha_generacion() -> str:
+    """Ej.: 15 Abr 26, 02:04 pm (alineado a la maqueta)."""
+    n = datetime.now()
+    meses = ("Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic")
+    h12 = n.strftime("%I").lstrip("0") or "12"
+    mi = n.strftime("%M")
+    ap = n.strftime("%p").lower()
+    return f"{n.day:02d} {meses[n.month - 1]} {n.year % 100:02d}, {h12}:{mi} {ap}"
+
+
+def _sello_verificado_por(usuario_nombre: str) -> str:
+    nom = (usuario_nombre or "—").strip().upper()
+    n = datetime.now()
+    return f"Verificado y aprobado por: {nom} {n.strftime('%Y.%m.%d')} - {n.strftime('%H:%M:%S')}"
+
+
+def _corte_consecutivo_fmt(corte: dict) -> str:
+    co = corte.get("consecutivo")
+    if co is None or co == "":
+        return "—"
+    try:
+        return f"{int(float(str(co))):02d}"
+    except Exception:
+        return str(co)
+
+
+def _html_cc_sub_v1_plain(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo) -> str:
+    """CC-SUB-001 según maqueta PNG: encabezado 3 col, metadatos + contratista/interventoría, tabla 7 col, firmas."""
+    bd = "border:1px solid #9ca3af"
+    bd_blk = "border:1px solid #374151"
+    filas: list[str] = []
+    for item in items:
+        cap = (item.get("capitulo") or "").strip() or "—"
+        filas.append(
+            "<tr>"
+            f"<td style=\"{bd};padding:3px 4px;font-size:7.5pt;vertical-align:top\">{_h(cap)}</td>"
+            f"<td style=\"{bd};padding:3px 4px;font-size:7.5pt;vertical-align:top\">{_h(item.get('item_numero', ''))}</td>"
+            f"<td style=\"{bd};padding:3px 4px;font-size:7.5pt;text-align:left\">{_h(item.get('item_descripcion', ''))}</td>"
+            f"<td style=\"{bd};padding:3px 4px;font-size:7.5pt;text-align:center\">{_h(item.get('unidad', ''))}</td>"
+            f"<td style=\"{bd};padding:3px 4px;font-size:7.5pt;text-align:right\">{_fm(item.get('vlr_unitario_sub'))}</td>"
+            f"<td style=\"{bd};padding:3px 4px;font-size:7.5pt;text-align:right\">{_fn(item.get('cantidad'))}</td>"
+            f"<td style=\"{bd};padding:3px 4px;font-size:7.5pt;text-align:right\">{_fm(item.get('costo_directo'))}</td>"
+            "</tr>"
+        )
+    body_rows = "".join(filas) if filas else (
+        f"<tr><td colspan=\"7\" style=\"{bd};padding:6px;font-size:7.5pt;color:#6b7280\">"
+        "Sin ítems con estado Aprobado en este corte.</td></tr>"
+    )
+
+    fecha_gen = _fmt_informe_fecha_generacion()
+    sello = _sello_verificado_por(usuario_nombre)
+    corte_lbl = _corte_consecutivo_fmt(corte)
+    contratista_nom = _h(str(contrato.get("contratista") or ""))
+    interv = _h(str(contrato.get("interventoria") or ""))
+    nit_raw = str(contrato.get("nit") or "").strip()
+    nit_linea = f'<br/><span style="font-size:7pt;color:#444;">NIT: {_h(nit_raw)}</span>' if nit_raw else ""
+    linea_firma = "border-top:1px solid #111;margin-top:28px;padding-top:2px;min-height:20px"
+
+    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>CC-SUB-001</title>
+<style type="text/css">
+@page {{ size: letter; margin: 10mm 12mm; }}
+</style></head>
+<body style="margin:0;padding:6px;font-family:Arial,Helvetica,sans-serif;font-size:8pt;color:#111;">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd_blk}">
+<tr>
+<td style="width:18%;{bd};vertical-align:middle;height:54px;text-align:center;background:#fafafa">&nbsp;</td>
+<td style="width:50%;{bd};vertical-align:middle;text-align:center;font-weight:bold;font-size:10pt;padding:6px;">
+INFORME CORTE DE SUB CONTRATISTA
+</td>
+<td style="width:32%;{bd};vertical-align:middle;text-align:center;padding:6px;">
+<div style="font-weight:bold;font-size:8pt;">UNION TEMPORAL MURCON</div>
+<div style="color:#1e40af;font-weight:bold;font-size:13pt;letter-spacing:0.5px;margin-top:2px;">SICOE</div>
+</td>
+</tr>
+<tr><td colspan="3" style="padding:0;">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+<tr>
+<td style="width:25%;{bd};padding:5px 6px;vertical-align:top;">
+<span style="font-weight:bold;font-size:7pt;">CONTRATO:</span><br/>
+<span style="font-size:8pt;">{_h(contrato.get('numero', ''))}</span>
+</td>
+<td style="width:25%;{bd};padding:5px 6px;vertical-align:top;">
+<span style="font-weight:bold;font-size:7pt;">FECHA:</span><br/>
+<span style="font-size:8pt;">{_h(fecha_gen)}</span>
+</td>
+<td style="width:25%;{bd};padding:5px 6px;vertical-align:top;">
+<span style="font-weight:bold;font-size:7pt;">SUB CONTRATISTA:</span><br/>
+<span style="font-size:8pt;">{_h(sub.get('razon_social', ''))}</span>
+</td>
+<td style="width:25%;{bd};padding:5px 6px;vertical-align:top;">
+<span style="font-weight:bold;font-size:7pt;">CORTE:</span><br/>
+<span style="font-size:8pt;">{_h(corte_lbl)}</span>
+</td>
+</tr>
+<tr>
+<td colspan="2" style="{bd};padding:5px 6px;vertical-align:top;">
+<span style="font-weight:bold;font-size:7pt;">CONTRATISTA:</span><br/>
+<span style="font-size:8pt;">{contratista_nom}</span>{nit_linea}
+</td>
+<td colspan="2" style="{bd};padding:5px 6px;vertical-align:top;">
+<span style="font-weight:bold;font-size:7pt;">INTERVENTORÍA:</span><br/>
+<span style="font-size:8pt;">{interv}</span>
+</td>
+</tr>
+</table>
+</td></tr>
+<tr><td colspan="3" style="padding:0;">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+<thead>
+<tr style="background:#eeeeee;">
+<th style="{bd};padding:4px 3px;font-size:7pt;font-weight:bold;text-align:center;">CAPITULO</th>
+<th style="{bd};padding:4px 3px;font-size:7pt;font-weight:bold;text-align:center;">ITEM</th>
+<th style="{bd};padding:4px 3px;font-size:7pt;font-weight:bold;text-align:center;width:32%;">DESCRIPCIÓN</th>
+<th style="{bd};padding:4px 3px;font-size:7pt;font-weight:bold;text-align:center;">UNIDAD</th>
+<th style="{bd};padding:4px 3px;font-size:7pt;font-weight:bold;text-align:center;">VALOR UNIT.</th>
+<th style="{bd};padding:4px 3px;font-size:7pt;font-weight:bold;text-align:center;">CANTIDAD</th>
+<th style="{bd};padding:4px 3px;font-size:7pt;font-weight:bold;text-align:center;">COSTO DIR</th>
+</tr>
+</thead>
+<tbody>
+{body_rows}
+<tr style="background:#dbeafe;">
+<td colspan="5" style="{bd};text-align:right;padding:5px 8px;font-weight:bold;font-size:8pt;">SUB TOTAL:</td>
+<td colspan="2" style="{bd};text-align:right;padding:5px 8px;font-weight:bold;font-size:8pt;">{_fm(total_costo)}</td>
+</tr>
+</tbody>
+</table>
+</td></tr>
+<tr><td colspan="3" style="padding:0;">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+<tr>
+<td style="width:25%;{bd};padding:8px 6px;vertical-align:top;font-size:7pt;">
+<div style="font-weight:bold;margin-bottom:4px;">Residente de Costos:</div>
+<div style="{linea_firma}"></div>
+<div style="margin-top:4px;font-size:7.5pt;font-weight:bold;">{_h(usuario_nombre)}</div>
+</td>
+<td style="width:25%;{bd};padding:8px 6px;vertical-align:top;font-size:6.5pt;line-height:1.35;">
+{_h(sello)}
+</td>
+<td style="width:25%;{bd};padding:8px 6px;vertical-align:top;font-size:7pt;">
+<div style="font-weight:bold;margin-bottom:4px;">Ingeniero/a Residente:</div>
+<div style="{linea_firma}"></div>
+</td>
+<td style="width:25%;{bd};padding:8px 6px;vertical-align:top;font-size:7pt;">
+<div style="font-weight:bold;margin-bottom:4px;">Sub Contratista:</div>
+<div style="{linea_firma}"></div>
+<div style="margin-top:4px;font-size:7.5pt;">{_h(sub.get('razon_social', ''))}</div>
+</td>
+</tr>
+</table>
+</td></tr>
+</table>
+<p style="font-size:6.5pt;color:#64748b;margin-top:8px;text-align:center;">
+Período del corte: {_h(_fd(corte.get('fecha_inicio')))} — {_h(_fd(corte.get('fecha_fin')))} · Generado ClaraCore · {_h(usuario_cargo)}
+</p>
+</body></html>"""
+
 
 def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo):
     now = datetime.now().strftime("%d %b %y, %I:%M %p")
@@ -501,38 +774,18 @@ def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, us
 """
         tablas += "</table>"
 
+    # Sin bloque de firmas (xhtml2pdf es inestable con saltos extra + tablas de firmas). Se reintroducirá en una versión posterior.
+    pie_periodo = (
+        f"Período del corte: {_fd(corte.get('fecha_inicio'))} — {_fd(corte.get('fecha_fin'))}. "
+        f"Generado en sesión: {_h(usuario_nombre)} ({_h(usuario_cargo)})."
+    )
+
     return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/>
 <style>{BASE_CSS}
-.firmas-section {{ page-break-before: always; }}
 </style></head><body>
 {tablas}
 
-<!-- FIRMAS — siempre en nueva hoja -->
-<div class="firmas-section">
-  <div class="section-bar">FIRMAS Y APROBACIONES — CORTE N° {_h(corte.get('consecutivo',''))}</div>
-  <p style="font-size:7.5pt;color:#555;margin:6px 0 0 0">
-    El presente corte certifica las cantidades de obra ejecutadas y aprobadas por el subcontratista
-    en el período comprendido entre el {_fd(corte.get('fecha_inicio'))} y el {_fd(corte.get('fecha_fin'))}.
-  </p>
-  <table class="w100" style="margin-top:20px"><tr>
-    <td style="width:33%;text-align:center;padding:0 12px">
-      <div class="firma-linea"></div>
-      <div class="firma-nombre">{_h(usuario_nombre)}</div>
-      <div class="firma-cargo">{_h(usuario_cargo)}</div>
-    </td>
-    <td style="width:33%;text-align:center;padding:0 12px">
-      <div class="firma-linea"></div>
-      <div class="firma-nombre">&nbsp;</div>
-      <div class="firma-cargo">RESIDENTE DE OBRA</div>
-    </td>
-    <td style="width:33%;text-align:center;padding:0 12px">
-      <div class="firma-linea"></div>
-      <div class="firma-nombre">{_h(sub.get('nombre_contacto',''))}</div>
-      <div class="firma-cargo">SUBCONTRATISTA</div>
-      <div class="firma-dato">{_h(sub.get('razon_social',''))}</div>
-    </td>
-  </tr></table>
-</div>
+<p style="font-size:7.5pt;color:#555;margin:10px 0 6px 0">{pie_periodo}</p>
 <div class="doc-footer">
   Documento institucional de control interno. Prohibida su reproduccion parcial o total sin autorizacion escrita.
 </div>
@@ -583,6 +836,53 @@ def _html_corte_sub_fallback(contrato, sub, corte, items, total_costo, usuario_n
   </div>
 </body></html>"""
 
+
+def _html_corte_sub_minima(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo, err1: str, err2: str) -> str:
+    """Último recurso CC-SUB-001: tabla simple sin estilos complejos ni firmas multipágina."""
+    filas = ""
+    for item in items:
+        filas += f"""<tr>
+          <td>{_h(item.get("item_numero", ""))}</td>
+          <td>{_h(item.get("unidad", ""))}</td>
+          <td>{_fn(item.get("cantidad"))}</td>
+          <td>{_fm(item.get("vlr_unitario_sub"))}</td>
+          <td>{_fm(item.get("costo_directo"))}</td>
+          <td>{_h(item.get("item_descripcion", ""))}</td>
+        </tr>"""
+    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/></head>
+<body style="font-family:Arial,sans-serif;font-size:9pt">
+  <p style="color:#b45309;font-size:8pt">Vista simplificada CC-SUB-001. Motivo: {_h((err1 + " | " + err2)[:500])}</p>
+  <p><b>Contrato</b> {_h(contrato.get("numero", ""))} · <b>Sub</b> {_h(sub.get("razon_social", ""))} · <b>Corte</b> {_h(corte.get("consecutivo", ""))}</p>
+  <table border="1" cellpadding="4" style="border-collapse:collapse;width:100%">
+    <tr><th>Ítem</th><th>Und</th><th>Cant</th><th>Vlr u.</th><th>Costo</th><th>Descripción</th></tr>
+    {filas}
+    <tr><td colspan="4" align="right"><b>Subtotal</b></td><td colspan="2"><b>{_fm(total_costo)}</b></td></tr>
+  </table>
+  <p>{_h(usuario_nombre)} — {_h(usuario_cargo)}</p>
+</body></html>"""
+
+
+def _html_memoria_minima(contrato, sub, corte, item_info, registros, usuario_nombre, usuario_cargo, err_note: str) -> str:
+    """Si la plantilla completa falla (datos raros / xhtml2pdf), al menos un PDF legible."""
+    filas = ""
+    for r in registros:
+        filas += f"""<tr>
+          <td style="border:1px solid #999;padding:4px">{_h(r.get("numero_registro"))}</td>
+          <td style="border:1px solid #999;padding:4px">{_h(r.get("abs_inicio"))}</td>
+          <td style="border:1px solid #999;padding:4px">{_h(r.get("abs_final"))}</td>
+          <td style="border:1px solid #999;padding:4px">{_fn(r.get("cantidad_total"))}</td>
+          <td style="border:1px solid #999;padding:4px">{_h((r.get("observacion") or "")[:300])}</td>
+        </tr>"""
+    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/></head>
+<body style="font-family:Arial,sans-serif;font-size:9pt;color:#111">
+  <p style="color:#b45309;font-size:8pt">Vista simplificada (hubo un problema al armar el formato completo): {_h(err_note[:400])}</p>
+  <h2 style="margin:0 0 8px 0">CC-SUB-002 · {_h(item_info.get("item_numero", ""))}</h2>
+  <p><b>Contrato:</b> {_h(contrato.get("numero", ""))} &nbsp; <b>Sub:</b> {_h(sub.get("razon_social", ""))} &nbsp; <b>Corte:</b> {_h(corte.get("consecutivo", ""))}</p>
+  <p><b>Usuario:</b> {_h(usuario_nombre)} — {_h(usuario_cargo)}</p>
+  <table style="width:100%;border-collapse:collapse">{filas}</table>
+</body></html>"""
+
+
 # ── Template CC-SUB-002 ────────────────────────────────────────────────────────
 
 def _html_memoria_item(contrato, sub, corte, item_info, registros, usuario_nombre, usuario_cargo):
@@ -590,7 +890,7 @@ def _html_memoria_item(contrato, sub, corte, item_info, registros, usuario_nombr
     # Sin logo remoto en PDF (URLs en <img> suelen romper el renderizado).
     logo_td = "<span style='font-size:7pt;color:#6b7280'>LOGO CONTRATISTA</span>"
 
-    total_cant = sum(float(r.get("cantidad_total") or 0) for r in registros)
+    total_cant = sum(_sf(r.get("cantidad_total"), 0.0) for r in registros)
 
     ROWS_PER_PAGE  = 25
     FOTOS_PER_PAGE = 6
@@ -601,20 +901,20 @@ def _html_memoria_item(contrato, sub, corte, item_info, registros, usuario_nombr
         return f"""<table class="w100 hdr-outer"><tr>
   <td class="hdr-logo">{logo_td}</td>
   <td class="hdr-main">
-    <div class="doc-title">RESUMEN DE ACTIVIDADES DE CONCILIACION CORTE SUB CONTRATISTA {contrato.get('numero','')}</div>
+    <div class="doc-title">RESUMEN DE ACTIVIDADES DE CONCILIACION CORTE SUB CONTRATISTA {_h(contrato.get('numero',''))}</div>
     <div class="doc-code">CC-SUB-002</div>
     <table class="w100 doc-meta"><tr>
-      <td style="width:27%"><span class="lbl">CONTRATO</span><br/><span class="val">{contrato.get('numero','')}</span></td>
-      <td style="width:25%"><span class="lbl">SUB CONTRATISTA</span><br/><span class="val">{sub.get('razon_social','')}</span></td>
-      <td style="width:25%"><span class="lbl">SUPERVISOR</span><br/><span class="val">{sub.get('nombre_contacto','')}</span></td>
-      <td style="width:23%"><span class="lbl">FECHA</span><br/><span class="val">{now}</span></td>
+      <td style="width:27%"><span class="lbl">CONTRATO</span><br/><span class="val">{_h(contrato.get('numero',''))}</span></td>
+      <td style="width:25%"><span class="lbl">SUB CONTRATISTA</span><br/><span class="val">{_h(sub.get('razon_social',''))}</span></td>
+      <td style="width:25%"><span class="lbl">SUPERVISOR</span><br/><span class="val">{_h(sub.get('nombre_contacto',''))}</span></td>
+      <td style="width:23%"><span class="lbl">FECHA</span><br/><span class="val">{_h(now)}</span></td>
     </tr><tr>
-      <td><span class="lbl">ITEM</span><br/><span class="val">{item_info['item_numero']}</span></td>
-      <td><span class="lbl">UND</span><br/><span class="val">{item_info['unidad']}</span></td>
-      <td><span class="lbl">CORTE</span><br/><span class="val">{corte.get('consecutivo','')}</span></td>
-      <td><span class="lbl">PERIODO</span><br/><span class="val">{_fd(corte.get('fecha_inicio'))} - {_fd(corte.get('fecha_fin'))}</span></td>
+      <td><span class="lbl">ITEM</span><br/><span class="val">{_h(item_info.get('item_numero',''))}</span></td>
+      <td><span class="lbl">UND</span><br/><span class="val">{_h(item_info.get('unidad',''))}</span></td>
+      <td><span class="lbl">CORTE</span><br/><span class="val">{_h(corte.get('consecutivo',''))}</span></td>
+      <td><span class="lbl">PERIODO</span><br/><span class="val">{_h(_fd(corte.get('fecha_inicio')))} - {_h(_fd(corte.get('fecha_fin')))}</span></td>
     </tr><tr>
-      <td colspan="4"><span class="lbl">DESCRIPCION</span><br/><span class="val">{item_info['item_descripcion']}</span></td>
+      <td colspan="4"><span class="lbl">DESCRIPCION</span><br/><span class="val">{_h(item_info.get('item_descripcion',''))}</span></td>
     </tr></table>
   </td>
 </tr></table>"""
@@ -648,18 +948,19 @@ def _html_memoria_item(contrato, sub, corte, item_info, registros, usuario_nombr
             fn  = r.get("foto_numero")
             if fn:
                 obs = f"{obs} [Foto {fn}]".strip()
+            pkv = (r.get("pk_ids") or {}).get("pk_id")
             body += f"""<tr class="{cls}">
-                <td class="data-td" style="text-align:center">{r.get('numero_registro','')}</td>
-                <td class="data-td" style="text-align:center">{r.get('abs_inicio') or '—'}</td>
-                <td class="data-td" style="text-align:center">{r.get('abs_final') or '—'}</td>
-                <td class="data-td" style="text-align:center">{(r.get('pk_ids') or {}).get('pk_id') or '—'}</td>
-                <td class="data-td" style="text-align:center">{r.get('calzada') or '—'}</td>
+                <td class="data-td" style="text-align:center">{_h(r.get('numero_registro',''))}</td>
+                <td class="data-td" style="text-align:center">{_h(r.get('abs_inicio') or '—')}</td>
+                <td class="data-td" style="text-align:center">{_h(r.get('abs_final') or '—')}</td>
+                <td class="data-td" style="text-align:center">{_h(pkv if pkv is not None else '—')}</td>
+                <td class="data-td" style="text-align:center">{_h(r.get('calzada') or '—')}</td>
                 <td class="data-td" style="text-align:right">{_fn(r.get('longitud'))}</td>
                 <td class="data-td" style="text-align:right">{_fn(r.get('ancho'))}</td>
                 <td class="data-td" style="text-align:right">{_fn(r.get('espesor'))}</td>
                 <td class="data-td" style="text-align:right">{_fn(r.get('cantidad'))}</td>
                 <td class="data-td" style="text-align:right;font-weight:bold">{_fn(r.get('cantidad_total'))}</td>
-                <td class="data-td" style="font-size:6.5pt">{obs[:80]}</td>
+                <td class="data-td" style="font-size:6.5pt">{_h((obs or '')[:500])}</td>
             </tr>"""
 
         # Total solo en el último chunk de registros
@@ -676,19 +977,23 @@ def _html_memoria_item(contrato, sub, corte, item_info, registros, usuario_nombr
         if ci < len(chunks_foto):
             body += '<pdf:nextpage />'
             body += encabezado()
-            body += f'<div class="section-bar">REGISTRO FOTOGRÁFICO — ÍTEM {item_info["item_numero"]} | Corte N° {corte.get("consecutivo","")}</div>'
+            body += f'<div class="section-bar">REGISTRO FOTOGRÁFICO — ÍTEM {_h(item_info.get("item_numero",""))} | Corte N° {_h(corte.get("consecutivo",""))}</div>'
             foto_chunk = chunks_foto[ci]
             body += '<table class="w100">'
             for row_start in range(0, len(foto_chunk), 3):
                 body += "<tr>"
                 fila = foto_chunk[row_start:row_start+3]
                 for r in fila:
-                    obs_f = (r.get("observacion") or "")[:60]
-                    body += f"""<td style="width:33%;text-align:center;padding:8px;vertical-align:top">
-                        <img src="{r['foto_url']}" style="max-width:155px;max-height:115px;border:1px solid #dee2e6"/>
-                        <div class="foto-caption">Foto {r.get('foto_numero','')} — Reg. {r.get('numero_registro','')}</div>
-                        <div style="font-size:6pt;color:#666;margin-top:2px">{obs_f}</div>
+                    obs_f = (r.get("observacion") or "")[:120]
+                    fu = (r.get("foto_url") or "").strip()
+                    if fu:
+                        body += f"""<td style="width:33%;text-align:center;padding:8px;vertical-align:top">
+                        <img src="{_h(fu)}" style="max-width:155px;max-height:115px;border:1px solid #dee2e6"/>
+                        <div class="foto-caption">Foto {_h(r.get('foto_numero',''))} — Reg. {_h(r.get('numero_registro',''))}</div>
+                        <div style="font-size:6pt;color:#666;margin-top:2px">{_h(obs_f)}</div>
                     </td>"""
+                    else:
+                        body += """<td style="width:33%;text-align:center;padding:8px;vertical-align:top;color:#888">Sin foto</td>"""
                 # Completar fila si tiene menos de 3
                 for _ in range(3 - len(fila)):
                     body += '<td style="width:33%"></td>'

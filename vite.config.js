@@ -7,5 +7,15 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    proxy: {
+      '/informes': 'http://localhost:8000',
+      '/sicoe-obra': 'http://localhost:8000',
+      '/auth': 'http://localhost:8000',
+      '/usuarios': 'http://localhost:8000',
+      '/contratos': 'http://localhost:8000',
+      '/admin': 'http://localhost:8000',
+      '/notificaciones': 'http://localhost:8000',
+      '/frase-del-dia': 'http://localhost:8000',
+    },
   },
 })

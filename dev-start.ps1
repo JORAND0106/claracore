@@ -7,10 +7,26 @@ $frontendDir = Join-Path $root "frontend"
 
 Write-Host "Iniciando entorno LOCAL seguro de ClaraCore..." -ForegroundColor Cyan
 
+# Si ya había un Python escuchando en 8000 (código viejo sin rutas nuevas), el navegador muestra «Not Found» en Informes.
+# Cerrar ese proceso obliga a cargar el main.py / informes.py actuales de esta carpeta.
+try {
+    $listen8000 = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue
+    foreach ($conn in $listen8000) {
+        $procId = [int]$conn.OwningProcess
+        if ($procId -gt 0) {
+            Write-Host "Cerrando proceso anterior en puerto 8000 (PID $procId)..." -ForegroundColor DarkYellow
+            Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Start-Sleep -Milliseconds 500
+} catch { }
+
+# OneDrive suele impedir que --reload detecte cambios; el polling evita servir código viejo sin rutas nuevas.
+# Comillas simples: si no, PowerShell reemplaza $env aquí y el hijo recibe "=1" y muestra error rojo.
 Start-Process -FilePath "powershell" -WorkingDirectory $backendDir -ArgumentList @(
     "-NoExit",
     "-Command",
-    "python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000"
+    '$env:WATCHFILES_FORCE_POLLING = "1"; python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000'
 ) | Out-Null
 
 Start-Process -FilePath "powershell" -WorkingDirectory $frontendDir -ArgumentList @(

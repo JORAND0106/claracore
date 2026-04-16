@@ -5,6 +5,8 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
+    // Evita ERR_CONNECTION_REFUSED al abrir 127.0.0.1 mientras Vite solo escucha en "localhost" (IPv6).
+    host: '127.0.0.1',
     port: 5173,
     strictPort: false,
     proxy: {

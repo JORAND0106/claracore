@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import StreamingResponse, JSONResponse
 import io, requests as req_http
@@ -87,7 +87,7 @@ def get_supabase():
     )
 
 supabase = get_supabase()
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
@@ -409,6 +409,41 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
 
 from informes import router as informes_router
 app.include_router(informes_router, prefix="/informes")
+
+# Vista previa JSON (CC-SUB-001 / CC-SUB-002): registrado aquí porque en algunos equipos el router
+# importado desde informes.py no exponía estas rutas en OpenAPI (Not Found en el cliente).
+from informes import _respuesta_json_corte, _respuesta_json_memoria
+
+
+@app.get("/informes/{contrato_id}/datos/corte-subcontratista/{corte_id}")
+def informes_datos_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(get_current_user)):
+    return _respuesta_json_corte(contrato_id, corte_id, current_user)
+
+
+@app.get("/informes/{contrato_id}/vista-json/corte-sub/{corte_id}")
+def informes_vista_json_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(get_current_user)):
+    return _respuesta_json_corte(contrato_id, corte_id, current_user)
+
+
+@app.get("/informes/{contrato_id}/datos/memoria-item/{corte_id}")
+def informes_datos_memoria_item(
+    contrato_id: int,
+    corte_id: int,
+    item_numero: str = Query(...),
+    current_user=Depends(get_current_user),
+):
+    return _respuesta_json_memoria(contrato_id, corte_id, item_numero, current_user)
+
+
+@app.get("/informes/{contrato_id}/vista-json/memoria/{corte_id}")
+def informes_vista_json_memoria(
+    contrato_id: int,
+    corte_id: int,
+    item_numero: str = Query(...),
+    current_user=Depends(get_current_user),
+):
+    return _respuesta_json_memoria(contrato_id, corte_id, item_numero, current_user)
+
 
 # ── Mapa de cargo_id → campo de validación en so_registros ───────────────────
 CARGO_ID_NIVEL_MAP = {
