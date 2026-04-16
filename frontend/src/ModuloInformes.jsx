@@ -1,38 +1,15 @@
 import { useState, useEffect } from 'react'
 
-const API_RAW = import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net'
-const ES_LOCAL = typeof window !== 'undefined' && ['localhost', '127.0.0.1'].includes(window.location.hostname)
-const API = ES_LOCAL ? '' : API_RAW
 const API_FALLBACK = 'https://claracore-backend.azurewebsites.net'
+/** En `npm run dev`, URL vacía → las peticiones van a 127.0.0.1:5173 y Vite reenvía `/informes` al :8000 (vite.config.js).
+ *  Evita "Failed to fetch" por CORS o bloqueos al llamar directo a :8000 desde el navegador.
+ *  En build de producción se usa VITE_API_URL. */
+const API = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || API_FALLBACK)
 
 const FS = {
   small:  { base: 13, sub: 12, title: 20, section: 12 },
   normal: { base: 16, sub: 14, title: 24, section: 13 },
   large:  { base: 20, sub: 17, title: 30, section: 15 },
-}
-
-function fmtMoney(n) {
-  if (n == null || n === '') return '—'
-  const x = Number(n)
-  if (Number.isNaN(x)) return String(n)
-  return `$ ${x.toLocaleString('es-CO', { maximumFractionDigits: 0 })}`
-}
-
-function fmtQty(n) {
-  if (n == null || n === '') return '—'
-  const x = Number(n)
-  if (Number.isNaN(x)) return String(n)
-  return x.toLocaleString('es-CO', { minimumFractionDigits: 0, maximumFractionDigits: 4 })
-}
-
-function fmtFechaIso(d) {
-  if (!d) return '—'
-  try {
-    const s = String(d).slice(0, 10)
-    return new Date(s + 'T12:00:00').toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
-  } catch {
-    return String(d)
-  }
 }
 
 export default function ModuloInformes({ t, usuario, token, s, fontSize = 'normal' }) {
@@ -74,6 +51,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
 
   async function leerErrorRespuesta(r) {
     const raw = await r.text()
+    const pref = r.status >= 400 ? `[${r.status} ${r.statusText || ''}] `.trim() + ' ' : ''
     try {
       const err = JSON.parse(raw)
       let detail = err.detail
@@ -82,9 +60,11 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
       } else if (detail != null && typeof detail === 'object') {
         detail = JSON.stringify(detail)
       }
-      return detail || raw.trim().slice(0, 600) || `HTTP ${r.status}`
+      const body = detail || raw.trim().slice(0, 600)
+      return (pref + (body || `HTTP ${r.status}`)).trim()
     } catch {
-      return raw.trim().slice(0, 900) || `HTTP ${r.status}`
+      const body = raw.trim().slice(0, 900)
+      return (pref + (body || `HTTP ${r.status}`)).trim()
     }
   }
 
@@ -101,7 +81,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   const [cargandoIt,  setCargandoIt]  = useState(false)
   const [error,       setError]       = useState(null)
 
-  /** Vista previa solo en plataforma (JSON → modal). Sin PDF ni descarga. */
+  /** Vista previa: PDF en modal (blob). */
   const [vistaPrevia, setVistaPrevia] = useState(null)
   // null | { fase:'cargando', tipo } | { fase:'ok', tipo, datos } | { fase:'error', tipo, mensaje }
 
@@ -160,26 +140,55 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
       .finally(() => setCargandoIt(false))
   }
 
+  function cerrarVistaPrevia() {
+    setVistaPrevia((prev) => {
+      if (prev?.pdfUrl) {
+        try {
+          URL.revokeObjectURL(prev.pdfUrl)
+        } catch {
+          /* noop */
+        }
+      }
+      return null
+    })
+  }
+
+  /** Vista previa = mismo PDF que genera el servidor (la ruta JSON fallaba en algunos entornos). */
   async function abrirVistaPreviaCorte() {
     const authToken = getAuthToken()
     if (!authToken) {
       setError('Sesion no autenticada.')
       return
     }
-    setVistaPrevia({ fase: 'cargando', tipo: 'corte' })
+    if (contratoId == null || contratoId === '' || !corteId) {
+      setVistaPrevia({ fase: 'error', tipo: 'corte', mensaje: 'Selecciona contrato y corte.' })
+      return
+    }
+    setVistaPrevia((prev) => {
+      if (prev?.pdfUrl) {
+        try {
+          URL.revokeObjectURL(prev.pdfUrl)
+        } catch {
+          /* noop */
+        }
+      }
+      return { fase: 'cargando', tipo: 'corte' }
+    })
     setError(null)
+    const opts = { headers: { Authorization: `Bearer ${authToken}` } }
+    const cid = encodeURIComponent(contratoId)
+    const cor = encodeURIComponent(corteId)
+    const pathPdf = `/informes/${cid}/pdf/corte-subcontratista/${cor}`
     try {
-      const r = await fetchConFallback(
-        `/informes/${contratoId}/datos/corte-subcontratista/${corteId}`,
-        { headers: { Authorization: `Bearer ${authToken}` } }
-      )
-      if (!r.ok) {
-        const msg = await leerErrorRespuesta(r)
+      const r = await fetchConFallback(pathPdf, opts)
+      if (!r || !r.ok) {
+        const msg = r ? await leerErrorRespuesta(r) : 'Sin respuesta'
         setVistaPrevia({ fase: 'error', tipo: 'corte', mensaje: msg })
         return
       }
-      const datos = await r.json()
-      setVistaPrevia({ fase: 'ok', tipo: 'corte', datos })
+      const blob = await r.blob()
+      const pdfUrl = URL.createObjectURL(blob)
+      setVistaPrevia({ fase: 'ok', tipo: 'corte-pdf', pdfUrl })
     } catch (e) {
       const msg = String(e?.message || e)
       setVistaPrevia({ fase: 'error', tipo: 'corte', mensaje: msg })
@@ -192,21 +201,36 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
       setError('Sesion no autenticada.')
       return
     }
-    setVistaPrevia({ fase: 'cargando', tipo: 'memoria', itemNumero })
+    if (contratoId == null || contratoId === '' || !corteId) {
+      setVistaPrevia({ fase: 'error', tipo: 'memoria', mensaje: 'Selecciona contrato y corte.', itemNumero })
+      return
+    }
+    setVistaPrevia((prev) => {
+      if (prev?.pdfUrl) {
+        try {
+          URL.revokeObjectURL(prev.pdfUrl)
+        } catch {
+          /* noop */
+        }
+      }
+      return { fase: 'cargando', tipo: 'memoria', itemNumero }
+    })
     setError(null)
+    const q = encodeURIComponent(itemNumero)
+    const opts = { headers: { Authorization: `Bearer ${authToken}` } }
+    const cid = encodeURIComponent(contratoId)
+    const cor = encodeURIComponent(corteId)
+    const pathPdf = `/informes/${cid}/pdf/memoria-item/${cor}?item_numero=${q}`
     try {
-      const q = encodeURIComponent(itemNumero)
-      const r = await fetchConFallback(
-        `/informes/${contratoId}/datos/memoria-item/${corteId}?item_numero=${q}`,
-        { headers: { Authorization: `Bearer ${authToken}` } }
-      )
-      if (!r.ok) {
-        const msg = await leerErrorRespuesta(r)
+      const r = await fetchConFallback(pathPdf, opts)
+      if (!r || !r.ok) {
+        const msg = r ? await leerErrorRespuesta(r) : 'Sin respuesta'
         setVistaPrevia({ fase: 'error', tipo: 'memoria', mensaje: msg, itemNumero })
         return
       }
-      const datos = await r.json()
-      setVistaPrevia({ fase: 'ok', tipo: 'memoria', datos, itemNumero })
+      const blob = await r.blob()
+      const pdfUrl = URL.createObjectURL(blob)
+      setVistaPrevia({ fase: 'ok', tipo: 'memoria-pdf', pdfUrl, itemNumero })
     } catch (e) {
       const msg = String(e?.message || e)
       setVistaPrevia({ fase: 'error', tipo: 'memoria', mensaje: msg, itemNumero })
@@ -261,15 +285,6 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     background: t.bg
   }
 
-  const th = {
-    textAlign: 'left', padding: '8px 10px', borderBottom: `1px solid ${t.border}`,
-    fontSize: f.sub + 'px', color: t.textMuted, fontWeight: '700'
-  }
-  const td = {
-    padding: '8px 10px', borderBottom: `1px solid ${t.border}44`,
-    fontSize: f.sub + 'px', color: t.text, verticalAlign: 'top'
-  }
-
   return (
     <div style={{ maxWidth: '1080px', margin: '0 auto', padding: '8px' }}>
 
@@ -278,7 +293,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
           Informes
         </div>
         <div style={{ fontSize: f.sub + 'px', color: t.textMuted, marginTop: '2px' }}>
-          Memorias de soporte: vista previa dentro de la plataforma (sin descarga de PDF).
+          Vista previa del mismo PDF que genera el servidor (informe de corte y memorias por ítem).
         </div>
       </div>
 
@@ -294,7 +309,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
           Formato activo: Corte Subcontratista
         </div>
         <div style={{ color: t.textMuted, fontSize: f.sub + 'px', marginBottom: '14px' }}>
-          Usa «Vista previa» para revisar el contenido aquí. No se genera ni descarga PDF desde esta pantalla.
+          «Vista previa» abre el PDF en una ventana dentro de la página (mismo documento que imprimirías o guardarías).
         </div>
 
         <div style={{ marginBottom: '14px' }}>
@@ -437,42 +452,78 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
         </div>
       </div>
 
-      {/* Modal vista previa (solo HTML en app; no PDF) */}
+      {/* Modal: vista previa = PDF embebido (misma ruta que descarga el backend).
+          Fondos opacos fijos: en producción t.card/t.bg pueden ser transparentes y el modal se mezcla con la página. */}
       {vistaPrevia && (
         <div
           role="dialog"
           aria-modal="true"
           style={{
-            position: 'fixed', inset: 0, zIndex: 10000,
-            background: 'rgba(15, 23, 42, 0.55)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px',
+            position: 'fixed',
+            inset: 0,
+            zIndex: 99999,
+            background: 'rgba(15, 23, 42, 0.78)',
+            backdropFilter: 'blur(2px)',
+            WebkitBackdropFilter: 'blur(2px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px',
+            boxSizing: 'border-box',
           }}
-          onClick={() => setVistaPrevia(null)}
+          onClick={cerrarVistaPrevia}
         >
           <div
             onClick={e => e.stopPropagation()}
             style={{
-              width: '100%', maxWidth: '960px', maxHeight: '90vh', overflow: 'auto',
-              background: t.card, color: t.text,
-              borderRadius: '14px', border: `1px solid ${t.border}`,
-              boxShadow: '0 24px 48px rgba(0,0,0,0.25)', padding: '20px 22px',
+              width: '100%',
+              maxWidth: '960px',
+              height: 'min(92vh, 880px)',
+              maxHeight: '92vh',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              backgroundColor: '#ffffff',
+              color: '#0f172a',
+              borderRadius: '14px',
+              border: '1px solid #e2e8f0',
+              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.35)',
+              padding: '16px 18px',
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '16px' }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'flex-start',
+                gap: '12px',
+                marginBottom: '12px',
+                flexShrink: 0,
+              }}
+            >
               <div>
-                <div style={{ fontSize: f.title - 2 + 'px', fontWeight: '800' }}>
-                  {vistaPrevia.tipo === 'corte' ? 'Vista previa · CC-SUB-001' : `Vista previa · CC-SUB-002 · ${vistaPrevia.itemNumero || ''}`}
+                <div style={{ fontSize: f.title - 2 + 'px', fontWeight: '800', color: '#0f172a' }}>
+                  {(vistaPrevia.tipo === 'corte' || vistaPrevia.tipo === 'corte-pdf')
+                    ? 'Vista previa · CC-SUB-001 (PDF)'
+                    : `Vista previa · CC-SUB-002 (PDF) · ${vistaPrevia.itemNumero || ''}`}
                 </div>
-                <div style={{ fontSize: f.sub + 'px', color: t.textMuted, marginTop: '4px' }}>
-                  Solo consulta en plataforma. No hay archivo PDF ni botón de descarga.
+                <div style={{ fontSize: f.sub + 'px', color: '#64748b', marginTop: '4px' }}>
+                  Mismo formato PDF que genera el sistema. Puedes usar el menú del visor del navegador para imprimir o guardar.
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setVistaPrevia(null)}
+                onClick={cerrarVistaPrevia}
                 style={{
-                  flexShrink: 0, padding: '8px 14px', borderRadius: '8px', border: `1px solid ${t.border}`,
-                  background: t.bg, color: t.text, fontWeight: '700', cursor: 'pointer',
+                  flexShrink: 0,
+                  padding: '10px 16px',
+                  borderRadius: '8px',
+                  border: '1px solid #cbd5e1',
+                  backgroundColor: '#f8fafc',
+                  color: '#0f172a',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
                 }}
               >
                 Cerrar
@@ -480,7 +531,9 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
             </div>
 
             {vistaPrevia.fase === 'cargando' && (
-              <div style={{ padding: '32px', textAlign: 'center', color: t.textMuted }}>Cargando datos…</div>
+              <div style={{ padding: '32px', textAlign: 'center', color: '#64748b' }}>
+                Generando vista previa PDF…
+              </div>
             )}
 
             {vistaPrevia.fase === 'error' && (
@@ -489,126 +542,30 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
               </div>
             )}
 
-            {vistaPrevia.fase === 'ok' && vistaPrevia.tipo === 'corte' && vistaPrevia.datos && (
-              <div style={{ fontSize: f.sub + 'px' }}>
-                {(() => {
-                  const d = vistaPrevia.datos
-                  const c = d.contrato || {}
-                  const su = d.sub || {}
-                  const co = d.corte || {}
-                  return (
-                    <>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px', marginBottom: '16px' }}>
-                        <div><span style={{ color: t.textMuted }}>Contrato</span><br /><b>{c.numero || '—'}</b></div>
-                        <div><span style={{ color: t.textMuted }}>Contratista</span><br />{c.contratista || '—'}</div>
-                        <div><span style={{ color: t.textMuted }}>Interventoría</span><br />{c.interventoria || '—'}</div>
-                        <div><span style={{ color: t.textMuted }}>Subcontratista</span><br /><b>{(su.razon_social || '').toUpperCase()}</b></div>
-                        <div><span style={{ color: t.textMuted }}>NIT sub</span><br />{su.nit || '—'}</div>
-                        <div><span style={{ color: t.textMuted }}>Corte N°</span><br /><b>{co.consecutivo ?? '—'}</b></div>
-                        <div><span style={{ color: t.textMuted }}>Período</span><br />
-                          {fmtFechaIso(co.fecha_inicio)} → {fmtFechaIso(co.fecha_fin)}
-                        </div>
-                      </div>
-                      <div style={{ marginBottom: '12px', color: t.textMuted }}>
-                        Generado en sesión: <b style={{ color: t.text }}>{d.usuario_nombre}</b> · {d.usuario_cargo || '—'}
-                      </div>
-                      <div style={{ overflowX: 'auto' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                          <thead>
-                            <tr>
-                              <th style={th}>Ítem</th>
-                              <th style={th}>Und</th>
-                              <th style={{ ...th, textAlign: 'right' }}>Cantidad</th>
-                              <th style={{ ...th, textAlign: 'right' }}>Vlr unit.</th>
-                              <th style={{ ...th, textAlign: 'right' }}>Costo dir.</th>
-                              <th style={th}>Descripción</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(d.items || []).map((row, i) => (
-                              <tr key={i}>
-                                <td style={td}>{row.item_numero}</td>
-                                <td style={td}>{row.unidad}</td>
-                                <td style={{ ...td, textAlign: 'right' }}>{fmtQty(row.cantidad)}</td>
-                                <td style={{ ...td, textAlign: 'right' }}>{fmtMoney(row.vlr_unitario_sub)}</td>
-                                <td style={{ ...td, textAlign: 'right' }}>{fmtMoney(row.costo_directo)}</td>
-                                <td style={td}>{row.item_descripcion}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                      <div style={{ marginTop: '14px', textAlign: 'right', fontWeight: '800', fontSize: f.base + 'px' }}>
-                        Subtotal: {fmtMoney(d.total_costo)}
-                      </div>
-                    </>
-                  )
-                })()}
-              </div>
-            )}
-
-            {vistaPrevia.fase === 'ok' && vistaPrevia.tipo === 'memoria' && vistaPrevia.datos && (
-              <div style={{ fontSize: f.sub + 'px' }}>
-                {(() => {
-                  const d = vistaPrevia.datos
-                  const c = d.contrato || {}
-                  const su = d.sub || {}
-                  const co = d.corte || {}
-                  const ii = d.item_info || {}
-                  const regs = d.registros || []
-                  return (
-                    <>
-                      <div style={{ marginBottom: '12px' }}>
-                        <b style={{ fontSize: f.base + 'px', color: t.primary }}>{ii.item_numero}</b>
-                        <span style={{ marginLeft: '8px' }}>{ii.item_descripcion}</span>
-                        <span style={{ color: t.textMuted, marginLeft: '8px' }}>[{ii.unidad}]</span>
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '8px', marginBottom: '14px' }}>
-                        <div><span style={{ color: t.textMuted }}>Contrato</span><br />{c.numero || '—'}</div>
-                        <div><span style={{ color: t.textMuted }}>Subcontratista</span><br />{su.razon_social || '—'}</div>
-                        <div><span style={{ color: t.textMuted }}>Corte</span><br />{co.consecutivo ?? '—'}</div>
-                        <div><span style={{ color: t.textMuted }}>Período</span><br />{fmtFechaIso(co.fecha_inicio)} → {fmtFechaIso(co.fecha_fin)}</div>
-                      </div>
-                      <div style={{ marginBottom: '12px', color: t.textMuted }}>
-                        Sesión: <b style={{ color: t.text }}>{d.usuario_nombre}</b> · {d.usuario_cargo || '—'}
-                      </div>
-                      <div style={{ overflowX: 'auto' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: f.sub - 1 + 'px' }}>
-                          <thead>
-                            <tr>
-                              <th style={th}>N°</th>
-                              <th style={th}>Abs ini</th>
-                              <th style={th}>Abs fin</th>
-                              <th style={th}>PK</th>
-                              <th style={th}>Calzada</th>
-                              <th style={{ ...th, textAlign: 'right' }}>L</th>
-                              <th style={{ ...th, textAlign: 'right' }}>A</th>
-                              <th style={{ ...th, textAlign: 'right' }}>E</th>
-                              <th style={{ ...th, textAlign: 'right' }}>Cant</th>
-                              <th style={th}>Obs.</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {regs.map((r, i) => (
-                              <tr key={i}>
-                                <td style={td}>{r.numero_registro ?? '—'}</td>
-                                <td style={td}>{r.abs_inicio ?? '—'}</td>
-                                <td style={td}>{r.abs_final ?? '—'}</td>
-                                <td style={td}>{(r.pk_ids && r.pk_ids.pk_id) != null ? r.pk_ids.pk_id : '—'}</td>
-                                <td style={td}>{r.calzada ?? '—'}</td>
-                                <td style={{ ...td, textAlign: 'right' }}>{fmtQty(r.longitud)}</td>
-                                <td style={{ ...td, textAlign: 'right' }}>{fmtQty(r.ancho)}</td>
-                                <td style={{ ...td, textAlign: 'right' }}>{fmtQty(r.espesor)}</td>
-                                <td style={{ ...td, textAlign: 'right' }}>{fmtQty(r.cantidad ?? r.cantidad_total)}</td>
-                                <td style={td}>{r.observacion || '—'}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </>
-                  )
-                })()}
+            {vistaPrevia.fase === 'ok' && vistaPrevia.pdfUrl && (
+              <div
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  borderRadius: '8px',
+                  overflow: 'hidden',
+                  backgroundColor: '#e2e8f0',
+                }}
+              >
+                <iframe
+                  title="Vista previa PDF"
+                  src={vistaPrevia.pdfUrl}
+                  style={{
+                    width: '100%',
+                    flex: 1,
+                    minHeight: 'min(72vh, 640px)',
+                    border: 'none',
+                    borderRadius: '8px',
+                    backgroundColor: '#ffffff',
+                  }}
+                />
               </div>
             )}
           </div>
