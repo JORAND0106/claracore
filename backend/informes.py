@@ -51,12 +51,12 @@ def _html_logo_contratista(contrato: dict) -> str:
     url = contrato.get("logo_contratista")
     if url is None or str(url).strip() == "":
         return (
-            '<div style="width:100%;height:84px;display:flex;align-items:center;justify-content:center;'
+            '<div style="width:100%;height:100px;display:flex;align-items:center;justify-content:center;'
             'font-size:6.5pt;color:#94a3b8;border:1px dashed #cbd5e1;">LOGO</div>'
         )
     u = html.escape(str(url).strip(), quote=True)
     return (
-        f'<img src="{u}" alt="" style="max-width:132px;max-height:92px;display:block;margin:0 auto;'
+        f'<img src="{u}" alt="" style="width:100%;max-width:100%;max-height:100px;display:block;margin:0 auto;'
         'object-fit:contain;" />'
     )
 
@@ -641,6 +641,8 @@ def _html_cc_sub_v1_plain(contrato, sub, corte, items, total_costo, usuario_nomb
 @page {{ size: letter; margin: 8mm 10mm; }}
 </style></head>
 <body style="margin:0;padding:4px;font-family:Arial,Helvetica,sans-serif;font-size:7.5pt;color:#111;">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;height:252mm;">
+<tr><td style="vertical-align:top;padding:0;">
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd_blk}">
 <tr>
 <td style="width:20%;{bd_blk};vertical-align:middle;padding:3px;text-align:center;background:#fff;height:64px;">
@@ -713,9 +715,9 @@ INFORME CORTE DE SUB CONTRATISTA
 </table>
 </td></tr>
 </table>
-<div style="height:56mm;"></div>
-<div style="position:fixed;left:10mm;right:10mm;bottom:10mm;">
-  <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+</td></tr>
+<tr><td style="vertical-align:bottom;padding:0;">
+  <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd_blk};">
     <tr>
       <td style="width:33.33%;{bd};padding:6px 5px;vertical-align:top;font-size:6.5pt;">
         <div style="font-weight:bold;margin-bottom:2px;">Residente de Costos:</div>
@@ -736,7 +738,8 @@ INFORME CORTE DE SUB CONTRATISTA
   <p style="font-size:6pt;color:#64748b;margin-top:6px;text-align:center;">
 Período del corte: {_h(_fd(corte.get('fecha_inicio')))} — {_h(_fd(corte.get('fecha_fin')))} · Generado ClaraCore · {_h(usuario_cargo)}
   </p>
-</div>
+</td></tr>
+</table>
 </body></html>"""
 
 
