@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
+import mapboxgl from "mapbox-gl";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = import.meta.env.VITE_API_URL || "https://claracore-backend.azurewebsites.net";
@@ -1019,12 +1020,42 @@ function SeccionResets({ call, theme }) {
 
 // ─── SECCIÓN 5: Contratos ──────────────────────────────────────────────────
 function SeccionContratos({ call, contratos, recargarContratos, perms = { crear: false, editar: false } }) {
-  const FORM_VACIO = { numero: '', objeto: '', contratista: '', nit: '', interventoria: '', logo_contratista: '', logo_interventoria: '', aiu: '', iva: '' };
+  const ENTIDADES = ["IDU", "ICCU", "ENEL", "EAB", "OTRA"];
+  const FORM_VACIO = {
+    numero: '', objeto: '', contratista: '', nit: '', interventoria: '',
+    entidad: '', entidad_otra: '', logo_entidad: '', plano_geojson: null, centro_lat: null, centro_lng: null,
+    logo_contratista: '', logo_interventoria: '', aiu: '', iva: ''
+  };
   const [form, setForm] = useState(FORM_VACIO);
   const [editandoId, setEditandoId] = useState(null); // null = crear, number = editar
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
   const [togglingFase, setTogglingFase] = useState(null); // id del contrato en proceso
+  const mapContainerRef = useRef(null);
+  const mapRef = useRef(null);
+
+  function extraerCoordenadasGeojson(geojson) {
+    const coords = [];
+    const walk = (geom) => {
+      if (!geom || !geom.type) return;
+      if (geom.type === "Feature") return walk(geom.geometry);
+      if (geom.type === "FeatureCollection") return (geom.features || []).forEach(walk);
+      if (geom.type === "GeometryCollection") return (geom.geometries || []).forEach(walk);
+      const c = geom.coordinates;
+      if (!c) return;
+      const flatten = (node) => {
+        if (!Array.isArray(node)) return;
+        if (typeof node[0] === "number" && typeof node[1] === "number") {
+          coords.push([node[0], node[1]]);
+          return;
+        }
+        node.forEach(flatten);
+      };
+      flatten(c);
+    };
+    walk(geojson);
+    return coords;
+  }
 
   function handleLogo(campo, e) {
     const file = e.target.files[0];
@@ -1034,12 +1065,47 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     reader.readAsDataURL(file);
   }
 
+  function handlePlanoGeojson(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(String(ev.target?.result || "{}"));
+        const coords = extraerCoordenadasGeojson(parsed);
+        if (!coords.length) throw new Error("El archivo no contiene coordenadas válidas.");
+        const lngs = coords.map(([lng]) => lng);
+        const lats = coords.map(([, lat]) => lat);
+        const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
+        const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+        const centroLng = (minLng + maxLng) / 2;
+        const centroLat = (minLat + maxLat) / 2;
+        setForm((f) => ({
+          ...f,
+          plano_geojson: parsed,
+          centro_lng: Number(centroLng.toFixed(6)),
+          centro_lat: Number(centroLat.toFixed(6)),
+        }));
+        setMsg({ type: "success", text: "Plano GeoJSON cargado y centrado automáticamente." });
+      } catch (err) {
+        setMsg({ type: "error", text: `GeoJSON inválido: ${err.message}` });
+      }
+    };
+    reader.readAsText(file);
+  }
+
   function iniciarEdicion(c) {
     setEditandoId(c.id);
     setForm({
       numero: c.numero || '', objeto: c.objeto || '',
       contratista: c.contratista || '', nit: c.nit || '',
       interventoria: c.interventoria || '',
+      entidad: c.entidad || '',
+      entidad_otra: c.entidad_otra || '',
+      logo_entidad: c.logo_entidad || '',
+      plano_geojson: c.plano_geojson || null,
+      centro_lat: c.centro_lat ?? null,
+      centro_lng: c.centro_lng ?? null,
       logo_contratista: c.logo_contratista || '',
       logo_interventoria: c.logo_interventoria || '',
       aiu: c.aiu != null ? String(c.aiu) : '',
@@ -1069,6 +1135,8 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
 
   async function handleGuardar() {
     if (!form.numero || !form.contratista) { setMsg({ type: 'error', text: 'Número y contratista son obligatorios' }); return; }
+    if (!form.entidad) { setMsg({ type: 'error', text: 'La entidad es obligatoria' }); return; }
+    if (form.entidad === "OTRA" && !form.entidad_otra?.trim()) { setMsg({ type: 'error', text: 'Debes indicar cuál es la otra entidad' }); return; }
     setSaving(true); setMsg(null);
     try {
       const payload = { ...form,
@@ -1089,6 +1157,61 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
       setMsg({ type: 'error', text: e.message || 'Error al guardar contrato' });
     } finally { setSaving(false); }
   }
+
+  useEffect(() => {
+    const token = import.meta.env.VITE_MAPBOX_TOKEN;
+    if (!mapContainerRef.current || !form.plano_geojson || !token) return;
+
+    mapboxgl.accessToken = token;
+    if (!mapRef.current) {
+      mapRef.current = new mapboxgl.Map({
+        container: mapContainerRef.current,
+        style: "mapbox://styles/mapbox/dark-v11",
+        center: [form.centro_lng || -74.08175, form.centro_lat || 4.60971],
+        zoom: 11,
+      });
+      mapRef.current.addControl(new mapboxgl.NavigationControl(), "top-right");
+    }
+
+    const map = mapRef.current;
+    const sourceId = "contrato-plano-source";
+    const fillId = "contrato-plano-fill";
+    const lineId = "contrato-plano-line";
+
+    const renderPlano = () => {
+      if (!map.getSource(sourceId)) {
+        map.addSource(sourceId, { type: "geojson", data: form.plano_geojson });
+        map.addLayer({ id: fillId, type: "fill", source: sourceId, paint: { "fill-color": "#00afc5", "fill-opacity": 0.18 } });
+        map.addLayer({ id: lineId, type: "line", source: sourceId, paint: { "line-color": "#00afc5", "line-width": 2 } });
+      } else {
+        map.getSource(sourceId).setData(form.plano_geojson);
+      }
+
+      const coords = extraerCoordenadasGeojson(form.plano_geojson);
+      if (coords.length) {
+        const lngs = coords.map(([lng]) => lng);
+        const lats = coords.map(([, lat]) => lat);
+        map.fitBounds(
+          [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
+          { padding: 30, maxZoom: 16, duration: 300 }
+        );
+      }
+    };
+
+    if (map.isStyleLoaded()) renderPlano();
+    else map.once("load", renderPlano);
+
+    return () => {
+      map.off("load", renderPlano);
+    };
+  }, [form.plano_geojson, form.centro_lng, form.centro_lat]);
+
+  useEffect(() => () => {
+    if (mapRef.current) {
+      mapRef.current.remove();
+      mapRef.current = null;
+    }
+  }, []);
 
   const inp = { width: '100%', background: '#0a1628', border: '1.5px solid #1E3A5F', borderRadius: 8, padding: '9px 12px', color: '#E0F2FE', fontSize: 13, outline: 'none', boxSizing: 'border-box', marginBottom: 12 };
   const lbl = { fontSize: 11, fontWeight: 700, color: '#4a7a87', letterSpacing: 1, display: 'block', marginBottom: 4 };
@@ -1118,6 +1241,38 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
           <input style={inp} placeholder="Ej: 900.123.456-7" value={form.nit} onChange={e => setForm(f => ({ ...f, nit: e.target.value }))} />
           <label style={lbl}>INTERVENTORÍA</label>
           <input style={inp} placeholder="Razón social interventoría" value={form.interventoria} onChange={e => setForm(f => ({ ...f, interventoria: e.target.value }))} />
+          <label style={lbl}>ENTIDAD *</label>
+          <select style={inp} value={form.entidad} onChange={e => setForm(f => ({ ...f, entidad: e.target.value, entidad_otra: e.target.value === "OTRA" ? f.entidad_otra : "" }))}>
+            <option value="">Selecciona entidad...</option>
+            {ENTIDADES.map(ent => <option key={ent} value={ent}>{ent === "OTRA" ? "OTRA... (Indique cuál)" : ent}</option>)}
+          </select>
+          {form.entidad === "OTRA" && (
+            <>
+              <label style={lbl}>¿CUÁL ENTIDAD?</label>
+              <input style={inp} placeholder="Escribe la entidad" value={form.entidad_otra} onChange={e => setForm(f => ({ ...f, entidad_otra: e.target.value }))} />
+            </>
+          )}
+          <label style={lbl}>LOGO ENTIDAD</label>
+          <label style={{ display: 'block', background: '#0a1628', border: '2px dashed #1E3A5F', borderRadius: 8, padding: 12, textAlign: 'center', cursor: 'pointer', color: '#4a7a87', fontSize: 12, marginBottom: 12 }}>
+            {form.logo_entidad ? '✅ Logo entidad cargado' : '📂 Cargar logo de entidad'}
+            <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => handleLogo('logo_entidad', e)} />
+          </label>
+          <label style={lbl}>CARGAR PLANO (GEOJSON)</label>
+          <label style={{ display: 'block', background: '#0a1628', border: '2px dashed #1E3A5F', borderRadius: 8, padding: 12, textAlign: 'center', cursor: 'pointer', color: '#4a7a87', fontSize: 12, marginBottom: 10 }}>
+            {form.plano_geojson ? '✅ Plano GeoJSON cargado' : '📂 Cargar archivo .geojson / .json'}
+            <input type="file" accept=".geojson,.json,application/geo+json,application/json" style={{ display: 'none' }} onChange={handlePlanoGeojson} />
+          </label>
+          {form.centro_lat != null && form.centro_lng != null && (
+            <div style={{ fontSize: 11, color: '#8acdd8', marginTop: -2, marginBottom: 12 }}>
+              Punto medio detectado: Lat {form.centro_lat} / Lng {form.centro_lng}
+            </div>
+          )}
+          {form.plano_geojson && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 10, color: '#4a7a87', letterSpacing: 0.7, marginBottom: 6 }}>PREVISUALIZACIÓN MAPBOX</div>
+              <div ref={mapContainerRef} style={{ width: '100%', height: 220, borderRadius: 8, border: '1px solid rgba(0,175,197,0.25)', overflow: 'hidden' }} />
+            </div>
+          )}
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:0 }}>
             <div>
               <label style={lbl}>AIU (%)</label>
@@ -1171,6 +1326,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
                 <div>
                   <div style={{ fontWeight: 700, color: '#00afc5', fontSize: 13 }}>{c.numero}</div>
                   <div style={{ color: '#8acdd8', fontSize: 12, marginTop: 2 }}>{c.contratista}</div>
+                  {c.entidad && <div style={{ color: '#4a7a87', fontSize: 11, marginTop: 2 }}>Entidad: {c.entidad === "OTRA" ? (c.entidad_otra || "OTRA") : c.entidad}</div>}
                   {c.interventoria && <div style={{ color: '#4a7a87', fontSize: 11, marginTop: 2 }}>Interventoría: {c.interventoria}</div>}
                   {/* Badge de fase */}
                   <div style={{ marginTop: 8, display: 'inline-flex', alignItems: 'center', gap: 6, background: (c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? 'rgba(245,158,11,0.12)' : 'rgba(0,175,197,0.10)', border: `1px solid ${(c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? 'rgba(245,158,11,0.4)' : 'rgba(0,175,197,0.3)'}`, borderRadius: 20, padding: '3px 10px' }}>
@@ -1179,6 +1335,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
                     </span>
                   </div>
                   <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                    {c.logo_entidad && <img src={c.logo_entidad} alt="logo entidad" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
                     {c.logo_contratista && <img src={c.logo_contratista} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
                     {c.logo_interventoria && <img src={c.logo_interventoria} alt="logo" style={{ height: 28, borderRadius: 4, background: '#fff', padding: 2 }} />}
                   </div>

@@ -5,6 +5,8 @@ import ModuloInformes from './ModuloInformes'
 import ModuloInicio from './ModuloInicio'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
+import * as XLSX from 'xlsx'
+import ExcelJS from 'exceljs'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net'
 const API = API_BASE
@@ -5482,6 +5484,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const puedeVer    = perm?.ver || nivelInfo.nivelValidacion !== null
   const puedeCrear  = perm?.crear
   const puedeEditar = perm?.editar
+  const puedeExportar = perm?.exportar
   const nivelInfo   = determinarNivelValidacion(usuario)
   const esSub       = nivelInfo.esSubcontratista
   // subcontratista_id del usuario para filtrar (puede venir como campo directo o en el objeto)
@@ -5778,6 +5781,252 @@ const limpiarFiltros = () => {
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos`, { headers: { Authorization: `Bearer ${getToken()}` } })
       .then(r => r.json()).then(caps => setFiltroCapList(Array.isArray(caps) ? caps : [])).catch(() => {})
   }
+
+  // ── Exportar registros (popup con campos seleccionables) ─────────────────
+  const [exportModalOpen, setExportModalOpen] = useState(false)
+  const [exportCargandoCampos, setExportCargandoCampos] = useState(false)
+  const [exportCampos, setExportCampos] = useState([])
+  const [exportFiltroCampo, setExportFiltroCampo] = useState('')
+  const [exportSeleccionCampos, setExportSeleccionCampos] = useState([])
+  const [exportError, setExportError] = useState(null)
+  const [exportando, setExportando] = useState(false)
+  const [exportMetaContrato, setExportMetaContrato] = useState(null)
+
+  const CAMPOS_OCULTOS_EXPORT = new Set([
+    'id',
+    'contrato_id',
+    'reporte_id',
+    'acta_rpo_id',
+    'semana_id',
+    'subcontratista_id',
+    'reporte',
+  ])
+  const CAMPOS_VIRTUALES_EXPORT = ['reporte_numero', 'acta_rpo_numero', 'semana_numero', 'pk_id_valor', 'subcontratista_nombre']
+  const LABELS_EXPORT = {
+    reporte_numero: 'Reporte',
+    acta_rpo_numero: 'Acta RPO',
+    semana_numero: 'Semana',
+    pk_id_valor: 'PK_ID',
+    subcontratista_nombre: 'Subcontratista',
+    vlr_unitario: 'Valor unitario',
+    cantidad_total: 'Cantidad total',
+    item_numero: 'Item',
+    item_descripcion: 'Descripcion',
+    nivel1_estado: 'Estado nivel 1',
+    nivel2_estado: 'Estado nivel 2',
+    nivel3_estado: 'Estado nivel 3',
+    sub_estado: 'Estado sub',
+  }
+  const prettyCampo = (c) => LABELS_EXPORT[c] || String(c || '').replace(/_/g, ' ').replace(/\bid\b/gi, 'ID').toUpperCase()
+
+  const abrirPopupExportRegistros = async () => {
+    if (!contrato_id) return
+    setExportModalOpen(true)
+    setExportError(null)
+    setExportCargandoCampos(true)
+    setExportCampos([])
+    setExportSeleccionCampos([])
+    setExportFiltroCampo('')
+
+    try {
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/campos`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      })
+      const campos = await res.json()
+      const camposRaw = Array.isArray(campos) ? campos : []
+      const camposVisibles = camposRaw.filter(c => {
+        const k = String(c || '').toLowerCase()
+        if (CAMPOS_OCULTOS_EXPORT.has(k)) return false
+        if (k.endsWith('_id')) return false
+        // Ocultar todo lo relacionado a subcontratista/campos sub,
+        // dejando solamente el campo de negocio "subcontratista" (virtual).
+        if (k.includes('subcontrat')) return false
+        if (k.includes('_sub') || k.startsWith('sub_')) return false
+        return true
+      })
+      const camposOk = [...new Set([...CAMPOS_VIRTUALES_EXPORT, ...camposVisibles])]
+      setExportCampos(camposOk)
+
+      // Metadatos de contrato para encabezado del Excel
+      try {
+        const rc = await fetch(`${API_URL}/contratos`, { headers: { Authorization: `Bearer ${getToken()}` } })
+        const contratos = await rc.json()
+        const c = (Array.isArray(contratos) ? contratos : []).find(x => x.id === contrato_id)
+        setExportMetaContrato(c || null)
+      } catch {
+        setExportMetaContrato(null)
+      }
+
+      const DEFAULT = [
+        'reporte_numero',
+        'acta_rpo_numero',
+        'semana_numero',
+        'numero_registro',
+        'capitulo',
+        'item_numero',
+        'item_descripcion',
+        'unidad',
+        'vlr_unitario',
+        'longitud',
+        'ancho',
+        'espesor',
+        'cantidad_total',
+        'costo_directo',
+        'pk_id_valor',
+        'tramo',
+        'margen',
+        'nivel1_estado',
+        'nivel2_estado',
+        'nivel3_estado',
+      ]
+      const defaultsOk = DEFAULT.filter(c => camposOk.includes(c))
+      setExportSeleccionCampos(defaultsOk.length > 0 ? defaultsOk : camposOk.slice(0, 20))
+    } catch (e) {
+      setExportError(e?.message || 'Error consultando campos')
+    } finally {
+      setExportCargandoCampos(false)
+    }
+  }
+
+  const camposVista = exportFiltroCampo.trim()
+    ? exportCampos.filter(c => String(c).toLowerCase().includes(exportFiltroCampo.trim().toLowerCase()))
+    : exportCampos
+
+  const descargarExcelRegistros = async () => {
+    if (!exportSeleccionCampos || exportSeleccionCampos.length === 0) return
+    if (!contrato_id) return
+    setExportError(null)
+    setExportando(true)
+    try {
+      const fNorm = { ...filtros }
+      Object.keys(fNorm).forEach(k => { if (fNorm[k] === '' || fNorm[k] === undefined) fNorm[k] = null })
+      const capa0 = capasValidacion?.[0] || null
+      const camposRequest = exportSeleccionCampos.filter(c => !CAMPOS_VIRTUALES_EXPORT.includes(c))
+      const payload = {
+        numero_reporte: fNorm.numero_reporte ?? null,
+        numero_registro: fNorm.numero_registro ?? null,
+        semana: fNorm.semana ?? null,
+        acta_rpo: fNorm.acta_rpo ?? null,
+        subcontratista_id: fNorm.subcontratista_id ?? null,
+        capitulo: fNorm.capitulo ?? null,
+        item: fNorm.item ?? null,
+        tramo: fNorm.tramo ?? null,
+        costado: fNorm.costado ?? null,
+        pk_id: fNorm.pk_id ?? null,
+        abs_inicio: fNorm.abs_inicio ?? null,
+        abs_final: fNorm.abs_final ?? null,
+        estado: fNorm.estado ?? null,
+        cargo_id: capa0?.cargo_id ?? null,
+        estado_validacion: capa0?.estado ?? null,
+        campos: camposRequest,
+      }
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/exportar`, {
+        method: 'POST',
+        headers: { ...hdrsJSON, Authorization: `Bearer ${getToken()}` },
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) {
+        const msg = await res.text().catch(() => '')
+        throw new Error(msg || `Error ${res.status} exportando registros`)
+      }
+      const registros = await res.json()
+      const registrosOk = Array.isArray(registros) ? registros : []
+      const headers = exportSeleccionCampos.map(c => prettyCampo(c))
+      const bodyRows = registrosOk.map(r => exportSeleccionCampos.map(c => r?.[c] ?? ''))
+      const hoy = new Date()
+      const fechaTxt = hoy.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' })
+      const horaTxt = hoy.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })
+      const meta = exportMetaContrato || {}
+      const totalCols = Math.max(headers.length, 6)
+      const wb = new ExcelJS.Workbook()
+      const ws = wb.addWorksheet('SICOE Obra - Registros', {
+        views: [{ showGridLines: false }],
+      })
+
+      ws.addRow(['CLARACORE - SICOE OBRA - EXPORTACION DE REGISTROS'])
+      ws.addRow([`Contrato: ${meta.numero || ''}`, '', '', '', '', `Generado: ${fechaTxt} ${horaTxt}`])
+      ws.addRow([`Contratista: ${meta.contratista || ''}`])
+      ws.addRow([`Interventoria: ${meta.interventoria || ''}`])
+      ws.addRow([`Objeto: ${meta.objeto || ''}`])
+      ws.addRow([])
+      ws.addRow(headers)
+      bodyRows.forEach(r => ws.addRow(r))
+
+      ws.mergeCells(1, 1, 1, totalCols)
+      ws.mergeCells(3, 1, 3, totalCols)
+      ws.mergeCells(4, 1, 4, totalCols)
+      ws.mergeCells(5, 1, 5, totalCols)
+
+      for (let c = 1; c <= totalCols; c += 1) {
+        ws.getColumn(c).width = c === 1 ? 24 : 18
+      }
+      ws.getRow(1).height = 28
+      ws.getRow(2).height = 22
+      ws.getRow(3).height = 20
+      ws.getRow(4).height = 20
+      ws.getRow(5).height = 20
+      ws.getRow(7).height = 22
+
+      const pastelTitle = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFDDEFF8' },
+      }
+      const pastelMeta = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFEEF7FB' },
+      }
+      const pastelHeader = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE5F4FA' },
+      }
+
+      ws.getCell('A1').fill = pastelTitle
+      ws.getCell('A1').font = { bold: true, size: 14, color: { argb: 'FF0F2942' } }
+      ws.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' }
+
+      ws.getCell('A2').fill = pastelMeta
+      ws.getCell('F2').fill = pastelMeta
+      ws.getCell('A2').font = { bold: true, size: 11, color: { argb: 'FF1F4E70' } }
+      ws.getCell('F2').font = { bold: true, size: 11, color: { argb: 'FF1F4E70' } }
+
+      ;['A3', 'A4', 'A5'].forEach(addr => {
+        ws.getCell(addr).fill = pastelMeta
+        ws.getCell(addr).font = { bold: true, size: 11, color: { argb: 'FF1F4E70' } }
+      })
+
+      ws.getRow(7).eachCell(cell => {
+        cell.fill = pastelHeader
+        cell.font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }
+      })
+
+      const buffer = await wb.xlsx.writeBuffer()
+      const blob = new Blob([buffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `sicoe_obra_registros_${contrato_id ?? 'NA'}.xlsx`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      setExportModalOpen(false)
+    } catch (e) {
+      setExportError(e?.message || 'Error exportando Excel')
+    } finally {
+      setExportando(false)
+    }
+  }
+
+  const toggleCampo = (c) => {
+    setExportSeleccionCampos(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])
+  }
+
   const setF = (k, v) => setFiltros(prev => ({ ...prev, [k]: v }))
 
   const buscarItems = async (texto) => {
@@ -6075,6 +6324,26 @@ const limpiarFiltros = () => {
               style={{ background:'#EF4444', color:'#fff', border:'none', borderRadius:'7px', padding:'5px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
               Limpiar
             </button>
+            {puedeExportar && busquedaRealizada && (
+              <button
+                onClick={abrirPopupExportRegistros}
+                disabled={!reportesMostrados || reportesMostrados.length === 0}
+                style={{
+                  background:'transparent',
+                  border:`1px solid ${t.border}`,
+                  color:t.textMuted,
+                  borderRadius:'7px',
+                  padding:'5px 16px',
+                  fontSize:'12px',
+                  fontWeight:'700',
+                  cursor:(!reportesMostrados || reportesMostrados.length === 0) ? 'not-allowed' : 'pointer',
+                  opacity:(!reportesMostrados || reportesMostrados.length === 0) ? 0.6 : 1,
+                  whiteSpace:'nowrap',
+                }}
+              >
+                ⬇ Exportar Excel
+              </button>
+            )}
             <button onClick={() => {
               const hayFiltros = Object.values(filtros).some(v => v !== '') || capasValidacion.length > 0
               if (!hayFiltros && nivelInfo.nivelValidacion) return
@@ -6349,6 +6618,155 @@ const limpiarFiltros = () => {
           onClose={() => { setModalNuevoReporte(false); setReporteEditando(null) }}
           onGuardado={() => { setModalNuevoReporte(false); setReporteEditando(null); buscarReportes(filtros, 0) }}
         />
+      )}
+
+      {/* ── Modal Exportar Registros ── */}
+      {exportModalOpen && (
+        <div
+          style={{
+            position:'fixed', inset:0, zIndex:10000,
+            background:'rgba(0,0,0,0.65)',
+            display:'flex', alignItems:'center', justifyContent:'center',
+            padding:'16px',
+          }}
+          onClick={() => setExportModalOpen(false)}
+        >
+          <div
+            style={{
+              width:'100%', maxWidth:'920px',
+              background:t.bgCard, borderRadius:'16px',
+              border:`1px solid ${t.border}`,
+              boxShadow:'0 28px 90px rgba(0,0,0,0.55)',
+              overflow:'hidden',
+              display:'flex', flexDirection:'column',
+              maxHeight:'88vh',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div
+              style={{
+                padding:'16px 20px',
+                borderBottom:`1px solid ${t.border}`,
+                background:'#0F1923',
+                display:'flex',
+                alignItems:'center',
+                justifyContent:'space-between',
+                gap:'12px',
+                flexShrink:0,
+              }}
+            >
+              <div style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
+                <div style={{ fontSize:'14px', fontWeight:'900', color:'#fff' }}>⬇ Exportar registros a Excel</div>
+                <div style={{ fontSize:'12px', color:'#94A3B8' }}>Elige los campos de so_registros que quieres descargar.</div>
+              </div>
+              <button
+                onClick={() => setExportModalOpen(false)}
+                style={{ background:'transparent', border:'none', color:t.textMuted, cursor:'pointer', fontSize:'20px' }}
+                aria-label="Cerrar"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ padding:'16px 20px', overflowY:'auto' }}>
+              {exportCargandoCampos ? (
+                <div style={{ textAlign:'center', color:t.textMuted, padding:'28px 0' }}>Consultando campos...</div>
+              ) : (
+                <>
+                  <div style={{ display:'flex', gap:'10px', alignItems:'center', flexWrap:'wrap', marginBottom:'12px' }}>
+                    <input
+                      placeholder="Buscar campo..."
+                      value={exportFiltroCampo}
+                      onChange={e => setExportFiltroCampo(e.target.value)}
+                      style={{ flex:'1 1 260px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 12px', color:t.text, outline:'none', fontSize:'13px' }}
+                    />
+                    <button
+                      onClick={() => setExportSeleccionCampos(exportCampos)}
+                      disabled={!exportCampos.length || exportando}
+                      style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', color:t.textMuted, cursor:(!exportCampos.length || exportando) ? 'not-allowed' : 'pointer', fontWeight:'700' }}
+                    >
+                      Seleccionar todo
+                    </button>
+                    <button
+                      onClick={() => setExportSeleccionCampos([])}
+                      disabled={exportando}
+                      style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', color:t.textMuted, cursor:exportando ? 'not-allowed' : 'pointer', fontWeight:'700' }}
+                    >
+                      Limpiar
+                    </button>
+                  </div>
+
+                  {exportError && (
+                    <div style={{ marginBottom:'12px', background:'#EF444415', border:'1px solid #EF444440', padding:'12px 14px', borderRadius:'12px', color:t.text }}>
+                      {exportError}
+                    </div>
+                  )}
+
+                  <div style={{ border:`1px solid ${t.border}`, borderRadius:'12px', overflow:'hidden' }}>
+                    <div style={{ padding:'10px 14px', background:'#0B1220', borderBottom:`1px solid ${t.border}`, display:'flex', justifyContent:'space-between', alignItems:'center', gap:'10px' }}>
+                      <div style={{ fontSize:'12px', fontWeight:'800', color:t.textMuted }}>
+                        {exportSeleccionCampos.length} campo(s) seleccionados
+                      </div>
+                      <div style={{ fontSize:'11px', color:'#94A3B8' }}>
+                        Tip: puedes seleccionar pocos campos para acelerar.
+                      </div>
+                    </div>
+                    <div style={{ maxHeight:'360px', overflowY:'auto', padding:'10px 14px' }}>
+                      {camposVista.length === 0 ? (
+                        <div style={{ color:t.textMuted, textAlign:'center', padding:'18px 0' }}>Sin campos para mostrar</div>
+                      ) : (
+                        <div style={{ display:'grid', gridTemplateColumns:'repeat(2, minmax(0, 1fr))', gap:'8px 12px' }}>
+                          {camposVista.map(c => (
+                            <label
+                              key={c}
+                              style={{ display:'flex', gap:'10px', alignItems:'center', padding:'6px 8px', border:`1px solid ${t.border}`, borderRadius:'10px', background:'transparent' }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={exportSeleccionCampos.includes(c)}
+                                onChange={() => toggleCampo(c)}
+                              />
+                              <span style={{ fontSize:'12px', color:t.textMuted, fontWeight:'700', lineHeight:1.2 }}>
+                                {prettyCampo(c)}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div
+              style={{
+                padding:'14px 20px',
+                borderTop:`1px solid ${t.border}`,
+                background:'#0F1923',
+                display:'flex',
+                justifyContent:'flex-end',
+                gap:'10px',
+                flexShrink:0,
+              }}
+            >
+              <button
+                onClick={() => setExportModalOpen(false)}
+                disabled={exportando}
+                style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 16px', color:t.textMuted, cursor:exportando ? 'not-allowed' : 'pointer', fontWeight:'800' }}
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={descargarExcelRegistros}
+                disabled={exportando || exportCargandoCampos || exportSeleccionCampos.length === 0}
+                style={{ background:t.primary, border:'none', borderRadius:'10px', padding:'10px 16px', color:'#fff', cursor:(exportando || exportCargandoCampos || exportSeleccionCampos.length === 0) ? 'not-allowed' : 'pointer', opacity:(exportando || exportCargandoCampos || exportSeleccionCampos.length === 0) ? 0.65 : 1, fontWeight:'900' }}
+              >
+                {exportando ? 'Generando...' : 'Descargar Excel'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

@@ -129,6 +129,12 @@ class ContratoCreate(BaseModel):
     contratista: Optional[str] = None
     nit: Optional[str] = None
     interventoria: Optional[str] = None
+    entidad: Optional[str] = None
+    entidad_otra: Optional[str] = None
+    logo_entidad: Optional[str] = None
+    plano_geojson: Optional[dict] = None
+    centro_lat: Optional[float] = None
+    centro_lng: Optional[float] = None
     logo_contratista: Optional[str] = None
     logo_interventoria: Optional[str] = None
     aiu: Optional[float] = None
@@ -161,6 +167,12 @@ class ContratoUpdate(BaseModel):
     contratista: Optional[str] = None
     nit: Optional[str] = None
     interventoria: Optional[str] = None
+    entidad: Optional[str] = None
+    entidad_otra: Optional[str] = None
+    logo_entidad: Optional[str] = None
+    plano_geojson: Optional[dict] = None
+    centro_lat: Optional[float] = None
+    centro_lng: Optional[float] = None
     logo_contratista: Optional[str] = None
     logo_interventoria: Optional[str] = None
     fase: Optional[str] = None  # 'PRESUPUESTO' | 'LIQUIDACION'
@@ -536,7 +548,7 @@ def listar_roles():
 
 @app.get("/contratos")
 def listar_contratos():
-    return supabase.table("contratos").select("id, numero, objeto, contratista, nit, interventoria, logo_contratista, logo_interventoria, fase").order("numero").execute().data
+    return supabase.table("contratos").select("id, numero, objeto, contratista, nit, interventoria, entidad, entidad_otra, logo_entidad, plano_geojson, centro_lat, centro_lng, logo_contratista, logo_interventoria, fase").order("numero").execute().data
 
 @app.post("/auth/login")
 def login(request: LoginRequest):
@@ -577,8 +589,32 @@ def login(request: LoginRequest):
     permisos = []
     if usuario.get("cargo_id"):
         permisos_raw = supabase.table("permisos").select("*").eq("cargo_id", usuario["cargo_id"]).execute().data
-        funciones_map = {f["id"]: f["nombre"] for f in supabase.table("funciones").select("id, nombre").execute().data}
+        funciones_rows = supabase.table("funciones").select("id, nombre").execute().data
+        funciones_map = {f["id"]: f["nombre"] for f in funciones_rows}
         permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
+    # Hotfix: garantizar exportación para Desarrollador en cualquier contrato
+    if cargo_nombre and cargo_nombre.strip().lower() == "desarrollador":
+        permisos = [{**p, "exportar": True, "ver": True} for p in (permisos or [])]
+        if not any((p.get("funcion_nombre") or "").strip().lower() == "reporte de cantidades" for p in permisos):
+            funcion_id = None
+            try:
+                fr = supabase.table("funciones").select("id,nombre").ilike("nombre", "Reporte de Cantidades").limit(1).execute().data
+                if fr:
+                    funcion_id = fr[0].get("id")
+            except Exception:
+                funcion_id = None
+            permisos.append({
+                "id": None,
+                "cargo_id": usuario.get("cargo_id"),
+                "funcion_id": funcion_id,
+                "funcion_nombre": "Reporte de Cantidades",
+                "ver": True,
+                "crear": True,
+                "editar": True,
+                "eliminar": True,
+                "validar": True,
+                "exportar": True,
+            })
     # C3: Subcontratista sin subcontratista asignado → sin acceso
     if cargo_nombre and cargo_nombre.lower() == 'subcontratista' and not usuario.get('subcontratista_id'):
         permisos = []
@@ -664,10 +700,34 @@ def get_mi_usuario(current_user=Depends(get_current_user)):
     if u.get("cargo_id"):
         try:
             permisos_raw = sb.table("permisos").select("*").eq("cargo_id", u["cargo_id"]).execute().data
-            funciones_map = {f["id"]: f["nombre"] for f in sb.table("funciones").select("id, nombre").execute().data}
+            funciones_rows = sb.table("funciones").select("id, nombre").execute().data
+            funciones_map = {f["id"]: f["nombre"] for f in funciones_rows}
             permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
         except Exception:
             permisos_raw = []
+    # Hotfix: garantizar exportación para Desarrollador en cualquier contrato
+    if cargo_nombre and cargo_nombre.strip().lower() == "desarrollador":
+        permisos = [{**p, "exportar": True, "ver": True} for p in (permisos or [])]
+        if not any((p.get("funcion_nombre") or "").strip().lower() == "reporte de cantidades" for p in permisos):
+            funcion_id = None
+            try:
+                fr = sb.table("funciones").select("id,nombre").ilike("nombre", "Reporte de Cantidades").limit(1).execute().data
+                if fr:
+                    funcion_id = fr[0].get("id")
+            except Exception:
+                funcion_id = None
+            permisos.append({
+                "id": None,
+                "cargo_id": u.get("cargo_id"),
+                "funcion_id": funcion_id,
+                "funcion_nombre": "Reporte de Cantidades",
+                "ver": True,
+                "crear": True,
+                "editar": True,
+                "eliminar": True,
+                "validar": True,
+                "exportar": True,
+            })
     if cargo_nombre and cargo_nombre.lower() == 'subcontratista' and not u.get('subcontratista_id'):
         permisos = []
     return {
@@ -732,6 +792,12 @@ def crear_contrato(contrato: ContratoCreate, current_user=Depends(get_current_us
         "contratista": contrato.contratista,
         "nit": contrato.nit,
         "interventoria": contrato.interventoria,
+        "entidad": contrato.entidad,
+        "entidad_otra": contrato.entidad_otra,
+        "logo_entidad": contrato.logo_entidad,
+        "plano_geojson": contrato.plano_geojson,
+        "centro_lat": contrato.centro_lat,
+        "centro_lng": contrato.centro_lng,
         "logo_contratista": contrato.logo_contratista,
         "logo_interventoria": contrato.logo_interventoria,
     }).execute()
@@ -943,7 +1009,7 @@ def get_usuario_contratos(usuario_id: int, current_user=Depends(get_current_user
     ids = [r["contrato_id"] for r in result.data]
     if not ids:
         return []
-    contratos = supabase.table("contratos").select("id, numero, contratista, interventoria, logo_contratista, logo_interventoria, fase").in_("id", ids).execute()
+    contratos = supabase.table("contratos").select("id, numero, contratista, interventoria, entidad, entidad_otra, logo_entidad, plano_geojson, centro_lat, centro_lng, logo_contratista, logo_interventoria, fase").in_("id", ids).execute()
     return contratos.data
 
 @app.post("/admin/usuario-contratos")
@@ -2995,6 +3061,346 @@ def buscar_reportes_obra(
         rows = [r for r in rows if (r.get("num_registros") or 0) > 0]
 
     return {"reportes": rows, "total": len(rows), "offset": offset, "limit": limit, "hay_mas": hay_mas}
+
+
+# ─── SICOE OBRA: Exportar registros filtrados ───────────────────────────────
+class ExportarRegistrosBody(BaseModel):
+    campos: List[str]
+
+    # Filtros (mismos nombres que la grilla / buscar_reportes_obra)
+    numero_reporte: Optional[int] = None
+    numero_registro: Optional[int] = None
+    semana: Optional[int] = None
+    acta_rpo: Optional[int] = None
+    subcontratista_id: Optional[int] = None
+    capitulo: Optional[str] = None
+    item: Optional[str] = None
+    tramo: Optional[str] = None
+    costado: Optional[str] = None
+    pk_id: Optional[int] = None
+    abs_inicio: Optional[float] = None
+    abs_final: Optional[float] = None
+    estado: Optional[str] = None
+
+    # Validación por nivel (viene de capasValidacion[0])
+    cargo_id: Optional[int] = None
+    estado_validacion: Optional[str] = None
+
+
+@app.get("/sicoe-obra/{contrato_id}/registros/campos")
+def listar_campos_registros_sicoe(
+    contrato_id: int,
+    current_user=Depends(get_current_user),
+):
+    try:
+        rows = supabase_execute(
+            lambda: supabase.table("so_registros")
+            .select("*")
+            .eq("contrato_id", contrato_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+    except Exception:
+        rows = []
+    if not rows:
+        return []
+    return sorted(list(rows[0].keys()))
+
+
+@app.post("/sicoe-obra/{contrato_id}/registros/exportar")
+def exportar_registros_sicoe(
+    contrato_id: int,
+    body: ExportarRegistrosBody,
+    current_user=Depends(get_current_user),
+):
+    if not body.campos:
+        raise HTTPException(status_code=400, detail="Debe seleccionar al menos un campo para exportar.")
+
+    def _seguro_campo(c: str) -> bool:
+        c = str(c or "")
+        return bool(c) and all((ch.isalnum() or ch == "_") for ch in c)
+
+    campos_solicitados = [c for c in body.campos if _seguro_campo(c)]
+    if not campos_solicitados:
+        raise HTTPException(status_code=400, detail="Campos inválidos.")
+    campos_virtuales = {"reporte_numero", "acta_rpo_numero", "semana_numero", "pk_id_valor", "subcontratista_nombre"}
+    campos = [c for c in campos_solicitados if c not in campos_virtuales]
+    if not campos:
+        # Permitir exportar solo virtuales; internamente se consulta llaves mínimas.
+        campos = []
+    campos_aux = list(dict.fromkeys(campos + ["reporte_id", "acta_rpo_id", "semana_id"]))
+
+    # 1) Resolver semana_id / acta_rpo_id
+    semana_id_filtro = None
+    if body.semana is not None:
+        try:
+            sem_rows = supabase_execute(
+                lambda: supabase.table("so_semanas")
+                .select("id")
+                .eq("contrato_id", contrato_id)
+                .eq("numero_semana", body.semana)
+                .limit(1)
+                .execute()
+                .data
+            )
+            semana_id_filtro = sem_rows[0]["id"] if sem_rows else None
+        except Exception:
+            semana_id_filtro = None
+
+    acta_id_filtro = None
+    if body.acta_rpo is not None:
+        try:
+            acta_rows = supabase_execute(
+                lambda: supabase.table("actas")
+                .select("id")
+                .eq("contrato_id", contrato_id)
+                .eq("numero_rpo", body.acta_rpo)
+                .limit(1)
+                .execute()
+                .data
+            )
+            if acta_rows:
+                acta_id_filtro = acta_rows[0]["id"]
+            else:
+                acta_rows = supabase_execute(
+                    lambda: supabase.table("actas")
+                    .select("id")
+                    .eq("contrato_id", contrato_id)
+                    .eq("consecutivo", body.acta_rpo)
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+                acta_id_filtro = acta_rows[0]["id"] if acta_rows else None
+        except Exception:
+            acta_id_filtro = None
+
+    # 2) Filtros que viven en so_reportes (necesitan restricción por reporte_id)
+    necesita_reporte_filter = any(
+        v is not None for v in [body.numero_reporte, body.pk_id, body.abs_inicio, body.abs_final, body.estado]
+    )
+
+    reporte_ids_base = None
+    if necesita_reporte_filter:
+        def _rep_ids():
+            q = supabase.table("so_reportes").select("id").eq("contrato_id", contrato_id)
+            if body.numero_reporte is not None:
+                q = q.eq("numero_reporte", body.numero_reporte)
+            if body.pk_id is not None:
+                q = q.eq("pk_id_id", body.pk_id)
+            if body.abs_inicio is not None:
+                q = q.gte("abs_inicio", body.abs_inicio)
+            if body.abs_final is not None:
+                q = q.lte("abs_final", body.abs_final)
+            if body.estado:
+                q = q.eq("estado", body.estado)
+            if body.subcontratista_id is not None:
+                q = q.eq("subcontratista_id", body.subcontratista_id)
+            if body.semana is not None and semana_id_filtro is not None:
+                q = q.eq("semana_id", semana_id_filtro)
+            if body.acta_rpo is not None and acta_id_filtro is not None:
+                q = q.eq("acta_rpo_id", acta_id_filtro)
+            return q.limit(50000).execute().data
+        rep_rows = supabase_execute(_rep_ids)
+        reporte_ids_base = [r["id"] for r in rep_rows if r.get("id")]
+        if not reporte_ids_base:
+            return []
+
+    # 3) Query base sobre so_registros
+    def _aplicar_filtros_reg(q):
+        q = q.eq("contrato_id", contrato_id)
+        if body.numero_registro is not None:
+            q = q.eq("numero_registro", body.numero_registro)
+        if semana_id_filtro is not None:
+            q = q.eq("semana_id", semana_id_filtro)
+        if acta_id_filtro is not None:
+            q = q.eq("acta_rpo_id", acta_id_filtro)
+        if body.subcontratista_id is not None:
+            q = q.eq("subcontratista_id", body.subcontratista_id)
+        if body.capitulo:
+            q = q.eq("capitulo", body.capitulo)
+        if body.item:
+            q = q.ilike("item_numero", f"%{body.item}%")
+        if body.tramo:
+            q = q.eq("tramo", body.tramo)
+        if body.costado:
+            # En so_registros el campo se usa como "margen"
+            q = q.eq("margen", body.costado)
+
+        # Validación por nivel (cargo_id + estado_validacion)
+        if body.cargo_id is not None and body.estado_validacion:
+            nivel_field = CARGO_ID_NIVEL_MAP.get(body.cargo_id)
+            if nivel_field:
+                prereq = CARGO_NIVEL_PRERREQUISITO.get(nivel_field)
+                if prereq:
+                    q = q.eq(prereq[0], prereq[1])
+
+                ev = body.estado_validacion
+                if ev in ("No Revisado", "No Revisados"):
+                    q = (
+                        q.or_(f"{nivel_field}.is.null,{nivel_field}.eq.No Revisado")
+                        .not_.is_("item_numero", "null")
+                        .neq("item_numero", "")
+                    )
+                else:
+                    q = q.eq(nivel_field, ev)
+
+        return q
+
+    registros: list = []
+    batch_size = 999
+
+    def _enriquecer_registros_export(rows: List[dict]) -> List[dict]:
+        if not rows:
+            return rows
+        reporte_ids = list({r.get("reporte_id") for r in rows if r.get("reporte_id")})
+        rep_map = {}
+        if reporte_ids:
+            try:
+                rep_rows = supabase_execute(
+                    lambda: supabase.table("so_reportes")
+                    .select("id, numero_reporte, acta_rpo_id, semana_id, pk_id_id, subcontratista_id")
+                    .in_("id", reporte_ids)
+                    .execute()
+                    .data
+                )
+                rep_map = {r["id"]: r for r in rep_rows if r.get("id")}
+            except Exception:
+                rep_map = {}
+
+        acta_ids = list({
+            (r.get("acta_rpo_id") or (rep_map.get(r.get("reporte_id")) or {}).get("acta_rpo_id"))
+            for r in rows
+            if (r.get("acta_rpo_id") or (rep_map.get(r.get("reporte_id")) or {}).get("acta_rpo_id"))
+        })
+        semana_ids = list({
+            (r.get("semana_id") or (rep_map.get(r.get("reporte_id")) or {}).get("semana_id"))
+            for r in rows
+            if (r.get("semana_id") or (rep_map.get(r.get("reporte_id")) or {}).get("semana_id"))
+        })
+        pk_ids = list({
+            (rep_map.get(r.get("reporte_id")) or {}).get("pk_id_id")
+            for r in rows
+            if (rep_map.get(r.get("reporte_id")) or {}).get("pk_id_id")
+        })
+
+        acta_map = {}
+        if acta_ids:
+            try:
+                aa = supabase_execute(
+                    lambda: supabase.table("actas")
+                    .select("id, numero_rpo")
+                    .in_("id", acta_ids)
+                    .execute()
+                    .data
+                )
+                acta_map = {a["id"]: a.get("numero_rpo") for a in aa if a.get("id")}
+            except Exception:
+                acta_map = {}
+
+        semana_map = {}
+        if semana_ids:
+            try:
+                ss = supabase_execute(
+                    lambda: supabase.table("so_semanas")
+                    .select("id, numero_semana")
+                    .in_("id", semana_ids)
+                    .execute()
+                    .data
+                )
+                semana_map = {s["id"]: s.get("numero_semana") for s in ss if s.get("id")}
+            except Exception:
+                semana_map = {}
+
+        pk_map = {}
+        if pk_ids:
+            try:
+                pp = supabase_execute(
+                    lambda: supabase.table("pk_ids")
+                    .select("id, pk_id")
+                    .in_("id", pk_ids)
+                    .execute()
+                    .data
+                )
+                pk_map = {p["id"]: p.get("pk_id") for p in pp if p.get("id")}
+            except Exception:
+                pk_map = {}
+
+        sub_ids = list({
+            (rep_map.get(r.get("reporte_id")) or {}).get("subcontratista_id")
+            for r in rows
+            if (rep_map.get(r.get("reporte_id")) or {}).get("subcontratista_id")
+        })
+        sub_map = {}
+        if sub_ids:
+            try:
+                ssb = supabase_execute(
+                    lambda: supabase.table("subcontratistas")
+                    .select("id, razon_social")
+                    .in_("id", sub_ids)
+                    .execute()
+                    .data
+                )
+                sub_map = {s["id"]: s.get("razon_social") for s in ssb if s.get("id")}
+            except Exception:
+                sub_map = {}
+
+        for r in rows:
+            rep = rep_map.get(r.get("reporte_id")) or {}
+            acta_id = r.get("acta_rpo_id") or rep.get("acta_rpo_id")
+            sem_id = r.get("semana_id") or rep.get("semana_id")
+            pk_id_id = rep.get("pk_id_id")
+            sub_id = rep.get("subcontratista_id")
+            r["reporte_numero"] = rep.get("numero_reporte")
+            r["acta_rpo_numero"] = acta_map.get(acta_id)
+            r["semana_numero"] = semana_map.get(sem_id)
+            r["pk_id_valor"] = pk_map.get(pk_id_id)
+            r["subcontratista_nombre"] = sub_map.get(sub_id)
+        return rows
+
+    def _fetch_by_reporte_id_list(id_list: List[int]):
+        out: list = []
+        off = 0
+        base_q = (
+            supabase.table("so_registros")
+            .select(",".join(campos_aux))
+            .in_("reporte_id", id_list)
+        )
+        base_q = _aplicar_filtros_reg(base_q)
+        while True:
+            batch = supabase_execute(lambda: base_q.range(off, off + batch_size).execute().data)
+            if not batch:
+                break
+            out.extend(batch)
+            if len(batch) < batch_size + 1:
+                break
+            off += batch_size + 1
+        return out
+
+    if reporte_ids_base is None:
+        base_q = supabase.table("so_registros").select(",".join(campos_aux))
+        base_q = _aplicar_filtros_reg(base_q)
+        off = 0
+        while True:
+            batch = supabase_execute(lambda: base_q.range(off, off + batch_size).execute().data)
+            if not batch:
+                break
+            registros.extend(batch)
+            if len(batch) < batch_size + 1:
+                break
+            off += batch_size + 1
+        registros = _enriquecer_registros_export(registros)
+        return registros
+
+    # Cuando hay restricción por reporte_ids, chunking por .in_()
+    _CHUNK = 200
+    for i in range(0, len(reporte_ids_base), _CHUNK):
+        chunk = reporte_ids_base[i:i + _CHUNK]
+        registros.extend(_fetch_by_reporte_id_list(chunk))
+
+    registros = _enriquecer_registros_export(registros)
+    return registros
 
 
 @app.get("/sicoe-obra/{contrato_id}/analisis")

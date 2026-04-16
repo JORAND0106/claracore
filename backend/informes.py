@@ -641,15 +641,15 @@ def _html_cc_sub_v1_plain(contrato, sub, corte, items, total_costo, usuario_nomb
 @page {{ size: letter; margin: 8mm 10mm; }}
 </style></head>
 <body style="margin:0;padding:4px;font-family:Arial,Helvetica,sans-serif;font-size:7.5pt;color:#111;">
-<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd_blk}">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd_blk};table-layout:fixed;">
 <tr>
-<td style="width:20%;{bd_blk};vertical-align:middle;padding:3px;text-align:center;background:#fff;height:64px;">
+<td style="width:20%;{bd_blk};vertical-align:middle;padding:2px;text-align:center;background:#fff">
 {logo_html}
 </td>
-<td style="width:48%;{bd_blk};vertical-align:middle;text-align:center;font-weight:bold;font-size:8.2pt;padding:3px 5px;line-height:1.1;height:64px;">
+<td style="width:48%;{bd_blk};vertical-align:middle;text-align:center;font-weight:bold;font-size:8.2pt;padding:3px 5px;line-height:1.1;height:32px;">
 INFORME CORTE DE SUB CONTRATISTA
 </td>
-<td style="width:32%;{bd_blk};vertical-align:middle;text-align:center;padding:3px 5px;height:64px;">
+<td style="width:32%;{bd_blk};vertical-align:middle;text-align:center;padding:3px 5px;">
 <div style="color:#1e3a8a;font-weight:bold;font-size:12.5pt;letter-spacing:0.5px;line-height:1;">{_h(codigo_ccd)}</div>
 <div style="font-size:8.5pt;color:#1e3a8a;font-weight:bold;margin-top:2px;">CCD · ClaraCore</div>
 </td>
@@ -691,7 +691,7 @@ INFORME CORTE DE SUB CONTRATISTA
 </table>
 </td></tr>
 <tr><td colspan="3" style="padding:0;">
-<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed;">
 <thead>
 <tr style="background:#e8e8e8;">
 <th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:16%;">CAPITULO</th>
@@ -712,31 +712,30 @@ INFORME CORTE DE SUB CONTRATISTA
 </tbody>
 </table>
 </td></tr>
+<tr><td colspan="3" style="padding:0;">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+<tr>
+<td style="width:33.33%;{bd};padding:6px 5px;vertical-align:top;font-size:6.5pt;">
+<div style="font-weight:bold;margin-bottom:2px;">Residente de Costos:</div>
+<div style="{linea_firma}"></div>
+<div style="margin-top:3px;font-size:7pt;font-weight:bold;">{_h(usuario_nombre)}</div>
+</td>
+<td style="width:33.33%;{bd};padding:6px 5px;vertical-align:top;font-size:6.5pt;">
+<div style="font-weight:bold;margin-bottom:2px;">Residente de Obra:</div>
+<div style="{linea_firma}"></div>
+</td>
+<td style="width:33.33%;{bd};padding:6px 5px;vertical-align:top;font-size:6.5pt;">
+<div style="font-weight:bold;margin-bottom:2px;">Sub Contratista:</div>
+<div style="{linea_firma}"></div>
+<div style="margin-top:3px;font-size:7pt;">{rep_sub}</div>
+</td>
+</tr>
 </table>
-<div style="height:56mm;"></div>
-<div style="position:fixed;left:10mm;right:10mm;bottom:10mm;">
-  <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
-    <tr>
-      <td style="width:33.33%;{bd};padding:6px 5px;vertical-align:top;font-size:6.5pt;">
-        <div style="font-weight:bold;margin-bottom:2px;">Residente de Costos:</div>
-        <div style="{linea_firma}"></div>
-        <div style="margin-top:3px;font-size:7pt;font-weight:bold;">{_h(usuario_nombre)}</div>
-      </td>
-      <td style="width:33.33%;{bd};padding:6px 5px;vertical-align:top;font-size:6.5pt;">
-        <div style="font-weight:bold;margin-bottom:2px;">Residente de Obra:</div>
-        <div style="{linea_firma}"></div>
-      </td>
-      <td style="width:33.33%;{bd};padding:6px 5px;vertical-align:top;font-size:6.5pt;">
-        <div style="font-weight:bold;margin-bottom:2px;">Sub Contratista:</div>
-        <div style="{linea_firma}"></div>
-        <div style="margin-top:3px;font-size:7pt;">{rep_sub}</div>
-      </td>
-    </tr>
-  </table>
-  <p style="font-size:6pt;color:#64748b;margin-top:6px;text-align:center;">
+</td></tr>
+</table>
+<p style="font-size:6pt;color:#64748b;margin-top:6px;text-align:center;">
 Período del corte: {_h(_fd(corte.get('fecha_inicio')))} — {_h(_fd(corte.get('fecha_fin')))} · Generado ClaraCore · {_h(usuario_cargo)}
-  </p>
-</div>
+</p>
 </body></html>"""
 
 
