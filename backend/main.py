@@ -473,6 +473,91 @@ CARGO_NIVEL_PRERREQUISITO = {
     'nivel3_estado': ('nivel2_estado', 'Aprobado'),
 }
 
+# Nivel 2/3: no listar cantidades en reportes borrador / sin ítem asignado a nivel reporte,
+# ni registros sin item_numero (cola de validación solo sobre cantidades listas).
+NIVEL_FIELD_VALIDACION_AVANZADA = ('nivel2_estado', 'nivel3_estado')
+ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA = ('Borrador', 'Sin Asignar Ítem')
+
+
+def _es_validacion_avanzada(nivel_field: Optional[str]) -> bool:
+    return nivel_field in NIVEL_FIELD_VALIDACION_AVANZADA
+
+
+def _so_reg_item_asignado(q):
+    """Registro con ítem asignado (no null ni cadena vacía)."""
+    return q.not_.is_("item_numero", "null").neq("item_numero", "")
+
+
+def _filtrar_reporte_ids_excl_estados(contrato_id: int, reporte_ids: list, excluir: tuple) -> list:
+    """Solo IDs de reportes cuyo estado en so_reportes no está en excluir."""
+    if not reporte_ids:
+        return []
+    out: List[int] = []
+    step = 200
+    for i in range(0, len(reporte_ids), step):
+        chunk = reporte_ids[i:i + step]
+
+        def _page(c=chunk):
+            return supabase.table("so_reportes").select("id, estado")\
+                .eq("contrato_id", contrato_id).in_("id", c).execute().data
+        for row in supabase_execute(_page):
+            e = row.get("estado")
+            if e not in excluir and row.get("id") is not None:
+                out.append(row["id"])
+    return out
+
+
+def _so_reg_or_pendiente_nivel(q, nivel_field: str):
+    """(campo IS NULL OR campo = 'No Revisado'). PostgREST exige comillas en valores con espacio."""
+    return q.or_(f'{nivel_field}.is.null,{nivel_field}.eq."No Revisado"')
+
+
+def _so_reg_filtro_costado(q, valor: Optional[str]):
+    """Barra 'costado': opciones vienen de cabecera (calzada). En línea el valor suele estar en
+    calzada (columna Excel CALZADA); datos antiguos pueden usar margen."""
+    if valor is None:
+        return q
+    s = str(valor).strip()
+    if not s:
+        return q
+    esc = s.replace('"', '""')
+    return q.or_(f'calzada.eq."{esc}",margen.eq."{esc}"')
+
+
+def _filtrar_registros_validacion_sicoe(
+    regs: list,
+    cargo_id: Optional[int],
+    estado_validacion: Optional[str],
+    reporte_row: Optional[dict] = None,
+) -> list:
+    """Misma semántica que la búsqueda por cargo: nivel 2/3 solo si cumple prerrequisito del nivel previo."""
+    if not regs or cargo_id is None or not (estado_validacion or "").strip():
+        return regs
+    fld = CARGO_ID_NIVEL_MAP.get(cargo_id)
+    if not fld:
+        return regs
+    if _es_validacion_avanzada(fld) and reporte_row is not None:
+        if reporte_row.get("estado") in ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA:
+            return []
+    prereq = CARGO_NIVEL_PRERREQUISITO.get(fld)
+    ev = estado_validacion.strip()
+    out: List[dict] = []
+    for reg in regs:
+        if _es_validacion_avanzada(fld):
+            if not (reg.get("item_numero") or "").strip():
+                continue
+        if prereq and reg.get(prereq[0]) != prereq[1]:
+            continue
+        cur = reg.get(fld)
+        if ev in ("No Revisado", "No Revisados"):
+            if cur is None or str(cur).strip() in ("", "No Revisado"):
+                out.append(reg)
+        else:
+            if cur == ev:
+                out.append(reg)
+    return out
+
+
 # ─────────────────────────────────────────────
 # RUTAS PÚBLICAS
 # ─────────────────────────────────────────────
@@ -2752,14 +2837,15 @@ def buscar_reportes_obra(
         if not reporte_ids_from_reg:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
-    # ── Filtros sobre so_reportes (tramo, costado, abs) ── igual que panel dinámico
-    has_rep_f = any([tramo, costado, abs_inicio is not None, abs_final is not None])
+    # ── Cabecera de reporte: solo abscisas (pk/numero/estado van en _build_q).
+    # Tramo/costado/subcontratista viven por línea en so_registros — si se filtran aquí
+    # por so_reportes.tramo/calzada y luego por registros, la intersección queda vacía
+    # (mismo síntoma que “al tercer filtro no hay datos”). Panel/analisis usan registros.
+    has_rep_f = any([abs_inicio is not None, abs_final is not None])
     if has_rep_f:
         def _reps_f():
             q = supabase.table("so_reportes").select("id")\
                 .eq("contrato_id", contrato_id)
-            if tramo:                  q = q.eq("tramo", tramo)
-            if costado:                q = q.eq("calzada", costado)
             if abs_inicio is not None: q = q.gte("abs_inicio", abs_inicio)
             if abs_final  is not None: q = q.lte("abs_final", abs_final)
             return q.limit(50000).execute().data
@@ -2773,8 +2859,11 @@ def buscar_reportes_obra(
         if not reporte_ids_from_reg:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
-    # ── Filtros sobre so_registros (capitulo, item, subcontratista) ── igual que panel dinámico
-    has_reg_f = any([capitulo, item, subcontratista_id is not None])
+    # ── Filtros sobre so_registros (línea “Excel”): capítulo, ítem, subc, tramo, costado
+    has_reg_f = any([
+        capitulo, item, subcontratista_id is not None,
+        bool(tramo), bool(costado),
+    ])
     if has_reg_f:
         def _regs_f():
             q = supabase.table("so_registros").select("reporte_id")\
@@ -2782,6 +2871,8 @@ def buscar_reportes_obra(
             if capitulo:                    q = q.eq("capitulo", capitulo)
             if item:                        q = q.ilike("item_numero", f"%{item}%")
             if subcontratista_id is not None: q = q.eq("subcontratista_id", subcontratista_id)
+            if tramo:                       q = q.eq("tramo", tramo)
+            if costado:                     q = _so_reg_filtro_costado(q, costado)
             return q.limit(50000).execute().data
         ids_reg_f = list({r["reporte_id"] for r in supabase_execute(_regs_f) if r.get("reporte_id")})
         if not ids_reg_f:
@@ -2819,12 +2910,13 @@ def buscar_reportes_obra(
                     if _prereq:
                         q = q.eq(_prereq[0], _prereq[1])
                     if _ev_l == 'No Revisado':
-                        q = q.or_(f"{_nivel_l}.is.null,{_nivel_l}.eq.No Revisado")\
-                             .not_.is_("item_numero", "null").neq("item_numero", "")
+                        q = _so_reg_or_pendiente_nivel(q, _nivel_l)
                     else:
                         q = q.eq(_nivel_l, _ev_l)
+                    if _es_validacion_avanzada(_nivel_l):
+                        q = _so_reg_item_asignado(q)
                     if _tramo_v:   q = q.eq("tramo", _tramo_v)
-                    if _costado_v: q = q.eq("margen", _costado_v)
+                    if _costado_v: q = _so_reg_filtro_costado(q, _costado_v)
                     if _cap_v:     q = q.eq("capitulo", _cap_v)
                     if _sub_v:     q = q.eq("subcontratista_id", _sub_v)
                     if _item_v:    q = q.ilike("item_numero", f"%{_item_v}%")
@@ -2838,6 +2930,11 @@ def buscar_reportes_obra(
                 if len(_page) < _pag_size:
                     break
                 _pag_offset += _pag_size
+
+            if ids_val and _es_validacion_avanzada(_nivel_l):
+                ids_val = _filtrar_reporte_ids_excl_estados(
+                    contrato_id, ids_val, ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA
+                )
 
             if not ids_val:
                 return {"reportes": [], "total": 0, "offset": offset,
@@ -2919,12 +3016,8 @@ def buscar_reportes_obra(
             .eq("contrato_id", contrato_id)
         if numero_reporte is not None:
             q = q.eq("numero_reporte", numero_reporte)
-        if subcontratista_id is not None:
-            q = q.eq("subcontratista_id", subcontratista_id)
-        if tramo:
-            q = q.eq("tramo", tramo)
-        if costado:
-            q = q.eq("calzada", costado)
+        # subcontratista / tramo / costado: ya restringidos vía so_registros (has_reg_f)
+        # o vía bloque de validación; repetir en cabecera vacía el universo.
         if pk_id is not None:
             q = q.eq("pk_id_id", pk_id)
         if abs_inicio is not None:
@@ -2933,6 +3026,8 @@ def buscar_reportes_obra(
             q = q.lte("abs_final", abs_final)
         if estado:
             q = q.eq("estado", estado)
+        elif _es_validacion_avanzada(_nivel_l):
+            q = q.not_.in_("estado", list(ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA))
         # Importante: para validaciones por nivel, el universo debe definirse por
         # estado de so_registros (nivelX_estado), no por estado de so_reportes.
         # Solo se filtra por estado de reporte cuando el usuario lo pide explícitamente.
@@ -3013,17 +3108,18 @@ def buscar_reportes_obra(
                 if tramo:
                     q = q.eq("tramo", tramo)
                 if costado:
-                    q = q.eq("margen", costado)
+                    q = _so_reg_filtro_costado(q, costado)
 
                 # Validación por nivel (nivel 1/2/3) — misma lógica que filtros principales
                 if _nivel_l and _ev_l:
                     if _prereq:
                         q = q.eq(_prereq[0], _prereq[1])
                     if _ev_l in ("No Revisado", "No Revisados"):
-                        q = q.or_(f"{_nivel_l}.is.null,{_nivel_l}.eq.No Revisado")\
-                             .not_.is_("item_numero", "null").neq("item_numero", "")
+                        q = _so_reg_or_pendiente_nivel(q, _nivel_l)
                     else:
                         q = q.eq(_nivel_l, _ev_l)
+                    if _es_validacion_avanzada(_nivel_l):
+                        q = _so_reg_item_asignado(q)
 
                 return q.limit(5000).execute().data
             reg_estados = supabase_execute(_reg_estados)
@@ -3225,8 +3321,7 @@ def exportar_registros_sicoe(
         if body.tramo:
             q = q.eq("tramo", body.tramo)
         if body.costado:
-            # En so_registros el campo se usa como "margen"
-            q = q.eq("margen", body.costado)
+            q = _so_reg_filtro_costado(q, body.costado)
 
         # Validación por nivel (cargo_id + estado_validacion)
         if body.cargo_id is not None and body.estado_validacion:
@@ -3238,13 +3333,11 @@ def exportar_registros_sicoe(
 
                 ev = body.estado_validacion
                 if ev in ("No Revisado", "No Revisados"):
-                    q = (
-                        q.or_(f"{nivel_field}.is.null,{nivel_field}.eq.No Revisado")
-                        .not_.is_("item_numero", "null")
-                        .neq("item_numero", "")
-                    )
+                    q = _so_reg_or_pendiente_nivel(q, nivel_field)
                 else:
                     q = q.eq(nivel_field, ev)
+                if _es_validacion_avanzada(nivel_field):
+                    q = _so_reg_item_asignado(q)
 
         return q
 
@@ -3260,7 +3353,7 @@ def exportar_registros_sicoe(
             try:
                 rep_rows = supabase_execute(
                     lambda: supabase.table("so_reportes")
-                    .select("id, numero_reporte, acta_rpo_id, semana_id, pk_id_id, subcontratista_id")
+                    .select("id, numero_reporte, acta_rpo_id, semana_id, pk_id_id, subcontratista_id, estado")
                     .in_("id", reporte_ids)
                     .execute()
                     .data
@@ -3268,6 +3361,16 @@ def exportar_registros_sicoe(
                 rep_map = {r["id"]: r for r in rep_rows if r.get("id")}
             except Exception:
                 rep_map = {}
+
+        _nf_ex = CARGO_ID_NIVEL_MAP.get(body.cargo_id) if body.cargo_id and body.estado_validacion else None
+        if _nf_ex and _es_validacion_avanzada(_nf_ex):
+            rows = [
+                r for r in rows
+                if (rep_map.get(r.get("reporte_id")) or {}).get("estado") not in ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA
+                and (r.get("item_numero") or "").strip()
+            ]
+            if not rows:
+                return rows
 
         acta_ids = list({
             (r.get("acta_rpo_id") or (rep_map.get(r.get("reporte_id")) or {}).get("acta_rpo_id"))
@@ -3416,10 +3519,14 @@ def analisis_registros_obra(
     abs_inicio:       Optional[float] = None,
     abs_final:        Optional[float] = None,
     estado:           Optional[str]   = None,
+    numero_reporte:   Optional[int]   = None,
+    numero_registro:  Optional[int]   = None,
+    pk_id:            Optional[int]   = None,
     cargo_id:         Optional[int]   = None,
     estado_validacion: Optional[str]  = None,
     current_user=Depends(get_current_user)
 ):
+    """Agregados del panel dinámico: cada query param activo es un filtro AND sobre el universo de registros."""
     _empty = {"modo":"general","encabezado":"Sin resultados","grupos":[],
               "total_costo_directo":0,"total_registros":0,
               "total_aprobados":0,"total_pendientes":0,"total_rechazados":0}
@@ -3467,32 +3574,7 @@ def analisis_registros_obra(
     if semana is not None and semana_id is None:
         return _empty
 
-    # ── 3. Resolver reporte_ids desde filtros a nivel reporte ────────────────
-    # capitulo y subcontratista_id se filtran directamente en so_registros (paso 4)
-    _cap_l = capitulo; _sub_l = subcontratista_id
-    reporte_ids_base = None
-    has_rep_f = any([tramo, costado, estado,
-                     abs_inicio is not None, abs_final is not None])
-    if has_rep_f:
-        try:
-            _tr_l=tramo; _cos_l=costado; _est_l=estado
-            _ai_l=abs_inicio; _af_l=abs_final
-            def _reps():
-                q = supabase.table("so_reportes").select("id")\
-                    .eq("contrato_id", contrato_id)
-                if _tr_l:   q = q.eq("tramo", _tr_l)
-                if _cos_l:  q = q.eq("calzada", _cos_l)
-                if _est_l:  q = q.eq("estado", _est_l)
-                if _ai_l is not None: q = q.gte("abs_inicio", _ai_l)
-                if _af_l is not None: q = q.lte("abs_final", _af_l)
-                return q.execute().data
-            rr = supabase_execute(_reps)
-            reporte_ids_base = list({r["id"] for r in rr if r.get("id")})
-            if not reporte_ids_base:
-                return _empty
-        except Exception: pass
-
-    # ── 3b. Resolver campo de validación para paso 4 ─────────────────────────
+    # ── 3. Campo de validación (necesario antes de filtrar registros) ─────────
     _val_campo_l = None
     _val_estado_l = None
     _val_prereq_l = None
@@ -3503,31 +3585,74 @@ def analisis_registros_obra(
             _val_estado_l = estado_validacion
             _val_prereq_l = CARGO_NIVEL_PRERREQUISITO.get(_c)
 
-    # ── 4. Obtener registros (paginado para superar límite 1000 de Supabase) ──
+    # ── 4. Filtros AND a nivel so_reportes (misma idea que export / buscar grilla) ─
+    # tramo/costado van en so_registros (paso 5). subcontratista_id va en registros.
+    _cap_l = capitulo
+    _sub_l = subcontratista_id
+    reporte_ids_base = None
+    has_rep_f = any([
+        numero_reporte is not None,
+        pk_id is not None,
+        abs_inicio is not None,
+        abs_final is not None,
+        bool(estado and str(estado).strip()),
+    ])
+    if has_rep_f:
+        try:
+            def _reps():
+                q = supabase.table("so_reportes").select("id")\
+                    .eq("contrato_id", contrato_id)
+                if numero_reporte is not None:
+                    q = q.eq("numero_reporte", numero_reporte)
+                if pk_id is not None:
+                    q = q.eq("pk_id_id", pk_id)
+                if abs_inicio is not None:
+                    q = q.gte("abs_inicio", abs_inicio)
+                if abs_final is not None:
+                    q = q.lte("abs_final", abs_final)
+                if estado and str(estado).strip():
+                    q = q.eq("estado", estado.strip())
+                return q.limit(50000).execute().data
+            rr = supabase_execute(_reps)
+            reporte_ids_base = list({r["id"] for r in rr if r.get("id")})
+            if not reporte_ids_base:
+                return _empty
+        except Exception:
+            pass
+
+    # ── 5. Obtener registros: todos los filtros de barra se combinan con AND ───
     registros = []
     try:
         _a_l=acta_id; _s_l=semana_id; _it_l=item; _rp_l=reporte_ids_base
         _vc_l=_val_campo_l; _ve_l=_val_estado_l; _vp_l=_val_prereq_l
+        _nr = numero_registro
         off = 0
         while True:
             def _regs(o=off):
                 q = supabase.table("so_registros")\
                     .select("reporte_id, costo_directo, cantidad_total, item_numero, item_descripcion, unidad, acta_rpo_id, nivel1_estado, nivel2_estado, nivel3_estado, capitulo, subcontratista_id")\
                     .eq("contrato_id", contrato_id)
+                if _nr is not None:
+                    q = q.eq("numero_registro", _nr)
                 if _a_l is not None:  q = q.eq("acta_rpo_id", _a_l)
                 if _s_l is not None:  q = q.eq("semana_id", _s_l)
                 if _it_l:             q = q.ilike("item_numero", f"%{_it_l}%")
                 if _cap_l:            q = q.eq("capitulo", _cap_l)
                 if _sub_l is not None: q = q.eq("subcontratista_id", _sub_l)
                 if _rp_l is not None: q = q.in_("reporte_id", _rp_l)
+                if tramo:
+                    q = q.eq("tramo", tramo)
+                if costado:
+                    q = _so_reg_filtro_costado(q, costado)
                 if _vc_l and _ve_l:
                     if _vp_l:
                         q = q.eq(_vp_l[0], _vp_l[1])
                     if _ve_l in ('No Revisado', 'No Revisados'):
-                        q = q.or_(f"{_vc_l}.is.null,{_vc_l}.eq.No Revisado")\
-                             .not_.is_("item_numero", "null").neq("item_numero", "")
+                        q = _so_reg_or_pendiente_nivel(q, _vc_l)
                     else:
                         q = q.eq(_vc_l, _ve_l)
+                    if _es_validacion_avanzada(_vc_l):
+                        q = _so_reg_item_asignado(q)
                 return q.range(o, o + 999).execute().data
             batch = supabase_execute(_regs)
             registros.extend(batch)
@@ -3538,7 +3663,24 @@ def analisis_registros_obra(
         if not registros:
             registros = []
 
-    # ── 5. Batch-resolve capitulo y estado desde so_reportes ─────────────────
+    if _val_campo_l and _es_validacion_avanzada(_val_campo_l) and registros:
+        _rp_ids = list({r.get("reporte_id") for r in registros if r.get("reporte_id")})
+        _est_map: dict = {}
+        for _i in range(0, len(_rp_ids), 500):
+            _ch = _rp_ids[_i:_i + 500]
+
+            def _em(c=_ch):
+                return supabase.table("so_reportes").select("id, estado")\
+                    .eq("contrato_id", contrato_id).in_("id", c).execute().data
+            for _row in supabase_execute(_em):
+                _est_map[_row["id"]] = _row.get("estado")
+        registros = [
+            r for r in registros
+            if _est_map.get(r.get("reporte_id")) not in ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA
+            and (r.get("item_numero") or "").strip()
+        ]
+
+    # ── 6. Batch-resolve capitulo y estado desde so_reportes ─────────────────
     rep_ids_found = list({r["reporte_id"] for r in registros if r.get("reporte_id")})
     reporte_map: dict = {}
     if rep_ids_found:
@@ -3555,7 +3697,7 @@ def analisis_registros_obra(
             except Exception:
                 pass
 
-    # ── 6. Agrupar según modo ─────────────────────────────────────────────────
+    # ── 7. Agrupar según modo ─────────────────────────────────────────────────
     def _estado_efectivo(reg):
         # Si hay filtro de validación activo, usar solo el estado del nivel filtrado
         if _vc_l:
@@ -3585,7 +3727,7 @@ def analisis_registros_obra(
             cd  = float(reg.get("costo_directo") or 0)
             if cap not in grupos:
                 grupos[cap] = {"label": cap, "costo_directo": 0.0,
-                               "total_registros": 0, "no_revisados": 0,
+                               "total_registros": 0, "no_revisados": 0, "no_revisados_costo": 0.0,
                                "aprobados": 0.0, "pendientes": 0.0, "rechazados": 0.0,
                                "aprobados_count": 0, "pendientes_count": 0, "rechazados_count": 0}
             grupos[cap]["costo_directo"]   += cd
@@ -3593,7 +3735,9 @@ def analisis_registros_obra(
             if   ee == "Aprobado":   grupos[cap]["aprobados"]  += cd; grupos[cap]["aprobados_count"]  += 1
             elif ee == "Pendiente":  grupos[cap]["pendientes"] += cd; grupos[cap]["pendientes_count"] += 1
             elif ee == "Rechazado":  grupos[cap]["rechazados"] += cd; grupos[cap]["rechazados_count"] += 1
-            else:                    grupos[cap]["no_revisados"] += 1
+            else:
+                grupos[cap]["no_revisados"] += 1
+                grupos[cap]["no_revisados_costo"] = grupos[cap].get("no_revisados_costo", 0.0) + cd
 
     elif modo == "capitulo_items":
         for reg in registros:
@@ -3609,6 +3753,7 @@ def analisis_registros_obra(
                     "costo_directo":   0.0,
                     "total_registros": 0,
                     "no_revisados": 0,
+                    "no_revisados_costo": 0.0,
                     "aprobados": 0.0, "pendientes": 0.0, "rechazados": 0.0,
                     "aprobados_count": 0, "pendientes_count": 0, "rechazados_count": 0,
                 }
@@ -3622,7 +3767,9 @@ def analisis_registros_obra(
             if   ee == "Aprobado":   grupos[it]["aprobados"]  += cd; grupos[it]["aprobados_count"]  += 1
             elif ee == "Pendiente":  grupos[it]["pendientes"] += cd; grupos[it]["pendientes_count"] += 1
             elif ee == "Rechazado":  grupos[it]["rechazados"] += cd; grupos[it]["rechazados_count"] += 1
-            else:                    grupos[it]["no_revisados"] += 1
+            else:
+                grupos[it]["no_revisados"] += 1
+                grupos[it]["no_revisados_costo"] = grupos[it].get("no_revisados_costo", 0.0) + cd
 
     elif modo == "item_detalle":
         acta_ids_found = list({r.get("acta_rpo_id") for r in registros if r.get("acta_rpo_id")})
@@ -3669,10 +3816,12 @@ def analisis_registros_obra(
         grupos_list = sorted(grupos.values(), key=lambda g: g["costo_directo"], reverse=True)
     for g in grupos_list:
         g["costo_directo"] = round(g["costo_directo"], 2)
+        if "no_revisados_costo" in g:
+            g["no_revisados_costo"] = round(g.get("no_revisados_costo") or 0, 2)
         if "cantidad_total" in g:
             g["cantidad_total"] = round(g["cantidad_total"], 3)
 
-    # ── 7. Encabezado ─────────────────────────────────────────────────────────
+    # ── 8. Encabezado ─────────────────────────────────────────────────────────
     if modo == "acta_semana":
         if acta_rpo is not None:
             nr = (acta_info or {}).get("numero_rpo") or acta_rpo
@@ -3696,13 +3845,30 @@ def analisis_registros_obra(
         encabezado = f"Ítem: {item}"
     else:  # general
         partes = []
-        if subcontratista_id: partes.append(f"Subc. #{subcontratista_id}")
-        if capitulo:   partes.append(f"Cap.: {capitulo}")
-        if tramo:      partes.append(f"Tramo: {tramo}")
-        if costado:    partes.append(f"Costado: {costado}")
-        if estado:     partes.append(f"Estado: {estado}")
-        if abs_inicio is not None: partes.append(f"Abs. ≥ {abs_inicio}")
-        if abs_final  is not None: partes.append(f"Abs. ≤ {abs_final}")
+        if numero_reporte is not None:
+            partes.append(f"Rep. #{numero_reporte}")
+        if numero_registro is not None:
+            partes.append(f"Reg. #{numero_registro}")
+        if pk_id is not None:
+            partes.append(f"PK_ID id {pk_id}")
+        if subcontratista_id:
+            partes.append(f"Subc. #{subcontratista_id}")
+        if capitulo:
+            partes.append(f"Cap.: {capitulo}")
+        if item:
+            partes.append(f"Ítem: {item}")
+        if tramo:
+            partes.append(f"Tramo: {tramo}")
+        if costado:
+            partes.append(f"Costado: {costado}")
+        if estado:
+            partes.append(f"Estado rep.: {estado}")
+        if abs_inicio is not None:
+            partes.append(f"Abs. ≥ {abs_inicio}")
+        if abs_final is not None:
+            partes.append(f"Abs. ≤ {abs_final}")
+        if cargo_id is not None and estado_validacion:
+            partes.append(f"Val. cargo {cargo_id}: {estado_validacion}")
         encabezado = " · ".join(partes) if partes else "Todos los registros"
 
     tc  = round(sum(g["costo_directo"]   for g in grupos_list), 2)
@@ -3714,10 +3880,12 @@ def analisis_registros_obra(
     tp_c  = sum(g.get("pendientes_count", 0) for g in grupos_list)
     trj_c = sum(g.get("rechazados_count", 0) for g in grupos_list)
     tnr   = sum(g.get("no_revisados",     0) for g in grupos_list)
+    tnrc  = round(sum(g.get("no_revisados_costo", 0.0) for g in grupos_list), 2)
 
     return {"modo": modo, "encabezado": encabezado, "grupos": grupos_list,
             "total_costo_directo": tc, "total_registros": tr,
             "total_no_revisados": tnr,
+            "total_no_revisados_costo": tnrc,
             "total_aprobados": ta, "total_pendientes": tp, "total_rechazados": trj,
             "total_aprobados_count": ta_c, "total_pendientes_count": tp_c, "total_rechazados_count": trj_c}
 
@@ -3942,17 +4110,44 @@ def filtros_items_registros(
 @app.get("/sicoe-obra/{contrato_id}/filtros/tramoscostados")
 def filtros_tramos_costados(contrato_id: int, current_user=Depends(get_current_user)):
     def _q():
-        return supabase.table("so_reportes").select("tramo, calzada")\
+        return supabase.table("so_reportes").select("tramo")\
             .eq("contrato_id", contrato_id).execute().data
     rows = supabase_execute(_q)
+    tramos = {r["tramo"] for r in rows if r.get("tramo")}
+    # Calzada del filtro: valores únicos desde pk_ids.calzada (maestro por contrato)
+    costados = set()
+    try:
+        _off_pk = 0
+        _step_pk = 1000
+        while True:
+            def _q_pk(o=_off_pk):
+                return supabase.table("pk_ids").select("calzada")\
+                    .eq("contrato_id", contrato_id)\
+                    .range(o, o + _step_pk - 1).execute().data
+            batch_pk = supabase_execute(_q_pk)
+            for r in batch_pk:
+                c = r.get("calzada")
+                if c is not None and str(c).strip() != "":
+                    costados.add(str(c).strip())
+            if len(batch_pk) < _step_pk:
+                break
+            _off_pk += _step_pk
+    except Exception:
+        pass
     return {
-        "tramos":   sorted({r["tramo"]   for r in rows if r.get("tramo")}),
-        "costados": sorted({r["calzada"] for r in rows if r.get("calzada")}),
+        "tramos":   sorted(tramos),
+        "costados": sorted(costados),
     }
 
 
 @app.get("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
-def obtener_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
+def obtener_reporte(
+    contrato_id: int,
+    reporte_id: int,
+    cargo_id: Optional[int] = Query(None),
+    estado_validacion: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
     def _r():
         return supabase.table("so_reportes").select("*, subcontratistas(razon_social), pk_ids(pk_id, civ, tramo, infraestructura, calzada, abs_inicio, abs_final)")\
             .eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
@@ -3978,6 +4173,7 @@ def obtener_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_
     else:
         r["pk_id_valor"] = None
     regs_raw = supabase_execute(_reg)
+    regs_raw = _filtrar_registros_validacion_sicoe(regs_raw, cargo_id, estado_validacion, r)
     reg_ids = [reg["id"] for reg in regs_raw if reg.get("id")]
     num_comentarios_map = {}
     if reg_ids:
@@ -5481,7 +5677,13 @@ def responder_comentario_registro(contrato_id: int, registro_id: int, comentario
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/sicoe-obra/{contrato_id}/registros/{registro_id}/reporte")
-def get_reporte_de_registro(contrato_id: int, registro_id: int, current_user=Depends(get_current_user)):
+def get_reporte_de_registro(
+    contrato_id: int,
+    registro_id: int,
+    cargo_id: Optional[int] = Query(None),
+    estado_validacion: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
     try:
         def _get():
             return supabase.table("so_registros").select("reporte_id")\
@@ -5507,6 +5709,7 @@ def get_reporte_de_registro(contrato_id: int, registro_id: int, current_user=Dep
         sub = r.pop("subcontratistas", None)
         r["subcontratista_nombre"] = sub["razon_social"] if sub else None
         regs_raw = supabase_execute(_reg)
+        regs_raw = _filtrar_registros_validacion_sicoe(regs_raw, cargo_id, estado_validacion, r)
         reg_ids = [reg["id"] for reg in regs_raw if reg.get("id")]
         num_comentarios_map = {}
         if reg_ids:

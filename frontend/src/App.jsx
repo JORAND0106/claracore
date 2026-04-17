@@ -3287,6 +3287,16 @@ function determinarNivelValidacion(usuario) {
   const esInterventoria = rol === 'interventoría' || rol === 'interventoria' || rol === 'operativo interventoría' || rol === 'operativo interventoria'
   const esSubRol        = rol === 'subcontratista'
 
+  const esOperativoContratista   = rol === 'operativo contratista'
+  const esOperativoInterventoria = rol === 'operativo interventoría' || rol === 'operativo interventoria'
+  const esApoyoTecnico           = esInterventoria && !puedeValidar &&
+                                   (cargo.includes('apoyo') || cargo.includes('técnico') || cargo.includes('tecnico'))
+  const esSubcontratista         = esSubRol || cargo.includes('subcontratista')
+  const esSoloComentarista       = esOperativoInterventoria  // puede ver y comentar, no valida ni edita
+
+  // Ocultar montos solo a operativo contratista / operativo interventoría; el resto ve valores económicos.
+  const verValoresEconomicos = !(esOperativoContratista || esOperativoInterventoria)
+
   let nivelValidacion = null
   const esDev = cargo.includes('desarrollador')
 
@@ -3302,16 +3312,6 @@ function determinarNivelValidacion(usuario) {
       (cargo.includes('residente') || cargo.includes('director'))) {
     nivelValidacion = 3
   }
-
-  const esOperativoContratista   = rol === 'operativo contratista'
-  const esOperativoInterventoria = rol === 'operativo interventoría' || rol === 'operativo interventoria'
-  const esOperativo              = esOperativoContratista || esOperativoInterventoria
-  const esApoyoTecnico           = esInterventoria && !puedeValidar &&
-                                   (cargo.includes('apoyo') || cargo.includes('técnico') || cargo.includes('tecnico'))
-  const esSubcontratista         = esSubRol || cargo.includes('subcontratista')
-  const esSoloComentarista       = esOperativoInterventoria  // puede ver y comentar, no valida ni edita
-
-  const verValoresEconomicos = !(esOperativo || esApoyoTecnico || esSoloComentarista)
 
   const rolOrigen = esInterventoria ? 'interventoria'
                   : esSubRol        ? 'subcontratista'
@@ -4377,9 +4377,16 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [reporte, setReporte]                     = useState(repoProp)
   const [registros, setRegistros]                 = useState(repoProp.registros || [])
 
-  // Mapa cargo_id → campo de nivel en so_registros
-  const CARGO_NIVEL_CAMPO = {54:'nivel1_estado',44:'nivel2_estado',
-    56:'nivel2_estado',50:'nivel3_estado',58:'nivel3_estado'}
+  // Mapa cargo_id → campo de nivel en so_registros (debe coincidir con backend CARGO_ID_NIVEL_MAP)
+  const CARGO_NIVEL_CAMPO = {
+    54: 'nivel1_estado',
+    44: 'nivel2_estado',
+    45: 'nivel2_estado',
+    51: 'nivel2_estado',
+    56: 'nivel2_estado',
+    50: 'nivel3_estado',
+    58: 'nivel3_estado',
+  }
   const CARGO_NIVEL_PREREQ = {
     'nivel2_estado': 'nivel1_estado',
     'nivel3_estado': 'nivel2_estado',
@@ -4391,6 +4398,15 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     : null
   const estadoFiltroActivo = filtroValidacion?.estado || null
   const prereqCampo = camponivelActivo ? CARGO_NIVEL_PREREQ[camponivelActivo] : null
+
+  // Nivel 2/3: mismo criterio que backend — no cantidades en reporte Borrador / sin ítem asignado, ni registro sin item_numero
+  const NIVEL_REQUIERE_REPORTE_PUBLICADO = { nivel2_estado: true, nivel3_estado: true }
+  const reporteExcluidoValidacionAvanzada = ['Borrador', 'Sin Asignar Ítem'].includes(reporte?.estado)
+  const registrosDominioValidacion = (() => {
+    if (!camponivelActivo || !NIVEL_REQUIERE_REPORTE_PUBLICADO[camponivelActivo]) return registros
+    if (reporteExcluidoValidacionAvanzada) return []
+    return registros.filter(r => String(r.item_numero || '').trim())
+  })()
 
   // Estado: mostrar solo pendientes o todos
   const [soloMisPendientes, setSoloMisPendientes] = useState(
@@ -4410,13 +4426,16 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     return estadoActual === estadoFiltroActivo
   }
 
-  // Registros filtrados según el toggle
-  const registrosMostrados = soloMisPendientes
-    ? registros.filter(registroCumpleFiltro)
-    : registros
+  // Con filtro de validación activo: nivel 2/3 solo ven filas con nivel previo Aprobado.
+  // "Ver todos" = todas las que ya pasaron el prerrequisito (cualquier estado en el nivel actual).
+  const registrosMostrados = (!camponivelActivo || !estadoFiltroActivo)
+    ? registros
+    : soloMisPendientes
+      ? registrosDominioValidacion.filter(registroCumpleFiltro)
+      : registrosDominioValidacion.filter(r => !prereqCampo || r[prereqCampo] === 'Aprobado')
 
   // Conteo de pendientes para mostrar en el badge del toggle
-  const cantPendientes = registros.filter(registroCumpleFiltro).length
+  const cantPendientes = registrosDominioValidacion.filter(registroCumpleFiltro).length
 
   const [tabActiva, setTabActiva]                 = useState('portada')
   const [guardandoEnlace, setGuardandoEnlace]     = useState(false)
@@ -4479,13 +4498,12 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const puedeEditar = perm?.editar
   const hdrs        = { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' }
   const nivelInfo   = determinarNivelValidacion(usuario)
-  
-  // Para subcontratistas: solo registros con objeto_pago_sub y subcontratista coincidente
+
   const subIdEnCarpeta   = usuario?.subcontratista_id ?? usuario?.sub_id ?? null
   const registrosVisibles = nivelInfo.esSubcontratista
-    ? registros.filter(r => r.nivel2_objeto_pago_sub === true &&
+    ? registrosMostrados.filter(r => r.nivel2_objeto_pago_sub === true &&
         (subIdEnCarpeta === null || r.subcontratista_id === subIdEnCarpeta))
-    : registros
+    : registrosMostrados
 
   // Ítems asignados únicos — cada uno genera un tab
   const itemsAsignados = [...new Set(registrosVisibles.filter(r => r.item_numero).map(r => r.item_numero))]
@@ -4493,7 +4511,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   const recargar = async () => {
     try {
-      const res  = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`, { headers: hdrs })
+      let url = `${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`
+      if (filtroValidacion?.cargo_id != null && filtroValidacion?.estado) {
+        url += `?${new URLSearchParams({ cargo_id: String(filtroValidacion.cargo_id), estado_validacion: filtroValidacion.estado })}`
+      }
+      const res  = await fetch(url, { headers: hdrs })
       const data = await res.json()
       setReporte(data)
       setRegistros(data.registros || [])
@@ -4718,8 +4740,10 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             { key: 'portada',      label: '📋 Portada' },
             { key: 'sin_asignar',  label: `📄 Sin Asignar Ítem${regsSinAsignar.length > 0 ? ` (${regsSinAsignar.length})` : ''}` },
             ...itemsAsignados.map(it => {
-              const tienePendiente = camponivelActivo && registros.some(r =>
-                r.item_numero === it && (r[camponivelActivo] === 'No Revisado' || r[camponivelActivo] == null)
+              const tienePendiente = camponivelActivo && registrosDominioValidacion.some(r =>
+                r.item_numero === it &&
+                (!prereqCampo || r[prereqCampo] === 'Aprobado') &&
+                (r[camponivelActivo] === 'No Revisado' || r[camponivelActivo] == null)
               )
               return { key: it, label: `${tienePendiente ? '🔴' : '🔖'} ${it}` }
             })
@@ -5461,7 +5485,12 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
 
   useEffect(() => {
     if (!navReporteId) return
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${navReporteId}`, { headers: { Authorization: `Bearer ${token}` } })
+    let u = `${API_URL}/sicoe-obra/${contrato_id}/reportes/${navReporteId}`
+    const c0 = capasValidacion[0]
+    if (c0?.cargo_id != null && c0?.estado) {
+      u += `?${new URLSearchParams({ cargo_id: String(c0.cargo_id), estado_validacion: c0.estado })}`
+    }
+    fetch(u, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.json())
       .then(data => { if (data?.id) { setReporteSeleccionado({ ...data, _autoRegistro: navRegistroNumero }); setModalCarpeta(true) } })
       .catch(() => {})
@@ -5602,6 +5631,15 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     // Operativos sin capa de validación → grilla vacía hasta que apliquen filtro
   }, [contrato_id])
 
+  const urlReporteDetalle = (repId, capas) => {
+    let u = `${API_URL}/sicoe-obra/${contrato_id}/reportes/${repId}`
+    const c0 = capas && capas[0]
+    if (c0?.cargo_id != null && c0?.estado) {
+      u += `?${new URLSearchParams({ cargo_id: String(c0.cargo_id), estado_validacion: c0.estado })}`
+    }
+    return u
+  }
+
   const buscarReportes = async (nuevosFiltros, nuevoOffset = 0, capas = []) => {
     setCargando(true)
     const esBusquedaAmplia = capas.length > 0 && 
@@ -5659,7 +5697,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       // Auto-abrir cuando búsqueda por N° Registro devuelve resultado único
       if (nuevosFiltros.numero_registro && lista.length === 1) {
         const rep = lista[0]
-        const r2 = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
+        const r2 = await fetch(urlReporteDetalle(rep.id, capas), { headers: { Authorization: `Bearer ${getToken()}` } })
         const detalle = await r2.json()
         setReporteSeleccionado(detalle)
         setModalCarpeta(true)
@@ -5719,13 +5757,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const cargoNombreUsuario = usuario?.cargo_nombre || usuario?.cargo || ''
 
   const defaultCapasValidacion = useMemo(() => {
-    const CARGO_ID_NIVEL = {54:1, 44:2, 56:2, 50:3, 58:3}
+    const CARGO_ID_NIVEL = { 54: 1, 44: 2, 45: 2, 51: 2, 56: 2, 50: 3, 58: 3 }
     if (!cargoIdUsuario || !CARGO_ID_NIVEL[cargoIdUsuario]) return []
     return [{ cargo_id: cargoIdUsuario, cargo_nombre: cargoNombreUsuario, estado: 'No Revisado' }]
   }, [cargoIdUsuario, cargoNombreUsuario])
 
   const [capasValidacion, setCapasValidacion] = useState(() => {
-    const CARGO_ID_NIVEL = {54:1, 44:2, 56:2, 50:3, 58:3}
+    const CARGO_ID_NIVEL = { 54: 1, 44: 2, 45: 2, 51: 2, 56: 2, 50: 3, 58: 3 }
     if (!cargoIdUsuario || !CARGO_ID_NIVEL[cargoIdUsuario]) return []
     return [{ cargo_id: cargoIdUsuario, cargo_nombre: cargoNombreUsuario, estado: 'No Revisado' }]
   })
@@ -5754,6 +5792,8 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     const cargoIdMap = {
       54: 'nivel1_estados',
       44: 'nivel2_estados',
+      45: 'nivel2_estados',
+      51: 'nivel2_estados',
       56: 'nivel2_estados',
       50: 'nivel3_estados',
       58: 'nivel3_estados',
@@ -6144,9 +6184,9 @@ const limpiarFiltros = () => {
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})}</td>
                         <td style={{ padding:'6px 16px', color:t.textMuted, fontSize:'11px' }}>{g.unidad}</td>
                         {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>}
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados ? (nivelInfo.verValoresEconomicos ? fmtPesos(g.aprobados) : g.aprobados_count ?? '—') : '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes ? (nivelInfo.verValoresEconomicos ? fmtPesos(g.pendientes) : g.pendientes_count ?? '—') : '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados ? (nivelInfo.verValoresEconomicos ? fmtPesos(g.rechazados) : g.rechazados_count ?? '—') : '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{nivelInfo.verValoresEconomicos ? fmtPesos(g.aprobados ?? 0) : (g.aprobados_count ?? '—')}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{nivelInfo.verValoresEconomicos ? fmtPesos(g.pendientes ?? 0) : (g.pendientes_count ?? '—')}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{nivelInfo.verValoresEconomicos ? fmtPesos(g.rechazados ?? 0) : (g.rechazados_count ?? '—')}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -6154,11 +6194,9 @@ const limpiarFiltros = () => {
                     <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
                       <td colSpan={4} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
-                      {capasValidacion.length === 0 && <>
-                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? fmtPesos(analisis.total_aprobados) : '—'}</td>}
-                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? fmtPesos(analisis.total_pendientes) : '—'}</td>}
-                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados ? fmtPesos(analisis.total_rechazados) : '—'}</td>}
-                      </>}
+                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{fmtPesos(analisis.total_aprobados ?? 0)}</td>}
+                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{fmtPesos(analisis.total_pendientes ?? 0)}</td>}
+                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{fmtPesos(analisis.total_rechazados ?? 0)}</td>}
                     </tr>
                   </tfoot>
                 </table>
@@ -6185,9 +6223,9 @@ const limpiarFiltros = () => {
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})}</td>
                         {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>}
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.textMuted }}>{g.total_registros}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados ? (nivelInfo.verValoresEconomicos ? fmtPesos(g.aprobados) : `${g.aprobados_count ?? 0} regs`) : '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes ? (nivelInfo.verValoresEconomicos ? fmtPesos(g.pendientes) : `${g.pendientes_count ?? 0} regs`) : '—'}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados ? (nivelInfo.verValoresEconomicos ? fmtPesos(g.rechazados) : `${g.rechazados_count ?? 0} regs`) : '—'}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{nivelInfo.verValoresEconomicos ? fmtPesos(g.aprobados ?? 0) : `${g.aprobados_count ?? 0} regs`}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{nivelInfo.verValoresEconomicos ? fmtPesos(g.pendientes ?? 0) : `${g.pendientes_count ?? 0} regs`}</td>
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{nivelInfo.verValoresEconomicos ? fmtPesos(g.rechazados ?? 0) : `${g.rechazados_count ?? 0} regs`}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -6196,10 +6234,19 @@ const limpiarFiltros = () => {
                       <td colSpan={3} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{analisis.total_no_revisados ?? '—'}</td>
-                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? fmtPesos(analisis.total_aprobados) : '—'}</td>}
-                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? fmtPesos(analisis.total_pendientes) : '—'}</td>}
-                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados ? fmtPesos(analisis.total_rechazados) : '—'}</td>}
+                      {nivelInfo.verValoresEconomicos ? (
+                        <>
+                          <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{fmtPesos(analisis.total_aprobados ?? 0)}</td>
+                          <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{fmtPesos(analisis.total_pendientes ?? 0)}</td>
+                          <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{fmtPesos(analisis.total_rechazados ?? 0)}</td>
+                        </>
+                      ) : (
+                        <>
+                          <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados_count ?? '—'}</td>
+                          <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes_count ?? '—'}</td>
+                          <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados_count ?? '—'}</td>
+                        </>
+                      )}
                     </tr>
                   </tfoot>
                 </table>
@@ -6230,10 +6277,12 @@ const limpiarFiltros = () => {
                         <td style={{ padding:'6px 16px', color:t.text, fontWeight:'600' }}>{g.label}</td>
                         {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>}
                         <td style={{ padding:'6px 16px', textAlign:'right', color:t.textMuted }}>{g.total_registros}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.no_revisados ?? '—'}</td>
-                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{g.aprobados ? fmtPesos(g.aprobados) : '—'}</td>}
-                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{g.pendientes ? fmtPesos(g.pendientes) : '—'}</td>}
-                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{g.rechazados ? fmtPesos(g.rechazados) : '—'}</td>}
+                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>
+                          {nivelInfo.verValoresEconomicos ? fmtPesos(g.no_revisados_costo ?? 0) : (g.no_revisados ?? '—')}
+                        </td>
+                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{fmtPesos(g.aprobados ?? 0)}</td>}
+                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{fmtPesos(g.pendientes ?? 0)}</td>}
+                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{fmtPesos(g.rechazados ?? 0)}</td>}
                       </tr>
                     ))}
                   </tbody>
@@ -6242,9 +6291,12 @@ const limpiarFiltros = () => {
                       <td style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{analisis.total_aprobados ? fmtPesos(analisis.total_aprobados) : '—'}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{analisis.total_pendientes ? fmtPesos(analisis.total_pendientes) : '—'}</td>
-                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{analisis.total_rechazados ? fmtPesos(analisis.total_rechazados) : '—'}</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>
+                        {nivelInfo.verValoresEconomicos ? fmtPesos(analisis.total_no_revisados_costo ?? 0) : (analisis.total_no_revisados ?? '—')}
+                      </td>
+                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{fmtPesos(analisis.total_aprobados ?? 0)}</td>}
+                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{fmtPesos(analisis.total_pendientes ?? 0)}</td>}
+                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{fmtPesos(analisis.total_rechazados ?? 0)}</td>}
                     </tr>
                   </tfoot>
                 </table>
@@ -6436,7 +6488,7 @@ const limpiarFiltros = () => {
               {filtroTramoList.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
             <select value={filtros.costado} onChange={e => setF('costado', e.target.value)} style={selStyle}>
-              <option value="">Costado…</option>
+              <option value="">Calzada…</option>
               {filtroCostadoList.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
             <input placeholder="Abs. Inicio" type="number" value={filtros.abs_inicio} onChange={e => setF('abs_inicio', e.target.value)}
@@ -6490,7 +6542,7 @@ const limpiarFiltros = () => {
                 setReporteEditando(data)
                 setModalNuevoReporte(true)
               } else if (esSub || puedeVer) {
-                const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
+                const r = await fetch(urlReporteDetalle(rep.id, capasValidacion), { headers: { Authorization: `Bearer ${getToken()}` } })
                 const data = await r.json()
                 setReporteSeleccionado(data)
                 setModalCarpeta(true)

@@ -1,15 +1,17 @@
 import io
+import json
 import logging
 import html
 import math
 import os as _os
 import re
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 _log = logging.getLogger("uvicorn.error")
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
+from pydantic import BaseModel
 from xhtml2pdf import pisa
 from main import get_current_user as _get_user
 from supabase import create_client as _create_client
@@ -22,6 +24,29 @@ _sb = _create_client(
 )
 
 router = APIRouter(tags=["informes"])
+
+# ── Biblioteca CCD (gestión documental): metadatos por código de formato ─────
+# Más adelante el contrato podrá elegir qué códigos aplican; las plantillas siguen en código.
+FORMATOS_CCD: Dict[str, Dict[str, Any]] = {
+    CODIGO_FORMATO_CCD_CC_SUB_001: {
+        "titulo": "Informe corte de subcontratista",
+        "descripcion": "Preacta / corte de cantidades aprobadas por subcontratista",
+        "plantilla_html": "cc_sub_001_v1_plain",
+        "motor_pdf": "xhtml2pdf",
+        "layout": {
+            "encabezado_institucional_solo_primera_hoja": True,
+            "tabla_items_continua_en_siguientes_hojas": True,
+            "firmas_solo_ultima_hoja": True,
+            "firmas_bloque_inferior": True,
+        },
+        # Misma estructura de slots para futuros formatos (Elaboró / Revisó configurables; Aprobó según reglas del formato).
+        "slots_firma": [
+            {"id": "elaboro", "label": "Elaboró", "origen": "configuracion"},
+            {"id": "reviso", "label": "Revisó", "origen": "configuracion"},
+            {"id": "aprobo", "label": "Aprobó", "origen": "subcontratista"},
+        ],
+    },
+}
 
 
 def _safe_filename_part(s: object) -> str:
@@ -68,6 +93,203 @@ def _row(table: str, select: str, **eq: Any) -> Optional[Dict[str, Any]]:
         q = q.eq(k, v)
     rows = q.limit(1).execute().data or []
     return rows[0] if rows else None
+
+
+class CcdFirmaConfigBody(BaseModel):
+    elaboro_nombre: Optional[str] = None
+    elaboro_cargo: Optional[str] = None
+    reviso_nombre: Optional[str] = None
+    reviso_cargo: Optional[str] = None
+
+
+def _is_ccd_formato_firma_table_missing(exc: BaseException) -> bool:
+    s = str(exc).lower()
+    return "pgrst205" in s or ("could not find the table" in s and "ccd_formato_firma" in s)
+
+
+def _dict_firma_from_row(r: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "elaboro_nombre": str(r.get("elaboro_nombre") or "").strip(),
+        "elaboro_cargo": str(r.get("elaboro_cargo") or "").strip(),
+        "reviso_nombre": str(r.get("reviso_nombre") or "").strip(),
+        "reviso_cargo": str(r.get("reviso_cargo") or "").strip(),
+    }
+
+
+def _get_ccd_firma_from_contrato_json(contrato_id: int, formato_codigo: str) -> Dict[str, str]:
+    """Fallback: contratos.ccd_firma_config[formato_codigo] (mismos campos que la tabla dedicada)."""
+    try:
+        rows = (
+            _sb.table("contratos")
+            .select("ccd_firma_config")
+            .eq("id", contrato_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not rows:
+            return {}
+        raw = rows[0].get("ccd_firma_config")
+        if raw is None:
+            return {}
+        if isinstance(raw, str):
+            raw = json.loads(raw)
+        if not isinstance(raw, dict):
+            return {}
+        block = raw.get(formato_codigo)
+        if not isinstance(block, dict):
+            return {}
+        return _dict_firma_from_row(block)
+    except Exception as e:
+        _log.warning("ccd_firma_config en contratos no disponible: %s", e)
+        return {}
+
+
+def _get_ccd_firma_config(contrato_id: int, formato_codigo: str) -> Dict[str, str]:
+    """Lee Elaboró/Revisó desde ccd_formato_firma; si la tabla no existe, desde contratos.ccd_firma_config."""
+    rows: List[Dict[str, Any]] = []
+    try:
+        rows = (
+            _sb.table("ccd_formato_firma")
+            .select("elaboro_nombre, elaboro_cargo, reviso_nombre, reviso_cargo")
+            .eq("contrato_id", contrato_id)
+            .eq("formato_codigo", formato_codigo)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:
+        if _is_ccd_formato_firma_table_missing(e):
+            _log.info("ccd_formato_firma ausente; usando contratos.ccd_firma_config si existe")
+            return _get_ccd_firma_from_contrato_json(contrato_id, formato_codigo)
+        _log.warning("ccd_formato_firma: %s", e)
+        return {}
+    if rows:
+        return _dict_firma_from_row(rows[0])
+    return _get_ccd_firma_from_contrato_json(contrato_id, formato_codigo)
+
+
+def _list_firmantes_candidatos_contrato(contrato_id: int) -> List[Dict[str, Any]]:
+    """Usuarios del contrato (principal + usuario_contratos) con cargo para elegir Elaboró/Revisó."""
+    try:
+        uc = _sb.table("usuario_contratos").select("usuario_id").eq("contrato_id", contrato_id).execute().data or []
+        ids_uc = [r["usuario_id"] for r in uc]
+        pr = (
+            _sb.table("usuarios")
+            .select("id, nombre, apellidos, cargo_id")
+            .eq("contrato_id", contrato_id)
+            .execute()
+            .data
+            or []
+        )
+        ids_principal = [u["id"] for u in pr]
+        todos_ids = list(dict.fromkeys(ids_uc + ids_principal))
+        if not todos_ids:
+            return []
+        rows = (
+            _sb.table("usuarios")
+            .select("id, nombre, apellidos, cargo_id, estado")
+            .in_("id", todos_ids)
+            .execute()
+            .data
+            or []
+        )
+        rows_ap = [r for r in rows if (r.get("estado") or "").lower() == "aprobado"]
+        rows = rows_ap if rows_ap else rows
+        carg_rows = _sb.table("cargos").select("id, nombre").execute().data or []
+        cmap = {c["id"]: (c.get("nombre") or "").strip() for c in carg_rows}
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            nom = f"{r.get('nombre') or ''} {r.get('apellidos') or ''}".strip()
+            cid = r.get("cargo_id")
+            out.append(
+                {
+                    "id": r.get("id"),
+                    "nombre_completo": nom or "—",
+                    "cargo": cmap.get(cid, "—"),
+                }
+            )
+        out.sort(key=lambda x: (x.get("nombre_completo") or "").lower())
+        return out
+    except Exception as e:
+        _log.warning("firmantes candidatos: %s", e)
+        return []
+
+
+def _upsert_ccd_firma_in_contrato_json(contrato_id: int, formato_codigo: str, body: CcdFirmaConfigBody) -> None:
+    patch = {
+        "elaboro_nombre": (body.elaboro_nombre or "").strip() or None,
+        "elaboro_cargo": (body.elaboro_cargo or "").strip() or None,
+        "reviso_nombre": (body.reviso_nombre or "").strip() or None,
+        "reviso_cargo": (body.reviso_cargo or "").strip() or None,
+    }
+    rows = (
+        _sb.table("contratos").select("ccd_firma_config").eq("id", contrato_id).limit(1).execute().data or []
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Contrato no encontrado")
+    raw = rows[0].get("ccd_firma_config")
+    if raw is None:
+        cfg: Dict[str, Any] = {}
+    elif isinstance(raw, str):
+        cfg = json.loads(raw) if raw.strip() else {}
+    elif isinstance(raw, dict):
+        cfg = dict(raw)
+    else:
+        cfg = {}
+    cfg[formato_codigo] = patch
+    _sb.table("contratos").update({"ccd_firma_config": cfg}).eq("id", contrato_id).execute()
+
+
+def _upsert_ccd_firma_config(contrato_id: int, formato_codigo: str, body: CcdFirmaConfigBody) -> Dict[str, str]:
+    row = {
+        "contrato_id": contrato_id,
+        "formato_codigo": formato_codigo,
+        "elaboro_nombre": (body.elaboro_nombre or "").strip() or None,
+        "elaboro_cargo": (body.elaboro_cargo or "").strip() or None,
+        "reviso_nombre": (body.reviso_nombre or "").strip() or None,
+        "reviso_cargo": (body.reviso_cargo or "").strip() or None,
+    }
+    try:
+        ex = (
+            _sb.table("ccd_formato_firma")
+            .select("id")
+            .eq("contrato_id", contrato_id)
+            .eq("formato_codigo", formato_codigo)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if ex:
+            upd = {k: v for k, v in row.items() if k not in ("contrato_id", "formato_codigo")}
+            _sb.table("ccd_formato_firma").update(upd).eq("id", ex[0]["id"]).execute()
+        else:
+            _sb.table("ccd_formato_firma").insert(row).execute()
+    except Exception as e:
+        if _is_ccd_formato_firma_table_missing(e):
+            try:
+                _upsert_ccd_firma_in_contrato_json(contrato_id, formato_codigo, body)
+            except HTTPException:
+                raise
+            except Exception as e2:
+                _log.exception("upsert ccd_firma_config en contratos")
+                raise HTTPException(
+                    status_code=503,
+                    detail="No se pudo guardar firmas: falta la tabla ccd_formato_firma y la columna "
+                    "contratos.ccd_firma_config. Ejecuta backend/sql/ccd_formato_firma.sql en Supabase. "
+                    f"Detalle: {e2!s}",
+                ) from e2
+            return _get_ccd_firma_config(contrato_id, formato_codigo)
+        _log.exception("upsert ccd_formato_firma")
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo guardar la configuración de firmas. ¿Existe la tabla ccd_formato_firma? "
+            f"Ver backend/sql/ccd_formato_firma.sql. Detalle: {e!s}",
+        ) from e
+    return _get_ccd_firma_config(contrato_id, formato_codigo)
 
 
 # ── REGISTRO DE FORMATOS ────────────────────────────────────────────────────────
@@ -288,6 +510,48 @@ def _respuesta_json_memoria(contrato_id: int, corte_id: int, item_numero: str, c
 def test_sin_auth():
     return {"ok": True}
 
+
+@router.get("/formatos-ccd")
+def listar_formatos_ccd(current_user=Depends(_get_user)):
+    """Biblioteca de formatos ClaraCore Documentación (CCD); convive con asignación futura por contrato."""
+    return [{"codigo": k, **v} for k, v in FORMATOS_CCD.items()]
+
+
+@router.get("/{contrato_id}/ccd/biblioteca")
+def ccd_biblioteca_contrato(contrato_id: int, current_user=Depends(_get_user)):
+    """Formatos CCD con slots de firma y configuración guardada (Elaboró/Revisó) para este contrato."""
+    out: List[Dict[str, Any]] = []
+    for codigo, meta in FORMATOS_CCD.items():
+        cfg = _get_ccd_firma_config(contrato_id, codigo)
+        out.append({"codigo": codigo, **meta, "config_firma": cfg})
+    return out
+
+
+@router.get("/{contrato_id}/ccd/firmantes-candidatos")
+def ccd_firmantes_candidatos(contrato_id: int, current_user=Depends(_get_user)):
+    """Usuarios del contrato con cargo — para asignar Elaboró y Revisó en la biblioteca CCD."""
+    return _list_firmantes_candidatos_contrato(contrato_id)
+
+
+@router.get("/{contrato_id}/ccd/config-firma/{formato_codigo}")
+def ccd_get_config_firma(contrato_id: int, formato_codigo: str, current_user=Depends(_get_user)):
+    if formato_codigo not in FORMATOS_CCD:
+        raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
+    return _get_ccd_firma_config(contrato_id, formato_codigo)
+
+
+@router.put("/{contrato_id}/ccd/config-firma/{formato_codigo}")
+def ccd_put_config_firma(
+    contrato_id: int,
+    formato_codigo: str,
+    body: CcdFirmaConfigBody,
+    current_user=Depends(_get_user),
+):
+    if formato_codigo not in FORMATOS_CCD:
+        raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
+    return _upsert_ccd_firma_config(contrato_id, formato_codigo, body)
+
+
 @router.get("/{contrato_id}/pdf/corte-subcontratista/{corte_id}", dependencies=[])
 def pdf_corte_sub(contrato_id: int, corte_id: int, current_user: dict = {}):
     try:
@@ -306,13 +570,19 @@ def pdf_corte_sub(contrato_id: int, corte_id: int, current_user: dict = {}):
         total_costo = ctx["total_costo"]
         usuario_nombre = ctx["usuario_nombre"]
         usuario_cargo = ctx["usuario_cargo"]
+        firma_cfg = _get_ccd_firma_config(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_001)
 
         # 1º plantilla v1 plana (sin BASE_CSS, sin pdf:nextpage) — máxima estabilidad con xhtml2pdf.
         # 2º modo seguro · 3º mínima · 4º PDF genérico si pisa falla con todo lo anterior.
         errs: list[str] = []
         pdf_bytes: bytes | None = None
         for name, fn in (
-            ("v1_plana", lambda: _html_cc_sub_v1_plain(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)),
+            (
+                "v1_plana",
+                lambda: _html_cc_sub_v1_plain(
+                    contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo, firma_cfg=firma_cfg
+                ),
+            ),
             ("modo_seguro", lambda: _html_corte_sub_fallback(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)),
             ("minima", lambda: _html_corte_sub_minima(
                 contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo, "prev", "prev",
@@ -328,7 +598,9 @@ def pdf_corte_sub(contrato_id: int, corte_id: int, current_user: dict = {}):
         if pdf_bytes is None:
             try:
                 # Importante: construir HTML dentro del try; si falla (p. ej. tipo raro en BD), no debe escapar sin HTTPException.
-                html_last = _html_cc_sub_v1_plain(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo)
+                html_last = _html_cc_sub_v1_plain(
+                    contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo, firma_cfg=firma_cfg
+                )
                 pdf_bytes = _to_pdf_corte_garantizado(html_last)
             except Exception as e:
                 _log.exception("pdf_corte_sub: sin PDF tras cadena de respaldo")
@@ -426,7 +698,21 @@ def preview_corte_sub():
         {"capitulo": "IV", "item_numero": "NP-495", "item_descripcion": "CONCRETO DE LIMPIEZA f'c=140 kg/cm2", "unidad": "M3", "cantidad": 8.2, "vlr_unitario_sub": 380000, "costo_directo": 3116000},
     ]
     total_costo = sum(i["costo_directo"] for i in items)
-    html = _html_cc_sub_v1_plain(contrato, sub, corte, items, total_costo, "Jorge Andrés Jaimes", "Desarrollador / Controlador de Obra")
+    html = _html_cc_sub_v1_plain(
+        contrato,
+        sub,
+        corte,
+        items,
+        total_costo,
+        "Jorge Andrés Jaimes",
+        "Desarrollador / Controlador de Obra",
+        firma_cfg={
+            "elaboro_nombre": "Ej. Elaboró",
+            "elaboro_cargo": "Cargo",
+            "reviso_nombre": "Ej. Revisó",
+            "reviso_cargo": "Cargo",
+        },
+    )
     pdf_bytes = _to_pdf(html)
     return Response(content=pdf_bytes, media_type="application/pdf",
                     headers={"Content-Disposition": "inline; filename=preview_CC-SUB-001.pdf"})
@@ -599,48 +885,104 @@ def _corte_consecutivo_fmt(corte: dict) -> str:
         return str(co)
 
 
-def _html_cc_sub_v1_plain(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo) -> str:
-    """CC-SUB-001 compacto: encabezado y metadatos reducidos, tabla optimizada y 3 firmas."""
+# Paginación CC-SUB-001 (letter ~8–10 mm márgenes + encabezado en 1ª hoja). Ajustar si se cortan filas.
+_CC_SUB_001_ROWS_PAGINA_1 = 14
+_CC_SUB_001_ROWS_PAGINA_SIG = 24
+
+
+def _cc_sub_001_chunk_items(items: List[dict]) -> List[List[dict]]:
+    if not items:
+        return [[]]
+    out: List[List[dict]] = []
+    i = 0
+    out.append(items[i : i + _CC_SUB_001_ROWS_PAGINA_1])
+    i += _CC_SUB_001_ROWS_PAGINA_1
+    while i < len(items):
+        out.append(items[i : i + _CC_SUB_001_ROWS_PAGINA_SIG])
+        i += _CC_SUB_001_ROWS_PAGINA_SIG
+    return out
+
+
+def _html_cc_sub_001_tr_item(item: dict, bd: str) -> str:
+    cap = (item.get("capitulo") or "").strip() or "—"
+    desc = str(item.get("item_descripcion", "") or "").lower()
+    return (
+        "<tr>"
+        f"<td style=\"{bd};padding:2px 3px;font-size:7pt;vertical-align:top\">{_h(cap)}</td>"
+        f"<td style=\"{bd};padding:2px 3px;font-size:7pt;vertical-align:top\">{_h(item.get('item_numero', ''))}</td>"
+        f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:left\">{_h(desc)}</td>"
+        f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:center\">{_h(item.get('unidad', ''))}</td>"
+        f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:right\">{_fm(item.get('vlr_unitario_sub'))}</td>"
+        f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:right\">{_fn(item.get('cantidad'))}</td>"
+        f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:right\">{_fm(item.get('costo_directo'))}</td>"
+        "</tr>"
+    )
+
+
+def _html_cc_sub_001_thead_items(bd: str) -> str:
+    return f"""<thead>
+<tr style="background:#e8e8e8;">
+<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:16%;">CAPITULO</th>
+<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:8%;">ITEM</th>
+<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:left;width:40%;">DESCRIPCIÓN</th>
+<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:6%;">UNIDAD</th>
+<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:10%;">VALOR UNIT.</th>
+<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:9%;">CANTIDAD</th>
+<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:11%;">COSTO DIR</th>
+</tr>
+</thead>"""
+
+
+def _html_cc_sub_v1_plain(
+    contrato,
+    sub,
+    corte,
+    items,
+    total_costo,
+    usuario_nombre,
+    usuario_cargo,
+    firma_cfg: Optional[Dict[str, Any]] = None,
+) -> str:
+    """CC-SUB-001: encabezado solo 1ª hoja; ítems paginados; firmas al cierre (Elaboró/Revisó configurables; Aprobó desde subcontratista)."""
     bd = "border:1px solid #9ca3af"
     bd_blk = "border:1px solid #1f2937"
     codigo_ccd = CODIGO_FORMATO_CCD_CC_SUB_001
     logo_html = _html_logo_contratista(contrato)
-    filas: list[str] = []
-    for item in items:
-        cap = (item.get("capitulo") or "").strip() or "—"
-        desc = str(item.get("item_descripcion", "") or "").lower()
-        filas.append(
-            "<tr>"
-            f"<td style=\"{bd};padding:2px 3px;font-size:7pt;vertical-align:top\">{_h(cap)}</td>"
-            f"<td style=\"{bd};padding:2px 3px;font-size:7pt;vertical-align:top\">{_h(item.get('item_numero', ''))}</td>"
-            f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:left\">{_h(desc)}</td>"
-            f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:center\">{_h(item.get('unidad', ''))}</td>"
-            f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:right\">{_fm(item.get('vlr_unitario_sub'))}</td>"
-            f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:right\">{_fn(item.get('cantidad'))}</td>"
-            f"<td style=\"{bd};padding:2px 3px;font-size:7pt;text-align:right\">{_fm(item.get('costo_directo'))}</td>"
-            "</tr>"
-        )
-    body_rows = "".join(filas) if filas else (
-        f"<tr><td colspan=\"7\" style=\"{bd};padding:5px;font-size:7pt;color:#6b7280\">"
-        "Sin ítems con estado Aprobado en este corte.</td></tr>"
-    )
-
     fecha_gen = _fmt_informe_fecha_generacion()
     corte_lbl = _corte_consecutivo_fmt(corte)
     contratista_nom = _h(str(contrato.get("contratista") or ""))
     interv = _h(str(contrato.get("interventoria") or ""))
     nit_raw = str(contrato.get("nit") or "").strip()
     nit_en_valor = f' <span style="font-size:6.5pt;color:#444;">(NIT: {_h(nit_raw)})</span>' if nit_raw else ""
-    rep_sub = _h(str(sub.get("nombre_contacto") or sub.get("razon_social") or "—"))
+    fc = firma_cfg or {}
+    elaboro_n = _h(str(fc.get("elaboro_nombre") or "").strip() or "—")
+    elaboro_c = _h(str(fc.get("elaboro_cargo") or "").strip() or "—")
+    reviso_n = _h(str(fc.get("reviso_nombre") or "").strip() or "—")
+    reviso_c = _h(str(fc.get("reviso_cargo") or "").strip() or "—")
+    aprobo_empresa = _h(str(sub.get("razon_social") or "").strip() or "—")
+    aprobo_rep = _h(str(sub.get("nombre_contacto") or "").strip() or "—")
     linea_firma = "border-top:1px solid #111;margin-top:20px;padding-top:2px;min-height:16px"
     lbl = "font-size:6pt;font-weight:bold;color:#111;text-transform:uppercase;letter-spacing:0.2px;"
     und = "border-bottom:1px solid #1f2937;font-size:7pt;padding:1px 0 2px 0;margin-top:1px;"
 
-    return f"""<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>{codigo_ccd}</title>
+    chunks = _cc_sub_001_chunk_items(list(items or []))
+    nchunks = len(chunks)
+
+    parts: list[str] = []
+    parts.append(f"""<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:pdf="http://www.xhtml2pdf.org/pdf">
+<head><meta charset="UTF-8"/><title>{_h(codigo_ccd)}</title>
 <style type="text/css">
 @page {{ size: letter; margin: 8mm 10mm; }}
+.cc001-tabla-items {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
+.cc001-tabla-items thead {{ display: table-header-group; }}
+.ccd-cc001-firmas-wrap {{ margin-top: 10mm; page-break-inside: avoid; }}
 </style></head>
 <body style="margin:0;padding:4px;font-family:Arial,Helvetica,sans-serif;font-size:7.5pt;color:#111;">
+""")
+
+    # ── Bloque encabezado (solo antes del primer corte de tabla de ítems = primera hoja) ──
+    parts.append(f"""
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd_blk};table-layout:fixed;">
 <tr>
 <td style="width:20%;{bd_blk};vertical-align:middle;padding:2px;text-align:center;background:#fff">
@@ -690,53 +1032,63 @@ INFORME CORTE DE SUB CONTRATISTA
 </td></tr>
 </table>
 </td></tr>
-<tr><td colspan="3" style="padding:0;">
-<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;table-layout:fixed;">
-<thead>
-<tr style="background:#e8e8e8;">
-<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:16%;">CAPITULO</th>
-<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:8%;">ITEM</th>
-<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:left;width:40%;">DESCRIPCIÓN</th>
-<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:6%;">UNIDAD</th>
-<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:10%;">VALOR UNIT.</th>
-<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:9%;">CANTIDAD</th>
-<th style="{bd};padding:3px 2px;font-size:6.5pt;font-weight:bold;text-align:center;width:11%;">COSTO DIR</th>
-</tr>
-</thead>
-<tbody>
-{body_rows}
-<tr style="background:#dbeafe;">
+</table>
+""")
+
+    for ci, chunk in enumerate(chunks):
+        if ci > 0:
+            parts.append('<pdf:nextpage />')
+        parts.append(f'<table class="cc001-tabla-items" cellspacing="0" cellpadding="0">')
+        parts.append(_html_cc_sub_001_thead_items(bd))
+        parts.append("<tbody>")
+        if not chunk and not items:
+            parts.append(
+                f"<tr><td colspan=\"7\" style=\"{bd};padding:5px;font-size:7pt;color:#6b7280\">"
+                "Sin ítems con estado Aprobado en este corte.</td></tr>"
+            )
+        else:
+            for it in chunk:
+                parts.append(_html_cc_sub_001_tr_item(it, bd))
+        if ci == nchunks - 1:
+            parts.append(
+                f"""<tr style="background:#dbeafe;">
 <td colspan="5" style="{bd};text-align:right;padding:4px 6px;font-weight:bold;font-size:7.5pt;">SUB TOTAL:</td>
 <td colspan="2" style="{bd};text-align:right;padding:4px 6px;font-weight:bold;font-size:7.5pt;">{_fm(total_costo)}</td>
-</tr>
-</tbody>
-</table>
-</td></tr>
-<tr><td colspan="3" style="padding:0;">
+</tr>"""
+            )
+        parts.append("</tbody></table>")
+
+    # Firmas: solo tras cerrar la última tabla de ítems (última hoja). Izq=Elaboró, Centro=Revisó, Der=Aprobó (datos del sub en módulo administrativo).
+    parts.append(f"""
+<div class="ccd-cc001-firmas-wrap">
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
 <tr>
 <td style="width:33.33%;{bd};padding:6px 5px;vertical-align:top;font-size:6.5pt;">
-<div style="font-weight:bold;margin-bottom:2px;">Residente de Costos:</div>
+<div style="font-weight:bold;margin-bottom:2px;">Elaboró:</div>
 <div style="{linea_firma}"></div>
-<div style="margin-top:3px;font-size:7pt;font-weight:bold;">{_h(usuario_nombre)}</div>
+<div style="margin-top:3px;font-size:7pt;font-weight:bold;">{elaboro_n}</div>
+<div style="font-size:6.5pt;color:#444;">{elaboro_c}</div>
 </td>
 <td style="width:33.33%;{bd};padding:6px 5px;vertical-align:top;font-size:6.5pt;">
-<div style="font-weight:bold;margin-bottom:2px;">Residente de Obra:</div>
+<div style="font-weight:bold;margin-bottom:2px;">Revisó:</div>
 <div style="{linea_firma}"></div>
+<div style="margin-top:3px;font-size:7pt;font-weight:bold;">{reviso_n}</div>
+<div style="font-size:6.5pt;color:#444;">{reviso_c}</div>
 </td>
 <td style="width:33.33%;{bd};padding:6px 5px;vertical-align:top;font-size:6.5pt;">
-<div style="font-weight:bold;margin-bottom:2px;">Sub Contratista:</div>
+<div style="font-weight:bold;margin-bottom:2px;">Aprobó:</div>
 <div style="{linea_firma}"></div>
-<div style="margin-top:3px;font-size:7pt;">{rep_sub}</div>
+<div style="margin-top:3px;font-size:7pt;font-weight:bold;">{aprobo_empresa}</div>
+<div style="margin-top:2px;font-size:6.5pt;">Representante: {aprobo_rep}</div>
 </td>
 </tr>
 </table>
-</td></tr>
-</table>
+</div>
 <p style="font-size:6pt;color:#64748b;margin-top:6px;text-align:center;">
-Período del corte: {_h(_fd(corte.get('fecha_inicio')))} — {_h(_fd(corte.get('fecha_fin')))} · Generado ClaraCore · {_h(usuario_cargo)}
+Período del corte: {_h(_fd(corte.get('fecha_inicio')))} — {_h(_fd(corte.get('fecha_fin')))} · Generado ClaraCore · {_h(usuario_cargo)} · Sesión: {_h(usuario_nombre)}
 </p>
-</body></html>"""
+</body></html>""")
+    return "".join(parts)
 
 
 def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo):

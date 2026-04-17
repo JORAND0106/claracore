@@ -80,6 +80,18 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   const [cargandoCor, setCargandoCor] = useState(false)
   const [cargandoIt,  setCargandoIt]  = useState(false)
   const [error,       setError]       = useState(null)
+  /** Biblioteca CCD por contrato (formatos + config de firmas + slots). */
+  const [biblioCcd, setBiblioCcd] = useState([])
+  const [firmantesCcd, setFirmantesCcd] = useState([])
+  const [cfgFirmaCc001, setCfgFirmaCc001] = useState({
+    elaboro_nombre: '',
+    elaboro_cargo: '',
+    reviso_nombre: '',
+    reviso_cargo: '',
+  })
+  const [guardandoFirmaCcd, setGuardandoFirmaCcd] = useState(false)
+  /** Por código de formato: panel abierto/cerrado (persistido en localStorage por contrato). */
+  const [ccdExpanded, setCcdExpanded] = useState(() => ({}))
 
   /** Vista previa: PDF en modal (blob). */
   const [vistaPrevia, setVistaPrevia] = useState(null)
@@ -102,6 +114,76 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
       .then(d => { setSubs(Array.isArray(d) ? d : []) })
       .catch(() => setError('Error cargando subcontratistas'))
       .finally(() => setCargandoSub(false))
+  }, [contratoId])
+
+  const ccdExpandedStorageKey = contratoId != null ? `ccd_biblio_expanded_${contratoId}` : null
+
+  useEffect(() => {
+    if (!ccdExpandedStorageKey) {
+      setCcdExpanded({})
+      return
+    }
+    try {
+      const raw = localStorage.getItem(ccdExpandedStorageKey)
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          setCcdExpanded(parsed)
+        }
+      }
+    } catch {
+      /* noop */
+    }
+  }, [ccdExpandedStorageKey])
+
+  function toggleCcdFormato(codigo) {
+    if (!ccdExpandedStorageKey) return
+    setCcdExpanded((prev) => {
+      const next = { ...prev, [codigo]: !prev[codigo] }
+      try {
+        localStorage.setItem(ccdExpandedStorageKey, JSON.stringify(next))
+      } catch {
+        /* noop */
+      }
+      return next
+    })
+  }
+
+  useEffect(() => {
+    if (!contratoId) {
+      setBiblioCcd([])
+      setFirmantesCcd([])
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) return
+    Promise.all([
+      fetchConFallback(`/informes/${contratoId}/ccd/biblioteca`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      }).then((r) => (r.ok ? r.json() : [])),
+      fetchConFallback(`/informes/${contratoId}/ccd/firmantes-candidatos`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      }).then((r) => (r.ok ? r.json() : [])),
+    ])
+      .then(([bib, cand]) => {
+        setBiblioCcd(Array.isArray(bib) ? bib : [])
+        setFirmantesCcd(Array.isArray(cand) ? cand : [])
+        const cc = (Array.isArray(bib) ? bib : []).find((x) => x.codigo === 'CC-SUB-001')
+        const cf = cc?.config_firma
+        if (cf && typeof cf === 'object') {
+          setCfgFirmaCc001((prev) => ({
+            ...prev,
+            elaboro_nombre: cf.elaboro_nombre ?? '',
+            elaboro_cargo: cf.elaboro_cargo ?? '',
+            reviso_nombre: cf.reviso_nombre ?? '',
+            reviso_cargo: cf.reviso_cargo ?? '',
+          }))
+        }
+      })
+      .catch(() => {
+        setBiblioCcd([])
+        setFirmantesCcd([])
+      })
   }, [contratoId])
 
   function onSubChange(e) {
@@ -285,6 +367,46 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     background: t.bg
   }
 
+  function aplicarFirmante(campo, usuarioId) {
+    const u = firmantesCcd.find((x) => String(x.id) === String(usuarioId))
+    if (!u) {
+      if (campo === 'elaboro') {
+        setCfgFirmaCc001((p) => ({ ...p, elaboro_nombre: '', elaboro_cargo: '' }))
+      } else {
+        setCfgFirmaCc001((p) => ({ ...p, reviso_nombre: '', reviso_cargo: '' }))
+      }
+      return
+    }
+    if (campo === 'elaboro') {
+      setCfgFirmaCc001((p) => ({ ...p, elaboro_nombre: u.nombre_completo, elaboro_cargo: u.cargo }))
+    } else {
+      setCfgFirmaCc001((p) => ({ ...p, reviso_nombre: u.nombre_completo, reviso_cargo: u.cargo }))
+    }
+  }
+
+  async function guardarCfgFirmaCc001() {
+    const authToken = getAuthToken()
+    if (!authToken || !contratoId) return
+    setGuardandoFirmaCcd(true)
+    setError(null)
+    try {
+      const r = await fetchConFallback(`/informes/${contratoId}/ccd/config-firma/CC-SUB-001`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfgFirmaCc001),
+      })
+      if (!r.ok) {
+        const msg = await leerErrorRespuesta(r)
+        setError(msg)
+        return
+      }
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setGuardandoFirmaCcd(false)
+    }
+  }
+
   return (
     <div style={{ maxWidth: '1080px', margin: '0 auto', padding: '8px' }}>
 
@@ -295,6 +417,192 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
         <div style={{ fontSize: f.sub + 'px', color: t.textMuted, marginTop: '2px' }}>
           Vista previa del mismo PDF que genera el servidor (informe de corte y memorias por ítem).
         </div>
+        {biblioCcd.length > 0 && (
+          <div
+            style={{
+              marginTop: '12px',
+              padding: '12px 14px',
+              borderRadius: '8px',
+              border: `1px solid ${t.border}`,
+              background: t.bg,
+              fontSize: f.sub + 'px',
+              color: t.textMuted,
+            }}
+          >
+            <div style={{ fontWeight: '700', color: t.text, marginBottom: '10px' }}>Biblioteca de formatos (CCD)</div>
+            <div style={{ fontSize: Math.max(11, f.sub - 1) + 'px', color: t.textMuted, marginBottom: '10px' }}>
+              Pulsa un formato para ver u ocultar slots y opciones; el estado abierto/cerrado se recuerda en este navegador.
+            </div>
+            {biblioCcd.map((fmt) => {
+              const abierto = !!ccdExpanded[fmt.codigo]
+              return (
+              <div
+                key={fmt.codigo}
+                style={{
+                  marginBottom: '10px',
+                  borderRadius: '8px',
+                  border: `1px solid ${t.border}`,
+                  overflow: 'hidden',
+                  background: t.card,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleCcdFormato(fmt.codigo)}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '10px',
+                    padding: '10px 12px',
+                    border: 'none',
+                    background: t.bg,
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    font: 'inherit',
+                  }}
+                >
+                  <span>
+                    <span style={{ color: t.primary, fontWeight: '800' }}>{fmt.codigo}</span>
+                    {fmt.titulo ? ` — ${fmt.titulo}` : ''}
+                  </span>
+                  <span style={{ color: t.textMuted, fontSize: '14px', flexShrink: 0 }} aria-hidden>
+                    {abierto ? '▼' : '▶'}
+                  </span>
+                </button>
+                {abierto && (
+                <div style={{ padding: '12px', borderTop: `1px solid ${t.border}` }}>
+                {(fmt.slots_firma || []).length > 0 && (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                      gap: '10px',
+                      alignItems: 'start',
+                    }}
+                  >
+                    {(fmt.slots_firma || []).map((slot) => (
+                      <div
+                        key={slot.id}
+                        style={{
+                          border: `1px solid ${t.border}`,
+                          borderRadius: '8px',
+                          padding: '8px 10px',
+                          background: t.bg,
+                        }}
+                      >
+                        <div style={{ fontWeight: '800', color: t.text, fontSize: Math.max(11, f.sub - 1) + 'px', marginBottom: '6px' }}>
+                          {slot.label}
+                        </div>
+                        {slot.origen === 'configuracion' && fmt.codigo === 'CC-SUB-001' && (
+                          <>
+                            {slot.id === 'elaboro' && (
+                              <>
+                                <label style={{ fontSize: '11px', display: 'block', marginBottom: '4px' }}>Usuario / cargo (catálogo del contrato)</label>
+                                <select
+                                  style={{ ...select, fontSize: '13px', marginBottom: '6px' }}
+                                  value=""
+                                  onChange={(e) => aplicarFirmante('elaboro', e.target.value)}
+                                >
+                                  <option value="">— Elegir —</option>
+                                  {firmantesCcd.map((u) => (
+                                    <option key={u.id} value={u.id}>
+                                      {u.nombre_completo} ({u.cargo})
+                                    </option>
+                                  ))}
+                                </select>
+                                <input
+                                  placeholder="Nombre (editable)"
+                                  value={cfgFirmaCc001.elaboro_nombre}
+                                  onChange={(e) => setCfgFirmaCc001((p) => ({ ...p, elaboro_nombre: e.target.value }))}
+                                  style={{ ...select, marginBottom: '6px', fontSize: '13px' }}
+                                />
+                                <input
+                                  placeholder="Cargo"
+                                  value={cfgFirmaCc001.elaboro_cargo}
+                                  onChange={(e) => setCfgFirmaCc001((p) => ({ ...p, elaboro_cargo: e.target.value }))}
+                                  style={{ ...select, fontSize: '13px' }}
+                                />
+                              </>
+                            )}
+                            {slot.id === 'reviso' && (
+                              <>
+                                <label style={{ fontSize: '11px', display: 'block', marginBottom: '4px' }}>Usuario / cargo (catálogo del contrato)</label>
+                                <select
+                                  style={{ ...select, fontSize: '13px', marginBottom: '6px' }}
+                                  value=""
+                                  onChange={(e) => aplicarFirmante('reviso', e.target.value)}
+                                >
+                                  <option value="">— Elegir —</option>
+                                  {firmantesCcd.map((u) => (
+                                    <option key={u.id} value={u.id}>
+                                      {u.nombre_completo} ({u.cargo})
+                                    </option>
+                                  ))}
+                                </select>
+                                <input
+                                  placeholder="Nombre (editable)"
+                                  value={cfgFirmaCc001.reviso_nombre}
+                                  onChange={(e) => setCfgFirmaCc001((p) => ({ ...p, reviso_nombre: e.target.value }))}
+                                  style={{ ...select, marginBottom: '6px', fontSize: '13px' }}
+                                />
+                                <input
+                                  placeholder="Cargo"
+                                  value={cfgFirmaCc001.reviso_cargo}
+                                  onChange={(e) => setCfgFirmaCc001((p) => ({ ...p, reviso_cargo: e.target.value }))}
+                                  style={{ ...select, fontSize: '13px' }}
+                                />
+                              </>
+                            )}
+                          </>
+                        )}
+                        {slot.origen === 'subcontratista' && (
+                          <div style={{ fontSize: '12px', lineHeight: 1.45 }}>
+                            <div style={{ color: t.textMuted, marginBottom: '4px' }}>
+                              Automático según el subcontratista elegido abajo en el informe:
+                            </div>
+                            <div>
+                              <b style={{ color: t.text }}>Empresa:</b> {subSel?.razon_social || '—'}
+                            </div>
+                            <div>
+                              <b style={{ color: t.text }}>Representante:</b> {subSel?.nombre_contacto || '—'}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {fmt.codigo === 'CC-SUB-001' && (
+                  <button
+                    type="button"
+                    onClick={guardarCfgFirmaCc001}
+                    disabled={guardandoFirmaCcd}
+                    style={{
+                      marginTop: '10px',
+                      padding: '6px 14px',
+                      borderRadius: '6px',
+                      border: 'none',
+                      background: t.primary,
+                      color: '#fff',
+                      fontWeight: '700',
+                      cursor: guardandoFirmaCcd ? 'not-allowed' : 'pointer',
+                      opacity: guardandoFirmaCcd ? 0.7 : 1,
+                    }}
+                  >
+                    {guardandoFirmaCcd ? 'Guardando…' : 'Guardar firmas (Elaboró / Revisó)'}
+                  </button>
+                )}
+                </div>
+                )}
+              </div>
+            )})}
+            <div style={{ fontSize: Math.max(11, f.sub - 1) + 'px', marginTop: '4px' }}>
+              Las plantillas PDF están en código; la asignación de formatos por contrato podrá filtrarse más adelante.
+            </div>
+          </div>
+        )}
       </div>
 
       {error && (
