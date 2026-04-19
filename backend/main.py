@@ -3344,7 +3344,9 @@ def admin_inicio_novedades_create(
     else:
         row["fecha"] = datetime.now(timezone.utc).date().isoformat()
     try:
-        res = supabase.table("inicio_novedades").insert(row).select("*").single().execute()
+        # supabase-py 2.x: insert() devuelve SyncQueryRequestBuilder (no admite .select() encadenado).
+        # returning=representation es el valor por defecto; execute() devuelve la fila insertada en data.
+        res = supabase.table("inicio_novedades").insert(row).execute()
     except Exception as e:
         _log_api.warning("POST /admin/inicio/novedades insert: %s", e)
         raise HTTPException(
@@ -3356,7 +3358,12 @@ def admin_inicio_novedades_create(
                 f"Detalle técnico: {e!s}"
             ),
         )
-    data = res.data
+    data = res.data[0] if res.data else None
+    if not data:
+        raise HTTPException(
+            status_code=503,
+            detail="La inserción no devolvió fila (PostgREST). Revisa permisos RLS y la tabla inicio_novedades.",
+        )
     u = dict(current_user)
     u["nombre"] = u.get("nombre") or u.get("email", "")
     registrar_log(
@@ -3389,8 +3396,12 @@ def admin_inicio_novedades_update(
         patch["fecha"] = str(patch["fecha"])[:10]
     if not patch:
         return prev
-    res = supabase.table("inicio_novedades").update(patch).eq("id", novedad_id).select("*").single().execute()
-    data = res.data or {**prev, **patch}
+    try:
+        res = supabase.table("inicio_novedades").update(patch).eq("id", novedad_id).execute()
+    except Exception as e:
+        _log_api.warning("PATCH /admin/inicio/novedades/%s: %s", novedad_id, e)
+        raise HTTPException(status_code=503, detail=f"No se pudo actualizar: {e!s}")
+    data = (res.data[0] if res.data else None) or {**prev, **patch}
     u = dict(current_user)
     u["nombre"] = u.get("nombre") or u.get("email", "")
     registrar_log(
