@@ -7,6 +7,20 @@ const API = import.meta.env.VITE_API_URL || "https://claracore-backend.azurewebs
 
 const ACCIONES = ["ver", "crear", "editar", "eliminar", "validar", "exportar"];
 
+/** Icono sugerido según tipo de novedad (módulo Inicio) */
+const NOVEDAD_ICONO_POR_TIPO = {
+  actualización: "📢",
+  mejora: "✨",
+  corrección: "🔧",
+  aviso: "⚠️",
+};
+/** Catálogo amplio para elegir en el panel (emoji Unicode) */
+const NOVEDAD_ICONOS_CATALOGO = [
+  "📢", "✨", "🔧", "⚠️", "🎉", "📣", "💡", "🔍", "📊", "🏗️", "🛠️", "✅", "📌",
+  "🚀", "📄", "🔐", "🌟", "💬", "📝", "🎯", "🔗", "☁️", "📋", "🦺", "⛑️",
+  "🌍", "🚧", "📐", "🔔", "💼", "📈", "🧭", "⚙️", "🗂️", "📎", "🏁", "⭐",
+];
+
 /** Claro y “Descansar vista” comparten ramas de UI tipo claro; solo oscuro usa la rama dark */
 function isLightTheme(theme) {
   return theme === "light" || theme === "rest";
@@ -189,6 +203,7 @@ const S = {
 // ─── HOOK: llamadas a la API ───────────────────────────────────────────────
 function useApi(token) {
   const call = useCallback(async (method, path, body = null) => {
+    const url = `${API}${path}`;
     const opts = {
       method,
       headers: {
@@ -197,7 +212,20 @@ function useApi(token) {
       },
     };
     if (body) opts.body = JSON.stringify(body);
-    const res = await fetch(`${API}${path}`, opts);
+    let res;
+    try {
+      res = await fetch(url, opts);
+    } catch (e) {
+      const raw = e && e.message ? String(e.message) : String(e);
+      if (raw === "Failed to fetch" || e instanceof TypeError) {
+        throw new Error(
+          `Sin conexión con el backend (${url}). Revisa: servidor en marcha, ` +
+            `VITE_API_URL correcto en el build del front, misma red, y que no mezcles ` +
+            `HTTPS (app) con HTTP (API) ni bloqueo CORS.`,
+        );
+      }
+      throw e instanceof Error ? e : new Error(raw);
+    }
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
       // detail puede ser string (mensaje) o lista de objetos (errores de validación Pydantic)
@@ -758,7 +786,7 @@ function SeccionInicioNovedades({ call, theme, token }) {
     tipo: "actualización",
     fecha: "",
     autor: "Equipo ClaraCore",
-    icono: "📢",
+    icono: NOVEDAD_ICONO_POR_TIPO["actualización"],
     color: "#00B4C6",
     imagen_url: "",
   });
@@ -793,13 +821,14 @@ function SeccionInicioNovedades({ call, theme, token }) {
 
   const abrirEditar = (row) => {
     setEditing(row.id);
+    const tipoR = row.tipo || "actualización";
     setForm({
       titulo: row.titulo || "",
       resumen: row.resumen || "",
-      tipo: row.tipo || "actualización",
+      tipo: tipoR,
       fecha: (row.fecha && String(row.fecha).slice(0, 10)) || "",
       autor: row.autor || "Equipo ClaraCore",
-      icono: row.icono || "📢",
+      icono: row.icono || NOVEDAD_ICONO_POR_TIPO[tipoR] || "📢",
       color: row.color || "#00B4C6",
       imagen_url: row.imagen_url || "",
     });
@@ -824,7 +853,7 @@ function SeccionInicioNovedades({ call, theme, token }) {
       tipo: form.tipo || "actualización",
       fecha: form.fecha ? form.fecha.slice(0, 10) : null,
       autor: (form.autor || "").trim() || "Equipo ClaraCore",
-      icono: form.icono || "📢",
+      icono: (form.icono || NOVEDAD_ICONO_POR_TIPO[form.tipo] || "📢").trim() || "📢",
       color: form.color || "#00B4C6",
       imagen_url: (form.imagen_url || "").trim() || null,
     };
@@ -990,10 +1019,21 @@ function SeccionInicioNovedades({ call, theme, token }) {
             </div>
             <div>
               <div style={labelStyle}>Tipo</div>
-              <select style={inputStyle} value={form.tipo} onChange={(e) => setForm((p) => ({ ...p, tipo: e.target.value }))}>
+              <select
+                style={inputStyle}
+                value={form.tipo}
+                onChange={(e) => {
+                  const tipo = e.target.value;
+                  setForm((p) => ({
+                    ...p,
+                    tipo,
+                    icono: NOVEDAD_ICONO_POR_TIPO[tipo] ?? p.icono,
+                  }));
+                }}
+              >
                 {["actualización", "mejora", "corrección", "aviso"].map((x) => (
                   <option key={x} value={x}>
-                    {x}
+                    {x} {NOVEDAD_ICONO_POR_TIPO[x] ? ` ${NOVEDAD_ICONO_POR_TIPO[x]}` : ""}
                   </option>
                 ))}
               </select>
@@ -1006,9 +1046,55 @@ function SeccionInicioNovedades({ call, theme, token }) {
               <div style={labelStyle}>Autor</div>
               <input style={inputStyle} value={form.autor} onChange={(e) => setForm((p) => ({ ...p, autor: e.target.value }))} />
             </div>
-            <div>
-              <div style={labelStyle}>Icono (emoji)</div>
-              <input style={inputStyle} value={form.icono} onChange={(e) => setForm((p) => ({ ...p, icono: e.target.value }))} />
+            <div style={{ gridColumn: "1 / -1" }}>
+              <div style={labelStyle}>
+                Icono{" "}
+                <span style={{ fontWeight: 400, opacity: 0.85 }}>
+                  (sugerido al cambiar el tipo; elige otro del catálogo si quieres)
+                </span>
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 6,
+                  padding: "10px 8px",
+                  borderRadius: 8,
+                  border: `1px solid ${col.borderColor}`,
+                  background: col.bgInput,
+                  maxHeight: 140,
+                  overflowY: "auto",
+                }}
+              >
+                {NOVEDAD_ICONOS_CATALOGO.map((em) => (
+                  <button
+                    key={em}
+                    type="button"
+                    title={em}
+                    onClick={() => setForm((p) => ({ ...p, icono: em }))}
+                    style={{
+                      fontSize: 22,
+                      lineHeight: 1,
+                      width: 40,
+                      height: 40,
+                      padding: 0,
+                      cursor: "pointer",
+                      border:
+                        form.icono === em
+                          ? "2px solid #00afc5"
+                          : `1px solid ${col.borderColor}`,
+                      borderRadius: 8,
+                      background: form.icono === em ? "rgba(0,175,197,0.12)" : "transparent",
+                    }}
+                  >
+                    {em}
+                  </button>
+                ))}
+              </div>
+              <div style={{ marginTop: 6, fontSize: 11, color: col.textMuted }}>
+                Seleccionado: <strong style={{ color: col.textTable }}>{form.icono || "—"}</strong> · Por tipo «{form.tipo}»:{" "}
+                {NOVEDAD_ICONO_POR_TIPO[form.tipo] || "—"}
+              </div>
             </div>
             <div>
               <div style={labelStyle}>Color acento</div>

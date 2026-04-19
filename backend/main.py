@@ -43,18 +43,27 @@ _MAINTENANCE_DEFAULT_SECONDS = int(os.getenv("MAINTENANCE_COUNTDOWN_SECONDS", st
 
 app = FastAPI(title="ClaraCore API")
 
+# Orígenes permitidos (CORS). Incluye claracore.co y localhost; CORS_EXTRA_ORIGINS=url1,url2 añade más sin redeploy.
+_cors_extra = [
+    o.strip()
+    for o in (os.getenv("CORS_EXTRA_ORIGINS") or "").split(",")
+    if o.strip()
+]
+_cors_origins = [
+    "https://claracore.co",
+    "https://www.claracore.co",
+    "https://app.claracore.co",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+] + _cors_extra
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://claracore.co",
-        "https://www.claracore.co",
-        "https://app.claracore.co",
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-    ],
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origins=_cors_origins,
+    # Cubre cualquier subdominio de claracore.co por si el front cambia de host (evita CORS silencioso si falta una entrada en la lista).
+    allow_origin_regex=r"^https://([a-z0-9-]+\.)*claracore\.co$|^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
@@ -3334,7 +3343,19 @@ def admin_inicio_novedades_create(
         row["fecha"] = raw_fecha[:10]
     else:
         row["fecha"] = datetime.now(timezone.utc).date().isoformat()
-    res = supabase.table("inicio_novedades").insert(row).select("*").single().execute()
+    try:
+        res = supabase.table("inicio_novedades").insert(row).select("*").single().execute()
+    except Exception as e:
+        _log_api.warning("POST /admin/inicio/novedades insert: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "No se pudo guardar en la base de datos. Comprueba que exista la tabla "
+                "`inicio_novedades` (ejecuta backend/sql/inicio_novedades.sql en Supabase) y que "
+                "las columnas coincidan con el despliegue actual. "
+                f"Detalle técnico: {e!s}"
+            ),
+        )
     data = res.data
     u = dict(current_user)
     u["nombre"] = u.get("nombre") or u.get("email", "")
