@@ -748,6 +748,353 @@ function SeccionPermisos({ call, cargos, theme }) {
   );
 }
 
+// ─── SECCIÓN PÁGINA DE INICIO (novedades) ─────────────────────────────────────
+function SeccionInicioNovedades({ call, theme, token }) {
+  const col = C(theme);
+  const API_BASE = import.meta.env.VITE_API_URL || "https://claracore-backend.azurewebsites.net";
+  const emptyForm = () => ({
+    titulo: "",
+    resumen: "",
+    tipo: "actualización",
+    fecha: "",
+    autor: "Equipo ClaraCore",
+    icono: "📢",
+    color: "#00B4C6",
+    imagen_url: "",
+  });
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [msg, setMsg] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState(emptyForm);
+  const [saving, setSaving] = useState(false);
+  const [mejorandoResumen, setMejorandoResumen] = useState(false);
+
+  const cargar = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await call("GET", "/admin/inicio/novedades");
+      setItems(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setMsg({ type: "error", text: e.message || "No se pudieron cargar las novedades (¿tabla inicio_novedades en Supabase?)" });
+    }
+    setLoading(false);
+  }, [call]);
+
+  useEffect(() => {
+    cargar();
+  }, [cargar]);
+
+  const abrirNueva = () => {
+    setEditing("new");
+    setForm(emptyForm());
+    setMsg(null);
+  };
+
+  const abrirEditar = (row) => {
+    setEditing(row.id);
+    setForm({
+      titulo: row.titulo || "",
+      resumen: row.resumen || "",
+      tipo: row.tipo || "actualización",
+      fecha: (row.fecha && String(row.fecha).slice(0, 10)) || "",
+      autor: row.autor || "Equipo ClaraCore",
+      icono: row.icono || "📢",
+      color: row.color || "#00B4C6",
+      imagen_url: row.imagen_url || "",
+    });
+    setMsg(null);
+  };
+
+  const cerrarForm = () => {
+    setEditing(null);
+    setForm(emptyForm());
+  };
+
+  const guardar = async () => {
+    if (!form.titulo.trim()) {
+      setMsg({ type: "error", text: "El título es obligatorio." });
+      return;
+    }
+    setSaving(true);
+    setMsg(null);
+    const payload = {
+      titulo: form.titulo.trim(),
+      resumen: (form.resumen || "").trim(),
+      tipo: form.tipo || "actualización",
+      fecha: form.fecha ? form.fecha.slice(0, 10) : null,
+      autor: (form.autor || "").trim() || "Equipo ClaraCore",
+      icono: form.icono || "📢",
+      color: form.color || "#00B4C6",
+      imagen_url: (form.imagen_url || "").trim() || null,
+    };
+    try {
+      if (editing === "new") {
+        await call("POST", "/admin/inicio/novedades", payload);
+      } else {
+        await call("PATCH", `/admin/inicio/novedades/${editing}`, payload);
+      }
+      cerrarForm();
+      await cargar();
+      setMsg({ type: "success", text: "Guardado correctamente." });
+    } catch (e) {
+      setMsg({ type: "error", text: e.message || "Error al guardar" });
+    }
+    setSaving(false);
+  };
+
+  const eliminar = async (id) => {
+    if (!window.confirm("¿Eliminar esta novedad de la página de inicio?")) return;
+    try {
+      await call("DELETE", `/admin/inicio/novedades/${id}`);
+      if (editing === id) cerrarForm();
+      await cargar();
+      setMsg({ type: "success", text: "Novedad eliminada." });
+    } catch (e) {
+      setMsg({ type: "error", text: e.message || "Error al eliminar" });
+    }
+  };
+
+  const subirImagen = async (ev) => {
+    const file = ev.target.files?.[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const res = await fetch(`${API_BASE}/admin/inicio/novedades/imagen`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const errBody = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const d = errBody.detail;
+        throw new Error(typeof d === "string" ? d : res.statusText);
+      }
+      if (errBody.url) setForm((p) => ({ ...p, imagen_url: errBody.url }));
+    } catch (e) {
+      setMsg({ type: "error", text: e.message || "Error al subir imagen" });
+    }
+    ev.target.value = "";
+  };
+
+  const mejorarResumenIa = async () => {
+    const borrador = (form.resumen || "").trim();
+    if (!borrador) {
+      setMsg({ type: "error", text: "Escribe un borrador en el resumen antes de usar la IA." });
+      return;
+    }
+    setMejorandoResumen(true);
+    setMsg(null);
+    try {
+      const res = await call("POST", "/admin/inicio/novedades/mejorar-texto", { texto: borrador });
+      if (res.texto) setForm((p) => ({ ...p, resumen: res.texto }));
+      if (res.sin_ia) {
+        setMsg({
+          type: "error",
+          text: "El servidor no tiene ANTHROPIC_API_KEY; no se puede mejorar el texto. Revisa la configuración del backend.",
+        });
+      } else {
+        setMsg({ type: "success", text: "Redacción actualizada. Revísala antes de guardar." });
+      }
+    } catch (e) {
+      setMsg({ type: "error", text: e.message || "Error al mejorar el texto" });
+    }
+    setMejorandoResumen(false);
+  };
+
+  const fmtCreada = (iso) => {
+    if (!iso) return "—";
+    try {
+      return new Date(iso).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" });
+    } catch {
+      return String(iso).slice(0, 19);
+    }
+  };
+
+  const labelStyle = { fontSize: 11, color: col.textMuted, marginBottom: 4, fontWeight: 600 };
+  const inputStyle = {
+    width: "100%",
+    padding: "8px 10px",
+    borderRadius: 6,
+    border: `1px solid ${col.borderColor}`,
+    background: col.bgInput,
+    color: col.textTable,
+    fontSize: 13,
+    boxSizing: "border-box",
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <button type="button" onClick={abrirNueva} style={{ ...S.btn("primary") }}>
+          ＋ Nueva novedad
+        </button>
+        <span style={{ fontSize: 12, color: col.textSecondary }}>
+          Visible para todos los usuarios en el módulo Inicio. Requiere migración SQL <code style={{ fontSize: 11 }}>backend/sql/inicio_novedades.sql</code> en Supabase.
+        </span>
+      </div>
+      {msg && (
+        <div
+          style={{
+            ...S.alert(msg.type),
+            marginBottom: 14,
+          }}
+        >
+          {msg.text}
+        </div>
+      )}
+
+      {editing !== null && (
+        <div
+          style={{
+            background: col.bgCard,
+            border: `1px solid ${col.borderColor}`,
+            borderRadius: 10,
+            padding: 16,
+            marginBottom: 20,
+          }}
+        >
+          <div style={{ fontWeight: 700, color: col.textPrimary, marginBottom: 12 }}>
+            {editing === "new" ? "Nueva novedad" : `Editar novedad #${editing}`}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <div style={labelStyle}>Título *</div>
+              <input style={inputStyle} value={form.titulo} onChange={(e) => setForm((p) => ({ ...p, titulo: e.target.value }))} />
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
+                <div style={labelStyle}>Resumen</div>
+                <button
+                  type="button"
+                  onClick={mejorarResumenIa}
+                  disabled={mejorandoResumen}
+                  style={{
+                    ...S.btn("ghost"),
+                    fontSize: 12,
+                    padding: "6px 12px",
+                    opacity: mejorandoResumen ? 0.65 : 1,
+                    cursor: mejorandoResumen ? "wait" : "pointer",
+                  }}
+                >
+                  {mejorandoResumen ? "⏳ Mejorando…" : "✨ Mejorar redacción (IA)"}
+                </button>
+              </div>
+              <textarea
+                style={{ ...inputStyle, minHeight: 96, resize: "vertical" }}
+                value={form.resumen}
+                onChange={(e) => setForm((p) => ({ ...p, resumen: e.target.value }))}
+                placeholder="Describe el cambio o la novedad; puedes pulsar el botón de IA para pulir el texto."
+              />
+            </div>
+            <div>
+              <div style={labelStyle}>Tipo</div>
+              <select style={inputStyle} value={form.tipo} onChange={(e) => setForm((p) => ({ ...p, tipo: e.target.value }))}>
+                {["actualización", "mejora", "corrección", "aviso"].map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <div style={labelStyle}>Fecha</div>
+              <input type="date" style={inputStyle} value={form.fecha} onChange={(e) => setForm((p) => ({ ...p, fecha: e.target.value }))} />
+            </div>
+            <div>
+              <div style={labelStyle}>Autor</div>
+              <input style={inputStyle} value={form.autor} onChange={(e) => setForm((p) => ({ ...p, autor: e.target.value }))} />
+            </div>
+            <div>
+              <div style={labelStyle}>Icono (emoji)</div>
+              <input style={inputStyle} value={form.icono} onChange={(e) => setForm((p) => ({ ...p, icono: e.target.value }))} />
+            </div>
+            <div>
+              <div style={labelStyle}>Color acento</div>
+              <input type="color" style={{ ...inputStyle, height: 36, padding: 4 }} value={form.color} onChange={(e) => setForm((p) => ({ ...p, color: e.target.value }))} />
+            </div>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <div style={labelStyle}>Imagen de contexto (opcional)</div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <label style={{ ...S.btn("ghost"), cursor: "pointer", margin: 0 }}>
+                  Subir imagen
+                  <input type="file" accept="image/*" style={{ display: "none" }} onChange={subirImagen} />
+                </label>
+                {form.imagen_url ? (
+                  <span style={{ fontSize: 11, color: col.textMuted, wordBreak: "break-all" }}>{form.imagen_url}</span>
+                ) : null}
+                {form.imagen_url ? (
+                  <button type="button" style={{ ...S.btn("ghost"), fontSize: 12 }} onClick={() => setForm((p) => ({ ...p, imagen_url: "" }))}>
+                    Quitar imagen
+                  </button>
+                ) : null}
+              </div>
+              {form.imagen_url ? (
+                <img
+                  src={form.imagen_url}
+                  alt=""
+                  style={{ marginTop: 8, maxWidth: 320, maxHeight: 160, objectFit: "cover", borderRadius: 8, border: `1px solid ${col.borderColor}` }}
+                />
+              ) : null}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+            <button type="button" style={S.btn("primary")} disabled={saving} onClick={guardar}>
+              {saving ? "Guardando…" : "Guardar"}
+            </button>
+            <button type="button" style={S.btn("ghost")} onClick={cerrarForm}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div style={S.empty}>Cargando…</div>
+      ) : items.length === 0 ? (
+        <div style={S.empty}>No hay novedades. Crea una con el botón superior.</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={S.table}>
+            <thead>
+              <tr>
+                <th style={S.th}>Creada</th>
+                <th style={S.th}>Fecha (aviso)</th>
+                <th style={S.th}>Título</th>
+                <th style={S.th}>Tipo</th>
+                <th style={{ ...S.th, textAlign: "right" }}>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((row) => (
+                <tr key={row.id}>
+                  <td style={S.td(theme)}>{fmtCreada(row.created_at)}</td>
+                  <td style={S.td(theme)}>{row.fecha ? String(row.fecha).slice(0, 10) : "—"}</td>
+                  <td style={S.td(theme)}>{row.titulo}</td>
+                  <td style={S.td(theme)}>{row.tipo}</td>
+                  <td style={{ ...S.td(theme), textAlign: "right", whiteSpace: "nowrap" }}>
+                    <button type="button" style={{ ...S.btn("ghost"), fontSize: 12, padding: "4px 10px" }} onClick={() => abrirEditar(row)}>
+                      Editar
+                    </button>
+                    <button
+                      type="button"
+                      style={{ ...S.btn("ghost"), fontSize: 12, padding: "4px 10px", color: "#ef4444", borderColor: "rgba(239,68,68,0.35)" }}
+                      onClick={() => eliminar(row.id)}
+                    >
+                      Eliminar
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── SECCIÓN LOGS ─────────────────────────────────────────────────────────────
 function SeccionLogs({ call, theme }) {
   const col = C(theme)
@@ -765,13 +1112,17 @@ function SeccionLogs({ call, theme }) {
   const [filtUsuario,   setFiltUsuario]   = useState("")
   const [filtModulo,    setFiltModulo]    = useState("")
   const [filtAccion,    setFiltAccion]    = useState("")
+  const [filtCategoria, setFiltCategoria] = useState("")
+  const [filtSeveridad, setFiltSeveridad] = useState("")
   const [filtDesde,     setFiltDesde]     = useState("")
   const [filtHasta,     setFiltHasta]     = useState("")
   const [offset,        setOffset]        = useState(0)
   const LIMIT = 50
 
-  const MODULOS = ["AUTH","PRESUPUESTO","COBRO","USUARIOS","CONTRATOS","PERMISOS","PRECIOS"]
-  const ACCIONES = ["LOGIN","APROBAR","RECHAZAR","EDITAR","RECALCULAR","VALIDAR","IMPORTAR","CREAR","ELIMINAR"]
+  const MODULOS = ["AUTH","SICOE","PRESUPUESTO","COBRO","USUARIOS","CONTRATOS","PERMISOS","PRECIOS","SISTEMA","INFORMES","NOTIFICACIONES","ACTAS","SUBCONTRATISTAS"]
+  const ACCIONES = ["LOGIN","LOGOUT","LOGIN_FAIL","APROBAR","RECHAZAR","EDITAR","RECALCULAR","VALIDAR","IMPORTAR","CREAR","ELIMINAR","EXPORTAR","ERROR_SISTEMA","DEPLOY","BROADCAST"]
+  const CATEGORIAS = ["auditoria", "sistema"]
+  const SEVERIDADES = ["INFO", "WARNING", "ERROR", "AUDIT"]
   const ACCION_COLOR = {
     LOGIN:"#0077B6", APROBAR:"#10B981", RECHAZAR:"#EF4444",
     EDITAR:"#F59E0B", RECALCULAR:"#7C3AED", VALIDAR:"#00A896",
@@ -783,12 +1134,12 @@ function SeccionLogs({ call, theme }) {
       .then(r => r.ok ? r.json() : []).then(setUsuarios).catch(() => {})
   }, [])
 
-  useEffect(() => { cargarLogs(0) }, [filtUsuario, filtModulo, filtAccion, filtDesde, filtHasta])
+  useEffect(() => { cargarLogs(0) }, [filtUsuario, filtModulo, filtAccion, filtCategoria, filtSeveridad, filtDesde, filtHasta])
 
   useEffect(() => {
     const iv = setInterval(() => cargarLogs(offset, { silent: true }), 30000)
     return () => clearInterval(iv)
-  }, [offset, filtUsuario, filtModulo, filtAccion, filtDesde, filtHasta])
+  }, [offset, filtUsuario, filtModulo, filtAccion, filtCategoria, filtSeveridad, filtDesde, filtHasta])
 
   async function cargarLogs(off = 0, opts = {}) {
     const { silent = false } = opts
@@ -798,6 +1149,8 @@ function SeccionLogs({ call, theme }) {
     if (filtUsuario) params.set("usuario_id", filtUsuario)
     if (filtModulo)  params.set("modulo",     filtModulo)
     if (filtAccion)  params.set("accion",     filtAccion)
+    if (filtCategoria) params.set("categoria", filtCategoria)
+    if (filtSeveridad) params.set("severidad", filtSeveridad)
     if (filtDesde)   params.set("fecha_desde",filtDesde)
     if (filtHasta)   params.set("fecha_hasta",filtHasta)
     const data = await fetch(`${API}/logs?${params}`, { headers: { Authorization: `Bearer ${token}` } })
@@ -840,17 +1193,51 @@ function SeccionLogs({ call, theme }) {
           <option value="">⚡ Todas las acciones</option>
           {ACCIONES.map(a => <option key={a} value={a}>{a}</option>)}
         </select>
+        <select value={filtCategoria} onChange={e => setFiltCategoria(e.target.value)}
+          style={{ background: col.inputBg, border:`1px solid ${col.border}`, borderRadius:6, padding:"5px 10px", color: col.textTable, fontSize:12, cursor:"pointer" }}>
+          <option value="">📂 Categoría</option>
+          {CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select value={filtSeveridad} onChange={e => setFiltSeveridad(e.target.value)}
+          style={{ background: col.inputBg, border:`1px solid ${col.border}`, borderRadius:6, padding:"5px 10px", color: col.textTable, fontSize:12, cursor:"pointer" }}>
+          <option value="">⚠️ Severidad</option>
+          {SEVERIDADES.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
         <input type="date" value={filtDesde} onChange={e => setFiltDesde(e.target.value)}
           style={{ background: col.inputBg, border:`1px solid ${col.border}`, borderRadius:6, padding:"5px 10px", color: col.textTable, fontSize:12 }} />
         <input type="date" value={filtHasta} onChange={e => setFiltHasta(e.target.value)}
           style={{ background: col.inputBg, border:`1px solid ${col.border}`, borderRadius:6, padding:"5px 10px", color: col.textTable, fontSize:12 }} />
-        <button onClick={() => { setFiltUsuario(""); setFiltModulo(""); setFiltAccion(""); setFiltDesde(""); setFiltHasta("") }}
+        <button onClick={() => { setFiltUsuario(""); setFiltModulo(""); setFiltAccion(""); setFiltCategoria(""); setFiltSeveridad(""); setFiltDesde(""); setFiltHasta("") }}
           style={{ background:"#EF444422", border:"1px solid #EF444466", borderRadius:6, padding:"5px 12px", color:"#EF4444", fontSize:11, fontWeight:700, cursor:"pointer" }}>
           ✕ Limpiar
         </button>
         <button onClick={() => cargarLogs(0)}
           style={{ background:"#0077B622", border:"1px solid #0077B666", borderRadius:6, padding:"5px 12px", color:"#0077B6", fontSize:11, fontWeight:700, cursor:"pointer" }}>
           🔄 Actualizar
+        </button>
+        <button type="button" onClick={async () => {
+          const params = new URLSearchParams({ max_rows: "8000" })
+          if (filtUsuario) params.set("usuario_id", filtUsuario)
+          if (filtModulo)  params.set("modulo", filtModulo)
+          if (filtAccion)  params.set("accion", filtAccion)
+          if (filtCategoria) params.set("categoria", filtCategoria)
+          if (filtSeveridad) params.set("severidad", filtSeveridad)
+          if (filtDesde)   params.set("fecha_desde", filtDesde)
+          if (filtHasta)   params.set("fecha_hasta", filtHasta)
+          try {
+            const r = await fetch(`${API}/logs/export.csv?${params}`, { headers: { Authorization: `Bearer ${token}` } })
+            if (!r.ok) return
+            const blob = await r.blob()
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement("a")
+            a.href = url
+            a.download = "claracore_logs.csv"
+            a.click()
+            URL.revokeObjectURL(url)
+          } catch { /* ignore */ }
+        }}
+          style={{ background:"#10B98122", border:"1px solid #10B98166", borderRadius:6, padding:"5px 12px", color:"#10B981", fontSize:11, fontWeight:700, cursor:"pointer" }}>
+          ⬇ CSV
         </button>
         <span style={{ marginLeft:"auto", fontSize:12, color: col.textMuted, alignSelf:"center" }}>
           {logs.length} registros · click para ver historial
@@ -865,14 +1252,14 @@ function SeccionLogs({ call, theme }) {
           <table style={{ width:"100%", borderCollapse:"collapse" }}>
             <thead style={{ background: col.bgCard }}>
               <tr>
-                {["Fecha","Usuario","Cargo","Módulo","Acción","Entidad","Contrato","Resultado"].map(h => (
+                {["Fecha","Usuario","Cargo","Rol","Módulo","Acción","Sever.","Entidad","Contrato","IP","Resultado"].map(h => (
                   <th key={h} style={thS}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {logs.length === 0 ? (
-                <tr><td colSpan={8} style={{ ...tdS, textAlign:"center", padding:40, color: col.textMuted }}>Sin registros</td></tr>
+                <tr><td colSpan={11} style={{ ...tdS, textAlign:"center", padding:40, color: col.textMuted }}>Sin registros</td></tr>
               ) : logs.map((log, i) => (
                 <tr key={log.id} onClick={() => abrirHistorial(log)}
                   style={{ cursor:"pointer", background:"transparent", transition:"background 0.15s" }}
@@ -881,6 +1268,7 @@ function SeccionLogs({ call, theme }) {
                   <td style={tdS}>{fmtFecha(log.created_at)}</td>
                   <td style={{ ...tdS, fontWeight:600 }}>{log.usuario_nombre}</td>
                   <td style={{ ...tdS, color: col.textMuted }}>{log.cargo_nombre}</td>
+                  <td style={{ ...tdS, color: col.textMuted, fontSize:11 }}>{log.rol_nombre || "—"}</td>
                   <td style={tdS}>
                     <span style={{ background: col.bgCard, border:`1px solid ${col.border}`, borderRadius:4, padding:"2px 8px", fontSize:11 }}>
                       {log.modulo}
@@ -891,10 +1279,12 @@ function SeccionLogs({ call, theme }) {
                       {log.accion}
                     </span>
                   </td>
+                  <td style={{ ...tdS, fontSize:10, color: col.textMuted }}>{log.severidad || "—"}</td>
                   <td style={{ ...tdS, color: col.textMuted, fontSize:11 }}>
                     {log.entidad_tipo && `${log.entidad_tipo} #${log.entidad_id}`}
                   </td>
                   <td style={{ ...tdS, fontSize:11 }}>{log.contrato_numero || "—"}</td>
+                  <td style={{ ...tdS, fontSize:10, color: col.textMuted, maxWidth:90, overflow:"hidden", textOverflow:"ellipsis" }} title={log.ip || ""}>{log.ip || "—"}</td>
                   <td style={tdS}>
                     <span style={{ color: log.resultado === "ok" ? "#10B981" : "#EF4444", fontWeight:700, fontSize:11 }}>
                       {log.resultado === "ok" ? "✓" : "✗"} {log.resultado}
@@ -944,6 +1334,23 @@ function SeccionLogs({ call, theme }) {
                     <span style={{ color: col.textTable, fontWeight:500 }}>{typeof v === "object" ? JSON.stringify(v) : String(v)}</span>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {(logSelec.valor_anterior != null || logSelec.valor_nuevo != null) && (
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
+                <div style={{ background: col.bg, borderRadius:8, padding:"10px 12px", fontSize:11, maxHeight:220, overflow:"auto" }}>
+                  <div style={{ fontWeight:700, color: col.textMuted, fontSize:10, letterSpacing:"0.5px", marginBottom:6 }}>VALOR ANTERIOR</div>
+                  <pre style={{ margin:0, whiteSpace:"pre-wrap", wordBreak:"break-word", fontSize:10, color: col.textTable, fontFamily:"ui-monospace, monospace" }}>
+                    {typeof logSelec.valor_anterior === "string" ? logSelec.valor_anterior : JSON.stringify(logSelec.valor_anterior, null, 2)}
+                  </pre>
+                </div>
+                <div style={{ background: col.bg, borderRadius:8, padding:"10px 12px", fontSize:11, maxHeight:220, overflow:"auto" }}>
+                  <div style={{ fontWeight:700, color: col.textMuted, fontSize:10, letterSpacing:"0.5px", marginBottom:6 }}>VALOR NUEVO</div>
+                  <pre style={{ margin:0, whiteSpace:"pre-wrap", wordBreak:"break-word", fontSize:10, color: col.textTable, fontFamily:"ui-monospace, monospace" }}>
+                    {typeof logSelec.valor_nuevo === "string" ? logSelec.valor_nuevo : JSON.stringify(logSelec.valor_nuevo, null, 2)}
+                  </pre>
+                </div>
               </div>
             )}
 
@@ -2887,6 +3294,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
     { id: "precios",          label: "Listado de Precios"   },
     { id: "subcontratistas",  label: "Subcontratistas"       },
     { id: "resets",           label: "Reset Claves"          },
+    { id: "inicio",    label: "Página de inicio", soloAdmin: true },
     { id: "logs",      label: "📋 Logs del Sistema", soloAdmin: true },
   ];
   const TABS = TABS_TODOS.filter(t => canSeeTab(t.id));
@@ -2901,6 +3309,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
     precios:          { title: "Listado de Precios",    sub: "Edita, carga y descarga el listado de precios por contrato" },
     subcontratistas:  { title: "Subcontratistas",       sub: "Gestión de subcontratistas, cortes de facturación y precios por contrato" },
     resets:           { title: "Reset Claves",          sub: "Autoriza solicitudes de cambio de contraseña" },
+    inicio:    { title: "Página de inicio",       sub: "Novedades, textos e imagen de contexto en el módulo Inicio" },
     logs:      { title: "Logs del Sistema",       sub: "Auditoría completa de acciones en la plataforma" },
   };
 
@@ -2987,6 +3396,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
             {tab === "precios"          && <SeccionListadoPrecios call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true, validar: true } : precioPerms} theme={activeTheme} />}
             {tab === "subcontratistas"  && <SeccionSubcontratistas call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, validar: true, exportar: true } : subPerms} theme={activeTheme} />}
             {tab === "resets"           && <SeccionResets    call={call} theme={activeTheme} />}
+            {tab === "inicio"           && <SeccionInicioNovedades call={call} theme={activeTheme} token={token} />}
               {tab === "logs"      && <SeccionLogs      call={call} theme={activeTheme} />}
           </div>
         </div>

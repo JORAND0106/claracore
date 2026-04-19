@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import StreamingResponse, JSONResponse
-import io, requests as req_http
+import io, csv, requests as req_http
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -62,6 +62,10 @@ app.add_middleware(
 
 _log_api = logging.getLogger("uvicorn.error")
 
+# Seguimiento en memoria para alertas (login fallido, 500 repetidos)
+_login_fail_tracker: dict = {}
+_endpoint_500_tracker: dict = {}
+
 # Versión del texto de políticas mostrada al usuario (auditoría junto a politicas_version en BD)
 POLITICAS_VERSION_DEFAULT = os.getenv("POLITICAS_VERSION", "1.0")
 
@@ -75,6 +79,33 @@ def _client_ip(request: Request) -> str:
     return ""
 
 
+def _json_for_log(obj):
+    """Serializa valores para columnas jsonb (evita tipos no JSON)."""
+    if obj is None:
+        return None
+    if isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {str(k): _json_for_log(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_for_log(x) for x in obj]
+    return str(obj)
+
+
+def _default_severidad(accion: str, modulo: str, resultado: str) -> str:
+    if resultado and str(resultado).lower() not in ("ok", "success", "éxito"):
+        return "ERROR" if "denegado" not in str(resultado).lower() else "WARNING"
+    if modulo == "PERMISOS" or accion in (
+        "ELIMINAR", "VALIDAR", "APROBAR", "RECHAZAR", "IMPORTAR_MASIVO",
+    ):
+        return "AUDIT"
+    if accion in ("LOGIN_FAIL", "ACCESO_DENEGADO"):
+        return "WARNING"
+    return "INFO"
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_to_json(request: Request, exc: Exception):
     """Evita HTML genérico 'Internal Server Error'; el front puede mostrar `detail` en JSON."""
@@ -83,6 +114,19 @@ async def unhandled_exception_to_json(request: Request, exc: Exception):
     if isinstance(exc, RequestValidationError):
         return JSONResponse(status_code=422, content={"detail": exc.errors()})
     _log_api.exception("Error no manejado: %s %s", request.method, request.url.path)
+    try:
+        registrar_log_sistema(
+            "ERROR",
+            request.url.path,
+            request.method,
+            {"error": type(exc).__name__, "msg": str(exc)[:2000]},
+            traceback.format_exc()[:12000],
+            resultado="error",
+            alerta_generada=False,
+        )
+        _track_500_endpoint_alert(request.url.path)
+    except Exception:
+        pass
     debug = os.getenv("CLARACORE_DEBUG", "").lower() in ("1", "true", "yes")
     detail = traceback.format_exc() if debug else f"{type(exc).__name__}: {exc}"
     return JSONResponse(status_code=500, content={"detail": detail})
@@ -219,6 +263,32 @@ class PerfilUpdate(BaseModel):
     apellidos: Optional[str] = None
     # Cadena vacía borra la fecha; YYYY-MM-DD la guarda; omitir no cambia.
     fecha_nacimiento: Optional[str] = None
+
+
+class InicioNovedadCreate(BaseModel):
+    titulo: str
+    resumen: str = ""
+    tipo: str = "actualización"
+    fecha: Optional[str] = None
+    autor: str = "Equipo ClaraCore"
+    icono: str = "📢"
+    color: str = "#00B4C6"
+    imagen_url: Optional[str] = None
+
+
+class InicioNovedadUpdate(BaseModel):
+    titulo: Optional[str] = None
+    resumen: Optional[str] = None
+    tipo: Optional[str] = None
+    fecha: Optional[str] = None
+    autor: Optional[str] = None
+    icono: Optional[str] = None
+    color: Optional[str] = None
+    imagen_url: Optional[str] = None
+
+
+class InicioNovedadMejorarTexto(BaseModel):
+    texto: str = ""
 
 class AprobarRequest(BaseModel):
     rol_id: int
@@ -477,29 +547,181 @@ def supabase_execute(fn, retries=3, delay=0.5):
             supabase = get_supabase()
             if i < retries - 1:
                 time.sleep(delay)
+    try:
+        registrar_log_sistema(
+            "ERROR",
+            "supabase_execute",
+            "RPC",
+            {"error": type(last_err).__name__, "msg": str(last_err)[:2000], "reintentos": retries},
+            traceback.format_exc()[:8000],
+            resultado="error",
+            alerta_generada=False,
+        )
+    except Exception:
+        pass
     raise last_err
 
 # ─────────────────────────────────────────────
 # SISTEMA DE LOGS
 # ─────────────────────────────────────────────
-def registrar_log(usuario, accion, modulo, entidad_tipo=None, entidad_id=None, detalle=None, resultado="ok"):
+def registrar_log_sistema(
+    severidad: str,
+    endpoint: str,
+    metodo_http: str,
+    detalle: dict,
+    stack_trace: Optional[str] = None,
+    resultado: str = "error",
+    alerta_generada: bool = False,
+    duracion_ms: Optional[int] = None,
+):
+    """Errores y eventos técnicos (categoría sistema). No requiene usuario."""
     try:
-        uid = usuario.get("sub") or usuario.get("id")
-        supabase.table("logs").insert({
-            "usuario_id":      int(uid) if uid else None,
-            "usuario_nombre":  usuario.get("nombre") or usuario.get("email", ""),
-            "cargo_nombre":    usuario.get("cargo_nombre", ""),
-            "contrato_id":     usuario.get("contrato_id"),
-            "contrato_numero": usuario.get("contrato_numero"),
-            "accion":          accion,
-            "modulo":          modulo,
-            "entidad_tipo":    entidad_tipo,
-            "entidad_id":      str(entidad_id) if entidad_id is not None else None,
-            "detalle":         detalle or {},
-            "resultado":       resultado,
-        }).execute()
+        row = {
+            "usuario_id":       None,
+            "usuario_nombre":   "SISTEMA",
+            "cargo_nombre":     "",
+            "rol_nombre":       None,
+            "contrato_id":      None,
+            "contrato_numero":  None,
+            "accion":           "ERROR_SISTEMA" if severidad == "ERROR" else "EVENTO_SISTEMA",
+            "modulo":           "SISTEMA",
+            "entidad_tipo":     "endpoint",
+            "entidad_id":       None,
+            "detalle":          _json_for_log(detalle) if detalle is not None else {},
+            "resultado":        resultado,
+            "categoria":        "sistema",
+            "severidad":        severidad,
+            "endpoint":         (endpoint or "")[:1024],
+            "metodo_http":      (metodo_http or "")[:32],
+            "stack_trace":      (stack_trace or "")[:12000] if stack_trace else None,
+            "duracion_ms":      duracion_ms,
+            "alerta_generada":  alerta_generada,
+        }
+        supabase.table("logs").insert(row).execute()
     except Exception:
         pass
+
+
+def registrar_log(
+    usuario,
+    accion,
+    modulo,
+    entidad_tipo=None,
+    entidad_id=None,
+    detalle=None,
+    resultado="ok",
+    *,
+    valor_anterior=None,
+    valor_nuevo=None,
+    ip=None,
+    severidad=None,
+    categoria="auditoria",
+    rol_nombre=None,
+    endpoint=None,
+    metodo_http=None,
+    stack_trace=None,
+    duracion_ms=None,
+    alerta_generada=None,
+):
+    try:
+        uid = usuario.get("sub") or usuario.get("id")
+        if severidad is None:
+            severidad = _default_severidad(accion, modulo, resultado)
+        row = {
+            "usuario_id":       int(uid) if uid else None,
+            "usuario_nombre":   usuario.get("nombre") or usuario.get("email", ""),
+            "cargo_nombre":     usuario.get("cargo_nombre") or "",
+            "rol_nombre":       rol_nombre if rol_nombre is not None else usuario.get("rol_nombre"),
+            "contrato_id":      usuario.get("contrato_id"),
+            "contrato_numero":  usuario.get("contrato_numero"),
+            "accion":           accion,
+            "modulo":           modulo,
+            "entidad_tipo":     entidad_tipo,
+            "entidad_id":       str(entidad_id) if entidad_id is not None else None,
+            "detalle":          _json_for_log(detalle) if detalle is not None else {},
+            "resultado":        resultado,
+            "valor_anterior":   _json_for_log(valor_anterior),
+            "valor_nuevo":      _json_for_log(valor_nuevo),
+            "ip":               ip,
+            "categoria":        categoria,
+            "severidad":        severidad,
+            "endpoint":         (endpoint or "")[:1024] if endpoint else None,
+            "metodo_http":      (metodo_http or "")[:32] if metodo_http else None,
+            "stack_trace":      (stack_trace or "")[:12000] if stack_trace else None,
+            "duracion_ms":      duracion_ms,
+            "alerta_generada":  alerta_generada if alerta_generada is not None else False,
+        }
+        supabase.table("logs").insert(row).execute()
+    except Exception:
+        pass
+
+
+def _track_login_failure_alert(email: str, ip: str):
+    import time
+    now = time.time()
+    key = (email.strip().lower(), ip or "")
+    q = _login_fail_tracker.setdefault(key, [])
+    q.append(now)
+    cutoff = now - 900
+    while q and q[0] < cutoff:
+        q.pop(0)
+    if len(q) >= 5:
+        try:
+            registrar_log_sistema(
+                "WARNING",
+                "/auth/login",
+                "POST",
+                {"email": email, "ip": ip, "ventana_seg": 900, "intentos": len(q)},
+                None,
+                resultado="alerta",
+                alerta_generada=True,
+            )
+        except Exception:
+            pass
+        q.clear()
+
+
+def _track_500_endpoint_alert(path: str):
+    import time
+    now = time.time()
+    q = _endpoint_500_tracker.setdefault(path, [])
+    q.append(now)
+    cutoff = now - 300
+    while q and q[0] < cutoff:
+        q.pop(0)
+    if len(q) >= 3:
+        try:
+            registrar_log_sistema(
+                "ERROR",
+                path,
+                "—",
+                {"tipo": "error_500_repetido", "ventana_seg": 300, "conteo": len(q)},
+                None,
+                resultado="alerta",
+                alerta_generada=True,
+            )
+        except Exception:
+            pass
+        q.clear()
+
+
+def _cargo_puede_auditar_logs(current_user) -> bool:
+    try:
+        uid = int(current_user.get("sub"))
+    except (TypeError, ValueError):
+        return False
+    try:
+        u = supabase.table("usuarios").select("cargo_id").eq("id", uid).limit(1).execute().data
+        u = u[0] if u else None
+        if not u or not u.get("cargo_id"):
+            return False
+        c = supabase.table("cargos").select("nombre").eq("id", u["cargo_id"]).limit(1).execute().data
+        c = c[0] if c else None
+        n = ((c or {}).get("nombre") or "").strip().lower()
+        return n in ("desarrollador", "administrador")
+    except Exception:
+        return False
+
 
 # ─────────────────────────────────────────────
 # SEGURIDAD
@@ -524,6 +746,13 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Token inválido")
+
+
+def require_logs_auditoria(current_user=Depends(get_current_user)):
+    if not _cargo_puede_auditar_logs(current_user):
+        raise HTTPException(status_code=403, detail="Solo Desarrollador y Administrador pueden acceder a la auditoría de logs")
+    return current_user
+
 
 def _caller_contract_scope(current_user):
     """Retorna (contrato_id, cargo_nombre) del usuario autenticado."""
@@ -749,6 +978,32 @@ def frase_del_dia(body: dict, current_user=Depends(get_current_user)):
         print(f"WARNING /frase-del-dia fallback por error: {e}", flush=True)
         return _fallback()
 
+
+_SLOW_REQUEST_MS = int(os.getenv("CLARACORE_SLOW_REQUEST_MS", "8000"))
+
+
+@app.middleware("http")
+async def registrar_respuesta_lenta(request: Request, call_next):
+    import time
+    t0 = time.perf_counter()
+    response = await call_next(request)
+    ms = int((time.perf_counter() - t0) * 1000)
+    if ms >= _SLOW_REQUEST_MS:
+        try:
+            registrar_log_sistema(
+                "WARNING",
+                request.url.path,
+                request.method,
+                {"tipo": "respuesta_lenta", "duracion_ms": ms},
+                None,
+                resultado="ok",
+                duracion_ms=ms,
+            )
+        except Exception:
+            pass
+    return response
+
+
 @app.get("/")
 def root():
     return {"message": "ClaraCore API funcionando"}
@@ -766,16 +1021,53 @@ def listar_contratos():
     return supabase.table("contratos").select("id, numero, objeto, contratista, nit, interventoria, entidad, entidad_otra, logo_entidad, plano_geojson, centro_lat, centro_lng, logo_contratista, logo_interventoria, fase").order("numero").execute().data
 
 @app.post("/auth/login")
-def login(request: LoginRequest):
-    result = supabase.table("usuarios").select("*").eq("email", request.email).execute()
+def login(request: Request, body: LoginRequest):
+    ip = _client_ip(request)
+    result = supabase.table("usuarios").select("*").eq("email", body.email).execute()
     if not result.data:
+        registrar_log(
+            {"nombre": "", "email": body.email},
+            "LOGIN_FAIL", "AUTH", None, None,
+            {"motivo": "usuario_no_encontrado", "email": body.email},
+            resultado="fallido",
+            ip=ip,
+            severidad="WARNING",
+        )
+        _track_login_failure_alert(body.email, ip)
         raise HTTPException(status_code=401, detail="Usuario no encontrado")
     usuario = result.data[0]
-    if not verify_password(request.password, usuario["password_hash"]):
+    if not verify_password(body.password, usuario["password_hash"]):
+        registrar_log(
+            {"sub": str(usuario["id"]), "nombre": usuario.get("nombre", ""), "email": body.email,
+             "cargo_nombre": "", "contrato_id": usuario.get("contrato_id")},
+            "LOGIN_FAIL", "AUTH", "usuario", str(usuario["id"]),
+            {"motivo": "password_incorrecto"},
+            resultado="fallido",
+            ip=ip,
+            severidad="WARNING",
+        )
+        _track_login_failure_alert(body.email, ip)
         raise HTTPException(status_code=401, detail="Contraseña incorrecta")
     if usuario.get("estado") == "pendiente":
+        registrar_log(
+            {"sub": str(usuario["id"]), "nombre": usuario.get("nombre", ""), "email": body.email,
+             "contrato_id": usuario.get("contrato_id")},
+            "LOGIN_FAIL", "AUTH", "usuario", str(usuario["id"]),
+            {"motivo": "cuenta_pendiente"},
+            resultado="denegado",
+            ip=ip,
+            severidad="WARNING",
+        )
         raise HTTPException(status_code=403, detail="Tu cuenta está pendiente de aprobación")
     if usuario.get("estado") == "rechazado":
+        registrar_log(
+            {"sub": str(usuario["id"]), "nombre": usuario.get("nombre", ""), "email": body.email},
+            "LOGIN_FAIL", "AUTH", "usuario", str(usuario["id"]),
+            {"motivo": "cuenta_rechazada"},
+            resultado="denegado",
+            ip=ip,
+            severidad="WARNING",
+        )
         raise HTTPException(status_code=403, detail="Tu cuenta fue rechazada")
 
     cargo_nombre = None
@@ -798,7 +1090,16 @@ def login(request: LoginRequest):
             logo_contratista = r.data[0].get("logo_contratista")
             logo_interventoria = r.data[0].get("logo_interventoria")
 
-    token = create_token({"sub": str(usuario["id"]), "email": usuario["email"]})
+    nombre_completo = f"{usuario.get('nombre','')} {usuario.get('apellidos','')}".strip()
+    token = create_token({
+        "sub": str(usuario["id"]),
+        "email": usuario["email"],
+        "nombre": nombre_completo or usuario.get("nombre") or "",
+        "cargo_nombre": cargo_nombre or "",
+        "rol_nombre": rol_nombre or "",
+        "contrato_id": usuario.get("contrato_id"),
+        "contrato_numero": contrato_numero or "",
+    })
 
     # Cargar permisos del cargo para control de acceso en el panel
     permisos = []
@@ -835,11 +1136,13 @@ def login(request: LoginRequest):
         permisos = []
 
     registrar_log(
-        {"sub": str(usuario["id"]), "nombre": usuario.get("nombre",""),
+        {"sub": str(usuario["id"]), "nombre": nombre_completo or usuario.get("nombre", ""),
          "cargo_nombre": cargo_nombre, "contrato_id": usuario.get("contrato_id"),
-         "contrato_numero": contrato_numero},
+         "contrato_numero": contrato_numero, "rol_nombre": rol_nombre},
         "LOGIN", "AUTH", "usuario", str(usuario["id"]),
-        {"email": usuario["email"], "cargo": cargo_nombre, "contrato": contrato_numero}
+        {"email": usuario["email"], "cargo": cargo_nombre, "contrato": contrato_numero},
+        ip=ip,
+        rol_nombre=rol_nombre,
     )
 
     return {
@@ -1124,6 +1427,61 @@ def _usuario_imagen_subir(
                 ),
             )
 
+    return sb.storage.from_(bucket).get_public_url(path)
+
+
+def _inicio_novedad_subir_imagen(contents: bytes, content_type: Optional[str]) -> str:
+    """Imagen de contexto para novedades de inicio (Cloudinary o Supabase Storage)."""
+    if len(contents) > 6 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="La imagen no puede superar 6 MB.")
+    ext = _ext_desde_content_type(content_type)
+    ct = (content_type or "image/jpeg").split(";")[0].strip()
+    if os.getenv("CLOUDINARY_CLOUD_NAME"):
+        import cloudinary.uploader
+        _cloudinary_config()
+        uid_part = uuid.uuid4().hex[:16]
+        result = cloudinary.uploader.upload(
+            contents,
+            folder=f"{CLOUDINARY_ROOT}/inicio-novedades",
+            public_id=f"nov_{uid_part}",
+            overwrite=False,
+            resource_type="image",
+        )
+        return result["secure_url"]
+    sb = get_supabase()
+    bucket = os.getenv("SUPABASE_INICIO_BUCKET", os.getenv("SUPABASE_PERFIL_BUCKET", "claracore-perfiles"))
+    path = f"inicio-novedades/{uuid.uuid4().hex}{ext}"
+    file_opts = {"content-type": ct, "upsert": "true"}
+
+    def _do_upload():
+        sb.storage.from_(bucket).upload(path, contents, file_options=file_opts)
+
+    try:
+        _do_upload()
+    except Exception as e1:
+        msg = str(e1).lower()
+        if "bucket" in msg or "not found" in msg or "not_found" in msg or "404" in msg:
+            try:
+                sb.storage.create_bucket(
+                    bucket,
+                    options={"public": True, "file_size_limit": 6 * 1024 * 1024},
+                )
+            except Exception as e_create:
+                _log_api.warning("create_bucket inicio novedades %s: %s", bucket, e_create)
+            try:
+                _do_upload()
+            except Exception as e2:
+                _log_api.warning("Supabase Storage upload inicio %s: %s", path, e2)
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "No se pudo subir la imagen. Configura Cloudinary (CLOUDINARY_*) "
+                        f"o el bucket público {bucket} en Supabase Storage."
+                    ),
+                )
+        else:
+            _log_api.warning("Supabase Storage upload inicio %s: %s", path, e1)
+            raise HTTPException(status_code=503, detail="No se pudo subir la imagen a Supabase Storage.")
     return sb.storage.from_(bucket).get_public_url(path)
 
 
@@ -1422,6 +1780,12 @@ def actualizar_usuario(usuario_id: int, body: UsuarioUpdate, current_user=Depend
             cargo_res = supabase.table("cargos").select("nombre").eq("id", target.data[0]["cargo_id"]).execute()
             if cargo_res.data and cargo_res.data[0]["nombre"].lower() == "desarrollador":
                 raise HTTPException(status_code=403, detail="No se puede modificar un usuario Desarrollador")
+
+    prev_snap = supabase.table("usuarios").select(
+        "cargo_id, rol_id, contrato_id, estado, activo, subcontratista_id, nombre, apellidos, email"
+    ).eq("id", usuario_id).limit(1).execute().data
+    prev_snap = prev_snap[0] if prev_snap else {}
+
     # exclude_unset=True: campos no enviados no se tocan; null explícito sí borra el campo
     data = body.dict(exclude_unset=True)
     if body.estado == "aprobado":
@@ -1471,7 +1835,38 @@ def actualizar_usuario(usuario_id: int, body: UsuarioUpdate, current_user=Depend
         r = supabase.table("contratos").select("numero").eq("id", detalle_log["contrato_id"]).execute()
         detalle_log["contrato"] = r.data[0]["numero"] if r.data else str(detalle_log["contrato_id"])
         del detalle_log["contrato_id"]
-    registrar_log(current_user, "EDITAR", "USUARIOS", "usuario", str(usuario_id), detalle_log)
+
+    def _usuario_audit_enriquecido(row: dict) -> dict:
+        if not row:
+            return {}
+        o = dict(row)
+        if row.get("cargo_id"):
+            cr = supabase.table("cargos").select("nombre").eq("id", row["cargo_id"]).execute()
+            o["cargo"] = cr.data[0]["nombre"] if cr.data else str(row["cargo_id"])
+        if row.get("rol_id"):
+            rr = supabase.table("roles").select("nombre").eq("id", row["rol_id"]).execute()
+            o["rol"] = rr.data[0]["nombre"] if rr.data else str(row["rol_id"])
+        if row.get("contrato_id"):
+            ct = supabase.table("contratos").select("numero").eq("id", row["contrato_id"]).execute()
+            o["contrato"] = ct.data[0]["numero"] if ct.data else str(row["contrato_id"])
+        return o
+
+    after_snap = supabase.table("usuarios").select(
+        "cargo_id, rol_id, contrato_id, estado, activo, subcontratista_id, nombre, apellidos, email"
+    ).eq("id", usuario_id).limit(1).execute().data
+    after_snap = after_snap[0] if after_snap else {}
+
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "USUARIOS",
+        "usuario",
+        str(usuario_id),
+        detalle_log,
+        valor_anterior=_usuario_audit_enriquecido(prev_snap),
+        valor_nuevo=_usuario_audit_enriquecido(after_snap),
+        severidad="AUDIT",
+    )
     return {"mensaje": "Usuario actualizado"}
 
 @app.post("/admin/verificar-inactividad")
@@ -1564,11 +1959,63 @@ def set_mantenimiento(body: MantenimientoRequest):
 @app.post("/auth/refresh")
 def refresh_token(current_user=Depends(get_current_user)):
     """Renueva el token JWT del usuario activo."""
+    uid = int(current_user.get("sub"))
+    result = supabase.table("usuarios").select("*").eq("id", uid).execute()
+    if not result.data:
+        raise HTTPException(status_code=401, detail="Usuario no encontrado")
+    usuario = result.data[0]
+    cargo_nombre = None
+    if usuario.get("cargo_id"):
+        r = supabase.table("cargos").select("nombre").eq("id", usuario["cargo_id"]).execute()
+        if r.data:
+            cargo_nombre = r.data[0]["nombre"]
+    rol_nombre = None
+    if usuario.get("rol_id"):
+        r = supabase.table("roles").select("nombre").eq("id", usuario["rol_id"]).execute()
+        if r.data:
+            rol_nombre = r.data[0]["nombre"]
+    contrato_numero = None
+    if usuario.get("contrato_id"):
+        r = supabase.table("contratos").select("numero").eq("id", usuario["contrato_id"]).execute()
+        if r.data:
+            contrato_numero = r.data[0]["numero"]
+    nombre_completo = f"{usuario.get('nombre','')} {usuario.get('apellidos','')}".strip()
     new_token = create_token({
-        "sub": current_user.get("sub"),
-        "email": current_user.get("email")
+        "sub": str(uid),
+        "email": usuario["email"],
+        "nombre": nombre_completo or usuario.get("nombre") or "",
+        "cargo_nombre": cargo_nombre or "",
+        "rol_nombre": rol_nombre or "",
+        "contrato_id": usuario.get("contrato_id"),
+        "contrato_numero": contrato_numero or "",
     })
     return {"access_token": new_token, "token_type": "bearer"}
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request, current_user=Depends(get_current_user)):
+    """Registra cierre de sesión (auditoría)."""
+    ip = _client_ip(request)
+    uid = current_user.get("sub")
+    nombre = current_user.get("nombre") or current_user.get("email", "")
+    registrar_log(
+        {
+            "sub": str(uid),
+            "nombre": nombre,
+            "cargo_nombre": current_user.get("cargo_nombre"),
+            "rol_nombre": current_user.get("rol_nombre"),
+            "contrato_id": current_user.get("contrato_id"),
+            "contrato_numero": current_user.get("contrato_numero"),
+        },
+        "LOGOUT",
+        "AUTH",
+        "usuario",
+        str(uid),
+        {},
+        ip=ip,
+    )
+    return {"ok": True}
+
 
 @app.post("/auth/solicitar-reset")
 def solicitar_reset(body: ResetSolicitud):
@@ -1612,6 +2059,35 @@ def autorizar_reset(request_id: int, body: ResetAutorizar, current_user=Depends(
 
 @app.post("/admin/permisos")
 def guardar_permisos(permisos: List[PermisoUpdate], current_user=Depends(get_current_user)):
+    cargo_ids = sorted({p.cargo_id for p in permisos})
+
+    def _norm_perm_rows(rows):
+        if not rows:
+            return []
+
+        def _key(r):
+            return (r.get("cargo_id"), r.get("funcion_id"))
+
+        out = []
+        for r in sorted(rows, key=_key):
+            out.append({
+                "cargo_id": r.get("cargo_id"),
+                "funcion_id": r.get("funcion_id"),
+                "ver": r.get("ver"),
+                "crear": r.get("crear"),
+                "editar": r.get("editar"),
+                "eliminar": r.get("eliminar"),
+                "validar": r.get("validar"),
+                "exportar": r.get("exportar"),
+            })
+        return out
+
+    antes_por_cargo = {}
+    for cid in cargo_ids:
+        antes_por_cargo[cid] = _norm_perm_rows(
+            supabase.table("permisos").select("*").eq("cargo_id", cid).execute().data or []
+        )
+
     for permiso in permisos:
         existe = supabase.table("permisos").select("id") \
             .eq("cargo_id", permiso.cargo_id).eq("funcion_id", permiso.funcion_id).execute()
@@ -1621,6 +2097,27 @@ def guardar_permisos(permisos: List[PermisoUpdate], current_user=Depends(get_cur
                 .eq("cargo_id", permiso.cargo_id).eq("funcion_id", permiso.funcion_id).execute()
         else:
             supabase.table("permisos").insert(data).execute()
+
+    for cid in cargo_ids:
+        despues = _norm_perm_rows(
+            supabase.table("permisos").select("*").eq("cargo_id", cid).execute().data or []
+        )
+        if despues == antes_por_cargo.get(cid, []):
+            continue
+        cargo_row = supabase.table("cargos").select("nombre").eq("id", cid).limit(1).execute().data
+        cn = cargo_row[0]["nombre"] if cargo_row else str(cid)
+        registrar_log(
+            current_user,
+            "EDITAR",
+            "PERMISOS",
+            "cargo",
+            str(cid),
+            {"cargo": cn, "cambio": "matriz_permisos"},
+            valor_anterior=antes_por_cargo.get(cid, []),
+            valor_nuevo=despues,
+            severidad="AUDIT",
+            alerta_generada=True,
+        )
     return {"mensaje": f"{len(permisos)} permisos guardados"}
 
 # ─────────────────────────────────────────────
@@ -1915,6 +2412,8 @@ def get_presupuesto_item(item_id: int, current_user=Depends(get_current_user)):
 @app.put("/presupuesto/item/{item_id}")
 def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=Depends(get_current_user)):
     data = body.dict(exclude_unset=True)
+    prev_row = supabase.table("presupuesto").select("*").eq("id", item_id).limit(1).execute().data
+    prev_row = prev_row[0] if prev_row else {}
     dims = {k: data.get(k) for k in ["area_long_nod", "ancho", "espesor"]}
     if any(v is not None for v in dims.values()):
         current = supabase.table("presupuesto").select("area_long_nod, ancho, espesor, vlr_unitario, cant_total").eq("id", item_id).execute().data
@@ -1973,7 +2472,35 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
         except: pass
 
     updated = supabase.table("presupuesto").select("*").eq("id", item_id).execute().data
-    return updated[0] if updated else {"mensaje": "Registro actualizado"}
+    row_after = updated[0] if updated else {}
+    try:
+        cinfo = None
+        cid = row_after.get("contrato_id") or prev_row.get("contrato_id")
+        if cid:
+            cr = supabase.table("contratos").select("numero").eq("id", cid).limit(1).execute().data
+            cinfo = cr[0].get("numero") if cr else None
+        u_log = {
+            "sub": str(current_user.get("sub")),
+            "nombre": current_user.get("nombre") or "",
+            "email": current_user.get("email"),
+            "cargo_nombre": current_user.get("cargo_nombre"),
+            "rol_nombre": current_user.get("rol_nombre"),
+            "contrato_id": cid,
+            "contrato_numero": cinfo,
+        }
+        registrar_log(
+            u_log,
+            "EDITAR",
+            "PRESUPUESTO",
+            "presupuesto",
+            str(item_id),
+            {"id_pol": row_after.get("id_pol") or prev_row.get("id_pol"), "item": row_after.get("item")},
+            valor_anterior=_json_for_log(prev_row),
+            valor_nuevo=_json_for_log(row_after),
+        )
+    except Exception:
+        pass
+    return row_after if updated else {"mensaje": "Registro actualizado"}
 
 @app.put("/presupuesto/item/{item_id}/dar-baja")
 def dar_baja_presupuesto(item_id: int, current_user=Depends(get_current_user)):
@@ -2012,6 +2539,32 @@ def dar_baja_presupuesto(item_id: int, current_user=Depends(get_current_user)):
             "layer_ent": f"del_{old_lent}" if old_lent and not old_lent.startswith("del_") else old_lent,
             "layer_txt": f"del_{old_ltxt}" if old_ltxt and not old_ltxt.startswith("del_") else old_ltxt,
         }).eq("id", item_id).execute()
+    try:
+        cid = r.get("contrato_id")
+        cinfo = None
+        if cid:
+            cr = supabase.table("contratos").select("numero").eq("id", cid).limit(1).execute().data
+            cinfo = cr[0].get("numero") if cr else None
+        u_log = {
+            "sub": str(current_user.get("sub")),
+            "nombre": current_user.get("nombre") or "",
+            "email": current_user.get("email"),
+            "cargo_nombre": current_user.get("cargo_nombre"),
+            "rol_nombre": current_user.get("rol_nombre"),
+            "contrato_id": cid,
+            "contrato_numero": cinfo,
+        }
+        registrar_log(
+            u_log,
+            "ELIMINAR",
+            "PRESUPUESTO",
+            "presupuesto",
+            str(item_id),
+            {"accion": "dar_baja", "layer_ent": r.get("layer_ent")},
+            severidad="AUDIT",
+        )
+    except Exception:
+        pass
     return {"ok": True}
 
 @app.put("/presupuesto/item/{item_id}/restaurar")
@@ -2051,6 +2604,32 @@ def restaurar_presupuesto(item_id: int, current_user=Depends(get_current_user)):
             "layer_ent": new_lent,
             "layer_txt": new_ltxt,
         }).eq("id", item_id).execute()
+    try:
+        cid = r.get("contrato_id")
+        cinfo = None
+        if cid:
+            cr = supabase.table("contratos").select("numero").eq("id", cid).limit(1).execute().data
+            cinfo = cr[0].get("numero") if cr else None
+        u_log = {
+            "sub": str(current_user.get("sub")),
+            "nombre": current_user.get("nombre") or "",
+            "email": current_user.get("email"),
+            "cargo_nombre": current_user.get("cargo_nombre"),
+            "rol_nombre": current_user.get("rol_nombre"),
+            "contrato_id": cid,
+            "contrato_numero": cinfo,
+        }
+        registrar_log(
+            u_log,
+            "EDITAR",
+            "PRESUPUESTO",
+            "presupuesto",
+            str(item_id),
+            {"accion": "restaurar"},
+            severidad="AUDIT",
+        )
+    except Exception:
+        pass
     return {"ok": True}
 
 @app.post("/presupuesto/{contrato_id}/agregar-cantidad")
@@ -2523,46 +3102,383 @@ def responder_comentario(comentario_id: int, body: RespuestaCreate, current_user
 # LOGS
 # ─────────────────────────────────────────────
 
+def _logs_query_base(
+    usuario_id: Optional[int] = None,
+    modulo: Optional[str] = None,
+    accion: Optional[str] = None,
+    categoria: Optional[str] = None,
+    severidad: Optional[str] = None,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+):
+    q = supabase.table("logs").select("*").order("created_at", desc=True)
+    if usuario_id:
+        q = q.eq("usuario_id", usuario_id)
+    if modulo:
+        q = q.eq("modulo", modulo)
+    if accion:
+        q = q.eq("accion", accion)
+    if categoria:
+        q = q.eq("categoria", categoria)
+    if severidad:
+        q = q.eq("severidad", severidad)
+    if fecha_desde:
+        q = q.gte("created_at", fecha_desde)
+    if fecha_hasta:
+        q = q.lte("created_at", fecha_hasta + "T23:59:59")
+    return q
+
+
 @app.get("/logs")
 def get_logs(
     usuario_id:   Optional[int] = None,
     modulo:       Optional[str] = None,
     accion:       Optional[str] = None,
+    categoria:    Optional[str] = None,
+    severidad:    Optional[str] = None,
     fecha_desde:  Optional[str] = None,
     fecha_hasta:  Optional[str] = None,
     limit:        int = 100,
     offset:       int = 0,
-    current_user=Depends(get_current_user)
+    current_user=Depends(require_logs_auditoria),
 ):
-    """Consulta logs con filtros. Solo para Desarrollador y Administrador."""
-    q = supabase.table("logs").select("*").order("created_at", desc=True)
-    if usuario_id:  q = q.eq("usuario_id", usuario_id)
-    if modulo:      q = q.eq("modulo", modulo)
-    if accion:      q = q.eq("accion", accion)
-    if fecha_desde: q = q.gte("created_at", fecha_desde)
-    if fecha_hasta: q = q.lte("created_at", fecha_hasta + "T23:59:59")
+    """Consulta logs con filtros. Solo Desarrollador y Administrador."""
+    q = _logs_query_base(
+        usuario_id=usuario_id,
+        modulo=modulo,
+        accion=accion,
+        categoria=categoria,
+        severidad=severidad,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+    )
     q = q.range(offset, offset + limit - 1)
     return q.execute().data
 
-@app.get("/logs/usuarios-lista")
-def get_logs_usuarios(current_user=Depends(get_current_user)):
-    """Lista de usuarios que tienen logs — para el selector de filtros."""
-    rows = supabase.table("logs").select("usuario_id, usuario_nombre, cargo_nombre").execute().data
-    vistos = {}
+
+@app.get("/logs/alertas")
+def get_logs_alertas(
+    limit: int = 50,
+    current_user=Depends(require_logs_auditoria),
+):
+    """Eventos marcados como alerta (login masivo, 500 repetidos, permisos, etc.)."""
+    rows = (
+        supabase.table("logs")
+        .select("*")
+        .eq("alerta_generada", True)
+        .order("created_at", desc=True)
+        .limit(min(limit, 200))
+        .execute()
+        .data
+    )
+    return rows
+
+
+@app.get("/logs/export.csv")
+def export_logs_csv(
+    usuario_id:  Optional[int] = None,
+    modulo:      Optional[str] = None,
+    accion:      Optional[str] = None,
+    categoria:   Optional[str] = None,
+    severidad:   Optional[str] = None,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    max_rows:    int = 5000,
+    current_user=Depends(require_logs_auditoria),
+):
+    """Exportación CSV para interventoría / auditoría externa."""
+    cap = min(max(max_rows, 1), 20000)
+    q = _logs_query_base(
+        usuario_id=usuario_id,
+        modulo=modulo,
+        accion=accion,
+        categoria=categoria,
+        severidad=severidad,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+    )
+    rows = q.limit(cap).execute().data or []
+    import json as _json
+
+    def _cell(v):
+        if v is None:
+            return ""
+        if isinstance(v, (dict, list)):
+            return _json.dumps(v, ensure_ascii=False)
+        return str(v)
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([
+        "id", "created_at", "categoria", "severidad", "usuario_id", "usuario_nombre", "rol_nombre",
+        "cargo_nombre", "contrato_id", "contrato_numero", "accion", "modulo",
+        "entidad_tipo", "entidad_id", "resultado", "ip", "endpoint", "detalle",
+        "valor_anterior", "valor_nuevo", "alerta_generada",
+    ])
     for r in rows:
-        uid = r.get("usuario_id")
-        if uid and uid not in vistos:
-            vistos[uid] = {"id": uid, "nombre": r.get("usuario_nombre",""), "cargo": r.get("cargo_nombre","")}
-    return list(vistos.values())
+        w.writerow([
+            r.get("id"), r.get("created_at"), r.get("categoria"), r.get("severidad"),
+            r.get("usuario_id"), r.get("usuario_nombre"), r.get("rol_nombre"),
+            r.get("cargo_nombre"), r.get("contrato_id"), r.get("contrato_numero"),
+            r.get("accion"), r.get("modulo"), r.get("entidad_tipo"), r.get("entidad_id"),
+            r.get("resultado"), r.get("ip"), r.get("endpoint"),
+            _cell(r.get("detalle")), _cell(r.get("valor_anterior")), _cell(r.get("valor_nuevo")),
+            r.get("alerta_generada"),
+        ])
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="claracore_logs.csv"'},
+    )
+
+
+@app.get("/logs/usuarios-lista")
+def get_logs_usuarios(current_user=Depends(require_logs_auditoria)):
+    """Lista de usuarios para el filtro (todos los visibles para el administrador, no solo quienes ya tienen log)."""
+    result = supabase.table("usuarios").select(
+        "id, nombre, apellidos, cargo_id, contrato_id"
+    ).order("nombre").execute()
+    cargos = {c["id"]: c["nombre"] for c in supabase.table("cargos").select("id, nombre").execute().data}
+    caller_contrato, _ = _caller_contract_scope(current_user)
+    caller_id = int(current_user["sub"])
+    out = []
+    for u in result.data or []:
+        uid = u.get("id")
+        cn = cargos.get(u.get("cargo_id"), "Sin cargo")
+        if caller_contrato and u.get("contrato_id") != caller_contrato:
+            continue
+        if (cn or "").lower() == "desarrollador" and uid != caller_id:
+            continue
+        nombre = f"{u.get('nombre', '')} {u.get('apellidos', '')}".strip() or f"Usuario {uid}"
+        out.append({"id": uid, "nombre": nombre, "cargo": cn})
+    return out
+
 
 @app.get("/logs/entidad/{entidad_tipo}/{entidad_id}")
-def get_logs_entidad(entidad_tipo: str, entidad_id: str, current_user=Depends(get_current_user)):
-    """Historial completo de una entidad específica."""
-    return supabase.table("logs").select("*") \
-        .eq("entidad_tipo", entidad_tipo) \
-        .eq("entidad_id", entidad_id) \
-        .order("created_at", desc=False) \
-        .execute().data
+def get_logs_entidad(
+    entidad_tipo: str,
+    entidad_id: str,
+    current_user=Depends(get_current_user),
+):
+    """Historial de una entidad (usuarios autenticados: trazabilidad en pantallas operativas)."""
+    return (
+        supabase.table("logs")
+        .select("*")
+        .eq("entidad_tipo", entidad_tipo)
+        .eq("entidad_id", entidad_id)
+        .order("created_at", desc=False)
+        .execute()
+        .data
+    )
+
+
+@app.post("/admin/deploy-log")
+def log_deploy_event(
+    body: dict,
+    current_user=Depends(require_logs_auditoria),
+):
+    """Registra un despliegue (versión, notas). Uso manual desde pipeline o consola."""
+    ver = (body or {}).get("version") or ""
+    notas = (body or {}).get("notas") or ""
+    uid = int(current_user.get("sub"))
+    nombre = current_user.get("nombre") or current_user.get("email", "")
+    registrar_log(
+        {
+            "sub": str(uid),
+            "nombre": nombre,
+            "cargo_nombre": current_user.get("cargo_nombre"),
+            "rol_nombre": current_user.get("rol_nombre"),
+            "contrato_id": current_user.get("contrato_id"),
+            "contrato_numero": current_user.get("contrato_numero"),
+        },
+        "DEPLOY",
+        "SISTEMA",
+        "deploy",
+        ver or "sin_version",
+        {"version": ver, "notas": notas},
+        severidad="INFO",
+        categoria="auditoria",
+    )
+    return {"ok": True}
+
+
+@app.get("/inicio/novedades")
+def inicio_novedades_public():
+    """Novedades de la página de inicio (lectura pública para usuarios logueados en el front)."""
+    rows = (
+        supabase.table("inicio_novedades")
+        .select("*")
+        .order("created_at", desc=True)
+        .execute()
+        .data
+    )
+    return rows or []
+
+
+@app.get("/admin/inicio/novedades")
+def admin_inicio_novedades_list(current_user=Depends(require_logs_auditoria)):
+    """Misma lista que GET /inicio/novedades (requiere rol de auditoría de logs)."""
+    return inicio_novedades_public()
+
+
+@app.post("/admin/inicio/novedades")
+def admin_inicio_novedades_create(
+    body: InicioNovedadCreate,
+    request: Request,
+    current_user=Depends(require_logs_auditoria),
+):
+    row = body.model_dump()
+    raw_fecha = (row.pop("fecha") or "").strip()
+    if raw_fecha:
+        row["fecha"] = raw_fecha[:10]
+    else:
+        row["fecha"] = datetime.now(timezone.utc).date().isoformat()
+    res = supabase.table("inicio_novedades").insert(row).select("*").single().execute()
+    data = res.data
+    u = dict(current_user)
+    u["nombre"] = u.get("nombre") or u.get("email", "")
+    registrar_log(
+        u,
+        "CREAR",
+        "INICIO",
+        "inicio_novedad",
+        str(data.get("id")) if data else None,
+        detalle={"titulo": row.get("titulo")},
+        resultado="ok",
+        valor_nuevo=data,
+        ip=_client_ip(request),
+    )
+    return data
+
+
+@app.patch("/admin/inicio/novedades/{novedad_id}")
+def admin_inicio_novedades_update(
+    novedad_id: int,
+    body: InicioNovedadUpdate,
+    request: Request,
+    current_user=Depends(require_logs_auditoria),
+):
+    prev_rows = supabase.table("inicio_novedades").select("*").eq("id", novedad_id).limit(1).execute().data or []
+    prev = prev_rows[0] if prev_rows else None
+    if not prev:
+        raise HTTPException(status_code=404, detail="Novedad no encontrada")
+    patch = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    if "fecha" in patch and patch["fecha"] is not None:
+        patch["fecha"] = str(patch["fecha"])[:10]
+    if not patch:
+        return prev
+    res = supabase.table("inicio_novedades").update(patch).eq("id", novedad_id).select("*").single().execute()
+    data = res.data or {**prev, **patch}
+    u = dict(current_user)
+    u["nombre"] = u.get("nombre") or u.get("email", "")
+    registrar_log(
+        u,
+        "EDITAR",
+        "INICIO",
+        "inicio_novedad",
+        str(novedad_id),
+        detalle=patch,
+        resultado="ok",
+        valor_anterior=prev,
+        valor_nuevo=data,
+        ip=_client_ip(request),
+    )
+    return data
+
+
+@app.delete("/admin/inicio/novedades/{novedad_id}")
+def admin_inicio_novedades_delete(
+    novedad_id: int,
+    request: Request,
+    current_user=Depends(require_logs_auditoria),
+):
+    prev_rows = supabase.table("inicio_novedades").select("*").eq("id", novedad_id).limit(1).execute().data or []
+    prev = prev_rows[0] if prev_rows else None
+    if not prev:
+        raise HTTPException(status_code=404, detail="Novedad no encontrada")
+    supabase.table("inicio_novedades").delete().eq("id", novedad_id).execute()
+    u = dict(current_user)
+    u["nombre"] = u.get("nombre") or u.get("email", "")
+    registrar_log(
+        u,
+        "ELIMINAR",
+        "INICIO",
+        "inicio_novedad",
+        str(novedad_id),
+        detalle={"titulo": prev.get("titulo")},
+        resultado="ok",
+        valor_anterior=prev,
+        ip=_client_ip(request),
+    )
+    return {"ok": True}
+
+
+@app.post("/admin/inicio/novedades/imagen")
+async def admin_inicio_novedad_imagen(
+    file: UploadFile = File(...),
+    current_user=Depends(require_logs_auditoria),
+):
+    contents = await file.read()
+    url = _inicio_novedad_subir_imagen(contents, file.content_type)
+    return {"url": url}
+
+
+@app.post("/admin/inicio/novedades/mejorar-texto")
+def admin_inicio_novedad_mejorar_texto(
+    body: InicioNovedadMejorarTexto,
+    current_user=Depends(require_logs_auditoria),
+):
+    """Mejora la redacción del resumen con el mismo modelo que /frase-del-dia (Anthropic)."""
+    raw = (body.texto or "").strip()
+    if len(raw) > 8000:
+        raise HTTPException(status_code=400, detail="Texto demasiado largo (máx. 8000 caracteres).")
+    if not raw:
+        return {"texto": ""}
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {"texto": raw, "sin_ia": True}
+    try:
+        res = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5",
+                "max_tokens": 900,
+                "messages": [{
+                    "role": "user",
+                    "content": (
+                        "Eres editor en español para avisos de una plataforma de gestión de obra (ClaraCore). "
+                        "Mejora la redacción del siguiente resumen de novedad: tono claro y profesional, "
+                        "sin inventar datos ni añadir información que no aparezca en el original. "
+                        "Conserva listas o viñetas si las hay. "
+                        "Devuelve SOLO el texto mejorado, sin título, sin comillas envolventes ni frases como \"Aquí tienes\".\n\n"
+                        + raw
+                    ),
+                }],
+            },
+            timeout=35.0,
+        )
+        data = res.json()
+        if res.status_code >= 400:
+            detail = data.get("error", {}).get("message") if isinstance(data.get("error"), dict) else data
+            raise HTTPException(status_code=503, detail=str(detail or "Error del proveedor IA"))
+        if "content" not in data or not data["content"]:
+            return {"texto": raw, "sin_ia": True}
+        texto = (data["content"][0].get("text") or "").strip()
+        if not texto:
+            return {"texto": raw, "sin_ia": True}
+        return {"texto": texto}
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log_api.warning("mejorar-texto novedad: %s", e)
+        return {"texto": raw, "sin_ia": True}
+
 
 # ─────────────────────────────────────────────
 # NOTIFICACIONES
@@ -3940,6 +4856,28 @@ def exportar_registros_sicoe(
                 break
             off += batch_size + 1
         registros = _enriquecer_registros_export(registros)
+        try:
+            cn_row = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
+            cn = cn_row[0]["numero"] if cn_row else None
+            u_log = {
+                "sub": str(current_user.get("sub")),
+                "nombre": current_user.get("nombre") or "",
+                "email": current_user.get("email"),
+                "cargo_nombre": current_user.get("cargo_nombre"),
+                "rol_nombre": current_user.get("rol_nombre"),
+                "contrato_id": contrato_id,
+                "contrato_numero": cn,
+            }
+            registrar_log(
+                u_log,
+                "EXPORTAR",
+                "SICOE",
+                "registro_export",
+                str(contrato_id),
+                {"filas": len(registros), "campos": len(campos_solicitados)},
+            )
+        except Exception:
+            pass
         return registros
 
     # Cuando hay restricción por reporte_ids, chunking por .in_()
@@ -3949,6 +4887,28 @@ def exportar_registros_sicoe(
         registros.extend(_fetch_by_reporte_id_list(chunk))
 
     registros = _enriquecer_registros_export(registros)
+    try:
+        cn_row = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
+        cn = cn_row[0]["numero"] if cn_row else None
+        u_log = {
+            "sub": str(current_user.get("sub")),
+            "nombre": current_user.get("nombre") or "",
+            "email": current_user.get("email"),
+            "cargo_nombre": current_user.get("cargo_nombre"),
+            "rol_nombre": current_user.get("rol_nombre"),
+            "contrato_id": contrato_id,
+            "contrato_numero": cn,
+        }
+        registrar_log(
+            u_log,
+            "EXPORTAR",
+            "SICOE",
+            "registro_export",
+            str(contrato_id),
+            {"filas": len(registros), "campos": len(campos_solicitados)},
+        )
+    except Exception:
+        pass
     return registros
 
 
@@ -4960,17 +5920,91 @@ def actualizar_localizacion_borrador(contrato_id: int, reporte_id: int, body: di
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}")
 def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate, current_user=Depends(get_current_user)):
     data = {k: v for k, v in body.dict().items() if v is not None}
+
+    def _prev():
+        return supabase.table("so_registros").select("*").eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
+
+    prev_rows = supabase_execute(_prev)
+    prev_row = prev_rows[0] if prev_rows else {}
+
     def _upd():
         return supabase.table("so_registros").update(data)\
             .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
-    return supabase_execute(_upd)
+
+    out = supabase_execute(_upd)
+    row = out[0] if out else {}
+    try:
+        cnum = None
+        cr = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
+        if cr:
+            cnum = cr[0].get("numero")
+        u_log = {
+            "sub": str(current_user.get("sub")),
+            "nombre": current_user.get("nombre") or "",
+            "email": current_user.get("email"),
+            "cargo_nombre": current_user.get("cargo_nombre"),
+            "rol_nombre": current_user.get("rol_nombre"),
+            "contrato_id": contrato_id,
+            "contrato_numero": cnum,
+        }
+        registrar_log(
+            u_log,
+            "EDITAR",
+            "SICOE",
+            "registro",
+            str(registro_id),
+            {"reporte_id": row.get("reporte_id"), "id_pol": row.get("id_pol")},
+            valor_anterior=_json_for_log(prev_row),
+            valor_nuevo=_json_for_log(row),
+        )
+    except Exception:
+        pass
+    return row
 
 @app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/registros")
 def eliminar_registros_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
+    def _list():
+        return supabase.table("so_registros").select("id").eq("reporte_id", reporte_id).eq("contrato_id", contrato_id).execute().data
+
+    ids_rows = supabase_execute(_list) or []
+    n = len(ids_rows)
+
     def _del():
         return supabase.table("so_registros").delete()\
             .eq("reporte_id", reporte_id).eq("contrato_id", contrato_id).execute().data
+
     supabase_execute(_del)
+    try:
+        cnum = None
+        cr = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
+        if cr:
+            cnum = cr[0].get("numero")
+        u_log = {
+            "sub": str(current_user.get("sub")),
+            "nombre": current_user.get("nombre") or "",
+            "email": current_user.get("email"),
+            "cargo_nombre": current_user.get("cargo_nombre"),
+            "rol_nombre": current_user.get("rol_nombre"),
+            "contrato_id": contrato_id,
+            "contrato_numero": cnum,
+        }
+        registrar_log(
+            u_log,
+            "ELIMINAR",
+            "SICOE",
+            "reporte",
+            str(reporte_id),
+            {
+                "registros_eliminados": n,
+                "muestra_ids": [r.get("id") for r in ids_rows[:80]],
+            },
+            valor_anterior={"ids": [r.get("id") for r in ids_rows]},
+            valor_nuevo={},
+            severidad="AUDIT",
+            alerta_generada=(n >= 20),
+        )
+    except Exception:
+        pass
     return {"ok": True}
 
 @app.post("/sicoe-obra/{contrato_id}/registros")
@@ -4998,7 +6032,34 @@ def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(
     def _ins():
         return supabase.table("so_registros").insert(data).execute().data
     result = supabase_execute(_ins)
-    return result[0] if result else {}
+    row = result[0] if result else {}
+    try:
+        cnum = None
+        cr = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
+        if cr:
+            cnum = cr[0].get("numero")
+        u_log = {
+            "sub": str(current_user.get("sub")),
+            "nombre": current_user.get("nombre") or "",
+            "email": current_user.get("email"),
+            "cargo_nombre": current_user.get("cargo_nombre"),
+            "rol_nombre": current_user.get("rol_nombre"),
+            "contrato_id": contrato_id,
+            "contrato_numero": cnum,
+        }
+        registrar_log(
+            u_log,
+            "CREAR",
+            "SICOE",
+            "registro",
+            str(row.get("id", "")),
+            {"reporte_id": row.get("reporte_id"), "id_pol": row.get("id_pol")},
+            valor_anterior=None,
+            valor_nuevo=_json_for_log(row),
+        )
+    except Exception:
+        pass
+    return row
 
 class PuntoTopo(BaseModel):
     punto: Optional[str] = None
@@ -5733,11 +6794,39 @@ def validar_sub(contrato_id: int, registro_id: int, body: ValidarSubBody,
 @app.get("/sicoe-obra/{contrato_id}/dashboard-resumen")
 def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_user)):
     try:
-        # 1. Resumen desde vista (una sola query)
-        def _resumen():
-            return supabase.table("vista_dashboard_resumen")\
-                .select("*").eq("contrato_id", contrato_id).execute().data
-        rows = supabase_execute(_resumen)
+        # 1. Obra aprobada (Interventoría): agregar desde so_registros con el mismo criterio
+        #    que la matriz / drill (nivel3 ≈ Aprobado), no desde vista_dashboard_resumen,
+        #    para que importaciones con variantes de texto ("APROBADO", espacios, etc.) cuenten.
+        def _actas_map():
+            return supabase.table("actas").select("id, numero_rpo")\
+                .eq("contrato_id", contrato_id).execute().data
+        acta_rows = supabase_execute(_actas_map) or []
+        acta_id_to_nr = {a["id"]: a.get("numero_rpo") for a in acta_rows if a.get("id") is not None}
+
+        total_cobrado = 0.0
+        acta_agg = {}
+        obra_caps = {}
+        off = 0
+        while True:
+            def _batch(o=off):
+                return supabase.table("so_registros").select(
+                    "capitulo, costo_directo, acta_rpo_id, nivel3_estado"
+                ).eq("contrato_id", contrato_id).range(o, o + 999).execute().data
+            batch = supabase_execute(_batch) or []
+            for reg in batch:
+                if _matriz_validacion_norm_estado(reg.get("nivel3_estado")) != "Aprobado":
+                    continue
+                cd = float(reg.get("costo_directo") or 0)
+                total_cobrado += cd
+                cap = reg.get("capitulo") or "Sin capítulo"
+                obra_caps[cap] = obra_caps.get(cap, 0) + cd
+                aid = reg.get("acta_rpo_id")
+                nr = acta_id_to_nr.get(aid) if aid is not None else None
+                if nr is not None:
+                    acta_agg[nr] = acta_agg.get(nr, 0) + cd
+            if len(batch) < 1000:
+                break
+            off += 1000
 
         # 2. Presupuesto por capítulo
         def _ppto():
@@ -5747,18 +6836,7 @@ def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_us
         ppto_caps = {r["capitulo"]: float(r.get("presupuesto") or 0) for r in ppto_raw}
         ppto_total = sum(ppto_caps.values())
 
-        # 3. Agregar en Python (datos ya resumidos)
-        total_cobrado = sum(float(r.get("costo_directo") or 0) for r in rows)
-
-        acta_agg = {}
-        obra_caps = {}
-        for r in rows:
-            cap = r.get("capitulo") or "Sin capítulo"
-            cd  = float(r.get("costo_directo") or 0)
-            obra_caps[cap] = obra_caps.get(cap, 0) + cd
-            nr = r.get("numero_rpo")
-            if nr:
-                acta_agg[nr] = acta_agg.get(nr, 0) + cd
+        # 3. Comparativo por capítulo (presupuesto vs obra aprobada N3)
 
         def _sort_acta_key(x):
             try:

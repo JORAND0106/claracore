@@ -5,6 +5,7 @@ import ModuloInformes from './ModuloInformes'
 import ModuloInicio from './ModuloInicio'
 import PerfilUsuarioModal from './PerfilUsuarioModal'
 import PoliticasConfidencialidadModal from './PoliticasConfidencialidadModal'
+import TrazabilidadRegistroModal from './TrazabilidadRegistroModal'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 
@@ -643,6 +644,8 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const POR_PAGINA = 50
   const [modalDetallePpto, setModalDetallePpto] = useState(null)
   const [modalDetallePptoEditable, setModalDetallePptoEditable] = useState(false)
+  /** Trazabilidad por fila: entidad `presupuesto` en API /logs/entidad/presupuesto/{id} */
+  const [trazabilidadPresupuesto, setTrazabilidadPresupuesto] = useState(null)
   const [popupDims, setPopupDims] = useState({ ancho: '', espesor: '' })
   const [popupCap,  setPopupCap]  = useState('')
   const [popupItem, setPopupItem] = useState('')
@@ -2399,6 +2402,19 @@ async function restaurar(id) {
           </div>
         </div>
       )}
+
+      {trazabilidadPresupuesto && (
+        <TrazabilidadRegistroModal
+          apiBase={API}
+          token={getToken()}
+          entidadTipo="presupuesto"
+          entidadId={trazabilidadPresupuesto.id}
+          titulo={`Presupuesto · ID_POL ${trazabilidadPresupuesto.id_pol || trazabilidadPresupuesto.pk_id || trazabilidadPresupuesto.id}`}
+          theme={t}
+          onClose={() => setTrazabilidadPresupuesto(null)}
+        />
+      )}
+
       {/* ── Modal comentario ── */}
       {modalComentario && (() => {
         const TITULOS = { dims:'📐 Comentario — Cambio de Dimensiones', item_capitulo:'🔄 Comentario — Cambio de Ítem/Capítulo', validacion:'🔍 Comentario — Cambio de Estado' }
@@ -3071,6 +3087,7 @@ async function restaurar(id) {
                 <th style={thStyle}>Vlr Unit.</th>
                 <th style={thStyle}>Costo Directo</th>
                 <th style={thStyle}>Revisado</th>
+                <th style={thStyle} title="Trazabilidad / auditoría">📜</th>
                 <th style={thStyle}>💬</th>
                 <th style={thStyle}></th>
               </tr>
@@ -3171,6 +3188,22 @@ async function restaurar(id) {
                           )
                         })}
                       </div>
+                    </td>
+                    <td style={{ ...tdStyle, textAlign:'center', width: 40 }} onClick={e=>e.stopPropagation()}>
+                      <button
+                        type="button"
+                        title="Trazabilidad y auditoría de este registro"
+                        onClick={() => setTrazabilidadPresupuesto(r)}
+                        style={{
+                          background: 'transparent',
+                          border: `1px solid ${t.border}`,
+                          borderRadius: '6px',
+                          padding: '2px 6px',
+                          cursor: 'pointer',
+                          fontSize: '12px',
+                          color: t.primary,
+                        }}
+                      >📜</button>
                     </td>
                     <td style={{ ...tdStyle, minWidth:'80px' }} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', gap:'4px', alignItems:'center', justifyContent:'center' }}>
@@ -4630,6 +4663,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [listaCaps, setListaCaps]                  = useState([])
   const [listasLoaded, setListasLoaded]            = useState(false)
   const [modalComentarios, setModalComentarios]    = useState(null)   // { reg } o null
+  const [modalTrazabilidadSicoe, setModalTrazabilidadSicoe] = useState(null) // { reg }
   const [comentariosData, setComentariosData]      = useState([])
   const [loadingComentarios, setLoadingComentarios] = useState(false)
   const [popupMasivo, setPopupMasivo]              = useState(null)   // { estado } o null
@@ -5459,6 +5493,25 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                         title={`Ver comentarios${reg.num_comentarios > 0 ? ` (${reg.num_comentarios})` : ''}`}>
                         💬{reg.num_comentarios > 0 && <span style={{ fontSize:'9px', fontWeight:'800', color:'#10B981', marginLeft:'1px' }}>{reg.num_comentarios}</span>}
                       </button>
+                      <button
+                        type="button"
+                        title="Trazabilidad y auditoría (SICOE obra)"
+                        onClick={e => {
+                          e.stopPropagation()
+                          setModalTrazabilidadSicoe(reg)
+                        }}
+                        style={{
+                          background: 'none',
+                          border: `1px solid ${t.border}`,
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          padding: '2px 6px',
+                          fontSize: '13px',
+                          color: t.primary,
+                          flexShrink: 0,
+                          lineHeight: 1,
+                        }}
+                      >📜</button>
                       {reg.enlace_soporte && (() => { try { const p = JSON.parse(reg.enlace_soporte); return Array.isArray(p) ? p.length > 0 : !!reg.enlace_soporte } catch { return !!reg.enlace_soporte } })() && (
                         <span title="Tiene soportes adjuntos" style={{ fontSize:'13px', flexShrink:0 }}>📎</span>
                       )}
@@ -5565,6 +5618,18 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         )
       })()}
 
+      {modalTrazabilidadSicoe && (
+        <TrazabilidadRegistroModal
+          apiBase={API_URL}
+          token={getToken()}
+          entidadTipo="registro"
+          entidadId={modalTrazabilidadSicoe.id}
+          titulo={`SICOE obra · Registro #${modalTrazabilidadSicoe.numero_registro ?? modalTrazabilidadSicoe.id} · id ${modalTrazabilidadSicoe.id}`}
+          theme={t}
+          onClose={() => setModalTrazabilidadSicoe(null)}
+        />
+      )}
+
       {/* ─ Modal Mover Registros ─ */}
       {modalMover && (
         <div style={{ position:'fixed', inset:0, zIndex:10000, background:'rgba(0,0,0,0.6)', display:'flex', alignItems:'center', justifyContent:'center' }} onClick={() => setModalMover(false)}>
@@ -5660,6 +5725,18 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const esSub       = nivelInfo.esSubcontratista
   // subcontratista_id del usuario para filtrar (puede venir como campo directo o en el objeto)
   const subIdUsuario = usuario?.subcontratista_id ?? usuario?.sub_id ?? null
+
+  /** Sin filtros de grilla ni capa de validación → no se consulta el backend (grilla vacía). */
+  const tieneParametrosBusquedaSicoe = (f, capas) => {
+    const ef = { ...f }
+    if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
+    const tieneCapa =
+      capas.length > 0 &&
+      capas[0].cargo_id != null && capas[0].cargo_id !== '' &&
+      String(capas[0].estado || '').trim() !== ''
+    const tieneGrid = Object.values(ef).some(v => v !== '' && v != null)
+    return tieneCapa || tieneGrid
+  }
 
   const [semanaVigente,     setSemanaVigente]     = useState(null)
   const [semanaProxima,     setSemanaProxima]      = useState(null)
@@ -5766,11 +5843,8 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       }]
       buscarReportes(filtros, 0, capasIniciales)
       cargarAnalisis(filtros, capasIniciales)
-    } else if (puedeEditar) {
-      // Solo usuarios con permiso editar ven todo sin filtro de validación
-      buscarReportes(filtros, 0, [])
     }
-    // Operativos sin capa de validación → grilla vacía hasta que apliquen filtro
+    // Sin filtros en la grilla → no se carga datos (incl. editores: deben pulsar Buscar con criterios)
   }, [contrato_id])
 
   const urlReporteDetalle = (repId, capas) => {
@@ -5783,6 +5857,17 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   }
 
   const buscarReportes = async (nuevosFiltros, nuevoOffset = 0, capas = []) => {
+    if (!tieneParametrosBusquedaSicoe(nuevosFiltros, capas)) {
+      if (nuevoOffset === 0) {
+        setReportes([])
+        setHayMas(false)
+        setOffsetActual(0)
+        setBusquedaRealizada(true)
+      }
+      setBusquedaAmplia(false)
+      setCargando(false)
+      return
+    }
     setCargando(true)
     const esBusquedaAmplia = capas.length > 0 && 
       Object.values(nuevosFiltros).every(v => v === '' || v == null)
@@ -5851,8 +5936,10 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const fmtPesos = v => '$' + Math.round(v || 0).toLocaleString('es-CO')
 
   const cargarAnalisis = async (nuevosFiltros, capas = []) => {
-    const hayFiltros = Object.values(nuevosFiltros).some(v => v !== '') || capas.length > 0
-    if (!hayFiltros) { setAnalisis(null); return }
+    if (!tieneParametrosBusquedaSicoe(nuevosFiltros, capas)) {
+      setAnalisis(null)
+      return
+    }
     setCargandoAnalisis(true)
     try {
       const params = new URLSearchParams()
@@ -6817,7 +6904,7 @@ const limpiarFiltros = () => {
           reporte={reporteSeleccionado} actasList={filtroActaList}
           filtroValidacion={capasValidacion.length > 0 ? capasValidacion[0] : null}
           onClose={() => { setModalCarpeta(false); setReporteSeleccionado(null) }}
-          onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); buscarReportes(filtros, 0) }}
+          onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); buscarReportes(filtros, 0, capasValidacion) }}
         />
       )}
 
@@ -6828,7 +6915,7 @@ const limpiarFiltros = () => {
           API_URL={API_URL} contrato_id={contrato_id}
           reporteInicial={reporteEditando}
           onClose={() => { setModalNuevoReporte(false); setReporteEditando(null) }}
-          onGuardado={() => { setModalNuevoReporte(false); setReporteEditando(null); buscarReportes(filtros, 0) }}
+          onGuardado={() => { setModalNuevoReporte(false); setReporteEditando(null); buscarReportes(filtros, 0, capasValidacion) }}
         />
       )}
 
@@ -8936,7 +9023,7 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   const [respondiendo, setRespondiendo] = useState(false)
   const [respuesta,    setRespuesta]    = useState('')
 
-  const esDev = usuario?.cargo_nombre === 'Desarrollador'
+  const esDev = usuario?.cargo_nombre?.trim().toLowerCase() === 'desarrollador'
   const h = { Authorization: `Bearer ${token}` }
 
   const cargarCount = async () => {
@@ -9730,16 +9817,20 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   }, [analisisData, analisisDir, analisisRangoMin, analisisRangoMax, analisisSortCol, analisisSortDir])
 
   // Desarrollador ve todo; otros usuarios ven solo su contrato
-  const esDeveloper = usuario?.cargo_nombre === 'Desarrollador'
+  const cargoNombreNorm = (usuario?.cargo_nombre || '').trim().toLowerCase()
+  const esDeveloper = cargoNombreNorm === 'desarrollador'
+  const esAdminCargo = cargoNombreNorm === 'administrador'
   // Funciones que habilitan ver el panel admin
   const ADMIN_FUNCIONES = ["contratos", "listado de precios"]
   const tienePermisoAdmin = (usuario?.permisos || []).some(p =>
     p.ver && ADMIN_FUNCIONES.includes(p.funcion_nombre?.toLowerCase())
   )
-  const canAdmin = esDeveloper || usuario?.cargo_nombre === 'Administrador' || tienePermisoAdmin
+  const canAdmin = esDeveloper || esAdminCargo || tienePermisoAdmin
+  /** Misma regla que el backend (logs / novedades): solo estos cargos publican novedades de inicio. */
+  const puedePublicarNovedadesInicio = esDeveloper || esAdminCargo
   const tienePermisoSicoeObra = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Reporte de Cantidades' && p.ver)
   const tienePermisoDashboard   = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Dashboard' && p.ver)
-  const tienePermisoInformesCcd = esDeveloper || usuario?.cargo_nombre === 'Administrador'
+  const tienePermisoInformesCcd = esDeveloper || esAdminCargo
     || (usuario?.permisos || []).some(p =>
       (p.funcion_nombre || '').toLowerCase() === 'informes ccd' && p.ver
     )
@@ -9987,7 +10078,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
 
 
-        {moduloActivo === 'inicio' && <ModuloInicio t={t} usuario={usuario} fontSize={fontSize} />}
+        {moduloActivo === 'inicio' && (
+          <ModuloInicio t={t} usuario={usuario} fontSize={fontSize} puedePublicarNovedades={puedePublicarNovedadesInicio} />
+        )}
         {moduloActivo === 'dashboard' && (() => {
           const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
           const fmtM = n => { if(!n) return '$0'; if(n>=1e9) return `$${(n/1e9).toFixed(1)}B`; if(n>=1e6) return `$${(n/1e6).toFixed(1)}M`; if(n>=1e3) return `$${(n/1e3).toFixed(0)}K`; return `$${Math.round(n)}` }
@@ -10201,7 +10294,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       {panelFoco === 'ppto-cobro' ? '⊠' : '⤢'}
                     </button>
                   </div>
-                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Por capítulo — hover para ver detalle</div>
+                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Por capítulo — barras verticales agrupadas · Obra = aprobado Interventoría (N3)</div>
                 </div>
                 {(() => {
                   const comp = kpiCobro?.comparativo_capitulos || []
@@ -10211,20 +10304,35 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   const maxVal = Math.max(...comp.map(c => Math.max(c.presupuesto||0, c.cobrado||0)), 1)
                   const CAP_PAG = 10
                   const compSlice = comp.slice(dashCapPag * CAP_PAG, (dashCapPag + 1) * CAP_PAG)
-                  const BAR_W = 28, GAP = 10, PAD_L = 8, PAD_R = 8, H = 260, PAD_T = 14, PAD_B = 32
-                  const totalW = PAD_L + compSlice.length * (BAR_W*2 + GAP + 12) + PAD_R
+                  const BAR_W = 42
+                  const INNER_GAP = 8
+                  const GROUP_GAP = 18
+                  const PAD_L = 56
+                  const PAD_R = 16
+                  const H = 288
+                  const PAD_T = 18
+                  const PAD_B = 44
+                  const groupInner = BAR_W * 2 + INNER_GAP
+                  const totalW = PAD_L + compSlice.length * (groupInner + GROUP_GAP) + PAD_R
+                  const vbW = Math.max(totalW, 420)
                   const scaleH = (v) => PAD_T + (1 - v/maxVal) * (H - PAD_T - PAD_B)
 
                   return (
                     <div style={{ overflowX:'auto', overflowY:'visible', width:'100%' }}>
-                      <svg width={Math.max(totalW, 400)} height={H} viewBox={`0 0 ${Math.max(totalW, 400)} ${H}`} style={{ overflow:'visible', display:'block', minWidth:'100%' }}>
-                        {/* Líneas de referencia */}
-                        {[0,25,50,75,100].map(pct => {
-                          const y = PAD_T + (1-pct/100)*(H-PAD_T-PAD_B)
-                          return <line key={pct} x1={PAD_L} x2={totalW-PAD_R} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="3,3"/>
+                      <svg width={vbW} height={H} viewBox={`0 0 ${vbW} ${H}`} style={{ overflow:'visible', display:'block', minWidth:'100%' }}>
+                        {/* Eje Y — valores */}
+                        {[0, 25, 50, 75, 100].map(pct => {
+                          const y = PAD_T + (1 - pct / 100) * (H - PAD_T - PAD_B)
+                          const val = maxVal * (pct / 100)
+                          return (
+                            <g key={`y-${pct}`}>
+                              <line x1={PAD_L} x2={vbW - PAD_R} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="4,4" />
+                              <text x={4} y={y + 4} fontSize="9" fill={t.textMuted} style={{ userSelect: 'none' }}>{fmtM(val)}</text>
+                            </g>
+                          )
                         })}
                         {compSlice.map((cap, i) => {
-                          const x = PAD_L + i * (BAR_W*2 + GAP + 8)
+                          const x = PAD_L + i * (groupInner + GROUP_GAP)
                           const yP = scaleH(cap.presupuesto||0)
                           const yC = scaleH(cap.cobrado||0)
                           const hP = H - PAD_B - yP
@@ -10233,17 +10341,18 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                           const colorC = sobrecosto ? '#DC2626' : '#00A896'
                           const isSelected = dashDrill[0]?.valor === cap.capitulo
                           const nomCorto = (cap.capitulo||'').length > 10 ? (cap.capitulo||'').slice(0,10)+'…' : (cap.capitulo||'')
+                          const cx = x + groupInner / 2
                           return (
                             <g key={i}>
                               {/* Barra Presupuesto */}
-                              <rect x={x} y={yP} width={BAR_W} height={Math.max(hP,2)} fill="#0077B6" rx="2" opacity={isSelected?1:0.85} style={{cursor:'pointer'}} onClick={() => { setDashDrill([{campo:'capitulo', valor:cap.capitulo}]); setPopupCapitulo(true) }}/>
-                              {/* Barra Cobro */}
-                              <rect x={x+BAR_W+2} y={yC} width={BAR_W} height={Math.max(hC,2)} fill={colorC} rx="2" opacity={isSelected?1:0.85} style={{cursor:'pointer'}} onClick={() => { setDashDrill([{campo:'capitulo', valor:cap.capitulo}]); setPopupCapitulo(true) }}/>
+                              <rect x={x} y={yP} width={BAR_W} height={Math.max(hP,2)} fill="#0077B6" rx="3" opacity={isSelected?1:0.88} style={{cursor:'pointer'}} onClick={() => { setDashDrill([{campo:'capitulo', valor:cap.capitulo}]); setPopupCapitulo(true) }}/>
+                              {/* Barra Obra aprobada */}
+                              <rect x={x+BAR_W+INNER_GAP} y={yC} width={BAR_W} height={Math.max(hC,2)} fill={colorC} rx="3" opacity={isSelected?1:0.88} style={{cursor:'pointer'}} onClick={() => { setDashDrill([{campo:'capitulo', valor:cap.capitulo}]); setPopupCapitulo(true) }}/>
                               {/* Etiqueta eje X */}
-                              <text x={x+BAR_W} y={H-8} textAnchor="middle" fontSize="9" fill={t.textMuted}>{nomCorto}</text>
+                              <text x={cx} y={H - 10} textAnchor="middle" fontSize="9" fill={t.textMuted}>{nomCorto}</text>
                               {/* Área hover invisible con tooltip */}
                               <g>
-                                <rect x={x-2} y={PAD_T} width={BAR_W*2+6} height={H-PAD_T-PAD_B} fill="transparent"
+                                <rect x={x-2} y={PAD_T} width={groupInner+4} height={H-PAD_T-PAD_B} fill="transparent"
                                   style={{cursor:'pointer'}}
                                   onClick={() => { setDashDrill([{campo:'capitulo', valor:cap.capitulo}]); setPopupCapitulo(true) }}
                                   onMouseEnter={e => {
@@ -10256,18 +10365,18 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                                   }}
                                 />
                                 <g id={`tip-vs-${i}`} style={{display:'none', pointerEvents:'none'}}>
-                                  <rect x={Math.min(x-10, totalW-220)} y={Math.min(yP,yC)-68} width="215" height="62" rx="6"
+                                  <rect x={Math.min(x-10, vbW-220)} y={Math.min(yP,yC)-68} width="215" height="62" rx="6"
                                     fill={t.bgCard} stroke={t.border} strokeWidth="1"
                                     style={{filter:'drop-shadow(0 2px 8px rgba(0,0,0,0.3))'}}/>
-                                  <text x={Math.min(x-10,totalW-220)+10} y={Math.min(yP,yC)-50} fontSize="10" fontWeight="700" fill={t.text}>
+                                  <text x={Math.min(x-10,vbW-220)+10} y={Math.min(yP,yC)-50} fontSize="10" fontWeight="700" fill={t.text}>
                                     {(cap.capitulo||'').length > 28 ? (cap.capitulo||'').slice(0,28)+'…' : (cap.capitulo||'')}
                                   </text>
-                                  <rect x={Math.min(x-10,totalW-220)+10} y={Math.min(yP,yC)-40} width="8" height="8" rx="1" fill="#0077B6"/>
-                                  <text x={Math.min(x-10,totalW-220)+22} y={Math.min(yP,yC)-33} fontSize="10" fill={t.textMuted}>
+                                  <rect x={Math.min(x-10,vbW-220)+10} y={Math.min(yP,yC)-40} width="8" height="8" rx="1" fill="#0077B6"/>
+                                  <text x={Math.min(x-10,vbW-220)+22} y={Math.min(yP,yC)-33} fontSize="10" fill={t.textMuted}>
                                     Ppto: <tspan fontWeight="700" fill="#0077B6">{fmtD(cap.presupuesto)}</tspan>
                                   </text>
-                                  <rect x={Math.min(x-10,totalW-220)+10} y={Math.min(yP,yC)-24} width="8" height="8" rx="1" fill={colorC}/>
-                                  <text x={Math.min(x-10,totalW-220)+22} y={Math.min(yP,yC)-17} fontSize="10" fill={t.textMuted}>
+                                  <rect x={Math.min(x-10,vbW-220)+10} y={Math.min(yP,yC)-24} width="8" height="8" rx="1" fill={colorC}/>
+                                  <text x={Math.min(x-10,vbW-220)+22} y={Math.min(yP,yC)-17} fontSize="10" fill={t.textMuted}>
                                     Obra: <tspan fontWeight="700" fill={colorC}>{fmtD(cap.cobrado)}</tspan>
                                   </text>
                                 </g>
@@ -11862,7 +11971,13 @@ if (contratos.length > 1) {
     setPendingUser(null); setPendingContratos([])
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    const token = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
+    if (token) {
+      try {
+        await fetch(`${API}/auth/logout`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+      } catch { /* silencioso */ }
+    }
     localStorage.removeItem('cc_token'); localStorage.removeItem('cc_usuario')
     sessionStorage.removeItem('cc_token'); sessionStorage.removeItem('cc_usuario')
     setUsuario(null)

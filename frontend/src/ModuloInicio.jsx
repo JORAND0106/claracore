@@ -10,61 +10,6 @@ const FS = {
   grande:  { base: '15px', titulo: '26px', stat: '26px', card: '15px', badge: '11px', autor: '12px' },
 }
 
-// ─── Novedades — edita este array para publicar nuevas entradas ───────────────
-const NOVEDADES = [
-  {
-    id: 5,
-    tipo: 'actualización',
-    titulo: 'CCD: conciliación interventoría–contratista (CC-SEM y CC-MES)',
-    resumen:
-      'En el módulo Informes: formatos CC-SEM-001/002 (semana) y CC-MES-001/002 (acta RPO) para conciliación interventoría–contratista, con biblioteca de firmas y descarga de PDF. En producción, aplica antes los scripts SQL nuevos en Supabase (Aprobó en biblioteca + tabla ccd_firma_registro por contexto).',
-    fecha: '2026-04-17',
-    autor: 'Equipo ClaraCore',
-    icono: '📄',
-    color: '#0D9488',
-  },
-  {
-    id: 1,
-    tipo: 'actualización',
-    titulo: 'Filtros avanzados en SICOE Obra',
-    resumen: 'Ahora puedes combinar hasta 13 filtros simultáneos en la grilla de reportes: validación, acta, capítulo, ítem, tramo, costado, abscisas y más.',
-    fecha: '2026-04-15',
-    autor: 'Equipo ClaraCore',
-    icono: '🔍',
-    color: '#00B4C6',
-  },
-  {
-    id: 2,
-    tipo: 'mejora',
-    titulo: 'Panel dinámico con permisos por perfil',
-    resumen: 'Los perfiles Operativo Contratista e Interventoría ya no ven valores financieros en el panel de análisis. La información se adapta al rol de cada usuario.',
-    fecha: '2026-04-15',
-    autor: 'Equipo ClaraCore',
-    icono: '🔐',
-    color: '#10B981',
-  },
-  {
-    id: 3,
-    tipo: 'corrección',
-    titulo: 'Abscisado y nodos en hoja de registro',
-    resumen: 'Los campos de Abs. Inicio, Abs. Final, Nodo Inicio y Nodo Final ahora se visualizan correctamente en cada hoja de registro de SICOE Obra.',
-    fecha: '2026-04-14',
-    autor: 'Equipo ClaraCore',
-    icono: '📍',
-    color: '#F59E0B',
-  },
-  {
-    id: 4,
-    tipo: 'actualización',
-    titulo: 'Contador de registros en grilla de reportes',
-    resumen: 'La columna REGS. en la grilla ahora muestra el número exacto de registros asociados a cada reporte de cantidades.',
-    fecha: '2026-04-13',
-    autor: 'Equipo ClaraCore',
-    icono: '📊',
-    color: '#8B5CF6',
-  },
-]
-
 const TIPO_LABEL = {
   'actualización': { label: 'Actualización', bg: '#00B4C622', color: '#00B4C6' },
   'mejora':        { label: 'Mejora',        bg: '#10B98122', color: '#10B981' },
@@ -139,6 +84,21 @@ function TarjetaNovedad({ novedad, t, fs, delay = 0 }) {
           <div style={{ fontSize: fs.base, color: t.textMuted, lineHeight: 1.55 }}>
             {novedad.resumen}
           </div>
+          {novedad.imagen_url ? (
+            <div style={{ marginTop: '10px' }}>
+              <img
+                src={novedad.imagen_url}
+                alt=""
+                style={{
+                  width: '100%',
+                  maxHeight: '220px',
+                  objectFit: 'cover',
+                  borderRadius: '8px',
+                  border: `1px solid ${t.border}`,
+                }}
+              />
+            </div>
+          ) : null}
           <div style={{ marginTop: '6px', fontSize: fs.autor, color: t.textMuted, opacity: 0.6 }}>
             — {novedad.autor}
           </div>
@@ -341,13 +301,28 @@ function FraseDelDia({ t, fs, usuario }) {
 }
 
 // ─── Componente principal ─────────────────────────────────────────────────────
-export default function ModuloInicio({ t, usuario, fontSize = 'normal' }) {
+export default function ModuloInicio({ t, usuario, fontSize = 'normal', puedePublicarNovedades = false }) {
   const [saludoVisible, setSaludoVisible] = useState(false)
+  const [novedades, setNovedades] = useState([])
+  const [novedadesCargando, setNovedadesCargando] = useState(true)
   const fs = FS[fontSize] || FS.normal
 
   useEffect(() => {
     const timer = setTimeout(() => setSaludoVisible(true), 100)
     return () => clearTimeout(timer)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    setNovedadesCargando(true)
+    fetch(`${API_BASE}/inicio/novedades`)
+      .then(r => (r.ok ? r.json() : []))
+      .then(data => {
+        if (!cancelled) setNovedades(Array.isArray(data) ? data : [])
+      })
+      .catch(() => { if (!cancelled) setNovedades([]) })
+      .finally(() => { if (!cancelled) setNovedadesCargando(false) })
+    return () => { cancelled = true }
   }, [])
 
   const hora   = new Date().getHours()
@@ -388,7 +363,7 @@ export default function ModuloInicio({ t, usuario, fontSize = 'normal' }) {
         display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
         gap: '10px', marginBottom: '28px',
       }}>
-        <StatCard icono="📋" valor={NOVEDADES.length} label="Novedades"     color={t.primary} t={t} fs={fs} delay={150} />
+        <StatCard icono="📋" valor={novedadesCargando ? '…' : novedades.length} label="Novedades"     color={t.primary} t={t} fs={fs} delay={150} />
         <StatCard icono="🏗️" valor="SICOE"            label="Módulo activo" color="#10B981"   t={t} fs={fs} delay={200} />
         <StatCard icono="🔐" valor="Seguro"            label="Sesión activa" color="#8B5CF6"   t={t} fs={fs} delay={250} />
         <StatCard icono="☁️" valor="Online"            label="Servidor"      color="#F59E0B"   t={t} fs={fs} delay={300} />
@@ -406,13 +381,31 @@ export default function ModuloInicio({ t, usuario, fontSize = 'normal' }) {
             background: t.bg, border: `1px solid ${t.border}`,
             borderRadius: '20px', padding: '2px 10px',
           }}>
-            {NOVEDADES.length} entradas
+            {novedadesCargando ? '…' : `${novedades.length} ${novedades.length === 1 ? 'entrada' : 'entradas'}`}
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {NOVEDADES.map((nov, i) => (
-            <TarjetaNovedad key={nov.id} novedad={nov} t={t} fs={fs} delay={350 + i * 80} />
-          ))}
+          {novedadesCargando ? (
+            <div style={{ fontSize: fs.base, color: t.textMuted, padding: '12px 0' }}>Cargando novedades…</div>
+          ) : novedades.length === 0 ? (
+            <div style={{ fontSize: fs.base, color: t.textMuted, padding: '12px 0', lineHeight: 1.55 }}>
+              {puedePublicarNovedades ? (
+                <>
+                  Aún no hay novedades publicadas. Como desarrollador o administrador puedes crearlas desde{' '}
+                  <strong style={{ color: t.text }}>⚙ Admin</strong> (barra superior) → pestaña{' '}
+                  <strong style={{ color: t.text }}>Página de inicio</strong>.
+                </>
+              ) : (
+                <>
+                  Por ahora no hay novedades. Cuando el equipo publique avisos, aparecerán aquí.
+                </>
+              )}
+            </div>
+          ) : (
+            novedades.map((nov, i) => (
+              <TarjetaNovedad key={nov.id} novedad={nov} t={t} fs={fs} delay={350 + i * 80} />
+            ))
+          )}
         </div>
       </div>
 
