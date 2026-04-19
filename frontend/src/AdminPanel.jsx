@@ -7,16 +7,21 @@ const API = import.meta.env.VITE_API_URL || "https://claracore-backend.azurewebs
 
 const ACCIONES = ["ver", "crear", "editar", "eliminar", "validar", "exportar"];
 
+/** Claro y “Descansar vista” comparten ramas de UI tipo claro; solo oscuro usa la rama dark */
+function isLightTheme(theme) {
+  return theme === "light" || theme === "rest";
+}
+
 // ─── TOKENS DE COLOR POR TEMA ──────────────────────────────────────────────
 // Evita repetir ternarios en cada componente
 const C = (theme) => ({
-  textPrimary:   theme === "light" ? "#0d3b52" : "#e0f4f7",
-  textSecondary: theme === "light" ? "#2a6070" : "#4a7a87",
-  textMuted:     theme === "light" ? "#4a7a87" : "#2a4a54",
-  textTable:     theme === "light" ? "#1a3a48" : "#c0dde3",
-  bgCard:        theme === "light" ? "#FFFFFF" : "#0b1920",
-  bgInput:       theme === "light" ? "#F0F9FF" : "#081318",
-  borderColor:   theme === "light" ? "#BAE6FD" : "rgba(0,175,197,0.2)",
+  textPrimary:   isLightTheme(theme) ? "#0d3b52" : "#e0f4f7",
+  textSecondary: isLightTheme(theme) ? "#2a6070" : "#4a7a87",
+  textMuted:     isLightTheme(theme) ? "#4a7a87" : "#2a4a54",
+  textTable:     isLightTheme(theme) ? "#1a3a48" : "#c0dde3",
+  bgCard:        isLightTheme(theme) ? "#FFFFFF" : "#0b1920",
+  bgInput:       isLightTheme(theme) ? "#F0F9FF" : "#081318",
+  borderColor:   isLightTheme(theme) ? "#BAE6FD" : "rgba(0,175,197,0.2)",
 });
 
 // ─── ESTILOS BASE ──────────────────────────────────────────────────────────
@@ -30,7 +35,7 @@ const S = {
   },
   panel: (theme) => ({
     width: "min(1100px, 96vw)", height: "min(780px, 92vh)",
-    background: theme === "light" ? "#F0F9FF" : "#0e1c24",
+    background: isLightTheme(theme) ? "#F0F9FF" : "#0e1c24",
     borderRadius: 12,
     display: "flex",
     overflow: "hidden",
@@ -38,8 +43,8 @@ const S = {
   }),
   sidebar: (theme) => ({
     width: 210, minWidth: 210,
-    background: theme === "light" ? "#E0F2FE" : "#081318",
-    borderRight: theme === "light" ? "1px solid #BAE6FD" : "1px solid rgba(0,175,197,0.12)",
+    background: isLightTheme(theme) ? "#E0F2FE" : "#081318",
+    borderRight: isLightTheme(theme) ? "1px solid #BAE6FD" : "1px solid rgba(0,175,197,0.12)",
     display: "flex", flexDirection: "column",
     padding: "28px 0",
   }),
@@ -75,18 +80,18 @@ const S = {
   },
   contentHeader: (theme) => ({
     padding: "24px 32px 20px",
-    borderBottom: theme === "light" ? "1px solid #BAE6FD" : "1px solid rgba(0,175,197,0.1)",
+    borderBottom: isLightTheme(theme) ? "1px solid #BAE6FD" : "1px solid rgba(0,175,197,0.1)",
     display: "flex", alignItems: "center", justifyContent: "space-between",
-    background: theme === "light" ? "#FFFFFF" : "#0b1920",
+    background: isLightTheme(theme) ? "#FFFFFF" : "#0b1920",
   }),
   contentTitle: (theme) => ({
     fontSize: 20, fontWeight: 700,
-    color: theme === "light" ? "#0d3b52" : "#e0f4f7",   // ← legible en ambos
+    color: isLightTheme(theme) ? "#0d3b52" : "#e0f4f7",   // ← legible en ambos
     fontFamily: "'Rajdhani', sans-serif", letterSpacing: 0.5,
   }),
   contentSub: (theme) => ({
     fontSize: 12,
-    color: theme === "light" ? "#2a6070" : "#4a7a87",   // ← legible en ambos
+    color: isLightTheme(theme) ? "#2a6070" : "#4a7a87",   // ← legible en ambos
     marginTop: 3,
   }),
   closeBtn: {
@@ -99,7 +104,7 @@ const S = {
   scrollArea: (theme) => ({
     flex: 1, overflowY: "auto", padding: "24px 32px",
     scrollbarWidth: "thin", scrollbarColor: "#1e3a44 transparent",
-    background: theme === "light" ? "#F8FAFC" : "transparent",
+    background: isLightTheme(theme) ? "#F8FAFC" : "transparent",
   }),
   table: { width: "100%", borderCollapse: "collapse", fontSize: 13 },
   th: {
@@ -111,8 +116,8 @@ const S = {
   },
   td: (theme) => ({
     padding: "12px 14px",
-    color: theme === "light" ? "#1a3a48" : "#c0dde3",   // ← legible en ambos
-    borderBottom: theme === "light" ? "1px solid #E0F2FE" : "1px solid rgba(255,255,255,0.04)",
+    color: isLightTheme(theme) ? "#1a3a48" : "#c0dde3",   // ← legible en ambos
+    borderBottom: isLightTheme(theme) ? "1px solid #E0F2FE" : "1px solid rgba(255,255,255,0.04)",
     verticalAlign: "middle",
   }),
   badge: (estado) => ({
@@ -253,6 +258,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
           contrato_id: u.contrato_id || "",
           estado: u.estado || "",
           subcontratista_id: u.subcontratista_id || "",
+          politicas_aceptadas: u.politicas_aceptadas === true,
         };
       });
       setEdits(prev => {
@@ -275,6 +281,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
   const guardar = async (uid) => {
     setSaving(uid);
     const e = edits[uid];
+    const orig = usuarios.find(x => x.id === uid);
     // Convertir "" a null para campos int — Pydantic rechaza string vacío en Optional[int]
     const payload = {
       cargo_id:          e.cargo_id          ? parseInt(e.cargo_id)          : null,
@@ -283,6 +290,9 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
       estado:            e.estado            || null,
       subcontratista_id: e.subcontratista_id ? parseInt(e.subcontratista_id) : null,
     };
+    if (orig && e.politicas_aceptadas !== undefined && e.politicas_aceptadas !== (orig.politicas_aceptadas === true)) {
+      payload.politicas_aceptadas = e.politicas_aceptadas;
+    }
     try {
       await call("PUT", `/admin/usuarios/${uid}`, payload);
       setMsg({ type: "success", text: "Usuario actualizado." });
@@ -364,7 +374,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
         <table style={S.table}>
           <thead>
             <tr>
-              {["Usuario", "Estado", "Cargo", "Rol", "Contrato principal", "Acciones"].map(h => (
+              {["Usuario", "Estado", "Cargo", "Rol", "Contrato principal", "Políticas", "Acciones"].map(h => (
                 <th key={h} style={S.th}>{h}</th>
               ))}
             </tr>
@@ -411,6 +421,24 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
                     </select>
                   </td>
                   <td style={tdStyle}>
+                    <select
+                      style={{ ...S.select, minWidth: 118 }}
+                      value={edits[u.id]?.politicas_aceptadas ? "si" : "no"}
+                      onChange={e => setEdit(u.id, "politicas_aceptadas", e.target.value === "si")}
+                    >
+                      <option value="si">Sí</option>
+                      <option value="no">Pendiente</option>
+                    </select>
+                    <div style={{ fontSize: 10, color: col.textSecondary, marginTop: 6, lineHeight: 1.35 }}>
+                      {u.politicas_version ? <>v{u.politicas_version}</> : "—"}
+                      {u.politicas_fecha ? (
+                        <span style={{ display: "block" }}>
+                          {new Date(u.politicas_fecha).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" })}
+                        </span>
+                      ) : null}
+                    </div>
+                  </td>
+                  <td style={tdStyle}>
                     <div style={{ display: "flex", gap: 6 }}>
                       <button style={S.btn("primary", true)} disabled={saving === u.id} onClick={() => guardar(u.id)}>
                         {saving === u.id ? "..." : "💾"}
@@ -423,7 +451,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
                 </tr>
                 {expandido === u.id && (
                   <tr key={`uc-${u.id}`}>
-                    <td colSpan={6} style={{ ...tdStyle, background: "rgba(0,175,197,0.04)", padding: "12px 20px" }}>
+                    <td colSpan={7} style={{ ...tdStyle, background: "rgba(0,175,197,0.04)", padding: "12px 20px" }}>
                       <div style={{ fontSize: 12, color: "#00afc5", marginBottom: 8, fontWeight: 600 }}>
                         Contratos autorizados para {u.nombre}:
                       </div>
@@ -758,12 +786,14 @@ function SeccionLogs({ call, theme }) {
   useEffect(() => { cargarLogs(0) }, [filtUsuario, filtModulo, filtAccion, filtDesde, filtHasta])
 
   useEffect(() => {
-    const iv = setInterval(() => cargarLogs(offset), 30000)
+    const iv = setInterval(() => cargarLogs(offset, { silent: true }), 30000)
     return () => clearInterval(iv)
   }, [offset, filtUsuario, filtModulo, filtAccion, filtDesde, filtHasta])
 
-  async function cargarLogs(off = 0) {
-    setLoading(true); setOffset(off)
+  async function cargarLogs(off = 0, opts = {}) {
+    const { silent = false } = opts
+    if (!silent) setLoading(true)
+    setOffset(off)
     const params = new URLSearchParams({ limit: LIMIT, offset: off })
     if (filtUsuario) params.set("usuario_id", filtUsuario)
     if (filtModulo)  params.set("modulo",     filtModulo)
@@ -772,7 +802,8 @@ function SeccionLogs({ call, theme }) {
     if (filtHasta)   params.set("fecha_hasta",filtHasta)
     const data = await fetch(`${API}/logs?${params}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : []).catch(() => [])
-    setLogs(data); setLoading(false)
+    setLogs(data)
+    if (!silent) setLoading(false)
   }
 
   async function abrirHistorial(log) {
@@ -1625,15 +1656,15 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
 
   // ── Estilos locales reutilizables ──────────────────────────────────────────
   const labelStyle   = { fontSize:11, color:col.textSecondary, marginBottom:5 };
-  const inputStyle   = theme === "light" ? { ...S.input, background:"#FFFFFF", color:"#0d3b52", border:"1px solid #BAE6FD" } : S.input;
-  const selectStyle  = theme === "light" ? { ...S.select, background:"#FFFFFF", color:"#0d3b52", border:"1px solid #BAE6FD", width:"100%" } : { ...S.select, width:"100%" };
+  const inputStyle   = isLightTheme(theme) ? { ...S.input, background:"#FFFFFF", color:"#0d3b52", border:"1px solid #BAE6FD" } : S.input;
+  const selectStyle  = isLightTheme(theme) ? { ...S.select, background:"#FFFFFF", color:"#0d3b52", border:"1px solid #BAE6FD", width:"100%" } : { ...S.select, width:"100%" };
   const overlayStyle = { position:"fixed",inset:0,zIndex:10001,background:"rgba(5,12,18,0.92)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center" };
-  const modalStyle   = (w) => ({ width:`min(${w}px,95vw)`,maxHeight:"92vh",background:theme==="light"?"#F0F9FF":"#0b1920",borderRadius:14,border:"1px solid rgba(0,175,197,0.2)",boxShadow:"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column" });
-  const modalHead    = { padding:"18px 28px 14px",borderBottom:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)",background:theme==="light"?"#E0F2FE":"#081318",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0 };
-  const modalScroll  = { flex:1,overflowY:"auto",padding:"22px 28px",scrollbarWidth:"thin",scrollbarColor:"#1e3a44 transparent",background:theme==="light"?"#F8FAFC":"transparent" };
-  const modalFoot    = { padding:"14px 28px",borderTop:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",background:theme==="light"?"#E0F2FE":"#081318",display:"flex",justifyContent:"flex-end",gap:10,flexShrink:0 };
+  const modalStyle   = (w) => ({ width:`min(${w}px,95vw)`,maxHeight:"92vh",background:isLightTheme(theme)?"#F0F9FF":"#0b1920",borderRadius:14,border:"1px solid rgba(0,175,197,0.2)",boxShadow:"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column" });
+  const modalHead    = { padding:"18px 28px 14px",borderBottom:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)",background:isLightTheme(theme)?"#E0F2FE":"#081318",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0 };
+  const modalScroll  = { flex:1,overflowY:"auto",padding:"22px 28px",scrollbarWidth:"thin",scrollbarColor:"#1e3a44 transparent",background:isLightTheme(theme)?"#F8FAFC":"transparent" };
+  const modalFoot    = { padding:"14px 28px",borderTop:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",background:isLightTheme(theme)?"#E0F2FE":"#081318",display:"flex",justifyContent:"flex-end",gap:10,flexShrink:0 };
   const secTitle     = { fontSize:10,color:"#00afc5",fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:14 };
-  const divider      = { borderTop:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",paddingTop:20,marginBottom:20 };
+  const divider      = { borderTop:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",paddingTop:20,marginBottom:20 };
 
   const UnidadSelector = ({ value, onChange, modoCustom, setModoCustom, uCustom, setUCustom }) => (
     <div>
@@ -1783,7 +1814,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
             <div style={{display:"flex",flex:1,overflow:"hidden"}}>
 
               {/* ── Panel izquierdo: formulario ── */}
-              <div style={{flex:"0 0 56%",padding:"14px 20px",overflowY:"auto",borderRight:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)"}}>
+              <div style={{flex:"0 0 56%",padding:"14px 20px",overflowY:"auto",borderRight:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)"}}>
                 <div style={{...secTitle,marginBottom:10}}>Información del Precio</div>
 
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
@@ -1964,7 +1995,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
                   )}
                 </div>
 
-                <div style={{borderTop:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",paddingTop:14}}>
+                <div style={{borderTop:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",paddingTop:14}}>
                   <div style={{...secTitle,marginBottom:10}}>Validación del Precio</div>
                   <div style={{display:"flex",flexDirection:"column",gap:12,alignItems:"flex-start"}}>
                     <span style={{...S.badge(popupEsAprobado?"aprobado":"pendiente"),fontSize:13,padding:"6px 16px"}}>
@@ -2131,14 +2162,14 @@ function ActasCalPicker({ value, onChange, isOpen, onToggle, theme }) {
   const dias = [...Array(fd).fill(null), ...Array.from({length:dim},(_,i) => i+1)];
   const iso = d => `${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
   const disp = v => v ? `${parseInt(v.split("-")[2])} ${MES[parseInt(v.split("-")[1])-1]}, ${v.split("-")[0]}` : "Seleccionar fecha";
-  const iS = theme==="light" ? {...S.input,background:"#FFFFFF",color:"#0d3b52",border:"1px solid #BAE6FD"} : S.input;
+  const iS = isLightTheme(theme) ? {...S.input,background:"#FFFFFF",color:"#0d3b52",border:"1px solid #BAE6FD"} : S.input;
   return (
     <div style={{position:"relative"}}>
       <div onClick={onToggle} style={{...iS,cursor:"pointer",padding:"8px 12px",display:"flex",alignItems:"center",gap:8}}>
         <span>📅</span><span style={{fontSize:13,color:value?col.textPrimary:col.textMuted}}>{disp(value)}</span>
       </div>
       {isOpen && (
-        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:10010,background:theme==="light"?"#fff":"#0b1920",border:"1px solid rgba(0,175,197,0.3)",borderRadius:10,padding:14,boxShadow:"0 20px 50px rgba(0,0,0,0.5)",minWidth:260}}>
+        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:10010,background:isLightTheme(theme)?"#fff":"#0b1920",border:"1px solid rgba(0,175,197,0.3)",borderRadius:10,padding:14,boxShadow:"0 20px 50px rgba(0,0,0,0.5)",minWidth:260}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
             <button style={{...S.btn("ghost",true),padding:"4px 10px"}} onClick={()=>setVd(new Date(y,m-1,1))}>◄</button>
             <span style={{fontSize:14,fontWeight:700,color:col.textPrimary}}>{MES[m]} <span style={{color:"#00afc5"}}>{y}</span></span>
@@ -2160,624 +2191,6 @@ function ActasCalPicker({ value, onChange, isOpen, onToggle, theme }) {
         </div>
       )}
     </div>
-  );
-}
-
-// ─── SECCIÓN 8: Actas ─────────────────────────────────────────────────────
-function SeccionActas({ call, user, perms, theme }) {
-  const contratoId = user?.contrato_id;
-  const col = C(theme);
-  const tdStyle = S.td(theme);
-
-  const [actas,          setActas]          = useState([]);
-  const [tipos,          setTipos]          = useState([]);
-  const [usrs,           setUsrs]           = useState([]);
-  const [loading,        setLoading]        = useState(false);
-  const [msg,            setMsg]            = useState(null);
-  const [filtroGrupo,    setFiltroGrupo]    = useState("");
-  const [showCrear,      setShowCrear]      = useState(false);
-  const [creating,       setCreating]       = useState(false);
-  const [detalle,        setDetalle]        = useState(null);
-  const [tabDet,         setTabDet]         = useState("componentes");
-  const [saving,         setSaving]         = useState(false);
-  const [financiero,     setFinanciero]     = useState(null);
-  const [finLoading,     setFinLoading]     = useState(false);
-  const [showNuevoTipo,  setShowNuevoTipo]  = useState(false);
-  const [nuevoTipoNom,   setNuevoTipoNom]   = useState("");
-  const [nuevoTipoEC,    setNuevoTipoEC]    = useState(false);
-  const [creandoTipo,    setCreandoTipo]    = useState(false);
-  const [tabCrear,  setTabCrear]  = useState("datos");
-  const [calFi,  setCalFi]  = useState(false);
-  const [calFf,  setCalFf]  = useState(false);
-  const [calFa,  setCalFa]  = useState(false);
-  const [calEFi, setCalEFi] = useState(false);
-  const [calEFf, setCalEFf] = useState(false);
-  const [calEFa, setCalEFa] = useState(false);
-
-  const topScrollRef = useRef(null);
-  const botScrollRef = useRef(null);
-  const syncFromTop  = () => { if (botScrollRef.current) botScrollRef.current.scrollLeft = topScrollRef.current.scrollLeft; };
-  const syncFromBot  = () => { if (topScrollRef.current) topScrollRef.current.scrollLeft = botScrollRef.current.scrollLeft; };
-
-  const FV = { consecutivo:1,tipo_acta_id:"",tipo_grupo:"administrativa",observacion:"",
-    asignado_a:"",fecha_asignacion:"",enlace:"",numero_rpo:"",fecha_inicio:"",fecha_fin:"",
-    valor_comp_ambiental:0,calificacion_ambiental:"",valor_comp_social:0,calificacion_social:"",
-    valor_comp_pmt:0,calificacion_pmt:"",valor_cobrado_adicional:0,
-    ajuste_iccp:0,ajuste_icociv:0,ajuste_ipc:0,pct_proyectado_ajustes:"" };
-  const [form,    setForm]    = useState(FV);
-  const [editForm,setEditForm]= useState({});
-
-  const lS  = { fontSize:11, color:col.textSecondary, marginBottom:5 };
-  const iS  = theme==="light"?{...S.input,background:"#FFFFFF",color:"#0d3b52",border:"1px solid #BAE6FD"}:S.input;
-  const sS  = theme==="light"?{...S.select,background:"#FFFFFF",color:"#0d3b52",border:"1px solid #BAE6FD",width:"100%"}:{...S.select,width:"100%"};
-  const ovS = {position:"fixed",inset:0,zIndex:10001,background:"rgba(5,12,18,0.92)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center"};
-  const mS  = ()=>({width:"95vw",maxHeight:"90vh",background:theme==="light"?"#F0F9FF":"#0b1920",borderRadius:14,border:"1px solid rgba(0,175,197,0.2)",boxShadow:"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column"});
-  const mH  = {padding:"18px 28px 14px",borderBottom:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)",background:theme==="light"?"#E0F2FE":"#081318",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0};
-  const mSc = {flex:1,overflowY:"auto",padding:"22px 28px",scrollbarWidth:"thin",scrollbarColor:"#1e3a44 transparent",background:theme==="light"?"#F8FAFC":"transparent"};
-  const mF  = {padding:"14px 28px",borderTop:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",background:theme==="light"?"#E0F2FE":"#081318",display:"flex",justifyContent:"flex-end",gap:10,flexShrink:0};
-  const sT  = {fontSize:10,color:"#00afc5",fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:10};
-  const secTitle = sT;
-  const fmt = (v) => v!=null?`$${Math.round(Number(v)).toLocaleString("es-CO")}`:"$0";
-  const fmtP= (v) => v&&v!==""?`${(parseFloat(v)*100).toFixed(2).replace(/\.?0+$/,"")}%`:"—";
-
-  const cargar = useCallback(async () => {
-    if (!contratoId) return;
-    setLoading(true);
-    try {
-      const [a,t,u] = await Promise.all([
-        call("GET",`/actas/${contratoId}/lista`),
-        call("GET",`/actas-tipos/${contratoId}`),
-        call("GET",`/actas/${contratoId}/usuarios-contrato`),
-      ]);
-      setActas(a||[]); setTipos(t||[]); setUsrs(u||[]);
-    } catch(e){setMsg({type:"error",text:e.message});}
-    finally{setLoading(false);}
-  },[contratoId]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(()=>{cargar();},[cargar]);
-
-  const cargarConsecutivo = async () => {
-    try { const r=await call("GET",`/actas/${contratoId}/proximo-consecutivo`); setForm(f=>({...f,consecutivo:r.proximo})); } catch{}
-  };
-
-  const abrirCrear = async () => {
-    setForm(FV); setShowNuevoTipo(false); setNuevoTipoNom(""); setCalFi(false); setCalFf(false); setCalFa(false);
-    setShowCrear(true); await cargarConsecutivo();
-  };
-
-  const seleccionarTipo = (val, src="form") => {
-    const t = tipos.find(t=>String(t.id)===String(val));
-    const grp = t?.es_cobro?"cobro":"administrativa";
-    if(src==="form") setForm(f=>({...f,tipo_acta_id:val,tipo_grupo:grp}));
-    else setEditForm(f=>({...f,tipo_acta_id:val,tipo_grupo:grp}));
-  };
-
-  const crearActa = async () => {
-    if (!form.tipo_acta_id){setMsg({type:"error",text:"Selecciona el tipo de acta."});return;}
-    setCreating(true);
-    try {
-      const toInt   = v => (v===""||v===null||v===undefined)?null:(parseInt(v)||null);
-      const toFloat = v => (v===""||v===null||v===undefined)?null:(parseFloat(v)||0);
-      const toFloatNull = v => (v===""||v===null||v===undefined)?null:parseFloat(v);
-      await call("POST",`/actas/${contratoId}`,{
-        consecutivo:            parseInt(form.consecutivo)||1,
-        tipo_acta_id:           toInt(form.tipo_acta_id),
-        tipo_grupo:             form.tipo_grupo||"administrativa",
-        observacion:            form.observacion||null,
-        asignado_a:             toInt(form.asignado_a),
-        fecha_asignacion:       form.fecha_asignacion||null,
-        enlace:                 form.enlace||null,
-        numero_rpo:             toInt(form.numero_rpo),
-        fecha_inicio:           form.fecha_inicio||null,
-        fecha_fin:              form.fecha_fin||null,
-        valor_comp_ambiental:   toFloat(form.valor_comp_ambiental),
-        calificacion_ambiental: toFloatNull(form.calificacion_ambiental),
-        valor_comp_social:      toFloat(form.valor_comp_social),
-        calificacion_social:    toFloatNull(form.calificacion_social),
-        valor_comp_pmt:         toFloat(form.valor_comp_pmt),
-        calificacion_pmt:       toFloatNull(form.calificacion_pmt),
-        valor_cobrado_adicional:toFloat(form.valor_cobrado_adicional),
-        ajuste_iccp:            toFloat(form.ajuste_iccp),
-        ajuste_icociv:          toFloat(form.ajuste_icociv),
-        ajuste_ipc:             toFloat(form.ajuste_ipc),
-        pct_proyectado_ajustes: toFloatNull(form.pct_proyectado_ajustes),
-      });
-      setMsg({type:"success",text:"✅ Acta creada."}); setShowCrear(false); cargar();
-    } catch(e){setMsg({type:"error",text:e.message});}
-    finally{setCreating(false);}
-  };
-
-  const abrirDetalle = async (a) => {
-    setDetalle(a); setEditForm({...a}); setTabDet("componentes");
-    setFinanciero(null); setCalEFi(false); setCalEFf(false); setCalEFa(false);
-    if(a.es_cobro){ setFinLoading(true); try{setFinanciero(await call("GET",`/actas/${a.id}/financiero`));}catch{}finally{setFinLoading(false);} }
-  };
-
-  const guardar = async () => {
-    setSaving(true);
-    try {
-      await call("PUT",`/actas/${detalle.id}`,{
-        ...editForm, tipo_acta_id:parseInt(editForm.tipo_acta_id)||null,
-        asignado_a:editForm.asignado_a?parseInt(editForm.asignado_a):null,
-        numero_rpo:editForm.numero_rpo?parseInt(editForm.numero_rpo):null,
-      });
-      setMsg({type:"success",text:"✅ Acta actualizada."}); setDetalle(d=>({...d,...editForm})); cargar();
-    } catch(e){setMsg({type:"error",text:e.message});}
-    finally{setSaving(false);}
-  };
-
-  const crearNuevoTipo = async () => {
-    if (!nuevoTipoNom.trim()) return;
-    setCreandoTipo(true);
-    try {
-      const nv = await call("POST",`/actas-tipos/${contratoId}`,{nombre:nuevoTipoNom.trim(),es_cobro:nuevoTipoEC});
-      setTipos(prev=>[...prev,nv]);
-      setForm(f=>({...f,tipo_acta_id:String(nv.id),tipo_grupo:nuevoTipoEC?"cobro":"administrativa"}));
-      setShowNuevoTipo(false); setNuevoTipoNom("");
-    } catch(e){setMsg({type:"error",text:e.message});}
-    finally{setCreandoTipo(false);}
-  };
-
-  // Componente fila de valor + calificación
-  const CompRow = ({label,fVal,fCal,obj,setObj,editable}) => (
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:12}}>
-      <div>
-        <div style={lS}>{label}</div>
-        <input style={{...iS,opacity:editable?1:0.65}} type="number" value={obj[fVal]||0} disabled={!editable}
-          onChange={e=>setObj(f=>({...f,[fVal]:parseFloat(e.target.value)||0}))} />
-      </div>
-      <div>
-        <div style={lS}>Calificación (%)</div>
-        <div style={{display:"flex",gap:6,alignItems:"center"}}>
-          <input style={{...iS,flex:1,opacity:editable?1:0.65}} type="number" step="0.01" min="0" max="1" placeholder="Ej: 0.98"
-            value={obj[fCal]||""} disabled={!editable} onChange={e=>setObj(f=>({...f,[fCal]:e.target.value}))} />
-          {obj[fCal]&&<span style={{fontSize:11,color:"#00afc5",whiteSpace:"nowrap"}}>{fmtP(obj[fCal])}</span>}
-        </div>
-      </div>
-    </div>
-  );
-
-  // Campos comunes del formulario (crear + editar)
-  const CamposComunes = ({obj,setObj,isEdit,cFi,setCFi,cFf,setCFf,cFa,setCFa}) => {
-    const esCobro = obj.tipo_grupo==="cobro";
-    return (
-      <>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
-          <div>
-            <div style={lS}>N° Consecutivo *</div>
-            <input style={iS} type="number" value={obj.consecutivo||1} onChange={e=>setObj(f=>({...f,consecutivo:e.target.value}))} />
-          </div>
-          <div>
-            <div style={lS}>Tipo de Acta *</div>
-            {!showNuevoTipo?(
-              <select style={sS} value={obj.tipo_acta_id||""} onChange={e=>{ if(e.target.value==="__nuevo__"){setShowNuevoTipo(true);}else{isEdit?seleccionarTipo(e.target.value,"edit"):seleccionarTipo(e.target.value);}}}>
-                <option value="">-- Selecciona --</option>
-                <optgroup label="Actas de Cobro">{tipos.filter(t=>t.es_cobro).map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}</optgroup>
-                <optgroup label="Actas Administrativas">{tipos.filter(t=>!t.es_cobro).map(t=><option key={t.id} value={t.id}>{t.nombre}</option>)}</optgroup>
-                <option value="__nuevo__">+ Agregar tipo de acta...</option>
-              </select>
-            ):(
-              <div>
-                <div style={{display:"flex",gap:6,marginBottom:6}}>
-                  <input style={{...iS,flex:1}} placeholder="Nombre del nuevo tipo" value={nuevoTipoNom} onChange={e=>setNuevoTipoNom(e.target.value)}/>
-                  <button style={S.btn("primary",true)} onClick={crearNuevoTipo} disabled={creandoTipo}>{creandoTipo?"...":"✓"}</button>
-                  <button style={S.btn("ghost",true)} onClick={()=>{setShowNuevoTipo(false);setNuevoTipoNom("");}}>✕</button>
-                </div>
-                <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:col.textSecondary,cursor:"pointer"}}>
-                  <input type="checkbox" checked={nuevoTipoEC} onChange={e=>setNuevoTipoEC(e.target.checked)}/> ¿Es acta de cobro?
-                </label>
-              </div>
-            )}
-          </div>
-        </div>
-        <div style={{marginBottom:14}}>
-          <div style={lS}>Observación</div>
-          <textarea style={{...iS,resize:"vertical",minHeight:60}} value={obj.observacion||""} onChange={e=>setObj(f=>({...f,observacion:e.target.value}))} />
-        </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
-          <div>
-            <div style={lS}>Asignado a</div>
-            <select style={sS} value={obj.asignado_a||""} onChange={e=>setObj(f=>({...f,asignado_a:e.target.value}))}>
-              <option value="">-- Sin asignar --</option>
-              {usrs.map(u=><option key={u.id} value={u.id}>{u.nombre} {u.apellidos}</option>)}
-            </select>
-          </div>
-          <div>
-            <div style={lS}>Fecha de Asignación</div>
-            <ActasCalPicker value={obj.fecha_asignacion||""} onChange={v=>setObj(f=>({...f,fecha_asignacion:v}))} isOpen={cFa} onToggle={()=>{setCFa(o=>!o);setCFi(false);setCFf(false);}} theme={theme}/>
-          </div>
-        </div>
-        <div style={{marginBottom:esCobro?14:0}}>
-          <div style={lS}>Enlace de consulta</div>
-          <input style={iS} type="url" placeholder="https://..." value={obj.enlace||""} onChange={e=>setObj(f=>({...f,enlace:e.target.value}))} />
-        </div>
-        {esCobro&&(
-          <>
-            <div style={{marginBottom:14,borderTop:"1px solid rgba(0,175,197,0.15)",paddingTop:14}}>
-              <div style={{...sT,marginBottom:10}}>Datos RPO</div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
-                <div>
-                  <div style={lS}>N° RPO</div>
-                  <input style={iS} type="number" value={obj.numero_rpo||""} onChange={e=>setObj(f=>({...f,numero_rpo:e.target.value}))} placeholder="Ej: 5"/>
-                </div>
-                <div>
-                  <div style={lS}>Fecha Inicio</div>
-                  <ActasCalPicker value={obj.fecha_inicio||""} onChange={v=>setObj(f=>({...f,fecha_inicio:v}))} isOpen={cFi} onToggle={()=>{setCFi(o=>!o);setCFf(false);setCFa(false);}} theme={theme}/>
-                </div>
-                <div>
-                  <div style={lS}>Fecha Fin</div>
-                  <ActasCalPicker value={obj.fecha_fin||""} onChange={v=>setObj(f=>({...f,fecha_fin:v}))} isOpen={cFf} onToggle={()=>{setCFf(o=>!o);setCFi(false);setCFa(false);}} theme={theme}/>
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-      </>
-    );
-  };
-
-  // Tab componentes y ajustes
-  const TabComponentes = ({obj,setObj,editable}) => {
-    const adjTotal = (parseFloat(obj.ajuste_iccp)||0)+(parseFloat(obj.ajuste_icociv)||0)+(parseFloat(obj.ajuste_ipc)||0);
-    return (
-      <div>
-        <div style={sT}>Componentes</div>
-        {CompRow({label:"Valor Comp. Ambiental", fVal:"valor_comp_ambiental", fCal:"calificacion_ambiental", obj, setObj, editable})}
-        {CompRow({label:"Valor Comp. Social",    fVal:"valor_comp_social",    fCal:"calificacion_social",    obj, setObj, editable})}
-        {CompRow({label:"Valor Comp. PMT",       fVal:"valor_comp_pmt",       fCal:"calificacion_pmt",       obj, setObj, editable})}
-        <div style={{marginBottom:14}}>
-          <div style={lS}>Valor Cobrado Adicional</div>
-          <input style={{...iS,opacity:editable?1:0.65}} type="number" value={obj.valor_cobrado_adicional||0} disabled={!editable} onChange={e=>setObj(f=>({...f,valor_cobrado_adicional:parseFloat(e.target.value)||0}))}/>
-        </div>
-        <div style={{borderTop:"1px solid rgba(0,175,197,0.12)",paddingTop:14,marginTop:4}}>
-          <div style={sT}>Ajustes</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14,marginBottom:12}}>
-            {[["Ajuste ICCP","ajuste_iccp"],["Ajuste ICOCIV","ajuste_icociv"],["Ajuste IPC","ajuste_ipc"]].map(([l,k])=>(
-              <div key={k}>
-                <div style={lS}>{l}</div>
-                <input style={{...iS,opacity:editable?1:0.65}} type="number" value={obj[k]||0} disabled={!editable} onChange={e=>setObj(f=>({...f,[k]:parseFloat(e.target.value)||0}))}/>
-              </div>
-            ))}
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
-            <div>
-              <div style={lS}>Valor Total Ajustes (calculado)</div>
-              <div style={{...iS,opacity:0.55,pointerEvents:"none",color:"#22c55e",fontWeight:700}}>{fmt(adjTotal)}</div>
-            </div>
-            <div>
-              <div style={lS}>% Proyectado Ajustes</div>
-              <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                <input style={{...iS,flex:1,opacity:editable?1:0.65}} type="number" step="0.01" min="0" max="1" placeholder="Ej: 0.05"
-                  value={obj.pct_proyectado_ajustes||""} disabled={!editable} onChange={e=>setObj(f=>({...f,pct_proyectado_ajustes:e.target.value}))}/>
-                {obj.pct_proyectado_ajustes&&<span style={{fontSize:11,color:"#00afc5",whiteSpace:"nowrap"}}>{fmtP(obj.pct_proyectado_ajustes)}</span>}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const actasFiltradas = actas.filter(a=>!filtroGrupo||a.tipo_grupo===filtroGrupo);
-  if (!contratoId) return <div style={S.empty}>No hay contrato activo.</div>;
-
-  return (
-    <div>
-      {msg&&<div style={S.alert(msg.type)}>{msg.text}<span onClick={()=>setMsg(null)} style={{float:"right",cursor:"pointer",opacity:0.6}}>✕</span></div>}
-
-      {/* Barra */}
-      <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
-        {perms?.crear&&<button style={S.btn("primary",true)} onClick={abrirCrear}>+ Crear Acta</button>}
-        <select style={{...S.select,minWidth:160}} value={filtroGrupo} onChange={e=>setFiltroGrupo(e.target.value)}>
-          <option value="">Todas las actas</option>
-          <option value="RPO">📋 RPO</option>
-          <option value="Administrativas">📁 Administrativas</option>
-        </select>
-        {actas.length>0&&<span style={{marginLeft:"auto",fontSize:12,color:col.textMuted}}>{actasFiltradas.length} actas</span>}
-      </div>
-
-      {/* Grilla */}
-      {loading?(<div style={S.empty}><span style={{color:"#00afc5"}}>Cargando...</span></div>
-      ):actas.length===0?(<div style={S.empty}>No hay actas registradas.<br/><span style={{fontSize:12,color:col.textMuted}}>Usa "Crear Acta" para agregar una.</span></div>
-      ):(
-        <>
-        <div ref={topScrollRef} onScroll={syncFromTop} style={{overflowX:"auto",overflowY:"hidden",height:12,marginBottom:2}}>
-          <div style={{minWidth:1100,height:1}}/>
-        </div>
-        <div ref={botScrollRef} onScroll={syncFromBot} style={{overflowX:"auto",overflowY:"auto",maxHeight:"calc(92vh - 210px)"}}>
-          <table style={{...S.table,minWidth:1100}}>
-            <thead>
-              <tr>
-                {["N° Acta","RPO","Tipo de Acta","Período","Grupo","Comp. Amb.","Comp. Soc.","Comp. PMT","Ajustes Obra","Val. Adic.","Total Acta"].map((h,i)=>(
-                  <th key={i} style={{...S.th,whiteSpace:"nowrap",position:"sticky",top:0,zIndex:2}}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {actasFiltradas.map(a=>(
-                <tr key={a.id} onClick={()=>abrirDetalle(a)} style={{cursor:"pointer"}}
-                  onMouseEnter={e=>e.currentTarget.style.background="rgba(0,175,197,0.05)"}
-                  onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                  <td style={{...tdStyle,fontWeight:700,color:"#00afc5"}}>#{a.consecutivo}</td>
-                  <td style={{...tdStyle,fontSize:12,color:col.textSecondary}}>{a.numero_rpo||"—"}</td>
-                  <td style={{...tdStyle,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.tipo_nombre||"—"}</td>
-                  <td style={{...tdStyle,fontSize:11,color:col.textMuted,whiteSpace:"nowrap"}}>{a.fecha_inicio&&a.fecha_fin?`${a.fecha_inicio} → ${a.fecha_fin}`:"—"}</td>
-                  <td style={tdStyle}>
-                    <span style={S.badge(a.tipo_grupo==="RPO"?"aprobado":"pendiente")}>{a.tipo_grupo||"—"}</span>
-                  </td>
-                  <td style={{...tdStyle,textAlign:"right",fontSize:12}}>{fmt(a.valor_comp_ambiental)}</td>
-                  <td style={{...tdStyle,textAlign:"right",fontSize:12}}>{fmt(a.valor_comp_social)}</td>
-                  <td style={{...tdStyle,textAlign:"right",fontSize:12}}>{fmt(a.valor_comp_pmt)}</td>
-                  <td style={{...tdStyle,textAlign:"right",fontSize:12}}>{fmt(a.valor_total_ajustes)}</td>
-                  <td style={{...tdStyle,textAlign:"right",fontSize:12}}>{fmt(a.valor_cobrado_adicional)}</td>
-                  <td style={{...tdStyle,textAlign:"right",fontWeight:700,color:"#22c55e"}}>{fmt(a.valor_total_acta)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        </>
-      )}
-
-      {/* ══ MODAL CREAR ══ */}
-      {showCrear&&(
-        <div style={ovS} onClick={e=>e.target===e.currentTarget&&setShowCrear(false)}>
-          <div style={{...mS(),minHeight:"min(600px,88vh)"}}>
-            <div style={mH}>
-              <div>
-                <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>Crear Nueva Acta</div>
-                <div style={{fontSize:11,color:col.textSecondary,marginTop:2}}>
-                  {form.tipo_grupo==="cobro"?"📋 Acta de Cobro (RPO)":"📁 Acta Administrativa"}
-                </div>
-              </div>
-              <button style={S.closeBtn} onClick={()=>setShowCrear(false)}>✕</button>
-            </div>
-            <div style={mSc}>
-              {CamposComunes({obj:form, setObj:setForm, isEdit:false, cFi:calFi, setCFi:setCalFi, cFf:calFf, setCFf:setCalFf, cFa:calFa, setCFa:setCalFa})}
-              {form.tipo_grupo==="cobro"&&(
-                <div style={{borderTop:"1px solid rgba(0,175,197,0.12)",paddingTop:14,marginTop:4}}>
-                  <div style={{display:"flex",gap:0,borderBottom:"1px solid rgba(0,175,197,0.12)",marginBottom:14}}>
-                    {[["datos","📋 Datos RPO"],["componentes","⚙️ Componentes y Ajustes"]].map(([id,label])=>(
-                      <button key={id} onClick={()=>setTabCrear(id)}
-                        style={{padding:"8px 16px",border:"none",background:"transparent",cursor:"pointer",fontSize:12,fontWeight:tabCrear===id?700:400,color:tabCrear===id?"#00afc5":col.textMuted,borderBottom:tabCrear===id?"2px solid #00afc5":"2px solid transparent",transition:"all 0.15s"}}>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  {tabCrear==="datos"&&(
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14}}>
-                      <div>
-                        <div style={secTitle}>N° RPO</div>
-                        <input style={iS} type="number" value={form.numero_rpo||""} onChange={e=>setForm(f=>({...f,numero_rpo:e.target.value}))} placeholder="Ej: 5"/>
-                      </div>
-                      <div>
-                        <div style={secTitle}>Fecha Inicio</div>
-                        <ActasCalPicker value={form.fecha_inicio||""} onChange={v=>setForm(f=>({...f,fecha_inicio:v}))} isOpen={calFi} onToggle={()=>{setCalFi(o=>!o);setCalFf(false);setCalFa(false);}} theme={theme}/>
-                      </div>
-                      <div>
-                        <div style={secTitle}>Fecha Fin</div>
-                        <ActasCalPicker value={form.fecha_fin||""} onChange={v=>setForm(f=>({...f,fecha_fin:v}))} isOpen={calFf} onToggle={()=>{setCalFf(o=>!o);setCalFi(false);setCalFa(false);}} theme={theme}/>
-                      </div>
-                    </div>
-                  )}
-                  {tabCrear==="componentes"&&(
-                    TabComponentes({obj:form, setObj:setForm, editable:true})
-                  )}
-                </div>
-              )}
-            </div>
-            <div style={mF}>
-              <button style={S.btn("ghost")} onClick={()=>setShowCrear(false)}>Cancelar</button>
-              <button style={S.btn("primary")} onClick={crearActa} disabled={creating}>{creating?"Creando...":"✓ Crear Acta"}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ══ POPUP DETALLE ══ */}
-      {detalle&&(
-        <div style={ovS} onClick={e=>e.target===e.currentTarget&&setDetalle(null)}>
-          <div style={mS()}>
-            <div style={mH}>
-              <div>
-                <div style={{fontSize:10,color:col.textSecondary,letterSpacing:1,textTransform:"uppercase",marginBottom:2}}>
-                  {detalle.es_cobro?`Acta RPO #${detalle.numero_rpo||"—"}`:"Acta Administrativa"}
-                </div>
-                <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>
-                  #{detalle.consecutivo} — {detalle.tipo_nombre}
-                </div>
-                {detalle.es_cobro&&detalle.fecha_inicio&&(
-                  <div style={{fontSize:11,color:"#00afc5",marginTop:2}}>
-                    Período: {detalle.fecha_inicio} → {detalle.fecha_fin||"—"}
-                  </div>
-                )}
-              </div>
-              <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                <span style={{...S.badge(detalle.tipo_grupo==="RPO"?"aprobado":"pendiente"),fontSize:12,padding:"5px 14px"}}>
-                  {detalle.tipo_grupo==="RPO"?"📋 RPO":"📁 Administrativas"}
-                </span>
-                <button style={S.closeBtn} onClick={()=>setDetalle(null)}>✕</button>
-              </div>
-            </div>
-
-            {/* Tabs solo para cobro */}
-            {detalle.es_cobro&&(
-              <div style={{display:"flex",borderBottom:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)",background:theme==="light"?"#E0F2FE":"#081318",flexShrink:0}}>
-                {[["componentes","📋 Componentes"],["financiero","📊 Financiero"],["respaldo","📎 Respaldo"],["validacion","✅ Validación"]].map(([id,label])=>(
-                  <button key={id} onClick={()=>setTabDet(id)}
-                    style={{padding:"10px 18px",border:"none",background:"transparent",cursor:"pointer",fontSize:12,fontWeight:tabDet===id?700:400,color:tabDet===id?"#00afc5":col.textSecondary,borderBottom:tabDet===id?"2px solid #00afc5":"2px solid transparent",transition:"all 0.15s",whiteSpace:"nowrap"}}>
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            <div style={mSc}>
-              {/* Acta administrativa — solo datos */}
-              {!detalle.es_cobro&&(
-                <div>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
-                    <div><div style={lS}>Tipo de Acta</div><div style={{...iS,opacity:0.7,pointerEvents:"none"}}>{detalle.tipo_nombre||"—"}</div></div>
-                    <div><div style={lS}>Consecutivo</div><div style={{...iS,opacity:0.7,pointerEvents:"none"}}>#{detalle.consecutivo}</div></div>
-                  </div>
-                  <div style={{marginBottom:14}}>
-                    <div style={lS}>Observación</div>
-                    <textarea style={{...iS,resize:"vertical",minHeight:60,opacity:perms?.editar?1:0.7}} value={editForm.observacion||""} disabled={!perms?.editar} onChange={e=>setEditForm(f=>({...f,observacion:e.target.value}))}/>
-                  </div>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
-                    <div>
-                      <div style={lS}>Asignado a</div>
-                      <select style={{...sS,opacity:perms?.editar?1:0.7}} value={editForm.asignado_a||""} disabled={!perms?.editar} onChange={e=>setEditForm(f=>({...f,asignado_a:e.target.value}))}>
-                        <option value="">-- Sin asignar --</option>
-                        {usrs.map(u=><option key={u.id} value={u.id}>{u.nombre} {u.apellidos}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <div style={lS}>Fecha de Asignación</div>
-                      {perms?.editar?(
-                        <ActasCalPicker value={editForm.fecha_asignacion||""} onChange={v=>setEditForm(f=>({...f,fecha_asignacion:v}))} isOpen={calEFa} onToggle={()=>setCalEFa(o=>!o)} theme={theme}/>
-                      ):(
-                        <div style={{...iS,opacity:0.7,pointerEvents:"none"}}>{detalle.fecha_asignacion||"—"}</div>
-                      )}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={lS}>Enlace de consulta</div>
-                    {detalle.enlace?(
-                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                        <input style={{...iS,flex:1,opacity:perms?.editar?1:0.7}} value={editForm.enlace||""} disabled={!perms?.editar} onChange={e=>setEditForm(f=>({...f,enlace:e.target.value}))}/>
-                        <a href={detalle.enlace} target="_blank" rel="noreferrer" style={{...S.btn("ghost",true),textDecoration:"none",whiteSpace:"nowrap"}}>🔗 Abrir</a>
-                      </div>
-                    ):(
-                      <input style={{...iS,opacity:perms?.editar?1:0.7}} type="url" placeholder="https://..." value={editForm.enlace||""} disabled={!perms?.editar} onChange={e=>setEditForm(f=>({...f,enlace:e.target.value}))}/>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Tab: Componentes (cobro) */}
-              {detalle.es_cobro&&tabDet==="componentes"&&(
-                <div>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:14,marginBottom:16}}>
-                    <div>
-                      <div style={lS}>N° RPO</div>
-                      <input style={{...iS,opacity:perms?.editar?1:0.65}} type="number" value={editForm.numero_rpo||""} disabled={!perms?.editar} onChange={e=>setEditForm(f=>({...f,numero_rpo:e.target.value}))}/>
-                    </div>
-                    <div>
-                      <div style={lS}>Fecha Inicio</div>
-                      {perms?.editar?<ActasCalPicker value={editForm.fecha_inicio||""} onChange={v=>setEditForm(f=>({...f,fecha_inicio:v}))} isOpen={calEFi} onToggle={()=>{setCalEFi(o=>!o);setCalEFf(false);}} theme={theme}/>:<div style={{...iS,opacity:0.65,pointerEvents:"none"}}>{detalle.fecha_inicio||"—"}</div>}
-                    </div>
-                    <div>
-                      <div style={lS}>Fecha Fin</div>
-                      {perms?.editar?<ActasCalPicker value={editForm.fecha_fin||""} onChange={v=>setEditForm(f=>({...f,fecha_fin:v}))} isOpen={calEFf} onToggle={()=>{setCalEFf(o=>!o);setCalEFi(false);}} theme={theme}/>:<div style={{...iS,opacity:0.65,pointerEvents:"none"}}>{detalle.fecha_fin||"—"}</div>}
-                    </div>
-                  </div>
-                  {TabComponentes({obj:editForm, setObj:setEditForm, editable:!!perms?.editar})}
-                </div>
-              )}
-
-              {/* Tab: Financiero */}
-              {detalle.es_cobro&&tabDet==="financiero"&&(
-                <div>
-                  <div style={sT}>Resumen Financiero — RPO #{detalle.numero_rpo||"—"}</div>
-                  {finLoading?(<div style={{color:"#4a7a87",fontSize:13}}>Calculando...</div>):financiero?(
-                    <>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
-                        {(financiero.resumen||[]).map(r=>(
-                          <div key={r.estado} style={{background:"rgba(0,175,197,0.04)",border:"1px solid rgba(0,175,197,0.15)",borderRadius:8,padding:"12px 16px"}}>
-                            <div style={{fontSize:9,color:"#4a7a87",fontWeight:700,letterSpacing:0.8,textTransform:"uppercase",marginBottom:8}}>{r.estado}</div>
-                            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                              <div><div style={{fontSize:9,color:"#4a7a87",marginBottom:3}}>Con AIU</div><div style={{fontSize:14,fontWeight:700,color:"#00afc5"}}>{fmt(r.aiu)}</div></div>
-                              <div><div style={{fontSize:9,color:"#4a7a87",marginBottom:3}}>Con IVA</div><div style={{fontSize:14,fontWeight:700,color:"#a78bfa"}}>{fmt(r.iva)}</div></div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                      <div style={sT}>Detalle por Capítulo</div>
-                      {financiero.capitulos?.length>0?(
-                        <div style={{overflowX:"auto"}}>
-                          <table style={{...S.table,minWidth:600}}>
-                            <thead><tr>
-                              <th style={S.th}>Capítulo</th>
-                              {["Aprobado","Pendiente","Pend. Precio","No Revisado","Rechazado"].map(h=><th key={h} style={{...S.th,textAlign:"right"}}>{h}</th>)}
-                            </tr></thead>
-                            <tbody>
-                              {financiero.capitulos.map((c,i)=>(
-                                <tr key={i}>
-                                  <td style={{...tdStyle,fontSize:12,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.capitulo}</td>
-                                  {[c.aprobado,c.pendiente,c.pendiente_precio,c.no_revisado,c.rechazado].map((v,j)=>(
-                                    <td key={j} style={{...tdStyle,textAlign:"right",fontSize:12,color:v>0?"#22c55e":col.textMuted}}>{fmt(v)}</td>
-                                  ))}
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      ):<div style={{color:"#4a7a87",fontSize:13}}>Sin capítulos en el listado de precios.</div>}
-                      <div style={{marginTop:12,padding:"8px 12px",background:"rgba(245,158,11,0.06)",border:"1px solid rgba(245,158,11,0.2)",borderRadius:8,fontSize:11,color:"#f59e0b"}}>
-                        ⚠ Los valores financieros se conectarán con SicoeWEB — actualmente en $0.
-                      </div>
-                    </>
-                  ):<div style={{color:"#4a7a87",fontSize:13}}>No se pudieron cargar los datos financieros.</div>}
-                </div>
-              )}
-
-              {/* Tab: Respaldo documental */}
-              {detalle.es_cobro&&tabDet==="respaldo"&&(
-                <div>
-                  <div style={sT}>Respaldo Documental</div>
-                  <div style={{marginBottom:14}}>
-                    <div style={lS}>Enlace de consulta del acta</div>
-                    <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                      <input style={{...iS,flex:1,opacity:perms?.editar?1:0.7}} type="url" placeholder="https://..." value={editForm.enlace||""} disabled={!perms?.editar} onChange={e=>setEditForm(f=>({...f,enlace:e.target.value}))}/>
-                      {(editForm.enlace||detalle.enlace)&&<a href={editForm.enlace||detalle.enlace} target="_blank" rel="noreferrer" style={{...S.btn("ghost",true),textDecoration:"none",whiteSpace:"nowrap"}}>🔗 Abrir</a>}
-                    </div>
-                  </div>
-                  <div>
-                    <div style={lS}>Observación / Comentarios</div>
-                    <textarea style={{...iS,resize:"vertical",minHeight:100,opacity:perms?.editar?1:0.7}} value={editForm.observacion||""} disabled={!perms?.editar} onChange={e=>setEditForm(f=>({...f,observacion:e.target.value}))}/>
-                  </div>
-                </div>
-              )}
-
-              {/* Tab: Validación */}
-              {detalle.es_cobro&&tabDet==="validacion"&&(
-                <div>
-                  {["Con AIU","Con IVA"].map(grupo=>(
-                    <div key={grupo} style={{marginBottom:24}}>
-                      <div style={{...sT,color:grupo==="Con AIU"?"#00afc5":"#a78bfa"}}>{grupo}</div>
-                      <table style={S.table}>
-                        <thead><tr>
-                          <th style={S.th}>Estado</th>
-                          {["Interventoría","Residente","Inspector de Obra"].map(h=><th key={h} style={{...S.th,textAlign:"right"}}>{h}</th>)}
-                        </tr></thead>
-                        <tbody>
-                          {["Aprobado","Pendiente","Pend. aprobación precio","No Revisado","Rechazado"].map(est=>(
-                            <tr key={est}>
-                              <td style={{...tdStyle,fontSize:12}}>{est}</td>
-                              <td style={{...tdStyle,textAlign:"right",fontSize:12,color:col.textMuted}}>$0</td>
-                              <td style={{...tdStyle,textAlign:"right",fontSize:12,color:col.textMuted}}>$0</td>
-                              <td style={{...tdStyle,textAlign:"right",fontSize:12,color:col.textMuted}}>$0</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ))}
-                  <div style={{padding:"8px 12px",background:"rgba(245,158,11,0.06)",border:"1px solid rgba(245,158,11,0.2)",borderRadius:8,fontSize:11,color:"#f59e0b"}}>
-                    ⚠ La matriz de validación se conectará cuando se construya SicoeWEB.
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div style={mF}>
-              <button style={S.btn("ghost")} onClick={()=>setDetalle(null)}>Cerrar</button>
-              {perms?.editar&&<button style={S.btn("primary")} onClick={guardar} disabled={saving}>{saving?"Guardando...":"💾 Guardar cambios"}</button>}
-            </div>
-          </div>
-        </div>
-      )}
-        </div>
   );
 }
 
@@ -2825,13 +2238,13 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
   const [calEditFf,        setCalEditFf]        = useState(false);
 
   const labelStyle  = { fontSize:11,color:col.textSecondary,marginBottom:5 };
-  const inputStyle  = theme==="light"?{...S.input,background:"#FFFFFF",color:"#0d3b52",border:"1px solid #BAE6FD"}:S.input;
-  const selectStyle = theme==="light"?{...S.select,background:"#FFFFFF",color:"#0d3b52",border:"1px solid #BAE6FD",width:"100%"}:{...S.select,width:"100%"};
+  const inputStyle  = isLightTheme(theme)?{...S.input,background:"#FFFFFF",color:"#0d3b52",border:"1px solid #BAE6FD"}:S.input;
+  const selectStyle = isLightTheme(theme)?{...S.select,background:"#FFFFFF",color:"#0d3b52",border:"1px solid #BAE6FD",width:"100%"}:{...S.select,width:"100%"};
   const overlayStyle = { position:"fixed",inset:0,zIndex:10001,background:"rgba(5,12,18,0.92)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center" };
-  const modalStyle  = (w) => ({ width:`min(${w}px,95vw)`,maxHeight:"92vh",background:theme==="light"?"#F0F9FF":"#0b1920",borderRadius:14,border:"1px solid rgba(0,175,197,0.2)",boxShadow:"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column" });
-  const modalHead   = { padding:"18px 28px 14px",borderBottom:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)",background:theme==="light"?"#E0F2FE":"#081318",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0 };
-  const modalScroll = { flex:1,overflowY:"auto",padding:"22px 28px",scrollbarWidth:"thin",scrollbarColor:"#1e3a44 transparent",background:theme==="light"?"#F8FAFC":"transparent" };
-  const modalFoot   = { padding:"14px 28px",borderTop:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",background:theme==="light"?"#E0F2FE":"#081318",display:"flex",justifyContent:"flex-end",gap:10,flexShrink:0 };
+  const modalStyle  = (w) => ({ width:`min(${w}px,95vw)`,maxHeight:"92vh",background:isLightTheme(theme)?"#F0F9FF":"#0b1920",borderRadius:14,border:"1px solid rgba(0,175,197,0.2)",boxShadow:"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column" });
+  const modalHead   = { padding:"18px 28px 14px",borderBottom:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)",background:isLightTheme(theme)?"#E0F2FE":"#081318",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0 };
+  const modalScroll = { flex:1,overflowY:"auto",padding:"22px 28px",scrollbarWidth:"thin",scrollbarColor:"#1e3a44 transparent",background:isLightTheme(theme)?"#F8FAFC":"transparent" };
+  const modalFoot   = { padding:"14px 28px",borderTop:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",background:isLightTheme(theme)?"#E0F2FE":"#081318",display:"flex",justifyContent:"flex-end",gap:10,flexShrink:0 };
   const secTitle    = { fontSize:10,color:"#00afc5",fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:10 };
   const fmt         = (v) => v!=null?`$${Math.round(Number(v)).toLocaleString("es-CO")}`:"—";
 
@@ -2957,7 +2370,7 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
           <span>📅</span><span style={{fontSize:13,color:value?col.textPrimary:col.textMuted}}>{disp(value)}</span>
         </div>
         {isOpen&&(
-          <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:10010,background:theme==="light"?"#fff":"#0b1920",border:"1px solid rgba(0,175,197,0.3)",borderRadius:10,padding:14,boxShadow:"0 20px 50px rgba(0,0,0,0.5)",minWidth:260}}>
+          <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:10010,background:isLightTheme(theme)?"#fff":"#0b1920",border:"1px solid rgba(0,175,197,0.3)",borderRadius:10,padding:14,boxShadow:"0 20px 50px rgba(0,0,0,0.5)",minWidth:260}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
               <button style={{...S.btn("ghost",true),padding:"4px 10px"}} onClick={()=>setVd(new Date(y,m-1,1))}>◄</button>
               <span style={{fontSize:14,fontWeight:700,color:col.textPrimary}}>{MESES[m]} <span style={{color:"#00afc5"}}>{y}</span></span>
@@ -3106,7 +2519,7 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
             </div>
 
             {/* Tabs internos */}
-            <div style={{display:"flex",borderBottom:theme==="light"?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)",background:theme==="light"?"#E0F2FE":"#081318",flexShrink:0}}>
+            <div style={{display:"flex",borderBottom:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)",background:isLightTheme(theme)?"#E0F2FE":"#081318",flexShrink:0}}>
               {[["datos","📋 Datos"],["cortes","📅 Cortes"],["precios","💲 Precios"]].map(([id,label])=>(
                 <button key={id} onClick={()=>setTabDetalle(id)}
                   style={{padding:"10px 20px",border:"none",background:"transparent",cursor:"pointer",fontSize:13,fontWeight:tabDetalle===id?700:400,color:tabDetalle===id?"#00afc5":col.textSecondary,borderBottom:tabDetalle===id?"2px solid #00afc5":"2px solid transparent",transition:"all 0.15s"}}>
@@ -3440,7 +2853,6 @@ const TAB_FUNCIONES = {
   contratos:       ["contratos"],
   precios:         ["listado de precios"],
   subcontratistas: ["subcontratistas"],
-  actas:           ["actas"],
   resets:          ["panel de administración"],
 };
 
@@ -3454,6 +2866,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
 
   // ── Filtrar tabs según permisos del usuario ────────────────────────────────
   function canSeeTab(tabId) {
+    if (tabId === "contratos") return isDeveloper;
     const tab = TABS_TODOS.find(t => t.id === tabId);
     if (tab?.soloAdmin) return isDeveloper || isAdmin;
     if (isDeveloper || isAdmin) return true;
@@ -3473,7 +2886,6 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
     { id: "contratos", label: "Contratos"            },
     { id: "precios",          label: "Listado de Precios"   },
     { id: "subcontratistas",  label: "Subcontratistas"       },
-    { id: "actas",            label: "Actas"                 },
     { id: "resets",           label: "Reset Claves"          },
     { id: "logs",      label: "📋 Logs del Sistema", soloAdmin: true },
   ];
@@ -3488,7 +2900,6 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
     contratos: { title: "Contratos",              sub: "Crea y gestiona contratos del sistema" },
     precios:          { title: "Listado de Precios",    sub: "Edita, carga y descarga el listado de precios por contrato" },
     subcontratistas:  { title: "Subcontratistas",       sub: "Gestión de subcontratistas, cortes de facturación y precios por contrato" },
-    actas:            { title: "Actas",                 sub: "Actas de cobro y administrativas del contrato" },
     resets:           { title: "Reset Claves",          sub: "Autoriza solicitudes de cambio de contraseña" },
     logs:      { title: "Logs del Sistema",       sub: "Auditoría completa de acciones en la plataforma" },
   };
@@ -3515,10 +2926,6 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
     p => p.funcion_nombre?.toLowerCase() === "subcontratistas"
   ) || {};
 
-  const actasPerms = (user?.permisos || []).find(
-    p => p.funcion_nombre?.toLowerCase() === "actas"
-  ) || {};
-
   return (
     <div style={S.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
       <div style={S.panel(activeTheme)}>
@@ -3529,7 +2936,8 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
             <img
               src="/CLARA.CORE.png"
               alt="ClaraCore"
-              style={{ height: 32, marginBottom: 6, filter: activeTheme === "light" ? "none" : "brightness(0) invert(1)" }}
+              className="cc-brand-logo cc-brand-logo--admin"
+              style={{ filter: isLightTheme(activeTheme) ? "none" : "brightness(0) invert(1)" }}
             />
             <div style={S.logoSub}>PANEL ADMIN</div>
           </div>
@@ -3563,7 +2971,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
             {tab === "cargos"    && <SeccionCargos    call={call} cargos={cargos} recargarCargos={cargarCargos} theme={activeTheme} />}
             {tab === "permisos"  && <SeccionPermisos  call={call} cargos={cargos} theme={activeTheme} />}
             {tab === "contratos" && <SeccionContratos call={call} contratos={contratos} recargarContratos={cargarContratos}
-            perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true } :
+            perms={isDeveloper ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true } :
               (() => {
                 const p = (user?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === "contratos");
                 return {
@@ -3578,7 +2986,6 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
           />}
             {tab === "precios"          && <SeccionListadoPrecios call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true, validar: true } : precioPerms} theme={activeTheme} />}
             {tab === "subcontratistas"  && <SeccionSubcontratistas call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, validar: true, exportar: true } : subPerms} theme={activeTheme} />}
-            {tab === "actas"            && <SeccionActas call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, validar: true, exportar: true } : actasPerms} theme={activeTheme} />}
             {tab === "resets"           && <SeccionResets    call={call} theme={activeTheme} />}
               {tab === "logs"      && <SeccionLogs      call={call} theme={activeTheme} />}
           </div>

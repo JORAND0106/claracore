@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useId, useRef } from 'react'
 
 const API_FALLBACK = 'https://claracore-backend.azurewebsites.net'
 /** En `npm run dev`, URL vacía → las peticiones van a 127.0.0.1:5173 y Vite reenvía `/informes` al :8000 (vite.config.js).
@@ -10,6 +10,273 @@ const FS = {
   small:  { base: 13, sub: 12, title: 20, section: 12 },
   normal: { base: 16, sub: 14, title: 24, section: 13 },
   large:  { base: 20, sub: 17, title: 30, section: 15 },
+}
+
+const _ccdCell = { border: '1px solid #9ca3af', padding: '2px 3px', fontSize: '7px', textAlign: 'center' }
+
+/** Excel — hoja verde con X / bloque tipo hoja de cálculo. */
+function IconoDescargaExcel({ size = 18 }) {
+  const id = useId().replace(/:/g, '')
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <defs>
+        <linearGradient id={`ccdXlG${id}`} x1="3" y1="3" x2="21" y2="21" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#34d399" />
+          <stop offset="1" stopColor="#047857" />
+        </linearGradient>
+      </defs>
+      <rect x="2.5" y="2.5" width="19" height="19" rx="3" fill={`url(#ccdXlG${id})`} />
+      <rect x="4" y="4" width="7" height="5" rx="0.8" fill="#065f46" opacity="0.35" />
+      <path d="M9 9l6 6M15 9l-6 6" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" />
+      <path d="M15 6.5h4.5v1.3H15V6.5z" fill="#fff" fillOpacity="0.88" />
+    </svg>
+  )
+}
+
+/** Vista previa — documento azul con brillo y lupa. */
+function IconoVistaPrevia({ size = 18 }) {
+  const id = useId().replace(/:/g, '')
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <defs>
+        <linearGradient id={`ccdVi${id}`} x1="4" y1="2" x2="18" y2="20" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#38bdf8" />
+          <stop offset="1" stopColor="#0284c7" />
+        </linearGradient>
+      </defs>
+      <path
+        d="M6 2.5h9l4.5 4.5V19a2.5 2.5 0 01-2.5 2.5H6A2.5 2.5 0 013.5 19V5A2.5 2.5 0 016 2.5z"
+        fill={`url(#ccdVi${id})`}
+      />
+      <path d="M15 2.5v5h5" fill="#7dd3fc" opacity="0.95" />
+      <rect x="7.5" y="9" width="7" height="1.4" rx="0.5" fill="#fff" fillOpacity="0.92" />
+      <rect x="7.5" y="11.8" width="5" height="1.4" rx="0.5" fill="#fff" fillOpacity="0.65" />
+      <circle cx="16.2" cy="15.2" r="3.8" fill="none" stroke="#f0f9ff" strokeWidth="1.6" />
+      <circle cx="16.2" cy="15.2" r="1.8" fill="#bae6fd" fillOpacity="0.5" />
+      <path d="M18.8 17.8l2.2 2.2" stroke="#0369a1" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+/** PDF firmado — hoja violeta con sello dorado. */
+function IconoPdfSello({ size = 18 }) {
+  const id = useId().replace(/:/g, '')
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <defs>
+        <linearGradient id={`ccdPdf${id}`} x1="3" y1="2" x2="17" y2="22" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#a78bfa" />
+          <stop offset="1" stopColor="#6d28d9" />
+        </linearGradient>
+        <radialGradient id={`ccdSeal${id}`} cx="50%" cy="40%" r="60%">
+          <stop stopColor="#fde68a" />
+          <stop offset="1" stopColor="#d97706" />
+        </radialGradient>
+      </defs>
+      <path
+        d="M6 2.5h8.5L18 6v14.5A2.5 2.5 0 0115.5 23h-9A2.5 2.5 0 014 20.5v-15A2.5 2.5 0 016 2.5z"
+        fill={`url(#ccdPdf${id})`}
+      />
+      <path d="M14.5 2.5v4.5H19" fill="#c4b5fd" opacity="0.9" />
+      <rect x="7" y="9" width="8" height="1.3" rx="0.4" fill="#fff" fillOpacity="0.88" />
+      <rect x="7" y="11.5" width="6" height="1.3" rx="0.4" fill="#fff" fillOpacity="0.55" />
+      <circle cx="16" cy="17.5" r="4.2" fill={`url(#ccdSeal${id})`} stroke="#b45309" strokeWidth="0.8" />
+      <path
+        d="M14.1 17.5l1.1 1.1 2.7-2.8"
+        fill="none"
+        stroke="#78350f"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+/** Registrar firma — pluma / lápiz en tonos ámbar. */
+function IconoFirmaRegistrar({ size = 18 }) {
+  const id = useId().replace(/:/g, '')
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+      <defs>
+        <linearGradient id={`ccdPen${id}`} x1="4" y1="20" x2="20" y2="4" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#fb923c" />
+          <stop offset="1" stopColor="#ea580c" />
+        </linearGradient>
+      </defs>
+      <path
+        d="M3.5 20.2l1.2-4.8 10.5-10.5 3.6 3.6L8.3 19l-4.8 1.2z"
+        fill={`url(#ccdPen${id})`}
+        stroke="#c2410c"
+        strokeWidth="0.6"
+        strokeLinejoin="round"
+      />
+      <path d="M15.2 5.4L18.6 8.8" stroke="#fed7aa" strokeWidth="2.2" strokeLinecap="round" />
+      <path d="M4.2 19.5L2.8 21" stroke="#64748b" strokeWidth="1.4" strokeLinecap="round" />
+      <ellipse cx="5.5" cy="20.5" rx="1.8" ry="0.9" fill="#334155" opacity="0.35" transform="rotate(-25 5.5 20.5)" />
+    </svg>
+  )
+}
+
+/** Estantería / libros — presentación «biblioteca CCD». */
+function IconoBiblioteca({ size = 28 }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path fill="currentColor" fillOpacity="0.92" d="M4 4h5v16H4V4zm6 2h5v14h-5V6zm6-1h5v15h-5V5z" />
+      <path fill="currentColor" fillOpacity="0.55" d="M5 5h3v14H5V5zm6 2h3v12h-3V7zm6-1h3v13h-3V6z" />
+      <path stroke="currentColor" strokeWidth="1" strokeOpacity="0.35" d="M4 4h16v16H4z" fill="none" />
+    </svg>
+  )
+}
+
+/** Vista en vivo (miniatura HTML) del informe de corte (-001) según colores elegidos.
+ *  Si existe `capitulo_subtotal_bg` (CC-SEM-001 / CC-MES-001), muestra una fila de ejemplo para contrastar con SUB TOTAL. */
+function CcdLivePreviewCorte({ es }) {
+  const bd = '1px solid #9ca3af'
+  const capSub = es.capitulo_subtotal_bg
+  const muestraSubCap = typeof capSub === 'string' && capSub.trim() !== ''
+  return (
+    <div
+      style={{
+        borderRadius: '10px',
+        border: bd,
+        overflow: 'hidden',
+        background: '#fff',
+        boxShadow: '0 4px 14px rgba(15,23,42,0.08)',
+      }}
+    >
+      <div style={{ padding: '6px 8px', fontSize: '9px', fontWeight: '700', color: '#475569', background: '#f8fafc', borderBottom: bd }}>
+        Tabla de ítems
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '7px' }}>
+        <thead>
+          <tr style={{ background: es.thead_bg }}>
+            <th style={{ ..._ccdCell, width: '14%' }}>CAP</th>
+            <th style={{ ..._ccdCell, width: '10%' }}>ÍTEM</th>
+            <th style={{ ..._ccdCell, textAlign: 'left' }}>DESCRIPCIÓN</th>
+            <th style={{ ..._ccdCell, width: '10%' }}>UND</th>
+            <th style={{ ..._ccdCell, width: '12%' }}>CANT</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style={{ background: es.row_even_bg }}>
+            <td style={_ccdCell}>IV</td>
+            <td style={_ccdCell}>NP-1</td>
+            <td style={{ ..._ccdCell, textAlign: 'left' }}>Ejemplo fila par</td>
+            <td style={_ccdCell}>ML</td>
+            <td style={_ccdCell}>12</td>
+          </tr>
+          <tr style={{ background: es.row_odd_bg }}>
+            <td style={_ccdCell}>IV</td>
+            <td style={_ccdCell}>NP-2</td>
+            <td style={{ ..._ccdCell, textAlign: 'left' }}>Ejemplo fila impar</td>
+            <td style={_ccdCell}>M3</td>
+            <td style={_ccdCell}>5</td>
+          </tr>
+          <tr style={{ background: es.row_even_bg }}>
+            <td style={_ccdCell}>IV</td>
+            <td style={_ccdCell}>NP-3</td>
+            <td style={{ ..._ccdCell, textAlign: 'left' }}>…</td>
+            <td style={_ccdCell}>ML</td>
+            <td style={_ccdCell}>8</td>
+          </tr>
+          {muestraSubCap && (
+            <tr style={{ background: capSub }}>
+              <td
+                colSpan={4}
+                style={{
+                  ..._ccdCell,
+                  textAlign: 'right',
+                  fontWeight: '800',
+                  fontSize: '6.5px',
+                  padding: '3px 4px',
+                }}
+              >
+                Subtotal capítulo — IV
+              </td>
+              <td style={{ ..._ccdCell, textAlign: 'right', fontWeight: '800', fontSize: '6.5px', padding: '3px 4px' }}>
+                $ —
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+      <div
+        style={{
+          background: es.subtotal_bg,
+          borderTop: bd,
+          padding: '5px 8px',
+          fontSize: '8px',
+          fontWeight: '800',
+          textAlign: 'right',
+        }}
+      >
+        SUB TOTAL: $ —
+      </div>
+    </div>
+  )
+}
+
+/** Vista en vivo (miniatura) de la memoria CC-SUB-002: barra + tabla + total. */
+function CcdLivePreviewMemoria({ es }) {
+  const bd = '1px solid #9ca3af'
+  return (
+    <div
+      style={{
+        borderRadius: '10px',
+        border: bd,
+        overflow: 'hidden',
+        background: '#fff',
+        boxShadow: '0 4px 14px rgba(15,23,42,0.08)',
+      }}
+    >
+      <div
+        style={{
+          background: es.section_bar_bg,
+          color: es.section_bar_text,
+          padding: '5px 8px',
+          fontSize: '8px',
+          fontWeight: '800',
+          borderBottom: bd,
+        }}
+      >
+        DETALLE DE CANTIDADES APROBADAS
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '6.5px' }}>
+        <thead>
+          <tr style={{ background: es.thead_bg }}>
+            <th style={{ ..._ccdCell, width: '8%' }}>N°</th>
+            <th style={{ ..._ccdCell, width: '10%' }}>ABS</th>
+            <th style={{ ..._ccdCell }}>OBSERVACIÓN</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style={{ background: es.row_even_bg }}>
+            <td style={_ccdCell}>101</td>
+            <td style={_ccdCell}>10.0</td>
+            <td style={{ ..._ccdCell, textAlign: 'left' }}>Texto ejemplo (fila par)</td>
+          </tr>
+          <tr style={{ background: es.row_odd_bg }}>
+            <td style={_ccdCell}>102</td>
+            <td style={_ccdCell}>20.0</td>
+            <td style={{ ..._ccdCell, textAlign: 'left' }}>Texto ejemplo (fila impar)</td>
+          </tr>
+        </tbody>
+      </table>
+      <div
+        style={{
+          background: es.subtotal_bg,
+          borderTop: bd,
+          padding: '5px 8px',
+          fontSize: '7px',
+          fontWeight: '800',
+          textAlign: 'right',
+        }}
+      >
+        CANTIDAD TOTAL DEL ÍTEM · —
+      </div>
+    </div>
+  )
 }
 
 export default function ModuloInformes({ t, usuario, token, s, fontSize = 'normal' }) {
@@ -69,7 +336,26 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   }
 
   const f          = FS[fontSize] || FS.normal
+  /** Escala UI del bloque «Formatos Subcontratista» según Pequeño / Mediano / Grande. */
+  const ui = {
+    hint: Math.max(10, f.sub - 2),
+    label: f.sub,
+    cardTitle: f.section,
+    body: f.sub,
+    itemEm: f.base,
+    pIn: fontSize === 'small' ? '8px 10px' : fontSize === 'large' ? '12px 14px' : '10px 12px',
+    pHead: fontSize === 'small' ? '8px 10px' : fontSize === 'large' ? '11px 14px' : '9px 12px',
+    gap: fontSize === 'small' ? 8 : fontSize === 'large' ? 12 : 10,
+    iconBtn: fontSize === 'small' ? 34 : fontSize === 'large' ? 44 : 40,
+    iconSvg: Math.max(15, Math.min(22, f.sub + 4)),
+  }
   const contratoId = usuario?.contrato_id
+
+  /** Perfiles de interventoría: ocultar formatos marcados como no de su interés (backend: acceso_interventoria). */
+  const esPerfilInterventoria = (() => {
+    const r = (usuario?.rol_nombre || '').toLowerCase()
+    return r.includes('intervent')
+  })()
 
   const [subs,        setSubs]        = useState([])
   const [subId,       setSubId]       = useState('')
@@ -83,40 +369,226 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   /** Biblioteca CCD por contrato (formatos + config de firmas + slots). */
   const [biblioCcd, setBiblioCcd] = useState([])
   const [firmantesCcd, setFirmantesCcd] = useState([])
-  const [cfgFirmaCc001, setCfgFirmaCc001] = useState({
-    elaboro_nombre: '',
-    elaboro_cargo: '',
-    reviso_nombre: '',
-    reviso_cargo: '',
-  })
+  /** Configuración Elaboró / Revisó + estilo PDF por código de formato CCD. */
+  const [cfgFirmaCcd, setCfgFirmaCcd] = useState(() => ({
+    'CC-SUB-001': {
+      elaboro_nombre: '',
+      elaboro_cargo: '',
+      elaboro_usuario_id: null,
+      reviso_nombre: '',
+      reviso_cargo: '',
+      reviso_usuario_id: null,
+      estilo_pdf: {
+        section_bar_bg: '#e5e7eb',
+        section_bar_text: '#111827',
+        thead_bg: '#e8e8e8',
+        row_even_bg: '#ffffff',
+        row_odd_bg: '#f9fafb',
+        subtotal_bg: '#dbeafe',
+      },
+    },
+    'CC-SUB-002': {
+      elaboro_nombre: '',
+      elaboro_cargo: '',
+      elaboro_usuario_id: null,
+      reviso_nombre: '',
+      reviso_cargo: '',
+      reviso_usuario_id: null,
+      estilo_pdf: {
+        section_bar_bg: '#e5e7eb',
+        section_bar_text: '#111827',
+        thead_bg: '#f3f4f6',
+        row_even_bg: '#f8fafc',
+        row_odd_bg: '#ffffff',
+        subtotal_bg: '#e5e7eb',
+      },
+    },
+  }))
   const [guardandoFirmaCcd, setGuardandoFirmaCcd] = useState(false)
   /** Por código de formato: panel abierto/cerrado (persistido en localStorage por contrato). */
   const [ccdExpanded, setCcdExpanded] = useState(() => ({}))
+  /** Tarjeta «Formatos Subcontratista» (corte + memorias): abierta/cerrada por contrato. Por defecto recogida. */
+  const [formatosSubAbierto, setFormatosSubAbierto] = useState(false)
+  /** Tarjeta «Formatos Semanales» (conciliación por semana): mismo patrón que subcontratista. */
+  const [formatosSemAbierto, setFormatosSemAbierto] = useState(false)
+  /** Sub-tarjetas por formato CCD (plantilla escalable: primera = corte, segunda = memorias). Por defecto recogidas. */
+  const [formatoCorte001Abierto, setFormatoCorte001Abierto] = useState(false)
+  const [formatoMemorias002Abierto, setFormatoMemorias002Abierto] = useState(false)
+  /** CC-SUB-002: bloque «Todos los ítems» + filas por código; recogido por defecto. */
+  const [ccSub002ListadoItemsAbierto, setCcSub002ListadoItemsAbierto] = useState(false)
+  const [formatoSem001Abierto, setFormatoSem001Abierto] = useState(false)
+  const [formatoSem002Abierto, setFormatoSem002Abierto] = useState(false)
+  /** CC-SEM-002: mismo patrón que CC-SUB-002. */
+  const [ccSem002ListadoItemsAbierto, setCcSem002ListadoItemsAbierto] = useState(false)
+  /** Tarjeta «Formatos Mensuales» (acta RPO): mismo patrón; cerrada por defecto. */
+  const [formatosMesAbierto, setFormatosMesAbierto] = useState(false)
+  /** Formatos de entidades contratantes (p. ej. IDU FO-EO-04); cerrada por defecto. */
+  const [formatosEntExtAbierto, setFormatosEntExtAbierto] = useState(false)
+  const [formatoMes001Abierto, setFormatoMes001Abierto] = useState(false)
+  const [formatoMes002Abierto, setFormatoMes002Abierto] = useState(false)
+  /** CC-MES-002: filas por ítem; recogido por defecto (mismo criterio que CC-SUB/CC-SEM). */
+  const [ccMes002ListadoItemsAbierto, setCcMes002ListadoItemsAbierto] = useState(false)
+  const [itemsSemanal, setItemsSemanal] = useState([])
+  const [cargandoItemsSemanal, setCargandoItemsSemanal] = useState(false)
+  const [itemsMensual, setItemsMensual] = useState([])
+  const [cargandoItemsMensual, setCargandoItemsMensual] = useState(false)
+  /** Panel «Biblioteca CCD» (derecha superior): contraído por defecto. */
+  const [biblioPanelAbierto, setBiblioPanelAbierto] = useState(false)
 
   /** Vista previa: PDF en modal (blob). */
   const [vistaPrevia, setVistaPrevia] = useState(null)
+  /** null | 'corte' | 'todos' | 'sem001' | 'sem2-all' | 's2:'+item | string (item corte) — Excel en curso */
+  const [excelBusy, setExcelBusy] = useState(null)
+  const [firmaCorteBusy, setFirmaCorteBusy] = useState(false)
+  /** Firmas ya registradas en el corte por código de formato (misma tabla; slots Elaboró/Revisó). */
+  const [firmasCcd, setFirmasCcd] = useState({
+    'CC-SUB-001': null,
+    'CC-SUB-002': null,
+    'CC-SEM-001': null,
+    'CC-SEM-002': null,
+    'CC-MES-001': null,
+    'CC-MES-002': null,
+  })
+  const [registrarFirmaBusy, setRegistrarFirmaBusy] = useState(false)
   // null | { fase:'cargando', tipo } | { fase:'ok', tipo, datos } | { fase:'error', tipo, mensaje }
+
+  const [semanasConc, setSemanasConc] = useState([])
+  const [actasConc, setActasConc] = useState([])
+  const [semanaConcId, setSemanaConcId] = useState('')
+  const [actaConcId, setActaConcId] = useState('')
+  /** Descarga PDF conciliación (CC-SEM / CC-MES): independiente del registro de firma. */
+  const [concPdfBusy, setConcPdfBusy] = useState(false)
+  /** null o código de formato mientras corre POST registrar-firma (un botón no bloquea al otro). */
+  const [firmaRegistroBusy, setFirmaRegistroBusy] = useState(null)
+  const [cargandoSemanasConc, setCargandoSemanasConc] = useState(false)
+  const semanasConcFetchRef = useRef(null)
+  const biblioCcdVisible = biblioCcd.filter(
+    (fmt) => !esPerfilInterventoria || fmt.acceso_interventoria === true
+  )
+  const biblioCcdInternos = biblioCcdVisible.filter((f) => f.grupo_ccd !== 'entidades_externas')
+  const biblioCcdEntidadesExternas = biblioCcdVisible.filter((f) => f.grupo_ccd === 'entidades_externas')
+  const biblioCcdListaPlana = [
+    ...(biblioCcdInternos.length
+      ? [{ _tipo: 'titulo', _key: 'tit-clara', texto: 'Plantillas ClaraCore (CCD)' }]
+      : []),
+    ...biblioCcdInternos.map((fmt) => ({ _tipo: 'fmt', _key: `fmt-${fmt.codigo}`, fmt })),
+    ...(biblioCcdEntidadesExternas.length
+      ? [{ _tipo: 'titulo', _key: 'tit-ext', texto: 'Formatos Entidades Externas' }]
+      : []),
+    ...biblioCcdEntidadesExternas.map((fmt) => ({ _tipo: 'fmt', _key: `fmt-${fmt.codigo}`, fmt })),
+  ]
 
   const subSel   = subs.find(s => String(s.id) === subId)   || null
   const corteSel = cortes.find(c => String(c.id) === corteId) || null
+  const actaSel = actasConc.find((a) => String(a.id) === String(actaConcId)) || null
 
   useEffect(() => {
-    if (!contratoId) return
+    if (!contratoId) {
+      setSubs([])
+      setBiblioCcd([])
+      setFirmantesCcd([])
+      setActasConc([])
+      setSemanasConc([])
+      semanasConcFetchRef.current = null
+      return
+    }
     const authToken = getAuthToken()
     if (!authToken) {
       setError('Sesion no autenticada. Ingresa de nuevo para generar informes.')
       return
     }
-    setCargandoSub(true); setError(null)
-    fetchConFallback(`/informes/${contratoId}/subcontratistas`,
-      { headers: { Authorization: `Bearer ${authToken}` } })
-      .then(r => r.json())
-      .then(d => { setSubs(Array.isArray(d) ? d : []) })
-      .catch(() => setError('Error cargando subcontratistas'))
+    setSemanasConc([])
+    semanasConcFetchRef.current = null
+    setCargandoSub(true)
+    setError(null)
+    Promise.all([
+      fetchConFallback(`/informes/${contratoId}/subcontratistas`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      }).then((r) => r.json()),
+      fetchConFallback(`/informes/${contratoId}/ccd/biblioteca`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      }).then((r) => (r.ok ? r.json() : [])),
+      fetchConFallback(`/informes/${contratoId}/ccd/firmantes-candidatos`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      }).then((r) => (r.ok ? r.json() : [])),
+      fetchConFallback(`/informes/${contratoId}/ccd/actas-rpo`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      }).then((r) => (r.ok ? r.json() : [])),
+    ])
+      .then(([subData, bib, cand, act]) => {
+        setSubs(Array.isArray(subData) ? subData : [])
+        setBiblioCcd(Array.isArray(bib) ? bib : [])
+        setFirmantesCcd(Array.isArray(cand) ? cand : [])
+        setActasConc(Array.isArray(act) ? act : [])
+        const b = Array.isArray(bib) ? bib : []
+        const blank = (cod) => ({
+          elaboro_nombre: '',
+          elaboro_cargo: '',
+          elaboro_usuario_id: null,
+          reviso_nombre: '',
+          reviso_cargo: '',
+          reviso_usuario_id: null,
+          aprobo_nombre: '',
+          aprobo_cargo: '',
+          aprobo_usuario_id: null,
+          estilo_pdf:
+            typeof cod === 'string' && cod.endsWith('-001')
+              ? {
+                  section_bar_bg: '#e5e7eb',
+                  section_bar_text: '#111827',
+                  thead_bg: '#e8e8e8',
+                  row_even_bg: '#ffffff',
+                  row_odd_bg: '#f9fafb',
+                  subtotal_bg: '#dbeafe',
+                  ...(cod === 'CC-SEM-001' || cod === 'CC-MES-001'
+                    ? { capitulo_subtotal_bg: '#93c5fd' }
+                    : {}),
+                }
+              : {
+                  section_bar_bg: '#e5e7eb',
+                  section_bar_text: '#111827',
+                  thead_bg: '#f3f4f6',
+                  row_even_bg: '#f8fafc',
+                  row_odd_bg: '#ffffff',
+                  subtotal_bg: '#e5e7eb',
+                },
+        })
+        setCfgFirmaCcd((prev) => {
+          const next = { ...prev }
+          for (const row of b) {
+            const cod = row?.codigo
+            const cf = row?.config_firma
+            if (!cod || !cf || typeof cf !== 'object') continue
+            const base = blank(cod)
+            const es = cf.estilo_pdf && typeof cf.estilo_pdf === 'object' ? cf.estilo_pdf : {}
+            next[cod] = {
+              ...base,
+              elaboro_nombre: cf.elaboro_nombre ?? '',
+              elaboro_cargo: cf.elaboro_cargo ?? '',
+              elaboro_usuario_id: cf.elaboro_usuario_id ?? null,
+              reviso_nombre: cf.reviso_nombre ?? '',
+              reviso_cargo: cf.reviso_cargo ?? '',
+              reviso_usuario_id: cf.reviso_usuario_id ?? null,
+              aprobo_nombre: cf.aprobo_nombre ?? '',
+              aprobo_cargo: cf.aprobo_cargo ?? '',
+              aprobo_usuario_id: cf.aprobo_usuario_id ?? null,
+              estilo_pdf: { ...base.estilo_pdf, ...es },
+            }
+          }
+          return next
+        })
+      })
+      .catch(() => {
+        setError('Error cargando datos del contrato')
+        setSubs([])
+        setBiblioCcd([])
+        setFirmantesCcd([])
+        setActasConc([])
+      })
       .finally(() => setCargandoSub(false))
   }, [contratoId])
 
-  const ccdExpandedStorageKey = contratoId != null ? `ccd_biblio_expanded_${contratoId}` : null
+  const ccdExpandedStorageKey = contratoId != null ? `ccd_biblio_expanded_v2_${contratoId}` : null
 
   useEffect(() => {
     if (!ccdExpandedStorageKey) {
@@ -149,42 +621,285 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     })
   }
 
+  const formatosSubStorageKey = contratoId != null ? `informes_formatos_sub_abierto_${contratoId}` : null
+
   useEffect(() => {
-    if (!contratoId) {
-      setBiblioCcd([])
-      setFirmantesCcd([])
+    if (!formatosSubStorageKey) {
+      setFormatosSubAbierto(false)
+      return
+    }
+    try {
+      const raw = localStorage.getItem(formatosSubStorageKey)
+      if (raw === 'true') setFormatosSubAbierto(true)
+      else setFormatosSubAbierto(false)
+    } catch {
+      /* noop */
+    }
+  }, [formatosSubStorageKey])
+
+  function toggleFormatosSub() {
+    setFormatosSubAbierto((prev) => {
+      const next = !prev
+      if (formatosSubStorageKey) {
+        try {
+          localStorage.setItem(formatosSubStorageKey, String(next))
+        } catch {
+          /* noop */
+        }
+      }
+      return next
+    })
+  }
+
+  /** Siempre recogido al cargar; no persistir en localStorage (evita que quede abierto entre visitas). */
+  function toggleFormatosSem() {
+    setFormatosSemAbierto((prev) => !prev)
+  }
+
+  useEffect(() => {
+    if (!formatosSemAbierto) {
+      setFormatoSem001Abierto(false)
+      setFormatoSem002Abierto(false)
+    }
+  }, [formatosSemAbierto])
+
+  function toggleFormatosMes() {
+    setFormatosMesAbierto((prev) => !prev)
+  }
+
+  useEffect(() => {
+    if (!formatosMesAbierto) {
+      setFormatoMes001Abierto(false)
+      setFormatoMes002Abierto(false)
+    }
+  }, [formatosMesAbierto])
+
+  useEffect(() => {
+    if (!formatoMemorias002Abierto) setCcSub002ListadoItemsAbierto(false)
+  }, [formatoMemorias002Abierto])
+
+  useEffect(() => {
+    if (!formatoSem002Abierto) setCcSem002ListadoItemsAbierto(false)
+  }, [formatoSem002Abierto])
+
+  useEffect(() => {
+    if (!formatoMes002Abierto) setCcMes002ListadoItemsAbierto(false)
+  }, [formatoMes002Abierto])
+
+  /** Semanas (pesado en servidor): solo al abrir «Formatos Semanales»; una vez por contrato. */
+  useEffect(() => {
+    if (!contratoId || !formatosSemAbierto) return
+    if (semanasConcFetchRef.current === contratoId) return
+    const authToken = getAuthToken()
+    if (!authToken) return
+    let cancelled = false
+    setCargandoSemanasConc(true)
+    fetchConFallback(`/informes/${contratoId}/ccd/semanas`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((sem) => {
+        if (cancelled) return
+        setSemanasConc(Array.isArray(sem) ? sem : [])
+        semanasConcFetchRef.current = contratoId
+      })
+      .catch(() => {
+        if (!cancelled) setSemanasConc([])
+      })
+      .finally(() => {
+        if (!cancelled) setCargandoSemanasConc(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [contratoId, formatosSemAbierto])
+
+  useEffect(() => {
+    if (contratoId == null || contratoId === '' || !corteId) {
+      setFirmasCcd((prev) => ({ ...prev, 'CC-SUB-001': null, 'CC-SUB-002': null }))
       return
     }
     const authToken = getAuthToken()
     if (!authToken) return
-    Promise.all([
-      fetchConFallback(`/informes/${contratoId}/ccd/biblioteca`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      }).then((r) => (r.ok ? r.json() : [])),
-      fetchConFallback(`/informes/${contratoId}/ccd/firmantes-candidatos`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      }).then((r) => (r.ok ? r.json() : [])),
-    ])
-      .then(([bib, cand]) => {
-        setBiblioCcd(Array.isArray(bib) ? bib : [])
-        setFirmantesCcd(Array.isArray(cand) ? cand : [])
-        const cc = (Array.isArray(bib) ? bib : []).find((x) => x.codigo === 'CC-SUB-001')
-        const cf = cc?.config_firma
-        if (cf && typeof cf === 'object') {
-          setCfgFirmaCc001((prev) => ({
-            ...prev,
-            elaboro_nombre: cf.elaboro_nombre ?? '',
-            elaboro_cargo: cf.elaboro_cargo ?? '',
-            reviso_nombre: cf.reviso_nombre ?? '',
-            reviso_cargo: cf.reviso_cargo ?? '',
-          }))
-        }
+    let cancelled = false
+    const codigos = ['CC-SUB-001', 'CC-SUB-002']
+    Promise.all(
+      codigos.map((cod) =>
+        fetchConFallback(
+          `/informes/${contratoId}/ccd/corte/${corteId}/firmas-registradas/${encodeURIComponent(cod)}`,
+          { headers: { Authorization: `Bearer ${authToken}` } }
+        ).then((r) => (r.ok ? r.json() : null))
+      )
+    )
+      .then((arr) => {
+        if (cancelled) return
+        setFirmasCcd((prev) => ({
+          ...prev,
+          'CC-SUB-001': arr[0],
+          'CC-SUB-002': arr[1],
+        }))
       })
       .catch(() => {
-        setBiblioCcd([])
-        setFirmantesCcd([])
+        if (!cancelled) {
+          setFirmasCcd((prev) => ({ ...prev, 'CC-SUB-001': null, 'CC-SUB-002': null }))
+        }
       })
-  }, [contratoId])
+    return () => {
+      cancelled = true
+    }
+  }, [contratoId, corteId])
+
+  useEffect(() => {
+    if (contratoId == null || contratoId === '' || !semanaConcId) {
+      setFirmasCcd((prev) => ({ ...prev, 'CC-SEM-001': null, 'CC-SEM-002': null }))
+      return
+    }
+    const sid = parseInt(String(semanaConcId), 10)
+    if (!Number.isFinite(sid)) {
+      setFirmasCcd((prev) => ({ ...prev, 'CC-SEM-001': null, 'CC-SEM-002': null }))
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) return
+    let cancelled = false
+    const codigos = ['CC-SEM-001', 'CC-SEM-002']
+    Promise.all(
+      codigos.map((cod) =>
+        fetchConFallback(
+          `/informes/${contratoId}/ccd/contexto/semana/${sid}/firmas-registradas/${encodeURIComponent(cod)}`,
+          { headers: { Authorization: `Bearer ${authToken}` } }
+        ).then((r) => (r.ok ? r.json() : null))
+      )
+    )
+      .then((arr) => {
+        if (cancelled) return
+        setFirmasCcd((prev) => ({
+          ...prev,
+          'CC-SEM-001': arr[0],
+          'CC-SEM-002': arr[1],
+        }))
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFirmasCcd((prev) => ({ ...prev, 'CC-SEM-001': null, 'CC-SEM-002': null }))
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [contratoId, semanaConcId])
+
+  useEffect(() => {
+    if (contratoId == null || contratoId === '' || !actaConcId) {
+      setFirmasCcd((prev) => ({ ...prev, 'CC-MES-001': null, 'CC-MES-002': null }))
+      return
+    }
+    const aid = parseInt(String(actaConcId), 10)
+    if (!Number.isFinite(aid)) {
+      setFirmasCcd((prev) => ({ ...prev, 'CC-MES-001': null, 'CC-MES-002': null }))
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) return
+    let cancelled = false
+    const codigos = ['CC-MES-001', 'CC-MES-002']
+    Promise.all(
+      codigos.map((cod) =>
+        fetchConFallback(
+          `/informes/${contratoId}/ccd/contexto/acta_rpo/${aid}/firmas-registradas/${encodeURIComponent(cod)}`,
+          { headers: { Authorization: `Bearer ${authToken}` } }
+        ).then((r) => (r.ok ? r.json() : null))
+      )
+    )
+      .then((arr) => {
+        if (cancelled) return
+        setFirmasCcd((prev) => ({
+          ...prev,
+          'CC-MES-001': arr[0],
+          'CC-MES-002': arr[1],
+        }))
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFirmasCcd((prev) => ({ ...prev, 'CC-MES-001': null, 'CC-MES-002': null }))
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [contratoId, actaConcId])
+
+  useEffect(() => {
+    if (!contratoId || !semanaConcId || !formatosSemAbierto) {
+      setItemsSemanal([])
+      return
+    }
+    const sid = parseInt(String(semanaConcId), 10)
+    if (!Number.isFinite(sid)) {
+      setItemsSemanal([])
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setItemsSemanal([])
+      return
+    }
+    let cancelled = false
+    setCargandoItemsSemanal(true)
+    fetchConFallback(`/informes/${contratoId}/ccd/conciliacion/semana/${sid}/items`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled) return
+        setItemsSemanal(Array.isArray(d?.items) ? d.items : [])
+      })
+      .catch(() => {
+        if (!cancelled) setItemsSemanal([])
+      })
+      .finally(() => {
+        if (!cancelled) setCargandoItemsSemanal(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [contratoId, semanaConcId, formatosSemAbierto])
+
+  useEffect(() => {
+    if (!contratoId || !actaConcId || !formatosMesAbierto) {
+      setItemsMensual([])
+      return
+    }
+    const aid = parseInt(String(actaConcId), 10)
+    if (!Number.isFinite(aid)) {
+      setItemsMensual([])
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setItemsMensual([])
+      return
+    }
+    let cancelled = false
+    setCargandoItemsMensual(true)
+    fetchConFallback(`/informes/${contratoId}/ccd/conciliacion/acta/${aid}/items`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled) return
+        setItemsMensual(Array.isArray(d?.items) ? d.items : [])
+      })
+      .catch(() => {
+        if (!cancelled) setItemsMensual([])
+      })
+      .finally(() => {
+        if (!cancelled) setCargandoItemsMensual(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [contratoId, actaConcId, formatosMesAbierto])
 
   function onSubChange(e) {
     const id = e.target.value
@@ -277,6 +992,85 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     }
   }
 
+  /** PDF CC-SUB-001 + página de sello (firma del perfil, huella SHA-256, fecha, contrato). */
+  async function descargarPdfCorteConSello() {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !corteId) {
+      setError('Selecciona contrato y corte.')
+      return
+    }
+    setFirmaCorteBusy(true)
+    setError(null)
+    const opts = { headers: { Authorization: `Bearer ${authToken}` } }
+    const cid = encodeURIComponent(contratoId)
+    const cor = encodeURIComponent(corteId)
+    const pathPdf = `/informes/${cid}/pdf/corte-subcontratista/${cor}/con-sello-firma`
+    try {
+      const r = await fetchConFallback(pathPdf, opts)
+      if (!r || !r.ok) {
+        const msg = r ? await leerErrorRespuesta(r) : 'Sin respuesta'
+        setError(msg)
+        return
+      }
+      const blob = await r.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `CC-SUB-001_corte_${corteId}_firmado.pdf`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setFirmaCorteBusy(false)
+    }
+  }
+
+  /** Registra en el servidor la URL de firma del perfil para Elaboró o Revisó (según biblioteca CCD). */
+  async function registrarMiFirmaCcd(formatoCodigo) {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !corteId) {
+      setError('Selecciona contrato y corte.')
+      return
+    }
+    setRegistrarFirmaBusy(true)
+    setError(null)
+    try {
+      const cod = encodeURIComponent(formatoCodigo)
+      const r = await fetchConFallback(
+        `/informes/${contratoId}/ccd/corte/${corteId}/registrar-firma/${cod}`,
+        { method: 'POST', headers: { Authorization: `Bearer ${authToken}` } }
+      )
+      if (!r?.ok) {
+        const msg = await leerErrorRespuesta(r)
+        setError(msg || 'No se pudo registrar la firma.')
+        return
+      }
+      const rr = await fetchConFallback(
+        `/informes/${contratoId}/ccd/corte/${corteId}/firmas-registradas/${cod}`,
+        { headers: { Authorization: `Bearer ${authToken}` } }
+      )
+      if (rr?.ok) {
+        const data = await rr.json()
+        setFirmasCcd((prev) => ({ ...prev, [formatoCodigo]: data }))
+      }
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setRegistrarFirmaBusy(false)
+    }
+  }
+
   async function abrirVistaPreviaMemoria(itemNumero) {
     const authToken = getAuthToken()
     if (!authToken) {
@@ -319,14 +1113,595 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     }
   }
 
+  /** Un solo PDF con todas las memorias CC-SUB-002 del corte (mismo formato que por ítem, página nueva entre ítems). */
+  async function abrirVistaPreviaMemoriaCorteCompleto() {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !corteId) {
+      setVistaPrevia({ fase: 'error', tipo: 'memoria-todos', mensaje: 'Selecciona contrato y corte.' })
+      return
+    }
+    setVistaPrevia((prev) => {
+      if (prev?.pdfUrl) {
+        try {
+          URL.revokeObjectURL(prev.pdfUrl)
+        } catch {
+          /* noop */
+        }
+      }
+      return { fase: 'cargando', tipo: 'memoria-todos' }
+    })
+    setError(null)
+    const opts = { headers: { Authorization: `Bearer ${authToken}` } }
+    const cid = encodeURIComponent(contratoId)
+    const cor = encodeURIComponent(corteId)
+    const pathPdf = `/informes/${cid}/pdf/memoria-corte-completo/${cor}`
+    try {
+      const r = await fetchConFallback(pathPdf, opts)
+      if (!r || !r.ok) {
+        const msg = r ? await leerErrorRespuesta(r) : 'Sin respuesta'
+        setVistaPrevia({ fase: 'error', tipo: 'memoria-todos', mensaje: msg })
+        return
+      }
+      const blob = await r.blob()
+      const pdfUrl = URL.createObjectURL(blob)
+      setVistaPrevia({ fase: 'ok', tipo: 'memoria-pdf-todos', pdfUrl })
+    } catch (e) {
+      const msg = String(e?.message || e)
+      setVistaPrevia({ fase: 'error', tipo: 'memoria-todos', mensaje: msg })
+    }
+  }
+
+  async function abrirVistaPreviaCorteSemanal() {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !semanaConcId) {
+      setVistaPrevia({ fase: 'error', tipo: 'corte-sem', mensaje: 'Selecciona la semana.' })
+      return
+    }
+    setVistaPrevia((prev) => {
+      if (prev?.pdfUrl) {
+        try {
+          URL.revokeObjectURL(prev.pdfUrl)
+        } catch {
+          /* noop */
+        }
+      }
+      return { fase: 'cargando', tipo: 'corte-sem' }
+    })
+    setError(null)
+    const opts = { headers: { Authorization: `Bearer ${authToken}` } }
+    const cid = encodeURIComponent(contratoId)
+    const sid = encodeURIComponent(semanaConcId)
+    const pathPdf = `/informes/${cid}/pdf/cc-sem-001/semana/${sid}`
+    try {
+      const r = await fetchConFallback(pathPdf, opts)
+      if (!r || !r.ok) {
+        const msg = r ? await leerErrorRespuesta(r) : 'Sin respuesta'
+        setVistaPrevia({ fase: 'error', tipo: 'corte-sem', mensaje: msg })
+        return
+      }
+      const blob = await r.blob()
+      const pdfUrl = URL.createObjectURL(blob)
+      setVistaPrevia({ fase: 'ok', tipo: 'corte-sem-pdf', pdfUrl })
+    } catch (e) {
+      const msg = String(e?.message || e)
+      setVistaPrevia({ fase: 'error', tipo: 'corte-sem', mensaje: msg })
+    }
+  }
+
+  async function abrirVistaPreviaMemoriaSemanal(itemNumero) {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !semanaConcId) {
+      setVistaPrevia({ fase: 'error', tipo: 'memoria-sem', mensaje: 'Selecciona la semana.', itemNumero })
+      return
+    }
+    setVistaPrevia((prev) => {
+      if (prev?.pdfUrl) {
+        try {
+          URL.revokeObjectURL(prev.pdfUrl)
+        } catch {
+          /* noop */
+        }
+      }
+      return { fase: 'cargando', tipo: 'memoria-sem', itemNumero }
+    })
+    setError(null)
+    const q = encodeURIComponent(itemNumero)
+    const opts = { headers: { Authorization: `Bearer ${authToken}` } }
+    const cid = encodeURIComponent(contratoId)
+    const sid = encodeURIComponent(semanaConcId)
+    const pathPdf = `/informes/${cid}/pdf/cc-sem-002/semana/${sid}?item_numero=${q}`
+    try {
+      const r = await fetchConFallback(pathPdf, opts)
+      if (!r || !r.ok) {
+        const msg = r ? await leerErrorRespuesta(r) : 'Sin respuesta'
+        setVistaPrevia({ fase: 'error', tipo: 'memoria-sem', mensaje: msg, itemNumero })
+        return
+      }
+      const blob = await r.blob()
+      const pdfUrl = URL.createObjectURL(blob)
+      setVistaPrevia({ fase: 'ok', tipo: 'memoria-sem-pdf', pdfUrl, itemNumero })
+    } catch (e) {
+      const msg = String(e?.message || e)
+      setVistaPrevia({ fase: 'error', tipo: 'memoria-sem', mensaje: msg, itemNumero })
+    }
+  }
+
+  async function abrirVistaPreviaMemoriaSemanalCompleto() {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !semanaConcId) {
+      setVistaPrevia({ fase: 'error', tipo: 'memoria-sem-todos', mensaje: 'Selecciona la semana.' })
+      return
+    }
+    setVistaPrevia((prev) => {
+      if (prev?.pdfUrl) {
+        try {
+          URL.revokeObjectURL(prev.pdfUrl)
+        } catch {
+          /* noop */
+        }
+      }
+      return { fase: 'cargando', tipo: 'memoria-sem-todos' }
+    })
+    setError(null)
+    const opts = { headers: { Authorization: `Bearer ${authToken}` } }
+    const cid = encodeURIComponent(contratoId)
+    const sid = encodeURIComponent(semanaConcId)
+    const pathPdf = `/informes/${cid}/pdf/cc-sem-002/semana/${sid}/completo`
+    try {
+      const r = await fetchConFallback(pathPdf, opts)
+      if (!r || !r.ok) {
+        const msg = r ? await leerErrorRespuesta(r) : 'Sin respuesta'
+        setVistaPrevia({ fase: 'error', tipo: 'memoria-sem-todos', mensaje: msg })
+        return
+      }
+      const blob = await r.blob()
+      const pdfUrl = URL.createObjectURL(blob)
+      setVistaPrevia({ fase: 'ok', tipo: 'memoria-sem-todos-pdf', pdfUrl })
+    } catch (e) {
+      const msg = String(e?.message || e)
+      setVistaPrevia({ fase: 'error', tipo: 'memoria-sem-todos', mensaje: msg })
+    }
+  }
+
+  async function abrirVistaPreviaCorteMensual() {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !actaConcId) {
+      setVistaPrevia({ fase: 'error', tipo: 'corte-mes', mensaje: 'Selecciona el acta RPO.' })
+      return
+    }
+    setVistaPrevia((prev) => {
+      if (prev?.pdfUrl) {
+        try {
+          URL.revokeObjectURL(prev.pdfUrl)
+        } catch {
+          /* noop */
+        }
+      }
+      return { fase: 'cargando', tipo: 'corte-mes' }
+    })
+    setError(null)
+    const opts = { headers: { Authorization: `Bearer ${authToken}` } }
+    const cid = encodeURIComponent(contratoId)
+    const aid = encodeURIComponent(actaConcId)
+    const pathPdf = `/informes/${cid}/pdf/cc-mes-001/acta/${aid}`
+    try {
+      const r = await fetchConFallback(pathPdf, opts)
+      if (!r || !r.ok) {
+        const msg = r ? await leerErrorRespuesta(r) : 'Sin respuesta'
+        setVistaPrevia({ fase: 'error', tipo: 'corte-mes', mensaje: msg })
+        return
+      }
+      const blob = await r.blob()
+      const pdfUrl = URL.createObjectURL(blob)
+      setVistaPrevia({ fase: 'ok', tipo: 'corte-mes-pdf', pdfUrl })
+    } catch (e) {
+      const msg = String(e?.message || e)
+      setVistaPrevia({ fase: 'error', tipo: 'corte-mes', mensaje: msg })
+    }
+  }
+
+  async function abrirVistaPreviaMemoriaMensual(itemNumero) {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !actaConcId) {
+      setVistaPrevia({ fase: 'error', tipo: 'memoria-mes', mensaje: 'Selecciona el acta RPO.', itemNumero })
+      return
+    }
+    setVistaPrevia((prev) => {
+      if (prev?.pdfUrl) {
+        try {
+          URL.revokeObjectURL(prev.pdfUrl)
+        } catch {
+          /* noop */
+        }
+      }
+      return { fase: 'cargando', tipo: 'memoria-mes', itemNumero }
+    })
+    setError(null)
+    const q = encodeURIComponent(itemNumero)
+    const opts = { headers: { Authorization: `Bearer ${authToken}` } }
+    const cid = encodeURIComponent(contratoId)
+    const aid = encodeURIComponent(actaConcId)
+    const pathPdf = `/informes/${cid}/pdf/cc-mes-002/acta/${aid}?item_numero=${q}`
+    try {
+      const r = await fetchConFallback(pathPdf, opts)
+      if (!r || !r.ok) {
+        const msg = r ? await leerErrorRespuesta(r) : 'Sin respuesta'
+        setVistaPrevia({ fase: 'error', tipo: 'memoria-mes', mensaje: msg, itemNumero })
+        return
+      }
+      const blob = await r.blob()
+      const pdfUrl = URL.createObjectURL(blob)
+      setVistaPrevia({ fase: 'ok', tipo: 'memoria-mes-pdf', pdfUrl, itemNumero })
+    } catch (e) {
+      const msg = String(e?.message || e)
+      setVistaPrevia({ fase: 'error', tipo: 'memoria-mes', mensaje: msg, itemNumero })
+    }
+  }
+
+  function nombreArchivoDesdeContentDisposition(cd) {
+    if (!cd || typeof cd !== 'string') return null
+    const u = /filename\*=UTF-8''([^;\n]+)/i.exec(cd)
+    if (u) return decodeURIComponent(u[1].trim())
+    const q = /filename="([^"]+)"/i.exec(cd)
+    if (q) return q[1]
+    const nq = /filename=([^;\n]+)/i.exec(cd)
+    if (nq) return nq[1].replace(/^["']|["']$/g, '').trim()
+    return null
+  }
+
+  /** Misma ruta que el PDF «limpio» pero con `/con-sello-firma` (huella SHA-256 + firma de perfil). */
+  function rutaPdfConcConSello(rutaRelativa) {
+    const s = String(rutaRelativa || '')
+    if (s.includes('/con-sello-firma')) return s
+    const qi = s.indexOf('?')
+    if (qi === -1) return `${s}/con-sello-firma`
+    return `${s.slice(0, qi)}/con-sello-firma${s.slice(qi)}`
+  }
+
+  async function descargarPdfConc(rutaRelativa, fallbackNombre) {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    setConcPdfBusy(true)
+    setError(null)
+    try {
+      const r = await fetchConFallback(rutaRelativa, { headers: { Authorization: `Bearer ${authToken}` } })
+      if (!r?.ok) {
+        setError(r ? await leerErrorRespuesta(r) : 'Sin respuesta')
+        return
+      }
+      const blob = await r.blob()
+      const name = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || fallbackNombre
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setConcPdfBusy(false)
+    }
+  }
+
+  async function registrarFirmaConc(formatoCodigo, contextoTipo, contextoId) {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contextoId === '' || contextoId == null) {
+      setError('Selecciona semana o acta.')
+      return
+    }
+    const ctx = parseInt(String(contextoId), 10)
+    if (!Number.isFinite(ctx)) {
+      setError('Identificador de contexto no válido.')
+      return
+    }
+    setFirmaRegistroBusy(formatoCodigo)
+    setError(null)
+    const cod = encodeURIComponent(formatoCodigo)
+    try {
+      const r = await fetchConFallback(
+        `/informes/${contratoId}/ccd/contexto/${contextoTipo}/${ctx}/registrar-firma/${cod}`,
+        { method: 'POST', headers: { Authorization: `Bearer ${authToken}` } }
+      )
+      if (!r?.ok) {
+        setError(r ? await leerErrorRespuesta(r) : 'No se pudo registrar la firma.')
+        return
+      }
+      const rr = await fetchConFallback(
+        `/informes/${contratoId}/ccd/contexto/${contextoTipo}/${ctx}/firmas-registradas/${cod}`,
+        { headers: { Authorization: `Bearer ${authToken}` } }
+      )
+      if (rr?.ok) {
+        const data = await rr.json()
+        setFirmasCcd((prev) => ({ ...prev, [formatoCodigo]: data }))
+      }
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setFirmaRegistroBusy(null)
+    }
+  }
+
+  async function descargarExcelMemoriaCorteCompleto() {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !corteId) {
+      setError('Selecciona contrato y corte.')
+      return
+    }
+    setExcelBusy('todos')
+    setError(null)
+    const cid = encodeURIComponent(contratoId)
+    const cor = encodeURIComponent(corteId)
+    const path = `/informes/${cid}/excel/memoria-corte-completo/${cor}`
+    try {
+      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
+      if (!r || !r.ok) {
+        setError(r ? await leerErrorRespuesta(r) : 'Sin respuesta')
+        return
+      }
+      const blob = await r.blob()
+      const name = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || 'memoria-corte.xlsx'
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setExcelBusy(null)
+    }
+  }
+
+  async function descargarExcelMemoriaItem(itemNumero) {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !corteId) {
+      setError('Selecciona contrato y corte.')
+      return
+    }
+    setExcelBusy(itemNumero)
+    setError(null)
+    const q = encodeURIComponent(itemNumero)
+    const cid = encodeURIComponent(contratoId)
+    const cor = encodeURIComponent(corteId)
+    const path = `/informes/${cid}/excel/memoria-item/${cor}?item_numero=${q}`
+    try {
+      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
+      if (!r || !r.ok) {
+        setError(r ? await leerErrorRespuesta(r) : 'Sin respuesta')
+        return
+      }
+      const blob = await r.blob()
+      const name = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || 'memoria-item.xlsx'
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setExcelBusy(null)
+    }
+  }
+
+  async function descargarExcelCorteSubcontratista() {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !corteId) {
+      setError('Selecciona contrato y corte.')
+      return
+    }
+    setExcelBusy('corte')
+    setError(null)
+    const cid = encodeURIComponent(contratoId)
+    const cor = encodeURIComponent(corteId)
+    const path = `/informes/${cid}/excel/corte-subcontratista/${cor}`
+    try {
+      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
+      if (!r || !r.ok) {
+        setError(r ? await leerErrorRespuesta(r) : 'Sin respuesta')
+        return
+      }
+      const blob = await r.blob()
+      const name = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || 'corte-subcontratista.xlsx'
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setExcelBusy(null)
+    }
+  }
+
+  async function descargarExcelCcSem001() {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !semanaConcId) {
+      setError('Selecciona contrato y semana de conciliación.')
+      return
+    }
+    setExcelBusy('sem001')
+    setError(null)
+    const cid = encodeURIComponent(contratoId)
+    const sid = encodeURIComponent(semanaConcId)
+    const path = `/informes/${cid}/excel/cc-sem-001/semana/${sid}`
+    try {
+      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
+      if (!r || !r.ok) {
+        setError(r ? await leerErrorRespuesta(r) : 'Sin respuesta')
+        return
+      }
+      const blob = await r.blob()
+      const name = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || 'CC-SEM-001.xlsx'
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setExcelBusy(null)
+    }
+  }
+
+  async function descargarExcelCcSem002Completo() {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !semanaConcId) {
+      setError('Selecciona contrato y semana de conciliación.')
+      return
+    }
+    setExcelBusy('sem2-all')
+    setError(null)
+    const cid = encodeURIComponent(contratoId)
+    const sid = encodeURIComponent(semanaConcId)
+    const path = `/informes/${cid}/excel/cc-sem-002/semana/${sid}/completo`
+    try {
+      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
+      if (!r || !r.ok) {
+        setError(r ? await leerErrorRespuesta(r) : 'Sin respuesta')
+        return
+      }
+      const blob = await r.blob()
+      const name = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || 'CC-SEM-002-todos.xlsx'
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setExcelBusy(null)
+    }
+  }
+
+  async function descargarExcelCcSem002Item(itemNumero) {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !semanaConcId || !itemNumero) {
+      setError('Selecciona contrato, semana e ítem.')
+      return
+    }
+    const key = `s2:${itemNumero}`
+    setExcelBusy(key)
+    setError(null)
+    const cid = encodeURIComponent(contratoId)
+    const sid = encodeURIComponent(semanaConcId)
+    const q = encodeURIComponent(itemNumero)
+    const path = `/informes/${cid}/excel/cc-sem-002/semana/${sid}?item_numero=${q}`
+    try {
+      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
+      if (!r || !r.ok) {
+        setError(r ? await leerErrorRespuesta(r) : 'Sin respuesta')
+        return
+      }
+      const blob = await r.blob()
+      const name = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || `CC-SEM-002-${itemNumero}.xlsx`
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setExcelBusy(null)
+    }
+  }
+
   const fmtFecha = d => d
     ? new Date(d + 'T12:00:00').toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric' })
     : '?'
 
   const card = {
-    background: t.card, borderRadius: '12px',
+    background: t.bgCard, borderRadius: '12px',
     border: `1px solid ${t.border}`, padding: '20px', marginBottom: '14px',
     boxShadow: `0 10px 24px ${t.border}33`
+  }
+  /** Tarjeta principal de informes de subcontratista: se distingue del fondo de página. */
+  const cardFormatosSub = {
+    ...card,
+    padding: fontSize === 'small' ? '14px 16px' : fontSize === 'large' ? '22px 20px' : '18px 18px',
+    background: `linear-gradient(165deg, ${t.primary}16 0%, ${t.bgCard} 42%, ${t.bg} 100%)`,
+    border: `1px solid ${t.primary}40`,
+    boxShadow: `0 12px 28px ${t.primary}18`,
   }
   const sectionTitle = {
     fontSize: f.base + 'px', fontWeight: '800', color: t.text, marginBottom: '14px'
@@ -336,11 +1711,32 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     color: t.textMuted, letterSpacing: '0.8px', textTransform: 'uppercase',
     marginBottom: '8px'
   }
+  /** Etiquetas del bloque Formatos Subcontratista (escala con Pequeño/Mediano/Grande). */
+  const labelSub = {
+    display: 'block',
+    fontSize: ui.label + 'px',
+    fontWeight: '700',
+    color: t.textMuted,
+    letterSpacing: fontSize === 'small' ? '0.5px' : '0.75px',
+    textTransform: 'uppercase',
+    marginBottom: fontSize === 'small' ? '5px' : '7px',
+  }
   const select = {
     width: '100%', padding: '9px 12px', borderRadius: '7px',
     border: `1px solid ${t.border}`, background: t.bg,
     color: t.text, fontSize: f.base + 'px', outline: 'none',
     cursor: 'pointer'
+  }
+  const selectSub = {
+    width: '100%',
+    padding: fontSize === 'small' ? '7px 10px' : fontSize === 'large' ? '10px 14px' : '8px 12px',
+    borderRadius: '7px',
+    border: `1px solid ${t.border}`,
+    background: t.bg,
+    color: t.text,
+    fontSize: ui.body + 'px',
+    outline: 'none',
+    cursor: 'pointer',
   }
   const infoBox = {
     marginTop: '10px', padding: '10px 12px', borderRadius: '8px',
@@ -348,17 +1744,119 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     fontSize: f.sub + 'px', color: t.textMuted,
     display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '4px 10px'
   }
+  const infoBoxSub = {
+    marginTop: '8px',
+    padding: fontSize === 'small' ? '8px 10px' : '10px 12px',
+    borderRadius: '8px',
+    background: t.primary + '11',
+    border: `1px solid ${t.primary}33`,
+    fontSize: ui.hint + 'px',
+    color: t.textMuted,
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+    gap: '4px 8px',
+  }
   const btnVer = (dis) => ({
-    padding: '8px 16px', borderRadius: '7px', border: 'none',
+    padding: `${fontSize === 'small' ? 6 : 7}px ${fontSize === 'large' ? 18 : 14}px`,
+    borderRadius: '7px', border: 'none',
     background: dis ? t.border : t.primary, color: 'white',
-    fontWeight: '700', fontSize: f.sub + 'px',
+    fontWeight: '700', fontSize: ui.body + 'px',
     cursor: dis ? 'not-allowed' : 'pointer', opacity: dis ? 0.6 : 1,
     whiteSpace: 'nowrap', flexShrink: 0
+  })
+  /** Botón solo icono: descarga Excel (tooltip en title). */
+  const btnIconoExcel = (dis) => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: ui.iconBtn,
+    minWidth: ui.iconBtn,
+    height: ui.iconBtn - 4,
+    padding: 0,
+    borderRadius: '7px',
+    border: `2px solid ${dis ? t.border : t.primary}`,
+    background: dis ? t.border + '22' : 'transparent',
+    color: dis ? t.textMuted : t.primary,
+    cursor: dis ? 'not-allowed' : 'pointer',
+    opacity: dis ? 0.5 : 1,
+    flexShrink: 0,
+  })
+  /** Botón icono barra CCD: color por tipo de acción (alineado al estilo «dashboard» de la plataforma). */
+  const _ccdBar = {
+    vista: { bd: '#38bdf8', bg: '#e0f2fe', sh: '0 2px 10px rgba(14,165,233,0.28)' },
+    pdf: { bd: '#a78bfa', bg: '#ede9fe', sh: '0 2px 10px rgba(124,58,237,0.22)' },
+    excel: { bd: '#34d399', bg: '#d1fae5', sh: '0 2px 10px rgba(5,150,105,0.22)' },
+    firma: { bd: '#fb923c', bg: '#ffedd5', sh: '0 2px 10px rgba(234,88,12,0.2)' },
+  }
+  const btnCcdToolbar = (dis, role) => {
+    const x = _ccdBar[role] || _ccdBar.vista
+    return {
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: Math.max(32, ui.iconBtn - 2),
+      minWidth: Math.max(32, ui.iconBtn - 2),
+      height: Math.max(30, ui.iconBtn - 6),
+      padding: 0,
+      borderRadius: '9px',
+      border: `2px solid ${dis ? t.border : x.bd}`,
+      background: dis ? t.border + '33' : x.bg,
+      boxShadow: dis ? 'none' : x.sh,
+      cursor: dis ? 'not-allowed' : 'pointer',
+      opacity: dis ? 0.45 : 1,
+      flexShrink: 0,
+      transition: 'transform 0.12s ease, box-shadow 0.12s ease',
+    }
+  }
+  const chipFirmaEstado = (ok) => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '2px',
+    padding: '2px 7px',
+    borderRadius: '6px',
+    fontSize: fontSize === 'small' ? 10 : 11,
+    fontWeight: '800',
+    letterSpacing: '0.02em',
+    background: ok ? t.primary + '20' : t.border + '44',
+    color: t.text,
+    border: `1px solid ${ok ? t.primary + '50' : t.border}`,
   })
   const itemRow = {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     gap: '10px', padding: '10px 12px', borderRadius: '8px',
     border: `1px solid ${t.border}`, marginBottom: '8px', background: t.bg
+  }
+  /** Filas de ítem / acciones en Formatos Subcontratista (más compactas). */
+  const itemRowFmt = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+    padding: ui.pIn,
+    borderRadius: '8px',
+    border: `1px solid ${t.border}`,
+    marginBottom: fontSize === 'small' ? '6px' : '8px',
+    background: t.bg,
+  }
+  const tarjetaFormato = {
+    border: `1px solid ${t.border}`,
+    borderRadius: '10px',
+    overflow: 'hidden',
+    background: `linear-gradient(180deg, ${t.primary}0a 0%, ${t.bgCard} 100%)`,
+  }
+  const tarjetaFormatoHead = {
+    width: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '10px',
+    padding: ui.pHead,
+    border: 'none',
+    borderBottom: `1px solid ${t.border}`,
+    background: t.primary + '0c',
+    cursor: 'pointer',
+    textAlign: 'left',
+    font: 'inherit',
   }
   const roadmapCard = {
     border: `1px dashed ${t.border}`,
@@ -367,33 +1865,143 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     background: t.bg
   }
 
-  function aplicarFirmante(campo, usuarioId) {
+  function aplicarFirmante(campo, usuarioId, codigoFormato) {
     const u = firmantesCcd.find((x) => String(x.id) === String(usuarioId))
-    if (!u) {
-      if (campo === 'elaboro') {
-        setCfgFirmaCc001((p) => ({ ...p, elaboro_nombre: '', elaboro_cargo: '' }))
-      } else {
-        setCfgFirmaCc001((p) => ({ ...p, reviso_nombre: '', reviso_cargo: '' }))
+    setCfgFirmaCcd((p) => {
+      const cur = p[codigoFormato] || {
+        elaboro_nombre: '',
+        elaboro_cargo: '',
+        elaboro_usuario_id: null,
+        reviso_nombre: '',
+        reviso_cargo: '',
+        reviso_usuario_id: null,
+        aprobo_nombre: '',
+        aprobo_cargo: '',
+        aprobo_usuario_id: null,
+        estilo_pdf: estiloDefectoPorCodigo(codigoFormato),
       }
+      if (!u) {
+        if (campo === 'elaboro') {
+          return {
+            ...p,
+            [codigoFormato]: {
+              ...cur,
+              elaboro_nombre: '',
+              elaboro_cargo: '',
+              elaboro_usuario_id: null,
+            },
+          }
+        }
+        if (campo === 'aprobo') {
+          return {
+            ...p,
+            [codigoFormato]: {
+              ...cur,
+              aprobo_nombre: '',
+              aprobo_cargo: '',
+              aprobo_usuario_id: null,
+            },
+          }
+        }
+        return {
+          ...p,
+          [codigoFormato]: {
+            ...cur,
+            reviso_nombre: '',
+            reviso_cargo: '',
+            reviso_usuario_id: null,
+          },
+        }
+      }
+      if (campo === 'elaboro') {
+        return {
+          ...p,
+          [codigoFormato]: {
+            ...cur,
+            elaboro_nombre: u.nombre_completo,
+            elaboro_cargo: u.cargo,
+            elaboro_usuario_id: u.id,
+          },
+        }
+      }
+      if (campo === 'aprobo') {
+        return {
+          ...p,
+          [codigoFormato]: {
+            ...cur,
+            aprobo_nombre: u.nombre_completo,
+            aprobo_cargo: u.cargo,
+            aprobo_usuario_id: u.id,
+          },
+        }
+      }
+      return {
+        ...p,
+        [codigoFormato]: {
+          ...cur,
+          reviso_nombre: u.nombre_completo,
+          reviso_cargo: u.cargo,
+          reviso_usuario_id: u.id,
+        },
+      }
+    })
+  }
+
+  /** Plantilla PDF sin datos (misma modal de vista previa que el resto de informes). */
+  async function abrirPreviewPlantillaVacia(codigoFormato) {
+    const authToken = getAuthToken()
+    if (!authToken || !contratoId) {
+      setError('Sesión no autenticada.')
       return
     }
-    if (campo === 'elaboro') {
-      setCfgFirmaCc001((p) => ({ ...p, elaboro_nombre: u.nombre_completo, elaboro_cargo: u.cargo }))
-    } else {
-      setCfgFirmaCc001((p) => ({ ...p, reviso_nombre: u.nombre_completo, reviso_cargo: u.cargo }))
+    setVistaPrevia((prev) => {
+      if (prev?.pdfUrl) {
+        try {
+          URL.revokeObjectURL(prev.pdfUrl)
+        } catch {
+          /* noop */
+        }
+      }
+      return { fase: 'cargando', tipo: 'idu-plantilla-vacia' }
+    })
+    setError(null)
+    try {
+      const r = await fetchConFallback(
+        `/informes/${contratoId}/ccd/preview-plantilla-vacia/${encodeURIComponent(codigoFormato)}`,
+        { headers: { Authorization: `Bearer ${authToken}` } }
+      )
+      if (!r.ok) {
+        setVistaPrevia({
+          fase: 'error',
+          tipo: 'idu-plantilla-vacia',
+          mensaje: await leerErrorRespuesta(r),
+        })
+        return
+      }
+      const blob = await r.blob()
+      const pdfUrl = URL.createObjectURL(blob)
+      setVistaPrevia({ fase: 'ok', tipo: 'idu-plantilla-vacia-pdf', pdfUrl })
+    } catch (e) {
+      setVistaPrevia({
+        fase: 'error',
+        tipo: 'idu-plantilla-vacia',
+        mensaje: String(e?.message || e),
+      })
     }
   }
 
-  async function guardarCfgFirmaCc001() {
+  async function guardarCfgFirmaCcd(codigoFormato) {
     const authToken = getAuthToken()
     if (!authToken || !contratoId) return
+    const body = cfgFirmaCcd[codigoFormato]
+    if (!body) return
     setGuardandoFirmaCcd(true)
     setError(null)
     try {
-      const r = await fetchConFallback(`/informes/${contratoId}/ccd/config-firma/CC-SUB-001`, {
+      const r = await fetchConFallback(`/informes/${contratoId}/ccd/config-firma/${encodeURIComponent(codigoFormato)}`, {
         method: 'PUT',
         headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(cfgFirmaCc001),
+        body: JSON.stringify(body),
       })
       if (!r.ok) {
         const msg = await leerErrorRespuesta(r)
@@ -407,34 +2015,207 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     }
   }
 
+  function estiloDefectoPorCodigo(cod) {
+    return typeof cod === 'string' && cod.endsWith('-001')
+      ? {
+          section_bar_bg: '#e5e7eb',
+          section_bar_text: '#111827',
+          thead_bg: '#e8e8e8',
+          row_even_bg: '#ffffff',
+          row_odd_bg: '#f9fafb',
+          subtotal_bg: '#dbeafe',
+          ...(cod === 'CC-SEM-001' || cod === 'CC-MES-001'
+            ? { capitulo_subtotal_bg: '#93c5fd' }
+            : {}),
+        }
+      : {
+          section_bar_bg: '#e5e7eb',
+          section_bar_text: '#111827',
+          thead_bg: '#f3f4f6',
+          row_even_bg: '#f8fafc',
+          row_odd_bg: '#ffffff',
+          subtotal_bg: '#e5e7eb',
+        }
+  }
+
+  function setEstiloCampo(codigoFormato, campo, valor) {
+    setCfgFirmaCcd((p) => {
+      const cur = p[codigoFormato] || {}
+      const est = { ...(cur.estilo_pdf || estiloDefectoPorCodigo(codigoFormato)), [campo]: valor }
+      return { ...p, [codigoFormato]: { ...cur, estilo_pdf: est } }
+    })
+  }
+
+  function restaurarEstiloDefecto(codigoFormato) {
+    setCfgFirmaCcd((p) => ({
+      ...p,
+      [codigoFormato]: {
+        ...(p[codigoFormato] || {}),
+        estilo_pdf: estiloDefectoPorCodigo(codigoFormato),
+      },
+    }))
+  }
+
   return (
     <div style={{ maxWidth: '1080px', margin: '0 auto', padding: '8px' }}>
 
-      <div style={{ marginBottom: '18px' }}>
-        <div style={{ fontSize: f.title + 'px', fontWeight: '800', color: t.text }}>
-          Informes
-        </div>
-        <div style={{ fontSize: f.sub + 'px', color: t.textMuted, marginTop: '2px' }}>
-          Vista previa del mismo PDF que genera el servidor (informe de corte y memorias por ítem).
-        </div>
-        {biblioCcd.length > 0 && (
-          <div
-            style={{
-              marginTop: '12px',
-              padding: '12px 14px',
-              borderRadius: '8px',
-              border: `1px solid ${t.border}`,
-              background: t.bg,
-              fontSize: f.sub + 'px',
-              color: t.textMuted,
-            }}
-          >
-            <div style={{ fontWeight: '700', color: t.text, marginBottom: '10px' }}>Biblioteca de formatos (CCD)</div>
-            <div style={{ fontSize: Math.max(11, f.sub - 1) + 'px', color: t.textMuted, marginBottom: '10px' }}>
-              Pulsa un formato para ver u ocultar slots y opciones; el estado abierto/cerrado se recuerda en este navegador.
+      <div style={{ marginBottom: '14px' }}>
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: '12px',
+            textAlign: 'left',
+          }}
+        >
+          <div style={{ flex: '1 1 240px', minWidth: 0 }}>
+            <div style={{ fontSize: f.title + 'px', fontWeight: '800', color: t.text }}>
+              Informes
             </div>
-            {biblioCcd.map((fmt) => {
+            <div style={{ fontSize: f.sub + 'px', color: t.textMuted, marginTop: '2px', lineHeight: 1.45 }}>
+              Vista previa del mismo PDF que genera el servidor (informe de corte y memorias por ítem).
+            </div>
+          </div>
+          {biblioCcd.length > 0 && (
+            <div
+              style={{
+                flex: biblioPanelAbierto ? '1 1 360px' : '0 0 auto',
+                width: biblioPanelAbierto ? 'min(100%, 420px)' : 'auto',
+                maxWidth: '100%',
+                marginLeft: 'auto',
+              }}
+            >
+              <div
+                style={{
+                  borderRadius: '12px',
+                  border: '2px solid #0284c7',
+                  background: 'linear-gradient(165deg, #f0f9ff 0%, #e0f2fe 38%, #7dd3fc 72%, #38bdf8 100%)',
+                  boxShadow: '0 8px 28px rgba(2,132,199,0.22)',
+                  overflow: 'hidden',
+                  textAlign: 'left',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setBiblioPanelAbierto((v) => !v)}
+                  aria-expanded={biblioPanelAbierto}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'flex-start',
+                    gap: '10px',
+                    padding: ui.pHead,
+                    border: 'none',
+                    background: biblioPanelAbierto ? 'rgba(255,255,255,0.35)' : 'transparent',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    font: 'inherit',
+                  }}
+                >
+                  <span style={{ color: '#0369a1', flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+                    <IconoBiblioteca size={Math.round(ui.iconSvg + 6)} />
+                  </span>
+                  <span style={{ minWidth: 0, flex: 1 }}>
+                    <span
+                      style={{
+                        display: 'block',
+                        fontWeight: '800',
+                        fontSize: ui.cardTitle + 'px',
+                        color: '#0c4a6e',
+                        letterSpacing: '0.02em',
+                      }}
+                    >
+                      Biblioteca CCD
+                    </span>
+                    <span
+                      style={{
+                        display: 'block',
+                        fontSize: ui.hint + 'px',
+                        color: '#075985',
+                        marginTop: '2px',
+                        fontWeight: '500',
+                      }}
+                    >
+                      Plantillas, firmas y estilos PDF
+                    </span>
+                  </span>
+                  <span style={{ color: '#0369a1', fontSize: f.section + 2 + 'px', flexShrink: 0 }} aria-hidden>
+                    {biblioPanelAbierto ? '▼' : '▶'}
+                  </span>
+                </button>
+                {biblioPanelAbierto && (
+                <div
+                  style={{
+                    borderTop: '1px solid rgba(3,105,161,0.35)',
+                    padding: '10px 12px 14px',
+                    maxHeight: 'min(72vh, 760px)',
+                    overflowY: 'auto',
+                    fontSize: ui.body + 'px',
+                    color: '#0c4a6e',
+                    background: 'rgba(255,255,255,0.5)',
+                  }}
+                >
+            <div style={{ fontSize: ui.hint + 'px', color: '#075985', marginBottom: '10px', lineHeight: 1.45 }}>
+              Pulsa un formato para ver u ocultar slots y opciones; el estado abierto/cerrado se recuerda en este navegador.
+              {esPerfilInterventoria && (
+                <span style={{ display: 'block', marginTop: '6px' }}>
+                  Con tu perfil solo se listan formatos pensados para interventoría; el resto queda oculto.
+                </span>
+              )}
+            </div>
+            {biblioCcdVisible.length === 0 && esPerfilInterventoria ? (
+              <div
+                style={{
+                  padding: '12px',
+                  borderRadius: '8px',
+                  border: `1px dashed ${t.border}`,
+                  background: t.bgCard,
+                  color: t.textMuted,
+                  fontSize: Math.max(12, f.sub) + 'px',
+                }}
+              >
+                No hay formatos CCD habilitados para interventoría en este contrato. Los de subcontratista suelen gestionarlos contratista / operativo contratista.
+              </div>
+            ) : (
+            biblioCcdListaPlana.map((row) => {
+              if (row._tipo === 'titulo') {
+                return (
+                  <div
+                    key={row._key}
+                    style={{
+                      fontWeight: '800',
+                      fontSize: Math.max(12, f.sub) + 'px',
+                      color: t.text,
+                      marginBottom: '6px',
+                      marginTop: row._key === 'tit-clara' ? '2px' : '16px',
+                      paddingLeft: '2px',
+                      letterSpacing: '0.02em',
+                    }}
+                  >
+                    {row.texto}
+                  </div>
+                )
+              }
+              const fmt = row.fmt
               const abierto = !!ccdExpanded[fmt.codigo]
+              const cfgF = cfgFirmaCcd[fmt.codigo] || {
+                elaboro_nombre: '',
+                elaboro_cargo: '',
+                elaboro_usuario_id: null,
+                reviso_nombre: '',
+                reviso_cargo: '',
+                reviso_usuario_id: null,
+                aprobo_nombre: '',
+                aprobo_cargo: '',
+                aprobo_usuario_id: null,
+                estilo_pdf: estiloDefectoPorCodigo(fmt.codigo),
+              }
+              const puedeEditarSlotsConfig = (fmt.slots_firma || []).some((s) => s.origen === 'configuracion')
+              const puedePersonalizarEstiloPdf =
+                typeof fmt.codigo === 'string' && (fmt.codigo.endsWith('-001') || fmt.codigo.endsWith('-002'))
               return (
               <div
                 key={fmt.codigo}
@@ -443,7 +2224,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                   borderRadius: '8px',
                   border: `1px solid ${t.border}`,
                   overflow: 'hidden',
-                  background: t.card,
+                  background: t.bgCard,
                 }}
               >
                 <button
@@ -463,9 +2244,22 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                     font: 'inherit',
                   }}
                 >
-                  <span>
-                    <span style={{ color: t.primary, fontWeight: '800' }}>{fmt.codigo}</span>
-                    {fmt.titulo ? ` — ${fmt.titulo}` : ''}
+                  <span style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '6px', minWidth: 0 }}>
+                    <span>
+                      <span style={{ color: t.primary, fontWeight: '800' }}>{fmt.codigo}</span>
+                      {fmt.titulo ? ` — ${fmt.titulo}` : ''}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: Math.max(11, f.sub - 1) + 'px',
+                        fontWeight: '600',
+                        color: fmt.acceso_interventoria === true ? '#059669' : '#64748b',
+                        whiteSpace: 'nowrap',
+                      }}
+                      title="Si es «No», el formato no se muestra a usuarios de interventoría en esta biblioteca."
+                    >
+                      · Interventoría: {fmt.acceso_interventoria === true ? 'sí' : 'no'}
+                    </span>
                   </span>
                   <span style={{ color: t.textMuted, fontSize: '14px', flexShrink: 0 }} aria-hidden>
                     {abierto ? '▼' : '▶'}
@@ -473,6 +2267,41 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                 </button>
                 {abierto && (
                 <div style={{ padding: '12px', borderTop: `1px solid ${t.border}` }}>
+                {fmt.codigo === 'FO-IDU-EO-04-V2' && (
+                  <div style={{ marginBottom: '12px' }}>
+                    <button
+                      type="button"
+                      onClick={() => abrirPreviewPlantillaVacia(fmt.codigo)}
+                      disabled={
+                        vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-plantilla-vacia'
+                      }
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: '8px',
+                        border: `1px solid ${t.border}`,
+                        background: t.bgCard,
+                        color: t.text,
+                        fontWeight: '700',
+                        fontSize: Math.max(12, f.sub) + 'px',
+                        cursor:
+                          vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-plantilla-vacia'
+                            ? 'wait'
+                            : 'pointer',
+                        opacity:
+                          vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-plantilla-vacia'
+                            ? 0.75
+                            : 1,
+                      }}
+                    >
+                      {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-plantilla-vacia'
+                        ? 'Generando vista previa…'
+                        : 'Vista previa plantilla vacía (PDF)'}
+                    </button>
+                    <div style={{ fontSize: '10px', color: t.textMuted, marginTop: '6px', lineHeight: 1.4 }}>
+                      Misma vista previa en modal que en «Formatos Entidades Externas» (abajo).
+                    </div>
+                  </div>
+                )}
                 {(fmt.slots_firma || []).length > 0 && (
                   <div
                     style={{
@@ -495,7 +2324,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                         <div style={{ fontWeight: '800', color: t.text, fontSize: Math.max(11, f.sub - 1) + 'px', marginBottom: '6px' }}>
                           {slot.label}
                         </div>
-                        {slot.origen === 'configuracion' && fmt.codigo === 'CC-SUB-001' && (
+                        {slot.origen === 'configuracion' && puedeEditarSlotsConfig && (
                           <>
                             {slot.id === 'elaboro' && (
                               <>
@@ -503,7 +2332,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                                 <select
                                   style={{ ...select, fontSize: '13px', marginBottom: '6px' }}
                                   value=""
-                                  onChange={(e) => aplicarFirmante('elaboro', e.target.value)}
+                                  onChange={(e) => aplicarFirmante('elaboro', e.target.value, fmt.codigo)}
                                 >
                                   <option value="">— Elegir —</option>
                                   {firmantesCcd.map((u) => (
@@ -514,14 +2343,24 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                                 </select>
                                 <input
                                   placeholder="Nombre (editable)"
-                                  value={cfgFirmaCc001.elaboro_nombre}
-                                  onChange={(e) => setCfgFirmaCc001((p) => ({ ...p, elaboro_nombre: e.target.value }))}
+                                  value={cfgF.elaboro_nombre}
+                                  onChange={(e) =>
+                                    setCfgFirmaCcd((p) => ({
+                                      ...p,
+                                      [fmt.codigo]: { ...cfgF, elaboro_nombre: e.target.value },
+                                    }))
+                                  }
                                   style={{ ...select, marginBottom: '6px', fontSize: '13px' }}
                                 />
                                 <input
                                   placeholder="Cargo"
-                                  value={cfgFirmaCc001.elaboro_cargo}
-                                  onChange={(e) => setCfgFirmaCc001((p) => ({ ...p, elaboro_cargo: e.target.value }))}
+                                  value={cfgF.elaboro_cargo}
+                                  onChange={(e) =>
+                                    setCfgFirmaCcd((p) => ({
+                                      ...p,
+                                      [fmt.codigo]: { ...cfgF, elaboro_cargo: e.target.value },
+                                    }))
+                                  }
                                   style={{ ...select, fontSize: '13px' }}
                                 />
                               </>
@@ -532,7 +2371,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                                 <select
                                   style={{ ...select, fontSize: '13px', marginBottom: '6px' }}
                                   value=""
-                                  onChange={(e) => aplicarFirmante('reviso', e.target.value)}
+                                  onChange={(e) => aplicarFirmante('reviso', e.target.value, fmt.codigo)}
                                 >
                                   <option value="">— Elegir —</option>
                                   {firmantesCcd.map((u) => (
@@ -543,14 +2382,63 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                                 </select>
                                 <input
                                   placeholder="Nombre (editable)"
-                                  value={cfgFirmaCc001.reviso_nombre}
-                                  onChange={(e) => setCfgFirmaCc001((p) => ({ ...p, reviso_nombre: e.target.value }))}
+                                  value={cfgF.reviso_nombre}
+                                  onChange={(e) =>
+                                    setCfgFirmaCcd((p) => ({
+                                      ...p,
+                                      [fmt.codigo]: { ...cfgF, reviso_nombre: e.target.value },
+                                    }))
+                                  }
                                   style={{ ...select, marginBottom: '6px', fontSize: '13px' }}
                                 />
                                 <input
                                   placeholder="Cargo"
-                                  value={cfgFirmaCc001.reviso_cargo}
-                                  onChange={(e) => setCfgFirmaCc001((p) => ({ ...p, reviso_cargo: e.target.value }))}
+                                  value={cfgF.reviso_cargo}
+                                  onChange={(e) =>
+                                    setCfgFirmaCcd((p) => ({
+                                      ...p,
+                                      [fmt.codigo]: { ...cfgF, reviso_cargo: e.target.value },
+                                    }))
+                                  }
+                                  style={{ ...select, fontSize: '13px' }}
+                                />
+                              </>
+                            )}
+                            {slot.id === 'aprobo' && (
+                              <>
+                                <label style={{ fontSize: '11px', display: 'block', marginBottom: '4px' }}>Usuario / cargo (catálogo del contrato)</label>
+                                <select
+                                  style={{ ...select, fontSize: '13px', marginBottom: '6px' }}
+                                  value=""
+                                  onChange={(e) => aplicarFirmante('aprobo', e.target.value, fmt.codigo)}
+                                >
+                                  <option value="">— Elegir —</option>
+                                  {firmantesCcd.map((u) => (
+                                    <option key={u.id} value={u.id}>
+                                      {u.nombre_completo} ({u.cargo})
+                                    </option>
+                                  ))}
+                                </select>
+                                <input
+                                  placeholder="Nombre (editable)"
+                                  value={cfgF.aprobo_nombre || ''}
+                                  onChange={(e) =>
+                                    setCfgFirmaCcd((p) => ({
+                                      ...p,
+                                      [fmt.codigo]: { ...cfgF, aprobo_nombre: e.target.value },
+                                    }))
+                                  }
+                                  style={{ ...select, marginBottom: '6px', fontSize: '13px' }}
+                                />
+                                <input
+                                  placeholder="Cargo"
+                                  value={cfgF.aprobo_cargo || ''}
+                                  onChange={(e) =>
+                                    setCfgFirmaCcd((p) => ({
+                                      ...p,
+                                      [fmt.codigo]: { ...cfgF, aprobo_cargo: e.target.value },
+                                    }))
+                                  }
                                   style={{ ...select, fontSize: '13px' }}
                                 />
                               </>
@@ -574,10 +2462,180 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                     ))}
                   </div>
                 )}
-                {fmt.codigo === 'CC-SUB-001' && (
+                {puedePersonalizarEstiloPdf && (() => {
+                  const esPrev = cfgF.estilo_pdf || estiloDefectoPorCodigo(fmt.codigo)
+                  const tituloPersonal =
+                    fmt.codigo.endsWith('-002') ? 'Personaliza tu memoria' : 'Personaliza tu informe de corte'
+                  const subtituloPersonal =
+                    'Aquí va la paleta de tu contrato. A la derecha ves una vista previa que cambia al instante: prueba combinaciones sin abrir y cerrar el PDF.'
+                  const campos =
+                    fmt.codigo.endsWith('-001')
+                      ? [
+                          {
+                            k: 'thead_bg',
+                            title: 'Títulos de columna',
+                            hint: 'Fila donde aparecen CAPÍTULO, ÍTEM, DESCRIPCIÓN, cantidades…',
+                          },
+                          {
+                            k: 'row_even_bg',
+                            title: 'Cuerpo · filas pares',
+                            hint: 'Líneas 2, 4, 6… del listado de ítems aprobados',
+                          },
+                          {
+                            k: 'row_odd_bg',
+                            title: 'Cuerpo · filas impares',
+                            hint: 'Líneas 1, 3, 5… (se alternan con las pares)',
+                          },
+                          ...(fmt.codigo === 'CC-SEM-001' || fmt.codigo === 'CC-MES-001'
+                            ? [
+                                {
+                                  k: 'capitulo_subtotal_bg',
+                                  title: 'Subtotal por capítulo',
+                                  hint: 'Fila resaltada al cerrar cada capítulo (solo costo directo)',
+                                },
+                              ]
+                            : []),
+                          {
+                            k: 'subtotal_bg',
+                            title: 'Fila SUB TOTAL',
+                            hint: 'La banda del subtotal en dinero al pie de la tabla',
+                          },
+                        ]
+                      : [
+                          {
+                            k: 'section_bar_bg',
+                            title: 'Franja del bloque',
+                            hint: 'Fondo de «DETALLE DE CANTIDADES…» y de los títulos de fotos',
+                          },
+                          {
+                            k: 'section_bar_text',
+                            title: 'Texto en la franja',
+                            hint: 'Color de letra sobre esa barra (legible sobre el fondo)',
+                          },
+                          {
+                            k: 'thead_bg',
+                            title: 'Fila de encabezados',
+                            hint: 'Donde están N°, abscisas, OBSERVACIÓN…',
+                          },
+                          {
+                            k: 'row_even_bg',
+                            title: 'Detalle · filas pares',
+                            hint: 'Registros en líneas alternas del detalle',
+                          },
+                          {
+                            k: 'row_odd_bg',
+                            title: 'Detalle · filas impares',
+                            hint: 'Alternan con las pares para leer más fácil',
+                          },
+                          {
+                            k: 'subtotal_bg',
+                            title: 'Banda del total del ítem',
+                            hint: 'La fila de «CANTIDAD TOTAL DEL ÍTEM» bajo la tabla',
+                          },
+                        ]
+                  return (
+                  <div
+                    style={{
+                      marginTop: (fmt.slots_firma || []).length > 0 ? '14px' : '0',
+                      paddingTop: '12px',
+                      borderTop: `1px dashed ${t.border}`,
+                    }}
+                  >
+                    <div style={{ fontWeight: '800', color: t.text, fontSize: Math.max(13, f.sub + 1) + 'px', marginBottom: '6px' }}>
+                      {tituloPersonal}
+                    </div>
+                    <div style={{ fontSize: '11px', color: t.textMuted, marginBottom: '14px', lineHeight: 1.5, maxWidth: '720px' }}>
+                      {subtituloPersonal}
+                    </div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: '16px',
+                        alignItems: 'flex-start',
+                      }}
+                    >
+                      <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+                        {campos.map(({ k, title, hint }) => (
+                          <label
+                            key={k}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'flex-start',
+                              gap: '10px',
+                              marginBottom: '12px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <input
+                              type="color"
+                              value={esPrev[k] || '#ffffff'}
+                              onChange={(e) => setEstiloCampo(fmt.codigo, k, e.target.value)}
+                              style={{
+                                width: '40px',
+                                height: '28px',
+                                minWidth: '40px',
+                                padding: 0,
+                                border: `1px solid ${t.border}`,
+                                borderRadius: '6px',
+                                cursor: 'pointer',
+                                flexShrink: 0,
+                              }}
+                            />
+                            <span style={{ minWidth: 0 }}>
+                              <span style={{ display: 'block', fontSize: '12px', fontWeight: '700', color: t.text }}>{title}</span>
+                              <span style={{ display: 'block', fontSize: '10px', color: t.textMuted, marginTop: '2px', lineHeight: 1.35 }}>
+                                {hint}
+                              </span>
+                            </span>
+                          </label>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => restaurarEstiloDefecto(fmt.codigo)}
+                          style={{
+                            marginTop: '4px',
+                            padding: '6px 12px',
+                            borderRadius: '6px',
+                            border: `1px solid ${t.border}`,
+                            background: t.bgCard,
+                            color: t.textMuted,
+                            fontSize: '12px',
+                            fontWeight: '600',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Volver a los colores sugeridos
+                        </button>
+                      </div>
+                      <div
+                        style={{
+                          flex: '1 1 240px',
+                          maxWidth: '100%',
+                          position: 'sticky',
+                          top: '8px',
+                        }}
+                      >
+                        <div style={{ fontSize: '10px', fontWeight: '700', color: t.textMuted, marginBottom: '8px', letterSpacing: '0.02em' }}>
+                          Vista previa en vivo
+                        </div>
+                        <div style={{ fontSize: '9px', color: t.textMuted, marginBottom: '8px', lineHeight: 1.35 }}>
+                          Aproximación del PDF; los márgenes y tipografías finales pueden variar un poco al imprimir.
+                        </div>
+                        {fmt.codigo.endsWith('-001') ? (
+                          <CcdLivePreviewCorte es={esPrev} />
+                        ) : (
+                          <CcdLivePreviewMemoria es={esPrev} />
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  )
+                })()}
+                {(puedeEditarSlotsConfig || puedePersonalizarEstiloPdf) && (
                   <button
                     type="button"
-                    onClick={guardarCfgFirmaCc001}
+                    onClick={() => guardarCfgFirmaCcd(fmt.codigo)}
                     disabled={guardandoFirmaCcd}
                     style={{
                       marginTop: '10px',
@@ -591,18 +2649,24 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                       opacity: guardandoFirmaCcd ? 0.7 : 1,
                     }}
                   >
-                    {guardandoFirmaCcd ? 'Guardando…' : 'Guardar firmas (Elaboró / Revisó)'}
+                    {guardandoFirmaCcd ? 'Guardando…' : `Guardar biblioteca · ${fmt.codigo}`}
                   </button>
                 )}
                 </div>
                 )}
               </div>
-            )})}
-            <div style={{ fontSize: Math.max(11, f.sub - 1) + 'px', marginTop: '4px' }}>
-              Las plantillas PDF están en código; la asignación de formatos por contrato podrá filtrarse más adelante.
+            );
+          })
+            )}
+            <div style={{ fontSize: ui.hint + 'px', marginTop: '6px', color: '#075985', lineHeight: 1.4 }}>
+              Las plantillas PDF están en código; la visibilidad para interventoría la define cada formato (metadato en servidor).
             </div>
-          </div>
-        )}
+                </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -612,18 +2676,50 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
         </div>
       )}
 
-      <div style={card}>
-        <div style={sectionTitle}>
-          Formato activo: Corte Subcontratista
-        </div>
-        <div style={{ color: t.textMuted, fontSize: f.sub + 'px', marginBottom: '14px' }}>
+      <div style={cardFormatosSub}>
+        <button
+          type="button"
+          onClick={toggleFormatosSub}
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            padding: '0',
+            marginBottom: formatosSubAbierto ? '14px' : '0',
+            border: 'none',
+            background: 'transparent',
+            cursor: 'pointer',
+            textAlign: 'left',
+            font: 'inherit',
+            borderBottom: formatosSubAbierto ? `1px solid ${t.border}` : 'none',
+            paddingBottom: formatosSubAbierto ? '14px' : '0',
+          }}
+        >
+          <span style={{ minWidth: 0 }}>
+            <div style={{ fontSize: f.base + 'px', fontWeight: '800', color: t.text }}>
+              Formatos Subcontratista
+            </div>
+            <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '3px', fontWeight: '500', lineHeight: 1.35 }}>
+              Corte Subcontratista · vista previa PDF (CC-SUB-001 / CC-SUB-002). Cada formato en su tarjeta; el mismo patrón servirá para nuevos formatos.
+            </div>
+          </span>
+          <span style={{ color: t.textMuted, fontSize: f.section + 2 + 'px', flexShrink: 0 }} aria-hidden>
+            {formatosSubAbierto ? '▼' : '▶'}
+          </span>
+        </button>
+
+        {formatosSubAbierto && (
+        <>
+        <div style={{ color: t.textMuted, fontSize: ui.hint + 'px', marginBottom: ui.gap + 'px', lineHeight: 1.45 }}>
           «Vista previa» abre el PDF en una ventana dentro de la página (mismo documento que imprimirías o guardarías).
         </div>
 
-        <div style={{ marginBottom: '14px' }}>
-          <label style={label}>Subcontratista</label>
+        <div style={{ marginBottom: ui.gap + 'px' }}>
+          <label style={labelSub}>Subcontratista</label>
           <select
-            style={select}
+            style={selectSub}
             value={subId}
             onChange={onSubChange}
             disabled={cargandoSub}
@@ -636,7 +2732,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
             ))}
           </select>
           {subSel && (
-            <div style={infoBox}>
+            <div style={infoBoxSub}>
               <span><b>NIT:</b> {subSel.nit || '—'}</span>
               <span><b>Contacto:</b> {subSel.nombre_contacto || '—'}</span>
               <span><b>Tel:</b> {subSel.telefono || '—'}</span>
@@ -645,10 +2741,10 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
         </div>
 
         {subId && (
-          <div style={{ marginBottom: '14px' }}>
-            <label style={label}>Corte</label>
+          <div style={{ marginBottom: ui.gap + 'px' }}>
+            <label style={labelSub}>Corte</label>
             <select
-              style={select}
+              style={selectSub}
               value={corteId}
               onChange={onCorteChange}
               disabled={cargandoCor}
@@ -663,7 +2759,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
               ))}
             </select>
             {corteSel && (
-              <div style={infoBox}>
+              <div style={infoBoxSub}>
                 <span><b>Período:</b> {fmtFecha(corteSel.fecha_inicio)} → {fmtFecha(corteSel.fecha_fin)}</span>
                 <span><b>Tipo:</b> {(corteSel.tipo_periodo || '').toUpperCase()}</span>
                 <span><b>Corte N°:</b> {corteSel.consecutivo}</span>
@@ -673,68 +2769,1332 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
         )}
 
         {corteId && (
-          <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-
-            <div style={itemRow}>
-              <div>
-                <div style={{ fontWeight: '700', color: t.text, fontSize: f.base + 'px' }}>
-                  Informe de Corte (CC-SUB-001)
-                </div>
-                <div style={{ fontSize: f.sub + 'px', color: t.textMuted }}>
-                  Resumen por ítem, subtotal y datos de contrato / subcontratista
-                </div>
-              </div>
+          <div
+            style={{
+              borderTop: `1px solid ${t.border}`,
+              paddingTop: ui.gap + 'px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: ui.gap + 'px',
+            }}
+          >
+            {/* Plantilla 1: informe de corte (replicable para nuevos formatos) */}
+            <div style={tarjetaFormato}>
               <button
                 type="button"
-                style={btnVer(vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte')}
-                onClick={abrirVistaPreviaCorte}
-                disabled={vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte'}
+                style={tarjetaFormatoHead}
+                onClick={() => setFormatoCorte001Abierto((v) => !v)}
+                aria-expanded={formatoCorte001Abierto}
               >
-                {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte' ? '⏳ Cargando…' : '📋 Vista previa'}
+                <span style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: '800', color: t.text, fontSize: ui.cardTitle + 'px' }}>
+                    Informe de Corte (CC-SUB-001)
+                  </div>
+                  <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '2px', fontWeight: '500' }}>
+                    Resumen por ítem, subtotal y datos de contrato / subcontratista
+                  </div>
+                </span>
+                <span style={{ color: t.textMuted, fontSize: f.section + 1 + 'px', flexShrink: 0 }} aria-hidden>
+                  {formatoCorte001Abierto ? '▼' : '▶'}
+                </span>
               </button>
-            </div>
-
-            <div>
-              <div style={{ fontSize: f.sub + 'px', fontWeight: '700', color: t.textMuted,
-                            letterSpacing: '0.8px', textTransform: 'uppercase', marginBottom: '8px' }}>
-                Memorias por ítem (CC-SUB-002)
-              </div>
-              {cargandoIt ? (
-                <div style={{ color: t.textMuted, fontSize: f.sub + 'px' }}>Cargando ítems...</div>
-              ) : items.length === 0 ? (
-                <div style={{ color: t.textMuted, fontSize: f.sub + 'px' }}>
-                  No hay registros aprobados por el subcontratista en este corte.
-                </div>
-              ) : (
-                items.map(item => {
-                  const busy = vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'memoria' && vistaPrevia?.itemNumero === item.item_numero
-                  return (
-                    <div key={item.item_numero} style={itemRow}>
-                      <div style={{ minWidth: 0 }}>
-                        <span style={{ fontWeight: '700', color: t.primary, fontSize: f.base + 'px' }}>
-                          {item.item_numero}
+              {formatoCorte001Abierto && (
+                <div style={{ padding: `${Math.max(6, ui.pIn - 6)}px ${ui.pIn}px ${ui.pIn}px`, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {corteId && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '5px 8px',
+                        borderRadius: '8px',
+                        border: `1px solid ${t.border}`,
+                        background: t.bgCard,
+                      }}
+                      title="CC-SUB-001: firmas aplicadas al PDF de este corte; vista previa y descargas usan la misma plantilla."
+                    >
+                      {firmasCcd['CC-SUB-001']?.tabla_disponible === false ? (
+                        <span
+                          style={{ fontSize: Math.max(10, ui.hint - 1) + 'px', color: '#b45309', fontWeight: '600' }}
+                          title="Ejecuta en Supabase backend/sql/ccd_corte_firma_registro.sql para persistir firmas por corte."
+                        >
+                          ⚠ SQL firmas
                         </span>
-                        <span style={{ color: t.text, fontSize: f.base + 'px', marginLeft: '8px' }}>
-                          {item.item_descripcion}
-                        </span>
-                        <span style={{ color: t.textMuted, fontSize: f.sub + 'px', marginLeft: '6px' }}>
-                          [{item.unidad}]
-                        </span>
-                      </div>
+                      ) : (
+                        <>
+                          <span
+                            style={chipFirmaEstado(!!firmasCcd['CC-SUB-001']?.elaboro)}
+                            title={firmasCcd['CC-SUB-001']?.elaboro ? 'Elaboró: firma registrada para este corte' : 'Elaboró: pendiente de registrar en este corte'}
+                          >
+                            E {firmasCcd['CC-SUB-001']?.elaboro ? '✓' : '·'}
+                          </span>
+                          <span
+                            style={chipFirmaEstado(!!firmasCcd['CC-SUB-001']?.reviso)}
+                            title={firmasCcd['CC-SUB-001']?.reviso ? 'Revisó: firma registrada para este corte' : 'Revisó: pendiente de registrar en este corte'}
+                          >
+                            R {firmasCcd['CC-SUB-001']?.reviso ? '✓' : '·'}
+                          </span>
+                          <span
+                            style={{
+                              ...chipFirmaEstado(true),
+                              opacity: 0.75,
+                              fontWeight: '700',
+                              background: t.border + '33',
+                              border: `1px dashed ${t.border}`,
+                            }}
+                            title="Aprobó: datos del subcontratista en el pie del PDF (no se registra con tu perfil)."
+                          >
+                            A PDF
+                          </span>
+                        </>
+                      )}
+                      <span style={{ flex: 1, minWidth: 4 }} aria-hidden />
                       <button
                         type="button"
-                        style={btnVer(busy)}
-                        onClick={() => abrirVistaPreviaMemoria(item.item_numero)}
-                        disabled={busy}
+                        style={btnCcdToolbar(vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte', 'vista')}
+                        onClick={abrirVistaPreviaCorte}
+                        disabled={vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte'}
+                        title="Vista previa PDF (mismo documento que imprimirías)"
+                        aria-label="Vista previa PDF"
                       >
-                        {busy ? '⏳…' : '📋 Vista previa'}
+                        {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte'
+                          ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                          : <IconoVistaPrevia size={ui.iconSvg} />}
+                      </button>
+                      <button
+                        type="button"
+                        style={btnCcdToolbar(firmaCorteBusy, 'pdf')}
+                        onClick={descargarPdfCorteConSello}
+                        disabled={firmaCorteBusy}
+                        title="Descargar PDF con página de sello (firma del perfil, fecha, huella SHA-256)"
+                        aria-label="Descargar PDF firmado con sello"
+                      >
+                        {firmaCorteBusy
+                          ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                          : <IconoPdfSello size={ui.iconSvg} />}
+                      </button>
+                      <button
+                        type="button"
+                        style={btnCcdToolbar(!!excelBusy, 'excel')}
+                        onClick={descargarExcelCorteSubcontratista}
+                        disabled={!!excelBusy}
+                        title="Descargar Excel (mismo contenido que el informe)"
+                        aria-label="Descargar Excel"
+                      >
+                        {excelBusy === 'corte'
+                          ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                          : <IconoDescargaExcel size={ui.iconSvg} />}
+                      </button>
+                      <button
+                        type="button"
+                        style={btnCcdToolbar(registrarFirmaBusy, 'firma')}
+                        onClick={() => registrarMiFirmaCcd('CC-SUB-001')}
+                        disabled={registrarFirmaBusy}
+                        title="Registrar tu firma del perfil para Elaboró o Revisó (según Biblioteca CCD)"
+                        aria-label="Registrar mi firma en este corte"
+                      >
+                        {registrarFirmaBusy
+                          ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                          : <IconoFirmaRegistrar size={ui.iconSvg} />}
                       </button>
                     </div>
-                  )
-                })
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Plantilla 2: memorias por ítem */}
+            <div style={tarjetaFormato}>
+              <button
+                type="button"
+                style={tarjetaFormatoHead}
+                onClick={() => setFormatoMemorias002Abierto((v) => !v)}
+                aria-expanded={formatoMemorias002Abierto}
+              >
+                <span style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: '800', color: t.text, fontSize: ui.cardTitle + 'px' }}>
+                    Memorias por ítem (CC-SUB-002)
+                  </div>
+                  <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '2px', fontWeight: '500' }}>
+                    Detalle por ítem, evidencias fotográficas y firmas (una memoria por fila o todas en un solo PDF).
+                  </div>
+                </span>
+                <span style={{ color: t.textMuted, fontSize: f.section + 1 + 'px', flexShrink: 0 }} aria-hidden>
+                  {formatoMemorias002Abierto ? '▼' : '▶'}
+                </span>
+              </button>
+              {formatoMemorias002Abierto && (
+                <div style={{ padding: `${Math.max(6, ui.pIn - 6)}px ${ui.pIn}px ${ui.pIn}px` }}>
+                  {cargandoIt ? (
+                    <div style={{ color: t.textMuted, fontSize: ui.body + 'px' }}>Cargando ítems...</div>
+                  ) : items.length === 0 ? (
+                    <div style={{ color: t.textMuted, fontSize: ui.body + 'px' }}>
+                      No hay registros aprobados por el subcontratista en este corte.
+                    </div>
+                  ) : (
+                    <>
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '5px 8px',
+                          marginBottom: '8px',
+                          borderRadius: '8px',
+                          border: `1px solid ${t.border}`,
+                          background: t.bgCard,
+                        }}
+                        title="CC-SUB-002: mismas reglas de firma que el informe de corte; se aplican a las memorias PDF."
+                      >
+                        {firmasCcd['CC-SUB-002']?.tabla_disponible === false ? (
+                          <span
+                            style={{ fontSize: Math.max(10, ui.hint - 1) + 'px', color: '#b45309', fontWeight: '600' }}
+                            title="Ejecuta en Supabase backend/sql/ccd_corte_firma_registro.sql para persistir firmas por corte."
+                          >
+                            ⚠ SQL firmas
+                          </span>
+                        ) : (
+                          <>
+                            <span
+                              style={chipFirmaEstado(!!firmasCcd['CC-SUB-002']?.elaboro)}
+                              title={firmasCcd['CC-SUB-002']?.elaboro ? 'Elaboró: firma registrada (memorias CC-SUB-002)' : 'Elaboró: pendiente en este corte'}
+                            >
+                              E {firmasCcd['CC-SUB-002']?.elaboro ? '✓' : '·'}
+                            </span>
+                            <span
+                              style={chipFirmaEstado(!!firmasCcd['CC-SUB-002']?.reviso)}
+                              title={firmasCcd['CC-SUB-002']?.reviso ? 'Revisó: firma registrada (memorias CC-SUB-002)' : 'Revisó: pendiente en este corte'}
+                            >
+                              R {firmasCcd['CC-SUB-002']?.reviso ? '✓' : '·'}
+                            </span>
+                            <span
+                              style={{
+                                ...chipFirmaEstado(true),
+                                opacity: 0.75,
+                                fontWeight: '700',
+                                background: t.border + '33',
+                                border: `1px dashed ${t.border}`,
+                              }}
+                              title="Aprobó: subcontratista en el pie del PDF de cada memoria."
+                            >
+                              A PDF
+                            </span>
+                          </>
+                        )}
+                        <span style={{ flex: 1, minWidth: 4 }} aria-hidden />
+                        <button
+                          type="button"
+                          style={btnCcdToolbar(registrarFirmaBusy, 'firma')}
+                          onClick={() => registrarMiFirmaCcd('CC-SUB-002')}
+                          disabled={registrarFirmaBusy}
+                          title="Registrar tu firma del perfil para Elaboró o Revisó en memorias (Biblioteca CCD)"
+                          aria-label="Registrar mi firma para CC-SUB-002"
+                        >
+                          {registrarFirmaBusy
+                            ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                            : <IconoFirmaRegistrar size={ui.iconSvg} />}
+                        </button>
+                      </div>
+
+                      <div style={{ marginBottom: '8px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setCcSub002ListadoItemsAbierto((v) => !v)}
+                          aria-expanded={ccSub002ListadoItemsAbierto}
+                          style={{
+                            width: '100%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '10px',
+                            padding: '8px 10px',
+                            borderRadius: '8px',
+                            border: `1px solid ${t.border}`,
+                            background: t.bgCard,
+                            color: t.text,
+                            cursor: 'pointer',
+                            textAlign: 'left',
+                            font: 'inherit',
+                            outline: 'none',
+                            boxSizing: 'border-box',
+                          }}
+                        >
+                          <span style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: '800', color: t.text, fontSize: ui.itemEm + 'px' }}>
+                              Todos los ítems · PDF y listado por fila
+                            </div>
+                            <div style={{ fontSize: Math.max(10, ui.hint - 1) + 'px', color: t.textMuted, marginTop: '2px', fontWeight: '500' }}>
+                              {items.length} ítem{items.length !== 1 ? 's' : ''} — expandir para ver el PDF único, Excel y cada código
+                            </div>
+                          </span>
+                          <span style={{ color: t.textMuted, fontSize: f.section + 1 + 'px', flexShrink: 0 }} aria-hidden>
+                            {ccSub002ListadoItemsAbierto ? '▼' : '▶'}
+                          </span>
+                        </button>
+                      </div>
+
+                      {ccSub002ListadoItemsAbierto && (
+                      <>
+                      <div
+                        style={{
+                          ...itemRowFmt,
+                          marginBottom: '6px',
+                          padding: '6px 10px',
+                          background: t.primary + '0d',
+                          border: `1px solid ${t.primary}35`,
+                        }}
+                      >
+                        <div
+                          style={{ minWidth: 0 }}
+                          title="Un PDF con todos los ítems en orden de código (NP-490…); cada ítem = detalle, fotos y firmas. Mismo orden en Excel que en el informe de corte."
+                        >
+                          <div style={{ fontWeight: '800', color: t.text, fontSize: ui.itemEm + 'px' }}>
+                            Todos los ítems · PDF único
+                          </div>
+                          <div style={{ fontSize: Math.max(10, ui.hint - 1) + 'px', color: t.textMuted, marginTop: '2px' }}>
+                            Orden ascendente por código de ítem — pasar el cursor para más detalle
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
+                          <button
+                            type="button"
+                            style={btnCcdToolbar(vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'memoria-todos', 'vista')}
+                            onClick={abrirVistaPreviaMemoriaCorteCompleto}
+                            disabled={vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'memoria-todos'}
+                            title="Vista previa: todas las memorias en un solo PDF"
+                            aria-label="Vista previa todas las memorias"
+                          >
+                            {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'memoria-todos'
+                              ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                              : <IconoVistaPrevia size={ui.iconSvg} />}
+                          </button>
+                          <button
+                            type="button"
+                            style={btnCcdToolbar(!!excelBusy, 'excel')}
+                            onClick={descargarExcelMemoriaCorteCompleto}
+                            disabled={!!excelBusy}
+                            title="Excel: todos los ítems (mismo orden)"
+                            aria-label="Descargar Excel todas las memorias"
+                          >
+                            {excelBusy === 'todos'
+                              ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                              : <IconoDescargaExcel size={ui.iconSvg} />}
+                          </button>
+                        </div>
+                      </div>
+                      {items.map((item) => {
+                        const busy = vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'memoria' && vistaPrevia?.itemNumero === item.item_numero
+                        const busyX = excelBusy === item.item_numero
+                        return (
+                          <div key={item.item_numero} style={{ ...itemRowFmt, padding: '6px 10px' }}>
+                            <div style={{ minWidth: 0 }}>
+                              <span style={{ fontWeight: '700', color: t.primary, fontSize: ui.itemEm + 'px' }}>
+                                {item.item_numero}
+                              </span>
+                              <span style={{ color: t.text, fontSize: ui.body + 'px', marginLeft: '6px' }}>
+                                {item.item_descripcion}
+                              </span>
+                              <span style={{ color: t.textMuted, fontSize: ui.hint + 'px', marginLeft: '4px' }}>
+                                [{item.unidad}]
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
+                              <button
+                                type="button"
+                                style={btnCcdToolbar(busy, 'vista')}
+                                onClick={() => abrirVistaPreviaMemoria(item.item_numero)}
+                                disabled={busy}
+                                title={`Vista previa PDF · ${item.item_numero}`}
+                                aria-label={`Vista previa ${item.item_numero}`}
+                              >
+                                {busy
+                                  ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                                  : <IconoVistaPrevia size={ui.iconSvg} />}
+                              </button>
+                              <button
+                                type="button"
+                                style={btnCcdToolbar(!!excelBusy, 'excel')}
+                                onClick={() => descargarExcelMemoriaItem(item.item_numero)}
+                                disabled={!!excelBusy}
+                                title={`Excel · ${item.item_numero}`}
+                                aria-label={`Descargar Excel ${item.item_numero}`}
+                              >
+                                {busyX
+                                  ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                                  : <IconoDescargaExcel size={ui.iconSvg} />}
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                      </>
+                      )}
+                    </>
+                  )}
+                </div>
               )}
             </div>
           </div>
+        )}
+        </>
+        )}
+      </div>
+
+      <div style={{ ...cardFormatosSub, marginTop: '14px' }}>
+        <button
+          type="button"
+          onClick={toggleFormatosSem}
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            padding: '0',
+            marginBottom: formatosSemAbierto ? '14px' : '0',
+            border: 'none',
+            background: 'transparent',
+            cursor: 'pointer',
+            textAlign: 'left',
+            font: 'inherit',
+            borderBottom: formatosSemAbierto ? `1px solid ${t.border}` : 'none',
+            paddingBottom: formatosSemAbierto ? '14px' : '0',
+          }}
+        >
+          <span style={{ minWidth: 0 }}>
+            <div style={{ fontSize: f.base + 'px', fontWeight: '800', color: t.text }}>
+              Formatos Semanales
+            </div>
+            <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '3px', fontWeight: '500', lineHeight: 1.35 }}>
+              Conciliación por semana (CC-SEM-001 / CC-SEM-002). Elige la semana y usa las mismas acciones que en Formatos Subcontratista.
+            </div>
+          </span>
+          <span style={{ color: t.textMuted, fontSize: f.section + 2 + 'px', flexShrink: 0 }} aria-hidden>
+            {formatosSemAbierto ? '▼' : '▶'}
+          </span>
+        </button>
+
+        {formatosSemAbierto && (
+        <>
+        <div style={{ color: t.textMuted, fontSize: ui.hint + 'px', marginBottom: ui.gap + 'px', lineHeight: 1.45 }}>
+          Solo registros nivel 3 aprobados y bloqueados. Configura Elaboró, Revisó y Aprobó en la biblioteca CCD para cada código.
+        </div>
+
+        <div style={{ marginBottom: ui.gap + 'px' }}>
+          <label style={labelSub}>Semana</label>
+          <select
+            style={selectSub}
+            value={semanaConcId}
+            onChange={(e) => setSemanaConcId(e.target.value)}
+            disabled={cargandoSemanasConc}
+          >
+            <option value="">
+              {cargandoSemanasConc ? 'Cargando semanas…' : '— Selecciona la semana —'}
+            </option>
+            {semanasConc.map((s) => (
+              <option key={s.id} value={s.id}>
+                N° {s.numero_semana} · {fmtFecha(s.fecha_inicio)} → {fmtFecha(s.fecha_fin)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {semanaConcId && (
+          <div
+            style={{
+              borderTop: `1px solid ${t.border}`,
+              paddingTop: ui.gap + 'px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: ui.gap + 'px',
+            }}
+          >
+            <div style={tarjetaFormato}>
+              <button
+                type="button"
+                style={tarjetaFormatoHead}
+                onClick={() => setFormatoSem001Abierto((v) => !v)}
+                aria-expanded={formatoSem001Abierto}
+              >
+                <span style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: '800', color: t.text, fontSize: ui.cardTitle + 'px' }}>
+                    Informe corte semanal (CC-SEM-001)
+                  </div>
+                  <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '2px', fontWeight: '500' }}>
+                    Resumen por ítem y total — conciliación interventoría–contratista por semana de aprobación
+                  </div>
+                </span>
+                <span style={{ color: t.textMuted, fontSize: f.section + 1 + 'px', flexShrink: 0 }} aria-hidden>
+                  {formatoSem001Abierto ? '▼' : '▶'}
+                </span>
+              </button>
+              {formatoSem001Abierto && (
+                <div style={{ padding: `${Math.max(6, ui.pIn - 6)}px ${ui.pIn}px ${ui.pIn}px`, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '5px 8px',
+                      borderRadius: '8px',
+                      border: `1px solid ${t.border}`,
+                      background: t.bgCard,
+                    }}
+                    title="CC-SEM-001: firmas por semana (contexto semana en biblioteca CCD)."
+                  >
+                    {firmasCcd['CC-SEM-001']?.tabla_disponible === false ? (
+                      <span
+                        style={{ fontSize: Math.max(10, ui.hint - 1) + 'px', color: '#b45309', fontWeight: '600' }}
+                        title="Ejecuta en Supabase el SQL de ccd_firma_registro por contexto."
+                      >
+                        ⚠ SQL firmas
+                      </span>
+                    ) : (
+                      <>
+                        <span
+                          style={chipFirmaEstado(!!firmasCcd['CC-SEM-001']?.elaboro)}
+                          title={firmasCcd['CC-SEM-001']?.elaboro ? 'Elaboró: firma registrada para esta semana' : 'Elaboró: pendiente'}
+                        >
+                          E {firmasCcd['CC-SEM-001']?.elaboro ? '✓' : '·'}
+                        </span>
+                        <span
+                          style={chipFirmaEstado(!!firmasCcd['CC-SEM-001']?.reviso)}
+                          title={firmasCcd['CC-SEM-001']?.reviso ? 'Revisó: firma registrada para esta semana' : 'Revisó: pendiente'}
+                        >
+                          R {firmasCcd['CC-SEM-001']?.reviso ? '✓' : '·'}
+                        </span>
+                        <span
+                          style={chipFirmaEstado(!!firmasCcd['CC-SEM-001']?.aprobo)}
+                          title={firmasCcd['CC-SEM-001']?.aprobo ? 'Aprobó: firma registrada' : 'Aprobó: pendiente'}
+                        >
+                          A {firmasCcd['CC-SEM-001']?.aprobo ? '✓' : '·'}
+                        </span>
+                      </>
+                    )}
+                    <span style={{ flex: 1, minWidth: 4 }} aria-hidden />
+                    <button
+                      type="button"
+                      style={btnCcdToolbar(vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte-sem', 'vista')}
+                      onClick={abrirVistaPreviaCorteSemanal}
+                      disabled={vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte-sem'}
+                      title="Vista previa PDF"
+                      aria-label="Vista previa PDF CC-SEM-001"
+                    >
+                      {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte-sem'
+                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                        : <IconoVistaPrevia size={ui.iconSvg} />}
+                    </button>
+                    <button
+                      type="button"
+                      style={btnCcdToolbar(concPdfBusy, 'pdf')}
+                      onClick={() =>
+                        descargarPdfConc(
+                          rutaPdfConcConSello(
+                            `/informes/${contratoId}/pdf/cc-sem-001/semana/${encodeURIComponent(semanaConcId)}`
+                          ),
+                          'CC-SEM-001.pdf'
+                        )
+                      }
+                      disabled={concPdfBusy}
+                      title="Descargar PDF con página de sello (firma del perfil, fecha, huella SHA-256)"
+                      aria-label="Descargar PDF CC-SEM-001 con sello"
+                    >
+                      {concPdfBusy
+                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                        : <IconoPdfSello size={ui.iconSvg} />}
+                    </button>
+                    <button
+                      type="button"
+                      style={btnCcdToolbar(!!excelBusy, 'excel')}
+                      onClick={descargarExcelCcSem001}
+                      disabled={!!excelBusy}
+                      title="Descargar Excel (mismo contenido que el informe semanal)"
+                      aria-label="Descargar Excel CC-SEM-001"
+                    >
+                      {excelBusy === 'sem001'
+                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                        : <IconoDescargaExcel size={ui.iconSvg} />}
+                    </button>
+                    <button
+                      type="button"
+                      style={btnCcdToolbar(firmaRegistroBusy === 'CC-SEM-001', 'firma')}
+                      onClick={() => registrarFirmaConc('CC-SEM-001', 'semana', semanaConcId)}
+                      disabled={firmaRegistroBusy === 'CC-SEM-001'}
+                      title="Registrar tu firma (Elaboró, Revisó o Aprobó según biblioteca CCD)"
+                      aria-label="Registrar mi firma CC-SEM-001"
+                    >
+                      {firmaRegistroBusy === 'CC-SEM-001'
+                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                        : <IconoFirmaRegistrar size={ui.iconSvg} />}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={tarjetaFormato}>
+              <button
+                type="button"
+                style={tarjetaFormatoHead}
+                onClick={() => setFormatoSem002Abierto((v) => !v)}
+                aria-expanded={formatoSem002Abierto}
+              >
+                <span style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: '800', color: t.text, fontSize: ui.cardTitle + 'px' }}>
+                    Memorias corte semanal (CC-SEM-002)
+                  </div>
+                  <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '2px', fontWeight: '500' }}>
+                    Detalle por ítem y anexo fotográfico — una memoria por fila o todas en un solo PDF
+                  </div>
+                </span>
+                <span style={{ color: t.textMuted, fontSize: f.section + 1 + 'px', flexShrink: 0 }} aria-hidden>
+                  {formatoSem002Abierto ? '▼' : '▶'}
+                </span>
+              </button>
+              {formatoSem002Abierto && (
+                <div style={{ padding: `${Math.max(6, ui.pIn - 6)}px ${ui.pIn}px ${ui.pIn}px` }}>
+                  {cargandoItemsSemanal ? (
+                    <div style={{ color: t.textMuted, fontSize: ui.body + 'px' }}>Cargando ítems…</div>
+                  ) : itemsSemanal.length === 0 ? (
+                    <div style={{ color: t.textMuted, fontSize: ui.body + 'px' }}>
+                      No hay registros de conciliación para esta semana.
+                    </div>
+                  ) : (
+                    <>
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '5px 8px',
+                          marginBottom: '8px',
+                          borderRadius: '8px',
+                          border: `1px solid ${t.border}`,
+                          background: t.bgCard,
+                        }}
+                        title="CC-SEM-002: firmas aplicadas al PDF de memorias de esta semana."
+                      >
+                        {firmasCcd['CC-SEM-002']?.tabla_disponible === false ? (
+                          <span
+                            style={{ fontSize: Math.max(10, ui.hint - 1) + 'px', color: '#b45309', fontWeight: '600' }}
+                            title="Ejecuta en Supabase el SQL de ccd_firma_registro por contexto."
+                          >
+                            ⚠ SQL firmas
+                          </span>
+                        ) : (
+                          <>
+                            <span
+                              style={chipFirmaEstado(!!firmasCcd['CC-SEM-002']?.elaboro)}
+                              title={firmasCcd['CC-SEM-002']?.elaboro ? 'Elaboró: firma registrada' : 'Elaboró: pendiente'}
+                            >
+                              E {firmasCcd['CC-SEM-002']?.elaboro ? '✓' : '·'}
+                            </span>
+                            <span
+                              style={chipFirmaEstado(!!firmasCcd['CC-SEM-002']?.reviso)}
+                              title={firmasCcd['CC-SEM-002']?.reviso ? 'Revisó: firma registrada' : 'Revisó: pendiente'}
+                            >
+                              R {firmasCcd['CC-SEM-002']?.reviso ? '✓' : '·'}
+                            </span>
+                            <span
+                              style={chipFirmaEstado(!!firmasCcd['CC-SEM-002']?.aprobo)}
+                              title={firmasCcd['CC-SEM-002']?.aprobo ? 'Aprobó: firma registrada' : 'Aprobó: pendiente'}
+                            >
+                              A {firmasCcd['CC-SEM-002']?.aprobo ? '✓' : '·'}
+                            </span>
+                          </>
+                        )}
+                        <span style={{ flex: 1, minWidth: 4 }} aria-hidden />
+                        <button
+                          type="button"
+                          style={btnCcdToolbar(firmaRegistroBusy === 'CC-SEM-002', 'firma')}
+                          onClick={() => registrarFirmaConc('CC-SEM-002', 'semana', semanaConcId)}
+                          disabled={firmaRegistroBusy === 'CC-SEM-002'}
+                          title="Registrar tu firma para memorias semanales"
+                          aria-label="Registrar mi firma CC-SEM-002"
+                        >
+                          {firmaRegistroBusy === 'CC-SEM-002'
+                            ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                            : <IconoFirmaRegistrar size={ui.iconSvg} />}
+                        </button>
+                      </div>
+
+                      <div style={{ marginBottom: '8px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setCcSem002ListadoItemsAbierto((v) => !v)}
+                          aria-expanded={ccSem002ListadoItemsAbierto}
+                          style={{
+                            width: '100%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '10px',
+                            padding: '8px 10px',
+                            borderRadius: '8px',
+                            border: `1px solid ${t.border}`,
+                            background: t.bgCard,
+                            color: t.text,
+                            cursor: 'pointer',
+                            textAlign: 'left',
+                            font: 'inherit',
+                            outline: 'none',
+                            boxSizing: 'border-box',
+                          }}
+                        >
+                          <span style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: '800', color: t.text, fontSize: ui.itemEm + 'px' }}>
+                              Todos los ítems · PDF y listado por fila
+                            </div>
+                            <div style={{ fontSize: Math.max(10, ui.hint - 1) + 'px', color: t.textMuted, marginTop: '2px', fontWeight: '500' }}>
+                              {itemsSemanal.length} ítem{itemsSemanal.length !== 1 ? 's' : ''} — expandir para ver el PDF único y cada código
+                            </div>
+                          </span>
+                          <span style={{ color: t.textMuted, fontSize: f.section + 1 + 'px', flexShrink: 0 }} aria-hidden>
+                            {ccSem002ListadoItemsAbierto ? '▼' : '▶'}
+                          </span>
+                        </button>
+                      </div>
+
+                      {ccSem002ListadoItemsAbierto && (
+                      <>
+                      <div
+                        style={{
+                          ...itemRowFmt,
+                          marginBottom: '6px',
+                          padding: '6px 10px',
+                          background: t.primary + '0d',
+                          border: `1px solid ${t.primary}35`,
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }} title="Un PDF con todos los ítems en orden de código.">
+                          <div style={{ fontWeight: '800', color: t.text, fontSize: ui.itemEm + 'px' }}>
+                            Todos los ítems · PDF único
+                          </div>
+                          <div style={{ fontSize: Math.max(10, ui.hint - 1) + 'px', color: t.textMuted, marginTop: '2px' }}>
+                            Orden ascendente por código de ítem
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
+                          <button
+                            type="button"
+                            style={btnCcdToolbar(vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'memoria-sem-todos', 'vista')}
+                            onClick={abrirVistaPreviaMemoriaSemanalCompleto}
+                            disabled={vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'memoria-sem-todos'}
+                            title="Vista previa: todas las memorias en un solo PDF"
+                            aria-label="Vista previa todas las memorias semanales"
+                          >
+                            {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'memoria-sem-todos'
+                              ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                              : <IconoVistaPrevia size={ui.iconSvg} />}
+                          </button>
+                          <button
+                            type="button"
+                            style={btnCcdToolbar(!!excelBusy, 'excel')}
+                            onClick={descargarExcelCcSem002Completo}
+                            disabled={!!excelBusy}
+                            title="Descargar Excel: todas las memorias (una hoja por ítem, mismo orden que el PDF)"
+                            aria-label="Descargar Excel todas las memorias semanales"
+                          >
+                            {excelBusy === 'sem2-all'
+                              ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                              : <IconoDescargaExcel size={ui.iconSvg} />}
+                          </button>
+                          <button
+                            type="button"
+                            style={btnCcdToolbar(concPdfBusy, 'pdf')}
+                            onClick={() =>
+                              descargarPdfConc(
+                                rutaPdfConcConSello(
+                                  `/informes/${contratoId}/pdf/cc-sem-002/semana/${encodeURIComponent(semanaConcId)}/completo`
+                                ),
+                                'CC-SEM-002-todos.pdf'
+                              )
+                            }
+                            disabled={concPdfBusy}
+                            title="Descargar PDF con todos los ítems y página de sello (firma del perfil, huella SHA-256)"
+                            aria-label="Descargar PDF todas las memorias semanales con sello"
+                          >
+                            {concPdfBusy
+                              ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                              : <IconoPdfSello size={ui.iconSvg} />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {itemsSemanal.map((item) => {
+                        const busy =
+                          vistaPrevia?.fase === 'cargando' &&
+                          vistaPrevia?.tipo === 'memoria-sem' &&
+                          vistaPrevia?.itemNumero === item.item_numero
+                        const busyX = excelBusy === `s2:${item.item_numero}`
+                        return (
+                          <div key={item.item_numero} style={{ ...itemRowFmt, padding: '6px 10px' }}>
+                            <div style={{ minWidth: 0 }}>
+                              <span style={{ fontWeight: '700', color: t.primary, fontSize: ui.itemEm + 'px' }}>
+                                {item.item_numero}
+                              </span>
+                              <span style={{ color: t.text, fontSize: ui.body + 'px', marginLeft: '6px' }}>
+                                {item.item_descripcion}
+                              </span>
+                              <span style={{ color: t.textMuted, fontSize: ui.hint + 'px', marginLeft: '4px' }}>
+                                [{item.unidad}]
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
+                              <button
+                                type="button"
+                                style={btnCcdToolbar(busy, 'vista')}
+                                onClick={() => abrirVistaPreviaMemoriaSemanal(item.item_numero)}
+                                disabled={busy}
+                                title={`Vista previa PDF · ${item.item_numero}`}
+                                aria-label={`Vista previa ${item.item_numero}`}
+                              >
+                                {busy
+                                  ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                                  : <IconoVistaPrevia size={ui.iconSvg} />}
+                              </button>
+                              <button
+                                type="button"
+                                style={btnCcdToolbar(!!excelBusy, 'excel')}
+                                onClick={() => descargarExcelCcSem002Item(item.item_numero)}
+                                disabled={!!excelBusy}
+                                title={`Descargar Excel · ${item.item_numero}`}
+                                aria-label={`Descargar Excel ${item.item_numero}`}
+                              >
+                                {busyX
+                                  ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                                  : <IconoDescargaExcel size={ui.iconSvg} />}
+                              </button>
+                              <button
+                                type="button"
+                                style={btnCcdToolbar(concPdfBusy, 'pdf')}
+                                onClick={() =>
+                                  descargarPdfConc(
+                                    rutaPdfConcConSello(
+                                      `/informes/${contratoId}/pdf/cc-sem-002/semana/${encodeURIComponent(semanaConcId)}?item_numero=${encodeURIComponent(item.item_numero)}`
+                                    ),
+                                    `CC-SEM-002-${item.item_numero}.pdf`
+                                  )
+                                }
+                                disabled={concPdfBusy}
+                                title={`Descargar PDF con página de sello · ${item.item_numero}`}
+                                aria-label={`Descargar PDF ${item.item_numero} con sello`}
+                              >
+                                {concPdfBusy
+                                  ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                                  : <IconoPdfSello size={ui.iconSvg} />}
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                      </>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        </>
+        )}
+      </div>
+
+      <div style={{ ...cardFormatosSub, marginTop: '14px' }}>
+        <button
+          type="button"
+          onClick={toggleFormatosMes}
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            padding: '0',
+            marginBottom: formatosMesAbierto ? '14px' : '0',
+            border: 'none',
+            background: 'transparent',
+            cursor: 'pointer',
+            textAlign: 'left',
+            font: 'inherit',
+            borderBottom: formatosMesAbierto ? `1px solid ${t.border}` : 'none',
+            paddingBottom: formatosMesAbierto ? '14px' : '0',
+          }}
+        >
+          <span style={{ minWidth: 0 }}>
+            <div style={{ fontSize: f.base + 'px', fontWeight: '800', color: t.text }}>
+              Formatos Mensuales
+            </div>
+            <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '3px', fontWeight: '500', lineHeight: 1.35 }}>
+              Conciliación por acta RPO (CC-MES-001 / CC-MES-002). Elige el acta y usa las mismas acciones que en Formatos Semanales.
+            </div>
+          </span>
+          <span style={{ color: t.textMuted, fontSize: f.section + 2 + 'px', flexShrink: 0 }} aria-hidden>
+            {formatosMesAbierto ? '▼' : '▶'}
+          </span>
+        </button>
+
+        {formatosMesAbierto && (
+        <>
+        <div style={{ color: t.textMuted, fontSize: ui.hint + 'px', marginBottom: ui.gap + 'px', lineHeight: 1.45 }}>
+          Solo registros nivel 3 aprobados y bloqueados. Configura Elaboró, Revisó y Aprobó en la biblioteca CCD para cada código.
+        </div>
+
+        <div style={{ marginBottom: ui.gap + 'px' }}>
+          <label style={labelSub}>Acta RPO</label>
+          <select
+            style={selectSub}
+            value={actaConcId}
+            onChange={(e) => setActaConcId(e.target.value)}
+          >
+            <option value="">
+              {actasConc.length === 0 ? 'Sin actas RPO en este contrato' : '— Selecciona el acta —'}
+            </option>
+            {actasConc.map((a) => (
+              <option key={a.id} value={a.id}>
+                RPO {a.numero_rpo ?? '—'} · cons. {a.consecutivo ?? '—'}
+              </option>
+            ))}
+          </select>
+          {actaSel && (
+            <div style={infoBoxSub}>
+              <span><b>RPO:</b> {actaSel.numero_rpo ?? '—'}</span>
+              <span><b>Cons.:</b> {actaSel.consecutivo ?? '—'}</span>
+            </div>
+          )}
+        </div>
+
+        {actaConcId && (
+          <div
+            style={{
+              borderTop: `1px solid ${t.border}`,
+              paddingTop: ui.gap + 'px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: ui.gap + 'px',
+            }}
+          >
+            <div style={tarjetaFormato}>
+              <button
+                type="button"
+                style={tarjetaFormatoHead}
+                onClick={() => setFormatoMes001Abierto((v) => !v)}
+                aria-expanded={formatoMes001Abierto}
+              >
+                <span style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: '800', color: t.text, fontSize: ui.cardTitle + 'px' }}>
+                    Informe ejecución mensual (CC-MES-001)
+                  </div>
+                  <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '2px', fontWeight: '500' }}>
+                    Resumen por ítem y total — conciliación interventoría–contratista por acta RPO
+                  </div>
+                </span>
+                <span style={{ color: t.textMuted, fontSize: f.section + 1 + 'px', flexShrink: 0 }} aria-hidden>
+                  {formatoMes001Abierto ? '▼' : '▶'}
+                </span>
+              </button>
+              {formatoMes001Abierto && (
+                <div style={{ padding: `${Math.max(6, ui.pIn - 6)}px ${ui.pIn}px ${ui.pIn}px`, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '5px 8px',
+                      borderRadius: '8px',
+                      border: `1px solid ${t.border}`,
+                      background: t.bgCard,
+                    }}
+                    title="CC-MES-001: firmas por acta RPO (contexto acta en biblioteca CCD)."
+                  >
+                    {firmasCcd['CC-MES-001']?.tabla_disponible === false ? (
+                      <span
+                        style={{ fontSize: Math.max(10, ui.hint - 1) + 'px', color: '#b45309', fontWeight: '600' }}
+                        title="Ejecuta en Supabase backend/sql/ccd_firma_registro_contexto.sql (tabla ccd_firma_registro)."
+                      >
+                        ⚠ SQL firmas
+                      </span>
+                    ) : (
+                      <>
+                        <span
+                          style={chipFirmaEstado(!!firmasCcd['CC-MES-001']?.elaboro)}
+                          title={firmasCcd['CC-MES-001']?.elaboro ? 'Elaboró: firma registrada para este acta' : 'Elaboró: pendiente'}
+                        >
+                          E {firmasCcd['CC-MES-001']?.elaboro ? '✓' : '·'}
+                        </span>
+                        <span
+                          style={chipFirmaEstado(!!firmasCcd['CC-MES-001']?.reviso)}
+                          title={firmasCcd['CC-MES-001']?.reviso ? 'Revisó: firma registrada para este acta' : 'Revisó: pendiente'}
+                        >
+                          R {firmasCcd['CC-MES-001']?.reviso ? '✓' : '·'}
+                        </span>
+                        <span
+                          style={chipFirmaEstado(!!firmasCcd['CC-MES-001']?.aprobo)}
+                          title={firmasCcd['CC-MES-001']?.aprobo ? 'Aprobó: firma registrada' : 'Aprobó: pendiente'}
+                        >
+                          A {firmasCcd['CC-MES-001']?.aprobo ? '✓' : '·'}
+                        </span>
+                      </>
+                    )}
+                    <span style={{ flex: 1, minWidth: 4 }} aria-hidden />
+                    <button
+                      type="button"
+                      style={btnCcdToolbar(vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte-mes', 'vista')}
+                      onClick={abrirVistaPreviaCorteMensual}
+                      disabled={vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte-mes'}
+                      title="Vista previa PDF"
+                      aria-label="Vista previa PDF CC-MES-001"
+                    >
+                      {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte-mes'
+                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                        : <IconoVistaPrevia size={ui.iconSvg} />}
+                    </button>
+                    <button
+                      type="button"
+                      style={btnCcdToolbar(concPdfBusy, 'pdf')}
+                      onClick={() =>
+                        descargarPdfConc(
+                          rutaPdfConcConSello(
+                            `/informes/${contratoId}/pdf/cc-mes-001/acta/${encodeURIComponent(actaConcId)}`
+                          ),
+                          'CC-MES-001.pdf'
+                        )
+                      }
+                      disabled={concPdfBusy}
+                      title="Descargar PDF con página de sello (firma del perfil, fecha, huella SHA-256)"
+                      aria-label="Descargar PDF CC-MES-001 con sello"
+                    >
+                      {concPdfBusy
+                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                        : <IconoPdfSello size={ui.iconSvg} />}
+                    </button>
+                    <button
+                      type="button"
+                      style={btnCcdToolbar(true, 'excel')}
+                      disabled
+                      title="Exportación Excel aún no disponible para el informe mensual"
+                      aria-label="Excel no disponible"
+                    >
+                      <IconoDescargaExcel size={ui.iconSvg} />
+                    </button>
+                    <button
+                      type="button"
+                      style={btnCcdToolbar(firmaRegistroBusy === 'CC-MES-001', 'firma')}
+                      onClick={() => registrarFirmaConc('CC-MES-001', 'acta_rpo', actaConcId)}
+                      disabled={firmaRegistroBusy === 'CC-MES-001'}
+                      title="Registrar tu firma (Elaboró, Revisó o Aprobó según biblioteca CCD)"
+                      aria-label="Registrar mi firma CC-MES-001"
+                    >
+                      {firmaRegistroBusy === 'CC-MES-001'
+                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                        : <IconoFirmaRegistrar size={ui.iconSvg} />}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={tarjetaFormato}>
+              <button
+                type="button"
+                style={tarjetaFormatoHead}
+                onClick={() => setFormatoMes002Abierto((v) => !v)}
+                aria-expanded={formatoMes002Abierto}
+              >
+                <span style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: '800', color: t.text, fontSize: ui.cardTitle + 'px' }}>
+                    Memorias mensuales (CC-MES-002)
+                  </div>
+                  <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '2px', fontWeight: '500' }}>
+                    Detalle por ítem y anexo fotográfico — una memoria por fila
+                  </div>
+                </span>
+                <span style={{ color: t.textMuted, fontSize: f.section + 1 + 'px', flexShrink: 0 }} aria-hidden>
+                  {formatoMes002Abierto ? '▼' : '▶'}
+                </span>
+              </button>
+              {formatoMes002Abierto && (
+                <div style={{ padding: `${Math.max(6, ui.pIn - 6)}px ${ui.pIn}px ${ui.pIn}px` }}>
+                  {cargandoItemsMensual ? (
+                    <div style={{ color: t.textMuted, fontSize: ui.body + 'px' }}>Cargando ítems…</div>
+                  ) : itemsMensual.length === 0 ? (
+                    <div style={{ color: t.textMuted, fontSize: ui.body + 'px' }}>
+                      No hay registros de conciliación para este acta.
+                    </div>
+                  ) : (
+                    <>
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          alignItems: 'center',
+                          gap: '6px',
+                          padding: '5px 8px',
+                          marginBottom: '8px',
+                          borderRadius: '8px',
+                          border: `1px solid ${t.border}`,
+                          background: t.bgCard,
+                        }}
+                        title="CC-MES-002: firmas aplicadas al PDF de memorias de este acta."
+                      >
+                        {firmasCcd['CC-MES-002']?.tabla_disponible === false ? (
+                          <span
+                            style={{ fontSize: Math.max(10, ui.hint - 1) + 'px', color: '#b45309', fontWeight: '600' }}
+                            title="Ejecuta en Supabase backend/sql/ccd_firma_registro_contexto.sql (tabla ccd_firma_registro)."
+                          >
+                            ⚠ SQL firmas
+                          </span>
+                        ) : (
+                          <>
+                            <span
+                              style={chipFirmaEstado(!!firmasCcd['CC-MES-002']?.elaboro)}
+                              title={firmasCcd['CC-MES-002']?.elaboro ? 'Elaboró: firma registrada' : 'Elaboró: pendiente'}
+                            >
+                              E {firmasCcd['CC-MES-002']?.elaboro ? '✓' : '·'}
+                            </span>
+                            <span
+                              style={chipFirmaEstado(!!firmasCcd['CC-MES-002']?.reviso)}
+                              title={firmasCcd['CC-MES-002']?.reviso ? 'Revisó: firma registrada' : 'Revisó: pendiente'}
+                            >
+                              R {firmasCcd['CC-MES-002']?.reviso ? '✓' : '·'}
+                            </span>
+                            <span
+                              style={chipFirmaEstado(!!firmasCcd['CC-MES-002']?.aprobo)}
+                              title={firmasCcd['CC-MES-002']?.aprobo ? 'Aprobó: firma registrada' : 'Aprobó: pendiente'}
+                            >
+                              A {firmasCcd['CC-MES-002']?.aprobo ? '✓' : '·'}
+                            </span>
+                          </>
+                        )}
+                        <span style={{ flex: 1, minWidth: 4 }} aria-hidden />
+                        <button
+                          type="button"
+                          style={btnCcdToolbar(firmaRegistroBusy === 'CC-MES-002', 'firma')}
+                          onClick={() => registrarFirmaConc('CC-MES-002', 'acta_rpo', actaConcId)}
+                          disabled={firmaRegistroBusy === 'CC-MES-002'}
+                          title="Registrar tu firma para memorias mensuales de este acta"
+                          aria-label="Registrar mi firma CC-MES-002"
+                        >
+                          {firmaRegistroBusy === 'CC-MES-002'
+                            ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                            : <IconoFirmaRegistrar size={ui.iconSvg} />}
+                        </button>
+                      </div>
+
+                      <div style={{ marginBottom: '8px' }}>
+                        <button
+                          type="button"
+                          onClick={() => setCcMes002ListadoItemsAbierto((v) => !v)}
+                          aria-expanded={ccMes002ListadoItemsAbierto}
+                          style={{
+                            width: '100%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '10px',
+                            padding: '8px 10px',
+                            borderRadius: '8px',
+                            border: `1px solid ${t.border}`,
+                            background: t.bgCard,
+                            color: t.text,
+                            cursor: 'pointer',
+                            textAlign: 'left',
+                            font: 'inherit',
+                            outline: 'none',
+                            boxSizing: 'border-box',
+                          }}
+                        >
+                          <span style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: '800', color: t.text, fontSize: ui.itemEm + 'px' }}>
+                              Listado por ítem
+                            </div>
+                            <div style={{ fontSize: Math.max(10, ui.hint - 1) + 'px', color: t.textMuted, marginTop: '2px', fontWeight: '500' }}>
+                              {itemsMensual.length} ítem{itemsMensual.length !== 1 ? 's' : ''} — expandir para vista previa y PDF por código
+                            </div>
+                          </span>
+                          <span style={{ color: t.textMuted, fontSize: f.section + 1 + 'px', flexShrink: 0 }} aria-hidden>
+                            {ccMes002ListadoItemsAbierto ? '▼' : '▶'}
+                          </span>
+                        </button>
+                      </div>
+
+                      {ccMes002ListadoItemsAbierto &&
+                      itemsMensual.map((item) => {
+                        const busy =
+                          vistaPrevia?.fase === 'cargando' &&
+                          vistaPrevia?.tipo === 'memoria-mes' &&
+                          vistaPrevia?.itemNumero === item.item_numero
+                        return (
+                          <div key={item.item_numero} style={{ ...itemRowFmt, padding: '6px 10px' }}>
+                            <div style={{ minWidth: 0 }}>
+                              <span style={{ fontWeight: '700', color: t.primary, fontSize: ui.itemEm + 'px' }}>
+                                {item.item_numero}
+                              </span>
+                              <span style={{ color: t.text, fontSize: ui.body + 'px', marginLeft: '6px' }}>
+                                {item.item_descripcion}
+                              </span>
+                              <span style={{ color: t.textMuted, fontSize: ui.hint + 'px', marginLeft: '4px' }}>
+                                [{item.unidad}]
+                              </span>
+                            </div>
+                            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
+                              <button
+                                type="button"
+                                style={btnCcdToolbar(busy, 'vista')}
+                                onClick={() => abrirVistaPreviaMemoriaMensual(item.item_numero)}
+                                disabled={busy}
+                                title={`Vista previa PDF · ${item.item_numero}`}
+                                aria-label={`Vista previa ${item.item_numero}`}
+                              >
+                                {busy
+                                  ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                                  : <IconoVistaPrevia size={ui.iconSvg} />}
+                              </button>
+                              <button
+                                type="button"
+                                style={btnCcdToolbar(true, 'excel')}
+                                disabled
+                                title="Excel no disponible aún para memorias mensuales"
+                                aria-label="Excel no disponible"
+                              >
+                                <IconoDescargaExcel size={ui.iconSvg} />
+                              </button>
+                              <button
+                                type="button"
+                                style={btnCcdToolbar(concPdfBusy, 'pdf')}
+                                onClick={() =>
+                                  descargarPdfConc(
+                                    rutaPdfConcConSello(
+                                      `/informes/${contratoId}/pdf/cc-mes-002/acta/${encodeURIComponent(actaConcId)}?item_numero=${encodeURIComponent(item.item_numero)}`
+                                    ),
+                                    `CC-MES-002-${item.item_numero}.pdf`
+                                  )
+                                }
+                                disabled={concPdfBusy}
+                                title={`Descargar PDF con página de sello · ${item.item_numero}`}
+                                aria-label={`Descargar PDF ${item.item_numero} con sello`}
+                              >
+                                {concPdfBusy
+                                  ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                                  : <IconoPdfSello size={ui.iconSvg} />}
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        </>
+        )}
+      </div>
+
+      <div style={{ ...cardFormatosSub, marginTop: '14px' }}>
+        <button
+          type="button"
+          onClick={() => setFormatosEntExtAbierto((v) => !v)}
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            padding: '0',
+            marginBottom: formatosEntExtAbierto ? '14px' : '0',
+            border: 'none',
+            background: 'transparent',
+            cursor: 'pointer',
+            textAlign: 'left',
+            font: 'inherit',
+            borderBottom: formatosEntExtAbierto ? `1px solid ${t.border}` : 'none',
+            paddingBottom: formatosEntExtAbierto ? '14px' : '0',
+          }}
+        >
+          <span style={{ minWidth: 0 }}>
+            <div style={{ fontSize: f.base + 'px', fontWeight: '800', color: t.text }}>
+              Formatos Entidades Externas
+            </div>
+            <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '3px', fontWeight: '500', lineHeight: 1.35 }}>
+              Plantillas exigidas por la entidad contratante (p. ej. IDU). Vista previa sin datos de obra.
+            </div>
+          </span>
+          <span style={{ color: t.textMuted, fontSize: f.section + 2 + 'px', flexShrink: 0 }} aria-hidden>
+            {formatosEntExtAbierto ? '▼' : '▶'}
+          </span>
+        </button>
+
+        {formatosEntExtAbierto && (
+          <>
+            <div style={{ color: t.textMuted, fontSize: ui.hint + 'px', marginBottom: ui.gap + 'px', lineHeight: 1.45 }}>
+              Configuración de firmas y colores (si aplica) sigue en la biblioteca CCD arriba; aquí solo la vista previa del diseño del formulario.
+            </div>
+            <div style={tarjetaFormato}>
+              <div
+                style={{
+                  padding: `${Math.max(6, ui.pIn - 6)}px ${ui.pIn}px ${ui.pIn}px`,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '10px',
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: '800', color: t.text, fontSize: ui.cardTitle + 'px' }}>
+                    Memorias IDU FO-EO-04 V2.0
+                  </div>
+                  <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '4px', fontWeight: '500', lineHeight: 1.45 }}>
+                    Código <span style={{ color: t.primary, fontWeight: '800' }}>FO-IDU-EO-04-V2</span> · Memoria de cálculo de cantidades de obra (Instituto de Desarrollo Urbano).
+                  </div>
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '8px 10px',
+                    borderRadius: '8px',
+                    border: `1px solid ${t.border}`,
+                    background: t.bgCard,
+                  }}
+                >
+                  <button
+                    type="button"
+                    style={btnCcdToolbar(
+                      vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-plantilla-vacia',
+                      'vista'
+                    )}
+                    onClick={() => abrirPreviewPlantillaVacia('FO-IDU-EO-04-V2')}
+                    disabled={
+                      vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-plantilla-vacia'
+                    }
+                    title="Abre el PDF de plantilla vacía en el visor (mismo modal que otros informes)"
+                    aria-label="Vista previa plantilla vacía FO-IDU-EO-04-V2"
+                  >
+                    {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-plantilla-vacia' ? (
+                      <span style={{ fontSize: ui.body + 'px' }} aria-hidden>
+                        ⏳
+                      </span>
+                    ) : (
+                      <IconoVistaPrevia size={ui.iconSvg} />
+                    )}
+                  </button>
+                  <span style={{ fontSize: ui.body + 'px', color: t.text, fontWeight: '600' }}>
+                    Vista previa plantilla vacía (PDF)
+                  </span>
+                </div>
+              </div>
+            </div>
+          </>
         )}
       </div>
 
@@ -743,15 +4103,17 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '10px' }}>
           <div style={roadmapCard}>
             <div style={{ fontWeight: 700, color: t.text, marginBottom: '4px' }}>Preacta semanal + memorias semanales</div>
-            <div style={{ fontSize: f.sub + 'px', color: t.textMuted }}>Estado: pendiente de implementacion visual y flujo.</div>
+            <div style={{ fontSize: f.sub + 'px', color: t.textMuted }}>CC-SEM-001/002 disponibles arriba.</div>
           </div>
           <div style={roadmapCard}>
             <div style={{ fontWeight: 700, color: t.text, marginBottom: '4px' }}>Preacta mensual</div>
-            <div style={{ fontSize: f.sub + 'px', color: t.textMuted }}>Estado: pendiente de estructura documental.</div>
+            <div style={{ fontSize: f.sub + 'px', color: t.textMuted }}>CC-MES-001/002 disponibles arriba.</div>
           </div>
           <div style={roadmapCard}>
-            <div style={{ fontWeight: 700, color: t.text, marginBottom: '4px' }}>Memorias mensuales Entidad</div>
-            <div style={{ fontSize: f.sub + 'px', color: t.textMuted }}>Estado: pendiente de layout de detalle y evidencias.</div>
+            <div style={{ fontWeight: 700, color: t.text, marginBottom: '4px' }}>Memorias entidad (IDU FO-EO-04)</div>
+            <div style={{ fontSize: f.sub + 'px', color: t.textMuted }}>
+              Plantilla vacía en «Formatos Entidades Externas»; datos de obra en desarrollo.
+            </div>
           </div>
           <div style={roadmapCard}>
             <div style={{ fontWeight: 700, color: t.text, marginBottom: '4px' }}>Informe de gerencia</div>
@@ -761,7 +4123,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
       </div>
 
       {/* Modal: vista previa = PDF embebido (misma ruta que descarga el backend).
-          Fondos opacos fijos: en producción t.card/t.bg pueden ser transparentes y el modal se mezcla con la página. */}
+          Fondos opacos fijos: en producción t.bgCard/t.bg pueden ser transparentes y el modal se mezcla con la página. */}
       {vistaPrevia && (
         <div
           role="dialog"
@@ -811,9 +4173,31 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
             >
               <div>
                 <div style={{ fontSize: f.title - 2 + 'px', fontWeight: '800', color: '#0f172a' }}>
-                  {(vistaPrevia.tipo === 'corte' || vistaPrevia.tipo === 'corte-pdf')
-                    ? 'Vista previa · CC-SUB-001 (PDF)'
-                    : `Vista previa · CC-SUB-002 (PDF) · ${vistaPrevia.itemNumero || ''}`}
+                  {(() => {
+                    const tp = vistaPrevia.tipo
+                    if (tp === 'corte' || tp === 'corte-pdf') return 'Vista previa · CC-SUB-001 (PDF)'
+                    if (tp === 'corte-sem' || tp === 'corte-sem-pdf') return 'Vista previa · CC-SEM-001 (PDF)'
+                    if (tp === 'corte-mes' || tp === 'corte-mes-pdf') return 'Vista previa · CC-MES-001 (PDF)'
+                    if (tp === 'memoria-pdf-todos' || tp === 'memoria-todos') {
+                      return 'Vista previa · CC-SUB-002 (PDF) · Todos los ítems'
+                    }
+                    if (tp === 'memoria-sem-todos' || tp === 'memoria-sem-todos-pdf') {
+                      return 'Vista previa · CC-SEM-002 (PDF) · Todos los ítems'
+                    }
+                    if (tp === 'memoria-sem' || tp === 'memoria-sem-pdf') {
+                      return `Vista previa · CC-SEM-002 (PDF) · ${vistaPrevia.itemNumero || ''}`
+                    }
+                    if (tp === 'memoria-mes' || tp === 'memoria-mes-pdf') {
+                      return `Vista previa · CC-MES-002 (PDF) · ${vistaPrevia.itemNumero || ''}`
+                    }
+                    if (tp === 'memoria' || tp === 'memoria-pdf') {
+                      return `Vista previa · CC-SUB-002 (PDF) · ${vistaPrevia.itemNumero || ''}`
+                    }
+                    if (tp === 'idu-plantilla-vacia' || tp === 'idu-plantilla-vacia-pdf') {
+                      return 'Vista previa · FO-IDU-EO-04-V2 · plantilla vacía (PDF)'
+                    }
+                    return 'Vista previa · PDF'
+                  })()}
                 </div>
                 <div style={{ fontSize: f.sub + 'px', color: '#64748b', marginTop: '4px' }}>
                   Mismo formato PDF que genera el sistema. Puedes usar el menú del visor del navegador para imprimir o guardar.

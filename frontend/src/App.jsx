@@ -1,15 +1,23 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import AdminPanel from './AdminPanel'
 import ModuloInformes from './ModuloInformes'
 import ModuloInicio from './ModuloInicio'
+import PerfilUsuarioModal from './PerfilUsuarioModal'
+import PoliticasConfidencialidadModal from './PoliticasConfidencialidadModal'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
+
+const _VITE_MAPBOX = import.meta.env.VITE_MAPBOX_TOKEN
+if (_VITE_MAPBOX) mapboxgl.accessToken = _VITE_MAPBOX
 import * as XLSX from 'xlsx'
 import ExcelJS from 'exceljs'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net'
+const API_BASE = import.meta.env.DEV
+  ? 'http://127.0.0.1:8000'
+  : (import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net')
 const API = API_BASE
+const POLITICAS_TEXTO_VERSION = '1.0'
 const TEST_MODE = String(import.meta.env.VITE_TEST_MODE || '').toLowerCase() === 'true'
 
 const themes = {
@@ -26,12 +34,36 @@ const themes = {
     shadow: '0 2px 12px rgba(0,0,0,0.40)', headerBg: '#0F2038',
     overlay: 'rgba(0,0,0,0.75)', inputBg: '#0A1628', inputBorder: '#1E3A5F',
     landingBg: 'linear-gradient(135deg, #0A1628 0%, #0D1F3C 50%, #0F2038 100%)',
-  }
+  },
+  /** Tono papel/beige: menos contraste que blanco puro, pensado para lectura prolongada */
+  rest: {
+    bg: '#E8E0D5', bgCard: '#F2EDE4', border: '#C9B8A4', text: '#2A2318',
+    textMuted: '#5C5346', primary: '#0E7490', primaryLight: '#14B8A6',
+    shadow: '0 2px 12px rgba(42,35,24,0.08)', headerBg: '#EDE6DC',
+    overlay: 'rgba(42,35,24,0.45)', inputBg: '#FAF6EF', inputBorder: '#C9B8A4',
+    landingBg: 'linear-gradient(145deg, #EDE6DC 0%, #E5DDD0 45%, #D9CEC0 100%)',
+  },
 }
 
 function getAutoTheme() {
   const hour = new Date().getHours()
   return (hour >= 7 && hour < 19) ? 'light' : 'dark'
+}
+
+/** Solo el modo oscuro “puro” usa mapa/estilos dark; claro, auto-día y descansar vista usan capa clara */
+function themeIsDarkChrome(activeTheme) {
+  return activeTheme === 'dark'
+}
+
+const THEME_MODE_STORAGE_KEY = 'claracore_theme_mode'
+const THEME_MODES = ['light', 'auto', 'dark', 'rest']
+
+function loadStoredThemeMode() {
+  try {
+    const m = localStorage.getItem(THEME_MODE_STORAGE_KEY)
+    if (m && THEME_MODES.includes(m)) return m
+  } catch { /* ignore */ }
+  return 'auto'
 }
 
 function capitalize(str) {
@@ -448,16 +480,21 @@ function ModalOlvide({ t, onClose }) {
 function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, onOlvide }) {
   return (
     <div style={{ minHeight: '100vh', width: '100%', background: t.landingBg, display: 'flex', flexDirection: 'column' }}>
-      <div style={{ position: 'absolute', top: '20px', right: '24px', display: 'flex', gap: '6px', background: activeTheme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.7)', border: `1px solid ${t.border}`, borderRadius: '20px', padding: '4px', backdropFilter: 'blur(8px)' }}>
-        {['light', 'auto', 'dark'].map((mode, i) => (
-          <button key={mode} onClick={() => onTheme(mode)} style={{ background: themeMode === mode ? t.primary : 'transparent', color: themeMode === mode ? '#fff' : t.textMuted, border: 'none', borderRadius: '16px', padding: '4px 12px', fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s' }}>
-            {['☀️ Claro', '⚡ Auto', '🌙 Oscuro'][i]}
+      <div style={{ position: 'absolute', top: '20px', right: '24px', display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: '6px', background: themeIsDarkChrome(activeTheme) ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.7)', border: `1px solid ${t.border}`, borderRadius: '20px', padding: '4px', backdropFilter: 'blur(8px)', maxWidth: 'min(420px, 96vw)' }}>
+        {['light', 'auto', 'dark', 'rest'].map((mode, i) => (
+          <button key={mode} onClick={() => onTheme(mode)} style={{ background: themeMode === mode ? t.primary : 'transparent', color: themeMode === mode ? '#fff' : t.textMuted, border: 'none', borderRadius: '16px', padding: '4px 10px', fontSize: '11px', cursor: 'pointer', transition: 'all 0.2s' }}>
+            {['☀️ Claro', '⚡ Auto', '🌙 Oscuro', '🌿 Descansar'][i]}
           </button>
         ))}
       </div>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 24px' }}>
         <div style={{ marginBottom: '16px', animation: 'fadeDown 0.6s ease' }}>
-          <img src="/CLARA.CORE.png" alt="ClaraCore" style={{ height: '80px', filter: activeTheme === 'dark' ? 'brightness(0) invert(1)' : 'none' }} />
+          <img
+            src="/CLARA.CORE.png"
+            alt="ClaraCore"
+            className="cc-brand-logo cc-brand-logo--landing"
+            style={{ filter: themeIsDarkChrome(activeTheme) ? 'brightness(0) invert(1)' : 'none' }}
+          />
         </div>
         <p style={{ color: t.textMuted, fontSize: '16px', margin: '0 0 56px', letterSpacing: '0.5px', animation: 'fadeDown 0.7s ease', textAlign: 'center', maxWidth: '400px', lineHeight: '1.6' }}>
           Gestión inteligente de contratos de construcción
@@ -1201,8 +1238,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const tipoComent = tieneItem ? 'item_capitulo' : 'dims'
 
     // Pedir comentario (obligatorio)
-    const comentario = await pedirComentario(tipoComent, true)
-    if (comentario === null) return  // canceló
+    const comentarioData = await pedirComentario(tipoComent, true)
+    if (comentarioData === null) return  // canceló
+    const comentario = comentarioData?.mensaje || ''
+    const destinatarioId = comentarioData?.destinatarioId || null
 
     const dims = ids.filter(id => editDims[id]).map(id => ({
       id,
@@ -1220,7 +1259,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     })
     setGuardandoBulk(false)
     if (res.ok) {
-      if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario, destinatarioComentario)
+      if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario, destinatarioId)
       // Patch local — actualizar registros en memoria sin recargar
       setRegistros(prev => prev.map(r => {
         if (!ids.includes(r.id)) return r
@@ -1248,8 +1287,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 async function ejecutarBulkEstadoDirecto(estado) {
     if (!estado || seleccionados.size === 0) return
     const obligatorio = estado === 'Pendiente' || estado === 'Rechazado'
-    const comentario = await pedirComentario('validacion', obligatorio)
-    if (comentario === null) return
+    const comentarioData = await pedirComentario('validacion', obligatorio)
+    if (comentarioData === null) return
+    const comentario = comentarioData?.mensaje || ''
+    const destinatarioId = comentarioData?.destinatarioId || null
     setGuardandoBulk(true)
     const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -1257,7 +1298,7 @@ async function ejecutarBulkEstadoDirecto(estado) {
     })
     setGuardandoBulk(false)
     if (res.ok) {
-      if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario, destinatarioComentario)
+      if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario, destinatarioId)
       const idsSelec = [...seleccionados]
       setBulkEstado(''); setSeleccionados(new Set())
       lanzarClaraLinkEstado(idsSelec, estado)
@@ -1268,8 +1309,10 @@ async function ejecutarBulkEstadoDirecto(estado) {
   async function ejecutarBulkEstado() {
     if (!bulkEstado || seleccionados.size === 0) return
     const obligatorio = bulkEstado === 'Pendiente' || bulkEstado === 'Rechazado'
-    const comentario = await pedirComentario('validacion', obligatorio)
-    if (comentario === null) return
+    const comentarioData = await pedirComentario('validacion', obligatorio)
+    if (comentarioData === null) return
+    const comentario = comentarioData?.mensaje || ''
+    const destinatarioId = comentarioData?.destinatarioId || null
     setGuardandoBulk(true)
     const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -1277,7 +1320,7 @@ async function ejecutarBulkEstadoDirecto(estado) {
     })
     setGuardandoBulk(false)
     if (res.ok) {
-      if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario, destinatarioComentario)
+      if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario, destinatarioId)
       const idsSelec = [...seleccionados]
       const estadoAplicado = bulkEstado
       setBulkEstado(''); setSeleccionados(new Set())
@@ -1402,15 +1445,17 @@ async function highlightEnDwg(registro) {
 
   async function cambiarEstadoDirecto(id, nuevoEstado) {
     const obligatorio = nuevoEstado === 'Pendiente' || nuevoEstado === 'Rechazado'
-    const comentario = await pedirComentario('validacion', obligatorio)
-    if (comentario === null) return
+    const comentarioData = await pedirComentario('validacion', obligatorio)
+    if (comentarioData === null) return
+    const comentario = comentarioData?.mensaje || ''
+    const destinatarioId = comentarioData?.destinatarioId || null
     const token = getToken()
     await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ ids: [id], revisado: nuevoEstado })
     })
-    if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioComentario)
+    if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioId)
     lanzarClaraLinkEstado([id], nuevoEstado)
     setRegistros(prev => prev.map(r => r.id === id ? { ...r, revisado: nuevoEstado } : r))
   }
@@ -1420,13 +1465,15 @@ async function darDeBaja(id) {
       alert('⚠️ Para dar de baja un registro necesitas tener el DWG enlazado.')
       return
     }
-    const comentario = await pedirComentario('validacion', true) // obligatorio
-    if (comentario === null) return
+    const comentarioData = await pedirComentario('validacion', true) // obligatorio
+    if (comentarioData === null) return
+    const comentario = comentarioData?.mensaje || ''
+    const destinatarioId = comentarioData?.destinatarioId || null
     const res = await fetch(`${API}/presupuesto/item/${id}/dar-baja`, {
       method: 'PUT', headers: { Authorization: `Bearer ${token}` }
     })
     if (res.ok) {
-      await crearComentarios([id], 'validacion', `[BAJA] ${comentario}`, destinatarioComentario)
+      await crearComentarios([id], 'validacion', `[BAJA] ${comentario}`, destinatarioId)
       await recargarCapActual()
     } else alert('Error al dar de baja el registro')
   }
@@ -1833,14 +1880,16 @@ async function restaurar(id) {
                     const ids = [...selTab]
                     if (!ids.length) return
                     const obligatorio = estado === 'Pendiente' || estado === 'Rechazado'
-                    const comentario = await pedirComentario('validacion', obligatorio)
-                    if (comentario === null) return
+                    const comentarioData = await pedirComentario('validacion', obligatorio)
+                    if (comentarioData === null) return
+                    const comentario = comentarioData?.mensaje || ''
+                    const destinatarioId = comentarioData?.destinatarioId || null
                     const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
                       method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                       body: JSON.stringify({ ids, revisado: estado })
                     })
                     if (res.ok) {
-                      if (comentario.trim()) await crearComentarios(ids, 'validacion', comentario, destinatarioComentario)
+                      if (comentario.trim()) await crearComentarios(ids, 'validacion', comentario, destinatarioId)
                       lanzarClaraLinkEstado(ids, estado)
                       setRegistros(prev => prev.map(r => ids.includes(r.id) ? { ...r, revisado: estado } : r))
                       setSelTramoTab(prev => ({ ...prev, [key]: new Set() }))
@@ -2390,7 +2439,11 @@ async function restaurar(id) {
               <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end',marginTop:'18px' }}>
                 <button onClick={() => { modalComentario.resolve(null); setModalComentario(null) }}
                   style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'8px',padding:'9px 18px',fontSize:'13px',color:t.textMuted,cursor:'pointer' }}>Cancelar</button>
-                <button onClick={() => { if (!valido) return; modalComentario.resolve(textoComentario); setModalComentario(null) }}
+                <button onClick={() => {
+                  if (!valido) return;
+                  modalComentario.resolve({ mensaje: textoComentario, destinatarioId: destinatarioComentario || null });
+                  setModalComentario(null);
+                }}
                   disabled={!valido}
                   style={{ background:valido?color:'#999',color:'#fff',border:'none',borderRadius:'8px',padding:'9px 22px',fontSize:'13px',fontWeight:'700',cursor:valido?'pointer':'not-allowed' }}>
                   {modalComentario.obligatorio ? '✓ Confirmar' : '✓ Continuar'}
@@ -2962,8 +3015,9 @@ async function restaurar(id) {
 
               {puedeEliminar && !verPapelera && dwgEnlazado && seleccionados.size > 1 && (
                 <button onClick={async () => {
-                  const comentario = await pedirComentario('validacion', true)
-                  if (comentario === null) return
+                  const comentarioData = await pedirComentario('validacion', true)
+                  if (comentarioData === null) return
+                  const comentario = comentarioData?.mensaje || ''
                   for (const id of [...seleccionados]) {
                     const res = await fetch(`${API}/presupuesto/item/${id}/dar-baja`, {
                       method: 'PUT', headers: { Authorization: `Bearer ${token}` }
@@ -3197,7 +3251,8 @@ async function restaurar(id) {
   )
 }
 
-// ─── HOJA REGIS// ─── MAPA PORTADA ─────────────────────────────────────────────────────────────
+// ─── HOJA REGIS// ─── MAPA PORTADA (localización en consulta/edición de reporte) ───────────────
+// Estilo outdoors: relieve y curvas de nivel; clic sigue actualizando coordenadas vía map.on('click').
 function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t }) {
   const containerRef = useRef(null)
   const mapRef       = useRef(null)
@@ -3213,7 +3268,7 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t }) {
     const cLng = hasCoords ? parseFloat(lng) : -74.07
     const map = new mapboxgl.Map({
       container: containerRef.current,
-      style: 'mapbox://styles/mapbox/streets-v12',
+      style: 'mapbox://styles/mapbox/outdoors-v12',
       center: [cLng, cLat],
       zoom: hasCoords ? 15 : 11
     })
@@ -3274,8 +3329,15 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t }) {
 
 // ─── HELPER: NIVEL DE VALIDACIÓN ─────────────────────────────────────────────
 function determinarNivelValidacion(usuario) {
-  const rol     = (usuario?.rol_nombre || usuario?.rol || '').toLowerCase()
-  const cargo   = (usuario?.cargo_nombre || usuario?.cargo || '').toLowerCase()
+  const norm = (txt) =>
+    String(txt || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, ' ')
+  const rol     = norm(usuario?.rol_nombre || usuario?.rol || '')
+  const cargo   = norm(usuario?.cargo_nombre || usuario?.cargo || '')
   const permisos = usuario?.permisos || []
   const permRpt  = permisos.find(p =>
     (p.funcion_nombre || '').toLowerCase().includes('reporte de cantidades')
@@ -3284,18 +3346,18 @@ function determinarNivelValidacion(usuario) {
   const puedeEditar  = !!(permRpt?.editar)
 
   const esContratista   = rol === 'contratista' || rol === 'operativo contratista'
-  const esInterventoria = rol === 'interventoría' || rol === 'interventoria' || rol === 'operativo interventoría' || rol === 'operativo interventoria'
+  const esInterventoria = rol === 'interventoria' || rol === 'operativo interventoria'
   const esSubRol        = rol === 'subcontratista'
 
   const esOperativoContratista   = rol === 'operativo contratista'
-  const esOperativoInterventoria = rol === 'operativo interventoría' || rol === 'operativo interventoria'
+  const esOperativoInterventoria = rol === 'operativo interventoria'
   const esApoyoTecnico           = esInterventoria && !puedeValidar &&
                                    (cargo.includes('apoyo') || cargo.includes('técnico') || cargo.includes('tecnico'))
   const esSubcontratista         = esSubRol || cargo.includes('subcontratista')
   const esSoloComentarista       = esOperativoInterventoria  // puede ver y comentar, no valida ni edita
 
-  // Ocultar montos solo a operativo contratista / operativo interventoría; el resto ve valores económicos.
-  const verValoresEconomicos = !(esOperativoContratista || esOperativoInterventoria)
+  // Operativos y apoyo técnico no ven valores económicos.
+  const verValoresEconomicos = !(esOperativoContratista || esOperativoInterventoria || esApoyoTecnico)
 
   let nivelValidacion = null
   const esDev = cargo.includes('desarrollador')
@@ -3310,6 +3372,9 @@ function determinarNivelValidacion(usuario) {
     nivelValidacion = 2
   } else if (esInterventoria && !esOperativoInterventoria && puedeValidar &&
       (cargo.includes('residente') || cargo.includes('director'))) {
+    nivelValidacion = 3
+  } else if (esApoyoTecnico) {
+    // Apoyo técnico de interventoría opera como visor/comentarista de nivel 3.
     nivelValidacion = 3
   }
 
@@ -3358,7 +3423,15 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
   useEffect(() => {
     fetch(`${API_URL}/actas/${contrato_id}/usuarios-contrato`, { headers: hdrs })
       .then(r => r.json())
-      .then(d => setUsuarios(Array.isArray(d) ? d : []))
+      .then(d => {
+        const lista = Array.isArray(d) ? d : []
+        const ordenada = lista.slice().sort((a, b) => {
+          const na = `${a?.nombre || ''} ${a?.apellidos || ''}`.trim()
+          const nb = `${b?.nombre || ''} ${b?.apellidos || ''}`.trim()
+          return na.localeCompare(nb, 'es', { sensitivity: 'base' })
+        })
+        setUsuarios(ordenada)
+      })
       .catch(() => {})
   }, [])
 
@@ -3476,7 +3549,9 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
             </div>
             <select value={etiqueta} onChange={e => setEtiqueta(e.target.value)} style={iS}>
               <option value=''>— Selecciona una etiqueta —</option>
-              {ETIQUETAS_VALIDACION.map(et => (
+              {[...ETIQUETAS_VALIDACION]
+                .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
+                .map(et => (
                 <option key={et} value={et}>{et}</option>
               ))}
             </select>
@@ -3748,7 +3823,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         const actaRes = await fetch(`${API}/sicoe-obra/${contrato_id}/acta-rpo-vigente`, { headers: hdrs })
         const actaData = await actaRes.json()
         if (!actaData || !actaData.id) {
-          alert('⚠️ No existe un Acta RPO vigente para la fecha de hoy.\n\nCrea el Acta RPO en el módulo administrativo antes de asignar ítems.')
+          alert('⚠️ No existe un Acta RPO vigente para la fecha de hoy.\n\nRegistra el periodo Acta RPO en el sistema (gestión de actas / administración del contrato) antes de asignar ítems.')
           setGuardando(false)
           return
         }
@@ -3781,6 +3856,36 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     setMostrarPopupValidacion(false)
     const nivel = nivelInfo.nivelValidacion
     if (!nivel) return
+    // Perfil solo-comentar: registra comentario completo sin cambiar estado.
+    if (!nivelInfo.puedeValidar) {
+      if (!comentarioData) return
+      const body = {
+        ...comentarioData,
+        rol_origen: nivelInfo.rolOrigen,
+        tipo: 'validacion',
+        nivel_validacion: nivel,
+      }
+      try {
+        const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/comentarios`, {
+          method: 'POST', headers: hdrs, body: JSON.stringify(body)
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          const detail = err?.detail
+          let msg = `Error ${res.status}`
+          if (typeof detail === 'string') msg = detail
+          else if (Array.isArray(detail)) msg = detail.map(x => x?.msg || JSON.stringify(x)).join(', ')
+          else if (detail && typeof detail === 'object') msg = JSON.stringify(detail)
+          else if (err?.message) msg = String(err.message)
+          throw new Error(msg)
+        }
+        onItemAsignado()
+      } catch (e) {
+        const msg = e?.message || String(e)
+        alert(`No se pudo guardar el comentario: ${msg}`)
+      }
+      return
+    }
     const sufijo = nivel === 1 ? 'validar-nivel1' : nivel === 2 ? 'validar-nivel2' : 'validar-nivel3'
     const body = { estado: estadoValidando }
     if (comentarioData) body.comentario_data = { ...comentarioData, rol_origen: nivelInfo.rolOrigen }
@@ -4198,7 +4303,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       )}
 
       {/* ─ Sección: Validación ─ */}
-      {nivelInfo.nivelValidacion && (() => {
+      {nivelInfo.nivelValidacion && nivelInfo.puedeValidar && (() => {
         const nv  = nivelInfo.nivelValidacion
         const bloqueado = !!registro.bloqueado
         const estadoActual = nv === 1 ? registro.nivel1_estado
@@ -4258,6 +4363,27 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           </div>
         )
       })()}
+
+      {/* ─ Sección: Solo comentar (sin validar) ─ */}
+      {nivelInfo.nivelValidacion && !nivelInfo.puedeValidar && (nivelInfo.esSoloComentarista || nivelInfo.esApoyoTecnico) && (
+        <div style={{ marginBottom:'16px', background:t.bg, borderRadius:'10px', padding:'16px', border:`1px solid ${C.borde}` }}>
+          <div style={{ fontSize:'11px', fontWeight:'800', color:t.textMuted, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>
+            💬 Comentarios de validación · Nivel {nivelInfo.nivelValidacion}
+          </div>
+          <div style={{ fontSize:'12px', color:t.textMuted, marginBottom:'10px' }}>
+            Este cargo no valida estados. Solo puede registrar comentarios dirigidos.
+          </div>
+          <button
+            onClick={() => { setEstadoValidando('Comentario'); setMostrarPopupValidacion(true) }}
+            style={{
+              padding:'8px 16px', borderRadius:'8px', fontSize:'12px', fontWeight:'700',
+              cursor:'pointer', background:`${t.primary}22`, color:t.primary, border:`1.5px solid ${t.primary}66`,
+            }}
+          >
+            ✉️ Nuevo comentario
+          </button>
+        </div>
+      )}
 
       {/* ─ Sección: Validación Sub ─ */}
       {nivelInfo.esSubcontratista && (() => {
@@ -4332,7 +4458,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           contrato_id={contrato_id} API_URL={API} hdrs={hdrs}
           estadoValidando={estadoValidando}
           nivelValidacion={nivelInfo.nivelValidacion}
-          obligatorio={estadoValidando !== 'Aprobado'}
+          obligatorio={!nivelInfo.puedeValidar || estadoValidando !== 'Aprobado'}
           onConfirmar={confirmarValidacion}
           onCancelar={() => setMostrarPopupValidacion(false)}
         />
@@ -4412,6 +4538,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [soloMisPendientes, setSoloMisPendientes] = useState(
     !!(camponivelActivo && estadoFiltroActivo)
   )
+  // Mantiene visibles los registros ya cargados al entrar a la carpeta,
+  // aunque cambien de estado durante esta misma sesión de validación.
+  const [registrosAnclados, setRegistrosAnclados] = useState(new Set())
 
   // Función que determina si un registro cumple el filtro de validación activo
   const registroCumpleFiltro = (reg) => {
@@ -4426,12 +4555,25 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     return estadoActual === estadoFiltroActivo
   }
 
+  useEffect(() => {
+    setRegistrosAnclados(new Set())
+  }, [camponivelActivo, estadoFiltroActivo])
+
+  useEffect(() => {
+    if (!camponivelActivo || !estadoFiltroActivo || !soloMisPendientes) return
+    setRegistrosAnclados(prev => {
+      const next = new Set(prev)
+      registrosDominioValidacion.filter(registroCumpleFiltro).forEach(r => next.add(r.id))
+      return next
+    })
+  }, [registrosDominioValidacion, camponivelActivo, estadoFiltroActivo, soloMisPendientes])
+
   // Con filtro de validación activo: nivel 2/3 solo ven filas con nivel previo Aprobado.
   // "Ver todos" = todas las que ya pasaron el prerrequisito (cualquier estado en el nivel actual).
   const registrosMostrados = (!camponivelActivo || !estadoFiltroActivo)
     ? registros
     : soloMisPendientes
-      ? registrosDominioValidacion.filter(registroCumpleFiltro)
+      ? registrosDominioValidacion.filter(r => registroCumpleFiltro(r) || registrosAnclados.has(r.id))
       : registrosDominioValidacion.filter(r => !prereqCampo || r[prereqCampo] === 'Aprobado')
 
   // Conteo de pendientes para mostrar en el badge del toggle
@@ -5779,13 +5921,31 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       .catch(() => {})
   }, [contrato_id])
 
+  useEffect(() => {
+    if (!Array.isArray(cargosValidacionList) || cargosValidacionList.length === 0) return
+    setCapasValidacion(prev => prev.map((c) => {
+      const nombreActual = String(c?.cargo_nombre || '').trim()
+      const pareceId = /^\d+$/.test(nombreActual) || /^cargo\s+\d+$/i.test(nombreActual)
+      if (nombreActual && !pareceId) return c
+      const match = cargosValidacionList.find(x => String(x.id) === String(c?.cargo_id))
+      return match?.nombre ? { ...c, cargo_nombre: match.nombre } : c
+    }))
+  }, [cargosValidacionList])
+
   const CARGO_ID_NIVEL_VALIDO = {54:1, 44:2, 45:2, 51:2, 56:2, 50:3, 58:3}
   const cargosDisponiblesEnFiltro = useMemo(() => {
+    if (nivelInfo.esApoyoTecnico) {
+      // Para apoyo técnico de interventoría solo se habilita el cargo "Residente de Interventoría".
+      return cargosValidacionList.filter(c =>
+        String(c?.nombre || '').toLowerCase().includes('residente') &&
+        String(c?.nombre || '').toLowerCase().includes('intervent')
+      )
+    }
     if (!cargoIdUsuario || !CARGO_ID_NIVEL_VALIDO[cargoIdUsuario]) {
       return cargosValidacionList  // Dev/Admin: ve todos
     }
     return cargosValidacionList.filter(c => c.id === cargoIdUsuario)
-  }, [cargosValidacionList, cargoIdUsuario])
+  }, [cargosValidacionList, cargoIdUsuario, nivelInfo.esApoyoTecnico])
   const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'' }
   const reportesMostrados = useMemo(() => {
     if (capasValidacion.length <= 1) return reportes
@@ -6897,8 +7057,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const [coordLat, setCoordLat] = useState(null)
   const [coordLng, setCoordLng] = useState(null)
   const [modalMapaPk, setModalMapaPk] = useState(false)
-  const mapaPkRef = useRef(null)
+  const mapaPkContainerRef = useRef(null)
   const mapaPkInstance = useRef(null)
+  const modalPkHandlersRef = useRef({})
+  const [planoGeojsonContrato, setPlanoGeojsonContrato] = useState(null)
 
   // Datos TAB 2 - Plantillas
   const [plantillas, setPlantillas] = useState([])
@@ -6925,8 +7087,28 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   const hdrs = { Authorization: `Bearer ${getToken()}` }
   const modoEdicion = !!reporteInicial
 
+  const tienePlanoMapa = useMemo(() => {
+    const g = planoGeojsonContrato
+    if (!g || typeof g !== 'object') return false
+    if (g.type === 'FeatureCollection' && Array.isArray(g.features)) return g.features.length > 0
+    if (g.type === 'Feature' && g.geometry) return true
+    if (Array.isArray(g.features) && g.features.length > 0) return true
+    return false
+  }, [planoGeojsonContrato])
+
   const [numeroReporte, setNumeroReporte] = useState(null)
   const [borradorId, setBorradorId] = useState(reporteInicial?.id || null)
+
+  useEffect(() => {
+    if (!contrato_id) return
+    fetch(`${API_URL}/contratos`, { headers: hdrs })
+      .then(r => (r.ok ? r.json() : []))
+      .then(list => {
+        const c = Array.isArray(list) ? list.find(x => x.id === contrato_id) : null
+        setPlanoGeojsonContrato(c?.plano_geojson || null)
+      })
+      .catch(() => setPlanoGeojsonContrato(null))
+  }, [contrato_id])
 
   useEffect(() => {
     if (!reporteInicial) {
@@ -7023,6 +7205,104 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     p.pk_id.toLowerCase().includes(pkBusqueda.toLowerCase()) ||
     (p.ubicacion||'').toLowerCase().includes(pkBusqueda.toLowerCase())
   ).slice(0, 20)
+
+  modalPkHandlersRef.current = {
+    pkIds,
+    selPkId,
+    setCoordLat,
+    setCoordLng,
+    setPkBusqueda,
+    setPkSeleccionado,
+    setModalMapaPk,
+  }
+
+  useLayoutEffect(() => {
+    if (!modalMapaPk || !tienePlanoMapa) return
+    const geojson = planoGeojsonContrato
+    if (!geojson?.features?.length) return
+    const container = mapaPkContainerRef.current
+    if (!container) return
+
+    const token = import.meta.env.VITE_MAPBOX_TOKEN
+    if (token) mapboxgl.accessToken = token
+
+    const map = new mapboxgl.Map({
+      container,
+      style: 'mapbox://styles/mapbox/outdoors-v12',
+      center: [-74.031242, 4.760271],
+      zoom: 12,
+      fadeDuration: 0,
+    })
+    mapaPkInstance.current = map
+    map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+
+    const onLoad = () => {
+      map.addSource('pkids', { type: 'geojson', data: geojson })
+      map.addLayer({
+        id: 'pkids-fill', type: 'fill', source: 'pkids',
+        paint: { 'fill-color': '#0077B6', 'fill-opacity': 0.35 },
+      })
+      map.addLayer({
+        id: 'pkids-outline', type: 'line', source: 'pkids',
+        paint: { 'line-color': '#00A896', 'line-width': 1.5 },
+      })
+      map.addLayer({
+        id: 'pkids-hover', type: 'fill', source: 'pkids',
+        paint: { 'fill-color': '#F59E0B', 'fill-opacity': 0.6 },
+        filter: ['==', 'Layer', ''],
+      })
+      const coords = geojson.features.flatMap(f => {
+        const geom = f.geometry
+        if (!geom) return []
+        if (geom.type === 'Polygon') return geom.coordinates[0]
+        if (geom.type === 'MultiPolygon') return geom.coordinates.flat(2)
+        return []
+      })
+      if (coords.length > 0) {
+        const lngs = coords.map(c => c[0])
+        const lats = coords.map(c => c[1])
+        map.fitBounds(
+          [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
+          { padding: 40, duration: 0 },
+        )
+      }
+      map.on('click', 'pkids-fill', (e) => {
+        const feat = e.features[0]
+        if (!feat) return
+        const h = modalPkHandlersRef.current
+        const pkIdVal = String(feat.properties.Layer || feat.properties.PK_ID || feat.properties.pk_id || '').trim()
+        const found = h.pkIds.find(p => String(p.pk_id).trim() === pkIdVal)
+        if (found) {
+          h.selPkId(found)
+          h.setCoordLat(e.lngLat.lat)
+          h.setCoordLng(e.lngLat.lng)
+        } else {
+          h.setPkBusqueda(pkIdVal)
+          h.setPkSeleccionado(null)
+        }
+        h.setModalMapaPk(false)
+      })
+      map.on('mouseenter', 'pkids-fill', (ev) => {
+        map.getCanvas().style.cursor = 'pointer'
+        map.setFilter('pkids-hover', ['==', 'Layer', String(ev.features[0]?.properties?.Layer || '')])
+      })
+      map.on('mouseleave', 'pkids-fill', () => {
+        map.getCanvas().style.cursor = ''
+        map.setFilter('pkids-hover', ['==', 'Layer', ''])
+      })
+    }
+
+    map.once('load', onLoad)
+
+    return () => {
+      try {
+        map.remove()
+      } catch {
+        /* ignore */
+      }
+      mapaPkInstance.current = null
+    }
+  }, [modalMapaPk, tienePlanoMapa, planoGeojsonContrato])
 
   const subFiltrados = subcontratistas.filter(s =>
     s.nombre.toLowerCase().includes(subBusqueda.toLowerCase())
@@ -7364,18 +7644,139 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     </div>
                   ) : (
                     <>
-                      <div style={{ display:'flex', gap:'6px', alignItems:'center' }}>
-                        <div style={{ ...inpStyle(errores.pk), flex:1, display:'flex', alignItems:'center', minHeight:'38px', cursor:'default' }}>
-                          {pkSeleccionado
-                            ? <span style={{ fontWeight:'800', color:t.primary, fontSize:'14px' }}>{pkSeleccionado.pk_id}</span>
-                            : <span style={{ color:t.textMuted, fontStyle:'italic', fontSize:'12px' }}>Selecciona el punto tocando el mapa →</span>
-                          }
+                      {tienePlanoMapa ? (
+                        <div style={{ display:'flex', gap:'6px', alignItems:'stretch' }}>
+                          <input
+                            readOnly
+                            disabled
+                            tabIndex={-1}
+                            value={pkSeleccionado?.pk_id ?? ''}
+                            placeholder="Pulsa el mapa y elige un polígono →"
+                            style={{
+                              ...inpStyle(errores.pk),
+                              flex: 1,
+                              minHeight: '38px',
+                              cursor: 'not-allowed',
+                              opacity: 0.92,
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setModalMapaPk(true)}
+                            title="Seleccionar PK_ID en el mapa"
+                            style={{
+                              background: t.primary,
+                              color: '#fff',
+                              border: 'none',
+                              borderRadius: '8px',
+                              padding: '0 14px',
+                              cursor: 'pointer',
+                              fontSize: '16px',
+                              flexShrink: 0,
+                              height: '38px',
+                            }}
+                          >
+                            🗺️
+                          </button>
                         </div>
-                        <button onClick={() => setModalMapaPk(true)} type="button" title="Seleccionar PK_ID en el mapa" style={{
-                          background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
-                          padding:'0 14px', cursor:'pointer', fontSize:'16px', flexShrink:0, height:'38px'
-                        }}>🗺️</button>
-                      </div>
+                      ) : (
+                        <div style={{ position:'relative' }}>
+                          <div style={{ display:'flex', gap:'6px', alignItems:'stretch' }}>
+                            <input
+                              readOnly
+                              disabled
+                              tabIndex={-1}
+                              value={pkSeleccionado?.pk_id ?? ''}
+                              placeholder="Elige un PK con la lista →"
+                              style={{
+                                ...inpStyle(errores.pk),
+                                flex: 1,
+                                minHeight: '38px',
+                                cursor: 'not-allowed',
+                                opacity: 0.92,
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setPkDropOpen(o => !o)}
+                              title="Lista de PK del contrato"
+                              style={{
+                                background: t.bgCard,
+                                color: t.primary,
+                                border: `1px solid ${t.border}`,
+                                borderRadius: '8px',
+                                padding: '0 12px',
+                                cursor: 'pointer',
+                                fontSize: '16px',
+                                flexShrink: 0,
+                                height: '38px',
+                              }}
+                            >
+                              📋
+                            </button>
+                          </div>
+                          {pkDropOpen && (
+                            <div
+                              style={{
+                                position: 'absolute',
+                                top: '100%',
+                                left: 0,
+                                right: 0,
+                                marginTop: '8px',
+                                background: t.bgCard,
+                                border: `1px solid ${t.border}`,
+                                borderRadius: '8px',
+                                zIndex: 25,
+                                padding: '10px',
+                                boxShadow: '0 12px 32px rgba(0,0,0,0.18)',
+                              }}
+                            >
+                              <input
+                                value={pkBusqueda}
+                                onChange={e => {
+                                  setPkBusqueda(e.target.value)
+                                  setPkSeleccionado(null)
+                                }}
+                                placeholder="Filtrar por código o ubicación..."
+                                style={{ ...inpStyle(false), marginBottom: '8px', fontSize: '12px' }}
+                                autoFocus
+                              />
+                              <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                                {pkFiltrados.length === 0 ? (
+                                  <div style={{ fontSize: '12px', color: t.textMuted, padding: '8px' }}>
+                                    Sin coincidencias
+                                  </div>
+                                ) : (
+                                  pkFiltrados.map(p => (
+                                    <div
+                                      key={p.id}
+                                      onMouseDown={() => {
+                                        selPkId(p)
+                                        setPkDropOpen(false)
+                                      }}
+                                      style={{
+                                        padding: '8px 10px',
+                                        cursor: 'pointer',
+                                        fontSize: '13px',
+                                        color: t.text,
+                                        borderBottom: `1px solid ${t.border}`,
+                                      }}
+                                    >
+                                      <span style={{ fontWeight: '700' }}>{p.pk_id}</span>
+                                      <span style={{ fontSize: '11px', color: t.textMuted, marginLeft: '8px' }}>
+                                        {p.ubicacion || ''}
+                                      </span>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          <div style={{ fontSize: '10px', color: t.textMuted, marginTop: '6px' }}>
+                            Sin plano GeoJSON no hay mapa; usa 📋 o pide cargar el plano en Contratos.
+                          </div>
+                        </div>
+                      )}
                       {pkSeleccionado && (
                         <div style={{ marginTop:'6px', padding:'8px 12px', background:t.bg,
                           borderRadius:'6px', fontSize:'11px', color:t.textMuted }}>
@@ -8027,8 +8428,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         </div>
       )}
 
-      {/* ── Modal Mapa PK_ID ── */}
-      {modalMapaPk && (
+      {/* ── Modal Mapa PK_ID (solo si el contrato tiene GeoJSON de plano) ── */}
+      {modalMapaPk && tienePlanoMapa && (
         <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.7)', zIndex:2000,
           display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}>
           <div style={{ background:t.bgCard, borderRadius:'16px', width:'100%', maxWidth:'700px',
@@ -8037,62 +8438,16 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               display:'flex', justifyContent:'space-between', alignItems:'center' }}>
               <div style={{ fontWeight:'700', color:t.text }}>🗺️ Seleccionar PK_ID en el mapa</div>
               <div style={{ fontSize:'12px', color:t.textMuted }}>Haz click en un polígono para seleccionarlo</div>
-              <button onClick={() => {
-                setModalMapaPk(false)
-                if (mapaPkInstance.current) { mapaPkInstance.current.remove(); mapaPkInstance.current = null }
-              }} style={{ background:'transparent', border:'none', fontSize:'20px', cursor:'pointer', color:t.textMuted }}>✕</button>
+              <button
+                type="button"
+                onClick={() => setModalMapaPk(false)}
+                style={{ background:'transparent', border:'none', fontSize:'20px', cursor:'pointer', color:t.textMuted }}
+              >
+                ✕
+              </button>
             </div>
-            <div style={{ flex:1, position:'relative' }}>
-              <div ref={el => {
-                if (!el || mapaPkInstance.current) return
-                mapaPkRef.current = el
-                const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
-                const map = new mapboxgl.Map({
-                  container: el,
-                  style: 'mapbox://styles/mapbox/dark-v11',
-                  center: [-74.031242, 4.760271],
-                  zoom: 15,
-                  accessToken: MAPBOX_TOKEN
-                })
-                mapaPkInstance.current = map
-                map.on('load', () => {
-                  fetch('/pOLIGONOS_1551t_Project_Feat.json')
-                    .then(r => r.json())
-                    .then(geojson => {
-                      map.addSource('pkids', { type:'geojson', data: geojson })
-                      map.addLayer({ id:'pkids-fill', type:'fill', source:'pkids',
-                        paint: { 'fill-color':'#0077B6', 'fill-opacity':0.3 } })
-                      map.addLayer({ id:'pkids-outline', type:'line', source:'pkids',
-                        paint: { 'line-color':'#00A896', 'line-width':1.5 } })
-                      map.addLayer({ id:'pkids-hover', type:'fill', source:'pkids',
-                        paint: { 'fill-color':'#F59E0B', 'fill-opacity':0.6 },
-                        filter: ['==', 'Layer', ''] })
-                      map.on('click', 'pkids-fill', (e) => {
-                        const feat = e.features[0]; if (!feat) return
-                        const pkIdVal = String(feat.properties.Layer || feat.properties.PK_ID || feat.properties.pk_id || '').trim()
-                        const found = pkIds.find(p => String(p.pk_id).trim() === pkIdVal)
-                        if (found) {
-                          selPkId(found)
-                          setCoordLat(e.lngLat.lat)
-                          setCoordLng(e.lngLat.lng)
-                        } else {
-                          setPkBusqueda(pkIdVal)
-                          setPkSeleccionado(null)
-                        }
-                        setModalMapaPk(false)
-                        if (mapaPkInstance.current) { mapaPkInstance.current.remove(); mapaPkInstance.current = null }
-                      })
-                      map.on('mouseenter', 'pkids-fill', (e) => {
-                        map.getCanvas().style.cursor = 'pointer'
-                        map.setFilter('pkids-hover', ['==', 'Layer', String(e.features[0]?.properties?.Layer || '')])
-                      })
-                      map.on('mouseleave', 'pkids-fill', () => {
-                        map.getCanvas().style.cursor = ''
-                        map.setFilter('pkids-hover', ['==', 'Layer', ''])
-                      })
-                    })
-                })
-              }} style={{ width:'100%', height:'100%' }} />
+            <div style={{ flex:1, position:'relative', minHeight:0 }}>
+              <div ref={mapaPkContainerRef} style={{ width:'100%', height:'100%' }} />
             </div>
           </div>
         </div>
@@ -8564,6 +8919,8 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
 // ─── BUZÓN DE NOTIFICACIONES ──────────────────────────────────────────────────
 function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   const API = API_BASE
+  const contratoCtx = usuario?.contrato_id
+  const qContrato = contratoCtx != null && contratoCtx !== '' ? `?contrato_id=${contratoCtx}` : ''
   const [abierto,       setAbierto]       = useState(false)
   const [tab,           setTab]           = useState('recibidos')
   const [recibidos,     setRecibidos]     = useState([])
@@ -8583,35 +8940,43 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   const h = { Authorization: `Bearer ${token}` }
 
   const cargarCount = async () => {
-    const r = await fetch(`${API}/notificaciones/no-leidas-count`, { headers: h }).catch(() => null)
+    const r = await fetch(`${API}/notificaciones/no-leidas-count${qContrato}`, { headers: h }).catch(() => null)
     if (r?.ok) { const d = await r.json(); setNoLeidas(d.count || 0) }
   }
 
   const cargarRecibidos = async () => {
-    const r = await fetch(`${API}/notificaciones/recibidas`, { headers: h }).catch(() => null)
+    const r = await fetch(`${API}/notificaciones/recibidas${qContrato}`, { headers: h }).catch(() => null)
     if (r?.ok) setRecibidos(await r.json())
   }
 
   const cargarEnviados = async () => {
-    const r = await fetch(`${API}/notificaciones/enviadas`, { headers: h }).catch(() => null)
+    const r = await fetch(`${API}/notificaciones/enviadas${qContrato}`, { headers: h }).catch(() => null)
     if (r?.ok) setEnviados(await r.json())
   }
 
   const cargarDestinatarios = async () => {
     const r = await fetch(`${API}/notificaciones/usuarios-destinatarios`, { headers: h }).catch(() => null)
-    if (r?.ok) setDestinatarios(await r.json())
+    if (r?.ok) {
+      const data = await r.json()
+      const ordenados = (Array.isArray(data) ? data : []).slice().sort((a, b) => {
+        const na = `${a?.nombre || ''}`.trim()
+        const nb = `${b?.nombre || ''}`.trim()
+        return na.localeCompare(nb, 'es', { sensitivity: 'base' })
+      })
+      setDestinatarios(ordenados)
+    }
   }
 
   useEffect(() => {
     cargarCount()
     const iv = setInterval(cargarCount, 30000)
     return () => clearInterval(iv)
-  }, [])
+  }, [contratoCtx])
 
   useEffect(() => {
     if (!abierto) return
     cargarRecibidos(); cargarEnviados(); cargarDestinatarios()
-  }, [abierto])
+  }, [abierto, contratoCtx])
 
   async function abrirHilo(notif) {
     setHiloActivo(notif); setHiloLoading(true); setHilo([])
@@ -8624,7 +8989,11 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   async function enviarNuevo() {
     if (!nuevo.asunto || !nuevo.mensaje) return
     setEnviando(true)
-    const body = { ...nuevo, destinatario_id: nuevo.tipo === 'BROADCAST' ? null : parseInt(nuevo.destinatario_id) || null }
+    const body = {
+      ...nuevo,
+      destinatario_id: nuevo.tipo === 'BROADCAST' ? null : parseInt(nuevo.destinatario_id) || null,
+      contrato_id: contratoCtx != null && contratoCtx !== '' ? parseInt(contratoCtx, 10) : null,
+    }
     await fetch(`${API}/notificaciones`, { method:'POST', headers:{...h,'Content-Type':'application/json'}, body: JSON.stringify(body) })
     setNuevo({ destinatario_id:'', asunto:'', mensaje:'', tipo:'MENSAJE_DIRECTO' })
     setMostrarNuevo(false); setEnviando(false)
@@ -8891,7 +9260,7 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0, fontSize = 'normal', onFontSize }) {
+function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0, fontSize = 'normal', onFontSize, onOpenPerfil }) {
   const [moduloActivo, setModuloActivo] = useState('inicio')
   const [dashCarpetaReporte, setDashCarpetaReporte] = useState(null)
   const [dashRegistroNumero, setDashRegistroNumero] = useState(null)
@@ -8942,6 +9311,13 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashDrillPag, setDashDrillPag] = useState(0)
   const [dashCapPag, setDashCapPag] = useState(0)
   const [panelFoco, setPanelFoco] = useState(null)
+  const [matrizValidacion, setMatrizValidacion] = useState(null)
+  /** true al inicio para evitar un destello "Sin acta" antes del primer fetch */
+  const [matrizValidacionLoad, setMatrizValidacionLoad] = useState(true)
+  /** vigente = servidor usa acta del período actual; all = todo el contrato; número = acta explícita */
+  const [actaFiltroMatriz, setActaFiltroMatriz] = useState('vigente')
+  /** Actas del contrato (misma fuente que módulo actas): RPO + nombre asignado para el dropdown de la matriz */
+  const [actasListaMatriz, setActasListaMatriz] = useState([])
   const dashDrillCache = useRef({})   // caché ítems: { 'capitulo': { data, ts } }
   const dashTablaCache = useRef({})   // caché tabla: { 'cap|item': { data, ts } }
   const CACHE_TTL = 5 * 60 * 1000    // 5 minutos en ms
@@ -8965,6 +9341,10 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-resumen`, { headers: { Authorization:`Bearer ${tok}` } })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if(d) setKpiCobro(d) })
+    fetch(`${API_URL}/actas/${contratoIdDash}/lista`, { headers: { Authorization: `Bearer ${tok}` } })
+      .then(r => r.ok ? r.json() : [])
+      .then(rows => setActasListaMatriz(Array.isArray(rows) ? rows : []))
+      .catch(() => setActasListaMatriz([]))
   }, [contratoIdDash])
 
 // ── Auto-refresh dashboard cada 30 segundos ───────────────────────────────
@@ -8993,6 +9373,49 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     const iv = setInterval(recargar, 30000)
     return () => clearInterval(iv)
   }, [contratoIdDash])
+
+  useLayoutEffect(() => {
+    setActaFiltroMatriz('vigente')
+  }, [contratoIdDash])
+
+  useEffect(() => {
+    if (!contratoIdDash) {
+      setMatrizValidacionLoad(false)
+      return
+    }
+    const ac = new AbortController()
+    setMatrizValidacionLoad(true)
+    const pm = new URLSearchParams()
+    if (actaFiltroMatriz === 'all') {
+      pm.set('todo_contrato', '1')
+    } else if (actaFiltroMatriz !== 'vigente' && actaFiltroMatriz != null && actaFiltroMatriz !== '') {
+      const na = parseInt(String(actaFiltroMatriz), 10)
+      if (!Number.isNaN(na)) pm.set('acta_rpo', String(na))
+    }
+    const url = `${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-matriz-validacion?${pm}`
+    fetch(url, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+      signal: ac.signal,
+    })
+      .then(async r => {
+        if (!r.ok) {
+          const errTxt = await r.text().catch(() => '')
+          console.warn('[dashboard-matriz-validacion]', r.status, errTxt?.slice(0, 200))
+          return
+        }
+        const j = await r.json().catch(() => null)
+        if (j && typeof j === 'object') setMatrizValidacion(j)
+      })
+      .catch(err => {
+        if (err?.name === 'AbortError') return
+        console.warn(err)
+        setMatrizValidacion(null)
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setMatrizValidacionLoad(false)
+      })
+    return () => ac.abort()
+  }, [contratoIdDash, actaFiltroMatriz])
 
   async function cargarDashDrill(drill) {
     if (!contratoIdDash) return
@@ -9316,6 +9739,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const canAdmin = esDeveloper || usuario?.cargo_nombre === 'Administrador' || tienePermisoAdmin
   const tienePermisoSicoeObra = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Reporte de Cantidades' && p.ver)
   const tienePermisoDashboard   = esDeveloper || (usuario?.permisos || []).some(p => p.funcion_nombre === 'Dashboard' && p.ver)
+  const tienePermisoInformesCcd = esDeveloper || usuario?.cargo_nombre === 'Administrador'
+    || (usuario?.permisos || []).some(p =>
+      (p.funcion_nombre || '').toLowerCase() === 'informes ccd' && p.ver
+    )
   const tienePermisoPresupuesto = esDeveloper || (usuario?.permisos || []).some(p => {
     const nombre = (p.funcion_nombre || '').toLowerCase()
     return nombre === 'editar registros presupuesto' && p.ver
@@ -9388,7 +9815,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
     <div style={s.app}>
       <div style={s.header}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <img src="/CLARA.CORE.png" alt="ClaraCore" style={{ height: '40px', filter: activeTheme === 'dark' ? 'brightness(0) invert(1)' : 'none' }} />
+          <img
+            src="/CLARA.CORE.png"
+            alt="ClaraCore"
+            className="cc-brand-logo cc-brand-logo--header"
+            style={{ filter: themeIsDarkChrome(activeTheme) ? 'brightness(0) invert(1)' : 'none' }}
+          />
           {usuario?.logo_contratista && (usuario?.rol_nombre === 'Contratista' || !['Interventoría'].includes(usuario?.rol_nombre)) && (
             <img src={usuario.logo_contratista} alt="Contratista" style={{ height: '52px', borderRadius: '6px', background: '#fff', padding: '3px 8px', boxShadow: '0 1px 4px rgba(0,0,0,0.15)' }} />
           )}
@@ -9397,10 +9829,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <div style={s.themeSelector}>
-            {['light', 'auto', 'dark'].map((mode, i) => (
+          <div style={{ ...s.themeSelector, flexWrap: 'wrap', justifyContent: 'flex-end', maxWidth: 'min(440px, 96vw)' }}>
+            {['light', 'auto', 'dark', 'rest'].map((mode, i) => (
               <button key={mode} style={s.themeBtn(mode)} onClick={() => onTheme(mode)}>
-                {['☀️ Claro', '⚡ Auto', '🌙 Oscuro'][i]}
+                {['☀️ Claro', '⚡ Auto', '🌙 Oscuro', '🌿 Descansar'][i]}
               </button>
             ))}
           </div>
@@ -9413,10 +9845,50 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             ))}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ fontSize: '13px', color: t.textMuted }}>
-              👤 {usuario?.nombre}
-              {usuario?.cargo_nombre && <span style={{ marginLeft: '6px', fontSize: '11px', opacity: 0.7 }}>· {usuario.cargo_nombre}</span>}
-            </span>
+            <button
+              type="button"
+              onClick={() => onOpenPerfil && onOpenPerfil()}
+              title="Editar perfil"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                background: t.bgCard,
+                border: `1px solid ${t.border}`,
+                borderRadius: '999px',
+                padding: '4px 12px 4px 4px',
+                cursor: 'pointer',
+                font: 'inherit',
+                textAlign: 'left',
+              }}
+            >
+              <span
+                style={{
+                  width: '36px',
+                  height: '36px',
+                  borderRadius: '50%',
+                  overflow: 'hidden',
+                  flexShrink: 0,
+                  background: t.inputBg,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '18px',
+                }}
+              >
+                {usuario?.foto_perfil_url ? (
+                  <img src={usuario.foto_perfil_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : (
+                  '👤'
+                )}
+              </span>
+              <span style={{ fontSize: '13px', color: t.textMuted }}>
+                <span style={{ color: t.text, fontWeight: '600' }}>{usuario?.nombre}</span>
+                {usuario?.cargo_nombre && (
+                  <span style={{ display: 'block', fontSize: '11px', opacity: 0.75, marginTop: '1px' }}>{usuario.cargo_nombre}</span>
+                )}
+              </span>
+            </button>
             <BuzonNotificaciones t={t} usuario={usuario} token={getToken()} onNavegar={handleNavegar} />
             {canAdmin && (
               <button onClick={() => setShowAdmin(true)} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.primary, fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>
@@ -9461,7 +9933,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             ['dashboard',    '📊', 'Dashboard',      tienePermisoDashboard],
             ['presupuesto',  '📋', 'Presupuesto',    tienePermisoPresupuesto],
             ['sicoe_obra',   '🏗️', 'SICOE Obra',    tienePermisoSicoeObra],
-            ['informes',     '📄', 'Informes',       true],
+            ['informes',     '📄', 'Informes',       tienePermisoInformesCcd],
             ['almacen',      '🏪', 'Almacén',        true],
             ['gantt',        '📅', 'Gantt',           true],
             ['semaforo',     '🗺️', 'Plano Semáforo', true],
@@ -9717,8 +10189,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 )}
               </div>
 
-              {/* 🟢 Panel Presupuesto vs Cobro — barras verticales por capítulo */}
-              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, gridColumn:'1 / -1' }}>
+              {/* 🟢 Presupuesto vs Obra + Matriz validación (SICOE / Acta RPO) */}
+              <div style={{ gridColumn:'1 / -1', display:'flex', flexDirection: panelFoco==='ppto-cobro' ? 'column' : 'row', flexWrap:'wrap', gap:'16px', alignItems:'stretch' }}>
+              <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, flex: panelFoco==='ppto-cobro' ? '1 1 100%' : '1 1 calc(50% - 8px)', minWidth: panelFoco==='ppto-cobro' ? '100%' : 'min(300px, 100%)', boxSizing:'border-box' }}>
                 <div style={{ marginBottom:'14px' }}>
                   <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
                     <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>📊 Presupuesto vs Obra Aprobada</div>
@@ -9782,10 +10255,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                                     if(tip) tip.style.display='none'
                                   }}
                                 />
-                                  onMouseLeave={e => {
-                                    const tip = document.getElementById(`tip-vs-${i}`)
-                                    if(tip) tip.style.display='none'
-                                  }}
                                 <g id={`tip-vs-${i}`} style={{display:'none', pointerEvents:'none'}}>
                                   <rect x={Math.min(x-10, totalW-220)} y={Math.min(yP,yC)-68} width="215" height="62" rx="6"
                                     fill={t.bgCard} stroke={t.border} strokeWidth="1"
@@ -9839,6 +10308,152 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   )
                 })()}
               {/* ── Drill → ahora vive en el popup ── */}
+              </div>
+
+              <div style={{
+                background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'16px', boxShadow:t.shadow,
+                flex: panelFoco==='ppto-cobro' ? '1 1 100%' : '1 1 calc(50% - 8px)', minWidth: panelFoco==='ppto-cobro' ? '100%' : 'min(300px, 100%)', boxSizing:'border-box',
+                maxHeight: panelFoco==='ppto-cobro' ? 'none' : 'min(92vh, 780px)', overflowY:'auto',
+              }}>
+                <div style={{ marginBottom:'12px' }}>
+                  <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>Validación por rol · SICOE Obra</div>
+                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'4px' }}>
+                    Por defecto se usa el acta RPO cuyo período incluye hoy. Columnas: Interventoría (N3) · Residente (N2) · Inspector (N1).
+                  </div>
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'10px' }}>
+                    <span style={{ fontSize:'11px', color:t.textMuted }}>Acta RPO:</span>
+                    <select
+                      className={`cc-dashboard-acta-select cc-dashboard-acta-select--${themeIsDarkChrome(activeTheme) ? 'dark' : 'light'}`}
+                      value={actaFiltroMatriz}
+                      onChange={e => setActaFiltroMatriz(e.target.value)}
+                      style={{
+                        fontSize:'12px',
+                        padding:'6px 10px',
+                        borderRadius:'6px',
+                        border:`1px solid ${t.border}`,
+                        background:t.bgCard,
+                        color:t.text,
+                        maxWidth:'min(420px, 100%)',
+                        minHeight:'32px',
+                        cursor:'pointer',
+                        colorScheme: themeIsDarkChrome(activeTheme) ? 'dark' : 'light',
+                      }}
+                    >
+                      {(() => {
+                        const av = matrizValidacion?.acta_vigente
+                        const filtro = matrizValidacion?.filtro
+                        let labVig = '—'
+                        if (matrizValidacionLoad && actaFiltroMatriz === 'vigente') {
+                          labVig = 'Cargando acta en período…'
+                        } else if (filtro === 'sin_vigente_todo_contrato') {
+                          labVig = 'Sin acta RPO en período (todo el contrato)'
+                        } else if (av && av.numero_rpo != null) {
+                          const nom = (av.asignado_nombre || '').trim()
+                          labVig = `Acta RPO ${av.numero_rpo}${nom ? ` · ${nom}` : ''}`
+                        } else {
+                          labVig = 'Sin acta en período'
+                        }
+                        return (
+                          <option value="vigente" style={{ background:t.bgCard, color:t.text }}>{labVig}</option>
+                        )
+                      })()}
+                      <option value="all" style={{ background:t.bgCard, color:t.text }}>Todo el contrato (histórico)</option>
+                      {(() => {
+                        const rpoRows = (actasListaMatriz || []).filter(
+                          a => a && String(a.tipo_grupo || '').toUpperCase() === 'RPO' && a.numero_rpo != null && a.numero_rpo !== ''
+                        )
+                        const nums = rpoRows.map(a => Number(a.numero_rpo)).filter(n => !Number.isNaN(n))
+                        const sorted = nums.length === rpoRows.length
+                          ? [...new Set(nums)].sort((a, b) => b - a)
+                          : [...new Set(rpoRows.map(a => a.numero_rpo))].sort((a, b) => String(b).localeCompare(String(a), undefined, { numeric: true }))
+                        return sorted.map((n) => {
+                          const row = rpoRows.find(r => String(r.numero_rpo) === String(n))
+                          const nom = (row?.asignado_nombre || '').trim()
+                          const lab = `Acta RPO ${n}${nom ? ` · ${nom}` : ''}`
+                          return (
+                            <option key={n} value={String(n)} style={{ background:t.bgCard, color:t.text }}>{lab}</option>
+                          )
+                        })
+                      })()}
+                    </select>
+                    {matrizValidacionLoad && <span style={{ fontSize:'11px', color:t.textMuted }}>Cargando…</span>}
+                  </div>
+                </div>
+                {(() => {
+                  /* Filas pastel: en tema oscuro t.text es claro → ilegible; usar texto oscuro sobre fondo claro */
+                  const textOnPastel = themeIsDarkChrome(activeTheme) ? '#0f172a' : t.text
+                  const filas = [
+                    { key: 'aprobado', label: 'APROBADO', bg: '#DCFCE7', dark: false },
+                    { key: 'pendiente', label: 'PENDIENTES', bg: '#FEF9C3', dark: false },
+                    { key: 'pendiente_item', label: 'PENDIENTES: ITEM PENDIENTE', bg: '#DBEAFE', dark: false },
+                    { key: 'no_revisado', label: 'NO REVISADOS', bg: '#E9D5FF', dark: false },
+                    { key: 'rechazado', label: 'RECHAZADOS', bg: '#FECACA', dark: false },
+                    { key: 'habilitado', label: 'HABILITADO VALIDACIÓN', bg: '#374151', dark: true },
+                    { key: 'otras_actas', label: 'PENDIENTES OTRAS ACTAS', bg: '#FEF9C3', dark: false },
+                  ]
+                  const emptyBloque = () => {
+                    const z = () => ({ interventoria: 0, residente: 0, inspector: 0 })
+                    return {
+                      aprobado: z(), pendiente: z(), pendiente_item: z(), no_revisado: z(),
+                      rechazado: z(), habilitado: z(), otras_actas: z(),
+                    }
+                  }
+                  const mergeBloque = (bloque) => {
+                    const e = emptyBloque()
+                    if (!bloque || typeof bloque !== 'object') return e
+                    for (const k of Object.keys(e)) {
+                      if (bloque[k] && typeof bloque[k] === 'object') {
+                        e[k] = { ...e[k], ...bloque[k] }
+                      }
+                    }
+                    return e
+                  }
+                  const renderTabla = (titulo, bloque) => {
+                    const b = mergeBloque(bloque)
+                    return (
+                      <div key={titulo} style={{ marginBottom:'18px' }}>
+                        <div style={{ fontSize:'11px', fontWeight:'800', color:t.text, marginBottom:'8px', letterSpacing:'0.3px' }}>{titulo}</div>
+                        <div style={{ overflowX:'auto' }}>
+                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'10px', minWidth:'280px' }}>
+                            <thead>
+                              <tr>
+                                <th style={{ textAlign:'left', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase' }}>Estado</th>
+                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase' }}>Interventoría (N3)</th>
+                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase' }}>Residente (N2)</th>
+                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase' }}>Inspector (N1)</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filas.map(row => {
+                                const d = b[row.key] || {}
+                                const tc = row.dark ? '#f9fafb' : textOnPastel
+                                const tcLabel = row.dark ? '#fff' : textOnPastel
+                                return (
+                                  <tr key={row.key} style={{ background: row.bg }}>
+                                    <td style={{ padding:'6px 4px', fontWeight:'700', color: tcLabel, fontSize:'9px' }}>{row.label}</td>
+                                    <td style={{ textAlign:'right', padding:'6px 4px', color: tc, fontWeight:'600' }}>{fmtD(d.interventoria)}</td>
+                                    <td style={{ textAlign:'right', padding:'6px 4px', color: tc, fontWeight:'600' }}>{fmtD(d.residente)}</td>
+                                    <td style={{ textAlign:'right', padding:'6px 4px', color: tc, fontWeight:'600' }}>{fmtD(d.inspector)}</td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )
+                  }
+                  if (!matrizValidacion && !matrizValidacionLoad) {
+                    return <div style={{ fontSize:'12px', color:t.textMuted, padding:'12px 0' }}>Sin datos de validación.</div>
+                  }
+                  return (
+                    <>
+                      {renderTabla('Obra ejecutada directo sin AIU', matrizValidacion?.obra_ejecutada_directo_sin_aiu)}
+                      {renderTabla('Ensayos y sondeos directo sin IVA', matrizValidacion?.ensayos_sondeos_directo_sin_iva)}
+                    </>
+                  )
+                })()}
+              </div>
               </div>
 
             </div>
@@ -10818,7 +11433,18 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
         {moduloActivo === 'sicoe_obra' && <ModuloSicoeObra t={t} usuario={usuario} token={getToken()} s={s} navRegistroNumero={navRegistroNumero} onNavReporteConsumed={() => setNavRegistroNumero(null)} />}
 
-        {moduloActivo === 'informes' && <ModuloInformes t={t} usuario={usuario} token={getToken()} s={s} fontSize={fontSize} />}
+        {moduloActivo === 'informes' && (
+          tienePermisoInformesCcd ? (
+            <ModuloInformes t={t} usuario={usuario} token={getToken()} s={s} fontSize={fontSize} />
+          ) : (
+            <div style={{ ...s.card, maxWidth: '560px', margin: '0 auto', textAlign: 'center', padding: '32px 24px' }}>
+              <div style={{ fontSize: '18px', fontWeight: 700, color: t.text, marginBottom: '10px' }}>Informes CCD</div>
+              <div style={{ fontSize: '14px', color: t.textMuted, lineHeight: 1.5 }}>
+                Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «Informes CCD» (acción Ver).
+              </div>
+            </div>
+          )
+        )}
 
         {/* ── Módulos próximamente ── */}
         {['almacen','gantt'].includes(moduloActivo) && (
@@ -10878,8 +11504,11 @@ const FONT_SIZES = { pequena: '12px', normal: '14px', grande: '16px' }
 
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [themeMode, setThemeMode] = useState('auto')
-  const [activeTheme, setActiveTheme] = useState(getAutoTheme())
+  const [themeMode, setThemeMode] = useState(loadStoredThemeMode)
+  const [activeTheme, setActiveTheme] = useState(() => {
+    const m = loadStoredThemeMode()
+    return m === 'auto' ? getAutoTheme() : m
+  })
   const [fontSize, setFontSize] = useState(() => localStorage.getItem('claracore_font_size') || 'normal')
   const [modal, setModal] = useState(null)
   const [usuario, setUsuario] = useState(() => {
@@ -10914,6 +11543,7 @@ export default function App() {
   function handleTheme(mode) {
     setThemeMode(mode)
     setActiveTheme(mode === 'auto' ? getAutoTheme() : mode)
+    try { localStorage.setItem(THEME_MODE_STORAGE_KEY, mode) } catch { /* ignore */ }
   }
 
   useEffect(() => {
@@ -10928,6 +11558,76 @@ export default function App() {
   const [pendingUser, setPendingUser] = useState(null)
   const [pendingContratos, setPendingContratos] = useState([])
   const [bannerMsg, setBannerMsg] = useState(null)
+  const [perfilModalAbierto, setPerfilModalAbierto] = useState(false)
+  const [cumpleModalAbierto, setCumpleModalAbierto] = useState(false)
+
+  function aplicarPerfilServidor(fresh) {
+    setUsuario((prev) => {
+      if (!prev) return prev
+      const next = {
+        ...prev,
+        ...fresh,
+        contrato_id: prev.contrato_id,
+        contrato_numero: prev.contrato_numero,
+        _contratos: prev._contratos,
+        logo_contratista: prev.logo_contratista,
+        logo_interventoria: prev.logo_interventoria,
+      }
+      const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
+      storage.setItem('cc_usuario', JSON.stringify(next))
+      return next
+    })
+  }
+
+  useEffect(() => {
+    if (!usuario?.id || !usuario?.fecha_nacimiento) return
+    const s = String(usuario.fecha_nacimiento).slice(0, 10)
+    const parts = s.split('-')
+    if (parts.length < 3) return
+    const month = parseInt(parts[1], 10)
+    const day = parseInt(parts[2], 10)
+    if (!month || !day) return
+    const now = new Date()
+    if (now.getMonth() + 1 !== month || now.getDate() !== day) return
+    const year = now.getFullYear()
+    const key = `cc_cumple_${usuario.id}_${year}`
+    if (localStorage.getItem(key)) return
+    localStorage.setItem(key, '1')
+    setCumpleModalAbierto(true)
+  }, [usuario?.id, usuario?.fecha_nacimiento])
+
+  // Sincronizar perfil (p. ej. políticas) al iniciar sesión con caché antigua en localStorage
+  useEffect(() => {
+    if (!usuario?.id) return
+    const token = getToken()
+    if (!token) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(`${API}/usuarios/me`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        if (!res.ok || cancelled) return
+        const fresh = await res.json()
+        setUsuario(prev => {
+          if (!prev || cancelled) return prev
+          const next = {
+            ...prev,
+            ...fresh,
+            contrato_id: prev.contrato_id,
+            contrato_numero: prev.contrato_numero,
+            _contratos: prev._contratos,
+            logo_contratista: prev.logo_contratista,
+            logo_interventoria: prev.logo_interventoria,
+          }
+          const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
+          storage.setItem('cc_usuario', JSON.stringify(next))
+          return next
+        })
+      } catch { /* silencioso */ }
+    })()
+    return () => { cancelled = true }
+  }, [usuario?.id])
 
   // ── Inactividad y renovación de token ───────────────────────────────────
   const usuarioRef = useRef(usuario)
@@ -11014,13 +11714,20 @@ export default function App() {
         const permisosChanged =
           JSON.stringify((fresh.permisos || []).map(p => `${p.funcion_id}-${p.ver}-${p.crear}-${p.editar}-${p.eliminar}-${p.validar}-${p.exportar}`).sort()) !==
           JSON.stringify((prev.permisos  || []).map(p => `${p.funcion_id}-${p.ver}-${p.crear}-${p.editar}-${p.eliminar}-${p.validar}-${p.exportar}`).sort())
-        const changed =
+        const profileChanged =
+          fresh.nombre !== prev.nombre ||
+          fresh.apellidos !== prev.apellidos ||
+          String(fresh.fecha_nacimiento || '') !== String(prev.fecha_nacimiento || '') ||
+          String(fresh.foto_perfil_url || '') !== String(prev.foto_perfil_url || '') ||
+          String(fresh.firma_imagen_url || '') !== String(prev.firma_imagen_url || '') ||
+          fresh.politicas_aceptadas !== prev.politicas_aceptadas
+        const adminChanged =
           fresh.cargo_id    !== prev.cargo_id   ||
           fresh.rol_id      !== prev.rol_id     ||
           fresh.estado      !== prev.estado     ||
           fresh.contrato_id !== prev.contrato_id ||
           permisosChanged
-        if (changed) {
+        if (adminChanged || profileChanged) {
           const updated = {
             ...prev, ...fresh,
             contrato_id:      prev.contrato_id,
@@ -11032,12 +11739,14 @@ export default function App() {
           const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
           storage.setItem('cc_usuario', JSON.stringify(updated))
           setUsuario(updated)
-          const msgs = []
-          if (fresh.cargo_id    !== prev.cargo_id)    msgs.push('cargo')
-          if (fresh.contrato_id !== prev.contrato_id) msgs.push('contrato')
-          if (fresh.estado      !== prev.estado)      msgs.push('estado')
-          if (permisosChanged)                         msgs.push('permisos')
-          setBannerMsg(`⚡ Tu ${msgs.join(', ')} fue actualizado por el administrador.`)
+          if (adminChanged) {
+            const msgs = []
+            if (fresh.cargo_id    !== prev.cargo_id)    msgs.push('cargo')
+            if (fresh.contrato_id !== prev.contrato_id) msgs.push('contrato')
+            if (fresh.estado      !== prev.estado)      msgs.push('estado')
+            if (permisosChanged)                         msgs.push('permisos')
+            setBannerMsg(`⚡ Tu ${msgs.join(', ')} fue actualizado por el administrador.`)
+          }
         }
       } catch { /* silencioso */ }
     }, 60000)
@@ -11160,6 +11869,32 @@ if (contratos.length > 1) {
   }
 
   if (usuario) {
+    if (usuario.politicas_aceptadas !== true) {
+      return (
+        <PoliticasConfidencialidadModal
+          t={{ ...themes[activeTheme], textSecondary: themes[activeTheme].textMuted }}
+          apiBase={API}
+          token={getToken()}
+          version={POLITICAS_TEXTO_VERSION}
+          onAccepted={(data) => {
+            setUsuario((prev) => {
+              if (!prev) return prev
+              const next = {
+                ...prev,
+                politicas_aceptadas: true,
+                politicas_fecha: data.politicas_fecha,
+                politicas_version: data.politicas_version,
+                politicas_ip: data.politicas_ip,
+              }
+              const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
+              storage.setItem('cc_usuario', JSON.stringify(next))
+              return next
+            })
+          }}
+          onReject={handleLogout}
+        />
+      )
+    }
     const _esPrivilegiado = ['Desarrollador', 'Administrador'].includes(usuario.cargo_nombre)
     const maintenanceBannerHeight = mantenimiento?.activo ? 74 : 0
     const updateBannerHeight = hayNuevaVersion ? 74 : 0
@@ -11260,10 +11995,77 @@ if (contratos.length > 1) {
           <button onClick={() => setBannerMsg(null)} style={{ background: 'transparent', border: 'none', color: '#8acdd8', cursor: 'pointer', fontSize: '16px', lineHeight: 1 }}>✕</button>
         </div>
       )}
+      {perfilModalAbierto && (
+        <PerfilUsuarioModal
+          t={t}
+          apiBase={API}
+          token={getToken()}
+          usuario={usuario}
+          onClose={() => setPerfilModalAbierto(false)}
+          onSaved={aplicarPerfilServidor}
+        />
+      )}
+      {cumpleModalAbierto && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100001,
+            background: 'rgba(15,41,66,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+          }}
+          onClick={() => setCumpleModalAbierto(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: '420px',
+              width: '100%',
+              borderRadius: '20px',
+              overflow: 'hidden',
+              boxShadow: '0 24px 80px rgba(0,0,0,0.35)',
+              background: 'linear-gradient(145deg, #e0f2fe 0%, #bae6fd 35%, #7dd3fc 70%, #38bdf8 100%)',
+              border: '2px solid rgba(0,119,182,0.35)',
+            }}
+          >
+            <div style={{ padding: '28px 26px 22px', textAlign: 'center' }}>
+              <div style={{ fontSize: '52px', lineHeight: 1, marginBottom: '8px' }} aria-hidden>🎂</div>
+              <div style={{ fontSize: '22px', fontWeight: '900', color: '#0c4a6e', letterSpacing: '0.02em' }}>
+                ¡Feliz cumpleaños{usuario?.nombre ? `, ${usuario.nombre}` : ''}!
+              </div>
+              <div style={{ fontSize: '14px', color: '#075985', marginTop: '12px', lineHeight: 1.55 }}>
+                ClaraCore te envía un gran abrazo en este día tan especial. Que sigas construyendo éxitos — en obra y en la vida.
+              </div>
+              <button
+                type="button"
+                onClick={() => setCumpleModalAbierto(false)}
+                style={{
+                  marginTop: '22px',
+                  background: '#0077B6',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '12px',
+                  padding: '12px 28px',
+                  fontSize: '14px',
+                  fontWeight: '800',
+                  cursor: 'pointer',
+                  boxShadow: '0 8px 24px rgba(0,119,182,0.35)',
+                }}
+              >
+                Gracias
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <Dashboard t={t} activeTheme={activeTheme} themeMode={themeMode}
         onTheme={handleTheme} usuario={usuario} setUsuario={setUsuario} onLogout={handleLogout}
         topOffset={totalTopOffset}
         fontSize={fontSize} onFontSize={cambiarFuente}
+        onOpenPerfil={() => setPerfilModalAbierto(true)}
       />
     </>
     )

@@ -10,15 +10,15 @@ from supabase import create_client, ClientOptions
 import httpx
 from passlib.context import CryptContext
 from jose import jwt, JWTError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 import os
+import base64
 import logging
 import traceback
 import time
 import uuid
 import threading
-from datetime import datetime, timedelta
 
 # ── Sesiones DWG activas (en memoria) ─────────────────────────────────────────
 _dwg_sessions: dict = {}
@@ -62,6 +62,18 @@ app.add_middleware(
 
 _log_api = logging.getLogger("uvicorn.error")
 
+# Versión del texto de políticas mostrada al usuario (auditoría junto a politicas_version en BD)
+POLITICAS_VERSION_DEFAULT = os.getenv("POLITICAS_VERSION", "1.0")
+
+
+def _client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
+    if xff:
+        return xff.split(",")[0].strip()[:128]
+    if request.client and request.client.host:
+        return str(request.client.host)[:128]
+    return ""
+
 
 @app.exception_handler(Exception)
 async def unhandled_exception_to_json(request: Request, exc: Exception):
@@ -93,6 +105,92 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
 EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES") or "10080")
 
+
+@app.middleware("http")
+async def exigir_politicas_confidencialidad(request: Request, call_next):
+    """Bloquea el uso de la API con token si el usuario no ha aceptado las políticas (salvo rutas mínimas)."""
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    path = request.url.path
+    auth = request.headers.get("authorization") or ""
+    if not auth.startswith("Bearer "):
+        return await call_next(request)
+    if (
+        (request.method == "POST" and path == "/auth/refresh")
+        or (request.method == "GET" and path == "/usuarios/me")
+        or (request.method == "POST" and path == "/usuarios/me/politicas-aceptar")
+    ):
+        return await call_next(request)
+    try:
+        payload = jwt.decode(auth[7:], SECRET_KEY, algorithms=[ALGORITHM])
+        sub = payload.get("sub")
+        if not sub:
+            return await call_next(request)
+        uid = int(sub)
+    except (JWTError, ValueError, TypeError):
+        return await call_next(request)
+    try:
+        r = supabase.table("usuarios").select("politicas_aceptadas").eq("id", uid).limit(1).execute()
+        row = r.data[0] if r.data else None
+        if row is None:
+            return JSONResponse(status_code=403, content={"detail": "politicas_pendientes"})
+        if row.get("politicas_aceptadas") is True:
+            return await call_next(request)
+        return JSONResponse(status_code=403, content={"detail": "politicas_pendientes"})
+    except Exception:
+        # Columna aún no migrada u otro error: no bloquear despliegue
+        return await call_next(request)
+
+
+# Cloudinary: claracore/{contrato_id}/fotos | graficos | Fotos de Perfil | Fotos de Firmas
+CLOUDINARY_ROOT = "claracore"
+CLOUDINARY_SUB_FOTOS = "fotos"
+CLOUDINARY_SUB_GRAFICOS = "graficos"
+CLOUDINARY_SUB_PERFIL = "Fotos de Perfil"
+CLOUDINARY_SUB_FIRMAS = "Fotos de Firmas"
+# PNG 1×1 px (marcador para crear carpetas al dar de alta un contrato)
+_CLOUDINARY_SEED_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
+
+def _cloudinary_config():
+    import cloudinary
+    cloudinary.config(
+        cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+        api_key=os.getenv("CLOUDINARY_API_KEY"),
+        api_secret=os.getenv("CLOUDINARY_API_SECRET"),
+    )
+
+
+def _cloudinary_folder_contrato(contrato_id: int, subcarpeta: str) -> str:
+    return f"{CLOUDINARY_ROOT}/{contrato_id}/{subcarpeta}"
+
+
+def _cloudinary_seed_carpetas_contrato(contrato_id: int) -> None:
+    """Crea en Cloudinary las cuatro carpetas del contrato (un PNG mínimo por carpeta)."""
+    if not os.getenv("CLOUDINARY_CLOUD_NAME"):
+        return
+    import cloudinary.uploader
+    _cloudinary_config()
+    seeds = [
+        (CLOUDINARY_SUB_FOTOS, "_inicial_fotos"),
+        (CLOUDINARY_SUB_GRAFICOS, "_inicial_graficos"),
+        (CLOUDINARY_SUB_PERFIL, "_inicial_perfil"),
+        (CLOUDINARY_SUB_FIRMAS, "_inicial_firmas"),
+    ]
+    for sub, public_id in seeds:
+        try:
+            cloudinary.uploader.upload(
+                _CLOUDINARY_SEED_PNG,
+                folder=_cloudinary_folder_contrato(contrato_id, sub),
+                public_id=public_id,
+                overwrite=True,
+                resource_type="image",
+            )
+        except Exception as e:
+            _log_api.warning("Cloudinary seed %s/%s: %s", contrato_id, sub, e)
+
 # ─────────────────────────────────────────────
 # MODELOS
 # ─────────────────────────────────────────────
@@ -114,6 +212,13 @@ class UsuarioRegistro(BaseModel):
     cargo_id: int
     contrato_id: Optional[int] = None
     password: str
+
+class PerfilUpdate(BaseModel):
+    """Actualización de perfil por el propio usuario (no modifica cargo, contrato ni email)."""
+    nombre: Optional[str] = None
+    apellidos: Optional[str] = None
+    # Cadena vacía borra la fecha; YYYY-MM-DD la guarda; omitir no cambia.
+    fecha_nacimiento: Optional[str] = None
 
 class AprobarRequest(BaseModel):
     rol_id: int
@@ -156,6 +261,7 @@ class UsuarioUpdate(BaseModel):
     contrato_id: Optional[int] = None
     estado: Optional[str] = None
     subcontratista_id: Optional[int] = None
+    politicas_aceptadas: Optional[bool] = None
 
 class UsuarioContratoCreate(BaseModel):
     usuario_id: int
@@ -418,6 +524,30 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Token inválido")
+
+def _caller_contract_scope(current_user):
+    """Retorna (contrato_id, cargo_nombre) del usuario autenticado."""
+    try:
+        caller_id = int(current_user.get("sub"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Token inválido")
+
+    caller_data = supabase.table("usuarios").select("cargo_id, contrato_id").eq("id", caller_id).single().execute().data
+    if not caller_data:
+        raise HTTPException(status_code=401, detail="Usuario no encontrado")
+
+    cargo_nombre = ""
+    cargo_id = caller_data.get("cargo_id")
+    if cargo_id:
+        c = supabase.table("cargos").select("nombre").eq("id", cargo_id).single().execute().data
+        cargo_nombre = (c or {}).get("nombre", "")
+    return caller_data.get("contrato_id"), (cargo_nombre or "").strip().lower()
+
+def _require_contract_access(current_user, contrato_id: int):
+    """Bloquea acceso si intenta consultar un contrato distinto al propio."""
+    caller_contrato, _ = _caller_contract_scope(current_user)
+    if caller_contrato and int(caller_contrato) != int(contrato_id):
+        raise HTTPException(status_code=403, detail="No tienes acceso a información de otro contrato")
 
 from informes import router as informes_router
 app.include_router(informes_router, prefix="/informes")
@@ -732,6 +862,13 @@ def login(request: LoginRequest):
             "activo": usuario.get("activo"),
             "subcontratista_id": usuario.get("subcontratista_id"),
             "permisos": permisos,
+            "fecha_nacimiento": usuario.get("fecha_nacimiento"),
+            "foto_perfil_url": usuario.get("foto_perfil_url"),
+            "firma_imagen_url": usuario.get("firma_imagen_url"),
+            "politicas_aceptadas": usuario.get("politicas_aceptadas") is True,
+            "politicas_fecha": usuario.get("politicas_fecha"),
+            "politicas_version": usuario.get("politicas_version"),
+            "politicas_ip": usuario.get("politicas_ip"),
         }
     }
 
@@ -822,7 +959,247 @@ def get_mi_usuario(current_user=Depends(get_current_user)):
         "contrato_id": u.get("contrato_id"), "estado": u.get("estado"), "activo": u.get("activo"),
         "subcontratista_id": u.get("subcontratista_id"),
         "permisos": permisos,
+        "fecha_nacimiento": u.get("fecha_nacimiento"),
+        "foto_perfil_url": u.get("foto_perfil_url"),
+        "firma_imagen_url": u.get("firma_imagen_url"),
+        "politicas_aceptadas": u.get("politicas_aceptadas") is True,
+        "politicas_fecha": u.get("politicas_fecha"),
+        "politicas_version": u.get("politicas_version"),
+        "politicas_ip": u.get("politicas_ip"),
     }
+
+@app.post("/usuarios/me/politicas-aceptar")
+def aceptar_politicas_confidencialidad(request: Request, current_user=Depends(get_current_user)):
+    """Registra aceptación de políticas (versión, fecha UTC, IP). Permite usar el resto de la API."""
+    uid = int(current_user["sub"])
+    ip = _client_ip(request)
+    ver = POLITICAS_VERSION_DEFAULT
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        sb = get_supabase()
+        sb.table("usuarios").update({
+            "politicas_aceptadas": True,
+            "politicas_fecha": now_iso,
+            "politicas_version": ver,
+            "politicas_ip": ip or None,
+        }).eq("id", uid).execute()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"No se pudo registrar la aceptación: {e}")
+    return {
+        "politicas_aceptadas": True,
+        "politicas_fecha": now_iso,
+        "politicas_version": ver,
+        "politicas_ip": ip or None,
+    }
+
+@app.put("/usuarios/me")
+def actualizar_mi_perfil(body: PerfilUpdate, current_user=Depends(get_current_user)):
+    """El usuario edita nombre, apellidos y fecha de cumpleaños."""
+    uid = int(current_user["sub"])
+    sb = get_supabase()
+    data = {}
+    if body.nombre is not None:
+        data["nombre"] = (body.nombre or "").strip()
+    if body.apellidos is not None:
+        data["apellidos"] = (body.apellidos or "").strip()
+    if body.fecha_nacimiento is not None:
+        raw = (body.fecha_nacimiento or "").strip()
+        if not raw:
+            data["fecha_nacimiento"] = None
+        else:
+            data["fecha_nacimiento"] = raw[:10]
+    if not data:
+        return get_mi_usuario(current_user)
+    try:
+        sb.table("usuarios").update(data).eq("id", uid).execute()
+    except Exception as e:
+        _log_api.warning("PUT /usuarios/me: %s", e)
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo guardar el perfil. Si acabas de desplegar, ejecuta backend/sql/usuario_perfil.sql en Supabase.",
+        )
+    return get_mi_usuario(current_user)
+
+
+def _ext_desde_content_type(content_type: Optional[str]) -> str:
+    c = (content_type or "image/jpeg").split(";")[0].strip().lower()
+    return {
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }.get(c, ".jpg")
+
+
+def _usuario_contrato_id(sb, uid: int) -> Optional[int]:
+    try:
+        r = sb.table("usuarios").select("contrato_id").eq("id", uid).limit(1).execute()
+        if r.data:
+            cid = r.data[0].get("contrato_id")
+            return int(cid) if cid is not None else None
+    except Exception:
+        pass
+    return None
+
+
+def _usuario_imagen_subir(
+    contents: bytes,
+    uid: int,
+    asset: str,
+    content_type: Optional[str],
+    contrato_id: Optional[int] = None,
+) -> str:
+    """
+    Sube foto de perfil o imagen de firma.
+    Cloudinary: claracore/{contrato_id}/Fotos_de_perfil | Fotos_de_firmas (si no hay contrato: sin_contrato/{uid}/...).
+    Supabase: contratos/{id}/perfil|firmas/... o usuarios/{id}/...
+    """
+    ext = _ext_desde_content_type(content_type)
+    ct = (content_type or "image/jpeg").split(";")[0].strip()
+
+    if os.getenv("CLOUDINARY_CLOUD_NAME"):
+        import cloudinary.uploader
+        _cloudinary_config()
+        sub = CLOUDINARY_SUB_PERFIL if asset == "avatar" else CLOUDINARY_SUB_FIRMAS
+        public_id = f"usuario_{uid}"
+        if contrato_id:
+            folder = _cloudinary_folder_contrato(int(contrato_id), sub)
+        else:
+            folder = f"{CLOUDINARY_ROOT}/sin_contrato/{uid}/{sub}"
+        result = cloudinary.uploader.upload(
+            contents,
+            folder=folder,
+            public_id=public_id,
+            overwrite=True,
+            resource_type="image",
+        )
+        return result["secure_url"]
+
+    sb = get_supabase()
+    bucket = os.getenv("SUPABASE_PERFIL_BUCKET", "claracore-perfiles")
+    if contrato_id:
+        sub = "perfil" if asset == "avatar" else "firmas"
+        path = f"contratos/{contrato_id}/{sub}/u{uid}{ext}"
+    else:
+        path = f"usuarios/{uid}/{asset}{ext}"
+    file_opts = {"content-type": ct, "upsert": "true"}
+
+    def _do_upload():
+        sb.storage.from_(bucket).upload(path, contents, file_options=file_opts)
+
+    try:
+        _do_upload()
+    except Exception as e1:
+        msg = str(e1).lower()
+        # Bucket inexistente: intentar crear (requiere service_role) y reintentar una vez
+        if "bucket" in msg or "not found" in msg or "not_found" in msg or "404" in msg:
+            try:
+                sb.storage.create_bucket(
+                    bucket,
+                    options={"public": True, "file_size_limit": 6 * 1024 * 1024},
+                )
+            except Exception as e_create:
+                # Ya existe u otro error: seguimos e intentamos subir de nuevo
+                _log_api.warning("create_bucket %s: %s", bucket, e_create)
+            try:
+                _do_upload()
+            except Exception as e2:
+                _log_api.warning("Supabase Storage upload %s: %s", path, e2)
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "No se pudo subir la imagen. Crea el bucket en Supabase Storage "
+                        f"({bucket}, público) o configura Cloudinary (variables CLOUDINARY_*). "
+                        "Puedes usar el script backend/sql/storage_perfil_bucket.sql"
+                    ),
+                )
+        else:
+            _log_api.warning("Supabase Storage upload %s: %s", path, e1)
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "No se pudo subir la imagen a Supabase Storage. "
+                    "Comprueba el bucket y la clave SUPABASE (service role recomendada para Storage)."
+                ),
+            )
+
+    return sb.storage.from_(bucket).get_public_url(path)
+
+
+def _detalle_guardar_url_perfil(exc: Exception, campo: str) -> str:
+    """Mensaje claro cuando falla el UPDATE (p. ej. columnas inexistentes en usuarios)."""
+    raw = str(exc).lower()
+    pg_undefined_column = "42703" in raw or "pgrst204" in raw  # Postgres / PostgREST
+    if pg_undefined_column or ("column" in raw and ("does not exist" in raw or "undefined column" in raw)):
+        return (
+            f'La columna "{campo}" no existe en la tabla usuarios. '
+            "Abre Supabase → SQL y ejecuta el archivo backend/sql/usuario_perfil.sql "
+            "(añade foto_perfil_url, firma_imagen_url y fecha_nacimiento)."
+        )
+    return (
+        "La imagen pudo subirse al almacenamiento, pero no se guardó la URL en usuarios. "
+        "Lo más habitual es no haber ejecutado la migración: backend/sql/usuario_perfil.sql en Supabase. "
+        f"Detalle: {exc!s}"
+    )
+
+
+@app.post("/usuarios/me/foto-perfil")
+async def subir_foto_perfil(file: UploadFile = File(...), current_user=Depends(get_current_user)):
+    uid = int(current_user["sub"])
+    contents = await file.read()
+    if len(contents) > 6 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="La imagen no puede superar 6 MB.")
+    sb = get_supabase()
+    cid = _usuario_contrato_id(sb, uid)
+    url = _usuario_imagen_subir(contents, uid, "avatar", file.content_type, contrato_id=cid)
+    try:
+        sb.table("usuarios").update({"foto_perfil_url": url}).eq("id", uid).execute()
+    except Exception as e:
+        _log_api.warning("POST /usuarios/me/foto-perfil: %s", e)
+        raise HTTPException(status_code=503, detail=_detalle_guardar_url_perfil(e, "foto_perfil_url"))
+    return {"url": url}
+
+
+@app.delete("/usuarios/me/foto-perfil")
+def quitar_foto_perfil(current_user=Depends(get_current_user)):
+    uid = int(current_user["sub"])
+    sb = get_supabase()
+    try:
+        sb.table("usuarios").update({"foto_perfil_url": None}).eq("id", uid).execute()
+    except Exception as e:
+        _log_api.warning("DELETE /usuarios/me/foto-perfil: %s", e)
+        raise HTTPException(status_code=503, detail="No se pudo actualizar el perfil.")
+    return {"ok": True}
+
+
+@app.post("/usuarios/me/firma-imagen")
+async def subir_firma_imagen(file: UploadFile = File(...), current_user=Depends(get_current_user)):
+    uid = int(current_user["sub"])
+    contents = await file.read()
+    if len(contents) > 6 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="La imagen no puede superar 6 MB.")
+    sb = get_supabase()
+    cid = _usuario_contrato_id(sb, uid)
+    url = _usuario_imagen_subir(contents, uid, "firma", file.content_type, contrato_id=cid)
+    try:
+        sb.table("usuarios").update({"firma_imagen_url": url}).eq("id", uid).execute()
+    except Exception as e:
+        _log_api.warning("POST /usuarios/me/firma-imagen: %s", e)
+        raise HTTPException(status_code=503, detail=_detalle_guardar_url_perfil(e, "firma_imagen_url"))
+    return {"url": url}
+
+
+@app.delete("/usuarios/me/firma-imagen")
+def quitar_firma_imagen(current_user=Depends(get_current_user)):
+    uid = int(current_user["sub"])
+    sb = get_supabase()
+    try:
+        sb.table("usuarios").update({"firma_imagen_url": None}).eq("id", uid).execute()
+    except Exception as e:
+        _log_api.warning("DELETE /usuarios/me/firma-imagen: %s", e)
+        raise HTTPException(status_code=503, detail="No se pudo actualizar el perfil.")
+    return {"ok": True}
 
 @app.get("/usuarios")
 def listar_usuarios(current_user=Depends(get_current_user)):
@@ -848,21 +1225,43 @@ def listar_categorias(current_user=Depends(get_current_user)):
 def listar_funciones(current_user=Depends(get_current_user)):
     funciones = supabase.table("funciones").select("*").order("nombre").execute().data or []
     existentes = {(f.get("nombre") or "").strip().lower() for f in funciones}
-    # Se asegura solo Dashboard (requerimiento urgente actual).
+    codigos_existentes = {
+        str((f.get("codigo") or "")).strip().upper()
+        for f in funciones
+        if f.get("codigo") is not None and str(f.get("codigo")).strip() != ""
+    }
+    # Asegurar filas base (Dashboard, Informes CCD). En producción el INSERT vía API a veces
+    # falla por RLS o restricciones; en ese caso ejecutar backend/sql/funcion_informes_ccd.sql en Supabase.
     requeridas = [
         {"codigo": "DASHBOARD", "nombre": "Dashboard", "modulo": "Dashboard"},
+        {"codigo": "INFCCD", "nombre": "Informes CCD", "modulo": "Informes"},
     ]
     for req in requeridas:
         nombre_funcion = req["nombre"]
-        if nombre_funcion.lower() in existentes:
+        cod = str(req.get("codigo") or "").strip().upper()
+        if nombre_funcion.lower() in existentes or (cod and cod in codigos_existentes):
             continue
         try:
             supabase.table("funciones").insert(req).execute()
             existentes.add(nombre_funcion.lower())
+            if cod:
+                codigos_existentes.add(cod)
         except Exception as e:
-            # No rompemos el endpoint si falla la creación automática,
-            # pero dejamos traza para diagnóstico.
-            print(f"WARNING /funciones: no se pudo crear '{nombre_funcion}': {e}", flush=True)
+            try:
+                supabase.table("funciones").upsert(req, on_conflict="codigo").execute()
+                existentes.add(nombre_funcion.lower())
+                if cod:
+                    codigos_existentes.add(cod)
+            except Exception as e2:
+                _log_api.warning(
+                    "/funciones: no se pudo insertar ni upsert '%s' (%s). "
+                    "Si falta en el panel admin, ejecuta backend/sql/funcion_informes_ccd.sql en Supabase. "
+                    "insert_err=%s | upsert_err=%s",
+                    nombre_funcion,
+                    req.get("codigo"),
+                    e,
+                    e2,
+                )
     funciones = supabase.table("funciones").select("*").order("nombre").execute().data or []
     return funciones
 
@@ -886,7 +1285,44 @@ def crear_contrato(contrato: ContratoCreate, current_user=Depends(get_current_us
         "logo_contratista": contrato.logo_contratista,
         "logo_interventoria": contrato.logo_interventoria,
     }).execute()
-    return result.data[0]
+    nuevo = result.data[0]
+    try:
+        _cloudinary_seed_carpetas_contrato(int(nuevo["id"]))
+    except Exception as e:
+        _log_api.warning("Tras crear contrato, seed Cloudinary: %s", e)
+    return nuevo
+
+
+@app.post("/contratos/{contrato_id}/cloudinary-sembrar-carpetas")
+def contrato_sembrar_carpetas_cloudinary(contrato_id: int, current_user=Depends(get_current_user)):
+    """
+    Contratos ya existentes (antes de la semilla automática): crea en Cloudinary las cuatro carpetas
+    (`fotos`, `graficos`, `Fotos de Perfil`, `Fotos de Firmas`) con un PNG mínimo por carpeta.
+    Si no usas Cloudinary en el backend, esta ruta responde 400 explicando que las imágenes van a Supabase.
+    """
+    if not os.getenv("CLOUDINARY_CLOUD_NAME"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Cloudinary no está configurado (variables CLOUDINARY_* en el servidor). "
+                "Las fotos de perfil y firma se suben entonces a Supabase Storage: no aparecerán en Cloudinary "
+                "y no hace falta crear carpetas allí."
+            ),
+        )
+    ex = supabase.table("contratos").select("id").eq("id", contrato_id).limit(1).execute()
+    if not ex.data:
+        raise HTTPException(status_code=404, detail="Contrato no encontrado")
+    caller_contrato, cargo = _caller_contract_scope(current_user)
+    priv = (cargo or "") in ("desarrollador", "administrador")
+    if not priv and caller_contrato and int(caller_contrato) != int(contrato_id):
+        raise HTTPException(status_code=403, detail="No tienes acceso a información de otro contrato")
+    _cloudinary_seed_carpetas_contrato(contrato_id)
+    return {
+        "ok": True,
+        "contrato_id": contrato_id,
+        "mensaje": f"Carpetas iniciales en Cloudinary: {CLOUDINARY_ROOT}/{contrato_id}/(fotos|graficos|…)",
+    }
+
 
 @app.put("/contratos/{contrato_id}")
 def actualizar_contrato(contrato_id: int, body: ContratoUpdate, current_user=Depends(get_current_user)):
@@ -957,34 +1393,24 @@ def obtener_permisos(cargo_id: int, current_user=Depends(get_current_user)):
 @app.get("/admin/todos-usuarios")
 def todos_usuarios(current_user=Depends(get_current_user)):
     result = supabase.table("usuarios").select(
-        "id, nombre, apellidos, email, activo, cargo_id, rol_id, contrato_id, estado, created_at"
+        "id, nombre, apellidos, email, activo, cargo_id, rol_id, contrato_id, estado, created_at, politicas_aceptadas, politicas_fecha, politicas_version, politicas_ip"
     ).order("nombre").execute()
     cargos = {c["id"]: c["nombre"] for c in supabase.table("cargos").select("id, nombre").execute().data}
     roles = {r["id"]: r["nombre"] for r in supabase.table("roles").select("id, nombre").execute().data}
     contratos = {c["id"]: c["numero"] for c in supabase.table("contratos").select("id, numero").execute().data}
+    caller_contrato, _ = _caller_contract_scope(current_user)
     for u in result.data:
         u["cargo_nombre"] = cargos.get(u.get("cargo_id"), "Sin cargo")
         u["rol_nombre"] = roles.get(u.get("rol_id"), "Sin rol")
         u["contrato_numero"] = contratos.get(u.get("contrato_id"), "Sin contrato")
-
-        caller_id = int(current_user["sub"])
-        caller_data = supabase.table("usuarios").select("cargo_id, contrato_id").eq("id", caller_id).execute().data
-        caller_cargo = ""
-        caller_contrato = None
-        if caller_data:
-            cid = caller_data[0].get("cargo_id")
-            if cid:
-                c = supabase.table("cargos").select("nombre").eq("id", cid).execute().data
-                if c: caller_cargo = c[0]["nombre"].lower()
-            caller_contrato = caller_data[0].get("contrato_id")
-
-        if caller_cargo == "administrador" and caller_contrato:
-            filtered = [u for u in result.data if u.get("contrato_id") == caller_contrato]
-        else:
-            filtered = list(result.data)
-
-        filtered = [u for u in filtered if u.get("cargo_nombre", "").lower() != "desarrollador" or u["id"] == caller_id]
-        return filtered
+    caller_id = int(current_user["sub"])
+    # Privacidad estricta: cada sesión solo puede ver usuarios de su contrato.
+    if caller_contrato:
+        filtered = [u for u in result.data if u.get("contrato_id") == caller_contrato]
+    else:
+        filtered = list(result.data)
+    filtered = [u for u in filtered if u.get("cargo_nombre", "").lower() != "desarrollador" or u["id"] == caller_id]
+    return filtered
 
 @app.put("/admin/usuarios/{usuario_id}")
 def actualizar_usuario(usuario_id: int, body: UsuarioUpdate, current_user=Depends(get_current_user)):
@@ -1002,6 +1428,9 @@ def actualizar_usuario(usuario_id: int, body: UsuarioUpdate, current_user=Depend
         data["activo"] = True
     elif body.estado == "rechazado":
         data["activo"] = False
+    if body.politicas_aceptadas is False:
+        data["politicas_fecha"] = None
+        data["politicas_ip"] = None
     supabase.table("usuarios").update(data).eq("id", usuario_id).execute()
     # Resetear contador de inactividad: insertar LOGIN sintético al reactivar un usuario
     if body.estado == "aprobado":
@@ -1200,6 +1629,7 @@ def guardar_permisos(permisos: List[PermisoUpdate], current_user=Depends(get_cur
 
 @app.get("/listado-precios/{contrato_id}")
 def get_listado_precios(contrato_id: int, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
     all_rows = []
     offset = 0
     while True:
@@ -1212,6 +1642,7 @@ def get_listado_precios(contrato_id: int, current_user=Depends(get_current_user)
 
 @app.post("/listado-precios/{contrato_id}/bulk")
 def bulk_precios(contrato_id: int, items: List[ListadoPrecioItem], current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
     """Reemplaza todos los precios del contrato con los items del CSV."""
     supabase.table("listado_precios").delete().eq("contrato_id", contrato_id).execute()
     if items:
@@ -1261,6 +1692,7 @@ def delete_precio(item_id: int, current_user=Depends(get_current_user)):
 
 @app.post("/listado-precios/{contrato_id}/item")
 def crear_precio(contrato_id: int, body: ListadoPrecioItem, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
     """Crea un ítem individual en el listado de precios con lógica de aprobación automática."""
     row = body.dict(exclude_none=True)
     row["contrato_id"] = contrato_id
@@ -1353,6 +1785,7 @@ def recalcular_cobros_precio(item_id: int, current_user=Depends(get_current_user
 @app.post("/listado-precios/{contrato_id}/log-exportar")
 def log_exportar_precios(contrato_id: int, current_user=Depends(get_current_user)):
     """Registra en el log que el usuario exportó el listado de precios en XLSX."""
+    _require_contract_access(current_user, contrato_id)
     registrar_log(current_user, "EXPORTAR", "PRECIOS", "listado_precios", str(contrato_id),
                   {"formato": "xlsx"})
     return {"ok": True}
@@ -2212,13 +2645,16 @@ def get_notificaciones_recibidas(
     solo_no_leidas: bool = False,
     limit: int = 50,
     offset: int = 0,
+    contrato_id: Optional[int] = None,
     current_user=Depends(get_current_user)
 ):
-    """Notificaciones recibidas por el usuario actual."""
+    """Notificaciones recibidas por el usuario actual. Si se envía contrato_id, solo las de ese contrato."""
     uid = int(current_user.get("sub", 0))
     q = supabase.table("notificaciones").select("*") \
         .eq("destinatario_id", uid) \
         .order("created_at", desc=True)
+    if contrato_id is not None:
+        q = q.eq("contrato_id", contrato_id)
     if solo_no_leidas:
         q = q.eq("leido", False)
     q = q.range(offset, offset + limit - 1)
@@ -2228,26 +2664,33 @@ def get_notificaciones_recibidas(
 def get_notificaciones_enviadas(
     limit: int = 50,
     offset: int = 0,
+    contrato_id: Optional[int] = None,
     current_user=Depends(get_current_user)
 ):
-    """Notificaciones enviadas por el usuario actual."""
+    """Notificaciones enviadas por el usuario actual. Si se envía contrato_id, solo las de ese contrato."""
     uid = int(current_user.get("sub", 0))
-    return supabase.table("notificaciones").select("*") \
+    q = supabase.table("notificaciones").select("*") \
         .eq("remitente_id", uid) \
-        .order("created_at", desc=True) \
-        .range(offset, offset + limit - 1) \
-        .execute().data
+        .order("created_at", desc=True)
+    if contrato_id is not None:
+        q = q.eq("contrato_id", contrato_id)
+    return q.range(offset, offset + limit - 1).execute().data
 
 @app.get("/notificaciones/no-leidas-count")
-def get_no_leidas_count(current_user=Depends(get_current_user)):
-    """Conteo de notificaciones no leídas — solo mensajes raíz."""
+def get_no_leidas_count(
+    contrato_id: Optional[int] = None,
+    current_user=Depends(get_current_user)
+):
+    """Conteo de notificaciones no leídas — solo mensajes raíz. Opcionalmente filtrado por contrato."""
     uid = int(current_user.get("sub", 0))
     try:
-        result = supabase.table("notificaciones").select("id", count="exact") \
+        q = supabase.table("notificaciones").select("id", count="exact") \
             .eq("destinatario_id", uid) \
             .eq("leido", False) \
-            .is_("padre_id", "null") \
-            .execute()
+            .is_("padre_id", "null")
+        if contrato_id is not None:
+            q = q.eq("contrato_id", contrato_id)
+        result = q.execute()
         return {"count": result.count or 0}
     except Exception:
         return {"count": 0}
@@ -2439,11 +2882,13 @@ class SubprecioUpdate(BaseModel):
 
 @app.get("/subcontratistas/{contrato_id}")
 def listar_subcontratistas(contrato_id: int, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
     rows = supabase.table("subcontratistas").select("*").eq("contrato_id", contrato_id).order("razon_social").execute().data
     return rows or []
 
 @app.post("/subcontratistas/{contrato_id}")
 def crear_subcontratista(contrato_id: int, body: SubcontratistaCreate, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
     row = {"contrato_id": contrato_id, **body.dict()}
     result = supabase.table("subcontratistas").insert(row).execute()
     nuevo = result.data[0] if result.data else {}
@@ -2671,6 +3116,7 @@ def listar_pk_ids(contrato_id: int, current_user=Depends(get_current_user)):
 
 @app.get("/sicoe-obra/{contrato_id}/subcontratistas-activos")
 def listar_subcontratistas_activos(contrato_id: int, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
     def _q():
         return supabase.table("subcontratistas")\
             .select("id, razon_social")\
@@ -3868,7 +4314,14 @@ def analisis_registros_obra(
         if abs_final is not None:
             partes.append(f"Abs. ≤ {abs_final}")
         if cargo_id is not None and estado_validacion:
-            partes.append(f"Val. cargo {cargo_id}: {estado_validacion}")
+            cargo_lbl = f"cargo {cargo_id}"
+            try:
+                c = supabase.table("cargos").select("nombre").eq("id", cargo_id).single().execute().data
+                if c and c.get("nombre"):
+                    cargo_lbl = c["nombre"]
+            except Exception:
+                pass
+            partes.append(f"Val. {cargo_lbl}: {estado_validacion}")
         encabezado = " · ".join(partes) if partes else "Todos los registros"
 
     tc  = round(sum(g["costo_directo"]   for g in grupos_list), 2)
@@ -4362,32 +4815,31 @@ def next_numero_registro(contrato_id: int, current_user=Depends(get_current_user
     numero = supabase_execute(_q)
     return {"numero": numero}
 
-import cloudinary
-import cloudinary.uploader
-
 @app.post("/sicoe-obra/{contrato_id}/upload-foto")
 async def upload_foto(contrato_id: int, file: UploadFile = File(...), numero: int = Form(...), descripcion: str = Form(""), current_user=Depends(get_current_user)):
-    cloudinary.config(cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"), api_key=os.getenv("CLOUDINARY_API_KEY"), api_secret=os.getenv("CLOUDINARY_API_SECRET"))
+    import cloudinary.uploader
+    _cloudinary_config()
     contents = await file.read()
     result = cloudinary.uploader.upload(
         contents,
-        folder=f"claracore/{contrato_id}/fotos",
+        folder=_cloudinary_folder_contrato(contrato_id, CLOUDINARY_SUB_FOTOS),
         public_id=f"foto_{numero}",
         overwrite=True,
-        resource_type="image"
+        resource_type="image",
     )
     return {"url": result["secure_url"], "numero": numero}
 
 @app.post("/sicoe-obra/{contrato_id}/upload-grafico")
 async def upload_grafico(contrato_id: int, file: UploadFile = File(...), numero: int = Form(...), descripcion: str = Form(""), current_user=Depends(get_current_user)):
-    cloudinary.config(cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"), api_key=os.getenv("CLOUDINARY_API_KEY"), api_secret=os.getenv("CLOUDINARY_API_SECRET"))
+    import cloudinary.uploader
+    _cloudinary_config()
     contents = await file.read()
     result = cloudinary.uploader.upload(
         contents,
-        folder=f"claracore/{contrato_id}/graficos",
+        folder=_cloudinary_folder_contrato(contrato_id, CLOUDINARY_SUB_GRAFICOS),
         public_id=f"grafico_{numero}",
         overwrite=True,
-        resource_type="image"
+        resource_type="image",
     )
     return {"url": result["secure_url"], "numero": numero}
 
@@ -4581,21 +5033,39 @@ def crear_puntos(contrato_id: int, body: PuntosCreate, current_user=Depends(get_
     return supabase_execute(_ins)
 
 # ─── SICOE OBRA: Verificar acta RPO vigente ──────────────────────────────────
+def _acta_rpo_vigente_row(contrato_id: int):
+    """Acta RPO cuyo período [fecha_inicio, fecha_fin] contiene hoy (tipo RPO)."""
+    from datetime import date
+    today = date.today().isoformat()
+
+    def _q():
+        return supabase.table("actas")\
+            .select("id, numero_rpo, fecha_inicio, fecha_fin, usuarios(nombre, apellidos)")\
+            .eq("contrato_id", contrato_id)\
+            .eq("tipo_grupo", "RPO")\
+            .lte("fecha_inicio", today)\
+            .gte("fecha_fin", today)\
+            .order("id", desc=True).limit(1).execute().data
+
+    actas = supabase_execute(_q)
+    row = actas[0] if actas else None
+    if not row:
+        return None
+    u = row.get("usuarios") or {}
+    if isinstance(u, list) and len(u) > 0:
+        u = u[0]
+    if not isinstance(u, dict):
+        u = {}
+    an = f"{u.get('nombre', '')} {u.get('apellidos', '')}".strip()
+    row = {k: v for k, v in row.items() if k != "usuarios"}
+    row["asignado_nombre"] = an or None
+    return row
+
+
 @app.get("/sicoe-obra/{contrato_id}/acta-rpo-vigente")
 def get_acta_rpo_vigente(contrato_id: int, current_user=Depends(get_current_user)):
     try:
-        from datetime import date
-        today = date.today().isoformat()
-        def _q():
-            return supabase.table("actas")\
-                .select("id, numero_rpo, fecha_inicio, fecha_fin")\
-                .eq("contrato_id", contrato_id)\
-                .eq("tipo_grupo", "RPO")\
-                .lte("fecha_inicio", today)\
-                .gte("fecha_fin", today)\
-                .order("id", desc=True).limit(1).execute().data
-        actas = supabase_execute(_q)
-        return actas[0] if actas else None
+        return _acta_rpo_vigente_row(contrato_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -4931,24 +5401,86 @@ class ValidarMasivoNivel3Body(BaseModel):
     ids_registros: List[int]
     comentario_data: Optional[dict] = None
 
+def _normalizar_macro_rol(valor: Optional[str]) -> Optional[str]:
+    txt = (valor or "").strip().lower()
+    if not txt:
+        return None
+    if "intervent" in txt:
+        return "interventoria"
+    # Subcontratista se considera del lado contratista para confidencialidad.
+    if "subcontrat" in txt:
+        return "contratista"
+    if "contrat" in txt:
+        return "contratista"
+    return None
+
+def _macro_rol_usuario_por_id(usuario_id: Optional[int]) -> Optional[str]:
+    if not usuario_id:
+        return None
+    try:
+        u = supabase.table("usuarios").select("cargo_id").eq("id", usuario_id).single().execute().data or {}
+        cargo_id = u.get("cargo_id")
+        if not cargo_id:
+            return None
+        c = supabase.table("cargos").select("nombre").eq("id", cargo_id).single().execute().data or {}
+        return _normalizar_macro_rol(c.get("nombre"))
+    except Exception:
+        return None
+
+def _macro_rol_current_user(current_user) -> Optional[str]:
+    try:
+        uid = int(current_user.get("sub") or current_user.get("id", 0))
+    except (TypeError, ValueError):
+        return None
+    return _macro_rol_usuario_por_id(uid)
+
+def _cargo_current_user(current_user) -> str:
+    try:
+        uid = int(current_user.get("sub") or current_user.get("id", 0))
+        u = supabase.table("usuarios").select("cargo_id").eq("id", uid).single().execute().data or {}
+        cargo_id = u.get("cargo_id")
+        if not cargo_id:
+            return ""
+        c = supabase.table("cargos").select("nombre").eq("id", cargo_id).single().execute().data or {}
+        return (c.get("nombre") or "").strip().lower()
+    except Exception:
+        return ""
+
+def _macro_roles_destinatarios(destinatarios: list) -> set:
+    roles_dest = set()
+    for d in (destinatarios or []):
+        if not isinstance(d, dict):
+            continue
+        r_macro = _normalizar_macro_rol(
+            d.get("rol") or d.get("rol_nombre") or d.get("cargo_nombre") or d.get("cargo")
+        )
+        if not r_macro:
+            r_macro = _macro_rol_usuario_por_id(d.get("id"))
+        if r_macro:
+            roles_dest.add(r_macro)
+    return roles_dest
+
 
 def _insertar_comentario(contrato_id: int, registro_id: int, autor_id: int,
-                         comentario_data: dict, tipo_override: str = None):
+                         comentario_data: dict, tipo_override: str = None, nivel_validacion_override: str = None):
     """Inserta un comentario en so_registro_comentarios calculando confidencialidad."""
     destinatarios = comentario_data.get("destinatarios") or []
-    rol_origen = comentario_data.get("rol_origen", "")
+    rol_origen_payload = comentario_data.get("rol_origen", "")
+    # Fuente de verdad: preferir el lado real del autor en BD.
+    rol_origen_macro = _normalizar_macro_rol(rol_origen_payload) or _macro_rol_usuario_por_id(autor_id)
+    rol_origen = rol_origen_macro or rol_origen_payload
+
+    roles_dest = _macro_roles_destinatarios(destinatarios)
 
     if not destinatarios:
         confidencialidad = "publico"
     else:
-        roles_dest = {d.get("rol") for d in destinatarios if isinstance(d, dict) and d.get("rol")}
-        if len(roles_dest) == 1 and rol_origen in roles_dest:
-            if rol_origen == "contratista":
-                confidencialidad = "contratista_interno"
-            elif rol_origen == "interventoria":
-                confidencialidad = "interventoria_interna"
-            else:
-                confidencialidad = "privado"
+        if roles_dest == {"contratista"} and rol_origen_macro == "contratista":
+            confidencialidad = "contratista_interno"
+        elif roles_dest == {"interventoria"} and rol_origen_macro == "interventoria":
+            confidencialidad = "interventoria_interna"
+        elif not roles_dest:
+            confidencialidad = "publico"
         else:
             confidencialidad = "cruzado"
 
@@ -4965,13 +5497,14 @@ def _insertar_comentario(contrato_id: int, registro_id: int, autor_id: int,
         "enlaces":            comentario_data.get("enlaces") or [],
         "cantidad_verificada": comentario_data.get("cantidad_verificada"),
         "tipo":               tipo_override or comentario_data.get("tipo"),
-        "nivel_validacion":   comentario_data.get("nivel_validacion"),
+        "nivel_validacion":   nivel_validacion_override or comentario_data.get("nivel_validacion"),
         "padre_id":           comentario_data.get("padre_id"),
     }
 
     def _ins():
         return supabase.table("so_registro_comentarios").insert(row).execute().data
-    supabase_execute(_ins)
+    data = supabase_execute(_ins)
+    return data[0] if data else {}
 
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/validar-nivel1")
 def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
@@ -5012,7 +5545,7 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
         supabase_execute(_upd)
         if body.comentario_data:
             _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
-                                 tipo_override="validacion")
+                                 tipo_override="validacion", nivel_validacion_override="Nivel 1")
             destinatarios = body.comentario_data.get("destinatarios") or []
             for dest in destinatarios:
                 dest_id = dest.get("id") if isinstance(dest, dict) else None
@@ -5085,7 +5618,28 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
         supabase_execute(_upd)
         if body.comentario_data:
             _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
-                                 tipo_override="validacion")
+                                 tipo_override="validacion", nivel_validacion_override="Nivel 2")
+            destinatarios = body.comentario_data.get("destinatarios") or []
+            for dest in destinatarios:
+                dest_id = dest.get("id") if isinstance(dest, dict) else None
+                if dest_id:
+                    try:
+                        def _notif(did=dest_id):
+                            return supabase.table("notificaciones").insert({
+                                "destinatario_id": did,
+                                "remitente_id": autor_id,
+                                "contrato_id": contrato_id,
+                                "tipo": "validacion",
+                                "modulo": "sicoe_obra",
+                                "entidad_tipo": "registro",
+                                "entidad_id": str(registro_id),
+                                "asunto": f"Validación Nivel 2: {body.estado}",
+                                "mensaje": body.comentario_data.get("mensaje", ""),
+                                "leido": False
+                            }).execute().data
+                        supabase_execute(_notif)
+                    except Exception:
+                        pass
         return {"ok": True}
     except HTTPException:
         raise
@@ -5129,7 +5683,7 @@ def validar_nivel3(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
         supabase_execute(_upd)
         if body.comentario_data:
             _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
-                                 tipo_override="validacion")
+                                 tipo_override="validacion", nivel_validacion_override="Nivel 3")
         return {"ok": True}
     except HTTPException:
         raise
@@ -5206,7 +5760,19 @@ def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_us
             if nr:
                 acta_agg[nr] = acta_agg.get(nr, 0) + cd
 
-        por_acta = [{"acta": nr, "cobrado": round(v, 2)} for nr, v in sorted(acta_agg.items(), key=lambda x: x[0])]
+        def _sort_acta_key(x):
+            try:
+                return float(x[0])
+            except (TypeError, ValueError):
+                return 0.0
+
+        def _acta_num(k):
+            try:
+                return float(k)
+            except (TypeError, ValueError):
+                return 0.0
+
+        por_acta = [{"acta": nr, "cobrado": round(v, 2)} for nr, v in sorted(acta_agg.items(), key=_sort_acta_key, reverse=True)]
 
         caps = sorted(set(list(ppto_caps.keys()) + list(obra_caps.keys())))
         comparativo = [
@@ -5225,9 +5791,294 @@ def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_us
             "total_cobrado": round(total_cobrado, 2),
             "delta": round(ppto_total - total_cobrado, 2),
             "consumo_pct": round(total_cobrado / ppto_total * 100, 1) if ppto_total else 0,
-            "actas": sorted(acta_agg.keys()),
+            "actas": sorted(acta_agg.keys(), key=_acta_num, reverse=True),
             "comparativo_capitulos": comparativo,
             "por_acta": por_acta,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _matriz_validacion_norm_estado(v) -> str:
+    if v is None:
+        return "No Revisado"
+    s = str(v).strip()
+    if not s:
+        return "No Revisado"
+    sl = s.lower()
+    if sl == "aprobado":
+        return "Aprobado"
+    if sl == "pendiente":
+        return "Pendiente"
+    if sl == "rechazado":
+        return "Rechazado"
+    if "no revis" in sl or sl == "no revisado":
+        return "No Revisado"
+    return s
+
+
+def _matriz_validacion_bloque_capitulo(capitulo: Optional[str]) -> str:
+    """Obra ejecutada directa vs ensayos/sondeos (cap. 14–15 o nombre típico)."""
+    c = (capitulo or "").strip().upper()
+    if c.startswith("14.") or c.startswith("15.") or "ENSAYO" in c or "SONDEO" in c:
+        return "ensayos"
+    return "obra"
+
+
+def _matriz_validacion_empty():
+    z = {"interventoria": 0.0, "residente": 0.0, "inspector": 0.0}
+    return {
+        "aprobado": dict(z),
+        "pendiente": dict(z),
+        "pendiente_item": dict(z),
+        "no_revisado": dict(z),
+        "rechazado": dict(z),
+        "habilitado": dict(z),
+        "otras_actas": dict(z),
+    }
+
+
+def _dashboard_matriz_validacion_fallback(
+    contrato_id: int,
+    acta_id_filtro: Optional[int],
+) -> dict:
+    """Fallback lento si la función SQL dashboard_matriz_validacion_agg no está desplegada."""
+    obra_m = _matriz_validacion_empty()
+    ens_m = _matriz_validacion_empty()
+
+    off = 0
+    while True:
+        def _batch(o=off):
+            q = supabase.table("so_registros").select(
+                "costo_directo,nivel1_estado,nivel2_estado,nivel3_estado,sub_estado,"
+                "capitulo,acta_rpo_id,item_numero"
+            ).eq("contrato_id", contrato_id)
+            if acta_id_filtro is not None:
+                q = q.eq("acta_rpo_id", acta_id_filtro)
+            return q.range(o, o + 999).execute().data
+
+        batch = supabase_execute(_batch)
+        for reg in batch:
+            if not (reg.get("item_numero") or "").strip():
+                continue
+            cd = float(reg.get("costo_directo") or 0)
+            n1 = _matriz_validacion_norm_estado(reg.get("nivel1_estado"))
+            n2 = _matriz_validacion_norm_estado(reg.get("nivel2_estado"))
+            n3 = _matriz_validacion_norm_estado(reg.get("nivel3_estado"))
+            sub_n = _matriz_validacion_norm_estado(reg.get("sub_estado"))
+            sub_raw = str(reg.get("sub_estado") or "").strip().lower()
+            bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
+            M = ens_m if bloque == "ensayos" else obra_m
+
+            def acc(estado_nivel: str, col: str):
+                if estado_nivel == "Aprobado":
+                    M["aprobado"][col] += cd
+                elif estado_nivel == "Pendiente":
+                    M["pendiente"][col] += cd
+                elif estado_nivel == "Rechazado":
+                    M["rechazado"][col] += cd
+                else:
+                    M["no_revisado"][col] += cd
+
+            acc(n3, "interventoria")
+            acc(n2, "residente")
+            acc(n1, "inspector")
+
+            if sub_raw == "pendiente" or sub_n == "Pendiente":
+                M["pendiente_item"]["residente"] += cd
+
+            M["habilitado"]["inspector"] += cd
+            if n1 == "Aprobado":
+                M["habilitado"]["residente"] += cd
+            if n1 == "Aprobado" and n2 == "Aprobado":
+                M["habilitado"]["interventoria"] += cd
+
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    if acta_id_filtro is not None:
+        off = 0
+        while True:
+            def _bo(o=off):
+                q = supabase.table("so_registros").select(
+                    "costo_directo,nivel1_estado,nivel2_estado,nivel3_estado,capitulo,acta_rpo_id,item_numero"
+                ).eq("contrato_id", contrato_id)
+                return q.range(o, o + 999).execute().data
+
+            batch = supabase_execute(_bo)
+            for reg in batch:
+                if not (reg.get("item_numero") or "").strip():
+                    continue
+                aid = reg.get("acta_rpo_id")
+                if aid is not None and aid == acta_id_filtro:
+                    continue
+                cd = float(reg.get("costo_directo") or 0)
+                n1 = _matriz_validacion_norm_estado(reg.get("nivel1_estado"))
+                n2 = _matriz_validacion_norm_estado(reg.get("nivel2_estado"))
+                n3 = _matriz_validacion_norm_estado(reg.get("nivel3_estado"))
+                bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
+                Ox = ens_m if bloque == "ensayos" else obra_m
+                if n3 == "Pendiente":
+                    Ox["otras_actas"]["interventoria"] += cd
+                if n2 == "Pendiente":
+                    Ox["otras_actas"]["residente"] += cd
+                if n1 == "Pendiente":
+                    Ox["otras_actas"]["inspector"] += cd
+            if len(batch) < 1000:
+                break
+            off += 1000
+
+    def round_block(m):
+        out = {}
+        for k, cols in m.items():
+            out[k] = {c: round(v, 2) for c, v in cols.items()}
+        return out
+
+    return {
+        "obra_ejecutada_directo_sin_aiu": round_block(obra_m),
+        "ensayos_sondeos_directo_sin_iva": round_block(ens_m),
+    }
+
+
+@app.get("/sicoe-obra/{contrato_id}/dashboard-matriz-validacion")
+def dashboard_matriz_validacion_obra(
+    contrato_id: int,
+    acta_rpo: Optional[int] = None,
+    todo_contrato: bool = Query(False, description="Si true, agrega todo el contrato (lento). Si false y sin acta_rpo, usa acta vigente por período."),
+    current_user=Depends(get_current_user),
+):
+    """
+    Matriz de validación por rol (Interventoría=nivel3, Residente=nivel2, Inspector=nivel1).
+    Por defecto (sin acta_rpo y todo_contrato=false): solo registros del **Acta RPO vigente** (fecha hoy ∈ [inicio, fin]).
+    Con acta_rpo explícito: solo ese acta. Con todo_contrato=true: histórico completo (costoso).
+    Preferir función SQL dashboard_matriz_validacion_agg (rápido); si no existe, fallback en Python.
+    """
+    try:
+        acta_id_filtro: Optional[int] = None
+        filtro_modo = "vigente"
+        acta_rpo_resp: Optional[int] = None
+        vig = None
+        payload: dict = {}
+
+        def _parse_rpc_matrix_raw(raw):
+            if raw is None:
+                return {}
+            if isinstance(raw, list) and len(raw) > 0:
+                return raw[0] if isinstance(raw[0], dict) else {}
+            if isinstance(raw, dict) and "obra_ejecutada_directo_sin_aiu" in raw:
+                return raw
+            if isinstance(raw, dict):
+                k = next(iter(raw.keys()), None)
+                return raw[k] if k and isinstance(raw.get(k), dict) else raw
+            return {}
+
+        if todo_contrato:
+            filtro_modo = "todo_contrato"
+            acta_id_filtro = None
+        elif acta_rpo is not None:
+            filtro_modo = "acta"
+
+            def _aid():
+                rows = supabase.table("actas").select("id")\
+                    .eq("contrato_id", contrato_id).eq("numero_rpo", acta_rpo).execute().data
+                if rows:
+                    return rows[0]["id"]
+                rows = supabase.table("actas").select("id")\
+                    .eq("contrato_id", contrato_id).eq("consecutivo", acta_rpo).execute().data
+                return rows[0]["id"] if rows else None
+            acta_id_filtro = supabase_execute(_aid)
+            acta_rpo_resp = int(acta_rpo) if acta_rpo is not None else None
+        else:
+            # Acta vigente: preferir RPC único (resuelve acta + agrega en BD; menos latencia).
+            bundle_meta = None
+            try:
+                def _bundle():
+                    return supabase.rpc(
+                        "dashboard_matriz_validacion_vigente_bundle",
+                        {"p_contrato_id": contrato_id},
+                    ).execute().data
+                pay = _parse_rpc_matrix_raw(supabase_execute(_bundle))
+                vm = pay.get("_vigente") if isinstance(pay, dict) else None
+                if isinstance(vm, dict) and "obra_ejecutada_directo_sin_aiu" in pay:
+                    bundle_meta = vm
+                    payload = {k: v for k, v in pay.items() if k != "_vigente"}
+            except Exception:
+                payload = {}
+
+            if bundle_meta is not None:
+                aid = bundle_meta.get("acta_id")
+                try:
+                    acta_id_filtro = int(aid) if aid is not None else None
+                except (TypeError, ValueError):
+                    acta_id_filtro = None
+                fm = bundle_meta.get("filtro")
+                if isinstance(fm, str):
+                    filtro_modo = fm
+                nr = bundle_meta.get("numero_rpo")
+                try:
+                    acta_rpo_resp = int(nr) if nr is not None else None
+                except (TypeError, ValueError):
+                    acta_rpo_resp = None
+                an_b = bundle_meta.get("asignado_nombre")
+                if an_b is not None and not isinstance(an_b, str):
+                    an_b = str(an_b)
+                if acta_id_filtro is not None:
+                    vig = {
+                        "id": acta_id_filtro,
+                        "numero_rpo": nr,
+                        "asignado_nombre": (an_b or "").strip() or None,
+                    }
+                else:
+                    vig = None
+            else:
+                vig = _acta_rpo_vigente_row(contrato_id)
+                if vig:
+                    acta_id_filtro = vig.get("id")
+                    nr = vig.get("numero_rpo")
+                    try:
+                        acta_rpo_resp = int(nr) if nr is not None else None
+                    except (TypeError, ValueError):
+                        acta_rpo_resp = None
+                else:
+                    filtro_modo = "sin_vigente_todo_contrato"
+                    acta_id_filtro = None
+
+        if "obra_ejecutada_directo_sin_aiu" not in payload or "ensayos_sondeos_directo_sin_iva" not in payload:
+            try:
+                def _rpc():
+                    return supabase.rpc(
+                        "dashboard_matriz_validacion_agg",
+                        {"p_contrato_id": contrato_id, "p_acta_id": acta_id_filtro},
+                    ).execute().data
+                payload = _parse_rpc_matrix_raw(supabase_execute(_rpc))
+            except Exception:
+                payload = {}
+
+        if "obra_ejecutada_directo_sin_aiu" not in payload or "ensayos_sondeos_directo_sin_iva" not in payload:
+            payload = _dashboard_matriz_validacion_fallback(contrato_id, acta_id_filtro)
+
+        def _acta_vigente_public(v):
+            if not v:
+                return None
+            nm = v.get("asignado_nombre")
+            if nm is not None:
+                nm = str(nm).strip() or None
+            return {
+                "id": v.get("id"),
+                "numero_rpo": v.get("numero_rpo"),
+                "asignado_nombre": nm,
+            }
+
+        return {
+            "acta_rpo": acta_rpo_resp,
+            "acta_id_resuelto": acta_id_filtro,
+            "filtro": filtro_modo,
+            "acta_vigente": _acta_vigente_public(vig),
+            "obra_ejecutada_directo_sin_aiu": payload.get("obra_ejecutada_directo_sin_aiu") or {},
+            "ensayos_sondeos_directo_sin_iva": payload.get("ensayos_sondeos_directo_sin_iva") or {},
         }
     except HTTPException:
         raise
@@ -5644,8 +6495,40 @@ def crear_comentario(contrato_id: int, registro_id: int, body: ComentarioCreate,
     try:
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
         comentario_data = body.dict()
-        _insertar_comentario(contrato_id, registro_id, autor_id, comentario_data)
-        return {"ok": True}
+        creado = _insertar_comentario(contrato_id, registro_id, autor_id, comentario_data)
+
+        # Notificación directa a destinatarios explícitos
+        destinatarios = comentario_data.get("destinatarios") or []
+        asunto = (comentario_data.get("asunto") or "Comentario de validación").strip() or "Comentario de validación"
+        mensaje = comentario_data.get("mensaje") or ""
+        for d in destinatarios:
+            if not isinstance(d, dict):
+                continue
+            try:
+                did = int(d.get("id"))
+            except Exception:
+                continue
+            if did == autor_id:
+                continue
+            try:
+                def _notif():
+                    return supabase.table("notificaciones").insert({
+                        "destinatario_id": did,
+                        "remitente_id": autor_id,
+                        "contrato_id": contrato_id,
+                        "tipo": "validacion",
+                        "modulo": "sicoe_obra",
+                        "entidad_tipo": "registro",
+                        "entidad_id": str(registro_id),
+                        "asunto": asunto,
+                        "mensaje": mensaje,
+                        "leido": False,
+                    }).execute().data
+                supabase_execute(_notif)
+            except Exception:
+                pass
+
+        return {"ok": True, "comentario_id": creado.get("id")}
     except HTTPException:
         raise
     except Exception as e:
@@ -5656,6 +6539,18 @@ def responder_comentario_registro(contrato_id: int, registro_id: int, comentario
                                    body: dict, current_user=Depends(get_current_user)):
     try:
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        parent = supabase.table("so_registro_comentarios").select(
+            "confidencialidad, rol_origen, destinatarios, etiqueta, asunto, tipo, nivel_validacion"
+        ).eq("id", comentario_id).eq("registro_id", registro_id).eq("contrato_id", contrato_id).single().execute().data
+
+        if not parent:
+            raise HTTPException(status_code=404, detail="Comentario padre no encontrado")
+
+        parent_conf = parent.get("confidencialidad") or "publico"
+        parent_rol = parent.get("rol_origen") or ""
+        parent_dest = parent.get("destinatarios") or []
+        parent_tipo = parent.get("tipo") or "validacion"
+
         def _ins():
             return supabase.table("so_registro_comentarios").insert({
                 "registro_id":    registro_id,
@@ -5663,13 +6558,15 @@ def responder_comentario_registro(contrato_id: int, registro_id: int, comentario
                 "autor_id":       autor_id,
                 "padre_id":       comentario_id,
                 "mensaje":        body.get("mensaje", ""),
-                "tipo":           "validacion",
-                "confidencialidad": "cruzado",
-                "rol_origen":     body.get("rol_origen", ""),
-                "destinatarios":  [],
-                "etiqueta":       None,
-                "asunto":         None,
+                "tipo":           parent_tipo,
+                # Heredar confidencialidad del hilo evita fugas por respuestas "cruzadas".
+                "confidencialidad": parent_conf,
+                "rol_origen":     body.get("rol_origen") or parent_rol,
+                "destinatarios":  parent_dest,
+                "etiqueta":       parent.get("etiqueta"),
+                "asunto":         parent.get("asunto"),
                 "enlaces":        [],
+                "nivel_validacion": parent.get("nivel_validacion"),
             }).execute().data
         supabase_execute(_ins)
         return {"ok": True}
@@ -5758,14 +6655,30 @@ def listar_comentarios(contrato_id: int, registro_id: int, rol_solicitante: str,
         for c in comentarios:
             c["autor"] = {"nombre": autor_map.get(c.get("autor_id"), "Usuario")}
 
-        # Filtrar por confidencialidad según el rol del solicitante
-        excluir = set()
-        if rol_solicitante in ("interventoria", "subcontratista"):
-            excluir.add("contratista_interno")
-        if rol_solicitante in ("contratista", "subcontratista"):
-            excluir.add("interventoria_interna")
+        # Regla directa solicitada:
+        # - Sin destinatarios: visible para todos.
+        # - Con destinatarios: visible solo para ids explícitos.
+        uid = int(current_user.get("sub") or current_user.get("id", 0))
+        by_id = {c.get("id"): c for c in comentarios}
+        filtrados = []
+        for c in comentarios:
+            destinatarios = c.get("destinatarios") or []
+            # Si es respuesta sin destinatarios, heredar destinatarios del padre.
+            if (not destinatarios) and c.get("padre_id") and by_id.get(c.get("padre_id")):
+                destinatarios = by_id[c.get("padre_id")].get("destinatarios") or []
+            ids_dest = set()
+            for d in destinatarios:
+                if isinstance(d, dict):
+                    try:
+                        did = int(d.get("id"))
+                        ids_dest.add(did)
+                    except Exception:
+                        continue
+            visible = (not ids_dest) or (uid in ids_dest) or (int(c.get("autor_id") or 0) == uid)
 
-        filtrados = [c for c in comentarios if c.get("confidencialidad") not in excluir]
+            if visible:
+                filtrados.append(c)
+
         # Agrupar: padres con sus respuestas anidadas
         padres = [c for c in filtrados if not c.get("padre_id")]
         hijos  = [c for c in filtrados if c.get("padre_id")]
@@ -5825,7 +6738,10 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
             supabase_execute(_upd)
 
             if body.comentario_data:
-                _insertar_comentario(contrato_id, reg_id, autor_id, body.comentario_data)
+                _insertar_comentario(
+                    contrato_id, reg_id, autor_id, body.comentario_data,
+                    tipo_override="validacion", nivel_validacion_override="Nivel 2"
+                )
             actualizados += 1
 
         return {"actualizados": actualizados, "omitidos": omitidos}
@@ -5874,7 +6790,10 @@ def validar_masivo_nivel3(contrato_id: int, reporte_id: int, body: ValidarMasivo
             supabase_execute(_upd)
 
             if body.comentario_data:
-                _insertar_comentario(contrato_id, reg_id, autor_id, body.comentario_data)
+                _insertar_comentario(
+                    contrato_id, reg_id, autor_id, body.comentario_data,
+                    tipo_override="validacion", nivel_validacion_override="Nivel 3"
+                )
             actualizados += 1
 
         return {"actualizados": actualizados, "omitidos": omitidos}

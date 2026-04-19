@@ -6,8 +6,9 @@
     <link rel="icon" type="image/png" href="/CLARA.CORE.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Clara.Core</title>
-    <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet" />
-    <script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js"></script>
+    <!-- Mapbox: el bundle (mapbox-gl npm + CSS en App) evita cargar GL dos veces; solo precalentamos red -->
+    <link rel="preconnect" href="https://api.mapbox.com" crossorigin />
+    <link rel="dns-prefetch" href="https://events.mapbox.com" />
   </head>
   <body>
     <div id="root"></div>

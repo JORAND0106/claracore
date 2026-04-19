@@ -11,3 +11,4 @@ requests
 cloudinary
 python-multipart
 xhtml2pdf
+pypdf>=4.0

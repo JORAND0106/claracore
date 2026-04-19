@@ -13,6 +13,17 @@ const FS = {
 // ─── Novedades — edita este array para publicar nuevas entradas ───────────────
 const NOVEDADES = [
   {
+    id: 5,
+    tipo: 'actualización',
+    titulo: 'CCD: conciliación interventoría–contratista (CC-SEM y CC-MES)',
+    resumen:
+      'En el módulo Informes: formatos CC-SEM-001/002 (semana) y CC-MES-001/002 (acta RPO) para conciliación interventoría–contratista, con biblioteca de firmas y descarga de PDF. En producción, aplica antes los scripts SQL nuevos en Supabase (Aprobó en biblioteca + tabla ccd_firma_registro por contexto).',
+    fecha: '2026-04-17',
+    autor: 'Equipo ClaraCore',
+    icono: '📄',
+    color: '#0D9488',
+  },
+  {
     id: 1,
     tipo: 'actualización',
     titulo: 'Filtros avanzados en SICOE Obra',
