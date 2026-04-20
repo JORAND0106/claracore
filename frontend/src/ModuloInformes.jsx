@@ -1,10 +1,5 @@
 import { useState, useEffect, useId, useRef } from 'react'
-
-const API_FALLBACK = 'https://claracore-backend.azurewebsites.net'
-/** En `npm run dev`, URL vacía → las peticiones van a 127.0.0.1:5173 y Vite reenvía `/informes` al :8000 (vite.config.js).
- *  Evita "Failed to fetch" por CORS o bloqueos al llamar directo a :8000 desde el navegador.
- *  En build de producción se usa VITE_API_URL. */
-const API = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || API_FALLBACK)
+import { API_BASE as API } from './apiBase'
 
 const FS = {
   small:  { base: 13, sub: 12, title: 20, section: 12 },

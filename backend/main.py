@@ -1023,6 +1023,12 @@ async def registrar_respuesta_lenta(request: Request, call_next):
 def root():
     return {"message": "ClaraCore API funcionando"}
 
+
+@app.get("/healthz")
+def healthz():
+    """Sin Supabase ni lógica pesada — útil para keep-alive y comprobar que el worker responde (Azure cold start)."""
+    return {"ok": True}
+
 @app.get("/cargos")
 def listar_cargos():
     return supabase.table("cargos").select("*").order("nombre").execute().data

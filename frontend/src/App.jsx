@@ -13,10 +13,8 @@ const _VITE_MAPBOX = import.meta.env.VITE_MAPBOX_TOKEN
 if (_VITE_MAPBOX) mapboxgl.accessToken = _VITE_MAPBOX
 import * as XLSX from 'xlsx'
 import ExcelJS from 'exceljs'
+import { API_BASE } from './apiBase'
 
-const API_BASE = import.meta.env.DEV
-  ? 'http://127.0.0.1:8000'
-  : (import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net')
 const API = API_BASE
 const POLITICAS_TEXTO_VERSION = '1.0'
 const TEST_MODE = String(import.meta.env.VITE_TEST_MODE || '').toLowerCase() === 'true'
@@ -12067,7 +12065,13 @@ export default function App() {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
 useEffect(() => {
-    const ping = () => fetch(`${API_BASE}/`).catch(() => {})
+    const ping = () => {
+      const opt =
+        typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? { signal: AbortSignal.timeout(20000) }
+          : {}
+      return fetch(`${API}/healthz`, opt).catch(() => {})
+    }
     ping()
     const iv = setInterval(ping, 8 * 60 * 1000)
     return () => clearInterval(iv)
@@ -12078,9 +12082,15 @@ useEffect(() => {
   const [esperandoFinMantenimiento, setEsperandoFinMantenimiento] = useState(false)
 
   useEffect(() => {
+    // Con Azure en frío las respuestas pueden tardar minutos; sin cuerpo HTTP el navegador muestra "CORS" aunque el fallo sea timeout.
+    const pollMs = mantenimiento?.activo ? 10000 : 40000
     const checkMant = async () => {
       try {
-        const r = await fetch(`${API}/mantenimiento`)
+        const opt =
+          typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+            ? { signal: AbortSignal.timeout(28000) }
+            : {}
+        const r = await fetch(`${API}/mantenimiento`, opt)
         if (r.ok) {
           const d = await r.json()
           if (d.activo) {
@@ -12101,10 +12111,10 @@ useEffect(() => {
             setCuentaRegresiva(null)
           }
         }
-      } catch {}
+      } catch { /* silencioso: red, timeout o instancia Azure aún arrancando */ }
     }
     checkMant()
-    const iv = setInterval(checkMant, 10000)
+    const iv = setInterval(checkMant, pollMs)
     return () => clearInterval(iv)
   }, [mantenimiento?.activo, esperandoFinMantenimiento])
 

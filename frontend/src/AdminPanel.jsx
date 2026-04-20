@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import * as XLSX from "xlsx";
 import mapboxgl from "mapbox-gl";
+import { API_BASE } from "./apiBase";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
-const API = import.meta.env.VITE_API_URL || "https://claracore-backend.azurewebsites.net";
+const API = API_BASE;
 
 const ACCIONES = ["ver", "crear", "editar", "eliminar", "validar", "exportar"];
 
@@ -201,6 +202,21 @@ const S = {
 };
 
 // ─── HOOK: llamadas a la API ───────────────────────────────────────────────
+/** Fallos de red / timeout: el navegador suele mostrar CORS aunque el origen esté permitido. Azure en frío puede tardar >1 min en la 1.ª respuesta. */
+function _esFalloRedTransitorio(e) {
+  if (!e) return false;
+  if (e instanceof TypeError) return true;
+  if (e.name === "AbortError") return true;
+  const msg = String(e.message || "");
+  if (msg.includes("Failed to fetch")) return true;
+  if (msg.includes("NetworkError") || msg.includes("Network request failed")) return true;
+  return false;
+}
+
+function _sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 function useApi(token) {
   const call = useCallback(async (method, path, body = null) => {
     const url = `${API}${path}`;
@@ -212,19 +228,30 @@ function useApi(token) {
       },
     };
     if (body) opts.body = JSON.stringify(body);
+    const intentos = 5;
+    const timeoutPorIntentoMs = 55000;
     let res;
-    try {
-      res = await fetch(url, opts);
-    } catch (e) {
-      const raw = e && e.message ? String(e.message) : String(e);
-      if (raw === "Failed to fetch" || e instanceof TypeError) {
-        throw new Error(
-          `Sin conexión con el backend (${url}). Revisa: servidor en marcha, ` +
-            `VITE_API_URL correcto en el build del front, misma red, y que no mezcles ` +
-            `HTTPS (app) con HTTP (API) ni bloqueo CORS.`,
-        );
+    for (let i = 0; i < intentos; i++) {
+      const intentoOpts = { ...opts };
+      if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+        intentoOpts.signal = AbortSignal.timeout(timeoutPorIntentoMs);
       }
-      throw e instanceof Error ? e : new Error(raw);
+      try {
+        res = await fetch(url, intentoOpts);
+        break;
+      } catch (e) {
+        if (!_esFalloRedTransitorio(e) || i === intentos - 1) {
+          const raw = e && e.message ? String(e.message) : String(e);
+          if (_esFalloRedTransitorio(e)) {
+            throw new Error(
+              `Sin conexión con el backend (${url}). Si es la primera carga del día, el servidor en Azure puede tardar más de un minuto en despertar: espera y vuelve a abrir el panel. ` +
+                `Comprueba también red/VPN, bloqueadores y que el despliegue use la misma URL de API (VITE_API_URL).`,
+            );
+          }
+          throw e instanceof Error ? e : new Error(raw);
+        }
+        await _sleep(1200 * (i + 1) + Math.random() * 400);
+      }
     }
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
@@ -779,7 +806,6 @@ function SeccionPermisos({ call, cargos, theme }) {
 // ─── SECCIÓN PÁGINA DE INICIO (novedades) ─────────────────────────────────────
 function SeccionInicioNovedades({ call, theme, token }) {
   const col = C(theme);
-  const API_BASE = import.meta.env.VITE_API_URL || "https://claracore-backend.azurewebsites.net";
   const emptyForm = () => ({
     titulo: "",
     resumen: "",
@@ -1184,7 +1210,6 @@ function SeccionInicioNovedades({ call, theme, token }) {
 // ─── SECCIÓN LOGS ─────────────────────────────────────────────────────────────
 function SeccionLogs({ call, theme }) {
   const col = C(theme)
-  const API = import.meta.env.VITE_API_URL || "https://claracore-backend.azurewebsites.net"
   const token = localStorage.getItem("cc_token") || sessionStorage.getItem("cc_token")
 
   const [logs,          setLogs]          = useState([])

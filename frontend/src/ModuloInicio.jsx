@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
-
-const API_BASE = import.meta.env.VITE_API_URL || 'https://claracore-backend.azurewebsites.net'
+import { API_BASE } from './apiBase'
 const API_ANTHROPIC = `${API_BASE}/frase-del-dia`
 
 // ─── Escala de fuentes — sincronizada con FONT_SIZES de App.jsx ───────────────
