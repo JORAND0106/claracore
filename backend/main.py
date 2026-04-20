@@ -59,15 +59,9 @@ _cors_origins = [
     "http://127.0.0.1:5174",
 ] + _cors_extra
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins,
-    # Cubre cualquier subdominio de claracore.co por si el front cambia de host (evita CORS silencioso si falta una entrada en la lista).
-    allow_origin_regex=r"^https://([a-z0-9-]+\.)*claracore\.co$|^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
-    allow_methods=["*"],
-    allow_headers=["*"],
-    allow_credentials=True,
-)
+# CORSMiddleware se registra al final del archivo (tras los @app.middleware) para que sea la capa
+# más externa y añada cabeceras CORS también cuando un middleware interno devuelve JSONResponse
+# sin llamar a call_next (p. ej. políticas 403); si CORS va “dentro”, el navegador ve CORS bloqueado.
 
 _log_api = logging.getLogger("uvicorn.error")
 
@@ -77,6 +71,41 @@ _endpoint_500_tracker: dict = {}
 
 # Versión del texto de políticas mostrada al usuario (auditoría junto a politicas_version en BD)
 POLITICAS_VERSION_DEFAULT = os.getenv("POLITICAS_VERSION", "1.0")
+
+# Cache en memoria: evita 1 consulta a Supabase por cada request autenticado (reduce carga y latencia).
+# Invalidación al aceptar políticas. TTL por defecto 120 s (ajustable con POLITICAS_CACHE_TTL_SECONDS).
+_POLITICAS_CACHE_TTL = float(os.getenv("POLITICAS_CACHE_TTL_SECONDS", "120"))
+_POLITICAS_CACHE_LOCK = threading.Lock()
+# uid -> (exp_unix, "ok"|"pend"|"none")  ok=aceptó, pend=rechazó pendiente, none=usuario no existe en select
+_politicas_cache: dict = {}
+
+
+def _politicas_cache_get(uid: int) -> Optional[str]:
+    with _POLITICAS_CACHE_LOCK:
+        row = _politicas_cache.get(uid)
+        if not row:
+            return None
+        exp, state = row
+        if time.time() > exp:
+            del _politicas_cache[uid]
+            return None
+        return state
+
+
+def _politicas_cache_set(uid: int, state: str) -> None:
+    """state: ok | pend | none"""
+    with _POLITICAS_CACHE_LOCK:
+        _politicas_cache[uid] = (time.time() + _POLITICAS_CACHE_TTL, state)
+        if len(_politicas_cache) > 8000:
+            now = time.time()
+            dead = [k for k, (e, _) in _politicas_cache.items() if e < now]
+            for k in dead[:4000]:
+                _politicas_cache.pop(k, None)
+
+
+def politicas_cache_invalidate(uid: int) -> None:
+    with _POLITICAS_CACHE_LOCK:
+        _politicas_cache.pop(uid, None)
 
 
 def _client_ip(request: Request) -> str:
@@ -143,12 +172,16 @@ async def unhandled_exception_to_json(request: Request, exc: Exception):
 
 _SUPABASE_URL = os.getenv("SUPABASE_URL")
 _SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# PostgREST puede tardar bajo carga; el default de httpx (~5s) provoca ReadTimeout en /auth/refresh y otras rutas.
+_SUPABASE_HTTP_TIMEOUT = httpx.Timeout(connect=20.0, read=120.0, write=90.0, pool=30.0)
 
 def get_supabase():
     return create_client(
         _SUPABASE_URL,
         _SUPABASE_KEY,
-        options=ClientOptions(httpx_client=httpx.Client(http2=False))
+        options=ClientOptions(
+            httpx_client=httpx.Client(http2=False, timeout=_SUPABASE_HTTP_TIMEOUT)
+        ),
     )
 
 supabase = get_supabase()
@@ -182,13 +215,23 @@ async def exigir_politicas_confidencialidad(request: Request, call_next):
         uid = int(sub)
     except (JWTError, ValueError, TypeError):
         return await call_next(request)
+    cached = _politicas_cache_get(uid)
+    if cached == "ok":
+        return await call_next(request)
+    if cached == "pend":
+        return JSONResponse(status_code=403, content={"detail": "politicas_pendientes"})
+    if cached == "none":
+        return JSONResponse(status_code=403, content={"detail": "politicas_pendientes"})
     try:
         r = supabase.table("usuarios").select("politicas_aceptadas").eq("id", uid).limit(1).execute()
         row = r.data[0] if r.data else None
         if row is None:
+            _politicas_cache_set(uid, "none")
             return JSONResponse(status_code=403, content={"detail": "politicas_pendientes"})
         if row.get("politicas_aceptadas") is True:
+            _politicas_cache_set(uid, "ok")
             return await call_next(request)
+        _politicas_cache_set(uid, "pend")
         return JSONResponse(status_code=403, content={"detail": "politicas_pendientes"})
     except Exception:
         # Columna aún no migrada u otro error: no bloquear despliegue
@@ -1019,6 +1062,18 @@ async def registrar_respuesta_lenta(request: Request, call_next):
     return response
 
 
+# Debe ir después de todos los @app.middleware("http") para quedar como capa externa y que
+# todas las respuestas (incl. cortocircuitos 403) lleven cabeceras CORS.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_origin_regex=r"^https://([a-z0-9-]+\.)*claracore\.co$|^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=True,
+)
+
+
 @app.get("/")
 def root():
     return {"message": "ClaraCore API funcionando"}
@@ -1309,6 +1364,7 @@ def aceptar_politicas_confidencialidad(request: Request, current_user=Depends(ge
         }).eq("id", uid).execute()
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"No se pudo registrar la aceptación: {e}")
+    politicas_cache_invalidate(uid)
     return {
         "politicas_aceptadas": True,
         "politicas_fecha": now_iso,
@@ -1981,36 +2037,55 @@ def set_mantenimiento(body: MantenimientoRequest):
 def refresh_token(current_user=Depends(get_current_user)):
     """Renueva el token JWT del usuario activo."""
     uid = int(current_user.get("sub"))
-    result = supabase.table("usuarios").select("*").eq("id", uid).execute()
-    if not result.data:
-        raise HTTPException(status_code=401, detail="Usuario no encontrado")
-    usuario = result.data[0]
-    cargo_nombre = None
-    if usuario.get("cargo_id"):
-        r = supabase.table("cargos").select("nombre").eq("id", usuario["cargo_id"]).execute()
-        if r.data:
-            cargo_nombre = r.data[0]["nombre"]
-    rol_nombre = None
-    if usuario.get("rol_id"):
-        r = supabase.table("roles").select("nombre").eq("id", usuario["rol_id"]).execute()
-        if r.data:
-            rol_nombre = r.data[0]["nombre"]
-    contrato_numero = None
-    if usuario.get("contrato_id"):
-        r = supabase.table("contratos").select("numero").eq("id", usuario["contrato_id"]).execute()
-        if r.data:
-            contrato_numero = r.data[0]["numero"]
-    nombre_completo = f"{usuario.get('nombre','')} {usuario.get('apellidos','')}".strip()
-    new_token = create_token({
-        "sub": str(uid),
-        "email": usuario["email"],
-        "nombre": nombre_completo or usuario.get("nombre") or "",
-        "cargo_nombre": cargo_nombre or "",
-        "rol_nombre": rol_nombre or "",
-        "contrato_id": usuario.get("contrato_id"),
-        "contrato_numero": contrato_numero or "",
-    })
-    return {"access_token": new_token, "token_type": "bearer"}
+    try:
+        def _u():
+            return supabase.table("usuarios").select("*").eq("id", uid).execute()
+        result = supabase_execute(_u, retries=4, delay=0.6)
+        if not result.data:
+            raise HTTPException(status_code=401, detail="Usuario no encontrado")
+        usuario = result.data[0]
+        cargo_nombre = None
+        if usuario.get("cargo_id"):
+            cid = usuario["cargo_id"]
+            def _c():
+                return supabase.table("cargos").select("nombre").eq("id", cid).execute()
+            r = supabase_execute(_c, retries=3, delay=0.5)
+            if r.data:
+                cargo_nombre = r.data[0]["nombre"]
+        rol_nombre = None
+        if usuario.get("rol_id"):
+            rid = usuario["rol_id"]
+            def _r():
+                return supabase.table("roles").select("nombre").eq("id", rid).execute()
+            r = supabase_execute(_r, retries=3, delay=0.5)
+            if r.data:
+                rol_nombre = r.data[0]["nombre"]
+        contrato_numero = None
+        if usuario.get("contrato_id"):
+            ctid = usuario["contrato_id"]
+            def _ct():
+                return supabase.table("contratos").select("numero").eq("id", ctid).execute()
+            r = supabase_execute(_ct, retries=3, delay=0.5)
+            if r.data:
+                contrato_numero = r.data[0]["numero"]
+        nombre_completo = f"{usuario.get('nombre','')} {usuario.get('apellidos','')}".strip()
+        new_token = create_token({
+            "sub": str(uid),
+            "email": usuario["email"],
+            "nombre": nombre_completo or usuario.get("nombre") or "",
+            "cargo_nombre": cargo_nombre or "",
+            "rol_nombre": rol_nombre or "",
+            "contrato_id": usuario.get("contrato_id"),
+            "contrato_numero": contrato_numero or "",
+        })
+        return {"access_token": new_token, "token_type": "bearer"}
+    except HTTPException:
+        raise
+    except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+        raise HTTPException(
+            status_code=503,
+            detail="El servicio de datos no respondió a tiempo. Intente de nuevo en unos segundos.",
+        ) from e
 
 
 @app.post("/auth/logout")
@@ -7493,7 +7568,14 @@ def dashboard_pkid_tabla_obra(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/sicoe-obra/{contrato_id}/dashboard-pkid-colores")
+@app.get(
+    "/presupuesto/{contrato_id}/pkid-colores",
+    operation_id="presupuesto_pkid_colores_compat",
+)
+@app.get(
+    "/sicoe-obra/{contrato_id}/dashboard-pkid-colores",
+    operation_id="sicoe_dashboard_pkid_colores",
+)
 def dashboard_pkid_colores_obra(
     contrato_id: int,
     capitulo: Optional[str] = None,
@@ -7501,6 +7583,7 @@ def dashboard_pkid_colores_obra(
     current_user=Depends(get_current_user)
 ):
     """
+    Compat: el front aún llama GET /presupuesto/{id}/pkid-colores.
     Reemplaza /cobro/{contrato_id}/pkid-colores-drill para el mini-mapa semáforo del Dashboard.
     Retorna misma forma: {pk_id: {cobrado, presupuesto, pct, sobrecosto}}
     """

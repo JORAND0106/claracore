@@ -756,7 +756,7 @@ useEffect(() => {
     const itemDrill = drill.find(d => d.campo === 'item')
     if (itemDrill) params.set('item', itemDrill.valor)
     else if (capDrill) params.set('capitulo', capDrill.valor)
-    fetch(`${API}/presupuesto/${contratoId}/pkid-colores?${params}`, {
+    fetch(`${API}/sicoe-obra/${contratoId}/dashboard-pkid-colores?${params}`, {
       headers: { Authorization: `Bearer ${token}` }
     }).then(r => r.ok ? r.json() : {}).then(setPptoPkidColores).catch(() => {})
   }, [contratoId, drill])

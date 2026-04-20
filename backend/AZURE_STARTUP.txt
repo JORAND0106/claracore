@@ -1,0 +1,27 @@
+CLARACORE — Azure App Service (backend), checklist sin rodeos
+============================================================
+
+1) COMANDO DE INICIO (lo más importante)
+   - MAL:  pip install ... && python -m uvicorn ...
+     Eso en cada reinicio satura CPU/red y genera 5xx.
+   - BIEN: bash startup.sh
+     (o la ruta real: bash backend/startup.sh según dónde quede el archivo al publicar)
+
+2) DEPENDENCIAS
+   - Deben instalarse al DESPLEGAR (pipeline / Oryx build), no en runtime.
+   - Tras cambiar requirements.txt: redesplegar o usar build en CI.
+
+3) PLAN
+   - Básico B2 = “cargas menos exigentes”. Producción con muchos usuarios: valorar Premium v3 o al menos B3.
+   - Métricas: si Memory o CPU pegados al 100%, subir plan o reducir carga.
+
+4) VARIABLES ÚTILES (Configuration → Application settings)
+   - WEB_CONCURRENCY=2 o 3  (workers gunicorn; no pasarse en RAM baja)
+   - POLITICAS_CACHE_TTL_SECONDS=120  (cache políticas; ya tiene default)
+
+5) SALUD
+   - Health check path: /healthz
+   - Always On: ya lo tienes en On; si sigue cayendo, no es “hibernación” clásica: es saturación o reinicios.
+
+6) MÉTRICAS QUE VISTE (5xx + picos Data In)
+   - Coincide con arranque pesado o picos de tráfico. Quitar pip del startup es el primer cambio obligatorio.

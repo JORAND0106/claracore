@@ -2,12 +2,17 @@
 # Arranque recomendado en Azure App Service (Linux): varios workers evitan 503/502
 # cuando hay muchas peticiones concurrentes (dashboard, notificaciones, etc.).
 #
-# En Azure Portal → App Service del API → Configuration → General settings:
-#   - Startup Command:  bash startup.sh   (o la ruta real si el código no está en la raíz del sitio)
-#   - Health check path: /healthz
-#   - Always On: On
+# === NO PONGAS "pip install" EN EL STARTUP ===
+# Si el comando es: pip install ... && uvicorn ...
+# en CADA reinicio Azure descarga e instala dependencias (minutos de CPU/red),
+# provoca 502/5xx y picos de "Data In". Instala dependencias en el DEPLOY, no al arrancar.
 #
-# Opcional (Application settings): WEB_CONCURRENCY=3 o 4 en planes con más CPU.
+# Azure Portal → Configuration → General settings:
+#   Startup Command:  bash startup.sh   (o bash backend/startup.sh según publicación)
+#   Health check path: /healthz
+#   Always On: On
+#
+# Application settings (opcional): WEB_CONCURRENCY=3 en B2/B3.
 set -e
 PORT="${PORT:-8000}"
 WORKERS="${WEB_CONCURRENCY:-2}"
