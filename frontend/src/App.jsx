@@ -631,6 +631,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [editDims, setEditDims] = useState({})      // {[id]: {ancho, espesor}}
   const [modalConfirm, setModalConfirm] = useState(false)
   const [bulkEstado, setBulkEstado] = useState('')
+  const [bulkPreInterv, setBulkPreInterv] = useState('')
   const [busquedaTipo, setBusquedaTipo] = useState('')   // 'nodo' | 'abscisa' | 'idpol'
   const [busquedaV1,   setBusquedaV1]   = useState('')   // nodo_ini | abs_ini | idpol
   const [busquedaV2,   setBusquedaV2]   = useState('')   // nodo_fin | abs_fin (no se usa en idpol)
@@ -729,7 +730,7 @@ useEffect(() => {
       .then(registro => {
         if (registro) {
           setModalDetallePpto(registro)
-          setModalDetallePptoEditable(true)
+          setModalDetallePptoEditable(!registro.sellado)
           setPopupDims({ ancho: registro.ancho ?? '', espesor: registro.espesor ?? '' })
           setPopupCap(registro.capitulo || '')
           setPopupItem(registro.item || '')
@@ -774,6 +775,35 @@ useEffect(() => {
   const puedeEliminar = esDeveloper || (_permPpto?.eliminar ?? false)
   const nivelInfo    = determinarNivelValidacion(usuario)
   const esSellado = (r) => r?.sellado === true
+  /** Tras bulk-estado: refleja sellado cuando Interventoría aprueba (mismo criterio que el backend). */
+  const aplicarCambioEstadoLocal = (r, ids, nuevoEstado) => {
+    if (!ids.includes(r.id)) return r
+    const next = { ...r, revisado: nuevoEstado }
+    if (nuevoEstado === 'Aprobado' && usuario?.rol_nombre === 'Interventoría') {
+      next.sellado = true
+      next.validado_por = usuario?.nombre || usuario?.email || ''
+      next.validado_en = new Date().toISOString()
+    }
+    if (nuevoEstado !== 'Aprobado') {
+      next.validado_por = null
+      next.validado_en = null
+    }
+    return next
+  }
+  const aplicarCambioPreIntervLocal = (r, ids, nuevoEstado) => {
+    if (!ids.includes(r.id)) return r
+    const next = { ...r, pre_interv_estado: nuevoEstado }
+    if (nuevoEstado === 'Aprobado') {
+      next.pre_interv_por = usuario?.nombre || usuario?.email || ''
+      next.pre_interv_en = new Date().toISOString()
+    } else {
+      next.pre_interv_por = null
+      next.pre_interv_en = null
+    }
+    return next
+  }
+  const puedePrevalidarUI = (nivelInfo.puedePrevalidarAntesInterv || esDeveloper) && puedeValidar && !nivelInfo.esInterventoria
+  const mostrarColumnaDepuracion = !nivelInfo.esInterventoria
   const [verPapelera, setVerPapelera] = useState(false)
   const _pptoCacheRef   = useRef(null)   // { data, ts, papelera } – solo para papelera
   const _pptoCachePorCap = useRef({})    // { [capitulo]: { data, ts } }
@@ -1088,6 +1118,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   const registrosPagina = useMemo(() =>
     registrosOrdenados.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA)
   , [registrosOrdenados, pagina])
+  const idsPaginaNoSellados = useMemo(
+    () => registrosPagina.filter(r => !esSellado(r)).map(r => r.id),
+    [registrosPagina]
+  )
 
   async function cargarItemsCapitulo(capitulo) {
     if (!contratoId) return
@@ -1289,6 +1323,11 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
 async function ejecutarBulkEstadoDirecto(estado) {
     if (!estado || seleccionados.size === 0) return
+    const selIds = [...seleccionados]
+    if (selIds.some(id => esSellado(registros.find(rr => rr.id === id)))) {
+      alert('Hay registros sellados (aprobados por Interventoría) en la selección; no pueden modificarse.')
+      return
+    }
     const obligatorio = estado === 'Pendiente' || estado === 'Rechazado'
     const comentarioData = await pedirComentario('validacion', obligatorio)
     if (comentarioData === null) return
@@ -1305,12 +1344,17 @@ async function ejecutarBulkEstadoDirecto(estado) {
       const idsSelec = [...seleccionados]
       setBulkEstado(''); setSeleccionados(new Set())
       lanzarClaraLinkEstado(idsSelec, estado)
-      setRegistros(prev => prev.map(r => idsSelec.includes(r.id) ? { ...r, revisado: estado } : r))
+      setRegistros(prev => prev.map(r => aplicarCambioEstadoLocal(r, idsSelec, estado)))
     }
   }
 
   async function ejecutarBulkEstado() {
     if (!bulkEstado || seleccionados.size === 0) return
+    const selIds = [...seleccionados]
+    if (selIds.some(id => esSellado(registros.find(rr => rr.id === id)))) {
+      alert('Hay registros sellados (aprobados por Interventoría) en la selección; no pueden modificarse.')
+      return
+    }
     const obligatorio = bulkEstado === 'Pendiente' || bulkEstado === 'Rechazado'
     const comentarioData = await pedirComentario('validacion', obligatorio)
     if (comentarioData === null) return
@@ -1328,12 +1372,47 @@ async function ejecutarBulkEstadoDirecto(estado) {
       const estadoAplicado = bulkEstado
       setBulkEstado(''); setSeleccionados(new Set())
       lanzarClaraLinkEstado(idsSelec, estadoAplicado)
-      setRegistros(prev => prev.map(r => idsSelec.includes(r.id) ? { ...r, revisado: estadoAplicado } : r))
+      setRegistros(prev => prev.map(r => aplicarCambioEstadoLocal(r, idsSelec, estadoAplicado)))
+    }
+  }
+
+  async function ejecutarBulkPreInterv() {
+    if (!bulkPreInterv || seleccionados.size === 0) return
+    const selIds = [...seleccionados]
+    if (selIds.some(id => esSellado(registros.find(rr => rr.id === id)))) {
+      alert('Hay registros sellados en la selección; no pueden modificarse.')
+      return
+    }
+    const obligatorio = bulkPreInterv === 'Pendiente' || bulkPreInterv === 'Rechazado'
+    const comentarioData = await pedirComentario('validacion', obligatorio)
+    if (comentarioData === null) return
+    const comentario = comentarioData?.mensaje || ''
+    const destinatarioId = comentarioData?.destinatarioId || null
+    setGuardandoBulk(true)
+    const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-pre-interv`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ids: selIds, estado: bulkPreInterv })
+    })
+    setGuardandoBulk(false)
+    if (res.ok) {
+      if (comentario.trim()) await crearComentarios(selIds, 'validacion', comentario, destinatarioId)
+      const idsSelec = [...selIds]
+      const estadoPre = bulkPreInterv
+      setBulkPreInterv(''); setSeleccionados(new Set())
+      setRegistros(prev => prev.map(r => aplicarCambioPreIntervLocal(r, idsSelec, estadoPre)))
+    } else {
+      try {
+        const d = await res.json()
+        alert(d.detail || 'No se pudo aplicar la depuración previa.')
+      } catch {
+        alert('No se pudo aplicar la depuración previa.')
+      }
     }
   }
 
   // ── Edición inline ─────────────────────────────────────────────────────────
   function iniciarEdicion(registro) {
+    if (esSellado(registro)) return
     setEditando(registro.id)
     setEditValues({
       area_long_nod: registro.area_long_nod ?? '',
@@ -1347,6 +1426,8 @@ async function ejecutarBulkEstadoDirecto(estado) {
   }
 
   async function guardarEdicion(id) {
+    const reg = registros.find(rr => rr.id === id)
+    if (esSellado(reg)) return
     const body = {}
     Object.entries(editValues).forEach(([k, v]) => {
       if (v === '' || v == null) return
@@ -1371,15 +1452,18 @@ async function ejecutarBulkEstadoDirecto(estado) {
 
   // ── Selección ──────────────────────────────────────────────────────────────
   function toggleSel(id) {
+    const row = registros.find(rr => rr.id === id)
+    if (esSellado(row)) return
     setSeleccionados(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   }
   function toggleTodos() {
-    const idsPagina = new Set(registrosPagina.map(r => r.id))
-    const todosPaginaSeleccionados = registrosPagina.every(r => seleccionados.has(r.id))
-    if (todosPaginaSeleccionados) {
-      setSeleccionados(prev => { const n = new Set(prev); idsPagina.forEach(id => n.delete(id)); return n })
+    const idsPagina = registrosPagina.map(r => r.id)
+    const idsNoSellados = registrosPagina.filter(r => !esSellado(r)).map(r => r.id)
+    const todosNoSelladosSeleccionados = idsNoSellados.length > 0 && idsNoSellados.every(id => seleccionados.has(id))
+    if (todosNoSelladosSeleccionados) {
+      setSeleccionados(prev => { const n = new Set(prev); idsPagina.forEach(i => n.delete(i)); return n })
     } else {
-      setSeleccionados(prev => { const n = new Set(prev); idsPagina.forEach(id => n.add(id)); return n })
+      setSeleccionados(prev => { const n = new Set(prev); idsNoSellados.forEach(i => n.add(i)); return n })
     }
   }
   useEffect(() => setPagina(1), [registrosFiltrados.length])
@@ -1447,23 +1531,55 @@ async function highlightEnDwg(registro) {
   }
 
   async function cambiarEstadoDirecto(id, nuevoEstado) {
+    const row = registros.find(rr => rr.id === id)
+    if (esSellado(row)) return
     const obligatorio = nuevoEstado === 'Pendiente' || nuevoEstado === 'Rechazado'
     const comentarioData = await pedirComentario('validacion', obligatorio)
     if (comentarioData === null) return
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
     const token = getToken()
-    await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
+    const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ ids: [id], revisado: nuevoEstado })
     })
+    if (!res.ok) return
     if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioId)
     lanzarClaraLinkEstado([id], nuevoEstado)
-    setRegistros(prev => prev.map(r => r.id === id ? { ...r, revisado: nuevoEstado } : r))
+    setRegistros(prev => prev.map(r => aplicarCambioEstadoLocal(r, [id], nuevoEstado)))
+  }
+
+  async function cambiarPreIntervDirecto(id, nuevoEstado) {
+    const row = registros.find(rr => rr.id === id)
+    if (esSellado(row)) return
+    const obligatorio = nuevoEstado === 'Pendiente' || nuevoEstado === 'Rechazado'
+    const comentarioData = await pedirComentario('validacion', obligatorio)
+    if (comentarioData === null) return
+    const comentario = comentarioData?.mensaje || ''
+    const destinatarioId = comentarioData?.destinatarioId || null
+    const tok = getToken()
+    const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-pre-interv`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+      body: JSON.stringify({ ids: [id], estado: nuevoEstado })
+    })
+    if (!res.ok) {
+      try {
+        const d = await res.json()
+        alert(d.detail || 'No se pudo guardar la depuración previa.')
+      } catch {
+        alert('No se pudo guardar la depuración previa.')
+      }
+      return
+    }
+    if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioId)
+    setRegistros(prev => prev.map(r => aplicarCambioPreIntervLocal(r, [id], nuevoEstado)))
   }
 
 async function darDeBaja(id) {
+    const row = registros.find(rr => rr.id === id)
+    if (esSellado(row)) return
     if (!dwgEnlazado) {
       alert('⚠️ Para dar de baja un registro necesitas tener el DWG enlazado.')
       return
@@ -1482,6 +1598,8 @@ async function darDeBaja(id) {
   }
 
 async function restaurar(id) {
+    const row = registros.find(rr => rr.id === id)
+    if (esSellado(row)) return
     if (!window.confirm('¿Restaurar este registro? Volverá a aparecer en la grilla y se reactivará en el DWG.')) return
     const res = await fetch(`${API}/presupuesto/item/${id}/restaurar`, {
       method: 'PUT', headers: { Authorization: `Bearer ${token}` }
@@ -1869,18 +1987,22 @@ async function restaurar(id) {
                   { tab: 3, regs: regsTramo,   key: 'tramo', msg: 'SIN CANTIDADES REPORTADAS PARA ESTE TRAMO' },
                 ].filter(t => t.tab === tabTramo).map(({ regs, key, msg }) => {
                   const selTab = selTramoTab[key]
-                  const todosSelec = regs.length > 0 && regs.every(r => selTab.has(r.id))
+                  const regsLibres = regs.filter(r => !esSellado(r))
+                  const todosSelec = regsLibres.length > 0 && regsLibres.every(r => selTab.has(r.id))
                   const algunoSelec = regs.some(r => selTab.has(r.id))
                   const toggleTab = () => {
                     setSelTramoTab(prev => {
                       const n = new Set(prev[key])
                       if (todosSelec) regs.forEach(r => n.delete(r.id))
-                      else regs.forEach(r => n.add(r.id))
+                      else regsLibres.forEach(r => n.add(r.id))
                       return { ...prev, [key]: n }
                     })
                   }
                   const validarTab = async (estado) => {
-                    const ids = [...selTab]
+                    let ids = [...selTab].filter(id => {
+                      const row = regs.find(x => x.id === id)
+                      return row && !esSellado(row)
+                    })
                     if (!ids.length) return
                     const obligatorio = estado === 'Pendiente' || estado === 'Rechazado'
                     const comentarioData = await pedirComentario('validacion', obligatorio)
@@ -1894,7 +2016,7 @@ async function restaurar(id) {
                     if (res.ok) {
                       if (comentario.trim()) await crearComentarios(ids, 'validacion', comentario, destinatarioId)
                       lanzarClaraLinkEstado(ids, estado)
-                      setRegistros(prev => prev.map(r => ids.includes(r.id) ? { ...r, revisado: estado } : r))
+                      setRegistros(prev => prev.map(r => aplicarCambioEstadoLocal(r, ids, estado)))
                       setSelTramoTab(prev => ({ ...prev, [key]: new Set() }))
                     }
                   }
@@ -1945,17 +2067,21 @@ async function restaurar(id) {
                                 style={{ display:'flex', gap:'8px', alignItems:'center', padding:'8px 10px', cursor:'pointer' }}>
                                 <input type="checkbox" checked={selTab.has(r.id)}
                                   onClick={e => e.stopPropagation()}
-                                  onChange={() => setSelTramoTab(prev => {
-                                    const n = new Set(prev[key])
-                                    selTab.has(r.id) ? n.delete(r.id) : n.add(r.id)
-                                    return { ...prev, [key]: n }
-                                  })}
-                                  style={{ width:'13px', height:'13px', cursor:'pointer', flexShrink:0 }} />
+                                  disabled={esSellado(r)}
+                                  onChange={() => {
+                                    if (esSellado(r)) return
+                                    setSelTramoTab(prev => {
+                                      const n = new Set(prev[key])
+                                      selTab.has(r.id) ? n.delete(r.id) : n.add(r.id)
+                                      return { ...prev, [key]: n }
+                                    })
+                                  }}
+                                  style={{ width:'13px', height:'13px', cursor: esSellado(r) ? 'not-allowed' : 'pointer', flexShrink:0, opacity: esSellado(r) ? 0.45 : 1 }} />
                                 <div style={{ width:'80px', flexShrink:0, fontSize:'11px', color:t.text, fontWeight:'600' }}>{r.item}</div>
                                 <div style={{ flex:3, fontSize:'11px', color:t.textMuted }}>{r.descripcion}</div>
                                 {/* Dims — editable cuando puedeEditar */}
                                 <div style={{ minWidth:'120px', fontSize:'11px', color:t.textMuted, textAlign:'right', whiteSpace:'nowrap' }}>
-                                  {puedeEditar && editDims[r.id] !== undefined ? (
+                                  {puedeEditar && !esSellado(r) && editDims[r.id] !== undefined ? (
                                     <div style={{ display:'flex', flexDirection:'column', gap:'2px', alignItems:'flex-end' }} onClick={e => e.stopPropagation()}>
                                       <input type="number" placeholder="ancho" value={editDims[r.id].ancho ?? ''}
                                         onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], ancho: e.target.value } }))}
@@ -1965,9 +2091,9 @@ async function restaurar(id) {
                                         style={{ width:'52px', fontSize:'10px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 4px', color:t.text, textAlign:'right' }} />
                                     </div>
                                   ) : (
-                                    <span onClick={puedeEditar ? (e) => { e.stopPropagation(); setEditDims(p => ({ ...p, [r.id]: { ancho: r.ancho ?? '', espesor: r.espesor ?? '' } })) } : undefined}
-                                      title={puedeEditar ? 'Clic para editar dims' : undefined}
-                                      style={{ cursor: puedeEditar ? 'pointer' : 'default', textDecoration: puedeEditar ? 'underline dotted' : 'none', whiteSpace:'nowrap' }}>
+                                    <span onClick={puedeEditar && !esSellado(r) ? (e) => { e.stopPropagation(); setEditDims(p => ({ ...p, [r.id]: { ancho: r.ancho ?? '', espesor: r.espesor ?? '' } })) } : undefined}
+                                      title={puedeEditar && !esSellado(r) ? 'Clic para editar dims' : undefined}
+                                      style={{ cursor: puedeEditar && !esSellado(r) ? 'pointer' : 'default', textDecoration: puedeEditar && !esSellado(r) ? 'underline dotted' : 'none', whiteSpace:'nowrap' }}>
                                       {[r.area_long_nod, r.ancho, r.espesor].filter(v => v != null && v !== '').join(' × ') || '—'}
                                     </span>
                                   )}
@@ -1987,7 +2113,7 @@ async function restaurar(id) {
                                 )}
                                 <div style={{ display:'flex', gap:'4px', alignItems:'center' }}>
                                   {/* Botón guardar dims */}
-                                  {puedeEditar && editDims[r.id] !== undefined && (
+                                  {puedeEditar && !esSellado(r) && editDims[r.id] !== undefined && (
                                     <button onClick={async (e) => {
                                       e.stopPropagation()
                                       const d = editDims[r.id]
@@ -2237,6 +2363,17 @@ async function restaurar(id) {
                   <Row><F label="ID_POL" val={r.id_pol||r.pk_id}/><F label="CAPÍTULO" val={r.capitulo}/><F label="ÍTEM" val={r.item} flex={0.5}/></Row>
                   <BigF label="DESCRIPCIÓN" val={r.descripcion}/>
                   <Row><F label="UNIDAD" val={r.und} flex={0.5}/><F label="REVISADO" val={r.revisado||'No Revisado'}/><F label="TIPO" val={r.tipo}/></Row>
+                  {mostrarColumnaDepuracion && (
+                    <Row>
+                      <F label="DEPURACIÓN (COSTOS / OBRA)" val={r.pre_interv_estado == null || r.pre_interv_estado === '' ? '— (legado)' : r.pre_interv_estado} flex={1}/>
+                      {r.pre_interv_por && <F label="POR" val={r.pre_interv_por} flex={1}/>}
+                    </Row>
+                  )}
+                  {esSellado(r) && (
+                    <div style={{ background:'rgba(22,101,52,0.12)', border:`1px solid rgba(22,101,52,0.35)`, borderRadius:'8px', padding:'10px 12px', marginBottom:'8px', fontSize:'12px', color:'#166534', fontWeight:'600' }}>
+                      🔒 Registro sellado — aprobado por Interventoría. No admite cambios de cantidades ni de estado.
+                    </div>
+                  )}
                   <Row><F label="NODO INICIO" val={r.no_inicio}/><F label="NODO FINAL" val={r.no_final}/></Row>
                   <Row><F label="ABS. INICIO" val={r.abs_inicio}/><F label="ABS. FINAL" val={r.abs_final}/></Row>
                   <Row>
@@ -3031,10 +3168,15 @@ async function restaurar(id) {
 
               {puedeEliminar && !verPapelera && dwgEnlazado && seleccionados.size > 1 && (
                 <button onClick={async () => {
+                  const idsBaja = [...seleccionados].filter(id => !esSellado(registros.find(rr => rr.id === id)))
+                  if (idsBaja.length === 0) {
+                    alert('Los registros seleccionados están sellados (aprobados por Interventoría) y no pueden modificarse.')
+                    return
+                  }
                   const comentarioData = await pedirComentario('validacion', true)
                   if (comentarioData === null) return
                   const comentario = comentarioData?.mensaje || ''
-                  for (const id of [...seleccionados]) {
+                  for (const id of idsBaja) {
                     const res = await fetch(`${API}/presupuesto/item/${id}/dar-baja`, {
                       method: 'PUT', headers: { Authorization: `Bearer ${token}` }
                     })
@@ -3060,6 +3202,20 @@ async function restaurar(id) {
                   ✓ Aplicar
                 </button>
               </>)}
+
+              {puedePrevalidarUI && (<>
+                <span style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, whiteSpace:'nowrap' }} title="Residente de Costos u Obra — antes de Interventoría">Depuración → Interv.</span>
+                <select value={bulkPreInterv} onChange={e => setBulkPreInterv(e.target.value)}
+                  style={{ background:t.inputBg, border:`1.5px solid ${bulkPreInterv ? estadoColor(bulkPreInterv) : t.border}`, borderRadius:'7px', padding:'5px 10px', color:bulkPreInterv ? estadoColor(bulkPreInterv) : t.textMuted, fontSize:'12px', cursor:'pointer', fontWeight: bulkPreInterv ? '700' : '400' }}>
+                  <option value="">Depuración…</option>
+                  {SEMAFORO.map(s => <option key={s.valor} value={s.valor}>{s.label} {s.valor}</option>)}
+                </select>
+                <button onClick={ejecutarBulkPreInterv}
+                  disabled={!bulkPreInterv || guardandoBulk}
+                  style={{ background:bulkPreInterv?'#0D9488':t.border,color:bulkPreInterv?'#fff':t.textMuted,border:'none',borderRadius:'7px',padding:'6px 14px',fontSize:'12px',fontWeight:'700',cursor:bulkPreInterv?'pointer':'not-allowed',whiteSpace:'nowrap' }}>
+                  ✓ Depuración
+                </button>
+              </>)}
             </>
           )}
         </div>
@@ -3071,7 +3227,7 @@ async function restaurar(id) {
           <table style={{ width:'100%',borderCollapse:'collapse',fontSize:'12px' }}>
             <thead style={{ background:t.bg }}>
               <tr>
-                <th style={thStyle}><input type="checkbox" checked={seleccionados.size === registrosFiltrados.length && registrosFiltrados.length > 0} onChange={toggleTodos} /></th>
+                <th style={thStyle}><input type="checkbox" checked={idsPaginaNoSellados.length > 0 && idsPaginaNoSellados.every(id => seleccionados.has(id))} onChange={toggleTodos} /></th>
                 <th style={thStyle}>ID_POL</th>
                 <th style={thStyle}>Capítulo</th>
                 <th style={thStyle}>Competencia</th>
@@ -3086,6 +3242,9 @@ async function restaurar(id) {
                 <th style={thStyle}>Cant.Total</th>
                 <th style={thStyle}>Vlr Unit.</th>
                 <th style={thStyle}>Costo Directo</th>
+                {mostrarColumnaDepuracion && (
+                  <th style={thStyle} title="Residente de Costos u Obra — antes de Interventoría">Depuración</th>
+                )}
                 <th style={thStyle}>Revisado</th>
                 <th style={thStyle} title="Trazabilidad / auditoría">📜</th>
                 <th style={thStyle}>💬</th>
@@ -3094,15 +3253,17 @@ async function restaurar(id) {
             </thead>
             <tbody>
               {registrosPagina.map(r => {
-                const isEdit = editando === r.id
+                const isEdit = editando === r.id && !esSellado(r)
+                const bgSellado = esSellado(r) ? 'rgba(22,101,52,0.06)' : 'transparent'
                 return (
-                  <tr key={r.id} data-id={r.id} style={{ background: filaZoom===r.id ? '#F59E0B22' : seleccionados.has(r.id) ? (t.primary+'18') : 'transparent', cursor: r.x_label ? 'crosshair' : 'default', outline: filaZoom===r.id ? '2px solid #F59E0B88' : 'none', transition:'background 0.3s, outline 0.3s' }}
+                  <tr key={r.id} data-id={r.id} style={{ background: filaZoom===r.id ? '#F59E0B22' : seleccionados.has(r.id) ? (t.primary+'18') : bgSellado, cursor: r.x_label ? 'crosshair' : 'default', outline: filaZoom===r.id ? '2px solid #F59E0B88' : 'none', transition:'background 0.3s, outline 0.3s' }}
                     onClick={() => { if (!isEdit) { zoomEnDwg(r); highlightEnDwg(r); if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && r.pk_id) { const td = document.getElementById(`zoom-feedback-${r.id}`); if(td){td.style.opacity='1'; setTimeout(()=>{td.style.opacity='0'},2000)} } } }}>
                     <td style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
-                        <input type="checkbox" checked={seleccionados.has(r.id)} onChange={() => toggleSel(r.id)} />
+                        <input type="checkbox" checked={seleccionados.has(r.id)} disabled={esSellado(r)} onChange={() => toggleSel(r.id)}
+                          style={{ cursor: esSellado(r) ? 'not-allowed' : 'pointer', opacity: esSellado(r) ? 0.45 : 1 }} />
                         <span id={`zoom-feedback-${r.id}`} style={{ fontSize:'10px', color:'#10B981', opacity:'0', transition:'opacity 0.3s', pointerEvents:'none' }}>🎯</span>
-                        <button onClick={() => setModalDetallePpto(r)}
+                        <button onClick={() => { setModalDetallePpto(r); setModalDetallePptoEditable(!esSellado(r)) }}
                           title="Ver detalle"
                           style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'13px', padding:'0', lineHeight:1, display:'flex', alignItems:'center' }}
                           onMouseEnter={e => e.currentTarget.style.color=t.primary}
@@ -3113,7 +3274,7 @@ async function restaurar(id) {
                     </td>
                     <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
                       <span
-                        onClick={() => setModalDetallePpto(r)}
+                        onClick={() => { setModalDetallePpto(r); setModalDetallePptoEditable(!esSellado(r)) }}
                         title="Ver detalle"
                         style={{ fontWeight:'600', color:t.primary, cursor:'pointer', textDecoration:'underline' }}>
                         {r.id_pol||r.pk_id||'-'}
@@ -3164,6 +3325,37 @@ async function restaurar(id) {
                     {nivelInfo.verValoresEconomicos && (
                     <td style={{ ...tdStyle,textAlign:'right',fontWeight:'700',color:t.primary }}>{fmt(r.costo_directo)}</td>
                     )}
+                    {mostrarColumnaDepuracion && (() => {
+                      const preDisp = (r.pre_interv_estado == null || r.pre_interv_estado === '') ? 'No Revisado' : r.pre_interv_estado
+                      const esLegadoPre = (r.pre_interv_estado == null || r.pre_interv_estado === '')
+                      return (
+                    <td style={tdStyle} onClick={e=>e.stopPropagation()}>
+                      <div style={{ display:'flex', gap:'6px', alignItems:'center', justifyContent:'center', flexWrap:'wrap' }}>
+                        {SEMAFORO.map(s => {
+                          const activo = preDisp === s.valor
+                          return (
+                            <div
+                              key={`pre-${s.valor}`}
+                              title={esLegadoPre ? `${s.valor} (registro anterior sin depuración)` : `Depuración: ${s.valor}`}
+                              onClick={() => puedePrevalidarUI && !activo && !esSellado(r) && cambiarPreIntervDirecto(r.id, s.valor)}
+                              style={{
+                                width: activo ? '18px' : '12px',
+                                height: activo ? '18px' : '12px',
+                                borderRadius: '50%',
+                                background: activo ? s.color : s.color + '33',
+                                border: `2px solid ${activo ? s.color : s.color + '66'}`,
+                                cursor: puedePrevalidarUI && !activo && !esSellado(r) ? 'pointer' : 'default',
+                                opacity: esSellado(r) ? 0.55 : (esLegadoPre ? 0.75 : 1),
+                                transition: 'all 0.2s',
+                                boxShadow: activo ? `0 0 8px ${s.color}88` : 'none',
+                              }}
+                            />
+                          )
+                        })}
+                      </div>
+                    </td>
+                      )
+                    })()}
                     <td style={tdStyle} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', gap:'6px', alignItems:'center', justifyContent:'center' }}>
                         {SEMAFORO.map(s => {
@@ -3179,14 +3371,17 @@ async function restaurar(id) {
                                 borderRadius: '50%',
                                 background: activo ? s.color : s.color + '33',
                                 border: `2px solid ${activo ? s.color : s.color + '66'}`,
-                                cursor: puedeValidar && !activo ? 'pointer' : 'default',
-                                opacity: 1,
+                                cursor: puedeValidar && !activo && !esSellado(r) ? 'pointer' : 'default',
+                                opacity: esSellado(r) ? 0.55 : 1,
                                 transition: 'all 0.2s',
                                 boxShadow: activo ? `0 0 8px ${s.color}88` : 'none',
                               }}
                             />
                           )
                         })}
+                        {esSellado(r) && (
+                          <span title="Sellado — aprobado por Interventoría" style={{ fontSize:'10px', fontWeight:'700', color:'#15803d', marginLeft:'4px', whiteSpace:'nowrap' }}>🔒</span>
+                        )}
                       </div>
                     </td>
                     <td style={{ ...tdStyle, textAlign:'center', width: 40 }} onClick={e=>e.stopPropagation()}>
@@ -3263,7 +3458,9 @@ async function restaurar(id) {
 
                     {puedeEditar && (
                       <td style={tdStyle} onClick={e=>e.stopPropagation()}>
-                        {isEdit ? (
+                        {esSellado(r) ? (
+                          <span title="Registro sellado — no editable" style={{ fontSize:'12px', color:t.textMuted }}>🔒</span>
+                        ) : isEdit ? (
                           <div style={{ display:'flex',gap:'4px' }}>
                             <button onClick={() => guardarEdicion(r.id)} style={{ background:t.primary,color:'#fff',border:'none',borderRadius:'4px',padding:'4px 10px',fontSize:'11px',cursor:'pointer' }}>✓</button>
                             <button onClick={() => setEditando(null)} style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'4px',padding:'4px 8px',fontSize:'11px',cursor:'pointer',color:t.textMuted }}>✕</button>
@@ -3415,7 +3612,14 @@ function determinarNivelValidacion(usuario) {
                   : esSubRol        ? 'subcontratista'
                   : 'contratista'
 
-  return { nivelValidacion, puedeEditar, puedeValidar, esApoyoTecnico, esSubcontratista, esSoloComentarista, verValoresEconomicos, rolOrigen }
+  /** Residente de Costos u Obra: depura antes de que Interventoría vea el registro. */
+  const puedePrevalidarAntesInterv = esContratista && puedeValidar &&
+    (cargo.includes('residente de costos') || cargo.includes('residente de obra'))
+
+  return {
+    nivelValidacion, puedeEditar, puedeValidar, esApoyoTecnico, esSubcontratista, esSoloComentarista,
+    verValoresEconomicos, rolOrigen, esInterventoria, puedePrevalidarAntesInterv,
+  }
 }
 
 // ─── POPUP COMENTARIO VALIDACIÓN ─────────────────────────────────────────────

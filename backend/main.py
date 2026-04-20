@@ -448,6 +448,12 @@ class PresupuestoBulkEstado(BaseModel):
     ids: List[int]
     revisado: str
 
+
+class PresupuestoBulkPreInterv(BaseModel):
+    """Depuración contratista antes de que Interventoría revise (Residente de Costos u Obra)."""
+    ids: List[int]
+    estado: str
+
 class AgregarCantidadBody(BaseModel):
     # Nuevo ítem
     item: str
@@ -2300,6 +2306,50 @@ def log_exportar_precios(contrato_id: int, current_user=Depends(get_current_user
 # PRESUPUESTO
 # ─────────────────────────────────────────────
 
+def _reject_if_presupuesto_sellado(supabase, item_ids: List[int]) -> None:
+    """Registros sellados (aprobación Interventoría) no admiten modificaciones ni cambio de estado."""
+    if not item_ids:
+        return
+    rows = supabase.table("presupuesto").select("id, sellado").in_("id", list(set(item_ids))).execute().data or []
+    if any(r.get("sellado") for r in rows):
+        raise HTTPException(
+            status_code=403,
+            detail="Registro sellado (aprobado por Interventoría): no puede modificarse.",
+        )
+
+
+def _pre_interv_liberado(row: dict) -> bool:
+    """NULL/vacío = legado (antes de la columna); solo 'Aprobado' habilita a Interventoría."""
+    v = row.get("pre_interv_estado")
+    if v is None:
+        return True
+    if isinstance(v, str) and not v.strip():
+        return True
+    return str(v).strip() == "Aprobado"
+
+
+def _cargo_puede_prevalidar_interventoria(cargo_nombre: str) -> bool:
+    n = (cargo_nombre or "").lower()
+    if "residente de interventoria" in n or "residente de interventoría" in n:
+        return False
+    if "residente de costos" in n:
+        return True
+    if "residente de obra" in n:
+        return True
+    return False
+
+
+def _presupuesto_aplica_filtro_interventoria(current_user) -> bool:
+    """Perfiles Interventoría solo ven cantidades ya depuradas por contratista (costos u obra)."""
+    rol = (current_user.get("rol_nombre") or "").strip().lower()
+    if rol in ("administrador", "desarrollador"):
+        return False
+    cargo = (current_user.get("cargo_nombre") or "").strip().lower()
+    if cargo == "desarrollador":
+        return False
+    return rol in ("interventoría", "interventoria", "operativo interventoria")
+
+
 @app.get("/presupuesto/{contrato_id}")
 @app.get("/presupuesto/{contrato_id}")
 def get_presupuesto(
@@ -2324,6 +2374,8 @@ def get_presupuesto(
         if item:     q = q.eq("item", item)
         if tramo:    q = q.eq("tramo", tramo)
         if calzada:  q = q.eq("calzada", calzada)
+        if _presupuesto_aplica_filtro_interventoria(current_user):
+            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
         batch = q.order("capitulo").order("item").order("pk_id").range(offset, offset + PAGE - 1).execute().data
         all_rows.extend(batch)
         if len(batch) < PAGE:
@@ -2344,6 +2396,8 @@ def get_filtros_presupuesto(
     if capitulo: q = q.eq("capitulo", capitulo)
     if item:     q = q.eq("item", item)
     if tramo:    q = q.eq("tramo", tramo)
+    if _presupuesto_aplica_filtro_interventoria(current_user):
+        q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
     rows = q.execute().data
     caps    = sorted(set(r["capitulo"] for r in rows if r.get("capitulo")))
     items   = sorted(set(r["item"]     for r in rows if r.get("item")))
@@ -2382,10 +2436,12 @@ def get_items_presupuesto(contrato_id: int, capitulo: str, current_user=Depends(
     rows = []
     offset = 0
     while True:
-        batch = supabase.table("presupuesto").select(
+        q_it = supabase.table("presupuesto").select(
             "item, descripcion, und, vlr_unitario, cant_total, costo_directo, revisado"
-        ).eq("contrato_id", contrato_id).eq("capitulo", capitulo).eq("dado_de_baja", False)\
-         .range(offset, offset + 999).execute().data
+        ).eq("contrato_id", contrato_id).eq("capitulo", capitulo).eq("dado_de_baja", False)
+        if _presupuesto_aplica_filtro_interventoria(current_user):
+            q_it = q_it.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        batch = q_it.range(offset, offset + 999).execute().data
         rows.extend(batch)
         if len(batch) < 1000: break 
         offset += 1000
@@ -2423,6 +2479,11 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
     data = body.dict(exclude_unset=True)
     prev_row = supabase.table("presupuesto").select("*").eq("id", item_id).limit(1).execute().data
     prev_row = prev_row[0] if prev_row else {}
+    if prev_row.get("sellado"):
+        raise HTTPException(
+            status_code=403,
+            detail="Registro sellado (aprobado por Interventoría): no puede modificarse.",
+        )
     dims = {k: data.get(k) for k in ["area_long_nod", "ancho", "espesor"]}
     if any(v is not None for v in dims.values()):
         current = supabase.table("presupuesto").select("area_long_nod, ancho, espesor, vlr_unitario, cant_total").eq("id", item_id).execute().data
@@ -2515,11 +2576,16 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
 def dar_baja_presupuesto(item_id: int, current_user=Depends(get_current_user)):
     """Soft delete: marca el registro como dado de baja y renombra sus layers en CAD."""
     row = supabase.table("presupuesto").select(
-        "layer_txt, layer_ent, x_label, y_label, contrato_id, ent_handle, txt_handle, rev_block_handle"
+        "layer_txt, layer_ent, x_label, y_label, contrato_id, ent_handle, txt_handle, rev_block_handle, sellado"
     ).eq("id", item_id).execute().data
     if not row:
         raise HTTPException(status_code=404, detail="Registro no encontrado")
     r = row[0]
+    if r.get("sellado"):
+        raise HTTPException(
+            status_code=403,
+            detail="Registro sellado (aprobado por Interventoría): no puede modificarse.",
+        )
     supabase.table("presupuesto").update({
         "dado_de_baja": True,
         "updated_at": "now()"
@@ -2580,11 +2646,16 @@ def dar_baja_presupuesto(item_id: int, current_user=Depends(get_current_user)):
 def restaurar_presupuesto(item_id: int, current_user=Depends(get_current_user)):
     """Restaura un registro dado de baja: quita del_ de layers y reactiva en CAD."""
     row = supabase.table("presupuesto").select(
-        "layer_txt, layer_ent, x_label, y_label, contrato_id, ent_handle, txt_handle, color_hex"
+        "layer_txt, layer_ent, x_label, y_label, contrato_id, ent_handle, txt_handle, color_hex, sellado"
     ).eq("id", item_id).execute().data
     if not row:
         raise HTTPException(status_code=404, detail="Registro no encontrado")
     r = row[0]
+    if r.get("sellado"):
+        raise HTTPException(
+            status_code=403,
+            detail="Registro sellado (aprobado por Interventoría): no puede modificarse.",
+        )
     supabase.table("presupuesto").update({
         "dado_de_baja": False,
         "updated_at": "now()"
@@ -2689,6 +2760,7 @@ def agregar_cantidad(contrato_id: int, body: AgregarCantidadBody, current_user=D
         "y_label":       body.y_label,
         "dado_de_baja":  False,
         "revisado":      "No Revisado",
+        "pre_interv_estado": "No Revisado",
     }
     inserted = supabase.table("presupuesto").insert(row).execute().data
     if not inserted:
@@ -2751,6 +2823,7 @@ def bulk_presupuesto(contrato_id: int, items: List[PresupuestoRow], mode: str = 
 def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=Depends(get_current_user)):
     if not body.ids:
         raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    _reject_if_presupuesto_sellado(supabase, body.ids)
     dims_map = {d.id: d for d in (body.dims or [])}
     # Traer también handles y layers para cad_queue
     rows = supabase.table("presupuesto").select(
@@ -2822,12 +2895,28 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
 def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depends(get_current_user)):
     if not body.ids:
         raise HTTPException(status_code=400, detail="No hay registros seleccionados")
-    # Traer x_label, y_label, layer_txt para cad_queue
-    rows_info = supabase.table("presupuesto").select("id, x_label, y_label, layer_txt, rev_block_handle"
-        ).in_("id", body.ids).execute().data
+    # Traer sellado, pre_interv y datos CAD
+    rows_info = supabase.table("presupuesto").select(
+        "id, x_label, y_label, layer_txt, rev_block_handle, sellado, pre_interv_estado"
+    ).in_("id", body.ids).execute().data or []
     info_map = {r["id"]: r for r in rows_info}
-    es_interventoria = current_user.get("rol_nombre") == "Interventoría"
-    sellar = body.revisado == "Aprobado" and es_interventoria
+    if any(r.get("sellado") for r in rows_info):
+        raise HTTPException(
+            status_code=403,
+            detail="Registro sellado (aprobado por Interventoría): no puede modificarse.",
+        )
+    rol_l = (current_user.get("rol_nombre") or "").strip().lower()
+    es_perfil_interventoria = rol_l in ("interventoría", "interventoria", "operativo interventoria")
+    if es_perfil_interventoria:
+        for rid in body.ids:
+            row = info_map.get(rid) or {}
+            if not _pre_interv_liberado(row):
+                raise HTTPException(
+                    status_code=403,
+                    detail="El registro debe estar aprobado en depuración contratista (Residente de Costos u Obra) antes de la validación de Interventoría.",
+                )
+    es_interventoria_sellar = current_user.get("rol_nombre") == "Interventoría"
+    sellar = body.revisado == "Aprobado" and es_interventoria_sellar
     nombre_usuario = current_user.get("nombre") or current_user.get("email") or "Usuario"
     for rid in body.ids:
         data_upd = {"revisado": body.revisado, "updated_at": "now()"}
@@ -2844,6 +2933,43 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
         
     registrar_log(current_user, "VALIDAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id),
         {"contrato_id": contrato_id, "cantidad_registros": len(body.ids), "estado": body.revisado})            
+    return {"actualizados": len(body.ids)}
+
+
+@app.put("/presupuesto/{contrato_id}/bulk-pre-interv")
+def bulk_pre_interv(contrato_id: int, body: PresupuestoBulkPreInterv, current_user=Depends(get_current_user)):
+    """Depuración contratista: Residente de Costos u Obra aprueba antes de que Interventoría vea/valide."""
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    _reject_if_presupuesto_sellado(supabase, body.ids)
+    ESTADOS_PRE = {"No Revisado", "Pendiente", "Rechazado", "Aprobado"}
+    if body.estado not in ESTADOS_PRE:
+        raise HTTPException(status_code=422, detail=f"Estado inválido. Use: {ESTADOS_PRE}")
+    rol = (current_user.get("rol_nombre") or "").strip().lower()
+    cargo = (current_user.get("cargo_nombre") or "").strip().lower()
+    es_dev = cargo == "desarrollador" or rol == "desarrollador"
+    if not es_dev:
+        if rol not in ("contratista", "operativo contratista"):
+            raise HTTPException(status_code=403, detail="Solo el contratista puede gestionar la depuración previa.")
+        if not _cargo_puede_prevalidar_interventoria(cargo):
+            raise HTTPException(
+                status_code=403,
+                detail="Solo Residente de Costos u Residente de Obra puede validar esta etapa.",
+            )
+    nombre_usuario = current_user.get("nombre") or current_user.get("email") or "Usuario"
+    for rid in body.ids:
+        data_upd = {"pre_interv_estado": body.estado, "updated_at": "now()"}
+        if body.estado == "Aprobado":
+            data_upd["pre_interv_por"] = nombre_usuario
+            data_upd["pre_interv_en"] = datetime.utcnow().isoformat()
+        else:
+            data_upd["pre_interv_por"] = None
+            data_upd["pre_interv_en"] = None
+        supabase.table("presupuesto").update(data_upd).eq("id", rid).execute()
+    registrar_log(
+        current_user, "VALIDAR", "PRESUPUESTO", "presupuesto_pre_interv", str(contrato_id),
+        {"contrato_id": contrato_id, "cantidad_registros": len(body.ids), "estado": body.estado},
+    )
     return {"actualizados": len(body.ids)}
 
 # ─────────────────────────────────────────────
