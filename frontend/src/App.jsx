@@ -3876,7 +3876,8 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
 }
 
 // ─── HOJA REGISTRO ────────────────────────────────────────────────────────────
-function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, seleccionado, onToggleSeleccion, onItemAsignado, hdrs, actasList = [] }) {
+function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, seleccionado, onToggleSeleccion, onItemAsignado, hdrs, actasList = [],
+  mostrarSeleccionValidacion = false, seleccionadoValidacion = false, onToggleSeleccionValidacion }) {
   const [competencia,    setCompetencia]    = useState(registro.competencia    || '')
   const [itemBusqueda,   setItemBusqueda]   = useState(registro.item_numero || '')
   const [itemsLista,     setItemsLista]     = useState([])
@@ -4205,6 +4206,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       <div style={{ marginBottom:'16px' }}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'8px' }}>
           <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+            {mostrarSeleccionValidacion && (
+              <input type="checkbox" checked={!!seleccionadoValidacion} onChange={onToggleSeleccionValidacion}
+                title="Seleccionar para validación masiva"
+                style={{ width:'16px', height:'16px', cursor:'pointer', accentColor:'#0d9488' }} />
+            )}
             {puedeEditar && (
               <input type="checkbox" checked={seleccionado} onChange={onToggleSeleccion}
                 style={{ width:'16px', height:'16px', cursor:'pointer', accentColor:'#8B5CF6' }} />
@@ -4827,6 +4833,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [editInfraLocal, setEditInfraLocal]        = useState(repoProp.infraestructura || '')
   const [listaPkIds, setListaPkIds]               = useState([])
   const [seleccionados, setSeleccionados]         = useState([])
+  const [seleccionadosValidacion, setSeleccionadosValidacion] = useState([])
+  const [portadaResumenEstado, setPortadaResumenEstado]       = useState(null)
   const [registroExpandido, setRegistroExpandido] = useState(null)
 
   useEffect(() => {
@@ -4887,6 +4895,52 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   // Ítems asignados únicos — cada uno genera un tab
   const itemsAsignados = [...new Set(registrosVisibles.filter(r => r.item_numero).map(r => r.item_numero))]
   const regsSinAsignar = registrosVisibles.filter(r => !r.item_numero)
+
+  useEffect(() => {
+    setSeleccionadosValidacion([])
+    setMsgMasivo('')
+  }, [tabActiva])
+
+  const campoEstadoResumen = nivelInfo.nivelValidacion === 1 ? 'nivel1_estado'
+    : nivelInfo.nivelValidacion === 2 ? 'nivel2_estado'
+    : nivelInfo.nivelValidacion === 3 ? 'nivel3_estado'
+    : null
+
+  const normalizarEstadoParaConteo = (r) => {
+    if (!campoEstadoResumen) return 'No Revisado'
+    let est = r[campoEstadoResumen] || 'No Revisado'
+    if (est === 'No Objeto de Cobro') est = 'Rechazado'
+    if (!['Aprobado', 'Pendiente', 'Rechazado', 'No Revisado'].includes(est)) return 'No Revisado'
+    return est
+  }
+
+  const conteoPortadaResumen = (() => {
+    const conteo = { Aprobado: 0, Pendiente: 0, Rechazado: 0, 'No Revisado': 0 }
+    if (!campoEstadoResumen) return conteo
+    registrosVisibles.forEach(r => {
+      const est = normalizarEstadoParaConteo(r)
+      conteo[est]++
+    })
+    return conteo
+  })()
+
+  const registrosPortadaResumenFiltrados = (() => {
+    if (!portadaResumenEstado || !campoEstadoResumen) return []
+    return registrosVisibles.filter(r => normalizarEstadoParaConteo(r) === portadaResumenEstado)
+  })()
+
+  const irARegistroDesdePortada = (reg) => {
+    setPortadaResumenEstado(null)
+    setTabActiva(reg.item_numero || 'sin_asignar')
+    setRegistroExpandido(reg.id)
+    setTimeout(() => {
+      document.getElementById(`registro-${reg.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 350)
+  }
+
+  const nvMasivo = nivelInfo.nivelValidacion
+  const puedeMasivaNivel = (nvMasivo === 2 || nvMasivo === 3) && nivelInfo.puedeValidar
+  const registroParaPopupMasivo = registrosVisibles.find(r => r.id === seleccionadosValidacion[0]) || registros[0] || {}
 
   const recargar = async () => {
     try {
@@ -5055,6 +5109,38 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setSeleccionados(prev => prev.includes(rid) ? prev.filter(x => x !== rid) : [...prev, rid])
   }
 
+  const toggleSeleccionValidacion = (rid) => {
+    setSeleccionadosValidacion(prev => prev.includes(rid) ? prev.filter(x => x !== rid) : [...prev, rid])
+  }
+
+  const ejecutarMasivoSeleccion = async (estado, comentarioData) => {
+    const nv = nivelInfo.nivelValidacion
+    if (nv !== 2 && nv !== 3) return
+    if (seleccionadosValidacion.length === 0) {
+      alert('Selecciona al menos un registro en este ítem.')
+      return
+    }
+    setPopupMasivo(null)
+    setEjecutandoMasivo(true)
+    setMsgMasivo('')
+    const sufijo = nv === 2 ? 'validar-masivo-nivel2' : 'validar-masivo-nivel3'
+    const body = { estado, ids_registros: [...seleccionadosValidacion] }
+    if (comentarioData) body.comentario_data = comentarioData
+    try {
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/${sufijo}`, {
+        method: 'PUT', headers: hdrs, body: JSON.stringify(body)
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.detail || `Error ${res.status}`)
+      setMsgMasivo(`✅ ${data.actualizados} actualizado(s), ${data.omitidos} omitido(s) por no cumplir el nivel anterior.`)
+      setSeleccionadosValidacion([])
+      recargar()
+    } catch (e) {
+      setMsgMasivo(`❌ ${e.message}`)
+    }
+    setEjecutandoMasivo(false)
+  }
+
   // ─ Colores del tema de la carpeta ─
   const C = {
     carpetaFondo:  t.bg,
@@ -5074,6 +5160,65 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       </div>
     </div>
   )
+
+  const renderBarraValidacionMasiva = (regsTab) => {
+    if (!puedeMasivaNivel) return null
+    const idsElegibles = regsTab.filter(r => {
+      if (nvMasivo === 2) return (r.nivel1_estado || 'No Revisado') === 'Aprobado'
+      if (nvMasivo === 3) return (r.nivel2_estado || 'No Revisado') === 'Aprobado'
+      return false
+    }).map(r => r.id)
+    if (idsElegibles.length === 0) return null
+
+    const todosSelVal = idsElegibles.length > 0 && idsElegibles.every(id => seleccionadosValidacion.includes(id))
+    const BTNS_MASIVOS = [
+      { estado:'Aprobado',  icon:'✅', color:'#16a34a' },
+      { estado:'Pendiente', icon:'🟡', color:'#d97706' },
+      { estado:'Rechazado', icon:'🔴', color:'#dc2626' },
+    ]
+
+    return (
+      <div style={{ background:t.bgCard, borderRadius:'10px', padding:'14px', border:`1px solid ${t.border}`, marginBottom:'12px' }}>
+        <div style={{ fontSize:'11px', fontWeight:'800', color:'#0d9488', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>
+          ⚡ Validación masiva · Nivel {nvMasivo} · {seleccionadosValidacion.length} seleccionado(s)
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap', marginBottom:'10px' }}>
+          <input type="checkbox" id={`sel-todos-val-${String(tabActiva)}`}
+            checked={todosSelVal}
+            onChange={() => {
+              if (todosSelVal) setSeleccionadosValidacion(prev => prev.filter(id => !idsElegibles.includes(id)))
+              else setSeleccionadosValidacion(prev => [...new Set([...prev, ...idsElegibles])])
+            }}
+            style={{ width:'16px', height:'16px', accentColor:'#0d9488', cursor:'pointer' }} />
+          <label htmlFor={`sel-todos-val-${String(tabActiva)}`} style={{ fontSize:'12px', fontWeight:'600', color:t.text, cursor:'pointer' }}>
+            Seleccionar todos los elegibles en esta vista ({idsElegibles.length})
+          </label>
+        </div>
+        <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
+          {BTNS_MASIVOS.map(({ estado, icon, color }) => (
+            <button key={estado} type="button"
+              disabled={ejecutandoMasivo}
+              onClick={() => {
+                if (estado === 'Aprobado') ejecutarMasivoSeleccion(estado, null)
+                else setPopupMasivo({ estado })
+              }}
+              style={{ padding:'8px 16px', borderRadius:'8px', fontSize:'12px', fontWeight:'700',
+                       cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
+                       opacity: ejecutandoMasivo ? 0.6 : 1,
+                       background:`${color}18`, color, border:`1.5px solid ${color}55` }}>
+              {icon} {estado}
+            </button>
+          ))}
+        </div>
+        {msgMasivo && (
+          <div style={{ marginTop:'10px', fontSize:'12px', color:t.text, background:t.bg,
+                        borderRadius:'8px', padding:'10px 14px', border:`1px solid ${t.border}` }}>
+            {msgMasivo}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div style={{ position:'fixed', inset:0, zIndex:9000, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'16px', overflowY:'auto' }}>
@@ -5162,123 +5307,75 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           {tabActiva === 'portada' && (
             <div style={{ display:'flex', flexDirection:'column', gap:'20px' }}>
 
-              {/* PANEL — Validación Masiva (solo nivel 2 y 3) */}
-              {(nivelInfo.nivelValidacion === 2 || nivelInfo.nivelValidacion === 3) && (() => {
-                const nv        = nivelInfo.nivelValidacion
-                const campoEst  = nv === 2 ? 'nivel2_estado' : 'nivel3_estado'
-                const conteo    = { 'No Revisado': 0, 'Aprobado': 0, 'Pendiente': 0, 'Rechazado': 0 }
-                registros.forEach(r => {
-                  const est = r[campoEst] || 'No Revisado'
-                  if (conteo[est] !== undefined) conteo[est]++
-                  else conteo['No Revisado']++
-                })
-                const todosSeleccionados = registros.length > 0 && registros.every(r => seleccionados.includes(r.id))
-
-                const ejecutarMasivo = async (estado, comentarioData) => {
-                  setPopupMasivo(null)
-                  setEjecutandoMasivo(true)
-                  setMsgMasivo('')
-                  const sufijo   = nv === 2 ? 'validar-masivo-nivel2' : 'validar-masivo-nivel3'
-                  const body     = { estado, ids_registros: registros.map(r => r.id) }
-                  if (comentarioData) body.comentario_data = comentarioData
-                  try {
-                    const res  = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/${sufijo}`, {
-                      method: 'PUT', headers: hdrs, body: JSON.stringify(body)
-                    })
-                    const data = await res.json()
-                    if (!res.ok) throw new Error(data.detail || `Error ${res.status}`)
-                    setMsgMasivo(`✅ ${data.actualizados} actualizado(s), ${data.omitidos} omitido(s) por no cumplir el nivel anterior.`)
-                    recargar()
-                  } catch(e) {
-                    setMsgMasivo(`❌ ${e.message}`)
-                  }
-                  setEjecutandoMasivo(false)
-                }
-
-                const BTNS_MASIVOS = [
-                  { estado:'Aprobado',  icon:'✅', color:'#16a34a' },
-                  { estado:'Pendiente', icon:'🟡', color:'#d97706' },
-                  { estado:'Rechazado', icon:'🔴', color:'#dc2626' },
-                ]
-                const COLOR_CNT = { 'No Revisado':'#3B82F6', 'Aprobado':'#10B981', 'Pendiente':'#F59E0B', 'Rechazado':'#EF4444' }
-
-                return (
-                  <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
-                    <div style={{ fontSize:'11px', fontWeight:'800', color:'#7c3aed', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'14px' }}>
-                      ⚡ Validación Masiva · Nivel {nv}
-                    </div>
-
-                    {/* Conteo de estados */}
-                    <div style={{ display:'flex', gap:'10px', flexWrap:'wrap', marginBottom:'14px' }}>
-                      {Object.entries(conteo).map(([est, cnt]) => (
-                        <div key={est} style={{ display:'flex', alignItems:'center', gap:'6px', background:t.bg,
-                                                border:`1px solid ${t.border}`, borderRadius:'20px', padding:'4px 12px' }}>
-                          <span style={{ width:'8px', height:'8px', borderRadius:'50%', background: COLOR_CNT[est], flexShrink:0 }} />
-                          <span style={{ fontSize:'11px', fontWeight:'700', color:t.text }}>{cnt}</span>
-                          <span style={{ fontSize:'10px', color:t.textMuted }}>{est}</span>
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Checkbox seleccionar todos */}
-                    <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'14px' }}>
-                      <input type="checkbox" id="sel-todos-masivo"
-                        checked={todosSeleccionados}
-                        onChange={() => {
-                          if (todosSeleccionados) setSeleccionados([])
-                          else setSeleccionados(registros.map(r => r.id))
-                        }}
-                        style={{ width:'16px', height:'16px', accentColor:'#7c3aed', cursor:'pointer' }} />
-                      <label htmlFor="sel-todos-masivo"
-                        style={{ fontSize:'12px', fontWeight:'600', color:t.text, cursor:'pointer' }}>
-                        Seleccionar todos los registros del reporte ({registros.length})
-                      </label>
-                    </div>
-
-                    {/* Botones de acción masiva */}
-                    <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
-                      {BTNS_MASIVOS.map(({ estado, icon, color }) => (
-                        <button key={estado}
-                          disabled={ejecutandoMasivo}
-                          onClick={() => {
-                            if (estado === 'Aprobado') {
-                              ejecutarMasivo(estado, null)
-                            } else {
-                              setPopupMasivo({ estado })
-                            }
-                          }}
-                          style={{ padding:'8px 16px', borderRadius:'8px', fontSize:'12px', fontWeight:'700',
-                                   cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
-                                   opacity: ejecutandoMasivo ? 0.6 : 1,
-                                   background:`${color}18`, color, border:`1.5px solid ${color}55` }}>
-                          {icon} {estado} todos
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Mensaje resultado */}
-                    {msgMasivo && (
-                      <div style={{ marginTop:'12px', fontSize:'12px', color:t.text, background:t.bg,
-                                    borderRadius:'8px', padding:'10px 14px', border:`1px solid ${t.border}` }}>
-                        {msgMasivo}
-                      </div>
-                    )}
-
-                    {/* Popup comentario para acciones masivas */}
-                    {popupMasivo && (
-                      <PopupComentarioValidacion
-                        t={t} usuario={usuario} registro={registros[0] || {}}
-                        contrato_id={contrato_id} API_URL={API_URL} hdrs={hdrs}
-                        estadoValidando={popupMasivo.estado}
-                        nivelValidacion={nv}
-                        obligatorio={true}
-                        onConfirmar={comentarioData => ejecutarMasivo(popupMasivo.estado, comentarioData)}
-                        onCancelar={() => setPopupMasivo(null)}
-                      />
-                    )}
+              {/* PANEL — Resumen por estado (N1/N2/N3 según rol) */}
+              {campoEstadoResumen && (
+                <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
+                  <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>
+                    📊 Resumen del reporte · Nivel {nivelInfo.nivelValidacion}
                   </div>
-                )
-              })()}
+                  <div style={{ display:'flex', gap:'10px', flexWrap:'wrap', marginBottom: portadaResumenEstado ? '14px' : 0 }}>
+                    {[
+                      { key:'Aprobado', label:'Aprobados' },
+                      { key:'Pendiente', label:'Pendientes' },
+                      { key:'Rechazado', label:'Rechazados' },
+                      { key:'No Revisado', label:'No revisado' },
+                    ].map(({ key, label }) => {
+                      const cnt = conteoPortadaResumen[key] ?? 0
+                      const COLOR_CNT = { 'No Revisado':'#3B82F6', 'Aprobado':'#10B981', 'Pendiente':'#F59E0B', 'Rechazado':'#EF4444' }
+                      const activo = portadaResumenEstado === key
+                      const puedeClic = cnt > 0
+                      return (
+                        <button key={key} type="button"
+                          disabled={!puedeClic}
+                          onClick={() => setPortadaResumenEstado(activo ? null : key)}
+                          style={{
+                            display:'flex', alignItems:'center', gap:'6px', background: activo ? `${COLOR_CNT[key]}22` : t.bg,
+                            border:`1px solid ${activo ? COLOR_CNT[key] : t.border}`, borderRadius:'20px', padding:'6px 14px',
+                            cursor: puedeClic ? 'pointer' : 'default', opacity: puedeClic ? 1 : 0.55,
+                          }}>
+                          <span style={{ width:'8px', height:'8px', borderRadius:'50%', background: COLOR_CNT[key], flexShrink:0 }} />
+                          <span style={{ fontSize:'12px', fontWeight:'800', color:t.text }}>{cnt}</span>
+                          <span style={{ fontSize:'11px', color:t.textMuted }}>{label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {portadaResumenEstado && (
+                    <div style={{ borderTop:`1px solid ${t.border}`, paddingTop:'14px' }}>
+                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px' }}>
+                        <span style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>
+                          Registros {portadaResumenEstado === 'No Revisado' ? 'sin revisar' : portadaResumenEstado.toLowerCase()} ({registrosPortadaResumenFiltrados.length})
+                        </span>
+                        <button type="button" onClick={() => setPortadaResumenEstado(null)}
+                          style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'4px 10px', fontSize:'11px', color:t.textMuted, cursor:'pointer' }}>
+                          Cerrar lista
+                        </button>
+                      </div>
+                      {registrosPortadaResumenFiltrados.length === 0 ? (
+                        <div style={{ fontSize:'12px', color:t.textMuted }}>No hay registros en este estado.</div>
+                      ) : (
+                        <div style={{ display:'flex', flexDirection:'column', gap:'6px', maxHeight:'260px', overflowY:'auto' }}>
+                          {registrosPortadaResumenFiltrados.map(reg => (
+                            <button key={reg.id} type="button"
+                              onClick={() => irARegistroDesdePortada(reg)}
+                              style={{
+                                background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px 12px',
+                                textAlign:'left', cursor:'pointer', display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center',
+                              }}>
+                              <span style={{ fontWeight:'800', color:'#D97706', fontSize:'12px' }}>Registro #{reg.numero_registro}</span>
+                              <span style={{ fontSize:'11px', color:t.textMuted }}>{reg.item_numero || 'Sin ítem'}</span>
+                              <span style={{ fontSize:'11px', color:t.text, flex:'1 1 200px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                                {reg.observacion || '—'}
+                              </span>
+                              <span style={{ fontSize:'11px', color:t.primary, fontWeight:'700' }}>Ir al registro →</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* GRUPO 2 — Identificación del Reporte */}
               <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
@@ -5608,29 +5705,44 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           {/* ── TAB SIN ASIGNAR ÍTEM ── */}
           {tabActiva === 'sin_asignar' && (
             <div style={{ display:'flex', flexDirection:'column', gap:'20px' }}>
+              {renderBarraValidacionMasiva(regsSinAsignar)}
               {regsSinAsignar.length === 0 ? (
                 <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>
                   ✅ Todos los registros tienen ítem asignado
                 </div>
-              ) : regsSinAsignar.map(reg => (
+              ) : regsSinAsignar.map(reg => {
+                const puedeMarcarVal = puedeMasivaNivel && (
+                  (nvMasivo === 2 && (reg.nivel1_estado || 'No Revisado') === 'Aprobado') ||
+                  (nvMasivo === 3 && (reg.nivel2_estado || 'No Revisado') === 'Aprobado')
+                )
+                return (
                 <HojaRegistro
                   key={reg.id} t={t} usuario={usuario} API_URL={API_URL}
                   contrato_id={contrato_id} reporte={reporte} registro={reg}
                   puedeEditar={puedeEditar} actasList={actasList}
                   seleccionado={seleccionados.includes(reg.id)}
                   onToggleSeleccion={() => toggleSeleccion(reg.id)}
+                  mostrarSeleccionValidacion={puedeMarcarVal}
+                  seleccionadoValidacion={seleccionadosValidacion.includes(reg.id)}
+                  onToggleSeleccionValidacion={() => toggleSeleccionValidacion(reg.id)}
                   onItemAsignado={recargar}
                   hdrs={hdrs}
                 />
-              ))}
+                )
+              })}
             </div>
           )}
 
           {/* ── TABS POR ÍTEM ── */}
           {itemsAsignados.map(itemNum => tabActiva === itemNum && (
             <div key={itemNum} style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
+              {renderBarraValidacionMasiva(registrosVisibles.filter(r => r.item_numero === itemNum))}
               {registrosVisibles.filter(r => r.item_numero === itemNum).map(reg => {
                 const expandido = registroExpandido === reg.id
+                const puedeMarcarVal = puedeMasivaNivel && (
+                  (nvMasivo === 2 && (reg.nivel1_estado || 'No Revisado') === 'Aprobado') ||
+                  (nvMasivo === 3 && (reg.nivel2_estado || 'No Revisado') === 'Aprobado')
+                )
                 const fechaReg = (() => { try { const ts=reg.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()
                 const colorNivel = st => st === 'Aprobado' ? '#10B981' : st === 'Pendiente' ? '#F59E0B' : st === 'Rechazado' ? '#EF4444' : st === 'No Objeto de Cobro' ? '#374151' : '#3B82F6'
                 const nivelesInfo = [
@@ -5645,6 +5757,13 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                       onClick={() => setRegistroExpandido(expandido ? null : reg.id)}
                       style={{ display:'flex', alignItems:'center', gap:'10px', background:'#D9770626', border:`1px solid ${expandido ? '#D97706' : '#D9770644'}`, borderLeft:'3px solid #D97706', borderRadius: expandido ? '10px 10px 0 0' : '10px', padding:'10px 16px', cursor:'pointer', transition:'border 0.15s' }}
                     >
+                      {puedeMarcarVal && (
+                        <input type="checkbox" checked={seleccionadosValidacion.includes(reg.id)}
+                          title="Seleccionar para validación masiva"
+                          onClick={e => e.stopPropagation()}
+                          onChange={() => toggleSeleccionValidacion(reg.id)}
+                          style={{ width:'15px', height:'15px', accentColor:'#0d9488', flexShrink:0 }} />
+                      )}
                       {puedeEditar && (
                         <input type="checkbox" checked={seleccionados.includes(reg.id)}
                           onClick={e => e.stopPropagation()}
@@ -5728,6 +5847,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           puedeEditar={puedeEditar} actasList={actasList}
                           seleccionado={seleccionados.includes(reg.id)}
                           onToggleSeleccion={() => toggleSeleccion(reg.id)}
+                          mostrarSeleccionValidacion={puedeMarcarVal}
+                          seleccionadoValidacion={seleccionadosValidacion.includes(reg.id)}
+                          onToggleSeleccionValidacion={() => toggleSeleccionValidacion(reg.id)}
                           onItemAsignado={recargar}
                           hdrs={hdrs}
                         />
@@ -5830,6 +5952,18 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           titulo={`SICOE obra · Registro #${modalTrazabilidadSicoe.numero_registro ?? modalTrazabilidadSicoe.id} · id ${modalTrazabilidadSicoe.id}`}
           theme={t}
           onClose={() => setModalTrazabilidadSicoe(null)}
+        />
+      )}
+
+      {popupMasivo && puedeMasivaNivel && (
+        <PopupComentarioValidacion
+          t={t} usuario={usuario} registro={registroParaPopupMasivo}
+          contrato_id={contrato_id} API_URL={API_URL} hdrs={hdrs}
+          estadoValidando={popupMasivo.estado}
+          nivelValidacion={nvMasivo}
+          obligatorio={true}
+          onConfirmar={comentarioData => ejecutarMasivoSeleccion(popupMasivo.estado, comentarioData)}
+          onCancelar={() => setPopupMasivo(null)}
         />
       )}
 

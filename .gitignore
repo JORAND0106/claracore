@@ -30,3 +30,9 @@ frontend/.env
 frontend/.env.local
 Bubble/*.ndjson
 Bubble/registros_sicoe.ndjson
+Bubble/log-error*.txt
+
+# Artefactos locales / despliegue (no versionar)
+backend/backend.zip
+**/__pycache__/
+*.pyc
