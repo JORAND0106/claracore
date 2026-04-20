@@ -1,0 +1,66 @@
+UNA SOLA FORMA: GitHub sube el backend a Azure (sin ZIP manual)
+================================================================
+
+PASO 0 — Si dice "La autenticación básica está deshabilitada"
+  App Service → Configuration → General settings
+  Activa (On) "FTP basic auth publishing credentials" y, si existe, "SCM basic auth publishing credentials".
+  Guardar. Luego ya podrás descargar el perfil.
+
+PASO 1 — Perfil de publicación
+  Azure Portal → App Service "claracore-backend" → arriba: "Descargar perfil de publicación"
+  Se baja un archivo .PublishSettings (XML).
+
+PASO 2 — Secreto en GitHub
+  GitHub → repo claracore → Settings → Secrets and variables → Actions → New repository secret
+  Nombre exacto:  AZURE_WEBAPP_PUBLISH_PROFILE
+  Valor: pega TODO el contenido del XML (abre el archivo con el bloc de notas y copia).
+
+PASO 3 — Comando de inicio en Azure (una sola línea)
+  App Service → Configuration → General settings → Startup Command:
+
+  python -m uvicorn main:app --host 0.0.0.0 --port $PORT
+
+  (Sin "cd backend": el deploy pone main.py en la raíz del sitio.)
+  Guardar. Reiniciar el App Service.
+
+PASO 4 — Variables de entorno (qué hacer, sin misterio)
+  Idea: lo que hoy tienes en la carpeta backend en un archivo llamado .env en tu PC,
+  lo mismo debe existir en Azure con los MISMOS nombres de variable.
+
+  Dónde en Azure:
+  App Service claracore-backend → menú izquierdo "Configuración" →
+  pestaña "Variables de entorno" (o "Application settings") → sección "Aplicación".
+
+  Cómo:
+  - Abre en tu PC el archivo backend\.env con el Bloc de notas (el que ya usas para que el API funcione en local).
+  - Por cada línea que sea NOMBRE=valor (sin # al inicio):
+      En Azure: "+ Nueva configuración de aplicación" → Nombre = NOMBRE → Valor = valor → Aceptar.
+  - Repite hasta copiar todas las que no sean comentarios.
+
+  Mínimo sin el cual el backend suele morir al arrancar (si falta alguna, revísala):
+    SUPABASE_URL
+    SUPABASE_KEY
+    SECRET_KEY
+    ALGORITHM          (ejemplo de valor: HS256)
+
+  Si en tu .env también tienes Cloudinary, Anthropic, etc., cópialas igual.
+
+  Obligatorio para el deploy con pip en el servidor (añádela aparte si no está):
+    Nombre: SCM_DO_BUILD_DURING_DEPLOYMENT
+    Valor: true
+
+  Al final: Guardar (arriba) y confirmar. Luego Reiniciar el App Service.
+
+PASO 5 — Quitar el segundo deploy que pelea (solo una vez)
+  App Service → Deployment Center
+  Si dice que el origen es GitHub con build automático de Azure, desconecta ESA integración.
+  El deploy del backend pasará a ser SOLO el workflow "Deploy backend to Azure App Service" (pestaña Actions).
+  Sigue viendo el estado en GitHub → Actions.
+
+PASO 6 — Subir el workflow al repo
+  Haz commit y push del archivo:
+  .github/workflows/azure-backend-app-service.yml
+  Mira Actions: debe aparecer un job verde. Luego prueba:
+  https://claracore-backend.azurewebsites.net/healthz
+
+NOTA: El workflow Static Web Apps del frontend NO se toca; sigue publicando claracore.co desde /frontend.

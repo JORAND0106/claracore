@@ -1,0 +1,23 @@
+# Despliega SOLO la carpeta backend al App Service Linux (claracore-backend).
+# Requisitos: secreto AZURE_WEBAPP_PUBLISH_PROFILE + comando de inicio en Azure sin "cd backend".
+name: Deploy backend to Azure App Service
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/azure-backend-app-service.yml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: claracore-backend
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: ./backend

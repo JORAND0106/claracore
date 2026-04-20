@@ -32,6 +32,10 @@ Bubble/*.ndjson
 Bubble/registros_sicoe.ndjson
 Bubble/log-error*.txt
 
+# Credenciales de publicación Azure (nunca subir a Git)
+*.PublishSettings
+**/claracore-backend.PublishSettings
+
 # Artefactos locales / despliegue (no versionar)
 backend/backend.zip
 **/__pycache__/
