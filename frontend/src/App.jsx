@@ -13,7 +13,7 @@ const _VITE_MAPBOX = import.meta.env.VITE_MAPBOX_TOKEN
 if (_VITE_MAPBOX) mapboxgl.accessToken = _VITE_MAPBOX
 import * as XLSX from 'xlsx'
 import ExcelJS from 'exceljs'
-import { API_BASE } from './apiBase'
+import { API_BASE, logApiFailure } from './apiBase'
 
 const API = API_BASE
 const POLITICAS_TEXTO_VERSION = '1.0'
@@ -694,7 +694,8 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
       } catch {}
     }
     check()
-    const iv = setInterval(check, 5000)
+    // 5s generaba demasiadas peticiones concurrentes al API y empeora 502 en Azure con poco CPU/RAM.
+    const iv = setInterval(check, 20000)
     return () => clearInterval(iv)
   }, [contratoId])
 
@@ -9258,7 +9259,7 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
 
   useEffect(() => {
     cargarCount()
-    const iv = setInterval(cargarCount, 30000)
+    const iv = setInterval(cargarCount, 60000)
     return () => clearInterval(iv)
   }, [contratoCtx])
 
@@ -9636,7 +9637,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       .catch(() => setActasListaMatriz([]))
   }, [contratoIdDash])
 
-// ── Auto-refresh dashboard cada 30 segundos ───────────────────────────────
+// ── Auto-refresh dashboard (menos frecuente → menos carga en Azure y menos 502 por saturación) ──
   const dashDrillRef = useRef([])
   useEffect(() => { dashDrillRef.current = dashDrill }, [dashDrill])
 
@@ -9659,7 +9660,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       }).then(r => r.ok ? r.json() : {}).then(setMiniMapaColores).catch(() => {})
     }
     recargar()
-    const iv = setInterval(recargar, 30000)
+    const iv = setInterval(recargar, 75000)
     return () => clearInterval(iv)
   }, [contratoIdDash])
 
@@ -12064,22 +12065,51 @@ export default function App() {
     return () => clearInterval(id)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-useEffect(() => {
-    const ping = () => {
-      const opt =
-        typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
-          ? { signal: AbortSignal.timeout(20000) }
-          : {}
-      return fetch(`${API}/healthz`, opt).catch(() => {})
-    }
-    ping()
-    const iv = setInterval(ping, 8 * 60 * 1000)
-    return () => clearInterval(iv)
-  }, [])
-
   const [mantenimiento, setMantenimiento] = useState(null)
   const [cuentaRegresiva, setCuentaRegresiva] = useState(null)
   const [esperandoFinMantenimiento, setEsperandoFinMantenimiento] = useState(false)
+  const [apiDegraded, setApiDegraded] = useState(false)
+  const apiHealthFailStreakRef = useRef(0)
+  const apiHealthWarnedRef = useRef(false)
+
+  useEffect(() => {
+    const timeoutMs = 28000
+    const intervalMs = 90 * 1000
+    const markOk = () => {
+      apiHealthFailStreakRef.current = 0
+      apiHealthWarnedRef.current = false
+      setApiDegraded(false)
+    }
+    const markFail = (reason, err) => {
+      apiHealthFailStreakRef.current += 1
+      if (apiHealthFailStreakRef.current < 2) return
+      setApiDegraded(true)
+      if (!apiHealthWarnedRef.current) {
+        apiHealthWarnedRef.current = true
+        console.warn(
+          '[ClaraCore] Sin respuesta fiable del servidor. En Red (F12), si ves 502 Bad Gateway, Azure no está sirviendo el API (reinicio, falta de memoria o saturación); ' +
+            'el mensaje de CORS es consecuencia de eso, no de orígenes mal configurados.',
+        )
+        logApiFailure(`healthz (${reason})`, err)
+      }
+    }
+    const run = async () => {
+      try {
+        const opt =
+          typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+            ? { signal: AbortSignal.timeout(timeoutMs) }
+            : {}
+        const r = await fetch(`${API}/healthz`, opt)
+        if (r.ok) markOk()
+        else markFail(`HTTP ${r.status}`, new Error(`HTTP ${r.status}`))
+      } catch (e) {
+        markFail('red/timeout', e)
+      }
+    }
+    run()
+    const iv = setInterval(run, intervalMs)
+    return () => clearInterval(iv)
+  }, [])
 
   useEffect(() => {
     // Con Azure en frío las respuestas pueden tardar minutos; sin cuerpo HTTP el navegador muestra "CORS" aunque el fallo sea timeout.
@@ -12227,8 +12257,9 @@ if (contratos.length > 1) {
     const _esPrivilegiado = ['Desarrollador', 'Administrador'].includes(usuario.cargo_nombre)
     const maintenanceBannerHeight = mantenimiento?.activo ? 74 : 0
     const updateBannerHeight = hayNuevaVersion ? 74 : 0
+    const apiBannerHeight = apiDegraded ? 52 : 0
     const infoBannerHeight = bannerMsg ? 44 : 0
-    const totalTopOffset = maintenanceBannerHeight + updateBannerHeight + infoBannerHeight
+    const totalTopOffset = maintenanceBannerHeight + updateBannerHeight + apiBannerHeight + infoBannerHeight
     if (!_esPrivilegiado && (!usuario.permisos || usuario.permisos.length === 0)) return (
       <div style={{ minHeight: '100vh', background: t.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '12px' }}>
         <div style={{ fontSize: '48px' }}>🔒</div>
@@ -12267,6 +12298,63 @@ if (contratos.length > 1) {
             <div style={{ fontSize: '28px', fontWeight: '900', lineHeight: 1 }}>{cuentaRegresiva}</div>
             <div style={{ fontSize: '10px', opacity: 0.8 }}>segundos</div>
           </div>
+        </div>
+      )}
+    {apiDegraded && (
+        <div style={{
+          position: 'fixed',
+          top: maintenanceBannerHeight + updateBannerHeight,
+          left: 0,
+          right: 0,
+          zIndex: 99998,
+          background: 'linear-gradient(90deg, #B45309, #D97706)',
+          color: '#fff',
+          padding: '10px 20px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '14px',
+          fontSize: '12px',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.2)',
+        }}>
+          <span style={{ fontSize: '18px' }} aria-hidden>⚠️</span>
+          <div style={{ flex: 1, lineHeight: 1.45 }}>
+            <strong style={{ display: 'block', marginBottom: '2px' }}>Problema de conexión con el servidor</strong>
+            Si en Red (F12) aparece <strong>502 Bad Gateway</strong>, el API en Azure no respondió (caído o saturado); el aviso de CORS es un efecto secundario.
+            {' '}
+            Espera 1–2 min, recarga o pulsa Reintentar. Más detalle: <code style={{ fontSize: '11px' }}>localStorage claracore_debug_api=1</code> y recarga.
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const opt =
+                  typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+                    ? { signal: AbortSignal.timeout(28000) }
+                    : {}
+                const r = await fetch(`${API}/healthz`, opt)
+                if (r.ok) {
+                  apiHealthFailStreakRef.current = 0
+                  apiHealthWarnedRef.current = false
+                  setApiDegraded(false)
+                }
+              } catch (e) {
+                logApiFailure('healthz (reintento manual)', e)
+              }
+            }}
+            style={{
+              flexShrink: 0,
+              background: '#fff',
+              color: '#B45309',
+              border: 'none',
+              borderRadius: '8px',
+              padding: '8px 14px',
+              fontSize: '12px',
+              fontWeight: '700',
+              cursor: 'pointer',
+            }}
+          >
+            Reintentar
+          </button>
         </div>
       )}
     {hayNuevaVersion && (
@@ -12319,7 +12407,7 @@ if (contratos.length > 1) {
         </div>
       )}
       {bannerMsg && (
-        <div style={{ position: 'fixed', top: maintenanceBannerHeight + updateBannerHeight, left: 0, right: 0, zIndex: 99999, background: '#0f2038', borderBottom: '2px solid #00afc5', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '13px', color: '#e0f4f7', boxShadow: '0 2px 12px rgba(0,0,0,0.4)' }}>
+        <div style={{ position: 'fixed', top: maintenanceBannerHeight + updateBannerHeight + apiBannerHeight, left: 0, right: 0, zIndex: 99999, background: '#0f2038', borderBottom: '2px solid #00afc5', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '13px', color: '#e0f4f7', boxShadow: '0 2px 12px rgba(0,0,0,0.4)' }}>
           <span>⚡ {bannerMsg}</span>
           <button onClick={() => setBannerMsg(null)} style={{ background: 'transparent', border: 'none', color: '#8acdd8', cursor: 'pointer', fontSize: '16px', lineHeight: 1 }}>✕</button>
         </div>
@@ -12403,11 +12491,52 @@ if (contratos.length > 1) {
   return (
     <>
       <TestModeBadge />
+      {apiDegraded && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 99998,
+          background: 'linear-gradient(90deg, #B45309, #D97706)', color: '#fff',
+          padding: '10px 20px', display: 'flex', alignItems: 'center', gap: '14px', fontSize: '12px',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.2)',
+        }}>
+          <span style={{ fontSize: '18px' }} aria-hidden>⚠️</span>
+          <div style={{ flex: 1, lineHeight: 1.45 }}>
+            <strong style={{ display: 'block' }}>Sin conexión con el servidor ClaraCore</strong>
+            En Red (F12), <strong>502</strong> = puerta de enlace sin backend activo (no es CORS). Espera, recarga o prueba Reintentar.
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const opt =
+                  typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+                    ? { signal: AbortSignal.timeout(28000) }
+                    : {}
+                const r = await fetch(`${API}/healthz`, opt)
+                if (r.ok) {
+                  apiHealthFailStreakRef.current = 0
+                  apiHealthWarnedRef.current = false
+                  setApiDegraded(false)
+                }
+              } catch (e) {
+                logApiFailure('healthz (reintento manual)', e)
+              }
+            }}
+            style={{
+              flexShrink: 0, background: '#fff', color: '#B45309', border: 'none',
+              borderRadius: '8px', padding: '8px 14px', fontSize: '12px', fontWeight: '700', cursor: 'pointer',
+            }}
+          >
+            Reintentar
+          </button>
+        </div>
+      )}
+      <div style={{ paddingTop: apiDegraded ? 56 : 0 }}>
       <LandingPage t={t} activeTheme={activeTheme} themeMode={themeMode}
         onTheme={handleTheme}
         onLogin={() => setModal('login')}
         onRegistro={() => setModal('registro')}
         onOlvide={() => setModal('olvide')} />
+      </div>
             {modal === 'login' && <ModalLogin t={t} onClose={() => setModal(null)} onLoginOk={handleLoginOk} onForgot={() => setModal('olvide')} />}
       {modal === 'selector_contrato' && (
         <Modal t={t} onClose={() => {}} width="400px">
