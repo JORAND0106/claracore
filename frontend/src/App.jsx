@@ -3877,7 +3877,8 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
 
 // ─── HOJA REGISTRO ────────────────────────────────────────────────────────────
 function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, seleccionado, onToggleSeleccion, onItemAsignado, hdrs, actasList = [],
-  mostrarSeleccionValidacion = false, seleccionadoValidacion = false, onToggleSeleccionValidacion }) {
+  mostrarSeleccionValidacion = false, seleccionadoValidacion = false, onToggleSeleccionValidacion,
+  esDeveloper = false, onDevEliminarRegistro = null, devEliminando = false }) {
   const [competencia,    setCompetencia]    = useState(registro.competencia    || '')
   const [itemBusqueda,   setItemBusqueda]   = useState(registro.item_numero || '')
   const [itemsLista,     setItemsLista]     = useState([])
@@ -4269,8 +4270,18 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               </span>
             )}
           </div>
-          <div style={{ fontSize:'11px', color:t.textMuted }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'11px', color:t.textMuted }}>
             {(() => { try { const ts=registro.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()}
+            {esDeveloper && typeof onDevEliminarRegistro === 'function' && (
+              <button type="button" disabled={devEliminando} onClick={() => onDevEliminarRegistro(registro.id)}
+                title="Solo desarrollador: elimina este registro en base de datos"
+                style={{
+                  background:'transparent', border:'1px solid #F87171', color:'#F87171', borderRadius:'6px',
+                  padding:'2px 8px', fontSize:'10px', fontWeight:'700', cursor: devEliminando ? 'not-allowed' : 'pointer', opacity: devEliminando ? 0.5 : 1,
+                }}>
+                🗑️ Dev
+              </button>
+            )}
           </div>
         </div>
         <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
@@ -4960,9 +4971,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [popupMasivo, setPopupMasivo]              = useState(null)   // { estado } o null
   const [msgMasivo, setMsgMasivo]                  = useState('')
   const [ejecutandoMasivo, setEjecutandoMasivo]    = useState(false)
+  const [devEliminando, setDevEliminando]          = useState(false)
 
   const perm        = (usuario?.permisos || []).find(p => p.funcion_nombre === 'Reporte de Cantidades')
   const puedeEditar = perm?.editar
+  const esDeveloper = (usuario?.cargo_nombre || '').toLowerCase() === 'desarrollador'
   const hdrs        = { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' }
   const nivelInfo   = determinarNivelValidacion(usuario)
 
@@ -5033,6 +5046,42 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       setReporte(data)
       setRegistros(data.registros || [])
     } catch(e) {}
+  }
+
+  const devEliminarRegistro = async (registroId) => {
+    const reg = registros.find(r => r.id === registroId)
+    const num = reg?.numero_registro ?? registroId
+    if (!window.confirm(`[DEV] ¿Eliminar permanentemente el registro #${num}? Esta acción no se puede deshacer.`)) return
+    setDevEliminando(true)
+    try {
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${registroId}/dev`, { method: 'DELETE', headers: hdrs })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        const d = err?.detail
+        throw new Error(typeof d === 'string' ? d : `Error ${res.status}`)
+      }
+      await recargar()
+    } catch (e) {
+      alert(e?.message || String(e))
+    }
+    setDevEliminando(false)
+  }
+
+  const devEliminarReporteCompleto = async () => {
+    if (!window.confirm(`[DEV] ¿Eliminar permanentemente el reporte #${reporte.numero_reporte} y TODOS sus registros, puntos topográficos y comentarios? No se puede deshacer.`)) return
+    setDevEliminando(true)
+    try {
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/dev`, { method: 'DELETE', headers: hdrs })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        const d = err?.detail
+        throw new Error(typeof d === 'string' ? d : `Error ${res.status}`)
+      }
+      onActualizar()
+    } catch (e) {
+      alert(e?.message || String(e))
+    }
+    setDevEliminando(false)
   }
 
   const guardarTopografia = async () => {
@@ -5327,7 +5376,20 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               })()}
             </div>
           </div>
-          <button onClick={onClose} style={{ background:'rgba(255,255,255,0.2)', border:'none', color:'#fff', borderRadius:'50%', width:'34px', height:'34px', fontSize:'18px', cursor:'pointer', fontWeight:'900', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
+          <div style={{ display:'flex', alignItems:'center', gap:'8px', flexShrink:0 }}>
+            {esDeveloper && (
+              <button type="button" disabled={devEliminando} onClick={devEliminarReporteCompleto}
+                title="Solo cargo Desarrollador: borra el reporte completo en base de datos"
+                style={{
+                  background:'#B91C1C', color:'#fff', border:'none', borderRadius:'8px', padding:'6px 12px',
+                  fontSize:'11px', fontWeight:'700', cursor: devEliminando ? 'not-allowed' : 'pointer', opacity: devEliminando ? 0.65 : 1,
+                  whiteSpace:'nowrap',
+                }}>
+                🗑️ Dev: borrar reporte
+              </button>
+            )}
+            <button onClick={onClose} style={{ background:'rgba(255,255,255,0.2)', border:'none', color:'#fff', borderRadius:'50%', width:'34px', height:'34px', fontSize:'18px', cursor:'pointer', fontWeight:'900', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
+          </div>
         </div>
 
         {/* ─ Botón volver al panel ─ */}
@@ -5807,6 +5869,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   onToggleSeleccionValidacion={() => toggleSeleccionValidacion(reg.id)}
                   onItemAsignado={recargar}
                   hdrs={hdrs}
+                  esDeveloper={esDeveloper}
+                  onDevEliminarRegistro={devEliminarRegistro}
+                  devEliminando={devEliminando}
                 />
                 )
               })}
@@ -5932,6 +5997,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           onToggleSeleccionValidacion={() => toggleSeleccionValidacion(reg.id)}
                           onItemAsignado={recargar}
                           hdrs={hdrs}
+                          esDeveloper={esDeveloper}
+                          onDevEliminarRegistro={devEliminarRegistro}
+                          devEliminando={devEliminando}
                         />
                       </div>
                     )}

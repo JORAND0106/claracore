@@ -781,6 +781,25 @@ def _cargo_puede_auditar_logs(current_user) -> bool:
         return False
 
 
+def _es_desarrollador(current_user) -> bool:
+    """Solo el cargo Desarrollador (no Administrador): acciones destructivas de desarrollo."""
+    try:
+        uid = int(current_user.get("sub"))
+    except (TypeError, ValueError):
+        return False
+    try:
+        u = supabase.table("usuarios").select("cargo_id").eq("id", uid).limit(1).execute().data
+        u = u[0] if u else None
+        if not u or not u.get("cargo_id"):
+            return False
+        c = supabase.table("cargos").select("nombre").eq("id", u["cargo_id"]).limit(1).execute().data
+        c = c[0] if c else None
+        n = ((c or {}).get("nombre") or "").strip().lower()
+        return n == "desarrollador"
+    except Exception:
+        return False
+
+
 # ─────────────────────────────────────────────
 # SEGURIDAD
 # ─────────────────────────────────────────────
@@ -6284,6 +6303,125 @@ def eliminar_registros_reporte(contrato_id: int, reporte_id: int, current_user=D
     except Exception:
         pass
     return {"ok": True}
+
+
+@app.delete("/sicoe-obra/{contrato_id}/registros/{registro_id}/dev")
+def dev_eliminar_registro(contrato_id: int, registro_id: int, current_user=Depends(get_current_user)):
+    """Solo Desarrollador: elimina un registro y sus comentarios (uso de soporte/desarrollo)."""
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede usar esta acción.")
+
+    def _get():
+        return supabase.table("so_registros").select("*").eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
+    rows = supabase_execute(_get)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Registro no encontrado")
+    prev_row = rows[0]
+
+    def _del_com():
+        return supabase.table("so_registro_comentarios").delete().eq("registro_id", registro_id).execute().data
+    supabase_execute(_del_com)
+
+    def _del_reg():
+        return supabase.table("so_registros").delete().eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
+    supabase_execute(_del_reg)
+
+    try:
+        cnum = None
+        cr = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
+        if cr:
+            cnum = cr[0].get("numero")
+        u_log = {
+            "sub": str(current_user.get("sub")),
+            "nombre": current_user.get("nombre") or "",
+            "email": current_user.get("email"),
+            "cargo_nombre": current_user.get("cargo_nombre"),
+            "rol_nombre": current_user.get("rol_nombre"),
+            "contrato_id": contrato_id,
+            "contrato_numero": cnum,
+        }
+        registrar_log(
+            u_log,
+            "ELIMINAR",
+            "SICOE",
+            "registro",
+            str(registro_id),
+            {"reporte_id": prev_row.get("reporte_id"), "dev": True},
+            valor_anterior=_json_for_log(prev_row),
+            valor_nuevo={},
+            severidad="AUDIT",
+            alerta_generada=True,
+        )
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/dev")
+def dev_eliminar_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
+    """Solo Desarrollador: elimina reporte, registros, comentarios y puntos topográficos (uso de soporte/desarrollo)."""
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede usar esta acción.")
+
+    def _get_rep():
+        return supabase.table("so_reportes").select("*").eq("id", reporte_id).eq("contrato_id", contrato_id).limit(1).execute().data
+    rep_rows = supabase_execute(_get_rep)
+    if not rep_rows:
+        raise HTTPException(status_code=404, detail="Reporte no encontrado")
+    prev_rep = rep_rows[0]
+
+    def _list_reg():
+        return supabase.table("so_registros").select("id").eq("reporte_id", reporte_id).eq("contrato_id", contrato_id).execute().data
+    reg_rows = supabase_execute(_list_reg) or []
+    reg_ids = [r["id"] for r in reg_rows]
+
+    if reg_ids:
+        def _del_com():
+            return supabase.table("so_registro_comentarios").delete().in_("registro_id", reg_ids).execute().data
+        supabase_execute(_del_com)
+
+    def _del_regs():
+        return supabase.table("so_registros").delete().eq("reporte_id", reporte_id).eq("contrato_id", contrato_id).execute().data
+    supabase_execute(_del_regs)
+
+    def _del_pts():
+        return supabase.table("so_puntos_topograficos").delete().eq("reporte_id", reporte_id).eq("contrato_id", contrato_id).execute().data
+    supabase_execute(_del_pts)
+
+    def _del_rep():
+        return supabase.table("so_reportes").delete().eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
+    supabase_execute(_del_rep)
+
+    try:
+        cnum = None
+        cr = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
+        if cr:
+            cnum = cr[0].get("numero")
+        u_log = {
+            "sub": str(current_user.get("sub")),
+            "nombre": current_user.get("nombre") or "",
+            "email": current_user.get("email"),
+            "cargo_nombre": current_user.get("cargo_nombre"),
+            "rol_nombre": current_user.get("rol_nombre"),
+            "contrato_id": contrato_id,
+            "contrato_numero": cnum,
+        }
+        registrar_log(
+            u_log,
+            "ELIMINAR",
+            "SICOE",
+            "reporte",
+            str(reporte_id),
+            {"registros_eliminados": len(reg_ids), "dev": True},
+            valor_anterior=_json_for_log(prev_rep),
+            valor_nuevo={},
+            severidad="AUDIT",
+            alerta_generada=True,
+        )
+    except Exception:
+        pass
+    return {"ok": True, "registros_eliminados": len(reg_ids)}
+
 
 @app.post("/sicoe-obra/{contrato_id}/registros")
 def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(get_current_user)):
