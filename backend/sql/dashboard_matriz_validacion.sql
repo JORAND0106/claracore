@@ -1,6 +1,9 @@
 -- Agregación en base de datos para /sicoe-obra/.../dashboard-matriz-validacion (rendimiento ~segundos).
 -- Ejecutar en Supabase SQL Editor (o psql) una vez.
 --
+-- Regla de negocio (cascada): N1 clasifica todo el acta; N2 solo filas con N1=Aprobado; N3 solo con N1 y N2=Aprobado.
+-- Pendiente por ítem (sub_estado) solo con N1=Aprobado y va a la fila «pendiente_item», no al pendiente del inspector.
+--
 -- Patrón vista_dashboard_* (como vista_dashboard_resumen): exponer solo columnas que usa la matriz
 -- para que el planificador lea menos ancho de fila y pueda usar índices de forma más eficiente.
 
@@ -70,21 +73,26 @@ base AS (
   WHERE r.contrato_id = p_contrato_id
     AND (p_acta_id IS NULL OR r.acta_rpo_id = p_acta_id)
 ),
+-- Regla en cascada (coherente con validación en API):
+-- · Inspector (N1): todos los ítems del acta; solo estados de nivel1 (no mezclar pendiente por ítem/sub_estado aquí).
+-- · Residente (N2): solo filas con N1 = Aprobado; sobre ese subconjunto, estados de nivel2.
+-- · Interventoría (N3): solo filas con N1 = Aprobado y N2 = Aprobado; sobre ese subconjunto, estados de nivel3.
+-- · Pendiente ítem (sub_estado): solo cuenta con N1 = Aprobado (no forma parte del bucket "Pendiente" del inspector).
 main AS (
   SELECT
     bloque,
-    SUM(CASE WHEN n3 = 'Aprobado' THEN cd ELSE 0 END) AS aprobado_interventoria,
-    SUM(CASE WHEN n2 = 'Aprobado' THEN cd ELSE 0 END) AS aprobado_residente,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'Aprobado' THEN cd ELSE 0 END) AS aprobado_interventoria,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' THEN cd ELSE 0 END) AS aprobado_residente,
     SUM(CASE WHEN n1 = 'Aprobado' THEN cd ELSE 0 END) AS aprobado_inspector,
-    SUM(CASE WHEN n3 = 'Pendiente' THEN cd ELSE 0 END) AS pendiente_interventoria,
-    SUM(CASE WHEN n2 = 'Pendiente' THEN cd ELSE 0 END) AS pendiente_residente,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'Pendiente' THEN cd ELSE 0 END) AS pendiente_interventoria,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Pendiente' THEN cd ELSE 0 END) AS pendiente_residente,
     SUM(CASE WHEN n1 = 'Pendiente' THEN cd ELSE 0 END) AS pendiente_inspector,
-    SUM(CASE WHEN sub_pend THEN cd ELSE 0 END) AS pendiente_item_residente,
-    SUM(CASE WHEN n3 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cd ELSE 0 END) AS no_revisado_interventoria,
-    SUM(CASE WHEN n2 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cd ELSE 0 END) AS no_revisado_residente,
+    SUM(CASE WHEN sub_pend AND n1 = 'Aprobado' THEN cd ELSE 0 END) AS pendiente_item_residente,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cd ELSE 0 END) AS no_revisado_interventoria,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cd ELSE 0 END) AS no_revisado_residente,
     SUM(CASE WHEN n1 NOT IN ('Aprobado', 'Pendiente', 'Rechazado') THEN cd ELSE 0 END) AS no_revisado_inspector,
-    SUM(CASE WHEN n3 = 'Rechazado' THEN cd ELSE 0 END) AS rechazado_interventoria,
-    SUM(CASE WHEN n2 = 'Rechazado' THEN cd ELSE 0 END) AS rechazado_residente,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'Rechazado' THEN cd ELSE 0 END) AS rechazado_interventoria,
+    SUM(CASE WHEN n1 = 'Aprobado' AND n2 = 'Rechazado' THEN cd ELSE 0 END) AS rechazado_residente,
     SUM(CASE WHEN n1 = 'Rechazado' THEN cd ELSE 0 END) AS rechazado_inspector,
     SUM(cd) AS habilitado_inspector,
     SUM(CASE WHEN n1 = 'Aprobado' THEN cd ELSE 0 END) AS habilitado_residente,
@@ -123,8 +131,15 @@ otras AS (
       THEN 'ensayos'
       ELSE 'obra'
     END AS bloque,
-    SUM(CASE WHEN public._norm_estado_matriz(r.nivel3_estado) = 'Pendiente' THEN COALESCE(r.costo_directo, 0)::numeric ELSE 0 END) AS otras_interventoria,
-    SUM(CASE WHEN public._norm_estado_matriz(r.nivel2_estado) = 'Pendiente' THEN COALESCE(r.costo_directo, 0)::numeric ELSE 0 END) AS otras_residente,
+    SUM(CASE
+      WHEN public._norm_estado_matriz(r.nivel1_estado) = 'Aprobado'
+        AND public._norm_estado_matriz(r.nivel2_estado) = 'Aprobado'
+        AND public._norm_estado_matriz(r.nivel3_estado) = 'Pendiente'
+      THEN COALESCE(r.costo_directo, 0)::numeric ELSE 0 END) AS otras_interventoria,
+    SUM(CASE
+      WHEN public._norm_estado_matriz(r.nivel1_estado) = 'Aprobado'
+        AND public._norm_estado_matriz(r.nivel2_estado) = 'Pendiente'
+      THEN COALESCE(r.costo_directo, 0)::numeric ELSE 0 END) AS otras_residente,
     SUM(CASE WHEN public._norm_estado_matriz(r.nivel1_estado) = 'Pendiente' THEN COALESCE(r.costo_directo, 0)::numeric ELSE 0 END) AS otras_inspector
   FROM public.vista_so_registros_matriz_validacion r
   WHERE r.contrato_id = p_contrato_id
@@ -190,7 +205,7 @@ SELECT jsonb_build_object(
 $BODY$;
 
 COMMENT ON FUNCTION public.dashboard_matriz_validacion_agg(bigint, bigint) IS
-  'Matriz validación SICOE: solo registros del acta cuando p_acta_id no es null.';
+  'Matriz validación SICOE: acta filtrada por p_acta_id; N2/N3 en cascada (N2 solo si N1 aprobado; N3 solo si N1 y N2 aprobados).';
 
 -- Una sola llamada: resuelve acta RPO vigente en BD + agrega (evita 2 round-trips desde el API).
 CREATE OR REPLACE FUNCTION public.dashboard_matriz_validacion_vigente_bundle(p_contrato_id bigint)

@@ -3908,8 +3908,29 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [mostrarPopupValidacion, setMostrarPopupValidacion] = useState(false)
   const [estadoValidando,        setEstadoValidando]        = useState('')
   const [toastMsg,               setToastMsg]               = useState(null)
+  const [listaCortes,            setListaCortes]            = useState([])
+  const [corteSel,               setCorteSel]               = useState('')
+  const [guardandoCorte,         setGuardandoCorte]         = useState(false)
   const API = API_URL
   const nivelInfo = determinarNivelValidacion(usuario)
+  const esNivel3Aprobado = registro?.nivel3_estado === 'Aprobado'
+  const editableCampos = puedeEditar && !esNivel3Aprobado
+  const soloCorteNivel3 = puedeEditar && esNivel3Aprobado
+
+  useEffect(() => {
+    setCorteSel(registro.corte_id != null ? String(registro.corte_id) : '')
+  }, [registro.id, registro.corte_id])
+
+  useEffect(() => {
+    if (!soloCorteNivel3 || !reporte.subcontratista_id) {
+      setListaCortes([])
+      return
+    }
+    fetch(`${API}/subcontratistas/${reporte.subcontratista_id}/cortes`, { headers: hdrs })
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d)) setListaCortes(d); else setListaCortes([]) })
+      .catch(() => setListaCortes([]))
+  }, [soloCorteNivel3, reporte.subcontratista_id, API])
 
   // Paso 1: cargar capítulos al montar desde el listado completo (fuente confiable)
   // Si ya hay capítulo preseleccionado, también carga sus ítems de inmediato
@@ -4082,6 +4103,32 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     setGuardando(false)
   }
 
+  const guardarCorte = async () => {
+    setGuardandoCorte(true)
+    try {
+      const cid = corteSel === '' ? null : parseInt(corteSel, 10)
+      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
+        method: 'PUT',
+        headers: hdrs,
+        body: JSON.stringify({
+          reporte_id: registro.reporte_id,
+          numero_registro: registro.numero_registro,
+          corte_id: Number.isNaN(cid) ? null : cid,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        const detail = err?.detail
+        throw new Error(typeof detail === 'string' ? detail : `Error ${res.status}`)
+      }
+      setToastMsg('Corte actualizado')
+      setTimeout(() => { setToastMsg(null); onItemAsignado() }, 200)
+    } catch (e) {
+      alert(e?.message || String(e))
+    }
+    setGuardandoCorte(false)
+  }
+
   const ejecutarValidacion = (estado) => {
     const esAprobado = estado === 'Aprobado'
     setEstadoValidando(estado)
@@ -4211,7 +4258,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 title="Seleccionar para validación masiva"
                 style={{ width:'16px', height:'16px', cursor:'pointer', accentColor:'#0d9488' }} />
             )}
-            {puedeEditar && (
+            {editableCampos && (
               <input type="checkbox" checked={seleccionado} onChange={onToggleSeleccion}
                 style={{ width:'16px', height:'16px', cursor:'pointer', accentColor:'#8B5CF6' }} />
             )}
@@ -4229,17 +4276,37 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
           {(() => {
             const actaNum = reporte.acta_rpo_numero ?? actasList.find(a => a.id === registro.acta_rpo_id)?.numero_rpo ?? null
-            const corteNum = reporte.corte_numero ?? registro.corte_id ?? null
+            const corteNum = reporte.corte_numero ?? listaCortes.find(c => c.id === registro.corte_id)?.consecutivo ?? registro.corte_id ?? null
             return (<>
               <span style={{ display:'flex', alignItems:'center', gap:'5px', background: actaNum ? `${t.primary}15` : '#EF444415', border:`1px solid ${actaNum ? t.primary+'33' : '#EF444433'}`, borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color: actaNum ? t.primary : '#EF4444' }}>
                 📋 {actaNum ? `RPO #${actaNum}` : 'Sin Acta RPO'}
               </span>
-              <span style={{ display:'flex', alignItems:'center', gap:'5px', background:`${t.textMuted}15`, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
-                📄 {corteNum ? `Corte #${corteNum}` : 'Sin Corte'}
-              </span>
+              {soloCorteNivel3 && reporte.subcontratista_id ? (
+                <span style={{ display:'flex', alignItems:'center', gap:'6px', flexWrap:'wrap', background:`${t.textMuted}12`, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'4px 10px', fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
+                  <span style={{ marginRight:'4px' }}>📄 Corte subcontratista</span>
+                  <select value={corteSel} onChange={e => setCorteSel(e.target.value)}
+                    style={{ background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'4px 8px', color:t.text, fontSize:'11px', maxWidth:'220px' }}>
+                    <option value="">— Sin corte —</option>
+                    {listaCortes.map(c => (
+                      <option key={c.id} value={String(c.id)}>Corte #{c.consecutivo ?? c.id}</option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={guardarCorte} disabled={guardandoCorte}
+                    style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'4px 10px', fontSize:'11px', fontWeight:'700', cursor: guardandoCorte ? 'not-allowed' : 'pointer', opacity: guardandoCorte ? 0.7 : 1 }}>
+                    {guardandoCorte ? '...' : 'Guardar'}
+                  </button>
+                </span>
+              ) : (
+                <span style={{ display:'flex', alignItems:'center', gap:'5px', background:`${t.textMuted}15`, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
+                  📄 {corteNum != null ? `Corte #${corteNum}` : 'Sin Corte'}
+                  {soloCorteNivel3 && !reporte.subcontratista_id && (
+                    <span style={{ fontWeight:'600', fontSize:'10px', marginLeft:'6px', color:'#d97706' }}>(defina subcontratista en la portada)</span>
+                  )}
+                </span>
+              )}
             </>)
           })()}
-          {puedeEditar ? (
+          {editableCampos ? (
             editandoSub ? (
               <span style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                 <select value={subcontratistaSel} onChange={e => setSubcontratistaSel(e.target.value)}
@@ -4277,8 +4344,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         </div>
       </div>
 
+      {esNivel3Aprobado && (
+        <div style={{ marginBottom:'12px', background:'#0d948818', border:'1px solid #0d948855', borderRadius:'8px', padding:'8px 12px', fontSize:'12px', color:t.text }}>
+          Aprobado por Interventoría (Nivel 3): el registro está bloqueado; solo puede ajustarse el corte de subcontratista.
+        </div>
+      )}
+
       {/* ─ Sección: Asignación de Ítem ─ */}
-      {(puedeEditar || nivelInfo.nivelValidacion) && (
+      {(editableCampos || nivelInfo.nivelValidacion) && (
         <div style={{ background:t.bg, borderRadius:'10px', padding:'16px', marginBottom:'16px', border:`1px solid ${C.borde}` }}>
           <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>🔖 Asignación de Ítem</div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 2fr', gap:'12px' }}>
@@ -4286,7 +4359,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             <div>
               <div style={{ fontSize:'10px', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Capítulo</div>
               <select value={capituloHoja} onChange={e => { setCapituloHoja(e.target.value); setCompetencia(''); setItemSel(null); setItemBusqueda('') }}
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px' }}>
+                disabled={!editableCampos}
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px', opacity: editableCampos ? 1 : 0.65 }}>
                 <option value="">— Selecciona —</option>
                 {listaCapitulos.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
@@ -4295,7 +4369,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             <div>
               <div style={{ fontSize:'10px', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Competencia</div>
               <select value={competencia} onChange={e => { setCompetencia(e.target.value); setItemSel(null); setItemBusqueda('') }}
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px' }}>
+                disabled={!editableCampos}
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px', opacity: editableCampos ? 1 : 0.65 }}>
                 <option value="">— Todas —</option>
                 {competencias.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
@@ -4310,7 +4385,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 onChange={e => { setItemBusqueda(e.target.value); setItemSel(null); setItemListadoId(null) }}
                 onFocus={() => itemsLista.length > 0 && setMostrarLista(true)}
                 placeholder="Buscar por número o descripción..."
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }}
+                disabled={!editableCampos}
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box', opacity: editableCampos ? 1 : 0.65 }}
               />
               {mostrarLista && itemsLista.length > 0 && (
                 <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:100, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', maxHeight:'200px', overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }}>
@@ -4343,7 +4419,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       <div style={{ marginBottom:'16px' }}>
         <div style={{ fontSize:'11px', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📏 Dimensiones y Cantidades</div>
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(130px,1fr))', gap:'10px' }}>
-          {puedeEditar ? (
+          {editableCampos ? (
             <>
               {[
                 ['Longitud', longitud, setLongitud, 'm'],
@@ -4381,7 +4457,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           )}
         </div>
         <div style={{ marginTop:'10px' }}>
-          {puedeEditar ? (
+          {editableCampos ? (
             <div>
               <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Observación</div>
               <textarea
@@ -4452,7 +4528,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 <img src={fotoLocal} alt="Foto" style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }} />
                 <div style={{ padding:'6px 10px', fontSize:'11px', color:t.textMuted, background:t.bg, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                   <span>📷 Foto #{registro.foto_numero ? String(registro.foto_numero).padStart(4,'0') : '—'}</span>
-                  {puedeEditar && (
+                  {editableCampos && (
                     <div style={{ display:'flex', gap:'8px' }}>
                       <label style={{ cursor:'pointer', color:t.primary, fontSize:'11px', fontWeight:'600' }}>
                         Cambiar
@@ -4468,7 +4544,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               </>
             ) : (
               <div style={{ display:'flex', flexDirection:'column', background:t.bg, borderRadius:'8px', overflow:'hidden', height:'160px' }}>
-                <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flex:1, cursor:'pointer', gap:'6px', borderBottom:`1px solid ${t.border}` }}>
+                <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flex:1, gap:'6px', borderBottom:`1px solid ${t.border}`, cursor: editableCampos ? 'pointer' : 'default', opacity: editableCampos ? 1 : 0.65 }}>
                   {uploadingFoto
                     ? <span style={{ color:t.textMuted, fontSize:'12px' }}>⏳ Subiendo...</span>
                     : <>
@@ -4477,13 +4553,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                         <span style={{ fontSize:'11px', color:t.primary, fontWeight:'600' }}>Toca para cargar</span>
                       </>
                   }
-                  <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto}
+                  <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto || !editableCampos}
                     onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
                 </label>
+                {editableCampos && (
                 <button onClick={() => setModalGaleriaHoja(true)}
                   style={{ padding:'8px', background:'transparent', border:'none', color:t.primary, fontSize:'11px', fontWeight:'600', cursor:'pointer' }}>
                   🖼️ Usar foto de la galería
                 </button>
+                )}
               </div>
             )}
           </div>
@@ -4497,7 +4575,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 </div>
               </>
             ) : (
-              <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'160px', background:t.bg, cursor:'pointer', gap:'8px' }}>
+              <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'160px', background:t.bg, cursor: editableCampos ? 'pointer' : 'default', gap:'8px', opacity: editableCampos ? 1 : 0.65 }}>
                 {uploadingGraf
                   ? <span style={{ color:t.textMuted, fontSize:'12px' }}>⏳ Subiendo...</span>
                   : <>
@@ -4506,7 +4584,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                       <span style={{ fontSize:'11px', color:t.primary, fontWeight:'600' }}>Toca para cargar</span>
                     </>
                 }
-                <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
+                <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf || !editableCampos}
                   onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f) }} />
               </label>
             )}
@@ -4707,7 +4785,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       )}
 
       {/* ─ Acciones finales ─ */}
-      {puedeEditar && (
+      {puedeEditar && (editableCampos || toastMsg) && (
         <div style={{ display:'flex', justifyContent:'flex-end', paddingTop:'12px', borderTop:`1px solid ${C.borde}` }}>
           {toastMsg && (
             <div style={{
@@ -4729,11 +4807,13 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             </div>
           )}
           <style>{`@keyframes fadeUp { from { opacity:0; transform:translateX(-50%) translateY(12px) } to { opacity:1; transform:translateX(-50%) translateY(0) } }`}</style>
+          {editableCampos && (
           <button onClick={guardarCambios} disabled={guardando} style={{
             background: t.primary, color:'#fff', border:'none',
             borderRadius:'8px', padding:'8px 22px', fontSize:'12px', fontWeight:'700',
             cursor: guardando ? 'not-allowed' : 'pointer', opacity: guardando ? 0.6 : 1
           }}>{guardando ? 'Guardando...' : '💾 Guardar Cambios'}</button>
+          )}
         </div>
       )}
     </div>
@@ -5990,6 +6070,28 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   )
 }
 
+// ─── SICOE OBRA: celda con barra tipo Excel (escala relativa al máximo de la columna) ─
+function SicoePanelDataBarCell({ value, max, color, text, textColor, trackBg = 'rgba(148,163,184,0.06)' }) {
+  const v = Math.max(0, Number(value) || 0)
+  const m = Math.max(0, Number(max) || 0)
+  const pct = m > 0 ? Math.min(100, (v / m) * 100) : (v > 0 ? 100 : 0)
+  return (
+    <div style={{ position:'relative', minWidth: 72, padding:'6px 16px', textAlign:'right' }}>
+      <div
+        aria-hidden
+        style={{
+          position:'absolute', left: 8, right: 16, top: '50%', transform: 'translateY(-50%)',
+          height: 13, borderRadius: 3, background: trackBg, overflow: 'hidden',
+        }}
+      >
+        {/* Relleno muy tenue: solo guía visual, no tapar el texto */}
+        <div style={{ height: '100%', width: `${pct}%`, background: color, opacity: 0.14 }} />
+      </div>
+      <span style={{ position:'relative', zIndex: 1, color: textColor || color, fontWeight: 600 }}>{text}</span>
+    </div>
+  )
+}
+
 // ─── MÓDULO SICOE OBRA ────────────────────────────────────────────────────────
 function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistroNumero = null, onNavReporteConsumed }) {
   const API_URL = API_BASE
@@ -6026,6 +6128,10 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const [reporteEditando, setReporteEditando]         = useState(null)
   const [modalCarpeta, setModalCarpeta]               = useState(false)
   const [reporteSeleccionado, setReporteSeleccionado] = useState(null)
+
+  /** Evita que una respuesta antigua de red sobrescriba grilla/panel (p. ej. tras «Volver»). */
+  const sicoeBusquedaSeqRef = useRef(0)
+  const sicoeAnalisisSeqRef = useRef(0)
 
   useEffect(() => {
     if (!navReporteId) return
@@ -6205,8 +6311,9 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       setCargando(false)
       return
     }
+    const seq = ++sicoeBusquedaSeqRef.current
     setCargando(true)
-    const esBusquedaAmplia = capas.length > 0 && 
+    const esBusquedaAmplia = capas.length > 0 &&
       Object.values(nuevosFiltros).every(v => v === '' || v == null)
     if (esBusquedaAmplia) setBusquedaAmplia(true)
     else setBusquedaAmplia(false)
@@ -6232,6 +6339,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       }
 
       let data = await fetchPage(nuevoOffset)
+      if (seq !== sicoeBusquedaSeqRef.current) return
       let lista = Array.isArray(data.reportes) ? data.reportes : []
 
       // En modo validación por nivel, cargar todas las páginas para que
@@ -6240,15 +6348,18 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         let off = PAGE_SIZE
         while (data.hay_mas) {
           data = await fetchPage(off)
+          if (seq !== sicoeBusquedaSeqRef.current) return
           const parte = Array.isArray(data.reportes) ? data.reportes : []
           if (parte.length === 0) break
           lista = [...lista, ...parte]
           off += PAGE_SIZE
         }
+        if (seq !== sicoeBusquedaSeqRef.current) return
         setReportes(lista)
         setHayMas(false)
         setOffsetActual(lista.length)
       } else {
+        if (seq !== sicoeBusquedaSeqRef.current) return
         if (nuevoOffset === 0) {
           setReportes(lista)
         } else {
@@ -6257,24 +6368,88 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         setHayMas(!!data.hay_mas)
         setOffsetActual(nuevoOffset + PAGE_SIZE)
       }
+      if (seq !== sicoeBusquedaSeqRef.current) return
       setBusquedaRealizada(true)
       // Auto-abrir cuando búsqueda por N° Registro devuelve resultado único
       if (nuevosFiltros.numero_registro && lista.length === 1) {
         const rep = lista[0]
         const r2 = await fetch(urlReporteDetalle(rep.id, capas), { headers: { Authorization: `Bearer ${getToken()}` } })
         const detalle = await r2.json()
+        if (seq !== sicoeBusquedaSeqRef.current) return
         setReporteSeleccionado(detalle)
         setModalCarpeta(true)
       }
     } catch(e) {}
-    setCargando(false)
+    finally {
+      if (seq === sicoeBusquedaSeqRef.current) setCargando(false)
+    }
   }
 
   const fmtPesos = v => '$' + Math.round(v || 0).toLocaleString('es-CO')
 
+  const verEco = nivelInfo.verValoresEconomicos
+
+  const sicoePanelMax = useMemo(() => {
+    if (!analisis?.grupos?.length) return null
+    const mode = analisis.modo
+    const groups = analisis.grupos
+    const max = {}
+    const bump = (k, v) => {
+      const n = Math.abs(Number(v) || 0)
+      max[k] = Math.max(max[k] || 0, n)
+    }
+    if (mode === 'capitulo_items') {
+      for (const g of groups) {
+        bump('cant', g.cantidad_total)
+        if (verEco) {
+          bump('cd', g.costo_directo)
+          bump('ap', g.aprobados)
+          bump('pe', g.pendientes)
+          bump('re', g.rechazados)
+        } else {
+          bump('ap', g.aprobados_count)
+          bump('pe', g.pendientes_count)
+          bump('re', g.rechazados_count)
+        }
+      }
+    } else if (mode === 'item_detalle') {
+      for (const g of groups) {
+        bump('cant', g.cantidad_total)
+        bump('regs', g.total_registros)
+        if (verEco) {
+          bump('cd', g.costo_directo)
+          bump('ap', g.aprobados)
+          bump('pe', g.pendientes)
+          bump('re', g.rechazados)
+        } else {
+          bump('ap', g.aprobados_count)
+          bump('pe', g.pendientes_count)
+          bump('re', g.rechazados_count)
+        }
+      }
+    } else {
+      for (const g of groups) {
+        bump('regs', g.total_registros)
+        if (verEco) {
+          bump('cd', g.costo_directo)
+          bump('sinv', g.no_revisados_costo)
+          bump('ap', g.aprobados)
+          bump('pe', g.pendientes)
+          bump('re', g.rechazados)
+        } else {
+          bump('sinv', g.no_revisados)
+        }
+      }
+    }
+    return max
+  }, [analisis, verEco])
+
+  const mx = sicoePanelMax || {}
+
   const cargarAnalisis = async (nuevosFiltros, capas = []) => {
+    const seq = ++sicoeAnalisisSeqRef.current
     if (!tieneParametrosBusquedaSicoe(nuevosFiltros, capas)) {
-      setAnalisis(null)
+      if (seq === sicoeAnalisisSeqRef.current) setAnalisis(null)
       return
     }
     setCargandoAnalisis(true)
@@ -6292,9 +6467,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         headers: { Authorization: `Bearer ${getToken()}` }
       })
       const data = await res.json()
+      if (seq !== sicoeAnalisisSeqRef.current) return
       setAnalisis(data)
-    } catch(e) { setAnalisis(null) }
-    setCargandoAnalisis(false)
+    } catch(e) {
+      if (seq === sicoeAnalisisSeqRef.current) setAnalisis(null)
+    } finally {
+      if (seq === sicoeAnalisisSeqRef.current) setCargandoAnalisis(false)
+    }
   }
 
   const actualizarFiltrosDisponibles = async (filtrosActivos) => {
@@ -6334,6 +6513,35 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     return [{ cargo_id: cargoIdUsuario, cargo_nombre: cargoNombreUsuario, estado: 'No Revisado' }]
   })
   const [capaTemp, setCapaTemp] = useState({ cargo_id: '', cargo_nombre: '', estado: '' })
+
+  /** Vuelve un nivel en el panel (ítem → capítulo → vista general) sin limpiar el resto de filtros. */
+  const volverPanelAnterior = async () => {
+    const itemT = String(filtros.item || '').trim()
+    const capT = String(filtros.capitulo || '').trim()
+    const modo = analisis?.modo
+
+    let nf = { ...filtros }
+    if (itemT) {
+      nf = { ...nf, item: '' }
+    } else if (capT) {
+      nf = { ...nf, capitulo: '', item: '' }
+    } else if (modo === 'item_detalle') {
+      nf = { ...nf, item: '' }
+    } else if (modo === 'capitulo_items') {
+      nf = { ...nf, capitulo: '', item: '' }
+    } else {
+      return
+    }
+    setFiltros(nf)
+    await buscarReportes(nf, 0, capasValidacion)
+    await cargarAnalisis(nf, capasValidacion)
+  }
+  const puedeVolverPanel = !!(
+    String(filtros.item || '').trim() ||
+    String(filtros.capitulo || '').trim() ||
+    analisis?.modo === 'item_detalle' ||
+    analisis?.modo === 'capitulo_items'
+  )
 
   const [cargosValidacionList, setCargosValidacionList] = useState([])
   useEffect(() => {
@@ -6737,9 +6945,27 @@ const limpiarFiltros = () => {
           <div style={{ padding:'14px 16px', textAlign:'center', color:t.textMuted, fontSize:'13px' }}>Calculando análisis...</div>
         ) : analisis && analisis.grupos.length > 0 ? (
           <>
-            <div onClick={() => setPanelExpandido(v => !v)} style={{ padding:'10px 16px', borderBottom: panelExpandido ? `1px solid ${t.border}` : 'none', display:'flex', alignItems:'center', gap:'8px', background:'#1E293B', cursor:'pointer', userSelect:'none' }}>
-              <span style={{ fontSize:'13px', fontWeight:'800', color:'#F1F5F9' }}>📊 {analisis.encabezado}</span>
-              <span style={{ marginLeft:'auto', fontSize:'11px', color:'#94A3B8' }}>
+            <div
+              onClick={(e) => {
+                if (e.target.closest('button[data-sicoe-volver-panel]')) return
+                setPanelExpandido(v => !v)
+              }}
+              style={{ padding:'10px 16px', borderBottom: panelExpandido ? `1px solid ${t.border}` : 'none', display:'flex', alignItems:'center', gap:'10px', background:'#1E293B', cursor:'pointer', userSelect:'none' }}>
+              {puedeVolverPanel && (
+                <button
+                  type="button"
+                  data-sicoe-volver-panel
+                  onClick={(e) => { e.stopPropagation(); void volverPanelAnterior() }}
+                  style={{
+                    background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.22)', borderRadius:'6px',
+                    padding:'4px 10px', fontSize:'11px', fontWeight:'700', color:'#F1F5F9', cursor:'pointer', flexShrink:0,
+                  }}
+                >
+                  ← Volver
+                </button>
+              )}
+              <span style={{ fontSize:'13px', fontWeight:'800', color:'#F1F5F9', flex:1, minWidth:0 }}>📊 {analisis.encabezado}</span>
+              <span style={{ marginLeft:'auto', fontSize:'11px', color:'#94A3B8', flexShrink:0 }}>
                 {analisis.total_registros.toLocaleString()} regs{nivelInfo.verValoresEconomicos ? ` · ${fmtPesos(analisis.total_costo_directo)}` : ''}
               </span>
               <span style={{ fontSize:'12px', color:'#94A3B8' }}>{panelExpandido ? '▲' : '▼'}</span>
@@ -6762,15 +6988,51 @@ const limpiarFiltros = () => {
                   </thead>
                   <tbody>
                     {analisis.grupos.map(g => (
-                      <tr key={g.label} style={{ borderBottom:`1px solid ${t.border}22` }}>
+                      <tr
+                        key={g.label}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          const newF = { ...filtros, item: g.label }
+                          setFiltros(newF)
+                          buscarReportes(newF, 0, capasValidacion)
+                          cargarAnalisis(newF, capasValidacion)
+                        }}
+                        style={{ borderBottom:`1px solid ${t.border}22`, cursor:'pointer' }}
+                        onMouseEnter={e => { e.currentTarget.style.background = t.bg + '88' }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+                      >
                         <td style={{ padding:'6px 16px', color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{g.label}</td>
                         <td style={{ padding:'6px 16px', color:t.text, fontSize:'11px', maxWidth:'220px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{g.descripcion}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})}</td>
+                        <td style={{ padding:0, verticalAlign:'middle' }}>
+                          <SicoePanelDataBarCell value={g.cantidad_total} max={mx.cant ?? 0} color="#64748B" textColor={t.text} text={(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})} />
+                        </td>
                         <td style={{ padding:'6px 16px', color:t.textMuted, fontSize:'11px' }}>{g.unidad}</td>
-                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>}
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{nivelInfo.verValoresEconomicos ? fmtPesos(g.aprobados ?? 0) : (g.aprobados_count ?? '—')}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{nivelInfo.verValoresEconomicos ? fmtPesos(g.pendientes ?? 0) : (g.pendientes_count ?? '—')}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{nivelInfo.verValoresEconomicos ? fmtPesos(g.rechazados ?? 0) : (g.rechazados_count ?? '—')}</td>
+                        {nivelInfo.verValoresEconomicos && (
+                          <td style={{ padding:0, verticalAlign:'middle' }}>
+                            <SicoePanelDataBarCell value={g.costo_directo} max={mx.cd ?? 0} color={t.primary} textColor={t.text} text={fmtPesos(g.costo_directo)} />
+                          </td>
+                        )}
+                        <td style={{ padding:0, verticalAlign:'middle' }}>
+                          {nivelInfo.verValoresEconomicos ? (
+                            <SicoePanelDataBarCell value={g.aprobados} max={mx.ap ?? 0} color="#10B981" text={fmtPesos(g.aprobados ?? 0)} />
+                          ) : (
+                            <SicoePanelDataBarCell value={g.aprobados_count} max={mx.ap ?? 0} color="#10B981" text={String(g.aprobados_count ?? '—')} />
+                          )}
+                        </td>
+                        <td style={{ padding:0, verticalAlign:'middle' }}>
+                          {nivelInfo.verValoresEconomicos ? (
+                            <SicoePanelDataBarCell value={g.pendientes} max={mx.pe ?? 0} color="#3B82F6" text={fmtPesos(g.pendientes ?? 0)} />
+                          ) : (
+                            <SicoePanelDataBarCell value={g.pendientes_count} max={mx.pe ?? 0} color="#3B82F6" text={String(g.pendientes_count ?? '—')} />
+                          )}
+                        </td>
+                        <td style={{ padding:0, verticalAlign:'middle' }}>
+                          {nivelInfo.verValoresEconomicos ? (
+                            <SicoePanelDataBarCell value={g.rechazados} max={mx.re ?? 0} color="#EF4444" text={fmtPesos(g.rechazados ?? 0)} />
+                          ) : (
+                            <SicoePanelDataBarCell value={g.rechazados_count} max={mx.re ?? 0} color="#EF4444" text={String(g.rechazados_count ?? '—')} />
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -6804,12 +7066,38 @@ const limpiarFiltros = () => {
                       <tr key={`${g.label}-${g.capitulo}`} style={{ borderBottom:`1px solid ${t.border}22` }}>
                         <td style={{ padding:'6px 16px', color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{g.label}</td>
                         <td style={{ padding:'6px 16px', color:t.text, fontSize:'11px' }}>{g.capitulo}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})}</td>
-                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>}
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:t.textMuted }}>{g.total_registros}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{nivelInfo.verValoresEconomicos ? fmtPesos(g.aprobados ?? 0) : `${g.aprobados_count ?? 0} regs`}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{nivelInfo.verValoresEconomicos ? fmtPesos(g.pendientes ?? 0) : `${g.pendientes_count ?? 0} regs`}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{nivelInfo.verValoresEconomicos ? fmtPesos(g.rechazados ?? 0) : `${g.rechazados_count ?? 0} regs`}</td>
+                        <td style={{ padding:0, verticalAlign:'middle' }}>
+                          <SicoePanelDataBarCell value={g.cantidad_total} max={mx.cant ?? 0} color="#64748B" textColor={t.text} text={(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})} />
+                        </td>
+                        {nivelInfo.verValoresEconomicos && (
+                          <td style={{ padding:0, verticalAlign:'middle' }}>
+                            <SicoePanelDataBarCell value={g.costo_directo} max={mx.cd ?? 0} color={t.primary} textColor={t.text} text={fmtPesos(g.costo_directo)} />
+                          </td>
+                        )}
+                        <td style={{ padding:0, verticalAlign:'middle' }}>
+                          <SicoePanelDataBarCell value={g.total_registros} max={mx.regs ?? 0} color="#94A3B8" textColor={t.textMuted} text={String(g.total_registros)} />
+                        </td>
+                        <td style={{ padding:0, verticalAlign:'middle' }}>
+                          {nivelInfo.verValoresEconomicos ? (
+                            <SicoePanelDataBarCell value={g.aprobados} max={mx.ap ?? 0} color="#10B981" text={fmtPesos(g.aprobados ?? 0)} />
+                          ) : (
+                            <SicoePanelDataBarCell value={g.aprobados_count} max={mx.ap ?? 0} color="#10B981" text={`${g.aprobados_count ?? 0} regs`} />
+                          )}
+                        </td>
+                        <td style={{ padding:0, verticalAlign:'middle' }}>
+                          {nivelInfo.verValoresEconomicos ? (
+                            <SicoePanelDataBarCell value={g.pendientes} max={mx.pe ?? 0} color="#3B82F6" text={fmtPesos(g.pendientes ?? 0)} />
+                          ) : (
+                            <SicoePanelDataBarCell value={g.pendientes_count} max={mx.pe ?? 0} color="#3B82F6" text={`${g.pendientes_count ?? 0} regs`} />
+                          )}
+                        </td>
+                        <td style={{ padding:0, verticalAlign:'middle' }}>
+                          {nivelInfo.verValoresEconomicos ? (
+                            <SicoePanelDataBarCell value={g.rechazados} max={mx.re ?? 0} color="#EF4444" text={fmtPesos(g.rechazados ?? 0)} />
+                          ) : (
+                            <SicoePanelDataBarCell value={g.rechazados_count} max={mx.re ?? 0} color="#EF4444" text={`${g.rechazados_count ?? 0} regs`} />
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -6851,7 +7139,7 @@ const limpiarFiltros = () => {
                   <tbody>
                     {analisis.grupos.map(g => (
                       <tr key={g.label} onClick={() => {
-                        const newF = { ...filtros, capitulo: g.label }
+                        const newF = { ...filtros, capitulo: g.label, item: '' }
                         setFiltros(newF)
                         buscarReportes(newF, 0, capasValidacion)
                         cargarAnalisis(newF, capasValidacion)
@@ -6859,14 +7147,36 @@ const limpiarFiltros = () => {
                       onMouseEnter={e => e.currentTarget.style.background = t.bg + '88'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                         <td style={{ padding:'6px 16px', color:t.text, fontWeight:'600' }}>{g.label}</td>
-                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:t.text }}>{fmtPesos(g.costo_directo)}</td>}
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:t.textMuted }}>{g.total_registros}</td>
-                        <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>
-                          {nivelInfo.verValoresEconomicos ? fmtPesos(g.no_revisados_costo ?? 0) : (g.no_revisados ?? '—')}
+                        {nivelInfo.verValoresEconomicos && (
+                          <td style={{ padding:0, verticalAlign:'middle' }}>
+                            <SicoePanelDataBarCell value={g.costo_directo} max={mx.cd ?? 0} color={t.primary} textColor={t.text} text={fmtPesos(g.costo_directo)} />
+                          </td>
+                        )}
+                        <td style={{ padding:0, verticalAlign:'middle' }}>
+                          <SicoePanelDataBarCell value={g.total_registros} max={mx.regs ?? 0} color="#94A3B8" textColor={t.textMuted} text={String(g.total_registros)} />
                         </td>
-                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:'#10B981', fontWeight:'600' }}>{fmtPesos(g.aprobados ?? 0)}</td>}
-                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:'#3B82F6', fontWeight:'600' }}>{fmtPesos(g.pendientes ?? 0)}</td>}
-                        {nivelInfo.verValoresEconomicos && <td style={{ padding:'6px 16px', textAlign:'right', color:'#EF4444', fontWeight:'600' }}>{fmtPesos(g.rechazados ?? 0)}</td>}
+                        <td style={{ padding:0, verticalAlign:'middle' }}>
+                          {nivelInfo.verValoresEconomicos ? (
+                            <SicoePanelDataBarCell value={g.no_revisados_costo} max={mx.sinv ?? 0} color="#3B82F6" text={fmtPesos(g.no_revisados_costo ?? 0)} />
+                          ) : (
+                            <SicoePanelDataBarCell value={g.no_revisados} max={mx.sinv ?? 0} color="#3B82F6" text={String(g.no_revisados ?? '—')} />
+                          )}
+                        </td>
+                        {nivelInfo.verValoresEconomicos && (
+                          <td style={{ padding:0, verticalAlign:'middle' }}>
+                            <SicoePanelDataBarCell value={g.aprobados} max={mx.ap ?? 0} color="#10B981" text={fmtPesos(g.aprobados ?? 0)} />
+                          </td>
+                        )}
+                        {nivelInfo.verValoresEconomicos && (
+                          <td style={{ padding:0, verticalAlign:'middle' }}>
+                            <SicoePanelDataBarCell value={g.pendientes} max={mx.pe ?? 0} color="#3B82F6" text={fmtPesos(g.pendientes ?? 0)} />
+                          </td>
+                        )}
+                        {nivelInfo.verValoresEconomicos && (
+                          <td style={{ padding:0, verticalAlign:'middle' }}>
+                            <SicoePanelDataBarCell value={g.rechazados} max={mx.re ?? 0} color="#EF4444" text={fmtPesos(g.rechazados ?? 0)} />
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -7088,12 +7398,19 @@ const limpiarFiltros = () => {
       {/* ── Grid reportes ── */}
       <div style={{ background:t.bgCard, borderRadius:'12px', border:`1px solid ${t.border}` }}>
         {/* Header grid — sticky */}
-        <div style={{ display:'grid', gridTemplateColumns:'80px 80px 100px 1fr 160px 120px 120px', gap:'8px',
+        <div style={{
+          display:'grid',
+          gridTemplateColumns: nivelInfo.verValoresEconomicos
+            ? '80px 80px 100px 1fr 120px 160px 120px 120px'
+            : '80px 80px 100px 1fr 160px 120px 120px',
+          gap:'8px',
           padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
           fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px',
           position:'sticky', top:0, zIndex:9, background:t.bgCard, borderRadius:'12px 12px 0 0' }}>
           <div>N° REP.</div><div>SEMANA</div><div>ACTA RPO</div>
-          <div>DESCRIPCIÓN</div><div>SUBCONTRATISTA</div><div>CAPÍTULO</div><div>REGS.</div>
+          <div>DESCRIPCIÓN</div>
+          {nivelInfo.verValoresEconomicos && <div style={{ textAlign:'right' }}>COSTO DIRECTO</div>}
+          <div>SUBCONTRATISTA</div><div>CAPÍTULO</div><div style={{ textAlign:'right' }}>REGS.</div>
         </div>
 
         {/* Filas */}
@@ -7115,7 +7432,11 @@ const limpiarFiltros = () => {
             Sin resultados para los filtros aplicados.
           </div>
         ) : reportesMostrados.map(rep => (
-          <div key={rep.id} style={{ display:'grid', gridTemplateColumns:'80px 80px 100px 1fr 160px 120px 120px',
+          <div key={rep.id} style={{
+            display:'grid',
+            gridTemplateColumns: nivelInfo.verValoresEconomicos
+              ? '80px 80px 100px 1fr 120px 160px 120px 120px'
+              : '80px 80px 100px 1fr 160px 120px 120px',
             gap:'8px', padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
             fontSize:'13px', color:t.text, cursor:'pointer',
             transition:'background 0.15s' }}
@@ -7142,6 +7463,11 @@ const limpiarFiltros = () => {
               {rep.acta_rpo != null ? `RPO ${rep.acta_rpo}` : '—'}
             </div>
             <div style={{ fontWeight:'600' }}>{rep.descripcion_actividad}</div>
+            {nivelInfo.verValoresEconomicos && (
+              <div style={{ fontSize:'12px', textAlign:'right', fontWeight:'600', color:t.text }}>
+                {rep.costo_directo_validacion != null ? fmtPesos(rep.costo_directo_validacion) : '—'}
+              </div>
+            )}
             <div style={{ fontSize:'12px' }}>{rep.subcontratista_nombre || '—'}</div>
             <div style={{ fontSize:'11px', color:t.textMuted }}>{rep.capitulo || '—'}</div>
             <div style={{ fontSize:'12px', color:t.textMuted, textAlign:'right', fontWeight:'600' }}>
@@ -9683,6 +10009,37 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   )
 }
 
+/** Ordena filas comparativo por prefijo numérico del capítulo (1, 2, … 10, 11), no alfabético. */
+function sortComparativoCapitulos(rows) {
+  if (!Array.isArray(rows)) return []
+  const parseNum = (s) => {
+    const m = String(s || '').trim().match(/^(\d+)/)
+    return m ? parseInt(m[1], 10) : 999999
+  }
+  return [...rows].sort((a, b) => {
+    const na = parseNum(a.capitulo)
+    const nb = parseNum(b.capitulo)
+    if (na !== nb) return na - nb
+    return String(a.capitulo || '').localeCompare(String(b.capitulo || ''), undefined, { numeric: true, sensitivity: 'base' })
+  })
+}
+
+/** Tipografía del tab Resumen (alineada al botón A pequeño / mediano / grande del header). */
+const DASH_UI = {
+  pequena: {
+    title: 12, sub: 10, body: 10, table: 9, rowLabel: 9, legend: 10, chartLabel: 9, chartAxis: 8, chartTip: 9, barH: 8, rowGap: 5, padLabelW: 128,
+    kpiLabel: 9, kpiValue: 17, kpiSub: 9, tab: 12,
+  },
+  normal: {
+    title: 13, sub: 11, body: 11, table: 10, rowLabel: 10, legend: 11, chartLabel: 10, chartAxis: 9, chartTip: 10, barH: 9, rowGap: 6, padLabelW: 168,
+    kpiLabel: 10, kpiValue: 18, kpiSub: 10, tab: 13,
+  },
+  grande: {
+    title: 15, sub: 13, body: 13, table: 12, rowLabel: 11, legend: 12, chartLabel: 12, chartAxis: 10, chartTip: 11, barH: 11, rowGap: 7, padLabelW: 215,
+    kpiLabel: 11, kpiValue: 20, kpiSub: 12, tab: 14,
+  },
+}
+
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0, fontSize = 'normal', onFontSize, onOpenPerfil }) {
   const [moduloActivo, setModuloActivo] = useState('inicio')
@@ -9733,7 +10090,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashTabla,    setDashTabla]    = useState(null)
   const [dashTablaLoad,setDashTablaLoad]= useState(false)
   const [dashDrillPag, setDashDrillPag] = useState(0)
-  const [dashCapPag, setDashCapPag] = useState(0)
   const [panelFoco, setPanelFoco] = useState(null)
   const [matrizValidacion, setMatrizValidacion] = useState(null)
   /** true al inicio para evitar un destello "Sin acta" antes del primer fetch */
@@ -9756,6 +10112,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const miniMapaRef = useRef(null)
   const API_URL = API_BASE
   const contratoIdDash = usuario?.contrato_id
+  const du = DASH_UI[fontSize] || DASH_UI.normal
 
   useEffect(() => {
     if (!contratoIdDash) return
@@ -10440,7 +10797,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 ['analisis',  '🔍 Análisis de Desviaciones'],
                 ...(usuario?.contrato_fase === 'LIQUIDACION' ? [['liquidacion', '⚖️ Análisis de Liquidación']] : []),
               ].map(([key,label]) => (
-                <button key={key} onClick={() => setDashTab(key)} style={{ background:dashTab===key?t.primary:'transparent', color:dashTab===key?'#fff':t.textMuted, border:'none', borderRadius:'8px', padding:'8px 22px', fontSize:'13px', fontWeight:'700', cursor:'pointer', transition:'all 0.15s', letterSpacing:'0.2px' }}>{label}</button>
+                <button key={key} onClick={() => setDashTab(key)} style={{ background:dashTab===key?t.primary:'transparent', color:dashTab===key?'#fff':t.textMuted, border:'none', borderRadius:'8px', padding:'8px 22px', fontSize:`${du.tab}px`, fontWeight:'700', cursor:'pointer', transition:'all 0.15s', letterSpacing:'0.2px' }}>{label}</button>
               ))}
             </div>
 
@@ -10485,9 +10842,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 }
                 return kpis.map(k => (
                   <div key={k.label} style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', boxShadow:t.shadow, borderLeft:`4px solid ${k.color}` }}>
-                    <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'4px' }}>{k.icon} {k.label}</div>
-                    <div style={{ fontSize:'18px', fontWeight:'800', color:k.color, lineHeight:1, marginBottom:'3px' }}>{k.value}</div>
-                    <div style={{ fontSize:'10px', color:t.textMuted }}>{k.sub}</div>
+                    <div style={{ fontSize:`${du.kpiLabel}px`, fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'4px' }}>{k.icon} {k.label}</div>
+                    <div style={{ fontSize:`${du.kpiValue}px`, fontWeight:'800', color:k.color, lineHeight:1, marginBottom:'3px' }}>{k.value}</div>
+                    <div style={{ fontSize:`${du.kpiSub}px`, color:t.textMuted }}>{k.sub}</div>
                   </div>
                 ))
               })()}
@@ -10496,13 +10853,13 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             {/* ── Barra de consumo global ── */}
             <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'14px 20px', marginBottom:'20px', boxShadow:t.shadow }}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
-                <span style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>Avance financiero del contrato</span>
-                <span style={{ fontSize:'12px', fontWeight:'700', color:alerta }}>{pct}% ejecutado</span>
+                <span style={{ fontSize:`${du.body}px`, fontWeight:'700', color:t.text }}>Avance financiero del contrato</span>
+                <span style={{ fontSize:`${du.body}px`, fontWeight:'700', color:alerta }}>{pct}% ejecutado</span>
               </div>
               <div style={{ height:'10px', background:t.border, borderRadius:'5px', overflow:'hidden' }}>
                 <div style={{ height:'100%', width:`${pct}%`, background:`linear-gradient(90deg, #0077B6, ${alerta})`, borderRadius:'5px', transition:'width 0.8s ease' }} />
               </div>
-              <div style={{ display:'flex', justifyContent:'space-between', marginTop:'6px', fontSize:'11px', color:t.textMuted }}>
+              <div style={{ display:'flex', justifyContent:'space-between', marginTop:'6px', fontSize:`${du.sub}px`, color:t.textMuted }}>
                 <span style={{color:alerta,fontWeight:'600'}}>{fmtD(cobro)}</span><span>{fmtD(ppto)}</span>
               </div>
             </div>
@@ -10515,16 +10872,16 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
                   <div>
                     <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                    <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>💰 Obra Aprobada por Acta RPO</div>
+                    <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>💰 Obra Aprobada por Acta RPO</div>
                     <button onClick={() => setPanelFoco(p => p === 'cobro-acta' ? null : 'cobro-acta')}
-                      style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'14px', padding:'0' }}
+                      style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:`${du.title + 1}px`, padding:'0' }}
                       title="Expandir panel">
                       {panelFoco === 'cobro-acta' ? '⊠' : '⤢'}
                     </button>
                   </div>
-                    <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Aprobado Interventoría · acumulado por Acta RPO</div>
+                    <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>Aprobado Interventoría · acumulado por Acta RPO</div>
                   </div>
-                  <div style={{ fontSize:'16px', fontWeight:'800', color:t.primary }}>{fmtD(cobro)}</div>
+                  <div style={{ fontSize:`${du.kpiValue - 2}px`, fontWeight:'800', color:t.primary }}>{fmtD(cobro)}</div>
                 </div>
                 {porActa.length === 0 ? (
                   <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin registros aprobados por Interventoría</div>
@@ -10585,19 +10942,19 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'14px' }}>
                   <div>
                     <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                      <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>📋 Presupuesto por Capítulo</div>
+                      <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>📋 Presupuesto por Capítulo</div>
                       <button onClick={() => setPanelFoco(p => p === 'ppto-capitulo' ? null : 'ppto-capitulo')}
-                        style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'14px', padding:'0' }}
+                        style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:`${du.title + 1}px`, padding:'0' }}
                         title="Expandir panel">
                         {panelFoco === 'ppto-capitulo' ? '⊠' : '⤢'}
                       </button>
                     </div>
-                    <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Top 15 capítulos por valor</div>
+                    <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>Top 15 capítulos por valor</div>
                   </div>
-                  <div style={{ fontSize:'16px', fontWeight:'800', color:'#0077B6' }}>{fmtD(ppto)}</div>
+                  <div style={{ fontSize:`${du.kpiValue - 2}px`, fontWeight:'800', color:'#0077B6' }}>{fmtD(ppto)}</div>
                 </div>
                 {porCapPpto.length === 0 ? (
-                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin datos de presupuesto</div>
+                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:`${du.body}px` }}>Sin datos de presupuesto</div>
                 ) : (
                   <div style={{ display:'flex', flexDirection:'column', gap:'6px', maxHeight:'200px', overflowY:'auto' }}>
                     {porCapPpto.map((cap, i) => {
@@ -10605,13 +10962,13 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       const color = ['#0077B6','#00B4C6','#00A896','#028090','#05668D','#2E86AB','#A23B72','#F18F01','#C73E1D','#3B1F2B','#44BBA4','#E94F37','#393E41','#F5A623','#7B2D8B'][i % 15]
                       return (
                         <div key={cap.capitulo} style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                          <div style={{ fontSize:'10px', color:t.textMuted, width:'140px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={cap.capitulo}>
+                          <div style={{ fontSize:`${du.table}px`, color:t.textMuted, width:'140px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={cap.capitulo}>
                             {cap.capitulo}
                           </div>
                           <div style={{ flex:1, height:'14px', background:t.border, borderRadius:'7px', overflow:'hidden' }}>
                             <div style={{ width:`${pct}%`, height:'100%', background:color, borderRadius:'7px', transition:'width 0.6s ease' }}/>
                           </div>
-                          <div style={{ fontSize:'10px', fontWeight:'700', color, width:'52px', textAlign:'right', flexShrink:0 }}>{fmtM(cap.costo)}</div>
+                          <div style={{ fontSize:`${du.table}px`, fontWeight:'700', color, width:'52px', textAlign:'right', flexShrink:0 }}>{fmtM(cap.costo)}</div>
                         </div>
                       )
                     })}
@@ -10624,132 +10981,185 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, flex: panelFoco==='ppto-cobro' ? '1 1 100%' : '1 1 calc(50% - 8px)', minWidth: panelFoco==='ppto-cobro' ? '100%' : 'min(300px, 100%)', boxSizing:'border-box' }}>
                 <div style={{ marginBottom:'14px' }}>
                   <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                    <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>📊 Presupuesto vs Obra Aprobada</div>
+                    <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>📊 Presupuesto vs Obra Aprobada</div>
                     <button onClick={() => setPanelFoco(p => p === 'ppto-cobro' ? null : 'ppto-cobro')}
-                      style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'14px', padding:'0' }}
+                      style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:`${du.title + 1}px`, padding:'0' }}
                       title="Expandir panel">
                       {panelFoco === 'ppto-cobro' ? '⊠' : '⤢'}
                     </button>
                   </div>
-                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>Por capítulo — barras verticales agrupadas · Obra = aprobado Interventoría (N3)</div>
+                  <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>Por capítulo — barras horizontales · orden numérico · Obra = aprobado Interventoría (N3)</div>
                 </div>
                 {(() => {
-                  const comp = kpiCobro?.comparativo_capitulos || []
+                  const comp = sortComparativoCapitulos(kpiCobro?.comparativo_capitulos || [])
                   if (comp.length === 0) return (
-                    <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin datos</div>
+                    <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:`${du.body}px` }}>Sin datos</div>
                   )
                   const maxVal = Math.max(...comp.map(c => Math.max(c.presupuesto||0, c.cobrado||0)), 1)
-                  const CAP_PAG = 10
-                  const compSlice = comp.slice(dashCapPag * CAP_PAG, (dashCapPag + 1) * CAP_PAG)
-                  const BAR_W = 42
-                  const INNER_GAP = 8
-                  const GROUP_GAP = 18
-                  const PAD_L = 56
-                  const PAD_R = 16
-                  const H = 288
-                  const PAD_T = 18
-                  const PAD_B = 44
-                  const groupInner = BAR_W * 2 + INNER_GAP
-                  const totalW = PAD_L + compSlice.length * (groupInner + GROUP_GAP) + PAD_R
-                  const vbW = Math.max(totalW, 420)
-                  const scaleH = (v) => PAD_T + (1 - v/maxVal) * (H - PAD_T - PAD_B)
+                  const PAD_R = 12
+                  const PAD_TOP = 10
+                  const GAP_BARS = 3
+                  const BAR_H = du.barH
+                  const ROW_INNER = 4 + BAR_H + GAP_BARS + BAR_H
+                  const ROW_H = ROW_INNER + du.rowGap
+                  const TEXT_START = 26
+                  const BAR_START = TEXT_START + du.padLabelW + 8
+                  const vbW = Math.max(760, BAR_START + 420)
+                  const chartW = vbW - PAD_R - BAR_START
+                  const scaleW = (v) => (Math.min(v, maxVal) / maxVal) * chartW
+                  const chartBottom = PAD_TOP + comp.length * ROW_H
+                  const AXIS_H = 22
+                  const vbH = chartBottom + AXIS_H
+                  const maxChars = Math.max(12, Math.floor(du.padLabelW / 5.2))
 
                   return (
-                    <div style={{ overflowX:'auto', overflowY:'visible', width:'100%' }}>
-                      <svg width={vbW} height={H} viewBox={`0 0 ${vbW} ${H}`} style={{ overflow:'visible', display:'block', minWidth:'100%' }}>
-                        {/* Eje Y — valores */}
+                    <div style={{ maxHeight:'min(440px, 58vh)', overflowY:'auto', overflowX:'hidden', width:'100%', paddingRight:'2px' }}>
+                      <div style={{ fontSize:`${du.chartAxis}px`, color:t.textMuted, marginBottom:'6px' }}>
+                        Escala: {fmtM(0)} — {fmtM(maxVal * 0.25)} — {fmtM(maxVal * 0.5)} — {fmtM(maxVal * 0.75)} — {fmtM(maxVal)}
+                      </div>
+                      <svg width="100%" height={vbH} viewBox={`0 0 ${vbW} ${vbH}`} preserveAspectRatio="xMinYMin meet" style={{ overflow:'visible', display:'block', maxWidth:'100%' }}>
                         {[0, 25, 50, 75, 100].map(pct => {
-                          const y = PAD_T + (1 - pct / 100) * (H - PAD_T - PAD_B)
-                          const val = maxVal * (pct / 100)
+                          const gx = BAR_START + (pct / 100) * chartW
                           return (
-                            <g key={`y-${pct}`}>
-                              <line x1={PAD_L} x2={vbW - PAD_R} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="4,4" />
-                              <text x={4} y={y + 4} fontSize="9" fill={t.textMuted} style={{ userSelect: 'none' }}>{fmtM(val)}</text>
+                            <line key={`gx-${pct}`} x1={gx} x2={gx} y1={PAD_TOP} y2={chartBottom} stroke={t.border} strokeWidth="0.5" strokeDasharray="4,4" />
+                          )
+                        })}
+                        {comp.map((cap, i) => {
+                          const rowY = PAD_TOP + i * ROW_H
+                          const yP = rowY + 4
+                          const yC = rowY + 4 + BAR_H + GAP_BARS
+                          const wP = Math.max(scaleW(cap.presupuesto || 0), 2)
+                          const wC = Math.max(scaleW(cap.cobrado || 0), 2)
+                          const sobrecosto = (cap.cobrado || 0) > (cap.presupuesto || 0)
+                          const colorC = sobrecosto ? '#DC2626' : '#00A896'
+                          const isSelected = dashDrill[0]?.valor === cap.capitulo
+                          const rawCap = cap.capitulo || ''
+                          const nomCap = rawCap.length > maxChars ? `${rawCap.slice(0, maxChars)}…` : rawCap
+                          const tipId = `tip-vs-h-${i}`
+                          return (
+                            <g key={`${rawCap}-${i}`}>
+                              <text
+                                x={TEXT_START - 4}
+                                y={rowY + ROW_INNER / 2}
+                                textAnchor="end"
+                                dominantBaseline="middle"
+                                fontSize={du.chartLabel}
+                                fill={t.primary}
+                                fontWeight="700"
+                                style={{ userSelect: 'none' }}
+                              >
+                                {i + 1}
+                              </text>
+                              <text
+                                x={TEXT_START}
+                                y={rowY + ROW_INNER / 2}
+                                textAnchor="start"
+                                dominantBaseline="middle"
+                                fontSize={du.chartLabel}
+                                fill={t.textMuted}
+                                style={{ userSelect: 'none' }}
+                              >
+                                <title>{rawCap}</title>
+                                {nomCap}
+                              </text>
+                              <rect
+                                x={BAR_START}
+                                y={yP}
+                                width={wP}
+                                height={BAR_H}
+                                fill="#0077B6"
+                                rx="2"
+                                opacity={isSelected ? 1 : 0.88}
+                                style={{ cursor: 'pointer' }}
+                                onClick={() => { setDashDrill([{ campo: 'capitulo', valor: cap.capitulo }]); setPopupCapitulo(true) }}
+                              />
+                              <rect
+                                x={BAR_START}
+                                y={yC}
+                                width={wC}
+                                height={BAR_H}
+                                fill={colorC}
+                                rx="2"
+                                opacity={isSelected ? 1 : 0.88}
+                                style={{ cursor: 'pointer' }}
+                                onClick={() => { setDashDrill([{ campo: 'capitulo', valor: cap.capitulo }]); setPopupCapitulo(true) }}
+                              />
+                              <rect
+                                x={0}
+                                y={rowY}
+                                width={vbW}
+                                height={ROW_INNER}
+                                fill="transparent"
+                                style={{ cursor: 'pointer' }}
+                                onClick={() => { setDashDrill([{ campo: 'capitulo', valor: cap.capitulo }]); setPopupCapitulo(true) }}
+                                onMouseEnter={() => {
+                                  const tip = document.getElementById(tipId)
+                                  if (tip) tip.style.display = 'block'
+                                }}
+                                onMouseLeave={() => {
+                                  const tip = document.getElementById(tipId)
+                                  if (tip) tip.style.display = 'none'
+                                }}
+                              />
                             </g>
                           )
                         })}
-                        {compSlice.map((cap, i) => {
-                          const x = PAD_L + i * (groupInner + GROUP_GAP)
-                          const yP = scaleH(cap.presupuesto||0)
-                          const yC = scaleH(cap.cobrado||0)
-                          const hP = H - PAD_B - yP
-                          const hC = H - PAD_B - yC
-                          const sobrecosto = (cap.cobrado||0) > (cap.presupuesto||0)
-                          const colorC = sobrecosto ? '#DC2626' : '#00A896'
-                          const isSelected = dashDrill[0]?.valor === cap.capitulo
-                          const nomCorto = (cap.capitulo||'').length > 10 ? (cap.capitulo||'').slice(0,10)+'…' : (cap.capitulo||'')
-                          const cx = x + groupInner / 2
+                        {[0, 25, 50, 75, 100].map(pct => {
+                          const x = BAR_START + (pct / 100) * chartW
+                          const val = maxVal * (pct / 100)
                           return (
-                            <g key={i}>
-                              {/* Barra Presupuesto */}
-                              <rect x={x} y={yP} width={BAR_W} height={Math.max(hP,2)} fill="#0077B6" rx="3" opacity={isSelected?1:0.88} style={{cursor:'pointer'}} onClick={() => { setDashDrill([{campo:'capitulo', valor:cap.capitulo}]); setPopupCapitulo(true) }}/>
-                              {/* Barra Obra aprobada */}
-                              <rect x={x+BAR_W+INNER_GAP} y={yC} width={BAR_W} height={Math.max(hC,2)} fill={colorC} rx="3" opacity={isSelected?1:0.88} style={{cursor:'pointer'}} onClick={() => { setDashDrill([{campo:'capitulo', valor:cap.capitulo}]); setPopupCapitulo(true) }}/>
-                              {/* Etiqueta eje X */}
-                              <text x={cx} y={H - 10} textAnchor="middle" fontSize="9" fill={t.textMuted}>{nomCorto}</text>
-                              {/* Área hover invisible con tooltip */}
-                              <g>
-                                <rect x={x-2} y={PAD_T} width={groupInner+4} height={H-PAD_T-PAD_B} fill="transparent"
-                                  style={{cursor:'pointer'}}
-                                  onClick={() => { setDashDrill([{campo:'capitulo', valor:cap.capitulo}]); setPopupCapitulo(true) }}
-                                  onMouseEnter={e => {
-                                    const tip = document.getElementById(`tip-vs-${i}`)
-                                    if(tip) tip.style.display='block'
-                                  }}
-                                  onMouseLeave={e => {
-                                    const tip = document.getElementById(`tip-vs-${i}`)
-                                    if(tip) tip.style.display='none'
-                                  }}
-                                />
-                                <g id={`tip-vs-${i}`} style={{display:'none', pointerEvents:'none'}}>
-                                  <rect x={Math.min(x-10, vbW-220)} y={Math.min(yP,yC)-68} width="215" height="62" rx="6"
-                                    fill={t.bgCard} stroke={t.border} strokeWidth="1"
-                                    style={{filter:'drop-shadow(0 2px 8px rgba(0,0,0,0.3))'}}/>
-                                  <text x={Math.min(x-10,vbW-220)+10} y={Math.min(yP,yC)-50} fontSize="10" fontWeight="700" fill={t.text}>
-                                    {(cap.capitulo||'').length > 28 ? (cap.capitulo||'').slice(0,28)+'…' : (cap.capitulo||'')}
-                                  </text>
-                                  <rect x={Math.min(x-10,vbW-220)+10} y={Math.min(yP,yC)-40} width="8" height="8" rx="1" fill="#0077B6"/>
-                                  <text x={Math.min(x-10,vbW-220)+22} y={Math.min(yP,yC)-33} fontSize="10" fill={t.textMuted}>
-                                    Ppto: <tspan fontWeight="700" fill="#0077B6">{fmtD(cap.presupuesto)}</tspan>
-                                  </text>
-                                  <rect x={Math.min(x-10,vbW-220)+10} y={Math.min(yP,yC)-24} width="8" height="8" rx="1" fill={colorC}/>
-                                  <text x={Math.min(x-10,vbW-220)+22} y={Math.min(yP,yC)-17} fontSize="10" fill={t.textMuted}>
-                                    Obra: <tspan fontWeight="700" fill={colorC}>{fmtD(cap.cobrado)}</tspan>
-                                  </text>
-                                </g>
-                              </g>
+                            <text key={`ax-${pct}`} x={x} y={chartBottom + 14} textAnchor="middle" fontSize={du.chartAxis} fill={t.textMuted} style={{ userSelect: 'none' }}>
+                              {fmtM(val)}
+                            </text>
+                          )
+                        })}
+                        {comp.map((cap, i) => {
+                          const rowY = PAD_TOP + i * ROW_H
+                          const wP = Math.max(scaleW(cap.presupuesto || 0), 2)
+                          const wC = Math.max(scaleW(cap.cobrado || 0), 2)
+                          const sobrecosto = (cap.cobrado || 0) > (cap.presupuesto || 0)
+                          const colorC = sobrecosto ? '#DC2626' : '#00A896'
+                          const tipId = `tip-vs-h-${i}`
+                          const tx = Math.min(BAR_START + Math.max(wP, wC) + 8, vbW - 222)
+                          return (
+                            <g key={`tip-${tipId}`} id={tipId} style={{ display: 'none', pointerEvents: 'none' }}>
+                              <rect
+                                x={tx}
+                                y={Math.max(4, rowY - 4)}
+                                width="215"
+                                height="56"
+                                rx="6"
+                                fill={t.bgCard}
+                                stroke={t.border}
+                                strokeWidth="1"
+                                style={{ filter: 'drop-shadow(0 2px 8px rgba(0,0,0,0.25))' }}
+                              />
+                              <text x={tx + 10} y={Math.max(14, rowY + 6)} fontSize={du.chartTip} fontWeight="700" fill={t.text}>
+                                {(cap.capitulo || '').length > 32 ? `${(cap.capitulo || '').slice(0, 32)}…` : (cap.capitulo || '')}
+                              </text>
+                              <rect x={tx + 10} y={Math.max(20, rowY + 12)} width="8" height="8" rx="1" fill="#0077B6" />
+                              <text x={tx + 22} y={Math.max(28, rowY + 20)} fontSize={du.chartTip} fill={t.textMuted}>
+                                Ppto: <tspan fontWeight="700" fill="#0077B6">{fmtD(cap.presupuesto)}</tspan>
+                              </text>
+                              <rect x={tx + 10} y={Math.max(34, rowY + 26)} width="8" height="8" rx="1" fill={colorC} />
+                              <text x={tx + 22} y={Math.max(42, rowY + 34)} fontSize={du.chartTip} fill={t.textMuted}>
+                                Obra: <tspan fontWeight="700" fill={colorC}>{fmtD(cap.cobrado)}</tspan>
+                              </text>
                             </g>
                           )
                         })}
                       </svg>
-                      {/* Leyenda */}
-                      <div style={{ display:'flex', gap:'16px', marginTop:'8px', justifyContent:'center' }}>
-                        <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'11px', color:t.textMuted }}>
+                      <div style={{ display:'flex', flexWrap:'wrap', gap:'12px', marginTop:'8px', justifyContent:'center' }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:`${du.legend}px`, color:t.textMuted }}>
                           <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#0077B6' }}/> Presupuesto
                         </div>
-                        <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'11px', color:t.textMuted }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:`${du.legend}px`, color:t.textMuted }}>
                           <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#00A896' }}/> Obra Aprobada
                         </div>
-                        <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:'11px', color:t.textMuted }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:`${du.legend}px`, color:t.textMuted }}>
                           <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#DC2626' }}/> Sobrecosto
                         </div>
                       </div>
-                      {/* Paginador capítulos */}
-                      {comp.length > CAP_PAG && (
-                        <div style={{ display:'flex', gap:'6px', justifyContent:'center', marginTop:'10px', alignItems:'center' }}>
-                          <button onClick={() => setDashCapPag(p => Math.max(0,p-1))} disabled={dashCapPag===0}
-                            style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'11px', cursor: dashCapPag===0?'default':'pointer', color: dashCapPag===0?t.textMuted:t.text }}>‹</button>
-                          {Array.from({length: Math.ceil(comp.length/CAP_PAG)}, (_,i) => (
-                            <button key={i} onClick={() => setDashCapPag(i)}
-                              style={{ background: dashCapPag===i ? t.primary : 'transparent', color: dashCapPag===i ? '#fff' : t.textMuted, border:`1px solid ${dashCapPag===i ? t.primary : t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'11px', cursor:'pointer' }}>
-                              {i+1}
-                            </button>
-                          ))}
-                          <button onClick={() => setDashCapPag(p => Math.min(Math.ceil(comp.length/CAP_PAG)-1, p+1))} disabled={dashCapPag===Math.ceil(comp.length/CAP_PAG)-1}
-                            style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'11px', cursor:'pointer', color:t.text }}>›</button>
-                          <span style={{ fontSize:'10px', color:t.textMuted }}>{dashCapPag*CAP_PAG+1}–{Math.min((dashCapPag+1)*CAP_PAG, comp.length)} de {comp.length}</span>
-                        </div>
-                      )}
                     </div>
                   )
                 })()}
@@ -10762,18 +11172,19 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 maxHeight: panelFoco==='ppto-cobro' ? 'none' : 'min(92vh, 780px)', overflowY:'auto',
               }}>
                 <div style={{ marginBottom:'12px' }}>
-                  <div style={{ fontSize:'13px', fontWeight:'700', color:t.text }}>Validación por rol · SICOE Obra</div>
-                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'4px' }}>
+                  <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>Validación por rol · SICOE Obra</div>
+                  <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'4px' }}>
                     Por defecto se usa el acta RPO cuyo período incluye hoy. Columnas: Interventoría (N3) · Residente (N2) · Inspector (N1).
+                    Los importes en N2 solo cuentan si N1 = Aprobado; los de N3 solo si N1 y N2 = Aprobado. «Pendiente ítem» (sub_estado) no suma en el inspector.
                   </div>
                   <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'10px' }}>
-                    <span style={{ fontSize:'11px', color:t.textMuted }}>Acta RPO:</span>
+                    <span style={{ fontSize:`${du.sub}px`, color:t.textMuted }}>Acta RPO:</span>
                     <select
                       className={`cc-dashboard-acta-select cc-dashboard-acta-select--${themeIsDarkChrome(activeTheme) ? 'dark' : 'light'}`}
                       value={actaFiltroMatriz}
                       onChange={e => setActaFiltroMatriz(e.target.value)}
                       style={{
-                        fontSize:'12px',
+                        fontSize:`${du.body}px`,
                         padding:'6px 10px',
                         borderRadius:'6px',
                         border:`1px solid ${t.border}`,
@@ -10822,7 +11233,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         })
                       })()}
                     </select>
-                    {matrizValidacionLoad && <span style={{ fontSize:'11px', color:t.textMuted }}>Cargando…</span>}
+                    {matrizValidacionLoad && <span style={{ fontSize:`${du.sub}px`, color:t.textMuted }}>Cargando…</span>}
                   </div>
                 </div>
                 {(() => {
@@ -10858,15 +11269,15 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     const b = mergeBloque(bloque)
                     return (
                       <div key={titulo} style={{ marginBottom:'18px' }}>
-                        <div style={{ fontSize:'11px', fontWeight:'800', color:t.text, marginBottom:'8px', letterSpacing:'0.3px' }}>{titulo}</div>
+                        <div style={{ fontSize:`${du.sub}px`, fontWeight:'800', color:t.text, marginBottom:'8px', letterSpacing:'0.3px' }}>{titulo}</div>
                         <div style={{ overflowX:'auto' }}>
-                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'10px', minWidth:'280px' }}>
+                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:`${du.table}px`, minWidth:'280px' }}>
                             <thead>
                               <tr>
-                                <th style={{ textAlign:'left', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase' }}>Estado</th>
-                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase' }}>Interventoría (N3)</th>
-                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase' }}>Residente (N2)</th>
-                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase' }}>Inspector (N1)</th>
+                                <th style={{ textAlign:'left', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>Estado</th>
+                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>Interventoría (N3)</th>
+                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>Residente (N2)</th>
+                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>Inspector (N1)</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -10876,10 +11287,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                                 const tcLabel = row.dark ? '#fff' : textOnPastel
                                 return (
                                   <tr key={row.key} style={{ background: row.bg }}>
-                                    <td style={{ padding:'6px 4px', fontWeight:'700', color: tcLabel, fontSize:'9px' }}>{row.label}</td>
-                                    <td style={{ textAlign:'right', padding:'6px 4px', color: tc, fontWeight:'600' }}>{fmtD(d.interventoria)}</td>
-                                    <td style={{ textAlign:'right', padding:'6px 4px', color: tc, fontWeight:'600' }}>{fmtD(d.residente)}</td>
-                                    <td style={{ textAlign:'right', padding:'6px 4px', color: tc, fontWeight:'600' }}>{fmtD(d.inspector)}</td>
+                                    <td style={{ padding:'6px 4px', fontWeight:'700', color: tcLabel, fontSize:`${du.rowLabel}px` }}>{row.label}</td>
+                                    <td style={{ textAlign:'right', padding:'6px 4px', color: tc, fontWeight:'600', fontSize:`${du.table}px` }}>{fmtD(d.interventoria)}</td>
+                                    <td style={{ textAlign:'right', padding:'6px 4px', color: tc, fontWeight:'600', fontSize:`${du.table}px` }}>{fmtD(d.residente)}</td>
+                                    <td style={{ textAlign:'right', padding:'6px 4px', color: tc, fontWeight:'600', fontSize:`${du.table}px` }}>{fmtD(d.inspector)}</td>
                                   </tr>
                                 )
                               })}
@@ -10890,7 +11301,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     )
                   }
                   if (!matrizValidacion && !matrizValidacionLoad) {
-                    return <div style={{ fontSize:'12px', color:t.textMuted, padding:'12px 0' }}>Sin datos de validación.</div>
+                    return <div style={{ fontSize:`${du.body}px`, color:t.textMuted, padding:'12px 0' }}>Sin datos de validación.</div>
                   }
                   return (
                     <>

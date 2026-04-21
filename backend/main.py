@@ -5,7 +5,7 @@ import io, csv, requests as req_http
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Any, Dict
 from supabase import create_client, ClientOptions
 import httpx
 from passlib.context import CryptContext
@@ -939,6 +939,12 @@ def _so_reg_filtro_costado(q, valor: Optional[str]):
         return q
     esc = s.replace('"', '""')
     return q.or_(f'calzada.eq."{esc}",margen.eq."{esc}"')
+
+
+def _sicoe_ocultar_costo_directo_reportes(current_user) -> bool:
+    """Operativo Contratista / Interventoría no reciben montos en la grilla SICOE Obra."""
+    rol = (current_user.get("rol_nombre") or "").strip().lower()
+    return rol in ("operativo contratista", "operativo interventoria", "operativo interventoría")
 
 
 def _filtrar_registros_validacion_sicoe(
@@ -4424,6 +4430,7 @@ def buscar_reportes_obra(
     current_user=Depends(get_current_user)
 ):
     limit = min(limit, 100)
+    _ocultar_costo_rep = _sicoe_ocultar_costo_directo_reportes(current_user)
 
     # Reporte IDs derivados de filtros sobre so_registros
     reporte_ids_from_reg = None
@@ -4692,7 +4699,7 @@ def buscar_reportes_obra(
             _rb_l = reporte_ids_batch
             def _reg_estados():
                 q = supabase.table("so_registros")\
-                    .select("reporte_id, nivel1_estado, nivel2_estado, nivel3_estado, sub_estado, semana_id, acta_rpo_id, item_numero, capitulo, subcontratista_id, tramo, margen")\
+                    .select("reporte_id, costo_directo, nivel1_estado, nivel2_estado, nivel3_estado, sub_estado, semana_id, acta_rpo_id, item_numero, capitulo, subcontratista_id, tramo, margen")\
                     .in_("reporte_id", _rb_l)
 
                 # Mantener coherencia con el universo filtrado de grilla/panel
@@ -4725,6 +4732,7 @@ def buscar_reportes_obra(
                 return q.limit(5000).execute().data
             reg_estados = supabase_execute(_reg_estados)
             cargo_map = {r["id"]: {"n1": [], "n2": [], "n3": [], "sub": [], "count": 0} for r in rows}
+            costo_map = {}
             for reg in reg_estados:
                 rid = reg.get("reporte_id")
                 if rid in cargo_map:
@@ -4733,6 +4741,7 @@ def buscar_reportes_obra(
                     cargo_map[rid]["n3"].append(reg.get("nivel3_estado") or "No Revisado")
                     cargo_map[rid]["sub"].append(reg.get("sub_estado") or "No Revisado")
                     cargo_map[rid]["count"] += 1
+                    costo_map[rid] = costo_map.get(rid, 0.0) + float(reg.get("costo_directo") or 0)
             for r in rows:
                 m = cargo_map.get(r["id"], {})
                 r["nivel1_estados"] = list(set(m.get("n1", [])))
@@ -4740,9 +4749,15 @@ def buscar_reportes_obra(
                 r["nivel3_estados"] = list(set(m.get("n3", [])))
                 r["sub_estados"]    = list(set(m.get("sub", [])))
                 r["num_registros"] = m.get("count", 0)
+                if not _ocultar_costo_rep:
+                    r["costo_directo_validacion"] = round(costo_map.get(r["id"], 0.0), 2)
         except Exception:
             for r in rows:
                 r["nivel1_estados"] = r["nivel2_estados"] = r["nivel3_estados"] = r["sub_estados"] = []
+                r["num_registros"] = 0
+            if not _ocultar_costo_rep:
+                for r in rows:
+                    r["costo_directo_validacion"] = 0.0
 
     for r in rows:
         sub = r.pop("subcontratistas", None)
@@ -6156,6 +6171,13 @@ def actualizar_localizacion_borrador(contrato_id: int, reporte_id: int, body: di
     result = supabase_execute(_upd)
     return result[0] if result else {}
 
+def _registro_nivel3_aprobado(row: Optional[Dict[str, Any]]) -> bool:
+    """Tras aprobación Nivel 3 (Interventoría), no se editan datos de obra salvo corte de subcontratista."""
+    if not row:
+        return False
+    return (row.get("nivel3_estado") or "").strip() == "Aprobado"
+
+
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}")
 def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate, current_user=Depends(get_current_user)):
     data = {k: v for k, v in body.dict().items() if v is not None}
@@ -6164,7 +6186,24 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         return supabase.table("so_registros").select("*").eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
 
     prev_rows = supabase_execute(_prev)
-    prev_row = prev_rows[0] if prev_rows else {}
+    prev_row = prev_rows[0] if prev_rows else None
+    if not prev_row:
+        raise HTTPException(status_code=404, detail="Registro no encontrado")
+
+    if _registro_nivel3_aprobado(prev_row):
+        otros = {k: v for k, v in data.items() if k not in ("corte_id", "reporte_id", "numero_registro")}
+        if otros:
+            raise HTTPException(
+                status_code=400,
+                detail="Registro aprobado por Interventoría (Nivel 3): solo puede modificarse el número de corte de subcontratista.",
+            )
+        if data.get("reporte_id") is not None and int(data["reporte_id"]) != int(prev_row["reporte_id"]):
+            raise HTTPException(status_code=400, detail="No puede modificarse el reporte del registro aprobado por Nivel 3.")
+        if data.get("numero_registro") is not None and int(data["numero_registro"]) != int(prev_row["numero_registro"]):
+            raise HTTPException(status_code=400, detail="No puede modificarse el número de registro aprobado por Nivel 3.")
+        if "corte_id" not in data:
+            return prev_row
+        data = {"corte_id": data["corte_id"]}
 
     def _upd():
         return supabase.table("so_registros").update(data)\
@@ -6406,11 +6445,16 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
 
         def _reg():
             return supabase.table("so_registros")\
-                .select("cantidad_total, reporte_id")\
+                .select("cantidad_total, reporte_id, nivel3_estado")\
                 .eq("id", registro_id).single().execute().data
         registro = supabase_execute(_reg)
         if not registro:
             raise HTTPException(status_code=404, detail="Registro no encontrado")
+        if _registro_nivel3_aprobado(registro):
+            raise HTTPException(
+                status_code=400,
+                detail="El registro está aprobado por Nivel 3 (Interventoría): no puede reasignarse el ítem.",
+            )
 
         cant_total = float(registro.get("cantidad_total") or 0)
         vlr_unit   = float(item.get("precio_unitario") or 0)
@@ -6535,11 +6579,16 @@ def mover_registro(contrato_id: int, registro_id: int, nuevo_reporte_id: int, cu
         # 2. Leer el registro para obtener el reporte_id origen
         def _reg():
             return supabase.table("so_registros")\
-                .select("reporte_id").eq("id", registro_id)\
+                .select("reporte_id, nivel3_estado").eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).limit(1).execute().data
         reg_rows = supabase_execute(_reg)
         if not reg_rows:
             raise HTTPException(status_code=404, detail="Registro no encontrado")
+        if _registro_nivel3_aprobado(reg_rows[0]):
+            raise HTTPException(
+                status_code=400,
+                detail="El registro está aprobado por Nivel 3 (Interventoría): no puede moverse a otro reporte.",
+            )
         reporte_origen_id = reg_rows[0]["reporte_id"]
 
         # 3. Leer campos de localización del reporte ORIGEN
@@ -6817,6 +6866,17 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
             detail="Se requiere comentario_data cuando el estado es Pendiente o Rechazado.")
     try:
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        def _get_n3():
+            return supabase.table("so_registros").select("nivel3_estado, reporte_id")\
+                .eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
+        n3rows = supabase_execute(_get_n3)
+        if not n3rows:
+            raise HTTPException(status_code=404, detail="Registro no encontrado.")
+        if _registro_nivel3_aprobado(n3rows[0]):
+            raise HTTPException(
+                status_code=400,
+                detail="El registro está aprobado por Nivel 3 (Interventoría) y no puede modificarse por esta vía.",
+            )
         update = {
             "nivel1_estado":     body.estado,
             "nivel1_usuario_id": autor_id,
@@ -6885,10 +6945,17 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
         # Verificar nivel1
         def _get():
             return supabase.table("so_registros")\
-                .select("nivel1_estado").eq("id", registro_id)\
+                .select("nivel1_estado, nivel3_estado").eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).limit(1).execute().data
         rows = supabase_execute(_get)
-        if not rows or rows[0].get("nivel1_estado") != "Aprobado":
+        if not rows:
+            raise HTTPException(status_code=404, detail="Registro no encontrado.")
+        if _registro_nivel3_aprobado(rows[0]):
+            raise HTTPException(
+                status_code=400,
+                detail="El registro está aprobado por Nivel 3 (Interventoría) y no puede modificarse por esta vía.",
+            )
+        if rows[0].get("nivel1_estado") != "Aprobado":
             raise HTTPException(status_code=422,
                 detail="El registro debe estar aprobado por Nivel 1 primero.")
 
@@ -6961,10 +7028,17 @@ def validar_nivel3(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
         # Verificar nivel2
         def _get():
             return supabase.table("so_registros")\
-                .select("nivel2_estado").eq("id", registro_id)\
+                .select("nivel2_estado, nivel3_estado").eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).limit(1).execute().data
         rows = supabase_execute(_get)
-        if not rows or rows[0].get("nivel2_estado") != "Aprobado":
+        if not rows:
+            raise HTTPException(status_code=404, detail="Registro no encontrado.")
+        if rows[0].get("nivel3_estado") == "Aprobado" and body.estado != "Aprobado":
+            raise HTTPException(
+                status_code=400,
+                detail="El registro ya está aprobado por Nivel 3. Use el flujo de reversión para modificar la validación.",
+            )
+        if rows[0].get("nivel2_estado") != "Aprobado":
             raise HTTPException(status_code=422,
                 detail="El registro debe estar aprobado por Nivel 2 primero.")
 
@@ -7002,10 +7076,17 @@ def validar_sub(contrato_id: int, registro_id: int, body: ValidarSubBody,
         # Verificar nivel2_objeto_pago_sub
         def _get():
             return supabase.table("so_registros")\
-                .select("nivel2_objeto_pago_sub").eq("id", registro_id)\
+                .select("nivel2_objeto_pago_sub, nivel3_estado").eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).limit(1).execute().data
         rows = supabase_execute(_get)
-        if not rows or not rows[0].get("nivel2_objeto_pago_sub"):
+        if not rows:
+            raise HTTPException(status_code=404, detail="Registro no encontrado.")
+        if _registro_nivel3_aprobado(rows[0]):
+            raise HTTPException(
+                status_code=400,
+                detail="El registro está aprobado por Nivel 3 (Interventoría) y no puede modificarse por esta vía.",
+            )
+        if not rows[0].get("nivel2_objeto_pago_sub"):
             raise HTTPException(status_code=422,
                 detail="El registro no es objeto de pago a subcontratista (nivel2_objeto_pago_sub debe ser True).")
 
@@ -7030,9 +7111,44 @@ def validar_sub(contrato_id: int, registro_id: int, body: ValidarSubBody,
 # SICOE-OBRA — Dashboard endpoints (reemplazan /cobro/ leyendo so_registros)
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+def _parse_rpc_dashboard_resumen_raw(raw):
+    """Deserializa respuesta de dashboard_resumen_sicoe_agg (PostgREST / RPC)."""
+    if raw is None:
+        return None
+    if isinstance(raw, list) and len(raw) > 0:
+        row = raw[0]
+        if isinstance(row, dict):
+            for v in row.values():
+                if isinstance(v, dict) and "total_presupuesto" in v:
+                    return v
+        if isinstance(row, dict) and "total_presupuesto" in row:
+            return row
+    if isinstance(raw, dict) and "total_presupuesto" in raw:
+        return raw
+    if isinstance(raw, dict):
+        k = next(iter(raw.keys()), None)
+        if k and isinstance(raw.get(k), dict) and "total_presupuesto" in raw[k]:
+            return raw[k]
+    return None
+
+
 @app.get("/sicoe-obra/{contrato_id}/dashboard-resumen")
 def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_user)):
     try:
+        try:
+            def _rpc():
+                return supabase.rpc(
+                    "dashboard_resumen_sicoe_agg",
+                    {"p_contrato_id": contrato_id},
+                ).execute().data
+
+            hit = _parse_rpc_dashboard_resumen_raw(supabase_execute(_rpc))
+            if hit is not None and isinstance(hit.get("comparativo_capitulos"), list):
+                return hit
+        except Exception:
+            pass
+
         # 1. Obra aprobada (Interventoría): agregar desde so_registros con el mismo criterio
         #    que la matriz / drill (nivel3 ≈ Aprobado), no desde vista_dashboard_resumen,
         #    para que importaciones con variantes de texto ("APROBADO", espacios, etc.) cuenten.
@@ -7199,11 +7315,17 @@ def _dashboard_matriz_validacion_fallback(
                 else:
                     M["no_revisado"][col] += cd
 
-            acc(n3, "interventoria")
-            acc(n2, "residente")
+            # N1 (inspector): todas las filas del acta; solo estados nivel 1.
             acc(n1, "inspector")
+            # N2 (residente): solo si N1 aprobó; sobre ese subconjunto, estados nivel 2.
+            if n1 == "Aprobado":
+                acc(n2, "residente")
+            # N3 (interventoría): solo si N1 y N2 aprobaron; sobre ese subconjunto, estados nivel 3.
+            if n1 == "Aprobado" and n2 == "Aprobado":
+                acc(n3, "interventoria")
 
-            if sub_raw == "pendiente" or sub_n == "Pendiente":
+            # Pendiente por ítem (sub_estado): no forma parte del bucket Pendiente del inspector; solo con N1 aprobado.
+            if (sub_raw == "pendiente" or sub_n == "Pendiente") and n1 == "Aprobado":
                 M["pendiente_item"]["residente"] += cd
 
             M["habilitado"]["inspector"] += cd
@@ -7238,9 +7360,9 @@ def _dashboard_matriz_validacion_fallback(
                 n3 = _matriz_validacion_norm_estado(reg.get("nivel3_estado"))
                 bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
                 Ox = ens_m if bloque == "ensayos" else obra_m
-                if n3 == "Pendiente":
+                if n1 == "Aprobado" and n2 == "Aprobado" and n3 == "Pendiente":
                     Ox["otras_actas"]["interventoria"] += cd
-                if n2 == "Pendiente":
+                if n1 == "Aprobado" and n2 == "Pendiente":
                     Ox["otras_actas"]["residente"] += cd
                 if n1 == "Pendiente":
                     Ox["otras_actas"]["inspector"] += cd
