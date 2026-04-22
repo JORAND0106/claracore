@@ -16,9 +16,35 @@ function pickLngLat(row) {
   return [lnN, laN]
 }
 
+/** Identificador PK en propiedades de GeoJSON (misma semántica que en click del plano). */
+function featurePkId(f) {
+  const p = f?.properties
+  if (!p) return ''
+  return String(p.PK_ID ?? p.pk_id ?? p.Layer ?? p.layer ?? p.Name ?? '').trim()
+}
+
+function ringCoordsFromGeometry(g) {
+  if (!g) return []
+  if (g.type === 'Polygon') return g.coordinates[0] || []
+  if (g.type === 'MultiPolygon') return g.coordinates.flat(2)
+  return []
+}
+
+/** [[minLng, minLat], [maxLng, maxLat]] o null. */
+function boundsFromFC(fc) {
+  const coords = (fc?.features || []).flatMap((f) => ringCoordsFromGeometry(f.geometry))
+  if (coords.length < 1) return null
+  const lngs = coords.map((c) => c[0])
+  const lats = coords.map((c) => c[1])
+  return [
+    [Math.min(...lngs), Math.min(...lats)],
+    [Math.max(...lngs), Math.max(...lats)],
+  ]
+}
+
 /**
  * `pkIdsDeGrilla`: null = mostrar todo el maestro con coordenadas; `[]` o lista = solo esos PK (armoniza con la grilla al elegir cap/ítem).
- * Vista con norte a la derecha: bearing 90°.
+ * Vista con norte a la derecha. bearing 90° dejó el norte del pliego a la izquierda; +180° → 270°.
  */
 export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIdsDeGrilla = null }) {
   const containerRef = useRef(null)
@@ -28,7 +54,7 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
   onPickRef.current = onPkPick
   tokenRef.current = token
 
-  const NORTH_RIGHT_BEARING = 90
+  const NORTH_RIGHT_BEARING = 270
   const filtroKey =
     pkIdsDeGrilla == null
       ? 'all'
@@ -70,6 +96,8 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
       if (permitSet.size === 0) return false
       return permitSet.has(String(pkv).trim().toLowerCase())
     }
+
+    const isFiltered = permit != null && permitSet && permitSet.size > 0
     ;(async () => {
       const [rPk, rCt] = await Promise.all([
         fetch(`${API}/sicoe-obra/${contratoId}/pk-ids`, { headers: hdrs }).then((x) => (x.ok ? x.json() : [])),
@@ -98,16 +126,44 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
 
       map.on('load', () => {
         if (cancelled) return
+
+        // Con grilla filtrada por cap/ítem: polígono = solo features cuyo PK_ID está en la grilla (no el corredor completo).
+        let planoData = null
         if (plano && plano.type === 'FeatureCollection' && Array.isArray(plano.features) && plano.features.length > 0) {
-          if (!map.getSource('ppto-plano')) {
-            map.addSource('ppto-plano', { type: 'geojson', data: plano })
-            map.addLayer({ id: 'ppto-plano-fill', type: 'fill', source: 'ppto-plano', paint: { 'fill-color': '#0077B6', 'fill-opacity': 0.3 } })
-            map.addLayer({ id: 'ppto-plano-line', type: 'line', source: 'ppto-plano', paint: { 'line-color': '#00A896', 'line-width': 1 } })
+          if (isFiltered) {
+            const matched = plano.features.filter((f) => {
+              const id = featurePkId(f)
+              return id && permitSet.has(id.toLowerCase())
+            })
+            if (matched.length > 0) {
+              planoData = { type: 'FeatureCollection', features: matched }
+            }
+          } else {
+            planoData = plano
           }
+        }
+
+        if (planoData) {
+          map.addSource('ppto-plano', { type: 'geojson', data: planoData })
+          map.addLayer({
+            id: 'ppto-plano-fill',
+            type: 'fill',
+            source: 'ppto-plano',
+            paint: {
+              'fill-color': isFiltered ? '#0D9488' : '#0077B6',
+              'fill-opacity': isFiltered ? 0.38 : 0.3,
+            },
+          })
+          map.addLayer({
+            id: 'ppto-plano-line',
+            type: 'line',
+            source: 'ppto-plano',
+            paint: { 'line-color': isFiltered ? '#0F766E' : '#00A896', 'line-width': isFiltered ? 2 : 1 },
+          })
           map.on('click', 'ppto-plano-fill', (e) => {
             const f = e.features?.[0]
             if (!f) return
-            const v = String(f.properties?.Layer ?? f.properties?.PK_ID ?? f.properties?.pk_id ?? '').trim()
+            const v = featurePkId(f) || String(f.properties?.Layer ?? f.properties?.PK_ID ?? f.properties?.pk_id ?? '').trim()
             if (v) onPickRef.current(v)
           })
           map.on('mouseenter', 'ppto-plano-fill', () => {
@@ -117,6 +173,9 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
             map.getCanvas().style.cursor = ''
           })
         }
+
+        const dot = isFiltered ? 14 : 12
+        const col = isFiltered ? '#0D9488' : '#0077B6'
         pkList.forEach((row) => {
           const pkv = String(row?.pk_id ?? row?.civ ?? '').trim()
           if (!pkv || !pkAllowed(pkv)) return
@@ -125,7 +184,7 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
           withCoords += 1
           toFit.push(ll)
           const el = document.createElement('div')
-          el.style.cssText = 'width:12px;height:12px;border-radius:50%;background:#0077B6;border:2px solid #fff;cursor:pointer;'
+          el.style.cssText = `width:${dot}px;height:${dot}px;border-radius:50%;background:${col};border:2px solid #fff;box-shadow:0 0 0 1px ${col}66;cursor:pointer;`
           el.title = pkv
           new mapboxgl.Marker({ element: el }).setLngLat(ll).addTo(map)
           el.addEventListener('click', (ev) => {
@@ -134,25 +193,27 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
           })
         })
         try {
-          if (plano?.features?.length) {
-            const coords = plano.features.flatMap((f) => {
-              const g = f.geometry
-              if (!g) return []
-              if (g.type === 'Polygon') return g.coordinates[0]
-              if (g.type === 'MultiPolygon') return g.coordinates.flat(2)
-              return []
-            })
-            if (coords.length) {
-              const lngs = coords.map((c) => c[0])
-              const lats = coords.map((c) => c[1])
+          const bPlano = planoData ? boundsFromFC(planoData) : null
+          const bProyecto = !isFiltered && plano && plano.type === 'FeatureCollection' ? boundsFromFC(plano) : null
+
+          if (isFiltered) {
+            if (toFit.length === 1) {
+              map.flyTo({ center: toFit[0], zoom: 15, bearing: NORTH_RIGHT_BEARING, pitch: 0 })
+            } else if (toFit.length > 1) {
+              const lngs = toFit.map((c) => c[0])
+              const lats = toFit.map((c) => c[1])
               map.fitBounds(
                 [
                   [Math.min(...lngs), Math.min(...lats)],
                   [Math.max(...lngs), Math.max(...lats)],
                 ],
-                { padding: 32, maxZoom: 16, bearing: NORTH_RIGHT_BEARING, pitch: 0 }
+                { padding: 50, maxZoom: 17, bearing: NORTH_RIGHT_BEARING, pitch: 0 }
               )
+            } else if (bPlano) {
+              map.fitBounds(bPlano, { padding: 40, maxZoom: 16, bearing: NORTH_RIGHT_BEARING, pitch: 0 })
             }
+          } else if (bProyecto) {
+            map.fitBounds(bProyecto, { padding: 32, maxZoom: 16, bearing: NORTH_RIGHT_BEARING, pitch: 0 })
           } else if (toFit.length === 1) {
             map.flyTo({ center: toFit[0], zoom: 14, bearing: NORTH_RIGHT_BEARING, pitch: 0 })
           } else if (toFit.length > 1) {

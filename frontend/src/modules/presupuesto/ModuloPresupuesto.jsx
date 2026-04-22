@@ -193,6 +193,15 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const debounceFetchPptoRef = useRef(null)
   /** Fase C: total con los mismos filtros que el listado (GET /conteo) */
   const [conteoFiltro, setConteoFiltro] = useState(null)
+  const conteoFiltroRef = useRef(null)
+  useEffect(() => { conteoFiltroRef.current = conteoFiltro }, [conteoFiltro])
+  /** Tamaño de lote al traer /presupuesto (limit/offset). La UI aplica un solo setRegistros al final. */
+  const PRES_PTO_CHUNK = 1000
+  const pptoCargaRef = useRef({ key: '', nextOffset: 0, hasMore: false, total: 0 })
+  const cargaPptoInFlightRef = useRef(false)
+  const cargaPptoIdRef = useRef(0)
+  const registrosRef = useRef([])
+  useEffect(() => { registrosRef.current = registros }, [registros])
   /** Filtro tipo SICOE Obra (reemplaza drill por gráfico de barras) */
   const [fObra, setFObra] = useState({
     cap: '', item: '', idPol: '', pkCriterio: '', texto: '', tramo: '', calzada: '', nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '',
@@ -377,8 +386,9 @@ useEffect(() => {
   const [verPapelera, setVerPapelera] = useState(false)
   const _pptoCacheRef   = useRef(null)   // { data, ts, papelera } – solo para papelera
   const _pptoCachePorCap = useRef({})    // { [capitulo]: { data, ts } }
-  const PPTO_CACHE_TTL  = 5 * 60 * 1000  // 5 min (papelera)
-  const CAP_CACHE_TTL   = 10 * 60 * 1000 // 10 min por capítulo
+  // Caché corta: otras sesiones (p. ej. interventoría) deben ver ediciones con latencia de segundos, no minutos
+  const PPTO_CACHE_TTL  = 2 * 1000  // 2 s — vista papelera / lista plana
+  const CAP_CACHE_TTL   = 2 * 1000  // 2 s — grilla por capítulo e ítem (antes 5–10 min)
   const [capitulosResumen,  setCapitulosResumen]  = useState([])
   const [loadingCapitulos,  setLoadingCapitulos]  = useState(false)
   const [itemsResumen,      setItemsResumen]      = useState([])
@@ -403,27 +413,83 @@ useEffect(() => {
     return p
   }, [ubicacionTramo, ubicacionCalzada, filtroEstado, busquedaTipo, busquedaV1, busquedaV2])
 
-  /** Query string alineada con GET /presupuesto (capítulo/ítem = mismos nombres que el drill del dashboard). */
+  /**
+   * Misma semántica que `aplicarFiltroObraConF`: cap/ítem + SICOE Obra (pk_criterio, id_pol, tramos, etc.)
+   * para que el poll / debounce no borre un filtro fino (p. ej. PK elegido en el mapa).
+   */
   const armarQueryPresupuestoServer = useCallback(() => {
     const p = armarFiltrosUbicacionSolo()
     const capD = drill.find(d => d.campo === 'capitulo')
     const itemD = drill.find(d => d.campo === 'item')
     if (capD) p.set('capitulo', capD.valor)
     if (itemD) p.set('item', itemD.valor)
+    if (verPapelera) p.set('papelera', 'true')
+    const f = fObra
+    if (f.tramo) p.set('tramo', f.tramo)
+    if (f.calzada) p.set('calzada', f.calzada)
+    if (f.nodoI) p.set('nodo_inicio', f.nodoI.trim())
+    if (f.nodoF) p.set('nodo_final', f.nodoF.trim())
+    if (f.absA) p.set('abs_desde', String(f.absA).replace(',', '.'))
+    if (f.absB) p.set('abs_hasta', String(f.absB).replace(',', '.'))
+    if (f.eje === 'interv' && f.revisado) p.set('revisado', f.revisado)
+    if (f.eje === 'depur' && f.preInterv) p.set('pre_interv_estado', f.preInterv)
+    if (f.idPol && String(f.idPol).trim()) p.set('id_pol', f.idPol.trim())
+    if (f.pkCriterio && String(f.pkCriterio).trim()) p.set('pk_criterio', f.pkCriterio.trim())
+    if (f.texto && String(f.texto).trim()) p.set('texto', f.texto.trim())
     return p
-  }, [armarFiltrosUbicacionSolo, drill])
+  }, [armarFiltrosUbicacionSolo, drill, fObra, verPapelera])
 
   const detalleConItem = !!drill.find(d => d.campo === 'item')
   const cacheKeyPpto = useMemo(() => {
     const capD = drill.find(d => d.campo === 'capitulo')
     const itemD = drill.find(d => d.campo === 'item')
+    const f = fObra
+    const obraKey = [f.tramo, f.calzada, f.eje, f.revisado, f.preInterv, f.idPol, f.pkCriterio, f.texto, f.nodoI, f.nodoF, f.absA, f.absB].join('\x1e')
     return [
       capD?.valor, itemD?.valor, ubicacionTramo, ubicacionCalzada, filtroEstado,
-      busquedaTipo, busquedaV1, busquedaV2, verPapelera,
+      busquedaTipo, busquedaV1, busquedaV2, verPapelera, obraKey,
     ].join('|')
-  }, [drill, ubicacionTramo, ubicacionCalzada, filtroEstado, busquedaTipo, busquedaV1, busquedaV2, verPapelera])
+  }, [drill, ubicacionTramo, ubicacionCalzada, filtroEstado, busquedaTipo, busquedaV1, busquedaV2, verPapelera, fObra])
 
   const keyCacheFila = (cap, it) => [cap, it || '', ubicacionTramo, ubicacionCalzada, filtroEstado, busquedaTipo, busquedaV1, busquedaV2].join('|')
+
+  /**
+   * Misma query que el listado; acumula offset en bloques. Conteo: GET conteo; filas: GET con limit+offset.
+   * Los callers hacen un solo setState con el resultado.
+   */
+  async function fetchPresupuestoPaginasCompletas(pQuery) {
+    const h = { Authorization: `Bearer ${token}` }
+    const pConteo = new URLSearchParams(pQuery.toString())
+    const qC = pConteo.toString()
+    const resC = await fetch(`${API}/presupuesto/${contratoId}/conteo${qC ? `?${qC}` : ''}`, { headers: h })
+    let totalN = 0
+    let conteoOk = false
+    if (resC.ok) {
+      conteoOk = true
+      const j = await resC.json()
+      if (j && typeof j.total === 'number') totalN = j.total
+    }
+    if (conteoOk && totalN === 0) {
+      return { rows: [], total: 0 }
+    }
+    const acc = []
+    let off = 0
+    while (true) {
+      const p = new URLSearchParams(pQuery.toString())
+      p.set('limit', String(PRES_PTO_CHUNK))
+      p.set('offset', String(off))
+      const q = p.toString()
+      const res = await fetch(`${API}/presupuesto/${contratoId}${q ? `?${q}` : ''}`, { headers: h })
+      if (!res.ok) break
+      const data = await res.json()
+      const list = Array.isArray(data) ? data : []
+      if (list.length === 0) break
+      acc.push(...list)
+      if (list.length < PRES_PTO_CHUNK) break
+      off += list.length
+    }
+    return { rows: acc, total: totalN > 0 ? totalN : acc.length }
+  }
 
 async function cargarRegistros(modoPapelera, forzar = false) {
     if (!contratoId) return
@@ -466,71 +532,103 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setLoadingCapitulos(false)
   }
   
-  async function cargarCapituloData(capitulo, item = null) {
+  async function cargarCapituloData(capitulo, item = null, opts = false) {
+    const o = typeof opts === 'object' && opts && !Array.isArray(opts) ? opts : { forzar: !!opts, syncPreserveSize: false }
     if (!contratoId) return
     const p = armarFiltrosUbicacionSolo()
     p.set('capitulo', capitulo)
     if (item) p.set('item', item)
     const cacheKey = keyCacheFila(capitulo, item)
-    const cached = _pptoCachePorCap.current[cacheKey]
-    if (cached && (Date.now() - cached.ts) < CAP_CACHE_TTL) {
-      setRegistros(cached.data)
-      setConteoFiltro(Array.isArray(cached.data) ? cached.data.length : 0)
-      return
+    const silent = !!o.forzar && !!o.syncPreserveSize
+    if (!o.forzar) {
+      const cached = _pptoCachePorCap.current[cacheKey]
+      if (cached && (Date.now() - cached.ts) < CAP_CACHE_TTL) {
+        if (Array.isArray(cached.data) && typeof cached.total === 'number' && cached.data.length < cached.total) {
+          delete _pptoCachePorCap.current[cacheKey]
+        } else {
+          setRegistros(cached.data)
+          if (typeof cached.total === 'number') setConteoFiltro(cached.total)
+          pptoCargaRef.current = {
+            key: cacheKey,
+            nextOffset: Array.isArray(cached.data) ? cached.data.length : 0,
+            hasMore: false,
+            total: typeof cached.total === 'number' ? cached.total : 0,
+          }
+          return
+        }
+      }
+    } else {
+      delete _pptoCachePorCap.current[cacheKey]
     }
-    setLoading(true)
+    cargaPptoIdRef.current += 1
+    const cargaId = cargaPptoIdRef.current
+    if (silent) {
+      cargaPptoInFlightRef.current = true
+    } else {
+      setLoading(true)
+    }
     try {
-      const q = p.toString()
-      const h = { Authorization: `Bearer ${token}` }
-      const [res, resC] = await Promise.all([
-        fetch(`${API}/presupuesto/${contratoId}${q ? `?${q}` : ''}`, { headers: h }),
-        fetch(`${API}/presupuesto/${contratoId}/conteo${q ? `?${q}` : ''}`, { headers: h }),
-      ])
-      if (res.ok) {
-        const data = await res.json()
-        _pptoCachePorCap.current[cacheKey] = { data, ts: Date.now() }
-        setRegistros(data)
+      const { rows, total } = await fetchPresupuestoPaginasCompletas(p)
+      if (cargaId !== cargaPptoIdRef.current) return
+      setConteoFiltro(total)
+      setRegistros(rows)
+      pptoCargaRef.current = { key: cacheKey, nextOffset: rows.length, hasMore: false, total }
+      _pptoCachePorCap.current[cacheKey] = { data: rows, ts: Date.now(), total }
+    } catch { /* silencio */ } finally {
+      if (silent) {
+        cargaPptoInFlightRef.current = false
+      } else {
+        setLoading(false)
       }
-      if (resC.ok) {
-        const j = await resC.json()
-        if (j && typeof j.total === 'number') setConteoFiltro(j.total)
-      }
-    } catch {}
-    setLoading(false)
+    }
   }
 
   /** Carga o refresca el detalle (ítem) con filtros de servidor; invalida caché por query. */
-  async function refreshRegistrosDetalle({ forzar = false } = {}) {
+  async function refreshRegistrosDetalle({ forzar = false, syncPreserveSize = false } = {}) {
     if (!contratoId || !detalleConItem) return
+    const silent = !!forzar && !!syncPreserveSize
     if (!forzar) {
       const cached = _pptoCachePorCap.current[cacheKeyPpto]
       if (cached && (Date.now() - cached.ts) < CAP_CACHE_TTL) {
-        setRegistros(cached.data)
-        setConteoFiltro(Array.isArray(cached.data) ? cached.data.length : 0)
-        return
+        if (Array.isArray(cached.data) && typeof cached.total === 'number' && cached.data.length < cached.total) {
+          delete _pptoCachePorCap.current[cacheKeyPpto]
+        } else {
+          setRegistros(cached.data)
+          if (typeof cached.total === 'number') setConteoFiltro(cached.total)
+          pptoCargaRef.current = {
+            key: cacheKeyPpto,
+            nextOffset: Array.isArray(cached.data) ? cached.data.length : 0,
+            hasMore: false,
+            total: typeof cached.total === 'number' ? cached.total : 0,
+          }
+          return
+        }
       }
     } else {
       delete _pptoCachePorCap.current[cacheKeyPpto]
     }
-    setLoading(true)
+    cargaPptoIdRef.current += 1
+    const cargaId = cargaPptoIdRef.current
+    if (silent) {
+      cargaPptoInFlightRef.current = true
+    } else {
+      setLoading(true)
+    }
     try {
-      const q = armarQueryPresupuestoServer().toString()
-      const h = { Authorization: `Bearer ${token}` }
-      const [res, resC] = await Promise.all([
-        fetch(`${API}/presupuesto/${contratoId}${q ? `?${q}` : ''}`, { headers: h }),
-        fetch(`${API}/presupuesto/${contratoId}/conteo${q ? `?${q}` : ''}`, { headers: h }),
-      ])
-      if (res.ok) {
-        const data = await res.json()
-        _pptoCachePorCap.current[cacheKeyPpto] = { data, ts: Date.now() }
-        setRegistros(data)
+      const p0 = armarQueryPresupuestoServer()
+      const { rows, total } = await fetchPresupuestoPaginasCompletas(p0)
+      if (cargaId !== cargaPptoIdRef.current) return
+      setConteoFiltro(total)
+      setRegistros(rows)
+      pptoCargaRef.current = { key: cacheKeyPpto, nextOffset: rows.length, hasMore: false, total }
+      _pptoCachePorCap.current[cacheKeyPpto] = { data: rows, ts: Date.now(), total }
+    } catch { /* silencio */ } finally {
+      if (silent) {
+        cargaPptoInFlightRef.current = false
+      } else {
+        setLoading(false)
       }
-      if (resC.ok) {
-        const j = await resC.json()
-        if (j && typeof j.total === 'number') setConteoFiltro(j.total)
-      }
-    } catch {}
-    setLoading(false)
+    }
   }
 
   const skipDebounceFiltrosRef = useRef(true)
@@ -567,7 +665,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (debounceFetchPptoRef.current) clearTimeout(debounceFetchPptoRef.current)
     debounceFetchPptoRef.current = setTimeout(() => {
       debounceFetchPptoRef.current = null
-      refreshRegistrosDetalle({ forzar: true })
+      refreshRegistrosDetalle({ forzar: true, syncPreserveSize: false })
     }, 450)
     return () => { if (debounceFetchPptoRef.current) clearTimeout(debounceFetchPptoRef.current) }
   }, [contratoId, detalleConItem, ubicacionTramo, ubicacionCalzada, filtroEstado, busquedaTipo, busquedaV1, busquedaV2])
@@ -601,6 +699,41 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (sincroSicoeModal) recargarCapActual(true)
   }, [sincroSicoeModal?.ts])
 
+  // Multisesión: refresco ~1s con pestaña activa. No encolar si ya hay carga o pantalla de carga (evita parpadeo).
+  useEffect(() => {
+    if (!contratoId) return
+    const tick = () => {
+      if (document.visibilityState !== 'visible') return
+      if (cargaPptoInFlightRef.current || loading) return
+      if (buscandoFiltroObra) return
+      if (detalleConItem) {
+        skipDebounceFiltrosRef.current = true
+        refreshRegistrosDetalle({ forzar: true, syncPreserveSize: true })
+        return
+      }
+      const capD = drill.find((d) => d.campo === 'capitulo')?.valor
+      const itemD = drill.find((d) => d.campo === 'item')?.valor
+      if (capD && !itemD) {
+        void cargarCapituloData(capD, null, { forzar: true, syncPreserveSize: true })
+        return
+      }
+      if (verPapelera) void cargarRegistros(undefined, true)
+    }
+    const onVis = () => {
+      if (document.visibilityState !== 'visible') return
+      tick()
+      if (!detalleConItem && drill.length === 0 && !verPapelera) void cargarCapitulos()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('focus', onVis)
+    const iv = setInterval(tick, 3000)
+    return () => {
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('focus', onVis)
+      clearInterval(iv)
+    }
+  }, [contratoId, detalleConItem, drill, verPapelera, loading, buscandoFiltroObra, fObra])
+
   function syncFObraALegacy(f) {
     setUbicacionTramo(f.tramo || '')
     setUbicacionCalzada(f.calzada || '')
@@ -630,6 +763,9 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     setFObra(f)
     setBuscandoFiltroObra(true)
+    cargaPptoIdRef.current += 1
+    const cargaId = cargaPptoIdRef.current
+    cargaPptoInFlightRef.current = true
     try {
       syncFObraALegacy(f)
       const d = []
@@ -653,29 +789,22 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (f.idPol && String(f.idPol).trim()) p.set('id_pol', f.idPol.trim())
       if (f.pkCriterio && String(f.pkCriterio).trim()) p.set('pk_criterio', f.pkCriterio.trim())
       if (f.texto && String(f.texto).trim()) p.set('texto', f.texto.trim())
-      const h = { Authorization: `Bearer ${token}` }
-      const [res, resC] = await Promise.all([
-        fetch(`${API}/presupuesto/${contratoId}${p.toString() ? `?${p.toString()}` : ''}`, { headers: h }),
-        fetch(`${API}/presupuesto/${contratoId}/conteo${p.toString() ? `?${p.toString()}` : ''}`, { headers: h }),
-      ])
-      if (res.ok) {
-        const data = await res.json()
-        setRegistros(data)
-        setPagina(1)
-        _pptoCachePorCap.current = {}
-        const capD = f.cap
-        const itemD = f.item
-        if (capD) {
-          const key = [capD, itemD || '', f.tramo, f.calzada, f.eje, f.revisado, f.preInterv, f.idPol, f.pkCriterio, f.texto, f.nodoI, f.nodoF, f.absA, f.absB].join('|')
-          _pptoCachePorCap.current[key] = { data, ts: Date.now() }
-        }
-      }
-      if (resC.ok) {
-        const j = await resC.json()
-        if (j && typeof j.total === 'number') setConteoFiltro(j.total)
+      const { rows, total } = await fetchPresupuestoPaginasCompletas(p)
+      if (cargaId !== cargaPptoIdRef.current) return
+      setConteoFiltro(total)
+      setRegistros(rows)
+      setPagina(1)
+      _pptoCachePorCap.current = {}
+      const capD = f.cap
+      const itemD = f.item
+      if (capD) {
+        const key = [capD, itemD || '', f.tramo, f.calzada, f.eje, f.revisado, f.preInterv, f.idPol, f.pkCriterio, f.texto, f.nodoI, f.nodoF, f.absA, f.absB].join('|')
+        pptoCargaRef.current = { key, nextOffset: rows.length, hasMore: false, total }
+        _pptoCachePorCap.current[key] = { data: rows, ts: Date.now(), total }
       }
       skipDebounceFiltrosRef.current = true
-    } finally {
+    } catch { /* silencio */ } finally {
+      cargaPptoInFlightRef.current = false
       setBuscandoFiltroObra(false)
     }
   }
@@ -684,11 +813,44 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     await aplicarFiltroObraConF(fObra)
   }
 
+  const fObraInicialVacio = () => ({
+    cap: '', item: '', idPol: '', pkCriterio: '', texto: '', tramo: '', calzada: '', nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '',
+  })
+
+  /** Quita búsqueda fina (PK, ID-POL, texto) y vuelve a cargar; mantiene cap/ítem y tramo/validación. */
+  async function restablecerPksVistaItem() {
+    const base = fObraRef.current
+    const f2 = { ...base, pkCriterio: '', idPol: '', texto: '' }
+    if (!criterioVistaActivo(f2)) return
+    setFObra(f2)
+    fObraRef.current = f2
+    syncFObraALegacy(f2)
+    const d = []
+    if (f2.cap) d.push({ campo: 'capitulo', valor: f2.cap })
+    if (f2.item) d.push({ campo: 'item', valor: f2.item })
+    setDrill(d)
+    if (f2.cap) setCapActivo(f2.cap)
+    skipDebounceFiltrosRef.current = true
+    await aplicarFiltroObraConF(f2)
+  }
+
   function limpiarFiltroObra() {
-    setFObra({ cap: '', item: '', idPol: '', pkCriterio: '', texto: '', tramo: '', calzada: '', nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '' })
+    cargaPptoIdRef.current += 1
+    const vacio = fObraInicialVacio()
+    setFObra(vacio)
+    fObraRef.current = vacio
     setDrill([])
     setUbicacionTramo(''); setUbicacionCalzada(''); setFiltroEstado(''); setBusquedaTipo(''); setBusquedaV1(''); setBusquedaV2(''); setConteoFiltro(null)
     setRegistros([]); setCapExpandido(null); setItemsResumen([]); setCapActivo(null); setPkidsSeleccionados([])
+    setPagina(1)
+    setSeleccionados(new Set())
+    setItemBusqueda(''); setItemNavIdx(-1)
+    setOpcionesUbicacion({ tramos: [], calzadas: [] })
+    _pptoCachePorCap.current = {}
+    _pptoCacheRef.current = null
+    pptoCargaRef.current = { key: '', nextOffset: 0, hasMore: false, total: 0 }
+    skipDebounceFiltrosRef.current = true
+    void cargarCapitulos()
   }
 
   function onMapPkPresu(pk) {
@@ -852,7 +1014,12 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (!(fObra.cap || '').trim()) return null
     const s = new Set()
     for (const r of registros) {
-      const p = r.pk_id != null ? String(r.pk_id).trim() : ''
+      const p =
+        r.pk_id != null && String(r.pk_id).trim() !== ''
+          ? String(r.pk_id).trim()
+          : r.pk != null && String(r.pk).trim() !== ''
+            ? String(r.pk).trim()
+            : ''
       if (p) s.add(p)
     }
     return [...s]
@@ -1935,7 +2102,9 @@ async function restaurar(id) {
                         <span style={{width:'80px',flexShrink:0}}>ÍTEM</span><span style={{flex:3}}>DESCRIPCIÓN</span>
                         <span style={{minWidth:'120px',textAlign:'right',whiteSpace:'nowrap'}}>DIMS</span><span style={{flex:1,textAlign:'right'}}>CANT.</span>
                         <span style={{flex:1,textAlign:'right'}}>V. UNIT.</span><span style={{flex:1,textAlign:'right'}}>C. DIRECTO</span>
-                        <span style={{flex:0.8}}></span>
+                        {mostrarColumnaDepuracion && <span style={{ flex:0.7, textAlign:'center' }} title="Depuración (contratista / obra)">Dep.</span>}
+                        <span style={{ flex:0.7, textAlign:'center' }} title="Interventoría">Rev.</span>
+                        <span style={{flex:0.5}}></span>
                       </div>
                       {regs.length === 0
                         ? <TabVacia msg={msg} />
@@ -2000,6 +2169,34 @@ async function restaurar(id) {
                                 <div style={{ flex:1, fontSize:'11px', color:t.textMuted, textAlign:'right' }}>
                                   {r.costo_directo != null ? `$${Number(r.costo_directo).toLocaleString('es-CO')}` : '—'}
                                 </div>
+                                )}
+                                {mostrarColumnaDepuracion && (
+                                  <div
+                                    onClick={e => e.stopPropagation()}
+                                    style={{ display:'flex', gap:'3px', alignItems:'center', justifyContent:'center', flex:'0.7 0 72px' }}
+                                    title="Depuración (residente de costos / obra)"
+                                  >
+                                    {SEMAFORO.map(s => {
+                                      const preDisp = (r.pre_interv_estado == null || r.pre_interv_estado === '') ? 'No Revisado' : r.pre_interv_estado
+                                      const activo = preDisp === s.valor
+                                      const esLegadoPre = (r.pre_interv_estado == null || r.pre_interv_estado === '')
+                                      return (
+                                        <div
+                                          key={`tr-pre-${r.id}-${s.valor}`}
+                                          onClick={() => puedePrevalidarUI && !activo && !esSellado(r) && cambiarPreIntervDirecto(r.id, s.valor)}
+                                          style={{
+                                            width: activo ? '15px' : '11px',
+                                            height: activo ? '15px' : '11px',
+                                            borderRadius: '50%',
+                                            background: activo ? s.color : s.color + '33',
+                                            border: `1.5px solid ${activo ? s.color : s.color + '55'}`,
+                                            cursor: puedePrevalidarUI && !activo && !esSellado(r) ? 'pointer' : 'default',
+                                            opacity: esSellado(r) ? 0.45 : (esLegadoPre ? 0.75 : 1),
+                                          }}
+                                        />
+                                      )
+                                    })}
+                                  </div>
                                 )}
                                 <div style={{ display:'flex', gap:'4px', alignItems:'center' }}>
                                   {/* Botón guardar dims */}
@@ -2730,7 +2927,7 @@ async function restaurar(id) {
         </button>
           {drill.length === 0 && !verPapelera
             ? `${capitulosResumen.length} capítulos`
-            : `${registros.length} total · ${registrosFiltrados.length} filtrados`} · {seleccionados.size} seleccionados
+            : `${conteoFiltro != null ? conteoFiltro.toLocaleString('es-CO') : registros.length} en contrato · ${registrosFiltrados.length} filtrados (vista)`} · {seleccionados.size} seleccionados
       {totalPaginas > 1 && (
         <span style={{ marginLeft: '16px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
           <button onClick={() => setPagina(p => Math.max(1, p-1))} disabled={pagina === 1}
@@ -2759,6 +2956,7 @@ async function restaurar(id) {
           onPickItem={onPickItemFromPanel}
           onBuscar={aplicarFiltroObra}
           onLimpiar={limpiarFiltroObra}
+          onRestablecerPksItem={restablecerPksVistaItem}
           onRevisorTramos={abrirRevisorTramosObra}
           tramoOptions={opcionesUbicacion.tramos}
           calzadaOptions={opcionesUbicacion.calzadas}
@@ -2775,7 +2973,9 @@ async function restaurar(id) {
         <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', justifyContent:'space-between', gap:10, marginBottom:10 }}>
           <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', gap:10 }}>
             {conteoFiltro != null && registros.length > 0 && (
-              <div style={{ fontSize:12, fontWeight:700, color:t.primary }}>Coincidencias (servidor): {conteoFiltro.toLocaleString('es-CO')}</div>
+              <div style={{ fontSize:12, fontWeight:700, color:t.primary }}>
+                Coincidencias (servidor): {conteoFiltro.toLocaleString('es-CO')}
+              </div>
             )}
             {!verPapelera && registrosFiltrados.length > 0 && (
               <button
@@ -3327,7 +3527,7 @@ function MiniMapaPresupuesto({ t, colores, pkidsActivos, pkidsResaltados = [], o
     const map = new mapboxgl.Map({
       container: mapRef.current,
       style: t.bg === '#0A1628' ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11',
-      center: [-74.05, 4.72], zoom: 11, interactive: true, bearing: 90
+      center: [-74.05, 4.72], zoom: 11, interactive: true, bearing: 270
     })
     mapInst.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
@@ -3373,7 +3573,7 @@ function MiniMapaPresupuesto({ t, colores, pkidsActivos, pkidsResaltados = [], o
         })
         if (coords.length > 0) {
           const lngs = coords.map(c => c[0]), lats = coords.map(c => c[1])
-          map.fitBounds([[Math.min(...lngs), Math.min(...lats)],[Math.max(...lngs), Math.max(...lats)]], { padding: 20, duration: 0 })
+          map.fitBounds([[Math.min(...lngs), Math.min(...lats)],[Math.max(...lngs), Math.max(...lats)]], { padding: 20, duration: 0, bearing: 270, pitch: 0 })
         }
         setListo(true)
       })

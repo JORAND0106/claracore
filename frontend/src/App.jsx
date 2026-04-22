@@ -1923,7 +1923,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 }
 
 // ─── CARPETA REPORTE ──────────────────────────────────────────────────────────
-function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [], filtroValidacion = null }) {
+function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [], capasFiltroValidacion = null }) {
+  const filtroValidacion = capasFiltroValidacion && capasFiltroValidacion[0] ? capasFiltroValidacion[0] : null
   const [reporte, setReporte]                     = useState(repoProp)
   const [registros, setRegistros]                 = useState(repoProp.registros || [])
 
@@ -2065,6 +2066,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [ejecutandoMasivo, setEjecutandoMasivo]    = useState(false)
   const [devEliminando, setDevEliminando]          = useState(false)
 
+  // Sincronizar cuando el padre reemplaza el resumen de grilla por el detalle completo (apertura optimista)
+  useEffect(() => {
+    if (!repoProp?.id) return
+    setReporte((prev) => ({ ...prev, ...repoProp }))
+    if (Array.isArray(repoProp.registros)) setRegistros(repoProp.registros)
+    if (Array.isArray(repoProp.puntos)) setPuntosEdit(repoProp.puntos.map((p) => ({ ...p })))
+  }, [repoProp])
+
   const perm        = (usuario?.permisos || []).find(p => p.funcion_nombre === 'Reporte de Cantidades')
   const puedeEditar = perm?.editar
   const esDeveloper = (usuario?.cargo_nombre || '').toLowerCase() === 'desarrollador'
@@ -2130,8 +2139,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const recargar = async () => {
     try {
       let url = `${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`
-      if (filtroValidacion?.cargo_id != null && filtroValidacion?.estado) {
-        url += `?${new URLSearchParams({ cargo_id: String(filtroValidacion.cargo_id), estado_validacion: filtroValidacion.estado })}`
+      if (capasFiltroValidacion && capasFiltroValidacion.length > 0) {
+        const payload = capasFiltroValidacion.map((c) => ({ cargo_id: c.cargo_id, estado: c.estado }))
+        url += `?${new URLSearchParams({ validacion_capas: JSON.stringify(payload) })}`
       }
       const res  = await fetch(url, { headers: hdrs })
       const data = await res.json()
@@ -2450,6 +2460,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
             <span style={{ fontSize:'28px' }}>📁</span>
             <div>
+              {reporte._cargandoDetalle && (
+                <div style={{ fontSize:'11px', fontWeight:'700', color:'#fff', marginBottom:6, padding:'6px 10px', background:'rgba(0,0,0,0.2)', borderRadius:8, display:'inline-block' }}>
+                  ⏳ Cargando registros, validaciones y plano…
+                </div>
+              )}
               <div style={{ fontSize:'18px', fontWeight:'900', color:'#fff' }}>
                 {reporte.descripcion_actividad || `Reporte #${reporte.numero_reporte}`}
               </div>
@@ -3428,14 +3443,22 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
 
   useEffect(() => {
     if (!navReporteId) return
+    const repRow = (reportes || []).find((x) => x.id === navReporteId)
+    setReporteSeleccionado(
+      repRow
+        ? { ...repRow, _cargandoDetalle: true, registros: [], puntos: [], _autoRegistro: navRegistroNumero }
+        : { id: navReporteId, _cargandoDetalle: true, registros: [], puntos: [], _autoRegistro: navRegistroNumero }
+    )
+    setModalCarpeta(true)
     let u = `${API_URL}/sicoe-obra/${contrato_id}/reportes/${navReporteId}`
-    const c0 = capasValidacion[0]
-    if (c0?.cargo_id != null && c0?.estado) {
-      u += `?${new URLSearchParams({ cargo_id: String(c0.cargo_id), estado_validacion: c0.estado })}`
+    if (capasValidacion.length > 0) {
+      u += `?${new URLSearchParams({ validacion_capas: JSON.stringify(capasValidacion.map((c) => ({ cargo_id: c.cargo_id, estado: c.estado }))) })}`
     }
     fetch(u, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(data => { if (data?.id) { setReporteSeleccionado({ ...data, _autoRegistro: navRegistroNumero }); setModalCarpeta(true) } })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.id) { setReporteSeleccionado({ ...data, _cargandoDetalle: false, _autoRegistro: navRegistroNumero }) }
+      })
       .catch(() => {})
     onNavReporteConsumed?.()
   }, [navReporteId])
@@ -3583,9 +3606,9 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
 
   const urlReporteDetalle = (repId, capas) => {
     let u = `${API_URL}/sicoe-obra/${contrato_id}/reportes/${repId}`
-    const c0 = capas && capas[0]
-    if (c0?.cargo_id != null && c0?.estado) {
-      u += `?${new URLSearchParams({ cargo_id: String(c0.cargo_id), estado_validacion: c0.estado })}`
+    if (capas && capas.length > 0) {
+      const payload = capas.map((c) => ({ cargo_id: c.cargo_id, estado: c.estado }))
+      u += `?${new URLSearchParams({ validacion_capas: JSON.stringify(payload) })}`
     }
     return u
   }
@@ -3614,6 +3637,8 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
       Object.entries(ef).forEach(([k, v]) => { if (v !== '' && v != null) params.append(k, v) })
       if (capas.length > 0) {
+        const payload = capas.map((c) => ({ cargo_id: c.cargo_id, estado: c.estado }))
+        params.append('validacion_capas', JSON.stringify(payload))
         params.append('cargo_id', capas[0].cargo_id)
         params.append('estado_validacion', capas[0].estado)
       }
@@ -3633,46 +3658,30 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         return res.json()
       }
 
-      let data = await fetchPage(nuevoOffset)
+      const data = await fetchPage(nuevoOffset)
       if (seq !== sicoeBusquedaSeqRef.current) return
-      let lista = Array.isArray(data.reportes) ? data.reportes : []
-
-      // En modo validación por nivel, cargar todas las páginas para que
-      // panel dinámico y grilla comparen exactamente el mismo universo.
-      if (capas.length > 0 && nuevoOffset === 0) {
-        let off = PAGE_SIZE
-        while (data.hay_mas) {
-          data = await fetchPage(off)
-          if (seq !== sicoeBusquedaSeqRef.current) return
-          const parte = Array.isArray(data.reportes) ? data.reportes : []
-          if (parte.length === 0) break
-          lista = [...lista, ...parte]
-          off += PAGE_SIZE
-        }
-        if (seq !== sicoeBusquedaSeqRef.current) return
+      const lista = Array.isArray(data.reportes) ? data.reportes : []
+      // Antes: con validación se traían TODAS las páginas en serie (N×50 request) y bloqueaba la UI 10–60+ s.
+      // El análisis KPI sigue yendo a /sicoe-obra/.../analisis (mismo criterio). La grilla pagina con «Cargar 50 más».
+      if (seq !== sicoeBusquedaSeqRef.current) return
+      if (nuevoOffset === 0) {
         setReportes(lista)
-        setHayMas(false)
-        setOffsetActual(lista.length)
       } else {
-        if (seq !== sicoeBusquedaSeqRef.current) return
-        if (nuevoOffset === 0) {
-          setReportes(lista)
-        } else {
-          setReportes(prev => [...prev, ...lista])
-        }
-        setHayMas(!!data.hay_mas)
-        setOffsetActual(nuevoOffset + PAGE_SIZE)
+        setReportes((prev) => [...prev, ...lista])
       }
+      setHayMas(!!data.hay_mas)
+      setOffsetActual(nuevoOffset + PAGE_SIZE)
       if (seq !== sicoeBusquedaSeqRef.current) return
       setBusquedaRealizada(true)
       // Auto-abrir cuando búsqueda por N° Registro devuelve resultado único
       if (nuevosFiltros.numero_registro && lista.length === 1) {
         const rep = lista[0]
+        setReporteSeleccionado({ ...rep, _cargandoDetalle: true, registros: [], puntos: [] })
+        setModalCarpeta(true)
         const r2 = await fetch(urlReporteDetalle(rep.id, capas), { headers: { Authorization: `Bearer ${getToken()}` } })
         const detalle = await r2.json()
         if (seq !== sicoeBusquedaSeqRef.current) return
-        setReporteSeleccionado(detalle)
-        setModalCarpeta(true)
+        if (detalle?.id) setReporteSeleccionado({ ...detalle, _cargandoDetalle: false })
       }
     } catch(e) {}
     finally {
@@ -3764,6 +3773,8 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         params.append(k, v)
       })
       if (capas.length > 0) {
+        const payload = capas.map((c) => ({ cargo_id: c.cargo_id, estado: c.estado }))
+        params.append('validacion_capas', JSON.stringify(payload))
         params.append('cargo_id', capas[0].cargo_id)
         params.append('estado_validacion', capas[0].estado)
       }
@@ -3842,14 +3853,18 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     cargarAnalisisSicoeRef.current?.(nf, capasSicoeRef.current)
   }
   sicoeMapaOpenReporteRef.current = async (rid) => {
+    const rep = (reportes || []).find((x) => x.id === rid)
+    setReporteSeleccionado(
+      rep
+        ? { ...rep, _cargandoDetalle: true, registros: [], puntos: [] }
+        : { id: rid, _cargandoDetalle: true, registros: [], puntos: [] }
+    )
+    setModalCarpeta(true)
     try {
       const u = urlReporteDetalle(rid, capasSicoeRef.current)
       const r = await fetch(u, { headers: { Authorization: `Bearer ${getToken()}` } })
       const data = await r.json()
-      if (data?.id) {
-        setReporteSeleccionado(data)
-        setModalCarpeta(true)
-      }
+      if (data?.id) setReporteSeleccionado({ ...data, _cargandoDetalle: false })
     } catch { /* ignore */ }
   }
 
@@ -3942,24 +3957,8 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     if (pa === '—' && pb === '—') return '—'
     return `${pa} → ${pb}`
   }
-  const reportesMostrados = useMemo(() => {
-    if (capasValidacion.length <= 1) return reportes
-    const cargoIdMap = {
-      54: 'nivel1_estados',
-      44: 'nivel2_estados',
-      45: 'nivel2_estados',
-      51: 'nivel2_estados',
-      56: 'nivel2_estados',
-      50: 'nivel3_estados',
-      58: 'nivel3_estados',
-    }
-    return reportes.filter(rep =>
-      capasValidacion.slice(1).every(capa => {
-        const estados = rep[cargoIdMap[capa.cargo_id]] || []
-        return estados.includes(capa.estado)
-      })
-    )
-  }, [reportes, capasValidacion])
+  // Varias capas: AND en backend (/reportes/buscar); no refinar de nuevo con agregados por reporte
+  const reportesMostrados = reportes
 
   const sicoePuntosPlano = useMemo(() => {
     const ignorarGpsReportes = contrato_id != null && SICOE_CONTRATOS_SIN_NODOS_REPORTE_GPS.has(Number(contrato_id))
@@ -4058,7 +4057,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       style: t.bg === '#0A1628' ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11',
       center: center0,
       zoom: 11,
-      bearing: 90,
+      bearing: 270,
     })
     sicoeFiltroMapaInst.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
@@ -4147,7 +4146,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         try {
           const lngs = puntos.map(p => p.lng)
           const lats = puntos.map(p => p.lat)
-          map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 40, duration: 0, maxZoom: 15 })
+          map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 40, duration: 0, maxZoom: 15, bearing: 270, pitch: 0 })
         } catch { /* ignore */ }
       } else if (geo?.features?.length) {
         const coords = geo.features.flatMap(f => {
@@ -4160,7 +4159,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         if (coords.length > 0) {
           const lngs = coords.map(c => c[0])
           const lats = coords.map(c => c[1])
-          map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 24, duration: 0 })
+          map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 24, duration: 0, bearing: 270, pitch: 0 })
         }
       }
     })
@@ -4343,6 +4342,10 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         estado: fNorm.estado ?? null,
         cargo_id: capa0?.cargo_id ?? null,
         estado_validacion: capa0?.estado ?? null,
+        validacion_capas:
+          capasValidacion && capasValidacion.length > 0
+            ? JSON.stringify(capasValidacion.map((c) => ({ cargo_id: c.cargo_id, estado: c.estado })))
+            : null,
         q_observacion: (sicoeFiltroObsRef.current && String(sicoeFiltroObsRef.current).trim()) || null,
         q_nodo: (sicoeFiltroNodoRef.current && String(sicoeFiltroNodoRef.current).trim()) || null,
         campos: camposRequest,
@@ -5224,17 +5227,27 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
             gap:'8px', padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
             fontSize:'13px', color:t.text, cursor:'pointer',
             transition:'background 0.15s' }}
-            onClick={async () => {
+            onClick={() => {
               if (!esSub && rep.estado === 'Borrador') {
-                const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
-                const data = await r.json()
-                setReporteEditando(data)
-                setModalNuevoReporte(true)
+                ;(async () => {
+                  const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
+                  const data = await r.json()
+                  setReporteEditando(data)
+                  setModalNuevoReporte(true)
+                })()
               } else if (esSub || puedeVer) {
-                const r = await fetch(urlReporteDetalle(rep.id, capasValidacion), { headers: { Authorization: `Bearer ${getToken()}` } })
-                const data = await r.json()
-                setReporteSeleccionado(data)
+                setReporteSeleccionado({ ...rep, _cargandoDetalle: true, registros: [], puntos: [] })
                 setModalCarpeta(true)
+                ;(async () => {
+                  try {
+                    const r = await fetch(urlReporteDetalle(rep.id, capasValidacion), { headers: { Authorization: `Bearer ${getToken()}` } })
+                    const data = await r.json()
+                    if (data?.id) setReporteSeleccionado({ ...data, _cargandoDetalle: false })
+                  } catch {
+                    setModalCarpeta(false)
+                    setReporteSeleccionado(null)
+                  }
+                })()
               }
             }}
             onMouseEnter={e => e.currentTarget.style.background = t.bg}
@@ -5354,7 +5367,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         <CarpetaReporte
           t={t} usuario={usuario} API_URL={API_URL} contrato_id={contrato_id}
           reporte={reporteSeleccionado} actasList={filtroActaList}
-          filtroValidacion={capasValidacion.length > 0 ? capasValidacion[0] : null}
+          capasFiltroValidacion={capasValidacion.length > 0 ? capasValidacion : null}
           onClose={() => { setModalCarpeta(false); setReporteSeleccionado(null) }}
           onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); buscarReportes(filtros, 0, capasValidacion) }}
         />
@@ -5771,6 +5784,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       center: [-74.031242, 4.760271],
       zoom: 12,
       fadeDuration: 0,
+      bearing: 270,
     })
     mapaPkInstance.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
@@ -5802,7 +5816,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         const lats = coords.map(c => c[1])
         map.fitBounds(
           [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
-          { padding: 40, duration: 0 },
+          { padding: 40, duration: 0, bearing: 270, pitch: 0 },
         )
       }
       map.on('click', 'pkids-fill', (e) => {
@@ -7036,7 +7050,8 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
       container: mapRef.current,
       style: t.bg === '#0A1628' ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11',
       center: [-74.05, 4.72],
-      zoom: 12
+      zoom: 12,
+      bearing: 270,
     })
     mapInstance.current = map
 
@@ -7116,7 +7131,7 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
             const lats = coords.map(c => c[1])
             map.fitBounds(
               [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
-              { padding: 40 }
+              { padding: 40, bearing: 270, pitch: 0 }
             )
           }
         })
@@ -7180,7 +7195,7 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
   )
 }
 // ─── MINI MAPA SEMÁFORO (dashboard) ──────────────────────────────────────────
-function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
+function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null, bearing = 270 }) {
   const mapRef        = useRef(null)
   const mapInstance   = useRef(null)
   const onClickRef    = useRef(onPkidClick)
@@ -7223,7 +7238,7 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
     const map = new mapboxgl.Map({
       container: mapRef.current,
       style: t.bg === '#0A1628' ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11',
-      center: [-74.05, 4.72], zoom: 11, interactive: true, bearing: 90,
+      center: [-74.05, 4.72], zoom: 11, interactive: true, bearing,
     })
     mapInstance.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
@@ -7271,13 +7286,13 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null }) {
           })
           if (coords.length > 0) {
             const lngs = coords.map(c => c[0]), lats = coords.map(c => c[1])
-            map.fitBounds([[Math.min(...lngs), Math.min(...lats)],[Math.max(...lngs), Math.max(...lats)]], { padding: 20, duration: 0 })
+            map.fitBounds([[Math.min(...lngs), Math.min(...lats)],[Math.max(...lngs), Math.max(...lats)]], { padding: 20, duration: 0, bearing, pitch: 0 })
           }
           setListo(true)
         })
     })
     return () => { if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; setListo(false) } }
-  }, [])
+  }, [bearing])
 
   useEffect(() => {
     const map = mapInstance.current
@@ -9336,7 +9351,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       t={t}
                       colores={analisisMapaColores}
                       height={260}
-                      bearing={90}
+                      bearing={270}
                       onPkidClick={analisisSeleccion ? abrirAnalisisMapaPopup : null}
                     />
                     <div style={{ fontSize:'10px', color:t.textMuted, marginTop:'6px', textAlign:'center' }}>
@@ -9531,7 +9546,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         </div>
                       ) : <span style={{ fontSize:'10px', color:t.textMuted, fontStyle:'italic' }}>← Clic en fila para ver en plano</span>}
                     </div>
-                    <MiniMapaSemaforo t={t} colores={liqMapaColores} height={260} bearing={90} onPkidClick={liqSeleccion ? abrirLiqMapaPopup : null} />
+                    <MiniMapaSemaforo t={t} colores={liqMapaColores} height={260} bearing={270} onPkidClick={liqSeleccion ? abrirLiqMapaPopup : null} />
                     <div style={{ fontSize:'10px', color:t.textMuted, marginTop:'6px', textAlign:'center' }}>
                       {Object.keys(liqMapaColores).length > 0 ? `${Object.keys(liqMapaColores).length} PK_IDs activos` : liqSeleccion ? 'Sin PK_IDs para este registro' : 'Selecciona una fila'}
                     </div>

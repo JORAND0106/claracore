@@ -23,6 +23,8 @@ export default function PptoFiltroObraVista({
   onPickItem,
   onBuscar,
   onLimpiar,
+  /** Vuelve a cargar el listado del cap/ítem actual sin filtro fino (PK, ID-POL, texto). */
+  onRestablecerPksItem,
   onRevisorTramos,
   tramoOptions,
   calzadaOptions,
@@ -40,6 +42,13 @@ export default function PptoFiltroObraVista({
     },
     [onMapPkPick]
   )
+
+  const hayFiltroFinoPks = !!(
+    (f.pkCriterio && String(f.pkCriterio).trim()) ||
+    (f.idPol && String(f.idPol).trim()) ||
+    (f.texto && String(f.texto).trim())
+  )
+  const hayCap = !!(f.cap && String(f.cap).trim())
 
   return (
     <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 14, alignItems: 'stretch' }}>
@@ -235,6 +244,26 @@ export default function PptoFiltroObraVista({
             >
               Limpiar filtros
             </button>
+            {onRestablecerPksItem && hayFiltroFinoPks && hayCap && (
+              <button
+                type="button"
+                onClick={onRestablecerPksItem}
+                disabled={buscando}
+                style={{
+                  background: '#0D948820',
+                  border: '1px solid #0D9488',
+                  borderRadius: 8,
+                  padding: '8px 14px',
+                  color: '#0D9488',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: buscando ? 'wait' : 'pointer',
+                }}
+                title="Quita PK, ID-POL y texto; mantiene capítulo, ítem y tramo/validación. Muestra de nuevo todos los PK del listado filtrado."
+              >
+                Ver todos los PK
+              </button>
+            )}
             <button
               type="button"
               onClick={onRevisorTramos}

@@ -21,6 +21,8 @@ import uuid
 import threading
 import calendar
 import re
+import json
+from concurrent.futures import ThreadPoolExecutor
 
 # ── Sesiones DWG activas (en memoria) ─────────────────────────────────────────
 _dwg_sessions: dict = {}
@@ -914,6 +916,93 @@ CARGO_NIVEL_PRERREQUISITO = {
     'nivel3_estado': ('nivel2_estado', 'Aprobado'),
 }
 
+
+def _estado_registro_eq_desde_filtro_ui(evp: str) -> str:
+    """Alinea plural de la UI con el valor almacenado en so_registros."""
+    p = (evp or "").strip()
+    m = {
+        "Aprobados": "Aprobado",
+        "Pendientes": "Pendiente",
+        "Rechazados": "Rechazado",
+    }
+    return m.get(p, p)
+
+
+def _parse_validacion_capas_param(
+    validacion_capas: Optional[str],
+    cargo_id: Optional[int],
+    estado_validacion: Optional[str],
+) -> List[dict]:
+    out: List[dict] = []
+    if validacion_capas and str(validacion_capas).strip():
+        try:
+            raw = json.loads(validacion_capas)
+            if isinstance(raw, list):
+                for c in raw:
+                    if not isinstance(c, dict) or c.get("cargo_id") is None:
+                        continue
+                    est = (c.get("estado") or "").strip()
+                    if not est:
+                        continue
+                    out.append({"cargo_id": int(c["cargo_id"]), "estado": est})
+        except (json.JSONDecodeError, TypeError, ValueError, KeyError):
+            pass
+    if not out and cargo_id is not None and (estado_validacion or "").strip():
+        out = [{"cargo_id": int(cargo_id), "estado": str(estado_validacion).strip()}]
+    return out
+
+
+def _so_registros_q_y_capas_validacion(
+    q,
+    capas: List[dict],
+    pk_id_val,
+    tramo_v,
+    costado_v,
+    cap_v,
+    sub_v,
+    item_v,
+):
+    """AND en la misma fila de so_registros: todas las capas (cargo+estado) a la vez."""
+    for capa in capas:
+        cv = int(capa["cargo_id"])
+        evp = (capa.get("estado") or "").strip()
+        if not evp:
+            continue
+        fld = CARGO_ID_NIVEL_MAP.get(cv)
+        if not fld:
+            continue
+        prereq = CARGO_NIVEL_PRERREQUISITO.get(fld)
+        if prereq:
+            q = q.eq(prereq[0], prereq[1])
+        if evp in ("No Revisado", "No Revisados"):
+            q = _so_reg_or_pendiente_nivel(q, fld)
+        else:
+            evq = _estado_registro_eq_desde_filtro_ui(evp)
+            q = q.eq(fld, evq)
+        if _es_validacion_avanzada(fld):
+            q = _so_reg_item_asignado(q)
+    if pk_id_val is not None:
+        q = q.eq("pk_id_id", pk_id_val)
+    if tramo_v:
+        q = q.eq("tramo", tramo_v)
+    if costado_v:
+        q = _so_reg_filtro_costado(q, costado_v)
+    if cap_v:
+        q = q.eq("capitulo", cap_v)
+    if sub_v is not None:
+        q = q.eq("subcontratista_id", sub_v)
+    if item_v:
+        q = q.ilike("item_numero", f"%{item_v}%")
+    return q
+
+
+def _validacion_cualquier_nivel2_o_3(capas: List[dict]) -> bool:
+    for c in capas:
+        f = CARGO_ID_NIVEL_MAP.get(int(c.get("cargo_id", 0)))
+        if f and _es_validacion_avanzada(f):
+            return True
+    return False
+
 # Nivel 2/3: no listar cantidades en reportes borrador / sin ítem asignado a nivel reporte,
 # ni registros sin item_numero (cola de validación solo sobre cantidades listas).
 NIVEL_FIELD_VALIDACION_AVANZADA = ('nivel2_estado', 'nivel3_estado')
@@ -1237,6 +1326,22 @@ def _filtrar_registros_validacion_sicoe(
         else:
             if cur == ev:
                 out.append(reg)
+    return out
+
+
+def _filtrar_registros_validacion_capas_sicoe(
+    regs: list,
+    capas: List[dict],
+    reporte_row: Optional[dict] = None,
+) -> list:
+    """Misma semántica AND que _so_registros_q_y_capas_validacion, en memoria (detalle de reporte)."""
+    if not capas:
+        return regs
+    out = regs
+    for c in capas:
+        out = _filtrar_registros_validacion_sicoe(
+            out, int(c["cargo_id"]), c.get("estado"), reporte_row
+        )
     return out
 
 
@@ -2767,6 +2872,8 @@ def get_presupuesto(
     revisado: Optional[str] = None,
     pre_interv_estado: Optional[str] = None,
     papelera: bool = False,
+    limit: Optional[int] = Query(None, ge=1, le=20000),
+    offset: int = Query(0, ge=0),
     current_user=Depends(get_current_user),
 ):
     """
@@ -2774,11 +2881,10 @@ def get_presupuesto(
     dashboard. id_pol, pk_criterio, texto: filtros separados (campos distintos). `buscar` mantiene
     compatibilidad: OR en id_pol, pk_id, registro, descripcion si no se usan esos tres.
     pre_interv_estado: filtro depuración (roles contratista / obra); revisado: Interventoría.
+    `limit` + `offset`: una sola página (grilla) sin bajar 10k+ filas. Sin `limit`, comportamiento
+    legado: acumulación por lotes de 1000.
     """
-    PAGE = 1000
-    all_rows = []
-    offset = 0
-    while True:
+    def _q_base():
         q = supabase.table("presupuesto").select("*").eq("contrato_id", contrato_id)
         if papelera:
             q = q.eq("dado_de_baja", True)
@@ -2807,11 +2913,21 @@ def get_presupuesto(
         )
         if _presupuesto_aplica_filtro_interventoria(current_user):
             q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
-        batch = q.order("capitulo").order("item").order("pk_id").range(offset, offset + PAGE - 1).execute().data
+        return q.order("capitulo").order("item").order("pk_id")
+
+    if limit is not None:
+        q = _q_base()
+        return q.range(offset, offset + limit - 1).execute().data
+
+    PAGE = 1000
+    all_rows = []
+    off = 0
+    while True:
+        batch = _q_base().range(off, off + PAGE - 1).execute().data
         all_rows.extend(batch)
         if len(batch) < PAGE:
             break
-        offset += PAGE
+        off += PAGE
     return all_rows
 
 
@@ -5054,6 +5170,7 @@ def buscar_reportes_obra(
     estado: Optional[str] = None,
     cargo_id: Optional[int] = None,
     estado_validacion: Optional[str] = None,
+    validacion_capas: Optional[str] = None,
     q_observacion: Optional[str] = None,
     q_nodo: Optional[str] = None,
     offset: int = 0,
@@ -5062,6 +5179,10 @@ def buscar_reportes_obra(
 ):
     limit = min(limit, 100)
     _ocultar_costo_rep = _sicoe_ocultar_costo_directo_reportes(current_user)
+    capas_v = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
+    _nivel_l = None
+    _ev_l = None
+    _prereq = None
 
     # Reporte IDs derivados de filtros sobre so_registros
     reporte_ids_from_reg = None
@@ -5160,70 +5281,53 @@ def buscar_reportes_obra(
         if not reporte_ids_from_reg:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
-    # Filtrar por cargo_id + estado_validacion ANTES de paginar
-    _nivel_l = None
-    _ev_l = None
-    _prereq = None
-    if cargo_id is not None and estado_validacion and not _estado_filtro_omite_validacion_por_cargo(estado):
-        _nivel_l = CARGO_ID_NIVEL_MAP.get(cargo_id)
-        if _nivel_l:
-            _ev_l = estado_validacion
-            _prereq = CARGO_NIVEL_PRERREQUISITO.get(_nivel_l)
-            _tramo_v = tramo; _costado_v = costado; _cap_v = capitulo
-            _sub_v = subcontratista_id; _item_v = item
+    # Validación N1–N3: varias capas = AND en la misma fila de so_registros (misma lógica en panel y grilla)
+    if capas_v and not _estado_filtro_omite_validacion_por_cargo(estado):
+        _tramo_v = tramo
+        _costado_v = costado
+        _cap_v = capitulo
+        _sub_v = subcontratista_id
+        _item_v = item
+        _seen_rids = set()
+        _pag_offset = 0
+        _pag_size = 1000
+        ids_val = []
 
-            # Paginación real: solo traer los reporte_id DISTINTOS de la página actual
-            _needed = offset + limit + 1
-            _seen_rids = set()
-            _pag_offset = 0
-            _pag_size = 1000
-            ids_val = []
-
-            while True:
-                def _val_page(off=_pag_offset):
-                    q = supabase.table("so_registros").select("reporte_id")\
-                        .eq("contrato_id", contrato_id)
-                    if pk_id is not None:
-                        q = q.eq("pk_id_id", pk_id)
-                    if _prereq:
-                        q = q.eq(_prereq[0], _prereq[1])
-                    if _ev_l == 'No Revisado':
-                        q = _so_reg_or_pendiente_nivel(q, _nivel_l)
-                    else:
-                        q = q.eq(_nivel_l, _ev_l)
-                    if _es_validacion_avanzada(_nivel_l):
-                        q = _so_reg_item_asignado(q)
-                    if _tramo_v:   q = q.eq("tramo", _tramo_v)
-                    if _costado_v: q = _so_reg_filtro_costado(q, _costado_v)
-                    if _cap_v:     q = q.eq("capitulo", _cap_v)
-                    if _sub_v:     q = q.eq("subcontratista_id", _sub_v)
-                    if _item_v:    q = q.ilike("item_numero", f"%{_item_v}%")
-                    return q.range(off, off + _pag_size - 1).execute().data
-                _page = supabase_execute(_val_page)
-                for r in _page:
-                    rid = r.get("reporte_id")
-                    if rid and rid not in _seen_rids:
-                        _seen_rids.add(rid)
-                        ids_val.append(rid)
-                if len(_page) < _pag_size:
-                    break
-                _pag_offset += _pag_size
-
-            if ids_val and _es_validacion_avanzada(_nivel_l):
-                ids_val = _filtrar_reporte_ids_excl_estados(
-                    contrato_id, ids_val, ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA
+        while True:
+            def _val_page(off=_pag_offset):
+                q0 = supabase.table("so_registros").select("reporte_id")\
+                    .eq("contrato_id", contrato_id)
+                q0 = _so_registros_q_y_capas_validacion(
+                    q0, capas_v, pk_id, _tramo_v, _costado_v, _cap_v, _sub_v, _item_v
                 )
+                return q0.range(off, off + _pag_size - 1).execute().data
+            _page = supabase_execute(_val_page)
+            for r in _page:
+                rid = r.get("reporte_id")
+                if rid and rid not in _seen_rids:
+                    _seen_rids.add(rid)
+                    ids_val.append(rid)
+            if len(_page) < _pag_size:
+                break
+            _pag_offset += _pag_size
 
-            if not ids_val:
-                return {"reportes": [], "total": 0, "offset": offset,
-                        "limit": limit, "hay_mas": False}
-            if reporte_ids_from_reg is not None:
-                reporte_ids_from_reg = list(set(reporte_ids_from_reg) & set(ids_val))
-            else:
-                reporte_ids_from_reg = ids_val
-            if not reporte_ids_from_reg:
-                return {"reportes": [], "total": 0, "offset": offset,
-                        "limit": limit, "hay_mas": False}
+        if ids_val and _validacion_cualquier_nivel2_o_3(capas_v):
+            ids_val = _filtrar_reporte_ids_excl_estados(
+                contrato_id, ids_val, ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA
+            )
+
+        if not ids_val:
+            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+        if reporte_ids_from_reg is not None:
+            reporte_ids_from_reg = list(set(reporte_ids_from_reg) & set(ids_val))
+        else:
+            reporte_ids_from_reg = ids_val
+        if not reporte_ids_from_reg:
+            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+
+        _nivel_l = CARGO_ID_NIVEL_MAP.get(int(capas_v[0]["cargo_id"]))
+        _ev_l = (capas_v[0].get("estado") or "").strip()
+        _prereq = CARGO_NIVEL_PRERREQUISITO.get(_nivel_l) if _nivel_l else None
 
     # Resolver semana_id desde numero_semana
     semana_id_filtro = None
@@ -5298,9 +5402,13 @@ def buscar_reportes_obra(
         # o vía bloque de validación; repetir en cabecera vacía el universo.
         # pk_id: restringido por reporte_ids_from_reg (líneas so_registros), no por cabecera.
         # abs_inicio/abs_final: ya aplicados por solape en so_registros (arriba)
+        _hay_n23_build = (
+            (_validacion_cualquier_nivel2_o_3(capas_v) if capas_v else False)
+            or (_nivel_l is not None and _es_validacion_avanzada(_nivel_l))
+        )
         if estado:
             q = _so_reportes_q_por_estado(q, estado)
-        elif _es_validacion_avanzada(_nivel_l):
+        elif _hay_n23_build:
             q = q.not_.in_("estado", list(ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA))
         # Importante: para validaciones por nivel, el universo debe definirse por
         # estado de so_registros (nivelX_estado), no por estado de so_reportes.
@@ -5388,16 +5496,11 @@ def buscar_reportes_obra(
                 # Mismo universo de líneas que el panel dinámico (abs / análisis)
                 q = _so_reg_filtro_abs_solape(q, abs_inicio, abs_final)
 
-                # Validación por nivel (nivel 1/2/3) — misma lógica que filtros principales
-                if _nivel_l and _ev_l:
-                    if _prereq:
-                        q = q.eq(_prereq[0], _prereq[1])
-                    if _ev_l in ("No Revisado", "No Revisados"):
-                        q = _so_reg_or_pendiente_nivel(q, _nivel_l)
-                    else:
-                        q = q.eq(_nivel_l, _ev_l)
-                    if _es_validacion_avanzada(_nivel_l):
-                        q = _so_reg_item_asignado(q)
+                # Misma semántica AND que el bloque de ids_val (varias capas en la misma línea)
+                if capas_v and not _estado_filtro_omite_validacion_por_cargo(estado):
+                    q = _so_registros_q_y_capas_validacion(
+                        q, capas_v, pk_id, tramo, costado, capitulo, subcontratista_id, item
+                    )
 
                 return q.limit(5000).execute().data
             reg_estados = supabase_execute(_reg_estados)
@@ -5477,9 +5580,10 @@ class ExportarRegistrosBody(BaseModel):
     abs_final: Optional[float] = None
     estado: Optional[str] = None
 
-    # Validación por nivel (viene de capasValidacion[0])
+    # Validación por nivel (JSON [{cargo_id, estado}, ...] o capasValidacion[0] vía cargo_id/estado)
     cargo_id: Optional[int] = None
     estado_validacion: Optional[str] = None
+    validacion_capas: Optional[str] = None
 
     q_observacion: Optional[str] = None
     q_nodo: Optional[str] = None
@@ -5639,22 +5743,22 @@ def exportar_registros_sicoe(
         if body.q_observacion is not None and str(body.q_observacion).strip():
             q = q.ilike("observacion", f"%{str(body.q_observacion).strip()}%")
 
-        # Validación por nivel (cargo_id + estado_validacion)
-        if body.cargo_id is not None and body.estado_validacion \
-                and not _estado_filtro_omite_validacion_por_cargo(body.estado):
-            nivel_field = CARGO_ID_NIVEL_MAP.get(body.cargo_id)
-            if nivel_field:
-                prereq = CARGO_NIVEL_PRERREQUISITO.get(nivel_field)
-                if prereq:
-                    q = q.eq(prereq[0], prereq[1])
-
-                ev = body.estado_validacion
-                if ev in ("No Revisado", "No Revisados"):
-                    q = _so_reg_or_pendiente_nivel(q, nivel_field)
-                else:
-                    q = q.eq(nivel_field, ev)
-                if _es_validacion_avanzada(nivel_field):
-                    q = _so_reg_item_asignado(q)
+        # Validación: _parse reúne validacion_capas JSON y/o cargo_id+estado (una o varias capas = AND)
+        if not _estado_filtro_omite_validacion_por_cargo(body.estado):
+            capas_exp = _parse_validacion_capas_param(
+                body.validacion_capas, body.cargo_id, body.estado_validacion
+            )
+            if capas_exp:
+                q = _so_registros_q_y_capas_validacion(
+                    q,
+                    capas_exp,
+                    body.pk_id,
+                    body.tramo,
+                    body.costado,
+                    body.capitulo,
+                    body.subcontratista_id,
+                    body.item,
+                )
 
         return q
 
@@ -5679,8 +5783,15 @@ def exportar_registros_sicoe(
             except Exception:
                 rep_map = {}
 
-        _nf_ex = CARGO_ID_NIVEL_MAP.get(body.cargo_id) if body.cargo_id and body.estado_validacion else None
-        if _nf_ex and _es_validacion_avanzada(_nf_ex):
+        _capas_enr = _parse_validacion_capas_param(
+            body.validacion_capas, body.cargo_id, body.estado_validacion
+        )
+        _nf_legacy = CARGO_ID_NIVEL_MAP.get(body.cargo_id) if body.cargo_id and body.estado_validacion else None
+        _filtrar_rep_pub_n23 = (
+            (_capas_enr and _validacion_cualquier_nivel2_o_3(_capas_enr))
+            or (_nf_legacy and _es_validacion_avanzada(_nf_legacy))
+        )
+        if _filtrar_rep_pub_n23:
             rows = [
                 r for r in rows
                 if (rep_map.get(r.get("reporte_id")) or {}).get("estado") not in ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA
@@ -5885,6 +5996,7 @@ def analisis_registros_obra(
     pk_id:            Optional[int]   = None,
     cargo_id:         Optional[int]   = None,
     estado_validacion: Optional[str]  = None,
+    validacion_capas: Optional[str] = None,
     q_observacion: Optional[str] = None,
     q_nodo: Optional[str] = None,
     current_user=Depends(get_current_user)
@@ -5937,16 +6049,16 @@ def analisis_registros_obra(
     if semana is not None and semana_id is None:
         return _empty
 
-    # ── 3. Campo de validación (necesario antes de filtrar registros) ─────────
+    # ── 3. Campo de validación (KPI panel: primera capa; filtro SQL: todas con AND) ─
+    capas_ana = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
     _val_campo_l = None
     _val_estado_l = None
-    _val_prereq_l = None
-    if cargo_id is not None and estado_validacion and not _estado_filtro_omite_validacion_por_cargo(estado):
-        _c = CARGO_ID_NIVEL_MAP.get(cargo_id)
+    if capas_ana and not _estado_filtro_omite_validacion_por_cargo(estado):
+        _c0 = capas_ana[0]
+        _c = CARGO_ID_NIVEL_MAP.get(int(_c0["cargo_id"]))
         if _c:
-            _val_campo_l  = _c
-            _val_estado_l = estado_validacion
-            _val_prereq_l = CARGO_NIVEL_PRERREQUISITO.get(_c)
+            _val_campo_l = _c
+            _val_estado_l = (_c0.get("estado") or "").strip()
 
     # ── 4. Filtros AND a nivel so_reportes (misma idea que export / buscar grilla) ─
     # tramo/costado van en so_registros (paso 5). subcontratista_id va en registros.
@@ -6013,7 +6125,7 @@ def analisis_registros_obra(
     registros = []
     try:
         _a_l=acta_id; _s_l=semana_id; _it_l=item; _rp_l=reporte_ids_base
-        _vc_l=_val_campo_l; _ve_l=_val_estado_l; _vp_l=_val_prereq_l
+        _capas_sql = capas_ana
         _nr = numero_registro
         off = 0
         while True:
@@ -6038,15 +6150,10 @@ def analisis_registros_obra(
                     q = q.eq("pk_id_id", pk_id)
                 if q_observacion is not None and str(q_observacion).strip():
                     q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
-                if _vc_l and _ve_l:
-                    if _vp_l:
-                        q = q.eq(_vp_l[0], _vp_l[1])
-                    if _ve_l in ('No Revisado', 'No Revisados'):
-                        q = _so_reg_or_pendiente_nivel(q, _vc_l)
-                    else:
-                        q = q.eq(_vc_l, _ve_l)
-                    if _es_validacion_avanzada(_vc_l):
-                        q = _so_reg_item_asignado(q)
+                if _capas_sql and not _estado_filtro_omite_validacion_por_cargo(estado):
+                    q = _so_registros_q_y_capas_validacion(
+                        q, _capas_sql, pk_id, tramo, costado, _cap_l, _sub_l, _it_l
+                    )
                 return q.range(o, o + 999).execute().data
             batch = supabase_execute(_regs)
             raw_len = len(batch)
@@ -6058,7 +6165,8 @@ def analisis_registros_obra(
         if not registros:
             registros = []
 
-    if _val_campo_l and _es_validacion_avanzada(_val_campo_l) and registros:
+    if capas_ana and _validacion_cualquier_nivel2_o_3(capas_ana) and registros \
+            and not _estado_filtro_omite_validacion_por_cargo(estado):
         _rp_ids = list({r.get("reporte_id") for r in registros if r.get("reporte_id")})
         _est_map: dict = {}
         for _i in range(0, len(_rp_ids), 500):
@@ -6094,9 +6202,9 @@ def analisis_registros_obra(
 
     # ── 7. Agrupar según modo ─────────────────────────────────────────────────
     def _estado_efectivo(reg):
-        # Si hay filtro de validación activo, usar solo el estado del nivel filtrado
-        if _vc_l:
-            estado = reg.get(_vc_l) or ""
+        # Si hay filtro de validación activo, usar solo el estado del nivel (primera capa) para KPI
+        if _val_campo_l:
+            estado = reg.get(_val_campo_l) or ""
             if estado == "Aprobado":  return "Aprobado"
             if estado == "Pendiente": return "Pendiente"
             if estado == "Rechazado": return "Rechazado"
@@ -6262,15 +6370,18 @@ def analisis_registros_obra(
             partes.append(f"Abs. ≥ {abs_inicio}")
         if abs_final is not None:
             partes.append(f"Abs. ≤ {abs_final}")
-        if cargo_id is not None and estado_validacion:
-            cargo_lbl = f"cargo {cargo_id}"
-            try:
-                c = supabase.table("cargos").select("nombre").eq("id", cargo_id).single().execute().data
-                if c and c.get("nombre"):
-                    cargo_lbl = c["nombre"]
-            except Exception:
-                pass
-            partes.append(f"Val. {cargo_lbl}: {estado_validacion}")
+        if capas_ana:
+            for capx in capas_ana:
+                cid = int(capx["cargo_id"])
+                evx = (capx.get("estado") or "").strip()
+                cargo_lbl = f"cargo {cid}"
+                try:
+                    c = supabase.table("cargos").select("nombre").eq("id", cid).single().execute().data
+                    if c and c.get("nombre"):
+                        cargo_lbl = c["nombre"]
+                except Exception:
+                    pass
+                partes.append(f"Val. {cargo_lbl}: {evx}")
         encabezado = " · ".join(partes) if partes else "Todos los registros"
 
     tc  = round(sum(g["costo_directo"]   for g in grupos_list), 2)
@@ -6548,6 +6659,7 @@ def obtener_reporte(
     reporte_id: int,
     cargo_id: Optional[int] = Query(None),
     estado_validacion: Optional[str] = Query(None),
+    validacion_capas: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
     def _r():
@@ -6559,9 +6671,15 @@ def obtener_reporte(
     def _pts():
         return supabase.table("so_puntos_topograficos").select("*")\
             .eq("reporte_id", reporte_id).order("id").execute().data
-    reporte = supabase_execute(_r)
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        fut_rep = ex.submit(lambda: supabase_execute(_r))
+        fut_reg = ex.submit(lambda: supabase_execute(_reg))
+        fut_pts = ex.submit(lambda: supabase_execute(_pts))
+    reporte = fut_rep.result()
     if not reporte:
         raise HTTPException(status_code=404, detail="Reporte no encontrado")
+    regs_raw = fut_reg.result()
+    puntos_rows = fut_pts.result()
     r = reporte[0]
     sub = r.pop("subcontratistas", None)
     r["subcontratista_nombre"] = sub["razon_social"] if sub else None
@@ -6574,8 +6692,9 @@ def obtener_reporte(
         r["calzada"]        = r.get("calzada") or pk.get("calzada")
     else:
         r["pk_id_valor"] = None
-    regs_raw = supabase_execute(_reg)
-    regs_raw = _filtrar_registros_validacion_sicoe(regs_raw, cargo_id, estado_validacion, r)
+    _capas_det = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
+    if _capas_det:
+        regs_raw = _filtrar_registros_validacion_capas_sicoe(regs_raw, _capas_det, r)
     reg_ids = [reg["id"] for reg in regs_raw if reg.get("id")]
     num_comentarios_map = {}
     if reg_ids:
@@ -6593,7 +6712,7 @@ def obtener_reporte(
     for reg in regs_raw:
         reg["num_comentarios"] = num_comentarios_map.get(reg["id"], 0)
     r["registros"] = regs_raw
-    r["puntos"] = supabase_execute(_pts)
+    r["puntos"] = puntos_rows
 
     # Resolver nombre del modificador
     modificado_por = r.get("modificado_por")
@@ -9048,6 +9167,7 @@ def get_reporte_de_registro(
     registro_id: int,
     cargo_id: Optional[int] = Query(None),
     estado_validacion: Optional[str] = Query(None),
+    validacion_capas: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
     try:
@@ -9075,7 +9195,9 @@ def get_reporte_de_registro(
         sub = r.pop("subcontratistas", None)
         r["subcontratista_nombre"] = sub["razon_social"] if sub else None
         regs_raw = supabase_execute(_reg)
-        regs_raw = _filtrar_registros_validacion_sicoe(regs_raw, cargo_id, estado_validacion, r)
+        _capas_gr = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
+        if _capas_gr:
+            regs_raw = _filtrar_registros_validacion_capas_sicoe(regs_raw, _capas_gr, r)
         reg_ids = [reg["id"] for reg in regs_raw if reg.get("id")]
         num_comentarios_map = {}
         if reg_ids:
