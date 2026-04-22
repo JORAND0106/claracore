@@ -16,6 +16,15 @@ import ExcelJS from 'exceljs'
 import { API_BASE, logApiFailure } from './apiBase'
 
 const API = API_BASE
+/** Contratos donde el plano de filtros no usa GPS de reportes: solo agregación por PK (sin nodos naranja ni coords de reporte). .env: VITE_SICOE_CONTRATOS_SIN_NODOS_REPORTE_GPS=12,34 */
+const SICOE_CONTRATOS_SIN_NODOS_REPORTE_GPS = new Set(
+  String(import.meta.env.VITE_SICOE_CONTRATOS_SIN_NODOS_REPORTE_GPS || '')
+    .split(/[,;]+/)
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(s => parseInt(s, 10))
+    .filter(n => !Number.isNaN(n))
+)
 const POLITICAS_TEXTO_VERSION = '1.0'
 const TEST_MODE = String(import.meta.env.VITE_TEST_MODE || '').toLowerCase() === 'true'
 
@@ -3639,13 +3648,15 @@ const ETIQUETAS_VALIDACION = [
   '14. Relacionada con Balance de Obra',
 ]
 
-const COLOR_ESTADO = { Aprobado: '#16a34a', Pendiente: '#d97706', Rechazado: '#dc2626', 'No Objeto de Cobro': '#dc2626' }
+const COLOR_ESTADO = { Aprobado: '#16a34a', Pendiente: '#d97706', Rechazado: '#dc2626', 'No Objeto de Cobro': '#dc2626', Mensaje: '#10B981', Comentario: '#0077B6' }
 
 function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL, hdrs,
                                      estadoValidando, nivelValidacion, obligatorio,
+                                     modoConversacion = false, zIndexOverlay = 2000,
                                      onConfirmar, onCancelar }) {
   const [usuarios,      setUsuarios]      = useState([])
   const [destinatarios, setDestinatarios] = useState([])
+  const [busquedaDest,  setBusquedaDest]  = useState('')
   const [etiqueta,      setEtiqueta]      = useState('')
   const [asunto,        setAsunto]        = useState('')
   const [mensaje,       setMensaje]       = useState('')
@@ -3653,8 +3664,19 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
   const [enlaces,       setEnlaces]       = useState([])
   const [error,         setError]         = useState('')
 
-  const esObligatorio = obligatorio || estadoValidando === 'Pendiente' || estadoValidando === 'Rechazado' || estadoValidando === 'No Objeto de Cobro'
+  const esObligatorio = modoConversacion
+    ? !!obligatorio
+    : (obligatorio || estadoValidando === 'Pendiente' || estadoValidando === 'Rechazado' || estadoValidando === 'No Objeto de Cobro')
   const colorEstado   = COLOR_ESTADO[estadoValidando] || t.primary
+  const usuariosFiltrados = (() => {
+    const q = busquedaDest.trim().toLowerCase()
+    if (!q) return usuarios
+    return usuarios.filter(u => {
+      const nombre = `${u.nombre || ''} ${u.apellidos || ''}`.trim().toLowerCase()
+      const cargo = `${u.cargo_nombre || u.cargo || ''}`.toLowerCase()
+      return nombre.includes(q) || cargo.includes(q) || `${nombre} ${cargo}`.includes(q)
+    })
+  })()
 
   useEffect(() => {
     fetch(`${API_URL}/actas/${contrato_id}/usuarios-contrato`, { headers: hdrs })
@@ -3677,6 +3699,12 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
     )
   }
 
+  const iS = {
+    width: '100%', background: t.inputBg, border: `1.5px solid ${t.inputBorder}`,
+    borderRadius: '10px', padding: '10px 13px', color: t.text, fontSize: '13px',
+    outline: 'none', boxSizing: 'border-box',
+  }
+
   const agregarEnlace = () => {
     const url = enlaceInput.trim()
     if (!url) return
@@ -3688,10 +3716,9 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
 
   const validar = () => {
     if (esObligatorio) {
-      if (!destinatarios.length) { setError('Selecciona al menos un destinatario.'); return false }
-      if (!etiqueta)             { setError('Selecciona una etiqueta de observación.'); return false }
-      if (!asunto.trim())        { setError('El asunto es obligatorio.'); return false }
-      if (!mensaje.trim())       { setError('El mensaje es obligatorio.'); return false }
+      if (!destinatarios.length) { setError('Indica al menos un destinatario (para quién va el mensaje).'); return false }
+      if (!modoConversacion && !etiqueta) { setError('Selecciona una etiqueta de observación.'); return false }
+      if (!mensaje.trim())       { setError('El cuerpo del mensaje es obligatorio.'); return false }
     }
     setError('')
     return true
@@ -3699,22 +3726,22 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
 
   const confirmar = () => {
     if (!validar()) return
-    onConfirmar({ destinatarios, etiqueta, asunto, mensaje, enlaces })
+    onConfirmar({
+      destinatarios,
+      etiqueta: modoConversacion ? null : etiqueta,
+      asunto: asunto.trim() || null,
+      mensaje,
+      enlaces,
+    })
   }
 
   const confirmarSinComentario = () => {
     onConfirmar(null)
   }
 
-  const iS = {
-    width: '100%', background: t.inputBg, border: `1.5px solid ${t.inputBorder}`,
-    borderRadius: '10px', padding: '10px 13px', color: t.text, fontSize: '13px',
-    outline: 'none', boxSizing: 'border-box',
-  }
-
   return (
     <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 2000,
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: zIndexOverlay,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
     }} onClick={onCancelar}>
       <div style={{
@@ -3729,10 +3756,12 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
           <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: colorEstado, flexShrink: 0 }} />
           <div>
             <div style={{ fontSize: '13px', fontWeight: '700', color: t.text }}>
-              Comentario de validación
+              {modoConversacion ? 'Nueva conversación' : 'Comentario de validación'}
             </div>
             <div style={{ fontSize: '11px', color: colorEstado, fontWeight: '600', marginTop: '2px' }}>
-              Estado: {estadoValidando} · Nivel {nivelValidacion}
+              {modoConversacion
+                ? `Registro #${registro?.numero_registro ?? '—'} · Nivel ${nivelValidacion}`
+                : `Estado: ${estadoValidando} · Nivel ${nivelValidacion}`}
             </div>
           </div>
           <button onClick={onCancelar} style={{ marginLeft: 'auto', background: 'none', border: 'none',
@@ -3745,14 +3774,25 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
           {/* Destinatarios */}
           <div>
             <div style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '8px' }}>
-              PARA {esObligatorio && <span style={{ color: '#dc2626' }}>*</span>}
+              PARA (destinatario) {esObligatorio && <span style={{ color: '#dc2626' }}>*</span>}
             </div>
+            <input
+              type="search"
+              value={busquedaDest}
+              onChange={e => setBusquedaDest(e.target.value)}
+              placeholder="Buscar por nombre o cargo…"
+              style={{ ...iS, marginBottom: '8px' }}
+              autoComplete="off"
+            />
             <div style={{ maxHeight: '140px', overflowY: 'auto', border: `1.5px solid ${t.inputBorder}`,
                           borderRadius: '10px', padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
               {usuarios.length === 0 && (
                 <div style={{ fontSize: '12px', color: t.textMuted, padding: '4px' }}>Cargando usuarios…</div>
               )}
-              {usuarios.map(u => {
+              {usuarios.length > 0 && usuariosFiltrados.length === 0 && (
+                <div style={{ fontSize: '12px', color: t.textMuted, padding: '4px' }}>Ningún usuario coincide con la búsqueda.</div>
+              )}
+              {usuariosFiltrados.map(u => {
                 const sel = !!destinatarios.find(d => d.id === u.id)
                 return (
                   <div key={u.id} onClick={() => toggleDestinatario(u)}
@@ -3778,28 +3818,30 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
             </div>
           </div>
 
-          {/* Etiqueta */}
-          <div>
-            <div style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
-              ETIQUETA {esObligatorio && <span style={{ color: '#dc2626' }}>*</span>}
+          {/* Etiqueta (no aplica en conversación nueva desde el módulo de comentarios) */}
+          {!modoConversacion && (
+            <div>
+              <div style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
+                ETIQUETA {esObligatorio && <span style={{ color: '#dc2626' }}>*</span>}
+              </div>
+              <select value={etiqueta} onChange={e => setEtiqueta(e.target.value)} style={iS}>
+                <option value=''>— Selecciona una etiqueta —</option>
+                {[...ETIQUETAS_VALIDACION]
+                  .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
+                  .map(et => (
+                  <option key={et} value={et}>{et}</option>
+                ))}
+              </select>
             </div>
-            <select value={etiqueta} onChange={e => setEtiqueta(e.target.value)} style={iS}>
-              <option value=''>— Selecciona una etiqueta —</option>
-              {[...ETIQUETAS_VALIDACION]
-                .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
-                .map(et => (
-                <option key={et} value={et}>{et}</option>
-              ))}
-            </select>
-          </div>
+          )}
 
-          {/* Asunto */}
+          {/* Asunto (opcional) */}
           <div>
             <div style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
-              ASUNTO {esObligatorio && <span style={{ color: '#dc2626' }}>*</span>}
+              ASUNTO <span style={{ fontWeight: '400', textTransform: 'none' }}>(opcional)</span>
             </div>
             <input value={asunto} onChange={e => setAsunto(e.target.value)} style={iS}
-                   placeholder='Resumen breve del comentario' />
+                   placeholder='Opcional — asunto o referencia breve' />
           </div>
 
           {/* Mensaje */}
@@ -3857,7 +3899,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
                      borderRadius: '10px', color: t.textMuted, fontSize: '13px', cursor: 'pointer' }}>
             Cancelar
           </button>
-          {!esObligatorio && (
+          {!esObligatorio && !modoConversacion && (
             <button onClick={confirmarSinComentario}
               style={{ padding: '10px 18px', background: `${colorEstado}22`, border: `1.5px solid ${colorEstado}55`,
                        borderRadius: '10px', color: colorEstado, fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
@@ -3867,7 +3909,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
           <button onClick={confirmar}
             style={{ padding: '10px 18px', background: colorEstado, border: 'none',
                      borderRadius: '10px', color: '#fff', fontSize: '13px', fontWeight: '700', cursor: 'pointer' }}>
-            Confirmar con comentario
+            {modoConversacion ? 'Enviar mensaje' : 'Confirmar con comentario'}
           </button>
         </div>
       </div>
@@ -4965,6 +5007,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [listaCaps, setListaCaps]                  = useState([])
   const [listasLoaded, setListasLoaded]            = useState(false)
   const [modalComentarios, setModalComentarios]    = useState(null)   // { reg } o null
+  const [popupNuevoComentObra, setPopupNuevoComentObra] = useState(null) // { reg } — crear conversación desde el modal
   const [modalTrazabilidadSicoe, setModalTrazabilidadSicoe] = useState(null) // { reg }
   const [comentariosData, setComentariosData]      = useState([])
   const [loadingComentarios, setLoadingComentarios] = useState(false)
@@ -6031,7 +6074,24 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 {loadingComentarios
                   ? <div style={{ textAlign:'center', padding:'30px', color:t.textMuted }}>Cargando...</div>
                   : comentariosData.length === 0
-                  ? <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'13px' }}>Sin comentarios aún</div>
+                  ? <div style={{ textAlign:'center', padding:'28px 16px' }}>
+                      <div style={{ fontSize:'13px', color:t.textMuted, marginBottom:'16px' }}>
+                        Aún no hay comentarios en este registro.
+                      </div>
+                      <button
+                        type="button"
+                        disabled={!nivelInfo.nivelValidacion}
+                        onClick={() => { if (nivelInfo.nivelValidacion) setPopupNuevoComentObra({ reg: modalComentarios.reg }) }}
+                        style={{
+                          background: color, color:'#fff', border:'none', borderRadius:'10px', padding:'10px 20px',
+                          fontSize:'13px', fontWeight:'700', cursor: nivelInfo.nivelValidacion ? 'pointer' : 'not-allowed',
+                          opacity: nivelInfo.nivelValidacion ? 1 : 0.5,
+                        }}
+                      >Crear comentario</button>
+                      {!nivelInfo.nivelValidacion && (
+                        <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'10px' }}>Tu perfil no tiene un nivel de validación asignado para iniciar comentarios.</div>
+                      )}
+                    </div>
                   : comentariosData.map(c => (
                     <div key={c.id} style={{ background:t.bg, borderRadius:'10px', padding:'12px', border:`1px solid ${color}33` }}>
                       <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
@@ -6086,10 +6146,79 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   ))
                 }
               </div>
+              {comentariosData.length > 0 && !loadingComentarios && (
+                <div style={{ marginTop:'12px', borderTop:`1px solid ${t.border}`, paddingTop:'12px', flexShrink:0 }}>
+                  <button
+                    type="button"
+                    disabled={!nivelInfo.nivelValidacion}
+                    onClick={() => { if (nivelInfo.nivelValidacion) setPopupNuevoComentObra({ reg: modalComentarios.reg }) }}
+                    style={{
+                      width:'100%',
+                      background: nivelInfo.nivelValidacion ? `${color}18` : t.bg,
+                      color: nivelInfo.nivelValidacion ? color : t.textMuted,
+                      border: `1.5px solid ${nivelInfo.nivelValidacion ? color + '55' : t.border}`,
+                      borderRadius:'10px', padding:'10px 14px', fontSize:'12px', fontWeight:'700',
+                      cursor: nivelInfo.nivelValidacion ? 'pointer' : 'not-allowed',
+                    }}
+                  >＋ Nueva conversación</button>
+                </div>
+              )}
             </div>
           </div>
         )
       })()}
+
+      {popupNuevoComentObra && nivelInfo.nivelValidacion && (
+        <PopupComentarioValidacion
+          t={t} usuario={usuario} registro={popupNuevoComentObra.reg}
+          contrato_id={contrato_id} API_URL={API_URL} hdrs={hdrs}
+          estadoValidando="Mensaje"
+          nivelValidacion={nivelInfo.nivelValidacion}
+          obligatorio={true}
+          modoConversacion={true}
+          zIndexOverlay={10400}
+          onConfirmar={async (comentarioData) => {
+            if (!comentarioData) return
+            const reg = popupNuevoComentObra.reg
+            const nv = nivelInfo.nivelValidacion
+            const body = {
+              ...comentarioData,
+              rol_origen: nivelInfo.rolOrigen,
+              tipo: 'validacion',
+              nivel_validacion: nv,
+            }
+            try {
+              const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}/comentarios`, {
+                method: 'POST', headers: hdrs, body: JSON.stringify(body),
+              })
+              if (!res.ok) {
+                const err = await res.json().catch(() => ({}))
+                const detail = err?.detail
+                let msg = `Error ${res.status}`
+                if (typeof detail === 'string') msg = detail
+                else if (Array.isArray(detail)) msg = detail.map(x => x?.msg || JSON.stringify(x)).join(', ')
+                else if (detail && typeof detail === 'object') msg = JSON.stringify(detail)
+                throw new Error(msg)
+              }
+              setPopupNuevoComentObra(null)
+              await recargar()
+              if (modalComentarios?.reg?.id === reg.id) {
+                setLoadingComentarios(true)
+                const rolOrigen = modalComentarios.rolOrigen
+                const rList = await fetch(
+                  `${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}/comentarios?rol_solicitante=${rolOrigen}`,
+                  { headers: hdrs },
+                )
+                if (rList.ok) setComentariosData(await rList.json())
+                setLoadingComentarios(false)
+              }
+            } catch (e) {
+              alert(e?.message || String(e))
+            }
+          }}
+          onCancelar={() => setPopupNuevoComentObra(null)}
+        />
+      )}
 
       {modalTrazabilidadSicoe && (
         <TrazabilidadRegistroModal
@@ -6200,6 +6329,53 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   /** Evita que una respuesta antigua de red sobrescriba grilla/panel (p. ej. tras «Volver»). */
   const sicoeBusquedaSeqRef = useRef(0)
   const sicoeAnalisisSeqRef = useRef(0)
+  /** Refinamiento en servidor tras una búsqueda base (observación / nodo inicio o final). */
+  const [sicoeFiltroObs, setSicoeFiltroObs] = useState('')
+  const [sicoeFiltroNodo, setSicoeFiltroNodo] = useState('')
+  const sicoeFiltroObsRef = useRef('')
+  const sicoeFiltroNodoRef = useRef('')
+  useEffect(() => { sicoeFiltroObsRef.current = sicoeFiltroObs }, [sicoeFiltroObs])
+  useEffect(() => { sicoeFiltroNodoRef.current = sicoeFiltroNodo }, [sicoeFiltroNodo])
+  const hadSicoeRefineRef = useRef(false)
+
+  /** Panel de filtros SICOE (todo el bloque) colapsable. */
+  const [sicoeFiltrosPanelOpen, setSicoeFiltrosPanelOpen] = useState(true)
+  /** Maestro PK + plano del contrato para el selector visual (sin mostrar código interno). */
+  const [sicoePkList, setSicoePkList] = useState([])
+  const [sicoePlanoGeojson, setSicoePlanoGeojson] = useState(null)
+  const [sicoeContratoCentro, setSicoeContratoCentro] = useState(null)
+  const sicoeFiltroMapaRef = useRef(null)
+  const sicoeFiltroMapaInst = useRef(null)
+  const sicoeFiltroMarkersRef = useRef([])
+  const sicoeMapFiltroApplyPkRef = useRef(() => {})
+  const sicoeMapaOpenReporteRef = useRef(() => {})
+  const buscarReportesSicoeRef = useRef(null)
+  const cargarAnalisisSicoeRef = useRef(null)
+  const sicoeFiltroPkSelRef = useRef('')
+
+  useEffect(() => {
+    if (!contrato_id) return
+    const hdrs = { Authorization: `Bearer ${getToken()}` }
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/pk-ids`, { headers: hdrs })
+      .then(r => r.json())
+      .then(d => setSicoePkList(Array.isArray(d) ? d : []))
+      .catch(() => setSicoePkList([]))
+    fetch(`${API_URL}/contratos`, { headers: hdrs })
+      .then(r => (r.ok ? r.json() : []))
+      .then(list => {
+        const c = Array.isArray(list) ? list.find(x => x.id === contrato_id) : null
+        setSicoePlanoGeojson(c?.plano_geojson || null)
+        setSicoeContratoCentro(
+          c?.centro_lat != null && c?.centro_lng != null
+            ? { lat: c.centro_lat, lng: c.centro_lng }
+            : null,
+        )
+      })
+      .catch(() => {
+        setSicoePlanoGeojson(null)
+        setSicoeContratoCentro(null)
+      })
+  }, [contrato_id])
 
   useEffect(() => {
     if (!navReporteId) return
@@ -6215,14 +6391,11 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     onNavReporteConsumed?.()
   }, [navReporteId])
 
-  const ESTADOS = ['Borrador','Sin Asignar Ítem','No Revisados','Aprobados','Pendientes','Rechazados','No Objeto de Cobro','En Papelera']
+  const ESTADOS = ['Borrador', 'Sin Asignar Ítem', 'No Revisados', 'No Objeto de Cobro', 'En Papelera']
   const ESTADO_COLORS = {
     'Borrador': '#6B7280',
     'Sin Asignar Ítem': '#F59E0B',
     'No Revisados': '#0077B6',
-    'Aprobados': '#10B981',
-    'Pendientes': '#3B82F6',
-    'Rechazados': '#EF4444',
     'No Objeto de Cobro': '#8B5CF6',
     'En Papelera': '#374151',
   }
@@ -6245,6 +6418,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       capas.length > 0 &&
       capas[0].cargo_id != null && capas[0].cargo_id !== '' &&
       String(capas[0].estado || '').trim() !== ''
+    // Cualquier campo de la barra (incl. solo abscisa) cuenta: AND entre columnas al pulsar Buscar
     const tieneGrid = Object.values(ef).some(v => v !== '' && v != null)
     return tieneCapa || tieneGrid
   }
@@ -6394,6 +6568,10 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         params.append('cargo_id', capas[0].cargo_id)
         params.append('estado_validacion', capas[0].estado)
       }
+      const oObs = sicoeFiltroObsRef.current?.trim()
+      const oNod = sicoeFiltroNodoRef.current?.trim()
+      if (oObs) params.append('q_observacion', oObs)
+      if (oNod) params.append('q_nodo', oNod)
       const baseParams = new URLSearchParams(params)
       const PAGE_SIZE = 50
       const fetchPage = async (offset) => {
@@ -6526,17 +6704,35 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       const ef = { ...nuevosFiltros }
       if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
       const camposAnalisis = ['acta_rpo','semana','subcontratista_id','capitulo','item','tramo','costado','abs_inicio','abs_final','estado','numero_reporte','numero_registro','pk_id']
-      camposAnalisis.forEach(k => { if (ef[k] !== '' && ef[k] != null) params.append(k, ef[k]) })
+      camposAnalisis.forEach(k => {
+        const v = ef[k]
+        if (v === '' || v == null) return
+        if (k === 'abs_inicio' || k === 'abs_final') {
+          const n = Number(v)
+          if (Number.isFinite(n)) params.append(k, String(n))
+          return
+        }
+        params.append(k, v)
+      })
       if (capas.length > 0) {
         params.append('cargo_id', capas[0].cargo_id)
         params.append('estado_validacion', capas[0].estado)
       }
+      const oObsA = sicoeFiltroObsRef.current?.trim()
+      const oNodA = sicoeFiltroNodoRef.current?.trim()
+      if (oObsA) params.append('q_observacion', oObsA)
+      if (oNodA) params.append('q_nodo', oNodA)
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/analisis?${params}`, {
         headers: { Authorization: `Bearer ${getToken()}` }
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        if (seq === sicoeAnalisisSeqRef.current) setAnalisis(null)
+        return
+      }
       if (seq !== sicoeAnalisisSeqRef.current) return
-      setAnalisis(data)
+      if (data && Array.isArray(data.grupos)) setAnalisis(data)
+      else setAnalisis(null)
     } catch(e) {
       if (seq === sicoeAnalisisSeqRef.current) setAnalisis(null)
     } finally {
@@ -6581,6 +6777,49 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     return [{ cargo_id: cargoIdUsuario, cargo_nombre: cargoNombreUsuario, estado: 'No Revisado' }]
   })
   const [capaTemp, setCapaTemp] = useState({ cargo_id: '', cargo_nombre: '', estado: '' })
+
+  const filtrosSicoeRef = useRef(filtros)
+  filtrosSicoeRef.current = filtros
+  sicoeFiltroPkSelRef.current = filtros.pk_id
+  const capasSicoeRef = useRef(capasValidacion)
+  capasSicoeRef.current = capasValidacion
+
+  buscarReportesSicoeRef.current = buscarReportes
+  cargarAnalisisSicoeRef.current = cargarAnalisis
+  sicoeMapFiltroApplyPkRef.current = (pkIdInt) => {
+    const nf = { ...filtrosSicoeRef.current, pk_id: String(pkIdInt) }
+    setFiltros(nf)
+    buscarReportesSicoeRef.current?.(nf, 0, capasSicoeRef.current)
+    cargarAnalisisSicoeRef.current?.(nf, capasSicoeRef.current)
+  }
+  sicoeMapaOpenReporteRef.current = async (rid) => {
+    try {
+      const u = urlReporteDetalle(rid, capasSicoeRef.current)
+      const r = await fetch(u, { headers: { Authorization: `Bearer ${getToken()}` } })
+      const data = await r.json()
+      if (data?.id) {
+        setReporteSeleccionado(data)
+        setModalCarpeta(true)
+      }
+    } catch { /* ignore */ }
+  }
+
+  useEffect(() => {
+    if (!contrato_id) return
+    if (!tieneParametrosBusquedaSicoe(filtrosSicoeRef.current, capasSicoeRef.current)) return
+    const hasR = !!(sicoeFiltroObs?.trim() || sicoeFiltroNodo?.trim())
+    if (!hasR) {
+      if (!hadSicoeRefineRef.current) return
+      hadSicoeRefineRef.current = false
+    } else {
+      hadSicoeRefineRef.current = true
+    }
+    const t = setTimeout(() => {
+      buscarReportes(filtrosSicoeRef.current, 0, capasSicoeRef.current)
+      cargarAnalisis(filtrosSicoeRef.current, capasSicoeRef.current)
+    }, 400)
+    return () => clearTimeout(t)
+  }, [sicoeFiltroObs, sicoeFiltroNodo, contrato_id])
 
   /** Vuelve un nivel en el panel (ítem → capítulo → vista general) sin limpiar el resto de filtros. */
   const volverPanelAnterior = async () => {
@@ -6647,6 +6886,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     return cargosValidacionList.filter(c => c.id === cargoIdUsuario)
   }, [cargosValidacionList, cargoIdUsuario, nivelInfo.esApoyoTecnico])
   const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'' }
+  /** Abscisas y nodos en cabecera de reporte (grilla SICOE). */
+  const fmtSicoeRangoCabecera = (a, b) => {
+    const pa = a != null && String(a).trim() !== '' ? String(a).trim() : '—'
+    const pb = b != null && String(b).trim() !== '' ? String(b).trim() : '—'
+    if (pa === '—' && pb === '—') return '—'
+    return `${pa} → ${pb}`
+  }
   const reportesMostrados = useMemo(() => {
     if (capasValidacion.length <= 1) return reportes
     const cargoIdMap = {
@@ -6664,8 +6910,238 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         return estados.includes(capa.estado)
       })
     )
-  }, [reportes, capasValidacion]) 
-const limpiarFiltros = () => {
+  }, [reportes, capasValidacion])
+
+  const sicoePuntosPlano = useMemo(() => {
+    const ignorarGpsReportes = contrato_id != null && SICOE_CONTRATOS_SIN_NODOS_REPORTE_GPS.has(Number(contrato_id))
+    const defLng = sicoeContratoCentro?.lng ?? -74.0817
+    const defLat = sicoeContratoCentro?.lat ?? 4.6097
+    const center = [defLng, defLat]
+    const metaFromPk = (pk) => {
+      const e = [pk.civ, pk.tramo, pk.infraestructura].filter(Boolean).join(' · ')
+      return e || 'Ubicación en obra'
+    }
+    const pts = []
+    if (!busquedaRealizada || reportesMostrados.length === 0) return pts
+    const byPk = new Map()
+    const pkMeta = new Map(sicoePkList.map(p => [p.id, p]))
+    for (const rep of reportesMostrados) {
+      const pid = rep.pk_id_id
+      const la = rep.coord_lat
+      const lo = rep.coord_lng
+      const hasCoord = !ignorarGpsReportes && la != null && lo != null && !Number.isNaN(+la) && !Number.isNaN(+lo)
+      if (pid == null) {
+        if (hasCoord) {
+          const lab = (rep.descripcion_actividad || '').trim().slice(0, 52) || `Reporte #${rep.numero_reporte ?? rep.id}`
+          pts.push({
+            pk_id_id: null,
+            reporte_id: rep.id,
+            soloReporte: true,
+            etiqueta: lab,
+            lat: +la,
+            lng: +lo,
+            reportes_count: 1,
+            aproximado: false,
+          })
+        }
+        continue
+      }
+      if (!byPk.has(pid)) byPk.set(pid, { reps: [], lat: null, lng: null })
+      const g = byPk.get(pid)
+      g.reps.push(rep)
+      if (hasCoord && g.lat == null) {
+        g.lat = +la
+        g.lng = +lo
+      }
+    }
+    let i = 0
+    for (const [pid, g] of byPk) {
+      const meta = pkMeta.get(pid) || {}
+      const etiqueta = metaFromPk(meta)
+      let lat = g.lat
+      let lng = g.lng
+      const tiene = lat != null && lng != null
+      if (!tiene) {
+        const o = (i++) * 0.00015
+        lng = center[0] + Math.cos(i * 2.4) * o * 100
+        lat = center[1] + Math.sin(i * 2.4) * o * 100
+      }
+      pts.push({
+        pk_id_id: pid,
+        reporte_id: null,
+        soloReporte: false,
+        etiqueta,
+        lat,
+        lng,
+        reportes_count: g.reps.length,
+        aproximado: !tiene,
+      })
+    }
+    return pts
+  }, [busquedaRealizada, reportesMostrados, sicoePkList, sicoeContratoCentro, contrato_id])
+
+  const sicoeTienePlanoGeojson = useMemo(() => {
+    const g = sicoePlanoGeojson
+    if (!g || typeof g !== 'object') return false
+    if (g.type === 'FeatureCollection' && Array.isArray(g.features)) return g.features.length > 0
+    return Array.isArray(g.features) && g.features.length > 0
+  }, [sicoePlanoGeojson])
+
+  useLayoutEffect(() => {
+    if (!filtrosAvanzados || !contrato_id) return
+    const container = sicoeFiltroMapaRef.current
+    if (!container) return
+    const token = import.meta.env.VITE_MAPBOX_TOKEN
+    if (!token) return
+
+    const mapEl = document.createElement('div')
+    mapEl.style.width = '100%'
+    mapEl.style.height = '260px'
+    container.innerHTML = ''
+    container.appendChild(mapEl)
+
+    mapboxgl.accessToken = token
+    const center0 = sicoeContratoCentro?.lng != null && sicoeContratoCentro?.lat != null
+      ? [sicoeContratoCentro.lng, sicoeContratoCentro.lat]
+      : [-74.0817, 4.6097]
+    const map = new mapboxgl.Map({
+      container: mapEl,
+      style: t.bg === '#0A1628' ? 'mapbox://styles/mapbox/dark-v11' : 'mapbox://styles/mapbox/light-v11',
+      center: center0,
+      zoom: 11,
+      bearing: 90,
+    })
+    sicoeFiltroMapaInst.current = map
+    map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+
+    const puntos = sicoePuntosPlano
+    const pkList = sicoePkList
+    const geo = sicoeTienePlanoGeojson ? sicoePlanoGeojson : null
+
+    const marcar = () => {
+      sicoeFiltroMarkersRef.current.forEach(m => { try { m.remove() } catch { /* ignore */ } })
+      sicoeFiltroMarkersRef.current = []
+      puntos.forEach(pt => {
+        const el = document.createElement('div')
+        el.style.width = '14px'
+        el.style.height = '14px'
+        el.style.borderRadius = '50%'
+        const selPk = String(sicoeFiltroPkSelRef.current || '')
+        if (pt.soloReporte) {
+          el.style.background = '#f97316'
+        } else {
+          el.style.background = selPk === String(pt.pk_id_id) ? '#0077B6' : '#94a3b8'
+        }
+        el.style.border = '2px solid #fff'
+        el.style.boxShadow = '0 1px 4px rgba(0,0,0,0.35)'
+        el.style.cursor = 'pointer'
+        el.title = pt.etiqueta + (pt.aproximado ? ' (aprox.)' : '')
+        const m = new mapboxgl.Marker({ element: el }).setLngLat([pt.lng, pt.lat]).addTo(map)
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation()
+          if (pt.soloReporte && pt.reporte_id) {
+            sicoeMapaOpenReporteRef.current(pt.reporte_id)
+          } else if (pt.pk_id_id != null) {
+            sicoeMapFiltroApplyPkRef.current(pt.pk_id_id)
+          }
+        })
+        sicoeFiltroMarkersRef.current.push(m)
+      })
+    }
+
+    map.on('load', () => {
+      if (geo?.features?.length) {
+        const pkIdsFiltrados = new Set(puntos.filter(p => p.pk_id_id != null).map(p => String(p.pk_id_id)))
+        const enriched = {
+          ...geo,
+          features: geo.features.map(f => {
+            const lay = String(f.properties?.Layer ?? f.properties?.PK_ID ?? f.properties?.pk_id ?? '').trim()
+            const matchPk = pkList.find(p => String(p.pk_id).trim() === lay)
+            const inFilter = !!(matchPk && pkIdsFiltrados.has(String(matchPk.id)))
+            return {
+              ...f,
+              properties: {
+                ...f.properties,
+                _sicoe_opacity: inFilter ? 0.5 : 0.12,
+              },
+            }
+          }),
+        }
+        map.addSource('sicoe-filtro-plano', { type: 'geojson', data: enriched })
+        map.addLayer({
+          id: 'sicoe-filtro-plano-fill',
+          type: 'fill',
+          source: 'sicoe-filtro-plano',
+          paint: {
+            'fill-color': '#0077B6',
+            'fill-opacity': ['get', '_sicoe_opacity'],
+          },
+        })
+        map.addLayer({
+          id: 'sicoe-filtro-plano-line',
+          type: 'line',
+          source: 'sicoe-filtro-plano',
+          paint: { 'line-color': '#00A896', 'line-width': 1.2 },
+        })
+        map.on('click', 'sicoe-filtro-plano-fill', (e) => {
+          const feat = e.features?.[0]
+          if (!feat) return
+          const pkIdVal = String(feat.properties?.Layer ?? feat.properties?.PK_ID ?? feat.properties?.pk_id ?? '').trim()
+          const found = pkList.find(p => String(p.pk_id).trim() === pkIdVal)
+          if (found?.id) sicoeMapFiltroApplyPkRef.current(found.id)
+        })
+        map.on('mouseenter', 'sicoe-filtro-plano-fill', () => { map.getCanvas().style.cursor = 'pointer' })
+        map.on('mouseleave', 'sicoe-filtro-plano-fill', () => { map.getCanvas().style.cursor = '' })
+      }
+      marcar()
+      if (puntos.length > 0) {
+        try {
+          const lngs = puntos.map(p => p.lng)
+          const lats = puntos.map(p => p.lat)
+          map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 40, duration: 0, maxZoom: 15 })
+        } catch { /* ignore */ }
+      } else if (geo?.features?.length) {
+        const coords = geo.features.flatMap(f => {
+          const geom = f.geometry
+          if (!geom) return []
+          if (geom.type === 'Polygon') return geom.coordinates[0]
+          if (geom.type === 'MultiPolygon') return geom.coordinates.flat(2)
+          return []
+        })
+        if (coords.length > 0) {
+          const lngs = coords.map(c => c[0])
+          const lats = coords.map(c => c[1])
+          map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 24, duration: 0 })
+        }
+      }
+    })
+
+    return () => {
+      try {
+        map.remove()
+      } catch {
+        /* ignore */
+      }
+      sicoeFiltroMapaInst.current = null
+      sicoeFiltroMarkersRef.current.forEach(m => { try { m.remove() } catch { /* ignore */ } })
+      sicoeFiltroMarkersRef.current = []
+    }
+  }, [
+    filtrosAvanzados,
+    contrato_id,
+    sicoePlanoGeojson,
+    sicoeTienePlanoGeojson,
+    sicoePuntosPlano,
+    sicoePkList,
+    t.bg,
+    sicoeContratoCentro,
+    filtros.pk_id,
+  ])
+
+  const limpiarFiltros = () => {
+    hadSicoeRefineRef.current = false
+    setSicoeFiltroObs('')
+    setSicoeFiltroNodo('')
     setCapasValidacion(defaultCapasValidacion)
     setCapaTemp({ cargo_id: '', cargo_nombre: '', estado: '' })
     setFiltros(filtrosVacios)
@@ -6818,6 +7294,8 @@ const limpiarFiltros = () => {
         estado: fNorm.estado ?? null,
         cargo_id: capa0?.cargo_id ?? null,
         estado_validacion: capa0?.estado ?? null,
+        q_observacion: (sicoeFiltroObsRef.current && String(sicoeFiltroObsRef.current).trim()) || null,
+        q_nodo: (sicoeFiltroNodoRef.current && String(sicoeFiltroNodoRef.current).trim()) || null,
         campos: camposRequest,
       }
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/exportar`, {
@@ -6949,6 +7427,15 @@ const limpiarFiltros = () => {
 
   const inpStyle = { background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: '7px', padding: '5px 9px', color: t.text, fontSize: '12px', outline: 'none' }
   const selStyle = { ...inpStyle, cursor: 'pointer' }
+  const sicoePuedeRefinar = busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, capasValidacion)
+  const filtroLbl = { fontSize: '9px', fontWeight: '800', color: t.textMuted, letterSpacing: '0.45px', textTransform: 'uppercase', marginBottom: '2px' }
+  const filtroCard = {
+    padding: '8px 10px',
+    borderRadius: '8px',
+    border: `1px solid ${t.border}`,
+    background: t.inputBg || t.bg,
+    minWidth: 0,
+  }
 
   return (
     <div>
@@ -7011,7 +7498,7 @@ const limpiarFiltros = () => {
       <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', marginBottom:'16px', overflow:'hidden' }}>
         {cargandoAnalisis ? (
           <div style={{ padding:'14px 16px', textAlign:'center', color:t.textMuted, fontSize:'13px' }}>Calculando análisis...</div>
-        ) : analisis && analisis.grupos.length > 0 ? (
+        ) : analisis && analisis.modo && Array.isArray(analisis.grupos) ? (
           <>
             <div
               onClick={(e) => {
@@ -7272,139 +7759,249 @@ const limpiarFiltros = () => {
         )}
       </div>
 
-      {/* ── Barra de filtros ── */}
-      <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'12px 16px', marginBottom:'16px', position:'sticky', top:0, zIndex:10 }}>
-        {/* Fila 1 — Búsqueda principal */}
-        <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center' }}>
-          <input placeholder="N° Reporte" type="number" value={filtros.numero_reporte} onChange={e => setF('numero_reporte', e.target.value)}
-            style={{ ...inpStyle, width:'100px' }} />
-          <input placeholder="N° Registro" type="number" value={filtros.numero_registro} onChange={e => setF('numero_registro', e.target.value)}
-            style={{ ...inpStyle, width:'100px' }} />
-          <input placeholder="Semana" type="number" value={filtros.semana}
-            onChange={e => setF('semana', e.target.value)}
-            onBlur={e => actualizarFiltrosDisponibles({ ...filtros, semana: e.target.value })}
-            style={{ ...inpStyle, width:'80px' }} />
-          <div style={{ position:'relative' }}>
-            <input placeholder="Acta RPO" type="number" value={filtros.acta_rpo}
-              onChange={e => { setF('acta_rpo', e.target.value); setMostrarSugsActa(true) }}
-              onFocus={() => { if (filtroActaList.length > 0) setMostrarSugsActa(true) }}
-              onBlur={() => setTimeout(() => setMostrarSugsActa(false), 150)}
-              style={{ ...inpStyle, width:'90px' }} />
-            {mostrarSugsActa && filtroActaList.filter(a => !filtros.acta_rpo || String(a.numero_rpo).startsWith(String(filtros.acta_rpo))).length > 0 && (
-              <div style={{ position:'absolute', top:'100%', left:0, zIndex:50, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', minWidth:'120px', maxHeight:'200px', overflowY:'auto', boxShadow:'0 4px 16px #0004', marginTop:'2px' }}>
-                {filtroActaList.filter(a => !filtros.acta_rpo || String(a.numero_rpo).startsWith(String(filtros.acta_rpo))).map(a => (
-                  <div key={a.numero_rpo}
-                    onMouseDown={() => {
-                      setF('acta_rpo', String(a.numero_rpo))
-                      setMostrarSugsActa(false)
-                      actualizarFiltrosDisponibles({ ...filtros, acta_rpo: String(a.numero_rpo) })
-                    }}
-                    style={{ padding:'7px 12px', cursor:'pointer', fontSize:'12px', borderBottom:`1px solid ${t.border}22`, color:t.primary, fontWeight:'600' }}>
-                    RPO {a.numero_rpo}
-                  </div>
-                ))}
-              </div>
+      {/* ── Barra de filtros: 1–2 y 3–4 en columna; con Avanzados, sección 5 a la derecha (2 columnas) ── */}
+      <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 12px', marginBottom:'12px', position:'sticky', top:0, zIndex:10 }}>
+        <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', justifyContent:'space-between', gap:'8px', marginBottom:'8px' }}>
+          <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', gap:'8px' }}>
+            <button type="button" onClick={() => setSicoeFiltrosPanelOpen(v => !v)}
+              style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'5px 12px', cursor:'pointer', fontSize:'12px', fontWeight:'800', color:t.text }}>
+              {sicoeFiltrosPanelOpen ? 'Ocultar filtros ▲' : 'Mostrar filtros ▼'}
+            </button>
+            {!sicoeFiltrosPanelOpen && (hayFiltrosActivos || capasValidacion.length > 0) && (
+              <span style={{ fontSize:'11px', color:t.textMuted }}>Hay criterios activos</span>
             )}
           </div>
-          <select value={filtros.subcontratista_id} onChange={e => {
-            const v = e.target.value
-            const nf = { ...filtros, subcontratista_id: v }
-            setFiltros(nf)
-            actualizarFiltrosDisponibles(nf)
-            buscarReportes(nf, 0, capasValidacion)
-            cargarAnalisis(nf, capasValidacion)
-          }} style={selStyle}>
-            <option value="">Subcontratista…</option>
-            {filtroSubcList.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
-          </select>
-          {(puedeEditar || !nivelInfo.nivelValidacion) && <select value={filtros.estado} onChange={e => {
-            const nf = { ...filtros, estado: e.target.value }
-            setFiltros(nf)
-            buscarReportes(nf, 0, capasValidacion)
-            cargarAnalisis(nf, capasValidacion)
-          }} style={selStyle}>
-            <option value="">Estado…</option>
-            {(puedeEditar
-              ? ['Borrador','Sin Asignar Ítem','No Revisados','Aprobados','Pendientes','Rechazados','No Objeto de Cobro','En Papelera']
-              : ['No Revisados','Aprobados','Pendientes','Rechazados']
-            ).map(e => <option key={e} value={e}>{e}</option>)}
-          </select>}
-          <div style={{ marginLeft:'auto', display:'flex', gap:'6px', alignItems:'center' }}>
-            <button onClick={() => setFiltrosAvanzados(v => !v)}
-              style={{ ...selStyle, background:'transparent', cursor:'pointer', whiteSpace:'nowrap', color:t.textMuted }}>
-              Filtros avanzados {filtrosAvanzados ? '▲' : '▼'}
+          <div style={{ display:'flex', flexWrap:'wrap', gap:'6px', alignItems:'center' }}>
+            <button type="button" onClick={() => setFiltrosAvanzados(v => !v)}
+              style={{ ...selStyle, background:'transparent', cursor:'pointer', whiteSpace:'nowrap', color:t.textMuted, padding:'4px 8px', fontSize:'11px' }}>
+              Avanzados {filtrosAvanzados ? '▲' : '▼'}
             </button>
-            <button onClick={limpiarFiltros}
-              style={{ background:'#EF4444', color:'#fff', border:'none', borderRadius:'7px', padding:'5px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
+            <button type="button" onClick={limpiarFiltros}
+              style={{ background:'#EF4444', color:'#fff', border:'none', borderRadius:'6px', padding:'4px 12px', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
               Limpiar
             </button>
             {puedeExportar && busquedaRealizada && (
               <button
+                type="button"
                 onClick={abrirPopupExportRegistros}
                 disabled={!reportesMostrados || reportesMostrados.length === 0}
                 style={{
                   background:'transparent',
                   border:`1px solid ${t.border}`,
                   color:t.textMuted,
-                  borderRadius:'7px',
-                  padding:'5px 16px',
-                  fontSize:'12px',
+                  borderRadius:'6px',
+                  padding:'4px 12px',
+                  fontSize:'11px',
                   fontWeight:'700',
                   cursor:(!reportesMostrados || reportesMostrados.length === 0) ? 'not-allowed' : 'pointer',
                   opacity:(!reportesMostrados || reportesMostrados.length === 0) ? 0.6 : 1,
                   whiteSpace:'nowrap',
                 }}
               >
-                ⬇ Exportar Excel
+                ⬇ Excel
               </button>
             )}
-            <button onClick={() => {
+            <button type="button" onClick={() => {
               const hayFiltros = Object.values(filtros).some(v => v !== '') || capasValidacion.length > 0
               if (!hayFiltros && nivelInfo.nivelValidacion) return
               buscarReportes(filtros, 0, capasValidacion); cargarAnalisis(filtros, capasValidacion)
             }}
-              style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'7px', padding:'5px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
+              style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'4px 14px', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
               Buscar
             </button>
           </div>
         </div>
-        {/* Fila 2 — Filtros avanzados (colapsable) */}
-        <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'8px', paddingTop:'8px', borderTop:`1px solid ${t.border}` }}>
-          <span style={{ fontSize:'12px', color:t.textMuted, fontWeight:'600' }}>Validación:</span>
-          <select value={capaTemp.cargo_id}
-            onChange={e => {
-              const sel = cargosDisponiblesEnFiltro.find(c => c.id === parseInt(e.target.value))
-              setCapaTemp(p => ({ ...p,
-                cargo_id: sel ? sel.id : '',
-                cargo_nombre: sel ? sel.nombre : ''
-              }))
-            }} style={selStyle}>
-            <option value="">Cargo…</option>
-            {cargosDisponiblesEnFiltro.map(c => (
-              <option key={c.id} value={c.id}>{c.nombre}</option>
-            ))}
-          </select>
-          <select value={capaTemp.estado} onChange={e => setCapaTemp(p => ({ ...p, estado: e.target.value }))} style={selStyle}>
-            <option value="">Estado…</option>
-            {['Aprobado','Pendiente','Rechazado','No Revisado'].map(e => <option key={e} value={e}>{e}</option>)}
-          </select>
-          <button disabled={!capaTemp.cargo_id || !capaTemp.estado}
-            onClick={() => {
-              setCapasValidacion(p => [...p, capaTemp])
-              setCapaTemp({ cargo_id: '', cargo_nombre: '', estado: '' })
-            }}
-            style={{ background:(!capaTemp.cargo_id || !capaTemp.estado) ? t.border : t.primary, color:'#fff', border:'none', borderRadius:'7px', padding:'5px 12px', fontSize:'12px', fontWeight:'700', cursor:(!capaTemp.cargo_id || !capaTemp.estado) ? 'not-allowed' : 'pointer' }}>
-            ＋ Agregar
-          </button>
-          {capasValidacion.map((c, i) => (
-            <span key={i} style={{ background:'rgba(0,175,197,0.12)', border:'1px solid rgba(0,175,197,0.3)', borderRadius:'6px', padding:'3px 10px', fontSize:'12px', color:'#00afc5', display:'flex', alignItems:'center', gap:'6px' }}>
-              {c.cargo_nombre}: {c.estado}
-              <span onClick={() => setCapasValidacion(p => p.filter((_,j) => j !== i))} style={{ cursor:'pointer', color:'#ef4444', fontWeight:'700' }}>×</span>
-            </span>
-          ))}
-        </div>
-        {filtrosAvanzados && (
-          <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'8px', paddingTop:'8px', borderTop:`1px solid ${t.border}` }}>
+
+        {sicoeFiltrosPanelOpen && (
+        <>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: filtrosAvanzados
+            ? 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))'
+            : 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))',
+          gap: '8px',
+          alignItems: 'stretch',
+        }}>
+          {/* Izquierda: 1–2 y 3–4 apilados con Avanzados; sin Avanzados, display:contents para que 1–2 y 3–4 sigan siendo celdas del grid */}
+          <div style={{
+            display: filtrosAvanzados ? 'flex' : 'contents',
+            flexDirection: 'column',
+            gap: '8px',
+            minWidth: 0,
+          }}>
+          {/* Bloque 1–2: identificación + actor */}
+          <div style={{ ...filtroCard, borderLeft: '3px solid #0077B6' }}>
+            <div style={{ ...filtroLbl, marginBottom: '6px', color: '#0077B6' }}>1 · Identificación</div>
+            <div style={{ display:'flex', flexWrap:'wrap', gap:'6px', alignItems:'flex-end' }}>
+              <div>
+                <div style={filtroLbl}>N° Rep.</div>
+                <input placeholder="—" type="number" value={filtros.numero_reporte} onChange={e => setF('numero_reporte', e.target.value)}
+                  style={{ ...inpStyle, width:'76px', padding:'4px 6px' }} />
+              </div>
+              <div>
+                <div style={filtroLbl}>N° Reg.</div>
+                <input placeholder="—" type="number" value={filtros.numero_registro} onChange={e => setF('numero_registro', e.target.value)}
+                  style={{ ...inpStyle, width:'76px', padding:'4px 6px' }} />
+              </div>
+              <div>
+                <div style={filtroLbl}>Sem.</div>
+                <input placeholder="—" type="number" value={filtros.semana}
+                  onChange={e => setF('semana', e.target.value)}
+                  onBlur={e => actualizarFiltrosDisponibles({ ...filtros, semana: e.target.value })}
+                  style={{ ...inpStyle, width:'64px', padding:'4px 6px' }} />
+              </div>
+              <div style={{ position:'relative' }}>
+                <div style={filtroLbl}>Acta RPO</div>
+                <input placeholder="—" type="number" value={filtros.acta_rpo}
+                  onChange={e => { setF('acta_rpo', e.target.value); setMostrarSugsActa(true) }}
+                  onFocus={() => { if (filtroActaList.length > 0) setMostrarSugsActa(true) }}
+                  onBlur={() => setTimeout(() => setMostrarSugsActa(false), 150)}
+                  style={{ ...inpStyle, width:'72px', padding:'4px 6px' }} />
+                {mostrarSugsActa && filtroActaList.filter(a => !filtros.acta_rpo || String(a.numero_rpo).startsWith(String(filtros.acta_rpo))).length > 0 && (
+                  <div style={{ position:'absolute', top:'100%', left:0, zIndex:50, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', minWidth:'120px', maxHeight:'200px', overflowY:'auto', boxShadow:'0 4px 16px #0004', marginTop:'2px' }}>
+                    {filtroActaList.filter(a => !filtros.acta_rpo || String(a.numero_rpo).startsWith(String(filtros.acta_rpo))).map(a => (
+                      <div key={a.numero_rpo}
+                        onMouseDown={() => {
+                          setF('acta_rpo', String(a.numero_rpo))
+                          setMostrarSugsActa(false)
+                          actualizarFiltrosDisponibles({ ...filtros, acta_rpo: String(a.numero_rpo) })
+                        }}
+                        style={{ padding:'7px 12px', cursor:'pointer', fontSize:'12px', borderBottom:`1px solid ${t.border}22`, color:t.primary, fontWeight:'600' }}>
+                        RPO {a.numero_rpo}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div style={{ marginTop:'8px', paddingTop:'8px', borderTop:`1px dashed ${t.border}` }}>
+              <div style={{ ...filtroLbl, marginBottom:'6px', color:'#0E7490' }}>2 · Actor / estado reporte</div>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:'6px', alignItems:'flex-end' }}>
+                <div style={{ flex:'1 1 140px', minWidth:0 }}>
+                  <div style={filtroLbl}>Subcontratista</div>
+                  <select value={filtros.subcontratista_id} onChange={e => {
+                    const v = e.target.value
+                    const nf = { ...filtros, subcontratista_id: v }
+                    setFiltros(nf)
+                    actualizarFiltrosDisponibles(nf)
+                    buscarReportes(nf, 0, capasValidacion)
+                    cargarAnalisis(nf, capasValidacion)
+                  }} style={{ ...selStyle, width:'100%', padding:'4px 6px', fontSize:'11px', minWidth:0 }}>
+                    <option value="">—</option>
+                    {filtroSubcList.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+                  </select>
+                </div>
+                {(puedeEditar || !nivelInfo.nivelValidacion) && (
+                  <div style={{ flex:'1 1 120px', minWidth:0 }}>
+                    <div style={filtroLbl}>Estado</div>
+                    <select value={filtros.estado} onChange={e => {
+                      const nf = { ...filtros, estado: e.target.value }
+                      setFiltros(nf)
+                      buscarReportes(nf, 0, capasValidacion)
+                      cargarAnalisis(nf, capasValidacion)
+                    }} style={{ ...selStyle, width:'100%', padding:'4px 6px', fontSize:'11px', minWidth:0 }}>
+                      <option value="">—</option>
+                      {(puedeEditar
+                        ? ['Borrador', 'Sin Asignar Ítem', 'No Revisados', 'No Objeto de Cobro', 'En Papelera']
+                        : ['Borrador', 'Sin Asignar Ítem', 'No Revisados', 'No Objeto de Cobro', 'En Papelera']
+                      ).map(e => <option key={e} value={e}>{e}</option>)}
+                    </select>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Columna 2: validación + refinar */}
+          <div style={{ ...filtroCard, borderLeft: '3px solid #00afc5', display:'flex', flexDirection:'column', gap:'8px' }}>
+            <div>
+              <div style={{ ...filtroLbl, marginBottom:'6px', color:'#00afc5' }}>3 · Validación por cargo</div>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:'6px', alignItems:'center' }}>
+                <select value={capaTemp.cargo_id}
+                  onChange={e => {
+                    const sel = cargosDisponiblesEnFiltro.find(c => c.id === parseInt(e.target.value))
+                    setCapaTemp(p => ({ ...p,
+                      cargo_id: sel ? sel.id : '',
+                      cargo_nombre: sel ? sel.nombre : ''
+                    }))
+                  }} style={{ ...selStyle, flex:'1 1 120px', minWidth:'100px', padding:'4px 6px', fontSize:'11px' }}>
+                  <option value="">Cargo…</option>
+                  {cargosDisponiblesEnFiltro.map(c => (
+                    <option key={c.id} value={c.id}>{c.nombre}</option>
+                  ))}
+                </select>
+                <select value={capaTemp.estado} onChange={e => setCapaTemp(p => ({ ...p, estado: e.target.value }))} style={{ ...selStyle, flex:'1 1 100px', minWidth:'88px', padding:'4px 6px', fontSize:'11px' }}>
+                  <option value="">Estado…</option>
+                  {['Aprobado','Pendiente','Rechazado','No Revisado'].map(e => <option key={e} value={e}>{e}</option>)}
+                </select>
+                <button type="button" disabled={!capaTemp.cargo_id || !capaTemp.estado}
+                  onClick={() => {
+                    setCapasValidacion(p => [...p, capaTemp])
+                    setCapaTemp({ cargo_id: '', cargo_nombre: '', estado: '' })
+                  }}
+                  style={{ background:(!capaTemp.cargo_id || !capaTemp.estado) ? t.border : t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'4px 10px', fontSize:'11px', fontWeight:'700', cursor:(!capaTemp.cargo_id || !capaTemp.estado) ? 'not-allowed' : 'pointer', flexShrink:0 }}>
+                  ＋
+                </button>
+              </div>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:'4px', marginTop:'6px' }}>
+                {capasValidacion.map((c, i) => (
+                  <span key={i} style={{ background:'rgba(0,175,197,0.12)', border:'1px solid rgba(0,175,197,0.3)', borderRadius:'4px', padding:'2px 6px', fontSize:'10px', color:'#00afc5', display:'inline-flex', alignItems:'center', gap:'4px' }}>
+                    {c.cargo_nombre}: {c.estado}
+                    <span role="button" tabIndex={0} onClick={() => setCapasValidacion(p => p.filter((_,j) => j !== i))} onKeyDown={e => { if (e.key === 'Enter') setCapasValidacion(p => p.filter((_,j) => j !== i)) }} style={{ cursor:'pointer', color:'#ef4444', fontWeight:'700' }}>×</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div style={{
+              paddingTop:'8px',
+              borderTop:`1px dashed ${t.border}`,
+              opacity: sicoePuedeRefinar ? 1 : 0.55,
+              pointerEvents: sicoePuedeRefinar ? 'auto' : 'none',
+            }}>
+              <div style={{ ...filtroLbl, marginBottom:'4px', color:'#F59E0B' }}>4 · Refinar registros</div>
+              <div style={{ fontSize:'10px', color:t.textMuted, marginBottom:'6px', lineHeight:1.35 }}>
+                {sicoePuedeRefinar
+                  ? 'Panel y grilla se actualizan al escribir (~0,4 s).'
+                  : 'Activo tras una búsqueda con criterios.'}
+              </div>
+              <div style={{ display:'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 120px), 1fr))', gap:'6px', alignItems:'end' }}>
+                <div style={{ minWidth:0 }}>
+                  <div style={filtroLbl}>Observación</div>
+                  <input
+                    placeholder="Texto…"
+                    value={sicoeFiltroObs}
+                    onChange={e => setSicoeFiltroObs(e.target.value)}
+                    style={{ ...inpStyle, width:'100%', boxSizing:'border-box', padding:'4px 8px', fontSize:'11px' }}
+                  />
+                </div>
+                <div style={{ minWidth:0 }}>
+                  <div style={filtroLbl}>Nodo ini./fin.</div>
+                  <input
+                    placeholder="Texto…"
+                    value={sicoeFiltroNodo}
+                    onChange={e => setSicoeFiltroNodo(e.target.value)}
+                    style={{ ...inpStyle, width:'100%', boxSizing:'border-box', padding:'4px 8px', fontSize:'11px' }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          </div>
+
+          {/* Derecha (solo Avanzados): ubicación técnica + plano PK */}
+          {filtrosAvanzados && (
+          <div style={{
+            ...filtroCard,
+            borderLeft:'3px solid #64748B',
+            minWidth:0,
+            alignSelf:'stretch',
+            display:'flex',
+            flexDirection:'column',
+            height:'100%',
+          }}>
+            <div style={{ ...filtroLbl, marginBottom:'6px', color:'#64748B' }}>5 · Ubicación técnica</div>
+            <div style={{ display:'flex', flexWrap:'wrap', gap:'6px', alignItems:'flex-end' }}>
             <select value={filtros.capitulo} onChange={e => {
               const v = e.target.value
               const nf = { ...filtros, capitulo: v }
@@ -7412,18 +8009,18 @@ const limpiarFiltros = () => {
               actualizarFiltrosDisponibles(nf)
               buscarReportes(nf, 0, capasValidacion)
               cargarAnalisis(nf, capasValidacion)
-            }} style={selStyle}>
+            }} style={{ ...selStyle, padding:'4px 6px', fontSize:'11px', flex:'1 1 120px', minWidth:'100px' }}>
               <option value="">Capítulo…</option>
               {filtroCapList.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
-            <div style={{ position:'relative' }}>
+            <div style={{ position:'relative', flex:'1 1 140px', minWidth:'100px' }}>
               <input
                 placeholder="Ítem…"
                 value={filtros.item}
                 onChange={e => { setF('item', e.target.value); buscarItems(e.target.value) }}
                 onFocus={() => { if (sugerenciasItem.length > 0) setMostrarSugsItem(true) }}
                 onBlur={() => setTimeout(() => setMostrarSugsItem(false), 150)}
-                style={{ ...inpStyle, width:'200px' }}
+                style={{ ...inpStyle, width:'100%', padding:'4px 6px', fontSize:'11px', boxSizing:'border-box' }}
               />
               {mostrarSugsItem && sugerenciasItem.length > 0 && (
                 <div style={{ position:'absolute', top:'100%', left:0, zIndex:50, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', minWidth:'320px', maxHeight:'240px', overflowY:'auto', boxShadow:'0 4px 16px #0004', marginTop:'2px' }}>
@@ -7445,21 +8042,86 @@ const limpiarFiltros = () => {
                 </div>
               )}
             </div>
-            <select value={filtros.tramo} onChange={e => setF('tramo', e.target.value)} style={selStyle}>
+            <select value={filtros.tramo} onChange={e => setF('tramo', e.target.value)} style={{ ...selStyle, padding:'4px 6px', fontSize:'11px', flex:'1 1 100px', minWidth:'88px' }}>
               <option value="">Tramo…</option>
               {filtroTramoList.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
-            <select value={filtros.costado} onChange={e => setF('costado', e.target.value)} style={selStyle}>
+            <select value={filtros.costado} onChange={e => setF('costado', e.target.value)} style={{ ...selStyle, padding:'4px 6px', fontSize:'11px', flex:'1 1 100px', minWidth:'88px' }}>
               <option value="">Calzada…</option>
               {filtroCostadoList.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
-            <input placeholder="Abs. Inicio" type="number" value={filtros.abs_inicio} onChange={e => setF('abs_inicio', e.target.value)}
-              style={{ ...inpStyle, width:'100px' }} />
-            <input placeholder="Abs. Final" type="number" value={filtros.abs_final} onChange={e => setF('abs_final', e.target.value)}
-              style={{ ...inpStyle, width:'100px' }} />
-            <input placeholder="PK ID" value={filtros.pk_id} onChange={e => setF('pk_id', e.target.value)}
-              style={{ ...inpStyle, width:'80px' }} />
+            <input placeholder="Abs. ini." type="number" value={filtros.abs_inicio} onChange={e => setF('abs_inicio', e.target.value)}
+              style={{ ...inpStyle, width:'72px', padding:'4px 6px', fontSize:'11px' }} />
+            <input placeholder="Abs. fin." type="number" value={filtros.abs_final} onChange={e => setF('abs_final', e.target.value)}
+              style={{ ...inpStyle, width:'72px', padding:'4px 6px', fontSize:'11px' }} />
+            </div>
+            <div style={{ width:'100%', marginTop:'10px', paddingTop:'10px', borderTop:`1px dashed ${t.border}`, flex:1, display:'flex', flexDirection:'column', minHeight:0 }}>
+              <div style={{ ...filtroLbl, marginBottom:'6px', color:'#0d9488' }}>Plano de ubicación (PK)</div>
+              <div style={{ fontSize:'10px', color:t.textMuted, marginBottom:'8px', lineHeight:1.4 }}>
+                {!busquedaRealizada
+                  ? 'Pulsa Buscar con criterios para ver en el mapa solo los puntos de la grilla actual (reportes con coordenadas o PK).'
+                  : (reportesMostrados.length === 0
+                    ? 'Sin resultados: no hay puntos que mostrar con los filtros actuales.'
+                    : (SICOE_CONTRATOS_SIN_NODOS_REPORTE_GPS.has(Number(contrato_id))
+                      ? 'Solo resultados filtrados por PK (coordenadas de reporte omitidas en este contrato). Gris/azul = PK; clic aplica filtro por ubicación.'
+                      : 'Solo resultados filtrados. Naranja = reporte con GPS sin PK asignado; gris/azul = PK. Clic abre el reporte o aplica filtro por ubicación.'))}
+              </div>
+              <div style={{ width: '100%', flex:1, display:'flex', flexDirection:'column', minHeight:0 }}>
+              {import.meta.env.VITE_MAPBOX_TOKEN ? (
+                <div ref={sicoeFiltroMapaRef} style={{ width:'100%', flex:1, minHeight:'260px', borderRadius:'8px', overflow:'hidden', border:`1px solid ${t.border}`, background:t.bg }} />
+              ) : (
+                <div style={{ fontSize:'11px', color:t.textMuted, padding:'8px', border:`1px dashed ${t.border}`, borderRadius:'8px' }}>
+                  Configura VITE_MAPBOX_TOKEN para ver el mapa.
+                </div>
+              )}
+              {busquedaRealizada && sicoePuntosPlano.length > 0 && (
+              <div style={{ display:'flex', flexWrap:'wrap', gap:'6px', marginTop:'8px', maxHeight:'120px', overflowY:'auto' }}>
+                {sicoePuntosPlano.map(pt => (
+                  <button
+                    key={pt.soloReporte ? `r-${pt.reporte_id}` : `pk-${pt.pk_id_id}`}
+                    type="button"
+                    onClick={() => {
+                      if (pt.soloReporte && pt.reporte_id) sicoeMapaOpenReporteRef.current(pt.reporte_id)
+                      else if (pt.pk_id_id != null) sicoeMapFiltroApplyPkRef.current(pt.pk_id_id)
+                    }}
+                    style={{
+                      fontSize:'10px',
+                      padding:'4px 8px',
+                      borderRadius:'6px',
+                      border:`1px solid ${
+                        pt.soloReporte ? '#fb923c' : (String(filtros.pk_id) === String(pt.pk_id_id) ? t.primary : t.border)
+                      }`,
+                      background: pt.soloReporte
+                        ? 'rgba(249,115,22,0.12)'
+                        : (String(filtros.pk_id) === String(pt.pk_id_id) ? 'rgba(0,119,182,0.15)' : t.inputBg || t.bg),
+                      color:t.text,
+                      cursor:'pointer',
+                      fontWeight: (pt.soloReporte || String(filtros.pk_id) === String(pt.pk_id_id)) ? '700' : '500',
+                    }}
+                  >
+                    {pt.etiqueta}
+                    {pt.reportes_count ? ` (${pt.reportes_count})` : ''}
+                    {pt.aproximado ? ' · ~' : ''}
+                  </button>
+                ))}
+              </div>
+              )}
+              </div>
+              {filtros.pk_id ? (
+                <button type="button" onClick={() => {
+                  const nf = { ...filtros, pk_id: '' }
+                  setFiltros(nf)
+                  buscarReportes(nf, 0, capasValidacion)
+                  cargarAnalisis(nf, capasValidacion)
+                }} style={{ marginTop:'8px', fontSize:'11px', color:'#ef4444', background:'transparent', border:'none', cursor:'pointer', textDecoration:'underline' }}>
+                  Quitar filtro de ubicación PK
+                </button>
+              ) : null}
+            </div>
           </div>
+          )}
+        </div>
+        </>
         )}
       </div>
 
@@ -7469,16 +8131,21 @@ const limpiarFiltros = () => {
         <div style={{
           display:'grid',
           gridTemplateColumns: nivelInfo.verValoresEconomicos
-            ? '80px 80px 100px 1fr 120px 160px 120px 120px'
-            : '80px 80px 100px 1fr 160px 120px 120px',
+            ? '68px 88px 86px 118px 132px minmax(200px,1.4fr) 108px 100px 70px'
+            : '68px 88px 86px 118px 132px minmax(200px,1.4fr) 100px 70px',
           gap:'8px',
           padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
           fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px',
           position:'sticky', top:0, zIndex:9, background:t.bgCard, borderRadius:'12px 12px 0 0' }}>
-          <div>N° REP.</div><div>SEMANA</div><div>ACTA RPO</div>
+          <div>N° REP.</div>
+          <div>TRAMO</div>
+          <div>COSTADO</div>
+          <div>ABCISA</div>
+          <div>NODO</div>
           <div>DESCRIPCIÓN</div>
           {nivelInfo.verValoresEconomicos && <div style={{ textAlign:'right' }}>COSTO DIRECTO</div>}
-          <div>SUBCONTRATISTA</div><div>CAPÍTULO</div><div style={{ textAlign:'right' }}>REGS.</div>
+          <div>CAPÍTULO</div>
+          <div style={{ textAlign:'right' }}>REGS.</div>
         </div>
 
         {/* Filas */}
@@ -7503,8 +8170,8 @@ const limpiarFiltros = () => {
           <div key={rep.id} style={{
             display:'grid',
             gridTemplateColumns: nivelInfo.verValoresEconomicos
-              ? '80px 80px 100px 1fr 120px 160px 120px 120px'
-              : '80px 80px 100px 1fr 160px 120px 120px',
+              ? '68px 88px 86px 118px 132px minmax(200px,1.4fr) 108px 100px 70px'
+              : '68px 88px 86px 118px 132px minmax(200px,1.4fr) 100px 70px',
             gap:'8px', padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
             fontSize:'13px', color:t.text, cursor:'pointer',
             transition:'background 0.15s' }}
@@ -7524,20 +8191,25 @@ const limpiarFiltros = () => {
             onMouseEnter={e => e.currentTarget.style.background = t.bg}
             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
             <div style={{ fontWeight:'700', color:t.primary }}>#{rep.numero_reporte}</div>
-            <div style={{ color:t.textMuted, fontSize:'12px' }}>
-              {rep.semana_numero != null ? `Sem. ${rep.semana_numero}` : '—'}
+            <div style={{ color:t.text, fontSize:'12px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={rep.tramo || ''}>
+              {rep.tramo || '—'}
             </div>
-            <div style={{ color:t.textMuted, fontSize:'12px' }}>
-              {rep.acta_rpo != null ? `RPO ${rep.acta_rpo}` : '—'}
+            <div style={{ color:t.text, fontSize:'12px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={rep.calzada || rep.margen || ''}>
+              {rep.calzada || rep.margen || '—'}
             </div>
-            <div style={{ fontWeight:'600' }}>{rep.descripcion_actividad}</div>
+            <div style={{ color:t.textMuted, fontSize:'11px', lineHeight:1.3 }} title={`${rep.abs_inicio ?? ''} → ${rep.abs_final ?? ''}`}>
+              {fmtSicoeRangoCabecera(rep.abs_inicio, rep.abs_final)}
+            </div>
+            <div style={{ color:t.textMuted, fontSize:'11px', lineHeight:1.3 }} title={`${rep.nodo_ini ?? ''} → ${rep.nodo_fin ?? ''}`}>
+              {fmtSicoeRangoCabecera(rep.nodo_ini, rep.nodo_fin)}
+            </div>
+            <div style={{ fontWeight:'600', minWidth:0, overflow:'hidden', textOverflow:'ellipsis' }}>{rep.descripcion_actividad || '—'}</div>
             {nivelInfo.verValoresEconomicos && (
               <div style={{ fontSize:'12px', textAlign:'right', fontWeight:'600', color:t.text }}>
                 {rep.costo_directo_validacion != null ? fmtPesos(rep.costo_directo_validacion) : '—'}
               </div>
             )}
-            <div style={{ fontSize:'12px' }}>{rep.subcontratista_nombre || '—'}</div>
-            <div style={{ fontSize:'11px', color:t.textMuted }}>{rep.capitulo || '—'}</div>
+            <div style={{ fontSize:'11px', color:t.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={rep.capitulo || ''}>{rep.capitulo || '—'}</div>
             <div style={{ fontSize:'12px', color:t.textMuted, textAlign:'right', fontWeight:'600' }}>
               {rep.num_registros != null ? rep.num_registros : '—'}
             </div>
@@ -11430,7 +12102,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                           try {
                             // 1) Iniciar generación en background
                             btn.innerHTML = '⏳ Generando...'
-                            const res = await fetch(`${API}/cobro/${usuario.contrato_id}/exportar-capitulo?capitulo=${cap}`, {
+                            const itemQ = dashDrill[1]?.valor
+                              ? `&item=${encodeURIComponent(dashDrill[1].valor)}`
+                              : ''
+                            const res = await fetch(`${API}/sicoe-obra/${usuario.contrato_id}/dashboard-export-capitulo?capitulo=${cap}${itemQ}`, {
                               headers: { Authorization: `Bearer ${tok}` }
                             })
                             if (!res.ok) { alert('Error al iniciar exportación'); return }

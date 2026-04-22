@@ -2712,6 +2712,872 @@ function ActasCalPicker({ value, onChange, isOpen, onToggle, theme }) {
   );
 }
 
+// ─── SECCIÓN: Actas (formulario completo + catálogo tipos + cierre RPO) ────
+function _actaEmptyForm() {
+  return {
+    consecutivo: "",
+    tipo_grupo: "RPO",
+    tipo_acta_id: "",
+    observacion: "",
+    asignado_a: "",
+    fecha_asignacion: "",
+    enlace: "",
+    numero_rpo: "",
+    fecha_inicio: "",
+    fecha_fin: "",
+    valor_comp_ambiental: "",
+    calificacion_ambiental: "",
+    valor_comp_social: "",
+    calificacion_social: "",
+    valor_comp_pmt: "",
+    calificacion_pmt: "",
+    valor_cobrado_adicional: "",
+    ajuste_iccp: "",
+    ajuste_icociv: "",
+    ajuste_ipc: "",
+    pct_proyectado_ajustes: "",
+  };
+}
+
+function _actaRowToForm(a) {
+  const s = (v) => (v != null && v !== "" ? String(v) : "");
+  const f = (k) => s(a[k]);
+  return {
+    consecutivo: s(a.consecutivo),
+    tipo_grupo: (a.tipo_grupo || "administrativa"),
+    tipo_acta_id: a.tipo_acta_id != null ? String(a.tipo_acta_id) : "",
+    observacion: a.observacion || "",
+    asignado_a: a.asignado_a != null ? String(a.asignado_a) : "",
+    fecha_asignacion: (a.fecha_asignacion || "").slice(0, 10),
+    enlace: a.enlace || "",
+    numero_rpo: a.numero_rpo != null ? String(a.numero_rpo) : "",
+    fecha_inicio: (a.fecha_inicio || "").slice(0, 10),
+    fecha_fin: (a.fecha_fin || "").slice(0, 10),
+    valor_comp_ambiental: f("valor_comp_ambiental"),
+    calificacion_ambiental: f("calificacion_ambiental"),
+    valor_comp_social: f("valor_comp_social"),
+    calificacion_social: f("calificacion_social"),
+    valor_comp_pmt: f("valor_comp_pmt"),
+    calificacion_pmt: f("calificacion_pmt"),
+    valor_cobrado_adicional: f("valor_cobrado_adicional"),
+    ajuste_iccp: f("ajuste_iccp"),
+    ajuste_icociv: f("ajuste_icociv"),
+    ajuste_ipc: f("ajuste_ipc"),
+    pct_proyectado_ajustes: f("pct_proyectado_ajustes"),
+  };
+}
+
+function _parseOptNum(v) {
+  if (v === "" || v == null) return undefined;
+  const n = parseFloat(String(v).replace(",", "."));
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function SeccionActasRpo({ call, user, contratos, theme }) {
+  const col = C(theme);
+  const tdStyle = S.td(theme);
+  const isDev = user?.cargo_nombre?.toLowerCase() === "desarrollador";
+
+  const [contratoId, setContratoId] = useState(user?.contrato_id || null);
+  const [actasTodas, setActasTodas] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [filtroTipo, setFiltroTipo] = useState("todos");
+  const [modalCerrar, setModalCerrar] = useState(null);
+  const [fechaCierre, setFechaCierre] = useState(() => new Date().toISOString().slice(0, 10));
+  const [cerrando, setCerrando] = useState(false);
+  const [calCierreOpen, setCalCierreOpen] = useState(false);
+
+  const [modalForm, setModalForm] = useState(false);
+  const [editingActaId, setEditingActaId] = useState(null);
+  const [formActa, setFormActa] = useState(() => _actaEmptyForm());
+  const [proximoCons, setProximoCons] = useState(1);
+  const [guardandoActa, setGuardandoActa] = useState(false);
+  const [actasTipos, setActasTipos] = useState([]);
+  const [usuariosContrato, setUsuariosContrato] = useState([]);
+  const [calIniOpen, setCalIniOpen] = useState(false);
+  const [calFinOpen, setCalFinOpen] = useState(false);
+  const [calFaOpen, setCalFaOpen] = useState(false);
+  const [mostrarCatalogoTipos, setMostrarCatalogoTipos] = useState(true);
+  const [modalNuevoTipo, setModalNuevoTipo] = useState(false);
+  const [nuevoTipoNom, setNuevoTipoNom] = useState("");
+  const [nuevoTipoCobro, setNuevoTipoCobro] = useState(false);
+  const [creandoTipo, setCreandoTipo] = useState(false);
+
+  const setF = (field, val) => setFormActa((p) => ({ ...p, [field]: val }));
+
+  useEffect(() => {
+    if (!user?.contrato_id && contratos?.length) {
+      setContratoId(contratos[0].id);
+    }
+  }, [user?.contrato_id, contratos]);
+
+  const cargarTipos = useCallback(async () => {
+    if (!contratoId) return;
+    try {
+      const tipos = await call("GET", `/actas-tipos/${contratoId}`).catch(() => []);
+      setActasTipos(Array.isArray(tipos) ? tipos : []);
+    } catch { setActasTipos([]); }
+  }, [call, contratoId]);
+
+  const cargar = useCallback(async () => {
+    if (!contratoId) return;
+    setLoading(true);
+    try {
+      const rows = await call("GET", `/actas/${contratoId}/lista`);
+      setActasTodas(Array.isArray(rows) ? rows : []);
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    } finally {
+      setLoading(false);
+    }
+  }, [call, contratoId]);
+
+  useEffect(() => {
+    cargar();
+    cargarTipos();
+  }, [cargar, cargarTipos]);
+
+  const maxNumeroRpo = () => {
+    const nums = actasTodas
+      .filter((a) => a.numero_rpo != null && a.numero_rpo !== "")
+      .map((a) => Number(a.numero_rpo));
+    return nums.length ? Math.max(...nums) : 0;
+  };
+
+  const abrirCrear = async () => {
+    if (!contratoId) return;
+    setMsg(null);
+    try {
+      const [pc, users] = await Promise.all([
+        call("GET", `/actas/${contratoId}/proximo-consecutivo`),
+        call("GET", `/actas/${contratoId}/usuarios-contrato`).catch(() => []),
+      ]);
+      await cargarTipos();
+      setProximoCons(pc?.proximo ?? 1);
+      setUsuariosContrato(Array.isArray(users) ? users : []);
+      setEditingActaId(null);
+      setFormActa({
+        ..._actaEmptyForm(),
+        consecutivo: String(pc?.proximo ?? 1),
+        numero_rpo: String(maxNumeroRpo() + 1),
+        tipo_grupo: "RPO",
+      });
+      setCalIniOpen(false);
+      setCalFinOpen(false);
+      setCalFaOpen(false);
+      setModalForm(true);
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    }
+  };
+
+  const abrirEditar = async (a) => {
+    if (!a?.id) return;
+    setMsg(null);
+    try {
+      const [users] = await Promise.all([
+        call("GET", `/actas/${contratoId}/usuarios-contrato`).catch(() => []),
+        cargarTipos(),
+      ]);
+      setUsuariosContrato(Array.isArray(users) ? users : []);
+      setEditingActaId(a.id);
+      setFormActa(_actaRowToForm(a));
+      setCalIniOpen(false);
+      setCalFinOpen(false);
+      setCalFaOpen(false);
+      setModalForm(true);
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    }
+  };
+
+  const buildPayloadActa = () => {
+    const c = parseInt(String(formActa.consecutivo || "").trim(), 10);
+    if (!Number.isFinite(c) || c < 1) throw new Error("Consecutivo inválido.");
+    const rawTg = String(formActa.tipo_grupo || "administrativa");
+    const tipoGrupoNorm = rawTg.toUpperCase() === "RPO"
+      ? "RPO"
+      : (rawTg.toLowerCase() === "cobro" ? "cobro" : "administrativa");
+    const tg = tipoGrupoNorm.toLowerCase();
+    const payload = { consecutivo: c, tipo_grupo: tipoGrupoNorm };
+    if (formActa.tipo_acta_id) payload.tipo_acta_id = parseInt(formActa.tipo_acta_id, 10);
+    if (formActa.observacion?.trim()) payload.observacion = formActa.observacion.trim();
+    if (formActa.asignado_a) payload.asignado_a = parseInt(formActa.asignado_a, 10);
+    if (formActa.fecha_asignacion) payload.fecha_asignacion = formActa.fecha_asignacion;
+    if (formActa.enlace?.trim()) payload.enlace = formActa.enlace.trim();
+    if (tg === "rpo") {
+      const nr = parseInt(String(formActa.numero_rpo || "").trim(), 10);
+      if (!nr || Number.isNaN(nr)) throw new Error("Número RPO obligatorio para actas RPO.");
+      if (!formActa.fecha_inicio || !formActa.fecha_fin) throw new Error("Fecha inicio y fin obligatorias para RPO.");
+      if (formActa.fecha_inicio > formActa.fecha_fin) throw new Error("La fecha fin debe ser ≥ fecha inicio.");
+      payload.numero_rpo = nr;
+      payload.fecha_inicio = formActa.fecha_inicio;
+      payload.fecha_fin = formActa.fecha_fin;
+    } else if (tipoGrupoNorm === "cobro") {
+      if (formActa.fecha_inicio) payload.fecha_inicio = formActa.fecha_inicio;
+      if (formActa.fecha_fin) payload.fecha_fin = formActa.fecha_fin;
+      const nr2 = parseInt(String(formActa.numero_rpo || "").trim(), 10);
+      if (nr2 && !Number.isNaN(nr2)) payload.numero_rpo = nr2;
+    }
+    // administrativa: sin RPO, período ni montos (solo catálogo + general)
+    const numKeys = [
+      "valor_comp_ambiental", "calificacion_ambiental", "valor_comp_social", "calificacion_social",
+      "valor_comp_pmt", "calificacion_pmt", "valor_cobrado_adicional", "ajuste_iccp", "ajuste_icociv", "ajuste_ipc", "pct_proyectado_ajustes",
+    ];
+    if (tipoGrupoNorm !== "administrativa") {
+      for (const k of numKeys) {
+        const x = _parseOptNum(formActa[k]);
+        if (x !== undefined) payload[k] = x;
+      }
+    }
+    return payload;
+  };
+
+  const guardarActa = async () => {
+    if (!contratoId) return;
+    setGuardandoActa(true);
+    try {
+      const payload = buildPayloadActa();
+      if (editingActaId) {
+        await call("PUT", `/actas/${editingActaId}`, payload);
+        setMsg({ type: "success", text: "Acta actualizada." });
+      } else {
+        await call("POST", `/actas/${contratoId}`, payload);
+        setMsg({ type: "success", text: "Acta creada." });
+      }
+      setModalForm(false);
+      setEditingActaId(null);
+      cargar();
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    } finally {
+      setGuardandoActa(false);
+    }
+  };
+
+  const crearTipoCatalogo = async () => {
+    if (!contratoId || !nuevoTipoNom.trim()) return;
+    setCreandoTipo(true);
+    try {
+      await call("POST", `/actas-tipos/${contratoId}`, { nombre: nuevoTipoNom.trim(), es_cobro: nuevoTipoCobro });
+      setModalNuevoTipo(false);
+      setNuevoTipoNom("");
+      setNuevoTipoCobro(false);
+      await cargarTipos();
+      setMsg({ type: "success", text: "Tipo de acta agregado al catálogo." });
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    } finally {
+      setCreandoTipo(false);
+    }
+  };
+
+  const hoy = new Date().toISOString().slice(0, 10);
+  const esVigente = (a) => {
+    const fi = a.fecha_inicio?.slice(0, 10);
+    const ff = a.fecha_fin?.slice(0, 10);
+    if (!fi || !ff) return false;
+    return fi <= hoy && ff >= hoy;
+  };
+
+  const labelTipoFila = (a) => {
+    const g = String(a.tipo_grupo || "").toLowerCase();
+    if (g === "rpo") return "RPO";
+    if (g === "cobro") return "Cobro";
+    return "Administrativa";
+  };
+
+  const actasFiltradas = actasTodas.filter((a) => {
+    if (filtroTipo === "todos") return true;
+    const g = String(a.tipo_grupo || "").toLowerCase();
+    if (filtroTipo === "rpo") return g === "rpo";
+    if (filtroTipo === "cobro") return g === "cobro";
+    if (filtroTipo === "admin") return g === "administrativa";
+    return true;
+  });
+
+  const fmtM = (v) => {
+    if (v == null || v === "") return "—";
+    const n = Number(v);
+    if (Number.isNaN(n)) return "—";
+    return `$${Math.round(n).toLocaleString("es-CO")}`;
+  };
+
+  const abrirCerrar = (a) => {
+    setModalCerrar(a);
+    setFechaCierre(hoy);
+    setCalCierreOpen(false);
+    setMsg(null);
+  };
+
+  const confirmarCerrar = async () => {
+    if (!modalCerrar || !contratoId) return;
+    if (!window.confirm(
+      `¿Cerrar el Acta RPO #${modalCerrar.numero_rpo} el ${fechaCierre}?\n\n` +
+      `Se acortará el período, se creará automáticamente el siguiente mes completo y los registros sin aprobación de Interventoría pasarán al nuevo acta.`,
+    )) return;
+    setCerrando(true);
+    try {
+      const res = await call("POST", `/actas/${contratoId}/rpo/cerrar-y-siguiente`, {
+        fecha_cierre: fechaCierre,
+        acta_id: modalCerrar.id,
+      });
+      const creada = res.acta_creada || {};
+      const per = res.periodo_siguiente || {};
+      const n = res.registros_movidos_residual ?? 0;
+      setMsg({
+        type: "success",
+        text:
+          `Período cerrado. Nuevo Acta RPO #${creada.numero_rpo ?? "—"} (${per.fecha_inicio ?? ""} → ${per.fecha_fin ?? ""}). ` +
+          `${n} registro(s) residual(es) reasignado(s).`,
+      });
+      setModalCerrar(null);
+      cargar();
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    } finally {
+      setCerrando(false);
+    }
+  };
+
+  const labelStyle = { fontSize: 11, color: col.textSecondary, marginBottom: 5 };
+  const inputStyle = isLightTheme(theme)
+    ? { ...S.input, background: "#FFFFFF", color: "#0d3b52", border: "1px solid #BAE6FD", width: "100%" }
+    : { ...S.input, width: "100%" };
+  const subTitle = { fontSize: 12, fontWeight: 700, color: "#00afc5", letterSpacing: 0.6, marginTop: 14, marginBottom: 8 };
+  /** Actas administrativas: solo catálogo, observación, asignación y enlace (sin RPO ni montos). */
+  const esActaAdministrativa = String(formActa.tipo_grupo || "").toLowerCase() === "administrativa";
+
+  return (
+    <div style={{ padding: 28, maxWidth: 1100 }}>
+      {msg && (
+        <div style={S.alert(msg.type)}>
+          {msg.text}
+          <span onClick={() => setMsg(null)} style={{ float: "right", cursor: "pointer", opacity: 0.6 }}>✕</span>
+        </div>
+      )}
+
+      <div style={{ marginBottom: 20, display: "flex", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ flex: "1 1 280px" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: col.textPrimary }}>📋 Actas del contrato</div>
+          <div style={{ fontSize: 12, color: col.textMuted, marginTop: 6, lineHeight: 1.45 }}>
+            <strong>Crear / editar acta:</strong> formulario completo con componentes (ambiental, social, PMT), ajustes (ICCP, ICOCIV, IPC), enlaces y asignación.
+            {" "}<strong>Cerrar acta</strong> (solo RPO en período): acorta el período, crea el mes siguiente y traslada residuales sin N3.
+          </div>
+        </div>
+        {contratoId && (
+          <button type="button" style={S.btn("primary")} onClick={abrirCrear}>
+            ➕ Crear acta
+          </button>
+        )}
+      </div>
+
+      {isDev && contratos?.length > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <div style={labelStyle}>Contrato</div>
+          <select
+            style={{ ...inputStyle, maxWidth: 400 }}
+            value={contratoId || ""}
+            onChange={(e) => setContratoId(e.target.value ? parseInt(e.target.value, 10) : null)}
+          >
+            {!contratoId && <option value="">— Selecciona —</option>}
+            {contratos.map((c) => (
+              <option key={c.id} value={c.id}>{c.numero}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {!contratoId ? (
+        <div style={S.empty}>Sin contrato asignado.</div>
+      ) : loading ? (
+        <div style={S.empty}><span style={{ color: "#00afc5" }}>Cargando actas…</span></div>
+      ) : actasTodas.length === 0 ? (
+        <div style={S.empty}>
+          No hay actas registradas. Usa <strong>Crear acta</strong> para el primer RPO o una administrativa.
+        </div>
+      ) : (
+        <>
+          <div style={{ marginBottom: 12, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+            <div style={labelStyle}>Filtrar por tipo</div>
+            <select
+              style={{ ...inputStyle, maxWidth: 220 }}
+              value={filtroTipo}
+              onChange={(e) => setFiltroTipo(e.target.value)}
+            >
+              <option value="todos">Todos</option>
+              <option value="rpo">RPO</option>
+              <option value="admin">Administrativa</option>
+              <option value="cobro">Cobro</option>
+            </select>
+          </div>
+          {actasFiltradas.length === 0 ? (
+            <div style={S.empty}>Ninguna acta coincide con el filtro.</div>
+          ) : (
+            <table style={S.table}>
+              <thead>
+                <tr>
+                  {["Tipo", "RPO", "Período", "Consec.", "Tipo doc. / uso", "Total $", "Estado / Notas", "Acción"].map((h) => (
+                    <th key={h} style={S.th}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {actasFiltradas.map((a) => {
+                  const esRpo = String(a.tipo_grupo || "").toUpperCase() === "RPO" && a.numero_rpo != null;
+                  return (
+                    <tr key={a.id}>
+                      <td style={tdStyle}>{labelTipoFila(a)}</td>
+                      <td style={tdStyle}>
+                        {esRpo ? (
+                          <span style={{ fontWeight: 700, color: "#00afc5" }}>#{a.numero_rpo}</span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td style={tdStyle}>
+                        {(a.fecha_inicio || "—").slice(0, 10)} → {(a.fecha_fin || "—").slice(0, 10)}
+                      </td>
+                      <td style={tdStyle}>{a.consecutivo ?? "—"}</td>
+                      <td style={tdStyle}>
+                        <span style={{ fontSize: 11, color: col.textMuted, display: "inline-block", maxWidth: 160 }}>
+                          {a.tipo_nombre || "—"}
+                          {a.es_cobro ? (
+                            <span style={{ marginLeft: 4, ...S.badge("pendiente"), textTransform: "none", fontSize: 9 }}>cobro</span>
+                          ) : null}
+                        </span>
+                      </td>
+                      <td style={tdStyle}>{fmtM(a.valor_total_acta)}</td>
+                      <td style={tdStyle}>
+                        {esRpo ? (
+                          esVigente(a) ? (
+                            <span style={{ ...S.badge("aprobado"), textTransform: "none" }}>En período</span>
+                          ) : (
+                            <span style={{ ...S.badge("pendiente"), textTransform: "none" }}>Historial</span>
+                          )
+                        ) : (
+                          <span style={{ fontSize: 11, color: col.textMuted, maxWidth: 180, display: "inline-block" }}>
+                            {(a.observacion || "—").slice(0, 72)}
+                            {(a.observacion || "").length > 72 ? "…" : ""}
+                          </span>
+                        )}
+                      </td>
+                      <td style={tdStyle}>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                          <button type="button" style={S.btn("ghost", true)} onClick={() => abrirEditar(a)}>
+                            Editar
+                          </button>
+                          {esRpo && esVigente(a) && (
+                            <button
+                              type="button"
+                              style={S.btn("danger", true)}
+                              onClick={() => abrirCerrar(a)}
+                            >
+                              Cerrar acta
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
+
+      {contratoId && (
+        <div style={{ marginTop: 28, paddingTop: 18, borderTop: `1px solid ${isLightTheme(theme) ? "#BAE6FD" : "rgba(0,175,197,0.15)"}` }}>
+          <button
+            type="button"
+            onClick={() => setMostrarCatalogoTipos((v) => !v)}
+            style={{ ...S.btn("ghost"), marginBottom: mostrarCatalogoTipos ? 12 : 0 }}
+          >
+            {mostrarCatalogoTipos ? "▼" : "▶"} Catálogo de tipos de acta administrativa
+          </button>
+          {mostrarCatalogoTipos && (
+            <>
+              <div style={{ fontSize: 12, color: col.textMuted, marginBottom: 10, lineHeight: 1.45 }}>
+                Tipos usados al clasificar actas administrativas / cobro. El listado refleja los registrados para este contrato (y globales).
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+                <button type="button" style={S.btn("primary", true)} onClick={() => { setModalNuevoTipo(true); setNuevoTipoNom(""); setNuevoTipoCobro(false); }}>
+                  ➕ Nuevo tipo
+                </button>
+              </div>
+              {actasTipos.length === 0 ? (
+                <div style={{ fontSize: 12, color: col.textMuted }}>Aún no hay tipos. Crea uno para vincularlo al crear actas administrativas.</div>
+              ) : (
+                <table style={{ ...S.table, maxWidth: 620 }}>
+                  <thead>
+                    <tr>
+                      {["Nombre", "Es cobro", "Usos en actas"].map((h) => (
+                        <th key={h} style={S.th}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {actasTipos.map((t) => {
+                      const usos = actasTodas.filter((a) => a.tipo_acta_id != null && Number(a.tipo_acta_id) === Number(t.id)).length;
+                      return (
+                        <tr key={t.id}>
+                          <td style={tdStyle}>{t.nombre || `—`}</td>
+                          <td style={tdStyle}>{t.es_cobro ? "Sí" : "No"}</td>
+                          <td style={tdStyle}>{usos}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {modalForm && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10020,
+            background: "rgba(5,12,18,0.88)",
+            backdropFilter: "blur(6px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+          onClick={(e) => e.target === e.currentTarget && !guardandoActa && setModalForm(false)}
+        >
+          <div
+            style={{
+              width: "min(760px, 96vw)",
+              maxHeight: "92vh",
+              overflowY: "auto",
+              background: isLightTheme(theme) ? "#F0F9FF" : "#0b1920",
+              border: "1px solid rgba(0,175,197,0.25)",
+              borderRadius: 14,
+              padding: "22px 26px",
+              boxShadow: "0 32px 80px rgba(0,0,0,0.55)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 16, fontWeight: 700, color: col.textPrimary, marginBottom: 6 }}>
+              {editingActaId ? "Editar acta" : "Crear acta"}
+            </div>
+            <div style={{ fontSize: 11, color: col.textMuted, marginBottom: 14 }}>
+              {!editingActaId && (
+                <>Consecutivo sugerido: <strong>{proximoCons}</strong>. Puedes ajustarlo si hace falta.</>
+              )}
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <div style={labelStyle}>Tipo de acta *</div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                {[
+                  ["RPO", "RPO (período SICOE)"],
+                  ["administrativa", "Administrativa"],
+                  ["cobro", "Cobro"],
+                ].map(([val, lab]) => {
+                  const raw = String(formActa.tipo_grupo || "");
+                  const sel = val === "RPO"
+                    ? raw.toUpperCase() === "RPO"
+                    : raw.toLowerCase() === val;
+                  return (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setF("tipo_grupo", val)}
+                    style={{
+                      ...S.chip(sel),
+                      padding: "8px 14px",
+                      fontSize: 12,
+                    }}
+                  >
+                    {lab}
+                  </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
+              <div>
+                <div style={labelStyle}>Consecutivo *</div>
+                <input
+                  style={inputStyle}
+                  type="number"
+                  min={1}
+                  value={formActa.consecutivo}
+                  onChange={(e) => setF("consecutivo", e.target.value)}
+                  disabled={!!editingActaId}
+                />
+              </div>
+              {actasTipos.length > 0 && (
+                <div>
+                  <div style={labelStyle}>Tipo documental (catálogo)</div>
+                  <select
+                    style={inputStyle}
+                    value={formActa.tipo_acta_id}
+                    onChange={(e) => setF("tipo_acta_id", e.target.value)}
+                  >
+                    <option value="">—</option>
+                    {actasTipos.map((t) => (
+                      <option key={t.id} value={t.id}>{t.nombre || `Tipo ${t.id}`}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            <div style={subTitle}>General</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <div style={labelStyle}>Observación</div>
+                <textarea
+                  style={{ ...inputStyle, resize: "vertical", minHeight: 64 }}
+                  value={formActa.observacion}
+                  onChange={(e) => setF("observacion", e.target.value)}
+                  placeholder="Notas o referencia"
+                />
+              </div>
+              {usuariosContrato.length > 0 && (
+                <div>
+                  <div style={labelStyle}>Asignado a</div>
+                  <select
+                    style={inputStyle}
+                    value={formActa.asignado_a}
+                    onChange={(e) => setF("asignado_a", e.target.value)}
+                  >
+                    <option value="">—</option>
+                    {usuariosContrato.map((u) => (
+                      <option key={u.id} value={u.id}>{u.nombre} {u.apellidos || ""}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div>
+                <div style={labelStyle}>Fecha asignación</div>
+                <ActasCalPicker
+                  value={formActa.fecha_asignacion}
+                  onChange={(v) => setF("fecha_asignacion", v || "")}
+                  isOpen={calFaOpen}
+                  onToggle={() => { setCalFaOpen((o) => !o); setCalIniOpen(false); setCalFinOpen(false); }}
+                  theme={theme}
+                />
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <div style={labelStyle}>Enlace (URL)</div>
+                <input
+                  style={inputStyle}
+                  type="url"
+                  value={formActa.enlace}
+                  onChange={(e) => setF("enlace", e.target.value)}
+                  placeholder="https://…"
+                />
+              </div>
+            </div>
+
+            {!esActaAdministrativa && (
+              <>
+            <div style={subTitle}>RPO / período</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
+              <div>
+                <div style={labelStyle}>Número RPO {String(formActa.tipo_grupo || "").toUpperCase() === "RPO" ? "*" : ""}</div>
+                <input
+                  style={inputStyle}
+                  type="number"
+                  min={1}
+                  value={formActa.numero_rpo}
+                  onChange={(e) => setF("numero_rpo", e.target.value)}
+                />
+              </div>
+              <div>
+                <div style={labelStyle}>Fecha inicio {String(formActa.tipo_grupo || "").toUpperCase() === "RPO" ? "*" : ""}</div>
+                <ActasCalPicker
+                  value={formActa.fecha_inicio}
+                  onChange={(v) => setF("fecha_inicio", v || "")}
+                  isOpen={calIniOpen}
+                  onToggle={() => { setCalIniOpen((o) => !o); setCalFinOpen(false); setCalFaOpen(false); }}
+                  theme={theme}
+                />
+              </div>
+              <div>
+                <div style={labelStyle}>Fecha fin {String(formActa.tipo_grupo || "").toUpperCase() === "RPO" ? "*" : ""}</div>
+                <ActasCalPicker
+                  value={formActa.fecha_fin}
+                  onChange={(v) => setF("fecha_fin", v || "")}
+                  isOpen={calFinOpen}
+                  onToggle={() => { setCalFinOpen((o) => !o); setCalIniOpen(false); setCalFaOpen(false); }}
+                  theme={theme}
+                />
+              </div>
+            </div>
+
+            <div style={subTitle}>Componentes y valores</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
+              {[
+                ["valor_comp_ambiental", "Valor ambiental"],
+                ["calificacion_ambiental", "Calif. ambiental"],
+                ["valor_comp_social", "Valor social"],
+                ["calificacion_social", "Calif. social"],
+                ["valor_comp_pmt", "Valor PMT"],
+                ["calificacion_pmt", "Calif. PMT"],
+                ["valor_cobrado_adicional", "Cobrado adicional"],
+              ].map(([k, lab]) => (
+                <div key={k}>
+                  <div style={labelStyle}>{lab}</div>
+                  <input
+                    style={inputStyle}
+                    type="text"
+                    inputMode="decimal"
+                    value={formActa[k]}
+                    onChange={(e) => setF(k, e.target.value)}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div style={subTitle}>Ajustes</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
+              {[
+                ["ajuste_iccp", "Ajuste ICCP"],
+                ["ajuste_icociv", "Ajuste ICOCIV"],
+                ["ajuste_ipc", "Ajuste IPC"],
+                ["pct_proyectado_ajustes", "% proyectado ajustes"],
+              ].map(([k, lab]) => (
+                <div key={k}>
+                  <div style={labelStyle}>{lab}</div>
+                  <input
+                    style={inputStyle}
+                    type="text"
+                    inputMode="decimal"
+                    value={formActa[k]}
+                    onChange={(e) => setF(k, e.target.value)}
+                  />
+                </div>
+              ))}
+            </div>
+              </>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
+              <button type="button" style={S.btn("ghost")} disabled={guardandoActa} onClick={() => { setModalForm(false); setEditingActaId(null); }}>
+                Cancelar
+              </button>
+              <button type="button" style={S.btn("primary")} disabled={guardandoActa} onClick={guardarActa}>
+                {guardandoActa ? "Guardando…" : editingActaId ? "Guardar cambios" : "Crear acta"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalNuevoTipo && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10025,
+            background: "rgba(5,12,18,0.88)",
+            backdropFilter: "blur(6px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+          onClick={(e) => e.target === e.currentTarget && !creandoTipo && setModalNuevoTipo(false)}
+        >
+          <div
+            style={{
+              width: "min(420px, 96vw)",
+              background: isLightTheme(theme) ? "#F0F9FF" : "#0b1920",
+              border: "1px solid rgba(0,175,197,0.25)",
+              borderRadius: 14,
+              padding: "22px 26px",
+              boxShadow: "0 32px 80px rgba(0,0,0,0.55)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 15, fontWeight: 700, color: col.textPrimary, marginBottom: 12 }}>Nuevo tipo de acta</div>
+            <div style={{ marginBottom: 12 }}>
+              <div style={labelStyle}>Nombre *</div>
+              <input style={inputStyle} value={nuevoTipoNom} onChange={(e) => setNuevoTipoNom(e.target.value)} placeholder="Ej. Modificación contractual" />
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: col.textMuted, marginBottom: 16, cursor: "pointer" }}>
+              <input type="checkbox" checked={nuevoTipoCobro} onChange={(e) => setNuevoTipoCobro(e.target.checked)} />
+              Marcar como tipo de cobro
+            </label>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button type="button" style={S.btn("ghost")} disabled={creandoTipo} onClick={() => setModalNuevoTipo(false)}>Cancelar</button>
+              <button type="button" style={S.btn("primary")} disabled={creandoTipo || !nuevoTipoNom.trim()} onClick={crearTipoCatalogo}>
+                {creandoTipo ? "Guardando…" : "Crear tipo"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalCerrar && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10020,
+            background: "rgba(5,12,18,0.88)",
+            backdropFilter: "blur(6px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+          onClick={(e) => e.target === e.currentTarget && !cerrando && setModalCerrar(null)}
+        >
+          <div
+            style={{
+              width: "min(440px, 96vw)",
+              background: isLightTheme(theme) ? "#F0F9FF" : "#0b1920",
+              border: "1px solid rgba(0,175,197,0.25)",
+              borderRadius: 14,
+              padding: "22px 26px",
+              boxShadow: "0 32px 80px rgba(0,0,0,0.55)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 16, fontWeight: 700, color: col.textPrimary, marginBottom: 8 }}>
+              Cerrar Acta RPO #{modalCerrar.numero_rpo}
+            </div>
+            <div style={{ fontSize: 12, color: col.textMuted, marginBottom: 16, lineHeight: 1.45 }}>
+              El acta quedará con último día <strong>{fechaCierre}</strong>. Se creará el acta del mes siguiente (calendario completo) y se moverán los registros sin cierre en Interventoría.
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <div style={labelStyle}>Fecha de cierre *</div>
+              <ActasCalPicker
+                value={fechaCierre}
+                onChange={(v) => setFechaCierre(v || hoy)}
+                isOpen={calCierreOpen}
+                onToggle={() => setCalCierreOpen((o) => !o)}
+                theme={theme}
+              />
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button type="button" style={S.btn("ghost")} disabled={cerrando} onClick={() => setModalCerrar(null)}>
+                Cancelar
+              </button>
+              <button type="button" style={S.btn("primary")} disabled={cerrando} onClick={confirmarCerrar}>
+                {cerrando ? "Procesando…" : "Confirmar cierre"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── SECCIÓN 7: Subcontratistas ───────────────────────────────────────────
 function SeccionSubcontratistas({ call, user, perms, theme }) {
   const contratoId = user?.contrato_id;
@@ -3405,6 +4271,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
     { id: "precios",          label: "Listado de Precios"   },
     { id: "subcontratistas",  label: "Subcontratistas"       },
     { id: "resets",           label: "Reset Claves"          },
+    { id: "actas",       label: "Actas", soloAdmin: true },
     { id: "inicio",    label: "Página de inicio", soloAdmin: true },
     { id: "logs",      label: "📋 Logs del Sistema", soloAdmin: true },
   ];
@@ -3420,6 +4287,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
     precios:          { title: "Listado de Precios",    sub: "Edita, carga y descarga el listado de precios por contrato" },
     subcontratistas:  { title: "Subcontratistas",       sub: "Gestión de subcontratistas, cortes de facturación y precios por contrato" },
     resets:           { title: "Reset Claves",          sub: "Autoriza solicitudes de cambio de contraseña" },
+    actas:       { title: "Actas", sub: "Crear actas RPO y administrativas; cierre anticipado y traslado de residuales (RPO)" },
     inicio:    { title: "Página de inicio",       sub: "Novedades, textos e imagen de contexto en el módulo Inicio" },
     logs:      { title: "Logs del Sistema",       sub: "Auditoría completa de acciones en la plataforma" },
   };
@@ -3506,6 +4374,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
           />}
             {tab === "precios"          && <SeccionListadoPrecios call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true, validar: true } : precioPerms} theme={activeTheme} />}
             {tab === "subcontratistas"  && <SeccionSubcontratistas call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, validar: true, exportar: true } : subPerms} theme={activeTheme} />}
+            {tab === "actas"            && <SeccionActasRpo call={call} user={user} contratos={contratos} theme={activeTheme} />}
             {tab === "resets"           && <SeccionResets    call={call} theme={activeTheme} />}
             {tab === "inicio"           && <SeccionInicioNovedades call={call} theme={activeTheme} token={token} />}
               {tab === "logs"      && <SeccionLogs      call={call} theme={activeTheme} />}
