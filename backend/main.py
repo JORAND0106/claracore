@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form, Query
+from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form, Query, Header
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import StreamingResponse, JSONResponse
 import io, csv, requests as req_http
@@ -24,6 +24,9 @@ import re
 
 # ── Sesiones DWG activas (en memoria) ─────────────────────────────────────────
 _dwg_sessions: dict = {}
+# Auditoría: última carga de cantidades desde SicoeCAD (cliente) → /presupuesto/.../bulk?source=sicoe_cad
+# Notificación consumida vía GET .../sincro-sicoe-cad-auditoria; en un solo proceso de API (no multi-réplica).
+_sicoe_cad_sincro_audit: dict = {}
 # ── Jobs de exportación Excel en background ────────────────────────────────────
 _export_jobs: dict = {}  # { job_id: { "estado": "procesando"|"listo"|"error", "buf": bytes, "filename": str } }
 _DWG_TIMEOUT = 30  # segundos — margen para curl.exe
@@ -2693,7 +2696,59 @@ def _presupuesto_aplica_filtro_interventoria(current_user) -> bool:
     return rol in ("interventoría", "interventoria", "operativo interventoria")
 
 
-@app.get("/presupuesto/{contrato_id}")
+def _presupuesto_q_filtros_ubicacion(
+    q,
+    nodo_inicio: Optional[str] = None,
+    nodo_final: Optional[str] = None,
+    buscar: Optional[str] = None,
+    id_pol: Optional[str] = None,
+    pk_criterio: Optional[str] = None,
+    texto: Optional[str] = None,
+    abs_desde: Optional[float] = None,
+    abs_hasta: Optional[float] = None,
+    revisado: Optional[str] = None,
+    pre_interv_estado: Optional[str] = None,
+):
+    """Filtros opcionales para GET /presupuesto (alineable con criterios tipo SICOE / dashboard)."""
+    if nodo_inicio and str(nodo_inicio).strip():
+        q = q.ilike("no_inicio", f"%{str(nodo_inicio).strip()}%")
+    if nodo_final and str(nodo_final).strip():
+        q = q.ilike("no_final", f"%{str(nodo_final).strip()}%")
+    has_split = (id_pol and str(id_pol).strip()) or (pk_criterio and str(pk_criterio).strip()) or (texto and str(texto).strip())
+    if not has_split and buscar and str(buscar).strip():
+        b = str(buscar).strip()
+        pat = f"%{b}%"
+        # Legacy: un solo cuadro busca en cuatro columnas
+        q = q.or_(f"id_pol.ilike.{pat},pk_id.ilike.{pat},registro.ilike.{pat},descripcion.ilike.{pat}")
+    else:
+        if id_pol and str(id_pol).strip():
+            q = q.ilike("id_pol", f"%{str(id_pol).strip()}%")
+        if pk_criterio and str(pk_criterio).strip():
+            q = q.ilike("pk_id", f"%{str(pk_criterio).strip()}%")
+        if texto and str(texto).strip():
+            t = f"%{str(texto).strip()}%"
+            q = q.or_(f"registro.ilike.{t},descripcion.ilike.{t}")
+    if revisado and str(revisado).strip():
+        q = q.eq("revisado", str(revisado).strip())
+    if pre_interv_estado and str(pre_interv_estado).strip():
+        pe = str(pre_interv_estado).strip()
+        if str(pe).strip().lower() in ("no revisado", "—", "-"):
+            q = q.is_("pre_interv_estado", "null")
+        else:
+            q = q.eq("pre_interv_estado", pe)
+    q = _so_reg_filtro_abs_solape(q, abs_desde, abs_hasta)
+    return q
+
+
+def _orden_capitulo_presupuesto(c: Optional[str]) -> tuple:
+    if not c:
+        return (2, 0, c or "")
+    m = re.match(r"^(\d+)", str(c).strip())
+    if m:
+        return (0, int(m.group(1)), c)
+    return (1, 0, c)
+
+
 @app.get("/presupuesto/{contrato_id}")
 def get_presupuesto(
     contrato_id: int,
@@ -2701,9 +2756,25 @@ def get_presupuesto(
     item: Optional[str] = None,
     tramo: Optional[str] = None,
     calzada: Optional[str] = None,
+    nodo_inicio: Optional[str] = None,
+    nodo_final: Optional[str] = None,
+    buscar: Optional[str] = None,
+    id_pol: Optional[str] = None,
+    pk_criterio: Optional[str] = None,
+    texto: Optional[str] = None,
+    abs_desde: Optional[float] = None,
+    abs_hasta: Optional[float] = None,
+    revisado: Optional[str] = None,
+    pre_interv_estado: Optional[str] = None,
     papelera: bool = False,
-    current_user=Depends(get_current_user)
+    current_user=Depends(get_current_user),
 ):
+    """
+    Listado de presupuesto con filtros de servidor. Parámetros capitulo / item alinean con el drill del
+    dashboard. id_pol, pk_criterio, texto: filtros separados (campos distintos). `buscar` mantiene
+    compatibilidad: OR en id_pol, pk_id, registro, descripcion si no se usan esos tres.
+    pre_interv_estado: filtro depuración (roles contratista / obra); revisado: Interventoría.
+    """
     PAGE = 1000
     all_rows = []
     offset = 0
@@ -2713,10 +2784,27 @@ def get_presupuesto(
             q = q.eq("dado_de_baja", True)
         else:
             q = q.eq("dado_de_baja", False)
-        if capitulo: q = q.eq("capitulo", capitulo)
-        if item:     q = q.eq("item", item)
-        if tramo:    q = q.eq("tramo", tramo)
-        if calzada:  q = q.eq("calzada", calzada)
+        if capitulo:
+            q = q.eq("capitulo", capitulo)
+        if item:
+            q = q.eq("item", item)
+        if tramo:
+            q = q.eq("tramo", tramo)
+        if calzada:
+            q = q.eq("calzada", calzada)
+        q = _presupuesto_q_filtros_ubicacion(
+            q,
+            nodo_inicio=nodo_inicio,
+            nodo_final=nodo_final,
+            buscar=buscar,
+            id_pol=id_pol,
+            pk_criterio=pk_criterio,
+            texto=texto,
+            abs_desde=abs_desde,
+            abs_hasta=abs_hasta,
+            revisado=revisado,
+            pre_interv_estado=pre_interv_estado,
+        )
         if _presupuesto_aplica_filtro_interventoria(current_user):
             q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
         batch = q.order("capitulo").order("item").order("pk_id").range(offset, offset + PAGE - 1).execute().data
@@ -2726,19 +2814,82 @@ def get_presupuesto(
         offset += PAGE
     return all_rows
 
+
+@app.get("/presupuesto/{contrato_id}/conteo")
+def get_presupuesto_conteo(
+    contrato_id: int,
+    capitulo: Optional[str] = None,
+    item: Optional[str] = None,
+    tramo: Optional[str] = None,
+    calzada: Optional[str] = None,
+    nodo_inicio: Optional[str] = None,
+    nodo_final: Optional[str] = None,
+    buscar: Optional[str] = None,
+    id_pol: Optional[str] = None,
+    pk_criterio: Optional[str] = None,
+    texto: Optional[str] = None,
+    abs_desde: Optional[float] = None,
+    abs_hasta: Optional[float] = None,
+    revisado: Optional[str] = None,
+    pre_interv_estado: Optional[str] = None,
+    papelera: bool = False,
+    current_user=Depends(get_current_user),
+):
+    """
+    Mismos query params que GET /presupuesto/{id}; respuesta mínima para dashboard y UI sin bajar filas.
+    Fase C: pre-paginación y consistencia con el listado.
+    """
+    q = supabase.table("presupuesto").select("id", count="exact").eq("contrato_id", contrato_id)
+    if papelera:
+        q = q.eq("dado_de_baja", True)
+    else:
+        q = q.eq("dado_de_baja", False)
+    if capitulo:
+        q = q.eq("capitulo", capitulo)
+    if item:
+        q = q.eq("item", item)
+    if tramo:
+        q = q.eq("tramo", tramo)
+    if calzada:
+        q = q.eq("calzada", calzada)
+    q = _presupuesto_q_filtros_ubicacion(
+        q,
+        nodo_inicio=nodo_inicio,
+        nodo_final=nodo_final,
+        buscar=buscar,
+        id_pol=id_pol,
+        pk_criterio=pk_criterio,
+        texto=texto,
+        abs_desde=abs_desde,
+        abs_hasta=abs_hasta,
+        revisado=revisado,
+        pre_interv_estado=pre_interv_estado,
+    )
+    if _presupuesto_aplica_filtro_interventoria(current_user):
+        q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+    result = q.execute()
+    return {"total": int(result.count or 0)}
+
+
 @app.get("/presupuesto/{contrato_id}/filtros")
 def get_filtros_presupuesto(
     contrato_id: int,
     capitulo: Optional[str] = None,
     item: Optional[str] = None,
     tramo: Optional[str] = None,
-    current_user=Depends(get_current_user)
+    calzada: Optional[str] = None,
+    current_user=Depends(get_current_user),
 ):
     """Devuelve valores únicos para filtros en cascada."""
     q = supabase.table("presupuesto").select("capitulo, item, tramo, calzada").eq("contrato_id", contrato_id)
-    if capitulo: q = q.eq("capitulo", capitulo)
-    if item:     q = q.eq("item", item)
-    if tramo:    q = q.eq("tramo", tramo)
+    if capitulo:
+        q = q.eq("capitulo", capitulo)
+    if item:
+        q = q.eq("item", item)
+    if tramo:
+        q = q.eq("tramo", tramo)
+    if calzada:
+        q = q.eq("calzada", calzada)
     if _presupuesto_aplica_filtro_interventoria(current_user):
         q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
     rows = q.execute().data
@@ -2771,7 +2922,22 @@ def get_resumen_presupuesto(contrato_id: int, current_user=Depends(get_current_u
 def get_capitulos_presupuesto(contrato_id: int, current_user=Depends(get_current_user)):
     """Devuelve capítulos con costo total y total de registros. Carga rápida sin traer filas individuales."""
     caps = supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
-    return [{"capitulo": r["capitulo"], "costo_total": r["presupuesto"], "total_registros": r["registros"]} for r in caps]
+    rows = [{"capitulo": r["capitulo"], "costo_total": r["presupuesto"], "total_registros": r["registros"]} for r in (caps or [])]
+    return sorted(rows, key=lambda x: _orden_capitulo_presupuesto(x.get("capitulo")))
+
+
+@app.get("/presupuesto/{contrato_id}/maestro-ubicacion-pk")
+def get_maestro_ubicacion_pk_ids(contrato_id: int, current_user=Depends(get_current_user)):
+    """Tramos y calzadas distintas desde el maestro pk_ids del contrato (SICOE)."""
+    def _q():
+        return supabase.table("pk_ids").select("tramo, calzada").eq("contrato_id", contrato_id).execute().data
+    try:
+        rows = supabase_execute(_q) or []
+    except Exception:
+        rows = []
+    tramos = sorted({str(r["tramo"]).strip() for r in rows if r.get("tramo") and str(r.get("tramo", "")).strip()})
+    calzadas = sorted({str(r["calzada"]).strip() for r in rows if r.get("calzada") and str(r.get("calzada", "")).strip()})
+    return {"tramos": tramos, "calzadas": calzadas}
 
 @app.get("/presupuesto/{contrato_id}/items-lista")
 def get_items_presupuesto(contrato_id: int, capitulo: str, current_user=Depends(get_current_user)):
@@ -3134,8 +3300,17 @@ def agregar_cantidad(contrato_id: int, body: AgregarCantidadBody, current_user=D
     return new_row
 
 @app.post("/presupuesto/{contrato_id}/bulk")
-def bulk_presupuesto(contrato_id: int, items: List[PresupuestoRow], mode: str = "append", current_user=Depends(get_current_user)):
-    """Importa registros de presupuesto. mode=replace elimina todo primero, mode=append agrega."""
+def bulk_presupuesto(
+    contrato_id: int,
+    items: List[PresupuestoRow],
+    mode: str = "append",
+    source: Optional[str] = None,
+    x_sicoe_cad_enviados: Optional[str] = Header(None, alias="X-SicoeCAD-Enviados"),
+    current_user=Depends(get_current_user),
+):
+    """Importa registros de presupuesto. mode=replace elimina todo primero, mode=append agrega.
+    Si el cliente es SicoeCAD, usar query source=sicoe_cad y opcional header X-SicoeCAD-Enviados
+    (cantidad de registros leídos en el DWG) para la auditoría en la web."""
     if mode == "replace":
         supabase.table("presupuesto").delete().eq("contrato_id", contrato_id).execute()
     if not items:
@@ -3159,8 +3334,37 @@ def bulk_presupuesto(contrato_id: int, items: List[PresupuestoRow], mode: str = 
                 except Exception:
                     pass
     registrar_log(current_user, "IMPORTAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id),
-        {"contrato_id": contrato_id, "mode": mode, "registros_insertados": insertados})
+        {"contrato_id": contrato_id, "mode": mode, "registros_insertados": insertados,
+         "source": (source or "").lower() or None})
+    if (source or "").strip().lower() == "sicoe_cad":
+        enviados = None
+        h = (x_sicoe_cad_enviados or "").strip()
+        if h.isdigit():
+            enviados = int(h)
+        _sicoe_cad_sincro_audit[contrato_id] = {
+            "insertados": insertados,
+            "enviados": enviados,
+            "ts": time.time(),
+        }
     return {"insertados": insertados}
+
+
+@app.get("/presupuesto/{contrato_id}/sincro-sicoe-cad-auditoria")
+def presupuesto_sincro_sicoe_cad_pendiente(contrato_id: int, current_user=Depends(get_current_user)):
+    """Aviso para la web: última importación de cantidades por SicoeCAD (sinc. con cola CAD / DWG)."""
+    e = _sicoe_cad_sincro_audit.get(contrato_id)
+    if not e:
+        return {"pendiente": None}
+    if time.time() - e["ts"] > 600:
+        _sicoe_cad_sincro_audit.pop(contrato_id, None)
+        return {"pendiente": None}
+    return {"pendiente": e}
+
+
+@app.post("/presupuesto/{contrato_id}/sincro-sicoe-cad-auditoria/ack")
+def presupuesto_sincro_sicoe_cad_ack(contrato_id: int, current_user=Depends(get_current_user)):
+    _sicoe_cad_sincro_audit.pop(contrato_id, None)
+    return {"ok": True}
 
 @app.put("/presupuesto/{contrato_id}/bulk-recalcular")
 def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=Depends(get_current_user)):
