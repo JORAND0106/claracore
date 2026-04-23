@@ -984,13 +984,12 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
   }
 
-  /** POST: evita `?ids=1,2,…` kilométrico en “Revisar por tramo” (5xx por límite de URL/proxy). */
-  async function fetchComentariosValidacionTramo(presupuestoIds) {
-    if (!presupuestoIds?.length || !contratoId) return {}
-    const res = await fetch(`${API}/presupuesto/${contratoId}/comentarios-validacion`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ ids: presupuestoIds })
+  /** Un GET por capítulo (join en servidor): evita URL/cuerpo con miles de IDs y N rondas POST. */
+  async function fetchComentariosValidacionPorCapitulo(capitulo) {
+    if (!String(capitulo || '').trim() || !contratoId) return {}
+    const p = new URLSearchParams({ capitulo: String(capitulo) })
+    const res = await fetch(`${API}/presupuesto/${contratoId}/comentarios-validacion-capitulo?${p}`, {
+      headers: { Authorization: `Bearer ${token}` }
     })
     if (!res.ok) return {}
     return res.json()
@@ -1541,15 +1540,10 @@ async function ejecutarBulkEstadoDirecto(estado) {
     if (ids?.length) cargarComentariosResumen(ids)
   }, [pagina, registrosFiltrados.length])
 
-  // Cargar comentarios de validación al entrar a un tramo (solo registros con estado)
+  // Comentarios de validación del capítulo al elegir tramo (una petición, sin lista de miles de IDs)
   useEffect(() => {
     if (!tramoSelec || !modalModoCapitulo || !contratoId) return
-    const capRegs = registros.filter(r => r.capitulo === modalModoCapitulo)
-    const idsConEstado = capRegs
-      .filter(r => r.revisado && r.revisado !== 'No Revisado')
-      .map(r => r.id)
-    if (!idsConEstado.length) return
-    fetchComentariosValidacionTramo(idsConEstado)
+    fetchComentariosValidacionPorCapitulo(modalModoCapitulo)
       .then(data => setComentariosTramo(prev => ({ ...prev, ...data })))
       .catch(() => {})
   }, [tramoSelec, modalModoCapitulo])
@@ -1821,11 +1815,8 @@ async function restaurar(id) {
                       setModoCapSeleccion(val)
                       if (val === 'tramos' && modalModoCapitulo) {
                         await cargarCapituloData(modalModoCapitulo)
-                        const capIds = registros.filter(r => r.capitulo === modalModoCapitulo).map(r => r.id)
-                        if (capIds.length) {
-                          const data = await fetchComentariosValidacionTramo(capIds)
-                          setComentariosTramo(data)
-                        }
+                        const data = await fetchComentariosValidacionPorCapitulo(modalModoCapitulo)
+                        setComentariosTramo(data)
                       }
                     }}
                     style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`,

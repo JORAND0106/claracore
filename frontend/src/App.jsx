@@ -6076,30 +6076,40 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     if (!validarTab1()) { setTabActivo(0); return }
     if (registros.length === 0) { alert('Debe tener al menos un registro en el TAB 3'); setTabActivo(2); return }
     setGuardando(true)
+    const httpErr = async (res) => {
+      const t = await res.text()
+      try {
+        const j = JSON.parse(t)
+        if (j?.detail) return typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+        if (j?.message) return j.message
+      } catch { /* cuerpo no JSON */ }
+      return t || `HTTP ${res.status}`
+    }
     try {
       // Usar variable local para evitar problemas de closure con el estado asíncrono
       let idParaGuardar = borradorId
       // Guardar localización si el reporte ya existía como borrador
       if (borradorId && pkSeleccionado) {
-          await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}/localizacion`, {
-              method: 'PATCH', headers: { ...hdrs, 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                  pk_id_id: pkSeleccionado?.id || null,
-                  civ: pkSeleccionado?.civ || null,
-                  tramo: pkSeleccionado?.tramo || null,
-                  infraestructura: pkSeleccionado?.infraestructura || null,
-                  calzada: pkSeleccionado?.calzada || null,
-                  ubicacion: pkSeleccionado?.ubicacion || null,
-                  coord_lat: coordLat || null,
-                  coord_lng: coordLng || null,
-                  margen: margen || null,
-                  abs_inicio: parseFloat(absInicio) || null,
-                  abs_final: parseFloat(absFinal) || null,
-                  nodo_ini: nodoIni || null,
-                  nodo_fin: nodoFin || null,
-              })
+        const rLoc = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}/localizacion`, {
+          method: 'PATCH', headers: { ...hdrs, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pk_id_id: pkSeleccionado?.id || null,
+            civ: pkSeleccionado?.civ || null,
+            tramo: pkSeleccionado?.tramo || null,
+            infraestructura: pkSeleccionado?.infraestructura || null,
+            calzada: pkSeleccionado?.calzada || null,
+            ubicacion: pkSeleccionado?.ubicacion || null,
+            coord_lat: coordLat || null,
+            coord_lng: coordLng || null,
+            margen: margen || null,
+            abs_inicio: parseFloat(absInicio) || null,
+            abs_final: parseFloat(absFinal) || null,
+            nodo_ini: nodoIni || null,
+            nodo_fin: nodoFin || null,
           })
-      }            
+        })
+        if (!rLoc.ok) throw new Error(await httpErr(rLoc))
+      }
       if (!idParaGuardar) {
         const bRes = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
           method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
@@ -6120,8 +6130,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             abs_final: parseFloat(absFinal) || null,
             nodo_ini: nodoIni || null,
             nodo_fin: nodoFin || null,
+          })
         })
-        })
+        if (!bRes.ok) throw new Error(await httpErr(bRes))
         const bData = await bRes.json()
         if (!bData.id) throw new Error('No se pudo crear el borrador')
         idParaGuardar = bData.id
@@ -6142,43 +6153,45 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         margen, abs_inicio: parseFloat(absInicio), abs_final: parseFloat(absFinal),
         nodo_ini: nodoIni, nodo_fin: nodoFin,
       }
-      // Actualizar el borrador y cambiar estado en un solo PUT
-      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}`, {
+      const rUpd = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}`, {
         method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...body, estado: 'Sin Asignar Ítem' })
       })
-      // Eliminar registros anteriores y reinsertar los actuales
-      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}/registros`, {
-        method: 'DELETE', headers: hdrs
-      })
-      for (const reg of registros) {
-        const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-registro`, { method: 'POST', headers: hdrs })
-          .then(x => x.json())
-        await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros`, {
-          method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            reporte_id: idParaGuardar, numero_registro: numR.numero,
-            nombre: reg.nombre, descripcion: reg.observacion,
-            longitud: parseFloat(reg.longitud)||null, ancho: parseFloat(reg.ancho)||null,
-            espesor: parseFloat(reg.espesor)||null, cantidad: parseFloat(reg.cantidad)||null,
-            cantidad_total: reg.cantidad_total,
-            unidad: reg.unidad, observacion: reg.observacion,
-            foto_url: reg.foto_url, foto_numero: reg.foto_numero, foto_descripcion: reg.foto_descripcion,
-            grafico_url: reg.grafico_url, grafico_numero: reg.grafico_numero, grafico_descripcion: reg.grafico_descripcion,
-          })
-        })
+      if (!rUpd.ok) throw new Error(await httpErr(rUpd))
+      // Un solo ida y vuelta: sustituye DELETE + 2N peticiones (evita "Failed to fetch" en 4G)
+      const payloadReg = {
+        registros: registros.map((reg) => ({
+          nombre: reg.nombre, descripcion: reg.observacion,
+          longitud: parseFloat(reg.longitud) || null, ancho: parseFloat(reg.ancho) || null,
+          espesor: parseFloat(reg.espesor) || null, cantidad: parseFloat(reg.cantidad) || null,
+          cantidad_total: reg.cantidad_total,
+          unidad: reg.unidad, observacion: reg.observacion,
+          foto_url: reg.foto_url, foto_numero: reg.foto_numero, foto_descripcion: reg.foto_descripcion,
+          grafico_url: reg.grafico_url, grafico_numero: reg.grafico_numero, grafico_descripcion: reg.grafico_descripcion
+        }))
       }
+      const rReg = await fetch(
+        `${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}/reemplazar-registros`,
+        { method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' }, body: JSON.stringify(payloadReg) }
+      )
+      if (!rReg.ok) throw new Error(await httpErr(rReg))
       // Guardar puntos topográficos
       const puntosValidos = puntos.filter(p => p.norte || p.este)
       if (puntosValidos.length > 0) {
-        await fetch(`${API_URL}/sicoe-obra/${contrato_id}/puntos-topograficos`, {
+        const rPt = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/puntos-topograficos`, {
           method: 'POST', headers: { ...hdrs, 'Content-Type': 'application/json' },
           body: JSON.stringify({ reporte_id: idParaGuardar, puntos: puntosValidos })
         })
+        if (!rPt.ok) throw new Error(await httpErr(rPt))
       }
       onGuardado()
-    } catch(e) {
-      alert('Error guardando reporte: ' + e.message)
+    } catch (e) {
+      const msg = (e && e.message) ? e.message : String(e)
+      if (msg === 'Failed to fetch') {
+        alert('Error guardando reporte: no hubo conexión con el servidor a tiempo. Comprueba la red, vuelve a intentar o abre con Wi‑Fi. Si usas móvil, el sistema ya envía las líneas en un solo lote: actualiza la app tras el despliegue.')
+      } else {
+        alert('Error guardando reporte: ' + msg)
+      }
     }
     setGuardando(false)
   }

@@ -3899,6 +3899,40 @@ def _comentarios_validacion_por_ids(id_list: List[int]) -> dict:
                 }
     return result
 
+def _comentarios_validacion_por_capitulo_contrato(contrato_id: int, capitulo: str) -> dict:
+    """Misma salida que por IDs, pero una sola petición: join comentarios → presupuesto (sin N×chunk a Supabase)."""
+    if not (capitulo or "").strip():
+        return {}
+    rows = (
+        supabase.table("comentarios")
+        .select("presupuesto_id, mensaje, usuario_nombre, created_at, presupuesto!inner(contrato_id, capitulo)")
+        .eq("tipo", "validacion")
+        .is_("parent_id", "null")
+        .eq("presupuesto.contrato_id", contrato_id)
+        .eq("presupuesto.capitulo", capitulo)
+        .order("created_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    result: Dict[int, Any] = {}
+    for r in rows:
+        pid = r["presupuesto_id"]
+        if pid not in result:
+            result[pid] = {
+                "mensaje": r["mensaje"],
+                "usuario_nombre": r["usuario_nombre"],
+                "created_at": r["created_at"],
+            }
+    return result
+
+@app.get("/presupuesto/{contrato_id}/comentarios-validacion-capitulo")
+def comentarios_validacion_por_capitulo(
+    contrato_id: int, capitulo: str, current_user=Depends(get_current_user)
+):
+    """Revisor por tramo: carga comentarios de validación de todo el capítulo en un solo ida-vuelta."""
+    return _comentarios_validacion_por_capitulo_contrato(contrato_id, capitulo)
+
 @app.get("/presupuesto/{contrato_id}/comentarios-validacion")
 def comentarios_validacion_batch(contrato_id: int, ids: str, current_user=Depends(get_current_user)):
     """Devuelve el comentario de validacion más reciente (sin hijos) por cada presupuesto_id."""
@@ -7041,6 +7075,27 @@ class RegistroCreate(BaseModel):
     creado_por_reg: Optional[int] = None
     modificado_por_reg: Optional[int] = None
 
+class RegistroLineaNuevoReporte(BaseModel):
+    """Líneas del modal Nuevo reporte: sin reporte_id ni número (los asigna el servidor)."""
+    nombre: Optional[str] = None
+    descripcion: Optional[str] = None
+    longitud: Optional[float] = None
+    ancho: Optional[float] = None
+    espesor: Optional[float] = None
+    cantidad: Optional[float] = None
+    cantidad_total: Optional[float] = None
+    unidad: Optional[str] = None
+    observacion: Optional[str] = None
+    foto_url: Optional[str] = None
+    foto_numero: Optional[int] = None
+    foto_descripcion: Optional[str] = None
+    grafico_url: Optional[str] = None
+    grafico_numero: Optional[int] = None
+    grafico_descripcion: Optional[str] = None
+
+class ReemplazarRegistrosNuevoReporteBody(BaseModel):
+    registros: List[RegistroLineaNuevoReporte]
+
 @app.put("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
 def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, current_user=Depends(get_current_user)):
     data = body.dict()
@@ -7193,6 +7248,82 @@ def eliminar_registros_reporte(contrato_id: int, reporte_id: int, current_user=D
         pass
     return {"ok": True}
 
+@app.put("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/reemplazar-registros")
+def reemplazar_registros_nuevo_reporte(
+    contrato_id: int, reporte_id: int, body: ReemplazarRegistrosNuevoReporteBody, current_user=Depends(get_current_user)
+):
+    """
+    Un solo ida y vuelta: borra so_registros del reporte e inserta las líneas nuevas.
+    Sustituye N×(next-registro+POST) para evitar “Failed to fetch” en móviles (timeout / cierre de conexión).
+    """
+    def _get_rep():
+        return supabase.table("so_reportes").select(
+            "pk_id_id,civ,tramo,infraestructura,calzada,ubicacion,"
+            "coord_lat,coord_lng,abs_inicio,abs_final,nodo_ini,nodo_fin,"
+            "subcontratista_id,inspector_id"
+        ).eq("id", reporte_id).eq("contrato_id", contrato_id).limit(1).execute().data
+    rep_rows = supabase_execute(_get_rep)
+    if not rep_rows:
+        raise HTTPException(status_code=404, detail="Reporte no encontrado en este contrato")
+    rep = rep_rows[0]
+    def _del():
+        return supabase.table("so_registros").delete()\
+            .eq("reporte_id", reporte_id).eq("contrato_id", contrato_id).execute().data
+    supabase_execute(_del)
+    uid = int(current_user.get("sub") or current_user.get("id", 0))
+    if not body.registros:
+        return {"ok": True, "insertados": 0}
+    rows_to_insert: List[Dict[str, Any]] = []
+    for line in body.registros:
+        def _n():
+            return supabase.rpc("siguiente_numero_registro", {"p_contrato_id": contrato_id}).execute().data
+        numero = supabase_execute(_n)
+        data: Dict[str, Any] = line.dict()
+        data["reporte_id"] = reporte_id
+        data["numero_registro"] = numero
+        data["contrato_id"] = contrato_id
+        data["creado_por_reg"] = uid
+        for campo in ("pk_id_id", "civ", "tramo", "infraestructura", "calzada", "ubicacion",
+                      "coord_lat", "coord_lng", "abs_inicio", "abs_final",
+                      "nodo_ini", "nodo_fin", "subcontratista_id", "inspector_id"):
+            if rep.get(campo) is not None:
+                data[campo] = rep[campo]
+        rows_to_insert.append(data)
+    _BATCH = 200
+    total = 0
+    for i in range(0, len(rows_to_insert), _BATCH):
+        chunk = rows_to_insert[i : i + _BATCH]
+        def _ins():
+            return supabase.table("so_registros").insert(chunk).execute().data
+        supabase_execute(_ins)
+        total += len(chunk)
+    try:
+        cnum = None
+        cr = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
+        if cr:
+            cnum = cr[0].get("numero")
+        u_log = {
+            "sub": str(current_user.get("sub")),
+            "nombre": current_user.get("nombre") or "",
+            "email": current_user.get("email"),
+            "cargo_nombre": current_user.get("cargo_nombre"),
+            "rol_nombre": current_user.get("rol_nombre"),
+            "contrato_id": contrato_id,
+            "contrato_numero": cnum,
+        }
+        registrar_log(
+            u_log,
+            "CREAR",
+            "SICOE",
+            "registro",
+            f"reporte_{reporte_id}_lote",
+            {"reporte_id": reporte_id, "reemplazar_registros_masivo": True, "insertados": total},
+            valor_anterior=None,
+            valor_nuevo={"insertados": total},
+        )
+    except Exception:
+        pass
+    return {"ok": True, "insertados": total}
 
 @app.delete("/sicoe-obra/{contrato_id}/registros/{registro_id}/dev")
 def dev_eliminar_registro(contrato_id: int, registro_id: int, current_user=Depends(get_current_user)):
