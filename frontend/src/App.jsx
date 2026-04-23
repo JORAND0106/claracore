@@ -16,15 +16,41 @@ const _VITE_MAPBOX = import.meta.env.VITE_MAPBOX_TOKEN
 if (_VITE_MAPBOX) mapboxgl.accessToken = _VITE_MAPBOX
 
 const API = API_BASE
-/** Contratos donde el plano de filtros no usa GPS de reportes: solo agregación por PK (sin nodos naranja ni coords de reporte). .env: VITE_SICOE_CONTRATOS_SIN_NODOS_REPORTE_GPS=12,34 */
+/**
+ * Plano SICOE como en Presupuesto: sin puntos naranja (GPS reporte), sin offsets falsos;
+ * posición solo desde maestro pk_ids (lat/lng). Añade más IDs vía
+ * VITE_SICOE_CONTRATOS_SIN_NODOS_REPORTE_GPS=3,4 — el contrato 2 va incluido por migraciones GPS.
+ */
 const SICOE_CONTRATOS_SIN_NODOS_REPORTE_GPS = new Set(
-  String(import.meta.env.VITE_SICOE_CONTRATOS_SIN_NODOS_REPORTE_GPS || '')
-    .split(/[,;]+/)
-    .map(s => s.trim())
-    .filter(Boolean)
-    .map(s => parseInt(s, 10))
-    .filter(n => !Number.isNaN(n))
+  (() => {
+    const fromEnv = String(import.meta.env.VITE_SICOE_CONTRATOS_SIN_NODOS_REPORTE_GPS || '')
+      .split(/[,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => parseInt(s, 10))
+      .filter((n) => !Number.isNaN(n))
+    return [2, ...fromEnv]
+  })()
 )
+
+/** [lng, lat] WGS84 desde fila maestro PK (misma lógica que PptoFiltroMapaPk). */
+function sicoePickLngLatMaestro(row) {
+  if (!row || typeof row !== 'object') return null
+  const la = row.lat ?? row.latitud ?? row.latitude ?? row.Lat
+  const ln = row.lng ?? row.lon ?? row.longitud ?? row.longitude ?? row.Lng ?? row.lngd
+  if (la == null || ln == null) return null
+  const laN = parseFloat(la)
+  const lnN = parseFloat(ln)
+  if (Number.isNaN(laN) || Number.isNaN(lnN)) return null
+  if (laN < -90 || laN > 90 || lnN < -180 || lnN > 180) return null
+  return [lnN, laN]
+}
+
+function _sicoeFeaturePkId(f) {
+  const p = f?.properties
+  if (!p) return ''
+  return String(p.PK_ID ?? p.pk_id ?? p.Layer ?? p.layer ?? p.Name ?? '').trim()
+}
 const POLITICAS_TEXTO_VERSION = '1.0'
 const TEST_MODE = String(import.meta.env.VITE_TEST_MODE || '').toLowerCase() === 'true'
 
@@ -998,6 +1024,13 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const graficoReporte = reporte.registros?.find(r => r.grafico_url) || null
   const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || graficoReporte?.grafico_url || null)
   const [mostrarPopupValidacion, setMostrarPopupValidacion] = useState(false)
+  // Sincronizar con datos del servidor (p. ej. migración de foto_url en BD sin remontar el componente)
+  useEffect(() => {
+    setFotoLocal(registro.foto_url || null)
+  }, [registro.id, registro.foto_url])
+  useEffect(() => {
+    setGrafLocal(registro.grafico_url || graficoReporte?.grafico_url || null)
+  }, [registro.id, registro.grafico_url, graficoReporte?.grafico_url])
   const [estadoValidando,        setEstadoValidando]        = useState('')
   const [toastMsg,               setToastMsg]               = useState(null)
   const [listaCortes,            setListaCortes]            = useState([])
@@ -3961,12 +3994,12 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const reportesMostrados = reportes
 
   const sicoePuntosPlano = useMemo(() => {
-    const ignorarGpsReportes = contrato_id != null && SICOE_CONTRATOS_SIN_NODOS_REPORTE_GPS.has(Number(contrato_id))
+    const planoSoloMaestro = contrato_id != null && SICOE_CONTRATOS_SIN_NODOS_REPORTE_GPS.has(Number(contrato_id))
     const defLng = sicoeContratoCentro?.lng ?? -74.0817
     const defLat = sicoeContratoCentro?.lat ?? 4.6097
     const center = [defLng, defLat]
     const metaFromPk = (pk) => {
-      const e = [pk.civ, pk.tramo, pk.infraestructura].filter(Boolean).join(' · ')
+      const e = [pk.civ, pk.tramo, pk.infraestructura, pk.calzada].filter(Boolean).join(' · ')
       return e || 'Ubicación en obra'
     }
     const pts = []
@@ -3977,7 +4010,8 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       const pid = rep.pk_id_id
       const la = rep.coord_lat
       const lo = rep.coord_lng
-      const hasCoord = !ignorarGpsReportes && la != null && lo != null && !Number.isNaN(+la) && !Number.isNaN(+lo)
+      const hasCoordGps = la != null && lo != null && !Number.isNaN(+la) && !Number.isNaN(+lo)
+      const hasCoord = !planoSoloMaestro && hasCoordGps
       if (pid == null) {
         if (hasCoord) {
           const lab = (rep.descripcion_actividad || '').trim().slice(0, 52) || `Reporte #${rep.numero_reporte ?? rep.id}`
@@ -3990,6 +4024,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
             lng: +lo,
             reportes_count: 1,
             aproximado: false,
+            sinMarcador: false,
           })
         }
         continue
@@ -4005,14 +4040,31 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     let i = 0
     for (const [pid, g] of byPk) {
       const meta = pkMeta.get(pid) || {}
-      const etiqueta = metaFromPk(meta)
+      const idTxt = String(meta.pk_id || '').trim()
+      const pie = metaFromPk(meta)
+      const etiqueta = [idTxt, pie].filter(Boolean).join(' - ') || `PK #${pid}`
       let lat = g.lat
       let lng = g.lng
-      const tiene = lat != null && lng != null
-      if (!tiene) {
-        const o = (i++) * 0.00015
-        lng = center[0] + Math.cos(i * 2.4) * o * 100
-        lat = center[1] + Math.sin(i * 2.4) * o * 100
+      let aproximado = false
+      let sinMarcador = false
+      if (planoSoloMaestro) {
+        const ll = sicoePickLngLatMaestro(meta)
+        if (ll) {
+          ;[lng, lat] = ll
+        } else {
+          lat = null
+          lng = null
+          sinMarcador = true
+        }
+        aproximado = false
+      } else {
+        const tiene = lat != null && lng != null
+        aproximado = !tiene
+        if (!tiene) {
+          const o = (i++) * 0.00015
+          lng = center[0] + Math.cos(i * 2.4) * o * 100
+          lat = center[1] + Math.sin(i * 2.4) * o * 100
+        }
       }
       pts.push({
         pk_id_id: pid,
@@ -4022,7 +4074,8 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         lat,
         lng,
         reportes_count: g.reps.length,
-        aproximado: !tiene,
+        aproximado,
+        sinMarcador,
       })
     }
     return pts
@@ -4066,19 +4119,24 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     const pkList = sicoePkList
     const geo = sicoeTienePlanoGeojson ? sicoePlanoGeojson : null
 
+    const planoSoloMaestro = contrato_id != null && SICOE_CONTRATOS_SIN_NODOS_REPORTE_GPS.has(Number(contrato_id))
+
     const marcar = () => {
       sicoeFiltroMarkersRef.current.forEach(m => { try { m.remove() } catch { /* ignore */ } })
       sicoeFiltroMarkersRef.current = []
       puntos.forEach(pt => {
+        if (pt.soloReporte ? false : (pt.sinMarcador || pt.lat == null || pt.lng == null || Number.isNaN(+pt.lat) || Number.isNaN(+pt.lng))) {
+          return
+        }
         const el = document.createElement('div')
-        el.style.width = '14px'
-        el.style.height = '14px'
+        el.style.width = planoSoloMaestro && !pt.soloReporte ? '12px' : '14px'
+        el.style.height = planoSoloMaestro && !pt.soloReporte ? '12px' : '14px'
         el.style.borderRadius = '50%'
         const selPk = String(sicoeFiltroPkSelRef.current || '')
         if (pt.soloReporte) {
           el.style.background = '#f97316'
         } else {
-          el.style.background = selPk === String(pt.pk_id_id) ? '#0077B6' : '#94a3b8'
+          el.style.background = selPk === String(pt.pk_id_id) ? '#0D9488' : (planoSoloMaestro ? '#0077B6' : '#94a3b8')
         }
         el.style.border = '2px solid #fff'
         el.style.boxShadow = '0 1px 4px rgba(0,0,0,0.35)'
@@ -4097,14 +4155,55 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       })
     }
 
+    const boundsFromRingCoords = (coords) => {
+      if (!coords || coords.length < 1) return null
+      const lngs = coords.map((c) => c[0])
+      const lats = coords.map((c) => c[1])
+      return [
+        [Math.min(...lngs), Math.min(...lats)],
+        [Math.max(...lngs), Math.max(...lats)],
+      ]
+    }
+    const boundsFromFC = (fc) => {
+      if (!fc?.features?.length) return null
+      const coords = fc.features.flatMap((f) => {
+        const g = f.geometry
+        if (!g) return []
+        if (g.type === 'Polygon') return g.coordinates[0] || []
+        if (g.type === 'MultiPolygon') return g.coordinates.flat(2)
+        return []
+      })
+      return boundsFromRingCoords(coords)
+    }
+
     map.on('load', () => {
       if (geo?.features?.length) {
         const pkIdsFiltrados = new Set(puntos.filter(p => p.pk_id_id != null).map(p => String(p.pk_id_id)))
+        const permitSet = new Set(
+          [...pkIdsFiltrados].map((id) => {
+            const row = pkList.find((p) => String(p.id) === String(id))
+            return row ? String(row.pk_id || '').trim().toLowerCase() : null
+          }).filter(Boolean)
+        )
+        let planoData = { ...geo }
+        if (planoSoloMaestro && permitSet.size > 0) {
+          const matched = geo.features.filter((f) => {
+            const idf = _sicoeFeaturePkId(f)
+            return idf && permitSet.has(idf.toLowerCase())
+          })
+          if (matched.length > 0) {
+            planoData = { type: 'FeatureCollection', features: matched }
+          }
+        }
+        const useOpacityDimming = !planoSoloMaestro || (planoSoloMaestro && planoData === geo)
         const enriched = {
-          ...geo,
-          features: geo.features.map(f => {
-            const lay = String(f.properties?.Layer ?? f.properties?.PK_ID ?? f.properties?.pk_id ?? '').trim()
-            const matchPk = pkList.find(p => String(p.pk_id).trim() === lay)
+          ...planoData,
+          features: planoData.features.map(f => {
+            if (!useOpacityDimming) {
+              return { ...f, properties: { ...f.properties, _sicoe_opacity: 0.38 } }
+            }
+            const lay = _sicoeFeaturePkId(f)
+            const matchPk = lay ? pkList.find(p => String(p.pk_id).trim().toLowerCase() === lay.toLowerCase()) : null
             const inFilter = !!(matchPk && pkIdsFiltrados.has(String(matchPk.id)))
             return {
               ...f,
@@ -4116,12 +4215,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
           }),
         }
         map.addSource('sicoe-filtro-plano', { type: 'geojson', data: enriched })
+        const fillC = planoSoloMaestro && enriched.features?.length && planoData !== geo ? '#0D9488' : '#0077B6'
         map.addLayer({
           id: 'sicoe-filtro-plano-fill',
           type: 'fill',
           source: 'sicoe-filtro-plano',
           paint: {
-            'fill-color': '#0077B6',
+            'fill-color': fillC,
             'fill-opacity': ['get', '_sicoe_opacity'],
           },
         })
@@ -4129,37 +4229,51 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
           id: 'sicoe-filtro-plano-line',
           type: 'line',
           source: 'sicoe-filtro-plano',
-          paint: { 'line-color': '#00A896', 'line-width': 1.2 },
+          paint: { 'line-color': planoSoloMaestro && planoData !== geo ? '#0F766E' : '#00A896', 'line-width': planoSoloMaestro && planoData !== geo ? 2 : 1.2 },
         })
         map.on('click', 'sicoe-filtro-plano-fill', (e) => {
           const feat = e.features?.[0]
           if (!feat) return
-          const pkIdVal = String(feat.properties?.Layer ?? feat.properties?.PK_ID ?? feat.properties?.pk_id ?? '').trim()
-          const found = pkList.find(p => String(p.pk_id).trim() === pkIdVal)
+          const pkIdVal = _sicoeFeaturePkId(feat)
+          const found = pkList.find(p => String(p.pk_id).trim().toLowerCase() === String(pkIdVal).trim().toLowerCase())
           if (found?.id) sicoeMapFiltroApplyPkRef.current(found.id)
         })
         map.on('mouseenter', 'sicoe-filtro-plano-fill', () => { map.getCanvas().style.cursor = 'pointer' })
         map.on('mouseleave', 'sicoe-filtro-plano-fill', () => { map.getCanvas().style.cursor = '' })
       }
       marcar()
-      if (puntos.length > 0) {
+      const pMap = puntos.filter(p => p.lat != null && p.lng != null && !p.sinMarcador && !Number.isNaN(+p.lat) && !Number.isNaN(+p.lng))
+      if (pMap.length > 0) {
         try {
-          const lngs = puntos.map(p => p.lng)
-          const lats = puntos.map(p => p.lat)
-          map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 40, duration: 0, maxZoom: 15, bearing: 270, pitch: 0 })
+          const lngs = pMap.map(p => p.lng)
+          const lats = pMap.map(p => p.lat)
+          map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 40, duration: 0, maxZoom: 17, bearing: 270, pitch: 0 })
         } catch { /* ignore */ }
+      } else if (planoSoloMaestro && geo?.features?.length) {
+        const permitSet2 = new Set(
+          [...new Set(puntos.filter((p) => p.pk_id_id != null).map((p) => p.pk_id_id))].map((id) => {
+            const row = pkList.find((p) => String(p.id) === String(id))
+            return row ? String(row.pk_id || '').trim().toLowerCase() : null
+          }).filter(Boolean)
+        )
+        const matched = permitSet2.size
+          ? geo.features.filter((f) => {
+            const idf = _sicoeFeaturePkId(f)
+            return idf && permitSet2.has(idf.toLowerCase())
+          })
+          : []
+        const b = matched.length ? boundsFromFC({ type: 'FeatureCollection', features: matched }) : boundsFromFC(geo)
+        if (b) {
+          try {
+            map.fitBounds(b, { padding: 40, duration: 0, maxZoom: 16, bearing: 270, pitch: 0 })
+          } catch { /* ignore */ }
+        }
       } else if (geo?.features?.length) {
-        const coords = geo.features.flatMap(f => {
-          const geom = f.geometry
-          if (!geom) return []
-          if (geom.type === 'Polygon') return geom.coordinates[0]
-          if (geom.type === 'MultiPolygon') return geom.coordinates.flat(2)
-          return []
-        })
-        if (coords.length > 0) {
-          const lngs = coords.map(c => c[0])
-          const lats = coords.map(c => c[1])
-          map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 24, duration: 0, bearing: 270, pitch: 0 })
+        const b = boundsFromFC(geo)
+        if (b) {
+          try {
+            map.fitBounds(b, { padding: 24, duration: 0, bearing: 270, pitch: 0 })
+          } catch { /* ignore */ }
         }
       }
     })

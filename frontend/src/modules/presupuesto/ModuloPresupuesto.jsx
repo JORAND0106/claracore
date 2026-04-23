@@ -2445,6 +2445,12 @@ async function restaurar(id) {
                   <div style={{ fontSize:'12px',color:t.text,lineHeight:1.5 }}>{val ?? '—'}</div>
                 </div>
               )
+              const fmtFechaHoraRecalculo = (iso) => {
+                if (!iso) return '—'
+                const d = new Date(iso)
+                if (Number.isNaN(d.getTime())) return String(iso)
+                return d.toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })
+              }
               return (
                 <>
                   <Row><F label="ID_POL" val={r.id_pol||r.pk_id}/><F label="CAPÍTULO" val={r.capitulo}/><F label="ÍTEM" val={r.item} flex={0.5}/></Row>
@@ -2475,6 +2481,16 @@ async function restaurar(id) {
                     <F label="COSTO DIRECTO" val={fmt(r.costo_directo)}/>
                   </Row>
                   )}
+                  <div style={{ display:'flex', gap:'12px', marginBottom:'5px' }}>
+                    <div style={{ flex:1.1, minWidth:0, background:t.bg, borderRadius:'6px', padding:'7px 10px' }} title={r.calculo_por || ''}>
+                      <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.6px' }}>CÁLCULO (usuario)</div>
+                      <div style={{ fontSize:'12px', color:t.text, fontWeight:'500', marginTop:'1px', lineHeight:1.35, whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{r.calculo_por ?? '—'}</div>
+                    </div>
+                    <div style={{ flex:1, minWidth:0, background:t.bg, borderRadius:'6px', padding:'7px 10px' }}>
+                      <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.6px' }}>CÁLCULO (fecha y hora)</div>
+                      <div style={{ fontSize:'12px', color:t.text, fontWeight:'500', marginTop:'1px' }}>{fmtFechaHoraRecalculo(r.calculo_en)}</div>
+                    </div>
+                  </div>
                   <Row><F label="TRAMO" val={r.tramo}/><F label="CALZADA" val={r.calzada}/><F label="PK" val={r.pk_id} flex={0.5}/></Row>
                   {/* Acciones desde buzón */}
                   {modalDetallePptoEditable && (puedeEditar || puedeEliminar) && !esSellado(r) && (

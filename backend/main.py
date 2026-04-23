@@ -832,6 +832,20 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         raise HTTPException(status_code=401, detail="Token inválido")
 
 
+def _calculo_usuario_label(current_user) -> str:
+    """Etiqueta legible del usuario autenticado (JWT) para auditoría de recálculo."""
+    if not current_user:
+        return ""
+    n = (current_user.get("nombre") or "").strip()
+    if n:
+        return n
+    e = (current_user.get("email") or "").strip()
+    if e:
+        return e
+    s = current_user.get("sub")
+    return f"Usuario {s}" if s is not None else "—"
+
+
 def require_logs_auditoria(current_user=Depends(get_current_user)):
     if not _cargo_puede_auditar_logs(current_user):
         raise HTTPException(status_code=403, detail="Solo Desarrollador y Administrador pueden acceder a la auditoría de logs")
@@ -3110,7 +3124,8 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
             detail="Registro sellado (aprobado por Interventoría): no puede modificarse.",
         )
     dims = {k: data.get(k) for k in ["area_long_nod", "ancho", "espesor"]}
-    if any(v is not None for v in dims.values()):
+    toco_dimensiones = any(v is not None for v in dims.values())
+    if toco_dimensiones:
         current = supabase.table("presupuesto").select("area_long_nod, ancho, espesor, vlr_unitario, cant_total").eq("id", item_id).execute().data
         if current:
             c = current[0]
@@ -3121,6 +3136,9 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
             cant  = round(area * ancho * esp, 2) if (ancho or esp) else round(area, 2)
             data["cant_total"]    = cant
             data["costo_directo"] = round(cant * vlr, 0)
+    if toco_dimensiones:
+        data["calculo_por"] = _calculo_usuario_label(current_user)
+        data["calculo_en"] = datetime.now(timezone.utc).isoformat()
     data["updated_at"] = "now()"
     supabase.table("presupuesto").update(data).eq("id", item_id).execute()
 
@@ -3507,7 +3525,14 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
             cant = r.get("cant_total") or 0
             data_ancho   = {}
         costo = round(float(cant) * float(vlr), 0)
-        data  = {"cant_total": cant, "costo_directo": costo, "updated_at": "now()", **data_ancho}
+        data  = {
+            "cant_total": cant,
+            "costo_directo": costo,
+            "updated_at": "now()",
+            "calculo_por": _calculo_usuario_label(current_user),
+            "calculo_en": datetime.now(timezone.utc).isoformat(),
+            **data_ancho,
+        }
         if body.capitulo    is not None: data["capitulo"]    = body.capitulo
         if body.item        is not None: data["item"]        = body.item
         if body.descripcion is not None: data["descripcion"] = body.descripcion
