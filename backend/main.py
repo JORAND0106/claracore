@@ -5168,7 +5168,9 @@ def next_numero_reporte(contrato_id: int, current_user=Depends(get_current_user)
         return rows
     rows = supabase_execute(_q)
     ultimo = rows[0]["numero_reporte"] if rows else 0
-    return {"siguiente": ultimo + 1}
+    # Mismo criterio que la RPC en BD (piso 35000): sico_consecutivos_desde_pisos.sql
+    sig = max(35000, ultimo + 1) if ultimo is not None else 35000
+    return {"siguiente": sig}
 
 @app.get("/sicoe-obra/{contrato_id}/nodos")
 def listar_nodos_obra(contrato_id: int, capitulo: str = None, current_user=Depends(get_current_user)):
@@ -7285,23 +7287,55 @@ def reemplazar_registros_nuevo_reporte(
                     return int(raw[k])
         return int(raw)
 
-    def _rpc_solo_numero(_: int) -> int:
-        """RPC en hilo con cliente propio: el bucle secuencial N× hacía timeout en móvil."""
-        last_err = None
-        sb = get_supabase()
-        for attempt in range(3):
-            try:
-                data = sb.rpc("siguiente_numero_registro", {"p_contrato_id": contrato_id}).execute().data
-                return _parse_numero_registro_raw(data)
-            except Exception as e:
-                last_err = e
-                time.sleep(0.35 * (attempt + 1))
-        raise last_err  # type: ignore
-
     nlines = len(body.registros)
-    workers = min(24, max(1, nlines))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        numeros = list(pool.map(_rpc_solo_numero, range(nlines)))
+    # Preferir 1 ida a Postgres (función en backend/sql/siguiente_n_numeros_registro.sql) frente a N o muchas
+    # llamadas en paralelo móvil→App→PostgREST (timeout / “no hubo conexión a tiempo”).
+    numeros: List[int] = []
+    def _try_rpc_bloque() -> bool:
+        nonlocal numeros
+        def _q():
+            return supabase.rpc(
+                "siguiente_n_numeros_registro", {"p_contrato_id": contrato_id, "p_n": nlines}
+            ).execute().data
+        try:
+            raw = supabase_execute(_q)
+        except Exception:
+            return False
+        if raw is None:
+            return False
+        if isinstance(raw, list):
+            if len(raw) != nlines:
+                return False
+            try:
+                numeros = [int(x) for x in raw]
+            except (TypeError, ValueError):
+                return False
+            return True
+        if isinstance(raw, dict):
+            for k in ("siguiente_n_numeros_registro", "data", "result"):
+                if k in raw and isinstance(raw[k], list):
+                    try:
+                        arr = [int(x) for x in raw[k]]
+                    except (TypeError, ValueError):
+                        return False
+                    if len(arr) != nlines:
+                        return False
+                    numeros = arr
+                    return True
+        return False
+
+    if not _try_rpc_bloque():
+        # NUNCA en paralelo: varias RPC concurrentes a siguiente_numero_registro
+        # duplican el mismo (contrato_id, numero_registro) → 23505 en so_registros.
+        for _ in range(nlines):
+            def _n():
+                return supabase.rpc("siguiente_numero_registro", {"p_contrato_id": contrato_id}).execute().data
+            numeros.append(_parse_numero_registro_raw(supabase_execute(_n)))
+    if len(set(numeros)) != len(numeros):
+        raise HTTPException(
+            status_code=500,
+            detail="Números de registro duplicados al reservar; reintente o revise la función de consecutivo en la base de datos",
+        )
     rows_to_insert: List[Dict[str, Any]] = []
     for line, numero in zip(body.registros, numeros):
         data: Dict[str, Any] = line.dict()

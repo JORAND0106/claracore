@@ -1,0 +1,3 @@
+-- CONTENIDO UNIFICADO en:  backend/sql/sico_consecutivos_desde_pisos.sql
+-- Crea tablas sico_ultimo_* y las funciones siguiente_numero_registro, siguiente_numero_reporte, siguiente_n_numeros_registro.
+-- No ejecutar este archivo por separado: puede duplicar o desincronizar. Usar sico_consecutivos_desde_pisos.sql.
