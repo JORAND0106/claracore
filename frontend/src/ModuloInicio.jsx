@@ -2,11 +2,14 @@ import { useState, useEffect } from 'react'
 import { API_BASE } from './apiBase'
 const API_ANTHROPIC = `${API_BASE}/frase-del-dia`
 
-// ─── Escala de fuentes — sincronizada con FONT_SIZES de App.jsx ───────────────
+// ─── Escala de fuentes — mismas variables CSS que el header (Pequeña / Mediana / Grande) ─
 const FS = {
-  pequena: { base: '11px', titulo: '18px', stat: '18px', card: '12px', badge: '9px', autor: '10px' },
-  normal:  { base: '13px', titulo: '22px', stat: '22px', card: '13px', badge: '10px', autor: '11px' },
-  grande:  { base: '15px', titulo: '26px', stat: '26px', card: '15px', badge: '11px', autor: '12px' },
+  base: 'var(--cc-body)',
+  titulo: 'var(--cc-h1)',
+  stat: 'var(--cc-h1)',
+  card: 'var(--cc-md)',
+  badge: 'var(--cc-caption)',
+  autor: 'var(--cc-label)',
 }
 
 const TIPO_LABEL = {
@@ -304,7 +307,7 @@ export default function ModuloInicio({ t, usuario, fontSize = 'normal', puedePub
   const [saludoVisible, setSaludoVisible] = useState(false)
   const [novedades, setNovedades] = useState([])
   const [novedadesCargando, setNovedadesCargando] = useState(true)
-  const fs = FS[fontSize] || FS.normal
+  const fs = FS
 
   useEffect(() => {
     const timer = setTimeout(() => setSaludoVisible(true), 100)

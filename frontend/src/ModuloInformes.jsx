@@ -330,7 +330,8 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     }
   }
 
-  const f          = FS[fontSize] || FS.normal
+  const fsMap = { pequena: 'small', normal: 'normal', grande: 'large' }
+  const f          = FS[fsMap[fontSize] || fontSize] || FS.normal
   /** Escala UI del bloque «Formatos Subcontratista» según Pequeño / Mediano / Grande. */
   const ui = {
     hint: Math.max(10, f.sub - 2),
@@ -338,10 +339,10 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     cardTitle: f.section,
     body: f.sub,
     itemEm: f.base,
-    pIn: fontSize === 'small' ? '8px 10px' : fontSize === 'large' ? '12px 14px' : '10px 12px',
-    pHead: fontSize === 'small' ? '8px 10px' : fontSize === 'large' ? '11px 14px' : '9px 12px',
-    gap: fontSize === 'small' ? 8 : fontSize === 'large' ? 12 : 10,
-    iconBtn: fontSize === 'small' ? 34 : fontSize === 'large' ? 44 : 40,
+    pIn: fontSize === 'pequena' ? '8px 10px' : fontSize === 'grande' ? '12px 14px' : '10px 12px',
+    pHead: fontSize === 'pequena' ? '8px 10px' : fontSize === 'grande' ? '11px 14px' : '9px 12px',
+    gap: fontSize === 'pequena' ? 8 : fontSize === 'grande' ? 12 : 10,
+    iconBtn: fontSize === 'pequena' ? 34 : fontSize === 'grande' ? 44 : 40,
     iconSvg: Math.max(15, Math.min(22, f.sub + 4)),
   }
   const contratoId = usuario?.contrato_id
@@ -1693,7 +1694,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   /** Tarjeta principal de informes de subcontratista: se distingue del fondo de página. */
   const cardFormatosSub = {
     ...card,
-    padding: fontSize === 'small' ? '14px 16px' : fontSize === 'large' ? '22px 20px' : '18px 18px',
+    padding: fontSize === 'pequena' ? '14px 16px' : fontSize === 'grande' ? '22px 20px' : '18px 18px',
     background: `linear-gradient(165deg, ${t.primary}16 0%, ${t.bgCard} 42%, ${t.bg} 100%)`,
     border: `1px solid ${t.primary}40`,
     boxShadow: `0 12px 28px ${t.primary}18`,
@@ -1712,9 +1713,9 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     fontSize: ui.label + 'px',
     fontWeight: '700',
     color: t.textMuted,
-    letterSpacing: fontSize === 'small' ? '0.5px' : '0.75px',
+    letterSpacing: fontSize === 'pequena' ? '0.5px' : '0.75px',
     textTransform: 'uppercase',
-    marginBottom: fontSize === 'small' ? '5px' : '7px',
+    marginBottom: fontSize === 'pequena' ? '5px' : '7px',
   }
   const select = {
     width: '100%', padding: '9px 12px', borderRadius: '7px',
@@ -1724,7 +1725,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   }
   const selectSub = {
     width: '100%',
-    padding: fontSize === 'small' ? '7px 10px' : fontSize === 'large' ? '10px 14px' : '8px 12px',
+    padding: fontSize === 'pequena' ? '7px 10px' : fontSize === 'grande' ? '10px 14px' : '8px 12px',
     borderRadius: '7px',
     border: `1px solid ${t.border}`,
     background: t.bg,
@@ -1741,7 +1742,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   }
   const infoBoxSub = {
     marginTop: '8px',
-    padding: fontSize === 'small' ? '8px 10px' : '10px 12px',
+    padding: fontSize === 'pequena' ? '8px 10px' : '10px 12px',
     borderRadius: '8px',
     background: t.primary + '11',
     border: `1px solid ${t.primary}33`,
@@ -1752,7 +1753,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     gap: '4px 8px',
   }
   const btnVer = (dis) => ({
-    padding: `${fontSize === 'small' ? 6 : 7}px ${fontSize === 'large' ? 18 : 14}px`,
+    padding: `${fontSize === 'pequena' ? 6 : 7}px ${fontSize === 'grande' ? 18 : 14}px`,
     borderRadius: '7px', border: 'none',
     background: dis ? t.border : t.primary, color: 'white',
     fontWeight: '700', fontSize: ui.body + 'px',
@@ -1809,7 +1810,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     gap: '2px',
     padding: '2px 7px',
     borderRadius: '6px',
-    fontSize: fontSize === 'small' ? 10 : 11,
+    fontSize: fontSize === 'pequena' ? 10 : 11,
     fontWeight: '800',
     letterSpacing: '0.02em',
     background: ok ? t.primary + '20' : t.border + '44',
@@ -1830,7 +1831,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     padding: ui.pIn,
     borderRadius: '8px',
     border: `1px solid ${t.border}`,
-    marginBottom: fontSize === 'small' ? '6px' : '8px',
+    marginBottom: fontSize === 'pequena' ? '6px' : '8px',
     background: t.bg,
   }
   const tarjetaFormato = {

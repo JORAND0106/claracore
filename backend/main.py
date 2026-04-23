@@ -504,6 +504,10 @@ class PresupuestoBulkPreInterv(BaseModel):
     ids: List[int]
     estado: str
 
+class ComentariosValidacionIds(BaseModel):
+    """Lista de filas `presupuesto` para comentarios de validación; POST evita query strings gigantes (5xx en proxy)."""
+    ids: List[int]
+
 class AgregarCantidadBody(BaseModel):
     # Nuevo ítem
     item: str
@@ -3872,27 +3876,52 @@ def comentarios_resumen(contrato_id: int, ids: str, current_user=Depends(get_cur
             result[pid][tipo]["replies"] = True
     return result
 
+def _comentarios_validacion_por_ids(id_list: List[int]) -> dict:
+    """Comentario de validación más reciente (raíz) por presupuesto_id. Chunking: PostgREST limita .in_() en la URL."""
+    if not id_list:
+        return {}
+    _CHUNK = 200
+    result: Dict[int, Any] = {}
+    for i in range(0, len(id_list), _CHUNK):
+        chunk = id_list[i : i + _CHUNK]
+        rows = supabase.table("comentarios").select(
+            "presupuesto_id, mensaje, usuario_nombre, created_at"
+        ).in_("presupuesto_id", chunk).eq("tipo", "validacion").is_("parent_id", "null").order(
+            "created_at", desc=True
+        ).execute().data or []
+        for r in rows:
+            pid = r["presupuesto_id"]
+            if pid not in result:
+                result[pid] = {
+                    "mensaje": r["mensaje"],
+                    "usuario_nombre": r["usuario_nombre"],
+                    "created_at": r["created_at"],
+                }
+    return result
+
 @app.get("/presupuesto/{contrato_id}/comentarios-validacion")
 def comentarios_validacion_batch(contrato_id: int, ids: str, current_user=Depends(get_current_user)):
     """Devuelve el comentario de validacion más reciente (sin hijos) por cada presupuesto_id."""
     id_list = [int(x) for x in ids.split(",") if x.strip().isdigit()]
-    if not id_list:
-        return {}
-    rows = supabase.table("comentarios").select(
-        "presupuesto_id, mensaje, usuario_nombre, created_at"
-    ).in_("presupuesto_id", id_list).eq("tipo", "validacion").is_("parent_id", "null").order(
-        "created_at", desc=True
-    ).execute().data
-    result = {}
-    for r in rows:
-        pid = r["presupuesto_id"]
-        if pid not in result:
-            result[pid] = {
-                "mensaje": r["mensaje"],
-                "usuario_nombre": r["usuario_nombre"],
-                "created_at": r["created_at"],
-            }
-    return result
+    return _comentarios_validacion_por_ids(id_list)
+
+@app.post("/presupuesto/{contrato_id}/comentarios-validacion")
+def comentarios_validacion_batch_post(
+    contrato_id: int, body: ComentariosValidacionIds, current_user=Depends(get_current_user)
+):
+    """Igual que GET: lista de IDs en el cuerpo para capítulos muy grandes (evita URL > límite del proxy)."""
+    id_list: List[int] = []
+    seen: set = set()
+    for x in body.ids:
+        try:
+            xi = int(x)
+        except (TypeError, ValueError):
+            continue
+        if xi in seen:
+            continue
+        seen.add(xi)
+        id_list.append(xi)
+    return _comentarios_validacion_por_ids(id_list)
 
 @app.get("/presupuesto/{presupuesto_id}/comentarios")
 def get_comentarios(presupuesto_id: int, tipo: str, current_user=Depends(get_current_user)):
@@ -6717,9 +6746,9 @@ def obtener_reporte(
         r["calzada"]        = r.get("calzada") or pk.get("calzada")
     else:
         r["pk_id_valor"] = None
-    _capas_det = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
-    if _capas_det:
-        regs_raw = _filtrar_registros_validacion_capas_sicoe(regs_raw, _capas_det, r)
+    # No filtrar registros por capas de validación en el detalle: la grilla ya acotó reportes;
+    # filtrar aquí ocultaba líneas aprobadas (p. ej. con foto_url) y dejaba carpetas "vacías".
+    # validacion_capas / cargo_id / estado_validacion se aceptan por compatibilidad y se ignoran.
     reg_ids = [reg["id"] for reg in regs_raw if reg.get("id")]
     num_comentarios_map = {}
     if reg_ids:
@@ -8956,7 +8985,7 @@ def dashboard_pkid_detalle_obra(
 
         # Registros aprobados para este pk_id
         q_c = supabase.table("so_registros")\
-            .select("id, numero_registro, tramo, nodo_ini, nodo_fin, cantidad_total, costo_directo, item_descripcion, item_numero, acta_rpo_id, calzada, reporte_id")\
+            .select("id, numero_registro, id_pol, tramo, nodo_ini, nodo_fin, cantidad_total, costo_directo, item_descripcion, item_numero, acta_rpo_id, calzada, reporte_id")\
             .eq("contrato_id", contrato_id).eq("nivel3_estado", "Aprobado")
         if pkid_id_val: q_c = q_c.eq("pk_id_id", pkid_id_val)
         if capitulo and not item: q_c = q_c.eq("capitulo", capitulo)
@@ -8977,6 +9006,7 @@ def dashboard_pkid_detalle_obra(
         for r in cobro_rows:
             cobro_fmt.append({
                 "registro": r.get("numero_registro"),
+                "id_pol": r.get("id_pol"),
                 "registro_id": r.get("id"),
                 "reporte_id": r.get("reporte_id"),
                 "tramo_inicio": r.get("nodo_ini"),

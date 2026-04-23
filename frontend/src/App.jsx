@@ -11,6 +11,7 @@ import ModuloPresupuesto from './modules/presupuesto/ModuloPresupuesto'
 import EmojiPicker from './EmojiPicker'
 import ExcelJS from 'exceljs'
 import { API_BASE, logApiFailure } from './apiBase'
+import { applyClaraTypography, getDashTypoUI } from './typographyScale'
 
 const _VITE_MAPBOX = import.meta.env.VITE_MAPBOX_TOKEN
 if (_VITE_MAPBOX) mapboxgl.accessToken = _VITE_MAPBOX
@@ -121,7 +122,7 @@ function TestModeBadge() {
       border: '1px solid #D97706',
       borderRadius: '999px',
       padding: '6px 12px',
-      fontSize: '11px',
+      fontSize: 'var(--cc-label)',
       fontWeight: '800',
       letterSpacing: '0.4px',
       boxShadow: '0 4px 14px rgba(0,0,0,0.2)'
@@ -156,12 +157,12 @@ function Modal({ t, onClose, children, width = '460px' }) {
 function Field({ label, t, ...props }) {
   return (
     <div style={{ marginBottom: '16px' }}>
-      <label style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>
+      <label style={{ fontSize: 'var(--cc-label)', fontWeight: '700', color: t.textMuted, letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>
         {label}
       </label>
       <input style={{
         width: '100%', background: t.inputBg, border: `1.5px solid ${t.inputBorder}`,
-        borderRadius: '10px', padding: '11px 14px', color: t.text, fontSize: '14px',
+        borderRadius: '10px', padding: '11px 14px', color: t.text, fontSize: 'var(--cc-body)',
         outline: 'none', boxSizing: 'border-box', transition: 'border-color 0.2s'
       }} {...props} />
     </div>
@@ -171,12 +172,12 @@ function Field({ label, t, ...props }) {
 function SelectField({ label, t, children, ...props }) {
   return (
     <div style={{ marginBottom: '16px' }}>
-      <label style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>
+      <label style={{ fontSize: 'var(--cc-label)', fontWeight: '700', color: t.textMuted, letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>
         {label}
       </label>
       <select style={{
         width: '100%', background: t.inputBg, border: `1.5px solid ${t.inputBorder}`,
-        borderRadius: '10px', padding: '11px 14px', color: t.text, fontSize: '14px',
+        borderRadius: '10px', padding: '11px 14px', color: t.text, fontSize: 'var(--cc-body)',
         outline: 'none', boxSizing: 'border-box', cursor: 'pointer'
       }} {...props}>
         {children}
@@ -219,8 +220,8 @@ function ModalLogin({ t, onClose, onLoginOk, onForgot }) {
     <Modal t={t} onClose={onClose} width="420px">
       <div style={{ textAlign: 'center', marginBottom: '28px' }}>
         <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔐</div>
-        <h2 style={{ color: t.primary, margin: 0, fontSize: '22px', fontWeight: '800' }}>Iniciar Sesión</h2>
-        <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: '13px' }}>Accede a tu cuenta ClaraCore</p>
+        <h2 style={{ color: t.primary, margin: 0, fontSize: 'var(--cc-h2)', fontWeight: '800' }}>Iniciar Sesión</h2>
+        <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: 'var(--cc-sm)' }}>Accede a tu cuenta ClaraCore</p>
       </div>
       <Field label="CORREO ELECTRÓNICO" t={t} type="email" placeholder="tu@correo.com"
         value={email} onChange={e => setEmail(e.target.value)} />
@@ -230,18 +231,18 @@ function ModalLogin({ t, onClose, onLoginOk, onForgot }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
         <input type="checkbox" id="mantener" checked={mantener} onChange={e => setMantener(e.target.checked)}
           style={{ width: '16px', height: '16px', accentColor: t.primary, cursor: 'pointer' }} />
-        <label htmlFor="mantener" style={{ fontSize: '13px', color: t.textMuted, cursor: 'pointer' }}>
+        <label htmlFor="mantener" style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, cursor: 'pointer' }}>
           Mantener sesión iniciada
         </label>
       </div>
-      {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', marginBottom: '16px' }}>{error}</div>}
+      {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: 'var(--cc-sm)', marginBottom: '16px' }}>{error}</div>}
       <button onClick={handleLogin} disabled={loading} style={{
         width: '100%', background: t.primary, color: '#fff', border: 'none',
-        borderRadius: '10px', padding: '13px', fontSize: '15px', fontWeight: '700',
+        borderRadius: '10px', padding: '13px', fontSize: 'var(--cc-md)', fontWeight: '700',
         cursor: loading ? 'wait' : 'pointer', marginBottom: '16px', opacity: loading ? 0.7 : 1
       }}>{loading ? 'Ingresando...' : 'Ingresar'}</button>
       <div style={{ textAlign: 'center' }}>
-        <button onClick={onForgot} style={{ background: 'none', border: 'none', color: t.primary, fontSize: '13px', cursor: 'pointer', textDecoration: 'underline' }}>
+        <button onClick={onForgot} style={{ background: 'none', border: 'none', color: t.primary, fontSize: 'var(--cc-sm)', cursor: 'pointer', textDecoration: 'underline' }}>
           ¿Olvidaste tu contraseña?
         </button>
       </div>
@@ -317,11 +318,11 @@ function ModalCrearCuenta({ t, onClose }) {
     <Modal t={t} onClose={onClose} width="420px">
       <div style={{ textAlign: 'center', padding: '20px 0' }}>
         <div style={{ fontSize: '48px', marginBottom: '16px' }}>✅</div>
-        <h2 style={{ color: t.primary, margin: '0 0 12px', fontSize: '22px' }}>¡Registro exitoso!</h2>
-        <p style={{ color: t.textMuted, fontSize: '14px', lineHeight: '1.6' }}>
+        <h2 style={{ color: t.primary, margin: '0 0 12px', fontSize: 'var(--cc-h2)' }}>¡Registro exitoso!</h2>
+        <p style={{ color: t.textMuted, fontSize: 'var(--cc-body)', lineHeight: '1.6' }}>
           Tu solicitud fue enviada. Un administrador asignará tu rol y activará tu cuenta.
         </p>
-        <button onClick={onClose} style={{ marginTop: '24px', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px 32px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}>
+        <button onClick={onClose} style={{ marginTop: '24px', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px 32px', fontSize: 'var(--cc-body)', fontWeight: '700', cursor: 'pointer' }}>
           Entendido
         </button>
       </div>
@@ -332,8 +333,8 @@ function ModalCrearCuenta({ t, onClose }) {
     <Modal t={t} onClose={onClose} width="480px">
       <div style={{ textAlign: 'center', marginBottom: '28px' }}>
         <div style={{ fontSize: '28px', marginBottom: '8px' }}>👤</div>
-        <h2 style={{ color: t.primary, margin: 0, fontSize: '22px', fontWeight: '800' }}>Crear Cuenta</h2>
-        <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: '13px' }}>Tu cuenta quedará pendiente de aprobación</p>
+        <h2 style={{ color: t.primary, margin: 0, fontSize: 'var(--cc-h2)', fontWeight: '800' }}>Crear Cuenta</h2>
+        <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: 'var(--cc-sm)' }}>Tu cuenta quedará pendiente de aprobación</p>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
@@ -350,7 +351,7 @@ function ModalCrearCuenta({ t, onClose }) {
 
       {/* Contrato: obligatorio para todos excepto Desarrollador */}
       <div style={{ marginBottom: '16px' }}>
-        <label style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>
+        <label style={{ fontSize: 'var(--cc-label)', fontWeight: '700', color: t.textMuted, letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>
           CONTRATO {contratoObligatorio ? '*' : '(opcional)'}
         </label>
         <select
@@ -360,14 +361,14 @@ function ModalCrearCuenta({ t, onClose }) {
             width: '100%', background: t.inputBg, border: `1.5px solid ${t.inputBorder}`,
             borderRadius: '10px', padding: '11px 14px',
             color: form.contrato_id ? t.text : t.textMuted,
-            fontSize: '14px', outline: 'none', boxSizing: 'border-box', cursor: 'pointer'
+            fontSize: 'var(--cc-body)', outline: 'none', boxSizing: 'border-box', cursor: 'pointer'
           }}
         >
           <option value="">-- Selecciona tu contrato --</option>
           {contratos.map(c => <option key={c.id} value={c.id}>{c.numero}</option>)}
         </select>
         {contratoObligatorio && (
-          <p style={{ fontSize: '11px', color: t.textMuted, margin: '5px 0 0' }}>
+          <p style={{ fontSize: 'var(--cc-label)', color: t.textMuted, margin: '5px 0 0' }}>
             El administrador asignará tu rol al aprobar tu cuenta.
           </p>
         )}
@@ -376,13 +377,13 @@ function ModalCrearCuenta({ t, onClose }) {
       <Field label="CONTRASEÑA *" t={t} type="password" placeholder="Mínimo 8 caracteres" value={form.password} onChange={set('password')} />
       <Field label="CONFIRMAR CONTRASEÑA *" t={t} type="password" placeholder="Repite la contraseña" value={form.confirmar} onChange={set('confirmar')} />
 
-      {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', marginBottom: '16px' }}>{error}</div>}
+      {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: 'var(--cc-sm)', marginBottom: '16px' }}>{error}</div>}
 
       <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
-        <button onClick={onClose} style={{ flex: 1, background: 'transparent', border: `1.5px solid ${t.border}`, borderRadius: '10px', padding: '12px', color: t.textMuted, fontSize: '14px', cursor: 'pointer' }}>
+        <button onClick={onClose} style={{ flex: 1, background: 'transparent', border: `1.5px solid ${t.border}`, borderRadius: '10px', padding: '12px', color: t.textMuted, fontSize: 'var(--cc-body)', cursor: 'pointer' }}>
           Cancelar
         </button>
-        <button onClick={handleRegistro} disabled={loading} style={{ flex: 2, background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: loading ? 'wait' : 'pointer', opacity: loading ? 0.7 : 1 }}>
+        <button onClick={handleRegistro} disabled={loading} style={{ flex: 2, background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: 'var(--cc-body)', fontWeight: '700', cursor: loading ? 'wait' : 'pointer', opacity: loading ? 0.7 : 1 }}>
           {loading ? 'Registrando...' : 'Crear Cuenta'}
         </button>
       </div>
@@ -448,9 +449,9 @@ function ModalOlvide({ t, onClose }) {
     <Modal t={t} onClose={onClose} width="400px">
       <div style={{ textAlign: 'center', padding: '20px 0' }}>
         <div style={{ fontSize: '48px', marginBottom: '16px' }}>✅</div>
-        <h2 style={{ color: t.primary, margin: '0 0 12px', fontSize: '20px' }}>¡Contraseña actualizada!</h2>
-        <p style={{ color: t.textMuted, fontSize: '14px' }}>Ya puedes iniciar sesión con tu nueva contraseña.</p>
-        <button onClick={onClose} style={{ marginTop: '24px', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px 32px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}>Ingresar</button>
+        <h2 style={{ color: t.primary, margin: '0 0 12px', fontSize: 'var(--cc-title)' }}>¡Contraseña actualizada!</h2>
+        <p style={{ color: t.textMuted, fontSize: 'var(--cc-body)' }}>Ya puedes iniciar sesión con tu nueva contraseña.</p>
+        <button onClick={onClose} style={{ marginTop: '24px', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px 32px', fontSize: 'var(--cc-body)', fontWeight: '700', cursor: 'pointer' }}>Ingresar</button>
       </div>
     </Modal>
   )
@@ -459,16 +460,16 @@ function ModalOlvide({ t, onClose }) {
     <Modal t={t} onClose={onClose} width="400px">
       <div style={{ textAlign: 'center', marginBottom: '20px' }}>
         <div style={{ fontSize: '40px', marginBottom: '8px' }}>⏳</div>
-        <h2 style={{ color: t.primary, margin: '0 0 8px', fontSize: '20px' }}>Solicitud enviada</h2>
-        <p style={{ color: t.textMuted, fontSize: '13px', lineHeight: '1.6' }}>
+        <h2 style={{ color: t.primary, margin: '0 0 8px', fontSize: 'var(--cc-title)' }}>Solicitud enviada</h2>
+        <p style={{ color: t.textMuted, fontSize: 'var(--cc-sm)', lineHeight: '1.6' }}>
           El administrador recibirá tu solicitud y te asignará una contraseña temporal. Cuando te lo indique, regresa aquí.
         </p>
       </div>
-      {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', marginBottom: '12px' }}>{error}</div>}
-      <button onClick={handleVerificarAutorizacion} disabled={loading} style={{ width: '100%', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', marginBottom: '10px' }}>
+      {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: 'var(--cc-sm)', marginBottom: '12px' }}>{error}</div>}
+      <button onClick={handleVerificarAutorizacion} disabled={loading} style={{ width: '100%', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: 'var(--cc-body)', fontWeight: '700', cursor: 'pointer', marginBottom: '10px' }}>
         {loading ? 'Verificando...' : '🔍 Ya me autorizaron, continuar'}
       </button>
-      <button onClick={onClose} style={{ width: '100%', background: 'transparent', border: `1.5px solid ${t.border}`, borderRadius: '10px', padding: '12px', color: t.textMuted, fontSize: '14px', cursor: 'pointer' }}>Cerrar</button>
+      <button onClick={onClose} style={{ width: '100%', background: 'transparent', border: `1.5px solid ${t.border}`, borderRadius: '10px', padding: '12px', color: t.textMuted, fontSize: 'var(--cc-body)', cursor: 'pointer' }}>Cerrar</button>
     </Modal>
   )
 
@@ -476,14 +477,14 @@ function ModalOlvide({ t, onClose }) {
     <Modal t={t} onClose={onClose} width="400px">
       <div style={{ textAlign: 'center', marginBottom: '20px' }}>
         <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔐</div>
-        <h2 style={{ color: t.primary, margin: 0, fontSize: '20px', fontWeight: '800' }}>Nueva Contraseña</h2>
-        <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: '13px' }}>Ingresa la contraseña temporal que te dio el administrador</p>
+        <h2 style={{ color: t.primary, margin: 0, fontSize: 'var(--cc-title)', fontWeight: '800' }}>Nueva Contraseña</h2>
+        <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: 'var(--cc-sm)' }}>Ingresa la contraseña temporal que te dio el administrador</p>
       </div>
       <Field label="CONTRASEÑA TEMPORAL" t={t} type="password" placeholder="La que te dio el admin" value={tempPass} onChange={e => setTempPass(e.target.value)} />
       <Field label="NUEVA CONTRASEÑA" t={t} type="password" placeholder="Mínimo 8 caracteres" value={nuevaPass} onChange={e => setNuevaPass(e.target.value)} />
       <Field label="CONFIRMAR NUEVA CONTRASEÑA" t={t} type="password" placeholder="Repite la contraseña" value={confirmarPass} onChange={e => setConfirmarPass(e.target.value)} />
-      {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', marginBottom: '12px' }}>{error}</div>}
-      <button onClick={handleCambiar} disabled={loading} style={{ width: '100%', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}>
+      {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: 'var(--cc-sm)', marginBottom: '12px' }}>{error}</div>}
+      <button onClick={handleCambiar} disabled={loading} style={{ width: '100%', background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: 'var(--cc-body)', fontWeight: '700', cursor: 'pointer' }}>
         {loading ? 'Guardando...' : 'Guardar Nueva Contraseña'}
       </button>
     </Modal>
@@ -493,16 +494,16 @@ function ModalOlvide({ t, onClose }) {
     <Modal t={t} onClose={onClose} width="400px">
       <div style={{ textAlign: 'center', marginBottom: '28px' }}>
         <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔑</div>
-        <h2 style={{ color: t.primary, margin: 0, fontSize: '22px', fontWeight: '800' }}>Olvidé mi Contraseña</h2>
-        <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: '13px' }}>El administrador te asignará una contraseña temporal</p>
+        <h2 style={{ color: t.primary, margin: 0, fontSize: 'var(--cc-h2)', fontWeight: '800' }}>Olvidé mi Contraseña</h2>
+        <p style={{ color: t.textMuted, margin: '8px 0 0', fontSize: 'var(--cc-sm)' }}>El administrador te asignará una contraseña temporal</p>
       </div>
       <Field label="CORREO ELECTRÓNICO" t={t} type="email" placeholder="tu@correo.com"
         value={email} onChange={e => setEmail(e.target.value)}
         onKeyDown={e => e.key === 'Enter' && handleSolicitar()} />
-      {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', marginBottom: '12px' }}>{error}</div>}
+      {error && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: 'var(--cc-sm)', marginBottom: '12px' }}>{error}</div>}
       <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
-        <button onClick={onClose} style={{ flex: 1, background: 'transparent', border: `1.5px solid ${t.border}`, borderRadius: '10px', padding: '12px', color: t.textMuted, fontSize: '14px', cursor: 'pointer' }}>Cancelar</button>
-        <button onClick={handleSolicitar} disabled={loading || !email} style={{ flex: 2, background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: (!email || loading) ? 'not-allowed' : 'pointer', opacity: (!email || loading) ? 0.6 : 1 }}>
+        <button onClick={onClose} style={{ flex: 1, background: 'transparent', border: `1.5px solid ${t.border}`, borderRadius: '10px', padding: '12px', color: t.textMuted, fontSize: 'var(--cc-body)', cursor: 'pointer' }}>Cancelar</button>
+        <button onClick={handleSolicitar} disabled={loading || !email} style={{ flex: 2, background: t.primary, color: '#fff', border: 'none', borderRadius: '10px', padding: '12px', fontSize: 'var(--cc-body)', fontWeight: '700', cursor: (!email || loading) ? 'not-allowed' : 'pointer', opacity: (!email || loading) ? 0.6 : 1 }}>
           {loading ? 'Enviando...' : 'Solicitar Reset'}
         </button>
       </div>
@@ -516,7 +517,7 @@ function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, 
     <div style={{ minHeight: '100vh', width: '100%', background: t.landingBg, display: 'flex', flexDirection: 'column' }}>
       <div style={{ position: 'absolute', top: '20px', right: '24px', display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: '6px', background: themeIsDarkChrome(activeTheme) ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.7)', border: `1px solid ${t.border}`, borderRadius: '20px', padding: '4px', backdropFilter: 'blur(8px)', maxWidth: 'min(420px, 96vw)' }}>
         {['light', 'auto', 'dark', 'rest'].map((mode, i) => (
-          <button key={mode} onClick={() => onTheme(mode)} style={{ background: themeMode === mode ? t.primary : 'transparent', color: themeMode === mode ? '#fff' : t.textMuted, border: 'none', borderRadius: '16px', padding: '4px 10px', fontSize: '11px', cursor: 'pointer', transition: 'all 0.2s' }}>
+          <button key={mode} onClick={() => onTheme(mode)} style={{ background: themeMode === mode ? t.primary : 'transparent', color: themeMode === mode ? '#fff' : t.textMuted, border: 'none', borderRadius: '16px', padding: '4px 10px', fontSize: 'var(--cc-label)', cursor: 'pointer', transition: 'all 0.2s' }}>
             {['☀️ Claro', '⚡ Auto', '🌙 Oscuro', '🌿 Descansar'][i]}
           </button>
         ))}
@@ -530,28 +531,28 @@ function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, 
             style={{ filter: themeIsDarkChrome(activeTheme) ? 'brightness(0) invert(1)' : 'none' }}
           />
         </div>
-        <p style={{ color: t.textMuted, fontSize: '16px', margin: '0 0 56px', letterSpacing: '0.5px', animation: 'fadeDown 0.7s ease', textAlign: 'center', maxWidth: '400px', lineHeight: '1.6' }}>
+        <p style={{ color: t.textMuted, fontSize: 'var(--cc-lg)', margin: '0 0 56px', letterSpacing: '0.5px', animation: 'fadeDown 0.7s ease', textAlign: 'center', maxWidth: '400px', lineHeight: '1.6' }}>
           Gestión inteligente de contratos de construcción
         </p>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', width: '100%', maxWidth: '340px', animation: 'fadeUp 0.7s ease' }}>
-          <button onClick={onLogin} style={{ background: t.primary, color: '#fff', border: 'none', borderRadius: '12px', padding: '16px', fontSize: '16px', fontWeight: '700', cursor: 'pointer', boxShadow: `0 8px 24px rgba(0,119,182,0.35)`, transition: 'transform 0.15s, box-shadow 0.15s', letterSpacing: '0.3px' }}
+          <button onClick={onLogin} style={{ background: t.primary, color: '#fff', border: 'none', borderRadius: '12px', padding: '16px', fontSize: 'var(--cc-lg)', fontWeight: '700', cursor: 'pointer', boxShadow: `0 8px 24px rgba(0,119,182,0.35)`, transition: 'transform 0.15s, box-shadow 0.15s', letterSpacing: '0.3px' }}
             onMouseEnter={e => { e.target.style.transform = 'translateY(-2px)'; e.target.style.boxShadow = `0 12px 32px rgba(0,119,182,0.45)` }}
             onMouseLeave={e => { e.target.style.transform = 'translateY(0)'; e.target.style.boxShadow = `0 8px 24px rgba(0,119,182,0.35)` }}>
             Iniciar Sesión
           </button>
-          <button onClick={onRegistro} style={{ background: 'transparent', color: t.primary, border: `2px solid ${t.primary}`, borderRadius: '12px', padding: '14px', fontSize: '16px', fontWeight: '700', cursor: 'pointer', transition: 'all 0.15s' }}
+          <button onClick={onRegistro} style={{ background: 'transparent', color: t.primary, border: `2px solid ${t.primary}`, borderRadius: '12px', padding: '14px', fontSize: 'var(--cc-lg)', fontWeight: '700', cursor: 'pointer', transition: 'all 0.15s' }}
             onMouseEnter={e => { e.target.style.background = t.primary; e.target.style.color = '#fff' }}
             onMouseLeave={e => { e.target.style.background = 'transparent'; e.target.style.color = t.primary }}>
             Crear Cuenta
           </button>
-          <button onClick={onOlvide} style={{ background: 'none', border: 'none', color: t.textMuted, fontSize: '14px', cursor: 'pointer', padding: '8px', textDecoration: 'underline', transition: 'color 0.15s' }}
+          <button onClick={onOlvide} style={{ background: 'none', border: 'none', color: t.textMuted, fontSize: 'var(--cc-body)', cursor: 'pointer', padding: '8px', textDecoration: 'underline', transition: 'color 0.15s' }}
             onMouseEnter={e => e.target.style.color = t.primary}
             onMouseLeave={e => e.target.style.color = t.textMuted}>
             Olvidé mi contraseña
           </button>
         </div>
       </div>
-      <div style={{ textAlign: 'center', padding: '20px', color: t.textMuted, fontSize: '12px', opacity: 0.7 }}>
+      <div style={{ textAlign: 'center', padding: '20px', color: t.textMuted, fontSize: 'var(--cc-sm)', opacity: 0.7 }}>
         ClaraCore © {new Date().getFullYear()} — Gestión de construcción
       </div>
       <style>{`
@@ -626,13 +627,13 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t }) {
       {!hasCoords && (
         <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:`${t.bgCard}EE`, gap:'8px', pointerEvents:'none' }}>
           <span style={{ fontSize:'36px' }}>📍</span>
-          <span style={{ fontSize:'12px', color:t.textMuted, textAlign:'center', padding:'0 20px' }}>
+          <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'center', padding:'0 20px' }}>
             {modoEdicion ? 'Haz clic en el mapa para fijar las coordenadas' : 'Sin coordenadas geográficas'}
           </span>
         </div>
       )}
       {modoEdicion && hasCoords && (
-        <div style={{ position:'absolute', bottom:'36px', left:'50%', transform:'translateX(-50%)', background:'rgba(0,0,0,0.75)', color:'#fff', borderRadius:'20px', padding:'5px 14px', fontSize:'11px', fontWeight:'600', whiteSpace:'nowrap', pointerEvents:'none' }}>
+        <div style={{ position:'absolute', bottom:'36px', left:'50%', transform:'translateX(-50%)', background:'rgba(0,0,0,0.75)', color:'#fff', borderRadius:'20px', padding:'5px 14px', fontSize:'var(--cc-label)', fontWeight:'600', whiteSpace:'nowrap', pointerEvents:'none' }}>
           🖱️ Clic en el mapa para actualizar la ubicación
         </div>
       )}
@@ -776,7 +777,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
 
   const iS = {
     width: '100%', background: t.inputBg, border: `1.5px solid ${t.inputBorder}`,
-    borderRadius: '10px', padding: '10px 13px', color: t.text, fontSize: '13px',
+    borderRadius: '10px', padding: '10px 13px', color: t.text, fontSize: 'var(--cc-sm)',
     outline: 'none', boxSizing: 'border-box',
   }
 
@@ -830,17 +831,17 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
                       display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: colorEstado, flexShrink: 0 }} />
           <div>
-            <div style={{ fontSize: '13px', fontWeight: '700', color: t.text }}>
+            <div style={{ fontSize: 'var(--cc-sm)', fontWeight: '700', color: t.text }}>
               {modoConversacion ? 'Nueva conversación' : 'Comentario de validación'}
             </div>
-            <div style={{ fontSize: '11px', color: colorEstado, fontWeight: '600', marginTop: '2px' }}>
+            <div style={{ fontSize: 'var(--cc-label)', color: colorEstado, fontWeight: '600', marginTop: '2px' }}>
               {modoConversacion
                 ? `Registro #${registro?.numero_registro ?? '—'} · Nivel ${nivelValidacion}`
                 : `Estado: ${estadoValidando} · Nivel ${nivelValidacion}`}
             </div>
           </div>
           <button onClick={onCancelar} style={{ marginLeft: 'auto', background: 'none', border: 'none',
-            fontSize: '18px', color: t.textMuted, cursor: 'pointer', lineHeight: 1 }}>✕</button>
+            fontSize: 'var(--cc-lg)', color: t.textMuted, cursor: 'pointer', lineHeight: 1 }}>✕</button>
         </div>
 
         {/* Body */}
@@ -848,7 +849,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
 
           {/* Destinatarios */}
           <div>
-            <div style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '8px' }}>
+            <div style={{ fontSize: 'var(--cc-label)', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '8px' }}>
               PARA (destinatario) {esObligatorio && <span style={{ color: '#dc2626' }}>*</span>}
             </div>
             <input
@@ -862,10 +863,10 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
             <div style={{ maxHeight: '140px', overflowY: 'auto', border: `1.5px solid ${t.inputBorder}`,
                           borderRadius: '10px', padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
               {usuarios.length === 0 && (
-                <div style={{ fontSize: '12px', color: t.textMuted, padding: '4px' }}>Cargando usuarios…</div>
+                <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, padding: '4px' }}>Cargando usuarios…</div>
               )}
               {usuarios.length > 0 && usuariosFiltrados.length === 0 && (
-                <div style={{ fontSize: '12px', color: t.textMuted, padding: '4px' }}>Ningún usuario coincide con la búsqueda.</div>
+                <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, padding: '4px' }}>Ningún usuario coincide con la búsqueda.</div>
               )}
               {usuariosFiltrados.map(u => {
                 const sel = !!destinatarios.find(d => d.id === u.id)
@@ -878,14 +879,14 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
                                   border: `2px solid ${sel ? colorEstado : t.inputBorder}`,
                                   background: sel ? colorEstado : 'transparent',
                                   display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      {sel && <span style={{ color: '#fff', fontSize: '10px', lineHeight: 1 }}>✓</span>}
+                      {sel && <span style={{ color: '#fff', fontSize: 'var(--cc-caption)', lineHeight: 1 }}>✓</span>}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: '12px', fontWeight: '600', color: t.text,
+                      <div style={{ fontSize: 'var(--cc-sm)', fontWeight: '600', color: t.text,
                                     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {u.nombre} {u.apellidos || ''}
                       </div>
-                      <div style={{ fontSize: '10px', color: t.textMuted }}>{u.cargo_nombre || u.cargo || ''}</div>
+                      <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>{u.cargo_nombre || u.cargo || ''}</div>
                     </div>
                   </div>
                 )
@@ -896,7 +897,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
           {/* Etiqueta (no aplica en conversación nueva desde el módulo de comentarios) */}
           {!modoConversacion && (
             <div>
-              <div style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
+              <div style={{ fontSize: 'var(--cc-label)', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
                 ETIQUETA {esObligatorio && <span style={{ color: '#dc2626' }}>*</span>}
               </div>
               <select value={etiqueta} onChange={e => setEtiqueta(e.target.value)} style={iS}>
@@ -912,7 +913,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
 
           {/* Asunto (opcional) */}
           <div>
-            <div style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
+            <div style={{ fontSize: 'var(--cc-label)', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
               ASUNTO <span style={{ fontWeight: '400', textTransform: 'none' }}>(opcional)</span>
             </div>
             <input value={asunto} onChange={e => setAsunto(e.target.value)} style={iS}
@@ -921,7 +922,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
 
           {/* Mensaje */}
           <div>
-            <div style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
+            <div style={{ fontSize: 'var(--cc-label)', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
               MENSAJE {esObligatorio && <span style={{ color: '#dc2626' }}>*</span>}
             </div>
             <textarea value={mensaje} onChange={e => setMensaje(e.target.value)}
@@ -931,7 +932,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
 
           {/* Enlaces */}
           <div>
-            <div style={{ fontSize: '11px', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
+            <div style={{ fontSize: 'var(--cc-label)', fontWeight: '700', color: t.textMuted, letterSpacing: '0.8px', marginBottom: '6px' }}>
               ENLACES <span style={{ fontWeight: '400', textTransform: 'none' }}>(opcional)</span>
             </div>
             <div style={{ display: 'flex', gap: '8px' }}>
@@ -940,7 +941,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
                      style={{ ...iS, flex: 1 }} placeholder='https://…' />
               <button onClick={agregarEnlace}
                 style={{ padding: '10px 14px', background: t.primary, color: '#fff', border: 'none',
-                         borderRadius: '10px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                         borderRadius: '10px', fontSize: 'var(--cc-sm)', fontWeight: '700', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                 + Agregar
               </button>
             </div>
@@ -948,11 +949,11 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
               <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 {enlaces.map((url, i) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px',
-                                        fontSize: '11px', color: t.primary }}>
+                                        fontSize: 'var(--cc-label)', color: t.primary }}>
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{url}</span>
                     <button onClick={() => setEnlaces(prev => prev.filter((_, j) => j !== i))}
                       style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer',
-                               fontSize: '13px', lineHeight: 1, padding: 0, flexShrink: 0 }}>✕</button>
+                               fontSize: 'var(--cc-sm)', lineHeight: 1, padding: 0, flexShrink: 0 }}>✕</button>
                   </div>
                 ))}
               </div>
@@ -961,7 +962,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
 
           {/* Error */}
           {error && (
-            <div style={{ fontSize: '12px', color: '#dc2626', background: '#dc262612',
+            <div style={{ fontSize: 'var(--cc-sm)', color: '#dc2626', background: '#dc262612',
                           borderRadius: '8px', padding: '8px 12px' }}>{error}</div>
           )}
         </div>
@@ -971,19 +972,19 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
                       display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
           <button onClick={onCancelar}
             style={{ padding: '10px 18px', background: 'none', border: `1.5px solid ${t.border}`,
-                     borderRadius: '10px', color: t.textMuted, fontSize: '13px', cursor: 'pointer' }}>
+                     borderRadius: '10px', color: t.textMuted, fontSize: 'var(--cc-sm)', cursor: 'pointer' }}>
             Cancelar
           </button>
           {!esObligatorio && !modoConversacion && (
             <button onClick={confirmarSinComentario}
               style={{ padding: '10px 18px', background: `${colorEstado}22`, border: `1.5px solid ${colorEstado}55`,
-                       borderRadius: '10px', color: colorEstado, fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
+                       borderRadius: '10px', color: colorEstado, fontSize: 'var(--cc-sm)', fontWeight: '600', cursor: 'pointer' }}>
               Confirmar sin comentario
             </button>
           )}
           <button onClick={confirmar}
             style={{ padding: '10px 18px', background: colorEstado, border: 'none',
-                     borderRadius: '10px', color: '#fff', fontSize: '13px', fontWeight: '700', cursor: 'pointer' }}>
+                     borderRadius: '10px', color: '#fff', fontSize: 'var(--cc-sm)', fontWeight: '700', cursor: 'pointer' }}>
             {modoConversacion ? 'Enviar mensaje' : 'Confirmar con comentario'}
           </button>
         </div>
@@ -1021,16 +1022,31 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [editandoSub,    setEditandoSub]    = useState(false)
   const [uploadingGraf,    setUploadingGraf]    = useState(false)
   const [modalGaleriaHoja, setModalGaleriaHoja] = useState(false)
+  const [fotoImgError, setFotoImgError] = useState(false)
+  // Misma fila en el reporte completo: a veces el `reg` del mapa no trae foto_url; el arreglo del GET sí
+  const regMismoEnReporte = reporte?.registros?.find((r) => r.id === registro.id) || null
   const graficoReporte = reporte.registros?.find(r => r.grafico_url) || null
   const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || graficoReporte?.grafico_url || null)
   const [mostrarPopupValidacion, setMostrarPopupValidacion] = useState(false)
   // Sincronizar con datos del servidor (p. ej. migración de foto_url en BD sin remontar el componente)
   useEffect(() => {
-    setFotoLocal(registro.foto_url || null)
-  }, [registro.id, registro.foto_url])
+    const fromRep = reporte?.registros?.find((r) => r.id === registro.id)
+    setFotoLocal(registro.foto_url || fromRep?.foto_url || null)
+    setFotoImgError(false)
+  }, [registro.id, registro.foto_url, reporte?.registros])
   useEffect(() => {
     setGrafLocal(registro.grafico_url || graficoReporte?.grafico_url || null)
   }, [registro.id, registro.grafico_url, graficoReporte?.grafico_url])
+
+  const _urlMedia = (v) => {
+    if (v == null) return null
+    const s = String(v).trim()
+    if (!s || s === 'null' || s === 'undefined') return null
+    return s
+  }
+  // Servidor primero; cruzar con reporte.registros para no perder URL si el objeto `reg` va incompleto
+  const fotoVista = _urlMedia(registro.foto_url) || _urlMedia(regMismoEnReporte?.foto_url) || _urlMedia(fotoLocal)
+  const grafVista = _urlMedia(registro.grafico_url) || _urlMedia(regMismoEnReporte?.grafico_url) || _urlMedia(graficoReporte?.grafico_url) || _urlMedia(grafLocal)
   const [estadoValidando,        setEstadoValidando]        = useState('')
   const [toastMsg,               setToastMsg]               = useState(null)
   const [listaCortes,            setListaCortes]            = useState([])
@@ -1354,8 +1370,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   const CampoRO = ({ label, valor, color }) => (
     <div>
-      <div style={{ fontSize:'10px', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
-      <div style={{ fontSize:'13px', color: color || t.text, fontWeight:'600', background:t.bgCard, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${C.borde}` }}>
+      <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+      <div style={{ fontSize:'var(--cc-sm)', color: color || t.text, fontWeight:'600', background:t.bgCard, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${C.borde}` }}>
         {valor ?? <span style={{ color:C.label, fontStyle:'italic' }}>—</span>}
       </div>
     </div>
@@ -1363,9 +1379,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   const CampoEdit = ({ label, value, onChange, placeholder }) => (
     <div>
-      <div style={{ fontSize:'10px', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+      <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
       <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder || ''}
-        style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+        style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
     </div>
   )
 
@@ -1387,21 +1403,21 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               <input type="checkbox" checked={seleccionado} onChange={onToggleSeleccion}
                 style={{ width:'16px', height:'16px', cursor:'pointer', accentColor:'#8B5CF6' }} />
             )}
-            <span style={{ fontSize:'15px', fontWeight:'800', color:t.primary }}>📄 Registro #{registro.numero_registro}</span>
+            <span style={{ fontSize:'var(--cc-md)', fontWeight:'800', color:t.primary }}>📄 Registro #{registro.numero_registro}</span>
             {registro.item_numero && (
-              <span style={{ background:`${t.primary}22`, color:t.primary, border:`1px solid ${t.primary}44`, borderRadius:'12px', padding:'2px 10px', fontSize:'11px', fontWeight:'700' }}>
+              <span style={{ background:`${t.primary}22`, color:t.primary, border:`1px solid ${t.primary}44`, borderRadius:'12px', padding:'2px 10px', fontSize:'var(--cc-label)', fontWeight:'700' }}>
                 {registro.item_numero}
               </span>
             )}
           </div>
-          <div style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'11px', color:t.textMuted }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'var(--cc-label)', color:t.textMuted }}>
             {(() => { try { const ts=registro.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()}
             {esDeveloper && typeof onDevEliminarRegistro === 'function' && (
               <button type="button" disabled={devEliminando} onClick={() => onDevEliminarRegistro(registro.id)}
                 title="Solo desarrollador: elimina este registro en base de datos"
                 style={{
                   background:'transparent', border:'1px solid #F87171', color:'#F87171', borderRadius:'6px',
-                  padding:'2px 8px', fontSize:'10px', fontWeight:'700', cursor: devEliminando ? 'not-allowed' : 'pointer', opacity: devEliminando ? 0.5 : 1,
+                  padding:'2px 8px', fontSize:'var(--cc-caption)', fontWeight:'700', cursor: devEliminando ? 'not-allowed' : 'pointer', opacity: devEliminando ? 0.5 : 1,
                 }}>
                 🗑️ Dev
               </button>
@@ -1413,29 +1429,29 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             const actaNum = reporte.acta_rpo_numero ?? actasList.find(a => a.id === registro.acta_rpo_id)?.numero_rpo ?? null
             const corteNum = reporte.corte_numero ?? listaCortes.find(c => c.id === registro.corte_id)?.consecutivo ?? registro.corte_id ?? null
             return (<>
-              <span style={{ display:'flex', alignItems:'center', gap:'5px', background: actaNum ? `${t.primary}15` : '#EF444415', border:`1px solid ${actaNum ? t.primary+'33' : '#EF444433'}`, borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color: actaNum ? t.primary : '#EF4444' }}>
+              <span style={{ display:'flex', alignItems:'center', gap:'5px', background: actaNum ? `${t.primary}15` : '#EF444415', border:`1px solid ${actaNum ? t.primary+'33' : '#EF444433'}`, borderRadius:'20px', padding:'3px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color: actaNum ? t.primary : '#EF4444' }}>
                 📋 {actaNum ? `RPO #${actaNum}` : 'Sin Acta RPO'}
               </span>
               {soloCorteNivel3 && reporte.subcontratista_id ? (
-                <span style={{ display:'flex', alignItems:'center', gap:'6px', flexWrap:'wrap', background:`${t.textMuted}12`, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'4px 10px', fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
+                <span style={{ display:'flex', alignItems:'center', gap:'6px', flexWrap:'wrap', background:`${t.textMuted}12`, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'4px 10px', fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted }}>
                   <span style={{ marginRight:'4px' }}>📄 Corte subcontratista</span>
                   <select value={corteSel} onChange={e => setCorteSel(e.target.value)}
-                    style={{ background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'4px 8px', color:t.text, fontSize:'11px', maxWidth:'220px' }}>
+                    style={{ background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'4px 8px', color:t.text, fontSize:'var(--cc-label)', maxWidth:'220px' }}>
                     <option value="">— Sin corte —</option>
                     {listaCortes.map(c => (
                       <option key={c.id} value={String(c.id)}>Corte #{c.consecutivo ?? c.id}</option>
                     ))}
                   </select>
                   <button type="button" onClick={guardarCorte} disabled={guardandoCorte}
-                    style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'4px 10px', fontSize:'11px', fontWeight:'700', cursor: guardandoCorte ? 'not-allowed' : 'pointer', opacity: guardandoCorte ? 0.7 : 1 }}>
+                    style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'4px 10px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: guardandoCorte ? 'not-allowed' : 'pointer', opacity: guardandoCorte ? 0.7 : 1 }}>
                     {guardandoCorte ? '...' : 'Guardar'}
                   </button>
                 </span>
               ) : (
-                <span style={{ display:'flex', alignItems:'center', gap:'5px', background:`${t.textMuted}15`, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color:t.textMuted }}>
+                <span style={{ display:'flex', alignItems:'center', gap:'5px', background:`${t.textMuted}15`, border:`1px solid ${t.border}`, borderRadius:'20px', padding:'3px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted }}>
                   📄 {corteNum != null ? `Corte #${corteNum}` : 'Sin Corte'}
                   {soloCorteNivel3 && !reporte.subcontratista_id && (
-                    <span style={{ fontWeight:'600', fontSize:'10px', marginLeft:'6px', color:'#d97706' }}>(defina subcontratista en la portada)</span>
+                    <span style={{ fontWeight:'600', fontSize:'var(--cc-caption)', marginLeft:'6px', color:'#d97706' }}>(defina subcontratista en la portada)</span>
                   )}
                 </span>
               )}
@@ -1445,7 +1461,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             editandoSub ? (
               <span style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                 <select value={subcontratistaSel} onChange={e => setSubcontratistaSel(e.target.value)}
-                  style={{ background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'3px 8px', color:t.text, fontSize:'11px' }}>
+                  style={{ background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'3px 8px', color:t.text, fontSize:'var(--cc-label)' }}>
                   <option value="">— Sin subcontratista —</option>
                   {listaSubs.map(s => <option key={s.id} value={s.id}>{s.razon_social}</option>)}
                 </select>
@@ -1458,21 +1474,21 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                     onItemAsignado()
                   } catch(e) { alert(`Error al guardar: ${e.message}`) }
                   setEditandoSub(false)
-                }} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'3px 10px', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
+                }} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'3px 10px', fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer' }}>
                   Guardar
                 </button>
                 <button onClick={() => setEditandoSub(false)}
-                  style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'3px 8px', fontSize:'11px', color:t.textMuted, cursor:'pointer' }}>
+                  style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'3px 8px', fontSize:'var(--cc-label)', color:t.textMuted, cursor:'pointer' }}>
                   ✕
                 </button>
               </span>
             ) : (
-              <span onClick={() => setEditandoSub(true)} style={{ display:'flex', alignItems:'center', gap:'5px', background:'#8B5CF615', border:'1px solid #8B5CF633', borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color:'#8B5CF6', cursor:'pointer' }}>
+              <span onClick={() => setEditandoSub(true)} style={{ display:'flex', alignItems:'center', gap:'5px', background:'#8B5CF615', border:'1px solid #8B5CF633', borderRadius:'20px', padding:'3px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#8B5CF6', cursor:'pointer' }}>
                 🏢 {reporte.subcontratista_nombre || 'Sin subcontratista'} ✏️
               </span>
             )
           ) : (
-            <span style={{ display:'flex', alignItems:'center', gap:'5px', background:'#8B5CF615', border:'1px solid #8B5CF633', borderRadius:'20px', padding:'3px 12px', fontSize:'11px', fontWeight:'700', color:'#8B5CF6' }}>
+            <span style={{ display:'flex', alignItems:'center', gap:'5px', background:'#8B5CF615', border:'1px solid #8B5CF633', borderRadius:'20px', padding:'3px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#8B5CF6' }}>
               🏢 {reporte.subcontratista_nombre || 'Sin subcontratista'}
             </span>
           )}
@@ -1480,7 +1496,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       </div>
 
       {esNivel3Aprobado && (
-        <div style={{ marginBottom:'12px', background:'#0d948818', border:'1px solid #0d948855', borderRadius:'8px', padding:'8px 12px', fontSize:'12px', color:t.text }}>
+        <div style={{ marginBottom:'12px', background:'#0d948818', border:'1px solid #0d948855', borderRadius:'8px', padding:'8px 12px', fontSize:'var(--cc-sm)', color:t.text }}>
           Aprobado por Interventoría (Nivel 3): el registro está bloqueado; solo puede ajustarse el corte de subcontratista.
         </div>
       )}
@@ -1488,31 +1504,31 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       {/* ─ Sección: Asignación de Ítem ─ */}
       {(editableCampos || nivelInfo.nivelValidacion) && (
         <div style={{ background:t.bg, borderRadius:'10px', padding:'16px', marginBottom:'16px', border:`1px solid ${C.borde}` }}>
-          <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>🔖 Asignación de Ítem</div>
+          <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>🔖 Asignación de Ítem</div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 2fr', gap:'12px' }}>
             {/* Capítulo */}
             <div>
-              <div style={{ fontSize:'10px', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Capítulo</div>
+              <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Capítulo</div>
               <select value={capituloHoja} onChange={e => { setCapituloHoja(e.target.value); setCompetencia(''); setItemSel(null); setItemBusqueda('') }}
                 disabled={!editableCampos}
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px', opacity: editableCampos ? 1 : 0.65 }}>
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', opacity: editableCampos ? 1 : 0.65 }}>
                 <option value="">— Selecciona —</option>
                 {listaCapitulos.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
             {/* Competencia */}
             <div>
-              <div style={{ fontSize:'10px', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Competencia</div>
+              <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Competencia</div>
               <select value={competencia} onChange={e => { setCompetencia(e.target.value); setItemSel(null); setItemBusqueda('') }}
                 disabled={!editableCampos}
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px', opacity: editableCampos ? 1 : 0.65 }}>
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', opacity: editableCampos ? 1 : 0.65 }}>
                 <option value="">— Todas —</option>
                 {competencias.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
             {/* Búsqueda de ítem */}
             <div style={{ position:'relative' }}>
-              <div style={{ fontSize:'10px', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>
+              <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>
                 Ítem {buscando ? '⏳' : ''}
               </div>
               <input
@@ -1521,7 +1537,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 onFocus={() => itemsLista.length > 0 && setMostrarLista(true)}
                 placeholder="Buscar por número o descripción..."
                 disabled={!editableCampos}
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box', opacity: editableCampos ? 1 : 0.65 }}
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', opacity: editableCampos ? 1 : 0.65 }}
               />
               {mostrarLista && itemsLista.length > 0 && (
                 <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:100, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', maxHeight:'200px', overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }}>
@@ -1530,9 +1546,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                       style={{ padding:'8px 12px', cursor:'pointer', borderBottom:`1px solid ${t.border}`, transition:'background 0.1s' }}
                       onMouseEnter={e => e.currentTarget.style.background = t.bg}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                      <div style={{ fontSize:'12px', fontWeight:'700', color:t.primary }}>{item.item_numero}</div>
-                      <div style={{ fontSize:'11px', color:t.text }}>{item.descripcion}</div>
-                      <div style={{ fontSize:'11px', color:t.textMuted }}>{item.und} · {fmtD(item.precio_unitario)}</div>
+                      <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.primary }}>{item.item_numero}</div>
+                      <div style={{ fontSize:'var(--cc-label)', color:t.text }}>{item.descripcion}</div>
+                      <div style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>{item.und} · {fmtD(item.precio_unitario)}</div>
                     </div>
                   ))}
                 </div>
@@ -1552,7 +1568,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       {/* ─ Sección: Dimensiones y Cantidades ─ */}
       <div style={{ marginBottom:'16px' }}>
-        <div style={{ fontSize:'11px', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📏 Dimensiones y Cantidades</div>
+        <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📏 Dimensiones y Cantidades</div>
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(130px,1fr))', gap:'10px' }}>
           {editableCampos ? (
             <>
@@ -1563,14 +1579,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 ['Cantidad', cantidad, setCantidad, 'und'],
               ].map(([label, val, setter, ph]) => (
                 <div key={label}>
-                  <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+                  <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
                   <input
                     value={val}
                     onChange={e => setter(e.target.value)}
                     placeholder={ph}
                     type="number"
                     step="any"
-                    style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }}
+                    style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }}
                   />
                 </div>
               ))}
@@ -1594,12 +1610,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         <div style={{ marginTop:'10px' }}>
           {editableCampos ? (
             <div>
-              <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Observación</div>
+              <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Observación</div>
               <textarea
                 value={observacion}
                 onChange={e => setObservacion(e.target.value)}
                 rows={2}
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box', resize:'vertical' }}
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', resize:'vertical' }}
               />
             </div>
           ) : (
@@ -1610,7 +1626,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       {/* ─ Sección: Abscisado y Nodos ─ */}
       <div style={{ marginBottom:'16px' }}>
-        <div style={{ fontSize:'11px', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📍 Abscisado y Nodos</div>
+        <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📍 Abscisado y Nodos</div>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'10px' }}>
           <CampoRO label="Abs. Inicio"  valor={registro.abs_inicio} />
           <CampoRO label="Abs. Final"   valor={registro.abs_final} />
@@ -1621,18 +1637,18 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       {/* ─ Sección: Coordenadas Topográficas ─ */}
       <div style={{ marginBottom:'16px' }}>
-        <div style={{ fontSize:'11px', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'8px' }}>📐 Coordenadas Topográficas</div>
+        <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'8px' }}>📐 Coordenadas Topográficas</div>
         {!tieneCoordenadas ? (
-          <div style={{ background:'#EF444415', border:'1px solid #EF444444', borderRadius:'8px', padding:'12px 16px', color:'#EF4444', fontSize:'12px', fontWeight:'600' }}>
+          <div style={{ background:'#EF444415', border:'1px solid #EF444444', borderRadius:'8px', padding:'12px 16px', color:'#EF4444', fontSize:'var(--cc-sm)', fontWeight:'600' }}>
             ⚠️ Sin coordenadas topográficas. El topógrafo debe diligenciarlas en la Portada antes de asignar el ítem.
           </div>
         ) : (
           <div style={{ overflowX:'auto' }}>
-            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
+            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
               <thead>
                 <tr style={{ background:t.bg }}>
                   {['Punto','Norte','Este','Cota','Descripción'].map(h => (
-                    <th key={h} style={{ padding:'6px 10px', textAlign:'left', color:t.textMuted, fontWeight:'700', fontSize:'10px', textTransform:'uppercase', letterSpacing:'0.5px' }}>{h}</th>
+                    <th key={h} style={{ padding:'6px 10px', textAlign:'left', color:t.textMuted, fontWeight:'700', fontSize:'var(--cc-caption)', textTransform:'uppercase', letterSpacing:'0.5px' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -1654,23 +1670,37 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
       {/* ─ Sección: Registros Fotográficos ─ */}
       <div style={{ marginBottom:'16px' }}>
-        <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>📷 Registros Fotográficos</div>
+        <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>📷 Registros Fotográficos</div>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'12px' }}>
           {/* Foto de obra */}
           <div style={{ borderRadius:'8px', overflow:'hidden', border:`1px solid ${C.borde}` }}>
-            {fotoLocal ? (
+            {fotoVista ? (
               <>
-                <img src={fotoLocal} alt="Foto" style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }} />
-                <div style={{ padding:'6px 10px', fontSize:'11px', color:t.textMuted, background:t.bg, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <img
+                  key={fotoVista}
+                  src={fotoVista}
+                  alt="Foto"
+                  referrerPolicy="no-referrer"
+                  style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }}
+                  onLoad={() => setFotoImgError(false)}
+                  onError={() => setFotoImgError(true)}
+                />
+                {fotoImgError && (
+                  <div style={{ padding:'8px 10px', fontSize:'var(--cc-label)', color:'#B91C1C', background:'#FEF2F2' }}>
+                    No se pudo cargar la imagen (revisa que la URL exista en Cloudinary o que no esté bloqueada).{' '}
+                    <a href={fotoVista} target="_blank" rel="noreferrer" style={{ color:t.primary, fontWeight:700 }}>Abrir enlace</a>
+                  </div>
+                )}
+                <div style={{ padding:'6px 10px', fontSize:'var(--cc-label)', color:t.textMuted, background:t.bg, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                   <span>📷 Foto #{registro.foto_numero ? String(registro.foto_numero).padStart(4,'0') : '—'}</span>
                   {editableCampos && (
                     <div style={{ display:'flex', gap:'8px' }}>
-                      <label style={{ cursor:'pointer', color:t.primary, fontSize:'11px', fontWeight:'600' }}>
+                      <label style={{ cursor:'pointer', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600' }}>
                         Cambiar
                         <input type="file" accept="image/*" style={{ display:'none' }} onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
                       </label>
                       <button onClick={() => setModalGaleriaHoja(true)}
-                        style={{ cursor:'pointer', color:t.primary, fontSize:'11px', fontWeight:'600', background:'none', border:'none', padding:0 }}>
+                        style={{ cursor:'pointer', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600', background:'none', border:'none', padding:0 }}>
                         📷 Galería
                       </button>
                     </div>
@@ -1681,11 +1711,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               <div style={{ display:'flex', flexDirection:'column', background:t.bg, borderRadius:'8px', overflow:'hidden', height:'160px' }}>
                 <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flex:1, gap:'6px', borderBottom:`1px solid ${t.border}`, cursor: editableCampos ? 'pointer' : 'default', opacity: editableCampos ? 1 : 0.65 }}>
                   {uploadingFoto
-                    ? <span style={{ color:t.textMuted, fontSize:'12px' }}>⏳ Subiendo...</span>
+                    ? <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)' }}>⏳ Subiendo...</span>
                     : <>
                         <span style={{ fontSize:'28px' }}>📷</span>
-                        <span style={{ fontSize:'11px', color:t.textMuted }}>Nueva foto</span>
-                        <span style={{ fontSize:'11px', color:t.primary, fontWeight:'600' }}>Toca para cargar</span>
+                        <span style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>Nueva foto</span>
+                        <span style={{ fontSize:'var(--cc-label)', color:t.primary, fontWeight:'600' }}>Toca para cargar</span>
                       </>
                   }
                   <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto || !editableCampos}
@@ -1693,30 +1723,42 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 </label>
                 {editableCampos && (
                 <button onClick={() => setModalGaleriaHoja(true)}
-                  style={{ padding:'8px', background:'transparent', border:'none', color:t.primary, fontSize:'11px', fontWeight:'600', cursor:'pointer' }}>
+                  style={{ padding:'8px', background:'transparent', border:'none', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600', cursor:'pointer' }}>
                   🖼️ Usar foto de la galería
                 </button>
+                )}
+                {!!registro.foto_numero && !fotoVista && (
+                  <p style={{ margin:'6px 10px 0', fontSize:'var(--cc-caption)', color:'#B45309', lineHeight:1.35 }}>
+                    Número de foto (legacy) en datos, sin URL: hay que mapear en BD o asignar desde galería.
+                  </p>
+                )}
+                {!fotoVista && (
+                  <p style={{ margin:'8px 10px 6px', fontSize:'var(--cc-caption)', color:t.textMuted, lineHeight:1.4 }}>
+                    Si no hay petición a la imagen en <strong>Red</strong> es normal: el navegador solo la pide si la API devuelve
+                    <code style={{ fontSize:'var(--cc-caption)', margin:'0 3px' }}>foto_url</code> para <strong>id {registro.id}</strong> (n.º de registro {registro.numero_registro ?? '—'}).
+                    Filtra <code>reportes</code>, abre el <code>GET …/reportes/…</code> y en <code>registros</code> busca ese <code>id</code> — sin URL aquí, no se pinta la foto. Pulsa <strong>⟳ Actualizar</strong> en la cabecera de la carpeta tras migrar.
+                  </p>
                 )}
               </div>
             )}
           </div>
           {/* Gráfico del reporte */}
           <div style={{ borderRadius:'8px', overflow:'hidden', border:`1px solid ${C.borde}` }}>
-            {grafLocal ? (
+            {grafVista ? (
               <>
-                <img src={grafLocal} alt="Gráfico" style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }} />
-                <div style={{ padding:'6px 10px', fontSize:'11px', color:t.textMuted, background:t.bg }}>
+                <img src={grafVista} alt="Gráfico" referrerPolicy="no-referrer" style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }} />
+                <div style={{ padding:'6px 10px', fontSize:'var(--cc-label)', color:t.textMuted, background:t.bg }}>
                   📐 Gráfico (compartido del reporte)
                 </div>
               </>
             ) : (
               <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'160px', background:t.bg, cursor: editableCampos ? 'pointer' : 'default', gap:'8px', opacity: editableCampos ? 1 : 0.65 }}>
                 {uploadingGraf
-                  ? <span style={{ color:t.textMuted, fontSize:'12px' }}>⏳ Subiendo...</span>
+                  ? <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)' }}>⏳ Subiendo...</span>
                   : <>
                       <span style={{ fontSize:'32px' }}>📐</span>
-                      <span style={{ fontSize:'12px', color:t.textMuted }}>Gráfico del reporte</span>
-                      <span style={{ fontSize:'11px', color:t.primary, fontWeight:'600' }}>Toca para cargar</span>
+                      <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Gráfico del reporte</span>
+                      <span style={{ fontSize:'var(--cc-label)', color:t.primary, fontWeight:'600' }}>Toca para cargar</span>
                     </>
                 }
                 <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf || !editableCampos}
@@ -1734,8 +1776,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           <div style={{ background:t.bgCard, borderRadius:'16px', padding:'24px', width:'560px', maxHeight:'80vh', overflow:'hidden', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
-              <span style={{ fontWeight:'800', color:t.text, fontSize:'15px' }}>🖼️ Galería de Fotos</span>
-              <button onClick={() => setModalGaleriaHoja(false)} style={{ background:'none', border:'none', color:t.textMuted, fontSize:'18px', cursor:'pointer' }}>✕</button>
+              <span style={{ fontWeight:'800', color:t.text, fontSize:'var(--cc-md)' }}>🖼️ Galería de Fotos</span>
+              <button onClick={() => setModalGaleriaHoja(false)} style={{ background:'none', border:'none', color:t.textMuted, fontSize:'var(--cc-lg)', cursor:'pointer' }}>✕</button>
             </div>
             <div style={{ overflowY:'auto', flex:1 }}>
               <GaleriaFotos
@@ -1772,9 +1814,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         ]
         return (
           <div style={{ marginBottom:'16px', background:t.bg, borderRadius:'10px', padding:'16px', border:`1px solid ${C.borde}` }}>
-            <div style={{ fontSize:'11px', fontWeight:'800', color:t.textMuted, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>
+            <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.textMuted, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>
               🚦 Validación · Nivel {nv}
-              {bloqueado && <span style={{ marginLeft:'8px', background:'#dc262615', color:'#dc2626', border:'1px solid #dc262633', borderRadius:'12px', padding:'2px 10px', fontSize:'10px' }}>🔒 Bloqueado</span>}
+              {bloqueado && <span style={{ marginLeft:'8px', background:'#dc262615', color:'#dc2626', border:'1px solid #dc262633', borderRadius:'12px', padding:'2px 10px', fontSize:'var(--cc-caption)' }}>🔒 Bloqueado</span>}
             </div>
             <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
               {BTNS.map(({ estado, icon, color }) => {
@@ -1783,7 +1825,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   <button key={estado} disabled={bloqueado}
                     onClick={() => ejecutarValidacion(estado)}
                     style={{
-                      padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '700',
+                      padding: '8px 16px', borderRadius: '8px', fontSize: 'var(--cc-sm)', fontWeight: '700',
                       cursor: bloqueado ? 'not-allowed' : 'pointer', opacity: bloqueado ? 0.5 : 1,
                       background: activo ? `${color}22` : 'transparent',
                       color, border: activo ? `2.5px solid ${color}` : `1.5px solid ${color}55`,
@@ -1795,7 +1837,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               })}
               {nv === 3 && bloqueado && (
                 <button onClick={solicitarReversion}
-                  style={{ padding:'8px 16px', borderRadius:'8px', fontSize:'12px', fontWeight:'700',
+                  style={{ padding:'8px 16px', borderRadius:'8px', fontSize:'var(--cc-sm)', fontWeight:'700',
                            cursor:'pointer', background:'#7c3aed15', color:'#7c3aed',
                            border:'1.5px solid #7c3aed55' }}>
                   ↩️ Solicitar Reversión
@@ -1810,7 +1852,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   onChange={e => actualizarObjetoPagoSub(e.target.checked)}
                   style={{ width:'16px', height:'16px', accentColor:'#8B5CF6', cursor: bloqueado ? 'not-allowed' : 'pointer' }} />
                 <label htmlFor={`obj-pago-sub-${registro.id}`}
-                  style={{ fontSize:'12px', fontWeight:'600', color:t.text, cursor: bloqueado ? 'not-allowed' : 'pointer' }}>
+                  style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.text, cursor: bloqueado ? 'not-allowed' : 'pointer' }}>
                   Objeto de pago al subcontratista
                 </label>
               </div>
@@ -1822,16 +1864,16 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       {/* ─ Sección: Solo comentar (sin validar) ─ */}
       {nivelInfo.nivelValidacion && !nivelInfo.puedeValidar && (nivelInfo.esSoloComentarista || nivelInfo.esApoyoTecnico) && (
         <div style={{ marginBottom:'16px', background:t.bg, borderRadius:'10px', padding:'16px', border:`1px solid ${C.borde}` }}>
-          <div style={{ fontSize:'11px', fontWeight:'800', color:t.textMuted, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>
+          <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.textMuted, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>
             💬 Comentarios de validación · Nivel {nivelInfo.nivelValidacion}
           </div>
-          <div style={{ fontSize:'12px', color:t.textMuted, marginBottom:'10px' }}>
+          <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, marginBottom:'10px' }}>
             Este cargo no valida estados. Solo puede registrar comentarios dirigidos.
           </div>
           <button
             onClick={() => { setEstadoValidando('Comentario'); setMostrarPopupValidacion(true) }}
             style={{
-              padding:'8px 16px', borderRadius:'8px', fontSize:'12px', fontWeight:'700',
+              padding:'8px 16px', borderRadius:'8px', fontSize:'var(--cc-sm)', fontWeight:'700',
               cursor:'pointer', background:`${t.primary}22`, color:t.primary, border:`1.5px solid ${t.primary}66`,
             }}
           >
@@ -1867,15 +1909,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         }
         return (
           <div style={{ marginBottom:'16px', background:t.bg, borderRadius:'10px', padding:'16px', border:`1px solid ${C.borde}` }}>
-            <div style={{ fontSize:'11px', fontWeight:'800', color:'#8B5CF6', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>
+            <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:'#8B5CF6', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>
               🔨 Mi Validación
               {bloqueado && !registro.nivel2_objeto_pago_sub && (
-                <span style={{ marginLeft:'8px', background:'#dc262615', color:'#dc2626', border:'1px solid #dc262633', borderRadius:'12px', padding:'2px 8px', fontSize:'10px' }}>No objeto de pago</span>
+                <span style={{ marginLeft:'8px', background:'#dc262615', color:'#dc2626', border:'1px solid #dc262633', borderRadius:'12px', padding:'2px 8px', fontSize:'var(--cc-caption)' }}>No objeto de pago</span>
               )}
             </div>
             <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'12px' }}>
-              <span style={{ fontSize:'12px', color:t.textMuted }}>Estado actual:</span>
-              <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'12px', fontWeight:'700', color: COLOR_SUB[estadoActual] || '#3B82F6' }}>
+              <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Estado actual:</span>
+              <span style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'var(--cc-sm)', fontWeight:'700', color: COLOR_SUB[estadoActual] || '#3B82F6' }}>
                 <span style={{ width:'10px', height:'10px', borderRadius:'50%', background: COLOR_SUB[estadoActual] || '#3B82F6' }} />
                 {estadoActual}
               </span>
@@ -1888,7 +1930,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                     <button key={estado}
                       onClick={() => ejecutarValidacionSub(estado)}
                       style={{
-                        padding:'8px 16px', borderRadius:'8px', fontSize:'12px', fontWeight:'700',
+                        padding:'8px 16px', borderRadius:'8px', fontSize:'var(--cc-sm)', fontWeight:'700',
                         cursor:'pointer', background: activo ? `${color}22` : 'transparent',
                         color, border: activo ? `2.5px solid ${color}` : `1.5px solid ${color}55`,
                       }}>
@@ -1898,7 +1940,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 })}
               </div>
             ) : (
-              <div style={{ fontSize:'12px', color:t.textMuted, fontStyle:'italic' }}>
+              <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, fontStyle:'italic' }}>
                 Este registro no está marcado como objeto de pago al subcontratista.
               </div>
             )}
@@ -1936,8 +1978,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 <path d="M6 10l3 3 5-5" stroke="#9FE1CB" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>
               <div>
-                <p style={{margin:0, fontSize:'22px', fontWeight:'700', color:'#E1F5EE'}}>Cambios guardados</p>
-                <p style={{margin:0, fontSize:'16px', color:'#9FE1CB', marginTop:'4px'}}>{toastMsg}</p>
+                <p style={{margin:0, fontSize:'var(--cc-h2)', fontWeight:'700', color:'#E1F5EE'}}>Cambios guardados</p>
+                <p style={{margin:0, fontSize:'var(--cc-lg)', color:'#9FE1CB', marginTop:'4px'}}>{toastMsg}</p>
               </div>
             </div>
           )}
@@ -1945,7 +1987,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           {editableCampos && (
           <button onClick={guardarCambios} disabled={guardando} style={{
             background: t.primary, color:'#fff', border:'none',
-            borderRadius:'8px', padding:'8px 22px', fontSize:'12px', fontWeight:'700',
+            borderRadius:'8px', padding:'8px 22px', fontSize:'var(--cc-sm)', fontWeight:'700',
             cursor: guardando ? 'not-allowed' : 'pointer', opacity: guardando ? 0.6 : 1
           }}>{guardando ? 'Guardando...' : '💾 Guardar Cambios'}</button>
           )}
@@ -2103,7 +2145,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   useEffect(() => {
     if (!repoProp?.id) return
     setReporte((prev) => ({ ...prev, ...repoProp }))
-    if (Array.isArray(repoProp.registros)) setRegistros(repoProp.registros)
+    if (Array.isArray(repoProp.registros)) {
+      setRegistros(repoProp.registros.map((row) => ({ ...row })))
+    }
     if (Array.isArray(repoProp.puntos)) setPuntosEdit(repoProp.puntos.map((p) => ({ ...p })))
   }, [repoProp])
 
@@ -2171,15 +2215,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   const recargar = async () => {
     try {
-      let url = `${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`
-      if (capasFiltroValidacion && capasFiltroValidacion.length > 0) {
-        const payload = capasFiltroValidacion.map((c) => ({ cargo_id: c.cargo_id, estado: c.estado }))
-        url += `?${new URLSearchParams({ validacion_capas: JSON.stringify(payload) })}`
-      }
+      const url = `${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`
       const res  = await fetch(url, { headers: hdrs })
       const data = await res.json()
       setReporte(data)
-      setRegistros(data.registros || [])
+      setRegistros((data.registros || []).map((row) => ({ ...row })))
     } catch(e) {}
   }
 
@@ -2418,8 +2458,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   // ─ Campo de info del reporte (para portada y hojas) ─
   const CampoInfo = ({ label, valor, full = false }) => (
     <div style={{ gridColumn: full ? '1 / -1' : undefined }}>
-      <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.8px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
-      <div style={{ fontSize:'13px', color:t.text, fontWeight:'600', background:t.bgCard, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${C.borde}` }}>
+      <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.8px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+      <div style={{ fontSize:'var(--cc-sm)', color:t.text, fontWeight:'600', background:t.bgCard, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${C.borde}` }}>
         {valor || <span style={{ color:t.textMuted, fontStyle:'italic' }}>—</span>}
       </div>
     </div>
@@ -2443,7 +2483,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
     return (
       <div style={{ background:t.bgCard, borderRadius:'10px', padding:'14px', border:`1px solid ${t.border}`, marginBottom:'12px' }}>
-        <div style={{ fontSize:'11px', fontWeight:'800', color:'#0d9488', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>
+        <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:'#0d9488', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>
           ⚡ Validación masiva · Nivel {nvMasivo} · {seleccionadosValidacion.length} seleccionado(s)
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap', marginBottom:'10px' }}>
@@ -2454,7 +2494,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               else setSeleccionadosValidacion(prev => [...new Set([...prev, ...idsElegibles])])
             }}
             style={{ width:'16px', height:'16px', accentColor:'#0d9488', cursor:'pointer' }} />
-          <label htmlFor={`sel-todos-val-${String(tabActiva)}`} style={{ fontSize:'12px', fontWeight:'600', color:t.text, cursor:'pointer' }}>
+          <label htmlFor={`sel-todos-val-${String(tabActiva)}`} style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.text, cursor:'pointer' }}>
             Seleccionar todos los elegibles en esta vista ({idsElegibles.length})
           </label>
         </div>
@@ -2466,7 +2506,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 if (estado === 'Aprobado') ejecutarMasivoSeleccion(estado, null)
                 else setPopupMasivo({ estado })
               }}
-              style={{ padding:'8px 16px', borderRadius:'8px', fontSize:'12px', fontWeight:'700',
+              style={{ padding:'8px 16px', borderRadius:'8px', fontSize:'var(--cc-sm)', fontWeight:'700',
                        cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
                        opacity: ejecutandoMasivo ? 0.6 : 1,
                        background:`${color}18`, color, border:`1.5px solid ${color}55` }}>
@@ -2475,7 +2515,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           ))}
         </div>
         {msgMasivo && (
-          <div style={{ marginTop:'10px', fontSize:'12px', color:t.text, background:t.bg,
+          <div style={{ marginTop:'10px', fontSize:'var(--cc-sm)', color:t.text, background:t.bg,
                         borderRadius:'8px', padding:'10px 14px', border:`1px solid ${t.border}` }}>
             {msgMasivo}
           </div>
@@ -2494,14 +2534,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             <span style={{ fontSize:'28px' }}>📁</span>
             <div>
               {reporte._cargandoDetalle && (
-                <div style={{ fontSize:'11px', fontWeight:'700', color:'#fff', marginBottom:6, padding:'6px 10px', background:'rgba(0,0,0,0.2)', borderRadius:8, display:'inline-block' }}>
+                <div style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:'#fff', marginBottom:6, padding:'6px 10px', background:'rgba(0,0,0,0.2)', borderRadius:8, display:'inline-block' }}>
                   ⏳ Cargando registros, validaciones y plano…
                 </div>
               )}
-              <div style={{ fontSize:'18px', fontWeight:'900', color:'#fff' }}>
+              <div style={{ fontSize:'var(--cc-lg)', fontWeight:'900', color:'#fff' }}>
                 {reporte.descripcion_actividad || `Reporte #${reporte.numero_reporte}`}
               </div>
-              <div style={{ fontSize:'12px', color:'#ffffff99', fontWeight:'600' }}>
+              <div style={{ fontSize:'var(--cc-sm)', color:'#ffffff99', fontWeight:'600' }}>
                 Reporte #{reporte.numero_reporte} · {reporte.capitulo} · {reporte.subcontratista_nombre || '—'}
               </div>
               {(() => {
@@ -2509,8 +2549,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 const fc = pF(reporte.created_at), fm = pF(reporte.updated_at)
                 return (
                   <div style={{ marginTop:'4px', display:'flex', gap:'16px', flexWrap:'wrap' }}>
-                    {fc && <span style={{ fontSize:'13px', color:'#ffffffCC' }}>📅 {fc}{reporte.nombre_creador ? ` · ${reporte.nombre_creador}` : ''}</span>}
-                    {fm && reporte.nombre_modificador && <span style={{ fontSize:'13px', color:'#ffffffAA' }}>✏️ {fm} · {reporte.nombre_modificador}</span>}
+                    {fc && <span style={{ fontSize:'var(--cc-sm)', color:'#ffffffCC' }}>📅 {fc}{reporte.nombre_creador ? ` · ${reporte.nombre_creador}` : ''}</span>}
+                    {fm && reporte.nombre_modificador && <span style={{ fontSize:'var(--cc-sm)', color:'#ffffffAA' }}>✏️ {fm} · {reporte.nombre_modificador}</span>}
                   </div>
                 )
               })()}
@@ -2522,20 +2562,26 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 title="Solo cargo Desarrollador: borra el reporte completo en base de datos"
                 style={{
                   background:'#B91C1C', color:'#fff', border:'none', borderRadius:'8px', padding:'6px 12px',
-                  fontSize:'11px', fontWeight:'700', cursor: devEliminando ? 'not-allowed' : 'pointer', opacity: devEliminando ? 0.65 : 1,
+                  fontSize:'var(--cc-label)', fontWeight:'700', cursor: devEliminando ? 'not-allowed' : 'pointer', opacity: devEliminando ? 0.65 : 1,
                   whiteSpace:'nowrap',
                 }}>
                 🗑️ Dev: borrar reporte
               </button>
             )}
-            <button onClick={onClose} style={{ background:'rgba(255,255,255,0.2)', border:'none', color:'#fff', borderRadius:'50%', width:'34px', height:'34px', fontSize:'18px', cursor:'pointer', fontWeight:'900', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
+            <button
+              type="button"
+              onClick={() => { void recargar() }}
+              title="Vuelve a cargar el reporte desde el servidor (útil si migraste fotos o cambió la base de datos)"
+              style={{ background:'rgba(255,255,255,0.22)', border:'1px solid rgba(255,255,255,0.35)', color:'#fff', borderRadius:'8px', padding:'6px 12px', fontSize:'var(--cc-sm)', fontWeight:'800', cursor:'pointer', whiteSpace:'nowrap' }}
+            >⟳ Actualizar</button>
+            <button onClick={onClose} style={{ background:'rgba(255,255,255,0.2)', border:'none', color:'#fff', borderRadius:'50%', width:'34px', height:'34px', fontSize:'var(--cc-lg)', cursor:'pointer', fontWeight:'900', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
           </div>
         </div>
 
         {/* ─ Botón volver al panel ─ */}
         {filtroValidacion && (
           <div style={{ padding:'6px 16px', background:'#0F1923', borderBottom:`1px solid ${C.borde}` }}>
-            <button onClick={onClose} style={{ background:'transparent', border:`1px solid ${C.borde}`, borderRadius:'6px', padding:'4px 12px', fontSize:'11px', color:'#94A3B8', cursor:'pointer' }}>
+            <button onClick={onClose} style={{ background:'transparent', border:`1px solid ${C.borde}`, borderRadius:'6px', padding:'4px 12px', fontSize:'var(--cc-label)', color:'#94A3B8', cursor:'pointer' }}>
               ← Volver al panel
             </button>
           </div>
@@ -2559,7 +2605,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               color:         tabActiva === tab.key ? '#fff' : t.textMuted,
               border:        `1px solid ${tabActiva === tab.key ? C.tabActivo : C.borde}`,
               borderBottom:  tabActiva === tab.key ? `1px solid ${C.tabActivo}` : '1px solid transparent',
-              borderRadius:  '8px 8px 0 0', padding:'8px 16px', fontSize:'12px',
+              borderRadius:  '8px 8px 0 0', padding:'8px 16px', fontSize:'var(--cc-sm)',
               fontWeight:    tabActiva === tab.key ? '700' : '400',
               cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.15s'
             }}>{tab.label}</button>
@@ -2570,13 +2616,13 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             {puedeEditar && seleccionados.length > 0 && (
               <button onClick={() => { cargarReportesParaMover(); setModalMover(true) }} style={{
                 background:'#8B5CF6', color:'#fff', border:'none', borderRadius:'8px',
-                padding:'6px 14px', fontSize:'12px', fontWeight:'700', cursor:'pointer'
+                padding:'6px 14px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer'
               }}>↗ Mover ({seleccionados.length})</button>
             )}
             {puedeEditar && (
               <button onClick={crearNuevoRegistro} disabled={creandoReg} style={{
                 background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
-                padding:'6px 14px', fontSize:'12px', fontWeight:'700', cursor:'pointer', opacity: creandoReg ? 0.6 : 1
+                padding:'6px 14px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', opacity: creandoReg ? 0.6 : 1
               }}>{creandoReg ? '...' : '+ Nuevo Registro'}</button>
             )}
           </div>
@@ -2592,7 +2638,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               {/* PANEL — Resumen por estado (N1/N2/N3 según rol) */}
               {campoEstadoResumen && (
                 <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
-                  <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>
+                  <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>
                     📊 Resumen del reporte · Nivel {nivelInfo.nivelValidacion}
                   </div>
                   <div style={{ display:'flex', gap:'10px', flexWrap:'wrap', marginBottom: portadaResumenEstado ? '14px' : 0 }}>
@@ -2616,8 +2662,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                             cursor: puedeClic ? 'pointer' : 'default', opacity: puedeClic ? 1 : 0.55,
                           }}>
                           <span style={{ width:'8px', height:'8px', borderRadius:'50%', background: COLOR_CNT[key], flexShrink:0 }} />
-                          <span style={{ fontSize:'12px', fontWeight:'800', color:t.text }}>{cnt}</span>
-                          <span style={{ fontSize:'11px', color:t.textMuted }}>{label}</span>
+                          <span style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:t.text }}>{cnt}</span>
+                          <span style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>{label}</span>
                         </button>
                       )
                     })}
@@ -2625,16 +2671,16 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   {portadaResumenEstado && (
                     <div style={{ borderTop:`1px solid ${t.border}`, paddingTop:'14px' }}>
                       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px' }}>
-                        <span style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>
+                        <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text }}>
                           Registros {portadaResumenEstado === 'No Revisado' ? 'sin revisar' : portadaResumenEstado.toLowerCase()} ({registrosPortadaResumenFiltrados.length})
                         </span>
                         <button type="button" onClick={() => setPortadaResumenEstado(null)}
-                          style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'4px 10px', fontSize:'11px', color:t.textMuted, cursor:'pointer' }}>
+                          style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'4px 10px', fontSize:'var(--cc-label)', color:t.textMuted, cursor:'pointer' }}>
                           Cerrar lista
                         </button>
                       </div>
                       {registrosPortadaResumenFiltrados.length === 0 ? (
-                        <div style={{ fontSize:'12px', color:t.textMuted }}>No hay registros en este estado.</div>
+                        <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>No hay registros en este estado.</div>
                       ) : (
                         <div style={{ display:'flex', flexDirection:'column', gap:'6px', maxHeight:'260px', overflowY:'auto' }}>
                           {registrosPortadaResumenFiltrados.map(reg => (
@@ -2644,12 +2690,12 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                                 background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px 12px',
                                 textAlign:'left', cursor:'pointer', display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center',
                               }}>
-                              <span style={{ fontWeight:'800', color:'#D97706', fontSize:'12px' }}>Registro #{reg.numero_registro}</span>
-                              <span style={{ fontSize:'11px', color:t.textMuted }}>{reg.item_numero || 'Sin ítem'}</span>
-                              <span style={{ fontSize:'11px', color:t.text, flex:'1 1 200px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                              <span style={{ fontWeight:'800', color:'#D97706', fontSize:'var(--cc-sm)' }}>Registro #{reg.numero_registro}</span>
+                              <span style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>{reg.item_numero || 'Sin ítem'}</span>
+                              <span style={{ fontSize:'var(--cc-label)', color:t.text, flex:'1 1 200px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
                                 {reg.observacion || '—'}
                               </span>
-                              <span style={{ fontSize:'11px', color:t.primary, fontWeight:'700' }}>Ir al registro →</span>
+                              <span style={{ fontSize:'var(--cc-label)', color:t.primary, fontWeight:'700' }}>Ir al registro →</span>
                             </button>
                           ))}
                         </div>
@@ -2663,51 +2709,51 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
                 <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:'12px' }}>
                   <div>
-                    <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase' }}>📋 Identificación del Reporte</div>
+                    <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase' }}>📋 Identificación del Reporte</div>
                   </div>
                   {puedeEditar && (
                     <div style={{ display:'flex', gap:'8px' }}>
                       {modoEdicion ? (
                         <>
-                          <button onClick={() => setModoEdicion(false)} style={{ background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted, borderRadius:'6px', padding:'5px 12px', fontSize:'11px', fontWeight:'600', cursor:'pointer' }}>Cancelar</button>
-                          <button onClick={guardarEdicion} disabled={guardandoEdicion} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'5px 14px', fontSize:'11px', fontWeight:'700', cursor:'pointer', opacity:guardandoEdicion?0.6:1 }}>{guardandoEdicion?'Guardando...':'💾 Guardar'}</button>
+                          <button onClick={() => setModoEdicion(false)} style={{ background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted, borderRadius:'6px', padding:'5px 12px', fontSize:'var(--cc-label)', fontWeight:'600', cursor:'pointer' }}>Cancelar</button>
+                          <button onClick={guardarEdicion} disabled={guardandoEdicion} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'5px 14px', fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer', opacity:guardandoEdicion?0.6:1 }}>{guardandoEdicion?'Guardando...':'💾 Guardar'}</button>
                         </>
                       ) : (
-                        <button onClick={activarEdicion} style={{ background:'transparent', border:`1px solid ${t.primary}`, color:t.primary, borderRadius:'6px', padding:'5px 14px', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>✏️ Editar</button>
+                        <button onClick={activarEdicion} style={{ background:'transparent', border:`1px solid ${t.primary}`, color:t.primary, borderRadius:'6px', padding:'5px 14px', fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer' }}>✏️ Editar</button>
                       )}
                     </div>
                   )}
                 </div>
                 {/* Nombre full width */}
                 <div style={{ marginBottom:'10px' }}>
-                  <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Nombre del Reporte</div>
+                  <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Nombre del Reporte</div>
                   {modoEdicion
-                    ? <input value={editDesc} onChange={e => setEditDesc(e.target.value)} style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'8px 12px', color:t.text, fontSize:'13px', fontWeight:'600', boxSizing:'border-box' }} />
-                    : <div style={{ fontSize:'14px', color:t.text, fontWeight:'700', background:t.bg, borderRadius:'6px', padding:'8px 12px', border:`1px solid ${t.border}` }}>{reporte.descripcion_actividad || <span style={{ color:t.textMuted, fontStyle:'italic' }}>—</span>}</div>
+                    ? <input value={editDesc} onChange={e => setEditDesc(e.target.value)} style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'8px 12px', color:t.text, fontSize:'var(--cc-sm)', fontWeight:'600', boxSizing:'border-box' }} />
+                    : <div style={{ fontSize:'var(--cc-body)', color:t.text, fontWeight:'700', background:t.bg, borderRadius:'6px', padding:'8px 12px', border:`1px solid ${t.border}` }}>{reporte.descripcion_actividad || <span style={{ color:t.textMuted, fontStyle:'italic' }}>—</span>}</div>
                   }
                 </div>
               </div>
 
               {/* GRUPO 3 — Localización */}
               <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
-                <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📍 Localización</div>
+                <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>📍 Localización</div>
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
 
                   {/* Columna izquierda — campos */}
                   <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
                     {/* PK_ID */}
                     <div>
-                      <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>PK_ID</div>
+                      <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>PK_ID</div>
                       {modoEdicion ? (
                         <select value={editPkId} onChange={e => onPkChange(e.target.value)}
-                          style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'13px' }}>
+                          style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)' }}>
                           <option value="">— Selecciona PK_ID —</option>
                           {listaPkIds.map(pk => (
                             <option key={pk.id} value={pk.id}>{pk.pk_id} · {pk.civ} · {pk.tramo}</option>
                           ))}
                         </select>
                       ) : (
-                        <div style={{ background:t.bg, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${t.border}`, fontSize:'13px', fontWeight:'700', color:t.text }}>
+                        <div style={{ background:t.bg, borderRadius:'6px', padding:'6px 10px', border:`1px solid ${t.border}`, fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text }}>
                           {reporte.pk_id_valor || reporte.pk_id_id || '—'}
                         </div>
                       )}
@@ -2730,14 +2776,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                       {modoEdicion ? (
                         <>
                           <div>
-                            <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Latitud</div>
+                            <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Latitud</div>
                             <input type="number" step="0.0000001" value={editLat} onChange={e => setEditLat(e.target.value)} placeholder="4.710989"
-                              style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+                              style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
                           </div>
                           <div>
-                            <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Longitud</div>
+                            <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Longitud</div>
                             <input type="number" step="0.0000001" value={editLng} onChange={e => setEditLng(e.target.value)} placeholder="-74.072092"
-                              style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+                              style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
                           </div>
                         </>
                       ) : (
@@ -2756,9 +2802,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                             ['Abs. Final',  editAbsFinal,  setEditAbsFinal,  'number']
                           ].map(([label, val, setter, type]) => (
                             <div key={label}>
-                              <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+                              <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
                               <input type={type} value={val} onChange={e => setter(e.target.value)}
-                                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+                                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
                             </div>
                           ))}
                         </>
@@ -2776,9 +2822,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                             ['Nodo Final',   editNodoFin, setEditNodoFin, 'text']
                           ].map(([label, val, setter, type]) => (
                             <div key={label}>
-                              <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
+                              <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>{label}</div>
                               <input type={type} value={val} onChange={e => setter(e.target.value)}
-                                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+                                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'6px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
                             </div>
                           ))}
                         </>
@@ -2805,17 +2851,17 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               {/* GRUPO 4 — Coordenadas Topográficas (siempre visible) */}
               <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
                 <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'12px' }}>
-                  <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase' }}>📐 Coordenadas Topográficas</div>
+                  <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase' }}>📐 Coordenadas Topográficas</div>
                   {puedeEditar && !editandoTopo && (
                     <button onClick={() => { setPuntosEdit((reporte.puntos||[]).map(p=>({...p}))); setEditandoTopo(true) }}
-                      style={{ background:'transparent', border:`1px solid ${t.primary}`, color:t.primary, borderRadius:'6px', padding:'5px 14px', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
+                      style={{ background:'transparent', border:`1px solid ${t.primary}`, color:t.primary, borderRadius:'6px', padding:'5px 14px', fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer' }}>
                       ✏️ Editar Topografía
                     </button>
                   )}
                   {editandoTopo && (
                     <div style={{ display:'flex', gap:'8px' }}>
-                      <button onClick={() => setEditandoTopo(false)} style={{ background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted, borderRadius:'6px', padding:'5px 12px', fontSize:'11px', fontWeight:'600', cursor:'pointer' }}>Cancelar</button>
-                      <button onClick={guardarTopografia} disabled={guardandoTopo} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'5px 14px', fontSize:'11px', fontWeight:'700', cursor:'pointer', opacity:guardandoTopo?0.6:1 }}>
+                      <button onClick={() => setEditandoTopo(false)} style={{ background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted, borderRadius:'6px', padding:'5px 12px', fontSize:'var(--cc-label)', fontWeight:'600', cursor:'pointer' }}>Cancelar</button>
+                      <button onClick={guardarTopografia} disabled={guardandoTopo} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'5px 14px', fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer', opacity:guardandoTopo?0.6:1 }}>
                         {guardandoTopo ? 'Guardando...' : '💾 Guardar Topografía'}
                       </button>
                     </div>
@@ -2824,8 +2870,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
                 {editandoTopo ? (
                   <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
-                    <div style={{ fontSize:'12px', color:t.textMuted }}>Registra las coordenadas levantadas en campo. Puedes importar desde CSV (Punto, Norte, Este, Cota, Descripción).</div>
-                    <div style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr 28px', gap:'8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, padding:'0 4px', letterSpacing:'0.5px', textTransform:'uppercase' }}>
+                    <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Registra las coordenadas levantadas en campo. Puedes importar desde CSV (Punto, Norte, Este, Cota, Descripción).</div>
+                    <div style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr 28px', gap:'8px', fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, padding:'0 4px', letterSpacing:'0.5px', textTransform:'uppercase' }}>
                       <div>Punto</div><div>Norte</div><div>Este</div><div>Cota</div><div>Descripción</div><div></div>
                     </div>
                     {puntosEdit.map((p, idx) => (
@@ -2837,18 +2883,18 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           type={['norte','este','cota'].includes(campo) ? 'number' : 'text'}
                           step='0.000001'
                           placeholder={campo.charAt(0).toUpperCase()+campo.slice(1)}
-                          style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'12px', width:'100%', boxSizing:'border-box' }} />
+                          style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', width:'100%', boxSizing:'border-box' }} />
                         ))}
                         <button onClick={() => setPuntosEdit(prev => prev.filter((_,i) => i!==idx))}
-                          style={{ background:'transparent', border:'none', color:'#EF4444', cursor:'pointer', fontSize:'16px', padding:0 }}>✕</button>
+                          style={{ background:'transparent', border:'none', color:'#EF4444', cursor:'pointer', fontSize:'var(--cc-lg)', padding:0 }}>✕</button>
                       </div>
                     ))}
                     <div style={{ display:'flex', gap:'8px' }}>
                       <button onClick={() => setPuntosEdit(prev => [...prev, {punto:'',norte:'',este:'',cota:'',descripcion:''}])}
-                        style={{ background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted, borderRadius:'8px', padding:'7px 16px', fontSize:'12px', cursor:'pointer' }}>
+                        style={{ background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted, borderRadius:'8px', padding:'7px 16px', fontSize:'var(--cc-sm)', cursor:'pointer' }}>
                         + Agregar punto
                       </button>
-                      <label style={{ background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted, borderRadius:'8px', padding:'7px 16px', fontSize:'12px', cursor:'pointer' }}>
+                      <label style={{ background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted, borderRadius:'8px', padding:'7px 16px', fontSize:'var(--cc-sm)', cursor:'pointer' }}>
                         📂 Importar CSV
                         <input type='file' accept='.csv' style={{ display:'none' }} onChange={e => {
                           const file = e.target.files[0]; if (!file) return
@@ -2867,16 +2913,16 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     </div>
                   </div>
                 ) : (reporte.puntos || []).length === 0 ? (
-                  <div style={{ background:'#EF444415', border:'1px solid #EF444433', borderRadius:'8px', padding:'12px 16px', color:'#EF4444', fontSize:'12px', fontWeight:'600', textAlign:'center' }}>
+                  <div style={{ background:'#EF444415', border:'1px solid #EF444433', borderRadius:'8px', padding:'12px 16px', color:'#EF4444', fontSize:'var(--cc-sm)', fontWeight:'600', textAlign:'center' }}>
                     ⚠️ Sin coordenadas registradas. Haz clic en "Editar Topografía" para ingresarlas — obligatorio para asignar ítems.
                   </div>
                 ) : (
                   <div style={{ overflowX:'auto' }}>
-                    <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
+                    <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
                       <thead>
                         <tr style={{ background:t.bg }}>
                           {['Punto','Norte','Este','Cota','Descripción'].map(h => (
-                            <th key={h} style={{ padding:'7px 12px', textAlign:'left', color:t.textMuted, fontWeight:'700', fontSize:'10px', letterSpacing:'0.5px', textTransform:'uppercase' }}>{h}</th>
+                            <th key={h} style={{ padding:'7px 12px', textAlign:'left', color:t.textMuted, fontWeight:'700', fontSize:'var(--cc-caption)', letterSpacing:'0.5px', textTransform:'uppercase' }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
@@ -2898,8 +2944,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
               {/* GRUPO 5 — Biblioteca de Soportes */}
               <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
-                <div style={{ fontSize:'11px', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'4px' }}>🔗 Biblioteca de Soportes</div>
-                <div style={{ fontSize:'11px', color:t.textMuted, marginBottom:'12px' }}>Agrega los enlaces a tus repositorios externos (Drive, SharePoint, OneDrive, etc.)</div>
+                <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'4px' }}>🔗 Biblioteca de Soportes</div>
+                <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginBottom:'12px' }}>Agrega los enlaces a tus repositorios externos (Drive, SharePoint, OneDrive, etc.)</div>
 
                 {/* Input para nuevo enlace */}
                 <div style={{ display:'flex', gap:'8px', alignItems:'center', marginBottom:'12px' }}>
@@ -2911,18 +2957,18 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     style={{ flex:1, background:t.bg, border:`1px solid ${(() => {
                       if (!enlaceInput) return t.border
                       try { new URL(enlaceInput); return '#10B981' } catch { return '#EF4444' }
-                    })()}`, borderRadius:'8px', padding:'9px 14px', color:t.text, fontSize:'13px' }}
+                    })()}`, borderRadius:'8px', padding:'9px 14px', color:t.text, fontSize:'var(--cc-sm)' }}
                   />
                   <button
                     onClick={agregarEnlace}
                     disabled={guardandoEnlace || !enlaceInput || (() => { try { new URL(enlaceInput); return false } catch { return true } })()} 
-                    style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'9px 18px', fontSize:'12px', fontWeight:'700', cursor:'pointer', whiteSpace:'nowrap',
+                    style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'9px 18px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', whiteSpace:'nowrap',
                       opacity: guardandoEnlace || !enlaceInput || (() => { try { new URL(enlaceInput); return false } catch { return true } })() ? 0.5 : 1 }}>
                     {guardandoEnlace ? '...' : '+ Agregar'}
                   </button>
                 </div>
                 {enlaceInput && (() => { try { new URL(enlaceInput); return false } catch { return true } })() && (
-                  <div style={{ fontSize:'11px', color:'#EF4444', marginBottom:'8px' }}>⚠️ Ingresa una URL válida (debe comenzar con https://)</div>
+                  <div style={{ fontSize:'var(--cc-label)', color:'#EF4444', marginBottom:'8px' }}>⚠️ Ingresa una URL válida (debe comenzar con https://)</div>
                 )}
 
                 {/* Soportes desde registros */}
@@ -2939,16 +2985,16 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   if (enlacesRegs.length === 0) return null
                   return (
                     <div style={{ display:'flex', flexDirection:'column', gap:'6px', marginBottom:'12px' }}>
-                      <div style={{ fontSize:'10px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase' }}>Desde registros</div>
+                      <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.7px', textTransform:'uppercase' }}>Desde registros</div>
                       {enlacesRegs.map((item, idx) => (
                         <div key={idx} style={{ display:'flex', alignItems:'center', gap:'8px', background:t.bg, borderRadius:'8px', padding:'8px 12px', border:`1px solid ${t.border}` }}>
-                          <span style={{ fontSize:'14px' }}>📎</span>
+                          <span style={{ fontSize:'var(--cc-body)' }}>📎</span>
                           <a href={item.url} target="_blank" rel="noreferrer"
-                            style={{ flex:1, color:t.primary, fontSize:'12px', fontWeight:'600', textDecoration:'none', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
+                            style={{ flex:1, color:t.primary, fontSize:'var(--cc-sm)', fontWeight:'600', textDecoration:'none', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
                             title={item.url}>{item.url}</a>
-                          <span style={{ fontSize:'11px', color:t.textMuted, whiteSpace:'nowrap', flexShrink:0 }}>Reg. #{item.numero}</span>
+                          <span style={{ fontSize:'var(--cc-label)', color:t.textMuted, whiteSpace:'nowrap', flexShrink:0 }}>Reg. #{item.numero}</span>
                           <a href={item.url} target="_blank" rel="noreferrer"
-                            style={{ padding:'4px 10px', background:`${t.primary}22`, color:t.primary, borderRadius:'6px', fontSize:'11px', fontWeight:'700', textDecoration:'none', whiteSpace:'nowrap', border:`1px solid ${t.primary}33` }}>
+                            style={{ padding:'4px 10px', background:`${t.primary}22`, color:t.primary, borderRadius:'6px', fontSize:'var(--cc-label)', fontWeight:'700', textDecoration:'none', whiteSpace:'nowrap', border:`1px solid ${t.primary}33` }}>
                             ↗ Abrir
                           </a>
                         </div>
@@ -2958,23 +3004,23 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 })()}
                 {/* Lista de enlaces guardados */}
                 {enlaces.length === 0 ? (
-                  <div style={{ textAlign:'center', padding:'16px', color:t.textMuted, fontSize:'12px', fontStyle:'italic', border:`1px dashed ${t.border}`, borderRadius:'8px' }}>
+                  <div style={{ textAlign:'center', padding:'16px', color:t.textMuted, fontSize:'var(--cc-sm)', fontStyle:'italic', border:`1px dashed ${t.border}`, borderRadius:'8px' }}>
                     Sin soportes agregados aún
                   </div>
                 ) : (
                   <div style={{ display:'flex', flexDirection:'column', gap:'6px' }}>
                     {enlaces.map((url, idx) => (
                       <div key={idx} style={{ display:'flex', alignItems:'center', gap:'8px', background:t.bg, borderRadius:'8px', padding:'8px 12px', border:`1px solid ${t.border}` }}>
-                        <span style={{ fontSize:'14px' }}>🔗</span>
+                        <span style={{ fontSize:'var(--cc-body)' }}>🔗</span>
                         <a href={url} target="_blank" rel="noreferrer"
-                          style={{ flex:1, color:t.primary, fontSize:'12px', fontWeight:'600', textDecoration:'none', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
+                          style={{ flex:1, color:t.primary, fontSize:'var(--cc-sm)', fontWeight:'600', textDecoration:'none', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
                           title={url}>{url}</a>
                         <a href={url} target="_blank" rel="noreferrer"
-                          style={{ padding:'4px 10px', background:`${t.primary}22`, color:t.primary, borderRadius:'6px', fontSize:'11px', fontWeight:'700', textDecoration:'none', whiteSpace:'nowrap', border:`1px solid ${t.primary}33` }}>
+                          style={{ padding:'4px 10px', background:`${t.primary}22`, color:t.primary, borderRadius:'6px', fontSize:'var(--cc-label)', fontWeight:'700', textDecoration:'none', whiteSpace:'nowrap', border:`1px solid ${t.primary}33` }}>
                           ↗ Abrir
                         </a>
                         <button onClick={() => eliminarEnlace(idx)}
-                          style={{ background:'transparent', border:'none', color:'#EF4444', cursor:'pointer', fontSize:'16px', padding:'0 4px', flexShrink:0 }}>✕</button>
+                          style={{ background:'transparent', border:'none', color:'#EF4444', cursor:'pointer', fontSize:'var(--cc-lg)', padding:'0 4px', flexShrink:0 }}>✕</button>
                       </div>
                     ))}
                   </div>
@@ -2999,7 +3045,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 )
                 return (
                 <HojaRegistro
-                  key={reg.id} t={t} usuario={usuario} API_URL={API_URL}
+                  key={`${reg.id}-${reg.foto_url ? 'u1' : 'u0'}`} t={t} usuario={usuario} API_URL={API_URL}
                   contrato_id={contrato_id} reporte={reporte} registro={reg}
                   puedeEditar={puedeEditar} actasList={actasList}
                   seleccionado={seleccionados.includes(reg.id)}
@@ -3055,13 +3101,13 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           onChange={() => toggleSeleccion(reg.id)}
                           style={{ width:'15px', height:'15px', accentColor:'#8B5CF6', flexShrink:0 }} />
                       )}
-                      <span style={{ fontWeight:'800', color:'#D97706', fontSize:'13px', flexShrink:0 }}>
+                      <span style={{ fontWeight:'800', color:'#D97706', fontSize:'var(--cc-sm)', flexShrink:0 }}>
                         📄 Registro #{reg.numero_registro}
                       </span>
-                      <span style={{ color:t.textMuted, fontSize:'12px', fontStyle: reg.observacion ? 'normal' : 'italic', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'300px', flex:1 }}>
+                      <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)', fontStyle: reg.observacion ? 'normal' : 'italic', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'300px', flex:1 }}>
                         {reg.observacion || 'Sin observación'}
                       </span>
-                      <span style={{ color:t.textMuted, fontSize:'11px', flexShrink:0 }}>{fechaReg}</span>
+                      <span style={{ color:t.textMuted, fontSize:'var(--cc-label)', flexShrink:0 }}>{fechaReg}</span>
                       {/* Íconos de validación */}
                       <div style={{ display:'flex', gap:'6px', alignItems:'center', flexShrink:0 }} onClick={e => e.stopPropagation()}>
                         {nivelesInfo.map(({ emoji, label, estado }) => {
@@ -3075,9 +3121,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                                 background: esMiNivel && sinRevisar ? '#3B82F620' : 'transparent',
                                 border: esMiNivel && sinRevisar ? '1px solid #3B82F6' : '1px solid transparent',
                                 borderRadius:'10px', padding:'1px 5px' }}>
-                              <span style={{ fontSize:'13px', lineHeight:1 }}>{emoji}</span>
+                              <span style={{ fontSize:'var(--cc-sm)', lineHeight:1 }}>{emoji}</span>
                               <span style={{ width:'8px', height:'8px', borderRadius:'50%', background: colorNivel(estado), flexShrink:0 }} />
-                              {esMiNivel && sinRevisar && <span style={{ fontSize:'9px', fontWeight:'800', color:'#3B82F6' }}>SIN REV.</span>}
+                              {esMiNivel && sinRevisar && <span style={{ fontSize:'var(--cc-caption)', fontWeight:'800', color:'#3B82F6' }}>SIN REV.</span>}
                             </div>
                           )
                         })}
@@ -3096,9 +3142,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                             .catch(() => setLoadingComentarios(false))
                         }}
                         style={{ background:'none', border:'none', cursor:'pointer', padding:'2px 4px',
-                                 fontSize:'15px', color: reg.num_comentarios > 0 ? '#10B981' : t.textMuted, flexShrink:0, lineHeight:1, position:'relative' }}
+                                 fontSize:'var(--cc-md)', color: reg.num_comentarios > 0 ? '#10B981' : t.textMuted, flexShrink:0, lineHeight:1, position:'relative' }}
                         title={`Ver comentarios${reg.num_comentarios > 0 ? ` (${reg.num_comentarios})` : ''}`}>
-                        💬{reg.num_comentarios > 0 && <span style={{ fontSize:'9px', fontWeight:'800', color:'#10B981', marginLeft:'1px' }}>{reg.num_comentarios}</span>}
+                        💬{reg.num_comentarios > 0 && <span style={{ fontSize:'var(--cc-caption)', fontWeight:'800', color:'#10B981', marginLeft:'1px' }}>{reg.num_comentarios}</span>}
                       </button>
                       <button
                         type="button"
@@ -3113,21 +3159,24 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           borderRadius: '8px',
                           cursor: 'pointer',
                           padding: '2px 6px',
-                          fontSize: '13px',
+                          fontSize: 'var(--cc-sm)',
                           color: t.primary,
                           flexShrink: 0,
                           lineHeight: 1,
                         }}
                       >📜</button>
                       {reg.enlace_soporte && (() => { try { const p = JSON.parse(reg.enlace_soporte); return Array.isArray(p) ? p.length > 0 : !!reg.enlace_soporte } catch { return !!reg.enlace_soporte } })() && (
-                        <span title="Tiene soportes adjuntos" style={{ fontSize:'13px', flexShrink:0 }}>📎</span>
+                        <span title="Tiene soportes adjuntos" style={{ fontSize:'var(--cc-sm)', flexShrink:0 }}>📎</span>
                       )}
-                      <span style={{ color:t.textMuted, fontSize:'12px', flexShrink:0 }}>{expandido ? '▲' : '▼'}</span>
+                      {String(reg.foto_url || '').trim() ? (
+                        <span title="Foto vinculada (URL en BD)" style={{ fontSize:'var(--cc-sm)', flexShrink:0 }}>🖼️</span>
+                      ) : null}
+                      <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)', flexShrink:0 }}>{expandido ? '▲' : '▼'}</span>
                     </div>
                     {expandido && (
                       <div style={{ border:`1px solid ${t.primary+'66'}`, borderTop:'none', borderRadius:'0 0 10px 10px', overflow:'hidden' }}>
                         <HojaRegistro
-                          key={reg.id} t={t} usuario={usuario} API_URL={API_URL}
+                          key={`${reg.id}-${reg.foto_url ? 'u1' : 'u0'}`} t={t} usuario={usuario} API_URL={API_URL}
                           contrato_id={contrato_id} reporte={reporte} registro={reg}
                           puedeEditar={puedeEditar} actasList={actasList}
                           seleccionado={seleccionados.includes(reg.id)}
@@ -3162,17 +3211,17 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             <div style={{ background:t.bgCard, border:`1.5px solid ${color}44`, borderRadius:'16px', padding:'24px', width:'560px', maxWidth:'96vw', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
               onClick={e => e.stopPropagation()}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
-                <div style={{ fontSize:'15px', fontWeight:'700', color }}>
+                <div style={{ fontSize:'var(--cc-md)', fontWeight:'700', color }}>
                   💬 Comentarios · Registro #{modalComentarios.reg.numero_registro}
                 </div>
-                <button onClick={() => setModalComentarios(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                <button onClick={() => setModalComentarios(null)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
               </div>
               <div style={{ overflowY:'auto', flex:1, display:'flex', flexDirection:'column', gap:'12px', paddingRight:'4px', minHeight:0 }}>
                 {loadingComentarios
                   ? <div style={{ textAlign:'center', padding:'30px', color:t.textMuted }}>Cargando...</div>
                   : comentariosData.length === 0
                   ? <div style={{ textAlign:'center', padding:'28px 16px' }}>
-                      <div style={{ fontSize:'13px', color:t.textMuted, marginBottom:'16px' }}>
+                      <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, marginBottom:'16px' }}>
                         Aún no hay comentarios en este registro.
                       </div>
                       <button
@@ -3181,26 +3230,26 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                         onClick={() => { if (nivelInfo.nivelValidacion) setPopupNuevoComentObra({ reg: modalComentarios.reg }) }}
                         style={{
                           background: color, color:'#fff', border:'none', borderRadius:'10px', padding:'10px 20px',
-                          fontSize:'13px', fontWeight:'700', cursor: nivelInfo.nivelValidacion ? 'pointer' : 'not-allowed',
+                          fontSize:'var(--cc-sm)', fontWeight:'700', cursor: nivelInfo.nivelValidacion ? 'pointer' : 'not-allowed',
                           opacity: nivelInfo.nivelValidacion ? 1 : 0.5,
                         }}
                       >Crear comentario</button>
                       {!nivelInfo.nivelValidacion && (
-                        <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'10px' }}>Tu perfil no tiene un nivel de validación asignado para iniciar comentarios.</div>
+                        <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'10px' }}>Tu perfil no tiene un nivel de validación asignado para iniciar comentarios.</div>
                       )}
                     </div>
                   : comentariosData.map(c => (
                     <div key={c.id} style={{ background:t.bg, borderRadius:'10px', padding:'12px', border:`1px solid ${color}33` }}>
                       <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
-                        <span style={{ fontSize:'12px', fontWeight:'700', color }}>{c.autor?.nombre || 'Usuario'}</span>
-                        <span style={{ fontSize:'10px', color:t.textMuted }}>{fmtFecha(c.created_at)}</span>
+                        <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color }}>{c.autor?.nombre || 'Usuario'}</span>
+                        <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>{fmtFecha(c.created_at)}</span>
                       </div>
-                      {c.etiqueta && <span style={{ fontSize:'10px', background:`${color}22`, color, borderRadius:'10px', padding:'2px 8px', marginBottom:'6px', display:'inline-block' }}>{c.etiqueta}</span>}
-                      {c.asunto && <div style={{ fontSize:'12px', fontWeight:'700', color:t.text, marginBottom:'3px' }}>{c.asunto}</div>}
-                      <div style={{ fontSize:'13px', color:t.text, lineHeight:1.5 }}>{c.mensaje}</div>
+                      {c.etiqueta && <span style={{ fontSize:'var(--cc-caption)', background:`${color}22`, color, borderRadius:'10px', padding:'2px 8px', marginBottom:'6px', display:'inline-block' }}>{c.etiqueta}</span>}
+                      {c.asunto && <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text, marginBottom:'3px' }}>{c.asunto}</div>}
+                      <div style={{ fontSize:'var(--cc-sm)', color:t.text, lineHeight:1.5 }}>{c.mensaje}</div>
                       {(c.enlaces||[]).length > 0 && (
                         <div style={{ marginTop:'6px', display:'flex', flexDirection:'column', gap:'3px' }}>
-                          {c.enlaces.map((url,i) => <a key={i} href={url} target="_blank" rel="noreferrer" style={{ fontSize:'11px', color:color }}>🔗 {url}</a>)}
+                          {c.enlaces.map((url,i) => <a key={i} href={url} target="_blank" rel="noreferrer" style={{ fontSize:'var(--cc-label)', color:color }}>🔗 {url}</a>)}
                         </div>
                       )}
                       {/* Respuestas anidadas */}
@@ -3209,10 +3258,10 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           {c.respuestas.map(r => (
                             <div key={r.id}>
                               <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'3px' }}>
-                                <span style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted }}>{r.autor?.nombre || 'Usuario'}</span>
-                                <span style={{ fontSize:'10px', color:t.textMuted }}>{fmtFecha(r.created_at)}</span>
+                                <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted }}>{r.autor?.nombre || 'Usuario'}</span>
+                                <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>{fmtFecha(r.created_at)}</span>
                               </div>
-                              <div style={{ fontSize:'12px', color:t.text }}>{r.mensaje}</div>
+                              <div style={{ fontSize:'var(--cc-sm)', color:t.text }}>{r.mensaje}</div>
                             </div>
                           ))}
                         </div>
@@ -3235,9 +3284,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                               setLoadingComentarios(false)
                             }
                           }}
-                          style={{ flex:1, background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', fontSize:'12px', color:t.text }}
+                          style={{ flex:1, background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', fontSize:'var(--cc-sm)', color:t.text }}
                         />
-                        <span style={{ fontSize:'10px', color:t.textMuted }}>↵ Enter</span>
+                        <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>↵ Enter</span>
                       </div>
                     </div>
                   ))
@@ -3254,7 +3303,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                       background: nivelInfo.nivelValidacion ? `${color}18` : t.bg,
                       color: nivelInfo.nivelValidacion ? color : t.textMuted,
                       border: `1.5px solid ${nivelInfo.nivelValidacion ? color + '55' : t.border}`,
-                      borderRadius:'10px', padding:'10px 14px', fontSize:'12px', fontWeight:'700',
+                      borderRadius:'10px', padding:'10px 14px', fontSize:'var(--cc-sm)', fontWeight:'700',
                       cursor: nivelInfo.nivelValidacion ? 'pointer' : 'not-allowed',
                     }}
                   >＋ Nueva conversación</button>
@@ -3345,9 +3394,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       {modalMover && (
         <div style={{ position:'fixed', inset:0, zIndex:10000, background:'rgba(0,0,0,0.6)', display:'flex', alignItems:'center', justifyContent:'center' }} onClick={() => setModalMover(false)}>
           <div style={{ background:t.bgCard, borderRadius:'16px', padding:'28px', width:'420px', boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize:'16px', fontWeight:'800', color:t.text, marginBottom:'16px' }}>↗ Mover {seleccionados.length} registro(s) a otro reporte</div>
-            <div style={{ fontSize:'12px', color:t.textMuted, marginBottom:'8px' }}>Reporte destino:</div>
-            <select value={reporteDestino} onChange={e => setReporteDestino(e.target.value)} style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px', color:t.text, fontSize:'13px', marginBottom:'20px' }}>
+            <div style={{ fontSize:'var(--cc-lg)', fontWeight:'800', color:t.text, marginBottom:'16px' }}>↗ Mover {seleccionados.length} registro(s) a otro reporte</div>
+            <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, marginBottom:'8px' }}>Reporte destino:</div>
+            <select value={reporteDestino} onChange={e => setReporteDestino(e.target.value)} style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px', color:t.text, fontSize:'var(--cc-sm)', marginBottom:'20px' }}>
               <option value="">— Selecciona reporte —</option>
               {reportesDisponibles.map(r => (
                 <option key={r.id} value={r.id}>#{r.numero_reporte} — {r.descripcion_actividad || '(sin nombre)'}</option>
@@ -3483,10 +3532,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         : { id: navReporteId, _cargandoDetalle: true, registros: [], puntos: [], _autoRegistro: navRegistroNumero }
     )
     setModalCarpeta(true)
-    let u = `${API_URL}/sicoe-obra/${contrato_id}/reportes/${navReporteId}`
-    if (capasValidacion.length > 0) {
-      u += `?${new URLSearchParams({ validacion_capas: JSON.stringify(capasValidacion.map((c) => ({ cargo_id: c.cargo_id, estado: c.estado }))) })}`
-    }
+    const u = `${API_URL}/sicoe-obra/${contrato_id}/reportes/${navReporteId}`
     fetch(u, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => r.json())
       .then((data) => {
@@ -3637,14 +3683,8 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     // Sin filtros en la grilla → no se carga datos (incl. editores: deben pulsar Buscar con criterios)
   }, [contrato_id])
 
-  const urlReporteDetalle = (repId, capas) => {
-    let u = `${API_URL}/sicoe-obra/${contrato_id}/reportes/${repId}`
-    if (capas && capas.length > 0) {
-      const payload = capas.map((c) => ({ cargo_id: c.cargo_id, estado: c.estado }))
-      u += `?${new URLSearchParams({ validacion_capas: JSON.stringify(payload) })}`
-    }
-    return u
-  }
+  /** Detalle completo del reporte (todos los registros). La grilla filtra; la carpeta no debe ocultar líneas. */
+  const urlReporteDetalle = (repId) => `${API_URL}/sicoe-obra/${contrato_id}/reportes/${repId}`
 
   const buscarReportes = async (nuevosFiltros, nuevoOffset = 0, capas = []) => {
     if (!tieneParametrosBusquedaSicoe(nuevosFiltros, capas)) {
@@ -3711,7 +3751,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         const rep = lista[0]
         setReporteSeleccionado({ ...rep, _cargandoDetalle: true, registros: [], puntos: [] })
         setModalCarpeta(true)
-        const r2 = await fetch(urlReporteDetalle(rep.id, capas), { headers: { Authorization: `Bearer ${getToken()}` } })
+        const r2 = await fetch(urlReporteDetalle(rep.id), { headers: { Authorization: `Bearer ${getToken()}` } })
         const detalle = await r2.json()
         if (seq !== sicoeBusquedaSeqRef.current) return
         if (detalle?.id) setReporteSeleccionado({ ...detalle, _cargandoDetalle: false })
@@ -3894,7 +3934,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     )
     setModalCarpeta(true)
     try {
-      const u = urlReporteDetalle(rid, capasSicoeRef.current)
+      const u = urlReporteDetalle(rid)
       const r = await fetch(u, { headers: { Authorization: `Bearer ${getToken()}` } })
       const data = await r.json()
       if (data?.id) setReporteSeleccionado({ ...data, _cargandoDetalle: false })
@@ -4591,10 +4631,10 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     } catch(e) { setSugerenciasItem([]) }
   }
 
-  const inpStyle = { background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: '7px', padding: '5px 9px', color: t.text, fontSize: '12px', outline: 'none' }
+  const inpStyle = { background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: '7px', padding: '5px 9px', color: t.text, fontSize: 'var(--cc-sm)', outline: 'none' }
   const selStyle = { ...inpStyle, cursor: 'pointer' }
   const sicoePuedeRefinar = busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, capasValidacion)
-  const filtroLbl = { fontSize: '9px', fontWeight: '800', color: t.textMuted, letterSpacing: '0.45px', textTransform: 'uppercase', marginBottom: '2px' }
+  const filtroLbl = { fontSize: 'var(--cc-caption)', fontWeight: '800', color: t.textMuted, letterSpacing: '0.45px', textTransform: 'uppercase', marginBottom: '2px' }
   const filtroCard = {
     padding: '8px 10px',
     borderRadius: '8px',
@@ -4608,13 +4648,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       {/* ── Header ── */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px' }}>
         <div>
-          <h2 style={{ margin:0, color:t.text, fontSize:'20px', fontWeight:'800' }}>🏗️ SICOE Obra</h2>
-          <p style={{ margin:0, color:t.textMuted, fontSize:'13px' }}>Reporte de cantidades de campo</p>
+          <h2 style={{ margin:0, color:t.text, fontSize:'var(--cc-title)', fontWeight:'800' }}>🏗️ SICOE Obra</h2>
+          <p style={{ margin:0, color:t.textMuted, fontSize:'var(--cc-sm)' }}>Reporte de cantidades de campo</p>
         </div>
         {puedeCrear && (
           <button onClick={() => setModalNuevoReporte(true)} style={{
             background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
-            padding:'10px 20px', fontWeight:'700', fontSize:'13px', cursor:'pointer'
+            padding:'10px 20px', fontWeight:'700', fontSize:'var(--cc-sm)', cursor:'pointer'
           }}>+ Nuevo Reporte</button>
         )}
       </div>
@@ -4623,10 +4663,10 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       {!semanaVigente && !alertaSemana && puedeEditar && (
         <div style={{ background:'#0077B615', border:'1px solid #0077B644', borderRadius:'10px', padding:'12px 16px', marginBottom:'16px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
           <div>
-            <span style={{ fontWeight:'700', color:'#0077B6', fontSize:'13px' }}>📅 Sin semanas configuradas</span>
-            <span style={{ color:t.textMuted, fontSize:'12px', marginLeft:'10px' }}>Configura el calendario semanal del contrato para activar el seguimiento.</span>
+            <span style={{ fontWeight:'700', color:'#0077B6', fontSize:'var(--cc-sm)' }}>📅 Sin semanas configuradas</span>
+            <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)', marginLeft:'10px' }}>Configura el calendario semanal del contrato para activar el seguimiento.</span>
           </div>
-          <button onClick={() => setModalIniciarSem(true)} style={{ background:'#0077B6', color:'#fff', border:'none', borderRadius:'8px', padding:'7px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer', whiteSpace:'nowrap' }}>
+          <button onClick={() => setModalIniciarSem(true)} style={{ background:'#0077B6', color:'#fff', border:'none', borderRadius:'8px', padding:'7px 16px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', whiteSpace:'nowrap' }}>
             Configurar semanas
           </button>
         </div>
@@ -4636,10 +4676,10 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       {alertaSemana && semanaVigente && (
         <div style={{ background:'#EF444415', border:'1px solid #EF444444', borderRadius:'10px', padding:'12px 16px', marginBottom:'16px', display:'flex', alignItems:'center', justifyContent:'space-between', gap:'12px' }}>
           <div>
-            <span style={{ fontWeight:'700', color:'#EF4444', fontSize:'13px' }}>⚠️ Semana {semanaVigente.numero_semana} vence el {semanaVigente.fecha_fin}</span>
-            <span style={{ color:t.textMuted, fontSize:'12px', marginLeft:'10px' }}>No hay semana siguiente configurada. Extiende el contrato.</span>
+            <span style={{ fontWeight:'700', color:'#EF4444', fontSize:'var(--cc-sm)' }}>⚠️ Semana {semanaVigente.numero_semana} vence el {semanaVigente.fecha_fin}</span>
+            <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)', marginLeft:'10px' }}>No hay semana siguiente configurada. Extiende el contrato.</span>
           </div>
-          <button onClick={() => setModalSemana(true)} style={{ background:'#EF4444', color:'#fff', border:'none', borderRadius:'8px', padding:'7px 16px', fontSize:'12px', fontWeight:'700', cursor:'pointer', whiteSpace:'nowrap' }}>
+          <button onClick={() => setModalSemana(true)} style={{ background:'#EF4444', color:'#fff', border:'none', borderRadius:'8px', padding:'7px 16px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', whiteSpace:'nowrap' }}>
             Extender semanas
           </button>
         </div>
@@ -4648,12 +4688,12 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       {/* ── Indicador semana activa ── */}
       {semanaVigente && !alertaSemana && (
         <div style={{ background:'#10B98115', border:'1px solid #10B98133', borderRadius:'10px', padding:'8px 16px', marginBottom:'16px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-          <span style={{ fontSize:'12px', color:'#10B981', fontWeight:'600' }}>
+          <span style={{ fontSize:'var(--cc-sm)', color:'#10B981', fontWeight:'600' }}>
             📅 Semana {semanaVigente.numero_semana} activa · {semanaVigente.fecha_inicio} → {semanaVigente.fecha_fin}
             {semanaProxima && <span style={{ color:t.textMuted, fontWeight:'400', marginLeft:'12px' }}>· Próxima: Sem. {semanaProxima.numero_semana}</span>}
           </span>
           {puedeEditar && (
-            <button onClick={() => setModalSemana(true)} style={{ background:'transparent', border:`1px solid #10B98133`, color:'#10B981', borderRadius:'6px', padding:'4px 12px', fontSize:'11px', fontWeight:'600', cursor:'pointer' }}>
+            <button onClick={() => setModalSemana(true)} style={{ background:'transparent', border:`1px solid #10B98133`, color:'#10B981', borderRadius:'6px', padding:'4px 12px', fontSize:'var(--cc-label)', fontWeight:'600', cursor:'pointer' }}>
               + Extender
             </button>
           )}
@@ -4663,7 +4703,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       {/* ── Panel de análisis ── */}
       <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', marginBottom:'16px', overflow:'hidden' }}>
         {cargandoAnalisis ? (
-          <div style={{ padding:'14px 16px', textAlign:'center', color:t.textMuted, fontSize:'13px' }}>Calculando análisis...</div>
+          <div style={{ padding:'14px 16px', textAlign:'center', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Calculando análisis...</div>
         ) : analisis && analisis.modo && Array.isArray(analisis.grupos) ? (
           <>
             <div
@@ -4679,24 +4719,24 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                   onClick={(e) => { e.stopPropagation(); void volverPanelAnterior() }}
                   style={{
                     background:'rgba(255,255,255,0.1)', border:'1px solid rgba(255,255,255,0.22)', borderRadius:'6px',
-                    padding:'4px 10px', fontSize:'11px', fontWeight:'700', color:'#F1F5F9', cursor:'pointer', flexShrink:0,
+                    padding:'4px 10px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#F1F5F9', cursor:'pointer', flexShrink:0,
                   }}
                 >
                   ← Volver
                 </button>
               )}
-              <span style={{ fontSize:'13px', fontWeight:'800', color:'#F1F5F9', flex:1, minWidth:0 }}>📊 {analisis.encabezado}</span>
-              <span style={{ marginLeft:'auto', fontSize:'11px', color:'#94A3B8', flexShrink:0 }}>
+              <span style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:'#F1F5F9', flex:1, minWidth:0 }}>📊 {analisis.encabezado}</span>
+              <span style={{ marginLeft:'auto', fontSize:'var(--cc-label)', color:'#94A3B8', flexShrink:0 }}>
                 {analisis.total_registros.toLocaleString()} regs{nivelInfo.verValoresEconomicos ? ` · ${fmtPesos(analisis.total_costo_directo)}` : ''}
               </span>
-              <span style={{ fontSize:'12px', color:'#94A3B8' }}>{panelExpandido ? '▲' : '▼'}</span>
+              <span style={{ fontSize:'var(--cc-sm)', color:'#94A3B8' }}>{panelExpandido ? '▲' : '▼'}</span>
             </div>
             {panelExpandido && <div style={{ overflowX:'auto' }}>
               {analisis.modo === 'capitulo_items' ? (
                 // ── Tabla por ítems ────────────────────────────────────────
-                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
                   <thead>
-                    <tr style={{ color:t.textMuted, fontSize:'11px', fontWeight:'700', letterSpacing:'0.4px' }}>
+                    <tr style={{ color:t.textMuted, fontSize:'var(--cc-label)', fontWeight:'700', letterSpacing:'0.4px' }}>
                       <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>ÍTEM</th>
                       <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>DESCRIPCIÓN</th>
                       <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>CANTIDAD</th>
@@ -4723,11 +4763,11 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                         onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
                       >
                         <td style={{ padding:'6px 16px', color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{g.label}</td>
-                        <td style={{ padding:'6px 16px', color:t.text, fontSize:'11px', maxWidth:'220px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{g.descripcion}</td>
+                        <td style={{ padding:'6px 16px', color:t.text, fontSize:'var(--cc-label)', maxWidth:'220px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{g.descripcion}</td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
                           <SicoePanelDataBarCell value={g.cantidad_total} max={mx.cant ?? 0} color="#64748B" textColor={t.text} text={(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})} />
                         </td>
-                        <td style={{ padding:'6px 16px', color:t.textMuted, fontSize:'11px' }}>{g.unidad}</td>
+                        <td style={{ padding:'6px 16px', color:t.textMuted, fontSize:'var(--cc-label)' }}>{g.unidad}</td>
                         {nivelInfo.verValoresEconomicos && (
                           <td style={{ padding:0, verticalAlign:'middle' }}>
                             <SicoePanelDataBarCell value={g.costo_directo} max={mx.cd ?? 0} color={t.primary} textColor={t.text} text={fmtPesos(g.costo_directo)} />
@@ -4760,7 +4800,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                   <tfoot>
                     <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
                       <td colSpan={4} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
-                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
+                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'var(--cc-sm)' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#10B981' }}>{fmtPesos(analisis.total_aprobados ?? 0)}</td>}
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>{fmtPesos(analisis.total_pendientes ?? 0)}</td>}
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:'#EF4444' }}>{fmtPesos(analisis.total_rechazados ?? 0)}</td>}
@@ -4769,9 +4809,9 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                 </table>
               ) : analisis.modo === 'item_detalle' ? (
                 // ── Tabla por acta + capítulo ──────────────────────────────
-                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
                   <thead>
-                    <tr style={{ color:t.textMuted, fontSize:'11px', fontWeight:'700', letterSpacing:'0.4px' }}>
+                    <tr style={{ color:t.textMuted, fontSize:'var(--cc-label)', fontWeight:'700', letterSpacing:'0.4px' }}>
                       <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>ACTA RPO</th>
                       <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>CAPÍTULO</th>
                       <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>CANTIDAD</th>
@@ -4786,7 +4826,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                     {analisis.grupos.map(g => (
                       <tr key={`${g.label}-${g.capitulo}`} style={{ borderBottom:`1px solid ${t.border}22` }}>
                         <td style={{ padding:'6px 16px', color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{g.label}</td>
-                        <td style={{ padding:'6px 16px', color:t.text, fontSize:'11px' }}>{g.capitulo}</td>
+                        <td style={{ padding:'6px 16px', color:t.text, fontSize:'var(--cc-label)' }}>{g.capitulo}</td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
                           <SicoePanelDataBarCell value={g.cantidad_total} max={mx.cant ?? 0} color="#64748B" textColor={t.text} text={(g.cantidad_total||0).toLocaleString('es-CO',{maximumFractionDigits:2})} />
                         </td>
@@ -4825,7 +4865,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                   <tfoot>
                     <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
                       <td colSpan={3} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
-                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
+                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'var(--cc-sm)' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
                       {nivelInfo.verValoresEconomicos ? (
                         <>
@@ -4845,9 +4885,9 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                 </table>
               ) : (
                 // ── Tabla por capítulos (acta_semana + general) ────────────
-                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'12px' }}>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
                   <thead>
-                    <tr style={{ color:t.textMuted, fontSize:'11px', fontWeight:'700', letterSpacing:'0.4px' }}>
+                    <tr style={{ color:t.textMuted, fontSize:'var(--cc-label)', fontWeight:'700', letterSpacing:'0.4px' }}>
                       <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>CAPÍTULO</th>
                       {nivelInfo.verValoresEconomicos && <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>COSTO DIRECTO</th>}
                       <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>REGS.</th>
@@ -4904,7 +4944,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                   <tfoot>
                     <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
                       <td style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
-                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'13px' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
+                      {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'var(--cc-sm)' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
                       <td style={{ padding:'7px 16px', textAlign:'right', color:'#3B82F6' }}>
                         {nivelInfo.verValoresEconomicos ? fmtPesos(analisis.total_no_revisados_costo ?? 0) : (analisis.total_no_revisados ?? '—')}
@@ -4919,7 +4959,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
             </div>}
           </>
         ) : (
-          <div style={{ padding:'14px 16px', textAlign:'center', color:t.textMuted, fontSize:'13px' }}>
+          <div style={{ padding:'14px 16px', textAlign:'center', color:t.textMuted, fontSize:'var(--cc-sm)' }}>
             Aplica un filtro y presiona <strong>Buscar</strong> para ver el análisis
           </div>
         )}
@@ -4930,20 +4970,20 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', justifyContent:'space-between', gap:'8px', marginBottom:'8px' }}>
           <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', gap:'8px' }}>
             <button type="button" onClick={() => setSicoeFiltrosPanelOpen(v => !v)}
-              style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'5px 12px', cursor:'pointer', fontSize:'12px', fontWeight:'800', color:t.text }}>
+              style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'5px 12px', cursor:'pointer', fontSize:'var(--cc-sm)', fontWeight:'800', color:t.text }}>
               {sicoeFiltrosPanelOpen ? 'Ocultar filtros ▲' : 'Mostrar filtros ▼'}
             </button>
             {!sicoeFiltrosPanelOpen && (hayFiltrosActivos || capasValidacion.length > 0) && (
-              <span style={{ fontSize:'11px', color:t.textMuted }}>Hay criterios activos</span>
+              <span style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>Hay criterios activos</span>
             )}
           </div>
           <div style={{ display:'flex', flexWrap:'wrap', gap:'6px', alignItems:'center' }}>
             <button type="button" onClick={() => setFiltrosAvanzados(v => !v)}
-              style={{ ...selStyle, background:'transparent', cursor:'pointer', whiteSpace:'nowrap', color:t.textMuted, padding:'4px 8px', fontSize:'11px' }}>
+              style={{ ...selStyle, background:'transparent', cursor:'pointer', whiteSpace:'nowrap', color:t.textMuted, padding:'4px 8px', fontSize:'var(--cc-label)' }}>
               Avanzados {filtrosAvanzados ? '▲' : '▼'}
             </button>
             <button type="button" onClick={limpiarFiltros}
-              style={{ background:'#EF4444', color:'#fff', border:'none', borderRadius:'6px', padding:'4px 12px', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
+              style={{ background:'#EF4444', color:'#fff', border:'none', borderRadius:'6px', padding:'4px 12px', fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer' }}>
               Limpiar
             </button>
             {puedeExportar && busquedaRealizada && (
@@ -4957,7 +4997,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                   color:t.textMuted,
                   borderRadius:'6px',
                   padding:'4px 12px',
-                  fontSize:'11px',
+                  fontSize:'var(--cc-label)',
                   fontWeight:'700',
                   cursor:(!reportesMostrados || reportesMostrados.length === 0) ? 'not-allowed' : 'pointer',
                   opacity:(!reportesMostrados || reportesMostrados.length === 0) ? 0.6 : 1,
@@ -4972,7 +5012,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
               if (!hayFiltros && nivelInfo.nivelValidacion) return
               buscarReportes(filtros, 0, capasValidacion); cargarAnalisis(filtros, capasValidacion)
             }}
-              style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'4px 14px', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
+              style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'4px 14px', fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer' }}>
               Buscar
             </button>
           </div>
@@ -5032,7 +5072,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                           setMostrarSugsActa(false)
                           actualizarFiltrosDisponibles({ ...filtros, acta_rpo: String(a.numero_rpo) })
                         }}
-                        style={{ padding:'7px 12px', cursor:'pointer', fontSize:'12px', borderBottom:`1px solid ${t.border}22`, color:t.primary, fontWeight:'600' }}>
+                        style={{ padding:'7px 12px', cursor:'pointer', fontSize:'var(--cc-sm)', borderBottom:`1px solid ${t.border}22`, color:t.primary, fontWeight:'600' }}>
                         RPO {a.numero_rpo}
                       </div>
                     ))}
@@ -5052,7 +5092,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                     actualizarFiltrosDisponibles(nf)
                     buscarReportes(nf, 0, capasValidacion)
                     cargarAnalisis(nf, capasValidacion)
-                  }} style={{ ...selStyle, width:'100%', padding:'4px 6px', fontSize:'11px', minWidth:0 }}>
+                  }} style={{ ...selStyle, width:'100%', padding:'4px 6px', fontSize:'var(--cc-label)', minWidth:0 }}>
                     <option value="">—</option>
                     {filtroSubcList.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
                   </select>
@@ -5065,7 +5105,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                       setFiltros(nf)
                       buscarReportes(nf, 0, capasValidacion)
                       cargarAnalisis(nf, capasValidacion)
-                    }} style={{ ...selStyle, width:'100%', padding:'4px 6px', fontSize:'11px', minWidth:0 }}>
+                    }} style={{ ...selStyle, width:'100%', padding:'4px 6px', fontSize:'var(--cc-label)', minWidth:0 }}>
                       <option value="">—</option>
                       {(puedeEditar
                         ? ['Borrador', 'Sin Asignar Ítem', 'No Revisados', 'No Objeto de Cobro', 'En Papelera']
@@ -5090,13 +5130,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                       cargo_id: sel ? sel.id : '',
                       cargo_nombre: sel ? sel.nombre : ''
                     }))
-                  }} style={{ ...selStyle, flex:'1 1 120px', minWidth:'100px', padding:'4px 6px', fontSize:'11px' }}>
+                  }} style={{ ...selStyle, flex:'1 1 120px', minWidth:'100px', padding:'4px 6px', fontSize:'var(--cc-label)' }}>
                   <option value="">Cargo…</option>
                   {cargosDisponiblesEnFiltro.map(c => (
                     <option key={c.id} value={c.id}>{c.nombre}</option>
                   ))}
                 </select>
-                <select value={capaTemp.estado} onChange={e => setCapaTemp(p => ({ ...p, estado: e.target.value }))} style={{ ...selStyle, flex:'1 1 100px', minWidth:'88px', padding:'4px 6px', fontSize:'11px' }}>
+                <select value={capaTemp.estado} onChange={e => setCapaTemp(p => ({ ...p, estado: e.target.value }))} style={{ ...selStyle, flex:'1 1 100px', minWidth:'88px', padding:'4px 6px', fontSize:'var(--cc-label)' }}>
                   <option value="">Estado…</option>
                   {['Aprobado','Pendiente','Rechazado','No Revisado'].map(e => <option key={e} value={e}>{e}</option>)}
                 </select>
@@ -5105,13 +5145,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                     setCapasValidacion(p => [...p, capaTemp])
                     setCapaTemp({ cargo_id: '', cargo_nombre: '', estado: '' })
                   }}
-                  style={{ background:(!capaTemp.cargo_id || !capaTemp.estado) ? t.border : t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'4px 10px', fontSize:'11px', fontWeight:'700', cursor:(!capaTemp.cargo_id || !capaTemp.estado) ? 'not-allowed' : 'pointer', flexShrink:0 }}>
+                  style={{ background:(!capaTemp.cargo_id || !capaTemp.estado) ? t.border : t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'4px 10px', fontSize:'var(--cc-label)', fontWeight:'700', cursor:(!capaTemp.cargo_id || !capaTemp.estado) ? 'not-allowed' : 'pointer', flexShrink:0 }}>
                   ＋
                 </button>
               </div>
               <div style={{ display:'flex', flexWrap:'wrap', gap:'4px', marginTop:'6px' }}>
                 {capasValidacion.map((c, i) => (
-                  <span key={i} style={{ background:'rgba(0,175,197,0.12)', border:'1px solid rgba(0,175,197,0.3)', borderRadius:'4px', padding:'2px 6px', fontSize:'10px', color:'#00afc5', display:'inline-flex', alignItems:'center', gap:'4px' }}>
+                  <span key={i} style={{ background:'rgba(0,175,197,0.12)', border:'1px solid rgba(0,175,197,0.3)', borderRadius:'4px', padding:'2px 6px', fontSize:'var(--cc-caption)', color:'#00afc5', display:'inline-flex', alignItems:'center', gap:'4px' }}>
                     {c.cargo_nombre}: {c.estado}
                     <span role="button" tabIndex={0} onClick={() => setCapasValidacion(p => p.filter((_,j) => j !== i))} onKeyDown={e => { if (e.key === 'Enter') setCapasValidacion(p => p.filter((_,j) => j !== i)) }} style={{ cursor:'pointer', color:'#ef4444', fontWeight:'700' }}>×</span>
                   </span>
@@ -5125,7 +5165,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
               pointerEvents: sicoePuedeRefinar ? 'auto' : 'none',
             }}>
               <div style={{ ...filtroLbl, marginBottom:'4px', color:'#F59E0B' }}>4 · Refinar registros</div>
-              <div style={{ fontSize:'10px', color:t.textMuted, marginBottom:'6px', lineHeight:1.35 }}>
+              <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginBottom:'6px', lineHeight:1.35 }}>
                 {sicoePuedeRefinar
                   ? 'Panel y grilla se actualizan al escribir (~0,4 s).'
                   : 'Activo tras una búsqueda con criterios.'}
@@ -5137,7 +5177,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                     placeholder="Texto…"
                     value={sicoeFiltroObs}
                     onChange={e => setSicoeFiltroObs(e.target.value)}
-                    style={{ ...inpStyle, width:'100%', boxSizing:'border-box', padding:'4px 8px', fontSize:'11px' }}
+                    style={{ ...inpStyle, width:'100%', boxSizing:'border-box', padding:'4px 8px', fontSize:'var(--cc-label)' }}
                   />
                 </div>
                 <div style={{ minWidth:0 }}>
@@ -5146,7 +5186,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                     placeholder="Texto…"
                     value={sicoeFiltroNodo}
                     onChange={e => setSicoeFiltroNodo(e.target.value)}
-                    style={{ ...inpStyle, width:'100%', boxSizing:'border-box', padding:'4px 8px', fontSize:'11px' }}
+                    style={{ ...inpStyle, width:'100%', boxSizing:'border-box', padding:'4px 8px', fontSize:'var(--cc-label)' }}
                   />
                 </div>
               </div>
@@ -5175,7 +5215,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
               actualizarFiltrosDisponibles(nf)
               buscarReportes(nf, 0, capasValidacion)
               cargarAnalisis(nf, capasValidacion)
-            }} style={{ ...selStyle, padding:'4px 6px', fontSize:'11px', flex:'1 1 120px', minWidth:'100px' }}>
+            }} style={{ ...selStyle, padding:'4px 6px', fontSize:'var(--cc-label)', flex:'1 1 120px', minWidth:'100px' }}>
               <option value="">Capítulo…</option>
               {filtroCapList.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
@@ -5186,7 +5226,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                 onChange={e => { setF('item', e.target.value); buscarItems(e.target.value) }}
                 onFocus={() => { if (sugerenciasItem.length > 0) setMostrarSugsItem(true) }}
                 onBlur={() => setTimeout(() => setMostrarSugsItem(false), 150)}
-                style={{ ...inpStyle, width:'100%', padding:'4px 6px', fontSize:'11px', boxSizing:'border-box' }}
+                style={{ ...inpStyle, width:'100%', padding:'4px 6px', fontSize:'var(--cc-label)', boxSizing:'border-box' }}
               />
               {mostrarSugsItem && sugerenciasItem.length > 0 && (
                 <div style={{ position:'absolute', top:'100%', left:0, zIndex:50, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', minWidth:'320px', maxHeight:'240px', overflowY:'auto', boxShadow:'0 4px 16px #0004', marginTop:'2px' }}>
@@ -5200,7 +5240,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                         buscarReportes(nf, 0, capasValidacion)
                         cargarAnalisis(nf, capasValidacion)
                       }}
-                      style={{ padding:'7px 12px', cursor:'pointer', fontSize:'12px', borderBottom:`1px solid ${t.border}22`, display:'flex', gap:'8px', alignItems:'baseline' }}>
+                      style={{ padding:'7px 12px', cursor:'pointer', fontSize:'var(--cc-sm)', borderBottom:`1px solid ${t.border}22`, display:'flex', gap:'8px', alignItems:'baseline' }}>
                       <span style={{ color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{s.item_numero}</span>
                       <span style={{ color:t.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.item_descripcion}</span>
                     </div>
@@ -5208,22 +5248,22 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                 </div>
               )}
             </div>
-            <select value={filtros.tramo} onChange={e => setF('tramo', e.target.value)} style={{ ...selStyle, padding:'4px 6px', fontSize:'11px', flex:'1 1 100px', minWidth:'88px' }}>
+            <select value={filtros.tramo} onChange={e => setF('tramo', e.target.value)} style={{ ...selStyle, padding:'4px 6px', fontSize:'var(--cc-label)', flex:'1 1 100px', minWidth:'88px' }}>
               <option value="">Tramo…</option>
               {filtroTramoList.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
-            <select value={filtros.costado} onChange={e => setF('costado', e.target.value)} style={{ ...selStyle, padding:'4px 6px', fontSize:'11px', flex:'1 1 100px', minWidth:'88px' }}>
+            <select value={filtros.costado} onChange={e => setF('costado', e.target.value)} style={{ ...selStyle, padding:'4px 6px', fontSize:'var(--cc-label)', flex:'1 1 100px', minWidth:'88px' }}>
               <option value="">Calzada…</option>
               {filtroCostadoList.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
             <input placeholder="Abs. ini." type="number" value={filtros.abs_inicio} onChange={e => setF('abs_inicio', e.target.value)}
-              style={{ ...inpStyle, width:'72px', padding:'4px 6px', fontSize:'11px' }} />
+              style={{ ...inpStyle, width:'72px', padding:'4px 6px', fontSize:'var(--cc-label)' }} />
             <input placeholder="Abs. fin." type="number" value={filtros.abs_final} onChange={e => setF('abs_final', e.target.value)}
-              style={{ ...inpStyle, width:'72px', padding:'4px 6px', fontSize:'11px' }} />
+              style={{ ...inpStyle, width:'72px', padding:'4px 6px', fontSize:'var(--cc-label)' }} />
             </div>
             <div style={{ width:'100%', marginTop:'10px', paddingTop:'10px', borderTop:`1px dashed ${t.border}`, flex:1, display:'flex', flexDirection:'column', minHeight:0 }}>
               <div style={{ ...filtroLbl, marginBottom:'6px', color:'#0d9488' }}>Plano de ubicación (PK)</div>
-              <div style={{ fontSize:'10px', color:t.textMuted, marginBottom:'8px', lineHeight:1.4 }}>
+              <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginBottom:'8px', lineHeight:1.4 }}>
                 {!busquedaRealizada
                   ? 'Pulsa Buscar con criterios para ver en el mapa solo los puntos de la grilla actual (reportes con coordenadas o PK).'
                   : (reportesMostrados.length === 0
@@ -5236,7 +5276,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
               {import.meta.env.VITE_MAPBOX_TOKEN ? (
                 <div ref={sicoeFiltroMapaRef} style={{ width:'100%', flex:1, minHeight:'260px', borderRadius:'8px', overflow:'hidden', border:`1px solid ${t.border}`, background:t.bg }} />
               ) : (
-                <div style={{ fontSize:'11px', color:t.textMuted, padding:'8px', border:`1px dashed ${t.border}`, borderRadius:'8px' }}>
+                <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, padding:'8px', border:`1px dashed ${t.border}`, borderRadius:'8px' }}>
                   Configura VITE_MAPBOX_TOKEN para ver el mapa.
                 </div>
               )}
@@ -5251,7 +5291,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                       else if (pt.pk_id_id != null) sicoeMapFiltroApplyPkRef.current(pt.pk_id_id)
                     }}
                     style={{
-                      fontSize:'10px',
+                      fontSize:'var(--cc-caption)',
                       padding:'4px 8px',
                       borderRadius:'6px',
                       border:`1px solid ${
@@ -5279,7 +5319,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                   setFiltros(nf)
                   buscarReportes(nf, 0, capasValidacion)
                   cargarAnalisis(nf, capasValidacion)
-                }} style={{ marginTop:'8px', fontSize:'11px', color:'#ef4444', background:'transparent', border:'none', cursor:'pointer', textDecoration:'underline' }}>
+                }} style={{ marginTop:'8px', fontSize:'var(--cc-label)', color:'#ef4444', background:'transparent', border:'none', cursor:'pointer', textDecoration:'underline' }}>
                   Quitar filtro de ubicación PK
                 </button>
               ) : null}
@@ -5301,7 +5341,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
             : '68px 88px 86px 118px 132px minmax(200px,1.4fr) 100px 70px',
           gap:'8px',
           padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
-          fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px',
+          fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px',
           position:'sticky', top:0, zIndex:9, background:t.bgCard, borderRadius:'12px 12px 0 0' }}>
           <div>N° REP.</div>
           <div>TRAMO</div>
@@ -5319,13 +5359,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
           <div style={{ padding:'40px', textAlign:'center', color:t.textMuted }}>
             {busquedaAmplia
               ? <span>⏳ <strong>Búsqueda amplia detectada</strong> — esto puede tomar unos segundos.<br/>
-                  <span style={{fontSize:'12px'}}>Combina filtros adicionales para resultados más rápidos.</span>
+                  <span style={{fontSize:'var(--cc-sm)'}}>Combina filtros adicionales para resultados más rápidos.</span>
                 </span>
               : 'Cargando reportes...'
             }
           </div>
         ) : !busquedaRealizada ? (
-          <div style={{ padding:'48px', textAlign:'center', color:t.textMuted, fontSize:'14px' }}>
+          <div style={{ padding:'48px', textAlign:'center', color:t.textMuted, fontSize:'var(--cc-body)' }}>
             🔍 Usa los filtros y presiona <strong>Buscar</strong> para ver los reportes
           </div>
         ) : reportes.length === 0 ? (
@@ -5339,7 +5379,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
               ? '68px 88px 86px 118px 132px minmax(200px,1.4fr) 108px 100px 70px'
               : '68px 88px 86px 118px 132px minmax(200px,1.4fr) 100px 70px',
             gap:'8px', padding:'10px 16px', borderBottom:`1px solid ${t.border}`,
-            fontSize:'13px', color:t.text, cursor:'pointer',
+            fontSize:'var(--cc-sm)', color:t.text, cursor:'pointer',
             transition:'background 0.15s' }}
             onClick={() => {
               if (!esSub && rep.estado === 'Borrador') {
@@ -5354,7 +5394,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                 setModalCarpeta(true)
                 ;(async () => {
                   try {
-                    const r = await fetch(urlReporteDetalle(rep.id, capasValidacion), { headers: { Authorization: `Bearer ${getToken()}` } })
+                    const r = await fetch(urlReporteDetalle(rep.id), { headers: { Authorization: `Bearer ${getToken()}` } })
                     const data = await r.json()
                     if (data?.id) setReporteSeleccionado({ ...data, _cargandoDetalle: false })
                   } catch {
@@ -5367,26 +5407,26 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
             onMouseEnter={e => e.currentTarget.style.background = t.bg}
             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
             <div style={{ fontWeight:'700', color:t.primary }}>#{rep.numero_reporte}</div>
-            <div style={{ color:t.text, fontSize:'12px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={rep.tramo || ''}>
+            <div style={{ color:t.text, fontSize:'var(--cc-sm)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={rep.tramo || ''}>
               {rep.tramo || '—'}
             </div>
-            <div style={{ color:t.text, fontSize:'12px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={rep.calzada || rep.margen || ''}>
+            <div style={{ color:t.text, fontSize:'var(--cc-sm)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={rep.calzada || rep.margen || ''}>
               {rep.calzada || rep.margen || '—'}
             </div>
-            <div style={{ color:t.textMuted, fontSize:'11px', lineHeight:1.3 }} title={`${rep.abs_inicio ?? ''} → ${rep.abs_final ?? ''}`}>
+            <div style={{ color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3 }} title={`${rep.abs_inicio ?? ''} → ${rep.abs_final ?? ''}`}>
               {fmtSicoeRangoCabecera(rep.abs_inicio, rep.abs_final)}
             </div>
-            <div style={{ color:t.textMuted, fontSize:'11px', lineHeight:1.3 }} title={`${rep.nodo_ini ?? ''} → ${rep.nodo_fin ?? ''}`}>
+            <div style={{ color:t.textMuted, fontSize:'var(--cc-label)', lineHeight:1.3 }} title={`${rep.nodo_ini ?? ''} → ${rep.nodo_fin ?? ''}`}>
               {fmtSicoeRangoCabecera(rep.nodo_ini, rep.nodo_fin)}
             </div>
             <div style={{ fontWeight:'600', minWidth:0, overflow:'hidden', textOverflow:'ellipsis' }}>{rep.descripcion_actividad || '—'}</div>
             {nivelInfo.verValoresEconomicos && (
-              <div style={{ fontSize:'12px', textAlign:'right', fontWeight:'600', color:t.text }}>
+              <div style={{ fontSize:'var(--cc-sm)', textAlign:'right', fontWeight:'600', color:t.text }}>
                 {rep.costo_directo_validacion != null ? fmtPesos(rep.costo_directo_validacion) : '—'}
               </div>
             )}
-            <div style={{ fontSize:'11px', color:t.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={rep.capitulo || ''}>{rep.capitulo || '—'}</div>
-            <div style={{ fontSize:'12px', color:t.textMuted, textAlign:'right', fontWeight:'600' }}>
+            <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={rep.capitulo || ''}>{rep.capitulo || '—'}</div>
+            <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'right', fontWeight:'600' }}>
               {rep.num_registros != null ? rep.num_registros : '—'}
             </div>
           </div>
@@ -5396,14 +5436,14 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         {reportes.length > 0 && (
           <div style={{ padding:'12px 16px', textAlign:'center', borderTop:`1px solid ${t.border}` }}>
             {cargando ? (
-              <span style={{ fontSize:'12px', color:t.textMuted }}>Cargando...</span>
+              <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Cargando...</span>
             ) : hayMas ? (
               <button onClick={() => buscarReportes(filtros, offsetActual, capasValidacion)}
-                style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'7px 20px', fontSize:'12px', color:t.textMuted, cursor:'pointer', fontWeight:'600' }}>
+                style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'7px 20px', fontSize:'var(--cc-sm)', color:t.textMuted, cursor:'pointer', fontWeight:'600' }}>
                 ⬇ Cargar 50 reportes más
               </button>
             ) : (
-              <span style={{ fontSize:'11px', color:t.textMuted }}>— Todos los reportes cargados —</span>
+              <span style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>— Todos los reportes cargados —</span>
             )}
           </div>
         )}
@@ -5414,27 +5454,27 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         <div style={{ position:'fixed', inset:0, zIndex:9500, background:'rgba(0,0,0,0.6)', display:'flex', alignItems:'center', justifyContent:'center' }}
           onClick={() => setModalIniciarSem(false)}>
           <div style={{ background:t.bgCard, borderRadius:'16px', padding:'28px', width:'440px', boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize:'16px', fontWeight:'800', color:t.text, marginBottom:'20px' }}>📅 Configurar Semanas del Contrato</div>
+            <div style={{ fontSize:'var(--cc-lg)', fontWeight:'800', color:t.text, marginBottom:'20px' }}>📅 Configurar Semanas del Contrato</div>
             <div style={{ display:'flex', flexDirection:'column', gap:'14px' }}>
               <div>
-                <div style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, marginBottom:'4px' }}>FECHA DE INICIO DE LA SEMANA 1</div>
+                <div style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, marginBottom:'4px' }}>FECHA DE INICIO DE LA SEMANA 1</div>
                 <input type="date" value={semFechaInicio} onChange={e => setSemFechaInicio(e.target.value)}
-                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'9px 12px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'9px 12px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
               </div>
               <div>
-                <div style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, marginBottom:'4px' }}>DÍA DE CORTE SEMANAL</div>
+                <div style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, marginBottom:'4px' }}>DÍA DE CORTE SEMANAL</div>
                 <select value={semDiaCorte} onChange={e => setSemDiaCorte(e.target.value)}
-                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'9px 12px', color:t.text, fontSize:'13px' }}>
+                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'9px 12px', color:t.text, fontSize:'var(--cc-sm)' }}>
                   {['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'].map((d, i) => (
                     <option key={i} value={i}>{d}</option>
                   ))}
                 </select>
               </div>
               <div>
-                <div style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, marginBottom:'4px' }}>CANTIDAD DE SEMANAS INICIALES</div>
+                <div style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, marginBottom:'4px' }}>CANTIDAD DE SEMANAS INICIALES</div>
                 <input type="number" min="1" max="520" value={semCantInicial} onChange={e => setSemCantInicial(parseInt(e.target.value))}
-                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'9px 12px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
-                <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'4px' }}>Podrás extender más semanas cuando sea necesario.</div>
+                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'9px 12px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
+                <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'4px' }}>Podrás extender más semanas cuando sea necesario.</div>
               </div>
             </div>
             <div style={{ display:'flex', gap:'10px', marginTop:'24px' }}>
@@ -5452,17 +5492,17 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         <div style={{ position:'fixed', inset:0, zIndex:9500, background:'rgba(0,0,0,0.6)', display:'flex', alignItems:'center', justifyContent:'center' }}
           onClick={() => setModalSemana(false)}>
           <div style={{ background:t.bgCard, borderRadius:'16px', padding:'28px', width:'380px', boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize:'16px', fontWeight:'800', color:t.text, marginBottom:'8px' }}>📅 Extender Semanas</div>
+            <div style={{ fontSize:'var(--cc-lg)', fontWeight:'800', color:t.text, marginBottom:'8px' }}>📅 Extender Semanas</div>
             {semanaVigente && (
-              <div style={{ fontSize:'12px', color:t.textMuted, marginBottom:'20px' }}>
+              <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, marginBottom:'20px' }}>
                 Última semana configurada: <strong style={{ color:t.text }}>Sem. {semanaVigente.numero_semana}</strong> · vence {semanaVigente.fecha_fin}
               </div>
             )}
             <div>
-              <div style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, marginBottom:'6px' }}>¿CUÁNTAS SEMANAS ADICIONALES?</div>
+              <div style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, marginBottom:'6px' }}>¿CUÁNTAS SEMANAS ADICIONALES?</div>
               <input type="number" min="1" max="52" value={nSemanas} onChange={e => setNSemanas(parseInt(e.target.value))}
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px 12px', color:t.text, fontSize:'24px', fontWeight:'800', textAlign:'center', boxSizing:'border-box' }} />
-              <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'6px', textAlign:'center' }}>
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'10px 12px', color:t.text, fontSize:'var(--cc-h1)', fontWeight:'800', textAlign:'center', boxSizing:'border-box' }} />
+              <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'6px', textAlign:'center' }}>
                 Se crearán con el mismo día de corte, continuando consecutivamente.
               </div>
             </div>
@@ -5534,12 +5574,12 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
               }}
             >
               <div style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
-                <div style={{ fontSize:'14px', fontWeight:'900', color:'#fff' }}>⬇ Exportar registros a Excel</div>
-                <div style={{ fontSize:'12px', color:'#94A3B8' }}>Elige los campos de so_registros que quieres descargar.</div>
+                <div style={{ fontSize:'var(--cc-body)', fontWeight:'900', color:'#fff' }}>⬇ Exportar registros a Excel</div>
+                <div style={{ fontSize:'var(--cc-sm)', color:'#94A3B8' }}>Elige los campos de so_registros que quieres descargar.</div>
               </div>
               <button
                 onClick={() => setExportModalOpen(false)}
-                style={{ background:'transparent', border:'none', color:t.textMuted, cursor:'pointer', fontSize:'20px' }}
+                style={{ background:'transparent', border:'none', color:t.textMuted, cursor:'pointer', fontSize:'var(--cc-title)' }}
                 aria-label="Cerrar"
               >
                 ✕
@@ -5556,7 +5596,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                       placeholder="Buscar campo..."
                       value={exportFiltroCampo}
                       onChange={e => setExportFiltroCampo(e.target.value)}
-                      style={{ flex:'1 1 260px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 12px', color:t.text, outline:'none', fontSize:'13px' }}
+                      style={{ flex:'1 1 260px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 12px', color:t.text, outline:'none', fontSize:'var(--cc-sm)' }}
                     />
                     <button
                       onClick={() => setExportSeleccionCampos(exportCampos)}
@@ -5582,10 +5622,10 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
 
                   <div style={{ border:`1px solid ${t.border}`, borderRadius:'12px', overflow:'hidden' }}>
                     <div style={{ padding:'10px 14px', background:'#0B1220', borderBottom:`1px solid ${t.border}`, display:'flex', justifyContent:'space-between', alignItems:'center', gap:'10px' }}>
-                      <div style={{ fontSize:'12px', fontWeight:'800', color:t.textMuted }}>
+                      <div style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:t.textMuted }}>
                         {exportSeleccionCampos.length} campo(s) seleccionados
                       </div>
-                      <div style={{ fontSize:'11px', color:'#94A3B8' }}>
+                      <div style={{ fontSize:'var(--cc-label)', color:'#94A3B8' }}>
                         Tip: puedes seleccionar pocos campos para acelerar.
                       </div>
                     </div>
@@ -5604,7 +5644,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                                 checked={exportSeleccionCampos.includes(c)}
                                 onChange={() => toggleCampo(c)}
                               />
-                              <span style={{ fontSize:'12px', color:t.textMuted, fontWeight:'700', lineHeight:1.2 }}>
+                              <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, fontWeight:'700', lineHeight:1.2 }}>
                                 {prettyCampo(c)}
                               </span>
                             </label>
@@ -5677,7 +5717,7 @@ function GaleriaFotos({ contrato_id, API_URL, hdrs, tipo, fechaDesde, fechaHasta
           onMouseEnter={e => e.currentTarget.style.borderColor = '#0077B6'}
           onMouseLeave={e => e.currentTarget.style.borderColor = 'transparent'}>
           <img src={f.url} style={{ width:'100%', height:'100px', objectFit:'cover' }} />
-          <div style={{ padding:'4px 6px', fontSize:'11px', color:'#6B7280', background:'#1E293B' }}>
+          <div style={{ padding:'4px 6px', fontSize:'var(--cc-label)', color:'#6B7280', background:'#1E293B' }}>
             #{String(f.numero).padStart(4,'0')} — {f.descripcion || ''}
           </div>
         </div>
@@ -6144,7 +6184,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   }
 
   const inpStyle = (err) => ({
-    width: '100%', padding: '8px 12px', borderRadius: '8px', fontSize: '13px',
+    width: '100%', padding: '8px 12px', borderRadius: '8px', fontSize: 'var(--cc-sm)',
     background: t.bg, color: t.text, boxSizing: 'border-box',
     border: `1px solid ${err ? '#EF4444' : t.border}`, outline: 'none'
   })
@@ -6162,14 +6202,14 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         <div style={{ padding:'20px 24px', borderBottom:`1px solid ${t.border}`,
           display:'flex', alignItems:'center', justifyContent:'space-between' }}>
           <div>
-            <div style={{ fontWeight:'800', fontSize:'16px', color:t.text }}>
+            <div style={{ fontWeight:'800', fontSize:'var(--cc-lg)', color:t.text }}>
               🏗️ Nuevo Reporte de Cantidades
               {numeroReporte && <span style={{ marginLeft:'12px', color:t.primary, fontSize:'28px', fontWeight:'900', letterSpacing:'-1px' }}>#{numeroReporte}</span>}
             </div>
-            <div style={{ fontSize:'12px', color:t.textMuted }}>Todos los campos son obligatorios</div>
+            <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Todos los campos son obligatorios</div>
           </div>
           <button onClick={onClose} style={{ background:'transparent', border:'none',
-            fontSize:'20px', cursor:'pointer', color:t.textMuted }}>✕</button>
+            fontSize:'var(--cc-title)', cursor:'pointer', color:t.textMuted }}>✕</button>
         </div>
 
         {/* Tabs */}
@@ -6177,7 +6217,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           {TABS.map((tab, i) => (
             <button key={i} onClick={() => i <= tabActivo && setTabActivo(i)} style={{
               background:'transparent', border:'none', borderBottom: tabActivo===i ? `2px solid ${t.primary}` : '2px solid transparent',
-              padding:'12px 16px', fontSize:'13px', fontWeight: tabActivo===i ? '700' : '400',
+              padding:'12px 16px', fontSize:'var(--cc-sm)', fontWeight: tabActivo===i ? '700' : '400',
               color: tabActivo===i ? t.primary : i > tabActivo ? t.border : t.textMuted,
               cursor: i <= tabActivo ? 'pointer' : 'default'
             }}>{tab}</button>
@@ -6193,18 +6233,18 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
               {/* Descripción */}
               <div>
-                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                   DESCRIPCIÓN ACTIVIDAD *
                 </label>
                 <textarea value={descripcion} onChange={e => setDescripcion(e.target.value)}
                   rows={2} placeholder="Nombre descriptivo del reporte..."
                   style={{ ...inpStyle(errores.descripcion), resize:'vertical' }} />
-                {errores.descripcion && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.descripcion}</span>}
+                {errores.descripcion && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.descripcion}</span>}
               </div>
 
               {/* Subcontratista */}
               <div style={{ position:'relative' }}>
-                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                   SUBCONTRATISTA *
                 </label>
                 <input value={subSeleccionado ? subSeleccionado.nombre : subBusqueda}
@@ -6216,7 +6256,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:10, maxHeight:'160px', overflowY:'auto' }}>
                     {subFiltrados.map(s => (
                       <div key={s.id} onClick={() => { setSubSeleccionado(s); setSubBusqueda(''); setSubDropOpen(false) }}
-                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:'13px', color:t.text,
+                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:'var(--cc-sm)', color:t.text,
                           borderBottom:`1px solid ${t.border}` }}
                         onMouseEnter={e => e.currentTarget.style.background = t.bg}
                         onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
@@ -6225,12 +6265,12 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     ))}
                   </div>
                 )}
-                {errores.sub && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.sub}</span>}
+                {errores.sub && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.sub}</span>}
               </div>
 
               {/* Inspector */}
               <div style={{ position:'relative' }}>
-                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                   INSPECTOR *
                 </label>
                 <input value={inspSeleccionado ? inspSeleccionado.nombre : inspBusqueda}
@@ -6242,7 +6282,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     border:`1px solid ${t.border}`, borderRadius:'8px', zIndex:10, maxHeight:'160px', overflowY:'auto' }}>
                     {inspFiltrados.map(i => (
                       <div key={i.id} onClick={() => { setInspSeleccionado(i); setInspBusqueda(''); setInspDropOpen(false) }}
-                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:'13px', color:t.text,
+                        style={{ padding:'8px 12px', cursor:'pointer', fontSize:'var(--cc-sm)', color:t.text,
                           borderBottom:`1px solid ${t.border}` }}
                         onMouseEnter={e => e.currentTarget.style.background = t.bg}
                         onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
@@ -6251,12 +6291,12 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     ))}
                   </div>
                 )}
-                {errores.insp && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.insp}</span>}
+                {errores.insp && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.insp}</span>}
               </div>
 
               {/* Capítulo */}
               <div style={{ position:'relative' }}>
-                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                   CAPÍTULO *
                 </label>
                 <input
@@ -6275,7 +6315,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                       .map(c => (
                         <div key={c.capitulo}
                           onMouseDown={() => { setCapituloSel(c.capitulo); setCapBusqueda(''); setCapDropOpen(false) }}
-                          style={{ padding:'8px 12px', cursor:'pointer', fontSize:'13px',
+                          style={{ padding:'8px 12px', cursor:'pointer', fontSize:'var(--cc-sm)',
                             color: capituloSel === c.capitulo ? t.primary : t.text,
                             fontWeight: capituloSel === c.capitulo ? '700' : '400',
                             borderBottom:`1px solid ${t.border}`,
@@ -6286,27 +6326,27 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                         </div>
                       ))}
                     {capitulos.filter(c => !capBusqueda || c.capitulo.toLowerCase().includes(capBusqueda.toLowerCase())).length === 0 && (
-                      <div style={{ padding:'12px', color:t.textMuted, fontSize:'13px', textAlign:'center' }}>
+                      <div style={{ padding:'12px', color:t.textMuted, fontSize:'var(--cc-sm)', textAlign:'center' }}>
                         No se encontró el capítulo
                       </div>
                     )}
                   </div>
                 )}
                 {capituloSel && (
-                  <div style={{ fontSize:'11px', color:'#10B981', marginTop:'4px' }}>✅ {capituloSel}</div>
+                  <div style={{ fontSize:'var(--cc-label)', color:'#10B981', marginTop:'4px' }}>✅ {capituloSel}</div>
                 )}
-                {errores.capitulo && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.capitulo}</span>}
+                {errores.capitulo && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.capitulo}</span>}
               </div>
 
               {/* Localización + Margen en fila */}
               <div style={{ display:'grid', gridTemplateColumns:'1fr 180px', gap:'12px', alignItems:'start' }}>
                 {/* PK_ID */}
                 <div style={{ position:'relative' }}>
-                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                     LOCALIZACIÓN (PK_ID){!modoEdicion && ' *'}
                   </label>
                   {modoEdicion ? (
-                    <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'12px', color:t.textMuted }}>
+                    <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'var(--cc-sm)', color:t.textMuted }}>
                       📍 CIV: {reporteInicial.civ || '—'} · {reporteInicial.tramo || '—'} · {reporteInicial.infraestructura || '—'} · {reporteInicial.calzada || '—'}
                     </div>
                   ) : (
@@ -6338,7 +6378,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                               borderRadius: '8px',
                               padding: '0 14px',
                               cursor: 'pointer',
-                              fontSize: '16px',
+                              fontSize: 'var(--cc-lg)',
                               flexShrink: 0,
                               height: '38px',
                             }}
@@ -6374,7 +6414,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                                 borderRadius: '8px',
                                 padding: '0 12px',
                                 cursor: 'pointer',
-                                fontSize: '16px',
+                                fontSize: 'var(--cc-lg)',
                                 flexShrink: 0,
                                 height: '38px',
                               }}
@@ -6405,12 +6445,12 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                                   setPkSeleccionado(null)
                                 }}
                                 placeholder="Filtrar por código o ubicación..."
-                                style={{ ...inpStyle(false), marginBottom: '8px', fontSize: '12px' }}
+                                style={{ ...inpStyle(false), marginBottom: '8px', fontSize: 'var(--cc-sm)' }}
                                 autoFocus
                               />
                               <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
                                 {pkFiltrados.length === 0 ? (
-                                  <div style={{ fontSize: '12px', color: t.textMuted, padding: '8px' }}>
+                                  <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, padding: '8px' }}>
                                     Sin coincidencias
                                   </div>
                                 ) : (
@@ -6424,13 +6464,13 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                                       style={{
                                         padding: '8px 10px',
                                         cursor: 'pointer',
-                                        fontSize: '13px',
+                                        fontSize: 'var(--cc-sm)',
                                         color: t.text,
                                         borderBottom: `1px solid ${t.border}`,
                                       }}
                                     >
                                       <span style={{ fontWeight: '700' }}>{p.pk_id}</span>
-                                      <span style={{ fontSize: '11px', color: t.textMuted, marginLeft: '8px' }}>
+                                      <span style={{ fontSize: 'var(--cc-label)', color: t.textMuted, marginLeft: '8px' }}>
                                         {p.ubicacion || ''}
                                       </span>
                                     </div>
@@ -6439,29 +6479,29 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                               </div>
                             </div>
                           )}
-                          <div style={{ fontSize: '10px', color: t.textMuted, marginTop: '6px' }}>
+                          <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: '6px' }}>
                             Sin plano GeoJSON no hay mapa; usa 📋 o pide cargar el plano en Contratos.
                           </div>
                         </div>
                       )}
                       {pkSeleccionado && (
                         <div style={{ marginTop:'6px', padding:'8px 12px', background:t.bg,
-                          borderRadius:'6px', fontSize:'11px', color:t.textMuted }}>
+                          borderRadius:'6px', fontSize:'var(--cc-label)', color:t.textMuted }}>
                           📍 CIV: {pkSeleccionado.civ} · {pkSeleccionado.tramo} · {pkSeleccionado.infraestructura} · {pkSeleccionado.calzada}
                         </div>
                       )}
-                      {errores.pk && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.pk}</span>}
+                      {errores.pk && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.pk}</span>}
                     </>
                   )}
                 </div>
 
                 {/* Margen */}
                 <div>
-                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                     MARGEN{!modoEdicion && ' *'}
                   </label>
                   {modoEdicion ? (
-                    <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'13px', color:t.textMuted }}>{margen || '—'}</div>
+                    <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'var(--cc-sm)', color:t.textMuted }}>{margen || '—'}</div>
                   ) : (
                     <>
                       <select value={margen.startsWith('Otro:') ? 'Otro' : margen}
@@ -6477,7 +6517,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                           placeholder='Especificar...'
                           style={{ ...inpStyle(false), marginTop:'6px' }} />
                       )}
-                      {errores.margen && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.margen}</span>}
+                      {errores.margen && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.margen}</span>}
                     </>
                   )}
                 </div>
@@ -6486,31 +6526,31 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               {/* Abscisado + Nodos en una sola fila */}
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:'12px' }}>
                 <div>
-                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                     ABS. INICIAL{!modoEdicion && ' *'}
                   </label>
                   {modoEdicion
-                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'13px', color:t.textMuted }}>{absInicio !== '' ? absInicio : '—'}</div>
+                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'var(--cc-sm)', color:t.textMuted }}>{absInicio !== '' ? absInicio : '—'}</div>
                     : <><input type='number' step='0.01' value={absInicio} onChange={e => setAbsInicio(e.target.value)} placeholder='0.00' style={inpStyle(errores.absInicio)} />
-                       {errores.absInicio && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.absInicio}</span>}</>
+                       {errores.absInicio && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.absInicio}</span>}</>
                   }
                 </div>
                 <div>
-                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                     ABS. FINAL{!modoEdicion && ' *'}
                   </label>
                   {modoEdicion
-                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'13px', color:t.textMuted }}>{absFinal !== '' ? absFinal : '—'}</div>
+                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'var(--cc-sm)', color:t.textMuted }}>{absFinal !== '' ? absFinal : '—'}</div>
                     : <><input type='number' step='0.01' value={absFinal} onChange={e => setAbsFinal(e.target.value)} placeholder='0.00' style={inpStyle(errores.absFinal)} />
-                       {errores.absFinal && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.absFinal}</span>}</>
+                       {errores.absFinal && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.absFinal}</span>}</>
                   }
                 </div>
                 <div>
-                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                     NODO INICIAL{!modoEdicion && ' *'}
                   </label>
                   {modoEdicion
-                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'13px', color:t.textMuted }}>{nodoIni || '—'}</div>
+                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'var(--cc-sm)', color:t.textMuted }}>{nodoIni || '—'}</div>
                     : <>
                         <input value={nodoIni}
                           onChange={e => {
@@ -6528,21 +6568,21 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                           <div style={{ position:'absolute', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', zIndex:10 }}>
                             {nodoIniSugg.map(n => (
                               <div key={n} onClick={() => { setNodoIni(n); setNodoIniSugg([]); setNodoIniWarn(false) }}
-                                style={{ padding:'6px 10px', cursor:'pointer', fontSize:'12px', color:t.text }}>{n}</div>
+                                style={{ padding:'6px 10px', cursor:'pointer', fontSize:'var(--cc-sm)', color:t.text }}>{n}</div>
                             ))}
                           </div>
                         )}
-                        {nodoIniWarn && <span style={{ color:'#F59E0B', fontSize:'11px' }}>⚠️ No existe en presupuesto</span>}
-                        {errores.nodoIni && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.nodoIni}</span>}
+                        {nodoIniWarn && <span style={{ color:'#F59E0B', fontSize:'var(--cc-label)' }}>⚠️ No existe en presupuesto</span>}
+                        {errores.nodoIni && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.nodoIni}</span>}
                       </>
                   }
                 </div>
                 <div>
-                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                     NODO FINAL{!modoEdicion && ' *'}
                   </label>
                   {modoEdicion
-                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'13px', color:t.textMuted }}>{nodoFin || '—'}</div>
+                    ? <div style={{ padding:'8px 12px', borderRadius:'8px', border:`1px solid ${t.border}`, background:t.bg, fontSize:'var(--cc-sm)', color:t.textMuted }}>{nodoFin || '—'}</div>
                     : <>
                         <input value={nodoFin}
                           onChange={e => {
@@ -6560,12 +6600,12 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                           <div style={{ position:'absolute', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'6px', zIndex:10 }}>
                             {nodoFinSugg.map(n => (
                               <div key={n} onClick={() => { setNodoFin(n); setNodoFinSugg([]); setNodoFinWarn(false) }}
-                                style={{ padding:'6px 10px', cursor:'pointer', fontSize:'12px', color:t.text }}>{n}</div>
+                                style={{ padding:'6px 10px', cursor:'pointer', fontSize:'var(--cc-sm)', color:t.text }}>{n}</div>
                             ))}
                           </div>
                         )}
-                        {nodoFinWarn && <span style={{ color:'#F59E0B', fontSize:'11px' }}>⚠️ No existe en presupuesto</span>}
-                        {errores.nodoFin && <span style={{ color:'#EF4444', fontSize:'11px' }}>{errores.nodoFin}</span>}
+                        {nodoFinWarn && <span style={{ color:'#F59E0B', fontSize:'var(--cc-label)' }}>⚠️ No existe en presupuesto</span>}
+                        {errores.nodoFin && <span style={{ color:'#EF4444', fontSize:'var(--cc-label)' }}>{errores.nodoFin}</span>}
                       </>
                   }
                 </div>
@@ -6584,12 +6624,12 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               {capituloSel && (
                 <div style={{ display:'flex', flexDirection:'column', gap:'16px' }}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                    <div style={{ fontSize:'13px', color:t.textMuted }}>
+                    <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>
                       Plantillas para: <strong style={{ color:t.text }}>{capituloSel}</strong>
                     </div>
                     <button onClick={() => setModalCrearPlantilla(true)} style={{
                       background:'transparent', border:`1px solid ${t.primary}`, color:t.primary,
-                      borderRadius:'6px', padding:'6px 14px', fontSize:'12px', cursor:'pointer', fontWeight:'600'
+                      borderRadius:'6px', padding:'6px 14px', fontSize:'var(--cc-sm)', cursor:'pointer', fontWeight:'600'
                     }}>+ Crear Plantilla</button>
                   </div>
                   {plantillas.length === 0 ? (
@@ -6607,7 +6647,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                           <div style={{ display:'flex', gap:'6px', flexWrap:'wrap' }}>
                             {(p.items||[]).map((item, i) => (
                               <span key={i} style={{ background:t.border, color:t.textMuted,
-                                borderRadius:'4px', padding:'2px 8px', fontSize:'11px' }}>{item.nombre}</span>
+                                borderRadius:'4px', padding:'2px 8px', fontSize:'var(--cc-label)' }}>{item.nombre}</span>
                             ))}
                           </div>
                         </div>
@@ -6616,7 +6656,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   )}
                   {plantillaSel && (
                     <div style={{ padding:'10px 14px', background:'#10B98122', border:'1px solid #10B981',
-                      borderRadius:'8px', fontSize:'12px', color:'#10B981' }}>
+                      borderRadius:'8px', fontSize:'var(--cc-sm)', color:'#10B981' }}>
                       ✅ Plantilla "{plantillaSel.nombre}" aplicada — {registros.length} actividades cargadas en TAB 3
                     </div>
                   )}
@@ -6636,7 +6676,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               {/* Grid header */}
               {registros.length > 0 && (
                 <div style={{ display:'grid', gridTemplateColumns:'60px 1fr 100px 40px',
-                  gap:'8px', fontSize:'11px', fontWeight:'700', color:t.textMuted,
+                  gap:'8px', fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted,
                   padding:'0 8px', letterSpacing:'0.5px' }}>
                   <div>N° REG.</div><div>NOMBRE / DESCRIPCIÓN</div><div>CANT. TOTAL</div><div>📸</div>
                 </div>
@@ -6649,36 +6689,36 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     alignItems:'center' }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = t.primary}
                   onMouseLeave={e => e.currentTarget.style.borderColor = t.border}>
-                  <div style={{ fontWeight:'700', color:t.primary, fontSize:'13px' }}>#{idx+1}</div>
+                  <div style={{ fontWeight:'700', color:t.primary, fontSize:'var(--cc-sm)' }}>#{idx+1}</div>
                   <div>
-                    <div style={{ fontWeight:'600', fontSize:'13px', color:t.text }}>
+                    <div style={{ fontWeight:'600', fontSize:'var(--cc-sm)', color:t.text }}>
                       {reg.nombre || <span style={{ color:t.textMuted, fontStyle:'italic' }}>Sin nombre</span>}
                     </div>
-                    <div style={{ fontSize:'11px', color:t.textMuted }}>
+                    <div style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>
                       {reg.observacion || <span style={{ fontStyle:'italic' }}>Click para diligenciar...</span>}
                     </div>
                   </div>
-                  <div style={{ fontWeight:'700', color: reg.cantidad_total ? '#10B981' : t.textMuted, fontSize:'13px' }}>
+                  <div style={{ fontWeight:'700', color: reg.cantidad_total ? '#10B981' : t.textMuted, fontSize:'var(--cc-sm)' }}>
                     {reg.cantidad_total != null ? Number(reg.cantidad_total).toFixed(2) : '—'}
                   </div>
-                  <div style={{ fontSize:'16px' }}>{reg._fotoOk ? '✅' : '⬜'}</div>
+                  <div style={{ fontSize:'var(--cc-lg)' }}>{reg._fotoOk ? '✅' : '⬜'}</div>
                 </div>
               ))}
               <button onClick={agregarRegistro} style={{
                 background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted,
-                borderRadius:'8px', padding:'10px', fontSize:'13px', cursor:'pointer', width:'100%'
+                borderRadius:'8px', padding:'10px', fontSize:'var(--cc-sm)', cursor:'pointer', width:'100%'
               }}>+ Agregar actividad</button>
 
               {/* Gráfico único del reporte */}
               <div style={{ marginTop:'8px', padding:'16px', background:t.bg, borderRadius:'12px', border:`1px solid ${t.border}` }}>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
-                  <label style={{ fontSize:'12px', fontWeight:'700', color:t.textMuted }}>
+                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.textMuted }}>
                     📐 GRÁFICO DEL REPORTE
                     {reporteGraficoNumero && <span style={{ color:t.primary, marginLeft:'8px' }}>#{String(reporteGraficoNumero).padStart(4,'0')}</span>}
                   </label>
-                  <span style={{ fontSize:'11px', color:'#F59E0B' }}>Opcional — obligatorio en validación</span>
+                  <span style={{ fontSize:'var(--cc-label)', color:'#F59E0B' }}>Opcional — obligatorio en validación</span>
                 </div>
-                <div style={{ fontSize:'11px', color:t.textMuted, marginBottom:'8px' }}>
+                <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginBottom:'8px' }}>
                   💡 Un solo gráfico aplica para todas las actividades de este reporte.
                 </div>
                 {reporteGraficoUrl && (
@@ -6686,7 +6726,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 )}
                 <button onClick={() => setModalGaleriaGrafico(true)} style={{
                   background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
-                  borderRadius:'6px', padding:'5px 12px', fontSize:'11px', cursor:'pointer', marginBottom:'6px'
+                  borderRadius:'6px', padding:'5px 12px', fontSize:'var(--cc-label)', cursor:'pointer', marginBottom:'6px'
                 }}>🖼️ Usar gráfico de galería</button>
                 <input type='file' accept='image/*' onChange={async e => {
                   const file = e.target.files[0]; if (!file) return
@@ -6700,8 +6740,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     setReporteGraficoUrl(data.url)
                     setReporteGraficoNumero(numR.numero)
                   } catch(e) { alert('Error subiendo gráfico') }
-                }} style={{ width:'100%', fontSize:'12px' }} />
-                {reporteGraficoUrl && <div style={{ color:'#10B981', fontSize:'12px', marginTop:'4px' }}>✅ Gráfico #{String(reporteGraficoNumero).padStart(4,'0')} cargado</div>}
+                }} style={{ width:'100%', fontSize:'var(--cc-sm)' }} />
+                {reporteGraficoUrl && <div style={{ color:'#10B981', fontSize:'var(--cc-sm)', marginTop:'4px' }}>✅ Gráfico #{String(reporteGraficoNumero).padStart(4,'0')} cargado</div>}
               </div>
             </div>
           )}
@@ -6709,12 +6749,12 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           {/* ── TAB 3: Topografía ── */}
           {tabActivo === 3 && (
             <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
-              <div style={{ fontSize:'13px', color:t.textMuted }}>
+              <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>
                 Registra las coordenadas levantadas en campo. Opcional — puedes importar desde CSV.
               </div>
               {/* Header grid */}
               <div style={{ display:'grid', gridTemplateColumns:'80px 1fr 1fr 1fr 1fr 28px',
-                gap:'8px', fontSize:'11px', fontWeight:'700', color:t.textMuted,
+                gap:'8px', fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted,
                 padding:'0 8px', letterSpacing:'0.5px' }}>
                 <div>PUNTO</div><div>NORTE</div><div>ESTE</div><div>COTA</div><div>DESCRIPCIÓN</div>
               </div>
@@ -6731,17 +6771,17 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                       style={inpStyle(false)} />
                   ))}
                   <button onClick={() => setPuntos(prev => prev.filter((_,i) => i!==idx))}
-                    style={{ background:'transparent', border:'none', color:'#EF4444', cursor:'pointer', fontSize:'16px', padding:0 }}>✕</button>
+                    style={{ background:'transparent', border:'none', color:'#EF4444', cursor:'pointer', fontSize:'var(--cc-lg)', padding:0 }}>✕</button>
                 </div>
               ))}
               <div style={{ display:'flex', gap:'8px' }}>
                 <button onClick={agregarPunto} style={{
                   background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted,
-                  borderRadius:'8px', padding:'8px 16px', fontSize:'12px', cursor:'pointer'
+                  borderRadius:'8px', padding:'8px 16px', fontSize:'var(--cc-sm)', cursor:'pointer'
                 }}>+ Agregar punto</button>
                 <label style={{
                   background:'transparent', border:`1px dashed ${t.border}`, color:t.textMuted,
-                  borderRadius:'8px', padding:'8px 16px', fontSize:'12px', cursor:'pointer'
+                  borderRadius:'8px', padding:'8px 16px', fontSize:'var(--cc-sm)', cursor:'pointer'
                 }}>
                   📂 Importar CSV
                   <input type='file' accept='.csv' style={{ display:'none' }} onChange={e => {
@@ -6777,7 +6817,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             onClose()
           }} style={{
             background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
-            borderRadius:'8px', padding:'8px 20px', cursor:'pointer', fontSize:'13px'
+            borderRadius:'8px', padding:'8px 20px', cursor:'pointer', fontSize:'var(--cc-sm)'
           }}>🗑️ Cancelar / Eliminar borrador</button>
           <div style={{ display:'flex', gap:'8px' }}>
             {tabActivo < 3 && (
@@ -6787,14 +6827,14 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 setTabActivo(tabActivo + 1)
               }} style={{
                 background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
-                padding:'8px 24px', cursor:'pointer', fontWeight:'700', fontSize:'13px'
+                padding:'8px 24px', cursor:'pointer', fontWeight:'700', fontSize:'var(--cc-sm)'
               }}>Siguiente →</button>
             )}
             {tabActivo === 3 && (
               <button onClick={guardarReporte} disabled={guardando} style={{
                 background: guardando ? t.border : '#10B981', color:'#fff', border:'none',
                 borderRadius:'8px', padding:'8px 24px', cursor: guardando ? 'not-allowed' : 'pointer',
-                fontWeight:'700', fontSize:'13px'
+                fontWeight:'700', fontSize:'var(--cc-sm)'
               }}>{guardando ? 'Guardando...' : '✅ Guardar y Enviar'}</button>
             )}
           </div>
@@ -6812,20 +6852,20 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               <div>
                 <div style={{ fontWeight:'700', color:t.text }}>📝 Registro #{String(modalRegistro + 1).padStart(3,'0')}</div>
                 {registros[modalRegistro].nombre && (
-                  <div style={{ fontSize:'12px', color:t.primary, fontWeight:'600', marginTop:'2px' }}>
+                  <div style={{ fontSize:'var(--cc-sm)', color:t.primary, fontWeight:'600', marginTop:'2px' }}>
                     📋 {registros[modalRegistro].nombre}
                   </div>
                 )}
               </div>
               <button onClick={() => setModalRegistro(null)} style={{
-                background:'transparent', border:'none', fontSize:'20px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                background:'transparent', border:'none', fontSize:'var(--cc-title)', cursor:'pointer', color:t.textMuted }}>✕</button>
             </div>
             <div style={{ flex:1, overflowY:'auto', padding:'20px', display:'flex', flexDirection:'column', gap:'14px' }}>
               {/* Dimensiones + Unidad en una sola fila */}
               <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr 1fr', gap:'10px' }}>
                 {[['longitud','Longitud'],['ancho','Ancho'],['espesor','Espesor'],['cantidad','Cantidad (x N)']].map(([campo, label]) => (
                   <div key={campo}>
-                    <label style={{ fontSize:'11px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>{label}</label>
+                    <label style={{ fontSize:'var(--cc-label)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>{label}</label>
                     <input type='number' step='0.01' value={registros[modalRegistro][campo] || ''}
                       onChange={e => {
                         const a=[...registros]
@@ -6836,14 +6876,14 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                         setRegistros(a)
                       }}
                       placeholder='0'
-                      style={{ width:'100%', padding:'8px 10px', borderRadius:'8px', fontSize:'13px', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }} />
+                      style={{ width:'100%', padding:'8px 10px', borderRadius:'8px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }} />
                   </div>
                 ))}
                 <div>
-                  <label style={{ fontSize:'11px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>Unidad</label>
+                  <label style={{ fontSize:'var(--cc-label)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>Unidad</label>
                   <select value={registros[modalRegistro].unidad || ''}
                     onChange={e => { const a=[...registros]; a[modalRegistro]={...a[modalRegistro], unidad:e.target.value}; setRegistros(a) }}
-                    style={{ width:'100%', padding:'8px 10px', borderRadius:'8px', fontSize:'13px', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }}>
+                    style={{ width:'100%', padding:'8px 10px', borderRadius:'8px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box' }}>
                     <option value=''>--</option>
                     {['m','m²','m³','ml','und','kg','ton','gl','vje','día','mes','Otro'].map(u => (
                       <option key={u} value={u}>{u}</option>
@@ -6853,29 +6893,29 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     <input value={registros[modalRegistro].unidadOtro || ''}
                       onChange={e => { const a=[...registros]; a[modalRegistro]={...a[modalRegistro], unidadOtro:e.target.value}; setRegistros(a) }}
                       placeholder="Especificar unidad..."
-                      style={{ width:'100%', padding:'6px 10px', borderRadius:'6px', fontSize:'12px', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', marginTop:'4px' }} />
+                      style={{ width:'100%', padding:'6px 10px', borderRadius:'6px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', marginTop:'4px' }} />
                   )}
                 </div>
               </div>
               {/* Cantidad total */}
               <div style={{ padding:'10px 14px', background:t.bg, borderRadius:'8px', display:'flex', justifyContent:'space-between' }}>
-                <span style={{ fontSize:'13px', color:t.textMuted, fontWeight:'600' }}>CANTIDAD TOTAL</span>
-                <span style={{ fontSize:'16px', fontWeight:'800', color:'#10B981' }}>
+                <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, fontWeight:'600' }}>CANTIDAD TOTAL</span>
+                <span style={{ fontSize:'var(--cc-lg)', fontWeight:'800', color:'#10B981' }}>
                   {registros[modalRegistro].cantidad_total != null ? Number(registros[modalRegistro].cantidad_total).toFixed(4) : '—'}
                 </span>
               </div>
               {/* Observación */}
               <div>
-                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>OBSERVACIÓN *</label>
+                <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>OBSERVACIÓN *</label>
                 <textarea value={registros[modalRegistro].observacion || ''}
                   onChange={e => { const a=[...registros]; a[modalRegistro]={...a[modalRegistro], observacion:e.target.value}; setRegistros(a) }}
                   rows={3} placeholder="Descripción detallada de la actividad..."
-                  style={{ width:'100%', padding:'8px 12px', borderRadius:'8px', fontSize:'13px', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box', resize:'vertical' }} />
+                  style={{ width:'100%', padding:'8px 12px', borderRadius:'8px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box', resize:'vertical' }} />
               </div>
               {/* Foto obra - ancho completo */}
               <div>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'4px' }}>
-                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted }}>
+                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted }}>
                     📸 FOTO OBRA * 
                     {registros[modalRegistro].foto_numero && (
                       <span style={{ color:t.primary, marginLeft:'8px' }}>#{String(registros[modalRegistro].foto_numero).padStart(4,'0')}</span>
@@ -6887,7 +6927,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 )}
                 <button onClick={() => setModalGaleria(true)} style={{
                   background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
-                  borderRadius:'6px', padding:'5px 12px', fontSize:'11px', cursor:'pointer', marginBottom:'6px'
+                  borderRadius:'6px', padding:'5px 12px', fontSize:'var(--cc-label)', cursor:'pointer', marginBottom:'6px'
                 }}>🖼️ Usar foto de galería</button>                
                 <input type='file' accept='image/*' onChange={async e => {
                   const file = e.target.files[0]; if (!file) return
@@ -6900,12 +6940,12 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                     const data = await r.json()
                     const a=[...registros]; a[modalRegistro]={...a[modalRegistro], foto_url: data.url, foto_numero: numR.numero, _fotoOk: true}; setRegistros(a)
                   } catch(e) { alert('Error subiendo foto') }
-                }} style={{ width:'100%', fontSize:'12px' }} />
+                }} style={{ width:'100%', fontSize:'var(--cc-sm)' }} />
                 {!registros[modalRegistro]._fotoOk && (
-                  <div style={{ color:'#F59E0B', fontSize:'11px', marginTop:'4px' }}>⚠️ La foto es obligatoria para guardar el registro</div>
+                  <div style={{ color:'#F59E0B', fontSize:'var(--cc-label)', marginTop:'4px' }}>⚠️ La foto es obligatoria para guardar el registro</div>
                 )}
                 {registros[modalRegistro]._fotoOk && (
-                  <div style={{ color:'#10B981', fontSize:'12px', marginTop:'4px' }}>✅ Foto #{String(registros[modalRegistro].foto_numero).padStart(4,'0')} cargada</div>
+                  <div style={{ color:'#10B981', fontSize:'var(--cc-sm)', marginTop:'4px' }}>✅ Foto #{String(registros[modalRegistro].foto_numero).padStart(4,'0')} cargada</div>
                 )}
               </div>
             </div>
@@ -6935,7 +6975,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 setModalRegistro(null)
               }} style={{
                 background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
-                padding:'8px 24px', cursor:'pointer', fontWeight:'700', fontSize:'13px'
+                padding:'8px 24px', cursor:'pointer', fontWeight:'700', fontSize:'var(--cc-sm)'
               }}>✅ Guardar Registro</button>
             </div>
           </div>
@@ -6952,15 +6992,15 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               display:'flex', justifyContent:'space-between', alignItems:'center' }}>
               <div style={{ fontWeight:'700', color:t.text }}>🖼️ Galería de Fotos</div>
               <button onClick={() => setModalGaleria(false)} style={{
-                background:'transparent', border:'none', fontSize:'20px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                background:'transparent', border:'none', fontSize:'var(--cc-title)', cursor:'pointer', color:t.textMuted }}>✕</button>
             </div>
             <div style={{ padding:'16px', borderBottom:`1px solid ${t.border}`, display:'flex', gap:'8px', alignItems:'center' }}>
-              <label style={{ fontSize:'12px', color:t.textMuted }}>Desde:</label>
+              <label style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Desde:</label>
               <input type='date' onChange={e => setGaleriaFechaDesde(e.target.value)}
-                style={{ padding:'6px 10px', borderRadius:'6px', fontSize:'12px', background:t.bg, color:t.text, border:`1px solid ${t.border}` }} />
-              <label style={{ fontSize:'12px', color:t.textMuted }}>Hasta:</label>
+                style={{ padding:'6px 10px', borderRadius:'6px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}` }} />
+              <label style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Hasta:</label>
               <input type='date' onChange={e => setGaleriaFechaHasta(e.target.value)}
-                style={{ padding:'6px 10px', borderRadius:'6px', fontSize:'12px', background:t.bg, color:t.text, border:`1px solid ${t.border}` }} />
+                style={{ padding:'6px 10px', borderRadius:'6px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}` }} />
             </div>
             <div style={{ flex:1, overflowY:'auto', padding:'16px' }}>
               <GaleriaFotos
@@ -6989,15 +7029,15 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               display:'flex', justifyContent:'space-between', alignItems:'center' }}>
               <div style={{ fontWeight:'700', color:t.text }}>📐 Galería de Gráficos</div>
               <button onClick={() => setModalGaleriaGrafico(false)} style={{
-                background:'transparent', border:'none', fontSize:'20px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                background:'transparent', border:'none', fontSize:'var(--cc-title)', cursor:'pointer', color:t.textMuted }}>✕</button>
             </div>
             <div style={{ padding:'16px', borderBottom:`1px solid ${t.border}`, display:'flex', gap:'8px', alignItems:'center' }}>
-              <label style={{ fontSize:'12px', color:t.textMuted }}>Desde:</label>
+              <label style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Desde:</label>
               <input type='date' onChange={e => setGaleriaGraficoFechaDesde(e.target.value)}
-                style={{ padding:'6px 10px', borderRadius:'6px', fontSize:'12px', background:t.bg, color:t.text, border:`1px solid ${t.border}` }} />
-              <label style={{ fontSize:'12px', color:t.textMuted }}>Hasta:</label>
+                style={{ padding:'6px 10px', borderRadius:'6px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}` }} />
+              <label style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Hasta:</label>
               <input type='date' onChange={e => setGaleriaGraficoFechaHasta(e.target.value)}
-                style={{ padding:'6px 10px', borderRadius:'6px', fontSize:'12px', background:t.bg, color:t.text, border:`1px solid ${t.border}` }} />
+                style={{ padding:'6px 10px', borderRadius:'6px', fontSize:'var(--cc-sm)', background:t.bg, color:t.text, border:`1px solid ${t.border}` }} />
             </div>
             <div style={{ flex:1, overflowY:'auto', padding:'16px' }}>
               <GaleriaFotos
@@ -7025,42 +7065,42 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               display:'flex', justifyContent:'space-between', alignItems:'center' }}>
               <div style={{ fontWeight:'700', color:t.text }}>📄 Nueva Plantilla — {capituloSel}</div>
               <button onClick={() => setModalCrearPlantilla(false)} style={{
-                background:'transparent', border:'none', fontSize:'20px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                background:'transparent', border:'none', fontSize:'var(--cc-title)', cursor:'pointer', color:t.textMuted }}>✕</button>
             </div>
             <div style={{ flex:1, overflowY:'auto', padding:'20px', display:'flex', flexDirection:'column', gap:'16px' }}>
               <div>
-                <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
+                <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>
                   NOMBRE DE LA PLANTILLA *
                 </label>
                 <input value={nuevaPlantillaNombre} onChange={e => setNuevaPlantillaNombre(e.target.value)}
                   placeholder="Ej: Tubería alcantarillado..." style={{
-                    width:'100%', padding:'8px 12px', borderRadius:'8px', fontSize:'13px',
+                    width:'100%', padding:'8px 12px', borderRadius:'8px', fontSize:'var(--cc-sm)',
                     background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none', boxSizing:'border-box'
                   }} />
               </div>
               <div>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
-                  <label style={{ fontSize:'12px', fontWeight:'600', color:t.textMuted }}>ACTIVIDADES *</label>
+                  <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted }}>ACTIVIDADES *</label>
                   <button onClick={() => setNuevaPlantillaItems(prev => [...prev, {nombre:'', descripcion:''}])}
                     style={{ background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
-                      borderRadius:'6px', padding:'4px 10px', fontSize:'12px', cursor:'pointer' }}>+ Agregar</button>
+                      borderRadius:'6px', padding:'4px 10px', fontSize:'var(--cc-sm)', cursor:'pointer' }}>+ Agregar</button>
                 </div>
                 {nuevaPlantillaItems.map((item, idx) => (
                   <div key={idx} style={{ display:'grid', gridTemplateColumns:'1fr 1fr 28px', gap:'8px', marginBottom:'8px' }}>
                     <input value={item.nombre}
                       onChange={e => { const a=[...nuevaPlantillaItems]; a[idx]={...a[idx],nombre:e.target.value}; setNuevaPlantillaItems(a) }}
                       placeholder="Nombre actividad..." style={{
-                        padding:'7px 10px', borderRadius:'6px', fontSize:'12px',
+                        padding:'7px 10px', borderRadius:'6px', fontSize:'var(--cc-sm)',
                         background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none'
                       }} />
                     <input value={item.descripcion}
                       onChange={e => { const a=[...nuevaPlantillaItems]; a[idx]={...a[idx],descripcion:e.target.value}; setNuevaPlantillaItems(a) }}
                       placeholder="Descripción..." style={{
-                        padding:'7px 10px', borderRadius:'6px', fontSize:'12px',
+                        padding:'7px 10px', borderRadius:'6px', fontSize:'var(--cc-sm)',
                         background:t.bg, color:t.text, border:`1px solid ${t.border}`, outline:'none'
                       }} />
                     <button onClick={() => setNuevaPlantillaItems(prev => prev.filter((_,i) => i!==idx))}
-                      style={{ background:'transparent', border:'none', color:'#EF4444', cursor:'pointer', fontSize:'16px' }}>✕</button>
+                      style={{ background:'transparent', border:'none', color:'#EF4444', cursor:'pointer', fontSize:'var(--cc-lg)' }}>✕</button>
                   </div>
                 ))}
               </div>
@@ -7068,7 +7108,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             <div style={{ padding:'16px 20px', borderTop:`1px solid ${t.border}`, display:'flex', justifyContent:'flex-end', gap:'8px' }}>
               <button onClick={() => setModalCrearPlantilla(false)} style={{
                 background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
-                borderRadius:'8px', padding:'8px 20px', cursor:'pointer', fontSize:'13px' }}>Cancelar</button>
+                borderRadius:'8px', padding:'8px 20px', cursor:'pointer', fontSize:'var(--cc-sm)' }}>Cancelar</button>
               <button onClick={async () => {
                 if (!nuevaPlantillaNombre.trim()) { alert('Nombre requerido'); return }
                 const items = nuevaPlantillaItems.filter(i => i.nombre.trim())
@@ -7088,7 +7128,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 } catch(e) { alert('Error guardando plantilla') }
               }} style={{
                 background:t.primary, color:'#fff', border:'none', borderRadius:'8px',
-                padding:'8px 20px', cursor:'pointer', fontWeight:'700', fontSize:'13px'
+                padding:'8px 20px', cursor:'pointer', fontWeight:'700', fontSize:'var(--cc-sm)'
               }}>Guardar Plantilla</button>
             </div>
           </div>
@@ -7104,11 +7144,11 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             <div style={{ padding:'16px 20px', borderBottom:`1px solid ${t.border}`,
               display:'flex', justifyContent:'space-between', alignItems:'center' }}>
               <div style={{ fontWeight:'700', color:t.text }}>🗺️ Seleccionar PK_ID en el mapa</div>
-              <div style={{ fontSize:'12px', color:t.textMuted }}>Haz click en un polígono para seleccionarlo</div>
+              <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Haz click en un polígono para seleccionarlo</div>
               <button
                 type="button"
                 onClick={() => setModalMapaPk(false)}
-                style={{ background:'transparent', border:'none', fontSize:'20px', cursor:'pointer', color:t.textMuted }}
+                style={{ background:'transparent', border:'none', fontSize:'var(--cc-title)', cursor:'pointer', color:t.textMuted }}
               >
                 ✕
               </button>
@@ -7264,18 +7304,18 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
 
       {/* Loading */}
       {loading && (
-        <div style={{ position:'absolute',top:0,left:0,right:0,bottom:0,background:t.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',color:t.textMuted }}>
+        <div style={{ position:'absolute',top:0,left:0,right:0,bottom:0,background:t.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'var(--cc-body)',color:t.textMuted }}>
           ⏳ Cargando plano...
         </div>
       )}
 
       {/* Leyenda */}
       <div style={{ position:'absolute',bottom:'24px',left:'16px',background:t.bgCard+'EE',border:`1px solid ${t.border}`,borderRadius:'10px',padding:'10px 14px',boxShadow:'0 4px 16px rgba(0,0,0,0.3)' }}>
-        <div style={{ fontSize:'10px',fontWeight:'700',color:t.textMuted,marginBottom:'8px',letterSpacing:'0.5px' }}>AVANCE COBRO</div>
+        <div style={{ fontSize:'var(--cc-caption)',fontWeight:'700',color:t.textMuted,marginBottom:'8px',letterSpacing:'0.5px' }}>AVANCE COBRO</div>
         {[['#10B981','< 70%'],['#F59E0B','70% – 90%'],['#EF4444','90% – 100%'],['#DC2626','> 100% Sobrecosto']].map(([c,l]) => (
           <div key={l} style={{ display:'flex',alignItems:'center',gap:'8px',marginBottom:'4px' }}>
             <div style={{ width:'14px',height:'14px',borderRadius:'3px',background:c,flexShrink:0 }}/>
-            <span style={{ fontSize:'11px',color:t.text }}>{l}</span>
+            <span style={{ fontSize:'var(--cc-label)',color:t.text }}>{l}</span>
           </div>
         ))}
       </div>
@@ -7284,8 +7324,8 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
       {seleccionado && (
         <div style={{ position:'absolute',top:'16px',right:'60px',background:t.bgCard+'EE',border:`1px solid ${t.border}`,borderRadius:'10px',padding:'14px 16px',boxShadow:'0 4px 16px rgba(0,0,0,0.3)',minWidth:'220px' }}>
           <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'10px' }}>
-            <div style={{ fontSize:'13px',fontWeight:'700',color:t.primary }}>PK_ID: {seleccionado.pk_id}</div>
-            <button onClick={() => setSeleccionado(null)} style={{ background:'transparent',border:'none',cursor:'pointer',color:t.textMuted,fontSize:'16px' }}>✕</button>
+            <div style={{ fontSize:'var(--cc-sm)',fontWeight:'700',color:t.primary }}>PK_ID: {seleccionado.pk_id}</div>
+            <button onClick={() => setSeleccionado(null)} style={{ background:'transparent',border:'none',cursor:'pointer',color:t.textMuted,fontSize:'var(--cc-lg)' }}>✕</button>
           </div>
           <div style={{ display:'flex',flexDirection:'column',gap:'6px' }}>
             {[
@@ -7295,12 +7335,12 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
               ['Estado',       seleccionado.sobrecosto ? '🔴 Sobrecosto' : seleccionado.pct >= 90 ? '🟡 Crítico' : seleccionado.pct >= 70 ? '🟠 Alerta' : '🟢 Normal'],
             ].map(([label, val]) => (
               <div key={label} style={{ display:'flex',justifyContent:'space-between',gap:'12px' }}>
-                <span style={{ fontSize:'11px',color:t.textMuted }}>{label}</span>
-                <span style={{ fontSize:'11px',fontWeight:'700',color:t.text }}>{val}</span>
+                <span style={{ fontSize:'var(--cc-label)',color:t.textMuted }}>{label}</span>
+                <span style={{ fontSize:'var(--cc-label)',fontWeight:'700',color:t.text }}>{val}</span>
               </div>
             ))}
           </div>
-          <div style={{ marginTop:'10px',padding:'4px 0',borderTop:`1px solid ${t.border}`,fontSize:'10px',color:t.textMuted,textAlign:'center' }}>
+          <div style={{ marginTop:'10px',padding:'4px 0',borderTop:`1px solid ${t.border}`,fontSize:'var(--cc-caption)',color:t.textMuted,textAlign:'center' }}>
             Click en otro polígono para ver su detalle
           </div>
         </div>
@@ -7435,7 +7475,7 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null, bearin
       background: modo === key ? color : 'transparent',
       color: modo === key ? '#fff' : t.textMuted,
       border: `1.5px solid ${modo === key ? color : t.border}`,
-      borderRadius: '20px', padding: '2px 10px', fontSize: '10px',
+      borderRadius: '20px', padding: '2px 10px', fontSize: 'var(--cc-caption)',
       fontWeight: modo === key ? '700' : '400', cursor: 'pointer',
       transition: 'all 0.15s'
     }}>{label}</button>
@@ -7451,16 +7491,16 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null, bearin
       <div style={{ position:'relative', width:'100%', height:`${height}px`, borderRadius:'8px', overflow:'hidden' }}>
         <div ref={mapRef} style={{ width:'100%', height:'100%' }} />
         {!listo && (
-          <div style={{ position:'absolute', top:0, left:0, right:0, bottom:0, background:t.bg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:'12px', color:t.textMuted }}>
+          <div style={{ position:'absolute', top:0, left:0, right:0, bottom:0, background:t.bg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:'var(--cc-sm)', color:t.textMuted }}>
             ⏳ Cargando mapa...
           </div>
         )}
         {onClickRef.current && (
-          <div style={{ position:'absolute', top:'8px', left:'8px', background:t.bgCard+'DD', borderRadius:'6px', padding:'4px 8px', fontSize:'9px', color:t.primary, fontWeight:'700' }}>
+          <div style={{ position:'absolute', top:'8px', left:'8px', background:t.bgCard+'DD', borderRadius:'6px', padding:'4px 8px', fontSize:'var(--cc-caption)', color:t.primary, fontWeight:'700' }}>
             👆 Click en polígono para ver detalle
           </div>
         )}
-        <div style={{ position:'absolute', bottom:'8px', left:'8px', background:t.bgCard+'DD', borderRadius:'6px', padding:'5px 8px', fontSize:'9px', display:'flex', gap:'6px', flexWrap:'wrap' }}>
+        <div style={{ position:'absolute', bottom:'8px', left:'8px', background:t.bgCard+'DD', borderRadius:'6px', padding:'5px 8px', fontSize:'var(--cc-caption)', display:'flex', gap:'6px', flexWrap:'wrap' }}>
           {modo !== 'presupuesto' && [['#10B981','<70%'],['#F59E0B','70-90%'],['#EF4444','90-100%'],['#DC2626','>100%']].map(([c,l]) => (
             <div key={l} style={{ display:'flex', alignItems:'center', gap:'3px', color:t.textMuted }}>
               <div style={{ width:'8px', height:'8px', borderRadius:'2px', background:c }}/>{l}
@@ -7594,7 +7634,7 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
       background: tab===key ? t.primary : 'transparent',
       color: tab===key ? '#fff' : t.textMuted,
       border: `1px solid ${tab===key ? t.primary : t.border}`,
-      borderRadius:'20px', padding:'4px 14px', fontSize:'12px',
+      borderRadius:'20px', padding:'4px 14px', fontSize:'var(--cc-sm)',
       fontWeight: tab===key ? '700' : '400', cursor:'pointer'
     }}>{label}</button>
   )
@@ -7612,19 +7652,19 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'4px' }}>
           <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
             {noLeida && <div style={{ width:'8px', height:'8px', borderRadius:'50%', background:t.primary, flexShrink:0 }}/>}
-            <span style={{ fontSize:'12px', fontWeight:'700', color:t.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'220px' }}>{n.asunto}</span>
+            <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'220px' }}>{n.asunto}</span>
           </div>
-          <span style={{ fontSize:'10px', color:t.textMuted, flexShrink:0, marginLeft:'8px' }}>{fmtFecha(n.created_at)}</span>
+          <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, flexShrink:0, marginLeft:'8px' }}>{fmtFecha(n.created_at)}</span>
         </div>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <span style={{ fontSize:'11px', color:t.textMuted }}>
+          <span style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>
             {esRecibido ? `De: ${n.remitente_nombre}` : `Para: ${destinatarios.find(d=>d.id===n.destinatario_id)?.nombre || (n.destinatario_id ? `#${n.destinatario_id}` : 'Todos')}`}
           </span>
-          <span style={{ fontSize:'10px', background: TIPO_COLOR[n.tipo]+'22', color: TIPO_COLOR[n.tipo], border:`1px solid ${TIPO_COLOR[n.tipo]}44`, borderRadius:'20px', padding:'1px 8px' }}>
+          <span style={{ fontSize:'var(--cc-caption)', background: TIPO_COLOR[n.tipo]+'22', color: TIPO_COLOR[n.tipo], border:`1px solid ${TIPO_COLOR[n.tipo]}44`, borderRadius:'20px', padding:'1px 8px' }}>
             {TIPO_LABEL[n.tipo]}
           </span>
         </div>
-        {n.mensaje && <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'4px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{n.mensaje}</div>}
+        {n.mensaje && <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'4px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{n.mensaje}</div>}
       </div>
     )
   }
@@ -7637,12 +7677,12 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
           background: abierto ? t.primary+'22' : 'transparent',
           border: `1px solid ${abierto ? t.primary : t.border}`,
           borderRadius:'8px', padding:'6px 12px', cursor:'pointer',
-          color: abierto ? t.primary : t.textMuted, fontSize:'18px', lineHeight:1,
+          color: abierto ? t.primary : t.textMuted, fontSize:'var(--cc-lg)', lineHeight:1,
           display:'flex', alignItems:'center', gap:'4px'
         }}>
           🔔
           {noLeidas > 0 && (
-            <span style={{ background:'#EF4444', color:'#fff', borderRadius:'20px', fontSize:'10px', fontWeight:'700', padding:'1px 6px', minWidth:'16px', textAlign:'center' }}>
+            <span style={{ background:'#EF4444', color:'#fff', borderRadius:'20px', fontSize:'var(--cc-caption)', fontWeight:'700', padding:'1px 6px', minWidth:'16px', textAlign:'center' }}>
               {noLeidas > 99 ? '99+' : noLeidas}
             </span>
           )}
@@ -7654,12 +7694,12 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
         <div style={{ position:'fixed', top:0, right:0, bottom:0, width:'400px', background:t.bgCard, borderLeft:`1px solid ${t.border}`, zIndex:9998, display:'flex', flexDirection:'column', boxShadow:'-4px 0 24px rgba(0,0,0,0.2)' }}>
           {/* Header del buzón */}
           <div style={{ padding:'16px 20px', borderBottom:`1px solid ${t.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <div style={{ fontSize:'15px', fontWeight:'700', color:t.text }}>🔔 Notificaciones</div>
+            <div style={{ fontSize:'var(--cc-md)', fontWeight:'700', color:t.text }}>🔔 Notificaciones</div>
             <div style={{ display:'flex', gap:'8px' }}>
-              <button onClick={() => setMostrarNuevo(true)} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'5px 12px', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
+              <button onClick={() => setMostrarNuevo(true)} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'5px 12px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer' }}>
                 ✉️ Nuevo
               </button>
-              <button onClick={() => setAbierto(false)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+              <button onClick={() => setAbierto(false)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
             </div>
           </div>
 
@@ -7673,12 +7713,12 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
           <div style={{ flex:1, overflowY:'auto', padding:'12px 16px' }}>
             {tab === 'recibidos' && (
               recibidos.length === 0
-                ? <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin notificaciones</div>
+                ? <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin notificaciones</div>
                 : recibidos.map(n => <ItemNotif key={n.id} n={n} esRecibido={true} />)
             )}
             {tab === 'enviados' && (
               enviados.length === 0
-                ? <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin mensajes enviados</div>
+                ? <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin mensajes enviados</div>
                 : enviados.map(n => <ItemNotif key={n.id} n={n} esRecibido={false} />)
             )}
           </div>
@@ -7687,7 +7727,7 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
           {!esDev && (
             <div style={{ padding:'12px 16px', borderTop:`1px solid ${t.border}` }}>
               <button onClick={() => { setNuevo({ destinatario_id:'', asunto:'', mensaje:'', tipo:'SOPORTE' }); setMostrarNuevo(true) }}
-                style={{ width:'100%', background:'#F59E0B22', border:'1px solid #F59E0B66', borderRadius:'8px', padding:'8px', color:'#F59E0B', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
+                style={{ width:'100%', background:'#F59E0B22', border:'1px solid #F59E0B66', borderRadius:'8px', padding:'8px', color:'#F59E0B', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer' }}>
                 🐛 Reportar bug / Solicitar al Desarrollador
               </button>
             </div>
@@ -7703,19 +7743,19 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
             onClick={e => e.stopPropagation()}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px' }}>
               <div>
-                <div style={{ fontSize:'15px', fontWeight:'700', color:t.text }}>{hilo[0]?.asunto}</div>
-                <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>
+                <div style={{ fontSize:'var(--cc-md)', fontWeight:'700', color:t.text }}>{hilo[0]?.asunto}</div>
+                <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'2px' }}>
                   {hilo.length} mensaje{hilo.length !== 1 ? 's' : ''} en este hilo
                 </div>
               </div>
               <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
                 {hilo[0]?.modulo && (
                   <button onClick={() => { onNavegar(hilo[0]); setHiloActivo(null); setAbierto(false) }}
-                    style={{ background:t.primary+'22', border:`1px solid ${t.primary}44`, borderRadius:'8px', padding:'5px 12px', color:t.primary, fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
+                    style={{ background:t.primary+'22', border:`1px solid ${t.primary}44`, borderRadius:'8px', padding:'5px 12px', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer' }}>
                     🔍 Rastrear registro
                   </button>
                 )}
-                <button onClick={() => setHiloActivo(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                <button onClick={() => setHiloActivo(null)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
               </div>
             </div>
             <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:'10px', marginBottom:'14px' }}>
@@ -7727,10 +7767,10 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
                 return (
                   <div key={m.id} style={{ background: esMio ? t.primary+'11' : t.bg, border:`1px solid ${esMio ? t.primary+'33' : t.border}`, borderRadius:'10px', padding:'12px' }}>
                     <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'6px' }}>
-                      <span style={{ fontSize:'12px', fontWeight:'700', color: esMio ? t.primary : t.text }}>{esMio ? 'Tú' : m.remitente_nombre}</span>
-                      <span style={{ fontSize:'10px', color:t.textMuted }}>{fmtFecha(m.created_at)}</span>
+                      <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color: esMio ? t.primary : t.text }}>{esMio ? 'Tú' : m.remitente_nombre}</span>
+                      <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>{fmtFecha(m.created_at)}</span>
                     </div>
-                    <div style={{ fontSize:'13px', color:t.text, lineHeight:1.6 }}>{m.mensaje}</div>
+                    <div style={{ fontSize:'var(--cc-sm)', color:t.text, lineHeight:1.6 }}>{m.mensaje}</div>
                   </div>
                 )
               })}
@@ -7740,14 +7780,14 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
               <div style={{ position:'relative' }}>
                 <textarea value={respuesta} onChange={e => setRespuesta(e.target.value)}
                   placeholder="Escribe tu respuesta..."
-                  style={{ width:'100%', minHeight:'72px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 10px', color:t.text, fontSize:'13px', resize:'vertical', boxSizing:'border-box' }} />
+                  style={{ width:'100%', minHeight:'72px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 10px', color:t.text, fontSize:'var(--cc-sm)', resize:'vertical', boxSizing:'border-box' }} />
                 <div style={{ position:'absolute', bottom:'8px', right:'8px' }}>
                   <EmojiPicker t={t} onSelect={em => setRespuesta(prev => prev + em)} />
                 </div>
               </div>
               <div style={{ display:'flex', justifyContent:'flex-end', marginTop:'8px' }}>
                 <button onClick={responder} disabled={!respuesta.trim()}
-                  style={{ background: respuesta.trim() && !respondiendo ? t.primary : t.border, color: respuesta.trim() && !respondiendo ? '#fff' : t.textMuted, border:'none', borderRadius:'8px', padding:'8px 20px', fontSize:'13px', fontWeight:'700', cursor: respuesta.trim() && !respondiendo ? 'pointer' : 'not-allowed', opacity: respondiendo ? 0.7 : 1 }}>
+                  style={{ background: respuesta.trim() && !respondiendo ? t.primary : t.border, color: respuesta.trim() && !respondiendo ? '#fff' : t.textMuted, border:'none', borderRadius:'8px', padding:'8px 20px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor: respuesta.trim() && !respondiendo ? 'pointer' : 'not-allowed', opacity: respondiendo ? 0.7 : 1 }}>
                   {respondiendo ? 'Enviando...' : '↩ Responder'}
                 </button>
               </div>
@@ -7763,14 +7803,14 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
           <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'28px', width:'480px', maxWidth:'95vw', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'20px' }}>
-              <div style={{ fontSize:'15px', fontWeight:'700', color:t.text }}>✉️ Nuevo Mensaje</div>
-              <button onClick={() => setMostrarNuevo(false)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+              <div style={{ fontSize:'var(--cc-md)', fontWeight:'700', color:t.text }}>✉️ Nuevo Mensaje</div>
+              <button onClick={() => setMostrarNuevo(false)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
             </div>
             {esDev && (
               <div style={{ marginBottom:'14px' }}>
-                <label style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>TIPO</label>
+                <label style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>TIPO</label>
                 <select value={nuevo.tipo} onChange={e => setNuevo({...nuevo, tipo: e.target.value, destinatario_id: e.target.value === 'BROADCAST' ? '' : nuevo.destinatario_id})}
-                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'13px' }}>
+                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'var(--cc-sm)' }}>
                   <option value="MENSAJE_DIRECTO">💬 Mensaje Directo</option>
                   <option value="BROADCAST">📢 Broadcast — Todos los usuarios</option>
                 </select>
@@ -7778,9 +7818,9 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
             )}
             {nuevo.tipo !== 'BROADCAST' && (
               <div style={{ marginBottom:'14px' }}>
-                <label style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>PARA</label>
+                <label style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>PARA</label>
                 <select value={nuevo.destinatario_id} onChange={e => setNuevo({...nuevo, destinatario_id: e.target.value})}
-                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'13px' }}>
+                  style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'var(--cc-sm)' }}>
                   <option value="">— Selecciona destinatario —</option>
                   {nuevo.tipo === 'SOPORTE'
                     ? destinatarios.filter(d => d.cargo?.toLowerCase() === 'desarrollador').map(d => <option key={d.id} value={d.id}>{d.nombre} · {d.cargo}</option>)
@@ -7790,26 +7830,26 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
               </div>
             )}
             <div style={{ marginBottom:'14px' }}>
-              <label style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>ASUNTO</label>
+              <label style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>ASUNTO</label>
               <input value={nuevo.asunto} onChange={e => setNuevo({...nuevo, asunto: e.target.value})}
                 placeholder="Asunto del mensaje..."
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'13px', boxSizing:'border-box' }} />
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
             </div>
             <div style={{ marginBottom:'20px' }}>
-              <label style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>MENSAJE</label>
+              <label style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', display:'block', marginBottom:'6px' }}>MENSAJE</label>
               <div style={{ position:'relative' }}>
                 <textarea value={nuevo.mensaje} onChange={e => setNuevo({...nuevo, mensaje: e.target.value})}
                   placeholder="Escribe tu mensaje..."
-                  style={{ width:'100%', minHeight:'100px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'13px', resize:'vertical', boxSizing:'border-box' }} />
+                  style={{ width:'100%', minHeight:'100px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 12px', color:t.text, fontSize:'var(--cc-sm)', resize:'vertical', boxSizing:'border-box' }} />
                 <div style={{ position:'absolute', bottom:'8px', right:'8px' }}>
                   <EmojiPicker t={t} onSelect={em => setNuevo(n => ({...n, mensaje: n.mensaje + em}))} />
                 </div>
               </div>
             </div>
             <div style={{ display:'flex', gap:'10px', justifyContent:'flex-end' }}>
-              <button onClick={() => setMostrarNuevo(false)} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 18px', fontSize:'13px', color:t.textMuted, cursor:'pointer' }}>Cancelar</button>
+              <button onClick={() => setMostrarNuevo(false)} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'8px 18px', fontSize:'var(--cc-sm)', color:t.textMuted, cursor:'pointer' }}>Cancelar</button>
               <button onClick={enviarNuevo} disabled={enviando || !nuevo.asunto || !nuevo.mensaje || (nuevo.tipo !== 'BROADCAST' && !nuevo.destinatario_id)}
-                style={{ background: t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'8px 22px', fontSize:'13px', fontWeight:'700', cursor:'pointer', opacity: enviando ? 0.7 : 1 }}>
+                style={{ background: t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'8px 22px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', opacity: enviando ? 0.7 : 1 }}>
                 {enviando ? 'Enviando...' : '📨 Enviar'}
               </button>
             </div>
@@ -7833,22 +7873,6 @@ function sortComparativoCapitulos(rows) {
     if (na !== nb) return na - nb
     return String(a.capitulo || '').localeCompare(String(b.capitulo || ''), undefined, { numeric: true, sensitivity: 'base' })
   })
-}
-
-/** Tipografía del tab Resumen (alineada al botón A pequeño / mediano / grande del header). */
-const DASH_UI = {
-  pequena: {
-    title: 12, sub: 10, body: 10, table: 9, rowLabel: 9, legend: 10, chartLabel: 9, chartAxis: 8, chartTip: 9, barH: 8, rowGap: 5, padLabelW: 128,
-    kpiLabel: 9, kpiValue: 17, kpiSub: 9, tab: 12,
-  },
-  normal: {
-    title: 13, sub: 11, body: 11, table: 10, rowLabel: 10, legend: 11, chartLabel: 10, chartAxis: 9, chartTip: 10, barH: 9, rowGap: 6, padLabelW: 168,
-    kpiLabel: 10, kpiValue: 18, kpiSub: 10, tab: 13,
-  },
-  grande: {
-    title: 15, sub: 13, body: 13, table: 12, rowLabel: 11, legend: 12, chartLabel: 12, chartAxis: 10, chartTip: 11, barH: 11, rowGap: 7, padLabelW: 215,
-    kpiLabel: 11, kpiValue: 20, kpiSub: 12, tab: 14,
-  },
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
@@ -7923,7 +7947,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const miniMapaRef = useRef(null)
   const API_URL = API_BASE
   const contratoIdDash = usuario?.contrato_id
-  const du = DASH_UI[fontSize] || DASH_UI.normal
+  const du = useMemo(() => getDashTypoUI(fontSize), [fontSize])
 
   useEffect(() => {
     if (!contratoIdDash) return
@@ -8345,28 +8369,28 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   })
 
   const s = {
-    app: { fontFamily: "'Segoe UI', sans-serif", background: t.bg, minHeight: '100vh', color: t.text },
-    header: { background: t.headerBg, borderBottom: `1px solid ${t.border}`, padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: t.shadow, marginTop: topOffset },
-    themeSelector: { display: 'flex', gap: '6px', background: t.bg, border: `1px solid ${t.border}`, borderRadius: '20px', padding: '4px' },
-    themeBtn: (mode) => ({ background: themeMode === mode ? t.primary : 'transparent', color: themeMode === mode ? '#fff' : t.textMuted, border: 'none', borderRadius: '16px', padding: '4px 12px', fontSize: '12px', cursor: 'pointer', transition: 'all 0.2s' }),
-    body: { padding: '20px 24px', maxWidth: '1400px', margin: '0 auto' },
-    topBar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' },
-    btnCrear: { background: t.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '10px 20px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' },
-    panelsGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px', marginBottom: '20px' },
-    card: { background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '12px', padding: '20px', boxShadow: t.shadow },
-    cardLabel: { fontSize: '11px', fontWeight: '600', letterSpacing: '1.5px', color: t.textMuted, marginBottom: '8px' },
+    app: { fontFamily: "'Segoe UI', sans-serif", background: t.bg, minHeight: '100vh', color: t.text, fontSize: 'var(--cc-body)' },
+    header: { background: t.headerBg, borderBottom: `1px solid ${t.border}`, padding: 'var(--cc-space-4) var(--cc-space-5)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: t.shadow, marginTop: topOffset },
+    themeSelector: { display: 'flex', gap: 'var(--cc-space-2)', background: t.bg, border: `1px solid ${t.border}`, borderRadius: '20px', padding: '4px' },
+    themeBtn: (mode) => ({ background: themeMode === mode ? t.primary : 'transparent', color: themeMode === mode ? '#fff' : t.textMuted, border: 'none', borderRadius: '16px', padding: '4px 12px', fontSize: 'var(--cc-sm)', cursor: 'pointer', transition: 'all 0.2s' }),
+    body: { padding: 'var(--cc-space-5) var(--cc-space-5)', maxWidth: '1400px', margin: '0 auto' },
+    topBar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--cc-space-5)' },
+    btnCrear: { background: t.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '10px 20px', fontSize: 'var(--cc-body)', fontWeight: '600', cursor: 'pointer' },
+    panelsGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 'var(--cc-space-4)', marginBottom: 'var(--cc-space-5)' },
+    card: { background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '12px', padding: 'var(--cc-space-5)', boxShadow: t.shadow },
+    cardLabel: { fontSize: 'var(--cc-label)', fontWeight: '600', letterSpacing: '1.5px', color: t.textMuted, marginBottom: 'var(--cc-space-2)' },
     cardValue: { fontSize: '26px', fontWeight: '700', color: t.primary, lineHeight: 1 },
-    cardSub: { fontSize: '12px', color: t.textMuted, marginTop: '6px' },
-    analisisBtn: (key) => ({ background: analisis === key ? t.primary : t.bgCard, color: analisis === key ? '#fff' : t.textMuted, border: `1px solid ${analisis === key ? t.primary : t.border}`, borderRadius: '8px', padding: '8px 18px', fontSize: '13px', cursor: 'pointer' }),
-    table: { background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '12px', padding: '20px', boxShadow: t.shadow, marginBottom: '20px' },
-    tableHeader: { display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: '8px', fontSize: '11px', fontWeight: '600', letterSpacing: '1px', color: t.textMuted, borderBottom: `1px solid ${t.border}`, paddingBottom: '10px', marginBottom: '10px' },
-    emptyState: { textAlign: 'center', padding: '40px', color: t.textMuted, fontSize: '14px' },
-    bottomPanel: { background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '12px', padding: '20px', boxShadow: t.shadow },
-    tab: (key) => ({ background: tabInferior === key ? t.primary : t.bgCard, color: tabInferior === key ? '#fff' : t.textMuted, border: 'none', borderRadius: '8px', padding: '8px 18px', fontSize: '13px', cursor: 'pointer' }),
+    cardSub: { fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: '6px' },
+    analisisBtn: (key) => ({ background: analisis === key ? t.primary : t.bgCard, color: analisis === key ? '#fff' : t.textMuted, border: `1px solid ${analisis === key ? t.primary : t.border}`, borderRadius: '8px', padding: '8px 18px', fontSize: 'var(--cc-sm)', cursor: 'pointer' }),
+    table: { background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '12px', padding: 'var(--cc-space-5)', boxShadow: t.shadow, marginBottom: 'var(--cc-space-5)' },
+    tableHeader: { display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 1fr 1fr', gap: 'var(--cc-space-2)', fontSize: 'var(--cc-label)', fontWeight: '600', letterSpacing: '1px', color: t.textMuted, borderBottom: `1px solid ${t.border}`, paddingBottom: '10px', marginBottom: '10px' },
+    emptyState: { textAlign: 'center', padding: '40px', color: t.textMuted, fontSize: 'var(--cc-body)' },
+    bottomPanel: { background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '12px', padding: 'var(--cc-space-5)', boxShadow: t.shadow },
+    tab: (key) => ({ background: tabInferior === key ? t.primary : t.bgCard, color: tabInferior === key ? '#fff' : t.textMuted, border: 'none', borderRadius: '8px', padding: '8px 18px', fontSize: 'var(--cc-sm)', cursor: 'pointer' }),
     overlay: { position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: t.overlay, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' },
     modal: { background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '16px', padding: '32px', width: '520px', maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' },
-    input: { width: '100%', background: t.inputBg, border: `1px solid ${t.inputBorder}`, borderRadius: '8px', padding: '10px 14px', color: t.text, fontSize: '14px', outline: 'none', boxSizing: 'border-box', marginBottom: '16px' },
-    label: { fontSize: '12px', fontWeight: '600', color: t.textMuted, letterSpacing: '0.5px', marginBottom: '6px', display: 'block' },
+    input: { width: '100%', background: t.inputBg, border: `1px solid ${t.inputBorder}`, borderRadius: '8px', padding: '10px 14px', color: t.text, fontSize: 'var(--cc-input)', outline: 'none', boxSizing: 'border-box', marginBottom: '16px' },
+    label: { fontSize: 'var(--cc-sm)', fontWeight: '600', color: t.textMuted, letterSpacing: '0.5px', marginBottom: '6px', display: 'block' },
   }
 
   function handleCSV(e) {
@@ -8469,7 +8493,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  fontSize: '18px',
+                  fontSize: 'var(--cc-lg)',
                 }}
               >
                 {usuario?.foto_perfil_url ? (
@@ -8478,20 +8502,20 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   '👤'
                 )}
               </span>
-              <span style={{ fontSize: '13px', color: t.textMuted }}>
+              <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
                 <span style={{ color: t.text, fontWeight: '600' }}>{usuario?.nombre}</span>
                 {usuario?.cargo_nombre && (
-                  <span style={{ display: 'block', fontSize: '11px', opacity: 0.75, marginTop: '1px' }}>{usuario.cargo_nombre}</span>
+                  <span style={{ display: 'block', fontSize: 'var(--cc-label)', opacity: 0.75, marginTop: '1px' }}>{usuario.cargo_nombre}</span>
                 )}
               </span>
             </button>
             <BuzonNotificaciones t={t} usuario={usuario} token={getToken()} onNavegar={handleNavegar} />
             {canAdmin && (
-              <button onClick={() => setShowAdmin(true)} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.primary, fontSize: '12px', cursor: 'pointer', fontWeight: '600' }}>
+              <button onClick={() => setShowAdmin(true)} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.primary, fontSize: 'var(--cc-sm)', cursor: 'pointer', fontWeight: '600' }}>
                 ⚙ Admin
               </button>
             )}
-            <button onClick={onLogout} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.textMuted, fontSize: '12px', cursor: 'pointer' }}>
+            <button onClick={onLogout} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.textMuted, fontSize: 'var(--cc-sm)', cursor: 'pointer' }}>
               Salir
             </button>
           </div>
@@ -8516,11 +8540,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           <button onClick={() => setMenuAbierto(o => !o)} style={{
             background: 'none', border: 'none', cursor: 'pointer',
             padding: '14px 16px', display: 'flex', alignItems: 'center', gap: '10px',
-            color: t.textMuted, fontSize: '18px', borderBottom: `1px solid ${t.border}`,
+            color: t.textMuted, fontSize: 'var(--cc-lg)', borderBottom: `1px solid ${t.border}`,
             minHeight: '48px', whiteSpace: 'nowrap', width: '100%'
           }}>
-            <span style={{ fontSize:'18px', lineHeight:1 }}>☰</span>
-            {menuAbierto && <span style={{ fontSize:'12px', fontWeight:'700', letterSpacing:'1px', color:t.textMuted }}>MÓDULOS</span>}
+            <span style={{ fontSize:'var(--cc-lg)', lineHeight:1 }}>☰</span>
+            {menuAbierto && <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', letterSpacing:'1px', color:t.textMuted }}>MÓDULOS</span>}
           </button>
 
           {/* Items del menú */}
@@ -8542,10 +8566,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               display: 'flex', alignItems: 'center', gap: '12px',
               color: moduloActivo === key ? t.primary : t.textMuted,
               fontWeight: moduloActivo === key ? '700' : '400',
-              fontSize: '13px', whiteSpace: 'nowrap', width: '100%',
+              fontSize: 'var(--cc-sm)', whiteSpace: 'nowrap', width: '100%',
               transition: 'all 0.15s', textAlign: 'left',
             }}>
-              <span style={{ fontSize:'16px', lineHeight:1, flexShrink:0 }}>{icon}</span>
+              <span style={{ fontSize:'var(--cc-lg)', lineHeight:1, flexShrink:0 }}>{icon}</span>
               {menuAbierto && <span>{label}</span>}
             </button>
           ))}
@@ -8564,7 +8588,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 const u = { ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero, logo_contratista: contrato.logo_contratista ?? null, logo_interventoria: contrato.logo_interventoria ?? null, contrato_fase: contrato.fase ?? 'PRESUPUESTO' }
                 setUsuario(u)
               }}
-              style={{ fontSize: '13px', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none' }}
+              style={{ fontSize: 'var(--cc-sm)', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none' }}
             >
               {!usuario.contrato_id && (
                 <option value="">— Selecciona un contrato —</option>
@@ -8574,7 +8598,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               ))}
             </select>
           ) : (
-            <span style={{ fontSize: '13px', color: t.textMuted }}>
+            <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
               📋 Contrato: {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
             </span>
           )}
@@ -8695,7 +8719,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   <div style={{ fontSize:`${du.kpiValue - 2}px`, fontWeight:'800', color:t.primary }}>{fmtD(cobro)}</div>
                 </div>
                 {porActa.length === 0 ? (
-                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin registros aprobados por Interventoría</div>
+                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin registros aprobados por Interventoría</div>
                 ) : (() => {
                   const W = 860, H = 160, PAD = 8
                   const maxVal = Math.max(...porActa.map(a => a.cobrado), 1)
@@ -8739,7 +8763,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                           </g>
                         ))}
                       </svg>
-                      <div style={{ display:'flex', justifyContent:'space-between', marginTop:'4px', fontSize:'10px', color:t.textMuted }}>
+                      <div style={{ display:'flex', justifyContent:'space-between', marginTop:'4px', fontSize:'var(--cc-caption)', color:t.textMuted }}>
                         {porActa.length > 0 && <span>Acta {porActa[0]?.acta}</span>}
                         {porActa.length > 1 && <span>Acta {porActa[porActa.length-1]?.acta}</span>}
                       </div>
@@ -9136,11 +9160,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   {/* Header fijo */}
                   <div style={{ padding:'14px 24px', borderBottom:`1px solid ${t.border}`, display:'flex', alignItems:'center', justifyContent:'space-between', flexShrink:0, background:t.bgCard }}>
                     <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap' }}>
-                      <span style={{ fontSize:'15px', fontWeight:'800', color:t.primary }}>📊 {dashDrill[0]?.valor}</span>
+                      <span style={{ fontSize:'var(--cc-md)', fontWeight:'800', color:t.primary }}>📊 {dashDrill[0]?.valor}</span>
                       {dashDrill[1] && (
                         <>
-                          <span style={{ fontSize:'13px', color:t.textMuted }}>›</span>
-                          <span style={{ fontSize:'13px', fontWeight:'700', color:'#00A896', background:'#00A89618', borderRadius:'20px', padding:'3px 12px' }}>
+                          <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>›</span>
+                          <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:'#00A896', background:'#00A89618', borderRadius:'20px', padding:'3px 12px' }}>
                             Ítem: {dashDrill[1]?.valor}
                           </span>
                           {(() => {
@@ -9149,13 +9173,13 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                               || dashData?.find(d => d.item === dashDrill[1]?.valor)?.descripcion
                               || ''
                             return desc ? (
-                              <span style={{ fontSize:'11px', color:t.textMuted, fontStyle:'italic', maxWidth:'400px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                              <span style={{ fontSize:'var(--cc-label)', color:t.textMuted, fontStyle:'italic', maxWidth:'400px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
                                 — {desc}
                               </span>
                             ) : null
                           })()}
                           <button onClick={() => setDashDrill([dashDrill[0]])}
-                            style={{ background:'transparent', border:'none', fontSize:'12px', color:t.textMuted, cursor:'pointer' }}>✕ volver a ítems</button>
+                            style={{ background:'transparent', border:'none', fontSize:'var(--cc-sm)', color:t.textMuted, cursor:'pointer' }}>✕ volver a ítems</button>
                         </>
                       )}
                     </div>                    
@@ -9216,13 +9240,13 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                           } catch { alert('Error de conexión') }
                           finally { btn.disabled=false; btn.innerHTML=orig; btn.style.opacity='1'; btn.style.cursor='pointer' }
                         }}
-                        style={{ background:'transparent', color:'#1E8449', border:'1.5px solid #1E8449', borderRadius:'8px', padding:'5px 10px', fontSize:'16px', cursor:'pointer', lineHeight:1, transition:'all 0.15s' }}
+                        style={{ background:'transparent', color:'#1E8449', border:'1.5px solid #1E8449', borderRadius:'8px', padding:'5px 10px', fontSize:'var(--cc-lg)', cursor:'pointer', lineHeight:1, transition:'all 0.15s' }}
                         onMouseEnter={e=>{ e.currentTarget.style.background='#1E8449'; e.currentTarget.style.color='#fff' }}
                         onMouseLeave={e=>{ e.currentTarget.style.background='transparent'; e.currentTarget.style.color='#1E8449' }}>
                         📊
                       </button>
                       <button onClick={() => { setPopupCapitulo(false); setDashDrill([]) }}
-                        style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'5px 14px', fontSize:'13px', cursor:'pointer', color:t.textMuted }}>
+                        style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'5px 14px', fontSize:'var(--cc-sm)', cursor:'pointer', color:t.textMuted }}>
                         ✕ Cerrar
                       </button>
                     </div>
@@ -9234,8 +9258,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     {/* Mapa sticky */}
                     <div style={{ position:'sticky', top:0, zIndex:10, background:t.bgCard, padding:'14px 24px 10px', borderBottom:`1px solid ${t.border}44`, flexShrink:0 }}>
                       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
-                        <span style={{ fontSize:'11px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>🗺️ PLANO SEMÁFORO</span>
-                        <span style={{ fontSize:'10px', color:t.textMuted }}>{Object.keys(miniMapaColores).length} PK_IDs</span>
+                        <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>🗺️ PLANO SEMÁFORO</span>
+                        <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>{Object.keys(miniMapaColores).length} PK_IDs</span>
                       </div>
                       <MiniMapaSemaforo t={t} colores={miniMapaColores} height={240} onPkidClick={dashDrill.length >= 2 ? abrirPopupPkid : null} />
                     </div>
@@ -9255,15 +9279,15 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
                         return (
                           <div style={{ display:'flex', alignItems:'center', gap:'6px', marginBottom:'12px', flexWrap:'wrap' }}>
-                            <span style={{ fontSize:'11px', fontWeight:'700', color:'#0077B6', background:'#0077B618', borderRadius:'20px', padding:'3px 10px' }}>Cant SICOE: {totalCantSicoe.toFixed(2)}</span>
-                            <span style={{ fontSize:'11px', fontWeight:'700', color:'#0077B6', background:'#0077B618', borderRadius:'20px', padding:'3px 10px' }}>Costo SICOE: {fmtD(totalCostSicoe)}</span>
-                            <span style={{ fontSize:'11px', fontWeight:'700', color:'#00A896', background:'#00A89618', borderRadius:'20px', padding:'3px 10px' }}>Cant Cobro: {totalCantCobro.toFixed(2)}</span>
-                            <span style={{ fontSize:'11px', fontWeight:'700', color:'#00A896', background:'#00A89618', borderRadius:'20px', padding:'3px 10px' }}>Costo Cobro: {fmtD(totalCostCobro)}</span>
-                            <span style={{ fontSize:'11px', color:t.textMuted }}>|</span>
-                            <span style={{ fontSize:'11px', fontWeight:'700', color: totalDeltaCant >= 0 ? '#10B981' : '#EF4444', background: totalDeltaCant >= 0 ? '#10B98118' : '#EF444418', borderRadius:'20px', padding:'3px 10px' }}>
+                            <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:'#0077B6', background:'#0077B618', borderRadius:'20px', padding:'3px 10px' }}>Cant SICOE: {totalCantSicoe.toFixed(2)}</span>
+                            <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:'#0077B6', background:'#0077B618', borderRadius:'20px', padding:'3px 10px' }}>Costo SICOE: {fmtD(totalCostSicoe)}</span>
+                            <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:'#00A896', background:'#00A89618', borderRadius:'20px', padding:'3px 10px' }}>Cant Cobro: {totalCantCobro.toFixed(2)}</span>
+                            <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:'#00A896', background:'#00A89618', borderRadius:'20px', padding:'3px 10px' }}>Costo Cobro: {fmtD(totalCostCobro)}</span>
+                            <span style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>|</span>
+                            <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color: totalDeltaCant >= 0 ? '#10B981' : '#EF4444', background: totalDeltaCant >= 0 ? '#10B98118' : '#EF444418', borderRadius:'20px', padding:'3px 10px' }}>
                               Δ Cant: {totalDeltaCant >= 0 ? '+' : ''}{totalDeltaCant.toFixed(2)}
                             </span>
-                            <span style={{ fontSize:'11px', fontWeight:'700', color: totalDeltaCosto >= 0 ? '#10B981' : '#EF4444', background: totalDeltaCosto >= 0 ? '#10B98118' : '#EF444418', borderRadius:'20px', padding:'3px 10px' }}>
+                            <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color: totalDeltaCosto >= 0 ? '#10B981' : '#EF4444', background: totalDeltaCosto >= 0 ? '#10B98118' : '#EF444418', borderRadius:'20px', padding:'3px 10px' }}>
                               Δ Costo: {totalDeltaCosto >= 0 ? '+' : ''}{fmtD(totalDeltaCosto)}
                             </span>
                           </div>
@@ -9273,7 +9297,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       {/* Nivel 1: ítems */}
                       {dashDrill.length === 1 && (
                         dashLoading ? (
-                          <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>⏳ Cargando ítems...</div>
+                          <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>⏳ Cargando ítems...</div>
                         ) : dashData?.length > 0 ? (() => {
                           const POR_PAG = 15
                           const totalPags = Math.ceil(dashData.length / POR_PAG)
@@ -9288,15 +9312,15 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                             <div style={{ marginTop:'8px' }}>
                               {totalPags > 1 && (
                                 <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', flexWrap:'wrap' }}>
-                                  <span style={{ fontSize:'10px', color:t.textMuted }}>{paginaItems*POR_PAG+1}–{Math.min((paginaItems+1)*POR_PAG, dashData.length)} de {dashData.length} ítems</span>
+                                  <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>{paginaItems*POR_PAG+1}–{Math.min((paginaItems+1)*POR_PAG, dashData.length)} de {dashData.length} ítems</span>
                                   <button onClick={() => setDashDrillPag(p => Math.max(0,p-1))} disabled={paginaItems===0}
-                                    style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'11px', cursor:paginaItems===0?'default':'pointer', color:paginaItems===0?t.textMuted:t.text }}>‹</button>
+                                    style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'var(--cc-label)', cursor:paginaItems===0?'default':'pointer', color:paginaItems===0?t.textMuted:t.text }}>‹</button>
                                   {Array.from({length: totalPags}, (_,i) => (
                                     <button key={i} onClick={() => setDashDrillPag(i)}
-                                      style={{ background:paginaItems===i?t.primary:'transparent', color:paginaItems===i?'#fff':t.textMuted, border:`1px solid ${paginaItems===i?t.primary:t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'11px', cursor:'pointer' }}>{i+1}</button>
+                                      style={{ background:paginaItems===i?t.primary:'transparent', color:paginaItems===i?'#fff':t.textMuted, border:`1px solid ${paginaItems===i?t.primary:t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'var(--cc-label)', cursor:'pointer' }}>{i+1}</button>
                                   ))}
                                   <button onClick={() => setDashDrillPag(p => Math.min(totalPags-1,p+1))} disabled={paginaItems===totalPags-1}
-                                    style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'11px', cursor:paginaItems===totalPags-1?'default':'pointer', color:paginaItems===totalPags-1?t.textMuted:t.text }}>›</button>
+                                    style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', fontSize:'var(--cc-label)', cursor:paginaItems===totalPags-1?'default':'pointer', color:paginaItems===totalPags-1?t.textMuted:t.text }}>›</button>
                                 </div>
                               )}
                               <div style={{ width:'100%', overflowX:'auto' }}>
@@ -9332,24 +9356,24 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                                 </svg>
                               </div>
                               <div style={{ display:'flex', gap:'12px', marginTop:'6px', justifyContent:'center' }}>
-                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color:t.textMuted }}><div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#0077B6' }}/> Presupuesto</div>
-                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'10px', color:t.textMuted }}><div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#00A896' }}/> Cobro</div>
+                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'var(--cc-caption)', color:t.textMuted }}><div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#0077B6' }}/> Presupuesto</div>
+                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'var(--cc-caption)', color:t.textMuted }}><div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#00A896' }}/> Cobro</div>
                               </div>
                             </div>
                           )
-                        })() : <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>Sin ítems</div>
+                        })() : <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin ítems</div>
                       )}
 
                       {/* Nivel 2: tabla PK_ID */}
                       {dashDrill.length >= 2 && (
                         dashTablaLoad ? (
-                          <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>⏳ Cargando tabla...</div>
+                          <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>⏳ Cargando tabla...</div>
                         ) : dashTabla ? (
                           <div style={{ overflowX:'auto' }}>
-                            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
                               <thead>
                                 <tr>{['PK_ID','Cant. SICOE','Costo SICOE','Cant. Cobro','Costo Cobro','Δ Cant','Δ Costo'].map(h => (
-                                  <th key={h} style={{ padding:'6px 8px', fontSize:'10px', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'right', whiteSpace:'nowrap' }}>{h}</th>
+                                  <th key={h} style={{ padding:'6px 8px', fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'right', whiteSpace:'nowrap' }}>{h}</th>
                                 ))}</tr>
                               </thead>
                               <tbody>
@@ -9372,7 +9396,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                               </tbody>
                             </table>
                           </div>
-                        ) : <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'12px' }}>Sin datos</div>
+                        ) : <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin datos</div>
                       )}
 
                     </div>{/* fin área drill */}
@@ -9418,26 +9442,26 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   <div style={{ display:'flex', flexWrap:'wrap', gap:'10px', alignItems:'center' }}>
                     <div style={{ display:'flex', gap:'2px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'7px', padding:'2px' }}>
                       {[['capitulo','Capítulo'],['item','Ítem']].map(([k,l]) => (
-                        <button key={k} onClick={()=>{setAnalisisNivel(k);setAnalisisSeleccion(null)}} style={{ background:analisisNivel===k?t.primary:'transparent', color:analisisNivel===k?'#fff':t.textMuted, border:'none', borderRadius:'5px', padding:'5px 12px', fontSize:'11px', fontWeight:'600', cursor:'pointer' }}>{l}</button>
+                        <button key={k} onClick={()=>{setAnalisisNivel(k);setAnalisisSeleccion(null)}} style={{ background:analisisNivel===k?t.primary:'transparent', color:analisisNivel===k?'#fff':t.textMuted, border:'none', borderRadius:'5px', padding:'5px 12px', fontSize:'var(--cc-label)', fontWeight:'600', cursor:'pointer' }}>{l}</button>
                       ))}
                     </div>
-                    <select value={analisisDir} onChange={e=>{setAnalisisDir(e.target.value);setAnalisisPag(0)}} style={{ background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'11px', cursor:'pointer', outline:'none' }}>
+                    <select value={analisisDir} onChange={e=>{setAnalisisDir(e.target.value);setAnalisisPag(0)}} style={{ background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'var(--cc-label)', cursor:'pointer', outline:'none' }}>
                       <option value="todos">🔵 Todos los registros</option>
                       <option value="sobrecobro">🔴 Sobrecobro — Cobro &gt; PPTO</option>
                       <option value="subcobro">🟡 Subcobro — PPTO &gt; Cobro</option>
                       <option value="equilibrio">🟢 En equilibrio (±5%)</option>
                     </select>
-                    <div style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'11px', color:t.textMuted }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'var(--cc-label)', color:t.textMuted }}>
                       <span>|Δ| desde</span>
-                      <input type="number" min="0" placeholder="0" value={analisisRangoMin} onChange={e=>{setAnalisisRangoMin(e.target.value);setAnalisisPag(0)}} style={{ width:'68px', background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'6px', padding:'5px 7px', color:t.text, fontSize:'11px', outline:'none' }}/>
+                      <input type="number" min="0" placeholder="0" value={analisisRangoMin} onChange={e=>{setAnalisisRangoMin(e.target.value);setAnalisisPag(0)}} style={{ width:'68px', background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'6px', padding:'5px 7px', color:t.text, fontSize:'var(--cc-label)', outline:'none' }}/>
                       <span>hasta</span>
-                      <input type="number" min="0" placeholder="∞" value={analisisRangoMax} onChange={e=>{setAnalisisRangoMax(e.target.value);setAnalisisPag(0)}} style={{ width:'68px', background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'6px', padding:'5px 7px', color:t.text, fontSize:'11px', outline:'none' }}/>
-                      <span style={{fontSize:'10px'}}>millones COP</span>
+                      <input type="number" min="0" placeholder="∞" value={analisisRangoMax} onChange={e=>{setAnalisisRangoMax(e.target.value);setAnalisisPag(0)}} style={{ width:'68px', background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'6px', padding:'5px 7px', color:t.text, fontSize:'var(--cc-label)', outline:'none' }}/>
+                      <span style={{fontSize:'var(--cc-caption)'}}>millones COP</span>
                     </div>
                     {(analisisDir!=='todos'||analisisRangoMin||analisisRangoMax) && (
-                      <button onClick={()=>{setAnalisisDir('todos');setAnalisisRangoMin('');setAnalisisRangoMax('');setAnalisisPag(0)}} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', fontSize:'11px', color:t.textMuted, cursor:'pointer' }}>✕ Limpiar filtros</button>
+                      <button onClick={()=>{setAnalisisDir('todos');setAnalisisRangoMin('');setAnalisisRangoMax('');setAnalisisPag(0)}} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', fontSize:'var(--cc-label)', color:t.textMuted, cursor:'pointer' }}>✕ Limpiar filtros</button>
                     )}
-                    <div style={{ marginLeft:'auto', fontSize:'11px', color:t.textMuted, fontStyle:'italic' }}>
+                    <div style={{ marginLeft:'auto', fontSize:'var(--cc-label)', color:t.textMuted, fontStyle:'italic' }}>
                       {analisisLoading ? '⏳ Cargando datos...' : `${analisisFiltrado.length} registros`}
                     </div>
                   </div>
@@ -9449,16 +9473,16 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   {/* Mapa semáforo */}
                   <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'12px 14px', boxShadow:t.shadow }}>
                     <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
-                      <div style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>🗺️ Plano Semáforo</div>
+                      <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text }}>🗺️ Plano Semáforo</div>
                       {analisisSeleccion ? (
                         <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
-                          <span style={{ fontSize:'10px', background:t.primary+'18', color:t.primary, borderRadius:'20px', padding:'2px 10px', fontWeight:'700' }}>
+                          <span style={{ fontSize:'var(--cc-caption)', background:t.primary+'18', color:t.primary, borderRadius:'20px', padding:'2px 10px', fontWeight:'700' }}>
                             {analisisSeleccion.item ? `Ítem: ${analisisSeleccion.item}` : `Cap: ${analisisSeleccion.capitulo?.slice(0,24)}`}
                           </span>
-                          <button onClick={()=>setAnalisisSeleccion(null)} style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'13px', padding:'0' }}>✕</button>
+                          <button onClick={()=>setAnalisisSeleccion(null)} style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'var(--cc-sm)', padding:'0' }}>✕</button>
                         </div>
                       ) : (
-                        <span style={{ fontSize:'10px', color:t.textMuted, fontStyle:'italic' }}>← Clic en una fila para ver en el plano</span>
+                        <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontStyle:'italic' }}>← Clic en una fila para ver en el plano</span>
                       )}
                     </div>
                     <MiniMapaSemaforo
@@ -9468,7 +9492,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       bearing={270}
                       onPkidClick={analisisSeleccion ? abrirAnalisisMapaPopup : null}
                     />
-                    <div style={{ fontSize:'10px', color:t.textMuted, marginTop:'6px', textAlign:'center' }}>
+                    <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginTop:'6px', textAlign:'center' }}>
                       {Object.keys(analisisMapaColores).length > 0
                         ? `${Object.keys(analisisMapaColores).length} PK_IDs activos — clic en polígono para detalle`
                         : analisisSeleccion ? 'Sin PK_IDs para este registro' : 'Selecciona una fila de la tabla'}
@@ -9485,10 +9509,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       <div key={k.label}
                         onClick={()=>{setAnalisisDir(d=>d===k.key?'todos':k.key);setAnalisisPag(0)}}
                         style={{ background:t.bgCard, border:`1px solid ${analisisDir===k.key?k.color:k.color+'44'}`, borderRadius:'10px', padding:'10px 14px', boxShadow:t.shadow, borderLeft:`4px solid ${k.color}`, cursor:'pointer', transition:'border 0.15s', opacity:analisisDir!=='todos'&&analisisDir!==k.key?0.5:1 }}>
-                        <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'3px' }}>{k.icon} {k.label}</div>
-                        <div style={{ fontSize:'20px', fontWeight:'800', color:k.color, lineHeight:1, marginBottom:'2px' }}>{k.count} <span style={{fontSize:'11px',fontWeight:'400'}}>registros</span></div>
-                        {k.amount!=null && <div style={{ fontSize:'10px', fontWeight:'700', color:k.color }}>{fmtD2(k.amount)}</div>}
-                        <div style={{ fontSize:'9px', color:t.textMuted, marginTop:'2px' }}>{k.sub}</div>
+                        <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'3px' }}>{k.icon} {k.label}</div>
+                        <div style={{ fontSize:'var(--cc-title)', fontWeight:'800', color:k.color, lineHeight:1, marginBottom:'2px' }}>{k.count} <span style={{fontSize:'var(--cc-label)',fontWeight:'400'}}>registros</span></div>
+                        {k.amount!=null && <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:k.color }}>{fmtD2(k.amount)}</div>}
+                        <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginTop:'2px' }}>{k.sub}</div>
                       </div>
                     ))}
                   </div>
@@ -9497,9 +9521,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 {/* ── Top 10 desviaciones absolutas ── */}
                 {!analisisLoading && top10.length > 0 && (
                   <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'14px 16px', marginBottom:'14px', boxShadow:t.shadow }}>
-                    <div style={{ fontSize:'12px', fontWeight:'700', color:t.text, marginBottom:'10px' }}>
+                    <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text, marginBottom:'10px' }}>
                       ⚡ Top 10 — Mayor Desviación Absoluta de Costo
-                      <span style={{ fontSize:'10px', fontWeight:'400', color:t.textMuted, marginLeft:'8px' }}>sobre los registros filtrados</span>
+                      <span style={{ fontSize:'var(--cc-caption)', fontWeight:'400', color:t.textMuted, marginLeft:'8px' }}>sobre los registros filtrados</span>
                     </div>
                     {top10.map((r,i) => {
                       const maxAbs = Math.abs(top10[0].delta_costo)||1
@@ -9507,14 +9531,14 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       const color = r.estado==='SOBRECOBRO'?'#EF4444':r.estado==='SUBCOBRO'?'#F59E0B':'#10B981'
                       return (
                         <div key={i} style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'5px' }}>
-                          <div style={{ fontSize:'10px', color:t.textMuted, width:'24px', textAlign:'right', flexShrink:0 }}>#{i+1}</div>
-                          <div style={{ fontSize:'10px', color:t.text, width:'150px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.nombre}>{r.nombre}</div>
-                          {analisisNivel==='item' && <div style={{ fontSize:'9px', color:t.textMuted, width:'80px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.capitulo}>{r.capitulo}</div>}
+                          <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, width:'24px', textAlign:'right', flexShrink:0 }}>#{i+1}</div>
+                          <div style={{ fontSize:'var(--cc-caption)', color:t.text, width:'150px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.nombre}>{r.nombre}</div>
+                          {analisisNivel==='item' && <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, width:'80px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.capitulo}>{r.capitulo}</div>}
                           <div style={{ flex:1, height:'14px', background:t.border, borderRadius:'4px', overflow:'hidden' }}>
                             <div style={{ width:`${pctBar}%`, height:'100%', background:color, borderRadius:'4px', transition:'width 0.5s ease' }}/>
                           </div>
-                          <div style={{ fontSize:'10px', fontWeight:'700', color, width:'80px', textAlign:'right', flexShrink:0 }}>{r.delta_costo>0?'+':''}{fmtM2(r.delta_costo)}</div>
-                          <div style={{ fontSize:'10px', color:t.textMuted, width:'36px', textAlign:'right', flexShrink:0 }}>{Math.min(r.pct,999)}%</div>
+                          <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color, width:'80px', textAlign:'right', flexShrink:0 }}>{r.delta_costo>0?'+':''}{fmtM2(r.delta_costo)}</div>
+                          <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, width:'36px', textAlign:'right', flexShrink:0 }}>{Math.min(r.pct,999)}%</div>
                         </div>
                       )
                     })}
@@ -9523,27 +9547,27 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
                 {/* ── Tabla sortable ── */}
                 {analisisLoading ? (
-                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>⏳ Cargando datos de análisis...</div>
+                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>⏳ Cargando datos de análisis...</div>
                 ) : analisisFiltrado.length===0 ? (
-                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'13px' }}>Sin registros para los filtros seleccionados</div>
+                  <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin registros para los filtros seleccionados</div>
                 ) : (
                   <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', boxShadow:t.shadow, overflow:'hidden' }}>
                     <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 16px', borderBottom:`1px solid ${t.border}` }}>
-                      <div style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>📋 Detalle — {analisisFiltrado.length} registros</div>
+                      <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text }}>📋 Detalle — {analisisFiltrado.length} registros</div>
                       {totalPagsA > 1 && (
                         <div style={{ display:'flex', gap:'4px', alignItems:'center' }}>
-                          <button onClick={()=>setAnalisisPag(p=>Math.max(0,p-1))} disabled={analisisPag===0} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 7px', fontSize:'11px', cursor:analisisPag===0?'default':'pointer', color:analisisPag===0?t.textMuted:t.text }}>‹</button>
-                          <span style={{ fontSize:'10px', color:t.textMuted }}>{analisisPag+1}/{totalPagsA}</span>
-                          <button onClick={()=>setAnalisisPag(p=>Math.min(totalPagsA-1,p+1))} disabled={analisisPag===totalPagsA-1} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 7px', fontSize:'11px', cursor:analisisPag===totalPagsA-1?'default':'pointer', color:analisisPag===totalPagsA-1?t.textMuted:t.text }}>›</button>
+                          <button onClick={()=>setAnalisisPag(p=>Math.max(0,p-1))} disabled={analisisPag===0} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 7px', fontSize:'var(--cc-label)', cursor:analisisPag===0?'default':'pointer', color:analisisPag===0?t.textMuted:t.text }}>‹</button>
+                          <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>{analisisPag+1}/{totalPagsA}</span>
+                          <button onClick={()=>setAnalisisPag(p=>Math.min(totalPagsA-1,p+1))} disabled={analisisPag===totalPagsA-1} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 7px', fontSize:'var(--cc-label)', cursor:analisisPag===totalPagsA-1?'default':'pointer', color:analisisPag===totalPagsA-1?t.textMuted:t.text }}>›</button>
                         </div>
                       )}
                     </div>
                     <div style={{ overflowX:'auto', overflowY:'auto', maxHeight:'420px' }}>
-                      <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                      <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
                         <thead style={{ position:'sticky', top:0, zIndex:2 }}>
                           <tr style={{ background:t.bg }}>
                             {COLS.map(col => (
-                              <th key={col.key} onClick={()=>thClick(col.key)} style={{ padding:'8px 10px', fontSize:'10px', fontWeight:'700', color:analisisSortCol===col.key?t.primary:t.textMuted, textAlign:col.align, cursor:'pointer', whiteSpace:'nowrap', userSelect:'none', borderBottom:`2px solid ${t.border}` }}>
+                              <th key={col.key} onClick={()=>thClick(col.key)} style={{ padding:'8px 10px', fontSize:'var(--cc-caption)', fontWeight:'700', color:analisisSortCol===col.key?t.primary:t.textMuted, textAlign:col.align, cursor:'pointer', whiteSpace:'nowrap', userSelect:'none', borderBottom:`2px solid ${t.border}` }}>
                                 {col.label}{analisisSortCol===col.key?(analisisSortDir==='asc'?' ↑':' ↓'):''}
                               </th>
                             ))}
@@ -9559,9 +9583,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                               <tr key={i}
                                 onClick={()=>setAnalisisSeleccion(analisisNivel==='item' ? {capitulo:r.capitulo, item:r.nombre} : {capitulo:r.nombre, item:null})}
                                 style={{ borderBottom:`1px solid ${t.border}44`, background: isSelected ? t.primary+'18' : i%2===0?'transparent':t.bg+'44', cursor:'pointer', outline: isSelected ? `2px solid ${t.primary}44` : 'none', transition:'background 0.1s' }}>
-                                <td style={{ padding:'6px 10px', fontSize:'10px', color:t.textMuted, maxWidth:'100px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.capitulo}>{r.capitulo}</td>
+                                <td style={{ padding:'6px 10px', fontSize:'var(--cc-caption)', color:t.textMuted, maxWidth:'100px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.capitulo}>{r.capitulo}</td>
                                 <td style={{ padding:'6px 10px', fontWeight:'700', color:isSelected?t.primary:t.primary, whiteSpace:'nowrap' }}>{r.nombre}</td>
-                                <td style={{ padding:'6px 10px', fontSize:'10px', color:t.textMuted, maxWidth:'160px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.descripcion}>{r.descripcion || '—'}</td>
+                                <td style={{ padding:'6px 10px', fontSize:'var(--cc-caption)', color:t.textMuted, maxWidth:'160px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.descripcion}>{r.descripcion || '—'}</td>
                                 <td style={{ padding:'6px 10px', textAlign:'right', color:t.textMuted }}>{(r.cant_ppto||0).toFixed(2)}</td>
                                 <td style={{ padding:'6px 10px', textAlign:'right', color:t.text }}>{fmtM2(r.presupuesto)}</td>
                                 <td style={{ padding:'6px 10px', textAlign:'right', color:t.textMuted }}>{(r.cant_cobro||0).toFixed(2)}</td>
@@ -9577,7 +9601,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                                   </div>
                                 </td>
                                 <td style={{ padding:'6px 10px', textAlign:'center' }}>
-                                  <span style={{ background:badgeBg, color:colorD, borderRadius:'20px', padding:'2px 8px', fontSize:'9px', fontWeight:'700' }}>{r.estado}</span>
+                                  <span style={{ background:badgeBg, color:colorD, borderRadius:'20px', padding:'2px 8px', fontSize:'var(--cc-caption)', fontWeight:'700' }}>{r.estado}</span>
                                 </td>
                               </tr>
                             )
@@ -9628,19 +9652,19 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   <div style={{ display:'flex', flexWrap:'wrap', gap:'10px', alignItems:'center' }}>
                     <div style={{ display:'flex', gap:'2px', background:t.bg, border:`1px solid ${t.border}`, borderRadius:'7px', padding:'2px' }}>
                       {[['item','Ítem'],['capitulo','Capítulo']].map(([k,l]) => (
-                        <button key={k} onClick={()=>{setLiqNivel(k);setLiqSeleccion(null)}} style={{ background:liqNivel===k?t.primary:'transparent', color:liqNivel===k?'#fff':t.textMuted, border:'none', borderRadius:'5px', padding:'5px 12px', fontSize:'11px', fontWeight:'600', cursor:'pointer' }}>{l}</button>
+                        <button key={k} onClick={()=>{setLiqNivel(k);setLiqSeleccion(null)}} style={{ background:liqNivel===k?t.primary:'transparent', color:liqNivel===k?'#fff':t.textMuted, border:'none', borderRadius:'5px', padding:'5px 12px', fontSize:'var(--cc-label)', fontWeight:'600', cursor:'pointer' }}>{l}</button>
                       ))}
                     </div>
-                    <select value={liqDir} onChange={e=>{setLiqDir(e.target.value);setLiqPag(0)}} style={{ background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'11px', cursor:'pointer', outline:'none' }}>
+                    <select value={liqDir} onChange={e=>{setLiqDir(e.target.value);setLiqPag(0)}} style={{ background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'var(--cc-label)', cursor:'pointer', outline:'none' }}>
                       <option value="todos">🔵 Todas las categorías</option>
                       <option value="SUPERCOBRO">🔴 Supercobro — excede +$20M</option>
                       <option value="DEVOLUCION">🟡 Por Devolución — excede hasta $20M</option>
                       <option value="POR_COBRAR">🟢 Por Cobrar — recalc mayor al cobro</option>
                     </select>
                     {liqDir !== 'todos' && (
-                      <button onClick={()=>{setLiqDir('todos');setLiqPag(0)}} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', fontSize:'11px', color:t.textMuted, cursor:'pointer' }}>✕ Limpiar</button>
+                      <button onClick={()=>{setLiqDir('todos');setLiqPag(0)}} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', fontSize:'var(--cc-label)', color:t.textMuted, cursor:'pointer' }}>✕ Limpiar</button>
                     )}
-                    <div style={{ marginLeft:'auto', fontSize:'11px', color:t.textMuted, fontStyle:'italic' }}>
+                    <div style={{ marginLeft:'auto', fontSize:'var(--cc-label)', color:t.textMuted, fontStyle:'italic' }}>
                       {liqLoading ? '⏳ Cargando...' : `${liqFiltrado.length} registros · ${nEjec} ítems de solo ejecución (excluidos)`}
                     </div>
                   </div>
@@ -9650,18 +9674,18 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 <div style={{ display:'grid', gridTemplateColumns:'1fr 320px', gap:'14px', marginBottom:'14px', alignItems:'start' }}>
                   <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'12px 14px', boxShadow:t.shadow }}>
                     <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
-                      <div style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>🗺️ Plano — Cobro vs Recalculado</div>
+                      <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text }}>🗺️ Plano — Cobro vs Recalculado</div>
                       {liqSeleccion ? (
                         <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
-                          <span style={{ fontSize:'10px', background:t.primary+'18', color:t.primary, borderRadius:'20px', padding:'2px 10px', fontWeight:'700' }}>
+                          <span style={{ fontSize:'var(--cc-caption)', background:t.primary+'18', color:t.primary, borderRadius:'20px', padding:'2px 10px', fontWeight:'700' }}>
                             {liqSeleccion.item ? `Ítem: ${liqSeleccion.item}` : `Cap: ${liqSeleccion.capitulo?.slice(0,24)}`}
                           </span>
-                          <button onClick={()=>setLiqSeleccion(null)} style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'13px' }}>✕</button>
+                          <button onClick={()=>setLiqSeleccion(null)} style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'var(--cc-sm)' }}>✕</button>
                         </div>
-                      ) : <span style={{ fontSize:'10px', color:t.textMuted, fontStyle:'italic' }}>← Clic en fila para ver en plano</span>}
+                      ) : <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontStyle:'italic' }}>← Clic en fila para ver en plano</span>}
                     </div>
                     <MiniMapaSemaforo t={t} colores={liqMapaColores} height={260} bearing={270} onPkidClick={liqSeleccion ? abrirLiqMapaPopup : null} />
-                    <div style={{ fontSize:'10px', color:t.textMuted, marginTop:'6px', textAlign:'center' }}>
+                    <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginTop:'6px', textAlign:'center' }}>
                       {Object.keys(liqMapaColores).length > 0 ? `${Object.keys(liqMapaColores).length} PK_IDs activos` : liqSeleccion ? 'Sin PK_IDs para este registro' : 'Selecciona una fila'}
                     </div>
                   </div>
@@ -9673,13 +9697,13 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     ].map(k => (
                       <div key={k.key} onClick={()=>{setLiqDir(d=>d===k.key?'todos':k.key);setLiqPag(0)}}
                         style={{ background:t.bgCard, border:`1px solid ${liqDir===k.key?k.color:k.color+'44'}`, borderRadius:'10px', padding:'10px 14px', boxShadow:t.shadow, borderLeft:`4px solid ${k.color}`, cursor:'pointer', opacity:liqDir!=='todos'&&liqDir!==k.key?0.5:1 }}>
-                        <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'3px' }}>{k.icon} {k.label}</div>
-                        <div style={{ fontSize:'20px', fontWeight:'800', color:k.color, lineHeight:1, marginBottom:'2px' }}>{k.count} <span style={{fontSize:'11px',fontWeight:'400'}}>registros</span></div>
-                        <div style={{ fontSize:'10px', fontWeight:'700', color:k.color }}>{fmtD2(k.amount)}</div>
-                        <div style={{ fontSize:'9px', color:t.textMuted, marginTop:'2px' }}>{k.sub}</div>
+                        <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'3px' }}>{k.icon} {k.label}</div>
+                        <div style={{ fontSize:'var(--cc-title)', fontWeight:'800', color:k.color, lineHeight:1, marginBottom:'2px' }}>{k.count} <span style={{fontSize:'var(--cc-label)',fontWeight:'400'}}>registros</span></div>
+                        <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:k.color }}>{fmtD2(k.amount)}</div>
+                        <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginTop:'2px' }}>{k.sub}</div>
                       </div>
                     ))}
-                    <div style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', fontSize:'10px', color:t.textMuted }}>
+                    <div style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', fontSize:'var(--cc-caption)', color:t.textMuted }}>
                       ℹ️ <strong>{nEjec}</strong> ítems de solo ejecución excluidos del análisis
                     </div>
                   </div>
@@ -9688,20 +9712,20 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 {/* Top 10 */}
                 {!liqLoading && top10liq.length > 0 && (
                   <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'14px 16px', marginBottom:'14px', boxShadow:t.shadow }}>
-                    <div style={{ fontSize:'12px', fontWeight:'700', color:t.text, marginBottom:'10px' }}>⚡ Top 10 — Mayor Desviación Absoluta</div>
+                    <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text, marginBottom:'10px' }}>⚡ Top 10 — Mayor Desviación Absoluta</div>
                     {top10liq.map((r,i) => {
                       const maxAbs = Math.abs(top10liq[0].delta_costo)||1
                       const color = CAT_COLOR[r.categoria] || t.textMuted
                       return (
                         <div key={i} style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'5px' }}>
-                          <div style={{ fontSize:'10px', color:t.textMuted, width:'24px', textAlign:'right', flexShrink:0 }}>#{i+1}</div>
-                          <div style={{ fontSize:'10px', color:t.text, width:'150px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.nombre}</div>
-                          <div style={{ fontSize:'9px', color:t.textMuted, width:'80px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.capitulo}</div>
+                          <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, width:'24px', textAlign:'right', flexShrink:0 }}>#{i+1}</div>
+                          <div style={{ fontSize:'var(--cc-caption)', color:t.text, width:'150px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.nombre}</div>
+                          <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, width:'80px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.capitulo}</div>
                           <div style={{ flex:1, height:'14px', background:t.border, borderRadius:'4px', overflow:'hidden' }}>
                             <div style={{ width:`${Math.abs(r.delta_costo)/maxAbs*100}%`, height:'100%', background:color, borderRadius:'4px' }}/>
                           </div>
-                          <div style={{ fontSize:'10px', fontWeight:'700', color, width:'80px', textAlign:'right', flexShrink:0 }}>{fmtM2(r.delta_costo)}</div>
-                          <span style={{ fontSize:'9px', background:color+'18', color, borderRadius:'10px', padding:'1px 7px', flexShrink:0 }}>{r.categoria}</span>
+                          <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color, width:'80px', textAlign:'right', flexShrink:0 }}>{fmtM2(r.delta_costo)}</div>
+                          <span style={{ fontSize:'var(--cc-caption)', background:color+'18', color, borderRadius:'10px', padding:'1px 7px', flexShrink:0 }}>{r.categoria}</span>
                         </div>
                       )
                     })}
@@ -9716,21 +9740,21 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 ) : (
                   <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', boxShadow:t.shadow, overflow:'hidden' }}>
                     <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 16px', borderBottom:`1px solid ${t.border}` }}>
-                      <div style={{ fontSize:'12px', fontWeight:'700', color:t.text }}>⚖️ Liquidación — {liqFiltrado.length} registros</div>
+                      <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text }}>⚖️ Liquidación — {liqFiltrado.length} registros</div>
                       {totalPagsL > 1 && (
                         <div style={{ display:'flex', gap:'4px', alignItems:'center' }}>
-                          <button onClick={()=>setLiqPag(p=>Math.max(0,p-1))} disabled={liqPag===0} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 7px', fontSize:'11px', cursor:liqPag===0?'default':'pointer', color:liqPag===0?t.textMuted:t.text }}>‹</button>
-                          <span style={{ fontSize:'10px', color:t.textMuted }}>{liqPag+1}/{totalPagsL}</span>
-                          <button onClick={()=>setLiqPag(p=>Math.min(totalPagsL-1,p+1))} disabled={liqPag===totalPagsL-1} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 7px', fontSize:'11px', cursor:liqPag===totalPagsL-1?'default':'pointer', color:liqPag===totalPagsL-1?t.textMuted:t.text }}>›</button>
+                          <button onClick={()=>setLiqPag(p=>Math.max(0,p-1))} disabled={liqPag===0} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 7px', fontSize:'var(--cc-label)', cursor:liqPag===0?'default':'pointer', color:liqPag===0?t.textMuted:t.text }}>‹</button>
+                          <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>{liqPag+1}/{totalPagsL}</span>
+                          <button onClick={()=>setLiqPag(p=>Math.min(totalPagsL-1,p+1))} disabled={liqPag===totalPagsL-1} style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 7px', fontSize:'var(--cc-label)', cursor:liqPag===totalPagsL-1?'default':'pointer', color:liqPag===totalPagsL-1?t.textMuted:t.text }}>›</button>
                         </div>
                       )}
                     </div>
                     <div style={{ overflowX:'auto', overflowY:'auto', maxHeight:'420px' }}>
-                      <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                      <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
                         <thead style={{ position:'sticky', top:0, zIndex:2 }}>
                           <tr style={{ background:t.bg }}>
                             {LIQ_COLS.map(col => (
-                              <th key={col.key} onClick={()=>liqThClick(col.key)} style={{ padding:'8px 10px', fontSize:'10px', fontWeight:'700', color:liqSortCol===col.key?t.primary:t.textMuted, textAlign:col.align, cursor:'pointer', whiteSpace:'nowrap', userSelect:'none', borderBottom:`2px solid ${t.border}` }}>
+                              <th key={col.key} onClick={()=>liqThClick(col.key)} style={{ padding:'8px 10px', fontSize:'var(--cc-caption)', fontWeight:'700', color:liqSortCol===col.key?t.primary:t.textMuted, textAlign:col.align, cursor:'pointer', whiteSpace:'nowrap', userSelect:'none', borderBottom:`2px solid ${t.border}` }}>
                                 {col.label}{liqSortCol===col.key?(liqSortDir==='asc'?' ↑':' ↓'):''}
                               </th>
                             ))}
@@ -9745,9 +9769,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                               <tr key={i}
                                 onClick={()=>setLiqSeleccion({capitulo:r.capitulo, item:r.nombre})}
                                 style={{ borderBottom:`1px solid ${t.border}44`, background:isSelected?t.primary+'18':i%2===0?'transparent':t.bg+'44', cursor:'pointer' }}>
-                                <td style={{ padding:'6px 10px', fontSize:'10px', color:t.textMuted, maxWidth:'100px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.capitulo}</td>
+                                <td style={{ padding:'6px 10px', fontSize:'var(--cc-caption)', color:t.textMuted, maxWidth:'100px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.capitulo}</td>
                                 <td style={{ padding:'6px 10px', fontWeight:'700', color:t.primary, whiteSpace:'nowrap' }}>{r.nombre}</td>
-                                <td style={{ padding:'6px 10px', fontSize:'10px', color:t.textMuted, maxWidth:'160px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.descripcion}>{r.descripcion||'—'}</td>
+                                <td style={{ padding:'6px 10px', fontSize:'var(--cc-caption)', color:t.textMuted, maxWidth:'160px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={r.descripcion}>{r.descripcion||'—'}</td>
                                 <td style={{ padding:'6px 10px', textAlign:'right', color:t.textMuted }}>{(r.cant_recalc||0).toFixed(2)}</td>
                                 <td style={{ padding:'6px 10px', textAlign:'right', color:t.text }}>{fmtM2(r.recalculado)}</td>
                                 <td style={{ padding:'6px 10px', textAlign:'right', color:t.textMuted }}>{(r.cant_cobro||0).toFixed(2)}</td>
@@ -9763,7 +9787,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                                   </div>
                                 </td>
                                 <td style={{ padding:'6px 10px', textAlign:'center' }}>
-                                  <span style={{ background:bgBadge, color, borderRadius:'20px', padding:'2px 8px', fontSize:'9px', fontWeight:'700' }}>{r.categoria}</span>
+                                  <span style={{ background:bgBadge, color, borderRadius:'20px', padding:'2px 8px', fontSize:'var(--cc-caption)', fontWeight:'700' }}>{r.categoria}</span>
                                 </td>
                               </tr>
                             )
@@ -9786,13 +9810,13 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               onClick={e => e.stopPropagation()}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px' }}>
                 <div>
-                  <div style={{ fontSize:'16px', fontWeight:'700', color:t.textMuted }}>{liqSeleccion?.capitulo}</div>
-                  <div style={{ fontSize:'12px', fontWeight:'800', color:t.primary, marginTop:'2px' }}>
+                  <div style={{ fontSize:'var(--cc-lg)', fontWeight:'700', color:t.textMuted }}>{liqSeleccion?.capitulo}</div>
+                  <div style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:t.primary, marginTop:'2px' }}>
                     {liqSeleccion?.item} — {liqMapaPopup.data?.ppto?.[0]?.descripcion || liqMapaPopup.data?.cobro?.[0]?.descripcion || ''}
                   </div>
-                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'3px' }}>PK_ID: <strong style={{ color:t.text }}>{liqMapaPopup.pkid}</strong></div>
+                  <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'3px' }}>PK_ID: <strong style={{ color:t.text }}>{liqMapaPopup.pkid}</strong></div>
                 </div>
-                <button onClick={() => setLiqMapaPopup(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                <button onClick={() => setLiqMapaPopup(null)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
               </div>
               {liqMapaPopupLoad ? (
                 <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>⏳ Cargando...</div>
@@ -9800,28 +9824,28 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 const { ppto, cobro, totales } = liqMapaPopup.data
                 const fmtD3 = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
                 const fmtN3 = n => n != null ? Number(n).toFixed(2) : '—'
-                const thS = { padding:'6px 10px', fontSize:'10px', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
-                const tdS = { padding:'6px 10px', fontSize:'11px', color:t.text, borderBottom:`1px solid ${t.border}` }
+                const thS = { padding:'6px 10px', fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
+                const tdS = { padding:'6px 10px', fontSize:'var(--cc-label)', color:t.text, borderBottom:`1px solid ${t.border}` }
                 return (
                   <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:'16px' }}>
                     <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px' }}>
                       <div style={{ background:t.bg, borderRadius:'10px', overflow:'hidden' }}>
-                        <div style={{ padding:'8px 12px', fontSize:'11px', fontWeight:'700', color:'#0077B6', borderBottom:`1px solid ${t.border}` }}>📋 Recalculado ({ppto?.length||0} registros)</div>
+                        <div style={{ padding:'8px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#0077B6', borderBottom:`1px solid ${t.border}` }}>📋 Recalculado ({ppto?.length||0} registros)</div>
                         {ppto?.length > 0 ? (
-                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
                             <thead><tr>{['ID_Pol','Nodo Ini','Nodo Fin','Cant','Costo'].map(h=><th key={h} style={thS}>{h}</th>)}</tr></thead>
                             <tbody>{ppto.map((p,i)=><tr key={i}><td style={tdS}>{p.id_polilinia}</td><td style={tdS}>{p.nodo_ini}</td><td style={tdS}>{p.nodo_fin}</td><td style={tdS}>{fmtN3(p.cantidad)}</td><td style={tdS}>{fmtD3(p.costo_directo)}</td></tr>)}</tbody>
                           </table>
-                        ) : <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'12px' }}>Sin registros recalculados</div>}
+                        ) : <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin registros recalculados</div>}
                       </div>
                       <div style={{ background:t.bg, borderRadius:'10px', overflow:'hidden' }}>
-                        <div style={{ padding:'8px 12px', fontSize:'11px', fontWeight:'700', color:'#00A896', borderBottom:`1px solid ${t.border}` }}>💰 Cobro ({cobro?.length||0} registros)</div>
+                        <div style={{ padding:'8px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#00A896', borderBottom:`1px solid ${t.border}` }}>💰 Cobro ({cobro?.length||0} registros)</div>
                         {cobro?.length > 0 ? (
-                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
                             <thead><tr>{['Registro','Acta','Tramo Ini','Tramo Fin','Cant','Costo'].map(h=><th key={h} style={thS}>{h}</th>)}</tr></thead>
                             <tbody>{cobro.map((c,i)=><tr key={i}><td style={{...tdS,color:'#00A896',fontWeight:'700'}}>{c.id}</td><td style={tdS}>{c.acta}</td><td style={tdS}>{c.nodo_ini}</td><td style={tdS}>{c.nodo_fin}</td><td style={tdS}>{fmtN3(c.cantidad)}</td><td style={tdS}>{fmtD3(c.costo_directo)}</td></tr>)}</tbody>
                           </table>
-                        ) : <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'12px' }}>Sin registros de cobro</div>}
+                        ) : <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin registros de cobro</div>}
                       </div>
                     </div>
                     {totales && (
@@ -9835,8 +9859,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                           { label:'Δ Costo',        val: `${totales.delta_costo>=0?'+':''}${fmtD3(totales.delta_costo)}`, color:totales.delta_costo>=0?'#10B981':'#EF4444' },
                         ].map(({label,val,color}) => (
                           <div key={label} style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', flex:1, minWidth:'100px' }}>
-                            <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.4px', marginBottom:'2px', whiteSpace:'nowrap' }}>{label}</div>
-                            <div style={{ fontSize:'12px', fontWeight:'800', color, whiteSpace:'nowrap' }}>{val}</div>
+                            <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.4px', marginBottom:'2px', whiteSpace:'nowrap' }}>{label}</div>
+                            <div style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color, whiteSpace:'nowrap' }}>{val}</div>
                           </div>
                         ))}
                       </div>
@@ -9850,19 +9874,20 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         {popupPkid && (
           <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.55)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}
             onClick={() => setPopupPkid(null)}>
-            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'780px', maxWidth:'96vw', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
+            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'960px', maxWidth:'98vw', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
               onClick={e => e.stopPropagation()}>
               {/* Header */}
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px' }}>
                 <div>
-                  <div style={{ fontSize:'16px', fontWeight:'700', color:t.textMuted }}>
+                  <div style={{ fontSize:'var(--cc-lg)', fontWeight:'700', color:t.textMuted }}>
                     {dashDrill[0]?.valor}
                   </div>
-                  <div style={{ fontSize:'12px', fontWeight:'800', color:t.primary, marginTop:'2px' }}>
+                  <div style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:t.primary, marginTop:'2px' }}>
                     {dashDrill[1]?.valor} — {popupPkid.data?.ppto?.[0]?.descripcion || popupPkid.data?.cobro?.[0]?.descripcion || ''}
                   </div>
-                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'3px' }}>
+                  <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'3px' }}>
                     PK_ID: <strong style={{ color:t.text }}>{popupPkid.pkid}</strong>
+                    {(() => { const p0 = popupPkid.data?.ppto?.[0] || popupPkid.data?.cobro?.[0]; const ip = p0?.id_pol; return ip != null && String(ip).trim() ? <> · <span style={{ color:t.text }}>ID_Pol: <strong>{ip}</strong></span></> : null })()}
                   </div>
                 </div>
                 <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
@@ -9871,11 +9896,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       onClick={() => enviarZoomPkid(popupPkid.pkid)}
                       disabled={zoomingPkid}
                       title="Zoom a este PK_ID en AutoCAD"
-                      style={{ background: zoomingPkid ? '#10B981' : t.primary, border:'none', borderRadius:'8px', padding:'6px 14px', color:'#fff', fontSize:'12px', fontWeight:'700', cursor: zoomingPkid ? 'default' : 'pointer', transition:'all 0.3s', opacity: zoomingPkid ? 0.85 : 1 }}>
+                      style={{ background: zoomingPkid ? '#10B981' : t.primary, border:'none', borderRadius:'8px', padding:'6px 14px', color:'#fff', fontSize:'var(--cc-sm)', fontWeight:'700', cursor: zoomingPkid ? 'default' : 'pointer', transition:'all 0.3s', opacity: zoomingPkid ? 0.85 : 1 }}>
                       {zoomingPkid ? '✅ Enviado a AutoCAD' : '🎯 Ver en AutoCAD'}
                     </button>
                   )}
-                  <button onClick={() => setPopupPkid(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                  <button onClick={() => setPopupPkid(null)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
                 </div>
               </div>
 
@@ -9885,19 +9910,19 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 const { ppto, cobro, totales } = popupPkid.data
                 const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
                 const fmtN = n => n != null ? Number(n).toFixed(2) : '—'
-                const thS = { padding:'6px 10px', fontSize:'10px', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
-                const tdS = { padding:'6px 10px', fontSize:'11px', color:t.text, borderBottom:`1px solid ${t.border}` }
+                const thS = { padding:'6px 10px', fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
+                const tdS = { padding:'6px 10px', fontSize:'var(--cc-label)', color:t.text, borderBottom:`1px solid ${t.border}` }
                 return (
                   <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:'16px' }}>
                     {/* Dos columnas */}
                     <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px' }}>
                       {/* PRESUPUESTO */}
                       <div>
-                        <div style={{ fontSize:'12px', fontWeight:'700', color:'#0077B6', marginBottom:'8px', padding:'6px 10px', background:'#0077B611', borderRadius:'6px' }}>
+                        <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:'#0077B6', marginBottom:'8px', padding:'6px 10px', background:'#0077B611', borderRadius:'6px' }}>
                           📋 Presupuesto ({ppto.length} registros)
                         </div>
                         <div style={{ overflowX:'auto' }}>
-                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
                             <thead>
                               <tr>{['ID_Pol','Nodo Ini','Nodo Fin','Cant','Costo'].map(h => <th key={h} style={thS}>{h}</th>)}</tr>
                             </thead>
@@ -9920,23 +9945,24 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       </div>
                       {/* COBRO */}
                       <div>
-                        <div style={{ fontSize:'12px', fontWeight:'700', color:'#00A896', marginBottom:'8px', padding:'6px 10px', background:'#00A89611', borderRadius:'6px' }}>
+                        <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:'#00A896', marginBottom:'8px', padding:'6px 10px', background:'#00A89611', borderRadius:'6px' }}>
                           💰 Cobro ({cobro.length} registros)
                         </div>
                         <div style={{ overflowX:'auto' }}>
-                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
                             <thead>
-                              <tr>{['Registro','Acta','Tramo Ini','Tramo Fin','Cant','Costo'].map(h => <th key={h} style={thS}>{h}</th>)}</tr>
+                              <tr>{['ID_Pol','Registro','Acta','Tramo Ini','Tramo Fin','Cant','Costo'].map(h => <th key={h} style={thS}>{h}</th>)}</tr>
                             </thead>
                             <tbody>
                               {cobro.length === 0
-                                ? <tr><td colSpan={5} style={{...tdS, textAlign:'center', color:t.textMuted}}>Sin registros</td></tr>
+                                ? <tr><td colSpan={7} style={{...tdS, textAlign:'center', color:t.textMuted}}>Sin registros</td></tr>
                                 : cobro.map((r,i) => (
                                   <tr key={i} style={{ cursor:'pointer' }} onClick={async () => {
                                     const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/reportes/${r.reporte_id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
                                     const data = await res.json()
                                     if (data?.id) { setDashCarpetaReporte({ ...data, _autoRegistro: r.registro_id }); setDashRegistroNumero(r.registro_id) }
                                   }}>
+                                    <td style={{...tdS, fontWeight:'600', color:t.text, fontSize:'var(--cc-caption)', maxWidth:'120px', wordBreak:'break-all'}} title={r.id_pol || ''}>{r.id_pol != null && String(r.id_pol).trim() ? String(r.id_pol) : '—'}</td>
                                     <td style={{...tdS, fontWeight:'600', color:'#00A896', textDecoration:'underline'}}>{r.registro || '—'}</td>
                                     <td style={tdS}>{r.acta || '—'}</td>
                                     <td style={tdS}>{r.tramo_inicio || '—'}</td>
@@ -9963,8 +9989,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         { label:'Δ Costo',     val: `${totales.delta_costo >= 0?'+':''}${fmtD(totales.delta_costo)}`, color: totales.delta_costo >= 0 ? '#10B981' : '#EF4444' },
                       ].map(({label, val, color}) => (
                         <div key={label} style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', flex:1, minWidth:'100px' }}>
-                          <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.4px', marginBottom:'2px', whiteSpace:'nowrap' }}>{label}</div>
-                          <div style={{ fontSize:'12px', fontWeight:'800', color, whiteSpace:'nowrap' }}>{val}</div>
+                          <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.4px', marginBottom:'2px', whiteSpace:'nowrap' }}>{label}</div>
+                          <div style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color, whiteSpace:'nowrap' }}>{val}</div>
                         </div>
                       ))}
                     </div>
@@ -9981,17 +10007,20 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         {analisisMapaPopup && (
           <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.55)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}
             onClick={() => setAnalisisMapaPopup(null)}>
-            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'780px', maxWidth:'96vw', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
+            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'960px', maxWidth:'98vw', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
               onClick={e => e.stopPropagation()}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px' }}>
                 <div>
-                  <div style={{ fontSize:'16px', fontWeight:'700', color:t.textMuted }}>{analisisSeleccion?.capitulo}</div>
-                  <div style={{ fontSize:'12px', fontWeight:'800', color:t.primary, marginTop:'2px' }}>
+                  <div style={{ fontSize:'var(--cc-lg)', fontWeight:'700', color:t.textMuted }}>{analisisSeleccion?.capitulo}</div>
+                  <div style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:t.primary, marginTop:'2px' }}>
                     {analisisSeleccion?.item && `${analisisSeleccion.item} — `}{analisisMapaPopup.data?.ppto?.[0]?.descripcion || analisisMapaPopup.data?.cobro?.[0]?.descripcion || ''}
                   </div>
-                  <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'3px' }}>PK_ID: <strong style={{ color:t.text }}>{analisisMapaPopup.pkid}</strong></div>
+                  <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'3px' }}>
+                    PK_ID: <strong style={{ color:t.text }}>{analisisMapaPopup.pkid}</strong>
+                    {(() => { const p0 = analisisMapaPopup.data?.ppto?.[0] || analisisMapaPopup.data?.cobro?.[0]; const ip = p0?.id_pol; return ip != null && String(ip).trim() ? <> · <span style={{ color:t.text }}>ID_Pol: <strong>{ip}</strong></span></> : null })()}
+                  </div>
                 </div>
-                <button onClick={() => setAnalisisMapaPopup(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                <button onClick={() => setAnalisisMapaPopup(null)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
               </div>
               {analisisMapaPopupLoading ? (
                 <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>⏳ Cargando...</div>
@@ -9999,28 +10028,38 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 const { ppto, cobro, totales } = analisisMapaPopup.data
                 const fmtD3 = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
                 const fmtN3 = n => n != null ? Number(n).toFixed(2) : '—'
-                const thS = { padding:'6px 10px', fontSize:'10px', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
-                const tdS = { padding:'6px 10px', fontSize:'11px', color:t.text, borderBottom:`1px solid ${t.border}` }
+                const thS = { padding:'6px 10px', fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
+                const tdS = { padding:'6px 10px', fontSize:'var(--cc-label)', color:t.text, borderBottom:`1px solid ${t.border}` }
                 return (
                   <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:'16px' }}>
                     <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px' }}>
                       <div style={{ background:t.bg, borderRadius:'10px', overflow:'hidden' }}>
-                        <div style={{ padding:'8px 12px', fontSize:'11px', fontWeight:'700', color:'#0077B6', borderBottom:`1px solid ${t.border}`, background:'#0077B608' }}>📋 Presupuesto ({ppto?.length||0} registros)</div>
+                        <div style={{ padding:'8px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#0077B6', borderBottom:`1px solid ${t.border}`, background:'#0077B608' }}>📋 Presupuesto ({ppto?.length||0} registros)</div>
                         {ppto?.length > 0 ? (
-                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
+                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
                             <thead><tr>{['ID_Pol','Nodo Ini','Nodo Fin','Cant','Costo'].map(h=><th key={h} style={thS}>{h}</th>)}</tr></thead>
                             <tbody>{ppto.map((p,i)=><tr key={i}><td style={tdS}>{p.id_polilinia}</td><td style={tdS}>{p.nodo_ini}</td><td style={tdS}>{p.nodo_fin}</td><td style={tdS}>{fmtN3(p.cantidad)}</td><td style={tdS}>{fmtD3(p.costo_directo)}</td></tr>)}</tbody>
                           </table>
-                        ) : <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'12px' }}>Sin registros</div>}
+                        ) : <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin registros</div>}
                       </div>
                       <div style={{ background:t.bg, borderRadius:'10px', overflow:'hidden' }}>
-                        <div style={{ padding:'8px 12px', fontSize:'11px', fontWeight:'700', color:'#00A896', borderBottom:`1px solid ${t.border}`, background:'#00A89608' }}>💰 Cobro ({cobro?.length||0} registros)</div>
+                        <div style={{ padding:'8px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#00A896', borderBottom:`1px solid ${t.border}`, background:'#00A89608' }}>💰 Cobro ({cobro?.length||0} registros)</div>
                         {cobro?.length > 0 ? (
-                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'11px' }}>
-                            <thead><tr>{['Registro','Acta','Tramo Ini','Tramo Fin','Cant','Costo'].map(h=><th key={h} style={thS}>{h}</th>)}</tr></thead>
-                            <tbody>{cobro.map((c,i)=><tr key={i}><td style={{...tdS,color:'#00A896',fontWeight:'700'}}>{c.id}</td><td style={tdS}>{c.acta}</td><td style={tdS}>{c.nodo_ini}</td><td style={tdS}>{c.nodo_fin}</td><td style={tdS}>{fmtN3(c.cantidad)}</td><td style={tdS}>{fmtD3(c.costo_directo)}</td></tr>)}</tbody>
+                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
+                            <thead><tr>{['ID_Pol','Registro','Acta','Tramo Ini','Tramo Fin','Cant','Costo'].map(h=><th key={h} style={thS}>{h}</th>)}</tr></thead>
+                            <tbody>{cobro.map((c,i) => (
+                              <tr key={i}>
+                                <td style={{...tdS, fontWeight:'600', fontSize:'var(--cc-caption)', maxWidth:'120px', wordBreak:'break-all'}} title={c.id_pol || ''}>{c.id_pol != null && String(c.id_pol).trim() ? String(c.id_pol) : '—'}</td>
+                                <td style={{...tdS,color:'#00A896',fontWeight:'700'}}>{c.registro ?? '—'}</td>
+                                <td style={tdS}>{c.acta ?? '—'}</td>
+                                <td style={tdS}>{c.tramo_inicio ?? c.nodo_ini ?? '—'}</td>
+                                <td style={tdS}>{c.tramo_final ?? c.nodo_fin ?? '—'}</td>
+                                <td style={tdS}>{fmtN3(c.cantidad ?? c.longitud)}</td>
+                                <td style={tdS}>{fmtD3(c.costo_directo)}</td>
+                              </tr>
+                            ))}</tbody>
                           </table>
-                        ) : <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'12px' }}>Sin registros</div>}
+                        ) : <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin registros</div>}
                       </div>
                     </div>
                     {totales && (
@@ -10034,8 +10073,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                           { label:'Δ Costo',     val: `${totales.delta_costo>=0?'+':''}${fmtD3(totales.delta_costo)}`, color: totales.delta_costo>=0?'#10B981':'#EF4444' },
                         ].map(({label,val,color}) => (
                           <div key={label} style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', flex:1, minWidth:'100px' }}>
-                            <div style={{ fontSize:'9px', fontWeight:'700', color:t.textMuted, letterSpacing:'0.4px', marginBottom:'2px', whiteSpace:'nowrap' }}>{label}</div>
-                            <div style={{ fontSize:'12px', fontWeight:'800', color, whiteSpace:'nowrap' }}>{val}</div>
+                            <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.4px', marginBottom:'2px', whiteSpace:'nowrap' }}>{label}</div>
+                            <div style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color, whiteSpace:'nowrap' }}>{val}</div>
                           </div>
                         ))}
                       </div>
@@ -10054,7 +10093,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'500px', maxWidth:'96vw', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
               onClick={e => e.stopPropagation()}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
-                <div style={{ fontSize:'16px', fontWeight:'700', color:t.primary }}>📋 {dashDetallePpto.id_pol || '—'}</div>
+                <div style={{ fontSize:'var(--cc-lg)', fontWeight:'700', color:t.primary }}>📋 {dashDetallePpto.id_pol || '—'}</div>
                 <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
                   <button onClick={() => {
                     const r = dashDetallePpto
@@ -10064,10 +10103,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     } else if (dwgEnlazadoDash && popupPkid?.pkid) {
                       enviarZoomPkid(popupPkid.pkid)
                     }
-                  }} style={{ background:t.primary, border:'none', borderRadius:'8px', padding:'6px 14px', color:'#fff', fontSize:'12px', fontWeight:'700', cursor:'pointer' }}>
+                  }} style={{ background:t.primary, border:'none', borderRadius:'8px', padding:'6px 14px', color:'#fff', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer' }}>
                     🎯 Ver en AutoCAD
                   </button>
-                  <button onClick={() => setDashDetallePpto(null)} style={{ background:'transparent', border:'none', fontSize:'18px', cursor:'pointer', color:t.textMuted }}>✕</button>
+                  <button onClick={() => setDashDetallePpto(null)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
                 </div>
               </div>
               <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
@@ -10080,8 +10119,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   ['Descripción', dashDetallePpto.descripcion],
                 ].map(([label, val]) => val ? (
                   <div key={label} style={{ display:'flex', justifyContent:'space-between', gap:'12px', borderBottom:`1px solid ${t.border}`, paddingBottom:'8px' }}>
-                    <span style={{ fontSize:'12px', color:t.textMuted, fontWeight:'600' }}>{label}</span>
-                    <span style={{ fontSize:'12px', color:t.text, textAlign:'right' }}>{val}</span>
+                    <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, fontWeight:'600' }}>{label}</span>
+                    <span style={{ fontSize:'var(--cc-sm)', color:t.text, textAlign:'right' }}>{val}</span>
                   </div>
                 ) : null)}
               </div>
@@ -10109,8 +10148,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             <ModuloInformes t={t} usuario={usuario} token={getToken()} s={s} fontSize={fontSize} />
           ) : (
             <div style={{ ...s.card, maxWidth: '560px', margin: '0 auto', textAlign: 'center', padding: '32px 24px' }}>
-              <div style={{ fontSize: '18px', fontWeight: 700, color: t.text, marginBottom: '10px' }}>Informes CCD</div>
-              <div style={{ fontSize: '14px', color: t.textMuted, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: t.text, marginBottom: '10px' }}>Informes CCD</div>
+              <div style={{ fontSize: 'var(--cc-body)', color: t.textMuted, lineHeight: 1.5 }}>
                 Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «Informes CCD» (acción Ver).
               </div>
             </div>
@@ -10119,7 +10158,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
         {/* ── Módulos próximamente ── */}
         {['almacen','gantt'].includes(moduloActivo) && (
-          <div style={{ textAlign:'center', padding:'80px 20px', color:t.textMuted, fontSize:'15px' }}>
+          <div style={{ textAlign:'center', padding:'80px 20px', color:t.textMuted, fontSize:'var(--cc-md)' }}>
             {moduloActivo === 'almacen' ? '🏪' : '📅'} Módulo próximamente
           </div>
         )}
@@ -10134,7 +10173,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
       {showModalContrato && (
         <div style={s.overlay} onClick={() => setShowModalContrato(false)}>
           <div style={s.modal} onClick={e => e.stopPropagation()}>
-            <div style={{ fontSize: '18px', fontWeight: '700', color: t.primary, marginBottom: '24px' }}>📋 Crear Nuevo Contrato</div>
+            <div style={{ fontSize: 'var(--cc-lg)', fontWeight: '700', color: t.primary, marginBottom: '24px' }}>📋 Crear Nuevo Contrato</div>
             <label style={s.label}>NÚMERO DE CONTRATO *</label>
             <input style={s.input} placeholder="Ej: IDU-1551-2017" value={nuevoContrato.numero} onChange={e => setNuevoContrato({ ...nuevoContrato, numero: e.target.value })} />
             <label style={s.label}>OBJETO DEL CONTRATO</label>
@@ -10144,11 +10183,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             <label style={s.label}>NIT</label>
             <input style={s.input} placeholder="Ej: 900.123.456-7" value={nuevoContrato.nit} onChange={e => setNuevoContrato({ ...nuevoContrato, nit: e.target.value })} />
             <label style={s.label}>LISTADO DE PRECIOS (CSV)</label>
-            <label style={{ display: 'block', background: t.bg, border: `2px dashed ${t.border}`, borderRadius: '8px', padding: '16px', textAlign: 'center', cursor: 'pointer', color: t.textMuted, fontSize: '13px', marginBottom: '16px' }}>
+            <label style={{ display: 'block', background: t.bg, border: `2px dashed ${t.border}`, borderRadius: '8px', padding: '16px', textAlign: 'center', cursor: 'pointer', color: t.textMuted, fontSize: 'var(--cc-sm)', marginBottom: '16px' }}>
               {csvNombre ? `✅ ${csvNombre}` : '📂 Haz clic para cargar CSV'}
               <input type="file" accept=".csv" style={{ display: 'none' }} onChange={handleCSV} />
             </label>
-            {errorContrato && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: '13px', marginBottom: '16px' }}>{errorContrato}</div>}
+            {errorContrato && <div style={{ background: '#FEE2E2', color: '#DC2626', borderRadius: '8px', padding: '10px 14px', fontSize: 'var(--cc-sm)', marginBottom: '16px' }}>{errorContrato}</div>}
             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
               <button onClick={() => setShowModalContrato(false)} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '10px 20px', color: t.textMuted, cursor: 'pointer' }}>Cancelar</button>
               <button onClick={handleGuardarContrato} disabled={savingContrato} style={{ background: t.primary, border: 'none', borderRadius: '8px', padding: '10px 24px', color: '#fff', fontWeight: '600', cursor: savingContrato ? 'wait' : 'pointer', opacity: savingContrato ? 0.7 : 1 }}>
@@ -10170,8 +10209,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
     </div>
   )
 }
-
-const FONT_SIZES = { pequena: '12px', normal: '14px', grande: '16px' }
 
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -10218,7 +10255,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    document.documentElement.style.setProperty('--font-size-base', FONT_SIZES[fontSize])
+    applyClaraTypography(fontSize)
   }, [fontSize])
 
   const cambiarFuente = (tamano) => {
@@ -10622,14 +10659,14 @@ if (contratos.length > 1) {
     if (!_esPrivilegiado && (!usuario.permisos || usuario.permisos.length === 0)) return (
       <div style={{ minHeight: '100vh', background: t.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '12px' }}>
         <div style={{ fontSize: '48px' }}>🔒</div>
-        <div style={{ fontSize: '20px', fontWeight: '700', color: t.text }}>Sin acceso</div>
-        <div style={{ fontSize: '14px', color: t.textMuted, textAlign: 'center', maxWidth: '340px', lineHeight: 1.6 }}>
+        <div style={{ fontSize: 'var(--cc-title)', fontWeight: '700', color: t.text }}>Sin acceso</div>
+        <div style={{ fontSize: 'var(--cc-body)', color: t.textMuted, textAlign: 'center', maxWidth: '340px', lineHeight: 1.6 }}>
           Tu cargo no tiene permisos asignados. Contacta al administrador.
         </div>
-        <div style={{ fontSize: '12px', color: t.textMuted, marginTop: '4px' }}>
+        <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: '4px' }}>
           {usuario.nombre} {usuario.apellidos} · {usuario.email}
         </div>
-        <button onClick={handleLogout} style={{ marginTop: '12px', background: t.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '10px 24px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>
+        <button onClick={handleLogout} style={{ marginTop: '12px', background: t.primary, color: '#fff', border: 'none', borderRadius: '8px', padding: '10px 24px', fontSize: 'var(--cc-body)', fontWeight: '600', cursor: 'pointer' }}>
           Cerrar sesión
         </button>
       </div>
@@ -10644,10 +10681,10 @@ if (contratos.length > 1) {
           padding: '12px 24px', display: 'flex', alignItems: 'center', gap: '16px',
           boxShadow: '0 4px 20px rgba(220,38,38,0.5)', fontFamily: 'inherit'
         }}>
-          <span style={{ fontSize: '20px' }}>🚨</span>
+          <span style={{ fontSize: 'var(--cc-title)' }}>🚨</span>
           <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: '800', fontSize: '14px' }}>Actualización obligatoria del sistema</div>
-            <div style={{ fontSize: '12px', opacity: 0.9, marginTop: '2px' }}>
+            <div style={{ fontWeight: '800', fontSize: 'var(--cc-body)' }}>Actualización obligatoria del sistema</div>
+            <div style={{ fontSize: 'var(--cc-sm)', opacity: 0.9, marginTop: '2px' }}>
               {esperandoFinMantenimiento
                 ? 'Terminando actualización del backend... recargaremos automáticamente al finalizar.'
                 : `${mantenimiento.mensaje} · Disculpa las molestias.`}
@@ -10655,7 +10692,7 @@ if (contratos.length > 1) {
           </div>
           <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: '8px 18px', textAlign: 'center', minWidth: '80px' }}>
             <div style={{ fontSize: '28px', fontWeight: '900', lineHeight: 1 }}>{cuentaRegresiva}</div>
-            <div style={{ fontSize: '10px', opacity: 0.8 }}>segundos</div>
+            <div style={{ fontSize: 'var(--cc-caption)', opacity: 0.8 }}>segundos</div>
           </div>
         </div>
       )}
@@ -10672,15 +10709,15 @@ if (contratos.length > 1) {
           display: 'flex',
           alignItems: 'center',
           gap: '14px',
-          fontSize: '12px',
+          fontSize: 'var(--cc-sm)',
           boxShadow: '0 2px 12px rgba(0,0,0,0.2)',
         }}>
-          <span style={{ fontSize: '18px' }} aria-hidden>⚠️</span>
+          <span style={{ fontSize: 'var(--cc-lg)' }} aria-hidden>⚠️</span>
           <div style={{ flex: 1, lineHeight: 1.45 }}>
             <strong style={{ display: 'block', marginBottom: '2px' }}>Problema de conexión con el servidor</strong>
             Si en Red (F12) aparece <strong>502 Bad Gateway</strong>, el API en Azure no respondió (caído o saturado); el aviso de CORS es un efecto secundario.
             {' '}
-            Espera 1–2 min, recarga o pulsa Reintentar. Más detalle: <code style={{ fontSize: '11px' }}>localStorage claracore_debug_api=1</code> y recarga.
+            Espera 1–2 min, recarga o pulsa Reintentar. Más detalle: <code style={{ fontSize: 'var(--cc-label)' }}>localStorage claracore_debug_api=1</code> y recarga.
           </div>
           <button
             type="button"
@@ -10707,7 +10744,7 @@ if (contratos.length > 1) {
               border: 'none',
               borderRadius: '8px',
               padding: '8px 14px',
-              fontSize: '12px',
+              fontSize: 'var(--cc-sm)',
               fontWeight: '700',
               cursor: 'pointer',
             }}
@@ -10724,12 +10761,12 @@ if (contratos.length > 1) {
           justifyContent: 'space-between', boxShadow: '0 2px 16px rgba(0,0,0,0.3)'
         }}>
           <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
-            <span style={{ fontSize:'18px' }}>🔄</span>
+            <span style={{ fontSize:'var(--cc-lg)' }}>🔄</span>
             <div>
-              <div style={{ fontSize:'13px', fontWeight:'700', color:'#fff' }}>
+              <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:'#fff' }}>
                 ClaraCore tiene una actualización disponible
               </div>
-              <div style={{ fontSize:'11px', color:'rgba(255,255,255,0.85)', marginTop:'2px' }}>
+              <div style={{ fontSize:'var(--cc-label)', color:'rgba(255,255,255,0.85)', marginTop:'2px' }}>
                 Ofrecemos disculpas por la interrupción — trabajamos continuamente para mejorar tu experiencia.
               </div>
             </div>
@@ -10748,7 +10785,7 @@ if (contratos.length > 1) {
               }}
               style={{
                 background: '#fff', color: '#0077B6', border: 'none',
-                borderRadius: '8px', padding: '8px 18px', fontSize: '13px',
+                borderRadius: '8px', padding: '8px 18px', fontSize: 'var(--cc-sm)',
                 fontWeight: '700', cursor: 'pointer', whiteSpace: 'nowrap'
               }}>
               🔃 Actualizar ahora         
@@ -10757,7 +10794,7 @@ if (contratos.length > 1) {
               onClick={() => setHayNuevaVersion(false)}
               style={{
                 background: 'rgba(255,255,255,0.2)', color: '#fff', border: 'none',
-                borderRadius: '8px', padding: '8px 14px', fontSize: '13px',
+                borderRadius: '8px', padding: '8px 14px', fontSize: 'var(--cc-sm)',
                 cursor: 'pointer', whiteSpace: 'nowrap'
               }}>
               Después
@@ -10766,9 +10803,9 @@ if (contratos.length > 1) {
         </div>
       )}
       {bannerMsg && (
-        <div style={{ position: 'fixed', top: maintenanceBannerHeight + updateBannerHeight + apiBannerHeight, left: 0, right: 0, zIndex: 99999, background: '#0f2038', borderBottom: '2px solid #00afc5', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '13px', color: '#e0f4f7', boxShadow: '0 2px 12px rgba(0,0,0,0.4)' }}>
+        <div style={{ position: 'fixed', top: maintenanceBannerHeight + updateBannerHeight + apiBannerHeight, left: 0, right: 0, zIndex: 99999, background: '#0f2038', borderBottom: '2px solid #00afc5', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 'var(--cc-sm)', color: '#e0f4f7', boxShadow: '0 2px 12px rgba(0,0,0,0.4)' }}>
           <span>⚡ {bannerMsg}</span>
-          <button onClick={() => setBannerMsg(null)} style={{ background: 'transparent', border: 'none', color: '#8acdd8', cursor: 'pointer', fontSize: '16px', lineHeight: 1 }}>✕</button>
+          <button onClick={() => setBannerMsg(null)} style={{ background: 'transparent', border: 'none', color: '#8acdd8', cursor: 'pointer', fontSize: 'var(--cc-lg)', lineHeight: 1 }}>✕</button>
         </div>
       )}
       {perfilModalAbierto && (
@@ -10809,10 +10846,10 @@ if (contratos.length > 1) {
           >
             <div style={{ padding: '28px 26px 22px', textAlign: 'center' }}>
               <div style={{ fontSize: '52px', lineHeight: 1, marginBottom: '8px' }} aria-hidden>🎂</div>
-              <div style={{ fontSize: '22px', fontWeight: '900', color: '#0c4a6e', letterSpacing: '0.02em' }}>
+              <div style={{ fontSize: 'var(--cc-h2)', fontWeight: '900', color: '#0c4a6e', letterSpacing: '0.02em' }}>
                 ¡Feliz cumpleaños{usuario?.nombre ? `, ${usuario.nombre}` : ''}!
               </div>
-              <div style={{ fontSize: '14px', color: '#075985', marginTop: '12px', lineHeight: 1.55 }}>
+              <div style={{ fontSize: 'var(--cc-body)', color: '#075985', marginTop: '12px', lineHeight: 1.55 }}>
                 ClaraCore te envía un gran abrazo en este día tan especial. Que sigas construyendo éxitos — en obra y en la vida.
               </div>
               <button
@@ -10825,7 +10862,7 @@ if (contratos.length > 1) {
                   border: 'none',
                   borderRadius: '12px',
                   padding: '12px 28px',
-                  fontSize: '14px',
+                  fontSize: 'var(--cc-body)',
                   fontWeight: '800',
                   cursor: 'pointer',
                   boxShadow: '0 8px 24px rgba(0,119,182,0.35)',
@@ -10854,10 +10891,10 @@ if (contratos.length > 1) {
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, zIndex: 99998,
           background: 'linear-gradient(90deg, #B45309, #D97706)', color: '#fff',
-          padding: '10px 20px', display: 'flex', alignItems: 'center', gap: '14px', fontSize: '12px',
+          padding: '10px 20px', display: 'flex', alignItems: 'center', gap: '14px', fontSize: 'var(--cc-sm)',
           boxShadow: '0 2px 12px rgba(0,0,0,0.2)',
         }}>
-          <span style={{ fontSize: '18px' }} aria-hidden>⚠️</span>
+          <span style={{ fontSize: 'var(--cc-lg)' }} aria-hidden>⚠️</span>
           <div style={{ flex: 1, lineHeight: 1.45 }}>
             <strong style={{ display: 'block' }}>Sin conexión con el servidor ClaraCore</strong>
             En Red (F12), <strong>502</strong> = puerta de enlace sin backend activo (no es CORS). Espera, recarga o prueba Reintentar.
@@ -10882,7 +10919,7 @@ if (contratos.length > 1) {
             }}
             style={{
               flexShrink: 0, background: '#fff', color: '#B45309', border: 'none',
-              borderRadius: '8px', padding: '8px 14px', fontSize: '12px', fontWeight: '700', cursor: 'pointer',
+              borderRadius: '8px', padding: '8px 14px', fontSize: 'var(--cc-sm)', fontWeight: '700', cursor: 'pointer',
             }}
           >
             Reintentar
@@ -10899,12 +10936,12 @@ if (contratos.length > 1) {
             {modal === 'login' && <ModalLogin t={t} onClose={() => setModal(null)} onLoginOk={handleLoginOk} onForgot={() => setModal('olvide')} />}
       {modal === 'selector_contrato' && (
         <Modal t={t} onClose={() => {}} width="400px">
-          <div style={{ fontSize: '18px', fontWeight: '700', color: t.primary, marginBottom: '8px' }}>🏗️ Selecciona el contrato</div>
-          <div style={{ fontSize: '13px', color: t.textMuted, marginBottom: '20px' }}>Tienes acceso a múltiples contratos. ¿A cuál deseas ingresar?</div>
+          <div style={{ fontSize: 'var(--cc-lg)', fontWeight: '700', color: t.primary, marginBottom: '8px' }}>🏗️ Selecciona el contrato</div>
+          <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: '20px' }}>Tienes acceso a múltiples contratos. ¿A cuál deseas ingresar?</div>
           {pendingContratos.map(c => (
-            <button key={c.id} onClick={() => handleSeleccionarContrato(c.id)} style={{ display: 'block', width: '100%', background: t.inputBg, border: `1.5px solid ${t.border}`, borderRadius: '10px', padding: '12px 16px', color: t.text, fontSize: '14px', textAlign: 'left', cursor: 'pointer', marginBottom: '10px', fontWeight: '500' }}>
+            <button key={c.id} onClick={() => handleSeleccionarContrato(c.id)} style={{ display: 'block', width: '100%', background: t.inputBg, border: `1.5px solid ${t.border}`, borderRadius: '10px', padding: '12px 16px', color: t.text, fontSize: 'var(--cc-body)', textAlign: 'left', cursor: 'pointer', marginBottom: '10px', fontWeight: '500' }}>
               📋 {c.numero}
-              {c.contratista && <div style={{ fontSize: '12px', color: t.textMuted, marginTop: '2px' }}>{c.contratista}</div>}
+              {c.contratista && <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: '2px' }}>{c.contratista}</div>}
             </button>
           ))}
         </Modal>

@@ -1,6 +1,11 @@
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; font-size: var(--font-size-base, 14px); }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body, #root { width: 100%; min-height: 100vh; }
-body { font-family: 'Segoe UI', sans-serif; }
+body {
+  font-family: 'Segoe UI', sans-serif;
+  font-size: var(--cc-body, 15px);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
 
 /* Logo ClaraCore (public/CLARA.CORE.png): lockup horizontal; evita compresión en filas flex */
 img.cc-brand-logo {

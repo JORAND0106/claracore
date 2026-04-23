@@ -984,6 +984,18 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
   }
 
+  /** POST: evita `?ids=1,2,…` kilométrico en “Revisar por tramo” (5xx por límite de URL/proxy). */
+  async function fetchComentariosValidacionTramo(presupuestoIds) {
+    if (!presupuestoIds?.length || !contratoId) return {}
+    const res = await fetch(`${API}/presupuesto/${contratoId}/comentarios-validacion`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ids: presupuestoIds })
+    })
+    if (!res.ok) return {}
+    return res.json()
+  }
+
   async function abrirHilo(registroId, tipo) {
     setHiloLoading(true)
     setRespuestaTexto('')
@@ -1537,9 +1549,9 @@ async function ejecutarBulkEstadoDirecto(estado) {
       .filter(r => r.revisado && r.revisado !== 'No Revisado')
       .map(r => r.id)
     if (!idsConEstado.length) return
-    fetch(`${API}/presupuesto/${contratoId}/comentarios-validacion?ids=${idsConEstado.join(',')}`, {
-      headers: { Authorization: `Bearer ${getToken()}` }
-    }).then(r => r.ok ? r.json() : {}).then(data => setComentariosTramo(prev => ({ ...prev, ...data }))).catch(() => {})
+    fetchComentariosValidacionTramo(idsConEstado)
+      .then(data => setComentariosTramo(prev => ({ ...prev, ...data })))
+      .catch(() => {})
   }, [tramoSelec, modalModoCapitulo])
 
   // ── Estilos ────────────────────────────────────────────────────────────────
@@ -1811,10 +1823,8 @@ async function restaurar(id) {
                         await cargarCapituloData(modalModoCapitulo)
                         const capIds = registros.filter(r => r.capitulo === modalModoCapitulo).map(r => r.id)
                         if (capIds.length) {
-                          const res = await fetch(`${API}/presupuesto/${contratoId}/comentarios-validacion?ids=${capIds.join(',')}`, {
-                            headers: { Authorization: `Bearer ${token}` }
-                          })
-                          if (res.ok) setComentariosTramo(await res.json())
+                          const data = await fetchComentariosValidacionTramo(capIds)
+                          setComentariosTramo(data)
                         }
                       }
                     }}
