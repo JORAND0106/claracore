@@ -7099,10 +7099,8 @@ class ReemplazarRegistrosNuevoReporteBody(BaseModel):
 @app.put("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
 def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, current_user=Depends(get_current_user)):
     data = body.dict()
-    for _campo in ('pk_id_id','civ','tramo','infraestructura','calzada','costado',
-                   'ubicacion','coord_lat','coord_lng','abs_inicio','abs_final',
-                   'nodo_ini','nodo_fin','margen'):
-        data.pop(_campo, None)
+    # Se persisten localización y PK en so_reportes (antes se descartaban y solo existía PATCH en Borrador;
+    # un reintento tras guardar cabecera dejaba estado≠Borrador y el PATCH devolvía 400).
     data.pop("updated_at", None)
     data["updated_at"]     = "now()"
     data["modificado_por"] = int(current_user.get("sub") or current_user.get("id", 0))
@@ -7273,11 +7271,39 @@ def reemplazar_registros_nuevo_reporte(
     uid = int(current_user.get("sub") or current_user.get("id", 0))
     if not body.registros:
         return {"ok": True, "insertados": 0}
+
+    def _parse_numero_registro_raw(raw) -> int:
+        if raw is None:
+            raise ValueError("RPC sin número de registro")
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            return int(raw)
+        if isinstance(raw, list) and len(raw) > 0:
+            return _parse_numero_registro_raw(raw[0])
+        if isinstance(raw, dict):
+            for k in ("numero", "siguiente_numero_registro", "siguiente", "id"):
+                if k in raw and raw[k] is not None:
+                    return int(raw[k])
+        return int(raw)
+
+    def _rpc_solo_numero(_: int) -> int:
+        """RPC en hilo con cliente propio: el bucle secuencial N× hacía timeout en móvil."""
+        last_err = None
+        sb = get_supabase()
+        for attempt in range(3):
+            try:
+                data = sb.rpc("siguiente_numero_registro", {"p_contrato_id": contrato_id}).execute().data
+                return _parse_numero_registro_raw(data)
+            except Exception as e:
+                last_err = e
+                time.sleep(0.35 * (attempt + 1))
+        raise last_err  # type: ignore
+
+    nlines = len(body.registros)
+    workers = min(24, max(1, nlines))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        numeros = list(pool.map(_rpc_solo_numero, range(nlines)))
     rows_to_insert: List[Dict[str, Any]] = []
-    for line in body.registros:
-        def _n():
-            return supabase.rpc("siguiente_numero_registro", {"p_contrato_id": contrato_id}).execute().data
-        numero = supabase_execute(_n)
+    for line, numero in zip(body.registros, numeros):
         data: Dict[str, Any] = line.dict()
         data["reporte_id"] = reporte_id
         data["numero_registro"] = numero
