@@ -101,11 +101,11 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
     ;(async () => {
       const [rPk, rCt] = await Promise.all([
         fetch(`${API}/sicoe-obra/${contratoId}/pk-ids`, { headers: hdrs }).then((x) => (x.ok ? x.json() : [])),
-        fetch(`${API}/contratos`, { headers: hdrs }).then((x) => (x.ok ? x.json() : [])),
+        fetch(`${API}/contratos/${contratoId}`, { headers: hdrs }).then((x) => (x.ok ? x.json() : null)),
       ])
       if (cancelled) return
       const pkList = Array.isArray(rPk) ? rPk : []
-      const contrato = (Array.isArray(rCt) ? rCt : []).find((x) => x.id === contratoId)
+      const contrato = rCt && typeof rCt === 'object' ? rCt : null
       const plano = contrato?.plano_geojson || null
       const center0 =
         contrato?.centro_lat != null && contrato?.centro_lng != null ? [contrato.centro_lng, contrato.centro_lat] : [-74.0817, 4.6097]

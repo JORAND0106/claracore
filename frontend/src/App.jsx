@@ -77,6 +77,22 @@ function _sicoeFeaturePkId(f) {
 const POLITICAS_TEXTO_VERSION = '1.0'
 const TEST_MODE = String(import.meta.env.VITE_TEST_MODE || '').toLowerCase() === 'true'
 
+/** Número para buscar en carpeta: `foto_numero` (BD) o, si no existe, `numero_registro`. */
+function strRefCarpetaFoto (reg) {
+  if (!reg) return null
+  const tieneFn = reg.foto_numero != null && reg.foto_numero !== ''
+  const n = tieneFn ? reg.foto_numero : reg.numero_registro
+  if (n == null || n === '') return null
+  if (tieneFn) {
+    const v = Number(n)
+    return Number.isNaN(v) ? String(n) : String(v).padStart(4, '0')
+  }
+  return String(n)
+}
+function regTieneFotoNumeroEnBd (reg) {
+  return reg && reg.foto_numero != null && reg.foto_numero !== ''
+}
+
 const themes = {
   light: {
     bg: '#F0F9FF', bgCard: '#FFFFFF', border: '#BAE6FD', text: '#0F2942',
@@ -1074,6 +1090,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }
   // Servidor primero; cruzar con reporte.registros para no perder URL si el objeto `reg` va incompleto
   const fotoVista = _urlMedia(registro.foto_url) || _urlMedia(regMismoEnReporte?.foto_url) || _urlMedia(fotoLocal)
+  const strRefCarpeta = strRefCarpetaFoto(registro)
+  const esFotoConsecBd = regTieneFotoNumeroEnBd(registro)
   const grafVista = _urlMedia(registro.grafico_url) || _urlMedia(regMismoEnReporte?.grafico_url) || _urlMedia(graficoReporte?.grafico_url) || _urlMedia(grafLocal)
   const [estadoValidando,        setEstadoValidando]        = useState('')
   const [toastMsg,               setToastMsg]               = useState(null)
@@ -1437,6 +1455,22 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 {registro.item_numero}
               </span>
             )}
+            {strRefCarpeta && (
+              <span
+                title={esFotoConsecBd ? 'Número de consecutivo de foto (BD)' : 'Referencia: n.º de registro (no hay consecutivo de foto en BD; usa el mismo criterio que en tu carpeta)'}
+                style={{
+                  background: '#0d948818',
+                  color: '#0f766e',
+                  border: '1px solid #0d948840',
+                  borderRadius: '12px',
+                  padding: '2px 10px',
+                  fontSize: 'var(--cc-label)',
+                  fontWeight: '800',
+                }}
+              >
+                {esFotoConsecBd ? 'Foto' : 'Ref.'} <span style={{ fontFamily: 'ui-monospace, Consolas, monospace' }}>{strRefCarpeta}</span>
+              </span>
+            )}
           </div>
           <div style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'var(--cc-label)', color:t.textMuted }}>
             {(() => { try { const ts=registro.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()}
@@ -1720,7 +1754,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   </div>
                 )}
                 <div style={{ padding:'6px 10px', fontSize:'var(--cc-label)', color:t.textMuted, background:t.bg, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-                  <span>📷 Foto #{registro.foto_numero ? String(registro.foto_numero).padStart(4,'0') : '—'}</span>
+                  <span>📷 {strRefCarpeta ? <span style={{ fontFamily: 'ui-monospace, Consolas, monospace' }}>#{strRefCarpeta}</span> : '—'}</span>
                   {editableCampos && (
                     <div style={{ display:'flex', gap:'8px' }}>
                       <label style={{ cursor:'pointer', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600' }}>
@@ -1755,16 +1789,19 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   🖼️ Usar foto de la galería
                 </button>
                 )}
-                {!!registro.foto_numero && !fotoVista && (
-                  <p style={{ margin:'6px 10px 0', fontSize:'var(--cc-caption)', color:'#B45309', lineHeight:1.35 }}>
-                    Número de foto (legacy) en datos, sin URL: hay que mapear en BD o asignar desde galería.
-                  </p>
+                {!fotoVista && strRefCarpeta && (
+                  <div
+                    title={esFotoConsecBd ? 'Consecutivo de foto (BD). Búsqueda en carpeta del contrato.' : 'N.º de registro (falta foto en BD). Úsalo para buscar el archivo si en tu convención aplica.'}
+                    style={{ margin: 0, padding: '10px 12px', background: 'linear-gradient(90deg, #0d948818, #0d948800)', borderTop: `1px solid ${C.borde}`, textAlign: 'center' }}
+                  >
+                    <div style={{ fontSize: '26px', fontWeight: '900', color: '#0f766e', fontFamily: 'ui-monospace, Consolas, monospace', letterSpacing: '1px', lineHeight: 1.2 }}>
+                      {strRefCarpeta}
+                    </div>
+                  </div>
                 )}
-                {!fotoVista && (
-                  <p style={{ margin:'8px 10px 6px', fontSize:'var(--cc-caption)', color:t.textMuted, lineHeight:1.4 }}>
-                    Si no hay petición a la imagen en <strong>Red</strong> es normal: el navegador solo la pide si la API devuelve
-                    <code style={{ fontSize:'var(--cc-caption)', margin:'0 3px' }}>foto_url</code> para <strong>id {registro.id}</strong> (n.º de registro {registro.numero_registro ?? '—'}).
-                    Filtra <code>reportes</code>, abre el <code>GET …/reportes/…</code> y en <code>registros</code> busca ese <code>id</code> — sin URL aquí, no se pinta la foto. Pulsa <strong>⟳ Actualizar</strong> en la cabecera de la carpeta tras migrar.
+                {!fotoVista && !strRefCarpeta && esDeveloper && (
+                  <p style={{ margin: '8px 10px 6px', fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
+                    Sin URL y sin n.º de registro. id registro: {registro.id}
                   </p>
                 )}
               </div>
@@ -2719,6 +2756,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                                 textAlign:'left', cursor:'pointer', display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center',
                               }}>
                               <span style={{ fontWeight:'800', color:'#D97706', fontSize:'var(--cc-sm)' }}>Registro #{reg.numero_registro}</span>
+                              {strRefCarpetaFoto(reg) && (
+                                <span
+                                  title={regTieneFotoNumeroEnBd(reg) ? 'Foto' : 'N.º reg. (carpeta)'}
+                                  style={{ fontSize: 'var(--cc-caption)', fontWeight: '800', color: '#0f766e' }}
+                                >
+                                  📷 {strRefCarpetaFoto(reg)}
+                                </span>
+                              )}
                               <span style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>{reg.item_numero || 'Sin ítem'}</span>
                               <span style={{ fontSize:'var(--cc-label)', color:t.text, flex:'1 1 200px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
                                 {reg.observacion || '—'}
@@ -3132,6 +3177,24 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                       <span style={{ fontWeight:'800', color:'#D97706', fontSize:'var(--cc-sm)', flexShrink:0 }}>
                         📄 Registro #{reg.numero_registro}
                       </span>
+                      {strRefCarpetaFoto(reg) && (
+                        <span
+                          title={regTieneFotoNumeroEnBd(reg) ? 'N.º consecutivo de foto' : 'N.º de registro (referencia de carpeta)'}
+                          style={{
+                            fontSize: 'var(--cc-label)',
+                            fontWeight: '800',
+                            color: '#0f766e',
+                            flexShrink: 0,
+                            background: '#0d948818',
+                            border: '1px solid #0d948840',
+                            borderRadius: '8px',
+                            padding: '2px 8px',
+                            fontFamily: 'ui-monospace, Consolas, monospace',
+                          }}
+                        >
+                          📷 {strRefCarpetaFoto(reg)}
+                        </span>
+                      )}
                       <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)', fontStyle: reg.observacion ? 'normal' : 'italic', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'300px', flex:1 }}>
                         {reg.observacion || 'Sin observación'}
                       </span>
@@ -3197,7 +3260,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                         <span title="Tiene soportes adjuntos" style={{ fontSize:'var(--cc-sm)', flexShrink:0 }}>📎</span>
                       )}
                       {String(reg.foto_url || '').trim() ? (
-                        <span title="Foto vinculada (URL en BD)" style={{ fontSize:'var(--cc-sm)', flexShrink:0 }}>🖼️</span>
+                        <span title={strRefCarpetaFoto(reg) ? `Ref. ${strRefCarpetaFoto(reg)} · ${regTieneFotoNumeroEnBd(reg) ? 'foto' : 'reg.'} (URL en BD)` : 'Foto vinculada (URL en BD)'} style={{ fontSize:'var(--cc-sm)', flexShrink:0 }}>🖼️</span>
                       ) : null}
                       <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)', flexShrink:0 }}>{expandido ? '▲' : '▼'}</span>
                     </div>
@@ -3535,13 +3598,17 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       .then(r => r.json())
       .then(d => setSicoePkList(Array.isArray(d) ? d : []))
       .catch(() => setSicoePkList([]))
-    fetch(`${API_URL}/contratos`, { headers: hdrs })
-      .then(r => (r.ok ? r.json() : []))
-      .then(list => {
-        const c = Array.isArray(list) ? list.find(x => x.id === contrato_id) : null
-        setSicoePlanoGeojson(c?.plano_geojson || null)
+    fetch(`${API_URL}/contratos/${contrato_id}`, { headers: hdrs })
+      .then(r => (r.ok ? r.json() : null))
+      .then(c => {
+        if (!c || typeof c !== 'object') {
+          setSicoePlanoGeojson(null)
+          setSicoeContratoCentro(null)
+          return
+        }
+        setSicoePlanoGeojson(c.plano_geojson || null)
         setSicoeContratoCentro(
-          c?.centro_lat != null && c?.centro_lng != null
+          c.centro_lat != null && c.centro_lng != null
             ? { lat: c.centro_lat, lng: c.centro_lng }
             : null,
         )
@@ -4487,10 +4554,9 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
 
       // Metadatos de contrato para encabezado del Excel
       try {
-        const rc = await fetch(`${API_URL}/contratos`, { headers: { Authorization: `Bearer ${getToken()}` } })
-        const contratos = await rc.json()
-        const c = (Array.isArray(contratos) ? contratos : []).find(x => x.id === contrato_id)
-        setExportMetaContrato(c || null)
+        const rc = await fetch(`${API_URL}/contratos/${contrato_id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
+        const c = rc.ok ? await rc.json() : null
+        setExportMetaContrato(c && typeof c === 'object' ? c : null)
       } catch {
         setExportMetaContrato(null)
       }
@@ -5894,12 +5960,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   useEffect(() => {
     if (!contrato_id) return
-    fetch(`${API_URL}/contratos`, { headers: hdrs })
-      .then(r => (r.ok ? r.json() : []))
-      .then(list => {
-        const c = Array.isArray(list) ? list.find(x => x.id === contrato_id) : null
-        setPlanoGeojsonContrato(c?.plano_geojson || null)
-      })
+    fetch(`${API_URL}/contratos/${contrato_id}`, { headers: hdrs })
+      .then(r => (r.ok ? r.json() : null))
+      .then(c => setPlanoGeojsonContrato(c && typeof c === 'object' ? (c.plano_geojson || null) : null))
       .catch(() => setPlanoGeojsonContrato(null))
   }, [contrato_id])
 
@@ -7012,8 +7075,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'4px' }}>
                   <label style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.textMuted }}>
                     📸 FOTO OBRA * 
-                    {registros[modalRegistro].foto_numero && (
-                      <span style={{ color:t.primary, marginLeft:'8px' }}>#{String(registros[modalRegistro].foto_numero).padStart(4,'0')}</span>
+                    {strRefCarpetaFoto(registros[modalRegistro]) && (
+                      <span style={{ color:t.primary, marginLeft:'8px', fontFamily: 'ui-monospace, Consolas, monospace' }}>#{strRefCarpetaFoto(registros[modalRegistro])}</span>
                     )}
                   </label>
                 </div>
@@ -7039,8 +7102,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 {!registros[modalRegistro]._fotoOk && (
                   <div style={{ color:'#F59E0B', fontSize:'var(--cc-label)', marginTop:'4px' }}>⚠️ La foto es obligatoria para guardar el registro</div>
                 )}
-                {registros[modalRegistro]._fotoOk && (
-                  <div style={{ color:'#10B981', fontSize:'var(--cc-sm)', marginTop:'4px' }}>✅ Foto #{String(registros[modalRegistro].foto_numero).padStart(4,'0')} cargada</div>
+                {registros[modalRegistro]._fotoOk && strRefCarpetaFoto(registros[modalRegistro]) && (
+                  <div style={{ color:'#10B981', fontSize:'var(--cc-sm)', marginTop:'4px' }}>✅ Foto #{strRefCarpetaFoto(registros[modalRegistro])} cargada</div>
                 )}
               </div>
             </div>
@@ -7628,6 +7691,8 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   const qContrato = contratoCtx != null && contratoCtx !== '' ? `?contrato_id=${contratoCtx}` : ''
   const [abierto,       setAbierto]       = useState(false)
   const [tab,           setTab]           = useState('recibidos')
+  /** 'todas' = lista separada leídas / no leídas; 'no_leidas' = solo filtro API (sin leer) */
+  const [filtroRecibidos, setFiltroRecibidos] = useState('todas')
   const [recibidos,     setRecibidos]     = useState([])
   const [enviados,      setEnviados]      = useState([])
   const [noLeidas,      setNoLeidas]      = useState(0)
@@ -7650,7 +7715,12 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   }
 
   const cargarRecibidos = async () => {
-    const r = await fetch(`${API}/notificaciones/recibidas${qContrato}`, { headers: h }).catch(() => null)
+    const p = new URLSearchParams()
+    if (contratoCtx != null && contratoCtx !== '') p.set('contrato_id', String(contratoCtx))
+    if (filtroRecibidos === 'no_leidas') p.set('solo_no_leidas', 'true')
+    p.set('limit', '100')
+    const q = p.toString()
+    const r = await fetch(`${API}/notificaciones/recibidas${q ? `?${q}` : ''}`, { headers: h }).catch(() => null)
     if (r?.ok) setRecibidos(await r.json())
   }
 
@@ -7681,7 +7751,7 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   useEffect(() => {
     if (!abierto) return
     cargarRecibidos(); cargarEnviados(); cargarDestinatarios()
-  }, [abierto, contratoCtx])
+  }, [abierto, contratoCtx, filtroRecibidos])
 
   async function abrirHilo(notif) {
     setHiloActivo(notif); setHiloLoading(true); setHilo([])
@@ -7732,6 +7802,29 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   const fmtFecha = iso => { try { return new Date(iso).toLocaleString('es-CO',{dateStyle:'short',timeStyle:'short'}) } catch { return iso } }
   const TIPO_COLOR = { MENSAJE_DIRECTO:'#0077B6', BROADCAST:'#7C3AED', SISTEMA:'#10B981', SOPORTE:'#F59E0B' }
   const TIPO_LABEL = { MENSAJE_DIRECTO:'Mensaje', BROADCAST:'Broadcast', SISTEMA:'Sistema', SOPORTE:'Soporte' }
+
+  const seccionH = (titulo, cant, color) => (
+    <div
+      style={{
+        fontSize: 'var(--cc-caption)',
+        fontWeight: '800',
+        letterSpacing: '0.6px',
+        textTransform: 'uppercase',
+        color: color || t.textMuted,
+        marginBottom: '8px',
+        marginTop: '4px',
+        paddingBottom: '4px',
+        paddingLeft: '8px',
+        borderLeft: `3px solid ${color || t.border}`,
+        borderBottom: `1px solid ${t.border}`,
+      }}
+    >
+      {titulo}
+      {cant != null && cant > 0 && (
+        <span style={{ fontWeight: '800', color: t.text, marginLeft: '6px' }}>({cant})</span>
+      )}
+    </div>
+  )
 
   const btnTab = (key, label) => (
     <button key={key} onClick={() => setTab(key)} style={{
@@ -7813,12 +7906,73 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
             {btnTab('enviados', '📤 Enviados')}
           </div>
 
+          {/* Filtro recibidos: todas vs solo no leídas */}
+          {tab === 'recibidos' && (
+            <div style={{ padding: '8px 16px 0', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginRight: '4px' }}>Vista:</span>
+              <button
+                type="button"
+                onClick={() => setFiltroRecibidos('todas')}
+                style={{
+                  background: filtroRecibidos === 'todas' ? t.primary : 'transparent',
+                  color: filtroRecibidos === 'todas' ? '#fff' : t.textMuted,
+                  border: `1px solid ${filtroRecibidos === 'todas' ? t.primary : t.border}`,
+                  borderRadius: '20px', padding: '3px 12px', fontSize: 'var(--cc-label)', fontWeight: filtroRecibidos === 'todas' ? '700' : '500',
+                  cursor: 'pointer',
+                }}
+              >
+                Todas (separadas)
+              </button>
+              <button
+                type="button"
+                onClick={() => setFiltroRecibidos('no_leidas')}
+                style={{
+                  background: filtroRecibidos === 'no_leidas' ? t.primary : 'transparent',
+                  color: filtroRecibidos === 'no_leidas' ? '#fff' : t.textMuted,
+                  border: `1px solid ${filtroRecibidos === 'no_leidas' ? t.primary : t.border}`,
+                  borderRadius: '20px', padding: '3px 12px', fontSize: 'var(--cc-label)', fontWeight: filtroRecibidos === 'no_leidas' ? '700' : '500',
+                  cursor: 'pointer',
+                }}
+              >
+                Solo no leídas{noLeidas > 0 ? ` · ${noLeidas}` : ''}
+              </button>
+            </div>
+          )}
+
           {/* Lista */}
           <div style={{ flex:1, overflowY:'auto', padding:'12px 16px' }}>
             {tab === 'recibidos' && (
               recibidos.length === 0
-                ? <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin notificaciones</div>
-                : recibidos.map(n => <ItemNotif key={n.id} n={n} esRecibido={true} />)
+                ? (
+                    <div style={{ textAlign:'center', padding:'32px 16px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>
+                      {filtroRecibidos === 'no_leidas'
+                        ? 'No hay notificaciones sin leer. Las que abriste o marcaste ya quedan en “Todas (separadas)”.'
+                        : 'Sin notificaciones recibidas.'}
+                    </div>
+                  )
+                : (filtroRecibidos === 'no_leidas'
+                    ? recibidos.map(n => <ItemNotif key={n.id} n={n} esRecibido={true} />)
+                    : (() => {
+                        const sinLeer = recibidos.filter(n => !n.leido)
+                        const leidasList = recibidos.filter(n => n.leido)
+                        return (
+                          <div>
+                            {sinLeer.length > 0 && (
+                              <div style={{ marginBottom: leidasList.length ? '16px' : 0 }}>
+                                {seccionH('Sin leer', sinLeer.length, t.primary)}
+                                {sinLeer.map(n => <ItemNotif key={n.id} n={n} esRecibido={true} />)}
+                              </div>
+                            )}
+                            {leidasList.length > 0 && (
+                              <div>
+                                {seccionH('Leídas / archivo', leidasList.length, t.textMuted)}
+                                {leidasList.map(n => <ItemNotif key={n.id} n={n} esRecibido={true} />)}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })()
+                  )
             )}
             {tab === 'enviados' && (
               enviados.length === 0

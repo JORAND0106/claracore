@@ -1231,7 +1231,7 @@ function SeccionLogs({ call, theme }) {
   const LIMIT = 50
 
   const MODULOS = ["AUTH","SICOE","PRESUPUESTO","COBRO","USUARIOS","CONTRATOS","PERMISOS","PRECIOS","SISTEMA","INFORMES","NOTIFICACIONES","ACTAS","SUBCONTRATISTAS"]
-  const ACCIONES = ["LOGIN","LOGOUT","LOGIN_FAIL","APROBAR","RECHAZAR","EDITAR","RECALCULAR","VALIDAR","IMPORTAR","CREAR","ELIMINAR","EXPORTAR","ERROR_SISTEMA","DEPLOY","BROADCAST"]
+  const ACCIONES = ["LOGIN","LOGOUT","LOGIN_FAIL","APROBAR","RECHAZAR","EDITAR","RECALCULAR","VALIDAR","CONSULTAR","ASIGNAR_ITEM","MOVER","IMPORTAR","CREAR","ELIMINAR","EXPORTAR","ERROR_SISTEMA","DEPLOY","BROADCAST"]
   const CATEGORIAS = ["auditoria", "sistema"]
   const SEVERIDADES = ["INFO", "WARNING", "ERROR", "AUDIT"]
   const ACCION_COLOR = {
@@ -1643,22 +1643,29 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     reader.readAsText(file);
   }
 
-  function iniciarEdicion(c) {
+  async function iniciarEdicion(c) {
     setEditandoId(c.id);
+    let d = c;
+    try {
+      d = await call("GET", `/contratos/${c.id}`);
+    } catch {
+      d = c;
+    }
+    if (!d || typeof d !== "object") d = c;
     setForm({
-      numero: c.numero || '', objeto: c.objeto || '',
-      contratista: c.contratista || '', nit: c.nit || '',
-      interventoria: c.interventoria || '',
-      entidad: c.entidad || '',
-      entidad_otra: c.entidad_otra || '',
-      logo_entidad: c.logo_entidad || '',
-      plano_geojson: c.plano_geojson || null,
-      centro_lat: c.centro_lat ?? null,
-      centro_lng: c.centro_lng ?? null,
-      logo_contratista: c.logo_contratista || '',
-      logo_interventoria: c.logo_interventoria || '',
-      aiu: c.aiu != null ? String(c.aiu) : '',
-      iva: c.iva != null ? String(c.iva) : '',
+      numero: d.numero || '', objeto: d.objeto || '',
+      contratista: d.contratista || '', nit: d.nit || '',
+      interventoria: d.interventoria || '',
+      entidad: d.entidad || '',
+      entidad_otra: d.entidad_otra || '',
+      logo_entidad: d.logo_entidad || '',
+      plano_geojson: d.plano_geojson || null,
+      centro_lat: d.centro_lat ?? null,
+      centro_lng: d.centro_lng ?? null,
+      logo_contratista: d.logo_contratista || '',
+      logo_interventoria: d.logo_interventoria || '',
+      aiu: d.aiu != null ? String(d.aiu) : '',
+      iva: d.iva != null ? String(d.iva) : '',
     });
     setMsg(null);
   }

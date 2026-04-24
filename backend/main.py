@@ -22,6 +22,7 @@ import threading
 import calendar
 import re
 import json
+import math
 from concurrent.futures import ThreadPoolExecutor
 
 # ── Sesiones DWG activas (en memoria) ─────────────────────────────────────────
@@ -128,10 +129,16 @@ def _json_for_log(obj):
     """Serializa valores para columnas jsonb (evita tipos no JSON)."""
     if obj is None:
         return None
-    if isinstance(obj, (str, int, float, bool)):
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, (str, int, bool)):
         return obj
     if isinstance(obj, datetime):
         return obj.isoformat()
+    if isinstance(obj, uuid.UUID):
+        return str(obj)
     if isinstance(obj, dict):
         return {str(k): _json_for_log(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
@@ -139,11 +146,46 @@ def _json_for_log(obj):
     return str(obj)
 
 
+def _audit_user_contrato(current_user, contrato_id: int) -> dict:
+    """Payload usuario + número de contrato para registrar_log (SICOE, informes, etc.)."""
+    cnum = None
+    try:
+        cr = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
+        if cr:
+            cnum = cr[0].get("numero")
+    except Exception:
+        pass
+    return {
+        "sub": str(current_user.get("sub") or current_user.get("id") or ""),
+        "nombre": current_user.get("nombre") or "",
+        "email": current_user.get("email"),
+        "cargo_nombre": current_user.get("cargo_nombre"),
+        "rol_nombre": current_user.get("rol_nombre"),
+        "contrato_id": contrato_id,
+        "contrato_numero": cnum,
+    }
+
+
+def _so_registro_audit_snapshot(row: Optional[dict]) -> Optional[dict]:
+    """Subconjunto de so_registros para jsonb (evita filas enormes y valores no JSON)."""
+    if not row:
+        return None
+    keys = (
+        "id", "reporte_id", "contrato_id", "numero_registro", "capitulo", "competencia",
+        "item_numero", "item_descripcion", "unidad", "vlr_unitario", "longitud", "ancho", "espesor",
+        "cantidad", "cantidad_total", "costo_directo", "observacion", "corte_id",
+        "nivel1_estado", "nivel2_estado", "nivel3_estado", "sub_estado", "bloqueado",
+        "foto_url", "foto_numero", "grafico_url", "acta_rpo_id", "semana_id", "nivel2_objeto_pago_sub",
+    )
+    return _json_for_log({k: row.get(k) for k in keys})
+
+
 def _default_severidad(accion: str, modulo: str, resultado: str) -> str:
     if resultado and str(resultado).lower() not in ("ok", "success", "éxito"):
         return "ERROR" if "denegado" not in str(resultado).lower() else "WARNING"
     if modulo == "PERMISOS" or accion in (
         "ELIMINAR", "VALIDAR", "APROBAR", "RECHAZAR", "IMPORTAR_MASIVO",
+        "ASIGNAR_ITEM", "MOVER",
     ):
         return "AUDIT"
     if accion in ("LOGIN_FAIL", "ACCESO_DENEGADO"):
@@ -604,6 +646,25 @@ def _estado_mantenimiento():
 # ─────────────────────────────────────────────
 # HELPER SUPABASE CON REINTENTOS
 # ─────────────────────────────────────────────
+def _is_supabase_statement_timeout(err: Exception) -> bool:
+    """Postgres 57014 — evita 500 genérico y alinea con saturación de la BD."""
+    s = str(err).lower()
+    if "57014" in s or "statement timeout" in s or "canceling statement" in s:
+        return True
+    code = getattr(err, "code", None)
+    if code == "57014":
+        return True
+    d = getattr(err, "dict", None)
+    if callable(d):
+        try:
+            di = d()
+            if isinstance(di, dict) and str(di.get("code") or "") == "57014":
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def supabase_execute(fn, retries=3, delay=0.5):
     import time
     global supabase
@@ -628,6 +689,11 @@ def supabase_execute(fn, retries=3, delay=0.5):
         )
     except Exception:
         pass
+    if _is_supabase_statement_timeout(last_err):
+        raise HTTPException(
+            status_code=503,
+            detail="La base de datos está ocupada o la consulta tardó demasiado. Reintenta en unos segundos o acota el filtro.",
+        )
     raise last_err
 
 # ─────────────────────────────────────────────
@@ -721,8 +787,11 @@ def registrar_log(
             "alerta_generada":  alerta_generada if alerta_generada is not None else False,
         }
         supabase.table("logs").insert(row).execute()
-    except Exception:
-        pass
+    except Exception as e:
+        try:
+            _log_api.warning("registrar_log: insert falló (%s) accion=%s modulo=%s", e, accion, modulo)
+        except Exception:
+            pass
 
 
 def _track_login_failure_alert(email: str, ip: str):
@@ -1434,7 +1503,8 @@ async def registrar_respuesta_lenta(request: Request, call_next):
     t0 = time.perf_counter()
     response = await call_next(request)
     ms = int((time.perf_counter() - t0) * 1000)
-    if ms >= _SLOW_REQUEST_MS:
+    # No escribir en `logs` por /healthz lento: en incidentes eso añade carga a la misma BD.
+    if ms >= _SLOW_REQUEST_MS and request.url.path != "/healthz":
         try:
             registrar_log_sistema(
                 "WARNING",
@@ -1480,9 +1550,30 @@ def listar_cargos():
 def listar_roles():
     return supabase.table("roles").select("*").order("nombre").execute().data
 
+# Listado sin plano_geojson: el GeoJSON por fila puede ser muy pesado y satura Postgres/egreso (v. métricas Azure).
+_CONTRATOS_SELECT_LISTA = (
+    "id, numero, objeto, contratista, nit, interventoria, entidad, entidad_otra, logo_entidad, "
+    "centro_lat, centro_lng, logo_contratista, logo_interventoria, fase"
+)
+_CONTRATOS_SELECT_DETALLE = (
+    "id, numero, objeto, contratista, nit, interventoria, entidad, entidad_otra, logo_entidad, plano_geojson, "
+    "centro_lat, centro_lng, logo_contratista, logo_interventoria, fase, aiu, iva"
+)
+
+
 @app.get("/contratos")
 def listar_contratos():
-    return supabase.table("contratos").select("id, numero, objeto, contratista, nit, interventoria, entidad, entidad_otra, logo_entidad, plano_geojson, centro_lat, centro_lng, logo_contratista, logo_interventoria, fase").order("numero").execute().data
+    return supabase.table("contratos").select(_CONTRATOS_SELECT_LISTA).order("numero").execute().data
+
+
+@app.get("/contratos/{contrato_id}")
+def obtener_contrato(contrato_id: int):
+    """Una fila completa (incl. plano_geojson). Usar para mapas/edición; el listado es ligero."""
+    r = supabase.table("contratos").select(_CONTRATOS_SELECT_DETALLE).eq("id", contrato_id).limit(1).execute()
+    row = r.data[0] if r.data else None
+    if not row:
+        raise HTTPException(status_code=404, detail="Contrato no encontrado")
+    return row
 
 @app.post("/auth/login")
 def login(request: Request, body: LoginRequest):
@@ -5381,9 +5472,18 @@ def buscar_reportes_obra(
         _seen_rids = set()
         _pag_offset = 0
         _pag_size = 1000
+        # Tope de filas leídas vía range(): evita bucles de minutos y statement timeout en cascada
+        _max_val_pages = int(os.getenv("SICOE_BUSCAR_VALIDACION_MAX_PAGES", "100"))
         ids_val = []
+        _val_page_n = 0
 
         while True:
+            if _val_page_n >= _max_val_pages:
+                raise HTTPException(
+                    status_code=503,
+                    detail="El filtro de validación devuelve demasiados registros. Acote con tramo, capítulo, PK, subcontratista, ítem u observación.",
+                )
+
             def _val_page(off=_pag_offset):
                 q0 = supabase.table("so_registros").select("reporte_id")\
                     .eq("contrato_id", contrato_id)
@@ -5392,6 +5492,7 @@ def buscar_reportes_obra(
                 )
                 return q0.range(off, off + _pag_size - 1).execute().data
             _page = supabase_execute(_val_page)
+            _val_page_n += 1
             for r in _page:
                 rid = r.get("reporte_id")
                 if rid and rid not in _seen_rids:
@@ -6013,17 +6114,7 @@ def exportar_registros_sicoe(
             off += batch_size + 1
         registros = _enriquecer_registros_export(registros)
         try:
-            cn_row = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
-            cn = cn_row[0]["numero"] if cn_row else None
-            u_log = {
-                "sub": str(current_user.get("sub")),
-                "nombre": current_user.get("nombre") or "",
-                "email": current_user.get("email"),
-                "cargo_nombre": current_user.get("cargo_nombre"),
-                "rol_nombre": current_user.get("rol_nombre"),
-                "contrato_id": contrato_id,
-                "contrato_numero": cn,
-            }
+            u_log = _audit_user_contrato(current_user, contrato_id)
             registrar_log(
                 u_log,
                 "EXPORTAR",
@@ -6044,17 +6135,7 @@ def exportar_registros_sicoe(
 
     registros = _enriquecer_registros_export(registros)
     try:
-        cn_row = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
-        cn = cn_row[0]["numero"] if cn_row else None
-        u_log = {
-            "sub": str(current_user.get("sub")),
-            "nombre": current_user.get("nombre") or "",
-            "email": current_user.get("email"),
-            "cargo_nombre": current_user.get("cargo_nombre"),
-            "rol_nombre": current_user.get("rol_nombre"),
-            "contrato_id": contrato_id,
-            "contrato_numero": cn,
-        }
+        u_log = _audit_user_contrato(current_user, contrato_id)
         registrar_log(
             u_log,
             "EXPORTAR",
@@ -6896,6 +6977,24 @@ def obtener_reporte(
         r["semana_numero"] = None
         r["semana_periodo"] = None
 
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "CONSULTAR",
+            "SICOE",
+            "reporte",
+            str(reporte_id),
+            {
+                "numero_reporte": r.get("numero_reporte"),
+                "estado": r.get("estado"),
+                "n_registros": len(regs_raw),
+                "n_puntos": len(puntos_rows or []),
+            },
+        )
+    except Exception:
+        pass
+
     return r
 
 @app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
@@ -7175,19 +7274,7 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
     out = supabase_execute(_upd)
     row = out[0] if out else {}
     try:
-        cnum = None
-        cr = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
-        if cr:
-            cnum = cr[0].get("numero")
-        u_log = {
-            "sub": str(current_user.get("sub")),
-            "nombre": current_user.get("nombre") or "",
-            "email": current_user.get("email"),
-            "cargo_nombre": current_user.get("cargo_nombre"),
-            "rol_nombre": current_user.get("rol_nombre"),
-            "contrato_id": contrato_id,
-            "contrato_numero": cnum,
-        }
+        u_log = _audit_user_contrato(current_user, contrato_id)
         registrar_log(
             u_log,
             "EDITAR",
@@ -7195,8 +7282,8 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
             "registro",
             str(registro_id),
             {"reporte_id": row.get("reporte_id"), "id_pol": row.get("id_pol")},
-            valor_anterior=_json_for_log(prev_row),
-            valor_nuevo=_json_for_log(row),
+            valor_anterior=_so_registro_audit_snapshot(prev_row),
+            valor_nuevo=_so_registro_audit_snapshot(row),
         )
     except Exception:
         pass
@@ -7216,19 +7303,7 @@ def eliminar_registros_reporte(contrato_id: int, reporte_id: int, current_user=D
 
     supabase_execute(_del)
     try:
-        cnum = None
-        cr = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
-        if cr:
-            cnum = cr[0].get("numero")
-        u_log = {
-            "sub": str(current_user.get("sub")),
-            "nombre": current_user.get("nombre") or "",
-            "email": current_user.get("email"),
-            "cargo_nombre": current_user.get("cargo_nombre"),
-            "rol_nombre": current_user.get("rol_nombre"),
-            "contrato_id": contrato_id,
-            "contrato_numero": cnum,
-        }
+        u_log = _audit_user_contrato(current_user, contrato_id)
         registrar_log(
             u_log,
             "ELIMINAR",
@@ -7358,19 +7433,7 @@ def reemplazar_registros_nuevo_reporte(
         supabase_execute(_ins)
         total += len(chunk)
     try:
-        cnum = None
-        cr = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
-        if cr:
-            cnum = cr[0].get("numero")
-        u_log = {
-            "sub": str(current_user.get("sub")),
-            "nombre": current_user.get("nombre") or "",
-            "email": current_user.get("email"),
-            "cargo_nombre": current_user.get("cargo_nombre"),
-            "rol_nombre": current_user.get("rol_nombre"),
-            "contrato_id": contrato_id,
-            "contrato_numero": cnum,
-        }
+        u_log = _audit_user_contrato(current_user, contrato_id)
         registrar_log(
             u_log,
             "CREAR",
@@ -7407,19 +7470,7 @@ def dev_eliminar_registro(contrato_id: int, registro_id: int, current_user=Depen
     supabase_execute(_del_reg)
 
     try:
-        cnum = None
-        cr = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
-        if cr:
-            cnum = cr[0].get("numero")
-        u_log = {
-            "sub": str(current_user.get("sub")),
-            "nombre": current_user.get("nombre") or "",
-            "email": current_user.get("email"),
-            "cargo_nombre": current_user.get("cargo_nombre"),
-            "rol_nombre": current_user.get("rol_nombre"),
-            "contrato_id": contrato_id,
-            "contrato_numero": cnum,
-        }
+        u_log = _audit_user_contrato(current_user, contrato_id)
         registrar_log(
             u_log,
             "ELIMINAR",
@@ -7427,7 +7478,7 @@ def dev_eliminar_registro(contrato_id: int, registro_id: int, current_user=Depen
             "registro",
             str(registro_id),
             {"reporte_id": prev_row.get("reporte_id"), "dev": True},
-            valor_anterior=_json_for_log(prev_row),
+            valor_anterior=_so_registro_audit_snapshot(prev_row),
             valor_nuevo={},
             severidad="AUDIT",
             alerta_generada=True,
@@ -7473,19 +7524,7 @@ def dev_eliminar_reporte(contrato_id: int, reporte_id: int, current_user=Depends
     supabase_execute(_del_rep)
 
     try:
-        cnum = None
-        cr = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
-        if cr:
-            cnum = cr[0].get("numero")
-        u_log = {
-            "sub": str(current_user.get("sub")),
-            "nombre": current_user.get("nombre") or "",
-            "email": current_user.get("email"),
-            "cargo_nombre": current_user.get("cargo_nombre"),
-            "rol_nombre": current_user.get("rol_nombre"),
-            "contrato_id": contrato_id,
-            "contrato_numero": cnum,
-        }
+        u_log = _audit_user_contrato(current_user, contrato_id)
         registrar_log(
             u_log,
             "ELIMINAR",
@@ -7493,7 +7532,9 @@ def dev_eliminar_reporte(contrato_id: int, reporte_id: int, current_user=Depends
             "reporte",
             str(reporte_id),
             {"registros_eliminados": len(reg_ids), "dev": True},
-            valor_anterior=_json_for_log(prev_rep),
+            valor_anterior=_json_for_log(
+                {k: prev_rep.get(k) for k in ("id", "numero_reporte", "estado", "descripcion_actividad") if prev_rep}
+            ),
             valor_nuevo={},
             severidad="AUDIT",
             alerta_generada=True,
@@ -7530,19 +7571,7 @@ def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(
     result = supabase_execute(_ins)
     row = result[0] if result else {}
     try:
-        cnum = None
-        cr = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
-        if cr:
-            cnum = cr[0].get("numero")
-        u_log = {
-            "sub": str(current_user.get("sub")),
-            "nombre": current_user.get("nombre") or "",
-            "email": current_user.get("email"),
-            "cargo_nombre": current_user.get("cargo_nombre"),
-            "rol_nombre": current_user.get("rol_nombre"),
-            "contrato_id": contrato_id,
-            "contrato_numero": cnum,
-        }
+        u_log = _audit_user_contrato(current_user, contrato_id)
         registrar_log(
             u_log,
             "CREAR",
@@ -7551,7 +7580,7 @@ def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(
             str(row.get("id", "")),
             {"reporte_id": row.get("reporte_id"), "id_pol": row.get("id_pol")},
             valor_anterior=None,
-            valor_nuevo=_json_for_log(row),
+            valor_nuevo=_so_registro_audit_snapshot(row),
         )
     except Exception:
         pass
@@ -7826,6 +7855,23 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
             }).eq("id", reporte_id).execute().data
         supabase_execute(_upd_rep)
 
+        try:
+            u_log = _audit_user_contrato(current_user, contrato_id)
+            registrar_log(
+                u_log,
+                "ASIGNAR_ITEM",
+                "SICOE",
+                "registro",
+                str(registro_id),
+                {
+                    "item_numero": item.get("item_numero"),
+                    "item_listado_id": body.item_listado_id,
+                    "reporte_id": reporte_id,
+                },
+            )
+        except Exception:
+            pass
+
         return {
             "ok": True, "vlr_unitario": vlr_unit, "costo_directo": costo_dir,
             "semana_id": semana_id, "acta_rpo_id": acta_rpo_id, "corte_id": corte_id
@@ -7906,6 +7952,18 @@ def mover_registro(contrato_id: int, registro_id: int, nuevo_reporte_id: int, cu
                 .update(update_data)\
                 .eq("id", registro_id).eq("contrato_id", contrato_id).execute().data
         supabase_execute(_upd)
+        try:
+            u_log = _audit_user_contrato(current_user, contrato_id)
+            registrar_log(
+                u_log,
+                "MOVER",
+                "SICOE",
+                "registro",
+                str(registro_id),
+                {"reporte_origen": reporte_origen_id, "reporte_destino": nuevo_reporte_id},
+            )
+        except Exception:
+            pass
         return {"ok": True}
     except HTTPException:
         raise
@@ -8217,6 +8275,14 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
                         supabase_execute(_notif)
                     except Exception:
                         pass
+        try:
+            u_log = _audit_user_contrato(current_user, contrato_id)
+            registrar_log(
+                u_log, "VALIDAR", "SICOE", "registro", str(registro_id),
+                {"nivel": 1, "estado": body.estado},
+            )
+        except Exception:
+            pass
         return {"ok": True}
     except HTTPException:
         raise
@@ -8303,6 +8369,14 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
                         supabase_execute(_notif)
                     except Exception:
                         pass
+        try:
+            u_log = _audit_user_contrato(current_user, contrato_id)
+            registrar_log(
+                u_log, "VALIDAR", "SICOE", "registro", str(registro_id),
+                {"nivel": 2, "estado": body.estado, "nivel2_objeto_pago_sub": body.objeto_pago_sub},
+            )
+        except Exception:
+            pass
         return {"ok": True}
     except HTTPException:
         raise
@@ -8360,6 +8434,14 @@ def validar_nivel3(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
         if body.comentario_data:
             _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
                                  tipo_override="validacion", nivel_validacion_override="Nivel 3")
+        try:
+            u_log = _audit_user_contrato(current_user, contrato_id)
+            registrar_log(
+                u_log, "VALIDAR", "SICOE", "registro", str(registro_id),
+                {"nivel": 3, "estado": body.estado},
+            )
+        except Exception:
+            pass
         return {"ok": True}
     except HTTPException:
         raise
@@ -8402,6 +8484,14 @@ def validar_sub(contrato_id: int, registro_id: int, body: ValidarSubBody,
                 .update(update).eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).execute().data
         supabase_execute(_upd)
+        try:
+            u_log = _audit_user_contrato(current_user, contrato_id)
+            registrar_log(
+                u_log, "VALIDAR", "SICOE", "registro", str(registro_id),
+                {"nivel": "sub", "estado": body.estado},
+            )
+        except Exception:
+            pass
         return {"ok": True}
     except HTTPException:
         raise

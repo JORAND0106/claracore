@@ -7,7 +7,8 @@
 -- Patrón vista_dashboard_* (como vista_dashboard_resumen): exponer solo columnas que usa la matriz
 -- para que el planificador lea menos ancho de fila y pueda usar índices de forma más eficiente.
 
-CREATE OR REPLACE VIEW public.vista_so_registros_matriz_validacion AS
+CREATE OR REPLACE VIEW public.vista_so_registros_matriz_validacion
+WITH (security_invoker = true) AS
 SELECT
   r.contrato_id,
   r.acta_rpo_id,
