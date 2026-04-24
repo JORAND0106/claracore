@@ -527,6 +527,7 @@ class DimOverride(BaseModel):
     id: int
     ancho: Optional[float] = None
     espesor: Optional[float] = None
+    area_long_nod: Optional[float] = None
 
 class PresupuestoBulkRecalc(BaseModel):
     ids: List[int]
@@ -3218,6 +3219,13 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
             status_code=403,
             detail="Registro sellado (aprobado por Interventoría): no puede modificarse.",
         )
+    if not _es_desarrollador(current_user):
+        for k in ("area_long_nod", "ancho", "espesor", "cant_total"):
+            if k in data:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Solo el cargo Desarrollador puede modificar dimensiones o la cantidad total en presupuesto.",
+                )
     dims = {k: data.get(k) for k in ["area_long_nod", "ancho", "espesor"]}
     toco_dimensiones = any(v is not None for v in dims.values())
     if toco_dimensiones:
@@ -3234,6 +3242,10 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
     if toco_dimensiones:
         data["calculo_por"] = _calculo_usuario_label(current_user)
         data["calculo_en"] = datetime.now(timezone.utc).isoformat()
+    if not toco_dimensiones and "vlr_unitario" in data:
+        cant0 = float(prev_row.get("cant_total") or 0)
+        vlr0 = float(data.get("vlr_unitario") or 0)
+        data["costo_directo"] = round(cant0 * vlr0, 0)
     data["updated_at"] = "now()"
     supabase.table("presupuesto").update(data).eq("id", item_id).execute()
 
@@ -3453,6 +3465,11 @@ def restaurar_presupuesto(item_id: int, current_user=Depends(get_current_user)):
 @app.post("/presupuesto/{contrato_id}/agregar-cantidad")
 def agregar_cantidad(contrato_id: int, body: AgregarCantidadBody, current_user=Depends(get_current_user)):
     """Inserta una nueva cantidad clonando la posición de un registro existente."""
+    if not _es_desarrollador(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el cargo Desarrollador puede agregar cantidades (dimensiones) en presupuesto.",
+        )
     area  = float(body.area_long_nod or 0)
     ancho = float(body.ancho or 0)
     esp   = float(body.espesor or 0)
@@ -3600,6 +3617,11 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
     if not body.ids:
         raise HTTPException(status_code=400, detail="No hay registros seleccionados")
     _reject_if_presupuesto_sellado(supabase, body.ids)
+    if (body.dims or []) and not _es_desarrollador(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el cargo Desarrollador puede modificar dimensiones en lote (presupuesto).",
+        )
     dims_map = {d.id: d for d in (body.dims or [])}
     # Traer también handles y layers para cad_queue
     rows = supabase.table("presupuesto").select(
@@ -3608,26 +3630,51 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
     for r in rows:
         rid = r["id"]
         dim = dims_map.get(rid)
-        ancho   = (dim.ancho   if dim and dim.ancho   is not None else None) or r.get("ancho")   or 1
-        espesor = (dim.espesor if dim and dim.espesor is not None else None) or r.get("espesor") or 1
-        area    = r.get("area_long_nod") or 0
-        vlr     = body.vlr_unitario if body.vlr_unitario is not None else (r.get("vlr_unitario") or 0)
-        # Recalcular cant_total con las nuevas dimensiones si hay dims
-        if dim and (dim.ancho is not None or dim.espesor is not None):
-            cant = round(float(area) * float(ancho) * float(espesor), 4)
-            data_ancho   = {"ancho": ancho, "espesor": espesor}
+        vlr = body.vlr_unitario if body.vlr_unitario is not None else (r.get("vlr_unitario") or 0)
+        vlr = float(vlr) if vlr is not None else 0.0
+        if dim and (
+            dim.ancho is not None
+            or dim.espesor is not None
+            or dim.area_long_nod is not None
+        ):
+            area = float(dim.area_long_nod) if dim.area_long_nod is not None else float(r.get("area_long_nod") or 0)
+            ancho = float(dim.ancho) if dim.ancho is not None else float(r.get("ancho") or 0)
+            espesor = float(dim.espesor) if dim.espesor is not None else float(r.get("espesor") or 0)
+            if (ancho or espesor):
+                cant = round(area * ancho * espesor, 4)
+            else:
+                cant = round(area, 4)
+            costo = round(cant * vlr, 0)
+            data = {
+                "area_long_nod": area,
+                "ancho": ancho,
+                "espesor": espesor,
+                "cant_total": cant,
+                "costo_directo": costo,
+                "updated_at": "now()",
+                "calculo_por": _calculo_usuario_label(current_user),
+                "calculo_en": datetime.now(timezone.utc).isoformat(),
+            }
         else:
-            cant = r.get("cant_total") or 0
-            data_ancho   = {}
-        costo = round(float(cant) * float(vlr), 0)
-        data  = {
-            "cant_total": cant,
-            "costo_directo": costo,
-            "updated_at": "now()",
-            "calculo_por": _calculo_usuario_label(current_user),
-            "calculo_en": datetime.now(timezone.utc).isoformat(),
-            **data_ancho,
-        }
+            ancho   = (dim.ancho   if dim and dim.ancho   is not None else None) or r.get("ancho")   or 1
+            espesor = (dim.espesor if dim and dim.espesor is not None else None) or r.get("espesor") or 1
+            area    = r.get("area_long_nod") or 0
+            # Recalcular cant_total con las nuevas dimensiones parciales (ancho/esp) si aplica
+            if dim and (dim.ancho is not None or dim.espesor is not None):
+                cant = round(float(area) * float(ancho) * float(espesor), 4)
+                data_ancho   = {"ancho": ancho, "espesor": espesor}
+            else:
+                cant = r.get("cant_total") or 0
+                data_ancho   = {}
+            costo = round(float(cant) * vlr, 0)
+            data  = {
+                "cant_total": cant,
+                "costo_directo": costo,
+                "updated_at": "now()",
+                "calculo_por": _calculo_usuario_label(current_user),
+                "calculo_en": datetime.now(timezone.utc).isoformat(),
+                **data_ancho,
+            }
         if body.capitulo    is not None: data["capitulo"]    = body.capitulo
         if body.item        is not None: data["item"]        = body.item
         if body.descripcion is not None: data["descripcion"] = body.descripcion
@@ -8115,12 +8162,20 @@ def _macro_rol_usuario_por_id(usuario_id: Optional[int]) -> Optional[str]:
     if not usuario_id:
         return None
     try:
-        u = supabase.table("usuarios").select("cargo_id").eq("id", usuario_id).single().execute().data or {}
+        u = supabase.table("usuarios").select("cargo_id, rol_id").eq("id", usuario_id).single().execute().data or {}
         cargo_id = u.get("cargo_id")
-        if not cargo_id:
-            return None
-        c = supabase.table("cargos").select("nombre").eq("id", cargo_id).single().execute().data or {}
-        return _normalizar_macro_rol(c.get("nombre"))
+        if cargo_id:
+            c = supabase.table("cargos").select("nombre").eq("id", cargo_id).single().execute().data or {}
+            m = _normalizar_macro_rol(c.get("nombre"))
+            if m:
+                return m
+        rol_id = u.get("rol_id")
+        if rol_id:
+            r = supabase.table("roles").select("nombre").eq("id", rol_id).single().execute().data or {}
+            m = _normalizar_macro_rol(r.get("nombre"))
+            if m:
+                return m
+        return None
     except Exception:
         return None
 
@@ -8165,7 +8220,10 @@ def _insertar_comentario(contrato_id: int, registro_id: int, autor_id: int,
     rol_origen_payload = comentario_data.get("rol_origen", "")
     # Fuente de verdad: preferir el lado real del autor en BD.
     rol_origen_macro = _normalizar_macro_rol(rol_origen_payload) or _macro_rol_usuario_por_id(autor_id)
-    rol_origen = rol_origen_macro or rol_origen_payload
+    rol_origen = (rol_origen_macro or (rol_origen_payload or "").strip() or None)
+    if not rol_origen:
+        # El CHECK en BD exige un macro-rol reconocible (p. ej. contratista / interventoria).
+        rol_origen = "contratista"
 
     roles_dest = _macro_roles_destinatarios(destinatarios)
 

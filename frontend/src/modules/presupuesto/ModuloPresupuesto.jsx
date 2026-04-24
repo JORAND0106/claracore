@@ -151,7 +151,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [listadoPrecios, setListadoPrecios] = useState([])
   const [editCapitulo, setEditCapitulo] = useState('')
   const [editItem, setEditItem] = useState('')
-  const [editDims, setEditDims] = useState({})      // {[id]: {ancho, espesor}}
+  const [editDims, setEditDims] = useState({})      // {[id]: { area_long_nod?, ancho, espesor }}
   const [modalConfirm, setModalConfirm] = useState(false)
   const [bulkEstado, setBulkEstado] = useState('')
   const [bulkPreInterv, setBulkPreInterv] = useState('')
@@ -170,7 +170,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [modalDetallePptoEditable, setModalDetallePptoEditable] = useState(false)
   /** Trazabilidad por fila: entidad `presupuesto` en API /logs/entidad/presupuesto/{id} */
   const [trazabilidadPresupuesto, setTrazabilidadPresupuesto] = useState(null)
-  const [popupDims, setPopupDims] = useState({ ancho: '', espesor: '' })
+  const [popupDims, setPopupDims] = useState({ ancho: '', espesor: '', area_long_nod: '' })
   const [popupCap,  setPopupCap]  = useState('')
   const [popupItem, setPopupItem] = useState('')
   const [popupItemBusq, setPopupItemBusq] = useState('')
@@ -310,7 +310,7 @@ useEffect(() => {
         if (registro) {
           setModalDetallePpto(registro)
           setModalDetallePptoEditable(!registro.sellado)
-          setPopupDims({ ancho: registro.ancho ?? '', espesor: registro.espesor ?? '' })
+          setPopupDims({ ancho: registro.ancho ?? '', espesor: registro.espesor ?? '', area_long_nod: registro.area_long_nod ?? '' })
           setPopupCap(registro.capitulo || '')
           setPopupItem(registro.item || '')
           setPopupItemBusq(registro.item ? `${registro.item} · ${registro.descripcion || ''}` : '')
@@ -348,6 +348,8 @@ useEffect(() => {
   }, [contratoId])
 
   const esDeveloper  = usuario?.cargo_nombre?.toLowerCase() === 'desarrollador'
+  /** Solo Desarrollador edita área / long. / NOD, ancho y espesor (y recálculo por dimensiones). */
+  const puedeEditarDimensiones = esDeveloper
   const _permPpto    = (usuario?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === 'editar registros presupuesto')
   const puedeEditar  = esDeveloper || (_permPpto?.editar   ?? false)
   const puedeValidar = esDeveloper || (_permPpto?.validar  ?? false)
@@ -1333,12 +1335,16 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   const precioSeleccionado = useMemo(() => listadoPrecios.find(p => p.item_numero === editItem) || null, [listadoPrecios, editItem])
   const hayModificaciones = seleccionados.size > 0 && (
     editCapitulo !== '' || editItem !== '' ||
-    [...seleccionados].some(id => editDims[id])
+    (puedeEditarDimensiones && [...seleccionados].some(id => editDims[id]))
   ) && ![...seleccionados].some(id => esSellado(registros.find(r => r.id === id)))
 
   async function ejecutarRecalcular() {
     const ids = [...seleccionados]
     const tieneDims  = ids.some(id => editDims[id])
+    if (tieneDims && !puedeEditarDimensiones) {
+      alert('Solo el cargo Desarrollador puede guardar cambios de dimensiones en lote.')
+      return
+    }
     const tieneItem  = !!(editCapitulo || editItem)
     const tipoComent = tieneItem ? 'item_capitulo' : 'dims'
 
@@ -1348,11 +1354,15 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
 
-    const dims = ids.filter(id => editDims[id]).map(id => ({
-      id,
-      ancho:   editDims[id].ancho   !== '' ? parseFloat(editDims[id].ancho)   : null,
-      espesor: editDims[id].espesor !== '' ? parseFloat(editDims[id].espesor) : null,
-    }))
+    const dims = ids.filter(id => editDims[id]).map(id => {
+      const d = editDims[id]
+      return {
+        id,
+        ancho: d.ancho !== '' && d.ancho != null ? parseFloat(d.ancho) : null,
+        espesor: d.espesor !== '' && d.espesor != null ? parseFloat(d.espesor) : null,
+        area_long_nod: d.area_long_nod !== '' && d.area_long_nod != null ? parseFloat(d.area_long_nod) : null,
+      }
+    })
     const body = { ids, dims: dims.length > 0 ? dims : null }
     if (editCapitulo)   body.capitulo    = editCapitulo
     if (editItem)       { body.item = editItem; body.descripcion = precioSeleccionado?.descripcion ?? null }
@@ -1369,9 +1379,9 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       setRegistros(prev => prev.map(r => {
         if (!ids.includes(r.id)) return r
         const dim = dims.find(d => d.id === r.id)
-        const ancho   = dim?.ancho   ?? r.ancho   ?? 1
-        const espesor = dim?.espesor ?? r.espesor ?? 1
-        const area    = r.area_long_nod ?? 0
+        const ancho   = (dim?.ancho != null ? dim.ancho : (r.ancho ?? 0)) || 0
+        const espesor = (dim?.espesor != null ? dim.espesor : (r.espesor ?? 0)) || 0
+        const area    = (dim?.area_long_nod != null ? dim.area_long_nod : (r.area_long_nod ?? 0)) || 0
         const vlr     = precioSeleccionado?.precio_unitario ?? r.vlr_unitario ?? 0
         const cant    = (ancho > 0 || espesor > 0) ? Math.round(area * ancho * espesor * 10000) / 10000 : area
         const costo   = Math.round(cant * vlr)
@@ -1379,7 +1389,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
           ...r,
           ...(editCapitulo && { capitulo: editCapitulo }),
           ...(editItem && { item: editItem, descripcion: precioSeleccionado?.descripcion ?? r.descripcion }),
-          ...(dim && { ancho, espesor }),
+          ...(dim && { ancho, espesor, area_long_nod: area }),
           cant_total:    cant,
           costo_directo: costo,
           vlr_unitario:  vlr,
@@ -1497,18 +1507,21 @@ async function ejecutarBulkEstadoDirecto(estado) {
     const reg = registros.find(rr => rr.id === id)
     if (esSellado(reg)) return
     const body = {}
+    const allowDim = puedeEditarDimensiones
     Object.entries(editValues).forEach(([k, v]) => {
       if (v === '' || v == null) return
-      body[k] = ['area_long_nod','ancho','espesor','vlr_unitario','cant_total'].includes(k) ? parseFloat(v) : v
+      if (!allowDim && ['area_long_nod', 'ancho', 'espesor'].includes(k)) return
+      body[k] = ['area_long_nod', 'ancho', 'espesor', 'vlr_unitario', 'cant_total'].includes(k) ? parseFloat(v) : v
     })
-    // Calcular cant_total si vienen dimensiones
-    const area = parseFloat(editValues.area_long_nod) || 0
-    const ancho = parseFloat(editValues.ancho) || 0
-    const esp = parseFloat(editValues.espesor) || 0
-    if (area > 0) {
-      body.cant_total = (ancho > 0 || esp > 0)
-        ? Math.round(area * ancho * esp * 10000) / 10000
-        : area
+    if (allowDim) {
+      const area = parseFloat(editValues.area_long_nod) || 0
+      const ancho = parseFloat(editValues.ancho) || 0
+      const esp = parseFloat(editValues.espesor) || 0
+      if (area > 0) {
+        body.cant_total = (ancho > 0 || esp > 0)
+          ? Math.round(area * ancho * esp * 10000) / 10000
+          : area
+      }
     }
     const res = await fetch(`${API}/presupuesto/item/${id}`, {
       method: 'PUT',
@@ -1792,7 +1805,7 @@ async function restaurar(id) {
                   <div style={{ fontSize:'11px', color:t.textMuted, marginTop:'2px' }}>{modalModoCapitulo}</div>
                 </div>
                 <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
-                  {puedeEditar && (
+                  {puedeEditar && puedeEditarDimensiones && (
                     <button onClick={() => { setModoSeleccionClon(true); setClonBase(null) }}
                       style={{ background:t.primary+'22', color:t.primary, border:`1px solid ${t.primary}`, borderRadius:'8px', padding:'5px 12px', fontSize:'11px', fontWeight:'700', cursor:'pointer' }}>
                       ＋ Agregar cantidad
@@ -2139,10 +2152,13 @@ async function restaurar(id) {
                                   style={{ width:'13px', height:'13px', cursor: esSellado(r) ? 'not-allowed' : 'pointer', flexShrink:0, opacity: esSellado(r) ? 0.45 : 1 }} />
                                 <div style={{ width:'80px', flexShrink:0, fontSize:'11px', color:t.text, fontWeight:'600' }}>{r.item}</div>
                                 <div style={{ flex:3, fontSize:'11px', color:t.textMuted }}>{r.descripcion}</div>
-                                {/* Dims — editable cuando puedeEditar */}
+                                {/* Dims — solo Desarrollador */}
                                 <div style={{ minWidth:'120px', fontSize:'11px', color:t.textMuted, textAlign:'right', whiteSpace:'nowrap' }}>
-                                  {puedeEditar && !esSellado(r) && editDims[r.id] !== undefined ? (
+                                  {puedeEditarDimensiones && !esSellado(r) && editDims[r.id] !== undefined ? (
                                     <div style={{ display:'flex', flexDirection:'column', gap:'2px', alignItems:'flex-end' }} onClick={e => e.stopPropagation()}>
+                                      <input type="number" placeholder="a/l/n" value={editDims[r.id].area_long_nod ?? ''}
+                                        onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], area_long_nod: e.target.value } }))}
+                                        style={{ width:'52px', fontSize:'10px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 4px', color:t.text, textAlign:'right' }} />
                                       <input type="number" placeholder="ancho" value={editDims[r.id].ancho ?? ''}
                                         onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], ancho: e.target.value } }))}
                                         style={{ width:'52px', fontSize:'10px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 4px', color:t.text, textAlign:'right' }} />
@@ -2151,9 +2167,9 @@ async function restaurar(id) {
                                         style={{ width:'52px', fontSize:'10px', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 4px', color:t.text, textAlign:'right' }} />
                                     </div>
                                   ) : (
-                                    <span onClick={puedeEditar && !esSellado(r) ? (e) => { e.stopPropagation(); setEditDims(p => ({ ...p, [r.id]: { ancho: r.ancho ?? '', espesor: r.espesor ?? '' } })) } : undefined}
-                                      title={puedeEditar && !esSellado(r) ? 'Clic para editar dims' : undefined}
-                                      style={{ cursor: puedeEditar && !esSellado(r) ? 'pointer' : 'default', textDecoration: puedeEditar && !esSellado(r) ? 'underline dotted' : 'none', whiteSpace:'nowrap' }}>
+                                    <span onClick={puedeEditarDimensiones && !esSellado(r) ? (e) => { e.stopPropagation(); setEditDims(p => ({ ...p, [r.id]: { area_long_nod: r.area_long_nod ?? '', ancho: r.ancho ?? '', espesor: r.espesor ?? '' } })) } : undefined}
+                                      title={puedeEditarDimensiones && !esSellado(r) ? 'Clic para editar dims' : undefined}
+                                      style={{ cursor: puedeEditarDimensiones && !esSellado(r) ? 'pointer' : 'default', textDecoration: puedeEditarDimensiones && !esSellado(r) ? 'underline dotted' : 'none', whiteSpace:'nowrap' }}>
                                       {[r.area_long_nod, r.ancho, r.espesor].filter(v => v != null && v !== '').join(' × ') || '—'}
                                     </span>
                                   )}
@@ -2201,7 +2217,7 @@ async function restaurar(id) {
                                 )}
                                 <div style={{ display:'flex', gap:'4px', alignItems:'center' }}>
                                   {/* Botón guardar dims */}
-                                  {puedeEditar && !esSellado(r) && editDims[r.id] !== undefined && (
+                                  {puedeEditarDimensiones && !esSellado(r) && editDims[r.id] !== undefined && (
                                     <button onClick={async (e) => {
                                       e.stopPropagation()
                                       const d = editDims[r.id]
@@ -2209,8 +2225,9 @@ async function restaurar(id) {
                                         method: 'PUT',
                                         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                                         body: JSON.stringify({
-                                          ancho:   d.ancho   !== '' ? Number(d.ancho)   : null,
-                                          espesor: d.espesor !== '' ? Number(d.espesor) : null,
+                                          area_long_nod: d.area_long_nod !== '' && d.area_long_nod != null ? Number(d.area_long_nod) : null,
+                                          ancho:   d.ancho   !== '' && d.ancho   != null ? Number(d.ancho)   : null,
+                                          espesor: d.espesor !== '' && d.espesor != null ? Number(d.espesor) : null,
                                         })
                                       })
                                       if (res.ok) {
@@ -2497,18 +2514,24 @@ async function restaurar(id) {
                   {modalDetallePptoEditable && (puedeEditar || puedeEliminar) && !esSellado(r) && (
                     <div style={{ borderTop:`1px solid ${t.border}`, marginTop:'12px', paddingTop:'12px' }}>
 
-                      {/* ── Editar dimensiones ── */}
-                      {puedeEditar && (
+                      {/* ── Editar dimensiones (solo Desarrollador) ── */}
+                      {puedeEditarDimensiones && (
                         <div style={{ background:t.bg, borderRadius:'8px', padding:'10px 12px', marginBottom:'10px' }}>
                           <div style={{ fontSize:'10px', fontWeight:'700', color:'#F59E0B', letterSpacing:'0.5px', marginBottom:'8px' }}>📐 EDITAR DIMENSIONES</div>
-                          <div style={{ display:'flex', gap:'10px', marginBottom:'8px' }}>
-                            <div style={{ flex:1 }}>
+                          <div style={{ display:'flex', gap:'10px', marginBottom:'8px', flexWrap:'wrap' }}>
+                            <div style={{ flex:1, minWidth:'100px' }}>
+                              <div style={{ fontSize:'9px', color:t.textMuted, fontWeight:'700', marginBottom:'3px' }}>ÁREA / LONG / NOD</div>
+                              <input type="number" value={popupDims.area_long_nod}
+                                onChange={e => setPopupDims(d => ({...d, area_long_nod: e.target.value}))}
+                                style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'12px', boxSizing:'border-box' }} />
+                            </div>
+                            <div style={{ flex:1, minWidth:'100px' }}>
                               <div style={{ fontSize:'9px', color:t.textMuted, fontWeight:'700', marginBottom:'3px' }}>ANCHO</div>
                               <input type="number" value={popupDims.ancho}
                                 onChange={e => setPopupDims(d => ({...d, ancho: e.target.value}))}
                                 style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'12px', boxSizing:'border-box' }} />
                             </div>
-                            <div style={{ flex:1 }}>
+                            <div style={{ flex:1, minWidth:'100px' }}>
                               <div style={{ fontSize:'9px', color:t.textMuted, fontWeight:'700', marginBottom:'3px' }}>ESPESOR</div>
                               <input type="number" value={popupDims.espesor}
                                 onChange={e => setPopupDims(d => ({...d, espesor: e.target.value}))}
@@ -2517,12 +2540,21 @@ async function restaurar(id) {
                           </div>
                           <button disabled={popupGuardando} onClick={async () => {
                             setPopupGuardando(true); setPopupMsg('')
-                            const area = parseFloat(r.area_long_nod) || 0
-                            const ancho = parseFloat(popupDims.ancho) || 0
-                            const esp   = parseFloat(popupDims.espesor) || 0
+                            const pArea = popupDims.area_long_nod === '' ? NaN : parseFloat(popupDims.area_long_nod)
+                            const pAncho = popupDims.ancho === '' ? NaN : parseFloat(popupDims.ancho)
+                            const pEsp = popupDims.espesor === '' ? NaN : parseFloat(popupDims.espesor)
+                            const area = Number.isFinite(pArea) ? pArea : 0
+                            const ancho = Number.isFinite(pAncho) ? pAncho : 0
+                            const esp   = Number.isFinite(pEsp) ? pEsp : 0
                             const cant  = (ancho > 0 || esp > 0) ? Math.round(area * ancho * esp * 10000) / 10000 : area
                             const costo = Math.round(cant * (r.vlr_unitario || 0))
-                            const body  = { ancho: ancho || null, espesor: esp || null, cant_total: cant, costo_directo: costo }
+                            const body  = {
+                              area_long_nod: Number.isFinite(pArea) ? pArea : null,
+                              ancho: Number.isFinite(pAncho) ? pAncho : null,
+                              espesor: Number.isFinite(pEsp) ? pEsp : null,
+                              cant_total: cant,
+                              costo_directo: costo
+                            }
                             const res = await fetch(`${API}/presupuesto/item/${r.id}`, {
                               method:'PUT', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
                               body: JSON.stringify(body)
@@ -2806,7 +2838,7 @@ async function restaurar(id) {
               {editCapitulo && <span>📁 <strong>Capítulo:</strong> {editCapitulo}</span>}
               {editItem && <span>📌 <strong>Ítem:</strong> {editItem} · {precioSeleccionado?.descripcion || ''}</span>}
               {precioSeleccionado && <span>💲 <strong>Vlr. Unitario:</strong> {fmt(precioSeleccionado.precio_unitario)}</span>}
-              {[...seleccionados].some(id => editDims[id]) && (
+              {puedeEditarDimensiones && [...seleccionados].some(id => editDims[id]) && (
                 <span>📐 <strong>Dimensiones</strong> modificadas en {[...seleccionados].filter(id => editDims[id]).length} fila(s)</span>
               )}
               <span style={{color:t.textMuted,fontSize:'12px',marginTop:'4px'}}>
@@ -3306,7 +3338,7 @@ async function restaurar(id) {
                         <input type="checkbox" checked={seleccionados.has(r.id)} disabled={esSellado(r)} onChange={() => toggleSel(r.id)}
                           style={{ cursor: esSellado(r) ? 'not-allowed' : 'pointer', opacity: esSellado(r) ? 0.45 : 1 }} />
                         <span id={`zoom-feedback-${r.id}`} style={{ fontSize:'10px', color:'#10B981', opacity:'0', transition:'opacity 0.3s', pointerEvents:'none' }}>🎯</span>
-                        <button onClick={() => { setModalDetallePpto(r); setModalDetallePptoEditable(!esSellado(r)) }}
+                        <button onClick={() => { setModalDetallePpto(r); setModalDetallePptoEditable(!esSellado(r)); setPopupDims({ ancho: r.ancho ?? '', espesor: r.espesor ?? '', area_long_nod: r.area_long_nod ?? '' }) }}
                           title="Ver detalle"
                           style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'13px', padding:'0', lineHeight:1, display:'flex', alignItems:'center' }}
                           onMouseEnter={e => e.currentTarget.style.color=t.primary}
@@ -3317,7 +3349,7 @@ async function restaurar(id) {
                     </td>
                     <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
                       <span
-                        onClick={() => { setModalDetallePpto(r); setModalDetallePptoEditable(!esSellado(r)) }}
+                        onClick={() => { setModalDetallePpto(r); setModalDetallePptoEditable(!esSellado(r)); setPopupDims({ ancho: r.ancho ?? '', espesor: r.espesor ?? '', area_long_nod: r.area_long_nod ?? '' }) }}
                         title="Ver detalle"
                         style={{ fontWeight:'600', color:t.primary, cursor:'pointer', textDecoration:'underline' }}>
                         {r.id_pol||r.pk_id||'-'}
@@ -3338,22 +3370,33 @@ async function restaurar(id) {
                     <td style={tdStyle}>{r.und}</td>
                     <td style={{ ...tdStyle }}>{r.no_inicio || '-'}</td>
                     <td style={{ ...tdStyle }}>{r.no_final || '-'}</td>
-                    <td style={{ ...tdStyle,textAlign:'right' }}>
-                      {isEdit ? <input type="number" value={editValues.area_long_nod} onChange={e=>setEditValues({...editValues,area_long_nod:e.target.value})}
-                        style={{ width:'80px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} onClick={e=>e.stopPropagation()} />
+                    <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
+                      {isEdit && puedeEditarDimensiones
+                        ? <input type="number" value={editValues.area_long_nod} onChange={e=>setEditValues({...editValues,area_long_nod:e.target.value})}
+                            style={{ width:'80px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} />
+                        : puedeEditarDimensiones && seleccionados.has(r.id) && !esSellado(r)
+                        ? <input type="number" value={editDims[r.id]?.area_long_nod ?? (r.area_long_nod ?? '')}
+                            onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], area_long_nod: v } })) }}
+                            style={{ width:'80px',background:t.inputBg,border:`1.5px solid ${t.primary}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} />
                         : fmtN(r.area_long_nod)}
                     </td>
                     <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
-                      {puedeEditar && seleccionados.has(r.id) && !esSellado(r)
+                      {isEdit && puedeEditarDimensiones
+                        ? <input type="number" value={editValues.ancho} onChange={e=>setEditValues({...editValues,ancho:e.target.value})}
+                            style={{ width:'70px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} />
+                        : puedeEditarDimensiones && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.ancho ?? (r.ancho ?? '')}
-                            onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { espesor: r.espesor, ...prev[r.id], ancho: v } })) }}
+                            onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], ancho: v } })) }}
                             style={{ width:'70px',background:t.inputBg,border:`1.5px solid ${t.primary}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} />
-                        : fmtN(r.ancho)}                
+                        : fmtN(r.ancho)}
                     </td>
                     <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
-                      {puedeEditar && seleccionados.has(r.id) && !esSellado(r)
+                      {isEdit && puedeEditarDimensiones
+                        ? <input type="number" value={editValues.espesor} onChange={e=>setEditValues({...editValues,espesor:e.target.value})}
+                            style={{ width:'70px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} />
+                        : puedeEditarDimensiones && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.espesor ?? (r.espesor ?? '')}
-                            onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ancho: r.ancho, ...prev[r.id], espesor: v } })) }}
+                            onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], espesor: v } })) }}
                             style={{ width:'70px',background:t.inputBg,border:`1.5px solid ${t.primary}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'12px' }} />
                         : fmtN(r.espesor)}
                     </td>

@@ -2494,7 +2494,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setMsgMasivo('')
     const sufijo = nv === 2 ? 'validar-masivo-nivel2' : 'validar-masivo-nivel3'
     const body = { estado, ids_registros: [...seleccionadosValidacion] }
-    if (comentarioData) body.comentario_data = comentarioData
+    if (comentarioData) {
+      body.comentario_data = { ...comentarioData, rol_origen: nivelInfo.rolOrigen }
+    }
     try {
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/${sufijo}`, {
         method: 'PUT', headers: hdrs, body: JSON.stringify(body)
