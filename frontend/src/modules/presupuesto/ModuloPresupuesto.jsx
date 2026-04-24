@@ -311,7 +311,17 @@ useEffect(() => {
       .then(registro => {
         if (registro) {
           setModalDetallePpto(registro)
-          setModalDetallePptoEditable(!registro.sellado)
+          setModalDetallePptoEditable(
+            !registro.sellado
+            || (registro.sellado
+                && (() => {
+                  const r = (usuario?.rol_nombre || '').toLowerCase().trim()
+                  const isCt = r === 'contratista' || r === 'operativo contratista'
+                  const isDev = (usuario?.cargo_nombre || '').toLowerCase() === 'desarrollador'
+                  const perm = (usuario?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === 'editar registros presupuesto')
+                  return isCt && !isDev && (perm?.editar ?? false)
+                })())
+          )
           setPopupDims({ ancho: registro.ancho ?? '', espesor: registro.espesor ?? '', area_long_nod: registro.area_long_nod ?? '' })
           setPopupCap(registro.capitulo || '')
           setPopupItem(registro.item || '')
@@ -354,6 +364,12 @@ useEffect(() => {
   const puedeEditarDimensiones = esDeveloper
   const _permPpto    = (usuario?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === 'editar registros presupuesto')
   const puedeEditar  = esDeveloper || (_permPpto?.editar   ?? false)
+  /** Solo contratista (no Desarrollador) con permiso editar: puede reabrir registro sellado con motivo obligatorio. */
+  const esRolContratistaPpto = (() => {
+    const r = (usuario?.rol_nombre || '').toLowerCase().trim()
+    return r === 'contratista' || r === 'operativo contratista'
+  })()
+  const puedeReabrirTrasAprob = esRolContratistaPpto && !esDeveloper && (_permPpto?.editar ?? false)
   const puedeValidar = esDeveloper || (_permPpto?.validar  ?? false)
   const puedeEliminar = esDeveloper || (_permPpto?.eliminar ?? false)
   const nivelInfo    = determinarNivelValidacion(usuario)
@@ -959,7 +975,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     })
     // Enviar notificación si hay destinatario
     if (destinatarioId) {
-      const TITULOS = { dims:'📐 Cambio de Dimensiones', item_capitulo:'🔄 Cambio de Ítem/Capítulo', validacion:'🔍 Cambio de Estado' }
+      const TITULOS = { dims:'📐 Cambio de Dimensiones', item_capitulo:'🔄 Cambio de Ítem/Capítulo', validacion:'🔍 Cambio de Estado', reapertura:'🔓 Reapertura de registro sellado' }
       await fetch(`${API}/notificaciones`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -1498,7 +1514,7 @@ async function ejecutarBulkEstadoDirecto(estado) {
 
   // ── Edición inline ─────────────────────────────────────────────────────────
   function iniciarEdicion(registro) {
-    if (esSellado(registro)) return
+    if (esSellado(registro) && !puedeReabrirTrasAprob) return
     setEditando(registro.id)
     setEditValues({
       area_long_nod: registro.area_long_nod ?? '',
@@ -1513,7 +1529,14 @@ async function ejecutarBulkEstadoDirecto(estado) {
 
   async function guardarEdicion(id) {
     const reg = registros.find(rr => rr.id === id)
-    if (esSellado(reg)) return
+    if (esSellado(reg) && !puedeReabrirTrasAprob) return
+    let motivoReap = null
+    if (esSellado(reg) && puedeReabrirTrasAprob) {
+      const com = await pedirComentario('reapertura', true)
+      if (com == null) return
+      motivoReap = String(com.mensaje || '').trim()
+      if (motivoReap.length < 15) { alert('El motivo de reapertura debe tener al menos 15 caracteres (visible para Interventoría).'); return }
+    }
     const body = {}
     const allowDim = puedeEditarDimensiones
     if (allowDim) {
@@ -1528,12 +1551,21 @@ async function ejecutarBulkEstadoDirecto(estado) {
       if (!allowDim && ['area_long_nod', 'ancho', 'espesor'].includes(k)) return
       body[k] = ['vlr_unitario', 'cant_total'].includes(k) ? parseFloat(v) : v
     })
+    if (motivoReap) body.motivo_edicion_tras_sellado = motivoReap
     const res = await fetch(`${API}/presupuesto/item/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(body)
     })
     if (res.ok) { setEditando(null); await recargarCapActual() }
+    else {
+      try {
+        const d = await res.json()
+        alert(d.detail || 'No se pudo guardar la edición.')
+      } catch {
+        alert('No se pudo guardar la edición.')
+      }
+    }
   }
 
   // ── Selección ──────────────────────────────────────────────────────────────
@@ -2504,9 +2536,14 @@ async function restaurar(id) {
                       {r.pre_interv_por && <F label="POR" val={r.pre_interv_por} flex={1}/>}
                     </Row>
                   )}
-                  {esSellado(r) && (
+                  {esSellado(r) && !puedeReabrirTrasAprob && (
                     <div style={{ background:'rgba(22,101,52,0.12)', border:`1px solid rgba(22,101,52,0.35)`, borderRadius:'8px', padding:'10px 12px', marginBottom:'8px', fontSize:'var(--cc-sm)', color:'#166534', fontWeight:'600' }}>
                       🔒 Registro sellado — aprobado por Interventoría. No admite cambios de cantidades ni de estado.
+                    </div>
+                  )}
+                  {esSellado(r) && puedeReabrirTrasAprob && (
+                    <div style={{ background:'rgba(14,165,233,0.12)', border:`1px solid rgba(14,165,233,0.4)`, borderRadius:'8px', padding:'10px 12px', marginBottom:'8px', fontSize:'var(--cc-sm)', color:'#0369A1', fontWeight:'600' }}>
+                      🔓 Como contratista puede editar capítulo/ítem y datos permitidos: al guardar se pedirá un motivo obligatorio, se anulará el sellado y el estado de Interventoría volverá a «No Revisado» para volver a validar.
                     </div>
                   )}
                   <Row><F label="NODO INICIO" val={r.no_inicio}/><F label="NODO FINAL" val={r.no_final}/></Row>
@@ -2535,11 +2572,11 @@ async function restaurar(id) {
                   </div>
                   <Row><F label="TRAMO" val={r.tramo}/><F label="CALZADA" val={r.calzada}/><F label="PK" val={r.pk_id} flex={0.5}/></Row>
                   {/* Acciones desde buzón */}
-                  {modalDetallePptoEditable && (puedeEditar || puedeEliminar) && !esSellado(r) && (
+                  {modalDetallePptoEditable && (puedeEditar || puedeEliminar) && (!esSellado(r) || puedeReabrirTrasAprob) && (
                     <div style={{ borderTop:`1px solid ${t.border}`, marginTop:'12px', paddingTop:'12px' }}>
 
-                      {/* ── Editar dimensiones (solo Desarrollador) ── */}
-                      {puedeEditarDimensiones && (
+                      {/* ── Editar dimensiones (solo Desarrollador) — no aplica a sellado (reabre solo contratista, sin dims) ── */}
+                      {puedeEditarDimensiones && !esSellado(r) && (
                         <div style={{ background:t.bg, borderRadius:'8px', padding:'10px 12px', marginBottom:'10px' }}>
                           <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:'#F59E0B', letterSpacing:'0.5px', marginBottom:'8px' }}>📐 EDITAR DIMENSIONES</div>
                           <div style={{ display:'flex', gap:'10px', marginBottom:'8px', flexWrap:'wrap' }}>
@@ -2634,6 +2671,13 @@ async function restaurar(id) {
                           </div>
                           <button disabled={popupGuardando || (!popupCap && !popupItem)} onClick={async () => {
                             setPopupGuardando(true); setPopupMsg('')
+                            let motivoReap = null
+                            if (esSellado(r) && puedeReabrirTrasAprob) {
+                              const com = await pedirComentario('reapertura', true)
+                              if (com == null) { setPopupGuardando(false); return }
+                              motivoReap = String(com.mensaje || '').trim()
+                              if (motivoReap.length < 15) { alert('El motivo de reapertura debe tener al menos 15 caracteres (visible para Interventoría).'); setPopupGuardando(false); return }
+                            }
                             const precio = listadoPrecios.find(p => p.item_numero === popupItem)
                             const vlr    = precio?.valor_unitario || precio?.vlr_unitario || r.vlr_unitario || 0
                             const cant   = r.cant_total || 0
@@ -2641,7 +2685,8 @@ async function restaurar(id) {
                               ...(popupCap  && { capitulo: popupCap }),
                               ...(popupItem && { item: popupItem, descripcion: precio?.descripcion || r.descripcion, und: precio?.und || r.und }),
                               vlr_unitario:  vlr,
-                              costo_directo: Math.round(cant * vlr)
+                              costo_directo: Math.round(cant * vlr),
+                              ...(motivoReap ? { motivo_edicion_tras_sellado: motivoReap } : {}),
                             }
                             const res = await fetch(`${API}/presupuesto/item/${r.id}`, {
                               method:'PUT', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
@@ -2652,7 +2697,9 @@ async function restaurar(id) {
                               if (updated.ok) { const d = await updated.json(); setModalDetallePpto(d) }
                               { const c = drill.find(d=>d.campo==='capitulo')?.valor; if(c) delete _pptoCachePorCap.current[c] }
                               setPopupMsg('✅ Capítulo/ítem actualizado')
-                            } else setPopupMsg('❌ Error al guardar')
+                            } else {
+                              try { const d = await res.json(); setPopupMsg(`❌ ${d.detail || 'Error al guardar'}`) } catch { setPopupMsg('❌ Error al guardar') }
+                            }
                             setPopupGuardando(false)
                           }}
                             style={{ background:'#0077B6', color:'#fff', border:'none', borderRadius:'7px', padding:'7px 18px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', opacity: (popupGuardando || (!popupCap && !popupItem)) ? 0.5 : 1 }}>
@@ -2661,8 +2708,8 @@ async function restaurar(id) {
                         </div>
                       )}
 
-                      {/* ── Dar de baja — solo si DWG enlazado ── */}
-                      {puedeEliminar && dwgEnlazado && (
+                      {/* ── Dar de baja — solo si DWG enlazado; no en sellado (reabrir antes con el flujo contratista) ── */}
+                      {puedeEliminar && dwgEnlazado && !esSellado(r) && (
                         <button onClick={async () => {
                           if (!window.confirm('¿Dar de baja este registro?')) return
                           setModalDetallePpto(null); setModalDetallePptoEditable(false)
@@ -2714,16 +2761,23 @@ async function restaurar(id) {
 
       {/* ── Modal comentario ── */}
       {modalComentario && (() => {
-        const TITULOS = { dims:'📐 Comentario — Cambio de Dimensiones', item_capitulo:'🔄 Comentario — Cambio de Ítem/Capítulo', validacion:'🔍 Comentario — Cambio de Estado' }
-        const COLORES = { dims:'#F59E0B', item_capitulo:'#0077B6', validacion:'#10B981' }
+        const TITULOS = { dims:'📐 Comentario — Cambio de Dimensiones', item_capitulo:'🔄 Comentario — Cambio de Ítem/Capítulo', validacion:'🔍 Comentario — Cambio de Estado', reapertura:'🔓 Motivo — Reapertura tras aprobación Interventoría' }
+        const COLORES = { dims:'#F59E0B', item_capitulo:'#0077B6', validacion:'#10B981', reapertura:'#0EA5E9' }
         const color   = COLORES[modalComentario.tipo] || t.primary
-        const valido  = !modalComentario.obligatorio || textoComentario.trim().length > 0
+        const minLen  = modalComentario.tipo === 'reapertura' ? 15 : 1
+        const valido  = !modalComentario.obligatorio || textoComentario.trim().length >= minLen
         return (
           <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex:6000,display:'flex',alignItems:'center',justifyContent:'center' }}>
             <div style={{ background:t.bgCard,border:`1.5px solid ${color}44`,borderRadius:'16px',padding:'28px',width:'460px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}>
-              <div style={{ fontSize:'var(--cc-body)',fontWeight:'700',color,marginBottom:'6px' }}>{TITULOS[modalComentario.tipo]}</div>
+              <div style={{ fontSize:'var(--cc-body)',fontWeight:'700',color,marginBottom:'6px' }}>{TITULOS[modalComentario.tipo] || TITULOS.validacion}</div>
               <div style={{ fontSize:'var(--cc-sm)',color:t.textMuted,marginBottom:'16px' }}>
-                {modalComentario.obligatorio ? '⚠️ El comentario es obligatorio para este estado.' : 'Opcional — explica el motivo del cambio.'}
+                {modalComentario.tipo === 'reapertura' ? (
+                  <>⚠️ Obligatorio (mín. 15 caracteres). Queda registrado para Interventoría: el registro pasa a «No Revisado» y deja de estar sellado.</>
+                ) : modalComentario.obligatorio ? (
+                  '⚠️ El comentario es obligatorio para este estado.'
+                ) : (
+                  'Opcional — explica el motivo del cambio.'
+                )}
               </div>
               {/* Selector de destinatario */}
               <div style={{ marginBottom:'12px' }}>
@@ -2746,8 +2800,8 @@ async function restaurar(id) {
                   <EmojiPicker t={t} onSelect={em => setTextoComentario(prev => prev + em)} />
                 </div>
               </div>
-              {modalComentario.obligatorio && !textoComentario.trim() && (
-                <div style={{ fontSize:'var(--cc-sm)',color:'#EF4444',marginTop:'4px' }}>* Este campo es obligatorio</div>
+              {modalComentario.obligatorio && textoComentario.trim().length < minLen && (
+                <div style={{ fontSize:'var(--cc-sm)',color:'#EF4444',marginTop:'4px' }}>* {modalComentario.tipo === 'reapertura' ? `Mínimo ${minLen} caracteres` : 'Este campo es obligatorio'}</div>
               )}
               <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end',marginTop:'18px' }}>
                 <button onClick={() => { modalComentario.resolve(null); setModalComentario(null) }}
@@ -3572,7 +3626,7 @@ async function restaurar(id) {
 
                     {puedeEditar && (
                       <td style={tdStyle} onClick={e=>e.stopPropagation()}>
-                        {esSellado(r) ? (
+                        {esSellado(r) && !puedeReabrirTrasAprob ? (
                           <span title="Registro sellado — no editable" style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>🔒</span>
                         ) : isEdit ? (
                           <div style={{ display:'flex',gap:'4px' }}>

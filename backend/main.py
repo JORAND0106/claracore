@@ -522,6 +522,8 @@ class PresupuestoUpdate(BaseModel):
     costo_directo: Optional[float] = None
     revisado: Optional[str] = None
     observacion_externa: Optional[str] = None
+    # Solo contratista, registro sellado: explica por qué reabre; interventoría no puede "reversar" desde aquí.
+    motivo_edicion_tras_sellado: Optional[str] = None
 
 class DimOverride(BaseModel):
     id: int
@@ -879,6 +881,12 @@ def _es_desarrollador(current_user) -> bool:
         return n == "desarrollador"
     except Exception:
         return False
+
+
+def _es_rol_contratista_ppto(current_user) -> bool:
+    """Contratista u operativo: único perfil que puede reabrir un registro sellado con motivo (no la Interventoría vía API)."""
+    r = (current_user.get("rol_nombre") or "").strip().lower()
+    return r in ("contratista", "operativo contratista")
 
 
 # ─────────────────────────────────────────────
@@ -3209,16 +3217,53 @@ def get_presupuesto_item(item_id: int, current_user=Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Registro no encontrado")
     return row
 
+# Campos que cuentan como “edición” para reapertura de registro sellado (no basta con el motivo solo).
+_PPTO_REABRIR_CAMPOS = frozenset(
+    {
+        "capitulo", "competencia", "item", "descripcion", "und", "calzada", "tramo",
+        "vlr_unitario", "area_long_nod", "ancho", "espesor", "cant_total", "costo_directo",
+        "observacion_externa",
+    }
+)
+
+
 @app.put("/presupuesto/item/{item_id}")
 def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=Depends(get_current_user)):
     data = body.dict(exclude_unset=True)
+    _mr = data.pop("motivo_edicion_tras_sellado", None)
+    motivo_reap = str(_mr).strip() if _mr is not None else ""
     prev_row = supabase.table("presupuesto").select("*").eq("id", item_id).limit(1).execute().data
     prev_row = prev_row[0] if prev_row else {}
+    reabrir = False
     if prev_row.get("sellado"):
-        raise HTTPException(
-            status_code=403,
-            detail="Registro sellado (aprobado por Interventoría): no puede modificarse.",
-        )
+        if _es_desarrollador(current_user):
+            raise HTTPException(
+                status_code=403,
+                detail="Registro sellado (aprobado por Interventoría): el Desarrollador no lo modifica desde aquí. Contacte soporte si aplica un caso excepcional.",
+            )
+        if not _es_rol_contratista_ppto(current_user):
+            raise HTTPException(
+                status_code=403,
+                detail="Registro sellado (aprobado por Interventoría): no puede modificarse salvo el flujo de reapertura del contratista.",
+            )
+        if not motivo_reap or len(motivo_reap) < 15:
+            raise HTTPException(
+                status_code=400,
+                detail="Debe consignar un motivo de reapertura (mínimo 15 caracteres) para editar un registro aprobado por Interventoría.",
+            )
+        toca = [k for k in data if k in _PPTO_REABRIR_CAMPOS]
+        if not toca:
+            raise HTTPException(
+                status_code=400,
+                detail="Indique al menos un dato a modificar (p. ej. capítulo, ítem o vlr. unitario) además del motivo de reapertura.",
+            )
+        for k in ("revisado", "sellado"):
+            data.pop(k, None)
+        data["sellado"] = False
+        data["revisado"] = "No Revisado"
+        data["validado_por"] = None
+        data["validado_en"] = None
+        reabrir = True
     if not _es_desarrollador(current_user):
         for k in ("area_long_nod", "ancho", "espesor", "cant_total"):
             if k in data:
@@ -3266,6 +3311,24 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
         data["costo_directo"] = round(cant0 * vlr0, 0)
     data["updated_at"] = "now()"
     supabase.table("presupuesto").update(data).eq("id", item_id).execute()
+
+    if reabrir and motivo_reap:
+        try:
+            nombre_u = current_user.get("nombre") or current_user.get("email") or "Usuario"
+            supabase.table("comentarios").insert(
+                {
+                    "presupuesto_id": item_id,
+                    "tipo": "validacion",
+                    "mensaje": f"[Reapertura tras aprobación Interventoría — edición por contratista] {motivo_reap}",
+                    "usuario_nombre": nombre_u,
+                    "parent_id": None,
+                }
+            ).execute()
+        except Exception:
+            try:
+                _log_api.warning("comentario reapertura sellado: insert falló item_id=%s", item_id)
+            except Exception:
+                pass
 
     # ── Encolar cambio de layer en CAD si cambió ítem o capítulo ──────────────
     if "capitulo" in data or "item" in data:
@@ -3332,7 +3395,11 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
             "PRESUPUESTO",
             "presupuesto",
             str(item_id),
-            {"id_pol": row_after.get("id_pol") or prev_row.get("id_pol"), "item": row_after.get("item")},
+            {
+                "id_pol": row_after.get("id_pol") or prev_row.get("id_pol"),
+                "item": row_after.get("item"),
+                "reapertura_tras_sellado": bool(reabrir),
+            },
             valor_anterior=_json_for_log(prev_row),
             valor_nuevo=_json_for_log(row_after),
         )
