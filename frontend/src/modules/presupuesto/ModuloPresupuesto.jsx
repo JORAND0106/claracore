@@ -1784,11 +1784,11 @@ async function restaurar(id) {
               style={{ display:'flex', gap:'8px', alignItems:'center', padding:'8px 10px',
                 borderRadius:'8px', cursor:'pointer', background:t.bg, marginBottom:'6px',
                 border:`1px solid ${t.border}` }}>
-              <div style={{ minWidth: '100px', maxWidth: '160px', fontSize: 'var(--cc-caption)', color: t.text, fontWeight: '600', fontFamily: 'ui-monospace, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={String(r.id_pol || r.pk_id || '')}>
+              <div style={{ minWidth: '100px', maxWidth: '160px', fontSize: 'var(--cc-sm)', color: t.text, fontWeight: '600', fontFamily: 'ui-monospace, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={String(r.id_pol || r.pk_id || '')}>
                 {r.id_pol || r.pk_id || '—'}
               </div>
               <div style={{ flex:2, fontSize:'var(--cc-sm)', color:t.text, fontWeight:'600' }}>{r.item}</div>
-              <div style={{ flex:3, fontSize:'var(--cc-sm)', color:t.textMuted }}>{r.descripcion}</div>
+              <div style={{ flex:3, fontSize:'var(--cc-sm)', color:t.textMuted, lineHeight: 1.4 }}>{r.descripcion}</div>
               <div style={{ flex:1, fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'right' }}>
                 {[r.area_long_nod, r.ancho, r.espesor].filter(Boolean).join(' × ')}
               </div>
@@ -1827,19 +1827,35 @@ async function restaurar(id) {
           <div style={{ padding:'30px', textAlign:'center', color:t.textMuted, fontSize:'var(--cc-label)', fontStyle:'italic' }}>{msg}</div>
         )
 
+        /** Inputs de dimensiones: ancho ~2× (antes 52px) y fuente con escala del header (Pequeña/Mediana/Grande). */
+        const tramoDimInput = {
+          width: '100px',
+          minWidth: '88px',
+          maxWidth: '128px',
+          fontSize: 'var(--cc-input)',
+          lineHeight: 1.35,
+          background: t.inputBg,
+          border: `1px solid ${t.border}`,
+          borderRadius: '6px',
+          padding: '5px 8px',
+          color: t.text,
+          textAlign: 'right',
+          boxSizing: 'border-box',
+        }
+
         return (
           <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.7)',zIndex:3500,display:'flex',alignItems:'center',justifyContent:'center' }}
             onClick={(e) => { if (modalComentario) return; setModalModoCapitulo(null); setTramoSelec(null); setModoSeleccionClon(false); setClonBase(null) }}>
-            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px',
-              padding:'24px', width: tramoSelec ? '1066px' : '572px', maxWidth:'96vw',
-              maxHeight:'88vh', overflowY:'auto', boxShadow:'0 24px 64px rgba(0,0,0,0.5)',
+            <div className="cc-revisor-tramos" style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px',
+              padding:'24px', width: tramoSelec ? 'min(1200px, 98vw)' : 'min(600px, 96vw)', maxWidth:'98vw',
+              maxHeight:'88vh', overflowY:'auto', boxShadow:'0 24px 64px rgba(0,0,0,0.5)', fontSize: 'var(--cc-body)', lineHeight: 1.45,
               transition:'width .25s' }}
               onClick={e => e.stopPropagation()}>
 
               {/* Header */}
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'18px' }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'18px' }}>
                 <div>
-                  <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary }}>
+                  <div style={{ fontSize:'var(--cc-md)', fontWeight:'800', color:t.primary }}>
                     {tramoSelec ? `🔎 ${tramoSelec.label}` : '📂 Abrir capítulo'}
                   </div>
                   <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, marginTop:'2px' }}>{modalModoCapitulo}</div>
@@ -2152,10 +2168,10 @@ async function restaurar(id) {
                           )}
                         </div>
                       )}
-                      <div style={{ display:'flex', gap:'8px', fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, padding:'0 10px', marginBottom:'6px', letterSpacing:'0.4px' }}>
+                      <div style={{ display:'flex', gap:'8px', fontSize:'var(--cc-sm)', fontWeight:'700', color:t.textMuted, padding:'0 10px', marginBottom:'6px', letterSpacing:'0.4px' }}>
                         <span style={{ minWidth: '100px', maxWidth: '160px', flexShrink: 0 }}>ID-POL</span>
                         <span style={{ width: '80px', flexShrink: 0 }}>ÍTEM</span><span style={{ flex: 3 }}>DESCRIPCIÓN</span>
-                        <span style={{ minWidth: '120px', textAlign: 'right', whiteSpace: 'nowrap' }}>DIMS</span><span style={{ flex: 1, textAlign: 'right' }}>CANT.</span>
+                        <span style={{ minWidth: '200px', textAlign: 'right', whiteSpace: 'nowrap' }}>DIMS</span><span style={{ flex: 1, textAlign: 'right' }}>CANT.</span>
                         <span style={{flex:1,textAlign:'right'}}>V. UNIT.</span><span style={{flex:1,textAlign:'right'}}>C. DIRECTO</span>
                         {mostrarColumnaDepuracion && <span style={{ flex:0.7, textAlign:'center' }} title="Depuración (contratista / obra)">Dep.</span>}
                         <span style={{ flex:0.7, textAlign:'center' }} title="Interventoría">Rev.</span>
@@ -2192,26 +2208,26 @@ async function restaurar(id) {
                                   }}
                                   style={{ width:'13px', height:'13px', cursor: esSellado(r) ? 'not-allowed' : 'pointer', flexShrink:0, opacity: esSellado(r) ? 0.45 : 1 }} />
                                 <div
-                                  style={{ minWidth: '100px', maxWidth: '160px', flexShrink: 0, fontSize: 'var(--cc-caption)', color: t.text, fontWeight: '600', fontFamily: 'ui-monospace, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                  style={{ minWidth: '100px', maxWidth: '160px', flexShrink: 0, fontSize: 'var(--cc-sm)', color: t.text, fontWeight: '600', fontFamily: 'ui-monospace, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                                   title={String(r.id_pol || r.pk_id || '')}
                                 >
                                   {r.id_pol || r.pk_id || '—'}
                                 </div>
                                 <div style={{ width:'80px', flexShrink:0, fontSize:'var(--cc-sm)', color:t.text, fontWeight:'600' }}>{r.item}</div>
-                                <div style={{ flex:3, fontSize:'var(--cc-sm)', color:t.textMuted }}>{r.descripcion}</div>
-                                {/* Dims — solo Desarrollador */}
-                                <div style={{ minWidth:'120px', fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'right', whiteSpace:'nowrap' }}>
+                                <div style={{ flex:3, fontSize:'var(--cc-sm)', color:t.textMuted, lineHeight: 1.4 }}>{r.descripcion}</div>
+                                {/* Dims — solo Desarrollador; inputs anchos y tipografía = escala global */}
+                                <div style={{ minWidth:'200px', flexShrink:0, fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'right', whiteSpace:'nowrap' }}>
                                   {puedeEditarDimensiones && !esSellado(r) && editDims[r.id] !== undefined ? (
-                                    <div style={{ display:'flex', flexDirection:'column', gap:'2px', alignItems:'flex-end' }} onClick={e => e.stopPropagation()}>
+                                    <div style={{ display:'flex', flexDirection:'column', gap:'4px', alignItems:'flex-end' }} onClick={e => e.stopPropagation()}>
                                       <input type="number" placeholder="a/l/n" value={editDims[r.id].area_long_nod ?? ''}
                                         onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], area_long_nod: e.target.value } }))}
-                                        style={{ width:'52px', fontSize:'var(--cc-caption)', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 4px', color:t.text, textAlign:'right' }} />
+                                        style={tramoDimInput} />
                                       <input type="number" placeholder="ancho" value={editDims[r.id].ancho ?? ''}
                                         onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], ancho: e.target.value } }))}
-                                        style={{ width:'52px', fontSize:'var(--cc-caption)', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 4px', color:t.text, textAlign:'right' }} />
+                                        style={tramoDimInput} />
                                       <input type="number" placeholder="esp" value={editDims[r.id].espesor ?? ''}
                                         onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], espesor: e.target.value } }))}
-                                        style={{ width:'52px', fontSize:'var(--cc-caption)', background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 4px', color:t.text, textAlign:'right' }} />
+                                        style={tramoDimInput} />
                                     </div>
                                   ) : (
                                     <span onClick={puedeEditarDimensiones && !esSellado(r) ? (e) => { e.stopPropagation(); setEditDims(p => ({ ...p, [r.id]: { area_long_nod: r.area_long_nod ?? '', ancho: r.ancho ?? '', espesor: r.espesor ?? '' } })) } : undefined}
@@ -2316,7 +2332,7 @@ async function restaurar(id) {
                               {/* Comentario de validación — clic para ver hilo */}
                               {comentariosTramo[r.id] && (
                                 <div onClick={() => abrirHilo(r.id, 'validacion')}
-                                  style={{ padding:'4px 10px 7px 36px', fontSize:'var(--cc-caption)', color:t.textMuted,
+                                  style={{ padding:'6px 10px 8px 36px', fontSize:'var(--cc-sm)', color:t.textMuted,
                                     cursor:'pointer', borderTop:`1px solid ${t.border}`,
                                     background:t.bg+'80', borderRadius:'0 0 8px 8px' }}>
                                   <span style={{ fontStyle:'italic' }}>
@@ -2328,7 +2344,7 @@ async function restaurar(id) {
                                     — {comentariosTramo[r.id].usuario_nombre}
                                   </span>
                                   {comentariosTramo[r.id].created_at && (
-                                    <span style={{ marginLeft:'6px', color:t.textMuted, fontSize:'var(--cc-caption)' }}>
+                                    <span style={{ marginLeft:'6px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>
                                       {(() => { try { return new Date(comentariosTramo[r.id].created_at).toLocaleDateString('es-CO',{dateStyle:'short'}) } catch { return '' } })()}
                                     </span>
                                   )}
