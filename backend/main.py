@@ -185,7 +185,7 @@ def _default_severidad(accion: str, modulo: str, resultado: str) -> str:
         return "ERROR" if "denegado" not in str(resultado).lower() else "WARNING"
     if modulo == "PERMISOS" or accion in (
         "ELIMINAR", "VALIDAR", "APROBAR", "RECHAZAR", "IMPORTAR_MASIVO",
-        "ASIGNAR_ITEM", "MOVER",
+        "ASIGNAR_ITEM", "MOVER", "COMENTAR",
     ):
         return "AUDIT"
     if accion in ("LOGIN_FAIL", "ACCESO_DENEGADO"):
@@ -3226,18 +3226,36 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
                     status_code=403,
                     detail="Solo el cargo Desarrollador puede modificar dimensiones o la cantidad total en presupuesto.",
                 )
-    dims = {k: data.get(k) for k in ["area_long_nod", "ancho", "espesor"]}
-    toco_dimensiones = any(v is not None for v in dims.values())
+    # Cualquier clave de dimensión presente en el body (aunque venga null en JSON) dispara
+    # recálculo. Antes, solo "not None" fallaba con null explícito y .get() no fusionaba con la fila.
+    _DIMK = ("area_long_nod", "ancho", "espesor")
+    toco_dimensiones = any(k in data for k in _DIMK)
     if toco_dimensiones:
         current = supabase.table("presupuesto").select("area_long_nod, ancho, espesor, vlr_unitario, cant_total").eq("id", item_id).execute().data
         if current:
             c = current[0]
-            area  = float(data.get("area_long_nod", c.get("area_long_nod") or 0))
-            ancho = float(data.get("ancho",         c.get("ancho")         or 0))
-            esp   = float(data.get("espesor",        c.get("espesor")       or 0))
-            vlr   = float(data.get("vlr_unitario",   c.get("vlr_unitario")  or 0))
-            cant  = round(area * ancho * esp, 2) if (ancho or esp) else round(area, 2)
-            data["cant_total"]    = cant
+
+            def _dim_merged(k: str) -> float:
+                if k not in data:
+                    return float(c.get(k) or 0)
+                v = data.get(k)
+                if v is None:
+                    return float(c.get(k) or 0)
+                return float(v or 0)
+
+            area = _dim_merged("area_long_nod")
+            ancho = _dim_merged("ancho")
+            esp = _dim_merged("espesor")
+            if "vlr_unitario" in data and data.get("vlr_unitario") is not None:
+                vlr = float(data.get("vlr_unitario") or 0)
+            else:
+                vlr = float(c.get("vlr_unitario") or 0)
+            cant = round(area * ancho * esp, 2) if (ancho or esp) else round(area, 2)
+            # Persistir dimensiones y totales de forma coherente (no dejar null que borre columnas)
+            data["area_long_nod"] = area
+            data["ancho"] = ancho
+            data["espesor"] = esp
+            data["cant_total"] = cant
             data["costo_directo"] = round(cant * vlr, 0)
     if toco_dimensiones:
         data["calculo_por"] = _calculo_usuario_label(current_user)
@@ -3987,6 +4005,24 @@ def crear_comentarios_bulk(contrato_id: int, body: ComentarioBulk, current_user=
     rows = [{"presupuesto_id": pid, "tipo": body.tipo, "mensaje": body.mensaje,
              "usuario_nombre": body.usuario_nombre} for pid in body.presupuesto_ids]
     supabase.table("comentarios").insert(rows).execute()
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        n = len(body.presupuesto_ids or [])
+        registrar_log(
+            u_log,
+            "COMENTAR",
+            "PRESUPUESTO",
+            f"comentario_{body.tipo}",
+            str(contrato_id),
+            {
+                "contrato_id": contrato_id,
+                "tipo": body.tipo,
+                "registros": n,
+                "presupuesto_ids_muestra": [str(x) for x in (body.presupuesto_ids or [])[:20]],
+            },
+        )
+    except Exception:
+        pass
     return {"creados": len(rows)}
 
 @app.get("/presupuesto/{contrato_id}/comentarios-resumen")
@@ -4121,6 +4157,26 @@ def responder_comentario(comentario_id: int, body: RespuestaCreate, current_user
         "usuario_nombre": body.usuario_nombre,
         "parent_id":      comentario_id
     }).execute()
+    try:
+        pr = supabase.table("presupuesto").select("contrato_id").eq("id", p["presupuesto_id"]).limit(1).execute().data
+        cid = (pr[0] or {}).get("contrato_id") if pr else None
+        if cid:
+            u_log = _audit_user_contrato(current_user, int(cid))
+            registrar_log(
+                u_log,
+                "COMENTAR",
+                "PRESUPUESTO",
+                "respuesta_hilo",
+                str(comentario_id),
+                {
+                    "parent_comentario_id": comentario_id,
+                    "presupuesto_id": p["presupuesto_id"],
+                    "tipo": p.get("tipo"),
+                    "es_respuesta": True,
+                },
+            )
+    except Exception:
+        pass
     return {"ok": True}
 # ─────────────────────────────────────────────
 # LOGS
@@ -4134,14 +4190,20 @@ def _logs_query_base(
     severidad: Optional[str] = None,
     fecha_desde: Optional[str] = None,
     fecha_hasta: Optional[str] = None,
+    excluir_accion: Optional[str] = None,
+    excluir_modulo: Optional[str] = None,
 ):
     q = supabase.table("logs").select("*").order("created_at", desc=True)
     if usuario_id:
         q = q.eq("usuario_id", usuario_id)
     if modulo:
         q = q.eq("modulo", modulo)
+    elif excluir_modulo:
+        q = q.neq("modulo", excluir_modulo)
     if accion:
         q = q.eq("accion", accion)
+    elif excluir_accion:
+        q = q.neq("accion", excluir_accion)
     if categoria:
         q = q.eq("categoria", categoria)
     if severidad:
@@ -4162,6 +4224,8 @@ def get_logs(
     severidad:    Optional[str] = None,
     fecha_desde:  Optional[str] = None,
     fecha_hasta:  Optional[str] = None,
+    excluir_accion: Optional[str] = None,
+    excluir_modulo: Optional[str] = None,
     limit:        int = 100,
     offset:       int = 0,
     current_user=Depends(require_logs_auditoria),
@@ -4175,6 +4239,8 @@ def get_logs(
         severidad=severidad,
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
+        excluir_accion=excluir_accion,
+        excluir_modulo=excluir_modulo,
     )
     q = q.range(offset, offset + limit - 1)
     return q.execute().data
@@ -4207,6 +4273,8 @@ def export_logs_csv(
     severidad:   Optional[str] = None,
     fecha_desde: Optional[str] = None,
     fecha_hasta: Optional[str] = None,
+    excluir_accion: Optional[str] = None,
+    excluir_modulo: Optional[str] = None,
     max_rows:    int = 5000,
     current_user=Depends(require_logs_auditoria),
 ):
@@ -4220,6 +4288,8 @@ def export_logs_csv(
         severidad=severidad,
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
+        excluir_accion=excluir_accion,
+        excluir_modulo=excluir_modulo,
     )
     rows = q.limit(cap).execute().data or []
     import json as _json

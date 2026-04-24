@@ -1,8 +1,16 @@
 import { useCallback } from 'react'
 import PptoFiltroMapaPk from './PptoFiltroMapaPk'
 
-const inp = (t) => ({ background: t.inputBg, border: `1.5px solid ${t.border}`, borderRadius: 7, padding: '6px 10px', color: t.text, fontSize: 12, minWidth: 0 })
-const lab = (t) => ({ fontSize: 10, fontWeight: 700, color: t.textMuted, marginBottom: 4 })
+const inp = (t) => ({
+  background: t.inputBg,
+  border: `1.5px solid ${t.border}`,
+  borderRadius: 7,
+  padding: '6px 10px',
+  color: t.text,
+  fontSize: 'var(--cc-input)',
+  minWidth: 0,
+})
+const lab = (t) => ({ fontSize: 'var(--cc-label)', fontWeight: 700, color: t.textMuted, marginBottom: 4 })
 
 /**
  * Filtro tipo SICOE Obra + panel capítulo→ítem + mapa PK.
@@ -51,7 +59,10 @@ export default function PptoFiltroObraVista({
   const hayCap = !!(f.cap && String(f.cap).trim())
 
   return (
-    <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 14, alignItems: 'stretch' }}>
+    <div
+      className="cc-ppo-filtro-obra"
+      style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 14, alignItems: 'stretch', fontSize: 'var(--cc-body)' }}
+    >
       <div
         style={{
           width: 280,
@@ -65,11 +76,11 @@ export default function PptoFiltroObraVista({
           boxShadow: t.shadow,
         }}
       >
-        <div style={{ fontSize: 11, fontWeight: 800, color: t.primary, marginBottom: 8 }}>📂 Presupuesto por capítulo</div>
+        <div style={{ fontSize: 'var(--cc-md)', fontWeight: 800, color: t.primary, marginBottom: 8 }}>📂 Presupuesto por capítulo</div>
         {loadingCapitulos ? (
-          <div style={{ fontSize: 12, color: t.textMuted }}>Cargando…</div>
+          <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>Cargando…</div>
         ) : !capitulosResumen.length ? (
-          <div style={{ fontSize: 12, color: t.textMuted }}>Sin capítulos</div>
+          <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>Sin capítulos</div>
         ) : (
           capitulosResumen.map((c) => {
             const open = capExpandido === c.capitulo
@@ -86,20 +97,20 @@ export default function PptoFiltroObraVista({
                     borderRadius: 6,
                     padding: '6px 8px',
                     cursor: 'pointer',
-                    fontSize: 11,
+                    fontSize: 'var(--cc-sm)',
                     color: t.text,
                   }}
                 >
                   <span style={{ fontWeight: 700 }}>{open ? '▼' : '▶'}</span>{' '}
                   <span style={{ fontWeight: 600 }}>{c.capitulo?.length > 32 ? c.capitulo.slice(0, 32) + '…' : c.capitulo}</span>
-                  <div style={{ fontSize: 10, color: t.textMuted, marginTop: 2 }}>
+                  <div style={{ fontSize: 'var(--cc-label)', color: t.textMuted, marginTop: 2 }}>
                     {(c.total_registros ?? 0).toLocaleString('es-CO')} reg. · {fmtM(c.costo_total)}
                   </div>
                 </button>
                 {open && (
                   <div style={{ marginLeft: 6, marginTop: 4, borderLeft: `2px solid ${t.border}`, paddingLeft: 8 }}>
                     {!itemsResumen.length ? (
-                      <div style={{ fontSize: 10, color: t.textMuted }}>Cargando ítems…</div>
+                      <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>Cargando ítems…</div>
                     ) : (
                       itemsResumen.map((it) => (
                         <button
@@ -115,7 +126,7 @@ export default function PptoFiltroObraVista({
                             borderRadius: 4,
                             padding: '4px 0',
                             cursor: 'pointer',
-                            fontSize: 10,
+                            fontSize: 'var(--cc-sm)',
                             color: t.text,
                           }}
                         >
@@ -133,7 +144,7 @@ export default function PptoFiltroObraVista({
 
       <div style={{ flex: 1, minWidth: 280, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 12, boxShadow: t.shadow }}>
-          <div style={{ fontSize: 12, fontWeight: 800, color: t.text, marginBottom: 10 }}>Ubicación técnica y criterios (como SICOE Obra)</div>
+          <div style={{ fontSize: 'var(--cc-md)', fontWeight: 800, color: t.text, marginBottom: 10 }}>Ubicación técnica y criterios (como SICOE Obra)</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8, alignItems: 'end' }}>
             <div>
               <div style={lab(t)}>CAPÍTULO (texto o panel)</div>
@@ -230,7 +241,7 @@ export default function PptoFiltroObraVista({
                 border: 'none',
                 borderRadius: 8,
                 padding: '8px 20px',
-                fontSize: 13,
+                fontSize: 'var(--cc-label)',
                 fontWeight: 700,
                 cursor: buscando ? 'wait' : 'pointer',
               }}
@@ -240,7 +251,7 @@ export default function PptoFiltroObraVista({
             <button
               type="button"
               onClick={onLimpiar}
-              style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 8, padding: '8px 16px', color: t.textMuted, fontSize: 12, cursor: 'pointer' }}
+              style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 8, padding: '8px 16px', color: t.textMuted, fontSize: 'var(--cc-sm)', cursor: 'pointer' }}
             >
               Limpiar filtros
             </button>
@@ -255,7 +266,7 @@ export default function PptoFiltroObraVista({
                   borderRadius: 8,
                   padding: '8px 14px',
                   color: '#0D9488',
-                  fontSize: 12,
+                  fontSize: 'var(--cc-sm)',
                   fontWeight: 700,
                   cursor: buscando ? 'wait' : 'pointer',
                 }}
@@ -267,12 +278,12 @@ export default function PptoFiltroObraVista({
             <button
               type="button"
               onClick={onRevisorTramos}
-              style={{ background: '#0D948820', border: '1px solid #0D9488', borderRadius: 8, padding: '8px 16px', color: '#0D9488', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}
+              style={{ background: '#0D948820', border: '1px solid #0D9488', borderRadius: 8, padding: '8px 16px', color: '#0D9488', fontSize: 'var(--cc-sm)', fontWeight: 700, cursor: 'pointer' }}
               title="Requiere capítulo; carga el capítulo y abre el revisor de tramos"
             >
               🛣️ Consultar por tramos
             </button>
-            <span style={{ fontSize: 10, color: t.textMuted, flex: 1, minWidth: 200 }}>Criterios en servidor. Combine cualquier criterio; la grilla refleja el filtro.</span>
+            <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, flex: 1, minWidth: 200 }}>Criterios en servidor. Combine cualquier criterio; la grilla refleja el filtro.</span>
           </div>
         </div>
         <PptoFiltroMapaPk t={t} token={token} contratoId={contratoId} onPkPick={onPk} pkIdsDeGrilla={pkIdsDeGrilla} />

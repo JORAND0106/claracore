@@ -1227,16 +1227,18 @@ function SeccionLogs({ call, theme }) {
   const [filtSeveridad, setFiltSeveridad] = useState("")
   const [filtDesde,     setFiltDesde]     = useState("")
   const [filtHasta,     setFiltHasta]     = useState("")
+  /** Por defecto oculta LOGIN: las 50 filas recientes suelen llenarse solo de inicios de sesión y ocultan el trabajo real (PRESUPUESTO, etc.). */
+  const [filtOcultarLogin, setFiltOcultarLogin] = useState(true)
   const [offset,        setOffset]        = useState(0)
   const LIMIT = 50
 
   const MODULOS = ["AUTH","SICOE","PRESUPUESTO","COBRO","USUARIOS","CONTRATOS","PERMISOS","PRECIOS","SISTEMA","INFORMES","NOTIFICACIONES","ACTAS","SUBCONTRATISTAS"]
-  const ACCIONES = ["LOGIN","LOGOUT","LOGIN_FAIL","APROBAR","RECHAZAR","EDITAR","RECALCULAR","VALIDAR","CONSULTAR","ASIGNAR_ITEM","MOVER","IMPORTAR","CREAR","ELIMINAR","EXPORTAR","ERROR_SISTEMA","DEPLOY","BROADCAST"]
+  const ACCIONES = ["LOGIN","LOGOUT","LOGIN_FAIL","APROBAR","RECHAZAR","EDITAR","RECALCULAR","VALIDAR","COMENTAR","CONSULTAR","ASIGNAR_ITEM","MOVER","IMPORTAR","CREAR","ELIMINAR","EXPORTAR","ERROR_SISTEMA","DEPLOY","BROADCAST"]
   const CATEGORIAS = ["auditoria", "sistema"]
   const SEVERIDADES = ["INFO", "WARNING", "ERROR", "AUDIT"]
   const ACCION_COLOR = {
     LOGIN:"#0077B6", APROBAR:"#10B981", RECHAZAR:"#EF4444",
-    EDITAR:"#F59E0B", RECALCULAR:"#7C3AED", VALIDAR:"#00A896",
+    EDITAR:"#F59E0B", RECALCULAR:"#7C3AED", VALIDAR:"#00A896", COMENTAR:"#0EA5E9",
     IMPORTAR:"#2E86AB", CREAR:"#16A34A", ELIMINAR:"#DC2626"
   }
 
@@ -1245,12 +1247,12 @@ function SeccionLogs({ call, theme }) {
       .then(r => r.ok ? r.json() : []).then(setUsuarios).catch(() => {})
   }, [])
 
-  useEffect(() => { cargarLogs(0) }, [filtUsuario, filtModulo, filtAccion, filtCategoria, filtSeveridad, filtDesde, filtHasta])
+  useEffect(() => { cargarLogs(0) }, [filtUsuario, filtModulo, filtAccion, filtCategoria, filtSeveridad, filtDesde, filtHasta, filtOcultarLogin])
 
   useEffect(() => {
     const iv = setInterval(() => cargarLogs(offset, { silent: true }), 30000)
     return () => clearInterval(iv)
-  }, [offset, filtUsuario, filtModulo, filtAccion, filtCategoria, filtSeveridad, filtDesde, filtHasta])
+  }, [offset, filtUsuario, filtModulo, filtAccion, filtCategoria, filtSeveridad, filtDesde, filtHasta, filtOcultarLogin])
 
   async function cargarLogs(off = 0, opts = {}) {
     const { silent = false } = opts
@@ -1264,6 +1266,7 @@ function SeccionLogs({ call, theme }) {
     if (filtSeveridad) params.set("severidad", filtSeveridad)
     if (filtDesde)   params.set("fecha_desde",filtDesde)
     if (filtHasta)   params.set("fecha_hasta",filtHasta)
+    if (filtOcultarLogin && !filtAccion) params.set("excluir_accion", "LOGIN")
     const data = await fetch(`${API}/logs?${params}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : []).catch(() => [])
     setLogs(data)
@@ -1318,7 +1321,11 @@ function SeccionLogs({ call, theme }) {
           style={{ background: col.inputBg, border:`1px solid ${col.border}`, borderRadius:6, padding:"5px 10px", color: col.textTable, fontSize:12 }} />
         <input type="date" value={filtHasta} onChange={e => setFiltHasta(e.target.value)}
           style={{ background: col.inputBg, border:`1px solid ${col.border}`, borderRadius:6, padding:"5px 10px", color: col.textTable, fontSize:12 }} />
-        <button onClick={() => { setFiltUsuario(""); setFiltModulo(""); setFiltAccion(""); setFiltCategoria(""); setFiltSeveridad(""); setFiltDesde(""); setFiltHasta("") }}
+        <label style={{ display:"inline-flex", alignItems:"center", gap:6, fontSize:12, color: col.textTable, cursor:"pointer", userSelect:"none" }}>
+          <input type="checkbox" checked={filtOcultarLogin} onChange={e => setFiltOcultarLogin(e.target.checked)} />
+          Ocultar inicios de sesión
+        </label>
+        <button onClick={() => { setFiltUsuario(""); setFiltModulo(""); setFiltAccion(""); setFiltCategoria(""); setFiltSeveridad(""); setFiltDesde(""); setFiltHasta(""); setFiltOcultarLogin(false) }}
           style={{ background:"#EF444422", border:"1px solid #EF444466", borderRadius:6, padding:"5px 12px", color:"#EF4444", fontSize:11, fontWeight:700, cursor:"pointer" }}>
           ✕ Limpiar
         </button>
@@ -1335,6 +1342,7 @@ function SeccionLogs({ call, theme }) {
           if (filtSeveridad) params.set("severidad", filtSeveridad)
           if (filtDesde)   params.set("fecha_desde", filtDesde)
           if (filtHasta)   params.set("fecha_hasta", filtHasta)
+          if (filtOcultarLogin && !filtAccion) params.set("excluir_accion", "LOGIN")
           try {
             const r = await fetch(`${API}/logs/export.csv?${params}`, { headers: { Authorization: `Bearer ${token}` } })
             if (!r.ok) return

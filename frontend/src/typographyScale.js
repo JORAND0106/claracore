@@ -5,19 +5,19 @@
 
 export const CLARA_FONT_KEYS = ['pequena', 'normal', 'grande']
 
-/** Tamaños base (normal) — subimos el mínimo legible frente a 9–10px sueltos */
+/** Tamaños base — pequeña / mediana / grande con salto claro (accesibilidad, baja visión) */
 const SCALES = {
   pequena: {
-    caption: 11,
-    label: 12,
+    caption: 10,
+    label: 11,
     sm: 12,
-    body: 14,
-    input: 14,
-    md: 15,
-    lg: 16,
-    title: 17,
-    h2: 19,
-    h1: 21,
+    body: 13,
+    input: 13,
+    md: 14,
+    lg: 15,
+    title: 16,
+    h2: 18,
+    h1: 20,
   },
   normal: {
     caption: 12,
@@ -32,16 +32,16 @@ const SCALES = {
     h1: 24,
   },
   grande: {
-    caption: 13,
-    label: 14,
-    sm: 15,
-    body: 17,
-    input: 17,
-    md: 18,
-    lg: 20,
-    title: 21,
-    h2: 24,
-    h1: 28,
+    caption: 14,
+    label: 15,
+    sm: 16,
+    body: 18,
+    input: 18,
+    md: 20,
+    lg: 22,
+    title: 23,
+    h2: 26,
+    h1: 30,
   },
 }
 

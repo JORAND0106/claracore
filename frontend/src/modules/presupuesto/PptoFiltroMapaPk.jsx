@@ -73,7 +73,7 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
     if (!mbt) {
       const d = document.createElement('div')
       d.textContent = 'Falta VITE_MAPBOX_TOKEN para el plano de PK.'
-      d.style.cssText = `padding:12px;font-size:12px;color:${t?.textMuted || '#64748B'};`
+      d.style.cssText = `padding:12px;font-size:var(--cc-sm);color:${t?.textMuted || '#64748B'};`
       c.appendChild(d)
       return
     }
@@ -232,19 +232,19 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
         }
         if (pkList.length > 0 && withCoords === 0 && !plano?.features?.length) {
           const hint = document.createElement('div')
-          hint.style.cssText = `position:absolute;bottom:6px;left:6px;right:6px;font-size:10px;padding:4px 6px;background:#fff9;border-radius:4px;pointer-events:none;color:${t?.textMuted || '#64748B'};`
+          hint.style.cssText = `position:absolute;bottom:6px;left:6px;right:6px;font-size:var(--cc-caption);padding:4px 6px;background:#fff9;border-radius:4px;pointer-events:none;color:${t?.textMuted || '#64748B'};`
           hint.textContent = 'Maestro PK sin coordenadas en lat/lng: use el polígono del plano o asigne posiciones en el maestro.'
           mapEl.style.position = 'relative'
           mapEl.appendChild(hint)
         } else if (Array.isArray(permit) && permit.length === 0) {
           const hint = document.createElement('div')
-          hint.style.cssText = `position:absolute;bottom:6px;left:6px;right:6px;font-size:10px;padding:4px 6px;background:#fff9;border-radius:4px;pointer-events:none;color:${t?.textMuted || '#64748B'};`
+          hint.style.cssText = `position:absolute;bottom:6px;left:6px;right:6px;font-size:var(--cc-caption);padding:4px 6px;background:#fff9;border-radius:4px;pointer-events:none;color:${t?.textMuted || '#64748B'};`
           hint.textContent = 'La grilla actual no tiene pk_id: no hay puntos que mostrar.'
           mapEl.style.position = 'relative'
           mapEl.appendChild(hint)
         } else if (permit && permitSet && permitSet.size > 0 && toFit.length === 0) {
           const hint = document.createElement('div')
-          hint.style.cssText = `position:absolute;bottom:6px;left:6px;right:6px;font-size:10px;padding:4px 6px;background:#fff9;border-radius:4px;pointer-events:none;color:${t?.textMuted || '#64748B'};`
+          hint.style.cssText = `position:absolute;bottom:6px;left:6px;right:6px;font-size:var(--cc-caption);padding:4px 6px;background:#fff9;border-radius:4px;pointer-events:none;color:${t?.textMuted || '#64748B'};`
           hint.textContent = 'Ninguno de los PK de la grilla tiene posición en el maestro. Use el polígono o complete lat/lng en PK.'
           mapEl.style.position = 'relative'
           mapEl.appendChild(hint)
@@ -264,8 +264,8 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
   }, [contratoId, filtroKey])
 
   return (
-    <div>
-      <div style={{ fontSize: '10px', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>PLANO · PK (clic = filtrar · norte → derecha)</div>
+    <div style={{ fontSize: 'var(--cc-body)' }}>
+      <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>PLANO · PK (clic = filtrar · norte → derecha)</div>
       <div ref={containerRef} style={{ borderRadius: 8, overflow: 'hidden', border: `1px solid ${t.border}` }} />
     </div>
   )
