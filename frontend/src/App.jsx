@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
 import AdminPanel from './AdminPanel'
 import ModuloInformes from './ModuloInformes'
+import ModuloGuias from './ModuloGuias'
 import ModuloInicio from './ModuloInicio'
 import PerfilUsuarioModal from './PerfilUsuarioModal'
 import PoliticasConfidencialidadModal from './PoliticasConfidencialidadModal'
@@ -1046,6 +1047,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [itemsLista,     setItemsLista]     = useState([])
   const [itemSel,        setItemSel]        = useState(registro.item_numero ? { item_numero: registro.item_numero, descripcion: registro.item_descripcion, unidad: registro.unidad, precio_unitario: registro.vlr_unitario, id: null } : null)
   const [mostrarLista,   setMostrarLista]   = useState(false)
+  const [indiceItemKbd,  setIndiceItemKbd]  = useState(-1)
+  const indiceItemKbdRef = useRef(-1)
+  useEffect(() => { indiceItemKbdRef.current = indiceItemKbd }, [indiceItemKbd])
   const [longitud,       setLongitud]       = useState(registro.longitud   ?? '')
   const [ancho,          setAncho]          = useState(registro.ancho      ?? '')
   const [espesor,        setEspesor]        = useState(registro.espesor    ?? '')
@@ -1237,7 +1241,18 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     setItemBusqueda(item.item_numero)
     setItemsLista([])
     setMostrarLista(false)
+    setIndiceItemKbd(-1)
   }
+
+  useEffect(() => {
+    setIndiceItemKbd(-1)
+  }, [itemBusqueda, competencia, capituloHoja])
+
+  useEffect(() => {
+    if (indiceItemKbd < 0 || !mostrarLista) return
+    const el = document.getElementById(`hoja-item-sug-${registro.id}-${indiceItemKbd}`)
+    if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' })
+  }, [indiceItemKbd, mostrarLista, registro.id])
 
   const guardarCambios = async () => {
     const idItem = itemListadoId
@@ -1573,6 +1588,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Capítulo</div>
               <select value={capituloHoja} onChange={e => { setCapituloHoja(e.target.value); setCompetencia(''); setItemSel(null); setItemBusqueda('') }}
                 disabled={!editableCampos}
+                onKeyDown={e => e.stopPropagation()}
                 style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', opacity: editableCampos ? 1 : 0.65 }}>
                 <option value="">— Selecciona —</option>
                 {listaCapitulos.map(c => <option key={c} value={c}>{c}</option>)}
@@ -1583,6 +1599,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Competencia</div>
               <select value={competencia} onChange={e => { setCompetencia(e.target.value); setItemSel(null); setItemBusqueda('') }}
                 disabled={!editableCampos}
+                onKeyDown={e => e.stopPropagation()}
                 style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', opacity: editableCampos ? 1 : 0.65 }}>
                 <option value="">— Todas —</option>
                 {competencias.map(c => <option key={c} value={c}>{c}</option>)}
@@ -1597,17 +1614,50 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 value={itemBusqueda}
                 onChange={e => { setItemBusqueda(e.target.value); setItemSel(null); setItemListadoId(null) }}
                 onFocus={() => itemsLista.length > 0 && setMostrarLista(true)}
+                onKeyDown={e => {
+                  e.stopPropagation()
+                  const n = itemsLista.length
+                  if (e.key === 'Escape') {
+                    setMostrarLista(false)
+                    setIndiceItemKbd(-1)
+                    return
+                  }
+                  if (!n || !editableCampos) return
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault()
+                    if (!mostrarLista) { setMostrarLista(true); setIndiceItemKbd(0) }
+                    else setIndiceItemKbd((i) => (i < 0 ? 0 : Math.min(n - 1, i + 1)))
+                    return
+                  }
+                  if (e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    if (!mostrarLista) { setMostrarLista(true); setIndiceItemKbd(n - 1) }
+                    else setIndiceItemKbd((i) => (i <= 0 ? 0 : i - 1))
+                    return
+                  }
+                  if (e.key === 'Enter' && mostrarLista) {
+                    const i = indiceItemKbdRef.current
+                    if (i >= 0 && i < n) {
+                      e.preventDefault()
+                      seleccionarItem(itemsLista[i])
+                    }
+                  }
+                }}
                 placeholder="Buscar por número o descripción..."
                 disabled={!editableCampos}
                 style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', opacity: editableCampos ? 1 : 0.65 }}
               />
               {mostrarLista && itemsLista.length > 0 && (
                 <div style={{ position:'absolute', top:'100%', left:0, right:0, zIndex:100, background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'8px', maxHeight:'200px', overflowY:'auto', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }}>
-                  {itemsLista.map(item => (
-                    <div key={item.id} onClick={() => seleccionarItem(item)}
-                      style={{ padding:'8px 12px', cursor:'pointer', borderBottom:`1px solid ${t.border}`, transition:'background 0.1s' }}
-                      onMouseEnter={e => e.currentTarget.style.background = t.bg}
-                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                  {itemsLista.map((item, idx) => (
+                    <div
+                      id={`hoja-item-sug-${registro.id}-${idx}`}
+                      key={item.id} onClick={() => seleccionarItem(item)}
+                      style={{
+                        padding:'8px 12px', cursor:'pointer', borderBottom:`1px solid ${t.border}`, transition:'background 0.1s',
+                        background: idx === indiceItemKbd ? t.bg : 'transparent',
+                      }}
+                      onMouseEnter={() => setIndiceItemKbd(idx)}>
                       <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.primary }}>{item.item_numero}</div>
                       <div style={{ fontSize:'var(--cc-label)', color:t.text }}>{item.descripcion}</div>
                       <div style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>{item.und} · {fmtD(item.precio_unitario)}</div>
@@ -3107,33 +3157,153 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
           {/* ── TAB SIN ASIGNAR ÍTEM ── */}
           {tabActiva === 'sin_asignar' && (
-            <div style={{ display:'flex', flexDirection:'column', gap:'20px' }}>
+            <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
               {renderBarraValidacionMasiva(regsSinAsignar)}
               {regsSinAsignar.length === 0 ? (
                 <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>
                   ✅ Todos los registros tienen ítem asignado
                 </div>
               ) : regsSinAsignar.map(reg => {
+                const expandido = registroExpandido === reg.id
                 const puedeMarcarVal = puedeMasivaNivel && (
                   (nvMasivo === 2 && (reg.nivel1_estado || 'No Revisado') === 'Aprobado') ||
                   (nvMasivo === 3 && (reg.nivel2_estado || 'No Revisado') === 'Aprobado')
                 )
+                const fechaReg = (() => { try { const ts=reg.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()
+                const colorNivel = st => st === 'Aprobado' ? '#10B981' : st === 'Pendiente' ? '#F59E0B' : st === 'Rechazado' ? '#EF4444' : st === 'No Objeto de Cobro' ? '#374151' : '#3B82F6'
+                const nivelesInfo = [
+                  { emoji:'👷',  label:'N1', estado: reg.nivel1_estado || 'No Revisado' },
+                  { emoji:'🏗️', label:'N2', estado: reg.nivel2_estado || 'No Revisado' },
+                  { emoji:'🏛️', label:'N3', estado: reg.nivel3_estado || 'No Revisado' },
+                  { emoji:'🔨', label:'Sub', estado: reg.sub_estado || 'No Revisado' },
+                ]
                 return (
-                <HojaRegistro
-                  key={`${reg.id}-${reg.foto_url ? 'u1' : 'u0'}`} t={t} usuario={usuario} API_URL={API_URL}
-                  contrato_id={contrato_id} reporte={reporte} registro={reg}
-                  puedeEditar={puedeEditar} actasList={actasList}
-                  seleccionado={seleccionados.includes(reg.id)}
-                  onToggleSeleccion={() => toggleSeleccion(reg.id)}
-                  mostrarSeleccionValidacion={puedeMarcarVal}
-                  seleccionadoValidacion={seleccionadosValidacion.includes(reg.id)}
-                  onToggleSeleccionValidacion={() => toggleSeleccionValidacion(reg.id)}
-                  onItemAsignado={recargar}
-                  hdrs={hdrs}
-                  esDeveloper={esDeveloper}
-                  onDevEliminarRegistro={devEliminarRegistro}
-                  devEliminando={devEliminando}
-                />
+                  <div key={reg.id} id={`registro-${reg.id}`}>
+                    <div
+                      onClick={() => setRegistroExpandido(expandido ? null : reg.id)}
+                      style={{ display:'flex', alignItems:'center', gap:'10px', background:'#D9770626', border:`1px solid ${expandido ? '#D97706' : '#D9770644'}`, borderLeft:'3px solid #D97706', borderRadius: expandido ? '10px 10px 0 0' : '10px', padding:'10px 16px', cursor:'pointer', transition:'border 0.15s' }}
+                    >
+                      {puedeMarcarVal && (
+                        <input type="checkbox" checked={seleccionadosValidacion.includes(reg.id)}
+                          title="Seleccionar para validación masiva"
+                          onClick={e => e.stopPropagation()}
+                          onChange={() => toggleSeleccionValidacion(reg.id)}
+                          style={{ width:'15px', height:'15px', accentColor:'#0d9488', flexShrink:0 }} />
+                      )}
+                      {puedeEditar && (
+                        <input type="checkbox" checked={seleccionados.includes(reg.id)}
+                          onClick={e => e.stopPropagation()}
+                          onChange={() => toggleSeleccion(reg.id)}
+                          style={{ width:'15px', height:'15px', accentColor:'#8B5CF6', flexShrink:0 }} />
+                      )}
+                      <span style={{ fontWeight:'800', color:'#D97706', fontSize:'var(--cc-sm)', flexShrink:0 }}>
+                        📄 Registro #{reg.numero_registro}
+                      </span>
+                      {strRefCarpetaFoto(reg) && (
+                        <span
+                          title={regTieneFotoNumeroEnBd(reg) ? 'N.º consecutivo de foto' : 'N.º de registro (referencia de carpeta)'}
+                          style={{
+                            fontSize: 'var(--cc-label)',
+                            fontWeight: '800',
+                            color: '#0f766e',
+                            flexShrink: 0,
+                            background: '#0d948818',
+                            border: '1px solid #0d948840',
+                            borderRadius: '8px',
+                            padding: '2px 8px',
+                            fontFamily: 'ui-monospace, Consolas, monospace',
+                          }}
+                        >
+                          📷 {strRefCarpetaFoto(reg)}
+                        </span>
+                      )}
+                      <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)', fontStyle: reg.observacion ? 'normal' : 'italic', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'300px', flex:1 }}>
+                        {reg.observacion || 'Sin observación'}
+                      </span>
+                      <span style={{ color:t.textMuted, fontSize:'var(--cc-label)', flexShrink:0 }}>{fechaReg}</span>
+                      <div style={{ display:'flex', gap:'6px', alignItems:'center', flexShrink:0 }} onClick={e => e.stopPropagation()}>
+                        {nivelesInfo.map(({ emoji, label, estado }) => {
+                          const esMiNivel = nivelInfo.nivelValidacion === 1 && label === 'N1'
+                            || nivelInfo.nivelValidacion === 2 && label === 'N2'
+                            || nivelInfo.nivelValidacion === 3 && label === 'N3'
+                          const sinRevisar = estado === 'No Revisado'
+                          return (
+                            <div key={label} title={`${label}: ${estado}`}
+                              style={{ display:'flex', alignItems:'center', gap:'3px',
+                                background: esMiNivel && sinRevisar ? '#3B82F620' : 'transparent',
+                                border: esMiNivel && sinRevisar ? '1px solid #3B82F6' : '1px solid transparent',
+                                borderRadius:'10px', padding:'1px 5px' }}>
+                              <span style={{ fontSize:'var(--cc-sm)', lineHeight:1 }}>{emoji}</span>
+                              <span style={{ width:'8px', height:'8px', borderRadius:'50%', background: colorNivel(estado), flexShrink:0 }} />
+                              {esMiNivel && sinRevisar && <span style={{ fontSize:'var(--cc-caption)', fontWeight:'800', color:'#3B82F6' }}>SIN REV.</span>}
+                            </div>
+                          )
+                        })}
+                      </div>
+                      <button
+                        onClick={e => {
+                          e.stopPropagation()
+                          const rolOrigen = determinarNivelValidacion(usuario).rolOrigen
+                          setModalComentarios({ reg, rolOrigen })
+                          setComentariosData([])
+                          setLoadingComentarios(true)
+                          fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}/comentarios?rol_solicitante=${rolOrigen}`, { headers: hdrs })
+                            .then(r => r.json())
+                            .then(d => { setComentariosData(Array.isArray(d) ? d : []); setLoadingComentarios(false) })
+                            .catch(() => setLoadingComentarios(false))
+                        }}
+                        style={{ background:'none', border:'none', cursor:'pointer', padding:'2px 4px',
+                                 fontSize:'var(--cc-md)', color: reg.num_comentarios > 0 ? '#10B981' : t.textMuted, flexShrink:0, lineHeight:1, position:'relative' }}
+                        title={`Ver comentarios${reg.num_comentarios > 0 ? ` (${reg.num_comentarios})` : ''}`}>
+                        💬{reg.num_comentarios > 0 && <span style={{ fontSize:'var(--cc-caption)', fontWeight:'800', color:'#10B981', marginLeft:'1px' }}>{reg.num_comentarios}</span>}
+                      </button>
+                      <button
+                        type="button"
+                        title="Trazabilidad y auditoría (SICOE obra)"
+                        onClick={e => {
+                          e.stopPropagation()
+                          setModalTrazabilidadSicoe(reg)
+                        }}
+                        style={{
+                          background: 'none',
+                          border: `1px solid ${t.border}`,
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          padding: '2px 6px',
+                          fontSize: 'var(--cc-sm)',
+                          color: t.primary,
+                          flexShrink: 0,
+                          lineHeight: 1,
+                        }}
+                      >📜</button>
+                      {reg.enlace_soporte && (() => { try { const p = JSON.parse(reg.enlace_soporte); return Array.isArray(p) ? p.length > 0 : !!reg.enlace_soporte } catch { return !!reg.enlace_soporte } })() && (
+                        <span title="Tiene soportes adjuntos" style={{ fontSize:'var(--cc-sm)', flexShrink:0 }}>📎</span>
+                      )}
+                      {String(reg.foto_url || '').trim() ? (
+                        <span title={strRefCarpetaFoto(reg) ? `Ref. ${strRefCarpetaFoto(reg)} · ${regTieneFotoNumeroEnBd(reg) ? 'foto' : 'reg.'} (URL en BD)` : 'Foto vinculada (URL en BD)'} style={{ fontSize:'var(--cc-sm)', flexShrink:0 }}>🖼️</span>
+                      ) : null}
+                      <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)', flexShrink:0 }}>{expandido ? '▲' : '▼'}</span>
+                    </div>
+                    {expandido && (
+                      <div style={{ border:`1px solid ${t.primary+'66'}`, borderTop:'none', borderRadius:'0 0 10px 10px', overflow:'hidden' }}>
+                        <HojaRegistro
+                          key={`${reg.id}-${reg.foto_url ? 'u1' : 'u0'}`} t={t} usuario={usuario} API_URL={API_URL}
+                          contrato_id={contrato_id} reporte={reporte} registro={reg}
+                          puedeEditar={puedeEditar} actasList={actasList}
+                          seleccionado={seleccionados.includes(reg.id)}
+                          onToggleSeleccion={() => toggleSeleccion(reg.id)}
+                          mostrarSeleccionValidacion={puedeMarcarVal}
+                          seleccionadoValidacion={seleccionadosValidacion.includes(reg.id)}
+                          onToggleSeleccionValidacion={() => toggleSeleccionValidacion(reg.id)}
+                          onItemAsignado={recargar}
+                          hdrs={hdrs}
+                          esDeveloper={esDeveloper}
+                          onDevEliminarRegistro={devEliminarRegistro}
+                          devEliminando={devEliminando}
+                        />
+                      </div>
+                    )}
+                  </div>
                 )
               })}
             </div>
@@ -8826,6 +8996,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             ['almacen',      '🏪', 'Almacén',        true],
             ['gantt',        '📅', 'Gantt',           true],
             ['semaforo',     '🗺️', 'Plano Semáforo', true],
+            ['guias',        '📖', 'Guías',          true],
           ].filter(([,,, visible]) => visible).map(([key, icon, label]) => (
             <button key={key} onClick={() => { setModuloActivo(key); setMenuAbierto(false) }} style={{
               background: moduloActivo === key ? t.primary+'22' : 'none',
@@ -8877,7 +9048,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
 
         {moduloActivo === 'inicio' && (
-          <ModuloInicio t={t} usuario={usuario} fontSize={fontSize} puedePublicarNovedades={puedePublicarNovedadesInicio} />
+          <ModuloInicio t={t} usuario={usuario} fontSize={fontSize} puedePublicarNovedades={puedePublicarNovedadesInicio} token={getToken()} />
         )}
         {moduloActivo === 'dashboard' && (() => {
           const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
@@ -10432,6 +10603,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               </div>
             </div>
           )
+        )}
+
+        {moduloActivo === 'guias' && (
+          <ModuloGuias t={t} usuario={usuario} token={getToken()} s={s} fontSize={fontSize} />
         )}
 
         {/* ── Módulos próximamente ── */}

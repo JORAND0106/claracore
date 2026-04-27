@@ -389,6 +389,8 @@ class InicioNovedadCreate(BaseModel):
     icono: str = "📢"
     color: str = "#00B4C6"
     imagen_url: Optional[str] = None
+    # Solo Desarrollador: null = novedad global (todos los contratos). Se ignora para Administrador.
+    contrato_id: Optional[int] = None
 
 
 class InicioNovedadUpdate(BaseModel):
@@ -400,6 +402,7 @@ class InicioNovedadUpdate(BaseModel):
     icono: Optional[str] = None
     color: Optional[str] = None
     imagen_url: Optional[str] = None
+    contrato_id: Optional[int] = None
 
 
 class InicioNovedadMejorarTexto(BaseModel):
@@ -412,6 +415,29 @@ class CargoCreate(BaseModel):
     nombre: str
     rol_id: Optional[int] = None
     categoria_id: Optional[int] = None
+
+
+class GuiaCreate(BaseModel):
+    titulo: str
+    modulo: Optional[str] = None
+    descripcion_corta: Optional[str] = None
+    bloques: List[Any] = Field(default_factory=list)
+    roles_visibles: List[int] = Field(default_factory=list)
+    publicado: bool = False
+    orden: int = 0
+    contrato_id: Optional[int] = None
+
+
+class GuiaUpdate(BaseModel):
+    titulo: Optional[str] = None
+    modulo: Optional[str] = None
+    descripcion_corta: Optional[str] = None
+    bloques: Optional[List[Any]] = None
+    roles_visibles: Optional[List[int]] = None
+    publicado: Optional[bool] = None
+    orden: Optional[int] = None
+    contrato_id: Optional[int] = None
+
 
 class CostoAdicionalItem(BaseModel):
     concepto_contractual: str = ""
@@ -920,6 +946,81 @@ def _es_desarrollador(current_user) -> bool:
         return False
 
 
+def _caller_cargo_id(current_user) -> Optional[int]:
+    """cargo_id del usuario autenticado (tabla usuarios)."""
+    try:
+        uid = int(current_user.get("sub"))
+    except (TypeError, ValueError):
+        return None
+    try:
+        u = supabase.table("usuarios").select("cargo_id").eq("id", uid).limit(1).execute().data
+        u = u[0] if u else None
+        if not u:
+            return None
+        cid = u.get("cargo_id")
+        return int(cid) if cid is not None else None
+    except Exception:
+        return None
+
+
+def _caller_rol_id(current_user) -> Optional[int]:
+    """rol_id del usuario autenticado (tabla usuarios → tabla roles)."""
+    try:
+        uid = int(current_user.get("sub"))
+    except (TypeError, ValueError):
+        return None
+    try:
+        u = supabase.table("usuarios").select("rol_id").eq("id", uid).limit(1).execute().data
+        u = u[0] if u else None
+        if not u:
+            return None
+        rid = u.get("rol_id")
+        return int(rid) if rid is not None else None
+    except Exception:
+        return None
+
+
+def _guia_visible_por_rol(row: dict, rol_id: Optional[int]) -> bool:
+    """roles_visibles = IDs en tabla roles; vacío = todos los roles; si no, debe incluir rol_id del usuario."""
+    rv = row.get("roles_visibles")
+    if rv is None or (isinstance(rv, list) and len(rv) == 0):
+        return True
+    if rol_id is None:
+        return False
+    try:
+        ids = [int(x) for x in rv]
+    except (TypeError, ValueError):
+        return False
+    return rol_id in ids
+
+
+_GUIAS_SELECT_LISTA = (
+    "id, contrato_id, titulo, slug, modulo, descripcion_corta, roles_visibles, publicado, orden, created_at, updated_at"
+)
+
+
+def _titulo_a_slug_base(titulo: str) -> str:
+    t = (titulo or "").strip().lower()
+    t = re.sub(r"\s+", "-", t)
+    t = re.sub(r"[^a-z0-9\-]+", "-", t)
+    t = re.sub(r"-+", "-", t).strip("-")
+    return (t or "guia")[:190]
+
+
+def _siguiente_slug_unico(base: str, exclude_id: Optional[int]) -> str:
+    cand = base
+    suf = 2
+    while True:
+        q = supabase.table("guias").select("id").eq("slug", cand).limit(1).execute()
+        row = q.data[0] if q.data else None
+        if not row:
+            return cand
+        if exclude_id is not None and int(row["id"]) == int(exclude_id):
+            return cand
+        cand = f"{base[:170]}-{suf}"
+        suf += 1
+
+
 def _es_rol_contratista_ppto(current_user) -> bool:
     """Contratista u operativo: único perfil que puede reabrir un registro sellado con motivo (no la Interventoría vía API)."""
     r = (current_user.get("rol_nombre") or "").strip().lower()
@@ -969,6 +1070,27 @@ def require_logs_auditoria(current_user=Depends(get_current_user)):
     if not _cargo_puede_auditar_logs(current_user):
         raise HTTPException(status_code=403, detail="Solo Desarrollador y Administrador pueden acceder a la auditoría de logs")
     return current_user
+
+
+def _query_inicio_novedades_accesibles(contrato_id_usuario: Optional[int]):
+    """Novedades globales (contrato_id NULL) + las del contrato del usuario, si aplica."""
+    q = supabase.table("inicio_novedades").select("*").order("created_at", desc=True)
+    if contrato_id_usuario is not None:
+        return q.or_(f"contrato_id.is.null,contrato_id.eq.{int(contrato_id_usuario)}")
+    return q.is_("contrato_id", "null")
+
+
+def _novedad_puede_gestionar_admin(
+    novedad: dict, contrato_caller: Optional[int], es_desarrollador: bool
+) -> bool:
+    if es_desarrollador:
+        return True
+    ncid = novedad.get("contrato_id")
+    if ncid is None:
+        return False
+    if contrato_caller is None:
+        return False
+    return int(ncid) == int(contrato_caller)
 
 
 def _caller_contract_scope(current_user):
@@ -1604,6 +1726,134 @@ def listar_cargos():
 @app.get("/roles")
 def listar_roles():
     return supabase.table("roles").select("*").order("nombre").execute().data
+
+
+@app.get("/guias/admin/todas")
+def guias_admin_todas(current_user=Depends(get_current_user)):
+    """Listado completo (incl. borradores) para el panel de documentación — solo Desarrollador."""
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede gestionar guías")
+    rows = supabase.table("guias").select("*").execute().data or []
+    rows.sort(key=lambda r: ((r.get("orden") if r.get("orden") is not None else 0), (r.get("titulo") or "").lower()))
+    return rows
+
+
+@app.get("/guias/buscar")
+def guias_buscar(q: str = Query(""), current_user=Depends(get_current_user)):
+    """Búsqueda por palabra en título y descripción; respeta visibilidad por rol (excepto Desarrollador: ve todas)."""
+    rol_id = _caller_rol_id(current_user)
+    es_dev = _es_desarrollador(current_user)
+    needle = (q or "").strip().lower()
+    if es_dev:
+        rows = supabase.table("guias").select(_GUIAS_SELECT_LISTA).order("titulo").execute().data or []
+    else:
+        rows = supabase.table("guias").select(_GUIAS_SELECT_LISTA).eq("publicado", True).order("titulo").execute().data or []
+        rows = [r for r in rows if _guia_visible_por_rol(r, rol_id)]
+    if needle:
+        rows = [
+            r
+            for r in rows
+            if needle in (r.get("titulo") or "").lower()
+            or needle in (r.get("descripcion_corta") or "").lower()
+        ]
+    return rows
+
+
+@app.get("/guias")
+def guias_listar_publicadas(current_user=Depends(get_current_user)):
+    """Guías publicadas visibles para el rol del usuario, orden alfabético por título."""
+    rol_id = _caller_rol_id(current_user)
+    rows = supabase.table("guias").select(_GUIAS_SELECT_LISTA).eq("publicado", True).order("titulo").execute().data or []
+    return [r for r in rows if _guia_visible_por_rol(r, rol_id)]
+
+
+@app.get("/guias/{slug}")
+def guia_detalle_por_slug(slug: str, current_user=Depends(get_current_user)):
+    """Detalle completo de una guía por slug."""
+    rol_id = _caller_rol_id(current_user)
+    es_dev = _es_desarrollador(current_user)
+    r = supabase.table("guias").select("*").eq("slug", slug).limit(1).execute()
+    row = r.data[0] if r.data else None
+    if not row:
+        raise HTTPException(status_code=404, detail="Guía no encontrada")
+    if not es_dev:
+        if not row.get("publicado"):
+            raise HTTPException(status_code=404, detail="Guía no encontrada")
+        if not _guia_visible_por_rol(row, rol_id):
+            raise HTTPException(status_code=404, detail="Guía no encontrada")
+    return row
+
+
+@app.post("/guias")
+def guias_crear(body: GuiaCreate, current_user=Depends(get_current_user)):
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede crear guías")
+    base = _titulo_a_slug_base(body.titulo)
+    slug = _siguiente_slug_unico(base, None)
+    now = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "titulo": body.titulo.strip(),
+        "slug": slug,
+        "modulo": body.modulo,
+        "descripcion_corta": body.descripcion_corta,
+        "bloques": _json_for_log(body.bloques) if body.bloques else [],
+        "roles_visibles": body.roles_visibles or [],
+        "publicado": bool(body.publicado),
+        "orden": int(body.orden or 0),
+        "contrato_id": body.contrato_id,
+        "updated_at": now,
+    }
+    ins = supabase.table("guias").insert(payload).execute()
+    data = ins.data
+    if data:
+        return data[0] if isinstance(data, list) else data
+    q = supabase.table("guias").select("*").eq("slug", slug).limit(1).execute()
+    return q.data[0] if q.data else payload
+
+
+@app.put("/guias/{guia_id}")
+def guias_actualizar(guia_id: int, body: GuiaUpdate, current_user=Depends(get_current_user)):
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede editar guías")
+    cur = supabase.table("guias").select("*").eq("id", guia_id).limit(1).execute()
+    existing = cur.data[0] if cur.data else None
+    if not existing:
+        raise HTTPException(status_code=404, detail="Guía no encontrada")
+    payload: Dict[str, Any] = {}
+    if body.titulo is not None:
+        payload["titulo"] = body.titulo.strip()
+        base = _titulo_a_slug_base(body.titulo)
+        payload["slug"] = _siguiente_slug_unico(base, guia_id)
+    if body.modulo is not None:
+        payload["modulo"] = body.modulo
+    if body.descripcion_corta is not None:
+        payload["descripcion_corta"] = body.descripcion_corta
+    if body.bloques is not None:
+        payload["bloques"] = _json_for_log(body.bloques)
+    if body.roles_visibles is not None:
+        payload["roles_visibles"] = body.roles_visibles
+    if body.publicado is not None:
+        payload["publicado"] = bool(body.publicado)
+    if body.orden is not None:
+        payload["orden"] = int(body.orden)
+    if body.contrato_id is not None:
+        payload["contrato_id"] = body.contrato_id
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    supabase.table("guias").update(payload).eq("id", guia_id).execute()
+    out = supabase.table("guias").select("*").eq("id", guia_id).limit(1).execute()
+    return out.data[0] if out.data else payload
+
+
+@app.delete("/guias/{guia_id}")
+def guias_eliminar(guia_id: int, current_user=Depends(get_current_user)):
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede eliminar guías")
+    cur = supabase.table("guias").select("id").eq("id", guia_id).limit(1).execute()
+    if not cur.data:
+        raise HTTPException(status_code=404, detail="Guía no encontrada")
+    supabase.table("guias").delete().eq("id", guia_id).execute()
+    return {"ok": True, "id": guia_id}
+
 
 # Listado ligero: SOLO columnas presentes en cualquier despliegue. Si pides columnas que aún no existen
 # en la BD (migración pendiente), PostgREST falla y el panel enseña 0 contratos aunque existan.
@@ -4673,23 +4923,104 @@ def log_deploy_event(
     return {"ok": True}
 
 
+def _inicio_novedades_rows_con_lectura(uid: int, contrato_id_u: Optional[int]) -> List[dict]:
+    try:
+        rows = _query_inicio_novedades_accesibles(contrato_id_u).execute().data or []
+    except Exception as e:
+        _log_api.warning("inicio novedades filtradas, fallback sin contrato_id: %s", e)
+        try:
+            rows = (
+                supabase.table("inicio_novedades")
+                .select("*")
+                .order("created_at", desc=True)
+                .execute()
+                .data
+                or []
+            )
+        except Exception as e2:
+            _log_api.warning("inicio novedades list: %s", e2)
+            rows = []
+    ids = [int(r["id"]) for r in rows if r.get("id") is not None]
+    leidas: set = set()
+    if ids:
+        try:
+            lr = (
+                supabase.table("inicio_novedades_lecturas")
+                .select("novedad_id")
+                .eq("usuario_id", int(uid))
+                .in_("novedad_id", ids)
+                .execute()
+                .data
+                or []
+            )
+            leidas = {int(x["novedad_id"]) for x in lr if x.get("novedad_id") is not None}
+        except Exception as e2:
+            _log_api.warning("inicio novedades lecturas: %s", e2)
+    out: List[dict] = []
+    for r in rows:
+        rr = dict(r)
+        try:
+            nid = int(rr.get("id") or 0)
+        except (TypeError, ValueError):
+            nid = 0
+        rr["leida"] = nid in leidas if nid else False
+        out.append(rr)
+    return out
+
+
 @app.get("/inicio/novedades")
-def inicio_novedades_public():
-    """Novedades de la página de inicio (lectura pública para usuarios logueados en el front)."""
-    rows = (
-        supabase.table("inicio_novedades")
-        .select("*")
-        .order("created_at", desc=True)
-        .execute()
-        .data
-    )
-    return rows or []
+def inicio_novedades_listado(current_user=Depends(get_current_user)):
+    """
+    Novedades visibles según el contrato del usuario + bandera `leida` por usuario.
+    Requiere token. Sin columna `contrato_id` en BD, el filtro puede fallar y se listan todas.
+    """
+    try:
+        uid = int(current_user.get("sub"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Token inválido")
+    contrato_id_u, _ = _caller_contract_scope(current_user)
+    if isinstance(contrato_id_u, (int, float)) and not isinstance(contrato_id_u, bool):
+        ciu = int(contrato_id_u)
+    else:
+        ciu = None
+    return _inicio_novedades_rows_con_lectura(uid, ciu)
+
+
+@app.post("/inicio/novedades/{novedad_id}/leida")
+def inicio_novedad_marcar_leida(
+    novedad_id: int,
+    current_user=Depends(get_current_user),
+):
+    try:
+        uid = int(current_user.get("sub"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Token inválido")
+    contrato_id_u, _ = _caller_contract_scope(current_user)
+    ciu = int(contrato_id_u) if contrato_id_u is not None else None
+    rows = _inicio_novedades_rows_con_lectura(uid, ciu)
+    ok = any(int(r.get("id") or 0) == int(novedad_id) for r in rows)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Novedad no disponible")
+    try:
+        supabase.table("inicio_novedades_lecturas").insert(
+            {"usuario_id": uid, "novedad_id": int(novedad_id)}
+        ).execute()
+    except Exception as e:
+        if "23505" not in str(e) and "duplicate" not in str(e).lower() and "unique" not in str(e).lower():
+            _log_api.warning("marcar leida novedad %s: %s", novedad_id, e)
+    return {"ok": True}
 
 
 @app.get("/admin/inicio/novedades")
 def admin_inicio_novedades_list(current_user=Depends(require_logs_auditoria)):
-    """Misma lista que GET /inicio/novedades (requiere rol de auditoría de logs)."""
-    return inicio_novedades_public()
+    """Novedades que puede ver el admin: globales + del propio contrato (mismo criterio que inicio)."""
+    try:
+        uid = int(current_user.get("sub"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Token inválido")
+    contrato_id_u, _ = _caller_contract_scope(current_user)
+    ciu = int(contrato_id_u) if contrato_id_u is not None else None
+    return _inicio_novedades_rows_con_lectura(uid, ciu)
 
 
 @app.post("/admin/inicio/novedades")
@@ -4699,6 +5030,24 @@ def admin_inicio_novedades_create(
     current_user=Depends(require_logs_auditoria),
 ):
     row = body.model_dump()
+    es_dev = _es_desarrollador(current_user)
+    caller_cid, _ = _caller_contract_scope(current_user)
+    raw_cid = row.pop("contrato_id", None)
+    if es_dev:
+        if raw_cid is not None:
+            try:
+                row["contrato_id"] = int(raw_cid)
+            except (TypeError, ValueError):
+                row["contrato_id"] = None
+        else:
+            row["contrato_id"] = None
+    else:
+        if not caller_cid:
+            raise HTTPException(
+                status_code=400,
+                detail="Los administradores de novedad deben tener un contrato asignado para publicar en su equipo.",
+            )
+        row["contrato_id"] = int(caller_cid)
     raw_fecha = (row.pop("fecha") or "").strip()
     if raw_fecha:
         row["fecha"] = raw_fecha[:10]
@@ -4752,7 +5101,23 @@ def admin_inicio_novedades_update(
     prev = prev_rows[0] if prev_rows else None
     if not prev:
         raise HTTPException(status_code=404, detail="Novedad no encontrada")
+    es_dev = _es_desarrollador(current_user)
+    caller_cid, _ = _caller_contract_scope(current_user)
+    ccr = int(caller_cid) if caller_cid is not None else None
+    if not _novedad_puede_gestionar_admin(prev, ccr, es_dev):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el Desarrollador puede editar novedades globales. Las de tu contrato las gestiona el administrador de ese contrato.",
+        )
     patch = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    if "contrato_id" in patch:
+        if not es_dev:
+            patch.pop("contrato_id", None)
+        else:
+            try:
+                patch["contrato_id"] = int(patch["contrato_id"]) if patch["contrato_id"] is not None else None
+            except (TypeError, ValueError):
+                patch["contrato_id"] = None
     if "fecha" in patch and patch["fecha"] is not None:
         patch["fecha"] = str(patch["fecha"])[:10]
     if not patch:
@@ -4790,6 +5155,14 @@ def admin_inicio_novedades_delete(
     prev = prev_rows[0] if prev_rows else None
     if not prev:
         raise HTTPException(status_code=404, detail="Novedad no encontrada")
+    es_dev = _es_desarrollador(current_user)
+    caller_cid, _ = _caller_contract_scope(current_user)
+    ccr = int(caller_cid) if caller_cid is not None else None
+    if not _novedad_puede_gestionar_admin(prev, ccr, es_dev):
+        raise HTTPException(
+            status_code=403,
+            detail="No puedes eliminar esta novedad (p. ej. novedad global: solo Desarrollador).",
+        )
     supabase.table("inicio_novedades").delete().eq("id", novedad_id).execute()
     u = dict(current_user)
     u["nombre"] = u.get("nombre") or u.get("email", "")

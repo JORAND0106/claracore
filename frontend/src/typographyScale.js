@@ -7,41 +7,42 @@ export const CLARA_FONT_KEYS = ['pequena', 'normal', 'grande']
 
 /** Tamaños base — pequeña / mediana / grande con salto claro (accesibilidad, baja visión) */
 const SCALES = {
+  /* Pequeña: +2px respecto a la escala previa; mediana y grande reescaladas para notar el salto. */
   pequena: {
-    caption: 10,
-    label: 11,
-    sm: 12,
-    body: 13,
-    input: 13,
-    md: 14,
-    lg: 15,
-    title: 16,
-    h2: 18,
-    h1: 20,
-  },
-  normal: {
     caption: 12,
     label: 13,
     sm: 14,
     body: 15,
     input: 15,
     md: 16,
-    lg: 18,
-    title: 19,
-    h2: 21,
-    h1: 24,
+    lg: 17,
+    title: 18,
+    h2: 20,
+    h1: 22,
   },
-  grande: {
-    caption: 14,
-    label: 15,
-    sm: 16,
+  normal: {
+    caption: 15,
+    label: 16,
+    sm: 17,
     body: 18,
     input: 18,
-    md: 20,
-    lg: 22,
-    title: 23,
-    h2: 26,
-    h1: 30,
+    md: 19,
+    lg: 21,
+    title: 22,
+    h2: 24,
+    h1: 27,
+  },
+  grande: {
+    caption: 17,
+    label: 18,
+    sm: 19,
+    body: 21,
+    input: 21,
+    md: 23,
+    lg: 25,
+    title: 26,
+    h2: 29,
+    h1: 33,
   },
 }
 
@@ -76,6 +77,27 @@ export function applyClaraTypography(fontKey) {
     r.style.setProperty(`--cc-space-${n}`, PX(sp[n]))
   }
   r.style.setProperty('--font-size-base', PX(s.body))
+}
+
+/**
+ * Tamaños en px (inline) alineados con SCALES — útil cuando el bloque UI debe
+ * reaccionar de forma fiable al prop `fontSize` (p. ej. módulo Inicio).
+ */
+export function getClaraTypeScaleInline(fontKey) {
+  const k = CLARA_FONT_KEYS.includes(fontKey) ? fontKey : 'normal'
+  const s = SCALES[k]
+  return {
+    caption: PX(s.caption),
+    label: PX(s.label),
+    sm: PX(s.sm),
+    body: PX(s.body),
+    input: PX(s.input),
+    md: PX(s.md),
+    lg: PX(s.lg),
+    title: PX(s.title),
+    h2: PX(s.h2),
+    h1: PX(s.h1),
+  }
 }
 
 /** Densidad UI del tab Resumen / mapa (sincronizado con la misma clave) */

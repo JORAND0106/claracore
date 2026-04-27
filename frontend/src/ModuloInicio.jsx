@@ -1,15 +1,23 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { API_BASE } from './apiBase'
+import { getClaraTypeScaleInline } from './typographyScale'
 const API_ANTHROPIC = `${API_BASE}/frase-del-dia`
 
-// ─── Escala de fuentes — mismas variables CSS que el header (Pequeña / Mediana / Grande) ─
-const FS = {
-  base: 'var(--cc-body)',
-  titulo: 'var(--cc-h1)',
-  stat: 'var(--cc-h1)',
-  card: 'var(--cc-md)',
-  badge: 'var(--cc-caption)',
-  autor: 'var(--cc-label)',
+function buildfs(fontSize) {
+  const s = getClaraTypeScaleInline(fontSize)
+  return {
+    base: s.body,
+    titulo: s.h1,
+    stat: s.h1,
+    card: s.md,
+    badge: s.caption,
+    autor: s.label,
+    h2: s.h2,
+    sm: s.sm,
+    novedadTitulo: s.title,
+    novedadIcon: s.lg,
+    lg: s.lg,
+  }
 }
 
 const TIPO_LABEL = {
@@ -29,16 +37,17 @@ function hoyISO() {
   return new Date().toISOString().split('T')[0]
 }
 
-// ─── Tarjeta de novedad ────────────────────────────────────────────────────────
-function TarjetaNovedad({ novedad, t, fs, delay = 0 }) {
-  const [visible, setVisible] = useState(false)
+// ─── Tarjeta de novedad (detalle) ──────────────────────────────────────────────
+function TarjetaNovedad({ novedad, t, fs, delay = 0, sinEntrada = false }) {
+  const [visible, setVisible] = useState(sinEntrada)
   const [hover, setHover]     = useState(false)
   const tipo = TIPO_LABEL[novedad.tipo] || TIPO_LABEL['aviso']
 
   useEffect(() => {
+    if (sinEntrada) return
     const timer = setTimeout(() => setVisible(true), delay)
     return () => clearTimeout(timer)
-  }, [delay])
+  }, [delay, sinEntrada])
 
   return (
     <div
@@ -50,8 +59,8 @@ function TarjetaNovedad({ novedad, t, fs, delay = 0 }) {
         borderRadius: '12px',
         padding: '14px 18px',
         transition: 'all 0.3s ease',
-        transform: visible ? 'translateY(0)' : 'translateY(20px)',
-        opacity: visible ? 1 : 0,
+        transform: sinEntrada || visible ? 'translateY(0)' : 'translateY(20px)',
+        opacity: sinEntrada || visible ? 1 : 0,
         boxShadow: hover ? `0 6px 24px ${novedad.color}22` : 'none',
         position: 'relative',
         overflow: 'hidden',
@@ -65,7 +74,7 @@ function TarjetaNovedad({ novedad, t, fs, delay = 0 }) {
       }} />
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
         <div style={{
-          fontSize: '18px', lineHeight: 1,
+          fontSize: fs.novedadIcon, lineHeight: 1,
           background: novedad.color + '18',
           borderRadius: '8px', padding: '8px', flexShrink: 0,
         }}>
@@ -80,25 +89,74 @@ function TarjetaNovedad({ novedad, t, fs, delay = 0 }) {
             }}>{tipo.label}</span>
             <span style={{ fontSize: fs.badge, color: t.textMuted }}>{fmtFecha(novedad.fecha)}</span>
           </div>
-          <div style={{ fontSize: fs.card, fontWeight: '700', color: t.text, marginBottom: '4px', lineHeight: 1.3 }}>
+          <div style={{ fontSize: fs.novedadTitulo, fontWeight: '800', color: t.text, marginBottom: '6px', lineHeight: 1.3 }}>
             {novedad.titulo}
           </div>
-          <div style={{ fontSize: fs.base, color: t.textMuted, lineHeight: 1.55 }}>
+          <div style={{ fontSize: fs.base, color: t.text, lineHeight: 1.55 }}>
             {novedad.resumen}
           </div>
           {novedad.imagen_url ? (
-            <div style={{ marginTop: '10px' }}>
-              <img
-                src={novedad.imagen_url}
-                alt=""
+            <div
+              style={{ marginTop: '12px' }}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => e.stopPropagation()}
+            >
+              <div
                 style={{
-                  width: '100%',
-                  maxHeight: '220px',
-                  objectFit: 'cover',
-                  borderRadius: '8px',
-                  border: `1px solid ${t.border}`,
+                  fontSize: fs.badge,
+                  fontWeight: '700',
+                  color: t.textMuted,
+                  marginBottom: '8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  flexWrap: 'wrap',
                 }}
-              />
+              >
+                <span style={{ fontSize: fs.lg, lineHeight: 1 }} aria-hidden>🖼️</span>
+                <span>Esta novedad incluye una imagen</span>
+                <span
+                  style={{
+                    background: `${t.primary}16`,
+                    color: t.primary,
+                    border: `1px solid ${t.primary}44`,
+                    borderRadius: '8px',
+                    padding: '2px 8px',
+                    fontWeight: '800',
+                    letterSpacing: '0.2px',
+                  }}
+                >
+                  + imagen
+                </span>
+              </div>
+              <a
+                href={novedad.imagen_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Abrir imagen a tamaño completo en otra pestaña"
+                style={{
+                  display: 'block',
+                  borderRadius: '8px',
+                  overflow: 'hidden',
+                  border: `1px solid ${t.border}`,
+                  cursor: 'pointer',
+                }}
+              >
+                <img
+                  src={novedad.imagen_url}
+                  alt="Imagen de la novedad. Clic para abrir en otra pestaña."
+                  style={{
+                    width: '100%',
+                    maxHeight: 'min(50vh, 360px)',
+                    objectFit: 'cover',
+                    display: 'block',
+                    verticalAlign: 'middle',
+                  }}
+                />
+              </a>
+              <div style={{ fontSize: fs.badge, color: t.primary, marginTop: '8px', lineHeight: 1.4 }}>
+                Clic en la imagen para abrirla en otra pestaña y ver el detalle.
+              </div>
             </div>
           ) : null}
           <div style={{ marginTop: '6px', fontSize: fs.autor, color: t.textMuted, opacity: 0.6 }}>
@@ -106,6 +164,190 @@ function TarjetaNovedad({ novedad, t, fs, delay = 0 }) {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+/** Bandeja a ancho completo; plegable; filas estilo correo (leída = tono suave). */
+function BandejaNovedadesInicio({ novedades, setNovedades, t, fs, novedadesCargando, token, puedePublicarNovedades }) {
+  const [abierta, setAbierta] = useState(true)
+  const [detalle, setDetalle] = useState(null)
+  const sinLeer = novedades.filter((n) => !n.leida).length
+
+  const marcarLeidaRemoto = (nov) => {
+    if (!nov?.id || nov.leida) return
+    if (!token) return
+    fetch(`${API_BASE}/inicio/novedades/${nov.id}/leida`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    }).catch(() => {})
+    setNovedades((prev) =>
+      prev.map((p) => (p.id === nov.id ? { ...p, leida: true } : p))
+    )
+  }
+
+  const abrirDetalle = (nov) => {
+    setDetalle(nov)
+    marcarLeidaRemoto(nov)
+  }
+
+  return (
+    <div
+      style={{
+        width: '100%',
+        alignSelf: 'stretch',
+        border: `1px solid ${t.border}`,
+        borderRadius: '12px',
+        background: t.bgCard,
+        boxShadow: '0 1px 8px rgba(0,0,0,0.06)',
+        overflow: 'hidden',
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setAbierta((v) => !v)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '10px',
+          padding: '10px 12px',
+          border: 'none',
+          background: abierta ? t.bg : 'transparent',
+          cursor: 'pointer',
+          font: 'inherit',
+          textAlign: 'left',
+        }}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+          <span style={{ fontSize: '18px' }}>📥</span>
+          <span style={{ fontSize: fs.base, fontWeight: '800', color: t.text }}>Novedades</span>
+          {novedadesCargando ? (
+            <span style={{ fontSize: fs.autor, color: t.textMuted }}>…</span>
+          ) : (
+            <span
+              style={{
+                fontSize: fs.autor,
+                fontWeight: '700',
+                color: sinLeer > 0 ? t.primary : t.textMuted,
+                background: sinLeer > 0 ? `${t.primary}18` : t.bg,
+                border: `1px solid ${t.border}`,
+                borderRadius: '10px',
+                padding: '1px 8px',
+              }}
+            >
+              {novedades.length}{sinLeer > 0 ? ` · ${sinLeer} sin leer` : ''}
+            </span>
+          )}
+        </span>
+        <span style={{ color: t.textMuted, fontSize: fs.sm }}>{abierta ? '▼' : '▶'}</span>
+      </button>
+      {abierta && (
+        <div
+          style={{
+            borderTop: `1px solid ${t.border}`,
+            maxHeight: 'min(50vh, 360px)',
+            overflowY: 'auto',
+            fontSize: fs.autor,
+          }}
+        >
+          {novedadesCargando ? (
+            <div style={{ padding: '12px', color: t.textMuted }}>Cargando…</div>
+          ) : novedades.length === 0 ? (
+            <div style={{ padding: '12px', color: t.textMuted, lineHeight: 1.5 }}>
+              {puedePublicarNovedades
+                ? 'Aún no hay novedades. Publícalas desde Admin → Página de inicio.'
+                : 'No hay novedades por ahora.'}
+            </div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: t.bg, color: t.textMuted, fontSize: fs.autor, textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                  <th style={{ textAlign: 'left', padding: '6px 10px', fontWeight: '700' }}>Fecha</th>
+                  <th style={{ textAlign: 'left', padding: '6px 10px', fontWeight: '700' }}>Enviada por</th>
+                  <th style={{ textAlign: 'left', padding: '6px 10px', fontWeight: '700' }}>Título</th>
+                </tr>
+              </thead>
+              <tbody>
+                {novedades.map((nov) => {
+                  const leida = !!nov.leida
+                  return (
+                    <tr
+                      key={nov.id}
+                      onClick={() => abrirDetalle(nov)}
+                      style={{
+                        cursor: 'pointer',
+                        borderBottom: `1px solid ${t.border}`,
+                        background: leida ? t.bg : t.bgCard,
+                        opacity: leida ? 0.72 : 1,
+                        color: leida ? t.textMuted : t.text,
+                        fontWeight: leida ? '500' : '700',
+                      }}
+                    >
+                      <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', verticalAlign: 'top', width: '1%' }}>
+                        {nov.fecha ? String(nov.fecha).slice(0, 10) : '—'}
+                      </td>
+                      <td style={{ padding: '8px 10px', verticalAlign: 'top', maxWidth: '200px' }}>
+                        <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={nov.autor || ''}>
+                          {nov.autor || '—'}
+                        </span>
+                      </td>
+                      <td style={{ padding: '8px 10px', verticalAlign: 'top' }}>
+                        <span style={{ marginRight: '6px' }}>{nov.icono || '📢'}</span>
+                        {nov.titulo}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+      {detalle && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setDetalle(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 4000,
+            background: 'rgba(15,23,42,0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px',
+            boxSizing: 'border-box',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: 'min(1040px, 96vw)', width: '100%', maxHeight: '90vh', overflowY: 'auto' }}
+          >
+            <TarjetaNovedad novedad={detalle} t={t} fs={fs} delay={0} sinEntrada />
+            <div style={{ textAlign: 'right', marginTop: '8px' }}>
+              <button
+                type="button"
+                onClick={() => setDetalle(null)}
+                style={{
+                  background: t.primary,
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  padding: '8px 16px',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  fontSize: fs.base,
+                }}
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -121,7 +363,7 @@ function StatCard({ icono, valor, label, color, t, fs, delay = 0 }) {
   return (
     <div style={{
       background: t.bgCard, border: `1px solid ${t.border}`,
-      borderRadius: '10px', padding: '12px 14px', textAlign: 'center',
+      borderRadius: '10px', padding: '12px 16px', textAlign: 'center', minWidth: 0,
       transition: 'all 0.4s ease',
       transform: visible ? 'translateY(0)' : 'translateY(16px)',
       opacity: visible ? 1 : 0,
@@ -303,11 +545,11 @@ function FraseDelDia({ t, fs, usuario }) {
 }
 
 // ─── Componente principal ─────────────────────────────────────────────────────
-export default function ModuloInicio({ t, usuario, fontSize = 'normal', puedePublicarNovedades = false }) {
+export default function ModuloInicio({ t, usuario, fontSize = 'normal', puedePublicarNovedades = false, token = null }) {
   const [saludoVisible, setSaludoVisible] = useState(false)
   const [novedades, setNovedades] = useState([])
   const [novedadesCargando, setNovedadesCargando] = useState(true)
-  const fs = FS
+  const fs = useMemo(() => buildfs(fontSize), [fontSize])
 
   useEffect(() => {
     const timer = setTimeout(() => setSaludoVisible(true), 100)
@@ -317,98 +559,92 @@ export default function ModuloInicio({ t, usuario, fontSize = 'normal', puedePub
   useEffect(() => {
     let cancelled = false
     setNovedadesCargando(true)
-    fetch(`${API_BASE}/inicio/novedades`)
-      .then(r => (r.ok ? r.json() : []))
-      .then(data => {
-        if (!cancelled) setNovedades(Array.isArray(data) ? data : [])
+    const getTok = () => localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || ''
+    const headers = getTok() ? { Authorization: `Bearer ${getTok()}` } : {}
+    fetch(`${API_BASE}/inicio/novedades`, { headers })
+      .then((r) => (r.status === 401 ? [] : r.ok ? r.json() : []))
+      .then((data) => {
+        if (cancelled) return
+        const arr = Array.isArray(data) ? data : []
+        setNovedades((prev) => {
+          const prevMap = new Map((prev || []).map((n) => [n.id, !!n.leida]))
+          return arr.map((n) => ({
+            ...n,
+            leida: !!(n.leida || prevMap.get(n.id)),
+          }))
+        })
       })
-      .catch(() => { if (!cancelled) setNovedades([]) })
-      .finally(() => { if (!cancelled) setNovedadesCargando(false) })
-    return () => { cancelled = true }
+      .catch(() => {
+        if (!cancelled) setNovedades([])
+      })
+      .finally(() => {
+        if (!cancelled) setNovedadesCargando(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const hora   = new Date().getHours()
   const saludo = hora < 12 ? 'Buenos días' : hora < 18 ? 'Buenas tardes' : 'Buenas noches'
 
   return (
-    <div style={{ maxWidth: '860px', margin: '0 auto', padding: '8px 0 48px' }}>
+    <div style={{ width: '100%', maxWidth: '1540px', margin: '0 auto', padding: '8px 0 48px', boxSizing: 'border-box' }}>
 
-      {/* ── Saludo ── */}
+      {/* ── Saludo + indicadores (misma fila) ── */}
       <div style={{
+        display: 'flex', flexFlow: 'row wrap', alignItems: 'stretch', gap: '12px',
         marginBottom: '20px',
         transition: 'all 0.5s ease',
         transform: saludoVisible ? 'translateY(0)' : 'translateY(-12px)',
         opacity: saludoVisible ? 1 : 0,
       }}>
-        <div style={{
-          background: `linear-gradient(135deg, ${t.primary}18 0%, ${t.bgCard} 100%)`,
-          border: `1px solid ${t.border}`, borderRadius: '14px',
-          padding: '20px 24px', display: 'flex', alignItems: 'center', gap: '16px',
-        }}>
-          <div style={{ fontSize: '36px', lineHeight: 1 }}>👋</div>
-          <div>
-            <div style={{ fontSize: fs.titulo, fontWeight: '800', color: t.text, marginBottom: '3px' }}>
-              {saludo}, {usuario?.nombre}
-            </div>
-            <div style={{ fontSize: fs.base, color: t.textMuted }}>
-              Bienvenido a <strong style={{ color: t.primary }}>ClaraCore</strong> — plataforma de gestión de obra y control de cantidades.
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ── Frase del día ── */}
-      <FraseDelDia t={t} fs={fs} usuario={usuario} />
-
-      {/* ── Stats ── */}
-      <div style={{
-        display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
-        gap: '10px', marginBottom: '28px',
-      }}>
-        <StatCard icono="📋" valor={novedadesCargando ? '…' : novedades.length} label="Novedades"     color={t.primary} t={t} fs={fs} delay={150} />
-        <StatCard icono="🏗️" valor="SICOE"            label="Módulo activo" color="#10B981"   t={t} fs={fs} delay={200} />
-        <StatCard icono="🔐" valor="Seguro"            label="Sesión activa" color="#8B5CF6"   t={t} fs={fs} delay={250} />
-        <StatCard icono="☁️" valor="Online"            label="Servidor"      color="#F59E0B"   t={t} fs={fs} delay={300} />
-      </div>
-
-      {/* ── Novedades ── */}
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
-          <div style={{ width: '3px', height: '18px', background: t.primary, borderRadius: '2px' }} />
-          <div style={{ fontSize: fs.card, fontWeight: '800', color: t.text, letterSpacing: '0.3px' }}>
-            📢 Novedades y actualizaciones
-          </div>
+        <div style={{ flex: '1 1 300px', minWidth: 0, display: 'flex' }}>
           <div style={{
-            marginLeft: 'auto', fontSize: fs.autor, color: t.textMuted,
-            background: t.bg, border: `1px solid ${t.border}`,
-            borderRadius: '20px', padding: '2px 10px',
+            flex: 1,
+            background: `linear-gradient(135deg, ${t.primary}18 0%, ${t.bgCard} 100%)`,
+            border: `1px solid ${t.border}`, borderRadius: '14px',
+            padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px', minHeight: 0,
           }}>
-            {novedadesCargando ? '…' : `${novedades.length} ${novedades.length === 1 ? 'entrada' : 'entradas'}`}
+            <div style={{ fontSize: '32px', lineHeight: 1, flexShrink: 0 }}>👋</div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: fs.titulo, fontWeight: '800', color: t.text, marginBottom: '3px' }}>
+                {saludo}, {usuario?.nombre}
+              </div>
+              <div style={{ fontSize: fs.base, color: t.textMuted, lineHeight: 1.45 }}>
+                Bienvenido a <strong style={{ color: t.primary }}>ClaraCore</strong> — plataforma de gestión de obra y control de cantidades.
+              </div>
+            </div>
           </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-          {novedadesCargando ? (
-            <div style={{ fontSize: fs.base, color: t.textMuted, padding: '12px 0' }}>Cargando novedades…</div>
-          ) : novedades.length === 0 ? (
-            <div style={{ fontSize: fs.base, color: t.textMuted, padding: '12px 0', lineHeight: 1.55 }}>
-              {puedePublicarNovedades ? (
-                <>
-                  Aún no hay novedades publicadas. Como desarrollador o administrador puedes crearlas desde{' '}
-                  <strong style={{ color: t.text }}>⚙ Admin</strong> (barra superior) → pestaña{' '}
-                  <strong style={{ color: t.text }}>Página de inicio</strong>.
-                </>
-              ) : (
-                <>
-                  Por ahora no hay novedades. Cuando el equipo publique avisos, aparecerán aquí.
-                </>
-              )}
-            </div>
-          ) : (
-            novedades.map((nov, i) => (
-              <TarjetaNovedad key={nov.id} novedad={nov} t={t} fs={fs} delay={350 + i * 80} />
-            ))
-          )}
+        <div style={{
+          display: 'grid',
+          /* Ancho del bloque de 3 tarjetas ampliado (+15% +15% frente a 300px) → ≈397px */
+          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+          gap: '10px', flex: '0 1 397px', minWidth: 'min(100%, 291px)', alignContent: 'stretch',
+        }}>
+          <StatCard icono="🏗️" valor="SICOE" label="Módulo activo" color="#10B981" t={t} fs={fs} delay={150} />
+          <StatCard icono="🔐" valor="Seguro" label="Sesión activa" color="#8B5CF6" t={t} fs={fs} delay={200} />
+          <StatCard icono="☁️" valor="Online" label="Servidor" color="#F59E0B" t={t} fs={fs} delay={250} />
         </div>
+      </div>
+
+      {/* ── Frase del día (ancho completo) ── */}
+      <div style={{ marginBottom: '20px' }}>
+        <FraseDelDia t={t} fs={fs} usuario={usuario} />
+      </div>
+
+      {/* ── Buzón de novedades (ancho de la sección, debajo de indicadores) ── */}
+      <div style={{ marginBottom: '20px' }}>
+        <BandejaNovedadesInicio
+          novedades={novedades}
+          setNovedades={setNovedades}
+          t={t}
+          fs={fs}
+          novedadesCargando={novedadesCargando}
+          token={token}
+          puedePublicarNovedades={puedePublicarNovedades}
+        />
       </div>
 
       {/* ── Footer ── */}

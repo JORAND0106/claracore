@@ -895,8 +895,9 @@ function SeccionPermisos({ call, cargos, theme }) {
 }
 
 // ─── SECCIÓN PÁGINA DE INICIO (novedades) ─────────────────────────────────────
-function SeccionInicioNovedades({ call, theme, token }) {
+function SeccionInicioNovedades({ call, theme, token, isDeveloper, user, contratos = [] }) {
   const col = C(theme);
+  const esAdminSolo = !isDeveloper && (user?.cargo_nombre || "").toLowerCase() === "administrador";
   const emptyForm = () => ({
     titulo: "",
     resumen: "",
@@ -906,6 +907,8 @@ function SeccionInicioNovedades({ call, theme, token }) {
     icono: NOVEDAD_ICONO_POR_TIPO["actualización"],
     color: "#00B4C6",
     imagen_url: "",
+    alcance: "global",
+    contrato_id: "",
   });
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -939,6 +942,7 @@ function SeccionInicioNovedades({ call, theme, token }) {
   const abrirEditar = (row) => {
     setEditing(row.id);
     const tipoR = row.tipo || "actualización";
+    const cid = row.contrato_id;
     setForm({
       titulo: row.titulo || "",
       resumen: row.resumen || "",
@@ -948,6 +952,8 @@ function SeccionInicioNovedades({ call, theme, token }) {
       icono: row.icono || NOVEDAD_ICONO_POR_TIPO[tipoR] || "📢",
       color: row.color || "#00B4C6",
       imagen_url: row.imagen_url || "",
+      alcance: cid == null || cid === "" ? "global" : "contrato",
+      contrato_id: cid != null && cid !== "" ? String(cid) : "",
     });
     setMsg(null);
   };
@@ -962,6 +968,10 @@ function SeccionInicioNovedades({ call, theme, token }) {
       setMsg({ type: "error", text: "El título es obligatorio." });
       return;
     }
+    if (isDeveloper && form.alcance === "contrato" && !form.contrato_id) {
+      setMsg({ type: "error", text: "Elige un contrato o deja la novedad como global." });
+      return;
+    }
     setSaving(true);
     setMsg(null);
     const payload = {
@@ -974,6 +984,11 @@ function SeccionInicioNovedades({ call, theme, token }) {
       color: form.color || "#00B4C6",
       imagen_url: (form.imagen_url || "").trim() || null,
     };
+    if (isDeveloper) {
+      if (form.alcance === "global") payload.contrato_id = null;
+      else if (form.contrato_id) payload.contrato_id = parseInt(form.contrato_id, 10);
+      else payload.contrato_id = null;
+    }
     try {
       if (editing === "new") {
         await call("POST", "/admin/inicio/novedades", payload);
@@ -1070,15 +1085,38 @@ function SeccionInicioNovedades({ call, theme, token }) {
     boxSizing: "border-box",
   };
 
+  const labelAlcance = (row) => {
+    if (row.contrato_id == null || row.contrato_id === "") return "Todos los contratos";
+    const c = contratos.find((x) => String(x.id) === String(row.contrato_id));
+    return c ? `Contrato ${c.numero || row.contrato_id}` : `Contrato #${row.contrato_id}`;
+  };
+
+  const puedeEditarFila = (row) => {
+    if (isDeveloper) return true;
+    if (esAdminSolo && row.contrato_id != null) return true;
+    return false;
+  };
+
   return (
     <div>
-      <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <button type="button" onClick={abrirNueva} style={{ ...S.btn("primary") }}>
+      <div
+        style={{
+          marginBottom: 16,
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <span style={{ fontSize: 12, color: col.textSecondary, flex: "1 1 220px", lineHeight: 1.45 }}>
+          {isDeveloper
+            ? "Como Desarrollador, las novedades sin contrato se muestran en todos los contratos. El administrador del contrato publica solo para su equipo."
+            : "Las novedades que crees solo las verá tu contrato. Las globales (equipo ClaraCore) las gestiona el Desarrollador."}
+        </span>
+        <button type="button" onClick={abrirNueva} style={{ ...S.btn("primary"), flexShrink: 0, padding: "8px 14px", fontSize: 13 }}>
           ＋ Nueva novedad
         </button>
-        <span style={{ fontSize: 12, color: col.textSecondary }}>
-          Visible para todos los usuarios en el módulo Inicio. Requiere migración SQL <code style={{ fontSize: 11 }}>backend/sql/inicio_novedades.sql</code> en Supabase.
-        </span>
       </div>
       {msg && (
         <div
@@ -1109,6 +1147,38 @@ function SeccionInicioNovedades({ call, theme, token }) {
               <div style={labelStyle}>Título *</div>
               <input style={inputStyle} value={form.titulo} onChange={(e) => setForm((p) => ({ ...p, titulo: e.target.value }))} />
             </div>
+            {isDeveloper && (
+              <div style={{ gridColumn: "1 / -1" }}>
+                <div style={labelStyle}>Alcance de publicación</div>
+                <select
+                  style={inputStyle}
+                  value={form.alcance}
+                  onChange={(e) => setForm((p) => ({ ...p, alcance: e.target.value, contrato_id: e.target.value === "global" ? "" : p.contrato_id }))}
+                >
+                  <option value="global">Todos los contratos (novedad global)</option>
+                  <option value="contrato">Solo un contrato</option>
+                </select>
+                {form.alcance === "contrato" && (
+                  <select
+                    style={{ ...inputStyle, marginTop: 8 }}
+                    value={form.contrato_id}
+                    onChange={(e) => setForm((p) => ({ ...p, contrato_id: e.target.value }))}
+                  >
+                    <option value="">— Elegir contrato —</option>
+                    {contratos.map((c) => (
+                      <option key={c.id} value={String(c.id)}>
+                        {c.numero || c.id}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
+            {!isDeveloper && esAdminSolo && user?.contrato_id && (
+              <div style={{ gridColumn: "1 / -1", fontSize: 12, color: col.textSecondary, padding: "6px 0" }}>
+                Se publicará para usuarios de <strong style={{ color: col.textTable }}>tu contrato asignado</strong> (administrador de contrato).
+              </div>
+            )}
             <div style={{ gridColumn: "1 / -1" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
                 <div style={labelStyle}>Resumen</div>
@@ -1266,6 +1336,7 @@ function SeccionInicioNovedades({ call, theme, token }) {
                 <th style={S.th(theme)}>Fecha (aviso)</th>
                 <th style={S.th(theme)}>Título</th>
                 <th style={S.th(theme)}>Tipo</th>
+                <th style={S.th(theme)}>Alcance</th>
                 <th style={{ ...S.th(theme), textAlign: "right" }}>Acciones</th>
               </tr>
             </thead>
@@ -1276,17 +1347,24 @@ function SeccionInicioNovedades({ call, theme, token }) {
                   <td style={S.td(theme)}>{row.fecha ? String(row.fecha).slice(0, 10) : "—"}</td>
                   <td style={S.td(theme)}>{row.titulo}</td>
                   <td style={S.td(theme)}>{row.tipo}</td>
+                  <td style={S.td(theme)}>{labelAlcance(row)}</td>
                   <td style={{ ...S.td(theme), textAlign: "right", whiteSpace: "nowrap" }}>
-                    <button type="button" style={{ ...S.btn("ghost"), fontSize: 12, padding: "4px 10px" }} onClick={() => abrirEditar(row)}>
-                      Editar
-                    </button>
-                    <button
-                      type="button"
-                      style={{ ...S.btn("ghost"), fontSize: 12, padding: "4px 10px", color: "#ef4444", borderColor: "rgba(239,68,68,0.35)" }}
-                      onClick={() => eliminar(row.id)}
-                    >
-                      Eliminar
-                    </button>
+                    {puedeEditarFila(row) ? (
+                      <>
+                        <button type="button" style={{ ...S.btn("ghost"), fontSize: 12, padding: "4px 10px" }} onClick={() => abrirEditar(row)}>
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          style={{ ...S.btn("ghost"), fontSize: 12, padding: "4px 10px", color: "#ef4444", borderColor: "rgba(239,68,68,0.35)" }}
+                          onClick={() => eliminar(row.id)}
+                        >
+                          Eliminar
+                        </button>
+                      </>
+                    ) : (
+                      <span style={{ fontSize: 11, color: col.textSecondary }}>Solo Desarrollador</span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -5075,7 +5153,16 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
             {tab === "subcontratistas"  && <SeccionSubcontratistas call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, validar: true, exportar: true } : subPerms} theme={activeTheme} />}
             {tab === "actas"            && <SeccionActasRpo call={call} user={user} contratos={contratos} theme={activeTheme} />}
             {tab === "resets"           && <SeccionResets    call={call} theme={activeTheme} />}
-            {tab === "inicio"           && <SeccionInicioNovedades call={call} theme={activeTheme} token={token} />}
+            {tab === "inicio"           && (
+              <SeccionInicioNovedades
+                call={call}
+                theme={activeTheme}
+                token={token}
+                isDeveloper={isDeveloper}
+                user={user}
+                contratos={contratos}
+              />
+            )}
               {tab === "logs"      && <SeccionLogs      call={call} theme={activeTheme} />}
           </div>
         </div>
