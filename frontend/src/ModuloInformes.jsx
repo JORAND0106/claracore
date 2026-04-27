@@ -7,6 +7,25 @@ const FS = {
   large:  { base: 20, sub: 17, title: 30, section: 15 },
 }
 
+const _fmtCopEs = (n) =>
+  n == null || n === '' || (typeof n === 'number' && !Number.isFinite(n))
+    ? '—'
+    : new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Number(n))
+const _fmtPctAiuIva = (frac) => {
+  if (frac == null || frac === '' || !Number.isFinite(Number(frac))) return '—'
+  const f = Number(frac)
+  const p = f > 1 ? f : f * 100
+  return `${p.toLocaleString('es-CO', { maximumFractionDigits: 4, useGrouping: false })}%`
+}
+function _etiquetaActaCobro(id, actas) {
+  if (id == null) return '—'
+  const a = (actas || []).find((x) => String(x.id) === String(id))
+  if (!a) return '—'
+  const fi = a.fecha_inicio ? String(a.fecha_inicio).slice(0, 10) : '—'
+  const ff = a.fecha_fin ? String(a.fecha_fin).slice(0, 10) : '—'
+  return `RPO ${a.numero_rpo ?? a.consecutivo ?? '—'} — del ${fi} al ${ff} (cons. ${a.consecutivo ?? '—'})`
+}
+
 const _ccdCell = { border: '1px solid #9ca3af', padding: '2px 3px', fontSize: '7px', textAlign: 'center' }
 
 /** Excel — hoja verde con X / bloque tipo hoja de cálculo. */
@@ -274,7 +293,114 @@ function CcdLivePreviewMemoria({ es }) {
   )
 }
 
-export default function ModuloInformes({ t, usuario, token, s, fontSize = 'normal' }) {
+/** Colores sugeridos por código CCD; incluye claves de matriz de gerencia (CC-GER-001). */
+function estiloDefectoCcd(cod) {
+  if (typeof cod !== 'string' || !cod) {
+    return {
+      section_bar_bg: '#e5e7eb',
+      section_bar_text: '#111827',
+      thead_bg: '#f3f4f6',
+      row_even_bg: '#f8fafc',
+      row_odd_bg: '#ffffff',
+      subtotal_bg: '#e5e7eb',
+    }
+  }
+  if (cod.endsWith('-001')) {
+    const base = {
+      section_bar_bg: '#e5e7eb',
+      section_bar_text: '#111827',
+      thead_bg: '#e8e8e8',
+      row_even_bg: '#ffffff',
+      row_odd_bg: '#f9fafb',
+      subtotal_bg: '#dbeafe',
+      ...((cod === 'CC-SEM-001' || cod === 'CC-MES-001' || cod === 'CC-GER-001')
+        ? { capitulo_subtotal_bg: '#93c5fd' }
+        : {}),
+    }
+    if (cod === 'CC-GER-001') {
+      return {
+        ...base,
+        ger_titulo_bloque_bg: '#bfdbfe',
+        ger_subtotal_obra_con_aiu_bg: '#e0f2fe',
+        ger_fila_tasa_aiu_bg: '#dbeafe',
+        ger_cdirecto_mas_aiu_bg: '#c7d8f0',
+        ger_filas_post_cdu_bg: '#e8edf5',
+        ger_vtot_obra_ajustes_bg: '#a8bfdb',
+        ger_subtotal_obra_con_iva_bg: '#e0f2fe',
+        ger_fila_tasa_iva_bg: '#e8eeff',
+        ger_cdirecto_mas_iva_bg: '#d4dcf5',
+        ger_vtot_obra_iva_bg: '#c3d0f0',
+        ger_valor_total_acta_bg: '#93c5fd',
+      }
+    }
+    return base
+  }
+  return {
+    section_bar_bg: '#e5e7eb',
+    section_bar_text: '#111827',
+    thead_bg: '#f3f4f6',
+    row_even_bg: '#f8fafc',
+    row_odd_bg: '#ffffff',
+    subtotal_bg: '#e5e7eb',
+  }
+}
+
+function CcdLivePreviewInformeGerencia({ es }) {
+  const bd = '1px solid #9ca3af'
+  const row = (label, bg) => (
+    <div
+      key={label}
+      style={{
+        padding: '4px 6px',
+        fontSize: '6.5px',
+        fontWeight: '800',
+        background: bg,
+        color: '#0f172a',
+        borderBottom: bd,
+      }}
+    >
+      {label}
+    </div>
+  )
+  return (
+    <div
+      style={{
+        borderRadius: '10px',
+        border: bd,
+        overflow: 'hidden',
+        background: '#fff',
+        boxShadow: '0 4px 14px rgba(15,23,42,0.08)',
+        textTransform: 'uppercase',
+        letterSpacing: '0.02em',
+      }}
+    >
+      <div style={{ padding: '5px 8px', fontSize: '8px', fontWeight: '700', color: '#475569', background: '#f8fafc', borderBottom: bd }}>
+        Resumen de filas · CC-GER-001
+      </div>
+      {row('Subtotal obra con AIU', es.ger_subtotal_obra_con_aiu_bg || es.subtotal_bg)}
+      {row('Tasa AIU', es.ger_fila_tasa_aiu_bg || '#dbeafe')}
+      {row('Costo directo + AIU', es.ger_cdirecto_mas_aiu_bg || '#c7d8f0')}
+      {row('… complementos, adic., ajuste', es.ger_filas_post_cdu_bg || '#e8edf5')}
+      {row('V. total obra c/ AIU y ajustes', es.ger_vtot_obra_ajustes_bg || '#a8bfdb')}
+      {row('Subtotal obra con IVA', es.ger_subtotal_obra_con_iva_bg || es.subtotal_bg)}
+      {row('Tasa IVA', es.ger_fila_tasa_iva_bg || '#e8eeff')}
+      {row('V. total obra c/ IVA (sin fila intermedia duplicada)', es.ger_vtot_obra_iva_bg || '#c3d0f0')}
+      {row('Valor total acta (pie)', es.ger_valor_total_acta_bg || '#93c5fd')}
+    </div>
+  )
+}
+
+export default function ModuloInformes({
+  t,
+  usuario,
+  token,
+  s,
+  fontSize = 'normal',
+  /** Permisos matriz «Informes CCD» (Panel admin). Desarrollador/admin: siempre en App. */
+  puedeEditarCcd = false,
+  puedeValidarCcd = false,
+  puedeExportarCcd = false,
+}) {
   const getAuthToken = () =>
     token ||
     localStorage.getItem('cc_token') ||
@@ -416,7 +542,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   const [formatoSem002Abierto, setFormatoSem002Abierto] = useState(false)
   /** CC-SEM-002: mismo patrón que CC-SUB-002. */
   const [ccSem002ListadoItemsAbierto, setCcSem002ListadoItemsAbierto] = useState(false)
-  /** Tarjeta «Formatos Mensuales» (acta RPO): mismo patrón; cerrada por defecto. */
+  /** Preacta mensual CC-MES (acta RPO); cerrada por defecto. */
   const [formatosMesAbierto, setFormatosMesAbierto] = useState(false)
   /** Formatos de entidades contratantes (p. ej. IDU FO-EO-04); cerrada por defecto. */
   const [formatosEntExtAbierto, setFormatosEntExtAbierto] = useState(false)
@@ -444,6 +570,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     'CC-SEM-002': null,
     'CC-MES-001': null,
     'CC-MES-002': null,
+    'CC-GER-001': null,
   })
   const [registrarFirmaBusy, setRegistrarFirmaBusy] = useState(false)
   // null | { fase:'cargando', tipo } | { fase:'ok', tipo, datos } | { fase:'error', tipo, mensaje }
@@ -452,6 +579,11 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   const [actasConc, setActasConc] = useState([])
   const [semanaConcId, setSemanaConcId] = useState('')
   const [actaConcId, setActaConcId] = useState('')
+  /** CC-GER-001: acta presente = siempre la última RPO (mismo criterio que /json/informe-gerencia-matriz). */
+  const [gerAutoActaId, setGerAutoActaId] = useState(null)
+  const [gerMatDato, setGerMatDato] = useState(null)
+  const [formatosInformeGerAbierto, setFormatosInformeGerAbierto] = useState(false)
+  const [formatoGer001Abierto, setFormatoGer001Abierto] = useState(false)
   /** Descarga PDF conciliación (CC-SEM / CC-MES): independiente del registro de firma. */
   const [concPdfBusy, setConcPdfBusy] = useState(false)
   /** null o código de formato mientras corre POST registrar-firma (un botón no bloquea al otro). */
@@ -473,6 +605,16 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
       : []),
     ...biblioCcdEntidadesExternas.map((fmt) => ({ _tipo: 'fmt', _key: `fmt-${fmt.codigo}`, fmt })),
   ]
+
+  const subCcd001Vis =
+    !esPerfilInterventoria ||
+    biblioCcd.length === 0 ||
+    biblioCcdVisible.some((f) => f.codigo === 'CC-SUB-001')
+  const subCcd002Vis =
+    !esPerfilInterventoria ||
+    biblioCcd.length === 0 ||
+    biblioCcdVisible.some((f) => f.codigo === 'CC-SUB-002')
+  const mostrarBloqueFormatosSub = subCcd001Vis || subCcd002Vis
 
   const subSel   = subs.find(s => String(s.id) === subId)   || null
   const corteSel = cortes.find(c => String(c.id) === corteId) || null
@@ -497,6 +639,12 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     semanasConcFetchRef.current = null
     setCargandoSub(true)
     setError(null)
+    const firmantesP = puedeEditarCcd
+      ? fetchConFallback(`/informes/${contratoId}/ccd/firmantes-candidatos`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        }).then((r) => (r.ok ? r.json() : []))
+      : Promise.resolve([])
+
     Promise.all([
       fetchConFallback(`/informes/${contratoId}/subcontratistas`, {
         headers: { Authorization: `Bearer ${authToken}` },
@@ -504,9 +652,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
       fetchConFallback(`/informes/${contratoId}/ccd/biblioteca`, {
         headers: { Authorization: `Bearer ${authToken}` },
       }).then((r) => (r.ok ? r.json() : [])),
-      fetchConFallback(`/informes/${contratoId}/ccd/firmantes-candidatos`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      }).then((r) => (r.ok ? r.json() : [])),
+      firmantesP,
       fetchConFallback(`/informes/${contratoId}/ccd/actas-rpo`, {
         headers: { Authorization: `Bearer ${authToken}` },
       }).then((r) => (r.ok ? r.json() : [])),
@@ -527,27 +673,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
           aprobo_nombre: '',
           aprobo_cargo: '',
           aprobo_usuario_id: null,
-          estilo_pdf:
-            typeof cod === 'string' && cod.endsWith('-001')
-              ? {
-                  section_bar_bg: '#e5e7eb',
-                  section_bar_text: '#111827',
-                  thead_bg: '#e8e8e8',
-                  row_even_bg: '#ffffff',
-                  row_odd_bg: '#f9fafb',
-                  subtotal_bg: '#dbeafe',
-                  ...(cod === 'CC-SEM-001' || cod === 'CC-MES-001'
-                    ? { capitulo_subtotal_bg: '#93c5fd' }
-                    : {}),
-                }
-              : {
-                  section_bar_bg: '#e5e7eb',
-                  section_bar_text: '#111827',
-                  thead_bg: '#f3f4f6',
-                  row_even_bg: '#f8fafc',
-                  row_odd_bg: '#ffffff',
-                  subtotal_bg: '#e5e7eb',
-                },
+          estilo_pdf: estiloDefectoCcd(cod),
         })
         setCfgFirmaCcd((prev) => {
           const next = { ...prev }
@@ -582,7 +708,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
         setActasConc([])
       })
       .finally(() => setCargandoSub(false))
-  }, [contratoId])
+  }, [contratoId, puedeEditarCcd])
 
   const ccdExpandedStorageKey = contratoId != null ? `ccd_biblio_expanded_v2_${contratoId}` : null
 
@@ -661,6 +787,10 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
 
   function toggleFormatosMes() {
     setFormatosMesAbierto((prev) => !prev)
+  }
+
+  function toggleFormatosInformeGer() {
+    setFormatosInformeGerAbierto((prev) => !prev)
   }
 
   useEffect(() => {
@@ -824,6 +954,82 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
       cancelled = true
     }
   }, [contratoId, actaConcId])
+
+  useEffect(() => {
+    if (contratoId == null || contratoId === '') {
+      setFirmasCcd((prev) => ({ ...prev, 'CC-GER-001': null }))
+      return
+    }
+    const raw = gerAutoActaId
+    if (!raw) {
+      setFirmasCcd((prev) => ({ ...prev, 'CC-GER-001': null }))
+      return
+    }
+    const aid = parseInt(String(raw), 10)
+    if (!Number.isFinite(aid)) {
+      setFirmasCcd((prev) => ({ ...prev, 'CC-GER-001': null }))
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) return
+    let cancelled = false
+    const cod = 'CC-GER-001'
+    fetchConFallback(
+      `/informes/${contratoId}/ccd/contexto/acta_rpo/${aid}/firmas-registradas/${encodeURIComponent(cod)}`,
+      { headers: { Authorization: `Bearer ${authToken}` } }
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled) return
+        setFirmasCcd((prev) => ({ ...prev, 'CC-GER-001': data }))
+      })
+      .catch(() => {
+        if (!cancelled) setFirmasCcd((prev) => ({ ...prev, 'CC-GER-001': null }))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [contratoId, gerAutoActaId])
+
+  useEffect(() => {
+    if (contratoId == null || contratoId === '') {
+      setGerAutoActaId(null)
+      setGerMatDato(null)
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setGerAutoActaId(null)
+      setGerMatDato(null)
+      return
+    }
+    let cancelled = false
+    fetchConFallback(`/informes/${contratoId}/json/informe-gerencia-matriz`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled) return
+        if (!d) {
+          setGerMatDato(null)
+          setGerAutoActaId(null)
+          return
+        }
+        setGerMatDato(d)
+        const id = d?.acta_presente?.id
+        if (id != null) setGerAutoActaId(String(id))
+        else setGerAutoActaId(null)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setGerAutoActaId(null)
+          setGerMatDato(null)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [contratoId])
 
   useEffect(() => {
     if (!contratoId || !semanaConcId || !formatosSemAbierto) {
@@ -1030,6 +1236,10 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
 
   /** Registra en el servidor la URL de firma del perfil para Elaboró o Revisó (según biblioteca CCD). */
   async function registrarMiFirmaCcd(formatoCodigo) {
+    if (!puedeValidarCcd) {
+      setError('No tienes permiso para registrar firmas en formatos (acción Validar en Informes CCD).')
+      return
+    }
     const authToken = getAuthToken()
     if (!authToken) {
       setError('Sesion no autenticada.')
@@ -1316,6 +1526,58 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     }
   }
 
+  function rutaInformeGerenciaPdf(conSello) {
+    const base = `/informes/${contratoId}/pdf/cc-ger-001`
+    return conSello ? rutaPdfConcConSello(base) : base
+  }
+
+  async function abrirVistaPreviaInformeGerencia() {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '') {
+      setVistaPrevia({ fase: 'error', tipo: 'corte-ger', mensaje: 'Sin contrato.' })
+      return
+    }
+    if (!gerAutoActaId) {
+      setVistaPrevia({
+        fase: 'error',
+        tipo: 'corte-ger',
+        mensaje: 'Cargando acta (última RPO) o sin actas en el contrato. Espera o revisa SICOE.',
+      })
+      return
+    }
+    setVistaPrevia((prev) => {
+      if (prev?.pdfUrl) {
+        try {
+          URL.revokeObjectURL(prev.pdfUrl)
+        } catch {
+          /* noop */
+        }
+      }
+      return { fase: 'cargando', tipo: 'corte-ger' }
+    })
+    setError(null)
+    const opts = { headers: { Authorization: `Bearer ${authToken}` } }
+    const pathPdf = rutaInformeGerenciaPdf(false)
+    try {
+      const r = await fetchConFallback(pathPdf, opts)
+      if (!r || !r.ok) {
+        const msg = r ? await leerErrorRespuesta(r) : 'Sin respuesta'
+        setVistaPrevia({ fase: 'error', tipo: 'corte-ger', mensaje: msg })
+        return
+      }
+      const blob = await r.blob()
+      const pdfUrl = URL.createObjectURL(blob)
+      setVistaPrevia({ fase: 'ok', tipo: 'corte-ger-pdf', pdfUrl })
+    } catch (e) {
+      const msg = String(e?.message || e)
+      setVistaPrevia({ fase: 'error', tipo: 'corte-ger', mensaje: msg })
+    }
+  }
+
   async function abrirVistaPreviaMemoriaMensual(itemNumero) {
     const authToken = getAuthToken()
     if (!authToken) {
@@ -1410,6 +1672,10 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   }
 
   async function registrarFirmaConc(formatoCodigo, contextoTipo, contextoId) {
+    if (!puedeValidarCcd) {
+      setError('No tienes permiso para registrar firmas en formatos (acción Validar en Informes CCD).')
+      return
+    }
     const authToken = getAuthToken()
     if (!authToken) {
       setError('Sesion no autenticada.')
@@ -1452,6 +1718,10 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   }
 
   async function descargarExcelMemoriaCorteCompleto() {
+    if (!puedeExportarCcd) {
+      setError('No tienes permiso para exportar a Excel (acción Exportar en Informes CCD).')
+      return
+    }
     const authToken = getAuthToken()
     if (!authToken) {
       setError('Sesion no autenticada.')
@@ -1490,6 +1760,10 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   }
 
   async function descargarExcelMemoriaItem(itemNumero) {
+    if (!puedeExportarCcd) {
+      setError('No tienes permiso para exportar a Excel (acción Exportar en Informes CCD).')
+      return
+    }
     const authToken = getAuthToken()
     if (!authToken) {
       setError('Sesion no autenticada.')
@@ -1529,6 +1803,10 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   }
 
   async function descargarExcelCorteSubcontratista() {
+    if (!puedeExportarCcd) {
+      setError('No tienes permiso para exportar a Excel (acción Exportar en Informes CCD).')
+      return
+    }
     const authToken = getAuthToken()
     if (!authToken) {
       setError('Sesion no autenticada.')
@@ -1567,6 +1845,10 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   }
 
   async function descargarExcelCcSem001() {
+    if (!puedeExportarCcd) {
+      setError('No tienes permiso para exportar a Excel (acción Exportar en Informes CCD).')
+      return
+    }
     const authToken = getAuthToken()
     if (!authToken) {
       setError('Sesion no autenticada.')
@@ -1605,6 +1887,10 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   }
 
   async function descargarExcelCcSem002Completo() {
+    if (!puedeExportarCcd) {
+      setError('No tienes permiso para exportar a Excel (acción Exportar en Informes CCD).')
+      return
+    }
     const authToken = getAuthToken()
     if (!authToken) {
       setError('Sesion no autenticada.')
@@ -1643,6 +1929,10 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   }
 
   async function descargarExcelCcSem002Item(itemNumero) {
+    if (!puedeExportarCcd) {
+      setError('No tienes permiso para exportar a Excel (acción Exportar en Informes CCD).')
+      return
+    }
     const authToken = getAuthToken()
     if (!authToken) {
       setError('Sesion no autenticada.')
@@ -1854,13 +2144,6 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     textAlign: 'left',
     font: 'inherit',
   }
-  const roadmapCard = {
-    border: `1px dashed ${t.border}`,
-    borderRadius: '10px',
-    padding: '12px',
-    background: t.bg
-  }
-
   function aplicarFirmante(campo, usuarioId, codigoFormato) {
     const u = firmantesCcd.find((x) => String(x.id) === String(usuarioId))
     setCfgFirmaCcd((p) => {
@@ -1987,6 +2270,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
   }
 
   async function guardarCfgFirmaCcd(codigoFormato) {
+    if (!puedeEditarCcd) return
     const authToken = getAuthToken()
     if (!authToken || !contratoId) return
     const body = cfgFirmaCcd[codigoFormato]
@@ -2011,33 +2295,12 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
     }
   }
 
-  function estiloDefectoPorCodigo(cod) {
-    return typeof cod === 'string' && cod.endsWith('-001')
-      ? {
-          section_bar_bg: '#e5e7eb',
-          section_bar_text: '#111827',
-          thead_bg: '#e8e8e8',
-          row_even_bg: '#ffffff',
-          row_odd_bg: '#f9fafb',
-          subtotal_bg: '#dbeafe',
-          ...(cod === 'CC-SEM-001' || cod === 'CC-MES-001'
-            ? { capitulo_subtotal_bg: '#93c5fd' }
-            : {}),
-        }
-      : {
-          section_bar_bg: '#e5e7eb',
-          section_bar_text: '#111827',
-          thead_bg: '#f3f4f6',
-          row_even_bg: '#f8fafc',
-          row_odd_bg: '#ffffff',
-          subtotal_bg: '#e5e7eb',
-        }
-  }
+  const estiloDefectoPorCodigo = estiloDefectoCcd
 
   function setEstiloCampo(codigoFormato, campo, valor) {
     setCfgFirmaCcd((p) => {
       const cur = p[codigoFormato] || {}
-      const est = { ...(cur.estilo_pdf || estiloDefectoPorCodigo(codigoFormato)), [campo]: valor }
+      const est = { ...estiloDefectoCcd(codigoFormato), ...(cur.estilo_pdf || {}), [campo]: valor }
       return { ...p, [codigoFormato]: { ...cur, estilo_pdf: est } }
     })
   }
@@ -2209,9 +2472,12 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                 aprobo_usuario_id: null,
                 estilo_pdf: estiloDefectoPorCodigo(fmt.codigo),
               }
-              const puedeEditarSlotsConfig = (fmt.slots_firma || []).some((s) => s.origen === 'configuracion')
+              const puedeEditarSlotsConfig =
+                puedeEditarCcd && (fmt.slots_firma || []).some((s) => s.origen === 'configuracion')
               const puedePersonalizarEstiloPdf =
-                typeof fmt.codigo === 'string' && (fmt.codigo.endsWith('-001') || fmt.codigo.endsWith('-002'))
+                puedeEditarCcd &&
+                typeof fmt.codigo === 'string' &&
+                (fmt.codigo.endsWith('-001') || fmt.codigo.endsWith('-002'))
               return (
               <div
                 key={fmt.codigo}
@@ -2459,45 +2725,93 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                   </div>
                 )}
                 {puedePersonalizarEstiloPdf && (() => {
-                  const esPrev = cfgF.estilo_pdf || estiloDefectoPorCodigo(fmt.codigo)
+                  const esPrev = { ...estiloDefectoCcd(fmt.codigo), ...(cfgF.estilo_pdf || {}) }
                   const tituloPersonal =
-                    fmt.codigo.endsWith('-002') ? 'Personaliza tu memoria' : 'Personaliza tu informe de corte'
+                    fmt.codigo === 'CC-GER-001'
+                      ? 'Personaliza el informe de gerencia (CC-GER-001)'
+                      : fmt.codigo.endsWith('-002')
+                        ? 'Personaliza tu memoria'
+                        : 'Personaliza tu informe de corte'
                   const subtituloPersonal =
-                    'Aquí va la paleta de tu contrato. A la derecha ves una vista previa que cambia al instante: prueba combinaciones sin abrir y cerrar el PDF.'
+                    fmt.codigo === 'CC-GER-001'
+                      ? 'Paleta del PDF horizontal (matriz 4 columnas): capítulos, totales con AIU, totales con IVA y el valor total del acta.'
+                      : 'Aquí va la paleta de tu contrato. A la derecha ves una vista previa que cambia al instante: prueba combinaciones sin abrir y cerrar el PDF.'
+                  const camposBase001 = [
+                    {
+                      k: 'thead_bg',
+                      title: 'Títulos de columna',
+                      hint: 'Fila donde aparecen los encabezados (capítulo, acta vigente, aprobados, pendientes…).',
+                    },
+                    {
+                      k: 'row_even_bg',
+                      title: 'Cuerpo · filas pares',
+                      hint: 'Líneas 2, 4, 6… del listado SICOE',
+                    },
+                    {
+                      k: 'row_odd_bg',
+                      title: 'Cuerpo · filas impares',
+                      hint: 'Líneas 1, 3, 5… (se alternan con las pares)',
+                    },
+                    {
+                      k: 'capitulo_subtotal_bg',
+                      title: 'Subtotal por capítulo',
+                      hint: 'Fila al cerrar cada capítulo (solo en formatos con subtotal por capítulo; en informe de gerencia ayuda a contrastar bloques de dinero).',
+                    },
+                    {
+                      k: 'subtotal_bg',
+                      title: 'Acento de tabla (referencia general)',
+                      hint: 'Sigue disponible; en CC-GER-001 los totales con nombre propio se configuran con las claves de abajo.',
+                    },
+                  ]
+                  const camposGer001 = [
+                    { k: 'ger_titulo_bloque_bg', title: 'Banda título de bloque', hint: 'Fila «Obra…» o «Ensayos…»' },
+                    { k: 'ger_subtotal_obra_con_aiu_bg', title: 'Subtotal Obra con AIU', hint: 'Suma de costo directo del bloque obra' },
+                    { k: 'ger_fila_tasa_aiu_bg', title: 'Fila tasa AIU', hint: 'Monto y % AIU pactado' },
+                    { k: 'ger_cdirecto_mas_aiu_bg', title: 'Costo Directo + AIU', hint: 'Directo con AIU' },
+                    { k: 'ger_filas_post_cdu_bg', title: 'Complementos y ajuste', hint: 'Componentes, adicionales y fila Ajustes' },
+                    { k: 'ger_vtot_obra_ajustes_bg', title: 'VALOR TOTAL OBRA CON AIU Y AJUSTES', hint: 'Total del bloque obra' },
+                    { k: 'ger_subtotal_obra_con_iva_bg', title: 'Subtotal Obra con IVA', hint: 'Suma de costo directo (ensayos) antes de IVA' },
+                    { k: 'ger_fila_tasa_iva_bg', title: 'Fila tasa IVA', hint: 'Monto y % IVA' },
+                    { k: 'ger_cdirecto_mas_iva_bg', title: 'Costo Directo + IVA', hint: 'Directo + IVA' },
+                    { k: 'ger_vtot_obra_iva_bg', title: 'VALOR TOTAL OBRA CON IVA', hint: 'Cierre de bloque ensayos' },
+                    { k: 'ger_valor_total_acta_bg', title: 'VALOR TOTAL ACTA', hint: 'Fila final: suma de totales de obra (con ajustes) y ensayos' },
+                  ]
                   const campos =
-                    fmt.codigo.endsWith('-001')
-                      ? [
-                          {
-                            k: 'thead_bg',
-                            title: 'Títulos de columna',
-                            hint: 'Fila donde aparecen CAPÍTULO, ÍTEM, DESCRIPCIÓN, cantidades…',
-                          },
-                          {
-                            k: 'row_even_bg',
-                            title: 'Cuerpo · filas pares',
-                            hint: 'Líneas 2, 4, 6… del listado de ítems aprobados',
-                          },
-                          {
-                            k: 'row_odd_bg',
-                            title: 'Cuerpo · filas impares',
-                            hint: 'Líneas 1, 3, 5… (se alternan con las pares)',
-                          },
-                          ...(fmt.codigo === 'CC-SEM-001' || fmt.codigo === 'CC-MES-001'
-                            ? [
-                                {
-                                  k: 'capitulo_subtotal_bg',
-                                  title: 'Subtotal por capítulo',
-                                  hint: 'Fila resaltada al cerrar cada capítulo (solo costo directo)',
-                                },
-                              ]
-                            : []),
-                          {
-                            k: 'subtotal_bg',
-                            title: 'Fila SUB TOTAL',
-                            hint: 'La banda del subtotal en dinero al pie de la tabla',
-                          },
-                        ]
-                      : [
+                    fmt.codigo === 'CC-GER-001'
+                      ? [...camposBase001, ...camposGer001]
+                      : fmt.codigo.endsWith('-001')
+                        ? [
+                            {
+                              k: 'thead_bg',
+                              title: 'Títulos de columna',
+                              hint: 'Fila donde aparecen CAPÍTULO, ÍTEM, DESCRIPCIÓN, cantidades…',
+                            },
+                            {
+                              k: 'row_even_bg',
+                              title: 'Cuerpo · filas pares',
+                              hint: 'Líneas 2, 4, 6… del listado de ítems aprobados',
+                            },
+                            {
+                              k: 'row_odd_bg',
+                              title: 'Cuerpo · filas impares',
+                              hint: 'Líneas 1, 3, 5… (se alternan con las pares)',
+                            },
+                            ...(fmt.codigo === 'CC-SEM-001' || fmt.codigo === 'CC-MES-001'
+                              ? [
+                                  {
+                                    k: 'capitulo_subtotal_bg',
+                                    title: 'Subtotal por capítulo',
+                                    hint: 'Fila resaltada al cerrar cada capítulo (solo costo directo)',
+                                  },
+                                ]
+                              : []),
+                            {
+                              k: 'subtotal_bg',
+                              title: 'Fila SUB TOTAL',
+                              hint: 'La banda del subtotal en dinero al pie de la tabla',
+                            },
+                          ]
+                        : [
                           {
                             k: 'section_bar_bg',
                             title: 'Franja del bloque',
@@ -2618,7 +2932,9 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                         <div style={{ fontSize: '9px', color: t.textMuted, marginBottom: '8px', lineHeight: 1.35 }}>
                           Aproximación del PDF; los márgenes y tipografías finales pueden variar un poco al imprimir.
                         </div>
-                        {fmt.codigo.endsWith('-001') ? (
+                        {fmt.codigo === 'CC-GER-001' ? (
+                          <CcdLivePreviewInformeGerencia es={esPrev} />
+                        ) : fmt.codigo.endsWith('-001') ? (
                           <CcdLivePreviewCorte es={esPrev} />
                         ) : (
                           <CcdLivePreviewMemoria es={esPrev} />
@@ -2672,6 +2988,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
         </div>
       )}
 
+      {mostrarBloqueFormatosSub && (
       <div style={cardFormatosSub}>
         <button
           type="button"
@@ -2775,6 +3092,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
             }}
           >
             {/* Plantilla 1: informe de corte (replicable para nuevos formatos) */}
+            {subCcd001Vis && (
             <div style={tarjetaFormato}>
               <button
                 type="button"
@@ -2870,6 +3188,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                           ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                           : <IconoPdfSello size={ui.iconSvg} />}
                       </button>
+                      {puedeExportarCcd && (
                       <button
                         type="button"
                         style={btnCcdToolbar(!!excelBusy, 'excel')}
@@ -2882,6 +3201,8 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                           ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                           : <IconoDescargaExcel size={ui.iconSvg} />}
                       </button>
+                      )}
+                      {puedeValidarCcd && (
                       <button
                         type="button"
                         style={btnCcdToolbar(registrarFirmaBusy, 'firma')}
@@ -2894,13 +3215,16 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                           ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                           : <IconoFirmaRegistrar size={ui.iconSvg} />}
                       </button>
+                      )}
                     </div>
                   )}
                 </div>
               )}
             </div>
+            )}
 
             {/* Plantilla 2: memorias por ítem */}
+            {subCcd002Vis && (
             <div style={tarjetaFormato}>
               <button
                 type="button"
@@ -2980,6 +3304,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                           </>
                         )}
                         <span style={{ flex: 1, minWidth: 4 }} aria-hidden />
+                        {puedeValidarCcd && (
                         <button
                           type="button"
                           style={btnCcdToolbar(registrarFirmaBusy, 'firma')}
@@ -2992,6 +3317,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                             ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                             : <IconoFirmaRegistrar size={ui.iconSvg} />}
                         </button>
+                        )}
                       </div>
 
                       <div style={{ marginBottom: '8px' }}>
@@ -3066,6 +3392,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                               ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                               : <IconoVistaPrevia size={ui.iconSvg} />}
                           </button>
+                          {puedeExportarCcd && (
                           <button
                             type="button"
                             style={btnCcdToolbar(!!excelBusy, 'excel')}
@@ -3078,6 +3405,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                               ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                               : <IconoDescargaExcel size={ui.iconSvg} />}
                           </button>
+                          )}
                         </div>
                       </div>
                       {items.map((item) => {
@@ -3109,6 +3437,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                                   ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                                   : <IconoVistaPrevia size={ui.iconSvg} />}
                               </button>
+                              {puedeExportarCcd && (
                               <button
                                 type="button"
                                 style={btnCcdToolbar(!!excelBusy, 'excel')}
@@ -3121,6 +3450,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                                   ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                                   : <IconoDescargaExcel size={ui.iconSvg} />}
                               </button>
+                              )}
                             </div>
                           </div>
                         )
@@ -3132,11 +3462,13 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                 </div>
               )}
             </div>
+            )}
           </div>
         )}
         </>
         )}
       </div>
+      )}
 
       <div style={{ ...cardFormatosSub, marginTop: '14px' }}>
         <button
@@ -3302,6 +3634,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                         ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                         : <IconoPdfSello size={ui.iconSvg} />}
                     </button>
+                    {puedeExportarCcd && (
                     <button
                       type="button"
                       style={btnCcdToolbar(!!excelBusy, 'excel')}
@@ -3314,6 +3647,8 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                         ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                         : <IconoDescargaExcel size={ui.iconSvg} />}
                     </button>
+                    )}
+                    {puedeValidarCcd && (
                     <button
                       type="button"
                       style={btnCcdToolbar(firmaRegistroBusy === 'CC-SEM-001', 'firma')}
@@ -3326,6 +3661,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                         ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                         : <IconoFirmaRegistrar size={ui.iconSvg} />}
                     </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -3404,6 +3740,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                           </>
                         )}
                         <span style={{ flex: 1, minWidth: 4 }} aria-hidden />
+                        {puedeValidarCcd && (
                         <button
                           type="button"
                           style={btnCcdToolbar(firmaRegistroBusy === 'CC-SEM-002', 'firma')}
@@ -3416,6 +3753,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                             ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                             : <IconoFirmaRegistrar size={ui.iconSvg} />}
                         </button>
+                        )}
                       </div>
 
                       <div style={{ marginBottom: '8px' }}>
@@ -3487,6 +3825,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                               ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                               : <IconoVistaPrevia size={ui.iconSvg} />}
                           </button>
+                          {puedeExportarCcd && (
                           <button
                             type="button"
                             style={btnCcdToolbar(!!excelBusy, 'excel')}
@@ -3499,6 +3838,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                               ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                               : <IconoDescargaExcel size={ui.iconSvg} />}
                           </button>
+                          )}
                           <button
                             type="button"
                             style={btnCcdToolbar(concPdfBusy, 'pdf')}
@@ -3553,6 +3893,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                                   ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                                   : <IconoVistaPrevia size={ui.iconSvg} />}
                               </button>
+                              {puedeExportarCcd && (
                               <button
                                 type="button"
                                 style={btnCcdToolbar(!!excelBusy, 'excel')}
@@ -3565,6 +3906,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                                   ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                                   : <IconoDescargaExcel size={ui.iconSvg} />}
                               </button>
+                              )}
                               <button
                                 type="button"
                                 style={btnCcdToolbar(concPdfBusy, 'pdf')}
@@ -3604,6 +3946,187 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
       <div style={{ ...cardFormatosSub, marginTop: '14px' }}>
         <button
           type="button"
+          onClick={toggleFormatosInformeGer}
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+            padding: '0',
+            marginBottom: formatosInformeGerAbierto ? '14px' : '0',
+            border: 'none',
+            background: 'transparent',
+            cursor: 'pointer',
+            textAlign: 'left',
+            font: 'inherit',
+            borderBottom: formatosInformeGerAbierto ? `1px solid ${t.border}` : 'none',
+            paddingBottom: formatosInformeGerAbierto ? '14px' : '0',
+          }}
+        >
+          <span style={{ minWidth: 0 }}>
+            <div style={{ fontSize: f.base + 'px', fontWeight: '800', color: t.text }}>
+              Informe de gerencia
+            </div>
+            <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '3px', fontWeight: '500', lineHeight: 1.35 }}>
+              <strong>CC-GER-001</strong> — matriz SICOE (4 columnas), acta de cobro vigente, totales de obra (AIU) y de ensayos
+              (IVA), y valor total del acta. Abre el bloque para detalle y acciones.
+            </div>
+          </span>
+          <span style={{ color: t.textMuted, fontSize: f.section + 2 + 'px', flexShrink: 0 }} aria-hidden>
+            {formatosInformeGerAbierto ? '▼' : '▶'}
+          </span>
+        </button>
+        {formatosInformeGerAbierto && (
+        <div
+          style={{
+            border: `1px solid ${t.border}`,
+            borderRadius: '10px',
+            padding: '12px 14px',
+            marginBottom: ui.gap + 4 + 'px',
+            background: t.bgCard,
+            boxShadow: t.shadow || '0 1px 4px rgba(15, 23, 42, 0.08)',
+          }}
+        >
+          <div style={{ fontSize: f.base + 'px', fontWeight: '800', color: t.text, marginBottom: '6px' }}>CC-GER-001</div>
+          <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginBottom: ui.gap + 'px', lineHeight: 1.45, fontWeight: '500' }}>
+            Puedes abrir <strong>vista previa</strong> o descargar el <strong>PDF con sello</strong>, y registrar <strong>Elaboró / Revisó / Aprobó</strong> sobre el acta
+            RPO asociada. Incluye totales por sección, tasas de contrato (AIU, IVA) y el monto de cierre (valor total acta) en
+            <strong>columna 1</strong> (con la misma estructura en aprobados y pendientes en las otras columnas). «CCD» es el sello
+            de <strong>ClaraCore Documentación</strong> (código de documento; la biblioteca define estilo y firmas por código).
+          </div>
+          {gerAutoActaId && (
+            <div style={{ ...infoBoxSub, marginBottom: ui.gap + 'px' }}>
+              <span>
+                <b>Contexto de firma (acta):</b>{' '}
+                <span style={{ color: t.text, fontWeight: 600 }}>{_etiquetaActaCobro(gerAutoActaId, actasConc)}</span>
+              </span>
+            </div>
+          )}
+          {gerMatDato && (
+            <div
+              style={{
+                fontSize: ui.hint + 'px',
+                color: t.textMuted,
+                lineHeight: 1.4,
+                marginBottom: ui.gap + 4 + 'px',
+                fontWeight: 500,
+              }}
+            >
+              <span style={{ color: t.text }}>Tasas contrato:</span> AIU{' '}
+              <strong style={{ color: t.text }}>{_fmtPctAiuIva(gerMatDato.aiu_pactado)}</strong> · IVA{' '}
+              <strong style={{ color: t.text }}>{_fmtPctAiuIva(gerMatDato.iva_pactado)}</strong> · totales
+              (con AIU/IVA según criterio) col.1:{' '}
+              <strong style={{ color: t.text }}>{_fmtCopEs(gerMatDato.totales?.c1)}</strong>
+            </div>
+          )}
+          {gerAutoActaId && (
+            <div style={tarjetaFormato}>
+              <button
+                type="button"
+                style={tarjetaFormatoHead}
+                onClick={() => setFormatoGer001Abierto((v) => !v)}
+                aria-expanded={formatoGer001Abierto}
+              >
+                <span style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: '800', color: t.text, fontSize: ui.cardTitle + 'px' }}>CC-GER-001 — PDF y firmas</div>
+                  <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '2px', fontWeight: '500' }}>
+                    Vista previa, descarga con sello, registro de firma
+                  </div>
+                </span>
+                <span style={{ color: t.textMuted, fontSize: f.section + 1 + 'px', flexShrink: 0 }} aria-hidden>
+                  {formatoGer001Abierto ? '▼' : '▶'}
+                </span>
+              </button>
+              {formatoGer001Abierto && (
+                <div style={{ padding: `${Math.max(6, ui.pIn - 6)}px ${ui.pIn}px ${ui.pIn}px`, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '5px 8px',
+                      borderRadius: '8px',
+                      border: `1px solid ${t.border}`,
+                      background: t.bg,
+                    }}
+                    title="Firmas por acta RPO (mismo acta generador del informe de gerencia v2)"
+                  >
+                    {firmasCcd['CC-GER-001']?.tabla_disponible === false ? (
+                      <span
+                        style={{ fontSize: Math.max(10, ui.hint - 1) + 'px', color: '#b45309', fontWeight: '600' }}
+                        title="SQL de firmas: backend/sql/ccd_firma_registro_contexto.sql"
+                      >
+                        ⚠ SQL firmas
+                      </span>
+                    ) : (
+                      <>
+                        <span style={chipFirmaEstado(!!firmasCcd['CC-GER-001']?.elaboro)} title="Elaboró">
+                          E {firmasCcd['CC-GER-001']?.elaboro ? '✓' : '·'}
+                        </span>
+                        <span style={chipFirmaEstado(!!firmasCcd['CC-GER-001']?.reviso)} title="Revisó">
+                          R {firmasCcd['CC-GER-001']?.reviso ? '✓' : '·'}
+                        </span>
+                        <span style={chipFirmaEstado(!!firmasCcd['CC-GER-001']?.aprobo)} title="Aprobó">
+                          A {firmasCcd['CC-GER-001']?.aprobo ? '✓' : '·'}
+                        </span>
+                      </>
+                    )}
+                    <span style={{ flex: 1, minWidth: 4 }} aria-hidden />
+                    <button
+                      type="button"
+                      style={btnCcdToolbar(
+                        vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte-ger',
+                        'vista'
+                      )}
+                      onClick={abrirVistaPreviaInformeGerencia}
+                      disabled={vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte-ger'}
+                      title="Vista previa PDF (horizontal, 4 columnas)"
+                      aria-label="Vista previa CC-GER-001"
+                    >
+                      {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte-ger'
+                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                        : <IconoVistaPrevia size={ui.iconSvg} />}
+                    </button>
+                    <button
+                      type="button"
+                      style={btnCcdToolbar(concPdfBusy, 'pdf')}
+                      onClick={() => descargarPdfConc(rutaInformeGerenciaPdf(true), 'CC-GER-001.pdf')}
+                      disabled={concPdfBusy}
+                      title="Descargar con página de sello (huella, fecha)"
+                      aria-label="Descargar CC-GER-001 con sello"
+                    >
+                      {concPdfBusy
+                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                        : <IconoPdfSello size={ui.iconSvg} />}
+                    </button>
+                    {puedeValidarCcd && (
+                    <button
+                      type="button"
+                      style={btnCcdToolbar(firmaRegistroBusy === 'CC-GER-001', 'firma')}
+                      onClick={() => registrarFirmaConc('CC-GER-001', 'acta_rpo', gerAutoActaId)}
+                      disabled={firmaRegistroBusy === 'CC-GER-001'}
+                      title="Registrar mi firma según slot en biblioteca CCD"
+                      aria-label="Registrar firma CC-GER-001"
+                    >
+                      {firmaRegistroBusy === 'CC-GER-001'
+                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                        : <IconoFirmaRegistrar size={ui.iconSvg} />}
+                    </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        )}
+      </div>
+
+      <div style={{ ...cardFormatosSub, marginTop: '14px' }}>
+        <button
+          type="button"
           onClick={toggleFormatosMes}
           style={{
             width: '100%',
@@ -3624,10 +4147,12 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
         >
           <span style={{ minWidth: 0 }}>
             <div style={{ fontSize: f.base + 'px', fontWeight: '800', color: t.text }}>
-              Formatos Mensuales
+              Preacta mensual (conciliación SICOE)
             </div>
             <div style={{ fontSize: ui.hint + 'px', color: t.textMuted, marginTop: '3px', fontWeight: '500', lineHeight: 1.35 }}>
-              Conciliación por acta RPO (CC-MES-001 / CC-MES-002). Elige el acta y usa las mismas acciones que en Formatos Semanales.
+              <strong>CC-MES-001 / 002</strong> — corte o detalle de cantidades aprobadas <strong>por un acta RPO</strong> que tú
+              eliges, con <strong>totales y cascada N1·N2·N3</strong> como en el módulo Actas (cierre real de aprobado, no solo
+              registro CCD de firma). Plantillas, firmas y colores CCD se configuran en la biblioteca del contrato.
             </div>
           </span>
           <span style={{ color: t.textMuted, fontSize: f.section + 2 + 'px', flexShrink: 0 }} aria-hidden>
@@ -3638,11 +4163,23 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
         {formatosMesAbierto && (
         <>
         <div style={{ color: t.textMuted, fontSize: ui.hint + 'px', marginBottom: ui.gap + 'px', lineHeight: 1.45 }}>
-          Solo registros nivel 3 aprobados y bloqueados. Configura Elaboró, Revisó y Aprobó en la biblioteca CCD para cada código.
+          Misma lógica de costo directo que la lista de actas (cascada N1·N2·N3). Configura Elaboró, Revisó y Aprobó en la biblioteca CCD para CC-MES-001 y CC-MES-002.
         </div>
 
+        <div
+          style={{
+            fontSize: f.base + 'px',
+            fontWeight: '800',
+            color: t.text,
+            marginBottom: '8px',
+            marginTop: '2px',
+            letterSpacing: 0.2,
+          }}
+        >
+          Formato: CC-MES-001 (tabla) y CC-MES-002 (memorias)
+        </div>
         <div style={{ marginBottom: ui.gap + 'px' }}>
-          <label style={labelSub}>Acta RPO</label>
+          <label style={labelSub}>Acta RPO (para preacta mensual)</label>
           <select
             style={selectSub}
             value={actaConcId}
@@ -3770,6 +4307,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                         ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                         : <IconoPdfSello size={ui.iconSvg} />}
                     </button>
+                    {puedeExportarCcd && (
                     <button
                       type="button"
                       style={btnCcdToolbar(true, 'excel')}
@@ -3779,6 +4317,8 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                     >
                       <IconoDescargaExcel size={ui.iconSvg} />
                     </button>
+                    )}
+                    {puedeValidarCcd && (
                     <button
                       type="button"
                       style={btnCcdToolbar(firmaRegistroBusy === 'CC-MES-001', 'firma')}
@@ -3791,6 +4331,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                         ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                         : <IconoFirmaRegistrar size={ui.iconSvg} />}
                     </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -3869,6 +4410,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                           </>
                         )}
                         <span style={{ flex: 1, minWidth: 4 }} aria-hidden />
+                        {puedeValidarCcd && (
                         <button
                           type="button"
                           style={btnCcdToolbar(firmaRegistroBusy === 'CC-MES-002', 'firma')}
@@ -3881,6 +4423,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                             ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                             : <IconoFirmaRegistrar size={ui.iconSvg} />}
                         </button>
+                        )}
                       </div>
 
                       <div style={{ marginBottom: '8px' }}>
@@ -3952,6 +4495,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                                   ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                                   : <IconoVistaPrevia size={ui.iconSvg} />}
                               </button>
+                              {puedeExportarCcd && (
                               <button
                                 type="button"
                                 style={btnCcdToolbar(true, 'excel')}
@@ -3961,6 +4505,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                               >
                                 <IconoDescargaExcel size={ui.iconSvg} />
                               </button>
+                              )}
                               <button
                                 type="button"
                                 style={btnCcdToolbar(concPdfBusy, 'pdf')}
@@ -4094,33 +4639,12 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
         )}
       </div>
 
-      <div style={card}>
-        <div style={sectionTitle}>Formatos siguientes (planeados)</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '10px' }}>
-          <div style={roadmapCard}>
-            <div style={{ fontWeight: 700, color: t.text, marginBottom: '4px' }}>Preacta semanal + memorias semanales</div>
-            <div style={{ fontSize: f.sub + 'px', color: t.textMuted }}>CC-SEM-001/002 disponibles arriba.</div>
-          </div>
-          <div style={roadmapCard}>
-            <div style={{ fontWeight: 700, color: t.text, marginBottom: '4px' }}>Preacta mensual</div>
-            <div style={{ fontSize: f.sub + 'px', color: t.textMuted }}>CC-MES-001/002 disponibles arriba.</div>
-          </div>
-          <div style={roadmapCard}>
-            <div style={{ fontWeight: 700, color: t.text, marginBottom: '4px' }}>Memorias entidad (IDU FO-EO-04)</div>
-            <div style={{ fontSize: f.sub + 'px', color: t.textMuted }}>
-              Plantilla vacía en «Formatos Entidades Externas»; datos de obra en desarrollo.
-            </div>
-          </div>
-          <div style={roadmapCard}>
-            <div style={{ fontWeight: 700, color: t.text, marginBottom: '4px' }}>Informe de gerencia</div>
-            <div style={{ fontSize: f.sub + 'px', color: t.textMuted }}>Estado: pendiente de definicion de indicadores.</div>
-          </div>
-        </div>
-      </div>
-
       {/* Modal: vista previa = PDF embebido (misma ruta que descarga el backend).
           Fondos opacos fijos: en producción t.bgCard/t.bg pueden ser transparentes y el modal se mezcla con la página. */}
-      {vistaPrevia && (
+      {vistaPrevia && (() => {
+        const esVistaPreviaGerencia =
+          vistaPrevia.tipo === 'corte-ger' || vistaPrevia.tipo === 'corte-ger-pdf'
+        return (
         <div
           role="dialog"
           aria-modal="true"
@@ -4143,7 +4667,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
             onClick={e => e.stopPropagation()}
             style={{
               width: '100%',
-              maxWidth: '960px',
+              maxWidth: esVistaPreviaGerencia ? 'min(100%, 1344px)' : '960px',
               height: 'min(92vh, 880px)',
               maxHeight: '92vh',
               overflow: 'hidden',
@@ -4174,6 +4698,7 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
                     if (tp === 'corte' || tp === 'corte-pdf') return 'Vista previa · CC-SUB-001 (PDF)'
                     if (tp === 'corte-sem' || tp === 'corte-sem-pdf') return 'Vista previa · CC-SEM-001 (PDF)'
                     if (tp === 'corte-mes' || tp === 'corte-mes-pdf') return 'Vista previa · CC-MES-001 (PDF)'
+                    if (tp === 'corte-ger' || tp === 'corte-ger-pdf') return 'Vista previa · CC-GER-001 — Informe de gerencia (PDF)'
                     if (tp === 'memoria-pdf-todos' || tp === 'memoria-todos') {
                       return 'Vista previa · CC-SUB-002 (PDF) · Todos los ítems'
                     }
@@ -4258,7 +4783,8 @@ export default function ModuloInformes({ t, usuario, token, s, fontSize = 'norma
             )}
           </div>
         </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

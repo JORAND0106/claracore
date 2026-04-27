@@ -10,7 +10,7 @@ import os as _os
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 _log = logging.getLogger("uvicorn.error")
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -24,9 +24,22 @@ from main import get_current_user as _get_user
 from mail_smtp import try_send_text_email
 from supabase import create_client as _create_client
 from ccd_conciliacion import (
+    _bloque_capitulo_matriz,
+    _orden_titulo_capitulo_obra,
     aggregate_items_conciliacion,
+    fetch_registros_acta_todas_sico_obra,
     fetch_registros_conciliacion,
+    fetch_registros_informe_cc_mes_por_acta,
+    fetch_registros_memoria_cc_mes_alineado_acta,
     fetch_registros_memoria_conciliacion,
+    informe_gerencia_matriz_maps_por_rpc,
+    rpo_conciliacion_por_contrato,
+    rpo_conciliacion_un_acta_rpc,
+    rpo_resumen_actas_rpc,
+    registro_tiene_pendiente_matriz,
+    suma_por_capitulo_desde_registros,
+    suma_por_capitulo_solo_cdirecto_almacenado,
+    suma_por_capitulo_solo_n3_aprobado,
 )
 
 # ClaraCore Documentación (CCD): código único por tipo de formato (gestión documental).
@@ -38,12 +51,102 @@ CODIGO_FORMATO_CCD_CC_MES_001 = "CC-MES-001"
 CODIGO_FORMATO_CCD_CC_MES_002 = "CC-MES-002"
 # Formato contractual entidad contratante (IDU — gestión documental ClaraCore).
 CODIGO_FORMATO_IDU_FO_EO_04_V2 = "FO-IDU-EO-04-V2"
+# Informe gerencia: comparativo de costo directo (cascada N1–N3) entre dos actas RPO; firmas CCD = acta «presente».
+CODIGO_FORMATO_CCD_CC_GER_001 = "CC-GER-001"
 _sb = _create_client(
     _os.getenv("SUPABASE_URL", ""),
     _os.getenv("SUPABASE_KEY", "")
 )
 
 router = APIRouter(tags=["informes"])
+
+
+def _cargar_permisos_cargo_por_sub(uid: int) -> List[dict]:
+    """
+    El JWT de get_current_user no incluye la matriz de permisos (solo se envía en el body del login al cliente).
+    Replica la carga de /auth/log-in para decidir acceso a Informes.
+    """
+    if not uid:
+        return []
+    try:
+        urows = (
+            _sb.table("usuarios")
+            .select("cargo_id, subcontratista_id")
+            .eq("id", uid)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e0:
+        _log.debug("informes perms: usuario: %s", e0)
+        return []
+    if not urows:
+        return []
+    urow = urows[0]
+    cargo_id = urow.get("cargo_id")
+    if not cargo_id:
+        return []
+    cargo_nombre = ""
+    try:
+        c = _sb.table("cargos").select("nombre").eq("id", int(cargo_id)).limit(1).execute().data
+        if c:
+            cargo_nombre = (c[0].get("nombre") or "").strip().lower()
+    except Exception:
+        pass
+    if cargo_nombre == "subcontratista" and not urow.get("subcontratista_id"):
+        return []
+    try:
+        permisos_raw = _sb.table("permisos").select("*").eq("cargo_id", cargo_id).execute().data or []
+        funciones_rows = _sb.table("funciones").select("id, nombre").execute().data or []
+    except Exception as e1:
+        _log.debug("informes perms: matriz: %s", e1)
+        return []
+    fmap = {f["id"]: f["nombre"] for f in funciones_rows}
+    out = [{**p, "funcion_nombre": fmap.get(p.get("funcion_id"), "")} for p in permisos_raw]
+    if cargo_nombre == "desarrollador":
+        out = [{**p, "exportar": True, "ver": True} for p in (out or [])]
+    return out or []
+
+
+def _perm_informes_ccd(user: Any, necesita: Literal["ver", "editar", "validar", "exportar"]) -> None:
+    """
+    Módulo Informes CCD / funciones: matriz «informes ccd» (ver, editar, validar, exportar).
+    Desarrollador y administrador: acceso completo.
+    """
+    if user is None:
+        raise HTTPException(401, "No autenticado")
+    try:
+        u = user if isinstance(user, dict) else dict(user)
+    except Exception:
+        u = {}
+    # Ver nota en _cargar_permisos_cargo_por_sub: el token JWT no trae "permisos".
+    pl = u.get("permisos")
+    if not (isinstance(pl, list) and len(pl) > 0):
+        try:
+            uid = int(str(u.get("sub") or "0").strip() or 0)
+        except (TypeError, ValueError):
+            uid = 0
+        if uid:
+            u = {**u, "permisos": _cargar_permisos_cargo_por_sub(uid)}
+    cn = (u.get("cargo_nombre") or "").strip().lower()
+    if cn in ("desarrollador", "administrador"):
+        return
+    for p in (u.get("permisos") or []):
+        if (p.get("funcion_nombre") or "").strip().lower() != "informes ccd":
+            continue
+        if necesita == "ver" and p.get("ver"):
+            return
+        if necesita == "editar" and p.get("editar"):
+            return
+        if necesita == "validar" and p.get("validar"):
+            return
+        if necesita == "exportar" and p.get("exportar"):
+            return
+    raise HTTPException(
+        403,
+        f"Sin permiso para esta acción en Informes (se requiere permiso «{necesita}» en la función Informes CCD).",
+    )
 
 # ── Biblioteca CCD (gestión documental): metadatos por código de formato ─────
 # Más adelante el contrato podrá elegir qué códigos aplican; las plantillas siguen en código.
@@ -148,6 +251,27 @@ FORMATOS_CCD: Dict[str, Dict[str, Any]] = {
         "layout": {
             "orientacion": "landscape",
             "encabezado_institucional_solo_primera_hoja": True,
+            "firmas_solo_ultima_hoja": True,
+            "firmas_bloque_inferior": True,
+        },
+        "slots_firma": [
+            {"id": "elaboro", "label": "Elaboró", "origen": "configuracion"},
+            {"id": "reviso", "label": "Revisó", "origen": "configuracion"},
+            {"id": "aprobo", "label": "Aprobó", "origen": "configuracion"},
+        ],
+        "acceso_interventoria": True,
+    },
+    CODIGO_FORMATO_CCD_CC_GER_001: {
+        "titulo": "Informe de gerencia (avance ejecución de obra — comparativo por acta RPO)",
+        "descripcion": (
+            "Comparación de costo directo aprobado en cascada (SICOE Obra, N1·N2·N3) por capítulo, "
+            "acta presente frente a acta de referencia. Firmas CCD vinculadas al acta presente."
+        ),
+        "plantilla_html": "informe_gerencia_v1",
+        "motor_pdf": "xhtml2pdf",
+        "layout": {
+            "encabezado_institucional_solo_primera_hoja": True,
+            "tabla_items_continua_en_siguientes_hojas": True,
             "firmas_solo_ultima_hoja": True,
             "firmas_bloque_inferior": True,
         },
@@ -325,6 +449,18 @@ class CcdEstiloPdfBody(BaseModel):
     row_odd_bg: Optional[str] = None
     subtotal_bg: Optional[str] = None
     capitulo_subtotal_bg: Optional[str] = None
+    # CC-GER-001 (informe de gerencia, matriz 4 columnas): filas resumidas
+    ger_titulo_bloque_bg: Optional[str] = None
+    ger_subtotal_obra_con_aiu_bg: Optional[str] = None
+    ger_fila_tasa_aiu_bg: Optional[str] = None
+    ger_cdirecto_mas_aiu_bg: Optional[str] = None
+    ger_filas_post_cdu_bg: Optional[str] = None
+    ger_vtot_obra_ajustes_bg: Optional[str] = None
+    ger_subtotal_obra_con_iva_bg: Optional[str] = None
+    ger_fila_tasa_iva_bg: Optional[str] = None
+    ger_cdirecto_mas_iva_bg: Optional[str] = None
+    ger_vtot_obra_iva_bg: Optional[str] = None
+    ger_valor_total_acta_bg: Optional[str] = None
 
 
 class CcdFirmaConfigBody(BaseModel):
@@ -375,6 +511,28 @@ def _default_estilo_pdf(formato_codigo: str) -> Dict[str, str]:
         }
         if formato_codigo in (CODIGO_FORMATO_CCD_CC_SEM_001, CODIGO_FORMATO_CCD_CC_MES_001):
             d["capitulo_subtotal_bg"] = "#93c5fd"
+        return d
+    if formato_codigo == CODIGO_FORMATO_CCD_CC_GER_001:
+        d: Dict[str, str] = {
+            "section_bar_bg": "#e5e7eb",
+            "section_bar_text": "#111827",
+            "thead_bg": "#e8e8e8",
+            "row_even_bg": "#ffffff",
+            "row_odd_bg": "#f9fafb",
+            "subtotal_bg": "#dbeafe",
+            "capitulo_subtotal_bg": "#93c5fd",
+            "ger_titulo_bloque_bg": "#bfdbfe",
+            "ger_subtotal_obra_con_aiu_bg": "#e0f2fe",
+            "ger_fila_tasa_aiu_bg": "#dbeafe",
+            "ger_cdirecto_mas_aiu_bg": "#c7d8f0",
+            "ger_filas_post_cdu_bg": "#e8edf5",
+            "ger_vtot_obra_ajustes_bg": "#a8bfdb",
+            "ger_subtotal_obra_con_iva_bg": "#e0f2fe",
+            "ger_fila_tasa_iva_bg": "#e8eeff",
+            "ger_cdirecto_mas_iva_bg": "#d4dcf5",
+            "ger_vtot_obra_iva_bg": "#c3d0f0",
+            "ger_valor_total_acta_bg": "#93c5fd",
+        }
         return d
     if formato_codigo in (
         CODIGO_FORMATO_CCD_CC_SUB_002,
@@ -848,6 +1006,7 @@ def _upsert_ccd_firma_config(contrato_id: int, formato_codigo: str, body: CcdFir
 
 @router.get("/{contrato_id}/subcontratistas")
 def inf_subcontratistas(contrato_id: int, current_user=Depends(_get_user)):
+    _perm_informes_ccd(current_user, "ver")
     rows = _sb.table("subcontratistas")\
         .select("id, razon_social, nit, nombre_contacto, telefono")\
         .order("razon_social").execute().data
@@ -855,6 +1014,7 @@ def inf_subcontratistas(contrato_id: int, current_user=Depends(_get_user)):
 
 @router.get("/{contrato_id}/cortes/{sub_id}")
 def inf_cortes(contrato_id: int, sub_id: int, current_user=Depends(_get_user)):
+    _perm_informes_ccd(current_user, "ver")
     rows = _sb.table("subcontratista_cortes").select("*")\
         .eq("subcontratista_id", sub_id)\
         .order("consecutivo").execute().data
@@ -863,6 +1023,7 @@ def inf_cortes(contrato_id: int, sub_id: int, current_user=Depends(_get_user)):
 @router.get("/{contrato_id}/items-corte/{corte_id}")
 def inf_items_corte(contrato_id: int, corte_id: int, current_user=Depends(_get_user)):
     """Ítems únicos aprobados por el sub en un corte dado."""
+    _perm_informes_ccd(current_user, "ver")
     try:
         rows = _sb.table("so_registros")\
             .select("item_numero, item_descripcion, unidad, capitulo")\
@@ -1140,12 +1301,14 @@ def test_sin_auth():
 @router.get("/formatos-ccd")
 def listar_formatos_ccd(current_user=Depends(_get_user)):
     """Biblioteca de formatos ClaraCore Documentación (CCD); convive con asignación futura por contrato."""
+    _perm_informes_ccd(current_user, "ver")
     return [{"codigo": k, **v} for k, v in FORMATOS_CCD.items()]
 
 
 @router.get("/{contrato_id}/ccd/biblioteca")
 def ccd_biblioteca_contrato(contrato_id: int, current_user=Depends(_get_user)):
     """Formatos CCD con slots de firma y configuración guardada (Elaboró/Revisó) para este contrato."""
+    _perm_informes_ccd(current_user, "ver")
     out: List[Dict[str, Any]] = []
     for codigo, meta in FORMATOS_CCD.items():
         cfg = _get_ccd_firma_config(contrato_id, codigo)
@@ -1156,11 +1319,13 @@ def ccd_biblioteca_contrato(contrato_id: int, current_user=Depends(_get_user)):
 @router.get("/{contrato_id}/ccd/firmantes-candidatos")
 def ccd_firmantes_candidatos(contrato_id: int, current_user=Depends(_get_user)):
     """Usuarios del contrato con cargo — para asignar Elaboró y Revisó en la biblioteca CCD."""
+    _perm_informes_ccd(current_user, "editar")
     return _list_firmantes_candidatos_contrato(contrato_id)
 
 
 @router.get("/{contrato_id}/ccd/config-firma/{formato_codigo}")
 def ccd_get_config_firma(contrato_id: int, formato_codigo: str, current_user=Depends(_get_user)):
+    _perm_informes_ccd(current_user, "ver")
     if formato_codigo not in FORMATOS_CCD:
         raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
     return _get_ccd_firma_config(contrato_id, formato_codigo)
@@ -1173,6 +1338,7 @@ def ccd_put_config_firma(
     body: CcdFirmaConfigBody,
     current_user=Depends(_get_user),
 ):
+    _perm_informes_ccd(current_user, "editar")
     if formato_codigo not in FORMATOS_CCD:
         raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
     return _upsert_ccd_firma_config(contrato_id, formato_codigo, body)
@@ -1249,6 +1415,7 @@ def ccd_registrar_firma_corte(
     current_user: dict = Depends(_get_user),
 ):
     """Guarda la URL de firma del perfil para Elaboró o Revisó según asignación en biblioteca CCD."""
+    _perm_informes_ccd(current_user, "validar")
     if formato_codigo not in FORMATOS_CCD:
         raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
     uid = _uid_session(current_user)
@@ -1309,6 +1476,7 @@ def ccd_firmas_registradas_corte(
     current_user: dict = Depends(_get_user),
 ):
     """Quién ya registró firma en este corte (Elaboró / Revisó)."""
+    _perm_informes_ccd(current_user, "ver")
     if formato_codigo not in FORMATOS_CCD:
         raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
     if not _corte_pertenece_contrato(contrato_id, corte_id):
@@ -1454,6 +1622,7 @@ def _fetch_semanas_rows_por_ids(contrato_id: int, sem_ids: List[int]) -> List[Di
 
 @router.get("/{contrato_id}/ccd/semanas")
 def ccd_listar_semanas(contrato_id: int, current_user=Depends(_get_user)):
+    _perm_informes_ccd(current_user, "ver")
     sem_ids = _distinct_semana_ids_nivel3_aprobado_interventoria(contrato_id)
     if not sem_ids:
         return []
@@ -1475,9 +1644,10 @@ def ccd_listar_semanas(contrato_id: int, current_user=Depends(_get_user)):
 @router.get("/{contrato_id}/ccd/actas-rpo")
 def ccd_listar_actas_rpo(contrato_id: int, current_user=Depends(_get_user)):
     """Actas de cobro RPO (excluye administrativas u otros grupos)."""
+    _perm_informes_ccd(current_user, "ver")
     rows = (
         _sb.table("actas")
-        .select("id, numero_rpo, consecutivo")
+        .select("id, numero_rpo, consecutivo, fecha_inicio, fecha_fin")
         .eq("contrato_id", contrato_id)
         .eq("tipo_grupo", "RPO")
         .order("consecutivo", desc=True)
@@ -1490,6 +1660,7 @@ def ccd_listar_actas_rpo(contrato_id: int, current_user=Depends(_get_user)):
 
 @router.get("/{contrato_id}/ccd/conciliacion/semana/{semana_id}/items")
 def ccd_items_conciliacion_semana(contrato_id: int, semana_id: int, current_user=Depends(_get_user)):
+    _perm_informes_ccd(current_user, "ver")
     if not _semana_pertenece_contrato(contrato_id, semana_id):
         raise HTTPException(404, "Semana no encontrada en este contrato")
     reg = fetch_registros_conciliacion(_sb, contrato_id, semana_id=semana_id)
@@ -1505,9 +1676,10 @@ def ccd_items_conciliacion_semana(contrato_id: int, semana_id: int, current_user
 
 @router.get("/{contrato_id}/ccd/conciliacion/acta/{acta_id}/items")
 def ccd_items_conciliacion_acta(contrato_id: int, acta_id: int, current_user=Depends(_get_user)):
+    _perm_informes_ccd(current_user, "ver")
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
-    reg = fetch_registros_conciliacion(_sb, contrato_id, acta_rpo_id=acta_id)
+    reg = fetch_registros_informe_cc_mes_por_acta(_sb, contrato_id, acta_id)
     items, total = aggregate_items_conciliacion(reg)
     _sort_items_corte_por_item_numero_asc(items)
     caps = _capitulos_por_item_numero_desde_items(items)
@@ -1526,6 +1698,7 @@ def ccd_registrar_firma_contexto(
     formato_codigo: str,
     current_user: dict = Depends(_get_user),
 ):
+    _perm_informes_ccd(current_user, "validar")
     if formato_codigo not in FORMATOS_CCD:
         raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
     if contexto_tipo not in ("semana", "acta_rpo"):
@@ -1595,6 +1768,7 @@ def ccd_firmas_registradas_contexto(
     formato_codigo: str,
     current_user: dict = Depends(_get_user),
 ):
+    _perm_informes_ccd(current_user, "ver")
     if formato_codigo not in FORMATOS_CCD:
         raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
     if contexto_tipo not in ("semana", "acta_rpo"):
@@ -1688,6 +1862,1573 @@ def _pdf_bytes_conciliacion_informe_v1(
         reviso_firma_data_uri=reviso_uri,
         aprobo_firma_data_uri=aprobo_uri,
         estilo_formato_codigo=formato_codigo,
+    )
+    return _to_pdf(html)
+
+
+def _rpo_gerencia_vacio() -> Dict[str, Any]:
+    return {
+        "costo_directo_total": 0.0,
+        "registros_cascade_interventoria": 0,
+        "registros_n3_aprobado": 0,
+        "por_capitulo": [],
+        "secciones": {},
+    }
+
+
+def _map_por_capitulo_a_montos(por: Optional[List[Dict[str, Any]]]) -> Dict[str, float]:
+    m: Dict[str, float] = {}
+    for r in por or []:
+        c = (str(r.get("capitulo") or "—").strip()) or "—"
+        m[c] = float(r.get("costo_directo") or 0)
+    return m
+
+
+def _merge_filas_gerencia_dos_actas(
+    p_list: Optional[List[Dict[str, Any]]],
+    a_list: Optional[List[Dict[str, Any]]],
+) -> List[Tuple[str, float, float, float]]:
+    m_p = _map_por_capitulo_a_montos(p_list)
+    m_a = _map_por_capitulo_a_montos(a_list)
+    keys = set(m_p) | set(m_a)
+    caps = sorted(keys, key=lambda c: _orden_titulo_capitulo_obra(c))
+    out: List[Tuple[str, float, float, float]] = []
+    for c in caps:
+        vp, va = m_p.get(c, 0.0), m_a.get(c, 0.0)
+        out.append((c, vp, va, vp - va))
+    return out
+
+
+def _cobro_item_numeros_contrato(contrato_id: int) -> set:
+    try:
+        rows = _sb.table("cobro").select("item").eq("contrato_id", contrato_id).execute().data or []
+    except Exception:
+        return set()
+    return {str(r.get("item") or "").strip() for r in rows if str(r.get("item") or "").strip()}
+
+
+def _actas_rpo_consecutivo_ascendente(contrato_id: int) -> List[Dict[str, Any]]:
+    rows = (
+        _sb.table("actas")
+        .select("id, consecutivo, numero_rpo, fecha_inicio, fecha_fin, tipo_grupo, pct_proyectado_ajustes")
+        .eq("contrato_id", contrato_id)
+        .eq("tipo_grupo", "RPO")
+        .order("consecutivo", desc=False)
+        .execute()
+        .data
+        or []
+    )
+    return [r for r in rows if r.get("id") is not None]
+
+
+_ECON_OH_KEYS = (
+    "valor_comp_ambiental",
+    "valor_comp_social",
+    "valor_comp_pmt",
+    "valor_cobrado_adicional",
+    "ajuste_iccp",
+    "ajuste_icociv",
+    "ajuste_ipc",
+)
+
+
+def _suma_historico_economia_rpo_antes_presente(
+    contrato_id: int, acta_presente_id: int
+) -> Dict[str, float]:
+    """
+    Suma en COP (solo actas RPO estrictamente anteriores al acta presente del informe).
+    El aporte del acta vigente (col.1: factor VR o líneas) se agrega en _embalaje, no en BD si no está diligenciado.
+    """
+    z = {k: 0.0 for k in _ECON_OH_KEYS}
+    if contrato_id <= 0 or acta_presente_id <= 0:
+        return z
+    actas = _actas_rpo_consecutivo_ascendente(contrato_id)
+    idx = next(
+        (i for i, a in enumerate(actas) if int(a.get("id") or 0) == int(acta_presente_id)),
+        None,
+    )
+    if idx is None or idx < 1:
+        return z
+    ids: List[int] = []
+    for a in actas[:idx]:
+        aid = a.get("id")
+        if aid is not None:
+            try:
+                ids.append(int(aid))
+            except (TypeError, ValueError):
+                continue
+    if not ids:
+        return z
+    cols = ", ".join(_ECON_OH_KEYS)
+    for off in range(0, len(ids), 200):
+        chunk = ids[off : off + 200]
+        try:
+            rws = _sb.table("actas").select(cols).in_("id", chunk).execute().data or []
+        except Exception:
+            rws = []
+        for row in rws or []:
+            if not isinstance(row, dict):
+                continue
+            for k in _ECON_OH_KEYS:
+                try:
+                    p = float(row.get(k) or 0.0)
+                except (TypeError, ValueError):
+                    p = 0.0
+                if not math.isfinite(p):
+                    p = 0.0
+                z[k] += p
+    for k in z:
+        z[k] = float(round(z[k], 0))
+    return z
+
+
+def _resolver_acta_gerencia_presente_y_anterior(
+    contrato_id: int, acta_presente_id: Optional[int] = None
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """
+    Acta «vigente» = mayor consecutivo (última RPO), salvo `acta_presente_id` (override).
+    Anterior = la RPO inmediata previa en consecutivo.
+    """
+    actas = _actas_rpo_consecutivo_ascendente(contrato_id)
+    if not actas:
+        return None, None
+    if acta_presente_id is not None and _acta_pertenece_contrato(contrato_id, int(acta_presente_id)):
+        for i, a in enumerate(actas):
+            if int(a.get("id") or 0) == int(acta_presente_id):
+                presente = a
+                anterior = actas[i - 1] if i > 0 else None
+                return presente, anterior
+    presente = actas[-1]
+    anterior = actas[-2] if len(actas) >= 2 else None
+    return presente, anterior
+
+
+def _construir_datos_informe_gerencia_matriz_fallback_por_capitulo(
+    contrato_id: int,
+    pres: dict,
+    ant: Optional[dict],
+    ap_id: int,
+    c_pres: int,
+    a_ant: Optional[int],
+    ids_cascade_hasta: List[int],
+    t2: float,
+    t_acc: float,
+    aiu_c: Optional[float] = None,
+    iva_c: Optional[float] = None,
+    vr_contr: Optional[dict] = None,
+) -> Dict[str, Any]:
+    """Lento: paginación Python; se usa si los RPC de informe_gerencia no existen aún en Supabase."""
+    todas = fetch_registros_acta_todas_sico_obra(_sb, contrato_id, ap_id)
+    c1r = list(todas)
+    m1 = suma_por_capitulo_solo_cdirecto_almacenado(c1r)
+    m4 = suma_por_capitulo_desde_registros([r for r in todas if registro_tiene_pendiente_matriz(r)])
+    rmap = rpo_conciliacion_por_contrato(_sb, contrato_id, [ap_id, a_ant] if a_ant else [ap_id])
+    d_p = rmap.get(ap_id) or _rpo_gerencia_vacio()
+    m2: Dict[str, float] = {}
+    if a_ant is not None:
+        d_a = rmap.get(int(a_ant)) or _rpo_gerencia_vacio()
+        for row in d_a.get("por_capitulo") or []:
+            c2 = (str(row.get("capitulo") or "—").strip()) or "—"
+            m2[c2] = m2.get(c2, 0.0) + float(row.get("costo_directo") or 0.0)
+    m3: Dict[str, float] = {}
+    for _aid in ids_cascade_hasta:
+        toda = fetch_registros_acta_todas_sico_obra(_sb, contrato_id, int(_aid))
+        part = suma_por_capitulo_solo_n3_aprobado(toda)
+        for c, v in part.items():
+            m3[c] = m3.get(c, 0) + v
+    caps = set(m1) | set(m2) | set(m3) | set(m4)
+    caps_orden = sorted(caps, key=lambda c: _orden_titulo_capitulo_obra(c))
+    c1b: Dict[Tuple[str, str], float] = {}
+    c2b: Dict[Tuple[str, str], float] = {}
+    c3b: Dict[Tuple[str, str], float] = {}
+    c4b: Dict[Tuple[str, str], float] = {}
+    for c in m1:
+        bl = _bloque_capitulo_matriz(c)
+        c1b[(c, bl)] = c1b.get((c, bl), 0.0) + m1.get(c, 0.0)
+    for c in m2:
+        c2b[(c, _bloque_capitulo_matriz(c))] = m2.get(c, 0.0)
+    for c in m3:
+        c3b[(c, _bloque_capitulo_matriz(c))] = m3.get(c, 0.0)
+    for c in m4:
+        c4b[(c, _bloque_capitulo_matriz(c))] = m4.get(c, 0.0)
+    rpv = rpo_resumen_actas_rpc(_sb, contrato_id, [ap_id]) or {}
+    t_pl = float((rpv.get(int(ap_id)) or {}).get("costo_directo_total", 0) or 0)
+    vr = vr_contr
+    if vr is None:
+        vr = (
+            _row(
+                "contratos",
+                "aiu, iva, costo_directo_contrato, valor_componente_ambiental, "
+                "valor_componente_social, valor_componente_pmt, costos_adicionales_lista",
+                id=contrato_id,
+            )
+            or {}
+        )
+    return _embalaje_informe_gerencia_bloques(
+        pres,
+        ant,
+        c_pres,
+        ids_cascade_hasta,
+        t2,
+        t_acc,
+        t_pl,
+        c1b,
+        c2b,
+        c3b,
+        c4b,
+        d_p,
+        a_ant,
+        aiu_c,
+        iva_c,
+        vr_contr=vr,
+        contrato_id=contrato_id,
+    )  # t2, t_acc, t_pl desde rpo_resumen (listado actas) para coherencia
+
+
+def _tasa_fraccion_desde_valor_contrato(tasa_raw: Optional[Any]) -> float:
+    """
+    Panel admin (AIU, IVA): lo habitual es 0,19 = 19 %. Si el valor es >1,
+    asumir porcentaje (p. ej. 19) y normalizar a fracción.
+    """
+    if tasa_raw is None:
+        return 0.0
+    try:
+        f = float(tasa_raw)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(f) or f < 0.0:
+        return 0.0
+    if f > 1.0:
+        f = f / 100.0
+    if f > 1.0:
+        f = 1.0
+    return f
+
+
+def _embalaje_informe_gerencia_bloques(
+    pres: dict,
+    ant: Optional[dict],
+    c_pres: int,
+    ids_cascade_hasta: List[int],
+    t2: float,
+    t_acc: float,
+    t_presente_lista: float,
+    c1: Dict[Tuple[str, str], float],
+    c2: Dict[Tuple[str, str], float],
+    c3: Dict[Tuple[str, str], float],
+    c4: Dict[Tuple[str, str], float],
+    d_p: dict,
+    a_ant: Optional[int],
+    aiu_pct: Optional[float] = None,
+    iva_pct: Optional[float] = None,
+    vr_contr: Optional[dict] = None,
+    contrato_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    all_keys: set = set()
+    for m in (c1, c2, c3, c4):
+        all_keys |= set(m.keys())
+    aiu = _tasa_fraccion_desde_valor_contrato(aiu_pct)
+    iva = _tasa_fraccion_desde_valor_contrato(iva_pct)
+
+    def _fila_bloque(bid: str, tit: str) -> dict:
+        keys = sorted([k for k in all_keys if k[1] == bid], key=lambda t: _orden_titulo_capitulo_obra(t[0]))
+        fils = [
+            {
+                "capitulo": k[0],
+                "bloque": k[1],
+                "c1": float(c1.get(k, 0.0)),
+                "c2": float(c2.get(k, 0.0)) if a_ant is not None else 0.0,
+                "c3": float(c3.get(k, 0.0)),
+                "c4": float(c4.get(k, 0.0)),
+            }
+            for k in keys
+        ]
+        st = {
+            "c1": sum(f["c1"] for f in fils) if fils else 0.0,
+            "c2": sum(f["c2"] for f in fils) if fils else 0.0,
+            "c3": sum(f["c3"] for f in fils) if fils else 0.0,
+            "c4": sum(f["c4"] for f in fils) if fils else 0.0,
+        }
+        out: Dict[str, Any] = {
+            "id": bid,
+            "titulo": tit,
+            "filas": fils,
+            "subtotal": st,
+        }
+        if bid == "obra" and aiu > 0.0 and (st.get("c1", 0) or st.get("c2", 0) or st.get("c3", 0) or st.get("c4", 0)):
+            out["fila_aiu"] = {
+                "c1": st["c1"] * aiu,
+                "c2": st["c2"] * aiu,
+                "c3": st["c3"] * aiu,
+                "c4": st["c4"] * aiu,
+            }
+            out["fila_costo_directo_mas_aiu"] = {
+                "c1": st["c1"] + out["fila_aiu"]["c1"],
+                "c2": st["c2"] + out["fila_aiu"]["c2"],
+                "c3": st["c3"] + out["fila_aiu"]["c3"],
+                "c4": st["c4"] + out["fila_aiu"]["c4"],
+            }
+        if bid == "obra" and isinstance(vr_contr, dict):
+            f_cdu = out.get("fila_costo_directo_mas_aiu")
+            n_acta = 0.0
+            if isinstance(f_cdu, dict) and f_cdu:
+                n_acta = float(f_cdu.get("c1") or 0.0)
+            else:
+                n_acta = float(st.get("c1") or 0.0)
+            n_acta_r = round(n_acta, 0)
+            try:
+                cd0 = float(vr_contr.get("costo_directo_contrato") or 0.0)
+            except (TypeError, ValueError):
+                cd0 = 0.0
+            n_con = round(cd0 * (1.0 + aiu), 0)
+            factor = 0.0
+            if n_con > 0.0 and math.isfinite(n_con) and n_con == n_con:
+                factor = float(n_acta_r) / float(n_con)
+            if not math.isfinite(factor):
+                factor = 0.0
+
+            n_acta4 = 0.0
+            if isinstance(f_cdu, dict) and f_cdu:
+                n_acta4 = float(f_cdu.get("c4") or 0.0)
+            else:
+                n_acta4 = float(st.get("c4") or 0.0)
+            n_acta4_r = round(n_acta4, 0)
+            factor4 = 0.0
+            if n_con > 0.0 and math.isfinite(n_con) and n_con == n_con:
+                factor4 = float(n_acta4_r) / float(n_con)
+            if not math.isfinite(factor4):
+                factor4 = 0.0
+
+            def _v1(vv) -> float:
+                try:
+                    w = float(vv)
+                except (TypeError, ValueError):
+                    w = 0.0
+                return float(round(factor * w, 0))
+
+            def _v4(vv) -> float:
+                """Escala a columna 4 (pendiente) con la misma base de contrato que c1, pero con CD+AIU de pendientes."""
+                try:
+                    w = float(vv)
+                except (TypeError, ValueError):
+                    w = 0.0
+                return float(round(factor4 * w, 0))
+
+            # Col.2 (acta de referencia anterior a la vigente): importes reales de esa acta (no factores c1).
+            ant_vals: Optional[dict] = None
+            if a_ant is not None:
+                try:
+                    ant_vals = _row(
+                        "actas",
+                        "valor_comp_ambiental, valor_comp_social, valor_comp_pmt, "
+                        "valor_cobrado_adicional, ajuste_iccp, ajuste_icociv, ajuste_ipc",
+                        id=int(a_ant),
+                    )
+                except (TypeError, ValueError):
+                    ant_vals = None
+            if not isinstance(ant_vals, dict):
+                ant_vals = None
+
+            def _a2(k: str) -> float:
+                if not ant_vals:
+                    return 0.0
+                try:
+                    v = float(ant_vals.get(k) or 0.0)
+                except (TypeError, ValueError):
+                    return 0.0
+                if not math.isfinite(v):
+                    return 0.0
+                return float(round(v, 0))
+
+            def _a2r(k: str) -> float:
+                if not ant_vals:
+                    return 0.0
+                try:
+                    v = float(ant_vals.get(k) or 0.0)
+                except (TypeError, ValueError):
+                    return 0.0
+                if not math.isfinite(v):
+                    return 0.0
+                return v
+
+            c2_cobrado_adic = _a2("valor_cobrado_adicional")
+            ap0 = int((pres or {}).get("id") or 0)
+            cid0 = int(contrato_id or 0)
+            if cid0 and ap0:
+                econ_antes = _suma_historico_economia_rpo_antes_presente(cid0, ap0)
+            else:
+                econ_antes = {k: 0.0 for k in _ECON_OH_KEYS}
+            c1_camb = _v1(vr_contr.get("valor_componente_ambiental"))
+            c1_csoc = _v1(vr_contr.get("valor_componente_social"))
+            c1_cpmt = _v1(vr_contr.get("valor_componente_pmt"))
+            pres_econ: Optional[dict] = None
+            if ap0:
+                try:
+                    pe_cols = (
+                        "valor_comp_ambiental, valor_comp_social, valor_comp_pmt, "
+                        "valor_cobrado_adicional, ajuste_iccp, ajuste_icociv, ajuste_ipc"
+                    )
+                    pres_econ = _row("actas", pe_cols, id=int(ap0)) or None
+                except (TypeError, ValueError):
+                    pres_econ = None
+            if not isinstance(pres_econ, dict):
+                pres_econ = None
+
+            def _pv(k: str) -> float:
+                if not pres_econ:
+                    return 0.0
+                try:
+                    w = float(pres_econ.get(k) or 0.0)
+                except (TypeError, ValueError):
+                    w = 0.0
+                if not math.isfinite(w):
+                    w = 0.0
+                return w
+
+            def _vig_mas_c1(db_v: float, c1b: float) -> float:
+                try:
+                    w = float(db_v or 0.0)
+                except (TypeError, ValueError):
+                    w = 0.0
+                if not math.isfinite(w):
+                    w = 0.0
+                return w if w else float(c1b)
+
+            c3_amb = float(econ_antes.get("valor_comp_ambiental") or 0.0) + _vig_mas_c1(
+                _pv("valor_comp_ambiental"), c1_camb
+            )
+            c3_soc = float(econ_antes.get("valor_comp_social") or 0.0) + _vig_mas_c1(
+                _pv("valor_comp_social"), c1_csoc
+            )
+            c3_pmt = float(econ_antes.get("valor_comp_pmt") or 0.0) + _vig_mas_c1(
+                _pv("valor_comp_pmt"), c1_cpmt
+            )
+            c3_cobrado_antes = float(econ_antes.get("valor_cobrado_adicional") or 0.0)
+            try:
+                pres_aj = float(
+                    round(
+                        _pv("ajuste_iccp")
+                        + _pv("ajuste_icociv")
+                        + _pv("ajuste_ipc"),
+                        0,
+                    )
+                )
+            except (TypeError, ValueError):
+                pres_aj = 0.0
+            if not math.isfinite(pres_aj):
+                pres_aj = 0.0
+            c3_ajus_hist = float(
+                round(
+                    float(econ_antes.get("ajuste_iccp") or 0.0)
+                    + float(econ_antes.get("ajuste_icociv") or 0.0)
+                    + float(econ_antes.get("ajuste_ipc") or 0.0)
+                    + pres_aj,
+                    0,
+                )
+            )
+            filas_t = [
+                {
+                    "id": "comp_amb",
+                    "label": "Componente Ambiental",
+                    "c1": c1_camb,
+                    "c2": _a2("valor_comp_ambiental"),
+                    "c3": float(round(c3_amb, 0)),
+                    "c4": _v4(vr_contr.get("valor_componente_ambiental")),
+                },
+                {
+                    "id": "comp_soc",
+                    "label": "Componente Social",
+                    "c1": c1_csoc,
+                    "c2": _a2("valor_comp_social"),
+                    "c3": float(round(c3_soc, 0)),
+                    "c4": _v4(vr_contr.get("valor_componente_social")),
+                },
+                {
+                    "id": "comp_pmt",
+                    "label": "Componente PMT",
+                    "c1": c1_cpmt,
+                    "c2": _a2("valor_comp_pmt"),
+                    "c3": float(round(c3_pmt, 0)),
+                    "c4": _v4(vr_contr.get("valor_componente_pmt")),
+                },
+            ]
+            raw_ads: Any = vr_contr.get("costos_adicionales_lista")
+            if isinstance(raw_ads, str) and str(raw_ads).strip():
+                try:
+                    raw_ads = json.loads(raw_ads)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    raw_ads = []
+            if not isinstance(raw_ads, list):
+                raw_ads = []
+            suma_c1_adic = 0.0
+            suma_c4_adic = 0.0
+            adic_c2_puesto = False
+            adic_c3_puesto = False
+            for idx, it in enumerate(raw_ads):
+                if not isinstance(it, dict):
+                    continue
+                cap = (str(it.get("concepto_contractual") or "")).strip()
+                if not cap:
+                    continue
+                vmm: float
+                try:
+                    vmm = float(it.get("valor_mensual") or 0.0)
+                except (TypeError, ValueError):
+                    vmm = 0.0
+                if vmm == 0.0 and (it.get("valor_mensual") in (None, "", "null")) and it.get("valor") is not None:
+                    try:
+                        vtot_leg = float(it.get("valor") or 0.0)
+                    except (TypeError, ValueError):
+                        vtot_leg = 0.0
+                    try:
+                        tm_leg = float(it.get("tiempo_meses") or 0.0) or 0.0
+                    except (TypeError, ValueError):
+                        tm_leg = 0.0
+                    dtm = max(tm_leg, 1.0) if vtot_leg or tm_leg else 1.0
+                    vmm = vtot_leg / dtm
+                # Col.1: mensual completo (COP) entero. Col.4: misma tasa de obra que componentes = factor4 × mensual
+                c1_ads = float(round(float(vmm), 0))
+                c4_ads = float(round(factor4 * c1_ads, 0))
+                suma_c1_adic += c1_ads
+                suma_c4_adic += c4_ads
+                c2_line = 0.0
+                if not adic_c2_puesto:
+                    c2_line = c2_cobrado_adic
+                    adic_c2_puesto = True
+                c3_line = 0.0
+                if not adic_c3_puesto:
+                    c3_line = float(
+                        round(
+                            c3_cobrado_antes
+                            + _vig_mas_c1(_pv("valor_cobrado_adicional"), float(c1_ads)),
+                            0,
+                        )
+                    )
+                    adic_c3_puesto = True
+                filas_t.append(
+                    {
+                        "id": f"adic_{idx}",
+                        "label": cap,
+                        "c1": c1_ads,
+                        "c2": c2_line,
+                        "c3": c3_line,
+                        "c4": c4_ads,
+                    }
+                )
+            c1_cd_aiu_aj = 0.0
+            if isinstance(f_cdu, dict):
+                c1_cd_aiu_aj = float(f_cdu.get("c1") or 0.0)
+            else:
+                c1_cd_aiu_aj = float(st.get("c1") or 0.0)
+            c4_camb = _v4(vr_contr.get("valor_componente_ambiental"))
+            c4_csoc = _v4(vr_contr.get("valor_componente_social"))
+            c4_cpmt = _v4(vr_contr.get("valor_componente_pmt"))
+            c4_cd_aiu_aj = 0.0
+            if isinstance(f_cdu, dict):
+                c4_cd_aiu_aj = float(f_cdu.get("c4") or 0.0)
+            else:
+                c4_cd_aiu_aj = float(st.get("c4") or 0.0)
+            base_aj = float(c1_cd_aiu_aj) + float(c1_camb) + float(c1_csoc) + float(c1_cpmt) + float(suma_c1_adic)
+            base4_aj = float(c4_cd_aiu_aj) + float(c4_camb) + float(c4_csoc) + float(c4_cpmt) + float(suma_c4_adic)
+            # col.1/4 subtotal obra = costo directo (sin fila AIU)
+            c1_directo_sin_aiu = float(st.get("c1") or 0.0)
+            c4_directo_sin_aiu = float(st.get("c4") or 0.0)
+            p_aj = _tasa_fraccion_desde_valor_contrato(
+                (pres or {}).get("pct_proyectado_ajustes")
+                if isinstance(pres, dict)
+                else None
+            )
+            if int(contrato_id or 0) == 2:
+                c1_ajustes = float(round(c1_directo_sin_aiu * float(p_aj), 0))
+                c4_ajustes = float(round(c4_directo_sin_aiu * float(p_aj), 0))
+            else:
+                c1_ajustes = float(round(float(base_aj) * float(p_aj), 0))
+                c4_ajustes = float(round(float(base4_aj) * float(p_aj), 0))
+            c1_vtot_obr = float(round(float(base_aj) + c1_ajustes, 0))
+            c4_vtot_obr = float(round(float(base4_aj) + c4_ajustes, 0))
+            c2_cd_aiu_aj = 0.0
+            if isinstance(f_cdu, dict):
+                c2_cd_aiu_aj = float(f_cdu.get("c2") or 0.0)
+            else:
+                c2_cd_aiu_aj = float(st.get("c2") or 0.0)
+            c2_ajustes = float(
+                round(_a2r("ajuste_iccp") + _a2r("ajuste_icociv") + _a2r("ajuste_ipc"), 0)
+            )
+            c2_camb = _a2("valor_comp_ambiental")
+            c2_csoc = _a2("valor_comp_social")
+            c2_cpmt = _a2("valor_comp_pmt")
+            base2_aj = (
+                float(c2_cd_aiu_aj)
+                + float(c2_camb)
+                + float(c2_csoc)
+                + float(c2_cpmt)
+                + float(c2_cobrado_adic)
+            )
+            c2_vtot_obr = float(round(float(base2_aj) + float(c2_ajustes), 0))
+            c3_cd_aiu_aj = 0.0
+            if isinstance(f_cdu, dict):
+                c3_cd_aiu_aj = float(f_cdu.get("c3") or 0.0)
+            else:
+                c3_cd_aiu_aj = float(st.get("c3") or 0.0)
+            c3_cobrado_h = 0.0
+            for _f in filas_t:
+                if not isinstance(_f, dict) or not str(_f.get("id") or "").startswith("adic_"):
+                    continue
+                try:
+                    c3_cobrado_h = float(_f.get("c3") or 0.0)
+                except (TypeError, ValueError):
+                    c3_cobrado_h = 0.0
+                break
+            if not c3_cobrado_h and c3_cobrado_antes:
+                c3_cobrado_h = c3_cobrado_antes
+            base3_aj = (
+                float(c3_cd_aiu_aj)
+                + float(c3_amb)
+                + float(c3_soc)
+                + float(c3_pmt)
+                + float(c3_cobrado_h)
+            )
+            c3_vtot_obr = float(round(float(base3_aj) + float(c3_ajus_hist), 0))
+            filas_t += [
+                {
+                    "id": "ajustes",
+                    "label": "Ajustes",
+                    "c1": c1_ajustes,
+                    "c2": c2_ajustes,
+                    "c3": c3_ajus_hist,
+                    "c4": c4_ajustes,
+                },
+                {
+                    "id": "vtot_aj",
+                    "label": "VALOR TOTAL OBRA CON AIU Y AJUSTES",
+                    "c1": c1_vtot_obr,
+                    "c2": c2_vtot_obr,
+                    "c3": c3_vtot_obr,
+                    "c4": c4_vtot_obr,
+                },
+            ]
+            out["filas_tras_costo_directo_mas_aiu"] = filas_t
+            out["_calc_componentes_meta"] = {
+                "n_acta_cd_aiu_c1": n_acta_r,
+                "n_contrato_cd_aiu": n_con,
+                "factor_sobre_vr_componente": round(factor, 12) if factor else 0.0,
+            }
+        if bid == "ensayos" and iva > 0.0 and (st.get("c1", 0) or st.get("c2", 0) or st.get("c3", 0) or st.get("c4", 0)):
+            out["fila_iva"] = {
+                "c1": st["c1"] * iva,
+                "c2": st["c2"] * iva,
+                "c3": st["c3"] * iva,
+                "c4": st["c4"] * iva,
+            }
+            out["fila_directo_mas_iva"] = {
+                "c1": st["c1"] + out["fila_iva"]["c1"],
+                "c2": st["c2"] + out["fila_iva"]["c2"],
+                "c3": st["c3"] + out["fila_iva"]["c3"],
+                "c4": st["c4"] + out["fila_iva"]["c4"],
+            }
+            fd0 = out["fila_directo_mas_iva"]
+            out["fila_valor_total_obra_iva"] = {
+                "c1": float(fd0.get("c1") or 0.0),
+                "c2": float(fd0.get("c2") or 0.0),
+                "c3": float(fd0.get("c3") or 0.0),
+                "c4": float(fd0.get("c4") or 0.0),
+            }
+        return out
+
+    blq = [
+        _fila_bloque("obra", "Obra ejecutada (directo con AIU — sección SICOE / matriz)"),
+        _fila_bloque("ensayos", "Ensayos, sondeos y 14/15 (IVA — sección SICOE / matriz)"),
+    ]
+    c_vtot_ob: Dict[str, float] = {"c1": 0.0, "c2": 0.0, "c3": 0.0, "c4": 0.0}
+    c_ens_iva: Dict[str, float] = {"c1": 0.0, "c2": 0.0, "c3": 0.0, "c4": 0.0}
+    for _b in blq:
+        if not isinstance(_b, dict):
+            continue
+        if _b.get("id") == "obra":
+            for _ft in _b.get("filas_tras_costo_directo_mas_aiu") or []:
+                if not isinstance(_ft, dict) or str(_ft.get("id") or "") != "vtot_aj":
+                    continue
+                c_vtot_ob = {
+                    "c1": float(_ft.get("c1") or 0.0),
+                    "c2": float(_ft.get("c2") or 0.0),
+                    "c3": float(_ft.get("c3") or 0.0),
+                    "c4": float(_ft.get("c4") or 0.0),
+                }
+        if _b.get("id") == "ensayos":
+            fdiv = _b.get("fila_valor_total_obra_iva") or _b.get("fila_directo_mas_iva")
+            if isinstance(fdiv, dict):
+                c_ens_iva = {
+                    "c1": float(fdiv.get("c1") or 0.0),
+                    "c2": float(fdiv.get("c2") or 0.0),
+                    "c3": float(fdiv.get("c3") or 0.0),
+                    "c4": float(fdiv.get("c4") or 0.0),
+                }
+    totales_doc = {
+        "c1": float(c_vtot_ob.get("c1", 0.0) + c_ens_iva.get("c1", 0.0)),
+        "c2": float(c_vtot_ob.get("c2", 0.0) + c_ens_iva.get("c2", 0.0)),
+        "c3": float(c_vtot_ob.get("c3", 0.0) + c_ens_iva.get("c3", 0.0)),
+        "c4": float(c_vtot_ob.get("c4", 0.0) + c_ens_iva.get("c4", 0.0)),
+    }
+    filas_unidas: List[Dict[str, Any]] = []
+    for b in blq:
+        for f in b["filas"]:
+            filas_unidas.append(f)
+    return {
+        "acta_presente": pres,
+        "acta_anterior": ant,
+        "criterio": (
+            "C1: acta vigente del contrato, matriz SICOE «HABILITADO» — costo directo con ítem. "
+            "C2: acta anterior a la vigente, cascada N1·N2·N3. "
+            "C3: total aprobado solo interventoría (nivel 3), acumulado hasta el acta vigente. "
+            "C4: pendiente en al menos un nivel. Tras subtotal bloque obra: fila AIU = subtotal·tasa AIU (contrato). "
+            "Tras subtotal bloque ensayos/14-15: fila IVA = subtotal·tasa IVA (contrato, p. ej. 0,19=19 %)."
+        ),
+        "aiu_pactado": aiu,
+        "iva_pactado": iva,
+        "resolucion": {
+            "consecutivo_presente": c_pres,
+            "ids_cascade_acumulado": ids_cascade_hasta,
+        },
+        "validacion_misma_que_lista_actas": {
+            "cascade_acta_presente_cdirecto_lista": float(t_presente_lista),
+            "cascade_acta_anterior_cdirecto": float(t2) if a_ant is not None else None,
+            "cascade_acumulado_todas_las_rpo_cdirecto": float(t_acc),
+        },
+        "filas_por_bloque": blq,
+        "totales": {
+            "c1": totales_doc["c1"],
+            "c2": totales_doc["c2"],
+            "c3": totales_doc["c3"],
+            "c4": totales_doc["c4"],
+        },
+        "valor_total_acta": {
+            "c1": totales_doc["c1"],
+            "c2": totales_doc["c2"],
+            "c3": totales_doc["c3"],
+            "c4": totales_doc["c4"],
+        },
+        "filas_orden_capitulo": filas_unidas,
+        "secciones_presente": d_p.get("secciones") or {},
+    }
+
+
+def _construir_datos_informe_gerencia_matriz(
+    contrato_id: int, acta_presente_override: Optional[int] = None
+) -> Dict[str, Any]:
+    pres, ant = _resolver_acta_gerencia_presente_y_anterior(contrato_id, acta_presente_override)
+    if not pres or not pres.get("id"):
+        raise HTTPException(404, "No hay actas RPO (cobro) en el contrato para el informe de gerencia")
+    ap_id = int(pres["id"])
+    c_pres = int(pres.get("consecutivo") or 0) or 0
+    actas_asc = _actas_rpo_consecutivo_ascendente(contrato_id)
+    ids_cascade_hasta: List[int] = [
+        int(a["id"])
+        for a in actas_asc
+        if a.get("id") is not None and int(a.get("consecutivo") or 0) <= c_pres
+    ]
+    a_ant = int(ant["id"]) if (ant and ant.get("id")) else None
+    t2 = 0.0
+    r_presente = rpo_resumen_actas_rpc(_sb, contrato_id, [ap_id]) or {}
+    t_presente_lista = float((r_presente.get(int(ap_id)) or {}).get("costo_directo_total", 0) or 0)
+    if a_ant is not None:
+        r_one = rpo_resumen_actas_rpc(_sb, contrato_id, [int(a_ant)])
+        if r_one:
+            t2 = float((r_one.get(int(a_ant)) or {}).get("costo_directo_total", 0) or 0)
+    rsum_acum = rpo_resumen_actas_rpc(_sb, contrato_id, ids_cascade_hasta) or {}
+    t_acc = 0.0
+    for _oid in ids_cascade_hasta:
+        t_acc += float((rsum_acum.get(int(_oid)) or {}).get("costo_directo_total", 0) or 0)
+    aiu_c: Optional[float] = None
+    iva_c: Optional[float] = None
+    ctr_r = (
+        _row(
+            "contratos",
+            "aiu, iva, costo_directo_contrato, valor_componente_ambiental, "
+            "valor_componente_social, valor_componente_pmt, costos_adicionales_lista",
+            id=contrato_id,
+        )
+        or {}
+    )
+    if ctr_r.get("aiu") is not None:
+        try:
+            aiu_c = float(ctr_r["aiu"])
+        except (TypeError, ValueError):
+            aiu_c = None
+    if ctr_r.get("iva") is not None:
+        try:
+            iva_c = float(ctr_r["iva"])
+        except (TypeError, ValueError):
+            iva_c = None
+
+    maps = informe_gerencia_matriz_maps_por_rpc(
+        _sb, contrato_id, ap_id, a_ant, ids_cascade_hasta, None
+    )
+    d_p = rpo_conciliacion_un_acta_rpc(_sb, contrato_id, ap_id)
+    if d_p is None:
+        d_p = (rpo_conciliacion_por_contrato(_sb, contrato_id, [ap_id]) or {}).get(ap_id) or _rpo_gerencia_vacio()
+    if maps is None:
+        return _construir_datos_informe_gerencia_matriz_fallback_por_capitulo(
+            contrato_id, pres, ant, ap_id, c_pres, a_ant, ids_cascade_hasta, t2, t_acc, aiu_c, iva_c, ctr_r
+        )
+
+    c1, c2, c3, c4 = maps["c1"], maps["c2"], maps["c3"], maps["c4"]
+    return _embalaje_informe_gerencia_bloques(
+        pres,
+        ant,
+        c_pres,
+        ids_cascade_hasta,
+        t2,
+        t_acc,
+        t_presente_lista,
+        c1,
+        c2,
+        c3,
+        c4,
+        d_p,
+        a_ant,
+        aiu_c,
+        iva_c,
+        vr_contr=ctr_r,
+        contrato_id=contrato_id,
+    )
+
+
+def _acta_cab_gerencia(acta_id: int) -> Dict[str, Any]:
+    r = _row("actas", "id, numero_rpo, consecutivo, fecha_inicio, fecha_fin, tipo_grupo", id=acta_id) or {}
+    if not r:
+        return r
+    return r
+
+
+def _html_informe_gerencia_cc_ger_001(
+    contrato: dict,
+    acta_p: dict,
+    acta_a: Optional[dict],
+    d_p: dict,
+    d_a: Optional[dict],
+    *,
+    usuario_nombre: str,
+    usuario_cargo: str,
+    formato_ccd: str,
+    contexto_tipo: str,
+    contexto_id: int,
+    firma_cfg: Optional[Dict[str, Any]],
+    elaboro_firma_data_uri: Optional[str],
+    reviso_firma_data_uri: Optional[str],
+    aprobo_firma_data_uri: Optional[str],
+) -> str:
+    """PDF CC-GER-001: matriz SICOE (N1 N2 N3) por capítulo; dos actas; firmas terciarias."""
+    bd = "border:1px solid #9ca3af"
+    bd_blk = "border:1px solid #1f2937"
+    fmt = formato_ccd
+    est = _merge_estilo_pdf((firma_cfg or {}).get("estilo_pdf"), fmt)
+    fc = firma_cfg or {}
+    logo_html = _html_logo_contratista(contrato)
+    fecha_gen = _fmt_informe_fecha_generacion()
+    contratista_nom = _h(str(contrato.get("contratista") or ""))
+    interv = _h(str(contrato.get("interventoria") or ""))
+    nit_raw = str(contrato.get("nit") or "").strip()
+    nit_en_valor = f' <span style="font-size:6.5pt;color:#444;">(NIT: {_h(nit_raw)})</span>' if nit_raw else ""
+    lbl = "font-size:6pt;font-weight:bold;color:#111;text-transform:uppercase;letter-spacing:0.2px;"
+    und = "border-bottom:1px solid #1f2937;font-size:7pt;padding:1px 0 2px 0;margin-top:1px;"
+    objeto = str(contrato.get("objeto") or "—")
+    mrg = _merge_filas_gerencia_dos_actas(d_p.get("por_capitulo"), d_a.get("por_capitulo") if d_a else None)
+    t_p = float(d_p.get("costo_directo_total") or 0)
+    t_a = float(d_a.get("costo_directo_total") or 0) if d_a else 0.0
+
+    def _lbl_acta(ra: dict) -> str:
+        n = str(ra.get("numero_rpo") or ra.get("consecutivo") or "—")
+        fi = str((ra.get("fecha_inicio") or "") or "")[:10] or "—"
+        ff = str((ra.get("fecha_fin") or "") or "")[:10] or "—"
+        return f"RPO {n} — {fi} → {ff} (consecutivo: {str(ra.get('consecutivo') or '—')})"
+
+    c3l, c3v = "ACTA (PRESENTE — CCD / FIRMA)", _lbl_acta(acta_p)
+    if acta_a:
+        c4l, c4v = "ACTA (REFERENCIA / COMPARACIÓN)", _lbl_acta(acta_a)
+    else:
+        c4l, c4v = "ACTA (REFERENCIA / COMPARACIÓN)", "— (sin acta de referencia; solo se lista el acta presente)"
+
+    elaboro_n = _h(str(fc.get("elaboro_nombre") or "").strip() or "—")
+    elaboro_c = _h(str(fc.get("elaboro_cargo") or "").strip() or "—")
+    reviso_n = _h(str(fc.get("reviso_nombre") or "").strip() or "—")
+    reviso_c = _h(str(fc.get("reviso_cargo") or "").strip() or "—")
+    aprobo_n = _h(str(fc.get("aprobo_nombre") or "").strip() or "—")
+    aprobo_c = _h(str(fc.get("aprobo_cargo") or "").strip() or "—")
+
+    thead_bg = _sanitize_ccd_hex_color(est.get("thead_bg"), "#1e3a5f")
+    reven = _sanitize_ccd_hex_color(est.get("row_even_bg"), "#f8fafc")
+    rodd = _sanitize_ccd_hex_color(est.get("row_odd_bg"), "#e5e7eb")
+
+    filas = []
+    for i, (cap, vp, va, dlt) in enumerate(mrg):
+        rbg = reven if i % 2 == 0 else rodd
+        cshow = (cap if len(cap) <= 100 else cap[:97] + "…")
+        if acta_a:
+            filas.append(
+                f'<tr style="background:{rbg}">'
+                f'<td style="{bd};padding:3px 4px;font-size:7pt;text-align:left;word-wrap:break-word">{_h(cshow)}</td>'
+                f'<td style="{bd};padding:3px 4px;font-size:7pt;text-align:right">{_fm(vp)}</td>'
+                f'<td style="{bd};padding:3px 4px;font-size:7pt;text-align:right">{_fm(va)}</td>'
+                f'<td style="{bd};padding:3px 4px;font-size:7pt;text-align:right;font-weight:600">{_fm(dlt)}</td>'
+                f"</tr>"
+            )
+        else:
+            filas.append(
+                f'<tr style="background:{rbg}">'
+                f'<td style="{bd};padding:3px 4px;font-size:7pt;text-align:left;word-wrap:break-word">{_h(cshow)}</td>'
+                f'<td style="{bd};padding:3px 4px;font-size:7pt;text-align:right">{_fm(vp)}</td>'
+                f"</tr>"
+            )
+    tbody = "".join(filas) if filas else (
+        f'<tr><td colspan="{4 if acta_a else 2}" style="{bd};padding:6px;font-size:7pt;color:#6b7280">'
+        "Sin capítulos con registro aprobado en matriz (revisa sincronización SICOE / acta RPO).</td></tr>"
+    )
+    tot_row = (
+        f'<tr style="background:{_sanitize_ccd_hex_color(est.get("subtotal_bg"), "#dbeafe")}">'
+        f'<td style="{bd};padding:4px 6px;font-size:7.5pt;font-weight:800;text-align:right">'
+        f'TOTAL costo directo aprob. (N1·N2·N3 en cascada)</td>'
+        f'<td style="{bd};padding:4px 6px;font-size:7.5pt;font-weight:800;text-align:right">{_fm(t_p)}</td>'
+    )
+    if acta_a:
+        tot_row += (
+            f'<td style="{bd};padding:4px 6px;font-size:7.5pt;font-weight:800;text-align:right">{_fm(t_a)}</td>'
+            f'<td style="{bd};padding:4px 6px;font-size:7.5pt;font-weight:800;text-align:right">{_fm(t_p - t_a)}</td>'
+        )
+    tot_row += "</tr>"
+
+    pie = (
+        f"Informe gerencia · criterio matriz: mismos N1, N2 y N3 aprobado en SICOE Obra que en conciliación. "
+        f"Contexto CCD: {contexto_tipo} {contexto_id}."
+    )
+
+    th_act = (
+        f'<th style="{bd};background:{thead_bg};color:#fff;padding:3px 4px;font-size:6.5pt">CAPÍTULO (obra según título SICOE)</th>'
+        f'<th style="{bd};background:{thead_bg};color:#fff;padding:3px 4px;font-size:6.5pt">ACTA PRESENTE · COP$</th>'
+    )
+    if acta_a:
+        th_act += (
+            f'<th style="{bd};background:{thead_bg};color:#fff;padding:3px 4px;font-size:6.5pt">'
+            f"ACTA REFERENCIA · COP$</th>"
+            f'<th style="{bd};background:{thead_bg};color:#fff;padding:3px 4px;font-size:6.5pt">DIF. · COP$</th>'
+        )
+
+    elaboro_td = _html_cc_sub_td_firma_columna(bd, "Elaboró:", elaboro_n, elaboro_c, elaboro_firma_data_uri)
+    reviso_td = _html_cc_sub_td_firma_columna(bd, "Revisó:", reviso_n, reviso_c, reviso_firma_data_uri)
+    aprobo_td = _html_cc_sub_td_firma_columna(bd, "Aprobó:", aprobo_n, aprobo_c, aprobo_firma_data_uri)
+
+    secc = d_p.get("secciones") or {}
+    sec_txt = []
+    for _k, blo in (secc.items() if isinstance(secc, dict) else []):
+        if isinstance(blo, dict) and blo.get("titulo") and (blo.get("subtotal") is not None):
+            sec_txt.append(f"{_h(str(blo.get('titulo') or ''))} · {_h(_fm(blo.get('subtotal')))}")
+    sum_sec = f"<p style=\"font-size:6.5pt;color:#374151;margin:6px 0 4px 0\">{' &nbsp;|&nbsp; '.join(sec_txt)}</p>" if sec_txt else ""
+
+    return f"""<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:pdf="http://www.xhtml2pdf.org/pdf">
+<head><meta charset="UTF-8"/><title>{_h(formato_ccd)}</title>
+<style type="text/css">
+@page {{ size: letter; margin: 8mm 10mm; }}
+</style></head>
+<body style="margin:0;padding:4px;font-family:Arial,Helvetica,sans-serif;font-size:7.5pt;color:#111;">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd_blk};table-layout:fixed;">
+<tr>
+<td style="width:20%;{bd_blk};vertical-align:middle;padding:2px;text-align:center;background:#fff">
+{logo_html}
+</td>
+<td style="width:48%;{bd_blk};vertical-align:middle;text-align:center;font-weight:bold;font-size:7.5pt;padding:3px 5px;line-height:1.1;">
+INFORME DE AVANCE (GERENCIAL) — EJECUCIÓN DE OBRA
+</td>
+<td style="width:32%;{bd_blk};vertical-align:middle;text-align:center;padding:3px 5px;">
+<div style="color:#1e3a8a;font-weight:bold;font-size:12pt;letter-spacing:0.3px;">{_h(formato_ccd)}</div>
+<div style="font-size:8.5pt;color:#1e3a8a;font-weight:bold;">CCD · ClaraCore</div>
+</td>
+</tr>
+<tr><td colspan="3" style="padding:0;border:none;">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd_blk};background:#fff">
+<tr><td style="padding:2px 6px;border:none;">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:none;">
+<tr>
+<td style="width:25%;padding:0 5px 2px 0;border:none;vertical-align:top;">
+<div style="{lbl}">CONTRATO</div>
+<div style="{und}">{_h(contrato.get("numero", ""))}</div>
+</td>
+<td style="width:25%;padding:0 5px 2px 0;border:none;vertical-align:top;">
+<div style="{lbl}">FECHA DE EMISIÓN</div>
+<div style="{und}">{_h(fecha_gen)}</div>
+</td>
+<td style="width:25%;padding:0 5px 2px 0;border:none;vertical-align:top;">
+<div style="{lbl}">{_h(c3l)}</div>
+<div style="{und}">{_h(c3v)}</div>
+</td>
+<td style="width:25%;padding:0 0 2px 0;border:none;vertical-align:top;">
+<div style="{lbl}">{_h(c4l)}</div>
+<div style="{und}">{_h(c4v)}</div>
+</td>
+</tr>
+<tr>
+<td colspan="2" style="padding:3px 5px 1px 0;border:none;vertical-align:top;">
+<div style="{lbl}">CONTRATISTA</div>
+<div style="{und}">{contratista_nom}{nit_en_valor}</div>
+</td>
+<td colspan="2" style="padding:3px 0 1px 0;border:none;vertical-align:top;">
+<div style="{lbl}">INTERVENTORÍA</div>
+<div style="{und}">{interv}</div>
+</td>
+</tr>
+<tr>
+<td colspan="4" style="padding:4px 5px 0 0;border:none;vertical-align:top;">
+<div style="{lbl}">OBJETO</div>
+<div style="border-bottom:1px solid #1f2937;font-size:7pt;padding:1px 0 2px 0;word-wrap:break-word">{_h(objeto)}</div>
+</td>
+</tr>
+</table>
+</td></tr>
+</table>
+</td></tr>
+</table>
+{sum_sec}
+<div style="font-size:6.3pt;color:#4b5563;margin:4px 0 2px 0">Datos: sincronizados con SICOE Obra; costo = línea directa aprobada en interventoría, sin Excel intermedio.</div>
+<table width="100%" cellspacing="0" cellpadding="0" class="cc001-tabla-ger" style="border-collapse:collapse;">
+<thead><tr>{th_act}</tr></thead>
+<tbody>
+{tbody}
+{tot_row}
+</tbody>
+</table>
+<div class="ccd-cc001-firmas-wrap" style="margin-top:4mm;page-break-inside:avoid;">
+<table class="ccd-cc001-firmas-tbl" style="width:100%;border-collapse:collapse" cellspacing="0" cellpadding="0">
+<tr>
+{elaboro_td}
+{reviso_td}
+{aprobo_td}
+</tr>
+</table>
+</div>
+<p style="font-size:6pt;color:#64748b;margin-top:6px;text-align:center;">{_h(pie)} · Generado ClaraCore · {_h(usuario_cargo)} · {_h(usuario_nombre)}</p>
+</body></html>"""
+
+
+def _html_informe_gerencia_cc_ger_001_matriz(
+    contrato: dict,
+    datos: Dict[str, Any],
+    *,
+    usuario_nombre: str,
+    usuario_cargo: str,
+    formato_ccd: str,
+    ap_id: int,
+    firma_cfg: Optional[Dict[str, Any]],
+    elaboro_firma_data_uri: Optional[str],
+    reviso_firma_data_uri: Optional[str],
+    aprobo_firma_data_uri: Optional[str],
+) -> str:
+    """CC-GER-001: 4 columnas, horizontal, compacto; Obra/AIU y Ensayos/IVA con subtotales independientes."""
+    bd = "border:0.4px solid #b8c5d0"
+    bd_blk = "border:0.4px solid #9ca3af"
+    fmt = formato_ccd
+    est = _merge_estilo_pdf((firma_cfg or {}).get("estilo_pdf"), fmt)
+    fc = firma_cfg or {}
+    logo_html = _html_logo_contratista(contrato, compact=True, compact_box_height="0.9cm")
+    fecha_gen = _fmt_informe_fecha_generacion()
+    contratista_nom = _h(str(contrato.get("contratista") or ""))
+    interv = _h(str(contrato.get("interventoria") or ""))
+    nit_raw = str(contrato.get("nit") or "").strip()
+    nit_en_valor = f' <span style="font-size:4.2pt;color:#444;">(NIT: {_h(nit_raw)})</span>' if nit_raw else ""
+    # Encabezado compacto (una sola hoja): no reducir contenido, solo padding/tipos.
+    lbl = "font-size:4.5pt;font-weight:bold;color:#111;text-transform:uppercase;letter-spacing:0.1px;padding-top:0;line-height:1.05;"
+    und = "border-bottom:0.4px solid #4b5563;font-size:4.65pt;padding:0.5px 0 0.5px 0;margin-top:0;line-height:1.08;word-wrap:break-word;"
+    # Bloque metadatos (CONTRATO…OBJETO, recuadro bajo título, no fila de logos): +20% altura / aire.
+    _meta_h = 1.2
+    _pye = 0.5 * _meta_h
+    lbl_m = (
+        f"font-size:4.5pt;font-weight:bold;color:#111;text-transform:uppercase;letter-spacing:0.1px;"
+        f"padding-top:0;line-height:{1.05 * _meta_h:.2f};"
+    )
+    und_m = (
+        f"border-bottom:0.4px solid #4b5563;font-size:4.65pt;padding:{_pye:.2f}px 0 {_pye:.2f}px 0;margin-top:0;"
+        f"line-height:{1.08 * _meta_h:.2f};word-wrap:break-word;"
+    )
+    pad_m4 = f"padding:{_pye:.2f}px 2px {_pye:.2f}px 0"
+    pad_m4l = f"padding:{_pye:.2f}px 0 {_pye:.2f}px 0"
+    pad_m2l = f"padding:{_pye:.2f}px 3px {_pye:.2f}px 0"
+    pad_mct1 = f"padding:{_pye:.2f}px 2px {_pye:.2f}px 0"
+    pad_mct2 = f"padding:{_pye:.2f}px 0 {_pye:.2f}px 0"
+    pad_mob = f"padding:{_pye:.2f}px 0 {_pye:.2f}px 3px"
+    objeto = str(contrato.get("objeto") or "—")
+    ap = (datos.get("acta_presente") or {}) or {}
+    aa = (datos.get("acta_anterior") or {}) or {}
+    val = (datos.get("validacion_misma_que_lista_actas") or {}) or {}
+    tit_acta = f"RPO {ap.get('numero_rpo') or ap.get('consecutivo') or '—'}"
+    if aa and aa.get("id"):
+        subt_ref = f"RPO ant. {aa.get('numero_rpo') or aa.get('consecutivo') or '—'}"
+    else:
+        subt_ref = "RPO ant.: —"
+    t = (datos.get("valor_total_acta") or datos.get("totales") or {}) or {}
+    aiu_pac = float(datos.get("aiu_pactado") or 0) or 0.0
+    iva_pac = float(datos.get("iva_pactado") or 0) or 0.0
+    aiu_lbl = f"AIU ({(aiu_pac * 100):g} % contrato)"
+    iva_lbl = f"IVA ({(iva_pac * 100):g} % contrato)"
+    thead_bg = _sanitize_ccd_hex_color(est.get("thead_bg"), "#1e3a5f")
+    reven = _sanitize_ccd_hex_color(est.get("row_even_bg"), "#f8fafc")
+    rodd = _sanitize_ccd_hex_color(est.get("row_odd_bg"), "#eef2f7")
+    sub_bg = _sanitize_ccd_hex_color(est.get("subtotal_bg"), "#bfdbfe")
+    g_tit_blo = _sanitize_ccd_hex_color(est.get("ger_titulo_bloque_bg"), sub_bg)
+    g_su_aiu = _sanitize_ccd_hex_color(est.get("ger_subtotal_obra_con_aiu_bg"), "#e0f2fe")
+    g_ta_aiu = _sanitize_ccd_hex_color(est.get("ger_fila_tasa_aiu_bg"), "#dbeafe")
+    g_cdu = _sanitize_ccd_hex_color(est.get("ger_cdirecto_mas_aiu_bg"), "#c7d8f0")
+    g_post = _sanitize_ccd_hex_color(est.get("ger_filas_post_cdu_bg"), "#e8edf5")
+    g_vo_aj = _sanitize_ccd_hex_color(est.get("ger_vtot_obra_ajustes_bg"), "#a8bfdb")
+    g_su_iva = _sanitize_ccd_hex_color(est.get("ger_subtotal_obra_con_iva_bg"), "#e0f2fe")
+    g_ta_iva = _sanitize_ccd_hex_color(est.get("ger_fila_tasa_iva_bg"), "#e8eeff")
+    g_cdiva = _sanitize_ccd_hex_color(est.get("ger_cdirecto_mas_iva_bg"), "#d4dcf5")
+    g_v_iva = _sanitize_ccd_hex_color(est.get("ger_vtot_obra_iva_bg"), "#c3d0f0")
+    g_vacta = _sanitize_ccd_hex_color(est.get("ger_valor_total_acta_bg"), "#93c5fd")
+    sec_tit = "#0c4a6e"
+    # Grilla: +1 pt respecto a la base compacta original (antes se probó +2; una hoja: +1).
+    _dpt = 1.0
+    fs = f"{4.9 + _dpt}pt"
+    fs_th = f"{5.5 + _dpt}pt"
+    fs_th_sub = f"{4.0 + _dpt}pt"
+    pd_cell = "0.6px 1.6px"
+
+    def _th_encab_cabecera_rpo(ra: Optional[dict], *, sin_referencia: str) -> str:
+        if not ra or not ra.get("id"):
+            return f'<div style="line-height:1.1;font-size:{fs_th}">{_h(sin_referencia)}</div>'
+        n = str(ra.get("numero_rpo") or ra.get("id") or "—")
+        c = str(ra.get("consecutivo") or "").strip() or "—"
+        fi0 = (ra.get("fecha_inicio") or "") or ""
+        ff0 = (ra.get("fecha_fin") or "") or ""
+        fi = (str(fi0)[:10] if fi0 else "—") or "—"
+        ff = (str(ff0)[:10] if ff0 else "—") or "—"
+        l1 = f"RPO {n} · cons. {c}"
+        l2 = f"{fi} → {ff}"
+        return (
+            f'<div style="line-height:1.0;font-size:{fs_th}">{_h(l1)}</div>'
+            f'<div style="line-height:1.0;font-size:{fs_th_sub};font-weight:600;opacity:0.95;padding-top:0">{_h(l2)}</div>'
+        )
+
+    # 10,2% c/u +15% de ancho → 11,73% c/u; capítulo el resto (xhtml2pdf: celdas + CSS nth-child).
+    w_num = "11.73%"
+    w_cap = "53.08%"  # 100 − 4×11,73%
+    st_w_cap = f"width:{w_cap};max-width:{w_cap};min-width:0;box-sizing:border-box;"
+    st_w_num = f"width:{w_num};max-width:{w_num};min-width:0;box-sizing:border-box;word-wrap:break-word;"
+    colgrp = (
+        f'<colgroup>'
+        f'<col style="{st_w_cap}" />'
+        f'<col style="{st_w_num}" />'
+        f'<col style="{st_w_num}" />'
+        f'<col style="{st_w_num}" />'
+        f'<col style="{st_w_num}" />'
+        f"</colgroup>"
+    )
+    th_c1 = _th_encab_cabecera_rpo(ap if ap.get("id") else None, sin_referencia="— (sin acta presente)")
+    th_c2 = _th_encab_cabecera_rpo(aa if (aa and aa.get("id")) else None, sin_referencia="— (sin RPO previa)")
+    th = (
+        f'<th style="{st_w_cap}{bd};background:{thead_bg};color:#fff;padding:0.5px 1px;font-size:{fs_th};line-height:1.05">'
+        f"Capítulo SICOE</th>"
+        f'<th style="{st_w_num}{bd};background:{thead_bg};color:#fff;padding:0.5px 0;font-size:{fs_th};line-height:1.05;text-align:center;vertical-align:middle">'
+        f"{th_c1}</th>"
+        f'<th style="{st_w_num}{bd};background:{thead_bg};color:#fff;padding:0.5px 0;font-size:{fs_th};line-height:1.05;text-align:center;vertical-align:middle">'
+        f"{th_c2}</th>"
+        f'<th style="{st_w_num}{bd};background:{thead_bg};color:#fff;padding:0.5px 0;font-size:{fs_th};line-height:1.05">'
+        f"Total aprobados</th>"
+        f'<th style="{st_w_num}{bd};background:{thead_bg};color:#fff;padding:0.5px 0;font-size:{fs_th};line-height:1.05">Total pendientes</th>'
+    )
+    # Sin max-width:0 (provocaba que la 1.ª col se colapsara y las numéricas comían el ancho en el PDF).
+    td_cap = f"{st_w_cap}word-wrap:break-word;overflow-wrap:break-word;white-space:normal;{bd}"
+    td_num = f"{st_w_num}{bd}"
+
+    def _row_dat(r: Dict[str, Any], i: int) -> str:
+        rbg = reven if i % 2 == 0 else rodd
+        cap = str(r.get("capitulo") or "—")
+        cshow = cap
+        return (
+            f'<tr style="background:{rbg}">'
+            f'<td style="{td_cap};padding:{pd_cell};font-size:{fs};line-height:1.1">{_h(cshow)}</td>'
+            f'<td style="{td_num};padding:{pd_cell};font-size:{fs};line-height:1.05;text-align:right">{_fm(float(r.get("c1") or 0))}</td>'
+            f'<td style="{td_num};padding:{pd_cell};font-size:{fs};line-height:1.05;text-align:right">{_fm(float(r.get("c2") or 0))}</td>'
+            f'<td style="{td_num};padding:{pd_cell};font-size:{fs};line-height:1.05;text-align:right">{_fm(float(r.get("c3") or 0))}</td>'
+            f'<td style="{td_num};padding:{pd_cell};font-size:{fs};line-height:1.05;text-align:right">{_fm(float(r.get("c4") or 0))}</td>'
+            f"</tr>"
+        )
+
+    bdy: list = []
+    bloques = datos.get("filas_por_bloque")
+    if isinstance(bloques, list) and bloques:
+        for j, bsec in enumerate(bloques):
+            if not isinstance(bsec, dict):
+                continue
+            titb = str(bsec.get("titulo") or "")
+            bdy.append(
+                f'<tr><td colspan="5" style="{bd};background:{g_tit_blo};color:{sec_tit};font-size:{4.7 + _dpt}pt;'
+                f'font-weight:800;padding:0.5px 1px;">{_h(titb)}</td></tr>'
+            )
+            for i, frow in enumerate(bsec.get("filas") or []):
+                if not isinstance(frow, dict):
+                    continue
+                bdy.append(_row_dat(frow, (j * 200) + i))
+            st = bsec.get("subtotal") or {}
+            st_lbl = "Subtotal"
+            st_row_bg = g_su_aiu
+            if bsec.get("id") == "obra":
+                st_lbl = "Subtotal Obra con AIU"
+                st_row_bg = g_su_aiu
+            elif bsec.get("id") == "ensayos":
+                st_lbl = "Subtotal Obra con IVA"
+                st_row_bg = g_su_iva
+            bdy.append(
+                f'<tr style="background:{st_row_bg}">'
+                f'<td style="{td_cap};font-size:{4.8 + _dpt}pt;font-weight:800;text-align:left;padding:{pd_cell}">{_h(st_lbl)}</td>'
+                f'<td style="{td_num};font-size:{4.8 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">{_fm(float(st.get("c1") or 0))}</td>'
+                f'<td style="{td_num};font-size:{4.8 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">{_fm(float(st.get("c2") or 0))}</td>'
+                f'<td style="{td_num};font-size:{4.8 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">{_fm(float(st.get("c3") or 0))}</td>'
+                f'<td style="{td_num};font-size:{4.8 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">{_fm(float(st.get("c4") or 0))}</td>'
+                f"</tr>"
+            )
+            f_aiu = bsec.get("fila_aiu")
+            f_cd_aiu = bsec.get("fila_costo_directo_mas_aiu")
+            if bsec.get("id") == "obra" and isinstance(f_aiu, dict):
+                bdy.append(
+                    f'<tr style="background:{g_ta_aiu}">'
+                    f'<td style="{td_cap};font-size:{4.6 + _dpt}pt;font-weight:700;text-align:left;padding:{pd_cell}">'
+                    f"{_h(aiu_lbl)}</td>"
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:700;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_aiu.get("c1") or 0))}</td>'
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:700;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_aiu.get("c2") or 0))}</td>'
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:700;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_aiu.get("c3") or 0))}</td>'
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:700;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_aiu.get("c4") or 0))}</td>'
+                    f"</tr>"
+                )
+            if bsec.get("id") == "obra" and isinstance(f_cd_aiu, dict):
+                bdy.append(
+                    f'<tr style="background:{g_cdu}">'
+                    f'<td style="{td_cap};font-size:{4.6 + _dpt}pt;font-weight:800;text-align:left;padding:{pd_cell}">'
+                    f"Costo Directo + AIU</td>"
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_cd_aiu.get("c1") or 0))}</td>'
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_cd_aiu.get("c2") or 0))}</td>'
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_cd_aiu.get("c3") or 0))}</td>'
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_cd_aiu.get("c4") or 0))}</td>'
+                    f"</tr>"
+                )
+            for f_aux in bsec.get("filas_tras_costo_directo_mas_aiu") or []:
+                if not isinstance(f_aux, dict) or not f_aux.get("label"):
+                    continue
+                lab2 = str(f_aux.get("label") or "—")
+                fx_id = str(f_aux.get("id") or "")
+                fxb = g_vo_aj if fx_id == "vtot_aj" else g_post
+                c1s = "—" if f_aux.get("c1") is None else _fm(float(f_aux.get("c1") or 0.0))
+                c2s = "—" if f_aux.get("c2") is None else _fm(float(f_aux.get("c2") or 0.0))
+                c3s = "—" if f_aux.get("c3") is None else _fm(float(f_aux.get("c3") or 0.0))
+                c4s = "—" if f_aux.get("c4") is None else _fm(float(f_aux.get("c4") or 0.0))
+                wfx = "800" if fx_id == "vtot_aj" else "700"
+                bdy.append(
+                    f'<tr style="background:{fxb}">'
+                    f'<td style="{td_cap};font-size:{4.4 + _dpt}pt;font-weight:{wfx};text-align:left;padding:{pd_cell}">'
+                    f"{_h(lab2)}</td>"
+                    f'<td style="{td_num};font-size:{4.4 + _dpt}pt;font-weight:{wfx};text-align:right;padding:{pd_cell}">'
+                    f"{c1s}</td>"
+                    f'<td style="{td_num};font-size:{4.4 + _dpt}pt;font-weight:{wfx};text-align:right;padding:{pd_cell}">'
+                    f"{c2s}</td>"
+                    f'<td style="{td_num};font-size:{4.4 + _dpt}pt;font-weight:{wfx};text-align:right;padding:{pd_cell}">'
+                    f"{c3s}</td>"
+                    f'<td style="{td_num};font-size:{4.4 + _dpt}pt;font-weight:{wfx};text-align:right;padding:{pd_cell}">'
+                    f"{c4s}</td>"
+                    f"</tr>"
+                )
+            f_iva = bsec.get("fila_iva")
+            f_vt_iva = bsec.get("fila_valor_total_obra_iva")
+            if bsec.get("id") == "ensayos" and isinstance(f_iva, dict):
+                bdy.append(
+                    f'<tr style="background:{g_ta_iva}">'
+                    f'<td style="{td_cap};font-size:{4.6 + _dpt}pt;font-weight:700;text-align:left;padding:{pd_cell}">'
+                    f"{_h(iva_lbl)}</td>"
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:700;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_iva.get("c1") or 0))}</td>'
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:700;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_iva.get("c2") or 0))}</td>'
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:700;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_iva.get("c3") or 0))}</td>'
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:700;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_iva.get("c4") or 0))}</td>'
+                    f"</tr>"
+                )
+            if bsec.get("id") == "ensayos" and isinstance(f_vt_iva, dict):
+                bdy.append(
+                    f'<tr style="background:{g_v_iva}">'
+                    f'<td style="{td_cap};font-size:{4.6 + _dpt}pt;font-weight:800;text-align:left;padding:{pd_cell}">'
+                    f"VALOR TOTAL OBRA CON IVA</td>"
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_vt_iva.get("c1") or 0))}</td>'
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_vt_iva.get("c2") or 0))}</td>'
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_vt_iva.get("c3") or 0))}</td>'
+                    f'<td style="{td_num};font-size:{4.7 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">'
+                    f'{_fm(float(f_vt_iva.get("c4") or 0))}</td>'
+                    f"</tr>"
+                )
+    else:
+        filas = datos.get("filas_orden_capitulo") or []
+        for i, row in enumerate(filas):
+            if not isinstance(row, dict):
+                continue
+            bdy.append(_row_dat(row, i))
+    tbody = "".join(bdy) if bdy else (
+        f'<tr><td colspan="5" style="{bd};padding:4px;font-size:{6 + _dpt}pt;color:#6b7280">Sin filas SICOE.</td></tr>'
+    )
+    tot_tr = (
+        f'<tr style="background:{g_vacta}">'
+        f'<td style="{td_cap};padding:{pd_cell};font-size:{4.8 + _dpt}pt;font-weight:800">VALOR TOTAL ACTA</td>'
+        f'<td style="{td_num};font-size:{4.8 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">{_fm(float(t.get("c1") or 0))}</td>'
+        f'<td style="{td_num};font-size:{4.8 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">{_fm(float(t.get("c2") or 0))}</td>'
+        f'<td style="{td_num};font-size:{4.8 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">{_fm(float(t.get("c3") or 0))}</td>'
+        f'<td style="{td_num};font-size:{4.8 + _dpt}pt;font-weight:800;text-align:right;padding:{pd_cell}">{_fm(float(t.get("c4") or 0))}</td>'
+        f"</tr>"
+    )
+    v_a = val.get("cascade_acta_anterior_cdirecto")
+    s_ant = _h(_fm(float(v_a))) if v_a is not None else "—"
+    s_acc = _h(_fm(float(val.get("cascade_acumulado_todas_las_rpo_cdirecto") or 0)))
+    s_pr = _h(_fm(float(val.get("cascade_acta_presente_cdirecto_lista") or 0)))
+    vline = f"Presente (lista actas) CD: {s_pr} · RPO ant. CD: {s_ant} · Acum. CD: {s_acc}"
+    elaboro_n = _h(str(fc.get("elaboro_nombre") or "").strip() or "—")
+    elaboro_c = _h(str(fc.get("elaboro_cargo") or "").strip() or "—")
+    reviso_n = _h(str(fc.get("reviso_nombre") or "").strip() or "—")
+    reviso_c = _h(str(fc.get("reviso_cargo") or "").strip() or "—")
+    aprobo_n = _h(str(fc.get("aprobo_nombre") or "").strip() or "—")
+    aprobo_c = _h(str(fc.get("aprobo_cargo") or "").strip() or "—")
+    pie2 = f"Firmas CCD · {tit_acta} · {vline}"
+    elaboro_td = _html_cc_sub_td_firma_columna(
+        bd, "Elaboró:", elaboro_n, elaboro_c, elaboro_firma_data_uri, memoria_compact=True
+    )
+    reviso_td = _html_cc_sub_td_firma_columna(
+        bd, "Revisó:", reviso_n, reviso_c, reviso_firma_data_uri, memoria_compact=True
+    )
+    aprobo_td = _html_cc_sub_td_firma_columna(
+        bd, "Aprobó:", aprobo_n, aprobo_c, aprobo_firma_data_uri, memoria_compact=True
+    )
+    return f"""<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:pdf="http://www.xhtml2pdf.org/pdf">
+<head><meta charset="UTF-8"/><title>{_h(formato_ccd)}</title>
+<style type="text/css">
+@page {{ size: letter landscape; margin: 2.8mm 3.2mm; }}
+th, td {{ word-wrap: break-word; }}
+table.cc-ger-mat {{ table-layout: fixed; width: 100%; border-collapse: collapse; page-break-inside: auto; }}
+table.cc-ger-mat th, table.cc-ger-mat td {{ box-sizing: border-box; }}
+/* xhtml2pdf a veces ignora colgroup: reforzar anchos (mismos % que celdas). */
+table.cc-ger-mat th:nth-child(1), table.cc-ger-mat td:nth-child(1) {{ width: {w_cap} !important; max-width: {w_cap} !important; }}
+table.cc-ger-mat th:nth-child(2), table.cc-ger-mat td:nth-child(2),
+table.cc-ger-mat th:nth-child(3), table.cc-ger-mat td:nth-child(3),
+table.cc-ger-mat th:nth-child(4), table.cc-ger-mat td:nth-child(4),
+table.cc-ger-mat th:nth-child(5), table.cc-ger-mat td:nth-child(5) {{ width: {w_num} !important; max-width: {w_num} !important; }}
+</style></head>
+<body style="margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:4.8pt;color:#0f172a;">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd_blk};table-layout:fixed">
+<tr>
+<td style="width:13%;{bd_blk};vertical-align:middle;padding:0;text-align:center;background:#fff">
+{logo_html}
+</td>
+<td style="width:55%;{bd_blk};vertical-align:middle;text-align:center;font-weight:bold;font-size:5.05pt;padding:0 2px;line-height:1.04;">
+INFORME DE AVANCE (GERENCIAL) — EJECUCIÓN DE OBRA
+</td>
+<td style="width:32%;{bd_blk};vertical-align:middle;text-align:center;padding:0 1px;">
+<div style="color:#1d4ed8;font-weight:800;font-size:4.4pt;letter-spacing:0.1px;line-height:1.02;">{_h(formato_ccd)}</div>
+<div style="font-size:3.1pt;color:#1d4ed8;font-weight:700;line-height:1.0">CCD · ClaraCore</div>
+</td>
+</tr>
+</table>
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd_blk};background:#fff">
+<tr>
+<td style="padding:0;border:none">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:none">
+<tr>
+<td style="width:25%;{pad_m4};border:none;vertical-align:top">
+<div style="{lbl_m}">CONTRATO</div>
+<div style="{und_m}">{_h(str(contrato.get("numero") or ""))}</div>
+</td>
+<td style="width:25%;{pad_m4};border:none;vertical-align:top">
+<div style="{lbl_m}">FECHA DE EMISIÓN</div>
+<div style="{und_m}">{_h(fecha_gen)}</div>
+</td>
+<td style="width:25%;{pad_m4};border:none;vertical-align:top">
+<div style="{lbl_m}">ACTA VIGENTE</div>
+<div style="{und_m}">{_h(tit_acta)}</div>
+</td>
+<td style="width:25%;{pad_m4l};border:none;vertical-align:top">
+<div style="{lbl_m}">ACTA ANTERIOR</div>
+<div style="{und_m}">{_h(subt_ref)}</div>
+</td>
+</tr>
+</table>
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:none;margin:0;table-layout:fixed">
+<tr>
+<td style="width:50%;border:none;vertical-align:top;{pad_m2l}">
+<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:none;table-layout:fixed">
+<tr>
+<td style="width:50%;{pad_mct1};border:none;vertical-align:top">
+<div style="{lbl_m}">CONTRATISTA</div>
+<div style="{und_m}">{contratista_nom}{nit_en_valor}</div>
+</td>
+<td style="width:50%;{pad_mct2};border:none;vertical-align:top">
+<div style="{lbl_m}">INTERVENTORÍA</div>
+<div style="{und_m}">{interv}</div>
+</td>
+</tr>
+</table>
+</td>
+<td style="width:50%;border:none;border-left:0.4px solid #b8c5d0;vertical-align:top;{pad_mob}">
+<div style="{lbl_m}">OBJETO</div>
+<div style="{und_m}">{_h(objeto)}</div>
+</td>
+</tr>
+</table>
+</td>
+</tr>
+</table>
+<div style="font-size:3.25pt;color:#334155;padding:0 1px 0.5px 1px;line-height:1.1">{_h(pie2)}</div>
+<table width="100%" style="border-collapse:collapse" cellspacing="0" cellpadding="0" class="cc-ger-mat">
+{colgrp}
+<thead><tr>{th}</tr></thead>
+<tbody>{tbody}{tot_tr}</tbody>
+</table>
+<div style="margin-top:0;page-break-inside:avoid">
+<table style="width:100%;border-collapse:collapse;font-size:3.45pt" cellspacing="0" cellpadding="0">
+<tr>
+{elaboro_td}
+{reviso_td}
+{aprobo_td}
+</tr>
+</table>
+</div>
+<div style="font-size:3.0pt;color:#64748b;padding-top:0">ClaraCore · {_h(usuario_cargo)} · {_h(usuario_nombre)}</div>
+</body></html>"""
+
+
+def _pdf_bytes_informe_gerencia_pareja(
+    contrato_id: int,
+    acta_presente_id: int,
+    acta_anterior_id: Optional[int],
+    current_user: dict,
+) -> bytes:
+    if not _acta_pertenece_contrato(contrato_id, acta_presente_id):
+        raise HTTPException(404, "Acta (presente) no encontrada en este contrato")
+    a_ant = int(acta_anterior_id) if acta_anterior_id is not None else None
+    if a_ant is not None and (
+        not _acta_pertenece_contrato(contrato_id, a_ant) or a_ant == int(acta_presente_id)
+    ):
+        raise HTTPException(400, "Acta de referencia no pertenece al contrato o es la misma que el acta presente")
+    ap = int(acta_presente_id)
+    contrato = _row(
+        "contratos", "id, numero, objeto, contratista, nit, interventoria, logo_contratista", id=contrato_id
+    )
+    if not contrato:
+        raise HTTPException(404, "Contrato no encontrado")
+    acta_p = _acta_cab_gerencia(ap)
+    if not acta_p.get("id"):
+        raise HTTPException(404, "Acta (presente) no encontrada")
+    acta_ref = _acta_cab_gerencia(a_ant) if a_ant is not None else None
+    ids: List[int] = [ap]
+    if a_ant is not None:
+        ids.append(a_ant)
+    rmap = rpo_conciliacion_por_contrato(_sb, contrato_id, ids)
+    d_p = rmap.get(ap) or _rpo_gerencia_vacio()
+    d_a: Optional[dict] = None
+    if a_ant is not None:
+        d_a = rmap.get(int(a_ant)) or _rpo_gerencia_vacio()
+    u = current_user if isinstance(current_user, dict) else dict(current_user)
+    un = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
+    uc = u.get("cargo_nombre", "—") or "—"
+    fmtc = CODIGO_FORMATO_CCD_CC_GER_001
+    firma_cfg = _get_ccd_firma_config(contrato_id, fmtc)
+    fc2 = firma_cfg or {}
+    e_uid2 = _opt_usuario_id(fc2.get("elaboro_usuario_id"))
+    r_uid2 = _opt_usuario_id(fc2.get("reviso_usuario_id"))
+    a_uid2 = _opt_usuario_id(fc2.get("aprobo_usuario_id"))
+    enom2 = str(fc2.get("elaboro_nombre") or "").strip()
+    rnom2 = str(fc2.get("reviso_nombre") or "").strip()
+    anom2 = str(fc2.get("aprobo_nombre") or "").strip()
+    el_ur = _firma_data_uri_para_slot_contexto(
+        contrato_id, "acta_rpo", ap, fmtc, "elaboro", e_uid2, enom2, current_user
+    )
+    re_ur = _firma_data_uri_para_slot_contexto(
+        contrato_id, "acta_rpo", ap, fmtc, "reviso", r_uid2, rnom2, current_user
+    )
+    ap_ur = _firma_data_uri_para_slot_contexto(
+        contrato_id, "acta_rpo", ap, fmtc, "aprobo", a_uid2, anom2, current_user
+    )
+    html = _html_informe_gerencia_cc_ger_001(
+        contrato,
+        acta_p,
+        acta_ref,
+        d_p,
+        d_a,
+        usuario_nombre=un,
+        usuario_cargo=uc,
+        formato_ccd=fmtc,
+        contexto_tipo="acta_rpo",
+        contexto_id=ap,
+        firma_cfg=firma_cfg,
+        elaboro_firma_data_uri=el_ur,
+        reviso_firma_data_uri=re_ur,
+        aprobo_firma_data_uri=ap_ur,
+    )
+    return _to_pdf(html)
+
+
+def _pdf_bytes_informe_gerencia_matriz(
+    contrato_id: int,
+    current_user: dict,
+    acta_presente_override: Optional[int] = None,
+    datos: Optional[Dict[str, Any]] = None,
+) -> bytes:
+    if datos is None:
+        datos = _construir_datos_informe_gerencia_matriz(contrato_id, acta_presente_override)
+    ap = datos.get("acta_presente") or {}
+    ap_id = int(ap.get("id") or 0)
+    if not ap_id:
+        raise HTTPException(404, "No se pudo determinar el acta presente")
+    contrato = _row(
+        "contratos", "id, numero, objeto, contratista, nit, interventoria, logo_contratista", id=contrato_id
+    )
+    if not contrato:
+        raise HTTPException(404, "Contrato no encontrado")
+    u = current_user if isinstance(current_user, dict) else dict(current_user)
+    un = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
+    uc = u.get("cargo_nombre", "—") or "—"
+    fmtc = CODIGO_FORMATO_CCD_CC_GER_001
+    firma_cfg = _get_ccd_firma_config(contrato_id, fmtc)
+    fc2 = firma_cfg or {}
+    e_uid2 = _opt_usuario_id(fc2.get("elaboro_usuario_id"))
+    r_uid2 = _opt_usuario_id(fc2.get("reviso_usuario_id"))
+    a_uid2 = _opt_usuario_id(fc2.get("aprobo_usuario_id"))
+    enom2 = str(fc2.get("elaboro_nombre") or "").strip()
+    rnom2 = str(fc2.get("reviso_nombre") or "").strip()
+    anom2 = str(fc2.get("aprobo_nombre") or "").strip()
+    el_ur = _firma_data_uri_para_slot_contexto(
+        contrato_id, "acta_rpo", ap_id, fmtc, "elaboro", e_uid2, enom2, current_user
+    )
+    re_ur = _firma_data_uri_para_slot_contexto(
+        contrato_id, "acta_rpo", ap_id, fmtc, "reviso", r_uid2, rnom2, current_user
+    )
+    ap_ur = _firma_data_uri_para_slot_contexto(
+        contrato_id, "acta_rpo", ap_id, fmtc, "aprobo", a_uid2, anom2, current_user
+    )
+    html = _html_informe_gerencia_cc_ger_001_matriz(
+        contrato,
+        datos,
+        usuario_nombre=un,
+        usuario_cargo=uc,
+        formato_ccd=fmtc,
+        ap_id=ap_id,
+        firma_cfg=firma_cfg,
+        elaboro_firma_data_uri=el_ur,
+        reviso_firma_data_uri=re_ur,
+        aprobo_firma_data_uri=ap_ur,
     )
     return _to_pdf(html)
 
@@ -2135,6 +3876,7 @@ def _html_pagina_sello_firma_claracore(
 
 @router.get("/{contrato_id}/pdf/corte-subcontratista/{corte_id}", dependencies=[])
 def pdf_corte_sub(contrato_id: int, corte_id: int, current_user: dict = Depends(_get_user)):
+    _perm_informes_ccd(current_user, "ver")
     try:
         try:
             ctx = _contexto_corte_sub(contrato_id, corte_id, current_user)
@@ -2173,6 +3915,7 @@ def pdf_corte_sub_con_sello_firma(
     fecha/hora (America/Bogotá), contrato, y SHA-256 del PDF del informe *antes* de añadir el sello.
     Requiere imagen de firma en perfil (firma_imagen_url).
     """
+    _perm_informes_ccd(current_user, "ver")
     try:
         ctx = _contexto_corte_sub(contrato_id, corte_id, current_user)
         pdf_main = _generar_pdf_bytes_corte_sub_desde_ctx(ctx, contrato_id, corte_id, current_user)
@@ -2205,6 +3948,7 @@ def pdf_memoria_item(
     item_numero: str = Query(...),
     current_user=Depends(_get_user)
 ):
+    _perm_informes_ccd(current_user, "ver")
     try:
         ctx = _contexto_memoria_item(contrato_id, corte_id, item_numero, current_user)
         contrato = ctx["contrato"]
@@ -2271,6 +4015,7 @@ def pdf_memoria_corte_completo(
     current_user=Depends(_get_user),
 ):
     """Un solo PDF CC-SUB-002: todos los ítems del corte (mismo formato que por ítem, separados con salto de página)."""
+    _perm_informes_ccd(current_user, "ver")
     try:
         numeros = _list_item_numeros_memoria_corte(contrato_id, corte_id)
         if not numeros:
@@ -2363,6 +4108,7 @@ def pdf_cc_sem_001_semana(
     semana_id: int,
     current_user=Depends(_get_user),
 ):
+    _perm_informes_ccd(current_user, "ver")
     if not _semana_pertenece_contrato(contrato_id, semana_id):
         raise HTTPException(404, "Semana no encontrada en este contrato")
     reg = fetch_registros_conciliacion(_sb, contrato_id, semana_id=semana_id)
@@ -2401,9 +4147,10 @@ def pdf_cc_mes_001_acta(
     acta_id: int,
     current_user=Depends(_get_user),
 ):
+    _perm_informes_ccd(current_user, "ver")
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
-    reg = fetch_registros_conciliacion(_sb, contrato_id, acta_rpo_id=acta_id)
+    reg = fetch_registros_informe_cc_mes_por_acta(_sb, contrato_id, acta_id)
     items, total = aggregate_items_conciliacion(reg)
     _sort_items_corte_por_item_numero_asc(items)
     ac = _row("actas", "id, numero_rpo, consecutivo", id=acta_id) or {}
@@ -2421,7 +4168,7 @@ def pdf_cc_mes_001_acta(
         c3_value=nrpo,
         c4_label="FECHA ACTA",
         c4_value=fa,
-        pie_contexto=f"Acta RPO {nrpo} · consecutivo {cons} · Registros nivel 3 aprobados y bloqueados",
+        pie_contexto=f"Acta RPO {nrpo} · consecutivo {cons} · Misma lógica que módulo Actas (N1·N2·N3 aprob. en cascada, costo directo por línea)",
         items=items,
         total_costo=total,
     )
@@ -2440,6 +4187,7 @@ def pdf_cc_sem_002_semana(
     item_numero: str = Query(...),
     current_user=Depends(_get_user),
 ):
+    _perm_informes_ccd(current_user, "ver")
     if not _semana_pertenece_contrato(contrato_id, semana_id):
         raise HTTPException(404, "Semana no encontrada en este contrato")
     registros = fetch_registros_memoria_conciliacion(
@@ -2529,6 +4277,7 @@ def pdf_cc_sem_002_semana_completo(
     current_user=Depends(_get_user),
 ):
     """Un solo PDF CC-SEM-002: todos los ítems de la semana (mismo formato que por ítem, salto entre ítems)."""
+    _perm_informes_ccd(current_user, "ver")
     try:
         if not _semana_pertenece_contrato(contrato_id, semana_id):
             raise HTTPException(404, "Semana no encontrada en este contrato")
@@ -2657,9 +4406,10 @@ def pdf_cc_mes_002_acta(
     item_numero: str = Query(...),
     current_user=Depends(_get_user),
 ):
+    _perm_informes_ccd(current_user, "ver")
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
-    registros = fetch_registros_memoria_conciliacion(
+    registros = fetch_registros_memoria_cc_mes_alineado_acta(
         _sb, contrato_id, item_numero, acta_rpo_id=acta_id, item_exacto=True
     )
     if not registros:
@@ -2746,6 +4496,7 @@ def pdf_cc_sem_001_semana_con_sello_firma(
     current_user=Depends(_get_user),
 ):
     """Mismo PDF que CC-SEM-001 + página final de sello (firma de perfil, SHA-256, fecha)."""
+    _perm_informes_ccd(current_user, "ver")
     if not _semana_pertenece_contrato(contrato_id, semana_id):
         raise HTTPException(404, "Semana no encontrada en este contrato")
     reg = fetch_registros_conciliacion(_sb, contrato_id, semana_id=semana_id)
@@ -2789,9 +4540,10 @@ def pdf_cc_mes_001_acta_con_sello_firma(
     current_user=Depends(_get_user),
 ):
     """Mismo PDF que CC-MES-001 + página final de sello."""
+    _perm_informes_ccd(current_user, "ver")
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
-    reg = fetch_registros_conciliacion(_sb, contrato_id, acta_rpo_id=acta_id)
+    reg = fetch_registros_informe_cc_mes_por_acta(_sb, contrato_id, acta_id)
     items, total = aggregate_items_conciliacion(reg)
     _sort_items_corte_por_item_numero_asc(items)
     ac = _row("actas", "id, numero_rpo, consecutivo", id=acta_id) or {}
@@ -2809,7 +4561,7 @@ def pdf_cc_mes_001_acta_con_sello_firma(
         c3_value=nrpo,
         c4_label="FECHA ACTA",
         c4_value=fa,
-        pie_contexto=f"Acta RPO {nrpo} · consecutivo {cons} · Registros nivel 3 aprobados y bloqueados",
+        pie_contexto=f"Acta RPO {nrpo} · consecutivo {cons} · Misma lógica que módulo Actas (N1·N2·N3 aprob. en cascada, costo directo por línea)",
         items=items,
         total_costo=total,
     )
@@ -2825,6 +4577,152 @@ def pdf_cc_mes_001_acta_con_sello_firma(
     )
 
 
+@router.get("/{contrato_id}/json/informe-gerencia")
+def json_informe_gerencia_pareja(
+    contrato_id: int,
+    acta_presente: int = Query(..., description="Acta RPO cuyo contexto CCD aplica a firmas"),
+    acta_referencia: Optional[int] = Query(
+        None, description="Otro acta RPO para columnas de comparación (opcional)"
+    ),
+    current_user=Depends(_get_user),
+):
+    """JSON (modo clásico) dos actas. Preferir /json/informe-gerencia-matriz para 4 columnas v2."""
+    _perm_informes_ccd(current_user, "ver")
+    if not _acta_pertenece_contrato(contrato_id, acta_presente):
+        raise HTTPException(404, "Acta (presente) no encontrada")
+    a_ref = int(acta_referencia) if acta_referencia is not None else None
+    if a_ref is not None and (not _acta_pertenece_contrato(contrato_id, a_ref) or a_ref == int(acta_presente)):
+        raise HTTPException(400, "Acta de referencia no válida")
+    ids: List[int] = [int(acta_presente)]
+    if a_ref is not None:
+        ids.append(a_ref)
+    rmap = rpo_conciliacion_por_contrato(_sb, contrato_id, ids)
+    d_p = rmap.get(int(acta_presente)) or _rpo_gerencia_vacio()
+    d_a = rmap.get(int(a_ref)) if a_ref is not None else None
+    if d_a is None and a_ref is not None:
+        d_a = _rpo_gerencia_vacio()
+    filas = _merge_filas_gerencia_dos_actas(d_p.get("por_capitulo"), d_a.get("por_capitulo") if d_a else None)
+    return {
+        "formato_ccd": CODIGO_FORMATO_CCD_CC_GER_001,
+        "criterio": "Costo directo aprobado en interventoría: N1, N2 y N3 aprobado en cascada (SICOE Obra).",
+        "acta_presente_id": int(acta_presente),
+        "acta_referencia_id": a_ref,
+        "contexto_firma_ccd": {"tipo": "acta_rpo", "id": int(acta_presente)},
+        "totales": {
+            "acta_presente_cdirecto": d_p.get("costo_directo_total"),
+            "acta_referencia_cdirecto": (d_a or {}).get("costo_directo_total") if a_ref is not None else None,
+        },
+        "por_capitulo_merged": [
+            {"capitulo": a, "costo_presente": b, "costo_referencia": c, "diferencia": d} for a, b, c, d in filas
+        ],
+        "secciones_presente": d_p.get("secciones") or {},
+    }
+
+
+@router.get("/{contrato_id}/json/informe-gerencia-matriz")
+def json_informe_gerencia_matriz(
+    contrato_id: int,
+    acta_presente: Optional[int] = Query(
+        None, description="Opcional. Si se omite: acta RPO con mayor consecutivo (vigente)."
+    ),
+    current_user=Depends(_get_user),
+):
+    """4 columnas (habil. cobro, acta ant. N3, acum. N3, pendiente) por capítulo, costo directo."""
+    _perm_informes_ccd(current_user, "ver")
+    d = _construir_datos_informe_gerencia_matriz(contrato_id, acta_presente)
+    ap = d.get("acta_presente") or {}
+    return {
+        "formato_ccd": CODIGO_FORMATO_CCD_CC_GER_001,
+        "v": 2,
+        "contexto_firma_ccd": {"tipo": "acta_rpo", "id": int(ap.get("id") or 0)},
+        **d,
+    }
+
+
+@router.get("/{contrato_id}/pdf/cc-ger-001")
+def pdf_cc_ger_001_pareja(
+    contrato_id: int,
+    acta_presente: Optional[int] = Query(
+        None, description="Opcional. Si se omite: RPO de mayor consecutivo. acta_referencia ya no aplica (v2 matriz)."
+    ),
+    acta_referencia: Optional[int] = Query(
+        None, description="(Deprecada en v2) se ignora; usaba comparación 2 actas en modo clásico."
+    ),
+    modo: str = Query(
+        "matriz", description="matriz = 4 col. (defecto). pareja = dos actas requiere acta_presente (Query obligatorio manual)."
+    ),
+    current_user=Depends(_get_user),
+):
+    """
+    PDF CC-GER-001. Por defecto: 4 columnas (horizontal) sin elegir el acta (última RPO).
+    modo=pareja: comparación 2 actas; acta_presente requerida; acta_referencia opcional.
+    """
+    _perm_informes_ccd(current_user, "ver")
+    m = (modo or "").lower().strip()
+    if m in ("pareja", "2", "dos", "clásico", "clasico") and acta_presente is None:
+        raise HTTPException(400, "Con modo=pareja debe indicar acta_presente")
+    if m in ("pareja", "2", "dos", "clásico", "clasico"):
+        a_ref = acta_referencia
+        raw = _pdf_bytes_informe_gerencia_pareja(
+            contrato_id, int(acta_presente), a_ref, current_user
+        )
+        ac = _row("actas", "numero_rpo, consecutivo", id=int(acta_presente)) or {}
+        nr = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_presente)
+    else:
+        datosg = _construir_datos_informe_gerencia_matriz(contrato_id, acta_presente)
+        raw = _pdf_bytes_informe_gerencia_matriz(
+            contrato_id, current_user, acta_presente, datos=datosg
+        )
+        apd = (datosg.get("acta_presente") or {}) or {}
+        nr = str(apd.get("numero_rpo") or apd.get("consecutivo") or apd.get("id") or "ger")
+    fname = _safe_filename_part(f"CC-GER-001_RPO{nr}.pdf")
+    return Response(
+        content=raw,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@router.get("/{contrato_id}/pdf/cc-ger-001/con-sello-firma")
+def pdf_cc_ger_001_pareja_con_sello_firma(
+    contrato_id: int,
+    acta_presente: Optional[int] = Query(None, description="Opcional en matriz; mayor consecutivo si se omite."),
+    acta_referencia: Optional[int] = Query(
+        None, description="(Deprecada) solo modo pareja; ignorada en matriz v2"
+    ),
+    modo: str = Query("matriz", description="matriz | pareja"),
+    current_user=Depends(_get_user),
+):
+    """Mismo PDF CC-GER-001 (matriz v2 o pareja) + página de sello (huella, fecha)."""
+    _perm_informes_ccd(current_user, "ver")
+    m = (modo or "").lower().strip()
+    if m in ("pareja", "2", "dos", "clásico", "clasico") and acta_presente is None:
+        raise HTTPException(400, "Con modo=pareja debe indicar acta_presente")
+    if m in ("pareja", "2", "dos", "clásico", "clasico"):
+        pdf_bytes = _pdf_bytes_informe_gerencia_pareja(
+            contrato_id, int(acta_presente), acta_referencia, current_user
+        )
+        ac = _row("actas", "numero_rpo, consecutivo", id=int(acta_presente)) or {}
+        nr = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_presente)
+    else:
+        datosg = _construir_datos_informe_gerencia_matriz(contrato_id, acta_presente)
+        pdf_bytes = _pdf_bytes_informe_gerencia_matriz(
+            contrato_id, current_user, acta_presente, datos=datosg
+        )
+        apd = (datosg.get("acta_presente") or {}) or {}
+        nr = str(apd.get("numero_rpo") or apd.get("consecutivo") or apd.get("id") or "ger")
+    fname = _safe_filename_part(f"CC-GER-001_RPO{nr}.pdf")
+    ctr = _row("contratos", "numero", id=contrato_id) or {}
+    return _attachment_pdf_con_pagina_sello_usuario(
+        pdf_bytes,
+        current_user,
+        titulo_doc=f"Informe gerencia CC-GER-001 — Acta RPO {nr}",
+        formato_ccd=CODIGO_FORMATO_CCD_CC_GER_001,
+        contrato_numero=str(ctr.get("numero") or ""),
+        nombre_archivo_pdf=fname,
+    )
+
+
 @router.get("/{contrato_id}/pdf/cc-sem-002/semana/{semana_id}/con-sello-firma")
 def pdf_cc_sem_002_semana_con_sello_firma(
     contrato_id: int,
@@ -2833,6 +4731,7 @@ def pdf_cc_sem_002_semana_con_sello_firma(
     current_user=Depends(_get_user),
 ):
     """Misma memoria CC-SEM-002 que por ítem + página de sello."""
+    _perm_informes_ccd(current_user, "ver")
     if not _semana_pertenece_contrato(contrato_id, semana_id):
         raise HTTPException(404, "Semana no encontrada en este contrato")
     registros = fetch_registros_memoria_conciliacion(
@@ -2925,6 +4824,7 @@ def pdf_cc_sem_002_semana_completo_con_sello_firma(
     current_user=Depends(_get_user),
 ):
     """Mismo PDF «todos los ítems» CC-SEM-002 + página de sello."""
+    _perm_informes_ccd(current_user, "ver")
     try:
         if not _semana_pertenece_contrato(contrato_id, semana_id):
             raise HTTPException(404, "Semana no encontrada en este contrato")
@@ -3057,9 +4957,10 @@ def pdf_cc_mes_002_acta_con_sello_firma(
     current_user=Depends(_get_user),
 ):
     """Misma memoria CC-MES-002 + página de sello."""
+    _perm_informes_ccd(current_user, "ver")
     if not _acta_pertenece_contrato(contrato_id, acta_id):
         raise HTTPException(404, "Acta no encontrada en este contrato")
-    registros = fetch_registros_memoria_conciliacion(
+    registros = fetch_registros_memoria_cc_mes_alineado_acta(
         _sb, contrato_id, item_numero, acta_rpo_id=acta_id, item_exacto=True
     )
     if not registros:
@@ -3152,6 +5053,7 @@ def excel_memoria_item(
     item_numero: str = Query(...),
     current_user=Depends(_get_user),
 ):
+    _perm_informes_ccd(current_user, "exportar")
     try:
         ctx = _contexto_memoria_item(contrato_id, corte_id, item_numero, current_user)
         firma_cfg = _get_ccd_firma_config(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_002)
@@ -3185,6 +5087,7 @@ def excel_memoria_corte_completo(
     current_user=Depends(_get_user),
 ):
     """Un libro con una hoja por ítem (orden ascendente por código, igual que el PDF completo)."""
+    _perm_informes_ccd(current_user, "exportar")
     try:
         numeros = _list_item_numeros_memoria_corte(contrato_id, corte_id)
         if not numeros:
@@ -3218,6 +5121,7 @@ def excel_corte_subcontratista(
     current_user=Depends(_get_user),
 ):
     """Excel CC-SUB-001: mismo contenido lógico que el informe de corte (PDF)."""
+    _perm_informes_ccd(current_user, "exportar")
     try:
         ctx = _contexto_corte_sub(contrato_id, corte_id, current_user)
         firma_cfg = _get_ccd_firma_config(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_001)
@@ -3251,6 +5155,7 @@ def excel_cc_sem_001_semana(
     current_user=Depends(_get_user),
 ):
     """Excel CC-SEM-001: mismo contenido lógico que el informe semanal (PDF)."""
+    _perm_informes_ccd(current_user, "exportar")
     try:
         xbytes = _cc_sem_001_excel_bytes(contrato_id, semana_id, current_user)
         sm = _row("so_semanas", "numero_semana", id=semana_id) or {}
@@ -3276,6 +5181,7 @@ def excel_cc_sem_002_semana(
     current_user=Depends(_get_user),
 ):
     """Excel CC-SEM-002 por ítem: misma estructura que la memoria PDF semanal."""
+    _perm_informes_ccd(current_user, "exportar")
     try:
         xbytes = _cc_sem_002_item_excel_bytes(contrato_id, semana_id, item_numero, current_user)
         sm = _row("so_semanas", "numero_semana", id=semana_id) or {}
@@ -3301,6 +5207,7 @@ def excel_cc_sem_002_semana_completo(
     current_user=Depends(_get_user),
 ):
     """Excel CC-SEM-002: una hoja por ítem (todos los ítems de la semana)."""
+    _perm_informes_ccd(current_user, "exportar")
     try:
         xbytes = _cc_sem_002_semana_completo_excel_bytes(contrato_id, semana_id, current_user)
         sm = _row("so_semanas", "numero_semana", id=semana_id) or {}
@@ -3529,6 +5436,7 @@ def ccd_preview_plantilla_vacia_pdf(
     current_user=Depends(_get_user),
 ):
     """PDF de plantilla sin datos (vista previa de diseño) para formatos que la expongan."""
+    _perm_informes_ccd(current_user, "ver")
     del contrato_id  # reservado para permisos por contrato / marca de agua futura
     if formato_codigo not in FORMATOS_CCD:
         raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")

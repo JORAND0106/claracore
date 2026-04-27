@@ -11,7 +11,7 @@ export default defineConfig({
     strictPort: false,
     proxy: {
       // Todas las rutas del backend (mismo origen en dev → login, SICOE, presupuesto, etc.)
-      '^/(auth|cargos|roles|contratos|usuarios|categorias|funciones|admin|mantenimiento|healthz|listado-precios|presupuesto|exportar|cad-queue|comentarios|logs|inicio|notificaciones|frase-del-dia|informes|actas|actas-tipos|sicoe-obra)': {
+      '^/(auth|cargos|roles|contratos|usuarios|categorias|funciones|admin|mantenimiento|healthz|listado-precios|subcontratistas|presupuesto|exportar|cad-queue|comentarios|logs|inicio|notificaciones|frase-del-dia|informes|actas|actas-tipos|sicoe-obra)': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
       },

@@ -310,23 +310,7 @@ useEffect(() => {
       .then(r => r.ok ? r.json() : null)
       .then(registro => {
         if (registro) {
-          setModalDetallePpto(registro)
-          setModalDetallePptoEditable(
-            !registro.sellado
-            || (registro.sellado
-                && (() => {
-                  const r = (usuario?.rol_nombre || '').toLowerCase().trim()
-                  const isCt = r === 'contratista' || r === 'operativo contratista'
-                  const isDev = (usuario?.cargo_nombre || '').toLowerCase() === 'desarrollador'
-                  const perm = (usuario?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === 'editar registros presupuesto')
-                  return isCt && !isDev && (perm?.editar ?? false)
-                })())
-          )
-          setPopupDims({ ancho: registro.ancho ?? '', espesor: registro.espesor ?? '', area_long_nod: registro.area_long_nod ?? '' })
-          setPopupCap(registro.capitulo || '')
-          setPopupItem(registro.item || '')
-          setPopupItemBusq(registro.item ? `${registro.item} · ${registro.descripcion || ''}` : '')
-          setPopupMsg('')
+          abrirDetallePptoDesdeFila(registro)
         }
       })
       .catch(() => {})
@@ -374,6 +358,53 @@ useEffect(() => {
   const puedeEliminar = esDeveloper || (_permPpto?.eliminar ?? false)
   const nivelInfo    = determinarNivelValidacion(usuario)
   const esSellado = (r) => r?.sellado === true
+  /** Grilla / detalle / tramos: edición si no está sellado, o contratista con permiso que puede reabrir. */
+  const puedeEditarFilaPptoNoSelladoOReabrir = (r) => !esSellado(r) || puedeReabrirTrasAprob
+
+  const ESTADOS_INTERV_CT_REQUIERE_MOTIVO = ['Aprobado', 'Pendiente', 'Rechazado']
+
+  function requiereMotivoIntervContratista(reg, body) {
+    if (!esRolContratistaPpto || esDeveloper || esSellado(reg) || !body || typeof body !== 'object') return false
+    const rv = String(reg?.revisado || 'No Revisado').trim()
+    if (!ESTADOS_INTERV_CT_REQUIERE_MOTIVO.includes(rv)) return false
+    const keys = ['capitulo', 'item', 'descripcion', 'und', 'vlr_unitario', 'observacion_externa', 'costo_directo']
+    for (const k of keys) {
+      if (!(k in body)) continue
+      const a = body[k]
+      const b = reg[k]
+      if (k === 'vlr_unitario' || k === 'costo_directo') {
+        const na = Number(a), nb = Number(b)
+        if (Number.isFinite(na) && Number.isFinite(nb)) {
+          if (Math.abs(na - nb) > 1e-4) return true
+        } else if (String(a ?? '') !== String(b ?? '')) return true
+      } else if (String(a ?? '').trim() !== String(b ?? '').trim()) return true
+    }
+    return false
+  }
+
+  async function adjuntarMotivoSiEdicionContratistaConInterv(reg, body) {
+    if (!requiereMotivoIntervContratista(reg, body)) return true
+    const com = await pedirComentario('contratista_edita_interv', true)
+    if (com == null) return false
+    const m = String(com.mensaje || '').trim()
+    if (m.length < 15) {
+      window.alert('El motivo debe tener al menos 15 caracteres (queda registrado para Interventoría).')
+      return false
+    }
+    body.motivo_edicion_con_estado_interv = m
+    return true
+  }
+
+  function abrirDetallePptoDesdeFila(registro) {
+    if (!registro) return
+    setModalDetallePpto(registro)
+    setModalDetallePptoEditable(puedeEditarFilaPptoNoSelladoOReabrir(registro))
+    setPopupDims({ ancho: registro.ancho ?? '', espesor: registro.espesor ?? '', area_long_nod: registro.area_long_nod ?? '' })
+    setPopupCap(registro.capitulo || '')
+    setPopupItem(registro.item || '')
+    setPopupItemBusq(registro.item ? `${registro.item} · ${registro.descripcion || ''}` : '')
+    setPopupMsg('')
+  }
   /** Tras bulk-estado: refleja sellado cuando Interventoría aprueba (mismo criterio que el backend). */
   const aplicarCambioEstadoLocal = (r, ids, nuevoEstado) => {
     if (!ids.includes(r.id)) return r
@@ -975,7 +1006,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     })
     // Enviar notificación si hay destinatario
     if (destinatarioId) {
-      const TITULOS = { dims:'📐 Cambio de Dimensiones', item_capitulo:'🔄 Cambio de Ítem/Capítulo', validacion:'🔍 Cambio de Estado', reapertura:'🔓 Reapertura de registro sellado' }
+        const TITULOS = { dims:'📐 Cambio de Dimensiones', item_capitulo:'🔄 Cambio de Ítem/Capítulo', validacion:'🔍 Cambio de Estado', reapertura:'🔓 Reapertura de registro sellado', contratista_edita_interv:'✏️ Motivo — Edición con validación Interventoría' }
       await fetch(`${API}/notificaciones`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -1552,6 +1583,7 @@ async function ejecutarBulkEstadoDirecto(estado) {
       body[k] = ['vlr_unitario', 'cant_total'].includes(k) ? parseFloat(v) : v
     })
     if (motivoReap) body.motivo_edicion_tras_sellado = motivoReap
+    if (!(await adjuntarMotivoSiEdicionContratistaConInterv(reg, body))) return
     const res = await fetch(`${API}/presupuesto/item/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -1735,6 +1767,23 @@ async function restaurar(id) {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="cc-modulo-presupuesto" style={{ fontSize: 'var(--cc-body)', lineHeight: 1.5 }}>
+      {esDeveloper && (
+        <div
+          style={{
+            marginBottom: 10,
+            padding: '8px 12px',
+            borderRadius: 8,
+            fontSize: 'var(--cc-sm)',
+            color: t.textMuted,
+            background: t.bg,
+            border: `1px dashed ${t.border}`,
+            lineHeight: 1.45,
+          }}
+        >
+          <strong style={{ color: t.text }}>Cargo Desarrollador:</strong> la reapertura de registros sellados, el motivo al editar con estado ya validado por Interventoría y el paso a «No Revisado» en ese flujo solo aplican al perfil{' '}
+          <strong>contratista</strong> (con permiso editar presupuesto). Para probarlos, use un usuario con ese rol. Como desarrollador sí verá el botón ✏️ en el revisor de tramos (abre el detalle del registro) y la edición de dimensiones donde corresponda.
+        </div>
+      )}
       {/* ── Modal Revisor de Tramos ─────────────────────────────────────────── */}
       {modalModoCapitulo && (() => {
         const capRegs = registros.filter(r => r.capitulo === modalModoCapitulo)
@@ -2327,6 +2376,25 @@ async function restaurar(id) {
                                       </button>
                                     )
                                   })}
+                                  {puedeEditar && (
+                                    <button
+                                      type="button"
+                                      title="Editar capítulo, ítem o valor (contratista: si estaba validado por Interventoría, se pedirá motivo y el estado pasará a No Revisado)"
+                                      onClick={(e) => { e.stopPropagation(); abrirDetallePptoDesdeFila(r) }}
+                                      style={{
+                                        marginLeft: '4px',
+                                        background: t.bgCard,
+                                        border: `1px solid ${t.border}`,
+                                        borderRadius: '6px',
+                                        padding: '2px 8px',
+                                        fontSize: 'var(--cc-sm)',
+                                        cursor: 'pointer',
+                                        color: t.primary,
+                                        fontWeight: '700',
+                                        flexShrink: 0,
+                                      }}
+                                    >✏️</button>
+                                  )}
                                 </div>
                               </div>
                               {/* Comentario de validación — clic para ver hilo */}
@@ -2514,8 +2582,33 @@ async function restaurar(id) {
           onClick={() => { setModalDetallePpto(null); setModalDetallePptoEditable(false) }}>
           <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'14px',padding:'20px',width:'520px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.4)' }}
             onClick={e => e.stopPropagation()}>
-            <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px' }}>
-              <div style={{ fontSize:'var(--cc-md)',fontWeight:'800',color:t.primary }}>📋 Detalle del Registro</div>
+            <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px', gap:'10px', flexWrap:'wrap' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap', flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize:'var(--cc-md)',fontWeight:'800',color:t.primary }}>📋 Detalle del Registro</div>
+                {(() => {
+                  const r0 = modalDetallePpto
+                  if (!r0) return null
+                  const puedePanel = (puedeEditar || puedeEliminar) && puedeEditarFilaPptoNoSelladoOReabrir(r0)
+                  if (!puedePanel || modalDetallePptoEditable) return null
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => setModalDetallePptoEditable(true)}
+                      style={{
+                        background: t.primary,
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: '8px',
+                        padding: '6px 14px',
+                        fontSize: 'var(--cc-sm)',
+                        fontWeight: '700',
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >✏️ Editar</button>
+                  )
+                })()}
+              </div>
               <button onClick={() => { setModalDetallePpto(null); setModalDetallePptoEditable(false) }} style={{ background:'transparent',border:'none',fontSize:'var(--cc-lg)',cursor:'pointer',color:t.textMuted }}>✕</button>
             </div>
             {(() => {
@@ -2638,7 +2731,11 @@ async function restaurar(id) {
                             })
                             if (res.ok) {
                               const updated = await fetch(`${API}/presupuesto/item/${r.id}`, { headers:{ Authorization:`Bearer ${token}` } })
-                              if (updated.ok) { const d = await updated.json(); setModalDetallePpto(d) }
+                              if (updated.ok) {
+                                const d = await updated.json()
+                                setModalDetallePpto(d)
+                                setModalDetallePptoEditable(puedeEditarFilaPptoNoSelladoOReabrir(d))
+                              }
                               { const c = drill.find(d=>d.campo==='capitulo')?.valor; if(c) delete _pptoCachePorCap.current[c] }
                               setPopupMsg('✅ Dimensiones actualizadas')
                             } else setPopupMsg('❌ Error al guardar')
@@ -2704,13 +2801,18 @@ async function restaurar(id) {
                               costo_directo: Math.round(cant * vlr),
                               ...(motivoReap ? { motivo_edicion_tras_sellado: motivoReap } : {}),
                             }
+                            if (!(await adjuntarMotivoSiEdicionContratistaConInterv(r, body))) { setPopupGuardando(false); return }
                             const res = await fetch(`${API}/presupuesto/item/${r.id}`, {
                               method:'PUT', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
                               body: JSON.stringify(body)
                             })
                             if (res.ok) {
                               const updated = await fetch(`${API}/presupuesto/item/${r.id}`, { headers:{ Authorization:`Bearer ${token}` } })
-                              if (updated.ok) { const d = await updated.json(); setModalDetallePpto(d) }
+                              if (updated.ok) {
+                                const d = await updated.json()
+                                setModalDetallePpto(d)
+                                setModalDetallePptoEditable(puedeEditarFilaPptoNoSelladoOReabrir(d))
+                              }
                               { const c = drill.find(d=>d.campo==='capitulo')?.valor; if(c) delete _pptoCachePorCap.current[c] }
                               setPopupMsg('✅ Capítulo/ítem actualizado')
                             } else {
@@ -2777,10 +2879,10 @@ async function restaurar(id) {
 
       {/* ── Modal comentario ── */}
       {modalComentario && (() => {
-        const TITULOS = { dims:'📐 Comentario — Cambio de Dimensiones', item_capitulo:'🔄 Comentario — Cambio de Ítem/Capítulo', validacion:'🔍 Comentario — Cambio de Estado', reapertura:'🔓 Motivo — Reapertura tras aprobación Interventoría' }
-        const COLORES = { dims:'#F59E0B', item_capitulo:'#0077B6', validacion:'#10B981', reapertura:'#0EA5E9' }
+        const TITULOS = { dims:'📐 Comentario — Cambio de Dimensiones', item_capitulo:'🔄 Comentario — Cambio de Ítem/Capítulo', validacion:'🔍 Comentario — Cambio de Estado', reapertura:'🔓 Motivo — Reapertura tras aprobación Interventoría', contratista_edita_interv:'✏️ Motivo — Edición con validación Interventoría' }
+        const COLORES = { dims:'#F59E0B', item_capitulo:'#0077B6', validacion:'#10B981', reapertura:'#0EA5E9', contratista_edita_interv:'#0D9488' }
         const color   = COLORES[modalComentario.tipo] || t.primary
-        const minLen  = modalComentario.tipo === 'reapertura' ? 15 : 1
+        const minLen  = (modalComentario.tipo === 'reapertura' || modalComentario.tipo === 'contratista_edita_interv') ? 15 : 1
         const valido  = !modalComentario.obligatorio || textoComentario.trim().length >= minLen
         return (
           <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex:6000,display:'flex',alignItems:'center',justifyContent:'center' }}>
@@ -2789,6 +2891,8 @@ async function restaurar(id) {
               <div style={{ fontSize:'var(--cc-sm)',color:t.textMuted,marginBottom:'16px' }}>
                 {modalComentario.tipo === 'reapertura' ? (
                   <>⚠️ Obligatorio (mín. 15 caracteres). Queda registrado para Interventoría: el registro pasa a «No Revisado» y deja de estar sellado.</>
+                ) : modalComentario.tipo === 'contratista_edita_interv' ? (
+                  <>⚠️ Obligatorio (mín. 15 caracteres). Queda registrado para Interventoría: el estado de validación pasa a «No Revisado».</>
                 ) : modalComentario.obligatorio ? (
                   '⚠️ El comentario es obligatorio para este estado.'
                 ) : (
@@ -2817,7 +2921,7 @@ async function restaurar(id) {
                 </div>
               </div>
               {modalComentario.obligatorio && textoComentario.trim().length < minLen && (
-                <div style={{ fontSize:'var(--cc-sm)',color:'#EF4444',marginTop:'4px' }}>* {modalComentario.tipo === 'reapertura' ? `Mínimo ${minLen} caracteres` : 'Este campo es obligatorio'}</div>
+                <div style={{ fontSize:'var(--cc-sm)',color:'#EF4444',marginTop:'4px' }}>* {(modalComentario.tipo === 'reapertura' || modalComentario.tipo === 'contratista_edita_interv') ? `Mínimo ${minLen} caracteres` : 'Este campo es obligatorio'}</div>
               )}
               <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end',marginTop:'18px' }}>
                 <button onClick={() => { modalComentario.resolve(null); setModalComentario(null) }}
@@ -3426,7 +3530,7 @@ async function restaurar(id) {
             </thead>
             <tbody>
               {registrosPagina.map(r => {
-                const isEdit = editando === r.id && !esSellado(r)
+                const isEdit = editando === r.id && puedeEditarFilaPptoNoSelladoOReabrir(r)
                 const bgSellado = esSellado(r) ? 'rgba(22,101,52,0.06)' : 'transparent'
                 return (
                   <tr key={r.id} data-id={r.id} style={{ background: filaZoom===r.id ? '#F59E0B22' : seleccionados.has(r.id) ? (t.primary+'18') : bgSellado, cursor: r.x_label ? 'crosshair' : 'default', outline: filaZoom===r.id ? '2px solid #F59E0B88' : 'none', transition:'background 0.3s, outline 0.3s' }}
@@ -3436,7 +3540,7 @@ async function restaurar(id) {
                         <input type="checkbox" checked={seleccionados.has(r.id)} disabled={esSellado(r)} onChange={() => toggleSel(r.id)}
                           style={{ cursor: esSellado(r) ? 'not-allowed' : 'pointer', opacity: esSellado(r) ? 0.45 : 1 }} />
                         <span id={`zoom-feedback-${r.id}`} style={{ fontSize:'var(--cc-caption)', color:'#10B981', opacity:'0', transition:'opacity 0.3s', pointerEvents:'none' }}>🎯</span>
-                        <button onClick={() => { setModalDetallePpto(r); setModalDetallePptoEditable(!esSellado(r)); setPopupDims({ ancho: r.ancho ?? '', espesor: r.espesor ?? '', area_long_nod: r.area_long_nod ?? '' }) }}
+                        <button onClick={() => abrirDetallePptoDesdeFila(r)}
                           title="Ver detalle"
                           style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:'var(--cc-label)', padding:'0', lineHeight:1, display:'flex', alignItems:'center' }}
                           onMouseEnter={e => e.currentTarget.style.color=t.primary}
@@ -3447,7 +3551,7 @@ async function restaurar(id) {
                     </td>
                     <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
                       <span
-                        onClick={() => { setModalDetallePpto(r); setModalDetallePptoEditable(!esSellado(r)); setPopupDims({ ancho: r.ancho ?? '', espesor: r.espesor ?? '', area_long_nod: r.area_long_nod ?? '' }) }}
+                        onClick={() => abrirDetallePptoDesdeFila(r)}
                         title="Ver detalle"
                         style={{ fontWeight:'600', color:t.primary, cursor:'pointer', textDecoration:'underline' }}>
                         {r.id_pol||r.pk_id||'-'}
@@ -3566,6 +3670,25 @@ async function restaurar(id) {
                         {esSellado(r) && (
                           <span title="Sellado — aprobado por Interventoría" style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:'#15803d', marginLeft:'4px', whiteSpace:'nowrap' }}>🔒</span>
                         )}
+                        {puedeEditar && (
+                          <button
+                            type="button"
+                            title="Abrir detalle del registro (mismo que en revisor de tramos: capítulo, ítem, valor; si es contratista con permiso y está sellado, podrá reabrir con motivo)"
+                            onClick={(e) => { e.stopPropagation(); abrirDetallePptoDesdeFila(r) }}
+                            style={{
+                              marginLeft: '4px',
+                              background: t.bgCard,
+                              border: `1px solid ${t.border}`,
+                              borderRadius: '6px',
+                              padding: '2px 8px',
+                              fontSize: 'var(--cc-sm)',
+                              cursor: 'pointer',
+                              color: t.primary,
+                              fontWeight: '700',
+                              flexShrink: 0,
+                            }}
+                          >✏️</button>
+                        )}
                       </div>
                     </td>
                     <td style={{ ...tdStyle, textAlign:'center', width: 40 }} onClick={e=>e.stopPropagation()}>
@@ -3643,14 +3766,22 @@ async function restaurar(id) {
                     {puedeEditar && (
                       <td style={tdStyle} onClick={e=>e.stopPropagation()}>
                         {esSellado(r) && !puedeReabrirTrasAprob ? (
-                          <span title="Registro sellado — no editable" style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>🔒</span>
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
+                            <button
+                              type="button"
+                              onClick={() => abrirDetallePptoDesdeFila(r)}
+                              title="Abrir panel de detalle (lectura si no puede reabrir; con permiso contratista — reapertura)"
+                              style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '4px', padding: '4px 8px', fontSize: 'var(--cc-sm)', cursor: 'pointer', color: t.primary }}
+                            >✏️</button>
+                            <span title="Registro sellado — sin permiso de reapertura" style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>🔒</span>
+                          </div>
                         ) : isEdit ? (
                           <div style={{ display:'flex',gap:'4px' }}>
                             <button onClick={() => guardarEdicion(r.id)} style={{ background:t.primary,color:'#fff',border:'none',borderRadius:'4px',padding:'4px 10px',fontSize:'var(--cc-sm)',cursor:'pointer' }}>✓</button>
                             <button onClick={() => setEditando(null)} style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'4px',padding:'4px 8px',fontSize:'var(--cc-sm)',cursor:'pointer',color:t.textMuted }}>✕</button>
                           </div>
                         ) : (
-                          <button onClick={() => iniciarEdicion(r)} style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'4px',padding:'4px 8px',fontSize:'var(--cc-sm)',cursor:'pointer',color:t.textMuted }}>✏️</button>
+                          <button onClick={() => iniciarEdicion(r)} title="Edición rápida en la grilla (capítulo, ítem, valor). Use ✏️ en «Revisado» para el mismo panel que en tramos." style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'4px',padding:'4px 8px',fontSize:'var(--cc-sm)',cursor:'pointer',color:t.textMuted }}>✏️</button>
                         )}
                       </td>
                     )}

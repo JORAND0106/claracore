@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, startTransition } from "react";
 import * as XLSX from "xlsx";
 import mapboxgl from "mapbox-gl";
 import { API_BASE } from "./apiBase";
@@ -22,24 +22,50 @@ const NOVEDAD_ICONOS_CATALOGO = [
   "🌍", "🚧", "📐", "🔔", "💼", "📈", "🧭", "⚙️", "🗂️", "📎", "🏁", "⭐",
 ];
 
-/** Claro y “Descansar vista” comparten ramas de UI tipo claro; solo oscuro usa la rama dark */
-function isLightTheme(theme) {
-  return theme === "light" || theme === "rest";
+/** Alineado con `themes` en `App.jsx` (claro / oscuro / descanso) */
+const THEME = {
+  light: {
+    bg: "#F0F9FF", bgCard: "#FFFFFF", border: "#BAE6FD", text: "#0F2942", textMuted: "#4A7FA5", primary: "#0077B6", primaryLight: "#00B4C6",
+    shadow: "0 2px 12px rgba(0,119,182,0.10)", headerBg: "#FFFFFF", inputBg: "#F8FAFC",
+  },
+  dark: {
+    bg: "#0A1628", bgCard: "#0F2038", border: "#1E3A5F", text: "#E0F2FE", textMuted: "#7FB3D3", primary: "#00B4C6", primaryLight: "#00D4E8",
+    shadow: "0 2px 12px rgba(0,0,0,0.40)", headerBg: "#0F2038", inputBg: "#0A1628",
+  },
+  rest: {
+    bg: "#E8E0D5", bgCard: "#F2EDE4", border: "#C9B8A4", text: "#2A2318", textMuted: "#5C5346", primary: "#0E7490", primaryLight: "#14B8A6",
+    shadow: "0 2px 12px rgba(42,35,24,0.12)", headerBg: "#EDE6DC", inputBg: "#FAF6EF",
+  },
 }
 
-// ─── TOKENS DE COLOR POR TEMA ──────────────────────────────────────────────
-// Evita repetir ternarios en cada componente
-const C = (theme) => ({
-  textPrimary:   isLightTheme(theme) ? "#0d3b52" : "#e0f4f7",
-  textSecondary: isLightTheme(theme) ? "#2a6070" : "#4a7a87",
-  textMuted:     isLightTheme(theme) ? "#4a7a87" : "#2a4a54",
-  textTable:     isLightTheme(theme) ? "#1a3a48" : "#c0dde3",
-  bgCard:        isLightTheme(theme) ? "#FFFFFF" : "#0b1920",
-  bgInput:       isLightTheme(theme) ? "#F0F9FF" : "#081318",
-  borderColor:   isLightTheme(theme) ? "#BAE6FD" : "rgba(0,175,197,0.2)",
-});
+function tFrom(m, t) {
+  if (t && t.text) return t
+  if (m && THEME[m]) return THEME[m]
+  return THEME.light
+}
 
-// ─── ESTILOS BASE ──────────────────────────────────────────────────────────
+function isDarkMode(m) { return m === "dark" }
+function isRestMode(m) { return m === "rest" }
+function isLightTheme(m) { return m === "light" || m === "rest" }
+
+// ─── TOKENS DE COLOR (objeto t del dashboard o clave de tema) ─────────────
+const C = (themeOrT) => {
+  let t;
+  if (typeof themeOrT === "string") t = THEME[themeOrT] || THEME.light;
+  else if (themeOrT && themeOrT.text) t = themeOrT;
+  else t = THEME.light;
+  return {
+    textPrimary:   t.text,
+    textSecondary: t.textMuted,
+    textMuted:     t.textMuted,
+    textTable:     t.text,
+    bgCard:        t.bgCard,
+    bgInput:       t.inputBg,
+    borderColor:   t.border,
+  }
+}
+
+// ─── ESTILOS BASE: tipografía = var(--cc-*) (Pequeña / Mediana / Grande) ───
 const S = {
   overlay: {
     position: "fixed", inset: 0, zIndex: 9999,
@@ -47,97 +73,151 @@ const S = {
     backdropFilter: "blur(6px)",
     display: "flex", alignItems: "center", justifyContent: "center",
     fontFamily: "'DM Sans', 'Segoe UI', sans-serif",
+    fontSize: "var(--cc-body)",
+    lineHeight: 1.35,
   },
-  panel: (theme) => ({
-    width: "min(1100px, 96vw)", height: "min(780px, 92vh)",
-    background: isLightTheme(theme) ? "#F0F9FF" : "#0e1c24",
-    borderRadius: 12,
-    display: "flex",
-    overflow: "hidden",
-    boxShadow: "0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,175,197,0.15)",
-  }),
-  sidebar: (theme) => ({
-    width: 210, minWidth: 210,
-    background: isLightTheme(theme) ? "#E0F2FE" : "#081318",
-    borderRight: isLightTheme(theme) ? "1px solid #BAE6FD" : "1px solid rgba(0,175,197,0.12)",
-    display: "flex", flexDirection: "column",
-    padding: "28px 0",
-  }),
-  sidebarHeader: {
-    padding: "0 20px 24px",
-    borderBottom: "1px solid rgba(0,175,197,0.1)",
-    marginBottom: 16,
+  panel: (m, t) => {
+    const tok = tFrom(m, t);
+    return {
+      width: "min(1320px, 98vw)",
+      height: "min(780px, 92vh)",
+      background: isDarkMode(m) ? "#0e1c24" : tok.bg,
+      borderRadius: 12,
+      display: "flex",
+      overflow: "hidden",
+      boxShadow: isDarkMode(m) ? "0 32px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,175,197,0.15)" : `0 24px 64px ${isRestMode(m) ? "rgba(42,35,24,0.2)" : "rgba(0,0,0,0.12)"}, 0 0 0 1px ${tok.border}99`,
+    };
   },
-  logoSub: { fontSize: 11, color: "#4a7a87", letterSpacing: 1, marginTop: 2 },
-  navItem: (active) => ({
-    display: "flex", alignItems: "center", gap: 10,
-    padding: "11px 20px", cursor: "pointer",
-    background: active ? "rgba(0,175,197,0.12)" : "transparent",
-    borderLeft: active ? "3px solid #00afc5" : "3px solid transparent",
-    color: active ? "#00afc5" : "#5a8a96",
-    fontSize: 13, fontWeight: active ? 600 : 400,
-    transition: "all 0.18s",
-    userSelect: "none",
-  }),
-  navDot: (active) => ({
-    width: 7, height: 7, borderRadius: "50%",
-    background: active ? "#00afc5" : "#2a4a54",
-    flexShrink: 0,
-  }),
-  sidebarFooter: {
-    marginTop: "auto", padding: "16px 20px",
-    borderTop: "1px solid rgba(0,175,197,0.08)",
+  sidebar: (m, t) => {
+    const tok = tFrom(m, t);
+    const bg = isDarkMode(m) ? "#081318" : isRestMode(m) ? "#D9CEC0" : "#E0F2FE";
+    return {
+      width: 200, minWidth: 200,
+      background: bg,
+      borderRight: `1px solid ${tok.border}`,
+      display: "flex", flexDirection: "column",
+      padding: "14px 0",
+    };
   },
-  userTag: { fontSize: 11, color: "#4a7a87" },
-  userName: { fontSize: 13, color: "#8acdd8", fontWeight: 600, marginTop: 2 },
+  sidebarHeader: (m, t) => {
+    const tok = tFrom(m, t);
+    return {
+      padding: "0 16px 14px",
+      borderBottom: `1px solid ${isDarkMode(m) ? "rgba(0,175,197,0.1)" : tok.border}88`,
+      marginBottom: 10,
+    };
+  },
+  logoSub: (m, t) => ({ fontSize: "var(--cc-caption)", color: tFrom(m, t).textMuted, letterSpacing: 1, marginTop: 2 }),
+  navItem: (active, m, t) => {
+    const tok = tFrom(m, t);
+    return {
+      display: "flex", alignItems: "center", gap: 8,
+      padding: "6px 14px", cursor: "pointer",
+      background: active ? (isRestMode(m) ? "rgba(14,116,144,0.12)" : "rgba(0,119,182,0.1)") : "transparent",
+      borderLeft: active ? `3px solid ${tok.primary}` : "3px solid transparent",
+      color: active ? tok.primary : tok.textMuted,
+      fontSize: "var(--cc-sm)", fontWeight: active ? 600 : 500,
+      transition: "all 0.18s", userSelect: "none",
+    };
+  },
+  navDot: (active, m, t) => ({
+    width: 6, height: 6, borderRadius: "50%",
+    background: active ? tFrom(m, t).primary : tFrom(m, t).textMuted,
+    flexShrink: 0, opacity: active ? 1 : 0.5,
+  }),
+  sidebarFooter: (m, t) => {
+    const tok = tFrom(m, t);
+    return {
+      marginTop: "auto", padding: "10px 14px",
+      borderTop: `1px solid ${isDarkMode(m) ? "rgba(0,175,197,0.08)" : tok.border}66`,
+    };
+  },
+  userTag: (m, t) => ({ fontSize: "var(--cc-caption)", color: tFrom(m, t).textMuted }),
+  userName: (m, t) => ({ fontSize: "var(--cc-sm)", color: tFrom(m, t).text, fontWeight: 600, marginTop: 2 }),
   content: {
     flex: 1, display: "flex", flexDirection: "column", overflow: "hidden",
   },
-  contentHeader: (theme) => ({
-    padding: "24px 32px 20px",
-    borderBottom: isLightTheme(theme) ? "1px solid #BAE6FD" : "1px solid rgba(0,175,197,0.1)",
-    display: "flex", alignItems: "center", justifyContent: "space-between",
-    background: isLightTheme(theme) ? "#FFFFFF" : "#0b1920",
-  }),
-  contentTitle: (theme) => ({
-    fontSize: 20, fontWeight: 700,
-    color: isLightTheme(theme) ? "#0d3b52" : "#e0f4f7",   // ← legible en ambos
-    fontFamily: "'Rajdhani', sans-serif", letterSpacing: 0.5,
-  }),
-  contentSub: (theme) => ({
-    fontSize: 12,
-    color: isLightTheme(theme) ? "#2a6070" : "#4a7a87",   // ← legible en ambos
-    marginTop: 3,
-  }),
-  closeBtn: {
-    width: 32, height: 32, borderRadius: 6,
-    background: "rgba(0,175,197,0.08)", border: "1px solid rgba(0,175,197,0.2)",
-    color: "#00afc5", fontSize: 16, cursor: "pointer",
-    display: "flex", alignItems: "center", justifyContent: "center",
-    transition: "all 0.15s",
+  contentHeader: (m, t) => {
+    const tok = tFrom(m, t);
+    return {
+      padding: "8px 18px 8px",
+      borderBottom: `1px solid ${tok.border}`,
+      display: "flex", alignItems: "center", justifyContent: "space-between",
+      background: isDarkMode(m) ? "#0b1920" : tok.bgCard,
+    };
   },
-  scrollArea: (theme) => ({
-    flex: 1, overflowY: "auto", padding: "24px 32px",
-    scrollbarWidth: "thin", scrollbarColor: "#1e3a44 transparent",
-    background: isLightTheme(theme) ? "#F8FAFC" : "transparent",
-  }),
-  table: { width: "100%", borderCollapse: "collapse", fontSize: 13 },
-  th: {
-    textAlign: "left", padding: "10px 14px",
-    background: "#081318", color: "#4a8a96",
-    fontSize: 11, fontWeight: 600, letterSpacing: 0.8,
-    textTransform: "uppercase",
-    borderBottom: "1px solid rgba(0,175,197,0.12)",
+  contentTitle: (m, t) => {
+    const tok = tFrom(m, t);
+    return {
+      fontSize: "var(--cc-h2)", fontWeight: 700, color: tok.text,
+      fontFamily: "'Rajdhani', sans-serif", letterSpacing: 0.4,
+    };
   },
-  td: (theme) => ({
-    padding: "12px 14px",
-    color: isLightTheme(theme) ? "#1a3a48" : "#c0dde3",   // ← legible en ambos
-    borderBottom: isLightTheme(theme) ? "1px solid #E0F2FE" : "1px solid rgba(255,255,255,0.04)",
-    verticalAlign: "middle",
-  }),
+  contentSub: (m, t) => {
+    const tok = tFrom(m, t);
+    return {
+      fontSize: "var(--cc-sm)", color: tok.textMuted, marginTop: 2, lineHeight: 1.35,
+    };
+  },
+  closeBtn: (m, t) => {
+    const tok = tFrom(m, t);
+    return {
+      width: 32, height: 32, borderRadius: 6,
+      background: isDarkMode(m) ? "rgba(0,175,197,0.08)" : (isRestMode(m) ? "rgba(14,116,144,0.1)" : "rgba(0,119,182,0.08)"),
+      border: `1px solid ${tok.border}`,
+      color: tok.primary, fontSize: "var(--cc-md)", cursor: "pointer",
+      display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.15s",
+    };
+  },
+  scrollArea: (m, t) => {
+    const tok = tFrom(m, t);
+    return {
+      flex: 1, overflowY: "auto", padding: "10px 16px",
+      scrollbarWidth: "thin", scrollbarColor: isDarkMode(m) ? "#1e3a44 transparent" : `${tok.border} transparent`,
+      background: isDarkMode(m) ? "transparent" : isRestMode(m) ? "#EEE8DF" : "#F8FAFC",
+    };
+  },
+  table: { width: "100%", borderCollapse: "collapse", fontSize: "var(--cc-sm)", lineHeight: 1.3 },
+  th: (m, t) => {
+    const tok = tFrom(m, t);
+    if (isRestMode(m)) {
+      return {
+        textAlign: "left", padding: "4px 8px",
+        background: "#2E2A25", color: "rgba(242,235,224,0.9)",
+        fontSize: "var(--cc-label)", fontWeight: 600, letterSpacing: 0.5,
+        textTransform: "uppercase",
+        borderBottom: `1px solid ${tok.border}`,
+      };
+    }
+    if (!isDarkMode(m)) {
+      return {
+        textAlign: "left", padding: "4px 8px",
+        background: "#081318", color: "#4a8a96",
+        fontSize: "var(--cc-label)", fontWeight: 600, letterSpacing: 0.5,
+        textTransform: "uppercase",
+        borderBottom: "1px solid rgba(0,175,197,0.12)",
+      };
+    }
+    return {
+      textAlign: "left", padding: "4px 8px",
+      background: "#020617", color: "#4a8a96",
+      fontSize: "var(--cc-label)", fontWeight: 600, letterSpacing: 0.5,
+      textTransform: "uppercase",
+      borderBottom: "1px solid rgba(0,175,197,0.12)",
+    };
+  },
+  td: (m, t) => {
+    const tok = tFrom(m, t);
+    return {
+      padding: "5px 8px", fontSize: "var(--cc-sm)",
+      color: tok.text,
+      borderBottom: isDarkMode(m) ? "1px solid rgba(255,255,255,0.04)" : `1px solid ${isRestMode(m) ? "rgba(201,184,164,0.45)" : "#E0F2FE"}`,
+      verticalAlign: "middle",
+    };
+  },
   badge: (estado) => ({
-    display: "inline-block", padding: "3px 10px", borderRadius: 20,
-    fontSize: 11, fontWeight: 600,
+    display: "inline-block", padding: "2px 8px", borderRadius: 20,
+    fontSize: "var(--cc-caption)", fontWeight: 600,
     background: estado === "pendiente" ? "rgba(245,158,11,0.15)"
       : estado === "aprobado" ? "rgba(34,197,94,0.15)"
       : "rgba(239,68,68,0.15)",
@@ -146,9 +226,9 @@ const S = {
       : "#ef4444",
   }),
   btn: (variant = "primary", sm = false) => ({
-    padding: sm ? "6px 14px" : "9px 20px",
+    padding: sm ? "4px 10px" : "6px 14px",
     borderRadius: 6, cursor: "pointer",
-    fontSize: sm ? 12 : 13, fontWeight: 600,
+    fontSize: sm ? "var(--cc-caption)" : "var(--cc-sm)", fontWeight: 600,
     border: "1px solid",
     transition: "all 0.15s",
     ...(variant === "primary" ? {
@@ -165,23 +245,23 @@ const S = {
   }),
   input: {
     background: "#081318", border: "1px solid rgba(0,175,197,0.2)",
-    borderRadius: 6, color: "#c0dde3", fontSize: 13,
-    padding: "8px 12px", outline: "none", width: "100%",
+    borderRadius: 6, color: "#c0dde3", fontSize: "var(--cc-input)",
+    padding: "5px 10px", outline: "none", width: "100%",
   },
   select: {
     background: "#081318", border: "1px solid rgba(0,175,197,0.2)",
-    borderRadius: 6, color: "#c0dde3", fontSize: 12,
-    padding: "6px 10px", outline: "none", cursor: "pointer",
+    borderRadius: 6, color: "#c0dde3", fontSize: "var(--cc-sm)",
+    padding: "4px 8px", outline: "none", cursor: "pointer",
   },
   card: {
     background: "#0b1920", border: "1px solid rgba(0,175,197,0.1)",
-    borderRadius: 8, padding: "20px 24px", marginBottom: 16,
+    borderRadius: 8, padding: "12px 16px", marginBottom: 10,
   },
-  cardTitle: { fontSize: 14, fontWeight: 600, color: "#8acdd8", marginBottom: 12 },
+  cardTitle: { fontSize: "var(--cc-sm)", fontWeight: 600, color: "#8acdd8", marginBottom: 8 },
   chip: (active) => ({
-    display: "inline-flex", alignItems: "center", gap: 5,
-    padding: "4px 10px", borderRadius: 20, cursor: "pointer",
-    fontSize: 11, fontWeight: 600, userSelect: "none",
+    display: "inline-flex", alignItems: "center", gap: 4,
+    padding: "2px 8px", borderRadius: 20, cursor: "pointer",
+    fontSize: "var(--cc-caption)", fontWeight: 600, userSelect: "none",
     border: "1px solid",
     transition: "all 0.15s",
     background: active ? "rgba(0,175,197,0.18)" : "rgba(255,255,255,0.03)",
@@ -189,15 +269,15 @@ const S = {
     color: active ? "#00afc5" : "#4a7a87",
   }),
   alert: (type) => ({
-    padding: "10px 16px", borderRadius: 6, fontSize: 13,
-    marginBottom: 16,
+    padding: "8px 12px", borderRadius: 6, fontSize: "var(--cc-sm)",
+    marginBottom: 12,
     background: type === "success" ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)",
     border: `1px solid ${type === "success" ? "rgba(34,197,94,0.3)" : "rgba(239,68,68,0.3)"}`,
     color: type === "success" ? "#22c55e" : "#ef4444",
   }),
   empty: {
-    textAlign: "center", padding: "48px 0",
-    color: "#2a4a54", fontSize: 14,
+    textAlign: "center", padding: "28px 0",
+    color: "#2a4a54", fontSize: "var(--cc-body)",
   },
 };
 
@@ -262,7 +342,18 @@ function useApi(token) {
       else if (err.message) msg = err.message;
       throw new Error(msg);
     }
-    return res.json();
+    const raw = await res.text();
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      if (raw.trim().startsWith("<!")) {
+        throw new Error(
+          "El servidor devolvió HTML en lugar de JSON. Si trabajas en local, comprueba el proxy de Vite (ruta reenviada a FastAPI) o que VITE_API_URL apunte al API.",
+        );
+      }
+      throw new Error("Respuesta no válida (no es JSON).");
+    }
   }, [token]);
   return call;
 }
@@ -430,7 +521,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
           <thead>
             <tr>
               {["Usuario", "Estado", "Cargo", "Rol", "Contrato principal", "Políticas", "Acciones"].map(h => (
-                <th key={h} style={S.th}>{h}</th>
+                <th key={h} style={S.th(theme)}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -629,7 +720,7 @@ function SeccionCargos({ call, cargos, recargarCargos, theme }) {
       <table style={S.table}>
         <thead>
           <tr>
-            {["#", "Nombre del cargo", "Acción"].map(h => <th key={h} style={S.th}>{h}</th>)}
+            {["#", "Nombre del cargo", "Acción"].map(h => <th key={h} style={S.th(theme)}>{h}</th>)}
           </tr>
         </thead>
         <tbody>
@@ -767,11 +858,11 @@ function SeccionPermisos({ call, cargos, theme }) {
       ) : (
         <div style={{ background: "#081318", borderRadius: 8, border: "1px solid rgba(0,175,197,0.1)", overflow: "hidden" }}>
           <div style={{ display: "grid", gridTemplateColumns: `220px repeat(${ACCIONES.length}, 1fr) 80px`, background: "#06101a", borderBottom: "1px solid rgba(0,175,197,0.15)" }}>
-            <div style={{ ...S.th, padding: "12px 16px" }}>Función</div>
+            <div style={{ ...S.th(theme), padding: "12px 16px" }}>Función</div>
             {ACCIONES.map(a => (
-              <div key={a} style={{ ...S.th, textAlign: "center", padding: "12px 4px", color: accionColor[a] }}>{a}</div>
+              <div key={a} style={{ ...S.th(theme), textAlign: "center", padding: "12px 4px", color: accionColor[a] }}>{a}</div>
             ))}
-            <div style={{ ...S.th, textAlign: "center" }}>Todo</div>
+            <div style={{ ...S.th(theme), textAlign: "center" }}>Todo</div>
           </div>
           {funciones.map((f, idx) => {
             const fila = permisos[f.id] || {};
@@ -1171,11 +1262,11 @@ function SeccionInicioNovedades({ call, theme, token }) {
           <table style={S.table}>
             <thead>
               <tr>
-                <th style={S.th}>Creada</th>
-                <th style={S.th}>Fecha (aviso)</th>
-                <th style={S.th}>Título</th>
-                <th style={S.th}>Tipo</th>
-                <th style={{ ...S.th, textAlign: "right" }}>Acciones</th>
+                <th style={S.th(theme)}>Creada</th>
+                <th style={S.th(theme)}>Fecha (aviso)</th>
+                <th style={S.th(theme)}>Título</th>
+                <th style={S.th(theme)}>Tipo</th>
+                <th style={{ ...S.th(theme), textAlign: "right" }}>Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -1241,6 +1332,8 @@ function SeccionLogs({ call, theme }) {
     EDITAR:"#F59E0B", RECALCULAR:"#7C3AED", VALIDAR:"#00A896", COMENTAR:"#0EA5E9",
     IMPORTAR:"#2E86AB", CREAR:"#16A34A", ELIMINAR:"#DC2626"
   }
+  /** Evita re-renders cuando el poll de fondo trae el mismo JSON que la vista actual */
+  const lastLogsPayloadRef = useRef("")
 
   useEffect(() => {
     fetch(`${API}/logs/usuarios-lista`, { headers: { Authorization: `Bearer ${token}` } })
@@ -1256,8 +1349,10 @@ function SeccionLogs({ call, theme }) {
 
   async function cargarLogs(off = 0, opts = {}) {
     const { silent = false } = opts
-    if (!silent) setLoading(true)
-    setOffset(off)
+    if (!silent) {
+      setLoading(true)
+      setOffset(off)
+    }
     const params = new URLSearchParams({ limit: LIMIT, offset: off })
     if (filtUsuario) params.set("usuario_id", filtUsuario)
     if (filtModulo)  params.set("modulo",     filtModulo)
@@ -1269,8 +1364,18 @@ function SeccionLogs({ call, theme }) {
     if (filtOcultarLogin && !filtAccion) params.set("excluir_accion", "LOGIN")
     const data = await fetch(`${API}/logs?${params}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : []).catch(() => [])
+    if (silent) {
+      const nextJson = JSON.stringify(data)
+      if (nextJson === lastLogsPayloadRef.current) {
+        return
+      }
+      lastLogsPayloadRef.current = nextJson
+      startTransition(() => setLogs(data))
+      return
+    }
+    lastLogsPayloadRef.current = JSON.stringify(data)
     setLogs(data)
-    if (!silent) setLoading(false)
+    setLoading(false)
   }
 
   async function abrirHistorial(log) {
@@ -1552,7 +1657,7 @@ function SeccionResets({ call, theme }) {
         <div style={S.empty}><div style={{ fontSize: 32, marginBottom: 8 }}>✓</div>No hay solicitudes de reset pendientes.</div>
       ) : (
         <table style={S.table}>
-          <thead><tr>{["Correo", "Fecha solicitud", "Contraseña temporal", "Acción"].map(h => <th key={h} style={S.th}>{h}</th>)}</tr></thead>
+          <thead><tr>{["Correo", "Fecha solicitud", "Contraseña temporal", "Acción"].map(h => <th key={h} style={S.th(theme)}>{h}</th>)}</tr></thead>
           <tbody>
             {solicitudes.map(s => (
               <tr key={s.id}>
@@ -1581,7 +1686,9 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
   const FORM_VACIO = {
     numero: '', objeto: '', contratista: '', nit: '', interventoria: '',
     entidad: '', entidad_otra: '', logo_entidad: '', plano_geojson: null, centro_lat: null, centro_lng: null,
-    logo_contratista: '', logo_interventoria: '', aiu: '', iva: ''
+    logo_contratista: '', logo_interventoria: '', aiu: '', iva: '',
+    valor_componente_ambiental: '', valor_componente_social: '', valor_componente_pmt: '', costo_directo_contrato: '',
+    costos_adicionales_lista: [],
   };
   const [form, setForm] = useState(FORM_VACIO);
   const [editandoId, setEditandoId] = useState(null); // null = crear, number = editar
@@ -1622,6 +1729,55 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     reader.readAsDataURL(file);
   }
 
+  function llenarFormDesdeContrato(d) {
+    if (!d || typeof d !== 'object') return;
+    let costos_adicionales_lista = [];
+    if (Array.isArray(d.costos_adicionales_lista) && d.costos_adicionales_lista.length) {
+      costos_adicionales_lista = d.costos_adicionales_lista.map((x) => {
+        const c = String(x.concepto_contractual ?? x.concepto ?? '').trim();
+        let vm = x.valor_mensual;
+        let tm = x.tiempo_meses;
+        if ((x.valor_mensual == null || x.valor_mensual === '') && x.valor != null && x.valor !== '') {
+          const tot = Number(x.valor);
+          const mes = Number(x.tiempo_meses) > 0 ? Number(x.tiempo_meses) : 1;
+          vm = Number.isFinite(tot) && Number.isFinite(mes) && mes > 0 ? String(tot / mes) : String(x.valor);
+          tm = x.tiempo_meses != null && x.tiempo_meses !== '' ? String(x.tiempo_meses) : '1';
+        }
+        return {
+          concepto_contractual: c,
+          valor_mensual: vm != null && vm !== '' && String(vm) !== 'null' ? String(vm) : '',
+          tiempo_meses: tm != null && tm !== '' && String(tm) !== 'null' ? String(tm) : '',
+        };
+      });
+    } else if (d.costos_adicionales != null && d.costos_adicionales !== '') {
+      costos_adicionales_lista = [
+        { concepto_contractual: 'Importe histórico (sin desglose)', valor_mensual: String(d.costos_adicionales), tiempo_meses: '1' },
+      ];
+    }
+    setForm({
+      numero: d.numero || '',
+      objeto: d.objeto || '',
+      contratista: d.contratista || '',
+      nit: d.nit || '',
+      interventoria: d.interventoria || '',
+      entidad: d.entidad || '',
+      entidad_otra: d.entidad_otra || '',
+      logo_entidad: d.logo_entidad || '',
+      plano_geojson: d.plano_geojson || null,
+      centro_lat: d.centro_lat ?? null,
+      centro_lng: d.centro_lng ?? null,
+      logo_contratista: d.logo_contratista || '',
+      logo_interventoria: d.logo_interventoria || '',
+      aiu: d.aiu != null ? String(d.aiu) : '',
+      iva: d.iva != null ? String(d.iva) : '',
+      valor_componente_ambiental: d.valor_componente_ambiental != null ? String(d.valor_componente_ambiental) : '',
+      valor_componente_social: d.valor_componente_social != null ? String(d.valor_componente_social) : '',
+      valor_componente_pmt: d.valor_componente_pmt != null ? String(d.valor_componente_pmt) : '',
+      costo_directo_contrato: d.costo_directo_contrato != null ? String(d.costo_directo_contrato) : '',
+      costos_adicionales_lista,
+    });
+  }
+
   function handlePlanoGeojson(e) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1655,26 +1811,13 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     setEditandoId(c.id);
     let d = c;
     try {
-      d = await call("GET", `/contratos/${c.id}`);
+      const detalle = await call("GET", `/contratos/${c.id}`);
+      d = { ...c, ...(detalle && typeof detalle === "object" ? detalle : {}) };
     } catch {
       d = c;
     }
     if (!d || typeof d !== "object") d = c;
-    setForm({
-      numero: d.numero || '', objeto: d.objeto || '',
-      contratista: d.contratista || '', nit: d.nit || '',
-      interventoria: d.interventoria || '',
-      entidad: d.entidad || '',
-      entidad_otra: d.entidad_otra || '',
-      logo_entidad: d.logo_entidad || '',
-      plano_geojson: d.plano_geojson || null,
-      centro_lat: d.centro_lat ?? null,
-      centro_lng: d.centro_lng ?? null,
-      logo_contratista: d.logo_contratista || '',
-      logo_interventoria: d.logo_interventoria || '',
-      aiu: d.aiu != null ? String(d.aiu) : '',
-      iva: d.iva != null ? String(d.iva) : '',
-    });
+    llenarFormDesdeContrato(d);
     setMsg(null);
   }
 
@@ -1697,25 +1840,60 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     } finally { setTogglingFase(null); }
   }
 
+  function _numONull(s) {
+    if (s === '' || s == null) return null;
+    const n = parseFloat(s);
+    return Number.isFinite(n) ? n : null;
+  }
+
   async function handleGuardar() {
     if (!form.numero || !form.contratista) { setMsg({ type: 'error', text: 'Número y contratista son obligatorios' }); return; }
     if (!form.entidad) { setMsg({ type: 'error', text: 'La entidad es obligatoria' }); return; }
     if (form.entidad === "OTRA" && !form.entidad_otra?.trim()) { setMsg({ type: 'error', text: 'Debes indicar cuál es la otra entidad' }); return; }
     setSaving(true); setMsg(null);
     try {
+      const costos_adicionales_lista = (form.costos_adicionales_lista || [])
+        .map((row) => ({
+          concepto_contractual: (row.concepto_contractual || '').trim(),
+          valor_mensual: _numONull(row.valor_mensual),
+          tiempo_meses: _numONull(row.tiempo_meses),
+        }))
+        .filter((row) => row.concepto_contractual);
       const payload = { ...form,
-        aiu: form.aiu !== '' ? parseFloat(form.aiu) : null,
-        iva: form.iva !== '' ? parseFloat(form.iva) : null,
+        aiu: _numONull(form.aiu),
+        iva: _numONull(form.iva),
+        valor_componente_ambiental: _numONull(form.valor_componente_ambiental),
+        valor_componente_social: _numONull(form.valor_componente_social),
+        valor_componente_pmt: _numONull(form.valor_componente_pmt),
+        costo_directo_contrato: _numONull(form.costo_directo_contrato),
+        costos_adicionales_lista,
       };
+      delete payload.costos_adicionales;
       if (editandoId) {
         await call("PUT", `/contratos/${editandoId}`, payload);
         setMsg({ type: 'success', text: 'Contrato actualizado correctamente' });
+        try {
+          const fresh = await call("GET", `/contratos/${editandoId}`);
+          llenarFormDesdeContrato(fresh);
+        } catch {
+          llenarFormDesdeContrato({
+            ...form,
+            aiu: payload.aiu,
+            iva: payload.iva,
+            valor_componente_ambiental: payload.valor_componente_ambiental,
+            valor_componente_social: payload.valor_componente_social,
+            valor_componente_pmt: payload.valor_componente_pmt,
+            costo_directo_contrato: payload.costo_directo_contrato,
+            costos_adicionales_lista: payload.costos_adicionales_lista,
+          });
+        }
+        /* Sigue en modo edición: no vaciar el formulario (era la causa de “no guarda”). */
       } else {
-        await call("POST", "/contratos", form);
+        await call("POST", "/contratos", payload);
         setMsg({ type: 'success', text: 'Contrato creado correctamente' });
+        setForm(FORM_VACIO);
+        setEditandoId(null);
       }
-      setForm(FORM_VACIO);
-      setEditandoId(null);
       recargarContratos();
     } catch (e) {
       setMsg({ type: 'error', text: e.message || 'Error al guardar contrato' });
@@ -1779,6 +1957,29 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
 
   const inp = { width: '100%', background: '#0a1628', border: '1.5px solid #1E3A5F', borderRadius: 8, padding: '9px 12px', color: '#E0F2FE', fontSize: 13, outline: 'none', boxSizing: 'border-box', marginBottom: 12 };
   const lbl = { fontSize: 11, fontWeight: 700, color: '#4a7a87', letterSpacing: 1, display: 'block', marginBottom: 4 };
+  const _fmtCOP0 = (n) => {
+    if (n == null || n === '' || !Number.isFinite(Number(n))) return '—';
+    return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Math.round(Number(n)));
+  };
+
+  function tasaYmontosResumenListado(c) {
+    if (!c || typeof c !== 'object') return null;
+    const partes = [];
+    if (c.aiu != null && c.aiu !== '' && !Number.isNaN(Number(c.aiu))) {
+      partes.push(`AIU ${(Number(c.aiu) * 100).toFixed(4).replace(/\.?0+$/, '')}%`);
+    }
+    if (c.iva != null && c.iva !== '' && !Number.isNaN(Number(c.iva))) {
+      partes.push(`IVA ${(Number(c.iva) * 100).toFixed(2).replace(/\.?0+$/, '')}%`);
+    }
+    const cop = (v) => (v != null && v !== '' && !Number.isNaN(Number(v)) ? new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Number(v)) : null);
+    if (c.costo_directo_contrato != null && c.costo_directo_contrato !== '') { const t = cop(c.costo_directo_contrato); if (t) partes.push(`CD contrato: ${t}`); }
+    if (c.valor_componente_ambiental != null && c.valor_componente_ambiental !== '') { const t = cop(c.valor_componente_ambiental); if (t) partes.push(`A: ${t}`); }
+    if (c.valor_componente_social != null && c.valor_componente_social !== '') { const t = cop(c.valor_componente_social); if (t) partes.push(`S: ${t}`); }
+    if (c.valor_componente_pmt != null && c.valor_componente_pmt !== '') { const t = cop(c.valor_componente_pmt); if (t) partes.push(`PMT: ${t}`); }
+    if (c.costos_adicionales != null && c.costos_adicionales !== '') { const t = cop(c.costos_adicionales); if (t) partes.push(`Adic. (otros, suma): ${t}`); }
+    if (!partes.length) return null;
+    return partes.join(' · ');
+  }
 
   return (
     <div style={{ padding: 28 }}>
@@ -1861,6 +2062,98 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
               )}
             </div>
           </div>
+          <div style={{ fontSize: 10, color: '#4a7a87', letterSpacing: 0.6, margin: '4px 0 8px' }}>VALORES CONTRATUALES (COP$)</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 8 }}>
+            <div>
+              <label style={lbl}>VALOR COMPONENTE AMBIENTAL</label>
+              <input style={inp} type="number" step="0.01" min="0" placeholder="COP" value={form.valor_componente_ambiental}
+                onChange={e => setForm(f => ({ ...f, valor_componente_ambiental: e.target.value }))} />
+            </div>
+            <div>
+              <label style={lbl}>VALOR COMPONENTE SOCIAL</label>
+              <input style={inp} type="number" step="0.01" min="0" placeholder="COP" value={form.valor_componente_social}
+                onChange={e => setForm(f => ({ ...f, valor_componente_social: e.target.value }))} />
+            </div>
+            <div>
+              <label style={lbl}>VALOR COMPONENTE PMT</label>
+              <input style={inp} type="number" step="0.01" min="0" placeholder="COP" value={form.valor_componente_pmt}
+                onChange={e => setForm(f => ({ ...f, valor_componente_pmt: e.target.value }))} />
+            </div>
+            <div>
+              <label style={lbl}>COSTO DIRECTO DEL CONTRATO</label>
+              <input style={inp} type="number" step="0.01" min="0" placeholder="COP" value={form.costo_directo_contrato}
+                onChange={e => setForm(f => ({ ...f, costo_directo_contrato: e.target.value }))} />
+            </div>
+          </div>
+          <div style={{ fontSize: 10, color: '#6ac8c9', letterSpacing: 0.4, margin: '0 0 6px' }}>
+            Costos adicionales: concepto, valor mensual (COP$) y plazo en meses. El <strong>valor total</strong> del renglón es automático: redondeo a entero (0 decimales). No forman parte del cobro de precios, AIU, IVA ni listado SICOE.
+          </div>
+          {(form.costos_adicionales_lista || []).map((row, i) => {
+            const vvm = _numONull(row.valor_mensual);
+            const ttm = _numONull(row.tiempo_meses);
+            const totalCalc = (vvm != null && ttm != null) ? Math.round(vvm * ttm) : null;
+            return (
+            <div key={i} style={{ marginBottom: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.1fr) 0.6fr 0.45fr 0.7fr 36px', gap: 8, alignItems: 'end' }}>
+              <div>
+                <label style={lbl}>CONCEPTO *</label>
+                <input style={inp} placeholder="Ej. servicio fijo, supervisión" value={row.concepto_contractual || ''}
+                  onChange={e => {
+                    const v = e.target.value;
+                    setForm(f => {
+                      const arr = [...(f.costos_adicionales_lista || [])];
+                      arr[i] = { ...arr[i], concepto_contractual: v };
+                      return { ...f, costos_adicionales_lista: arr };
+                    });
+                  }} />
+              </div>
+              <div>
+                <label style={lbl}>VALOR MENSUAL (COP)</label>
+                <input style={inp} type="number" step="0.01" min="0" placeholder="0"
+                  value={row.valor_mensual}
+                  onChange={e => {
+                    const v = e.target.value;
+                    setForm(f => {
+                      const arr = [...(f.costos_adicionales_lista || [])];
+                      arr[i] = { ...arr[i], valor_mensual: v };
+                      return { ...f, costos_adicionales_lista: arr };
+                    });
+                  }} />
+              </div>
+              <div>
+                <label style={lbl}>MESES</label>
+                <input style={inp} type="number" step="0.1" min="0" placeholder="0"
+                  value={row.tiempo_meses}
+                  onChange={e => {
+                    const v = e.target.value;
+                    setForm(f => {
+                      const arr = [...(f.costos_adicionales_lista || [])];
+                      arr[i] = { ...arr[i], tiempo_meses: v };
+                      return { ...f, costos_adicionales_lista: arr };
+                    });
+                  }} />
+              </div>
+              <div>
+                <label style={lbl}>COSTO ADICIONAL (CALC.)</label>
+                <div style={{ ...inp, display: 'flex', alignItems: 'center', marginBottom: 12, minHeight: 40, color: totalCalc != null ? '#a5f3fc' : '#4a7a87' }}>
+                  {totalCalc != null ? _fmtCOP0(totalCalc) : '—'}
+                </div>
+              </div>
+              <button type="button" onClick={() => {
+                setForm(f => {
+                  const arr = [...(f.costos_adicionales_lista || [])];
+                  arr.splice(i, 1);
+                  return { ...f, costos_adicionales_lista: arr };
+                });
+              }} style={{ background: 'rgba(248,113,113,0.15)', border: '1px solid rgba(248,113,113,0.35)', color: '#f87171', borderRadius: 6, padding: '8px 0', cursor: 'pointer', fontSize: 11 }}>Quitar</button>
+            </div>
+            <div style={{ fontSize: 10, color: '#5eead4', marginTop: 4, paddingLeft: 2 }}>
+              Valor mensual: {vvm != null ? _fmtCOP0(vvm) : '—'}
+            </div>
+            </div>
+            );
+          })}
+          <button type="button" onClick={() => setForm(f => ({ ...f, costos_adicionales_lista: [...(f.costos_adicionales_lista || []), { concepto_contractual: '', valor_mensual: '', tiempo_meses: '' }] }))} style={{ background: 'rgba(0,175,197,0.2)', border: '1px solid rgba(0,175,197,0.4)', color: '#00afc5', borderRadius: 8, padding: '8px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer', marginBottom: 12 }}>+ Agregar costo adicional</button>
           <label style={lbl}>LOGO CONTRATISTA</label>
           <label style={{ display: 'block', background: '#0a1628', border: '2px dashed #1E3A5F', borderRadius: 8, padding: 12, textAlign: 'center', cursor: 'pointer', color: '#4a7a87', fontSize: 12, marginBottom: 12 }}>
             {form.logo_contratista ? '✅ Logo cargado' : '📂 Cargar logo contratista'}
@@ -1884,7 +2177,9 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
           <div style={{ fontSize: 15, fontWeight: 700, color: '#00afc5', marginBottom: 20 }}>📋 Contratos registrados</div>
           {contratos.length === 0 ? (
             <div style={{ color: '#4a7a87', fontSize: 13 }}>No hay contratos registrados</div>
-          ) : contratos.map(c => (
+          ) : contratos.map(c => {
+            const resumenCtz = tasaYmontosResumenListado(c);
+            return (
             <div key={c.id} style={{ background: editandoId === c.id ? 'rgba(0,175,197,0.08)' : '#081318', border: `1px solid ${editandoId === c.id ? 'rgba(0,175,197,0.4)' : 'rgba(0,175,197,0.15)'}`, borderRadius: 8, padding: '12px 16px', marginBottom: 10 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
@@ -1892,6 +2187,11 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
                   <div style={{ color: '#8acdd8', fontSize: 12, marginTop: 2 }}>{c.contratista}</div>
                   {c.entidad && <div style={{ color: '#4a7a87', fontSize: 11, marginTop: 2 }}>Entidad: {c.entidad === "OTRA" ? (c.entidad_otra || "OTRA") : c.entidad}</div>}
                   {c.interventoria && <div style={{ color: '#4a7a87', fontSize: 11, marginTop: 2 }}>Interventoría: {c.interventoria}</div>}
+                  {resumenCtz && (
+                    <div style={{ color: '#6ac8c9', fontSize: 10, marginTop: 5, lineHeight: 1.4, wordBreak: 'break-word' }} title="Datos guardados en el contrato">
+                      {resumenCtz}
+                    </div>
+                  )}
                   {/* Badge de fase */}
                   <div style={{ marginTop: 8, display: 'inline-flex', alignItems: 'center', gap: 6, background: (c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? 'rgba(245,158,11,0.12)' : 'rgba(0,175,197,0.10)', border: `1px solid ${(c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? 'rgba(245,158,11,0.4)' : 'rgba(0,175,197,0.3)'}`, borderRadius: 20, padding: '3px 10px' }}>
                     <span style={{ fontSize: 10, fontWeight: 700, color: (c.fase || 'PRESUPUESTO') === 'LIQUIDACION' ? '#F59E0B' : '#00afc5', letterSpacing: 1 }}>
@@ -1948,7 +2248,8 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
                 </div>
               </div>
             </div>
-          ))}
+          );
+          })}
         </div>
       </div>
     </div>
@@ -1985,6 +2286,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
 
   const col    = C(theme);
   const tdStyle = S.td(theme);
+  const tTok   = tFrom(theme);
 
   const UNIDADES    = ["CM","GL","HORA","KG","KM-CARRIL","LT","M","M2","M3","M3-KM","ML","TON","TRAMO","UN","UN/ME","UND"];
   const COMPETENCIAS = ["EAB","ENEL-CODENSA","ETB","Gas Natural","IDU","MOVISTAR"];
@@ -2187,17 +2489,22 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
     popup.acta_fijacion && popup.acta_fijacion !== "0" &&
     popup.acta_modificatoria && popup.acta_modificatoria !== "0";
 
-  // ── Estilos locales reutilizables ──────────────────────────────────────────
-  const labelStyle   = { fontSize:11, color:col.textSecondary, marginBottom:5 };
-  const inputStyle   = isLightTheme(theme) ? { ...S.input, background:"#FFFFFF", color:"#0d3b52", border:"1px solid #BAE6FD" } : S.input;
-  const selectStyle  = isLightTheme(theme) ? { ...S.select, background:"#FFFFFF", color:"#0d3b52", border:"1px solid #BAE6FD", width:"100%" } : { ...S.select, width:"100%" };
-  const overlayStyle = { position:"fixed",inset:0,zIndex:10001,background:"rgba(5,12,18,0.92)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center" };
-  const modalStyle   = (w) => ({ width:`min(${w}px,95vw)`,maxHeight:"92vh",background:isLightTheme(theme)?"#F0F9FF":"#0b1920",borderRadius:14,border:"1px solid rgba(0,175,197,0.2)",boxShadow:"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column" });
-  const modalHead    = { padding:"18px 28px 14px",borderBottom:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)",background:isLightTheme(theme)?"#E0F2FE":"#081318",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0 };
-  const modalScroll  = { flex:1,overflowY:"auto",padding:"22px 28px",scrollbarWidth:"thin",scrollbarColor:"#1e3a44 transparent",background:isLightTheme(theme)?"#F8FAFC":"transparent" };
-  const modalFoot    = { padding:"14px 28px",borderTop:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",background:isLightTheme(theme)?"#E0F2FE":"#081318",display:"flex",justifyContent:"flex-end",gap:10,flexShrink:0 };
-  const secTitle     = { fontSize:10,color:"#00afc5",fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:14 };
-  const divider      = { borderTop:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",paddingTop:20,marginBottom:20 };
+  // ── Estilos locales reutilizables (tema claro y descanso usan tokens; oscuro, capa fija) ─
+  const labelStyle   = { fontSize: "var(--cc-caption)", color: col.textSecondary, marginBottom: 5 };
+  const inputStyle   = !isDarkMode(theme) ? { ...S.input, background: tTok.inputBg, color: tTok.text, border: `1px solid ${tTok.border}` } : S.input;
+  const selectStyle  = !isDarkMode(theme) ? { ...S.select, background: tTok.inputBg, color: tTok.text, border: `1px solid ${tTok.border}`, width: "100%" } : { ...S.select, width: "100%" };
+  const overlayStyle = { position: "fixed", inset: 0, zIndex: 10001, background: "rgba(5,12,18,0.92)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center" };
+  const modalStyle   = (w) => ({
+    width: `min(${w}px,95vw)`, maxHeight: "92vh", borderRadius: 14,
+    background: isDarkMode(theme) ? "#0b1920" : tTok.bg, border: `1px solid ${tTok.border}`,
+    boxShadow: isRestMode(theme) ? "0 32px 56px rgba(42,35,24,0.2)" : "0 40px 100px rgba(0,0,0,0.7)", overflow: "hidden", display: "flex", flexDirection: "column",
+  });
+  const modalHeadBg  = isDarkMode(theme) ? "#081318" : (isRestMode(theme) ? tTok.headerBg : "#E0F2FE");
+  const modalHead    = { padding: "12px 20px 10px", borderBottom: `1px solid ${isDarkMode(theme) ? "rgba(0,175,197,0.12)" : tTok.border}`, background: modalHeadBg, display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 };
+  const modalScroll  = { flex: 1, overflowY: "auto", padding: "14px 20px", scrollbarWidth: "thin", scrollbarColor: isDarkMode(theme) ? "#1e3a44 transparent" : `${tTok.border}44`, background: isDarkMode(theme) ? "transparent" : (isRestMode(theme) ? tTok.bgCard : "#F8FAFC") };
+  const modalFoot    = { padding: "10px 20px", borderTop: `1px solid ${isDarkMode(theme) ? "rgba(0,175,197,0.1)" : tTok.border}`, background: modalHeadBg, display: "flex", justifyContent: "flex-end", gap: 10, flexShrink: 0 };
+  const secTitle     = { fontSize: "var(--cc-caption)", color: tTok.primary, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", marginBottom: 10 };
+  const divider      = { borderTop: isDarkMode(theme) ? "1px solid rgba(0,175,197,0.1)" : `1px solid ${tTok.border}`, paddingTop: 12, marginBottom: 12 };
 
   const UnidadSelector = ({ value, onChange, modoCustom, setModoCustom, uCustom, setUCustom }) => (
     <div>
@@ -2295,7 +2602,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
             <thead>
               <tr>
                 {["Capítulo","Competencia","Ítem","Descripción","Unidad","Valor Unitario","Estado"].map((h,i) => (
-                  <th key={i} style={S.th}>{h}</th>
+                  <th key={i} style={S.th(theme)}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -2340,14 +2647,14 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
                 <span style={{ ...S.badge(popupEsAprobado?"aprobado":"pendiente"),fontSize:12,padding:"5px 14px" }}>
                   {popupEsAprobado?"✓ Aprobado":"⏳ Pendiente"}
                 </span>
-                <button style={S.closeBtn} onClick={() => setPopup(null)}>✕</button>
+                <button style={S.closeBtn(theme)} onClick={() => setPopup(null)}>✕</button>
               </div>
             </div>
 
             <div style={{display:"flex",flex:1,overflow:"hidden"}}>
 
               {/* ── Panel izquierdo: formulario ── */}
-              <div style={{flex:"0 0 56%",padding:"14px 20px",overflowY:"auto",borderRight:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)"}}>
+              <div style={{flex:"0 0 56%",padding:"10px 14px",overflowY:"auto",borderRight:`1px solid ${tTok.border}`}}>
                 <div style={{...secTitle,marginBottom:10}}>Información del Precio</div>
 
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
@@ -2528,7 +2835,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
                   )}
                 </div>
 
-                <div style={{borderTop:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",paddingTop:14}}>
+                <div style={{borderTop:`1px solid ${tTok.border}`,paddingTop:10}}>
                   <div style={{...secTitle,marginBottom:10}}>Validación del Precio</div>
                   <div style={{display:"flex",flexDirection:"column",gap:12,alignItems:"flex-start"}}>
                     <span style={{...S.badge(popupEsAprobado?"aprobado":"pendiente"),fontSize:13,padding:"6px 16px"}}>
@@ -2574,7 +2881,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
                 <div style={{ fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif" }}>Crear Nuevo Precio</div>
                 <div style={{ fontSize:11,color:col.textSecondary,marginTop:2 }}>Complete los campos para agregar un precio al listado</div>
               </div>
-              <button style={S.closeBtn} onClick={() => setShowCrear(false)}>✕</button>
+              <button style={S.closeBtn(theme)} onClick={() => setShowCrear(false)}>✕</button>
             </div>
 
             <div style={modalScroll}>
@@ -2686,23 +2993,51 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
 }
 
 // ─── CalPicker: selector de fecha reutilizable (nivel módulo) ─────────────
+function _actaFechaAISO(v) {
+  if (v == null || v === "") return "";
+  const s = String(v).trim();
+  const p10 = s.length >= 10 ? s.slice(0, 10) : s;
+  if (/^\d{4}-\d{2}-\d{2}/.test(p10)) return p10;
+  const t = Date.parse(s);
+  return Number.isNaN(t) ? "" : new Date(t).toISOString().slice(0, 10);
+}
+
 function ActasCalPicker({ value, onChange, isOpen, onToggle, theme }) {
   const col = C(theme);
-  const [vd, setVd] = useState(() => value ? new Date(value + "T12:00:00") : new Date());
+  const tt = tFrom(theme);
+  const vIso = _actaFechaAISO(value);
+  const [vd, setVd] = useState(() => {
+    if (!vIso) return new Date();
+    const t = vIso + "T12:00:00";
+    const d = new Date(t);
+    return Number.isNaN(d.getTime()) ? new Date() : d;
+  });
   const MES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  useEffect(() => {
+    if (!vIso) return;
+    const t = vIso + "T12:00:00";
+    const d = new Date(t);
+    if (!Number.isNaN(d.getTime())) setVd(d);
+  }, [vIso]);
   const y = vd.getFullYear(), m = vd.getMonth();
   const fd = new Date(y,m,1).getDay(), dim = new Date(y,m+1,0).getDate();
   const dias = [...Array(fd).fill(null), ...Array.from({length:dim},(_,i) => i+1)];
   const iso = d => `${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-  const disp = v => v ? `${parseInt(v.split("-")[2])} ${MES[parseInt(v.split("-")[1])-1]}, ${v.split("-")[0]}` : "Seleccionar fecha";
-  const iS = isLightTheme(theme) ? {...S.input,background:"#FFFFFF",color:"#0d3b52",border:"1px solid #BAE6FD"} : S.input;
+  const disp = (v) => {
+    const s = _actaFechaAISO(v);
+    if (!s) return "Seleccionar fecha";
+    const p = s.split("-");
+    if (p.length < 3) return s;
+    return `${parseInt(p[2], 10)} ${MES[parseInt(p[1], 10) - 1]}, ${p[0]}`;
+  };
+  const iS = !isDarkMode(theme) ? { ...S.input, background: tt.inputBg, color: tt.text, border: `1px solid ${tt.border}` } : S.input;
   return (
-    <div style={{position:"relative"}}>
+  <div style={{position:"relative"}}>
       <div onClick={onToggle} style={{...iS,cursor:"pointer",padding:"8px 12px",display:"flex",alignItems:"center",gap:8}}>
-        <span>📅</span><span style={{fontSize:13,color:value?col.textPrimary:col.textMuted}}>{disp(value)}</span>
+        <span>📅</span><span style={{fontSize:"var(--cc-sm)",color:value?col.textPrimary:col.textMuted}}>{disp(value)}</span>
       </div>
       {isOpen && (
-        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:10010,background:isLightTheme(theme)?"#fff":"#0b1920",border:"1px solid rgba(0,175,197,0.3)",borderRadius:10,padding:14,boxShadow:"0 20px 50px rgba(0,0,0,0.5)",minWidth:260}}>
+        <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:10010,background:isDarkMode(theme)?"#0b1920":tt.bgCard,border:`1px solid ${isDarkMode(theme)?"rgba(0,175,197,0.3)":tt.border}`,borderRadius:10,padding:14,boxShadow:isRestMode(theme)?"0 16px 40px rgba(42,35,24,0.2)":"0 20px 50px rgba(0,0,0,0.5)",minWidth:260}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
             <button style={{...S.btn("ghost",true),padding:"4px 10px"}} onClick={()=>setVd(new Date(y,m-1,1))}>◄</button>
             <span style={{fontSize:14,fontWeight:700,color:col.textPrimary}}>{MES[m]} <span style={{color:"#00afc5"}}>{y}</span></span>
@@ -2712,7 +3047,7 @@ function ActasCalPicker({ value, onChange, isOpen, onToggle, theme }) {
             {["dom","lun","mar","mié","jue","vie","sáb"].map(d=><div key={d} style={{textAlign:"center",fontSize:9,color:"#4a7a87",fontWeight:700,padding:"2px 0"}}>{d}</div>)}
             {dias.map((d,i) => {
               if (!d) return <div key={i}/>;
-              const h=new Date().toISOString().slice(0,10), di=iso(d), isSel=di===value, isHoy=di===h;
+              const h=new Date().toISOString().slice(0,10), di=iso(d), isSel=di===vIso, isHoy=di===h;
               return <div key={i} onClick={()=>{onChange(di);onToggle();}} style={{textAlign:"center",padding:"5px 2px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:isSel?700:400,background:isSel?"#00afc5":isHoy?"rgba(0,175,197,0.15)":"transparent",color:isSel?"#081318":col.textPrimary,border:isHoy&&!isSel?"1px solid rgba(0,175,197,0.4)":"1px solid transparent"}} onMouseEnter={e=>{if(!isSel)e.currentTarget.style.background="rgba(0,175,197,0.1)";}} onMouseLeave={e=>{if(!isSel)e.currentTarget.style.background=isHoy?"rgba(0,175,197,0.15)":"transparent";}}>{d}</div>;
             })}
           </div>
@@ -2757,17 +3092,18 @@ function _actaEmptyForm() {
 function _actaRowToForm(a) {
   const s = (v) => (v != null && v !== "" ? String(v) : "");
   const f = (k) => s(a[k]);
+  const d10 = (k) => _actaFechaAISO(a[k]);
   return {
     consecutivo: s(a.consecutivo),
     tipo_grupo: (a.tipo_grupo || "administrativa"),
     tipo_acta_id: a.tipo_acta_id != null ? String(a.tipo_acta_id) : "",
     observacion: a.observacion || "",
     asignado_a: a.asignado_a != null ? String(a.asignado_a) : "",
-    fecha_asignacion: (a.fecha_asignacion || "").slice(0, 10),
+    fecha_asignacion: d10("fecha_asignacion"),
     enlace: a.enlace || "",
     numero_rpo: a.numero_rpo != null ? String(a.numero_rpo) : "",
-    fecha_inicio: (a.fecha_inicio || "").slice(0, 10),
-    fecha_fin: (a.fecha_fin || "").slice(0, 10),
+    fecha_inicio: d10("fecha_inicio"),
+    fecha_fin: d10("fecha_fin"),
     valor_comp_ambiental: f("valor_comp_ambiental"),
     calificacion_ambiental: f("calificacion_ambiental"),
     valor_comp_social: f("valor_comp_social"),
@@ -2791,6 +3127,7 @@ function _parseOptNum(v) {
 function SeccionActasRpo({ call, user, contratos, theme }) {
   const col = C(theme);
   const tdStyle = S.td(theme);
+  const tTok = tFrom(theme);
   const isDev = user?.cargo_nombre?.toLowerCase() === "desarrollador";
 
   const [contratoId, setContratoId] = useState(user?.contrato_id || null);
@@ -2818,6 +3155,13 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
   const [nuevoTipoNom, setNuevoTipoNom] = useState("");
   const [nuevoTipoCobro, setNuevoTipoCobro] = useState(false);
   const [creandoTipo, setCreandoTipo] = useState(false);
+  const [rpoDetalle, setRpoDetalle] = useState({
+    open: false,
+    acta: null,
+    data: null,
+    err: null,
+    load: false,
+  });
 
   const setF = (field, val) => setFormActa((p) => ({ ...p, [field]: val }));
 
@@ -3019,6 +3363,21 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
     return `$${Math.round(n).toLocaleString("es-CO")}`;
   };
 
+  const abrirDetalleRpo = async (a) => {
+    if (!a?.id) return;
+    setRpoDetalle({ open: true, acta: a, data: null, err: null, load: true });
+    try {
+      const d = await call("GET", `/actas/${a.id}/rpo-costo-conciliacion`);
+      setRpoDetalle((p) => ({ ...p, data: d, load: false, err: null }));
+    } catch (e) {
+      setRpoDetalle((p) => ({ ...p, load: false, err: e.message || String(e) }));
+    }
+  };
+
+  const cerrarDetalleRpo = () => {
+    setRpoDetalle({ open: false, acta: null, data: null, err: null, load: false });
+  };
+
   const abrirCerrar = (a) => {
     setModalCerrar(a);
     setFechaCierre(hoy);
@@ -3056,16 +3415,16 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
     }
   };
 
-  const labelStyle = { fontSize: 11, color: col.textSecondary, marginBottom: 5 };
-  const inputStyle = isLightTheme(theme)
-    ? { ...S.input, background: "#FFFFFF", color: "#0d3b52", border: "1px solid #BAE6FD", width: "100%" }
+  const labelStyle = { fontSize: "var(--cc-label)", color: col.textSecondary, marginBottom: 4 };
+  const inputStyle = !isDarkMode(theme)
+    ? { ...S.input, background: tTok.inputBg, color: tTok.text, border: `1px solid ${tTok.border}`, width: "100%" }
     : { ...S.input, width: "100%" };
-  const subTitle = { fontSize: 12, fontWeight: 700, color: "#00afc5", letterSpacing: 0.6, marginTop: 14, marginBottom: 8 };
+  const subTitle = { fontSize: "var(--cc-sm)", fontWeight: 700, color: tTok.primary, letterSpacing: 0.4, marginTop: 10, marginBottom: 6 };
   /** Actas administrativas: solo catálogo, observación, asignación y enlace (sin RPO ni montos). */
   const esActaAdministrativa = String(formActa.tipo_grupo || "").toLowerCase() === "administrativa";
 
   return (
-    <div style={{ padding: 28, maxWidth: 1100 }}>
+    <div style={{ padding: 0, maxWidth: "100%" }}>
       {msg && (
         <div style={S.alert(msg.type)}>
           {msg.text}
@@ -3073,11 +3432,12 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
         </div>
       )}
 
-      <div style={{ marginBottom: 20, display: "flex", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+      <div style={{ marginBottom: 12, display: "flex", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
         <div style={{ flex: "1 1 280px" }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: col.textPrimary }}>📋 Actas del contrato</div>
-          <div style={{ fontSize: 12, color: col.textMuted, marginTop: 6, lineHeight: 1.45 }}>
+          <div style={{ fontSize: "var(--cc-md)", fontWeight: 700, color: col.textPrimary }}>📋 Actas del contrato</div>
+            <div style={{ fontSize: "var(--cc-sm)", color: col.textMuted, marginTop: 4, lineHeight: 1.4 }}>
             <strong>Crear / editar acta:</strong> formulario completo con componentes (ambiental, social, PMT), ajustes (ICCP, ICOCIV, IPC), enlaces y asignación.
+            {" "}<strong>Costo directo</strong> (columna): mismo criterio que el <strong>dashboard de validación</strong> (N1, N2 y N3 aprobado en cascada) en SICOE Obra para ese acta RPO, sin tocar el formulario de acta.
             {" "}<strong>Cerrar acta</strong> (solo RPO en período): acorta el período, crea el mes siguiente y traslada residuales sin N3.
           </div>
         </div>
@@ -3133,8 +3493,8 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
             <table style={S.table}>
               <thead>
                 <tr>
-                  {["Tipo", "RPO", "Período", "Consec.", "Tipo doc. / uso", "Total $", "Estado / Notas", "Acción"].map((h) => (
-                    <th key={h} style={S.th}>{h}</th>
+                  {["Tipo", "RPO", "Período", "Consec.", "Tipo doc. / uso", "Costo (validación)", "Estado / Notas", "Acción"].map((h) => (
+                    <th key={h} style={S.th(theme)}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -3146,7 +3506,24 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
                       <td style={tdStyle}>{labelTipoFila(a)}</td>
                       <td style={tdStyle}>
                         {esRpo ? (
-                          <span style={{ fontWeight: 700, color: "#00afc5" }}>#{a.numero_rpo}</span>
+                          <button
+                            type="button"
+                            onClick={() => abrirDetalleRpo(a)}
+                            title="Ver desglose por capítulo (costo directo SICOE)"
+                            style={{
+                              background: "none",
+                              border: "none",
+                              padding: 0,
+                              font: "inherit",
+                              fontWeight: 700,
+                              color: "#00afc5",
+                              cursor: "pointer",
+                              textDecoration: "underline",
+                              textUnderlineOffset: 3,
+                            }}
+                          >
+                            #{a.numero_rpo}
+                          </button>
                         ) : (
                           "—"
                         )}
@@ -3204,7 +3581,7 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
       )}
 
       {contratoId && (
-        <div style={{ marginTop: 28, paddingTop: 18, borderTop: `1px solid ${isLightTheme(theme) ? "#BAE6FD" : "rgba(0,175,197,0.15)"}` }}>
+        <div style={{ marginTop: 12, paddingTop: 8, borderTop: `1px solid ${isDarkMode(theme) ? "rgba(0,175,197,0.15)" : tTok.border}` }}>
           <button
             type="button"
             onClick={() => setMostrarCatalogoTipos((v) => !v)}
@@ -3229,7 +3606,7 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
                   <thead>
                     <tr>
                       {["Nombre", "Es cobro", "Usos en actas"].map((h) => (
-                        <th key={h} style={S.th}>{h}</th>
+                        <th key={h} style={S.th(theme)}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -3272,7 +3649,7 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
               width: "min(760px, 96vw)",
               maxHeight: "92vh",
               overflowY: "auto",
-              background: isLightTheme(theme) ? "#F0F9FF" : "#0b1920",
+              background: isDarkMode(theme) ? "#0b1920" : tTok.bg,
               border: "1px solid rgba(0,175,197,0.25)",
               borderRadius: 14,
               padding: "22px 26px",
@@ -3509,7 +3886,7 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
           <div
             style={{
               width: "min(420px, 96vw)",
-              background: isLightTheme(theme) ? "#F0F9FF" : "#0b1920",
+              background: isDarkMode(theme) ? "#0b1920" : tTok.bg,
               border: "1px solid rgba(0,175,197,0.25)",
               borderRadius: 14,
               padding: "22px 26px",
@@ -3554,7 +3931,7 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
           <div
             style={{
               width: "min(440px, 96vw)",
-              background: isLightTheme(theme) ? "#F0F9FF" : "#0b1920",
+              background: isDarkMode(theme) ? "#0b1920" : tTok.bg,
               border: "1px solid rgba(0,175,197,0.25)",
               borderRadius: 14,
               padding: "22px 26px",
@@ -3589,6 +3966,310 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
           </div>
         </div>
       )}
+
+      {rpoDetalle.open && rpoDetalle.acta && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10030,
+            background: "rgba(5,12,18,0.9)",
+            backdropFilter: "blur(8px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+          onClick={(e) => e.target === e.currentTarget && !rpoDetalle.load && cerrarDetalleRpo()}
+        >
+          <div
+            style={{
+              width: "min(1020px, 98vw)",
+              maxHeight: "min(88vh, 900px)",
+              display: "flex",
+              flexDirection: "column",
+              background: isDarkMode(theme) ? "linear-gradient(180deg, #0d1f28 0%, #0b1920 40%)" : (isRestMode(theme) ? "linear-gradient(180deg, #EDE6DC 0%, #E8E0D5 35%, #F2EDE4 100%)" : "linear-gradient(180deg, #E0F2FE 0%, #F0F9FF 30%, #F8FAFC 100%)"),
+              border: "1px solid rgba(0,175,197,0.28)",
+              borderRadius: 16,
+              boxShadow: "0 32px 90px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,175,197,0.12)",
+              overflow: "hidden",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                padding: "20px 22px 12px",
+                background: isDarkMode(theme) ? "rgba(0,175,197,0.1)" : (isRestMode(theme) ? "rgba(14,116,144,0.1)" : "rgba(0,175,197,0.14)"),
+                borderBottom: "1px solid rgba(0,175,197,0.2)",
+                display: "flex",
+                alignItems: "flex-start",
+                justifyContent: "space-between",
+                gap: 10,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: "#00afc5", textTransform: "uppercase" }}>
+                  Costo directo RPO
+                </div>
+                <div style={{ fontSize: 20, fontWeight: 800, color: col.textPrimary, marginTop: 2 }}>
+                  Acta RPO #{rpoDetalle.acta.numero_rpo}
+                  {rpoDetalle.acta.consecutivo != null && (
+                    <span style={{ fontSize: 13, fontWeight: 600, color: col.textMuted, marginLeft: 8 }}>consec. {rpoDetalle.acta.consecutivo}</span>
+                  )}
+                </div>
+                <div style={{ fontSize: 12, color: col.textMuted, marginTop: 6, lineHeight: 1.4 }}>
+                  {rpoDetalle.data?.periodo?.fecha_inicio || (rpoDetalle.acta.fecha_inicio || "—").slice(0, 10)}
+                  {" "}
+                  →
+                  {rpoDetalle.data?.periodo?.fecha_fin || (rpoDetalle.acta.fecha_fin || "—").slice(0, 10)}
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                <button
+                  type="button"
+                  style={{ ...S.btn("ghost", true), fontSize: 18, lineHeight: 1, padding: "2px 8px" }}
+                  title="Cerrar"
+                  disabled={rpoDetalle.load}
+                  onClick={cerrarDetalleRpo}
+                >
+                  ✕
+                </button>
+                <button
+                  type="button"
+                  style={S.btn("ghost", true)}
+                  disabled={rpoDetalle.load}
+                  onClick={() => abrirDetalleRpo(rpoDetalle.acta)}
+                >
+                  ⟳ Actualizar
+                </button>
+              </div>
+            </div>
+            <div style={{ padding: 18, overflow: "auto", flex: 1, minHeight: 0 }}>
+              {rpoDetalle.load && (
+                <div style={{ textAlign: "center", padding: "32px 12px", color: col.textMuted, fontSize: 14 }}>Cargando desglose…</div>
+              )}
+              {!rpoDetalle.load && rpoDetalle.err && (
+                <div style={{ ...S.alert("error") }}>{rpoDetalle.err}</div>
+              )}
+              {!rpoDetalle.load && !rpoDetalle.err && rpoDetalle.data && (
+                <>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "minmax(220px, 1fr) minmax(240px, 1.4fr)",
+                      gap: 14,
+                      marginBottom: 12,
+                    }}
+                  >
+                    <div
+                      style={{
+                        borderRadius: 10,
+                        padding: "12px 14px",
+                        background: isDarkMode(theme) ? "rgba(0,30,40,0.5)" : (isRestMode(theme) ? "rgba(250,246,239,0.85)" : "rgba(255,255,255,0.9)"),
+                        border: "1px solid rgba(0,175,197,0.2)",
+                      }}
+                    >
+                      <div style={{ fontSize: 10, color: col.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Total (N1·N2·N3 aprob. — matriz SICOE)</div>
+                      <div style={{ fontSize: "var(--cc-h1)", fontWeight: 800, color: isDarkMode(theme) ? "#5ee4f7" : tTok.primary, marginTop: 4, letterSpacing: 0.2 }}>
+                        {fmtM(rpoDetalle.data.costo_directo_total)}
+                      </div>
+                      <div style={{ fontSize: 11, color: col.textMuted, marginTop: 6 }}>
+                        {rpoDetalle.data.registros_cascade_interventoria ?? rpoDetalle.data.registros_n3_aprobado ?? 0} línea(s) SICOE · acta {rpoDetalle.data.numero_rpo ?? "—"}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 10,
+                        color: col.textMuted,
+                        lineHeight: 1.4,
+                        padding: "6px 4px 0 0",
+                        maxHeight: 100,
+                        overflow: "auto",
+                        opacity: 0.88,
+                      }}
+                    >
+                      {rpoDetalle.data.criterio}
+                    </div>
+                  </div>
+                  {(!rpoDetalle.data.por_capitulo || rpoDetalle.data.por_capitulo.length === 0) &&
+                    !(
+                      rpoDetalle.data.secciones
+                      && Object.values(rpoDetalle.data.secciones).some((s) => s && (s.subtotal > 0 || (s.por_capitulo && s.por_capitulo.length > 0)))
+                    ) && (
+                    <div style={{ fontSize: 13, color: col.textMuted, textAlign: "center", padding: 20 }}>
+                      Sin desglose: no hay filas SICOE con N1, N2 y N3 aprobado en este acta o sin ítem asignado.
+                    </div>
+                  )}
+                  {(() => {
+                    const s = rpoDetalle.data.secciones || {};
+                    const order = ["obra_ejecutada_directo_sin_aiu", "ensayos_sondeos_directo_sin_iva"];
+                    const hasMatriz = order.some(
+                      (k) => s[k] && (Number(s[k].subtotal) > 0 || (s[k].por_capitulo && s[k].por_capitulo.length > 0)),
+                    );
+                    const thC = (h) => ({
+                      textAlign: h === "Capítulo" ? "left" : "right",
+                      padding: "6px 8px",
+                      fontSize: 9,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.35,
+                      color: col.textMuted,
+                      fontWeight: 800,
+                      borderBottom: "1px solid rgba(0,175,197,0.2)",
+                    });
+                    const wrap = {
+                      border: `1px solid ${isDarkMode(theme) ? "rgba(0,175,197,0.2)" : (isRestMode(theme) ? "rgba(201,184,164,0.5)" : "rgba(14,165,233,0.22)")}`,
+                      borderRadius: 8,
+                      overflow: "auto",
+                      maxHeight: "min(46vh, 480px)",
+                      background: isDarkMode(theme) ? "rgba(0,0,0,0.2)" : (isRestMode(theme) ? "rgba(242,237,228,0.6)" : "rgba(255,255,255,0.5)"),
+                    };
+                    const tbl = (filas) => (
+                      <table
+                        style={{
+                          width: "100%",
+                          borderCollapse: "collapse",
+                          fontSize: 12,
+                          tableLayout: "fixed",
+                        }}
+                      >
+                        <colgroup>
+                          <col style={{ width: 22, maxWidth: 26 }} />
+                          <col style={{ width: "auto" }} />
+                          <col style={{ width: 72, maxWidth: 80 }} />
+                          <col style={{ width: 120, minWidth: 100 }} />
+                        </colgroup>
+                        <thead>
+                          <tr
+                            style={{
+                              background: isDarkMode(theme) ? "rgba(0,175,197,0.12)" : (isRestMode(theme) ? "rgba(14,116,144,0.15)" : "rgba(0,175,197,0.2)"),
+                              position: "sticky",
+                              top: 0,
+                              zIndex: 1,
+                            }}
+                          >
+                            {["#", "Capítulo", "%", "Costo directo"].map((h) => (
+                              <th key={h} style={thC(h)}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filas.map((row, j) => {
+                            const pct = Number(row.porcentaje) || 0;
+                            return (
+                              <tr
+                                key={`${row.capitulo}-${j}`}
+                                style={{
+                                  background: j % 2 === 0
+                                    ? (isDarkMode(theme) ? "rgba(0,0,0,0.1)" : (isRestMode(theme) ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.4)"))
+                                    : "transparent",
+                                }}
+                              >
+                                <td
+                                  style={{
+                                    width: 22,
+                                    minWidth: 20,
+                                    maxWidth: 26,
+                                    padding: "3px 2px",
+                                    color: col.textMuted,
+                                    textAlign: "center",
+                                    fontSize: 10,
+                                    fontVariantNumeric: "tabular-nums",
+                                  }}
+                                >
+                                  {j + 1}
+                                </td>
+                                <td
+                                  style={{
+                                    padding: "4px 8px",
+                                    color: col.textPrimary,
+                                    fontWeight: 600,
+                                    lineHeight: 1.3,
+                                    wordBreak: "break-word",
+                                    verticalAlign: "top",
+                                    fontSize: 11,
+                                  }}
+                                >
+                                  {row.capitulo}
+                                </td>
+                                <td
+                                  style={{
+                                    padding: "4px 6px",
+                                    textAlign: "right",
+                                    color: isDarkMode(theme) ? "#5ee4f7" : tTok.primary,
+                                    fontWeight: 800,
+                                    fontSize: 11,
+                                    fontVariantNumeric: "tabular-nums",
+                                  }}
+                                >
+                                  {pct.toFixed(1).replace(".", ",")}%
+                                </td>
+                                <td
+                                  style={{
+                                    padding: "4px 8px",
+                                    textAlign: "right",
+                                    color: col.textPrimary,
+                                    fontWeight: 700,
+                                    fontVariantNumeric: "tabular-nums",
+                                    fontSize: 11,
+                                  }}
+                                >
+                                  {fmtM(row.costo_directo)}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    );
+                    if (hasMatriz) {
+                      return (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                          {order.map((key) => {
+                            const sec = s[key];
+                            if (!sec) return null;
+                            const n = sec.subtotal;
+                            if (!(Number(n) > 0 || (sec.por_capitulo && sec.por_capitulo.length > 0))) return null;
+                            return (
+                              <div key={key}>
+                                <div style={{ fontSize: 11, fontWeight: 800, color: col.textPrimary, marginBottom: 4, lineHeight: 1.35 }}>{sec.titulo || key}</div>
+                                <div style={{ fontSize: 12, fontWeight: 700, color: "#00afc5", marginBottom: 6 }}>Subtotal: {fmtM(n)}</div>
+                                {sec.por_capitulo && sec.por_capitulo.length > 0 && <div style={wrap}>{tbl(sec.por_capitulo)}</div>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    }
+                    if (rpoDetalle.data.por_capitulo && rpoDetalle.data.por_capitulo.length > 0) {
+                      return (
+                        <div>
+                          <div
+                            style={{
+                              fontSize: 11,
+                              fontWeight: 700,
+                              color: col.textPrimary,
+                              marginBottom: 6,
+                            }}
+                          >
+                            Desglose por capítulo (total acta, orden SICOE)
+                          </div>
+                          <div style={wrap}>{tbl(rpoDetalle.data.por_capitulo)}</div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+                </>
+              )}
+            </div>
+            <div style={{ padding: "10px 18px 16px", borderTop: "1px solid rgba(0,175,197,0.12)", display: "flex", justifyContent: "flex-end" }}>
+              <button type="button" style={S.btn("primary", true)} disabled={rpoDetalle.load} onClick={cerrarDetalleRpo}>
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3598,6 +4279,7 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
   const contratoId = user?.contrato_id;
   const col  = C(theme);
   const tdStyle = S.td(theme);
+  const tTok  = tFrom(theme);
 
   const [subs,             setSubs]             = useState([]);
   const [loading,          setLoading]          = useState(false);
@@ -3636,15 +4318,16 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
   const [calFfOpen,        setCalFfOpen]        = useState(false);
   const [calEditFf,        setCalEditFf]        = useState(false);
 
-  const labelStyle  = { fontSize:11,color:col.textSecondary,marginBottom:5 };
-  const inputStyle  = isLightTheme(theme)?{...S.input,background:"#FFFFFF",color:"#0d3b52",border:"1px solid #BAE6FD"}:S.input;
-  const selectStyle = isLightTheme(theme)?{...S.select,background:"#FFFFFF",color:"#0d3b52",border:"1px solid #BAE6FD",width:"100%"}:{...S.select,width:"100%"};
+  const labelStyle  = { fontSize:"var(--cc-caption)", color: col.textSecondary, marginBottom: 4 };
+  const inputStyle  = !isDarkMode(theme) ? { ...S.input, background: tTok.inputBg, color: tTok.text, border: `1px solid ${tTok.border}` } : S.input;
+  const selectStyle = !isDarkMode(theme) ? { ...S.select, background: tTok.inputBg, color: tTok.text, border: `1px solid ${tTok.border}`, width: "100%" } : { ...S.select, width: "100%" };
   const overlayStyle = { position:"fixed",inset:0,zIndex:10001,background:"rgba(5,12,18,0.92)",backdropFilter:"blur(8px)",display:"flex",alignItems:"center",justifyContent:"center" };
-  const modalStyle  = (w) => ({ width:`min(${w}px,95vw)`,maxHeight:"92vh",background:isLightTheme(theme)?"#F0F9FF":"#0b1920",borderRadius:14,border:"1px solid rgba(0,175,197,0.2)",boxShadow:"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column" });
-  const modalHead   = { padding:"18px 28px 14px",borderBottom:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)",background:isLightTheme(theme)?"#E0F2FE":"#081318",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0 };
-  const modalScroll = { flex:1,overflowY:"auto",padding:"22px 28px",scrollbarWidth:"thin",scrollbarColor:"#1e3a44 transparent",background:isLightTheme(theme)?"#F8FAFC":"transparent" };
-  const modalFoot   = { padding:"14px 28px",borderTop:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.1)",background:isLightTheme(theme)?"#E0F2FE":"#081318",display:"flex",justifyContent:"flex-end",gap:10,flexShrink:0 };
-  const secTitle    = { fontSize:10,color:"#00afc5",fontWeight:700,letterSpacing:1.2,textTransform:"uppercase",marginBottom:10 };
+  const modalStyle  = (w) => ({ width:`min(${w}px,95vw)`,maxHeight:"92vh",background:isDarkMode(theme)?"#0b1920":tTok.bg,borderRadius:14,border:`1px solid ${tTok.border}`,boxShadow:isRestMode(theme)?"0 32px 56px rgba(42,35,24,0.2)":"0 40px 100px rgba(0,0,0,0.7)",overflow:"hidden",display:"flex",flexDirection:"column" });
+  const modalHeadBgS = isDarkMode(theme) ? "#081318" : (isRestMode(theme) ? tTok.headerBg : "#E0F2FE");
+  const modalHead   = { padding:"12px 20px 10px",borderBottom:`1px solid ${isDarkMode(theme)?"rgba(0,175,197,0.12)":tTok.border}`,background:modalHeadBgS,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0 };
+  const modalScroll = { flex:1,overflowY:"auto",padding:"14px 20px",scrollbarWidth:"thin",scrollbarColor: isDarkMode(theme) ? "#1e3a44 transparent" : `${tTok.border}44`, background: isDarkMode(theme) ? "transparent" : (isRestMode(theme) ? tTok.bgCard : "#F8FAFC") };
+  const modalFoot   = { padding:"10px 20px",borderTop:`1px solid ${isDarkMode(theme)?"rgba(0,175,197,0.1)":tTok.border}`,background:modalHeadBgS,display:"flex",justifyContent:"flex-end",gap:10,flexShrink:0 };
+  const secTitle    = { fontSize:"var(--cc-caption)", color: tTok.primary, fontWeight:700, letterSpacing:1, textTransform:"uppercase", marginBottom:8 };
   const fmt         = (v) => v!=null?`$${Math.round(Number(v)).toLocaleString("es-CO")}`:"—";
 
   // ── Carga ────────────────────────────────────────────────
@@ -3769,15 +4452,15 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
           <span>📅</span><span style={{fontSize:13,color:value?col.textPrimary:col.textMuted}}>{disp(value)}</span>
         </div>
         {isOpen&&(
-          <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:10010,background:isLightTheme(theme)?"#fff":"#0b1920",border:"1px solid rgba(0,175,197,0.3)",borderRadius:10,padding:14,boxShadow:"0 20px 50px rgba(0,0,0,0.5)",minWidth:260}}>
+          <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:10010,background:isDarkMode(theme)?"#0b1920":tTok.bgCard,border:`1px solid ${isDarkMode(theme)?"rgba(0,175,197,0.3)":tTok.border}`,borderRadius:10,padding:14,boxShadow:isRestMode(theme)?"0 16px 40px rgba(42,35,24,0.2)":"0 20px 50px rgba(0,0,0,0.5)",minWidth:260}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
               <button style={{...S.btn("ghost",true),padding:"4px 10px"}} onClick={()=>setVd(new Date(y,m-1,1))}>◄</button>
-              <span style={{fontSize:14,fontWeight:700,color:col.textPrimary}}>{MESES[m]} <span style={{color:"#00afc5"}}>{y}</span></span>
+              <span style={{fontSize:14,fontWeight:700,color:col.textPrimary}}>{MESES[m]} <span style={{color: tTok.primary}}>{y}</span></span>
               <button style={{...S.btn("ghost",true),padding:"4px 10px"}} onClick={()=>setVd(new Date(y,m+1,1))}>►</button>
             </div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:6}}>
               {["dom","lun","mar","mié","jue","vie","sáb"].map(d=>(
-                <div key={d} style={{textAlign:"center",fontSize:9,color:"#4a7a87",fontWeight:700,padding:"2px 0"}}>{d}</div>
+                <div key={d} style={{textAlign:"center",fontSize:"var(--cc-caption)",color:col.textMuted,fontWeight:700,padding:"2px 0"}}>{d}</div>
               ))}
               {dias.map((d,i)=>{
                 if(!d) return <div key={i}/>;
@@ -3832,7 +4515,7 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
       ):subs.length===0?(<div style={S.empty}>No hay subcontratistas registrados.<br/><span style={{fontSize:12,color:col.textMuted}}>Usa "Crear Subcontratista" para agregar uno.</span></div>
       ):(
         <table style={S.table}>
-          <thead><tr>{["Razón Social","Nombre de Contacto","NIT","Estado"].map((h,i)=><th key={i} style={S.th}>{h}</th>)}</tr></thead>
+          <thead><tr>{["Razón Social","Nombre de Contacto","NIT","Estado"].map((h,i)=><th key={i} style={S.th(theme)}>{h}</th>)}</tr></thead>
           <tbody>
             {subsFiltrados.map(sub=>(
               <tr key={sub.id} onClick={()=>abrirDetalle(sub)} style={{cursor:"pointer"}}
@@ -3857,7 +4540,7 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
                 <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>Crear Subcontratista</div>
                 <div style={{fontSize:11,color:col.textSecondary,marginTop:2}}>Ingresa los datos del nuevo subcontratista</div>
               </div>
-              <button style={S.closeBtn} onClick={()=>setShowCrear(false)}>✕</button>
+              <button style={S.closeBtn(theme)} onClick={()=>setShowCrear(false)}>✕</button>
             </div>
             <div style={modalScroll}>
               <div style={{marginBottom:14}}>
@@ -3913,12 +4596,12 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
               </div>
               <div style={{display:"flex",gap:8,alignItems:"center"}}>
                 {perms?.editar&&<button style={S.btn(detalle.activo?"danger":"success",true)} onClick={toggleActivo} disabled={toggling}>{toggling?"...":(detalle.activo?"⏸ Desactivar":"▶ Activar")}</button>}
-                <button style={S.closeBtn} onClick={()=>setDetalle(null)}>✕</button>
+                <button style={S.closeBtn(theme)} onClick={()=>setDetalle(null)}>✕</button>
               </div>
             </div>
 
             {/* Tabs internos */}
-            <div style={{display:"flex",borderBottom:isLightTheme(theme)?"1px solid #BAE6FD":"1px solid rgba(0,175,197,0.12)",background:isLightTheme(theme)?"#E0F2FE":"#081318",flexShrink:0}}>
+            <div style={{display:"flex",borderBottom:`1px solid ${tTok.border}`,background: isDarkMode(theme) ? "#081318" : (isRestMode(theme) ? tTok.headerBg : "#E0F2FE"),flexShrink:0}}>
               {[["datos","📋 Datos"],["cortes","📅 Cortes"],["precios","💲 Precios"]].map(([id,label])=>(
                 <button key={id} onClick={()=>setTabDetalle(id)}
                   style={{padding:"10px 20px",border:"none",background:"transparent",cursor:"pointer",fontSize:13,fontWeight:tabDetalle===id?700:400,color:tabDetalle===id?"#00afc5":col.textSecondary,borderBottom:tabDetalle===id?"2px solid #00afc5":"2px solid transparent",transition:"all 0.15s"}}>
@@ -3985,7 +4668,7 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
                   ):cortes.length===0?(<div style={S.empty}>No hay cortes registrados.</div>
                   ):(
                     <table style={S.table}>
-                      <thead><tr>{["N° Corte","Tipo","Fecha Inicio","Fecha Fin"].map((h,i)=><th key={i} style={S.th}>{h}</th>)}</tr></thead>
+                      <thead><tr>{["N° Corte","Tipo","Fecha Inicio","Fecha Fin"].map((h,i)=><th key={i} style={S.th(theme)}>{h}</th>)}</tr></thead>
                       <tbody>
                         {cortes.map(c=>(
                           <tr key={c.id} onClick={()=>{setCorteDetalle(c);setEditCorteForm({fecha_fin:c.fecha_fin});setCalEditFf(false);}} style={{cursor:"pointer"}}
@@ -4014,7 +4697,7 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
                   ):preciosSub.length===0?(<div style={S.empty}>No hay ítems asignados.</div>
                   ):(
                     <table style={S.table}>
-                      <thead><tr>{["Capítulo","Ítem","Descripción","Vlr. Referencia","Vlr. Subcontratista"].map((h,i)=><th key={i} style={S.th}>{h}</th>)}</tr></thead>
+                      <thead><tr>{["Capítulo","Ítem","Descripción","Vlr. Referencia","Vlr. Subcontratista"].map((h,i)=><th key={i} style={S.th(theme)}>{h}</th>)}</tr></thead>
                       <tbody>
                         {preciosSub.map(p=>(
                           <tr key={p.id} onClick={()=>{setPrecioEdit(p);setEditPrecioVal(String(p.precio_unitario_sub));}} style={{cursor:"pointer"}}
@@ -4050,7 +4733,7 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
                 <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>Crear Nuevo Corte</div>
                 <div style={{fontSize:11,color:col.textSecondary,marginTop:2}}>{detalle?.razon_social}</div>
               </div>
-              <button style={S.closeBtn} onClick={()=>setShowCrearCorte(false)}>✕</button>
+              <button style={S.closeBtn(theme)} onClick={()=>setShowCrearCorte(false)}>✕</button>
             </div>
             <div style={modalScroll}>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
@@ -4099,7 +4782,7 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
                 <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>Corte #{corteDetalle.consecutivo}</div>
                 <div style={{fontSize:11,color:col.textSecondary,marginTop:2}}>{detalle?.razon_social} · {corteDetalle.tipo_periodo}</div>
               </div>
-              <button style={S.closeBtn} onClick={()=>setCorteDetalle(null)}>✕</button>
+              <button style={S.closeBtn(theme)} onClick={()=>setCorteDetalle(null)}>✕</button>
             </div>
             <div style={modalScroll}>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
@@ -4135,7 +4818,7 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
                 <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>Agregar Ítem de Cobro</div>
                 <div style={{fontSize:11,color:col.textSecondary,marginTop:2}}>Subcontratista: {detalle?.razon_social}</div>
               </div>
-              <button style={S.closeBtn} onClick={()=>setShowAgregarItem(false)}>✕</button>
+              <button style={S.closeBtn(theme)} onClick={()=>setShowAgregarItem(false)}>✕</button>
             </div>
             <div style={modalScroll}>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
@@ -4205,7 +4888,7 @@ function SeccionSubcontratistas({ call, user, perms, theme }) {
                 <div style={{fontSize:17,fontWeight:700,color:col.textPrimary,fontFamily:"'Rajdhani',sans-serif"}}>{precioEdit.item_numero} — {(precioEdit.descripcion||"").substring(0,38)}{(precioEdit.descripcion||"").length>38?"...":""}</div>
                 <div style={{fontSize:11,color:col.textSecondary,marginTop:2}}>{detalle?.razon_social}</div>
               </div>
-              <button style={S.closeBtn} onClick={()=>setPrecioEdit(null)}>✕</button>
+              <button style={S.closeBtn(theme)} onClick={()=>setPrecioEdit(null)}>✕</button>
             </div>
             <div style={modalScroll}>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
@@ -4255,10 +4938,11 @@ const TAB_FUNCIONES = {
   resets:          ["panel de administración"],
 };
 
-export default function AdminPanel({ user, token, onClose, activeTheme }) {
+export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp }) {
   const call = useApi(token);
   const [cargos, setCargos] = useState([]);
   const [contratos, setContratos] = useState([]);
+  const t = tProp && tProp.text ? tProp : tFrom(activeTheme, null);
 
   const isDeveloper = user?.cargo_nombre?.toLowerCase() === "desarrollador";
   const isAdmin     = user?.cargo_nombre?.toLowerCase() === "administrador";
@@ -4331,45 +5015,45 @@ export default function AdminPanel({ user, token, onClose, activeTheme }) {
 
   return (
     <div style={S.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={S.panel(activeTheme)}>
+      <div style={S.panel(activeTheme, t)} onClick={e => e.stopPropagation()}>
 
         {/* SIDEBAR */}
-        <div style={S.sidebar(activeTheme)}>
-          <div style={S.sidebarHeader}>
+        <div style={S.sidebar(activeTheme, t)}>
+          <div style={S.sidebarHeader(activeTheme, t)}>
             <img
               src="/CLARA.CORE.png"
               alt="ClaraCore"
               className="cc-brand-logo cc-brand-logo--admin"
               style={{ filter: isLightTheme(activeTheme) ? "none" : "brightness(0) invert(1)" }}
             />
-            <div style={S.logoSub}>PANEL ADMIN</div>
+            <div style={S.logoSub(activeTheme, t)}>PANEL ADMIN</div>
           </div>
 
-          {TABS.map(t => (
-            <div key={t.id} style={S.navItem(tab === t.id)} onClick={() => setTab(t.id)}>
-              <div style={S.navDot(tab === t.id)} />
-              <span>{t.label}</span>
+          {TABS.map((it) => (
+            <div key={it.id} style={S.navItem(tab === it.id, activeTheme, t)} onClick={() => setTab(it.id)}>
+              <div style={S.navDot(tab === it.id, activeTheme, t)} />
+              <span>{it.label}</span>
             </div>
           ))}
 
-          <div style={S.sidebarFooter}>
-            <div style={S.userTag}>Sesión activa</div>
-            <div style={S.userName}>{user?.nombre} {user?.apellidos}</div>
-            <div style={{ ...S.userTag, marginTop: 2 }}>{user?.cargo_nombre}</div>
+          <div style={S.sidebarFooter(activeTheme, t)}>
+            <div style={S.userTag(activeTheme, t)}>Sesión activa</div>
+            <div style={S.userName(activeTheme, t)}>{user?.nombre} {user?.apellidos}</div>
+            <div style={{ ...S.userTag(activeTheme, t), marginTop: 2 }}>{user?.cargo_nombre}</div>
           </div>
         </div>
 
         {/* CONTENIDO */}
         <div style={S.content}>
-          <div style={S.contentHeader(activeTheme)}>
+          <div style={S.contentHeader(activeTheme, t)}>
             <div>
-              <div style={S.contentTitle(activeTheme)}>{TITULOS[tab]?.title}</div>
-              <div style={S.contentSub(activeTheme)}>{TITULOS[tab]?.sub}</div>
+              <div style={S.contentTitle(activeTheme, t)}>{TITULOS[tab]?.title}</div>
+              <div style={S.contentSub(activeTheme, t)}>{TITULOS[tab]?.sub}</div>
             </div>
-            <button style={S.closeBtn} onClick={onClose} title="Cerrar">✕</button>
+            <button style={S.closeBtn(activeTheme, t)} onClick={onClose} title="Cerrar" type="button">✕</button>
           </div>
 
-          <div style={S.scrollArea(activeTheme)}>
+          <div style={S.scrollArea(activeTheme, t)}>
             {tab === "usuarios"  && <SeccionUsuarios  call={call} cargos={cargos} theme={activeTheme} userId={user?.id} />}
             {tab === "cargos"    && <SeccionCargos    call={call} cargos={cargos} recargarCargos={cargarCargos} theme={activeTheme} />}
             {tab === "permisos"  && <SeccionPermisos  call={call} cargos={cargos} theme={activeTheme} />}

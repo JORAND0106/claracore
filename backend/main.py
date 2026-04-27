@@ -4,7 +4,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 import io, csv, requests as req_http
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Any, Dict
 from supabase import create_client, ClientOptions
 import httpx
@@ -26,6 +26,8 @@ import math
 from concurrent.futures import ThreadPoolExecutor
 
 # ── Sesiones DWG activas (en memoria) ─────────────────────────────────────────
+# Clave: (contrato_id, usuario_id) → timestamp Unix. Nunca mezclar con otro usuario:
+# el badge «DWG enlazado» en la web debe ser solo para quien corre SicoeCAD con su sesión.
 _dwg_sessions: dict = {}
 # Auditoría: última carga de cantidades desde SicoeCAD (cliente) → /presupuesto/.../bulk?source=sicoe_cad
 # Notificación consumida vía GET .../sincro-sicoe-cad-auditoria; en un solo proceso de API (no multi-réplica).
@@ -41,9 +43,21 @@ _maintenance_state = {
     "expires_at": None,
 }
 
+def _session_key_cad(contrato_id: int, usuario_id: int):
+    return (int(contrato_id), int(usuario_id) if usuario_id is not None else 0)
+
+
 def _dwg_activo(contrato_id: int, usuario_id: int = None) -> bool:
-    last = _dwg_sessions.get(contrato_id)
-    return last is not None and (time.time() - last) < 10
+    """
+    True si *algún* usuario tiene heartbeat CAD reciente para el contrato (p. ej. cola a AutoCAD).
+    No confundir con /cad-queue/.../estado, que es solo el usuario de la petición.
+    """
+    t = time.time()
+    ctx = int(contrato_id)
+    for (cid, _uid), last in _dwg_sessions.items():
+        if int(cid) == ctx and (t - float(last)) < 10:
+            return True
+    return False
 
 load_dotenv()
 _MAINTENANCE_SECRET = os.getenv("MAINTENANCE_SECRET", _MAINTENANCE_SECRET)
@@ -399,6 +413,14 @@ class CargoCreate(BaseModel):
     rol_id: Optional[int] = None
     categoria_id: Optional[int] = None
 
+class CostoAdicionalItem(BaseModel):
+    concepto_contractual: str = ""
+    valor_mensual: Optional[float] = None
+    tiempo_meses: Optional[float] = None
+    # Calculado: round( valor_mensual * tiempo_meses, 0 ); puede venir de cliente pero se pisa.
+    valor: Optional[float] = None
+
+
 class ContratoCreate(BaseModel):
     numero: str
     objeto: Optional[str] = None
@@ -415,6 +437,13 @@ class ContratoCreate(BaseModel):
     logo_interventoria: Optional[str] = None
     aiu: Optional[float] = None
     iva: Optional[float] = None
+    valor_componente_ambiental: Optional[float] = None
+    valor_componente_social: Optional[float] = None
+    valor_componente_pmt: Optional[float] = None
+    costo_directo_contrato: Optional[float] = None
+    # Suma legada; si envías costos_adicionales_lista, el API recalcula.
+    costos_adicionales: Optional[float] = None
+    costos_adicionales_lista: List[CostoAdicionalItem] = Field(default_factory=list)
 
 class PermisoUpdate(BaseModel):
     cargo_id: int
@@ -455,6 +484,12 @@ class ContratoUpdate(BaseModel):
     fase: Optional[str] = None  # 'PRESUPUESTO' | 'LIQUIDACION'
     aiu: Optional[float] = None
     iva: Optional[float] = None
+    valor_componente_ambiental: Optional[float] = None
+    valor_componente_social: Optional[float] = None
+    valor_componente_pmt: Optional[float] = None
+    costo_directo_contrato: Optional[float] = None
+    costos_adicionales: Optional[float] = None
+    costos_adicionales_lista: Optional[List[CostoAdicionalItem]] = None
 
 class ListadoPrecioItem(BaseModel):
     capitulo: Optional[str] = None
@@ -524,6 +559,8 @@ class PresupuestoUpdate(BaseModel):
     observacion_externa: Optional[str] = None
     # Solo contratista, registro sellado: explica por qué reabre; interventoría no puede "reversar" desde aquí.
     motivo_edicion_tras_sellado: Optional[str] = None
+    # Contratista: al editar datos con revisado Pendiente/Rechazado/Aprobado (sin sellado), motivo ≥15 y reset a No Revisado.
+    motivo_edicion_con_estado_interv: Optional[str] = None
 
 class DimOverride(BaseModel):
     id: int
@@ -963,16 +1000,23 @@ app.include_router(informes_router, prefix="/informes")
 
 # Vista previa JSON (CC-SUB-001 / CC-SUB-002): registrado aquí porque en algunos equipos el router
 # importado desde informes.py no exponía estas rutas en OpenAPI (Not Found en el cliente).
-from informes import _respuesta_json_corte, _respuesta_json_memoria
+from informes import _perm_informes_ccd, _respuesta_json_corte, _respuesta_json_memoria
+from ccd_conciliacion import (
+    rpo_conciliacion_por_contrato,
+    rpo_conciliacion_un_acta_rpc,
+    rpo_resumen_actas_rpc,
+)
 
 
 @app.get("/informes/{contrato_id}/datos/corte-subcontratista/{corte_id}")
 def informes_datos_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(get_current_user)):
+    _perm_informes_ccd(current_user, "ver")
     return _respuesta_json_corte(contrato_id, corte_id, current_user)
 
 
 @app.get("/informes/{contrato_id}/vista-json/corte-sub/{corte_id}")
 def informes_vista_json_corte_sub(contrato_id: int, corte_id: int, current_user=Depends(get_current_user)):
+    _perm_informes_ccd(current_user, "ver")
     return _respuesta_json_corte(contrato_id, corte_id, current_user)
 
 
@@ -983,6 +1027,7 @@ def informes_datos_memoria_item(
     item_numero: str = Query(...),
     current_user=Depends(get_current_user),
 ):
+    _perm_informes_ccd(current_user, "ver")
     return _respuesta_json_memoria(contrato_id, corte_id, item_numero, current_user)
 
 
@@ -993,6 +1038,7 @@ def informes_vista_json_memoria(
     item_numero: str = Query(...),
     current_user=Depends(get_current_user),
 ):
+    _perm_informes_ccd(current_user, "ver")
     return _respuesta_json_memoria(contrato_id, corte_id, item_numero, current_user)
 
 
@@ -1559,15 +1605,14 @@ def listar_cargos():
 def listar_roles():
     return supabase.table("roles").select("*").order("nombre").execute().data
 
-# Listado sin plano_geojson: el GeoJSON por fila puede ser muy pesado y satura Postgres/egreso (v. métricas Azure).
+# Listado ligero: SOLO columnas presentes en cualquier despliegue. Si pides columnas que aún no existen
+# en la BD (migración pendiente), PostgREST falla y el panel enseña 0 contratos aunque existan.
 _CONTRATOS_SELECT_LISTA = (
     "id, numero, objeto, contratista, nit, interventoria, entidad, entidad_otra, logo_entidad, "
-    "centro_lat, centro_lng, logo_contratista, logo_interventoria, fase"
+    "centro_lat, centro_lng, logo_contratista, logo_interventoria, fase, costos_adicionales"
 )
-_CONTRATOS_SELECT_DETALLE = (
-    "id, numero, objeto, contratista, nit, interventoria, entidad, entidad_otra, logo_entidad, plano_geojson, "
-    "centro_lat, centro_lng, logo_contratista, logo_interventoria, fase, aiu, iva"
-)
+# Al editar, traemos * para no romper si faltan columnas nuevas en un entorno; el listado queda aligerado.
+_CONTRATOS_SELECT_DETALLE = "*"
 
 
 @app.get("/contratos")
@@ -1577,7 +1622,7 @@ def listar_contratos():
 
 @app.get("/contratos/{contrato_id}")
 def obtener_contrato(contrato_id: int):
-    """Una fila completa (incl. plano_geojson). Usar para mapas/edición; el listado es ligero."""
+    """Una fila completa (incl. plano_geojson y columnas añadidas vía migraciones, sin listar nombres fijos)."""
     r = supabase.table("contratos").select(_CONTRATOS_SELECT_DETALLE).eq("id", contrato_id).limit(1).execute()
     row = r.data[0] if r.data else None
     if not row:
@@ -2188,11 +2233,73 @@ def listar_funciones(current_user=Depends(get_current_user)):
     funciones = supabase.table("funciones").select("*").order("nombre").execute().data or []
     return funciones
 
+def _normalizar_costos_adicionales_lista(items: List[CostoAdicionalItem]) -> List[dict]:
+    out: List[dict] = []
+
+    def _f(x) -> Optional[float]:
+        if x is None:
+            return None
+        try:
+            v = float(x)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(v):
+            return None
+        return v
+
+    for it in items or []:
+        c = (it.concepto_contractual or "").strip()
+        if not c:
+            continue
+        vm = _f(it.valor_mensual)
+        tm = _f(it.tiempo_meses)
+        v_old = _f(it.valor)
+        if vm is None and v_old is not None and tm is None:
+            vm = v_old
+            tm = 1.0
+        if vm is None:
+            vm = 0.0
+        if tm is None:
+            tm = 0.0
+        if tm < 0.0:
+            tm = 0.0
+        v = float(round(float(vm) * float(tm), 0))
+        out.append(
+            {
+                "concepto_contractual": c,
+                "valor_mensual": float(vm),
+                "tiempo_meses": float(tm),
+                "valor": v,
+            }
+        )
+    return out
+
+
+def _suma_costos_adicionales_cop(lista: List[dict]) -> Optional[float]:
+    t = 0.0
+    n = 0
+    for x in lista or []:
+        v = x.get("valor")
+        if v is None:
+            continue
+        t += float(v)
+        n += 1
+    if not lista:
+        return None
+    if n == 0:
+        return None
+    return t
+
+
 @app.post("/contratos")
 def crear_contrato(contrato: ContratoCreate, current_user=Depends(get_current_user)):
     existe = supabase.table("contratos").select("id").eq("numero", contrato.numero).execute()
     if existe.data:
         raise HTTPException(status_code=400, detail="Ya existe un contrato con ese número")
+    norm = _normalizar_costos_adicionales_lista(contrato.costos_adicionales_lista or [])
+    costos_cop = _suma_costos_adicionales_cop(norm)
+    if not norm and contrato.costos_adicionales is not None:
+        costos_cop = contrato.costos_adicionales
     result = supabase.table("contratos").insert({
         "numero": contrato.numero,
         "objeto": contrato.objeto,
@@ -2207,6 +2314,14 @@ def crear_contrato(contrato: ContratoCreate, current_user=Depends(get_current_us
         "centro_lng": contrato.centro_lng,
         "logo_contratista": contrato.logo_contratista,
         "logo_interventoria": contrato.logo_interventoria,
+        "aiu": contrato.aiu,
+        "iva": contrato.iva,
+        "valor_componente_ambiental": contrato.valor_componente_ambiental,
+        "valor_componente_social": contrato.valor_componente_social,
+        "valor_componente_pmt": contrato.valor_componente_pmt,
+        "costo_directo_contrato": contrato.costo_directo_contrato,
+        "costos_adicionales": costos_cop,
+        "costos_adicionales_lista": norm,
     }).execute()
     nuevo = result.data[0]
     try:
@@ -2250,6 +2365,10 @@ def contrato_sembrar_carpetas_cloudinary(contrato_id: int, current_user=Depends(
 @app.put("/contratos/{contrato_id}")
 def actualizar_contrato(contrato_id: int, body: ContratoUpdate, current_user=Depends(get_current_user)):
     data = body.dict(exclude_unset=True)
+    if "costos_adicionales_lista" in data and body.costos_adicionales_lista is not None:
+        norm = _normalizar_costos_adicionales_lista(body.costos_adicionales_lista)
+        data["costos_adicionales_lista"] = norm
+        data["costos_adicionales"] = _suma_costos_adicionales_cop(norm)
     if not data:
         return {"mensaje": "Sin cambios"}
     supabase.table("contratos").update(data).eq("id", contrato_id).execute()
@@ -3226,12 +3345,44 @@ _PPTO_REABRIR_CAMPOS = frozenset(
     }
 )
 
+# Cambios de datos “de negocio” por contratista que invalidan un estado ya asignado por Interventoría (sin sellado).
+_PPTO_CT_SUBSTANTIVE = frozenset(
+    {
+        "capitulo", "competencia", "item", "descripcion", "und",
+        "vlr_unitario", "observacion_externa", "costo_directo",
+    }
+)
+
+
+def _ppto_val_eq(a, b) -> bool:
+    if a is None and b is None:
+        return True
+    try:
+        fa, fb = float(a), float(b)
+        if math.isfinite(fa) and math.isfinite(fb):
+            tol = 1e-6 + 1e-9 * max(abs(fa), abs(fb), 1.0)
+            return abs(fa - fb) < tol
+    except (TypeError, ValueError):
+        pass
+    return str(a or "").strip() == str(b or "").strip()
+
+
+def _ppto_substantive_contractor_fields_changed(prev: dict, data: dict) -> bool:
+    for k in _PPTO_CT_SUBSTANTIVE:
+        if k not in data:
+            continue
+        if not _ppto_val_eq(data.get(k), prev.get(k)):
+            return True
+    return False
+
 
 @app.put("/presupuesto/item/{item_id}")
 def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=Depends(get_current_user)):
     data = body.dict(exclude_unset=True)
     _mr = data.pop("motivo_edicion_tras_sellado", None)
     motivo_reap = str(_mr).strip() if _mr is not None else ""
+    _mi = data.pop("motivo_edicion_con_estado_interv", None)
+    motivo_interv = str(_mi).strip() if _mi is not None else ""
     prev_row = supabase.table("presupuesto").select("*").eq("id", item_id).limit(1).execute().data
     prev_row = prev_row[0] if prev_row else {}
     reabrir = False
@@ -3264,6 +3415,27 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
         data["validado_por"] = None
         data["validado_en"] = None
         reabrir = True
+    reset_interv_comment = None
+    prev_rev_for_log = (prev_row.get("revisado") or "No Revisado").strip()
+    if (
+        not prev_row.get("sellado")
+        and not reabrir
+        and _es_rol_contratista_ppto(current_user)
+        and not _es_desarrollador(current_user)
+    ):
+        data.pop("revisado", None)
+        if prev_rev_for_log in ("Aprobado", "Pendiente", "Rechazado") and _ppto_substantive_contractor_fields_changed(
+            prev_row, data
+        ):
+            if len(motivo_interv) < 15:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Debe consignar un motivo (mínimo 15 caracteres) al modificar un registro ya marcado por Interventoría; el estado volverá a «No Revisado».",
+                )
+            data["revisado"] = "No Revisado"
+            data["validado_por"] = None
+            data["validado_en"] = None
+            reset_interv_comment = motivo_interv
     if not _es_desarrollador(current_user):
         for k in ("area_long_nod", "ancho", "espesor", "cant_total"):
             if k in data:
@@ -3327,6 +3499,23 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
         except Exception:
             try:
                 _log_api.warning("comentario reapertura sellado: insert falló item_id=%s", item_id)
+            except Exception:
+                pass
+    if reset_interv_comment:
+        try:
+            nombre_u = current_user.get("nombre") or current_user.get("email") or "Usuario"
+            supabase.table("comentarios").insert(
+                {
+                    "presupuesto_id": item_id,
+                    "tipo": "validacion",
+                    "mensaje": f"[Contratista — edición con estado Interventoría «{prev_rev_for_log}»] {reset_interv_comment}",
+                    "usuario_nombre": nombre_u,
+                    "parent_id": None,
+                }
+            ).execute()
+        except Exception:
+            try:
+                _log_api.warning("comentario reset estado interv: insert falló item_id=%s", item_id)
             except Exception:
                 pass
 
@@ -3919,8 +4108,11 @@ def exportar_descargar(job_id: str, current_user=Depends(get_current_user)):
 
 @app.post("/cad-queue/{contrato_id}/heartbeat")
 def cad_heartbeat(contrato_id: int, usuario_id: int = 0):
-    """SicoeCAD llama esto cada 3s — sin auth, persiste en Supabase."""
-    _dwg_sessions[contrato_id] = time.time()
+    """SicoeCAD llama esto cada 3s — sin auth, persiste en Supabase.
+    usuario_id: id del usuario ClaraCore (mismo que inicia sesión) para no mostrar “enlazado” a otros.
+    """
+    k = _session_key_cad(contrato_id, usuario_id)
+    _dwg_sessions[k] = time.time()
     try:
         supabase.table("cad_sessions").upsert({
             "contrato_id": contrato_id,
@@ -3935,11 +4127,14 @@ def cad_debug(contrato_id: int, current_user=Depends(get_current_user)):
     """Diagnóstico temporal — muestra estado de sesiones DWG."""
     sessions_info = []
     for k, ts in _dwg_sessions.items():
-        sessions_info.append({
-            "key": str(k),
-            "hace_segundos": round(time.time() - ts, 1),
-            "activo": (time.time() - ts) < _DWG_TIMEOUT
-        })
+        if isinstance(k, tuple) and len(k) == 2 and int(k[0]) == int(contrato_id):
+            cctx, uu = k
+            sessions_info.append({
+                "contrato_id": cctx,
+                "usuario_id": uu,
+                "hace_segundos": round(time.time() - float(ts), 1),
+                "activo": (time.time() - float(ts)) < _DWG_TIMEOUT
+            })
     db_sessions = []
     try:
         rows = supabase.table("cad_sessions").select("*").eq("contrato_id", contrato_id).execute().data
@@ -3955,24 +4150,38 @@ def cad_debug(contrato_id: int, current_user=Depends(get_current_user)):
 
 @app.get("/cad-queue/{contrato_id}/estado")
 def cad_estado(contrato_id: int, current_user=Depends(get_current_user)):
-    """ClaraCore web consulta si hay DWG enlazado."""
-    # 1) Verificar memoria primero (más rápido)
-    last = _dwg_sessions.get(contrato_id)
-    if last is not None and (time.time() - last) < 30:
+    """Solo el usuario cuyo SicoeCAD envía heartbeats (mismo usuario_id) ve enlazado=True."""
+    my_uid = 0
+    try:
+        my_uid = int(current_user.get("sub") or 0)
+    except (TypeError, ValueError):
+        my_uid = 0
+    if my_uid <= 0:
+        return {"enlazado": False}
+    # 1) Memoria: sesión (contrato, mi usuario)
+    k = _session_key_cad(contrato_id, my_uid)
+    last = _dwg_sessions.get(k)
+    if last is not None and (time.time() - float(last)) < 30:
         return {"enlazado": True}
-    # 2) Fallback Supabase — sobrevive reinicios de Azure
+    # 2) Supabase — filtrar por usuario; sin esto, cualquier fila del contrato ponía en verde a todos
     try:
         from datetime import timezone
-        rows = supabase.table("cad_sessions").select("ultimo_heartbeat") \
-            .eq("contrato_id", contrato_id).execute().data
+        row = supabase.table("cad_sessions").select("ultimo_heartbeat") \
+            .eq("contrato_id", contrato_id) \
+            .eq("usuario_id", my_uid) \
+            .limit(1) \
+            .execute()
+        rows = (row.data or [])
         if rows:
-            ts = rows[0]["ultimo_heartbeat"].replace("Z", "+00:00")
-            ultimo = datetime.fromisoformat(ts)
+            tstr = rows[0]["ultimo_heartbeat"]
+            tstr = (tstr or "").replace("Z", "+00:00")
+            ultimo = datetime.fromisoformat(tstr)
             if ultimo.tzinfo is None:
                 ultimo = ultimo.replace(tzinfo=timezone.utc)
             diff = (datetime.now(timezone.utc) - ultimo).total_seconds()
             return {"enlazado": diff < 30}
-    except: pass
+    except Exception:
+        pass
     return {"enlazado": False}
 
 @app.get("/cad-queue/{contrato_id}/pendientes")
@@ -4883,6 +5092,16 @@ def listar_actas(contrato_id: int, current_user=Depends(get_current_user)):
     rows = supabase.table("actas").select(
         "*, actas_tipos(nombre, es_cobro), usuarios(nombre, apellidos)"
     ).eq("contrato_id", contrato_id).order("consecutivo", desc=True).execute().data
+    rpo_ids = [
+        r["id"]
+        for r in (rows or [])
+        if (r.get("tipo_grupo") or "").strip().upper() == "RPO" and r.get("id") is not None
+    ]
+    rpo_costo = {}
+    if rpo_ids:
+        rpo_costo = rpo_resumen_actas_rpc(supabase, contrato_id, rpo_ids)
+        if rpo_costo is None:
+            rpo_costo = rpo_conciliacion_por_contrato(supabase, contrato_id, rpo_ids)
     result = []
     for r in (rows or []):
         tipo = r.get("actas_tipos") or {}
@@ -4890,13 +5109,28 @@ def listar_actas(contrato_id: int, current_user=Depends(get_current_user)):
         adj  = (r.get("ajuste_iccp") or 0) + (r.get("ajuste_icociv") or 0) + (r.get("ajuste_ipc") or 0)
         total = (r.get("valor_comp_ambiental") or 0) + (r.get("valor_comp_social") or 0) + \
                 (r.get("valor_comp_pmt") or 0) + (r.get("valor_cobrado_adicional") or 0) + adj
-        result.append({**r,
+        is_rpo = (r.get("tipo_grupo") or "").strip().upper() == "RPO"
+        rpo = None
+        if is_rpo and r.get("id") is not None:
+            rpo = rpo_costo.get(int(r["id"]), {
+                "costo_directo_total": 0.0,
+                "registros_n3_aprobado": 0,
+            })
+        valor_mostrado = float(rpo.get("costo_directo_total", 0.0) or 0) if is_rpo and rpo else total
+        out = {**r,
             "tipo_nombre":       tipo.get("nombre", ""),
             "es_cobro":          tipo.get("es_cobro", False),
             "asignado_nombre":   f"{usr.get('nombre','')} {usr.get('apellidos','')}".strip(),
             "valor_total_ajustes": adj,
-            "valor_total_acta":    total,
-        })
+            "valor_total_acta":    valor_mostrado,
+        }
+        if is_rpo and rpo is not None:
+            out["costo_directo_rpo_sicoe_n3"] = rpo.get("costo_directo_total", 0.0)
+            out["registros_sicoe_n3_aprobado"] = rpo.get("registros_n3_aprobado", 0)
+            out["registros_sicoe_cascade_interventoria"] = rpo.get(
+                "registros_cascade_interventoria", rpo.get("registros_n3_aprobado", 0)
+            )
+        result.append(out)
     return result
 
 @app.get("/actas/{contrato_id}/proximo-consecutivo")
@@ -5122,6 +5356,52 @@ def acta_financiero(acta_id: int, current_user=Depends(get_current_user)):
     capitulos = [{"capitulo": c, "aprobado": 0, "pendiente": 0, "pendiente_precio": 0,
                   "no_revisado": 0, "rechazado": 0} for c in caps_unicos]
     return {"resumen": resumen, "capitulos": capitulos}
+
+
+@app.get("/actas/{acta_id}/rpo-costo-conciliacion")
+def acta_rpo_costo_conciliacion(acta_id: int, current_user=Depends(get_current_user)):
+    """Desglose de costo directo (SICOE, N3 aprobado) por capítulo; solo actas tipo RPO."""
+    acta = supabase.table("actas").select(
+        "id, contrato_id, tipo_grupo, numero_rpo, consecutivo, fecha_inicio, fecha_fin, tipo_acta_id"
+    ).eq("id", acta_id).limit(1).execute().data
+    acta = acta[0] if acta else None
+    if not acta or (acta.get("tipo_grupo") or "").strip().upper() != "RPO":
+        raise HTTPException(status_code=400, detail="Solo aplica a actas con tipo RPO.")
+    contrato_id = int(acta["contrato_id"])
+    block = rpo_conciliacion_un_acta_rpc(supabase, contrato_id, int(acta_id))
+    if block is None:
+        m = rpo_conciliacion_por_contrato(supabase, contrato_id, [int(acta_id)])
+        block = m.get(
+            int(acta_id),
+            {
+                "costo_directo_total": 0.0,
+                "registros_n3_aprobado": 0,
+                "registros_cascade_interventoria": 0,
+                "por_capitulo": [],
+                "secciones": {},
+            },
+        )
+    return {
+        "acta_id": int(acta_id),
+        "contrato_id": contrato_id,
+        "numero_rpo": acta.get("numero_rpo"),
+        "consecutivo": acta.get("consecutivo"),
+        "periodo": {
+            "fecha_inicio": (acta.get("fecha_inicio") or "")[:10],
+            "fecha_fin": (acta.get("fecha_fin") or "")[:10],
+        },
+        "criterio": (
+            "Alineado con el dashboard de validación: solo líneas SICOE con N1, N2 y N3 en «Aprobado» (cascada) "
+            "e ítem asignado. Sin filtro de «bloqueado» (diferente a formatos CCD con sello de bloqueo). "
+            "Bloque «obra / ensayos–sondeos» = misma regla de capítulos que dashboard_matriz_validacion (14, 15, ENSAYO, SONDEO)."
+        ),
+        "costo_directo_total": block.get("costo_directo_total", 0.0),
+        "registros_n3_aprobado": block.get("registros_n3_aprobado", 0),
+        "registros_cascade_interventoria": block.get("registros_cascade_interventoria", block.get("registros_n3_aprobado", 0)),
+        "por_capitulo": block.get("por_capitulo") or [],
+        "secciones": block.get("secciones") or {},
+    }
+
 
 # ─────────────────────────────────────────────────────────────
 # SUBCONTRATISTAS
@@ -9204,7 +9484,7 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
         off += 1000
 
     q_p = supabase.table("presupuesto")\
-        .select("pk_id, cant_total, costo_directo, descripcion")\
+        .select("pk_id, cant_total, costo_directo, descripcion, revisado")\
         .eq("contrato_id", contrato_id).eq("dado_de_baja", False)
     if item: q_p = q_p.eq("item", item)
     elif capitulo: q_p = q_p.eq("capitulo", capitulo)
@@ -9219,9 +9499,12 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
     agg_p = {}
     for r in ppto:
         k = r.get("pk_id") or "(sin pk)"
-        if k not in agg_p: agg_p[k] = {"cant": 0.0, "costo": 0.0, "desc": ""}
+        if k not in agg_p:
+            agg_p[k] = {"cant": 0.0, "costo": 0.0, "desc": "", "_rev_track": []}
+        cost_line = float(r.get("costo_directo") or 0)
         agg_p[k]["cant"] += float(r.get("cant_total") or 0)
-        agg_p[k]["costo"] += float(r.get("costo_directo") or 0)
+        agg_p[k]["costo"] += cost_line
+        agg_p[k]["_rev_track"].append((cost_line, r.get("revisado")))
         if not agg_p[k]["desc"] and r.get("descripcion"):
             agg_p[k]["desc"] = r["descripcion"]
 
@@ -9236,8 +9519,12 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
     keys = sorted(set(list(agg_p.keys()) + list(agg_c.keys())), key=lambda x: str(x))
     rows = []
     for k in keys:
-        p = agg_p.get(k, {"cant": 0.0, "costo": 0.0})
+        p = agg_p.get(k, {"cant": 0.0, "costo": 0.0, "desc": "", "_rev_track": []})
         c = agg_c.get(k, {"cant": 0.0, "costo": 0.0})
+        tr = p.get("_rev_track") or []
+        rev_dom = "No Revisado"
+        if tr:
+            rev_dom = _matriz_validacion_norm_estado(max(tr, key=lambda x: float(x[0] or 0))[1])
         rows.append({
             "pk_id": k,
             "cant_ppto": round(p["cant"], 3), "costo_ppto": round(p["costo"], 0),
@@ -9245,6 +9532,7 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
             "delta_cant": round(p["cant"] - c["cant"], 3),
             "delta_costo": round(p["costo"] - c["costo"], 0),
             "descripcion": p.get("desc", ""),
+            "revisado": rev_dom,
         })
 
     desc_item = ""
@@ -9259,45 +9547,408 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
     return {"rows": rows, "por_cobrar": por_cobrar, "devolucion": devolucion, "descripcion_item": desc_item}
 
 
-def _build_dashboard_capitulo_xlsx(data: Dict[str, Any], capitulo: str, item: Optional[str], contrato_id: int):
+def _ppto_rows_capitulo(contrato_id: int, capitulo: str) -> List[dict]:
+    rows = []
+    off = 0
+    while True:
+        def _b(o=off):
+            return (
+                supabase.table("presupuesto")
+                .select("item, descripcion, capitulo, cant_total, costo_directo, revisado, pk_id")
+                .eq("contrato_id", contrato_id)
+                .eq("capitulo", capitulo)
+                .eq("dado_de_baja", False)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_b) or []
+        rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        off += 1000
+    return rows
+
+
+def _ppto_costo_por_revisado(rows_item: List[dict]) -> Dict[str, float]:
+    out = {"Aprobado": 0.0, "Pendiente": 0.0, "Rechazado": 0.0, "No Revisado": 0.0}
+    for r in rows_item:
+        cost = float(r.get("costo_directo") or 0)
+        rv = _matriz_validacion_norm_estado(r.get("revisado"))
+        if rv not in out:
+            rv = "No Revisado"
+        out[rv] += cost
+    return out
+
+
+def _xlsx_safe_sheet_name(name: str, fallback: str = "Hoja") -> str:
+    s = re.sub(r"[\[\]\*\/\\\?\:]", "_", str(name or "").strip())[:31]
+    return s or fallback[:31]
+
+
+def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Optional[str]):
+    """
+    Informe multi-hoja: (1) resumen por ítem del capítulo presupuesto vs obra aprobada N3,
+    (2..n) análisis por PK por ítem, (n-1) base presupuesto capítulo, (n) obra filtrada a esos ítems.
+
+    Los totales «Cobrada/Cobrado» del resumen se calculan con la misma lógica que el análisis por PK
+    (_dashboard_pkid_tabla_obra_core), no por agrupación cruda de item_numero en obra (evita
+    desfaces cuando el texto del ítem en obra no coincide exactamente con el del presupuesto).
+    """
     from openpyxl import Workbook
-    from openpyxl.styles import Font
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    fill_hdr = PatternFill("solid", fgColor="1B2A4A")
+    fill_tot = PatternFill("solid", fgColor="1B2A4A")
+    fill_green = PatternFill("solid", fgColor="DCFCE7")
+    fill_red = PatternFill("solid", fgColor="FEE2E2")
+    fill_white = PatternFill("solid", fgColor="FFFFFF")
+    font_hdr = Font(bold=True, color="FFFFFF", size=11)
+    font_bold = Font(bold=True)
+    al_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    _side = Side(style="thin", color="FFB4B4B4")
+    border_tbl = Border(left=_side, right=_side, top=_side, bottom=_side)
+
+    def _style_header_row(ws, row_idx: int, ncols: int):
+        for c in range(1, ncols + 1):
+            cell = ws.cell(row=row_idx, column=c)
+            cell.fill = fill_hdr
+            cell.font = font_hdr
+            cell.alignment = al_center
+            cell.border = border_tbl
+
+    def _style_total_row(ws, row_idx: int, ncols: int):
+        for c in range(1, ncols + 1):
+            cell = ws.cell(row=row_idx, column=c)
+            cell.fill = fill_tot
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.border = border_tbl
+
+    def _border_range(ws, r1: int, r2: int, c1: int, c2: int):
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                ws.cell(row=r, column=c).border = border_tbl
+
+    def _row_fill(ws, r: int, c1: int, c2: int, fill):
+        for c in range(c1, c2 + 1):
+            ws.cell(row=r, column=c).fill = fill
+
+    def _fill_data_row_by_delta(ws, r: int, c1: int, c2: int, delta_costo: float):
+        dc = float(delta_costo or 0)
+        if dc > 0.5:
+            _row_fill(ws, r, c1, c2, fill_green)
+        elif dc < -0.5:
+            _row_fill(ws, r, c1, c2, fill_red)
+        else:
+            _row_fill(ws, r, c1, c2, fill_white)
+
+    meta_ct = ""
+    try:
+        cr = supabase.table("contratos").select("numero, contratista").eq("id", contrato_id).limit(1).execute().data
+        if cr:
+            meta_ct = (cr[0].get("contratista") or cr[0].get("numero") or "").strip()
+    except Exception:
+        pass
+    gen_ts = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M")
+
+    ppto_all = _ppto_rows_capitulo(contrato_id, capitulo)
+    by_item: Dict[str, List[dict]] = {}
+    for r in ppto_all:
+        it = (r.get("item") or "").strip()
+        if not it:
+            continue
+        by_item.setdefault(it, []).append(r)
+    items_sorted = sorted(by_item.keys(), key=lambda x: str(x))
+    # Misma fuente que las hojas por ítem (PK), para que resumen y detalle coincidan.
+    core_by_item: Dict[str, Dict[str, Any]] = {}
+    for _it in items_sorted:
+        core_by_item[_it] = _dashboard_pkid_tabla_obra_core(contrato_id, capitulo, _it)
 
     wb = Workbook()
-    ws = wb.active
-    ws.title = "Detalle PK"
-    ws.append(["Contrato ID", contrato_id])
-    ws.append(["Capítulo", capitulo or ""])
-    ws.append(["Ítem", item or ""])
-    if data.get("descripcion_item"):
-        ws.append(["Descripción ítem", data["descripcion_item"]])
-    ws.append([])
-    hdr = [
-        "pk_id", "Descripción (ppto)", "Cant. presupuesto", "Costo presupuesto",
-        "Cant. SICOE", "Costo SICOE", "Delta cant.", "Delta costo",
+    ws0 = wb.active
+    ws0.title = _xlsx_safe_sheet_name("Resumen capítulo", "Resumen")
+
+    # ── Hoja 1: resumen por ítem ───────────────────────────────────────────
+    ws0.merge_cells(start_row=1, start_column=1, end_row=2, end_column=13)
+    c1 = ws0.cell(row=1, column=1)
+    c1.value = f"RESUMEN POR CAPÍTULO — {capitulo}"
+    c1.font = Font(bold=True, size=14, color="FFFFFF")
+    c1.fill = fill_hdr
+    c1.alignment = Alignment(horizontal="center", vertical="center")
+    ws0.row_dimensions[1].height = 22
+    ws0.row_dimensions[2].height = 6
+    ws0.merge_cells(start_row=3, start_column=1, end_row=3, end_column=13)
+    c3 = ws0.cell(row=3, column=1)
+    c3.value = f"Generado: {gen_ts}" + (f" | {meta_ct}" if meta_ct else "")
+    c3.font = Font(size=10, italic=True)
+    c3.alignment = Alignment(horizontal="center")
+
+    hdr1 = [
+        "Ítem",
+        "Descripción",
+        "Cant. ClaraCore",
+        "Costo ClaraCore",
+        "Cant. Cobrada",
+        "Costo Cobrado",
+        "Δ Cantidad",
+        "Δ Costo",
+        "Estado",
+        "Aprobado",
+        "Pendiente",
+        "Rechazado",
+        "No Revisado",
     ]
-    ws.append(hdr)
-    hr = ws.max_row
-    for c in range(1, len(hdr) + 1):
-        ws.cell(row=hr, column=c).font = Font(bold=True)
-    for r in data.get("rows") or []:
-        ws.append([
-            r.get("pk_id"),
-            r.get("descripcion") or "",
-            r.get("cant_ppto"),
-            r.get("costo_ppto"),
-            r.get("cant_sicoe"),
-            r.get("costo_sicoe"),
-            r.get("delta_cant"),
-            r.get("delta_costo"),
-        ])
-    ws.append([])
-    ws.append(["Por cobrar (delta costo > 0)", data.get("por_cobrar", 0)])
-    ws.append(["Devolución / ajuste (delta < 0)", data.get("devolucion", 0)])
+    _border_range(ws0, 3, 3, 1, len(hdr1))
+    r0 = 4
+    for j, h in enumerate(hdr1, start=1):
+        ws0.cell(row=r0, column=j, value=h)
+    _style_header_row(ws0, r0, len(hdr1))
+
+    tot_cc_cant = tot_cc_cost = tot_cb_cant = tot_cb_cost = tot_d_cant = tot_d_cost = 0.0
+    tot_ap = tot_pe = tot_re = tot_nr = 0.0
+    row_i = r0 + 1
+    for it in items_sorted:
+        rows_it = by_item[it]
+        desc = ""
+        for x in rows_it:
+            if x.get("descripcion"):
+                desc = str(x["descripcion"])
+                break
+        cant_p = sum(float(x.get("cant_total") or 0) for x in rows_it)
+        cost_p = sum(float(x.get("costo_directo") or 0) for x in rows_it)
+        _rows_pk = (core_by_item.get(it) or {}).get("rows") or []
+        cant_c = sum(float(x.get("cant_sicoe") or 0) for x in _rows_pk)
+        cost_c = sum(float(x.get("costo_sicoe") or 0) for x in _rows_pk)
+        d_cant = cant_p - cant_c
+        d_cost = cost_p - cost_c
+        estado = "Equilibrio"
+        if d_cost > 0.5:
+            estado = "Por cobrar"
+        elif d_cost < -0.5:
+            estado = "Devolución"
+        spl = _ppto_costo_por_revisado(rows_it)
+        tot_cc_cant += cant_p
+        tot_cc_cost += cost_p
+        tot_cb_cant += cant_c
+        tot_cb_cost += cost_c
+        tot_d_cant += d_cant
+        tot_d_cost += d_cost
+        tot_ap += spl["Aprobado"]
+        tot_pe += spl["Pendiente"]
+        tot_re += spl["Rechazado"]
+        tot_nr += spl["No Revisado"]
+
+        ws0.cell(row=row_i, column=1, value=it)
+        ws0.cell(row=row_i, column=2, value=desc)
+        ws0.cell(row=row_i, column=3, value=round(cant_p, 4))
+        ws0.cell(row=row_i, column=4, value=round(cost_p, 0))
+        ws0.cell(row=row_i, column=5, value=round(cant_c, 4))
+        ws0.cell(row=row_i, column=6, value=round(cost_c, 0))
+        ws0.cell(row=row_i, column=7, value=round(d_cant, 4))
+        ws0.cell(row=row_i, column=8, value=round(d_cost, 0))
+        ws0.cell(row=row_i, column=9, value=estado)
+        ws0.cell(row=row_i, column=10, value=round(spl["Aprobado"], 0))
+        ws0.cell(row=row_i, column=11, value=round(spl["Pendiente"], 0))
+        ws0.cell(row=row_i, column=12, value=round(spl["Rechazado"], 0))
+        ws0.cell(row=row_i, column=13, value=round(spl["No Revisado"], 0))
+        if estado == "Por cobrar":
+            _row_fill(ws0, row_i, 1, 13, fill_green)
+        elif estado == "Devolución":
+            _row_fill(ws0, row_i, 1, 13, fill_red)
+        else:
+            _row_fill(ws0, row_i, 1, 13, fill_white)
+        row_i += 1
+
+    ws0.cell(row=row_i, column=1, value="TOTALES CAPÍTULO")
+    ws0.cell(row=row_i, column=3, value=round(tot_cc_cant, 4))
+    ws0.cell(row=row_i, column=4, value=round(tot_cc_cost, 0))
+    ws0.cell(row=row_i, column=5, value=round(tot_cb_cant, 4))
+    ws0.cell(row=row_i, column=6, value=round(tot_cb_cost, 0))
+    ws0.cell(row=row_i, column=7, value=round(tot_d_cant, 4))
+    ws0.cell(row=row_i, column=8, value=round(tot_d_cost, 0))
+    ws0.cell(row=row_i, column=10, value=round(tot_ap, 0))
+    ws0.cell(row=row_i, column=11, value=round(tot_pe, 0))
+    ws0.cell(row=row_i, column=12, value=round(tot_re, 0))
+    ws0.cell(row=row_i, column=13, value=round(tot_nr, 0))
+    _style_total_row(ws0, row_i, len(hdr1))
+    _border_range(ws0, r0, row_i, 1, len(hdr1))
+
+    # ── Hojas por ítem: análisis PK (por cobrar / devolución) ────────────────
+    tbl_cols = ["PK_Id", "Cant. ClaraCore", "Costo ClaraCore", "Cant. Cobrada", "Costo Cobrado", "Δ Cantidad", "Δ Costo", "Revisado"]
+
+    def _append_pk_table(ws, block_rows, title, fill_title, uniform_row_fill, is_subtotal=False, per_row_delta=False):
+        mr = ws.max_row + 1
+        if title:
+            ws.merge_cells(start_row=mr, start_column=1, end_row=mr, end_column=len(tbl_cols))
+            c = ws.cell(row=mr, column=1)
+            c.value = title
+            if fill_title:
+                c.fill = fill_title
+            c.font = font_bold
+            _border_range(ws, mr, mr, 1, len(tbl_cols))
+        ws.append(tbl_cols)
+        _style_header_row(ws, ws.max_row, len(tbl_cols))
+        for r in block_rows:
+            ws.append(
+                [
+                    r.get("pk_id"),
+                    r.get("cant_ppto"),
+                    r.get("costo_ppto"),
+                    r.get("cant_sicoe"),
+                    r.get("costo_sicoe"),
+                    r.get("delta_cant"),
+                    r.get("delta_costo"),
+                    r.get("revisado"),
+                ]
+            )
+            rr = ws.max_row
+            if per_row_delta:
+                _fill_data_row_by_delta(ws, rr, 1, len(tbl_cols), float(r.get("delta_costo") or 0))
+            elif uniform_row_fill:
+                _row_fill(ws, rr, 1, len(tbl_cols), uniform_row_fill)
+            else:
+                _row_fill(ws, rr, 1, len(tbl_cols), fill_white)
+            _border_range(ws, rr, rr, 1, len(tbl_cols))
+        if is_subtotal and block_rows:
+            if "DEVOL" in (title or ""):
+                label = f"Subtotal DEVOLUCIÓN ({len(block_rows)} PK)"
+            elif "POR COBRAR" in (title or ""):
+                label = f"Subtotal POR COBRAR ({len(block_rows)} PK)"
+            else:
+                label = f"Subtotal ({len(block_rows)} PK)"
+            ws.append(
+                [
+                    label,
+                    sum(r["cant_ppto"] for r in block_rows),
+                    sum(r["costo_ppto"] for r in block_rows),
+                    sum(r["cant_sicoe"] for r in block_rows),
+                    sum(r["costo_sicoe"] for r in block_rows),
+                    sum(r["delta_cant"] for r in block_rows),
+                    sum(r["delta_costo"] for r in block_rows),
+                    "",
+                ]
+            )
+            _style_total_row(ws, ws.max_row, len(tbl_cols))
+            _border_range(ws, ws.max_row, ws.max_row, 1, len(tbl_cols))
+
+    for it in items_sorted:
+        data = core_by_item[it]
+        rows = data.get("rows") or []
+        desc_item = data.get("descripcion_item") or ""
+        ws = wb.create_sheet(title=_xlsx_safe_sheet_name(it, "Item"))
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+        t1 = ws.cell(row=1, column=1)
+        t1.value = f"ANÁLISIS DE COBRO — {it} | {desc_item[:180]}"
+        t1.font = Font(bold=True, size=12)
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=8)
+        t2 = ws.cell(row=2, column=1)
+        t2.value = f"{capitulo} | Generado: {gen_ts}"
+        t2.font = Font(size=10, color="666666")
+
+        if rows:
+            s_cp = sum(float(r.get("cant_ppto") or 0) for r in rows)
+            s_co = sum(float(r.get("costo_ppto") or 0) for r in rows)
+            s_cc = sum(float(r.get("cant_sicoe") or 0) for r in rows)
+            s_ob = sum(float(r.get("costo_sicoe") or 0) for r in rows)
+            d_ct = s_cp - s_cc
+            d_cs = s_co - s_ob
+            ws.append([])
+            ws.append(["Cant. ClaraCore", "Costo ClaraCore", "Cant. Cobrada", "Costo Cobrado", "Δ Cantidad", "Δ Costo"])
+            rh = ws.max_row
+            _style_header_row(ws, rh, 6)
+            ws.append([round(s_cp, 3), round(s_co, 0), round(s_cc, 3), round(s_ob, 0), round(d_ct, 3), round(d_cs, 0)])
+            lr = ws.max_row
+            _fill_data_row_by_delta(ws, lr, 1, 6, d_cs)
+            _border_range(ws, rh, lr, 1, 6)
+
+        pos = [r for r in rows if (r.get("delta_costo") or 0) > 0]
+        neg = [r for r in rows if (r.get("delta_costo") or 0) < 0]
+        sum_pos_cost = sum(r["delta_costo"] for r in pos)
+        sum_neg_cost = sum(r["delta_costo"] for r in neg)
+
+        ws.append([])
+        if pos:
+            tit = f"POR COBRAR | Total: +${sum_pos_cost:,.0f}"
+            _append_pk_table(ws, pos, tit, fill_green, fill_green, True, False)
+            ws.append([])
+        if neg:
+            titn = f"DEVOLUCIÓN | Total: ${sum_neg_cost:,.0f}"
+            _append_pk_table(ws, neg, titn, fill_red, fill_red, True, False)
+        if not pos and not neg and rows:
+            rnote = ws.max_row + 1
+            ws.merge_cells(start_row=rnote, start_column=1, end_row=rnote, end_column=len(tbl_cols))
+            cn = ws.cell(row=rnote, column=1)
+            cn.value = "Listado completo (Δ costo = 0 o sin clasificar por signo):"
+            cn.font = font_bold
+            _border_range(ws, rnote, rnote, 1, len(tbl_cols))
+            _append_pk_table(ws, rows, "", None, None, False, True)
+
+    # ── Penúltima: presupuesto capítulo (completo) ──────────────────────────
+    ws_p = wb.create_sheet(title=_xlsx_safe_sheet_name("Presupuesto cap", "Presupuesto"))
+    if ppto_all:
+        keys = list(ppto_all[0].keys())
+        ws_p.append(keys)
+        _style_header_row(ws_p, 1, len(keys))
+        for r in ppto_all:
+            ws_p.append([r.get(k) for k in keys])
+        nc = len(keys)
+        _border_range(ws_p, 1, ws_p.max_row, 1, nc)
+        for rr in range(2, ws_p.max_row + 1):
+            _row_fill(ws_p, rr, 1, nc, fill_white)
+
+    # ── Última: obra (N3 aprobado) solo ítems del presupuesto ────────────────
+    ws_o = wb.create_sheet(title=_xlsx_safe_sheet_name("Sicoe obra items", "SicoeObra"))
+    obra_rows: List[dict] = []
+    if items_sorted:
+        for ci in range(0, len(items_sorted), 400):
+            chunk_items = items_sorted[ci : ci + 400]
+            off = 0
+            while True:
+
+                def _ob():
+                    return (
+                        supabase.table("so_registros")
+                        .select("*")
+                        .eq("contrato_id", contrato_id)
+                        .eq("capitulo", capitulo)
+                        .eq("nivel3_estado", "Aprobado")
+                        .in_("item_numero", chunk_items)
+                        .range(off, off + 999)
+                        .execute()
+                        .data
+                    )
+
+                batch = supabase_execute(_ob) or []
+                obra_rows.extend(batch)
+                if len(batch) < 1000:
+                    break
+                off += 1000
+    if obra_rows:
+        keys_o = list(obra_rows[0].keys())
+        ws_o.append(keys_o)
+        _style_header_row(ws_o, 1, len(keys_o))
+        for r in obra_rows:
+            row_vals = []
+            for k in keys_o:
+                v = r.get(k)
+                if isinstance(v, (dict, list)):
+                    row_vals.append(json.dumps(v, ensure_ascii=False)[:500])
+                else:
+                    row_vals.append(v)
+            ws_o.append(row_vals)
+        nco = len(keys_o)
+        _border_range(ws_o, 1, ws_o.max_row, 1, nco)
+        for rr in range(2, ws_o.max_row + 1):
+            _row_fill(ws_o, rr, 1, nco, fill_white)
+
+    for _sh in wb.worksheets:
+        _sh.sheet_view.showGridLines = False
+
     bio = io.BytesIO()
     wb.save(bio)
     safe_cap = re.sub(r"[^\w\-.]+", "_", str(capitulo or "cap"))[:40]
-    fn = f"ClaraCore_dashboard_{contrato_id}_{safe_cap}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
+    fn = f"ClaraCore_{safe_cap}_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.xlsx"
     return bio.getvalue(), fn
 
 
@@ -9339,8 +9990,7 @@ def dashboard_export_capitulo_obra(
 
     def _work():
         try:
-            data = _dashboard_pkid_tabla_obra_core(contrato_id, cap_copy, item_copy)
-            buf, fn = _build_dashboard_capitulo_xlsx(data, cap_copy, item_copy, contrato_id)
+            buf, fn = _build_dashboard_capitulo_xlsx(contrato_id, cap_copy, item_copy)
             _export_jobs[job_id] = {"estado": "listo", "buf": buf, "filename": fn}
         except Exception as e:
             _export_jobs[job_id] = {"estado": f"error:{e!s}", "buf": None, "filename": None}

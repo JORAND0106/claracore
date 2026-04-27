@@ -8623,6 +8623,15 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
     || (usuario?.permisos || []).some(p =>
       (p.funcion_nombre || '').toLowerCase() === 'informes ccd' && p.ver
     )
+  const _permisoInformesCcdFlag = (flag) => {
+    if (esDeveloper || esAdminCargo) return true
+    return (usuario?.permisos || []).some(
+      p => (p.funcion_nombre || '').toLowerCase() === 'informes ccd' && p[flag]
+    )
+  }
+  const puedeEditarInformesCcd = _permisoInformesCcdFlag('editar')
+  const puedeValidarInformesCcd = _permisoInformesCcdFlag('validar')
+  const puedeExportarInformesCcd = _permisoInformesCcdFlag('exportar')
   const tienePermisoPresupuesto = esDeveloper || (usuario?.permisos || []).some(p => {
     const nombre = (p.funcion_nombre || '').toLowerCase()
     return nombre === 'editar registros presupuesto' && p.ver
@@ -10405,7 +10414,16 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
         {moduloActivo === 'informes' && (
           tienePermisoInformesCcd ? (
-            <ModuloInformes t={t} usuario={usuario} token={getToken()} s={s} fontSize={fontSize} />
+            <ModuloInformes
+              t={t}
+              usuario={usuario}
+              token={getToken()}
+              s={s}
+              fontSize={fontSize}
+              puedeEditarCcd={puedeEditarInformesCcd}
+              puedeValidarCcd={puedeValidarInformesCcd}
+              puedeExportarCcd={puedeExportarInformesCcd}
+            />
           ) : (
             <div style={{ ...s.card, maxWidth: '560px', margin: '0 auto', textAlign: 'center', padding: '32px 24px' }}>
               <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: t.text, marginBottom: '10px' }}>Informes CCD</div>
@@ -10464,6 +10482,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           token={getToken()}
           onClose={() => setShowAdmin(false)}
           activeTheme={activeTheme}
+          t={t}
         />
       )}
     </div>
