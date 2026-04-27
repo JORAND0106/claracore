@@ -1240,6 +1240,9 @@ def _so_registros_q_y_capas_validacion(
             q = q.eq(prereq[0], prereq[1])
         if evp in ("No Revisado", "No Revisados"):
             q = _so_reg_or_pendiente_nivel(q, fld)
+            # N1: misma lógica que "cola" N2/N3: sin ítem asignado no entra a revisión de inspector
+            if fld == "nivel1_estado":
+                q = _so_reg_item_asignado(q)
         else:
             evq = _estado_registro_eq_desde_filtro_ui(evp)
             q = q.eq(fld, evq)
@@ -1304,6 +1307,14 @@ def _estado_filtro_omite_validacion_por_cargo(estado: Optional[str]) -> bool:
     if "sin asignar" in sl and "item" in sl.replace("í", "i"):
         return True
     return False
+
+
+def _estado_filtro_es_sin_asignar_item(estado: Optional[str]) -> bool:
+    """Filtro de grilla por cabecera 'Sin Asignar Ítem' (excl. Borrador)."""
+    if estado is None or not str(estado).strip():
+        return False
+    sl = str(estado).strip().lower()
+    return "sin asignar" in sl and "item" in sl.replace("í", "i")
 
 
 def _so_reportes_q_por_estado(q, estado: Optional[str]):
@@ -1579,6 +1590,9 @@ def _filtrar_registros_validacion_sicoe(
     out: List[dict] = []
     for reg in regs:
         if _es_validacion_avanzada(fld):
+            if not (reg.get("item_numero") or "").strip():
+                continue
+        if fld == "nivel1_estado" and ev in ("No Revisado", "No Revisados"):
             if not (reg.get("item_numero") or "").strip():
                 continue
         if prereq and reg.get(prereq[0]) != prereq[1]:
@@ -6536,6 +6550,10 @@ def buscar_reportes_obra(
             if not _ocultar_costo_rep:
                 for r in rows:
                     r["costo_directo_validacion"] = 0.0
+
+    # "Sin asignar ítem" aplica a registros: un reporte sin filas en so_registros no puede asignar ítem
+    if _estado_filtro_es_sin_asignar_item(estado):
+        rows = [r for r in rows if (r.get("num_registros") or 0) > 0]
 
     for r in rows:
         sub = r.pop("subcontratistas", None)
