@@ -1,0 +1,31 @@
+/**
+ * Respaldo offline (sin API) — alineado con backend/frases_pools.py; ampliar allí y copiar lote de vez en cuando.
+ */
+export const FRASES_OFFLINE_INICIO = [
+  { frase: 'Ladrillo a ladrillo, la mayor obra se hace con constancia, no con prisa.', autor: 'Aforismo popular', tipo: 'motivadora' },
+  { frase: 'El cimiento no se aprecia hasta que la tempestad lo pone a prueba.', autor: 'Refrán de ingeniería', tipo: 'reflexiva' },
+  { frase: 'La precisión de hoy evita el derroche de mañana.', autor: 'ClaraCore', tipo: 'motivadora' },
+  { frase: 'El trazo en el plano ahorra el error en el terreno.', autor: 'Dicho de topografía', tipo: 'motivadora' },
+  { frase: 'Lo que hoy cuesta medirlo, mañana cuesta rehacerlo.', autor: 'ClaraCore', tipo: 'reflexiva' },
+  { frase: 'Cada corte de metal es una pregunta al cálculo; no lo respondas a la suerte.', autor: 'Aforismo industrial', tipo: 'motivadora' },
+  { frase: 'Hacer bien la primera parte evita reparar toda la obra.', autor: 'Refrán de taller', tipo: 'motivadora' },
+  { frase: 'Más vale inspección diez minutos, que siete días reponiendo cimentación.', autor: 'Aforismo de interventoría', tipo: 'reflexiva' },
+  { frase: 'Trabaja como si fueras a poner allí el nombre de tu abuelo, no solo tu firma.', autor: 'Aforismo de ética de obra', tipo: 'motivadora' },
+  { frase: 'No hay tarea pequeña cuando la carga soporta vidas.', autor: 'ClaraCore', tipo: 'reflexiva' },
+  { frase: 'Confía en Jehová de todo corazón, y no en tu propia prudencia. Reconócelo en todos tus caminos, y él enderezará tus veredas.', autor: 'Proverbios 3:5-6 (RVR)', tipo: 'bíblica' },
+  { frase: 'Mas buscad primeramente el reino de Dios y su justicia, y todas estas cosas os serán añadidas.', autor: 'Mateo 6:33 (RVR)', tipo: 'bíblica' },
+  { frase: 'Aunque ande en valle de sombra de muerte, no temeré mal alguno, porque tú estarás conmigo; tu vara y tu cayado me infundirán aliento.', autor: 'Salmos 23:4 (RVR)', tipo: 'bíblica' },
+  { frase: 'Bienaventurados los de limpio corazón, porque ellos verán a Dios.', autor: 'Mateo 5:8 (RVR)', tipo: 'bíblica' },
+  { frase: 'El Señor es mi luz y mi salvación: ¿a quién temeré?', autor: 'Salmos 27:1 (RVR)', tipo: 'bíblica' },
+  { frase: 'Encomienda a Jehová tu camino, y confía en él, y él hará.', autor: 'Salmos 37:5 (RVR)', tipo: 'bíblica' },
+  { frase: 'Ama a Jehová tu Dios, de todo corazón, y de toda alma, y con todo el espíritu, y con todas tus fuerzas.', autor: 'Marcos 12:30 (RVR)', tipo: 'bíblica' },
+  { frase: 'Agradecesed en todo, porque ésta es la voluntad de Dios para con vosotros en Cristo Jesús.', autor: '1 Tesalonicenses 5:18 (RVR)', tipo: 'bíblica' },
+  { frase: 'Honra a tu padre y a tu madre, para que sean largos los días sobre la tierra que Jehová tu Dios te da.', autor: 'Éxodo 20:12 (RVR)', tipo: 'bíblica' },
+  { frase: 'Amarás a tu prójimo como a ti mismo.', autor: 'Levítico 19:18 (RVR)', tipo: 'bíblica' },
+  { frase: 'Cada nodo alineado es un nudo de confianza para el que vendrá después a mantenerlo.', autor: 'ClaraCore', tipo: 'reflexiva' },
+  { frase: 'La duda honesta a tiempo evita el error a destiempo en obra.', autor: 'ClaraCore', tipo: 'reflexiva' },
+  { frase: 'Cada escuadra bien usada, es un corte menos de culpa luego.', autor: 'Aforismo de carpintería', tipo: 'motivadora' },
+  { frase: 'Lo barato, si es mal, sale carísimo en papeleo, replanteo, y paciencia gasta.', autor: 'Refrán de obra pública', tipo: 'reflexiva' },
+  { frase: 'Hoy, que la bitácora tenga paz, la cuadrilla, claridad, y usted, la dicha de dejar rastro sólido.', autor: 'ClaraCore', tipo: 'motivadora' },
+  { frase: 'Agradécele al plano, que te habla bajito, antes que el muro hable duro al corregir.', autor: 'Dicho de diseño', tipo: 'motivadora' },
+]

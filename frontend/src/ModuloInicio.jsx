@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { API_BASE } from './apiBase'
 import { getClaraTypeScaleInline } from './typographyScale'
+import { FRASES_OFFLINE_INICIO } from './data/frasesOfflineInicio.js'
 const API_ANTHROPIC = `${API_BASE}/frase-del-dia`
 
 function buildfs(fontSize) {
@@ -397,6 +398,7 @@ function FraseDelDia({ t, fs, usuario }) {
     { frase: 'Los que esperan en el Señor tendrán nuevas fuerzas; levantarán alas como las águilas.', autor: 'Isaías 40:31', tipo: 'bíblica' },
     { frase: 'Fiel es Dios, que no dejará que sean probados más de lo que pueden resistir.', autor: '1 Corintios 10:13', tipo: 'bíblica' },
     { frase: 'El corazón del hombre piensa su camino, mas el Señor endereza sus pasos.', autor: 'Proverbios 16:9', tipo: 'bíblica' },
+    ...FRASES_OFFLINE_INICIO,
   ]
   const fallbackLocal = (fraseActual = null) => {
     const pool = FRASES_FALLBACK.filter(f => !fraseActual || f.frase !== fraseActual.frase)

@@ -1615,60 +1615,24 @@ def _filtrar_registros_validacion_capas_sicoe(
 
 @app.post("/frase-del-dia")
 def frase_del_dia(body: dict, current_user=Depends(get_current_user)):
-    frases_fallback = [
-        {"frase": "El avance de hoy construye el resultado de mañana.", "autor": "ClaraCore", "tipo": "motivadora"},
-        {"frase": "La disciplina diaria convierte grandes obras en realidad.", "autor": "ClaraCore", "tipo": "reflexiva"},
-        {"frase": "Todo tiene su tiempo, y todo lo que se quiere debajo del cielo tiene su hora.", "autor": "Eclesiastés 3:1", "tipo": "bíblica"},
-        {"frase": "La calidad no se improvisa: se decide en cada detalle.", "autor": "ClaraCore", "tipo": "reflexiva"},
-        {"frase": "Mantente firme: cada paso bien hecho cuenta.", "autor": "ClaraCore", "tipo": "motivadora"},
-    ]
-    def _fallback():
-        idx = datetime.utcnow().toordinal() % len(frases_fallback)
-        return frases_fallback[idx]
+    from frase_del_dia_sources import _pool_local_aleatoria, frase_dia_espanol
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        return _fallback()
-    nombre = body.get("nombre", "un profesional")
-    turno  = body.get("turno", "día")
-    dia    = body.get("dia", "hoy")
+    def _fallback_min():
+        return {
+            "frase": "El avance de hoy construye el resultado de mañana.",
+            "autor": "ClaraCore",
+            "tipo": "motivadora",
+        }
+
+    # Versículo RVR (es) desde la red, citas de autores en español, aforismos de obra — nada en inglés
     try:
-        res = httpx.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-haiku-4-5",
-                "max_tokens": 300,
-                "messages": [{
-                    "role": "user",
-                    "content": f"Genera una frase inspiradora, reflexiva o bíblica para {nombre} que trabaja en construcción de obras públicas. Hoy es {dia}, en la {turno}. Responde SOLO en este formato JSON sin backticks ni texto adicional: {{\"frase\":\"texto\",\"autor\":\"fuente\",\"tipo\":\"reflexiva|motivadora|bíblica\"}}"
-                }]
-            },
-            timeout=20.0
-        )
-        data = res.json()
-        if "content" not in data:
-            return _fallback()
-        import json as _json
-        texto = data["content"][0]["text"]
-        try:
-            parsed = _json.loads(texto.replace("```json","").replace("```","").strip())
-        except Exception:
-            return _fallback()
-        if not isinstance(parsed, dict) or not parsed.get("frase"):
-            return _fallback()
-        parsed["autor"] = parsed.get("autor") or "ClaraCore"
-        parsed["tipo"] = parsed.get("tipo") if parsed.get("tipo") in ["reflexiva", "motivadora", "bíblica"] else "reflexiva"
-        return parsed
-    except HTTPException:
-        raise
+        f = frase_dia_espanol()
+        if f and f.get("frase"):
+            return f
     except Exception as e:
-        print(f"WARNING /frase-del-dia fallback por error: {e}", flush=True)
-        return _fallback()
+        print(f"WARNING /frase-del-dia: {e}", flush=True)
+    p = _pool_local_aleatoria()
+    return p if p else _fallback_min()
 
 
 _SLOW_REQUEST_MS = int(os.getenv("CLARACORE_SLOW_REQUEST_MS", "8000"))
