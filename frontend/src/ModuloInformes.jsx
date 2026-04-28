@@ -1,5 +1,6 @@
 import { useState, useEffect, useId, useRef } from 'react'
 import { API_BASE as API } from './apiBase'
+import { formatCOP } from './utils/formatCOP'
 
 const FS = {
   small:  { base: 13, sub: 12, title: 20, section: 12 },
@@ -8,9 +9,7 @@ const FS = {
 }
 
 const _fmtCopEs = (n) =>
-  n == null || n === '' || (typeof n === 'number' && !Number.isFinite(n))
-    ? '—'
-    : new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Number(n))
+  n == null || n === '' || (typeof n === 'number' && !Number.isFinite(n)) ? '—' : formatCOP(n)
 const _fmtPctAiuIva = (frac) => {
   if (frac == null || frac === '' || !Number.isFinite(Number(frac))) return '—'
   const f = Number(frac)

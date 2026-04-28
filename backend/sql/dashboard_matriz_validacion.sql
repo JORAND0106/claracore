@@ -161,39 +161,39 @@ bloque_json AS (
     m.bloque,
     jsonb_build_object(
       'aprobado', jsonb_build_object(
-        'interventoria', round(m.aprobado_interventoria::numeric, 2),
-        'residente', round(m.aprobado_residente::numeric, 2),
-        'inspector', round(m.aprobado_inspector::numeric, 2)
+        'interventoria', round(m.aprobado_interventoria::numeric, 0),
+        'residente', round(m.aprobado_residente::numeric, 0),
+        'inspector', round(m.aprobado_inspector::numeric, 0)
       ),
       'pendiente', jsonb_build_object(
-        'interventoria', round(m.pendiente_interventoria::numeric, 2),
-        'residente', round(m.pendiente_residente::numeric, 2),
-        'inspector', round(m.pendiente_inspector::numeric, 2)
+        'interventoria', round(m.pendiente_interventoria::numeric, 0),
+        'residente', round(m.pendiente_residente::numeric, 0),
+        'inspector', round(m.pendiente_inspector::numeric, 0)
       ),
       'pendiente_item', jsonb_build_object(
         'interventoria', 0,
-        'residente', round(m.pendiente_item_residente::numeric, 2),
+        'residente', round(m.pendiente_item_residente::numeric, 0),
         'inspector', 0
       ),
       'no_revisado', jsonb_build_object(
-        'interventoria', round(m.no_revisado_interventoria::numeric, 2),
-        'residente', round(m.no_revisado_residente::numeric, 2),
-        'inspector', round(m.no_revisado_inspector::numeric, 2)
+        'interventoria', round(m.no_revisado_interventoria::numeric, 0),
+        'residente', round(m.no_revisado_residente::numeric, 0),
+        'inspector', round(m.no_revisado_inspector::numeric, 0)
       ),
       'rechazado', jsonb_build_object(
-        'interventoria', round(m.rechazado_interventoria::numeric, 2),
-        'residente', round(m.rechazado_residente::numeric, 2),
-        'inspector', round(m.rechazado_inspector::numeric, 2)
+        'interventoria', round(m.rechazado_interventoria::numeric, 0),
+        'residente', round(m.rechazado_residente::numeric, 0),
+        'inspector', round(m.rechazado_inspector::numeric, 0)
       ),
       'habilitado', jsonb_build_object(
-        'interventoria', round(m.habilitado_interventoria::numeric, 2),
-        'residente', round(m.habilitado_residente::numeric, 2),
-        'inspector', round(m.habilitado_inspector::numeric, 2)
+        'interventoria', round(m.habilitado_interventoria::numeric, 0),
+        'residente', round(m.habilitado_residente::numeric, 0),
+        'inspector', round(m.habilitado_inspector::numeric, 0)
       ),
       'otras_actas', jsonb_build_object(
-        'interventoria', round(ot.otras_interventoria::numeric, 2),
-        'residente', round(ot.otras_residente::numeric, 2),
-        'inspector', round(ot.otras_inspector::numeric, 2)
+        'interventoria', round(ot.otras_interventoria::numeric, 0),
+        'residente', round(ot.otras_residente::numeric, 0),
+        'inspector', round(ot.otras_inspector::numeric, 0)
       )
     ) AS j
   FROM main_full m

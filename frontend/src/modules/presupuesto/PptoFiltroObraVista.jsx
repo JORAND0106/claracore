@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import PptoFiltroMapaPk from './PptoFiltroMapaPk'
+import { formatCOPShort } from '../../utils/formatCOP'
 
 const inp = (t) => ({
   background: t.inputBg,
@@ -104,7 +105,7 @@ export default function PptoFiltroObraVista({
                   <span style={{ fontWeight: 700 }}>{open ? '▼' : '▶'}</span>{' '}
                   <span style={{ fontWeight: 600 }}>{c.capitulo?.length > 32 ? c.capitulo.slice(0, 32) + '…' : c.capitulo}</span>
                   <div style={{ fontSize: 'var(--cc-label)', color: t.textMuted, marginTop: 2 }}>
-                    {(c.total_registros ?? 0).toLocaleString('es-CO')} reg. · {fmtM(c.costo_total)}
+                    {(c.total_registros ?? 0).toLocaleString('es-CO')} reg. · {formatCOPShort(c.costo_total)}
                   </div>
                 </button>
                 {open && (
@@ -130,7 +131,7 @@ export default function PptoFiltroObraVista({
                             color: t.text,
                           }}
                         >
-                          <strong>{it.item}</strong> <span style={{ color: t.textMuted }}>· {fmtM(it.costo_total)}</span>
+                          <strong>{it.item}</strong> <span style={{ color: t.textMuted }}>· {formatCOPShort(it.costo_total)}</span>
                         </button>
                       ))
                     )}
@@ -290,12 +291,4 @@ export default function PptoFiltroObraVista({
       </div>
     </div>
   )
-}
-
-function fmtM(n) {
-  if (n == null || n === '') return '—'
-  if (n >= 1e9) return '$' + (n / 1e9).toFixed(1) + 'B'
-  if (n >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M'
-  if (n >= 1e3) return '$' + (n / 1e3).toFixed(0) + 'K'
-  return '$' + Math.round(n)
 }

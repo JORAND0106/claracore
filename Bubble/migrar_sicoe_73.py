@@ -13,6 +13,9 @@ Comportamiento:
   - Duplicados dentro del mismo archivo: gana la última línea leída.
   - Filas ya existentes en BD: se actualizan (upsert) con los datos del archivo.
 
+  Si el export incluye «42_NUM IMAGEN» o «42_IMAGEN», se guarda también en so_registros.foto_numero.
+  Para un archivo aparte «nombre_fotos», usar Bubble/migrar_foto_numero_nombre_fotos.py
+
 Orden: primero reportes (derivados de registros ± archivo opcional), luego registros (FK reporte_id).
 
 Nota sobre el nombre «73»: es el número RPO del acta (filtro de negocio), no el contrato.
@@ -406,6 +409,11 @@ def map_registro_row(
 
     old_imagen = strv(r.get("Old IMAGEN"))
     foto_url = ("https:" + old_imagen) if old_imagen else None
+    foto_numero = intv(r.get("42_NUM IMAGEN"))
+    if foto_numero is None:
+        foto_numero = intv(r.get("42_IMAGEN"))
+    if foto_numero is None:
+        foto_numero = intv(r.get("42_imagen"))
 
     row = {
         "contrato_id": CONTRATO_ID,
@@ -445,6 +453,7 @@ def map_registro_row(
         "nivel3_estado": normalizar_estado_validacion(r.get("32_1_ESTADO INTERVENTORIA")),
         "sub_estado": normalizar_estado_validacion(r.get("33_1_ESTADO SUB CONTRATISTA")),
         "foto_url": foto_url,
+        "foto_numero": foto_numero,
         "enlace_soporte": strv(r.get("29_SOPORTE")),
         "coord_lat": floatv(r.get("47_2_COORDENADA LATITUD")) if abs(floatv(r.get("47_2_COORDENADA LATITUD")) or 0) < 10000 else None,
         "coord_lng": floatv(str(r.get("47_1_COORDENADA GEO") or "").split(",")[-1].strip()) if r.get("47_1_COORDENADA GEO") else None,

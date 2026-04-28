@@ -6,6 +6,7 @@ import "mapbox-gl/dist/mapbox-gl.css"
 import * as XLSX from "xlsx"
 import ExcelJS from "exceljs"
 import { API_BASE } from '../../apiBase'
+import { formatCOP, formatCOPShort } from '../../utils/formatCOP'
 import EmojiPicker from '../../EmojiPicker'
 import PptoFiltroObraVista from './PptoFiltroObraVista'
 
@@ -282,15 +283,9 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
     '#44BBA4','#E94F37','#393E41','#F5A623','#7B2D8B',
   ]
 
-  const fmt  = (n) => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '-'
+  const fmt  = (n) => (n != null ? formatCOP(n) : '-')
   const fmtN = (n) => n != null ? new Intl.NumberFormat('es-CO',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n) : '-'
-  const fmtM = (n) => {
-    if (n == null) return ''
-    if (n >= 1e9) return `$${(n/1e9).toFixed(1)}B`
-    if (n >= 1e6) return `$${(n/1e6).toFixed(1)}M`
-    if (n >= 1e3) return `$${(n/1e3).toFixed(0)}K`
-    return `$${Math.round(n)}`
-  }
+  const fmtM = (n) => (n == null ? '' : formatCOPShort(n))
 
   // ── Carga inicial ──────────────────────────────────────────────────────────
   useEffect(() => { if (contratoId) cargarCapitulos() }, [contratoId])
@@ -1438,7 +1433,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         const espesor = (dim?.espesor != null ? dim.espesor : (r.espesor ?? 0)) || 0
         const area    = (dim?.area_long_nod != null ? dim.area_long_nod : (r.area_long_nod ?? 0)) || 0
         const vlr     = precioSeleccionado?.precio_unitario ?? r.vlr_unitario ?? 0
-        const cant    = (ancho > 0 || espesor > 0) ? Math.round(area * ancho * espesor * 10000) / 10000 : area
+        const cant    = (ancho > 0 || espesor > 0) ? Math.round(area * ancho * espesor * 100) / 100 : Math.round(area * 100) / 100
         const costo   = Math.round(cant * vlr)
         return {
           ...r,
@@ -1842,7 +1837,7 @@ async function restaurar(id) {
                 {[r.area_long_nod, r.ancho, r.espesor].filter(Boolean).join(' × ')}
               </div>
               <div style={{ flex:1, fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'right' }}>
-                {r.cant_total != null ? Number(r.cant_total).toLocaleString('es-CO', {maximumFractionDigits:3}) : '—'}
+                {r.cant_total != null ? Number(r.cant_total).toLocaleString('es-CO', {maximumFractionDigits:2}) : '—'}
               </div>
               {nivelInfo.verValoresEconomicos && (
               <div style={{ flex:1, fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'right' }}>
@@ -2287,7 +2282,7 @@ async function restaurar(id) {
                                   )}
                                 </div>
                                 <div style={{ flex:1, fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'right' }}>
-                                  {r.cant_total != null ? Number(r.cant_total).toLocaleString('es-CO', {maximumFractionDigits:3}) : '—'}
+                                  {r.cant_total != null ? Number(r.cant_total).toLocaleString('es-CO', {maximumFractionDigits:2}) : '—'}
                                 </div>
                                 {nivelInfo.verValoresEconomicos && (
                                 <div style={{ flex:1, fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'right' }}>
@@ -2511,7 +2506,7 @@ async function restaurar(id) {
                 <div style={{ display:'flex', gap:'8px', marginBottom:'16px' }}>
                   <div style={{ flex:1, background:t.bg, borderRadius:'8px', padding:'8px 12px' }}>
                     <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>CANT. CALCULADA</div>
-                    <div style={{ fontSize:'var(--cc-md)', fontWeight:'800', color:t.text, marginTop:'2px' }}>{_cant.toLocaleString('es-CO', {maximumFractionDigits:3})}</div>
+                    <div style={{ fontSize:'var(--cc-md)', fontWeight:'800', color:t.text, marginTop:'2px' }}>{_cant.toLocaleString('es-CO', {maximumFractionDigits:2})}</div>
                   </div>
                   <div style={{ flex:1, background:t.bg, borderRadius:'8px', padding:'8px 12px' }}>
                     <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>COSTO DIRECTO</div>
@@ -2716,7 +2711,7 @@ async function restaurar(id) {
                             const area = Number.isFinite(pArea) ? pArea : 0
                             const ancho = Number.isFinite(pAncho) ? pAncho : 0
                             const esp   = Number.isFinite(pEsp) ? pEsp : 0
-                            const cant  = (ancho > 0 || esp > 0) ? Math.round(area * ancho * esp * 10000) / 10000 : area
+                            const cant  = (ancho > 0 || esp > 0) ? Math.round(area * ancho * esp * 100) / 100 : Math.round(area * 100) / 100
                             const costo = Math.round(cant * (r.vlr_unitario || 0))
                             const body  = {
                               area_long_nod: Number.isFinite(pArea) ? pArea : null,

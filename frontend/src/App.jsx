@@ -13,6 +13,7 @@ import EmojiPicker from './EmojiPicker'
 import ExcelJS from 'exceljs'
 import { API_BASE, logApiFailure } from './apiBase'
 import { applyClaraTypography, getDashTypoUI } from './typographyScale'
+import { formatCOP, formatCOPShort } from './utils/formatCOP'
 
 const _VITE_MAPBOX = import.meta.env.VITE_MAPBOX_TOKEN
 if (_VITE_MAPBOX) mapboxgl.accessToken = _VITE_MAPBOX
@@ -1202,7 +1203,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   const cantTotal   = calcCantTotal(longitud, ancho, espesor, cantidad)
   const vlrUnitario = itemSel?.precio_unitario ?? registro.vlr_unitario ?? 0
-  const costoDirecto = Math.round(cantTotal * vlrUnitario * 100) / 100
+  const costoDirecto = Math.round(cantTotal * vlrUnitario)
 
   const tieneCoordenadas = (reporte.puntos || []).length > 0
 
@@ -1273,6 +1274,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           espesor:         espesor  !== '' ? parseFloat(espesor)  : null,
           cantidad:        cantidad !== '' ? parseFloat(cantidad) : null,
           cantidad_total:  cantTotal,
+          ...( (itemSel?.item_numero || registro.item_numero) && vlrUnitario != null && !Number.isNaN(Number(vlrUnitario))
+            ? { costo_directo: Math.round(cantTotal * Number(vlrUnitario)) }
+            : {}),
           observacion:     observacion || null,
         })
       })
@@ -1427,7 +1431,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }
 
   const C = { borde: t.border, label: t.textMuted }
-  const fmtD = v => v != null ? new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format(v) : '—'
+  const fmtD = v => v != null ? formatCOP(v) : '—'
 
   const CampoRO = ({ label, valor, color }) => (
     <div>
@@ -2251,6 +2255,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [modalTrazabilidadSicoe, setModalTrazabilidadSicoe] = useState(null) // { reg }
   const [comentariosData, setComentariosData]      = useState([])
   const [loadingComentarios, setLoadingComentarios] = useState(false)
+  const [comentariosError, setComentariosError]    = useState(null)
   const [popupMasivo, setPopupMasivo]              = useState(null)   // { estado } o null
   const [msgMasivo, setMsgMasivo]                  = useState('')
   const [ejecutandoMasivo, setEjecutandoMasivo]    = useState(false)
@@ -2336,6 +2341,36 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       setReporte(data)
       setRegistros((data.registros || []).map((row) => ({ ...row })))
     } catch(e) {}
+  }
+
+  const cargarComentariosRegistro = async (regId, rolOrigen) => {
+    setComentariosError(null)
+    setLoadingComentarios(true)
+    setComentariosData([])
+    try {
+      const res = await fetch(
+        `${API_URL}/sicoe-obra/${contrato_id}/registros/${regId}/comentarios?rol_solicitante=${encodeURIComponent(rolOrigen)}`,
+        { headers: hdrs },
+      )
+      const d = await res.json().catch(() => null)
+      if (!res.ok) {
+        const msg =
+          typeof d?.detail === 'string'
+            ? d.detail
+            : Array.isArray(d?.detail)
+              ? d.detail.map((x) => x?.msg || JSON.stringify(x)).join(', ')
+            : d?.message || `Error ${res.status}`
+        setComentariosError(msg)
+        setComentariosData([])
+        return
+      }
+      setComentariosData(Array.isArray(d) ? d : [])
+    } catch {
+      setComentariosError('No se pudo cargar la lista de comentarios.')
+      setComentariosData([])
+    } finally {
+      setLoadingComentarios(false)
+    }
   }
 
   const devEliminarRegistro = async (registroId) => {
@@ -3245,12 +3280,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           e.stopPropagation()
                           const rolOrigen = determinarNivelValidacion(usuario).rolOrigen
                           setModalComentarios({ reg, rolOrigen })
-                          setComentariosData([])
-                          setLoadingComentarios(true)
-                          fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}/comentarios?rol_solicitante=${rolOrigen}`, { headers: hdrs })
-                            .then(r => r.json())
-                            .then(d => { setComentariosData(Array.isArray(d) ? d : []); setLoadingComentarios(false) })
-                            .catch(() => setLoadingComentarios(false))
+                          cargarComentariosRegistro(reg.id, rolOrigen)
                         }}
                         style={{ background:'none', border:'none', cursor:'pointer', padding:'2px 4px',
                                  fontSize:'var(--cc-md)', color: reg.num_comentarios > 0 ? '#10B981' : t.textMuted, flexShrink:0, lineHeight:1, position:'relative' }}
@@ -3397,12 +3427,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           e.stopPropagation()
                           const rolOrigen = determinarNivelValidacion(usuario).rolOrigen
                           setModalComentarios({ reg, rolOrigen })
-                          setComentariosData([])
-                          setLoadingComentarios(true)
-                          fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}/comentarios?rol_solicitante=${rolOrigen}`, { headers: hdrs })
-                            .then(r => r.json())
-                            .then(d => { setComentariosData(Array.isArray(d) ? d : []); setLoadingComentarios(false) })
-                            .catch(() => setLoadingComentarios(false))
+                          cargarComentariosRegistro(reg.id, rolOrigen)
                         }}
                         style={{ background:'none', border:'none', cursor:'pointer', padding:'2px 4px',
                                  fontSize:'var(--cc-md)', color: reg.num_comentarios > 0 ? '#10B981' : t.textMuted, flexShrink:0, lineHeight:1, position:'relative' }}
@@ -3470,23 +3495,35 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         const rolOrigen = modalComentarios.rolOrigen
         return (
           <div style={{ position:'fixed', inset:0, zIndex:10200, background:'rgba(0,0,0,0.6)', display:'flex', alignItems:'center', justifyContent:'center' }}
-            onClick={() => setModalComentarios(null)}>
+            onClick={() => { setComentariosError(null); setModalComentarios(null) }}>
             <div style={{ background:t.bgCard, border:`1.5px solid ${color}44`, borderRadius:'16px', padding:'24px', width:'560px', maxWidth:'96vw', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
               onClick={e => e.stopPropagation()}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
                 <div style={{ fontSize:'var(--cc-md)', fontWeight:'700', color }}>
                   💬 Comentarios · Registro #{modalComentarios.reg.numero_registro}
                 </div>
-                <button onClick={() => setModalComentarios(null)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
+                <button onClick={() => { setComentariosError(null); setModalComentarios(null) }} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
               </div>
               <div style={{ overflowY:'auto', flex:1, display:'flex', flexDirection:'column', gap:'12px', paddingRight:'4px', minHeight:0 }}>
                 {loadingComentarios
                   ? <div style={{ textAlign:'center', padding:'30px', color:t.textMuted }}>Cargando...</div>
                   : comentariosData.length === 0
                   ? <div style={{ textAlign:'center', padding:'28px 16px' }}>
-                      <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, marginBottom:'16px' }}>
-                        Aún no hay comentarios en este registro.
-                      </div>
+                      {comentariosError && (
+                        <div style={{ fontSize:'var(--cc-sm)', color:'#b91c1c', marginBottom:'12px', lineHeight:1.5 }}>
+                          {comentariosError}
+                        </div>
+                      )}
+                      {!comentariosError && (
+                        <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, marginBottom:'16px' }}>
+                          Aún no hay comentarios en este registro.
+                        </div>
+                      )}
+                      {!comentariosError && modalComentarios.reg.num_comentarios > 0 && (
+                        <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginBottom:'14px', lineHeight:1.45 }}>
+                          El contador muestra anotaciones en este registro. Si no ves ninguna, revisa la trazabilidad (📜 en la fila) o vuelve a abrir el modal tras actualizar.
+                        </div>
+                      )}
                       <button
                         type="button"
                         disabled={!nivelInfo.nivelValidacion}
@@ -3541,10 +3578,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                                 method:'POST', headers:{...hdrs,'Content-Type':'application/json'},
                                 body: JSON.stringify({ mensaje: msg, rol_origen: rolOrigen })
                               })
-                              setLoadingComentarios(true)
-                              const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${modalComentarios.reg.id}/comentarios?rol_solicitante=${rolOrigen}`, { headers: hdrs })
-                              if (res.ok) setComentariosData(await res.json())
-                              setLoadingComentarios(false)
+                              await cargarComentariosRegistro(modalComentarios.reg.id, rolOrigen)
                             }
                           }}
                           style={{ flex:1, background:t.inputBg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', fontSize:'var(--cc-sm)', color:t.text }}
@@ -3612,14 +3646,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               setPopupNuevoComentObra(null)
               await recargar()
               if (modalComentarios?.reg?.id === reg.id) {
-                setLoadingComentarios(true)
-                const rolOrigen = modalComentarios.rolOrigen
-                const rList = await fetch(
-                  `${API_URL}/sicoe-obra/${contrato_id}/registros/${reg.id}/comentarios?rol_solicitante=${rolOrigen}`,
-                  { headers: hdrs },
-                )
-                if (rList.ok) setComentariosData(await rList.json())
-                setLoadingComentarios(false)
+                await cargarComentariosRegistro(reg.id, modalComentarios.rolOrigen)
               }
             } catch (e) {
               alert(e?.message || String(e))
@@ -4054,7 +4081,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     }
   }
 
-  const fmtPesos = v => '$' + Math.round(v || 0).toLocaleString('es-CO')
+  const fmtPesos = v => formatCOP(Number(v) || 0)
 
   const verEco = nivelInfo.verValoresEconomicos
 
@@ -7231,7 +7258,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               <div style={{ padding:'10px 14px', background:t.bg, borderRadius:'8px', display:'flex', justifyContent:'space-between' }}>
                 <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, fontWeight:'600' }}>CANTIDAD TOTAL</span>
                 <span style={{ fontSize:'var(--cc-lg)', fontWeight:'800', color:'#10B981' }}>
-                  {registros[modalRegistro].cantidad_total != null ? Number(registros[modalRegistro].cantidad_total).toFixed(4) : '—'}
+                    {registros[modalRegistro].cantidad_total != null ? Number(registros[modalRegistro].cantidad_total).toFixed(2) : '—'}
                 </span>
               </div>
               {/* Observación */}
@@ -7629,7 +7656,7 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
     }
   }, [loading])
 
-  const fmt = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+  const fmt = n => n != null ? formatCOP(n) : '—'
 
   return (
     <div style={{ position:'relative', height:'calc(100vh - 140px)', borderRadius:'12px', overflow:'hidden', border:`1px solid ${t.border}` }}>
@@ -9051,8 +9078,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           <ModuloInicio t={t} usuario={usuario} fontSize={fontSize} puedePublicarNovedades={puedePublicarNovedadesInicio} token={getToken()} />
         )}
         {moduloActivo === 'dashboard' && (() => {
-          const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
-          const fmtM = n => { if(!n) return '$0'; if(n>=1e9) return `$${(n/1e9).toFixed(1)}B`; if(n>=1e6) return `$${(n/1e6).toFixed(1)}M`; if(n>=1e3) return `$${(n/1e3).toFixed(0)}K`; return `$${Math.round(n)}` }
+          const fmtD = n => n != null ? formatCOP(n) : '—'
+          const fmtM = n => formatCOPShort(n)
           const ppto  = kpiPpto?.costo_total  || 0
           const cobro = kpiCobro?.total_cobrado || 0
           const delta = ppto - cobro
@@ -9716,7 +9743,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         const totalCostCobro  = filas.reduce((s,f) => s + (f.costo_sicoe||0), 0)
                         const totalDeltaCant  = filas.reduce((s,f) => s + (f.delta_cant ?? ((f.cant_ppto||0)-(f.cant_sicoe||0))), 0)
                         const totalDeltaCosto = filas.reduce((s,f) => s + (f.delta_costo ?? ((f.costo_ppto||0)-(f.costo_sicoe||0))), 0)
-                        const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+                        const fmtD = n => n != null ? formatCOP(n) : '—'
                         return (
                           <div style={{ display:'flex', alignItems:'center', gap:'6px', marginBottom:'12px', flexWrap:'wrap' }}>
                             <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:'#0077B6', background:'#0077B618', borderRadius:'20px', padding:'3px 10px' }}>Cant SICOE: {totalCantSicoe.toFixed(2)}</span>
@@ -9747,7 +9774,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                           const BAR_W = 26, GAP = 10, PAD_L = 8, PAD_R = 8, H = 240, PAD_T = 14, PAD_B = 32
                           const totalW = PAD_L + slice.length * (BAR_W*2 + GAP + 8) + PAD_R
                           const scaleH = v => PAD_T + (1 - v/maxV) * (H - PAD_T - PAD_B)
-                          const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+                          const fmtD = n => n != null ? formatCOP(n) : '—'
                           return (
                             <div style={{ marginTop:'8px' }}>
                               {totalPags > 1 && (
@@ -9820,7 +9847,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                                 {(dashTabla.rows || dashTabla.filas || []).map((row, i) => {
                                   const dCant  = row.delta_cant  ?? ((row.cant_ppto||0)-(row.cant_sicoe||0))
                                   const dCosto = row.delta_costo ?? ((row.costo_ppto||0)-(row.costo_sicoe||0))
-                                  const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+                                  const fmtD = n => n != null ? formatCOP(n) : '—'
                                   return (
                                     <tr key={i} style={{ background: i%2===0?'transparent':t.bg+'88' }}>
                                       <td style={{ padding:'5px 8px', fontWeight:'600', color:t.primary, textAlign:'right' }}>{row.pk_id||row.id_pol||'—'}</td>
@@ -9848,8 +9875,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             </>}
 
             {dashTab === 'analisis' && (() => {
-              const fmtD2 = n => n!=null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
-              const fmtM2 = n => { if(n==null) return '$0'; const abs=Math.abs(n); const sign=n<0?'-':''; if(abs>=1e9) return `${sign}$${(abs/1e9).toFixed(1)}B`; if(abs>=1e6) return `${sign}$${(abs/1e6).toFixed(1)}M`; if(abs>=1e3) return `${sign}$${(abs/1e3).toFixed(0)}K`; return `${sign}$${Math.round(abs)}` }
+              const fmtD2 = n => n!=null ? formatCOP(n) : '—'
+              const fmtM2 = n => formatCOPShort(n)
               const nSobre = analisisFiltrado.filter(r=>r.estado==='SOBRECOBRO').length
               const nSub   = analisisFiltrado.filter(r=>r.estado==='SUBCOBRO').length
               const nEq    = analisisFiltrado.filter(r=>r.estado==='EQUILIBRIO').length
@@ -10055,8 +10082,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             })()}
 
             {dashTab === 'liquidacion' && usuario?.contrato_fase === 'LIQUIDACION' && (() => {
-              const fmtD2 = n => n!=null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
-              const fmtM2 = n => { if(n==null) return '$0'; const abs=Math.abs(n); const sign=n<0?'-':''; if(abs>=1e9) return `${sign}$${(abs/1e9).toFixed(1)}B`; if(abs>=1e6) return `${sign}$${(abs/1e6).toFixed(1)}M`; if(abs>=1e3) return `${sign}$${(abs/1e3).toFixed(0)}K`; return `${sign}$${Math.round(abs)}` }
+              const fmtD2 = n => n!=null ? formatCOP(n) : '—'
+              const fmtM2 = n => formatCOPShort(n)
               const nSuper  = liqFiltrado.filter(r=>r.categoria==='SUPERCOBRO').length
               const nDev    = liqFiltrado.filter(r=>r.categoria==='DEVOLUCION').length
               const nCobrar = liqFiltrado.filter(r=>r.categoria==='POR_COBRAR').length
@@ -10262,7 +10289,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>⏳ Cargando...</div>
               ) : liqMapaPopup.data ? (() => {
                 const { ppto, cobro, totales } = liqMapaPopup.data
-                const fmtD3 = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+                const fmtD3 = n => n != null ? formatCOP(n) : '—'
                 const fmtN3 = n => n != null ? Number(n).toFixed(2) : '—'
                 const thS = { padding:'6px 10px', fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
                 const tdS = { padding:'6px 10px', fontSize:'var(--cc-label)', color:t.text, borderBottom:`1px solid ${t.border}` }
@@ -10348,7 +10375,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>⏳ Cargando...</div>
               ) : popupPkid.data ? (() => {
                 const { ppto, cobro, totales } = popupPkid.data
-                const fmtD = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+                          const fmtD = n => n != null ? formatCOP(n) : '—'
                 const fmtN = n => n != null ? Number(n).toFixed(2) : '—'
                 const thS = { padding:'6px 10px', fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
                 const tdS = { padding:'6px 10px', fontSize:'var(--cc-label)', color:t.text, borderBottom:`1px solid ${t.border}` }
@@ -10466,7 +10493,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>⏳ Cargando...</div>
               ) : analisisMapaPopup.data ? (() => {
                 const { ppto, cobro, totales } = analisisMapaPopup.data
-                const fmtD3 = n => n != null ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(n) : '—'
+                const fmtD3 = n => n != null ? formatCOP(n) : '—'
                 const fmtN3 = n => n != null ? Number(n).toFixed(2) : '—'
                 const thS = { padding:'6px 10px', fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
                 const tdS = { padding:'6px 10px', fontSize:'var(--cc-label)', color:t.text, borderBottom:`1px solid ${t.border}` }
@@ -10554,7 +10581,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   ['Nodo Inicio', dashDetallePpto.no_inicio],
                   ['Nodo Final',  dashDetallePpto.no_final],
                   ['Cantidad',    dashDetallePpto.cant_total],
-                  ['Costo Directo', new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(dashDetallePpto.costo_directo || 0)],
+                  ['Costo Directo', formatCOP(dashDetallePpto.costo_directo || 0)],
                   ['Ítem', dashDetallePpto.item],
                   ['Descripción', dashDetallePpto.descripcion],
                 ].map(([label, val]) => val ? (

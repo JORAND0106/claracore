@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, startTransition } from "react
 import * as XLSX from "xlsx";
 import mapboxgl from "mapbox-gl";
 import { API_BASE } from "./apiBase";
+import { formatCOP } from "./utils/formatCOP";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -2037,7 +2038,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
   const lbl = { fontSize: 11, fontWeight: 700, color: '#4a7a87', letterSpacing: 1, display: 'block', marginBottom: 4 };
   const _fmtCOP0 = (n) => {
     if (n == null || n === '' || !Number.isFinite(Number(n))) return '—';
-    return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Math.round(Number(n)));
+    return formatCOP(n);
   };
 
   function tasaYmontosResumenListado(c) {
@@ -2049,7 +2050,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     if (c.iva != null && c.iva !== '' && !Number.isNaN(Number(c.iva))) {
       partes.push(`IVA ${(Number(c.iva) * 100).toFixed(2).replace(/\.?0+$/, '')}%`);
     }
-    const cop = (v) => (v != null && v !== '' && !Number.isNaN(Number(v)) ? new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(Number(v)) : null);
+    const cop = (v) => (v != null && v !== '' && !Number.isNaN(Number(v)) ? formatCOP(v) : null);
     if (c.costo_directo_contrato != null && c.costo_directo_contrato !== '') { const t = cop(c.costo_directo_contrato); if (t) partes.push(`CD contrato: ${t}`); }
     if (c.valor_componente_ambiental != null && c.valor_componente_ambiental !== '') { const t = cop(c.valor_componente_ambiental); if (t) partes.push(`A: ${t}`); }
     if (c.valor_componente_social != null && c.valor_componente_social !== '') { const t = cop(c.valor_componente_social); if (t) partes.push(`S: ${t}`); }

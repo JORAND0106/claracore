@@ -1,6 +1,5 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from 'react'
 import { API_BASE } from './apiBase'
-import { getDashTypoUI } from './typographyScale'
 
 const API = API_BASE
 const API_FALLBACK = 'https://claracore-backend.azurewebsites.net'
@@ -47,13 +46,390 @@ function agruparAZ(items) {
 
 /** Bloques por defecto JSON */
 function bloqueVacio(tipo) {
-  if (tipo === 'texto') return { tipo: 'texto', contenido: '' }
-  if (tipo === 'subtitulo') return { tipo: 'subtitulo', contenido: '' }
-  return { tipo: 'imagen', url: '', caption: '' }
+  const id =
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `bk-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+  if (tipo === 'texto') return { _key: id, tipo: 'texto', contenido: '' }
+  if (tipo === 'subtitulo') return { _key: id, tipo: 'subtitulo', contenido: '' }
+  return { _key: id, tipo: 'imagen', url: '', caption: '' }
+}
+
+/**
+ * Agrupa bloques para la lectura: sección (subtítulo + párrafos siguientes),
+ * párrafos iniciales sin subtítulo, e imagen + pie como tarjeta propia.
+ */
+function buildGuiaBlockGroups(bloques) {
+  const arr = Array.isArray(bloques) ? bloques : []
+  const groups = []
+  let i = 0
+  while (i < arr.length) {
+    const raw = arr[i]
+    const tipo = (raw && raw.tipo) || 'texto'
+    if (tipo === 'imagen') {
+      groups.push({ kind: 'media', block: raw })
+      i++
+      continue
+    }
+    if (tipo === 'subtitulo') {
+      const title = raw.contenido || ''
+      i++
+      const paragraphs = []
+      while (i < arr.length) {
+        const t2 = (arr[i] && arr[i].tipo) || 'texto'
+        if (t2 !== 'texto') break
+        paragraphs.push(arr[i])
+        i++
+      }
+      groups.push({ kind: 'section', title, paragraphs })
+      continue
+    }
+    const paragraphs = []
+    while (i < arr.length) {
+      const t2 = (arr[i] && arr[i].tipo) || 'texto'
+      if (t2 !== 'texto') break
+      paragraphs.push(arr[i])
+      i++
+    }
+    if (paragraphs.length) groups.push({ kind: 'prose', paragraphs })
+  }
+  return groups
+}
+
+/** Ancla por bloque agrupado (p. ej. enlaces profundos #guia-bloque-0). */
+function anchorIdGuiaGrupo(gi) {
+  return `guia-bloque-${gi}`
+}
+
+function numeroSeccionParaGrupo(grupos, gi) {
+  if (!grupos[gi] || grupos[gi].kind !== 'section') return null
+  let n = 0
+  for (let i = 0; i <= gi; i++) {
+    if (grupos[i]?.kind === 'section') n += 1
+  }
+  return n
+}
+
+function renderGuiaGrupo(t, grupos, g, gi) {
+  const nid = anchorIdGuiaGrupo(gi)
+  if (g.kind === 'section') {
+    const n = numeroSeccionParaGrupo(grupos, gi) || 0
+    return (
+      <article
+        id={nid}
+        style={{
+          marginBottom: 'var(--cc-space-4)',
+          borderRadius: '14px',
+          border: `1px solid ${t.border}`,
+          overflow: 'hidden',
+          background: t.bgCard,
+          boxShadow: `0 6px 24px rgba(15,23,42,0.06), inset 0 1px 0 rgba(255,255,255,0.45)`,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '12px',
+            padding: 'var(--cc-space-3) var(--cc-space-3)',
+            background: `linear-gradient(100deg, ${t.primary}12 0%, ${t.primaryLight || t.primary}0f 52%, transparent 100%)`,
+            borderLeft: `4px solid ${t.primary}`,
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              flexShrink: 0,
+              width: '32px',
+              height: '32px',
+              borderRadius: '10px',
+              background: `linear-gradient(145deg, ${t.primary}, ${t.primaryLight || t.primary})`,
+              color: '#fff',
+              fontSize: 'var(--cc-sm)',
+              fontWeight: '800',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: `0 4px 12px ${t.primary}55`,
+            }}
+          >
+            {n}
+          </span>
+          <h3
+            style={{
+              margin: '2px 0 0',
+              fontSize: 'var(--cc-lg)',
+              fontWeight: '800',
+              color: t.primary,
+              lineHeight: 1.35,
+            }}
+          >
+            {g.title}
+          </h3>
+        </div>
+        {g.paragraphs.length > 0 ? (
+          <div style={{ padding: '0 var(--cc-space-3) var(--cc-space-3)' }}>
+            {g.paragraphs.map((p, pi) => (
+              <p
+                key={pi}
+                style={{
+                  fontSize: 'var(--cc-body)',
+                  color: t.text,
+                  lineHeight: 1.65,
+                  whiteSpace: 'pre-wrap',
+                  margin: pi > 0 ? 'var(--cc-space-3) 0 0' : 0,
+                }}
+              >
+                {p.contenido || ''}
+              </p>
+            ))}
+          </div>
+        ) : null}
+      </article>
+    )
+  }
+  if (g.kind === 'prose') {
+    return (
+      <div
+        id={nid}
+        style={{
+          marginBottom: 'var(--cc-space-4)',
+          padding: 'var(--cc-space-3)',
+          borderRadius: '12px',
+          background: `${t.primary}0a`,
+          border: `1px dashed ${t.border}`,
+        }}
+      >
+        {g.paragraphs.map((p, pi) => (
+          <p
+            key={pi}
+            style={{
+              fontSize: 'var(--cc-body)',
+              color: t.text,
+              lineHeight: 1.65,
+              whiteSpace: 'pre-wrap',
+              margin: pi > 0 ? 'var(--cc-space-3) 0 0' : 0,
+            }}
+          >
+            {p.contenido || ''}
+          </p>
+        ))}
+      </div>
+    )
+  }
+  const b = g.block
+  const hasUrl = b && b.url
+  return (
+    <figure
+      id={nid}
+      style={{
+        margin: '0 0 var(--cc-space-4)',
+        borderRadius: '16px',
+        overflow: 'hidden',
+        border: `1px solid ${t.border}`,
+        background: t.bgCard,
+        boxShadow: `0 10px 40px rgba(0,0,0,0.08), 0 0 0 1px ${t.primary}12`,
+      }}
+    >
+      <div
+        style={{
+          padding: 'var(--cc-space-2)',
+          background: `linear-gradient(180deg, ${t.primary}18, ${t.primary}06 40%, transparent)`,
+        }}
+      >
+        {hasUrl ? (
+          <a
+            href={b.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Abrir imagen en una pestaña nueva (zoom del navegador)"
+            aria-label={`Abrir imagen en tamaño completo: ${b.caption || b.url || 'imagen de la guía'}`}
+            style={{
+              display: 'block',
+              lineHeight: 0,
+              borderRadius: '10px',
+              cursor: 'pointer',
+              outline: 'none',
+            }}
+          >
+            <img
+              src={b.url}
+              alt={b.caption || 'Ilustración de la guía'}
+              style={{
+                display: 'block',
+                width: '100%',
+                maxHeight: 'min(38vh, 320px)',
+                objectFit: 'contain',
+                borderRadius: '10px',
+                background: t.bg,
+                pointerEvents: 'none',
+              }}
+            />
+          </a>
+        ) : (
+          <div
+            style={{
+              padding: 'var(--cc-space-5)',
+              textAlign: 'center',
+              color: t.textMuted,
+              fontSize: 'var(--cc-sm)',
+              borderRadius: '10px',
+              background: t.bg,
+            }}
+          >
+            Sin URL de imagen
+          </div>
+        )}
+      </div>
+      {b && b.caption ? (
+        <figcaption
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '10px',
+            padding: 'var(--cc-space-2) var(--cc-space-3)',
+            fontSize: 'var(--cc-sm)',
+            color: t.textMuted,
+            lineHeight: 1.5,
+            background: `linear-gradient(90deg, ${t.primary}10, transparent)`,
+            borderTop: `1px solid ${t.border}`,
+          }}
+        >
+          <span aria-hidden style={{ fontSize: 'var(--cc-md)', lineHeight: 1 }}>
+            🖼️
+          </span>
+          <span style={{ fontStyle: 'italic' }}>{b.caption}</span>
+        </figcaption>
+      ) : null}
+    </figure>
+  )
+}
+
+function withStableBlockKeys(bloques) {
+  return (Array.isArray(bloques) ? bloques : []).map((b) => ({
+    ...b,
+    _key:
+      b._key ||
+      (typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `bk-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`),
+  }))
+}
+
+function stripBlockKeysForApi(bloques) {
+  return (Array.isArray(bloques) ? bloques : []).map((b) => {
+    const { _key: _k, ...rest } = b
+    return rest
+  })
+}
+
+/** Cabecera de guía (lectura / vista previa editor) */
+function GuiaPreviewCabecera({ t, titulo, modulo, descripcionCorta, titleId }) {
+  return (
+    <header
+      style={{
+        flexShrink: 0,
+        padding: 'var(--cc-space-4) var(--cc-space-4) var(--cc-space-3)',
+        background: `linear-gradient(145deg, ${t.primary}14 0%, ${t.primaryLight || t.primary}22 42%, ${t.bgCard} 88%)`,
+        borderBottom: `1px solid ${t.border}`,
+        position: 'relative',
+        borderRadius: '12px 12px 0 0',
+      }}
+    >
+      <div
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: '3px',
+          background: `linear-gradient(90deg, ${t.primary}, ${t.primaryLight || t.primary}, ${t.primary})`,
+          opacity: 0.95,
+          borderRadius: '12px 12px 0 0',
+        }}
+      />
+      <div
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '8px',
+          fontSize: 'var(--cc-caption)',
+          fontWeight: '800',
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          color: t.primary,
+          marginBottom: '8px',
+          background: `${t.primary}14`,
+          padding: '4px 10px',
+          borderRadius: '999px',
+          border: `1px solid ${t.primary}35`,
+        }}
+      >
+        <span aria-hidden>📌</span>
+        {modulo || 'General'}
+      </div>
+      <h2
+        id={titleId}
+        style={{
+          margin: '0 0 8px',
+          fontSize: 'var(--cc-h2)',
+          fontWeight: '800',
+          color: t.text,
+          lineHeight: 1.25,
+          letterSpacing: '-0.02em',
+        }}
+      >
+        {titulo || 'Sin título'}
+      </h2>
+      {descripcionCorta ? (
+        <p
+          style={{
+            margin: 0,
+            fontSize: 'var(--cc-md)',
+            color: t.textMuted,
+            lineHeight: 1.55,
+            maxWidth: '62ch',
+            borderLeft: `3px solid ${t.primary}`,
+            paddingLeft: '12px',
+          }}
+        >
+          {descripcionCorta}
+        </p>
+      ) : null}
+    </header>
+  )
+}
+
+/** Cuerpo con tarjetas agrupadas (ids `guia-bloque-N` por si más adelante enlazamos secciones). */
+function GuiaCuerpoBloques({ t, bloques, showEmptyHint = true, emptyHintText }) {
+  const shellStyle = {
+    padding: 'var(--cc-space-3) var(--cc-space-4) var(--cc-space-4)',
+    background: t.bg && t.bg !== t.bgCard ? `linear-gradient(180deg, ${t.bg} 0%, ${t.bgCard} 24%)` : t.bgCard,
+    borderRadius: '0 0 12px 12px',
+  }
+  const grupos = buildGuiaBlockGroups(bloques)
+
+  if (!grupos.length && showEmptyHint) {
+    return (
+      <div style={shellStyle}>
+        <p style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, textAlign: 'center', margin: 'var(--cc-space-3) 0' }}>
+          {emptyHintText ||
+            'Añade bloques a la izquierda: verás aquí el resultado al instante.'}
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div style={shellStyle}>
+      {grupos.map((g, gi) => (
+        <Fragment key={gi}>{renderGuiaGrupo(t, grupos, grupos[gi], gi)}</Fragment>
+      ))}
+    </div>
+  )
 }
 
 export default function ModuloGuias({ t, usuario, token, s, fontSize = 'normal' }) {
-  const uiSp = getDashTypoUI(fontSize)
   const esDesarrollador = (usuario?.cargo_nombre || '').toLowerCase().trim() === 'desarrollador'
 
   const getAuthToken = () =>
@@ -114,6 +490,22 @@ export default function ModuloGuias({ t, usuario, token, s, fontSize = 'normal' 
   const [eliminarId, setEliminarId] = useState(null)
 
   const [listaTick, setListaTick] = useState(0)
+  const [formBloqueFocusIdx, setFormBloqueFocusIdx] = useState(null)
+  const [dragBloqueIdx, setDragBloqueIdx] = useState(null)
+  const [editorSplit, setEditorSplit] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth >= 920,
+  )
+  const [uploadingBloqueIdx, setUploadingBloqueIdx] = useState(null)
+  const [archivoPickIdx, setArchivoPickIdx] = useState(null)
+  const archivoGuiaInputRef = useRef(null)
+  const formBloquesRef = useRef([])
+
+  useEffect(() => {
+    const fn = () => setEditorSplit(window.innerWidth >= 920)
+    fn()
+    window.addEventListener('resize', fn)
+    return () => window.removeEventListener('resize', fn)
+  }, [])
 
   useEffect(() => {
     fetchConFallback('/roles', {})
@@ -165,6 +557,105 @@ export default function ModuloGuias({ t, usuario, token, s, fontSize = 'normal' 
     }
   }, [busqueda, esDesarrollador, fetchConFallback, listaTick])
 
+  formBloquesRef.current = formBloques
+
+  const subirArchivoGuiaBloque = useCallback(
+    async (file, idx) => {
+      if (!file || !file.type.startsWith('image/')) {
+        setError('Usa un archivo de imagen (PNG, JPEG, WebP o GIF).')
+        return
+      }
+      const auth = getAuthToken()
+      if (!auth) return
+      setUploadingBloqueIdx(idx)
+      setError(null)
+      try {
+        const fd = new FormData()
+        fd.append('file', file)
+        const r = await fetchConFallback('/guias/imagen', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${auth}` },
+          body: fd,
+        })
+        const raw = await r.text()
+        if (!r.ok) {
+          let msg = raw
+          try {
+            const j = JSON.parse(raw)
+            msg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail || j)
+          } catch {
+            /* ignore */
+          }
+          throw new Error(msg)
+        }
+        const data = JSON.parse(raw)
+        const url = data.url
+        if (!url) throw new Error('El servidor no devolvió URL')
+        setFormBloques((prev) => {
+          const next = [...prev]
+          if (!next[idx]) return prev
+          next[idx] = { ...next[idx], url }
+          return next
+        })
+      } catch (e) {
+        setError(String(e?.message || e))
+      } finally {
+        setUploadingBloqueIdx(null)
+      }
+    },
+    [fetchConFallback],
+  )
+
+  useEffect(() => {
+    if (!formAbierto) return undefined
+    const onPaste = (e) => {
+      const idx = formBloqueFocusIdx
+      if (idx == null) return
+      const bl = formBloquesRef.current[idx]
+      if (!bl || bl.tipo !== 'imagen') return
+      const items = e.clipboardData?.items
+      if (!items) return
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i]
+        if (it.kind === 'file' && it.type.startsWith('image/')) {
+          e.preventDefault()
+          const f = it.getAsFile()
+          if (f) subirArchivoGuiaBloque(f, idx)
+          break
+        }
+      }
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [formAbierto, formBloqueFocusIdx, subirArchivoGuiaBloque])
+
+  async function pegarImagenDesdeClipboard(idx) {
+    try {
+      const clip = await navigator.clipboard.read()
+      for (const item of clip) {
+        for (const ty of item.types) {
+          if (ty.startsWith('image/')) {
+            const blob = await item.getType(ty)
+            const ext = ty.includes('png') ? 'png' : 'jpg'
+            const file = new File([blob], `captura.${ext}`, { type: blob.type || ty || 'image/png' })
+            await subirArchivoGuiaBloque(file, idx)
+            return
+          }
+        }
+      }
+      setError('El portapapeles no tiene una imagen. Copia una captura o imagen primero.')
+    } catch {
+      setError(
+        'No se pudo leer el portapapeles. Prueba Ctrl+V con el bloque imagen seleccionado o «Elegir archivo».',
+      )
+    }
+  }
+
+  function abrirSelectorArchivoGuia(idx) {
+    setArchivoPickIdx(idx)
+    requestAnimationFrame(() => archivoGuiaInputRef.current?.click())
+  }
+
   const grupos = useMemo(() => agruparAZ(guias), [guias])
 
   function abrirNueva() {
@@ -177,6 +668,8 @@ export default function ModuloGuias({ t, usuario, token, s, fontSize = 'normal' 
     setFormRolesIds([])
     setFormPublicado(false)
     setFormOrden(0)
+    setFormBloqueFocusIdx(null)
+    setDragBloqueIdx(null)
     setFormAbierto(true)
   }
 
@@ -187,12 +680,27 @@ export default function ModuloGuias({ t, usuario, token, s, fontSize = 'normal' 
     setFormModulo(g.modulo || MODULOS_OPCIONES[0])
     setFormDesc(g.descripcion_corta || '')
     const bl = g.bloques
-    setFormBloques(Array.isArray(bl) ? [...bl] : [])
+    setFormBloques(withStableBlockKeys(Array.isArray(bl) ? [...bl] : []))
     const rv = g.roles_visibles
     setFormRolesIds(Array.isArray(rv) ? rv.map((x) => Number(x)) : [])
     setFormPublicado(!!g.publicado)
     setFormOrden(g.orden != null ? Number(g.orden) : 0)
+    setFormBloqueFocusIdx(null)
+    setDragBloqueIdx(null)
     setFormAbierto(true)
+  }
+
+  function mueveBloqueDesdeHasta(from, to) {
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from === to) return
+    let insertAt = to
+    if (from < to) insertAt = to - 1
+    setFormBloques((prev) => {
+      const n = [...prev]
+      const [el] = n.splice(from, 1)
+      n.splice(insertAt, 0, el)
+      return n
+    })
+    setFormBloqueFocusIdx(insertAt)
   }
 
   async function guardarForm() {
@@ -205,7 +713,7 @@ export default function ModuloGuias({ t, usuario, token, s, fontSize = 'normal' 
         titulo: formTitulo.trim(),
         modulo: formModulo || null,
         descripcion_corta: formDesc.trim() || null,
-        bloques: formBloques,
+        bloques: stripBlockKeysForApi(formBloques),
         roles_visibles: formRolesIds,
         publicado: formPublicado,
         orden: formOrden,
@@ -355,422 +863,763 @@ export default function ModuloGuias({ t, usuario, token, s, fontSize = 'normal' 
             >
               {letter}
             </div>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-                gap: `${Math.max(12, uiSp.rowGap + 10)}px`,
-              }}
-            >
-              {rows.map((g) => (
-                <div
-                  key={g.id}
-                  style={{
-                    ...s.card,
-                    cursor: 'pointer',
-                    position: 'relative',
-                    padding: 'var(--cc-space-4)',
-                  }}
-                  onClick={() => abrirDetalle(g.slug)}
-                >
-                  {esDesarrollador && (
-                    <div
+            <nav aria-label={`Guías que empiezan por ${letter}`}>
+              <ul style={{ listStyle: 'none', margin: 0, padding: 0, maxWidth: 'min(720px, 100%)' }}>
+                {rows.map((g) => (
+                  <li
+                    key={g.id}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      padding: '10px 0',
+                      borderBottom: `1px solid ${t.border}`,
+                    }}
+                  >
+                    <span aria-hidden style={{ color: t.textMuted, fontSize: 'var(--cc-caption)', flexShrink: 0, width: '1.25em' }}>
+                      ·
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => abrirDetalle(g.slug)}
                       style={{
-                        position: 'absolute',
-                        top: '10px',
-                        right: '10px',
-                        display: 'flex',
-                        gap: '6px',
+                        flex: 1,
+                        minWidth: 0,
+                        textAlign: 'left',
+                        background: 'none',
+                        border: 'none',
+                        padding: '2px 0',
+                        cursor: 'pointer',
+                        fontSize: 'var(--cc-body)',
+                        fontWeight: '600',
+                        color: t.primary,
+                        lineHeight: 1.45,
+                        textDecoration: 'underline',
+                        textDecorationColor: `${t.primary}55`,
+                        textUnderlineOffset: '3px',
                       }}
-                      onClick={(e) => e.stopPropagation()}
                     >
-                      <button
-                        type="button"
-                        title="Editar"
-                        onClick={() => abrirEditar(g)}
+                      {g.titulo || 'Sin título'}
+                    </button>
+                    {esDesarrollador && !g.publicado ? (
+                      <span
                         style={{
-                          background: t.bg,
-                          border: `1px solid ${t.border}`,
-                          borderRadius: '8px',
-                          padding: '4px 8px',
-                          cursor: 'pointer',
-                          fontSize: 'var(--cc-caption)',
+                          flexShrink: 0,
+                          fontSize: '10px',
+                          fontWeight: '700',
+                          letterSpacing: '0.06em',
+                          textTransform: 'uppercase',
+                          color: t.textMuted,
                         }}
                       >
-                        ✏️
-                      </button>
-                      <button
-                        type="button"
-                        title="Eliminar"
-                        onClick={() => setEliminarId(g.id)}
-                        style={{
-                          background: t.bg,
-                          border: `1px solid ${t.border}`,
-                          borderRadius: '8px',
-                          padding: '4px 8px',
-                          cursor: 'pointer',
-                          fontSize: 'var(--cc-caption)',
-                        }}
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  )}
-                  <div style={{ fontSize: 'var(--cc-caption)', color: t.primary, fontWeight: '700', marginBottom: '6px' }}>
-                    {g.modulo || 'General'}
-                  </div>
-                  <div style={{ fontSize: 'var(--cc-md)', fontWeight: '700', color: t.text, marginBottom: '8px', lineHeight: 1.35 }}>
-                    {g.titulo}
-                  </div>
-                  <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
-                    {g.descripcion_corta || '—'}
-                  </div>
-                  {esDesarrollador && (
-                    <div style={{ marginTop: '10px', fontSize: 'var(--cc-caption)', color: g.publicado ? '#059669' : t.textMuted }}>
-                      {g.publicado ? '● Publicada' : '○ Borrador'}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
+                        Borrador
+                      </span>
+                    ) : null}
+                    {esDesarrollador ? (
+                      <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                        <button
+                          type="button"
+                          title="Editar"
+                          onClick={() => abrirEditar(g)}
+                          style={{
+                            background: t.bg,
+                            border: `1px solid ${t.border}`,
+                            borderRadius: '6px',
+                            padding: '4px 8px',
+                            cursor: 'pointer',
+                            fontSize: 'var(--cc-caption)',
+                          }}
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          type="button"
+                          title="Eliminar"
+                          onClick={() => setEliminarId(g.id)}
+                          style={{
+                            background: t.bg,
+                            border: `1px solid ${t.border}`,
+                            borderRadius: '6px',
+                            padding: '4px 8px',
+                            cursor: 'pointer',
+                            fontSize: 'var(--cc-caption)',
+                          }}
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </nav>
           </section>
         ))}
 
-      {/* Modal lectura */}
+      {/* Modal lectura — shell editorial: cabecera, cuerpo con scroll, bloques agrupados */}
       {detalleSlug && (
-        <div style={s.overlay} onClick={() => { setDetalleSlug(null); setDetalle(null) }}>
+        <div
+          style={{
+            ...s.overlay,
+            backdropFilter: 'blur(6px)',
+            WebkitBackdropFilter: 'blur(6px)',
+          }}
+          onClick={() => { setDetalleSlug(null); setDetalle(null) }}
+        >
           <div
-            style={{ ...s.modal, maxWidth: '720px', width: '95vw' }}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="guia-lectura-titulo"
+            style={{
+              background: t.bgCard,
+              borderRadius: '18px',
+              border: `1px solid ${t.border}`,
+              width: 'min(1000px, 96vw)',
+              maxWidth: '1000px',
+              maxHeight: 'min(92vh, 880px)',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: `0 24px 64px rgba(0,0,0,0.22), 0 0 0 1px ${t.primary}18, 0 -2px 24px ${t.primaryLight || t.primary}22`,
+            }}
             onClick={(e) => e.stopPropagation()}
           >
-            {cargandoDetalle && <div style={{ fontSize: 'var(--cc-body)' }}>Cargando…</div>}
+            {cargandoDetalle && (
+              <div
+                style={{
+                  padding: 'var(--cc-space-6)',
+                  textAlign: 'center',
+                  fontSize: 'var(--cc-body)',
+                  color: t.textMuted,
+                }}
+              >
+                <span style={{ display: 'inline-block', marginRight: '10px', opacity: 0.65 }}>⏳</span>
+                Cargando guía…
+              </div>
+            )}
             {!cargandoDetalle && detalle && (
               <>
-                <div style={{ fontSize: 'var(--cc-caption)', color: t.primary, fontWeight: '700', marginBottom: '8px' }}>
-                  {detalle.modulo || 'General'}
+                <GuiaPreviewCabecera
+                  t={t}
+                  titulo={detalle.titulo}
+                  modulo={detalle.modulo}
+                  descripcionCorta={detalle.descripcion_corta}
+                  titleId="guia-lectura-titulo"
+                />
+                <div
+                  style={{
+                    flex: 1,
+                    minHeight: 0,
+                    overflowY: 'auto',
+                  }}
+                >
+                  <GuiaCuerpoBloques
+                    t={t}
+                    bloques={detalle.bloques}
+                    showEmptyHint
+                    emptyHintText="Esta guía aún no tiene bloques de contenido."
+                  />
                 </div>
-                <h2 style={{ margin: '0 0 var(--cc-space-4)', fontSize: 'var(--cc-h2)', color: t.text }}>{detalle.titulo}</h2>
-                <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 'var(--cc-space-5)' }}>
-                  {detalle.descripcion_corta}
-                </div>
-                <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 'var(--cc-space-4)' }}>
-                  {(Array.isArray(detalle.bloques) ? detalle.bloques : []).map((b, i) => {
-                    const tipo = (b && b.tipo) || 'texto'
-                    if (tipo === 'subtitulo') {
-                      return (
-                        <h3
-                          key={i}
-                          style={{
-                            fontSize: 'var(--cc-lg)',
-                            fontWeight: '700',
-                            color: t.text,
-                            margin: 'var(--cc-space-4) 0 var(--cc-space-2)',
-                          }}
-                        >
-                          {b.contenido || ''}
-                        </h3>
-                      )
-                    }
-                    if (tipo === 'imagen') {
-                      return (
-                        <figure key={i} style={{ margin: 'var(--cc-space-4) 0' }}>
-                          {b.url ? (
-                            <img
-                              src={b.url}
-                              alt={b.caption || ''}
-                              style={{
-                                maxWidth: '100%',
-                                borderRadius: '8px',
-                                border: `1px solid ${t.border}`,
-                              }}
-                            />
-                          ) : null}
-                          {b.caption ? (
-                            <figcaption style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: '8px' }}>
-                              {b.caption}
-                            </figcaption>
-                          ) : null}
-                        </figure>
-                      )
-                    }
-                    return (
-                      <p
-                        key={i}
-                        style={{
-                          fontSize: 'var(--cc-body)',
-                          color: t.text,
-                          lineHeight: 1.6,
-                          whiteSpace: 'pre-wrap',
-                          margin: '0 0 var(--cc-space-3)',
-                        }}
-                      >
-                        {b.contenido || ''}
-                      </p>
-                    )
-                  })}
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--cc-space-5)' }}>
+
+                {/* Pie */}
+                <footer
+                  style={{
+                    flexShrink: 0,
+                    padding: 'var(--cc-space-4) var(--cc-space-5)',
+                    borderTop: `1px solid ${t.border}`,
+                    background: `linear-gradient(180deg, ${t.bgCard}, ${t.primary}08)`,
+                    display: 'flex',
+                    justifyContent: 'flex-end',
+                    alignItems: 'center',
+                    gap: '12px',
+                  }}
+                >
                   <button
                     type="button"
                     onClick={() => { setDetalleSlug(null); setDetalle(null) }}
                     style={{
-                      background: t.primary,
+                      background: `linear-gradient(180deg, ${t.primaryLight || t.primary}, ${t.primary})`,
                       color: '#fff',
                       border: 'none',
-                      borderRadius: '8px',
-                      padding: '10px 22px',
+                      borderRadius: '10px',
+                      padding: '11px 26px',
                       fontSize: 'var(--cc-sm)',
-                      fontWeight: '700',
+                      fontWeight: '800',
                       cursor: 'pointer',
+                      letterSpacing: '0.02em',
+                      boxShadow: `0 4px 16px ${t.primary}44`,
                     }}
                   >
                     Cerrar
                   </button>
-                </div>
+                </footer>
               </>
             )}
           </div>
         </div>
       )}
 
-      {/* Form crear / editar */}
+      {/* Form crear / editar — editor + vista previa en vivo, bloques arrastrables */}
       {formAbierto && (
-        <div style={s.overlay} onClick={() => !guardando && setFormAbierto(false)}>
+        <div
+          style={{
+            ...s.overlay,
+            backdropFilter: 'blur(5px)',
+            WebkitBackdropFilter: 'blur(5px)',
+          }}
+          onClick={() => !guardando && setFormAbierto(false)}
+        >
           <div
-            style={{ ...s.modal, maxWidth: '640px', width: '96vw', maxHeight: '92vh' }}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="guia-editor-titulo"
+            style={{
+              background: t.bgCard,
+              borderRadius: '16px',
+              border: `1px solid ${t.border}`,
+              width: 'min(1600px, 98vw)',
+              maxWidth: '1600px',
+              maxHeight: '94vh',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: `0 20px 60px rgba(0,0,0,0.2), 0 0 0 1px ${t.primary}15`,
+            }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 style={{ margin: '0 0 var(--cc-space-4)', fontSize: 'var(--cc-h2)', color: t.primary }}>
-              {formModo === 'crear' ? 'Nueva guía' : 'Editar guía'}
-            </h2>
-
-            <label style={s.label}>TÍTULO *</label>
-            <input style={s.input} value={formTitulo} onChange={(e) => setFormTitulo(e.target.value)} />
-            <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: '-8px', marginBottom: '16px' }}>
-              Slug URL: <code style={{ color: t.text }}>{slugPreview(formTitulo)}</code> (se guarda al publicar)
-            </div>
-
-            <label style={s.label}>MÓDULO</label>
-            <select
-              style={s.input}
-              value={formModulo}
-              onChange={(e) => setFormModulo(e.target.value)}
-            >
-              {MODULOS_OPCIONES.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-
-            <label style={s.label}>DESCRIPCIÓN CORTA</label>
-            <textarea
-              style={{ ...s.input, minHeight: '72px', resize: 'vertical' }}
-              value={formDesc}
-              onChange={(e) => setFormDesc(e.target.value)}
-            />
-
-            <label style={s.label}>ORDEN (opcional)</label>
-            <input
-              type="number"
-              style={s.input}
-              value={formOrden}
-              onChange={(e) => setFormOrden(parseInt(e.target.value, 10) || 0)}
-            />
-
-            <div style={{ marginBottom: 'var(--cc-space-4)' }}>
-              <span style={s.label}>CONTENIDO (BLOQUES)</span>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
-                <button
-                  type="button"
-                  onClick={() => setFormBloques((b) => [...b, bloqueVacio('texto')])}
-                  style={{
-                    background: t.bg,
-                    border: `1px solid ${t.border}`,
-                    borderRadius: '8px',
-                    padding: '6px 12px',
-                    fontSize: 'var(--cc-sm)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  + Texto
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFormBloques((b) => [...b, bloqueVacio('subtitulo')])}
-                  style={{
-                    background: t.bg,
-                    border: `1px solid ${t.border}`,
-                    borderRadius: '8px',
-                    padding: '6px 12px',
-                    fontSize: 'var(--cc-sm)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  + Subtítulo
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFormBloques((b) => [...b, bloqueVacio('imagen')])}
-                  style={{
-                    background: t.bg,
-                    border: `1px solid ${t.border}`,
-                    borderRadius: '8px',
-                    padding: '6px 12px',
-                    fontSize: 'var(--cc-sm)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  + Imagen (URL)
-                </button>
-              </div>
-              {formBloques.map((bl, idx) => (
-                <div
-                  key={idx}
-                  style={{
-                    border: `1px solid ${t.border}`,
-                    borderRadius: '8px',
-                    padding: '12px',
-                    marginBottom: '10px',
-                    background: t.bg,
-                  }}
-                >
-                  <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginBottom: '8px' }}>
-                    Bloque {idx + 1} · {bl.tipo}
-                  </div>
-                  {(bl.tipo === 'texto' || bl.tipo === 'subtitulo') && (
-                    <textarea
-                      style={{ ...s.input, marginBottom: 0, minHeight: '80px' }}
-                      placeholder={bl.tipo === 'subtitulo' ? 'Título de sección' : 'Texto'}
-                      value={bl.contenido || ''}
-                      onChange={(e) => {
-                        const v = e.target.value
-                        setFormBloques((prev) => {
-                          const next = [...prev]
-                          next[idx] = { ...next[idx], contenido: v }
-                          return next
-                        })
-                      }}
-                    />
-                  )}
-                  {bl.tipo === 'imagen' && (
-                    <>
-                      <input
-                        style={{ ...s.input, marginBottom: '8px' }}
-                        placeholder="https://…"
-                        value={bl.url || ''}
-                        onChange={(e) => {
-                          const v = e.target.value
-                          setFormBloques((prev) => {
-                            const next = [...prev]
-                            next[idx] = { ...next[idx], url: v }
-                            return next
-                          })
-                        }}
-                      />
-                      <input
-                        style={{ ...s.input, marginBottom: 0 }}
-                        placeholder="Pie de foto / descripción"
-                        value={bl.caption || ''}
-                        onChange={(e) => {
-                          const v = e.target.value
-                          setFormBloques((prev) => {
-                            const next = [...prev]
-                            next[idx] = { ...next[idx], caption: v }
-                            return next
-                          })
-                        }}
-                      />
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => setFormBloques((prev) => prev.filter((_, j) => j !== idx))}
-                    style={{
-                      marginTop: '8px',
-                      background: 'transparent',
-                      border: `1px solid ${t.border}`,
-                      borderRadius: '6px',
-                      padding: '4px 10px',
-                      fontSize: 'var(--cc-caption)',
-                      cursor: 'pointer',
-                      color: t.textMuted,
-                    }}
-                  >
-                    Quitar bloque
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            <label style={s.label}>ROLES QUE PUEDEN VER LA GUÍA</label>
             <div
               style={{
-                maxHeight: '160px',
-                overflowY: 'auto',
-                border: `1px solid ${t.border}`,
-                borderRadius: '8px',
-                padding: '10px',
-                marginBottom: '16px',
-                fontSize: 'var(--cc-sm)',
+                flexShrink: 0,
+                padding: '10px 14px 8px',
+                borderBottom: `1px solid ${t.border}`,
+                background: `linear-gradient(90deg, ${t.primary}10, transparent)`,
               }}
             >
-              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={formRolesIds.length === 0}
-                  onChange={(e) => {
-                    if (e.target.checked) setFormRolesIds([])
-                  }}
-                />
-                <span>Todos los roles (lista vacía)</span>
-              </label>
-              {catalogoRoles.map((rol) => (
-                <label
-                  key={rol.id}
-                  style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', cursor: 'pointer' }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={formRolesIds.includes(Number(rol.id))}
-                    onChange={() => {
-                      setFormRolesIds((prev) => {
-                        const n = Number(rol.id)
-                        if (prev.includes(n)) return prev.filter((x) => x !== n)
-                        return [...prev, n]
-                      })
-                    }}
-                  />
-                  <span>{rol.nombre}</span>
-                </label>
-              ))}
+              <h2
+                id="guia-editor-titulo"
+                style={{ margin: '0 0 4px', fontSize: 'var(--cc-title)', color: t.primary, fontWeight: '800' }}
+              >
+                {formModo === 'crear' ? 'Nueva guía' : 'Editar guía'}
+              </h2>
+              <p style={{ margin: 0, fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.4 }}>
+                Bloques a la izquierda (<strong>⋮⋮</strong> reordena). Imágenes: archivo, <strong>Ctrl+V</strong> o enlace. Derecha = vista final.
+              </p>
             </div>
 
-            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: 'var(--cc-space-4)', cursor: 'pointer', fontSize: 'var(--cc-sm)' }}>
-              <input type="checkbox" checked={formPublicado} onChange={(e) => setFormPublicado(e.target.checked)} />
-              Publicado (visible en el listado para los roles seleccionados)
-            </label>
-
-            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                disabled={guardando}
-                onClick={() => setFormAbierto(false)}
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                display: 'grid',
+                gap: 0,
+                ...(editorSplit
+                  ? { gridTemplateColumns: 'minmax(420px, 0.52fr) minmax(320px, 1fr)' }
+                  : { gridTemplateColumns: '1fr', gridTemplateRows: 'minmax(220px, 46vh) minmax(260px, 1fr)' }),
+              }}
+            >
+              {/* Columna editor */}
+              <aside
                 style={{
-                  background: 'transparent',
-                  border: `1px solid ${t.border}`,
-                  borderRadius: '8px',
-                  padding: '10px 18px',
-                  fontSize: 'var(--cc-sm)',
-                  cursor: 'pointer',
-                  color: t.textMuted,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  minHeight: 0,
+                  borderRight: `1px solid ${t.border}`,
+                  background: t.bg,
                 }}
               >
-                Cerrar
-              </button>
-              <button type="button" disabled={guardando || !formTitulo.trim()} onClick={guardarForm} style={s.btnCrear}>
-                {guardando ? 'Guardando…' : 'Guardar y cerrar'}
-              </button>
+                <input
+                  ref={archivoGuiaInputRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    const idx = archivoPickIdx
+                    e.target.value = ''
+                    setArchivoPickIdx(null)
+                    if (file != null && idx != null) subirArchivoGuiaBloque(file, idx)
+                  }}
+                />
+                <div style={{ flexShrink: 0, padding: '8px 12px 6px' }}>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(0, 1fr) minmax(112px, 26%) 56px',
+                      gap: '6px 8px',
+                      alignItems: 'end',
+                      marginBottom: '4px',
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <label style={{ ...s.label, fontSize: '10px', marginBottom: '2px', letterSpacing: '0.04em' }}>TÍTULO *</label>
+                      <input
+                        style={{ ...s.input, padding: '6px 8px', marginBottom: 0 }}
+                        value={formTitulo}
+                        onChange={(e) => setFormTitulo(e.target.value)}
+                      />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <label style={{ ...s.label, fontSize: '10px', marginBottom: '2px', letterSpacing: '0.04em' }}>MÓDULO</label>
+                      <select
+                        style={{ ...s.input, padding: '6px 6px', marginBottom: 0 }}
+                        value={formModulo}
+                        onChange={(e) => setFormModulo(e.target.value)}
+                      >
+                        {MODULOS_OPCIONES.map((m) => (
+                          <option key={m} value={m}>
+                            {m}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ ...s.label, fontSize: '10px', marginBottom: '2px', letterSpacing: '0.04em' }}>ORD.</label>
+                      <input
+                        type="number"
+                        style={{ ...s.input, padding: '6px 6px', marginBottom: 0 }}
+                        value={formOrden}
+                        onChange={(e) => setFormOrden(parseInt(e.target.value, 10) || 0)}
+                      />
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      fontSize: '10px',
+                      color: t.textMuted,
+                      margin: '0 0 6px',
+                      lineHeight: 1.3,
+                      wordBreak: 'break-all',
+                    }}
+                  >
+                    Slug: <code style={{ color: t.text, fontSize: '10px' }}>{slugPreview(formTitulo)}</code>
+                  </div>
+                  <div style={{ marginBottom: '6px' }}>
+                    <label style={{ ...s.label, fontSize: '10px', marginBottom: '2px', letterSpacing: '0.04em' }}>DESCRIPCIÓN CORTA</label>
+                    <textarea
+                      rows={2}
+                      style={{
+                        ...s.input,
+                        minHeight: '40px',
+                        maxHeight: '72px',
+                        padding: '6px 8px',
+                        resize: 'vertical',
+                        marginBottom: 0,
+                        lineHeight: 1.35,
+                      }}
+                      value={formDesc}
+                      onChange={(e) => setFormDesc(e.target.value)}
+                    />
+                  </div>
+
+                  <span style={{ ...s.label, fontSize: '10px', marginBottom: '4px', display: 'inline-block' }}>BLOQUES · AÑADIR</span>
+                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '6px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setFormBloques((b) => [...b, bloqueVacio('subtitulo')])}
+                      style={{
+                        background: `${t.primary}18`,
+                        border: `1px solid ${t.primary}`,
+                        color: t.primary,
+                        borderRadius: '8px',
+                        padding: '5px 10px',
+                        fontSize: 'var(--cc-caption)',
+                        fontWeight: '800',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      + H · Subtítulo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormBloques((b) => [...b, bloqueVacio('texto')])}
+                      style={{
+                        background: `${t.primaryLight || t.primary}22`,
+                        border: `1px solid ${t.border}`,
+                        color: t.text,
+                        borderRadius: '8px',
+                        padding: '5px 10px',
+                        fontSize: 'var(--cc-caption)',
+                        fontWeight: '700',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      + T · Texto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormBloques((b) => [...b, bloqueVacio('imagen')])}
+                      style={{
+                        background: '#05966922',
+                        border: '1px solid #05966988',
+                        color: '#047857',
+                        borderRadius: '8px',
+                        padding: '5px 10px',
+                        fontSize: 'var(--cc-caption)',
+                        fontWeight: '700',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      + I · Imagen
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 12px 8px' }}>
+                  {formBloques.map((bl, idx) => {
+                    const tipo = (bl && bl.tipo) || 'texto'
+                    const acento =
+                      tipo === 'subtitulo'
+                        ? { bg: '#7c3aed18', br: '#7c3aed', tag: 'H' }
+                        : tipo === 'imagen'
+                          ? { bg: '#05966918', br: '#059669', tag: 'I' }
+                          : { bg: `${t.primary}14`, br: t.primary, tag: 'T' }
+                    const sel = formBloqueFocusIdx === idx
+                    return (
+                      <div
+                        key={bl._key || `b-${idx}`}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => {
+                          e.preventDefault()
+                          const from = parseInt(e.dataTransfer.getData('text/plain'), 10)
+                          mueveBloqueDesdeHasta(from, idx)
+                        }}
+                        onClick={() => setFormBloqueFocusIdx(idx)}
+                        style={{
+                          border: `2px solid ${sel ? t.primary : t.border}`,
+                          borderRadius: '12px',
+                          padding: '10px 12px',
+                          marginBottom: '12px',
+                          background: t.bgCard,
+                          boxShadow: sel ? `0 0 0 3px ${t.primary}22` : `0 2px 8px rgba(0,0,0,0.04)`,
+                          opacity: dragBloqueIdx === idx ? 0.55 : 1,
+                          cursor: 'default',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                          <span
+                            draggable
+                            title="Arrastrar para reordenar"
+                            onDragStart={(e) => {
+                              e.stopPropagation()
+                              e.dataTransfer.setData('text/plain', String(idx))
+                              e.dataTransfer.effectAllowed = 'move'
+                              setDragBloqueIdx(idx)
+                            }}
+                            onDragEnd={() => setDragBloqueIdx(null)}
+                            style={{
+                              cursor: 'grab',
+                              fontSize: 'var(--cc-md)',
+                              color: t.textMuted,
+                              userSelect: 'none',
+                              padding: '2px 4px',
+                            }}
+                          >
+                            ⋮⋮
+                          </span>
+                          <span
+                            style={{
+                              fontSize: '10px',
+                              fontWeight: '800',
+                              padding: '3px 7px',
+                              borderRadius: '6px',
+                              background: acento.bg,
+                              border: `1px solid ${acento.br}`,
+                              color: acento.br,
+                            }}
+                          >
+                            {acento.tag}
+                          </span>
+                          <span style={{ flex: 1, fontSize: 'var(--cc-caption)', color: t.textMuted, textTransform: 'capitalize' }}>
+                            #{idx + 1} · {tipo === 'subtitulo' ? 'subtítulo' : tipo}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setFormBloques((prev) => prev.filter((_, j) => j !== idx))
+                              setFormBloqueFocusIdx((f) => {
+                                if (f == null) return null
+                                if (f === idx) return null
+                                if (f > idx) return f - 1
+                                return f
+                              })
+                            }}
+                            style={{
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#b91c1c',
+                              fontSize: 'var(--cc-caption)',
+                              cursor: 'pointer',
+                              fontWeight: '700',
+                            }}
+                          >
+                            Quitar
+                          </button>
+                        </div>
+                        {(tipo === 'texto' || tipo === 'subtitulo') && (
+                          <textarea
+                            style={{
+                              ...s.input,
+                              marginBottom: 0,
+                              minHeight: tipo === 'subtitulo' ? '60px' : '108px',
+                              resize: 'vertical',
+                              cursor: 'text',
+                            }}
+                            placeholder={tipo === 'subtitulo' ? 'Título de sección' : 'Párrafo'}
+                            value={bl.contenido || ''}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                              const v = e.target.value
+                              setFormBloques((prev) => {
+                                const next = [...prev]
+                                next[idx] = { ...next[idx], contenido: v }
+                                return next
+                              })
+                            }}
+                          />
+                        )}
+                        {tipo === 'imagen' && (
+                          <>
+                            <p style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, margin: '0 0 8px', lineHeight: 1.45 }}>
+                              Subí una imagen, pegá captura (<strong>Ctrl+V</strong> con este bloque elegido) o pegá desde el portapapeles. También podés usar un enlace externo abajo.
+                            </p>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '10px' }}>
+                              <button
+                                type="button"
+                                disabled={uploadingBloqueIdx === idx}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  abrirSelectorArchivoGuia(idx)
+                                }}
+                                style={{
+                                  background: `${t.primary}22`,
+                                  border: `1px solid ${t.primary}`,
+                                  color: t.primary,
+                                  borderRadius: '8px',
+                                  padding: '7px 12px',
+                                  fontSize: 'var(--cc-caption)',
+                                  fontWeight: '800',
+                                  cursor: uploadingBloqueIdx === idx ? 'wait' : 'pointer',
+                                  opacity: uploadingBloqueIdx === idx ? 0.7 : 1,
+                                }}
+                              >
+                                {uploadingBloqueIdx === idx ? 'Subiendo…' : '📁 Elegir archivo'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={uploadingBloqueIdx === idx}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  pegarImagenDesdeClipboard(idx)
+                                }}
+                                style={{
+                                  background: t.bgCard,
+                                  border: `1px solid ${t.border}`,
+                                  borderRadius: '8px',
+                                  padding: '7px 12px',
+                                  fontSize: 'var(--cc-caption)',
+                                  fontWeight: '700',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                📋 Pegar portapapeles
+                              </button>
+                            </div>
+                            {bl.url ? (
+                              <div
+                                style={{
+                                  marginBottom: '10px',
+                                  borderRadius: '10px',
+                                  border: `1px solid ${t.border}`,
+                                  overflow: 'hidden',
+                                  background: t.bgCard,
+                                }}
+                              >
+                                <a
+                                  href={bl.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title="Abrir imagen en una pestaña nueva"
+                                  onClick={(e) => e.stopPropagation()}
+                                  onKeyDown={(e) => e.stopPropagation()}
+                                  style={{
+                                    display: 'block',
+                                    lineHeight: 0,
+                                    cursor: 'pointer',
+                                    outline: 'none',
+                                  }}
+                                >
+                                  <img
+                                    src={bl.url}
+                                    alt=""
+                                    style={{
+                                      display: 'block',
+                                      width: '100%',
+                                      maxHeight: '160px',
+                                      objectFit: 'contain',
+                                      background: t.bg,
+                                      pointerEvents: 'none',
+                                    }}
+                                  />
+                                </a>
+                              </div>
+                            ) : null}
+                            <label style={{ ...s.label, fontSize: 'var(--cc-caption)' }}>ENLACE EXTERNO (OPCIONAL)</label>
+                            <input
+                              style={{ ...s.input, marginBottom: '8px', cursor: 'text' }}
+                              placeholder="https://… si la imagen ya está alojada fuera"
+                              value={bl.url || ''}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => {
+                                const v = e.target.value
+                                setFormBloques((prev) => {
+                                  const next = [...prev]
+                                  next[idx] = { ...next[idx], url: v }
+                                  return next
+                                })
+                              }}
+                            />
+                            <input
+                              style={{ ...s.input, marginBottom: 0, cursor: 'text' }}
+                              placeholder="Pie de foto / descripción"
+                              value={bl.caption || ''}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => {
+                                const v = e.target.value
+                                setFormBloques((prev) => {
+                                  const next = [...prev]
+                                  next[idx] = { ...next[idx], caption: v }
+                                  return next
+                                })
+                              }}
+                            />
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <div style={{ flexShrink: 0, padding: '10px 12px 12px', borderTop: `1px solid ${t.border}` }}>
+                  <label style={{ ...s.label, fontSize: 'var(--cc-caption)', marginBottom: '6px' }}>ROLES QUE PUEDEN VER LA GUÍA</label>
+                  <div
+                    style={{
+                      maxHeight: '100px',
+                      overflowY: 'auto',
+                      border: `1px solid ${t.border}`,
+                      borderRadius: '8px',
+                      padding: '8px',
+                      marginBottom: '12px',
+                      fontSize: 'var(--cc-caption)',
+                      background: t.bgCard,
+                    }}
+                  >
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={formRolesIds.length === 0}
+                        onChange={(e) => {
+                          if (e.target.checked) setFormRolesIds([])
+                        }}
+                      />
+                      <span>Todos los roles</span>
+                    </label>
+                    {catalogoRoles.map((rol) => (
+                      <label
+                        key={rol.id}
+                        style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '2px', cursor: 'pointer' }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={formRolesIds.includes(Number(rol.id))}
+                          onChange={() => {
+                            setFormRolesIds((prev) => {
+                              const n = Number(rol.id)
+                              if (prev.includes(n)) return prev.filter((x) => x !== n)
+                              return [...prev, n]
+                            })
+                          }}
+                        />
+                        <span>{rol.nombre}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px', cursor: 'pointer', fontSize: 'var(--cc-sm)' }}>
+                    <input type="checkbox" checked={formPublicado} onChange={(e) => setFormPublicado(e.target.checked)} />
+                    Publicado
+                  </label>
+                  <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      disabled={guardando}
+                      onClick={() => setFormAbierto(false)}
+                      style={{
+                        background: 'transparent',
+                        border: `1px solid ${t.border}`,
+                        borderRadius: '8px',
+                        padding: '9px 16px',
+                        fontSize: 'var(--cc-sm)',
+                        cursor: 'pointer',
+                        color: t.textMuted,
+                      }}
+                    >
+                      Cerrar
+                    </button>
+                    <button
+                      type="button"
+                      disabled={guardando || !formTitulo.trim()}
+                      onClick={guardarForm}
+                      style={s.btnCrear}
+                    >
+                      {guardando ? 'Guardando…' : 'Guardar y cerrar'}
+                    </button>
+                  </div>
+                </div>
+              </aside>
+
+              {/* Vista previa */}
+              <section
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  minHeight: 0,
+                  background: `linear-gradient(160deg, ${t.primary}08, ${t.bgCard})`,
+                }}
+              >
+                <div
+                  style={{
+                    flexShrink: 0,
+                    padding: '10px 16px',
+                    fontSize: 'var(--cc-caption)',
+                    fontWeight: '800',
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: t.primary,
+                    borderBottom: `1px solid ${t.border}`,
+                    background: `${t.primary}10`,
+                  }}
+                >
+                  👁 Vista previa en vivo
+                </div>
+                <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 16px 20px' }}>
+                  <div
+                    style={{
+                      border: `1px solid ${t.border}`,
+                      borderRadius: '14px',
+                      overflow: 'hidden',
+                      boxShadow: `0 8px 32px rgba(0,0,0,0.07)`,
+                    }}
+                  >
+                    <GuiaPreviewCabecera
+                      t={t}
+                      titulo={formTitulo}
+                      modulo={formModulo}
+                      descripcionCorta={formDesc}
+                    />
+                    <GuiaCuerpoBloques t={t} bloques={formBloques} showEmptyHint />
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
         </div>

@@ -194,6 +194,44 @@ def _so_registro_audit_snapshot(row: Optional[dict]) -> Optional[dict]:
     return _json_for_log({k: row.get(k) for k in keys})
 
 
+def _so_registro_validacion_audit_snapshot(row: Optional[dict]) -> Optional[dict]:
+    """Campos de validación / bloqueo para auditoría (antes-después)."""
+    if not row:
+        return None
+    keys = (
+        "nivel1_estado", "nivel1_usuario_id", "nivel1_fecha",
+        "nivel2_estado", "nivel2_usuario_id", "nivel2_fecha", "nivel2_objeto_pago_sub",
+        "nivel3_estado", "nivel3_usuario_id", "nivel3_fecha",
+        "sub_estado", "sub_usuario_id", "sub_fecha",
+        "bloqueado", "solicitud_reversion",
+    )
+    return _json_for_log({k: row.get(k) for k in keys})
+
+
+def _so_registro_fetch_validacion_audit(contrato_id: int, registro_id: int) -> Optional[dict]:
+    def _q():
+        return supabase.table("so_registros").select(
+            "nivel1_estado, nivel1_usuario_id, nivel1_fecha,"
+            "nivel2_estado, nivel2_usuario_id, nivel2_fecha, nivel2_objeto_pago_sub,"
+            "nivel3_estado, nivel3_usuario_id, nivel3_fecha,"
+            "sub_estado, sub_usuario_id, sub_fecha, bloqueado, solicitud_reversion"
+        ).eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
+    r = supabase_execute(_q)
+    return r[0] if r else None
+
+
+def _so_reporte_audit_snapshot(row: Optional[dict]) -> Optional[dict]:
+    if not row:
+        return None
+    keys = (
+        "id", "numero_reporte", "estado", "capitulo", "semana_id", "acta_rpo_id", "corte_id",
+        "pk_id_id", "civ", "tramo", "infraestructura", "calzada", "ubicacion",
+        "coord_lat", "coord_lng", "abs_inicio", "abs_final", "nodo_ini", "nodo_fin", "margen",
+        "subcontratista_id", "inspector_id",
+    )
+    return _json_for_log({k: row.get(k) for k in keys})
+
+
 def _default_severidad(accion: str, modulo: str, resultado: str) -> str:
     if resultado and str(resultado).lower() not in ("ok", "success", "éxito"):
         return "ERROR" if "denegado" not in str(resultado).lower() else "WARNING"
@@ -1336,6 +1374,11 @@ def _so_reg_item_asignado(q):
     return q.not_.is_("item_numero", "null").neq("item_numero", "")
 
 
+def _so_reg_sin_item_asignado(q):
+    """Registro sin ítem (cola 'Sin Asignar Ítem' a nivel línea; alineado con UI)."""
+    return q.or_('item_numero.is.null,item_numero.eq.""')
+
+
 def _filtrar_reporte_ids_excl_estados(contrato_id: int, reporte_ids: list, excluir: tuple) -> list:
     """Solo IDs de reportes cuyo estado en so_reportes no está en excluir."""
     if not reporte_ids:
@@ -1833,6 +1876,16 @@ def guias_eliminar(guia_id: int, current_user=Depends(get_current_user)):
     return {"ok": True, "id": guia_id}
 
 
+@app.post("/guias/imagen")
+async def guias_subir_imagen_bloque(file: UploadFile = File(...), current_user=Depends(get_current_user)):
+    """Sube una imagen para un bloque de guía (archivo). Solo Desarrollador — misma infra que novedades Inicio."""
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede subir imágenes para guías")
+    contents = await file.read()
+    url = _guia_bloque_subir_imagen(contents, file.content_type)
+    return {"url": url}
+
+
 # Listado ligero: SOLO columnas presentes en cualquier despliegue. Si pides columnas que aún no existen
 # en la BD (migración pendiente), PostgREST falla y el panel enseña 0 contratos aunque existan.
 _CONTRATOS_SELECT_LISTA = (
@@ -2319,6 +2372,61 @@ def _inicio_novedad_subir_imagen(contents: bytes, content_type: Optional[str]) -
                 )
         else:
             _log_api.warning("Supabase Storage upload inicio %s: %s", path, e1)
+            raise HTTPException(status_code=503, detail="No se pudo subir la imagen a Supabase Storage.")
+    return sb.storage.from_(bucket).get_public_url(path)
+
+
+def _guia_bloque_subir_imagen(contents: bytes, content_type: Optional[str]) -> str:
+    """Imagen embebida en bloques de guías (Cloudinary o Supabase Storage). Solo vía API autorizada."""
+    if len(contents) > 6 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="La imagen no puede superar 6 MB.")
+    ext = _ext_desde_content_type(content_type)
+    ct = (content_type or "image/jpeg").split(";")[0].strip()
+    if os.getenv("CLOUDINARY_CLOUD_NAME"):
+        import cloudinary.uploader
+        _cloudinary_config()
+        uid_part = uuid.uuid4().hex[:16]
+        result = cloudinary.uploader.upload(
+            contents,
+            folder=f"{CLOUDINARY_ROOT}/guias-bloques",
+            public_id=f"guia_{uid_part}",
+            overwrite=False,
+            resource_type="image",
+        )
+        return result["secure_url"]
+    sb = get_supabase()
+    bucket = os.getenv("SUPABASE_GUIAS_BUCKET", os.getenv("SUPABASE_PERFIL_BUCKET", "claracore-perfiles"))
+    path = f"guias-bloques/{uuid.uuid4().hex}{ext}"
+    file_opts = {"content-type": ct, "upsert": "true"}
+
+    def _do_upload():
+        sb.storage.from_(bucket).upload(path, contents, file_options=file_opts)
+
+    try:
+        _do_upload()
+    except Exception as e1:
+        msg = str(e1).lower()
+        if "bucket" in msg or "not found" in msg or "not_found" in msg or "404" in msg:
+            try:
+                sb.storage.create_bucket(
+                    bucket,
+                    options={"public": True, "file_size_limit": 6 * 1024 * 1024},
+                )
+            except Exception as e_create:
+                _log_api.warning("create_bucket guias bloques %s: %s", bucket, e_create)
+            try:
+                _do_upload()
+            except Exception as e2:
+                _log_api.warning("Supabase Storage upload guia bloque %s: %s", path, e2)
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "No se pudo subir la imagen. Configura Cloudinary (CLOUDINARY_*) "
+                        f"o el bucket público {bucket} en Supabase Storage."
+                    ),
+                )
+        else:
+            _log_api.warning("Supabase Storage upload guia bloque %s: %s", path, e1)
             raise HTTPException(status_code=503, detail="No se pudo subir la imagen a Supabase Storage.")
     return sb.storage.from_(bucket).get_public_url(path)
 
@@ -4045,9 +4153,31 @@ def agregar_cantidad(contrato_id: int, body: AgregarCantidadBody, current_user=D
     except Exception:
         pass
 
-    return new_row
+    try:
+        cr = supabase.table("contratos").select("numero").eq("id", contrato_id).limit(1).execute().data
+        cinfo = cr[0].get("numero") if cr else None
+        u_log = {
+            "sub": str(current_user.get("sub")),
+            "nombre": current_user.get("nombre") or "",
+            "email": current_user.get("email"),
+            "cargo_nombre": current_user.get("cargo_nombre"),
+            "rol_nombre": current_user.get("rol_nombre"),
+            "contrato_id": contrato_id,
+            "contrato_numero": cinfo,
+        }
+        registrar_log(
+            u_log,
+            "CREAR",
+            "PRESUPUESTO",
+            "presupuesto",
+            str(new_row.get("id") or ""),
+            {"id_pol": new_id_pol, "origen": "agregar_cantidad"},
+            valor_nuevo=_json_for_log(new_row),
+        )
+    except Exception:
+        pass
 
-@app.post("/presupuesto/{contrato_id}/bulk")
+    return new_row
 def bulk_presupuesto(
     contrato_id: int,
     items: List[PresupuestoRow],
@@ -4143,9 +4273,9 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
             ancho = float(dim.ancho) if dim.ancho is not None else float(r.get("ancho") or 0)
             espesor = float(dim.espesor) if dim.espesor is not None else float(r.get("espesor") or 0)
             if (ancho or espesor):
-                cant = round(area * ancho * espesor, 4)
+                cant = round(area * ancho * espesor, 2)
             else:
-                cant = round(area, 4)
+                cant = round(area, 2)
             costo = round(cant * vlr, 0)
             data = {
                 "area_long_nod": area,
@@ -4163,7 +4293,7 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
             area    = r.get("area_long_nod") or 0
             # Recalcular cant_total con las nuevas dimensiones parciales (ancho/esp) si aplica
             if dim and (dim.ancho is not None or dim.espesor is not None):
-                cant = round(float(area) * float(ancho) * float(espesor), 4)
+                cant = round(float(area) * float(ancho) * float(espesor), 2)
                 data_ancho   = {"ancho": ancho, "espesor": espesor}
             else:
                 cant = r.get("cant_total") or 0
@@ -4859,16 +4989,49 @@ def get_logs_entidad(
     entidad_id: str,
     current_user=Depends(get_current_user),
 ):
-    """Historial de una entidad (usuarios autenticados: trazabilidad en pantallas operativas)."""
-    return (
-        supabase.table("logs")
-        .select("*")
-        .eq("entidad_tipo", entidad_tipo)
-        .eq("entidad_id", entidad_id)
-        .order("created_at", desc=False)
-        .execute()
-        .data
-    )
+    """Historial de una entidad. Para `registro` incluye eventos del reporte padre (importación masiva, cabecera)."""
+    def _fetch(tipo: str, eid: str) -> List[dict]:
+        return (
+            supabase.table("logs")
+            .select("*")
+            .eq("entidad_tipo", tipo)
+            .eq("entidad_id", eid)
+            .order("created_at", desc=False)
+            .execute()
+            .data
+            or []
+        )
+
+    merged: Dict[Any, dict] = {}
+    for row in _fetch(entidad_tipo, entidad_id):
+        pk = row.get("id")
+        if pk is not None:
+            merged[pk] = row
+
+    if entidad_tipo == "registro":
+        try:
+            rid_int = int(entidad_id)
+        except (TypeError, ValueError):
+            rid_int = None
+        if rid_int is not None:
+            rrows = (
+                supabase.table("so_registros")
+                .select("reporte_id")
+                .eq("id", rid_int)
+                .limit(1)
+                .execute()
+                .data
+            )
+            rep_id = (rrows[0].get("reporte_id") if rrows else None)
+            if rep_id is not None:
+                for row in _fetch("reporte", str(rep_id)):
+                    pk = row.get("id")
+                    if pk is not None:
+                        merged[pk] = row
+
+    out = list(merged.values())
+    out.sort(key=lambda x: (x.get("created_at") or ""))
+    return out
 
 
 @app.post("/admin/deploy-log")
@@ -6508,8 +6671,16 @@ def buscar_reportes_obra(
                         q, capas_v, pk_id, tramo, costado, capitulo, subcontratista_id, item
                     )
 
+                if _estado_filtro_es_sin_asignar_item(estado):
+                    q = _so_reg_sin_item_asignado(q)
+
                 return q.limit(5000).execute().data
             reg_estados = supabase_execute(_reg_estados)
+            if _estado_filtro_es_sin_asignar_item(estado):
+                reg_estados = [
+                    x for x in reg_estados
+                    if not (str(x.get("item_numero") or "").strip())
+                ]
             cargo_map = {r["id"]: {"n1": [], "n2": [], "n3": [], "sub": [], "count": 0} for r in rows}
             costo_map = {}
             for reg in reg_estados:
@@ -6539,7 +6710,7 @@ def buscar_reportes_obra(
                 r["sub_estados"]    = list(set(m.get("sub", [])))
                 r["num_registros"] = m.get("count", 0)
                 if not _ocultar_costo_rep:
-                    r["costo_directo_validacion"] = round(costo_map.get(r["id"], 0.0), 2)
+                    r["costo_directo_validacion"] = round(costo_map.get(r["id"], 0.0), 0)
                 caps = cap_por_rep.get(r["id"], set())
                 if caps:
                     r["capitulo"] = ", ".join(sorted(caps))
@@ -6752,6 +6923,8 @@ def exportar_registros_sicoe(
             q = _so_reg_filtro_costado(q, body.costado)
         if body.q_observacion is not None and str(body.q_observacion).strip():
             q = q.ilike("observacion", f"%{str(body.q_observacion).strip()}%")
+        if _estado_filtro_es_sin_asignar_item(body.estado):
+            q = _so_reg_sin_item_asignado(q)
 
         # Validación: _parse reúne validacion_capas JSON y/o cargo_id+estado (una o varias capas = AND)
         if not _estado_filtro_omite_validacion_por_cargo(body.estado):
@@ -7144,6 +7317,8 @@ def analisis_registros_obra(
                     q = _so_registros_q_y_capas_validacion(
                         q, _capas_sql, pk_id, tramo, costado, _cap_l, _sub_l, _it_l
                     )
+                if _estado_filtro_es_sin_asignar_item(estado):
+                    q = _so_reg_sin_item_asignado(q)
                 return q.range(o, o + 999).execute().data
             batch = supabase_execute(_regs)
             raw_len = len(batch)
@@ -7154,6 +7329,12 @@ def analisis_registros_obra(
     except Exception as e:
         if not registros:
             registros = []
+
+    if _estado_filtro_es_sin_asignar_item(estado):
+        registros = [
+            r for r in registros
+            if not (str(r.get("item_numero") or "").strip())
+        ]
 
     if capas_ana and _validacion_cualquier_nivel2_o_3(capas_ana) and registros \
             and not _estado_filtro_omite_validacion_por_cargo(estado):
@@ -7308,11 +7489,11 @@ def analisis_registros_obra(
     else:
         grupos_list = sorted(grupos.values(), key=lambda g: g["costo_directo"], reverse=True)
     for g in grupos_list:
-        g["costo_directo"] = round(g["costo_directo"], 2)
+        g["costo_directo"] = round(g["costo_directo"], 0)
         if "no_revisados_costo" in g:
-            g["no_revisados_costo"] = round(g.get("no_revisados_costo") or 0, 2)
+            g["no_revisados_costo"] = round(g.get("no_revisados_costo") or 0, 0)
         if "cantidad_total" in g:
-            g["cantidad_total"] = round(g["cantidad_total"], 3)
+            g["cantidad_total"] = round(g["cantidad_total"], 2)
 
     # ── 8. Encabezado ─────────────────────────────────────────────────────────
     if modo == "acta_semana":
@@ -7374,7 +7555,7 @@ def analisis_registros_obra(
                 partes.append(f"Val. {cargo_lbl}: {evx}")
         encabezado = " · ".join(partes) if partes else "Todos los registros"
 
-    tc  = round(sum(g["costo_directo"]   for g in grupos_list), 2)
+    tc  = round(sum(g["costo_directo"]   for g in grupos_list), 0)
     tr  = sum(g["total_registros"] for g in grupos_list)
     ta  = sum(g["aprobados"]       for g in grupos_list)
     tp  = sum(g["pendientes"]      for g in grupos_list)
@@ -7383,7 +7564,7 @@ def analisis_registros_obra(
     tp_c  = sum(g.get("pendientes_count", 0) for g in grupos_list)
     trj_c = sum(g.get("rechazados_count", 0) for g in grupos_list)
     tnr   = sum(g.get("no_revisados",     0) for g in grupos_list)
-    tnrc  = round(sum(g.get("no_revisados_costo", 0.0) for g in grupos_list), 2)
+    tnrc  = round(sum(g.get("no_revisados_costo", 0.0) for g in grupos_list), 0)
 
     return {"modo": modo, "encabezado": encabezado, "grupos": grupos_list,
             "total_costo_directo": tc, "total_registros": tr,
@@ -7838,7 +8019,20 @@ def crear_reporte_obra(contrato_id: int, body: ReporteCreate, current_user=Depen
     def _ins():
         return supabase.table("so_reportes").insert(data).execute().data
     result = supabase_execute(_ins)
-    return result[0] if result else {}
+    row = result[0] if result else {}
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "CREAR",
+            "SICOE",
+            "reporte",
+            str(row.get("id") or ""),
+            {"numero_reporte": row.get("numero_reporte"), "estado": row.get("estado")},
+        )
+    except Exception:
+        pass
+    return row
 
 @app.get("/sicoe-obra/{contrato_id}/plantillas")
 def listar_plantillas(contrato_id: int, capitulo: str = None, current_user=Depends(get_current_user)):
@@ -8018,6 +8212,10 @@ class ReemplazarRegistrosNuevoReporteBody(BaseModel):
 
 @app.put("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
 def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, current_user=Depends(get_current_user)):
+    def _prev_rep():
+        return supabase.table("so_reportes").select("*").eq("id", reporte_id).eq("contrato_id", contrato_id).limit(1).execute().data
+    prev_rows = supabase_execute(_prev_rep)
+    prev_rep = prev_rows[0] if prev_rows else {}
     data = body.dict()
     # Se persisten localización y PK en so_reportes (antes se descartaban y solo existía PATCH en Borrador;
     # un reintento tras guardar cabecera dejaba estado≠Borrador y el PATCH devolvía 400).
@@ -8028,7 +8226,22 @@ def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, c
         return supabase.table("so_reportes").update(data)\
             .eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
     result = supabase_execute(_upd)
-    return result[0] if result else {}
+    out = result[0] if result else {}
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "EDITAR",
+            "SICOE",
+            "reporte",
+            str(reporte_id),
+            {"numero_reporte": out.get("numero_reporte") or prev_rep.get("numero_reporte")},
+            valor_anterior=_so_reporte_audit_snapshot(prev_rep),
+            valor_nuevo=_so_reporte_audit_snapshot(out),
+        )
+    except Exception:
+        pass
+    return out
 
 @app.patch("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/localizacion")
 def actualizar_localizacion_borrador(contrato_id: int, reporte_id: int, body: dict, current_user=Depends(get_current_user)):
@@ -8046,11 +8259,30 @@ def actualizar_localizacion_borrador(contrato_id: int, reporte_id: int, body: di
     )}
     if not campos:
         raise HTTPException(status_code=400, detail="Sin campos de localización")
+    def _prev_snap():
+        return supabase.table("so_reportes").select("*").eq("id", reporte_id).eq("contrato_id", contrato_id).limit(1).execute().data
+    pr = supabase_execute(_prev_snap)
+    prev_rep = pr[0] if pr else {}
     def _upd():
         return supabase.table("so_reportes").update(campos)\
             .eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
     result = supabase_execute(_upd)
-    return result[0] if result else {}
+    out = result[0] if result else {}
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "EDITAR",
+            "SICOE",
+            "reporte",
+            str(reporte_id),
+            {"alcance": "localizacion_borrador", "campos": list(campos.keys())},
+            valor_anterior=_so_reporte_audit_snapshot(prev_rep),
+            valor_nuevo=_so_reporte_audit_snapshot(out),
+        )
+    except Exception:
+        pass
+    return out
 
 def _registro_nivel3_aprobado(row: Optional[Dict[str, Any]]) -> bool:
     """Tras aprobación Nivel 3 (Interventoría), no se editan datos de obra salvo corte de subcontratista."""
@@ -8085,6 +8317,21 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         if "corte_id" not in data:
             return prev_row
         data = {"corte_id": data["corte_id"]}
+
+    for dk in ("longitud", "ancho", "espesor", "cantidad"):
+        if dk in data:
+            data[dk] = round(float(data[dk]), 2)
+    if "cantidad_total" in data:
+        data["cantidad_total"] = round(float(data["cantidad_total"]), 2)
+    vlr_merged = (
+        float(data["vlr_unitario"])
+        if data.get("vlr_unitario") is not None
+        else float(prev_row.get("vlr_unitario") or 0)
+    )
+    if "cantidad_total" in data and (str(prev_row.get("item_numero") or "").strip()):
+        data["costo_directo"] = round(float(data["cantidad_total"]) * vlr_merged, 0)
+    elif "costo_directo" in data:
+        data["costo_directo"] = round(float(data["costo_directo"]), 0)
 
     def _upd():
         return supabase.table("so_registros").update(data)\
@@ -8593,7 +8840,8 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
 
         cant_total = float(registro.get("cantidad_total") or 0)
         vlr_unit   = float(item.get("precio_unitario") or 0)
-        costo_dir  = round(cant_total * vlr_unit, 2)
+        cant_total = round(cant_total, 2)
+        costo_dir  = round(cant_total * vlr_unit, 0)
         reporte_id = registro["reporte_id"]
 
         def _rep():
@@ -8657,6 +8905,7 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
                 "item_numero":      item.get("item_numero"),
                 "item_descripcion": item.get("descripcion"),
                 "vlr_unitario":     vlr_unit,
+                "cantidad_total":   cant_total,
                 "costo_directo":    costo_dir,
                 "unidad":           item.get("unidad"),
                 "semana_id":        semana_id,
@@ -8714,9 +8963,20 @@ def nuevo_registro_en_reporte(contrato_id: int, reporte_id: int, current_user=De
             "numero_registro": numero,
         }).execute().data
     result = supabase_execute(_ins)
-    return result[0] if result else {}
-
-# ─── SICOE OBRA: Mover registro a otro reporte ───────────────────────────────
+    row = result[0] if result else {}
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "CREAR",
+            "SICOE",
+            "registro",
+            str(row.get("id") or ""),
+            {"reporte_id": reporte_id, "numero_registro": row.get("numero_registro")},
+        )
+    except Exception:
+        pass
+    return row
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/mover-a/{nuevo_reporte_id}")
 def mover_registro(contrato_id: int, registro_id: int, nuevo_reporte_id: int, current_user=Depends(get_current_user)):
     try:
@@ -8986,7 +9246,8 @@ def _macro_roles_destinatarios(destinatarios: list) -> set:
 
 
 def _insertar_comentario(contrato_id: int, registro_id: int, autor_id: int,
-                         comentario_data: dict, tipo_override: str = None, nivel_validacion_override: str = None):
+                         comentario_data: dict, tipo_override: str = None, nivel_validacion_override: str = None,
+                         audit_user=None):
     """Inserta un comentario en so_registro_comentarios calculando confidencialidad."""
     destinatarios = comentario_data.get("destinatarios") or []
     rol_origen_payload = comentario_data.get("rol_origen", "")
@@ -9031,7 +9292,30 @@ def _insertar_comentario(contrato_id: int, registro_id: int, autor_id: int,
     def _ins():
         return supabase.table("so_registro_comentarios").insert(row).execute().data
     data = supabase_execute(_ins)
-    return data[0] if data else {}
+    ins_row = data[0] if data else {}
+    if audit_user and ins_row:
+        try:
+            u_log = _audit_user_contrato(audit_user, contrato_id)
+            msg = ins_row.get("mensaje") or ""
+            registrar_log(
+                u_log,
+                "COMENTAR",
+                "SICOE",
+                "registro",
+                str(registro_id),
+                {
+                    "so_comentario_id": ins_row.get("id"),
+                    "tipo": ins_row.get("tipo"),
+                    "nivel_validacion": ins_row.get("nivel_validacion"),
+                    "etiqueta": ins_row.get("etiqueta"),
+                    "asunto": ins_row.get("asunto"),
+                    "mensaje_excerpt": msg[:800],
+                },
+                severidad="AUDIT",
+            )
+        except Exception:
+            pass
+    return ins_row
 
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/validar-nivel1")
 def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
@@ -9055,6 +9339,7 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
                 status_code=400,
                 detail="El registro está aprobado por Nivel 3 (Interventoría) y no puede modificarse por esta vía.",
             )
+        prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
         update = {
             "nivel1_estado":     body.estado,
             "nivel1_usuario_id": autor_id,
@@ -9083,7 +9368,8 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
         supabase_execute(_upd)
         if body.comentario_data:
             _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
-                                 tipo_override="validacion", nivel_validacion_override="Nivel 1")
+                                 tipo_override="validacion", nivel_validacion_override="Nivel 1",
+                                 audit_user=current_user)
             destinatarios = body.comentario_data.get("destinatarios") or []
             for dest in destinatarios:
                 dest_id = dest.get("id") if isinstance(dest, dict) else None
@@ -9107,9 +9393,12 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
                         pass
         try:
             u_log = _audit_user_contrato(current_user, contrato_id)
+            after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
             registrar_log(
                 u_log, "VALIDAR", "SICOE", "registro", str(registro_id),
                 {"nivel": 1, "estado": body.estado},
+                valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
+                valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
             )
         except Exception:
             pass
@@ -9156,6 +9445,7 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
             raise HTTPException(status_code=422,
                 detail="Se requiere comentario_data cuando el estado es Pendiente o Rechazado.")
 
+        prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
         update = {
             "nivel2_estado":     estado_real,
             "nivel2_usuario_id": autor_id,
@@ -9177,7 +9467,8 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
                 pass
         if body.comentario_data:
             _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
-                                 tipo_override="validacion", nivel_validacion_override="Nivel 2")
+                                 tipo_override="validacion", nivel_validacion_override="Nivel 2",
+                                 audit_user=current_user)
             destinatarios = body.comentario_data.get("destinatarios") or []
             for dest in destinatarios:
                 dest_id = dest.get("id") if isinstance(dest, dict) else None
@@ -9201,9 +9492,12 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
                         pass
         try:
             u_log = _audit_user_contrato(current_user, contrato_id)
+            after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
             registrar_log(
                 u_log, "VALIDAR", "SICOE", "registro", str(registro_id),
                 {"nivel": 2, "estado": body.estado, "nivel2_objeto_pago_sub": body.objeto_pago_sub},
+                valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
+                valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
             )
         except Exception:
             pass
@@ -9242,6 +9536,7 @@ def validar_nivel3(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
             raise HTTPException(status_code=422,
                 detail="El registro debe estar aprobado por Nivel 2 primero.")
 
+        prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
         update = {
             "nivel3_estado":     body.estado,
             "nivel3_usuario_id": autor_id,
@@ -9263,12 +9558,16 @@ def validar_nivel3(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
                 pass
         if body.comentario_data:
             _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
-                                 tipo_override="validacion", nivel_validacion_override="Nivel 3")
+                                 tipo_override="validacion", nivel_validacion_override="Nivel 3",
+                                 audit_user=current_user)
         try:
             u_log = _audit_user_contrato(current_user, contrato_id)
+            after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
             registrar_log(
                 u_log, "VALIDAR", "SICOE", "registro", str(registro_id),
                 {"nivel": 3, "estado": body.estado},
+                valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
+                valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
             )
         except Exception:
             pass
@@ -9304,6 +9603,7 @@ def validar_sub(contrato_id: int, registro_id: int, body: ValidarSubBody,
             raise HTTPException(status_code=422,
                 detail="El registro no es objeto de pago a subcontratista (nivel2_objeto_pago_sub debe ser True).")
 
+        prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
         update = {
             "sub_estado":     body.estado,
             "sub_usuario_id": autor_id,
@@ -9316,9 +9616,12 @@ def validar_sub(contrato_id: int, registro_id: int, body: ValidarSubBody,
         supabase_execute(_upd)
         try:
             u_log = _audit_user_contrato(current_user, contrato_id)
+            after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
             registrar_log(
                 u_log, "VALIDAR", "SICOE", "registro", str(registro_id),
                 {"nivel": "sub", "estado": body.estado},
+                valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
+                valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
             )
         except Exception:
             pass
@@ -9595,7 +9898,7 @@ def _dashboard_matriz_validacion_fallback(
     def round_block(m):
         out = {}
         for k, cols in m.items():
-            out[k] = {c: round(v, 2) for c, v in cols.items()}
+            out[k] = {c: round(v, 0) for c, v in cols.items()}
         return out
 
     return {
@@ -9882,9 +10185,9 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
             rev_dom = _matriz_validacion_norm_estado(max(tr, key=lambda x: float(x[0] or 0))[1])
         rows.append({
             "pk_id": k,
-            "cant_ppto": round(p["cant"], 3), "costo_ppto": round(p["costo"], 0),
-            "cant_sicoe": round(c["cant"], 3), "costo_sicoe": round(c["costo"], 0),
-            "delta_cant": round(p["cant"] - c["cant"], 3),
+            "cant_ppto": round(p["cant"], 2), "costo_ppto": round(p["costo"], 0),
+            "cant_sicoe": round(c["cant"], 2), "costo_sicoe": round(c["costo"], 0),
+            "delta_cant": round(p["cant"] - c["cant"], 2),
             "delta_costo": round(p["costo"] - c["costo"], 0),
             "descripcion": p.get("desc", ""),
             "revisado": rev_dom,
@@ -10542,13 +10845,30 @@ def solicitar_reversion(contrato_id: int, registro_id: int, body: SolicitarRever
             raise HTTPException(status_code=422,
                 detail="El registro debe estar en nivel3 Aprobado y bloqueado para solicitar reversión.")
 
+        prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
         def _upd():
             return supabase.table("so_registros")\
                 .update({"solicitud_reversion": True}).eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).execute().data
         supabase_execute(_upd)
         _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
-                             tipo_override="solicitud_reversion")
+                             tipo_override="solicitud_reversion", audit_user=current_user)
+        try:
+            u_log = _audit_user_contrato(current_user, contrato_id)
+            after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
+            registrar_log(
+                u_log,
+                "REVERSION_SOLICITAR",
+                "SICOE",
+                "registro",
+                str(registro_id),
+                {},
+                valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
+                valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
+                severidad="AUDIT",
+            )
+        except Exception:
+            pass
         return {"ok": True}
     except HTTPException:
         raise
@@ -10569,6 +10889,8 @@ def aceptar_reversion(contrato_id: int, registro_id: int, body: AceptarReversion
         if not rows or not rows[0].get("solicitud_reversion"):
             raise HTTPException(status_code=422,
                 detail="No existe una solicitud de reversión activa para este registro.")
+
+        prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
 
         if body.aceptar:
             update = {
@@ -10593,7 +10915,24 @@ def aceptar_reversion(contrato_id: int, registro_id: int, body: AceptarReversion
                 "mensaje": "Reversión aceptada.",
             }
             _insertar_comentario(contrato_id, registro_id, autor_id, comentario_data,
-                                 tipo_override="aceptar_reversion")
+                                 tipo_override="aceptar_reversion", audit_user=current_user)
+        try:
+            u_log = _audit_user_contrato(current_user, contrato_id)
+            after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
+            accion = "REVERSION_ACEPTAR" if body.aceptar else "REVERSION_RECHAZAR"
+            registrar_log(
+                u_log,
+                accion,
+                "SICOE",
+                "registro",
+                str(registro_id),
+                {},
+                valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
+                valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
+                severidad="AUDIT",
+            )
+        except Exception:
+            pass
         return {"ok": True}
     except HTTPException:
         raise
@@ -10619,7 +10958,7 @@ def crear_comentario(contrato_id: int, registro_id: int, body: ComentarioCreate,
         if n_dest < 1:
             raise HTTPException(
                 status_code=422, detail="Debe indicar al menos un destinatario (para quién va el mensaje).")
-        creado = _insertar_comentario(contrato_id, registro_id, autor_id, comentario_data)
+        creado = _insertar_comentario(contrato_id, registro_id, autor_id, comentario_data, audit_user=current_user)
 
         # Notificación directa a destinatarios explícitos
         destinatarios = comentario_data.get("destinatarios") or []
@@ -10692,10 +11031,33 @@ def responder_comentario_registro(contrato_id: int, registro_id: int, comentario
                 "enlaces":        [],
                 "nivel_validacion": parent.get("nivel_validacion"),
             }).execute().data
-        supabase_execute(_ins)
-        return {"ok": True}
+        data = supabase_execute(_ins)
+        row = data[0] if data else {}
+        try:
+            u_log = _audit_user_contrato(current_user, contrato_id)
+            msg = (body.get("mensaje") or "")[:800]
+            registrar_log(
+                u_log,
+                "COMENTAR_RESPUESTA",
+                "SICOE",
+                "registro",
+                str(registro_id),
+                {
+                    "so_comentario_id": row.get("id"),
+                    "padre_id": comentario_id,
+                    "mensaje_excerpt": msg,
+                    "tipo": parent_tipo,
+                },
+                severidad="AUDIT",
+            )
+        except Exception:
+            pass
+        return {"ok": True, "comentario_id": row.get("id")}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/sicoe-obra/{contrato_id}/registros/{registro_id}/reporte")
 def get_reporte_de_registro(
@@ -10761,11 +11123,22 @@ def get_reporte_de_registro(
 def listar_comentarios(contrato_id: int, registro_id: int, rol_solicitante: str,
                        current_user=Depends(get_current_user)):
     try:
+        def _verify_reg():
+            return supabase.table("so_registros").select("id")\
+                .eq("id", registro_id).eq("contrato_id", contrato_id)\
+                .limit(1).execute().data
+        if not supabase_execute(_verify_reg):
+            raise HTTPException(
+                status_code=404,
+                detail="Registro no encontrado en este contrato.",
+            )
+        # Por registro_id: el conteo en grilla no filtra por contrato_id en la fila del
+        # comentario; migraciones u operaciones legacy pueden dejar contrato_id distinto/NULL
+        # y el listado quedaba vacío aunque hubiera filas.
         def _get():
             return supabase.table("so_registro_comentarios")\
                 .select("*")\
                 .eq("registro_id", registro_id)\
-                .eq("contrato_id", contrato_id)\
                 .order("created_at", desc=False).execute().data
         comentarios = supabase_execute(_get)
         autor_ids = list({c["autor_id"] for c in comentarios if c.get("autor_id")})
@@ -10806,11 +11179,16 @@ def listar_comentarios(contrato_id: int, registro_id: int, rol_solicitante: str,
             if visible:
                 filtrados.append(c)
 
-        # Agrupar: padres con sus respuestas anidadas
-        padres = [c for c in filtrados if not c.get("padre_id")]
-        hijos  = [c for c in filtrados if c.get("padre_id")]
+        # Raíces: sin padre o padre no está en el conjunto visible (p. ej. filtrado o
+        # migrado sin padre en BD); no perder "huérfanos" en la respuesta.
+        by_id_filtrados = {c.get("id"): c for c in filtrados}
+        padres = []
+        for c in filtrados:
+            pid = c.get("padre_id")
+            if not pid or pid not in by_id_filtrados:
+                padres.append(c)
         for p in padres:
-            p["respuestas"] = [h for h in hijos if h.get("padre_id") == p["id"]]
+            p["respuestas"] = [h for h in filtrados if h.get("padre_id") == p["id"]]
         return padres
     except HTTPException:
         raise
@@ -10850,6 +11228,8 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
                 omitidos += 1
                 continue
 
+            prev_audit = _so_registro_fetch_validacion_audit(contrato_id, reg_id) or {}
+
             update = {
                 "nivel2_estado":     estado_real,
                 "nivel2_usuario_id": autor_id,
@@ -10873,8 +11253,23 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
             if body.comentario_data:
                 _insertar_comentario(
                     contrato_id, reg_id, autor_id, body.comentario_data,
-                    tipo_override="validacion", nivel_validacion_override="Nivel 2"
+                    tipo_override="validacion", nivel_validacion_override="Nivel 2",
+                    audit_user=current_user,
                 )
+            try:
+                u_log = _audit_user_contrato(current_user, contrato_id)
+                after_audit = _so_registro_fetch_validacion_audit(contrato_id, reg_id) or {}
+                registrar_log(
+                    u_log, "VALIDAR", "SICOE", "registro", str(reg_id),
+                    {
+                        "nivel": 2, "estado": body.estado, "masivo": True, "reporte_id": reporte_id,
+                        "nivel2_objeto_pago_sub": body.objeto_pago_sub,
+                    },
+                    valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
+                    valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
+                )
+            except Exception:
+                pass
             actualizados += 1
 
         return {"actualizados": actualizados, "omitidos": omitidos}
@@ -10908,6 +11303,8 @@ def validar_masivo_nivel3(contrato_id: int, reporte_id: int, body: ValidarMasivo
                 omitidos += 1
                 continue
 
+            prev_audit = _so_registro_fetch_validacion_audit(contrato_id, reg_id) or {}
+
             update = {
                 "nivel3_estado":     body.estado,
                 "nivel3_usuario_id": autor_id,
@@ -10931,8 +11328,20 @@ def validar_masivo_nivel3(contrato_id: int, reporte_id: int, body: ValidarMasivo
             if body.comentario_data:
                 _insertar_comentario(
                     contrato_id, reg_id, autor_id, body.comentario_data,
-                    tipo_override="validacion", nivel_validacion_override="Nivel 3"
+                    tipo_override="validacion", nivel_validacion_override="Nivel 3",
+                    audit_user=current_user,
                 )
+            try:
+                u_log = _audit_user_contrato(current_user, contrato_id)
+                after_audit = _so_registro_fetch_validacion_audit(contrato_id, reg_id) or {}
+                registrar_log(
+                    u_log, "VALIDAR", "SICOE", "registro", str(reg_id),
+                    {"nivel": 3, "estado": body.estado, "masivo": True, "reporte_id": reporte_id},
+                    valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
+                    valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
+                )
+            except Exception:
+                pass
             actualizados += 1
 
         return {"actualizados": actualizados, "omitidos": omitidos}
