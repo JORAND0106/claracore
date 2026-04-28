@@ -137,16 +137,10 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   // ── Estado ─────────────────────────────────────────────────────────────────
   const [registros, setRegistros] = useState([])
   const [loading, setLoading] = useState(false)
-  const [importing, setImporting] = useState(false)
-  const [importMsg, setImportMsg] = useState('')
-  const [importProgreso, setImportProgreso] = useState(0)
   const [seleccionados, setSeleccionados] = useState(new Set())
   const [filaZoom, setFilaZoom] = useState(null) // id de la fila con zoom activo
   const [editando, setEditando] = useState(null)
   const [editValues, setEditValues] = useState({})
-  const [modalImport, setModalImport] = useState(null)
-  const [modoImport, setModoImport] = useState('replace')
-  const [confirmReplace, setConfirmReplace] = useState(false)
   const [drill, setDrill] = useState([])        // [{campo, valor}, …] – ruta activa
   const [hoveredBar, setHoveredBar] = useState(null)
   // ── Estado edición y validación ────────────────────────────────────────────
@@ -188,6 +182,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [filtroEstrellaTipo, setFiltroEstrellaTipo] = useState('tramo') // 'ini' | 'fin' | 'tramo'
   const [tramoSelec,        setTramoSelec]        = useState(null) // {no_inicio, no_final, label}
   const [tabTramo,          setTabTramo]          = useState(0)    // 0=INFO 1=NODO INI 2=NODO FIN 3=TRAMO
+  const [refrescandoRevisorTramos, setRefrescandoRevisorTramos] = useState(false)
   /** Fase B: filtros de servidor (misma semántica capítulo/ítem que dashboard SICOE) */
   const [ubicacionTramo,   setUbicacionTramo]   = useState('')
   const [ubicacionCalzada, setUbicacionCalzada] = useState('')
@@ -277,11 +272,6 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
     // ── Constantes drill-down ──────────────────────────────────────────────────
   const NIVELES = ['capitulo', 'item', 'pk_id']
   const NOM     = { capitulo:'Capítulo', item:'Ítem', pk_id:'PK_ID' }
-  const PALETA_BARRAS = [
-    '#0077B6','#00B4C6','#00A896','#028090','#05668D',
-    '#2E86AB','#A23B72','#F18F01','#C73E1D','#3B1F2B',
-    '#44BBA4','#E94F37','#393E41','#F5A623','#7B2D8B',
-  ]
 
   const fmt  = (n) => (n != null ? formatCOP(n) : '-')
   const fmtN = (n) => n != null ? new Intl.NumberFormat('es-CO',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n) : '-'
@@ -980,8 +970,6 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   const [primerNivel, setPrimerNivel] = useState('capitulo')
   const nivelesOrden = [primerNivel, ...NIVELES.filter(n => n !== primerNivel)]
   const nivelActual  = nivelesOrden[drill.length] || null
-  const nivelIdx     = NIVELES.indexOf(nivelActual ?? primerNivel)
-  const colorActual  = PALETA_BARRAS[Math.max(0, Math.min(nivelIdx, PALETA_BARRAS.length - 1))]
 
   // ── Comentarios: pedir, crear, cargar resumen ────────────────────────────
   function pedirComentario(tipo, obligatorio) {
@@ -1039,6 +1027,20 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     })
     if (!res.ok) return {}
     return res.json()
+  }
+
+  async function refrescarDatosRevisorTramosModal() {
+    const cap = modalModoCapitulo
+    if (!String(cap || '').trim() || !contratoId) return
+    const itemDrill = drill.find((d) => d.campo === 'item')?.valor || null
+    setRefrescandoRevisorTramos(true)
+    try {
+      await cargarCapituloData(cap, itemDrill, { forzar: true, syncPreserveSize: false })
+      const data = await fetchComentariosValidacionPorCapitulo(cap)
+      setComentariosTramo((prev) => ({ ...prev, ...data }))
+    } finally {
+      setRefrescandoRevisorTramos(false)
+    }
   }
 
   async function abrirHilo(registroId, tipo, opts = {}) {
@@ -1206,9 +1208,11 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const porRevisado = {}
     const porPreInterv = {}
     let costoAcum = 0
+    let cantTotalAcum = 0
     for (const r of registrosFiltrados) {
       const cd = Number(r.costo_directo) || 0
       costoAcum += cd
+      cantTotalAcum += Number(r.cant_total) || 0
       const rev = r.revisado || 'No Revisado'
       if (!porRevisado[rev]) porRevisado[rev] = { count: 0, costo: 0 }
       porRevisado[rev].count += 1
@@ -1218,8 +1222,35 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       porPreInterv[pre].count += 1
       porPreInterv[pre].costo += cd
     }
-    return { porRevisado, porPreInterv, total: registrosFiltrados.length, costoAcum }
+    return { porRevisado, porPreInterv, total: registrosFiltrados.length, costoAcum, cantTotalAcum }
   }, [registrosFiltrados])
+
+  /** Título del panel de totales: ítem + descripción según filtro (panel lateral, grilla o listado de precios). */
+  const etiquetaTituloVistaFiltrada = useMemo(() => {
+    const raw = String(fObra.item ?? '').trim()
+    if (!raw) return 'Sin ítem en criterio'
+    const normKey = (s) => String(s ?? '').trim().replace(/\.+$/, '')
+    const nk = normKey(raw)
+    const matchItem = (x) => {
+      const ix = String(x ?? '').trim()
+      return ix === raw || normKey(ix) === nk
+    }
+    const fromPanel = itemsResumen.find((it) => matchItem(it.item))
+    let desc = String(fromPanel?.descripcion ?? '').trim()
+    let itemLabel = String(fromPanel?.item ?? raw).trim()
+    if (!desc && registrosFiltrados.length) {
+      const r0 = registrosFiltrados.find((r) => matchItem(r.item))
+      if (r0) {
+        desc = String(r0.descripcion ?? '').trim()
+        if (!fromPanel) itemLabel = String(r0.item ?? raw).trim()
+      }
+    }
+    if (!desc && Array.isArray(listadoPrecios)) {
+      const p = listadoPrecios.find((x) => matchItem(x.item_numero))
+      if (p) desc = String(p.descripcion ?? '').trim()
+    }
+    return desc ? `${itemLabel} · ${desc}` : itemLabel
+  }, [fObra.item, itemsResumen, registrosFiltrados, listadoPrecios])
 
   async function cargarItemsCapitulo(capitulo) {
     if (!contratoId) return
@@ -1253,126 +1284,6 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   function irA(idx) {
     setDrill(prev => prev.slice(0, idx))
     // Los registros de capítulos cargados permanecen en memoria para re-uso
-  }
-
-  // ── Import CSV ─────────────────────────────────────────────────────────────
-  async function handleImportCSV(e) {
-    const file = e.target.files[0]; if (!file) return
-    const raw  = await file.text()
-    const text = raw.replace(/^\uFEFF/, '')
-
-    // Parser CSV robusto — respeta campos entre comillas con separador interno
-    function parseCSVLine(line, sep) {
-      const result = []; let cur = ''; let inQuote = false
-      for (let i = 0; i < line.length; i++) {
-        const ch = line[i]
-        if (ch === '"') { inQuote = !inQuote }
-        else if (ch === sep && !inQuote) { result.push(cur.trim()); cur = '' }
-        else { cur += ch }
-      }
-      result.push(cur.trim())
-      return result
-    }
-
-    const lines = text.split(/\r?\n/).filter(l => l.trim())
-    const firstLine = lines[0]
-    const sep = (firstLine.match(/;/g)||[]).length > (firstLine.match(/,/g)||[]).length ? ';' : ','
-    const headers = parseCSVLine(firstLine, sep).map(h => h.replace(/^"|"$/g,'').trim().toUpperCase())
-
-    const MAP = {
-      'PK_ID':'pk_id',
-      'CAPITULO':'capitulo','CAPÍTULO':'capitulo','COMPETENCIA':'competencia',
-      'ITEM':'item','ÍTEM':'item',
-      'DESCRIPCION':'descripcion','DESCRIPCIÓN':'descripcion',
-      'UND':'und',
-      'CALZADA':'calzada','TRAMO':'tramo',
-      'ABS. INICIO':'abs_inicio','ABS. FINAL':'abs_final',
-      'ABS INICIO':'abs_inicio','ABS FINAL':'abs_final',
-      'VLR UNITARIO':'vlr_unitario','VLR. UNITARIO':'vlr_unitario','VALOR UNITARIO':'valor_unitario',
-      'NO. INICIO':'no_inicio','NO. FINAL':'no_final',
-      'NO INICIO':'no_inicio','NO FINAL':'no_final',
-      'AREA/LONG/NOD':'area_long_nod','ÁREA/LONG/NOD':'area_long_nod',
-      'AREA/LONG':'area_long_nod','ÁREA/LONG':'area_long_nod',
-      'ANCHO':'ancho','ESPESOR':'espesor',
-      'CANT.TOTAL':'cant_total','CANT. TOTAL':'cant_total','CANTIDAD':'cant_total',
-      'COSTO DIRECTO':'costo_directo',
-      'TIPO DE EJECUCIÓN':'tipo_ejecucion','TIPO DE EJECUCION':'tipo_ejecucion',
-      'TIPO DE ENTIDAD':'tipo_entidad',
-      'ID_POL':'id_pol','ID POL':'id_pol',
-      'OBSERVACIÓN':'observacion','OBSERVACION':'observacion',
-      'ENTHANDLE':'ent_handle','ENT_HANDLE':'ent_handle',
-      'TXTHANDLE':'txt_handle','TXT_HANDLE':'txt_handle',
-      'LAYERENT':'layer_ent','LAYER_ENT':'layer_ent',
-      'LAYERTXT':'layer_txt','LAYER_TXT':'layer_txt',
-      'COLORHEX':'color_hex','COLOR_HEX':'color_hex',
-      'GUID':'guid',
-      'X_LABEL (ESTE)':'x_label','X_LABEL':'x_label',
-      'Y_LABEL (NORTE)':'y_label','Y_LABEL':'y_label',
-      'REVISADO (TRUE/FALSE)':'revisado','REVISADO':'revisado',
-      'OBSERVACIÓN EXTERNA':'observacion_externa','OBSERVACION EXTERNA':'observacion_externa',
-      'REV_BLOCK_HANDLE':'rev_block_handle',
-    }
-    const NUMS = new Set(['vlr_unitario','valor_unitario','area_long_nod','ancho','espesor','cant_total','costo_directo','x_label','y_label'])
-    const rows = []
-    for (let i = 1; i < lines.length; i++) {
-      const vals = parseCSVLine(lines[i], sep).map(v => v.replace(/^"|"$/g,'').trim())
-      const obj = {}
-      headers.forEach((h, idx) => {
-        const key = MAP[h]; if (!key) return
-        const v = vals[idx] || ''
-        if (NUMS.has(key)) { const n = parseFloat(v.replace(/[,$]/g,'')); obj[key] = isNaN(n) ? null : n }
-        else obj[key] = v || null
-      })
-      if (obj.pk_id || obj.item) rows.push(obj)
-    }
-    setModalImport({ rows, fileName: file.name })
-    setModoImport('append'); setConfirmReplace(false); e.target.value = ''
-  }
-
-  async function ejecutarImport() {
-    if (!modalImport) return
-    if (modoImport === 'replace' && !confirmReplace) { setConfirmReplace(true); return }
-    const { rows } = modalImport
-    setModalImport(null); setImporting(true); setImportProgreso(0)
-    const BATCH = 500
-    let ok = true; let msj = ''
-    let totalInsertados = 0
-    for (let i = 0; i < rows.length; i += BATCH) {
-      const batch = rows.slice(i, i + BATCH)
-      const mode = i === 0 ? modoImport : 'append'
-      const res = await fetch(`${API}/presupuesto/${contratoId}/bulk?mode=${mode}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(batch)
-      })
-      if (!res.ok) {
-        let detail = 'Error al importar'
-        try {
-          const d = await res.json()
-          detail = d.detail != null ? String(d.detail) : detail
-        } catch { /* ignore */ }
-        msj = `❌ ${detail}`
-        ok = false
-        break
-      }
-      try {
-        const j = await res.json()
-        const ins = j && typeof j.insertados === 'number' ? j.insertados : batch.length
-        totalInsertados += ins
-      } catch {
-        totalInsertados += batch.length
-      }
-      setImportProgreso(Math.min(100, Math.round(((i + batch.length) / rows.length) * 100)))
-    }
-    setImporting(false); setImportProgreso(0)
-    if (ok) {
-      setImportMsg(`✅ Importación completada (${rows.length} filas, ${totalInsertados} almacenadas).`)
-      setTimeout(() => setImportMsg(''), 6000)
-    } else {
-      setImportMsg(msj)
-      setTimeout(() => setImportMsg(''), 8000)
-    }
-    if (ok) { await recargarCapActual(true) }
   }
 
   // ── Listado de precios: derivados ──────────────────────────────────────────
@@ -1905,6 +1816,25 @@ async function restaurar(id) {
                   <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, marginTop:'2px' }}>{modalModoCapitulo}</div>
                 </div>
                 <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
+                  <button
+                    type="button"
+                    disabled={refrescandoRevisorTramos}
+                    onClick={() => { void refrescarDatosRevisorTramosModal() }}
+                    title="Vuelve a cargar los registros del capítulo desde el servidor (mantiene tramo y pestaña)"
+                    style={{
+                      background:'rgba(148,163,184,0.15)',
+                      border:`1px solid ${t.border}`,
+                      color:t.text,
+                      borderRadius:'8px',
+                      padding:'5px 12px',
+                      fontSize:'var(--cc-sm)',
+                      fontWeight:'700',
+                      cursor: refrescandoRevisorTramos ? 'wait' : 'pointer',
+                      opacity: refrescandoRevisorTramos ? 0.7 : 1,
+                    }}
+                  >
+                    {refrescandoRevisorTramos ? '…' : '⟳ Actualizar'}
+                  </button>
                   {puedeEditar && puedeEditarDimensiones && (
                     <button onClick={() => { setModoSeleccionClon(true); setClonBase(null) }}
                       style={{ background:t.primary+'22', color:t.primary, border:`1px solid ${t.primary}`, borderRadius:'8px', padding:'5px 12px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer' }}>
@@ -3055,36 +2985,6 @@ async function restaurar(id) {
         </div>
       )}
 
-      {/* ── Modal importar ── */}
-      {modalImport && (
-        <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.5)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center' }}>
-          <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'16px',padding:'28px',width:'420px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.3)' }}>
-            <div style={{ fontSize:'var(--cc-md)',fontWeight:'700',color:t.primary,marginBottom:'8px' }}>📂 Importar Presupuesto</div>
-            <div style={{ fontSize:'var(--cc-label)',color:t.textMuted,marginBottom:'20px' }}>{modalImport.fileName} — <strong style={{color:t.text}}>{modalImport.rows.length} registros</strong></div>
-            <div style={{ fontSize:'var(--cc-label)',fontWeight:'600',color:t.text,marginBottom:'10px' }}>¿Cómo desea cargar los datos?</div>
-            <div style={{ display:'flex',flexDirection:'column',gap:'8px',marginBottom:'20px' }}>
-              {[['replace','🔄 Reemplazar todo','Elimina los registros actuales y carga los nuevos'],['append','➕ Agregar','Agrega los nuevos registros sin eliminar los existentes']].map(([v,l,d]) => (
-                <label key={v} style={{ display:'flex',alignItems:'flex-start',gap:'10px',padding:'12px',border:`2px solid ${modoImport===v?t.primary:t.border}`,borderRadius:'8px',cursor:'pointer',background:modoImport===v?t.primary+'11':'transparent' }}>
-                  <input type="radio" name="modo" value={v} checked={modoImport===v} onChange={() => { setModoImport(v); setConfirmReplace(false) }} style={{ marginTop:'2px' }} />
-                  <div><div style={{ fontSize:'var(--cc-label)',fontWeight:'600',color:t.text }}>{l}</div><div style={{ fontSize:'var(--cc-sm)',color:t.textMuted }}>{d}</div></div>
-                </label>
-              ))}
-            </div>
-            {modoImport === 'replace' && confirmReplace && (
-              <div style={{ background:'#FEE2E2',border:'1px solid #FCA5A5',borderRadius:'8px',padding:'12px',marginBottom:'16px',fontSize:'var(--cc-sm)',color:'#DC2626' }}>
-                ⚠️ <strong>Esta acción no se puede deshacer.</strong> Se eliminarán todos los registros actuales. ¿Confirma?
-              </div>
-            )}
-            <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end' }}>
-              <button onClick={() => { setModalImport(null); setConfirmReplace(false) }} style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'8px',padding:'9px 18px',fontSize:'var(--cc-label)',color:t.textMuted,cursor:'pointer' }}>Cancelar</button>
-              <button onClick={ejecutarImport} style={{ background:modoImport==='replace'&&confirmReplace?'#DC2626':t.primary,color:'#fff',border:'none',borderRadius:'8px',padding:'9px 20px',fontSize:'var(--cc-label)',fontWeight:'600',cursor:'pointer' }}>
-                {modoImport==='replace'&&!confirmReplace?'Continuar →':modoImport==='replace'?'⚠️ Sí, reemplazar':'➕ Agregar'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ── Auditoría: cantidades migradas desde SicoeCAD (cliente) → cola / sincro con el DWG (cad_queue) ── */}
       {sincroSicoeModal && (() => {
         const a = sincroSicoeModal
@@ -3152,40 +3052,6 @@ async function restaurar(id) {
         )
       })()}
 
-      {/* ── Toolbar ── */}
-      <div style={{ display:'flex',gap:'12px',alignItems:'center',marginBottom:'16px',flexWrap:'wrap' }}>
-        {esDeveloper && (
-          <label style={{ background:colorActual,color:'#fff',border:'none',borderRadius:'8px',padding:'9px 18px',fontSize:'var(--cc-label)',fontWeight:'600',cursor:importing?'wait':'pointer',opacity:importing?0.7:1 }}>
-            {importing ? `Importando ${importProgreso}%...` : '📂 Importar CSV'}
-            <input type="file" accept=".csv" style={{ display:'none' }} onChange={handleImportCSV} disabled={importing} />
-          </label>
-        )}
-        {importing && (
-          <div style={{ flex:1,maxWidth:'200px',height:'6px',background:t.border,borderRadius:'3px',overflow:'hidden' }}>
-            <div style={{ width:`${importProgreso}%`,height:'100%',background:t.primary,borderRadius:'3px',transition:'width 0.3s' }} />
-          </div>
-        )}
-        {importMsg && <span style={{ fontSize:'var(--cc-label)',color:importMsg.startsWith('✅')?'#16A34A':importMsg.startsWith('❌')?'#DC2626':t.textMuted }}>{importMsg}</span>}
-        <span style={{ marginLeft:'auto',fontSize:'var(--cc-sm)',color:t.textMuted }}>
-        <button onClick={() => recargarCapActual(drill.length === 0)}
-          style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'7px 14px', color:t.textMuted, fontSize:'var(--cc-sm)', fontWeight:'600', cursor:'pointer' }}>
-          🔄 Actualizar
-        </button>
-          {drill.length === 0 && !verPapelera
-            ? `${capitulosResumen.length} capítulos`
-            : `${conteoFiltro != null ? conteoFiltro.toLocaleString('es-CO') : registros.length} en contrato · ${registrosFiltrados.length} filtrados (vista)`} · {seleccionados.size} seleccionados
-      {totalPaginas > 1 && (
-        <span style={{ marginLeft: '16px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-          <button onClick={() => setPagina(p => Math.max(1, p-1))} disabled={pagina === 1}
-            style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', cursor: pagina===1?'default':'pointer', color: pagina===1?t.textMuted:t.text }}>‹</button>
-          <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Pág. {pagina} / {totalPaginas}</span>
-          <button onClick={() => setPagina(p => Math.min(totalPaginas, p+1))} disabled={pagina === totalPaginas}
-            style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'4px', padding:'2px 8px', cursor: pagina===totalPaginas?'default':'pointer', color: pagina===totalPaginas?t.textMuted:t.text }}>›</button>
-        </span>
-      )}
-        </span>
-      </div>
-
       {!verPapelera && (
         <PptoFiltroObraVista
           t={t}
@@ -3208,22 +3074,42 @@ async function restaurar(id) {
           calzadaOptions={opcionesUbicacion.calzadas}
           semaforo={SEMAFORO}
           buscando={buscandoFiltroObra}
+          barraResumen={(
+            <>
+              <span style={{ whiteSpace: 'nowrap' }}>
+                {drill.length === 0 && !verPapelera
+                  ? `${capitulosResumen.length} capítulos`
+                  : `${conteoFiltro != null ? conteoFiltro.toLocaleString('es-CO') : registros.length} en contrato · ${registrosFiltrados.length} filtrados (vista)`} · {seleccionados.size} seleccionados
+              </span>
+              {totalPaginas > 1 && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <button type="button" onClick={() => setPagina(p => Math.max(1, p - 1))} disabled={pagina === 1}
+                    style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '4px', padding: '2px 8px', cursor: pagina === 1 ? 'default' : 'pointer', color: pagina === 1 ? t.textMuted : t.text }}>‹</button>
+                  <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>Pág. {pagina} / {totalPaginas}</span>
+                  <button type="button" onClick={() => setPagina(p => Math.min(totalPaginas, p + 1))} disabled={pagina === totalPaginas}
+                    style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '4px', padding: '2px 8px', cursor: pagina === totalPaginas ? 'default' : 'pointer', color: pagina === totalPaginas ? t.textMuted : t.text }}>›</button>
+                </span>
+              )}
+            </>
+          )}
+          onActualizar={() => recargarCapActual(drill.length === 0)}
+          actualizarDisabled={loading || buscandoFiltroObra}
           onMapPkPick={onMapPkPresu}
           pkIdsDeGrilla={pkIdsDeGrillaParaMapa}
         />
       )}
       {verPapelera && (
-        <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:10, padding:12, marginBottom:10, color:t.textMuted, fontSize:'var(--cc-sm)' }}>Papelera: use «Actualizar» o importar; el filtrado avanzado aplica al volver a activos.</div>
+        <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:10, padding:12, marginBottom:10, color:t.textMuted, fontSize:'var(--cc-sm)' }}>Papelera: use «Actualizar»; el filtrado avanzado aplica al volver a activos.</div>
       )}
       {((conteoFiltro != null && registros.length > 0) || (!verPapelera && registrosFiltrados.length > 0)) && (
-        <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', justifyContent:'space-between', gap:10, marginBottom:10 }}>
-          <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', gap:10 }}>
-            {conteoFiltro != null && registros.length > 0 && (
-              <div style={{ fontSize:'var(--cc-sm)', fontWeight:700, color:t.primary }}>
-                Coincidencias (servidor): {conteoFiltro.toLocaleString('es-CO')}
-              </div>
-            )}
-            {!verPapelera && registrosFiltrados.length > 0 && (
+        <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', gap:10, marginBottom:10 }}>
+          {conteoFiltro != null && registros.length > 0 && (
+            <div style={{ fontSize:'var(--cc-sm)', fontWeight:700, color:t.primary }}>
+              Coincidencias (servidor): {conteoFiltro.toLocaleString('es-CO')}
+            </div>
+          )}
+          {!verPapelera && registrosFiltrados.length > 0 && (
+            <>
               <button
                 type="button"
                 onClick={() => setModalResumenValidacion(true)}
@@ -3232,16 +3118,74 @@ async function restaurar(id) {
               >
                 📊 Resumen de validación
               </button>
-            )}
-          </div>
-          {!verPapelera && registrosFiltrados.length > 0 && (
-            <div style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>Vista: {resumenValidacionVista.total} registro{resumenValidacionVista.total !== 1 ? 's' : ''} filtrado{resumenValidacionVista.total !== 1 ? 's' : ''} · costo {fmt(resumenValidacionVista.costoAcum)}</div>
+              <div
+                role="group"
+                aria-label="Totales de la vista filtrada"
+                style={{
+                  display:'flex',
+                  flexWrap:'wrap',
+                  alignItems:'stretch',
+                  gap:14,
+                  padding:'10px 16px',
+                  borderRadius:10,
+                  border:`2px solid ${t.primary}33`,
+                  background:`linear-gradient(180deg, ${t.bgCard} 0%, ${t.bg} 100%)`,
+                  boxShadow:'0 1px 3px rgba(0,0,0,0.08)',
+                  flex:'1 1 520px',
+                  minWidth:320,
+                  maxWidth:'100%',
+                }}
+              >
+                <div style={{
+                  flex:'1 1 280px',
+                  minWidth:220,
+                  maxWidth:'min(720px, 100%)',
+                  paddingRight:8,
+                  borderRight:`1px solid ${t.border}`,
+                  alignSelf:'stretch',
+                  display:'flex',
+                  alignItems:'center',
+                }}>
+                  <div style={{
+                    fontSize:'var(--cc-sm)',
+                    fontWeight:800,
+                    color:t.text,
+                    lineHeight:1.4,
+                    wordBreak:'break-word',
+                  }}>
+                    {etiquetaTituloVistaFiltrada}
+                  </div>
+                </div>
+                <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', gap:14, flex:'1 1 260px' }}>
+                <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+                  <span style={{ fontSize:'var(--cc-caption)', fontWeight:700, color:t.textMuted }}>Registros</span>
+                  <span style={{ fontSize:'var(--cc-md)', fontWeight:800, color:t.primary, lineHeight:1.2 }}>
+                    {resumenValidacionVista.total.toLocaleString('es-CO')}
+                  </span>
+                </div>
+                <div style={{ width:1, height:28, background:t.border, alignSelf:'center' }} />
+                <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+                  <span style={{ fontSize:'var(--cc-caption)', fontWeight:700, color:t.textMuted }}>Cant. total (suma)</span>
+                  <span style={{ fontSize:'var(--cc-md)', fontWeight:800, color:t.text, lineHeight:1.2 }}>
+                    {fmtN(resumenValidacionVista.cantTotalAcum)}
+                  </span>
+                </div>
+                <div style={{ width:1, height:28, background:t.border, alignSelf:'center' }} />
+                <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+                  <span style={{ fontSize:'var(--cc-caption)', fontWeight:700, color:t.textMuted }}>Costo directo</span>
+                  <span style={{ fontSize:'var(--cc-md)', fontWeight:800, color:t.primary, lineHeight:1.2 }}>
+                    {nivelInfo.verValoresEconomicos ? fmt(resumenValidacionVista.costoAcum) : '—'}
+                  </span>
+                </div>
+                </div>
+              </div>
+            </>
           )}
         </div>
       )}
 
       {modalResumenValidacion && (() => {
-        const { porRevisado, porPreInterv, total, costoAcum } = resumenValidacionVista
+        const { porRevisado, porPreInterv, total, costoAcum, cantTotalAcum } = resumenValidacionVista
         const filas = (estados, data) => {
           const visto = new Set()
           const out = []
@@ -3289,7 +3233,7 @@ async function restaurar(id) {
                 <button type="button" onClick={() => setModalResumenValidacion(false)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-h1)', cursor:'pointer', color:t.textMuted, lineHeight:1 }}>✕</button>
               </div>
               <div style={{ fontSize:'var(--cc-body)', color:t.text, marginBottom:14, padding:10, background:t.bg, borderRadius:8, border:`1px solid ${t.border}` }}>
-                <strong>{total.toLocaleString('es-CO')}</strong> reg. · <strong>Costo directo (suma):</strong> {nivelInfo.verValoresEconomicos ? fmt(costoAcum) : '— (rol sin valores)'}
+                <strong>{total.toLocaleString('es-CO')}</strong> reg. · <strong>Cant. total (suma):</strong> {fmtN(cantTotalAcum)} · <strong>Costo directo (suma):</strong> {nivelInfo.verValoresEconomicos ? fmt(costoAcum) : '— (rol sin valores)'}
               </div>
               <div style={{ fontSize:'var(--cc-sm)', fontWeight:800, color:t.text, marginBottom:6 }}>Interventoría — revisado (semáforo en obra)</div>
               <div style={{ overflowX:'auto', marginBottom:18 }}>

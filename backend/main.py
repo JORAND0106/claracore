@@ -1607,6 +1607,148 @@ def _sicoe_reporte_ids_abs_solapa_registros(
     return out
 
 
+def _sicoe_so_registros_q_linea_filtros_busqueda(
+    q,
+    *,
+    numero_registro: Optional[int] = None,
+    abs_inicio: Optional[float] = None,
+    abs_final: Optional[float] = None,
+    capitulo: Optional[str] = None,
+    item: Optional[str] = None,
+    subcontratista_id: Optional[int] = None,
+    tramo: Optional[str] = None,
+    costado: Optional[str] = None,
+    pk_id: Optional[int] = None,
+    q_observacion: Optional[str] = None,
+    semana_id: Optional[int] = None,
+    acta_rpo_id: Optional[int] = None,
+    capas_v: Optional[List[dict]] = None,
+    estado: Optional[str] = None,
+):
+    """AND sobre columnas de so_registros; misma semántica que /reportes/buscar y /analisis."""
+    if numero_registro is not None:
+        q = q.eq("numero_registro", numero_registro)
+    q = _so_reg_filtro_abs_solape(q, abs_inicio, abs_final)
+    if capitulo:
+        q = q.eq("capitulo", capitulo)
+    if item:
+        q = q.ilike("item_numero", f"%{item}%")
+    if subcontratista_id is not None:
+        q = q.eq("subcontratista_id", subcontratista_id)
+    if tramo:
+        q = q.eq("tramo", tramo)
+    if costado:
+        q = _so_reg_filtro_costado(q, costado)
+    if pk_id is not None:
+        q = q.eq("pk_id_id", pk_id)
+    if semana_id is not None:
+        q = q.eq("semana_id", semana_id)
+    if acta_rpo_id is not None:
+        q = q.eq("acta_rpo_id", acta_rpo_id)
+    if q_observacion and str(q_observacion).strip():
+        q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
+    if capas_v:
+        q = _so_registros_q_y_capas_validacion(
+            q, capas_v, pk_id, tramo, costado, capitulo, subcontratista_id, item
+        )
+    if _estado_filtro_es_sin_asignar_item(estado):
+        q = _so_reg_sin_item_asignado(q)
+    return q
+
+
+def _sicoe_filtrar_registros_coinciden_nodo_ui(regs: list, reporte_row: dict, q_nodo: Optional[str]) -> list:
+    """Cabecera del reporte y/o líneas no_inicio/no_final (coherente con la grilla)."""
+    if not q_nodo or not str(q_nodo).strip():
+        return regs
+    tokens = _sicoe_parse_nodo_tokens(q_nodo)
+    if not tokens:
+        return regs
+    hdr_ok = _sicoe_row_match_nodo_tokens(tokens, reporte_row.get("nodo_ini"), reporte_row.get("nodo_fin"))
+    out = []
+    for reg in regs:
+        if hdr_ok or _sicoe_row_match_nodo_tokens(tokens, reg.get("no_inicio"), reg.get("no_final")):
+            out.append(reg)
+    return out
+
+
+def _sicoe_collect_reporte_ids_misma_linea(
+    contrato_id: int,
+    *,
+    numero_registro: Optional[int] = None,
+    abs_inicio: Optional[float] = None,
+    abs_final: Optional[float] = None,
+    capitulo: Optional[str] = None,
+    item: Optional[str] = None,
+    subcontratista_id: Optional[int] = None,
+    tramo: Optional[str] = None,
+    costado: Optional[str] = None,
+    pk_id: Optional[int] = None,
+    q_observacion: Optional[str] = None,
+    semana_id: Optional[int] = None,
+    acta_rpo_id: Optional[int] = None,
+    capas_v: Optional[List[dict]] = None,
+    estado: Optional[str] = None,
+) -> set:
+    """
+    reporte_id tales que existe al menos una fila en so_registros que cumple todos
+    los criterios a la vez (AND). Evita intersectar IDs por criterios distintos, que
+    incluía reportes sin ninguna línea coincidente con el panel /analisis.
+    """
+    ids: set = set()
+    off = 0
+    page = 1000
+    max_pages = int(os.getenv("SICOE_BUSCAR_VALIDACION_MAX_PAGES", "100"))
+    capas_ok = bool(capas_v)
+    for _pn in range(max_pages):
+
+        def _one_page(o=off):
+            q = supabase.table("so_registros").select("reporte_id").eq("contrato_id", contrato_id)
+            q = _sicoe_so_registros_q_linea_filtros_busqueda(
+                q,
+                numero_registro=numero_registro,
+                abs_inicio=abs_inicio,
+                abs_final=abs_final,
+                capitulo=capitulo,
+                item=item,
+                subcontratista_id=subcontratista_id,
+                tramo=tramo,
+                costado=costado,
+                pk_id=pk_id,
+                q_observacion=q_observacion,
+                semana_id=semana_id,
+                acta_rpo_id=acta_rpo_id,
+                capas_v=(capas_v if capas_ok else None),
+                estado=estado,
+            )
+            return q.range(o, o + page - 1).execute().data
+
+        batch = supabase_execute(_one_page)
+        for row in batch:
+            rid = row.get("reporte_id")
+            if rid:
+                ids.add(rid)
+        if len(batch) < page:
+            break
+        off += page
+    else:
+        raise HTTPException(
+            status_code=503,
+            detail="El filtro devuelve demasiados registros. Acote con tramo, capítulo, PK, subcontratista, ítem, semana, acta u observación.",
+        )
+    if (
+        capas_ok
+        and _validacion_cualquier_nivel2_o_3(capas_v)
+        and not _estado_filtro_omite_validacion_por_cargo(estado)
+    ):
+        if ids:
+            ids = set(
+                _filtrar_reporte_ids_excl_estados(
+                    contrato_id, list(ids), ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA
+                )
+            )
+    return ids
+
+
 def _sicoe_ocultar_costo_directo_reportes(current_user) -> bool:
     """Operativo Contratista / Interventoría no reciben montos en la grilla SICOE Obra."""
     rol = (current_user.get("rol_nombre") or "").strip().lower()
@@ -4178,6 +4320,9 @@ def agregar_cantidad(contrato_id: int, body: AgregarCantidadBody, current_user=D
         pass
 
     return new_row
+
+
+@app.post("/presupuesto/{contrato_id}/bulk")
 def bulk_presupuesto(
     contrato_id: int,
     items: List[PresupuestoRow],
@@ -6285,7 +6430,9 @@ class ReporteCreate(BaseModel):
 @app.get("/sicoe-obra/{contrato_id}/cargos-validacion")
 def cargos_con_validacion(contrato_id: int, current_user=Depends(get_current_user)):
     try:
-        # Cargos que están en CARGO_ID_NIVEL_MAP y tienen usuarios aprobados
+        # Cargos que están en CARGO_ID_NIVEL_MAP (tabla cargos). Siempre listarlos para
+        # filtros aunque no haya usuario aprobado con ese cargo en el contrato — si no,
+        # opciones como «Residente de Obra» desaparecen sin poder filtrar registros ya validados.
         cargo_ids_nivel = list(CARGO_ID_NIVEL_MAP.keys())
 
         def _cargos():
@@ -6294,18 +6441,10 @@ def cargos_con_validacion(contrato_id: int, current_user=Depends(get_current_use
         cargos_rows = supabase_execute(_cargos)
         cargo_id_nombre = {r["id"]: r["nombre"] for r in cargos_rows}
 
-        def _usuarios():
-            return supabase.table("usuarios").select("cargo_id")\
-                .eq("contrato_id", contrato_id)\
-                .eq("estado", "aprobado")\
-                .in_("cargo_id", cargo_ids_nivel).execute().data
-        usuarios_rows = supabase_execute(_usuarios)
-        cargos_activos = {r["cargo_id"] for r in usuarios_rows}
-
         return [
             {"id": cid, "nombre": cargo_id_nombre[cid]}
             for cid in cargo_ids_nivel
-            if cid in cargos_activos and cid in cargo_id_nombre
+            if cid in cargo_id_nombre
         ]
     except Exception as e:
         return []
@@ -6341,164 +6480,26 @@ def buscar_reportes_obra(
     capas_v = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
     _nivel_l = None
     _ev_l = None
-    _prereq = None
+    if capas_v:
+        try:
+            _nivel_l = CARGO_ID_NIVEL_MAP.get(int(capas_v[0]["cargo_id"]))
+            _ev_l = (capas_v[0].get("estado") or "").strip()
+        except (TypeError, ValueError, KeyError, IndexError):
+            _nivel_l = None
+            _ev_l = None
 
-    # Reporte IDs derivados de filtros sobre so_registros
-    reporte_ids_from_reg = None
-
-    if numero_registro is not None:
-        def _reg():
-            return supabase.table("so_registros").select("reporte_id")\
-                .eq("contrato_id", contrato_id)\
-                .eq("numero_registro", numero_registro).execute().data
-        rows_reg = supabase_execute(_reg)
-        reporte_ids_from_reg = list({r["reporte_id"] for r in rows_reg if r.get("reporte_id")})
-        if not reporte_ids_from_reg:
-            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-
-    # ── Abscisa: por líneas (solape con [abs_inicio, abs_final] del filtro), no solo cabecera del reporte
-    if abs_inicio is not None or abs_final is not None:
-        ids_abs = _sicoe_reporte_ids_abs_solapa_registros(contrato_id, abs_inicio, abs_final, reporte_ids_from_reg)
-        if ids_abs is not None:
-            if not ids_abs:
-                return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-            if reporte_ids_from_reg is not None:
-                reporte_ids_from_reg = [x for x in reporte_ids_from_reg if x in ids_abs]
-            else:
-                reporte_ids_from_reg = list(ids_abs)
-            if not reporte_ids_from_reg:
-                return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-
-    # ── Filtros sobre so_registros (línea “Excel”): capítulo, ítem, subc, tramo, costado
     has_reg_f = any([
         capitulo, item, subcontratista_id is not None,
         bool(tramo), bool(costado),
     ])
-    if has_reg_f:
-        def _regs_f():
-            q = supabase.table("so_registros").select("reporte_id")\
-                .eq("contrato_id", contrato_id)
-            if capitulo:                    q = q.eq("capitulo", capitulo)
-            if item:                        q = q.ilike("item_numero", f"%{item}%")
-            if subcontratista_id is not None: q = q.eq("subcontratista_id", subcontratista_id)
-            if tramo:                       q = q.eq("tramo", tramo)
-            if costado:                     q = _so_reg_filtro_costado(q, costado)
-            return q.limit(50000).execute().data
-        ids_reg_f = list({r["reporte_id"] for r in supabase_execute(_regs_f) if r.get("reporte_id")})
-        if not ids_reg_f:
-            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-        if reporte_ids_from_reg is not None:
-            reporte_ids_from_reg = list(set(reporte_ids_from_reg) & set(ids_reg_f))
-        else:
-            reporte_ids_from_reg = ids_reg_f
-        if not reporte_ids_from_reg:
-            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+    capas_aplican_a_lineas = bool(capas_v) and not _estado_filtro_omite_validacion_por_cargo(estado)
+    q_obs_trim = (str(q_observacion).strip() if q_observacion is not None else "")
 
-    # ── Texto en observación / nodo inicio o final (so_registros) ────────────
-    if q_observacion is not None and str(q_observacion).strip():
-        pat_o = f"%{str(q_observacion).strip()}%"
+    # Universo de reportes: IDs con al menos una fila de obra que cumple todos los criterios de línea a la vez
+    # (AND), alineado con GET /sicoe-obra/.../analisis. Evita intersectar conjuntos por reporte_id con criterios distintos.
+    reporte_ids_from_reg = None
+    omit_header_semana_acta_en_reportes = False
 
-        def _regs_obs():
-            q = supabase.table("so_registros").select("reporte_id")\
-                .eq("contrato_id", contrato_id).ilike("observacion", pat_o)
-            return q.limit(50000).execute().data
-        ids_obs = list({r["reporte_id"] for r in supabase_execute(_regs_obs) if r.get("reporte_id")})
-        if not ids_obs:
-            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-        if reporte_ids_from_reg is not None:
-            reporte_ids_from_reg = list(set(reporte_ids_from_reg) & set(ids_obs))
-        else:
-            reporte_ids_from_reg = ids_obs
-        if not reporte_ids_from_reg:
-            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-
-    if q_nodo is not None and str(q_nodo).strip():
-        ids_n = _sicoe_reporte_ids_coinciden_nodo(contrato_id, q_nodo, reporte_ids_from_reg)
-        if ids_n is not None:
-            if not ids_n:
-                return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-            if reporte_ids_from_reg is not None:
-                reporte_ids_from_reg = [x for x in reporte_ids_from_reg if x in ids_n]
-            else:
-                reporte_ids_from_reg = list(ids_n)
-            if not reporte_ids_from_reg:
-                return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-
-    # PK desde líneas de obra (so_registros), no solo cabecera de so_reportes — alinea plano/grilla/panel
-    if pk_id is not None:
-        def _regs_pk():
-            q = supabase.table("so_registros").select("reporte_id")\
-                .eq("contrato_id", contrato_id).eq("pk_id_id", pk_id)
-            return q.limit(50000).execute().data
-        ids_pk = list({r["reporte_id"] for r in supabase_execute(_regs_pk) if r.get("reporte_id")})
-        if not ids_pk:
-            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-        if reporte_ids_from_reg is not None:
-            reporte_ids_from_reg = list(set(reporte_ids_from_reg) & set(ids_pk))
-        else:
-            reporte_ids_from_reg = ids_pk
-        if not reporte_ids_from_reg:
-            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-
-    # Validación N1–N3: varias capas = AND en la misma fila de so_registros (misma lógica en panel y grilla)
-    if capas_v and not _estado_filtro_omite_validacion_por_cargo(estado):
-        _tramo_v = tramo
-        _costado_v = costado
-        _cap_v = capitulo
-        _sub_v = subcontratista_id
-        _item_v = item
-        _seen_rids = set()
-        _pag_offset = 0
-        _pag_size = 1000
-        # Tope de filas leídas vía range(): evita bucles de minutos y statement timeout en cascada
-        _max_val_pages = int(os.getenv("SICOE_BUSCAR_VALIDACION_MAX_PAGES", "100"))
-        ids_val = []
-        _val_page_n = 0
-
-        while True:
-            if _val_page_n >= _max_val_pages:
-                raise HTTPException(
-                    status_code=503,
-                    detail="El filtro de validación devuelve demasiados registros. Acote con tramo, capítulo, PK, subcontratista, ítem u observación.",
-                )
-
-            def _val_page(off=_pag_offset):
-                q0 = supabase.table("so_registros").select("reporte_id")\
-                    .eq("contrato_id", contrato_id)
-                q0 = _so_registros_q_y_capas_validacion(
-                    q0, capas_v, pk_id, _tramo_v, _costado_v, _cap_v, _sub_v, _item_v
-                )
-                return q0.range(off, off + _pag_size - 1).execute().data
-            _page = supabase_execute(_val_page)
-            _val_page_n += 1
-            for r in _page:
-                rid = r.get("reporte_id")
-                if rid and rid not in _seen_rids:
-                    _seen_rids.add(rid)
-                    ids_val.append(rid)
-            if len(_page) < _pag_size:
-                break
-            _pag_offset += _pag_size
-
-        if ids_val and _validacion_cualquier_nivel2_o_3(capas_v):
-            ids_val = _filtrar_reporte_ids_excl_estados(
-                contrato_id, ids_val, ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA
-            )
-
-        if not ids_val:
-            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-        if reporte_ids_from_reg is not None:
-            reporte_ids_from_reg = list(set(reporte_ids_from_reg) & set(ids_val))
-        else:
-            reporte_ids_from_reg = ids_val
-        if not reporte_ids_from_reg:
-            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-
-        _nivel_l = CARGO_ID_NIVEL_MAP.get(int(capas_v[0]["cargo_id"]))
-        _ev_l = (capas_v[0].get("estado") or "").strip()
-        _prereq = CARGO_NIVEL_PRERREQUISITO.get(_nivel_l) if _nivel_l else None
-
-    # Resolver semana_id desde numero_semana
     semana_id_filtro = None
     if semana is not None:
         try:
@@ -6514,17 +6515,14 @@ def buscar_reportes_obra(
         except Exception:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
-    # Resolver acta_id desde numero_rpo (con fallback a consecutivo)
     acta_id_filtro = None
     if acta_rpo is not None:
         try:
             def _acta_id():
-                # Intentar por numero_rpo primero
                 rows = supabase.table("actas").select("id")\
                     .eq("contrato_id", contrato_id)\
                     .eq("numero_rpo", acta_rpo).execute().data
                 if not rows:
-                    # Fallback: buscar por consecutivo
                     rows = supabase.table("actas").select("id")\
                         .eq("contrato_id", contrato_id)\
                         .eq("consecutivo", acta_rpo).execute().data
@@ -6537,25 +6535,52 @@ def buscar_reportes_obra(
         except Exception:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
-        # Buscar reporte_ids via so_registros.acta_rpo_id (más fiable que so_reportes.acta_rpo_id)
-        try:
-            _acta_id_local = acta_id_filtro
-            def _regs_acta():
-                return supabase.table("so_registros").select("reporte_id")\
-                    .eq("contrato_id", contrato_id)\
-                    .eq("acta_rpo_id", _acta_id_local).execute().data
-            reg_acta_rows = supabase_execute(_regs_acta)
-            ids_via_reg = list({r["reporte_id"] for r in reg_acta_rows if r.get("reporte_id")})
-            if ids_via_reg:
-                if reporte_ids_from_reg is not None:
-                    reporte_ids_from_reg = list(set(reporte_ids_from_reg) & set(ids_via_reg))
-                else:
-                    reporte_ids_from_reg = ids_via_reg
-                if not reporte_ids_from_reg:
-                    return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
-                acta_id_filtro = None  # ya cubierto por reporte_ids_from_reg
-        except Exception:
-            pass  # fallback: filtrar por acta_rpo_id directo en so_reportes
+    unified_line = any([
+        numero_registro is not None,
+        abs_inicio is not None or abs_final is not None,
+        has_reg_f,
+        bool(q_obs_trim),
+        pk_id is not None,
+        capas_aplican_a_lineas,
+        semana_id_filtro is not None,
+        acta_id_filtro is not None,
+    ])
+
+    if unified_line:
+        ids_unif = _sicoe_collect_reporte_ids_misma_linea(
+            contrato_id,
+            numero_registro=numero_registro,
+            abs_inicio=abs_inicio,
+            abs_final=abs_final,
+            capitulo=capitulo,
+            item=item,
+            subcontratista_id=subcontratista_id,
+            tramo=tramo,
+            costado=costado,
+            pk_id=pk_id,
+            q_observacion=q_obs_trim or None,
+            semana_id=semana_id_filtro,
+            acta_rpo_id=acta_id_filtro,
+            capas_v=(capas_v if capas_aplican_a_lineas else None),
+            estado=estado,
+        )
+        if not ids_unif:
+            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+        reporte_ids_from_reg = list(ids_unif)
+        if semana_id_filtro is not None or acta_id_filtro is not None:
+            omit_header_semana_acta_en_reportes = True
+
+    if q_nodo is not None and str(q_nodo).strip():
+        ids_n = _sicoe_reporte_ids_coinciden_nodo(contrato_id, q_nodo, reporte_ids_from_reg)
+        if ids_n is not None:
+            if not ids_n:
+                return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+            if reporte_ids_from_reg is not None:
+                reporte_ids_from_reg = [x for x in reporte_ids_from_reg if x in ids_n]
+            else:
+                reporte_ids_from_reg = list(ids_n)
+            if not reporte_ids_from_reg:
+                return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
     # PostgREST envía .in_() como parámetro URL; listas grandes superan el límite
     # de longitud del servidor y se truncan silenciosamente. Se divide en chunks
@@ -6582,10 +6607,11 @@ def buscar_reportes_obra(
         # Importante: para validaciones por nivel, el universo debe definirse por
         # estado de so_registros (nivelX_estado), no por estado de so_reportes.
         # Solo se filtra por estado de reporte cuando el usuario lo pide explícitamente.
-        if semana_id_filtro is not None:
-            q = q.eq("semana_id", semana_id_filtro)
-        if acta_id_filtro is not None:
-            q = q.eq("acta_rpo_id", acta_id_filtro)
+        if not omit_header_semana_acta_en_reportes:
+            if semana_id_filtro is not None:
+                q = q.eq("semana_id", semana_id_filtro)
+            if acta_id_filtro is not None:
+                q = q.eq("acta_rpo_id", acta_id_filtro)
         if ids_chunk is not None:
             q = q.in_("id", ids_chunk)
         return q
@@ -6640,10 +6666,14 @@ def buscar_reportes_obra(
     if reporte_ids_batch:
         try:
             _rb_l = reporte_ids_batch
-            def _reg_estados():
+
+            def _reg_estados_q_base():
                 q = supabase.table("so_registros")\
                     .select("reporte_id, costo_directo, nivel1_estado, nivel2_estado, nivel3_estado, sub_estado, semana_id, acta_rpo_id, item_numero, capitulo, subcontratista_id, tramo, margen")\
                     .in_("reporte_id", _rb_l)
+
+                if numero_registro is not None:
+                    q = q.eq("numero_registro", numero_registro)
 
                 # Mantener coherencia con el universo filtrado de grilla/panel
                 if semana_id_filtro is not None:
@@ -6662,10 +6692,10 @@ def buscar_reportes_obra(
                     q = _so_reg_filtro_costado(q, costado)
                 if pk_id is not None:
                     q = q.eq("pk_id_id", pk_id)
-                # Mismo universo de líneas que el panel dinámico (abs / análisis)
+                if q_observacion is not None and str(q_observacion).strip():
+                    q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
                 q = _so_reg_filtro_abs_solape(q, abs_inicio, abs_final)
 
-                # Misma semántica AND que el bloque de ids_val (varias capas en la misma línea)
                 if capas_v and not _estado_filtro_omite_validacion_por_cargo(estado):
                     q = _so_registros_q_y_capas_validacion(
                         q, capas_v, pk_id, tramo, costado, capitulo, subcontratista_id, item
@@ -6673,9 +6703,20 @@ def buscar_reportes_obra(
 
                 if _estado_filtro_es_sin_asignar_item(estado):
                     q = _so_reg_sin_item_asignado(q)
+                return q
 
-                return q.limit(5000).execute().data
-            reg_estados = supabase_execute(_reg_estados)
+            reg_estados = []
+            _re_off = 0
+            _re_page = 1000
+            while True:
+                def _re_fetch(o=_re_off):
+                    return _reg_estados_q_base().range(o, o + _re_page - 1).execute().data
+
+                _batch = supabase_execute(_re_fetch)
+                reg_estados.extend(_batch)
+                if len(_batch) < _re_page:
+                    break
+                _re_off += _re_page
             if _estado_filtro_es_sin_asignar_item(estado):
                 reg_estados = [
                     x for x in reg_estados
@@ -7828,29 +7869,125 @@ def filtros_tramos_costados(contrato_id: int, current_user=Depends(get_current_u
 def obtener_reporte(
     contrato_id: int,
     reporte_id: int,
+    aplicar_filtros_busqueda: bool = Query(False),
+    numero_registro: Optional[int] = None,
+    semana: Optional[int] = None,
+    acta_rpo: Optional[int] = None,
+    subcontratista_id: Optional[int] = None,
+    capitulo: Optional[str] = None,
+    item: Optional[str] = None,
+    tramo: Optional[str] = None,
+    costado: Optional[str] = None,
+    pk_id: Optional[int] = None,
+    abs_inicio: Optional[float] = None,
+    abs_final: Optional[float] = None,
+    estado: Optional[str] = None,
     cargo_id: Optional[int] = Query(None),
     estado_validacion: Optional[str] = Query(None),
     validacion_capas: Optional[str] = Query(None),
+    q_observacion: Optional[str] = Query(None),
+    q_nodo: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
+    capas_v = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
+    capas_aplican_a_lineas = bool(capas_v) and not _estado_filtro_omite_validacion_por_cargo(estado)
+
     def _r():
         return supabase.table("so_reportes").select("*, subcontratistas(razon_social), pk_ids(pk_id, civ, tramo, infraestructura, calzada, abs_inicio, abs_final)")\
             .eq("id", reporte_id).eq("contrato_id", contrato_id).execute().data
-    def _reg():
+
+    def _reg_all():
         return supabase.table("so_registros").select("*")\
-            .eq("reporte_id", reporte_id).order("id").execute().data
+            .eq("reporte_id", reporte_id).eq("contrato_id", contrato_id).order("id").execute().data
+
+    def _reg_filtrados_como_busqueda():
+        semana_id_filtro = None
+        if semana is not None:
+            try:
+                def _sem_id():
+                    return supabase.table("so_semanas").select("id")\
+                        .eq("contrato_id", contrato_id)\
+                        .eq("numero_semana", semana).execute().data
+                sem_rows = supabase_execute(_sem_id)
+                if sem_rows:
+                    semana_id_filtro = sem_rows[0]["id"]
+                else:
+                    return []
+            except Exception:
+                return []
+
+        acta_id_filtro = None
+        if acta_rpo is not None:
+            try:
+                def _acta_id():
+                    rows = supabase.table("actas").select("id")\
+                        .eq("contrato_id", contrato_id)\
+                        .eq("numero_rpo", acta_rpo).execute().data
+                    if not rows:
+                        rows = supabase.table("actas").select("id")\
+                            .eq("contrato_id", contrato_id)\
+                            .eq("consecutivo", acta_rpo).execute().data
+                    return rows
+                acta_rows = supabase_execute(_acta_id)
+                if acta_rows:
+                    acta_id_filtro = acta_rows[0]["id"]
+                else:
+                    return []
+            except Exception:
+                return []
+
+        out = []
+        off = 0
+        page = 1000
+        while True:
+            def _page(o=off):
+                q = supabase.table("so_registros").select("*")\
+                    .eq("reporte_id", reporte_id).eq("contrato_id", contrato_id)
+                q = _sicoe_so_registros_q_linea_filtros_busqueda(
+                    q,
+                    numero_registro=numero_registro,
+                    abs_inicio=abs_inicio,
+                    abs_final=abs_final,
+                    capitulo=capitulo,
+                    item=item,
+                    subcontratista_id=subcontratista_id,
+                    tramo=tramo,
+                    costado=costado,
+                    pk_id=pk_id,
+                    q_observacion=q_observacion,
+                    semana_id=semana_id_filtro,
+                    acta_rpo_id=acta_id_filtro,
+                    capas_v=(capas_v if capas_aplican_a_lineas else None),
+                    estado=estado,
+                )
+                return q.order("id").range(o, o + page - 1).execute().data
+
+            batch = supabase_execute(_page)
+            out.extend(batch)
+            if len(batch) < page:
+                break
+            off += page
+        return out
+
     def _pts():
         return supabase.table("so_puntos_topograficos").select("*")\
             .eq("reporte_id", reporte_id).order("id").execute().data
+
     with ThreadPoolExecutor(max_workers=3) as ex:
         fut_rep = ex.submit(lambda: supabase_execute(_r))
-        fut_reg = ex.submit(lambda: supabase_execute(_reg))
+        fut_reg = ex.submit(
+            _reg_filtrados_como_busqueda if aplicar_filtros_busqueda else _reg_all
+        )
         fut_pts = ex.submit(lambda: supabase_execute(_pts))
     reporte = fut_rep.result()
     if not reporte:
         raise HTTPException(status_code=404, detail="Reporte no encontrado")
     regs_raw = fut_reg.result()
     puntos_rows = fut_pts.result()
+
+    if aplicar_filtros_busqueda and q_nodo is not None and str(q_nodo).strip():
+        regs_raw = _sicoe_filtrar_registros_coinciden_nodo_ui(regs_raw, reporte[0], q_nodo)
+
     r = reporte[0]
     sub = r.pop("subcontratistas", None)
     r["subcontratista_nombre"] = sub["razon_social"] if sub else None
@@ -7863,9 +8000,7 @@ def obtener_reporte(
         r["calzada"]        = r.get("calzada") or pk.get("calzada")
     else:
         r["pk_id_valor"] = None
-    # No filtrar registros por capas de validación en el detalle: la grilla ya acotó reportes;
-    # filtrar aquí ocultaba líneas aprobadas (p. ej. con foto_url) y dejaba carpetas "vacías".
-    # validacion_capas / cargo_id / estado_validacion se aceptan por compatibilidad y se ignoran.
+    # Si aplicar_filtros_busqueda=true, registros coinciden con la misma semántica AND que la grilla/panel.
     reg_ids = [reg["id"] for reg in regs_raw if reg.get("id")]
     num_comentarios_map = {}
     if reg_ids:
@@ -7884,6 +8019,8 @@ def obtener_reporte(
         reg["num_comentarios"] = num_comentarios_map.get(reg["id"], 0)
     r["registros"] = regs_raw
     r["puntos"] = puntos_rows
+    if aplicar_filtros_busqueda:
+        r["registros_vista_filtrada"] = True
 
     # Resolver nombre del modificador
     modificado_por = r.get("modificado_por")

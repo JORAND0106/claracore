@@ -4,14 +4,34 @@ import { formatCOPShort } from '../../utils/formatCOP'
 
 const inp = (t) => ({
   background: t.inputBg,
-  border: `1.5px solid ${t.border}`,
-  borderRadius: 7,
-  padding: '6px 10px',
+  border: `1px solid ${t.border}`,
+  borderRadius: 5,
+  padding: '3px 6px',
   color: t.text,
-  fontSize: 'var(--cc-input)',
+  fontSize: 'var(--cc-sm)',
   minWidth: 0,
+  lineHeight: 1.25,
 })
-const lab = (t) => ({ fontSize: 'var(--cc-label)', fontWeight: 700, color: t.textMuted, marginBottom: 4 })
+const lab = (t) => ({
+  fontSize: 'var(--cc-caption)',
+  fontWeight: 700,
+  color: t.textMuted,
+  marginBottom: 2,
+  lineHeight: 1.2,
+})
+/** Exactamente 2 filas de controles (+ etiquetas): fila1 = cap…pk + texto; fila2 = ubicación y validación. */
+const gridFila1 = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(12, minmax(0, 1fr))',
+  gap: '4px 6px',
+  alignItems: 'end',
+}
+const gridFila2 = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(8, minmax(0, 1fr))',
+  gap: '4px 6px',
+  alignItems: 'end',
+}
 
 /**
  * Filtro tipo SICOE Obra + panel capítulo→ítem + mapa PK.
@@ -38,7 +58,12 @@ export default function PptoFiltroObraVista({
   tramoOptions,
   calzadaOptions,
   semaforo, // SEMAFORO
+  /** Conteos / paginación que se muestran arriba a la derecha junto a Buscar, Limpiar, etc. */
+  barraResumen,
   buscando,
+  /** Recarga datos del contrato/capítulo (equivalente al «Actualizar» del toolbar). */
+  onActualizar,
+  actualizarDisabled,
   onMapPkPick, // (pk: string) => void — padre: set PK y ejecuta búsqueda
   /** null = maestro completo; array (vacío o no) = solo esos PK (alineado con grilla con cap/ítem) */
   pkIdsDeGrilla,
@@ -62,22 +87,22 @@ export default function PptoFiltroObraVista({
   return (
     <div
       className="cc-ppo-filtro-obra"
-      style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 14, alignItems: 'stretch', fontSize: 'var(--cc-body)' }}
+      style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 10, alignItems: 'flex-start', fontSize: 'var(--cc-body)' }}
     >
       <div
         style={{
-          width: 280,
+          width: 248,
           flexShrink: 0,
           background: t.bgCard,
           border: `1px solid ${t.border}`,
-          borderRadius: 10,
-          padding: 10,
-          maxHeight: 480,
+          borderRadius: 8,
+          padding: 8,
+          maxHeight: 432, /* antes 360px; +20 % para más lista visible */
           overflow: 'auto',
           boxShadow: t.shadow,
         }}
       >
-        <div style={{ fontSize: 'var(--cc-md)', fontWeight: 800, color: t.primary, marginBottom: 8 }}>📂 Presupuesto por capítulo</div>
+        <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.primary, marginBottom: 6 }}>📂 Presupuesto por capítulo</div>
         {loadingCapitulos ? (
           <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>Cargando…</div>
         ) : !capitulosResumen.length ? (
@@ -118,6 +143,11 @@ export default function PptoFiltroObraVista({
                           type="button"
                           key={it.item}
                           onClick={() => onPickItem(it.item)}
+                          title={
+                            (it.descripcion && String(it.descripcion).trim())
+                              ? `${it.item} · ${String(it.descripcion).trim()}`
+                              : String(it.item ?? '')
+                          }
                           style={{
                             display: 'block',
                             width: '100%',
@@ -143,149 +173,211 @@ export default function PptoFiltroObraVista({
         )}
       </div>
 
-      <div style={{ flex: 1, minWidth: 280, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 10, padding: 12, boxShadow: t.shadow }}>
-          <div style={{ fontSize: 'var(--cc-md)', fontWeight: 800, color: t.text, marginBottom: 10 }}>Ubicación técnica y criterios (como SICOE Obra)</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8, alignItems: 'end' }}>
-            <div>
-              <div style={lab(t)}>CAPÍTULO (texto o panel)</div>
-              <input value={f.cap} onChange={(e) => onF({ cap: e.target.value })} placeholder="Capítulo" style={inp(t)} />
+      <div style={{ flex: '1 1 260px', minWidth: 260, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8, padding: '8px 10px', boxShadow: t.shadow }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              flexWrap: 'wrap',
+              gap: 8,
+              marginBottom: 6,
+            }}
+          >
+            <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 800, color: t.text, lineHeight: 1.25, flex: '1 1 200px', minWidth: 0 }}>
+              Ubicación técnica y criterios (como SICOE Obra)
             </div>
-            <div>
-              <div style={lab(t)}>ÍTEM</div>
-              <input value={f.item} onChange={(e) => onF({ item: e.target.value })} placeholder="Ítem" style={inp(t)} />
-            </div>
-            <div>
-              <div style={lab(t)}>ID-POL (campo id_pol)</div>
-              <input value={f.idPol} onChange={(e) => onF({ idPol: e.target.value })} placeholder="Filtro id_pol" style={inp(t)} />
-            </div>
-            <div>
-              <div style={lab(t)}>PK (campo pk_id)</div>
-              <input value={f.pkCriterio} onChange={(e) => onF({ pkCriterio: e.target.value })} placeholder="Código / etiqueta PK" style={inp(t)} />
-            </div>
-            <div>
-              <div style={lab(t)}>Texto (registro y descripción)</div>
-              <input value={f.texto} onChange={(e) => onF({ texto: e.target.value })} placeholder="Busca en registro, descripción…" style={{ ...inp(t), minWidth: 200 }} />
-            </div>
-            <div>
-              <div style={lab(t)}>TRAMO (maestro PK)</div>
-              <select value={f.tramo} onChange={(e) => onF({ tramo: e.target.value })} style={inp(t)}>
-                <option value="">— Todos —</option>
-                {(tramoOptions || []).map((x) => (
-                  <option key={x} value={x}>
-                    {x}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <div style={lab(t)}>CALZADA / MARGEN (maestro PK)</div>
-              <select value={f.calzada} onChange={(e) => onF({ calzada: e.target.value })} style={inp(t)}>
-                <option value="">— Todos —</option>
-                {(calzadaOptions || []).map((x) => (
-                  <option key={x} value={x}>
-                    {x}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <div style={lab(t)}>NODO INICIO</div>
-              <input value={f.nodoI} onChange={(e) => onF({ nodoI: e.target.value })} style={inp(t)} />
-            </div>
-            <div>
-              <div style={lab(t)}>NODO FIN</div>
-              <input value={f.nodoF} onChange={(e) => onF({ nodoF: e.target.value })} style={inp(t)} />
-            </div>
-            <div>
-              <div style={lab(t)}>ABS. DESDE</div>
-              <input value={f.absA} onChange={(e) => onF({ absA: e.target.value })} style={inp(t)} />
-            </div>
-            <div>
-              <div style={lab(t)}>ABS. HASTA</div>
-              <input value={f.absB} onChange={(e) => onF({ absB: e.target.value })} style={inp(t)} />
-            </div>
-            <div>
-              <div style={lab(t)}>VALIDACIÓN</div>
-              <select value={f.eje || 'interv'} onChange={(e) => onF({ eje: e.target.value, revisado: '', preInterv: '' })} style={inp(t)}>
-                <option value="interv">Interventoría (revisado)</option>
-                <option value="depur">Depuración / Obra (pre_interv)</option>
-              </select>
-            </div>
-            <div>
-              <div style={lab(t)}>{(f.eje || 'interv') === 'depur' ? 'Estado (depuración)' : 'Estado (Interventoría)'}</div>
-              <select
-                value={(f.eje || 'interv') === 'depur' ? f.preInterv : f.revisado}
-                onChange={(e) => {
-                  if ((f.eje || 'interv') === 'depur') onF({ preInterv: e.target.value })
-                  else onF({ revisado: e.target.value })
-                }}
-                style={inp(t)}
-              >
-                <option value="">— Todos —</option>
-                {(semaforo || []).map((o) => (
-                  <option key={o.valor} value={o.valor}>
-                    {o.label} {o.valor}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12, alignItems: 'center' }}>
-            <button
-              type="button"
-              onClick={onBuscar}
-              disabled={buscando}
+            <div
               style={{
-                background: t.primary,
-                color: '#fff',
-                border: 'none',
-                borderRadius: 8,
-                padding: '8px 20px',
-                fontSize: 'var(--cc-label)',
-                fontWeight: 700,
-                cursor: buscando ? 'wait' : 'pointer',
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 6,
+                alignItems: 'center',
+                justifyContent: 'flex-end',
+                flex: '1 1 240px',
               }}
             >
-              {buscando ? '⏳ Buscando…' : '🔍 Buscar'}
-            </button>
-            <button
-              type="button"
-              onClick={onLimpiar}
-              style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 8, padding: '8px 16px', color: t.textMuted, fontSize: 'var(--cc-sm)', cursor: 'pointer' }}
-            >
-              Limpiar filtros
-            </button>
-            {onRestablecerPksItem && hayFiltroFinoPks && hayCap && (
+              {barraResumen != null && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 'var(--cc-sm)', color: t.textMuted }}>
+                  {barraResumen}
+                </div>
+              )}
               <button
                 type="button"
-                onClick={onRestablecerPksItem}
+                onClick={onBuscar}
                 disabled={buscando}
                 style={{
-                  background: '#0D948820',
-                  border: '1px solid #0D9488',
-                  borderRadius: 8,
-                  padding: '8px 14px',
-                  color: '#0D9488',
-                  fontSize: 'var(--cc-sm)',
+                  background: t.primary,
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 6,
+                  padding: '5px 14px',
+                  fontSize: 'var(--cc-caption)',
                   fontWeight: 700,
                   cursor: buscando ? 'wait' : 'pointer',
                 }}
-                title="Quita PK, ID-POL y texto; mantiene capítulo, ítem y tramo/validación. Muestra de nuevo todos los PK del listado filtrado."
               >
-                Ver todos los PK
+                {buscando ? '⏳…' : '🔍 Buscar'}
               </button>
-            )}
-            <button
-              type="button"
-              onClick={onRevisorTramos}
-              style={{ background: '#0D948820', border: '1px solid #0D9488', borderRadius: 8, padding: '8px 16px', color: '#0D9488', fontSize: 'var(--cc-sm)', fontWeight: 700, cursor: 'pointer' }}
-              title="Requiere capítulo; carga el capítulo y abre el revisor de tramos"
-            >
-              🛣️ Consultar por tramos
-            </button>
-            <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, flex: 1, minWidth: 200 }}>Criterios en servidor. Combine cualquier criterio; la grilla refleja el filtro.</span>
+              <button
+                type="button"
+                onClick={onLimpiar}
+                style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 6, padding: '5px 10px', color: t.textMuted, fontSize: 'var(--cc-caption)', cursor: 'pointer' }}
+              >
+                Limpiar
+              </button>
+              {typeof onActualizar === 'function' && (
+                <button
+                  type="button"
+                  onClick={onActualizar}
+                  disabled={!!actualizarDisabled}
+                  title="Recarga capítulos y datos del filtro actual"
+                  style={{
+                    background: 'transparent',
+                    border: `1px solid ${t.border}`,
+                    borderRadius: 6,
+                    padding: '5px 10px',
+                    color: t.textMuted,
+                    fontSize: 'var(--cc-caption)',
+                    fontWeight: 600,
+                    cursor: actualizarDisabled ? 'wait' : 'pointer',
+                    opacity: actualizarDisabled ? 0.65 : 1,
+                  }}
+                >
+                  🔄 Actualizar
+                </button>
+              )}
+              {onRestablecerPksItem && hayFiltroFinoPks && hayCap && (
+                <button
+                  type="button"
+                  onClick={onRestablecerPksItem}
+                  disabled={buscando}
+                  style={{
+                    background: '#0D948820',
+                    border: '1px solid #0D9488',
+                    borderRadius: 6,
+                    padding: '5px 10px',
+                    color: '#0D9488',
+                    fontSize: 'var(--cc-caption)',
+                    fontWeight: 700,
+                    cursor: buscando ? 'wait' : 'pointer',
+                  }}
+                  title="Quita PK, ID-POL y texto; mantiene capítulo, ítem y tramo/validación. Muestra de nuevo todos los PK del listado filtrado."
+                >
+                  Ver PK
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onRevisorTramos}
+                style={{ background: '#0D948820', border: '1px solid #0D9488', borderRadius: 6, padding: '5px 10px', color: '#0D9488', fontSize: 'var(--cc-caption)', fontWeight: 700, cursor: 'pointer' }}
+                title="Requiere capítulo; carga el capítulo y abre el revisor de tramos"
+              >
+                🛣️ Tramos
+              </button>
+            </div>
           </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={gridFila1}>
+              <div style={{ gridColumn: 'span 2' }}>
+                <div style={lab(t)}>CAPÍTULO</div>
+                <input value={f.cap} onChange={(e) => onF({ cap: e.target.value })} placeholder="Capítulo / panel" title="Capítulo (texto o panel)" style={{ ...inp(t), width: '100%' }} />
+              </div>
+              <div style={{ gridColumn: 'span 2' }}>
+                <div style={lab(t)}>ÍTEM</div>
+                <input value={f.item} onChange={(e) => onF({ item: e.target.value })} placeholder="Ítem" style={{ ...inp(t), width: '100%' }} />
+              </div>
+              <div style={{ gridColumn: 'span 2' }}>
+                <div style={lab(t)}>ID-POL</div>
+                <input value={f.idPol} onChange={(e) => onF({ idPol: e.target.value })} placeholder="id_pol" title="Campo id_pol" style={{ ...inp(t), width: '100%' }} />
+              </div>
+              <div style={{ gridColumn: 'span 2' }}>
+                <div style={lab(t)}>PK</div>
+                <input value={f.pkCriterio} onChange={(e) => onF({ pkCriterio: e.target.value })} placeholder="pk_id" title="Campo pk_id" style={{ ...inp(t), width: '100%' }} />
+              </div>
+              <div style={{ gridColumn: 'span 4' }}>
+                <div style={lab(t)}>Texto (registro / descripción)</div>
+                <input
+                  value={f.texto}
+                  onChange={(e) => onF({ texto: e.target.value })}
+                  placeholder="Buscar en registro, descripción…"
+                  style={{ ...inp(t), width: '100%', boxSizing: 'border-box' }}
+                />
+              </div>
+            </div>
+
+            <div style={gridFila2}>
+              <div>
+                <div style={lab(t)}>TRAMO</div>
+                <select value={f.tramo} onChange={(e) => onF({ tramo: e.target.value })} title="Maestro PK" style={{ ...inp(t), width: '100%' }}>
+                  <option value="">— Todos —</option>
+                  {(tramoOptions || []).map((x) => (
+                    <option key={x} value={x}>
+                      {x}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div style={lab(t)}>CALZADA</div>
+                <select value={f.calzada} onChange={(e) => onF({ calzada: e.target.value })} title="Maestro PK" style={{ ...inp(t), width: '100%' }}>
+                  <option value="">— Todos —</option>
+                  {(calzadaOptions || []).map((x) => (
+                    <option key={x} value={x}>
+                      {x}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div style={lab(t)}>NODO INI.</div>
+                <input value={f.nodoI} onChange={(e) => onF({ nodoI: e.target.value })} style={{ ...inp(t), width: '100%' }} />
+              </div>
+              <div>
+                <div style={lab(t)}>NODO FIN</div>
+                <input value={f.nodoF} onChange={(e) => onF({ nodoF: e.target.value })} style={{ ...inp(t), width: '100%' }} />
+              </div>
+              <div>
+                <div style={lab(t)}>ABS. DESDE</div>
+                <input value={f.absA} onChange={(e) => onF({ absA: e.target.value })} style={{ ...inp(t), width: '100%' }} />
+              </div>
+              <div>
+                <div style={lab(t)}>ABS. HASTA</div>
+                <input value={f.absB} onChange={(e) => onF({ absB: e.target.value })} style={{ ...inp(t), width: '100%' }} />
+              </div>
+              <div>
+                <div style={lab(t)}>VALID.</div>
+                <select value={f.eje || 'interv'} onChange={(e) => onF({ eje: e.target.value, revisado: '', preInterv: '' })} title="Interventoría o depuración" style={{ ...inp(t), width: '100%' }}>
+                  <option value="interv">Interventoría</option>
+                  <option value="depur">Depuración</option>
+                </select>
+              </div>
+              <div>
+                <div style={lab(t)}>{(f.eje || 'interv') === 'depur' ? 'Estado dep.' : 'Estado int.'}</div>
+                <select
+                  value={(f.eje || 'interv') === 'depur' ? f.preInterv : f.revisado}
+                  onChange={(e) => {
+                    if ((f.eje || 'interv') === 'depur') onF({ preInterv: e.target.value })
+                    else onF({ revisado: e.target.value })
+                  }}
+                  style={{ ...inp(t), width: '100%' }}
+                >
+                  <option value="">— Todos —</option>
+                  {(semaforo || []).map((o) => (
+                    <option key={o.valor} value={o.valor}>
+                      {o.label} {o.valor}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <p style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, margin: '4px 0 0', lineHeight: 1.35 }}>
+            Criterios en servidor; la grilla refleja el filtro.
+          </p>
         </div>
         <PptoFiltroMapaPk t={t} token={token} contratoId={contratoId} onPkPick={onPk} pkIdsDeGrilla={pkIdsDeGrilla} />
       </div>

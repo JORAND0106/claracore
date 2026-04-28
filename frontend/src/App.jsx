@@ -2117,7 +2117,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 }
 
 // ─── CARPETA REPORTE ──────────────────────────────────────────────────────────
-function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [], capasFiltroValidacion = null }) {
+function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [], capasFiltroValidacion = null, urlReporteDetalle: urlReporteDetalleFn }) {
   const filtroValidacion = capasFiltroValidacion && capasFiltroValidacion[0] ? capasFiltroValidacion[0] : null
   const [reporte, setReporte]                     = useState(repoProp)
   const [registros, setRegistros]                 = useState(repoProp.registros || [])
@@ -2335,7 +2335,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   const recargar = async () => {
     try {
-      const url = `${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}`
+      const build = urlReporteDetalleFn || ((id) => `${API_URL}/sicoe-obra/${contrato_id}/reportes/${id}`)
+      const url = build(reporte.id)
       const res  = await fetch(url, { headers: hdrs })
       const data = await res.json()
       setReporte(data)
@@ -2696,6 +2697,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               <div style={{ fontSize:'var(--cc-sm)', color:'#ffffff99', fontWeight:'600' }}>
                 Reporte #{reporte.numero_reporte} · {reporte.capitulo} · {reporte.subcontratista_nombre || '—'}
               </div>
+              {!!reporte.registros_vista_filtrada && (
+                <div style={{ fontSize:'var(--cc-label)', color:'#D9F99D', marginTop:'6px', fontWeight:'600' }}>
+                  Filtro de búsqueda activo: solo se listan las líneas que coinciden con los criterios de la grilla.
+                </div>
+              )}
               {(() => {
                 const pF = ts => { if (!ts) return null; try { const n = /Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?null:d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) } catch{return null} }
                 const fc = pF(reporte.created_at), fm = pF(reporte.updated_at)
@@ -2723,7 +2729,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             <button
               type="button"
               onClick={() => { void recargar() }}
-              title="Vuelve a cargar el reporte desde el servidor (útil si migraste fotos o cambió la base de datos)"
+              title="Vuelve a cargar desde el servidor. Si abriste el reporte con filtros de búsqueda, se mantienen y solo se actualizan las líneas que cumplen esos criterios."
               style={{ background:'rgba(255,255,255,0.22)', border:'1px solid rgba(255,255,255,0.35)', color:'#fff', borderRadius:'8px', padding:'6px 12px', fontSize:'var(--cc-sm)', fontWeight:'800', cursor:'pointer', whiteSpace:'nowrap' }}
             >⟳ Actualizar</button>
             <button onClick={onClose} style={{ background:'rgba(255,255,255,0.2)', border:'none', color:'#fff', borderRadius:'50%', width:'34px', height:'34px', fontSize:'var(--cc-lg)', cursor:'pointer', fontWeight:'900', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
@@ -3987,8 +3993,34 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     // Sin filtros en la grilla → no se carga datos (incl. editores: deben pulsar Buscar con criterios)
   }, [contrato_id])
 
-  /** Detalle completo del reporte (todos los registros). La grilla filtra; la carpeta no debe ocultar líneas. */
-  const urlReporteDetalle = (repId) => `${API_URL}/sicoe-obra/${contrato_id}/reportes/${repId}`
+  /** Mismos query params que la grilla (para detalle / export coherente). */
+  const sicoeAppendParamsBusquedaActivos = (params) => {
+    const ef = { ...filtros }
+    if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
+    if (nivelInfo.esInterventoria) delete ef.subcontratista_id
+    Object.entries(ef).forEach(([k, v]) => { if (v !== '' && v != null) params.append(k, v) })
+    if (capasValidacion.length > 0) {
+      const payload = capasValidacion.map((c) => ({ cargo_id: c.cargo_id, estado: c.estado }))
+      params.append('validacion_capas', JSON.stringify(payload))
+      params.append('cargo_id', capasValidacion[0].cargo_id)
+      params.append('estado_validacion', capasValidacion[0].estado)
+    }
+    const oObs = sicoeFiltroObsRef.current?.trim()
+    const oNod = sicoeFiltroNodoRef.current?.trim()
+    if (oObs) params.append('q_observacion', oObs)
+    if (oNod) params.append('q_nodo', oNod)
+  }
+
+  /** Detalle del reporte: si hay búsqueda activa, solo líneas que cumplen los mismos filtros AND que la grilla/panel. */
+  const urlReporteDetalle = (repId) => {
+    const base = `${API_URL}/sicoe-obra/${contrato_id}/reportes/${repId}`
+    if (!busquedaRealizada || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) return base
+    const params = new URLSearchParams()
+    params.set('aplicar_filtros_busqueda', '1')
+    sicoeAppendParamsBusquedaActivos(params)
+    const qs = params.toString()
+    return qs ? `${base}?${qs}` : base
+  }
 
   const buscarReportes = async (nuevosFiltros, nuevoOffset = 0, capas = []) => {
     if (!tieneParametrosBusquedaSicoe(nuevosFiltros, capas)) {
@@ -4079,6 +4111,15 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     finally {
       if (seq === sicoeBusquedaSeqRef.current) setCargando(false)
     }
+  }
+
+  /** Misma petición que «Buscar»: panel dinámico + grilla al día sin borrar filtros. */
+  const refrescarVistaSicoeObra = () => {
+    const hayFiltros = Object.values(filtros).some(v => v !== '') || capasValidacion.length > 0
+    if (!hayFiltros && nivelInfo.nivelValidacion) return
+    if (!tieneParametrosBusquedaSicoe(filtros, capasValidacion)) return
+    buscarReportes(filtros, 0, capasValidacion)
+    cargarAnalisis(filtros, capasValidacion)
   }
 
   const fmtPesos = v => formatCOP(Number(v) || 0)
@@ -5321,6 +5362,26 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
               style={{ background:'#EF4444', color:'#fff', border:'none', borderRadius:'6px', padding:'4px 12px', fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer' }}>
               Limpiar
             </button>
+            <button
+              type="button"
+              onClick={refrescarVistaSicoeObra}
+              disabled={cargando || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)}
+              title="Vuelve a cargar grilla y panel desde el servidor sin cambiar los filtros actuales"
+              style={{
+                background:'transparent',
+                border:`1px solid ${t.border}`,
+                color:t.textMuted,
+                borderRadius:'6px',
+                padding:'4px 12px',
+                fontSize:'var(--cc-label)',
+                fontWeight:'700',
+                cursor:(cargando || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) ? 'not-allowed' : 'pointer',
+                opacity:(cargando || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) ? 0.55 : 1,
+                whiteSpace:'nowrap',
+              }}
+            >
+              ⟳ Actualizar
+            </button>
             {puedeExportar && busquedaRealizada && (
               <button
                 type="button"
@@ -5874,6 +5935,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
           t={t} usuario={usuario} API_URL={API_URL} contrato_id={contrato_id}
           reporte={reporteSeleccionado} actasList={filtroActaList}
           capasFiltroValidacion={capasValidacion.length > 0 ? capasValidacion : null}
+          urlReporteDetalle={urlReporteDetalle}
           onClose={() => { setModalCarpeta(false); setReporteSeleccionado(null) }}
           onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); buscarReportes(filtros, 0, capasValidacion) }}
         />
