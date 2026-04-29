@@ -8868,10 +8868,14 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const cargoNombreNorm = (usuario?.cargo_nombre || '').trim().toLowerCase()
   const esDeveloper = cargoNombreNorm === 'desarrollador'
   const esAdminCargo = cargoNombreNorm === 'administrador'
-  // Funciones que habilitan ver el panel admin
-  const ADMIN_FUNCIONES = ["contratos", "listado de precios"]
-  const tienePermisoAdmin = (usuario?.permisos || []).some(p =>
-    p.ver && ADMIN_FUNCIONES.includes(p.funcion_nombre?.toLowerCase())
+  // Funciones que habilitan ver el panel admin (cualquier acción distinta de “todo en falso”)
+  const ADMIN_FUNCIONES = ["contratos", "listado de precios", "subcontratistas", "actas"]
+  const _permisoAlgunaAccion = (p) =>
+    !!(p && (p.ver || p.crear || p.editar || p.eliminar || p.validar || p.exportar))
+  const tienePermisoAdmin = ADMIN_FUNCIONES.some((fn) =>
+    (usuario?.permisos || []).some(
+      (p) => (p.funcion_nombre || "").toLowerCase() === fn && _permisoAlgunaAccion(p)
+    )
   )
   const canAdmin = esDeveloper || esAdminCargo || tienePermisoAdmin
   /** Misma regla que el backend (logs / novedades): solo estos cargos publican novedades de inicio. */

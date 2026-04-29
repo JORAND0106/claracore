@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, startTransition } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, startTransition } from "react";
 import * as XLSX from "xlsx";
 import mapboxgl from "mapbox-gl";
 import { API_BASE } from "./apiBase";
@@ -5047,7 +5047,26 @@ const TAB_FUNCIONES = {
   precios:         ["listado de precios"],
   subcontratistas: ["subcontratistas"],
   resets:          ["panel de administración"],
+  actas:           ["actas"],
 };
+
+function _permisoTabVisible(p) {
+  return !!(p && (p.ver || p.crear || p.editar || p.eliminar || p.validar || p.exportar));
+}
+
+/** Orden del panel admin (ids deben coincidir con TAB_FUNCIONES y el contenido renderizado). */
+const ADMIN_PANEL_TABS = [
+  { id: "usuarios",  label: "Gestión de Usuarios" },
+  { id: "cargos",    label: "Gestión de cargos"   },
+  { id: "permisos",  label: "Control de accesos"  },
+  { id: "contratos", label: "Contratos"            },
+  { id: "precios",          label: "Listado de Precios"   },
+  { id: "subcontratistas",  label: "Subcontratistas"       },
+  { id: "resets",           label: "Reset Claves"          },
+  { id: "actas",       label: "Actas", soloAdmin: false },
+  { id: "inicio",    label: "Página de inicio", soloAdmin: true },
+  { id: "logs",      label: "📋 Logs del Sistema", soloAdmin: true },
+];
 
 export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp }) {
   const call = useApi(token);
@@ -5058,36 +5077,40 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
   const isDeveloper = user?.cargo_nombre?.toLowerCase() === "desarrollador";
   const isAdmin     = user?.cargo_nombre?.toLowerCase() === "administrador";
 
-  // ── Filtrar tabs según permisos del usuario ────────────────────────────────
-  function canSeeTab(tabId) {
-    if (tabId === "contratos") return isDeveloper;
-    const tab = TABS_TODOS.find(t => t.id === tabId);
-    if (tab?.soloAdmin) return isDeveloper || isAdmin;
-    if (isDeveloper || isAdmin) return true;
-    const funciones = TAB_FUNCIONES[tabId] || [];
-    return funciones.some(fname =>
-      (user?.permisos || []).some(p =>
-        p.funcion_nombre?.toLowerCase() === fname &&
-        (p.ver || p.crear || p.editar || p.eliminar || p.validar || p.exportar)
-      )
-    );
-  }
+  const TABS = useMemo(() => {
+    return ADMIN_PANEL_TABS.filter((t) => {
+      if (isDeveloper || isAdmin) return true;
+      const funciones = TAB_FUNCIONES[t.id] || [];
+      if (
+        funciones.some((fname) =>
+          (user?.permisos || []).some(
+            (p) => p.funcion_nombre?.toLowerCase() === fname && _permisoTabVisible(p)
+          )
+        )
+      ) {
+        return true;
+      }
+      if (t.soloAdmin) return false;
+      return false;
+    });
+  }, [user?.permisos, user?.cargo_nombre, isDeveloper, isAdmin]);
 
-  const TABS_TODOS = [
-    { id: "usuarios",  label: "Gestión de Usuarios" },
-    { id: "cargos",    label: "Gestión de cargos"   },
-    { id: "permisos",  label: "Control de accesos"  },
-    { id: "contratos", label: "Contratos"            },
-    { id: "precios",          label: "Listado de Precios"   },
-    { id: "subcontratistas",  label: "Subcontratistas"       },
-    { id: "resets",           label: "Reset Claves"          },
-    { id: "actas",       label: "Actas", soloAdmin: true },
-    { id: "inicio",    label: "Página de inicio", soloAdmin: true },
-    { id: "logs",      label: "📋 Logs del Sistema", soloAdmin: true },
-  ];
-  const TABS = TABS_TODOS.filter(t => canSeeTab(t.id));
+  const [tab, setTab] = useState(() => ADMIN_PANEL_TABS[0]?.id || "usuarios");
 
-  const [tab, setTab] = useState(() => TABS[0]?.id || "usuarios");
+  useEffect(() => {
+    if (TABS.length && !TABS.some((x) => x.id === tab)) {
+      startTransition(() => setTab(TABS[0].id));
+    }
+  }, [TABS, tab]);
+
+  /** Contratos visibles en el panel: no privilegiados solo el asignado en su perfil. */
+  const contratosVisibles = useMemo(() => {
+    if (isDeveloper || isAdmin) return contratos;
+    const cid = user?.contrato_id;
+    if (cid == null || cid === "") return [];
+    const n = Number(cid);
+    return contratos.filter((c) => Number(c.id) === n);
+  }, [contratos, isDeveloper, isAdmin, user?.contrato_id]);
 
   const TITULOS = {
     usuarios:  { title: "Gestión de usuarios",    sub: "Administra cargos, roles, contratos y estados" },
@@ -5168,7 +5191,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
             {tab === "usuarios"  && <SeccionUsuarios  call={call} cargos={cargos} theme={activeTheme} userId={user?.id} />}
             {tab === "cargos"    && <SeccionCargos    call={call} cargos={cargos} recargarCargos={cargarCargos} theme={activeTheme} />}
             {tab === "permisos"  && <SeccionPermisos  call={call} cargos={cargos} theme={activeTheme} />}
-            {tab === "contratos" && <SeccionContratos call={call} contratos={contratos} recargarContratos={cargarContratos}
+            {tab === "contratos" && <SeccionContratos call={call} contratos={contratosVisibles} recargarContratos={cargarContratos}
             perms={isDeveloper ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true } :
               (() => {
                 const p = (user?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === "contratos");
@@ -5184,7 +5207,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
           />}
             {tab === "precios"          && <SeccionListadoPrecios call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true, validar: true } : precioPerms} theme={activeTheme} />}
             {tab === "subcontratistas"  && <SeccionSubcontratistas call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, validar: true, exportar: true } : subPerms} theme={activeTheme} />}
-            {tab === "actas"            && <SeccionActasRpo call={call} user={user} contratos={contratos} theme={activeTheme} />}
+            {tab === "actas"            && <SeccionActasRpo call={call} user={user} contratos={contratosVisibles} theme={activeTheme} />}
             {tab === "resets"           && <SeccionResets    call={call} theme={activeTheme} />}
             {tab === "inicio"           && (
               <SeccionInicioNovedades
@@ -5193,7 +5216,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
                 token={token}
                 isDeveloper={isDeveloper}
                 user={user}
-                contratos={contratos}
+                contratos={contratosVisibles}
               />
             )}
               {tab === "logs"      && <SeccionLogs      call={call} theme={activeTheme} />}

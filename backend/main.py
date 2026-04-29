@@ -5689,15 +5689,62 @@ def marcar_leida(notif_id: int, current_user=Depends(get_current_user)):
 
 @app.get("/notificaciones/usuarios-destinatarios")
 def get_usuarios_destinatarios(current_user=Depends(get_current_user)):
-    """Lista de usuarios activos para el selector de destinatario."""
+    """Usuarios activos del mismo contrato (o contratos vinculados) para el selector de destinatario.
+    Desarrollador sin contrato asignado conserva el listado global para operación de plataforma."""
     uid = int(current_user.get("sub", 0))
-    rows = supabase.table("usuarios").select("id, nombre, apellidos, cargo_id") \
-        .eq("activo", True).execute().data
-    cargos = {c["id"]: c["nombre"] for c in supabase.table("cargos").select("id, nombre").execute().data}
-    return [
-        {"id": r["id"], "nombre": f"{r['nombre']} {r.get('apellidos','')}", "cargo": cargos.get(r.get("cargo_id"), "")}
-        for r in rows if r["id"] != uid
-    ]
+    urow = supabase.table("usuarios").select("contrato_id, cargo_id").eq("id", uid).limit(1).execute().data
+    urow = urow[0] if urow else {}
+    cargo_nom = ""
+    if urow.get("cargo_id"):
+        crow = supabase.table("cargos").select("nombre").eq("id", urow["cargo_id"]).limit(1).execute().data
+        if crow:
+            cargo_nom = (crow[0].get("nombre") or "").strip().lower()
+
+    scope = set()
+    if urow.get("contrato_id") is not None:
+        try:
+            scope.add(int(urow["contrato_id"]))
+        except (TypeError, ValueError):
+            pass
+    for r in supabase.table("usuario_contratos").select("contrato_id").eq("usuario_id", uid).execute().data or []:
+        if r.get("contrato_id") is not None:
+            try:
+                scope.add(int(r["contrato_id"]))
+            except (TypeError, ValueError):
+                pass
+
+    def _rows_to_out(rows: list) -> list:
+        cargos = {c["id"]: c["nombre"] for c in supabase.table("cargos").select("id, nombre").execute().data}
+        return [
+            {"id": r["id"], "nombre": f"{r['nombre']} {r.get('apellidos','')}", "cargo": cargos.get(r.get("cargo_id"), "")}
+            for r in (rows or []) if r.get("id") is not None and r["id"] != uid
+        ]
+
+    if not scope:
+        if cargo_nom == "desarrollador":
+            rows = supabase.table("usuarios").select("id, nombre, apellidos, cargo_id").eq("activo", True).execute().data or []
+            out = _rows_to_out(rows)
+            out.sort(key=lambda x: (x.get("nombre") or "").lower())
+            return out
+        return []
+
+    scope_l = list(scope)
+    by_id = {}
+    r1 = supabase.table("usuarios").select("id, nombre, apellidos, cargo_id").eq("activo", True).in_("contrato_id", scope_l).execute().data or []
+    for r in r1:
+        by_id[r["id"]] = r
+    uc = supabase.table("usuario_contratos").select("usuario_id").in_("contrato_id", scope_l).execute().data or []
+    extra_ids = list({int(x["usuario_id"]) for x in uc if x.get("usuario_id") is not None} - {uid})
+    if extra_ids:
+        chunk = 120
+        for i in range(0, len(extra_ids), chunk):
+            part = extra_ids[i : i + chunk]
+            r2 = supabase.table("usuarios").select("id, nombre, apellidos, cargo_id").eq("activo", True).in_("id", part).execute().data or []
+            for r in r2:
+                by_id[r["id"]] = r
+    out = _rows_to_out(list(by_id.values()))
+    out.sort(key=lambda x: (x.get("nombre") or "").lower())
+    return out
 
 # ─────────────────────────────────────────────────────────────
 # ACTAS
