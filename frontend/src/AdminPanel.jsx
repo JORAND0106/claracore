@@ -1777,27 +1777,56 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
 
-  function extraerCoordenadasGeojson(geojson) {
-    const coords = [];
+  /** Límites y centro en una pasada (sin arrays enormes). Math.min(...array) falla con muchos vértices (>~65k args). */
+  function boundsDesdeGeojson(geojson) {
+    let minLng = Infinity;
+    let maxLng = -Infinity;
+    let minLat = Infinity;
+    let maxLat = -Infinity;
+    let n = 0;
+    const considerar = (lng, lat) => {
+      if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+      n += 1;
+      if (lng < minLng) minLng = lng;
+      if (lng > maxLng) maxLng = lng;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    };
+    const recorrerCoords = (node) => {
+      if (!Array.isArray(node)) return;
+      if (typeof node[0] === "number" && typeof node[1] === "number") {
+        considerar(node[0], node[1]);
+        return;
+      }
+      for (let i = 0; i < node.length; i++) recorrerCoords(node[i]);
+    };
     const walk = (geom) => {
       if (!geom || !geom.type) return;
       if (geom.type === "Feature") return walk(geom.geometry);
-      if (geom.type === "FeatureCollection") return (geom.features || []).forEach(walk);
-      if (geom.type === "GeometryCollection") return (geom.geometries || []).forEach(walk);
+      if (geom.type === "FeatureCollection") {
+        const feats = geom.features || [];
+        for (let i = 0; i < feats.length; i++) walk(feats[i]);
+        return;
+      }
+      if (geom.type === "GeometryCollection") {
+        const geoms = geom.geometries || [];
+        for (let i = 0; i < geoms.length; i++) walk(geoms[i]);
+        return;
+      }
       const c = geom.coordinates;
-      if (!c) return;
-      const flatten = (node) => {
-        if (!Array.isArray(node)) return;
-        if (typeof node[0] === "number" && typeof node[1] === "number") {
-          coords.push([node[0], node[1]]);
-          return;
-        }
-        node.forEach(flatten);
-      };
-      flatten(c);
+      if (c) recorrerCoords(c);
     };
     walk(geojson);
-    return coords;
+    if (!n) return null;
+    return {
+      minLng,
+      maxLng,
+      minLat,
+      maxLat,
+      centroLng: (minLng + maxLng) / 2,
+      centroLat: (minLat + maxLat) / 2,
+      vertexCount: n,
+    };
   }
 
   function handleLogo(campo, e) {
@@ -1860,30 +1889,29 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
   function handlePlanoGeojson(e) {
     const file = e.target.files?.[0];
     if (!file) return;
+    setMsg({ type: "success", text: `Procesando "${file.name}" (${(file.size / (1024 * 1024)).toFixed(2)} MB)…` });
     const reader = new FileReader();
+    reader.onerror = () => {
+      setMsg({ type: "error", text: "No se pudo leer el archivo. Reintenta o comprueba permisos." });
+    };
     reader.onload = (ev) => {
       try {
         const parsed = JSON.parse(String(ev.target?.result || "{}"));
-        const coords = extraerCoordenadasGeojson(parsed);
-        if (!coords.length) throw new Error("El archivo no contiene coordenadas válidas.");
-        const lngs = coords.map(([lng]) => lng);
-        const lats = coords.map(([, lat]) => lat);
-        const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
-        const minLat = Math.min(...lats), maxLat = Math.max(...lats);
-        const centroLng = (minLng + maxLng) / 2;
-        const centroLat = (minLat + maxLat) / 2;
+        const b = boundsDesdeGeojson(parsed);
+        if (!b) throw new Error("El archivo no contiene coordenadas válidas (GeoJSON vacío o tipos no soportados).");
         setForm((f) => ({
           ...f,
           plano_geojson: parsed,
-          centro_lng: Number(centroLng.toFixed(6)),
-          centro_lat: Number(centroLat.toFixed(6)),
+          centro_lng: Number(b.centroLng.toFixed(6)),
+          centro_lat: Number(b.centroLat.toFixed(6)),
         }));
-        setMsg({ type: "success", text: "Plano GeoJSON cargado y centrado automáticamente." });
+        setMsg({ type: "success", text: `Plano GeoJSON cargado (${b.vertexCount.toLocaleString()} vértices) y centrado automáticamente.` });
       } catch (err) {
         setMsg({ type: "error", text: `GeoJSON inválido: ${err.message}` });
       }
     };
     reader.readAsText(file);
+    e.target.value = "";
   }
 
   async function iniciarEdicion(c) {
@@ -2008,12 +2036,10 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
         map.getSource(sourceId).setData(form.plano_geojson);
       }
 
-      const coords = extraerCoordenadasGeojson(form.plano_geojson);
-      if (coords.length) {
-        const lngs = coords.map(([lng]) => lng);
-        const lats = coords.map(([, lat]) => lat);
+      const b = boundsDesdeGeojson(form.plano_geojson);
+      if (b) {
         map.fitBounds(
-          [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
+          [[b.minLng, b.minLat], [b.maxLng, b.maxLat]],
           { padding: 30, maxZoom: 16, duration: 300 }
         );
       }
@@ -2114,7 +2140,13 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
           {form.plano_geojson && (
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 10, color: '#4a7a87', letterSpacing: 0.7, marginBottom: 6 }}>PREVISUALIZACIÓN MAPBOX</div>
-              <div ref={mapContainerRef} style={{ width: '100%', height: 220, borderRadius: 8, border: '1px solid rgba(0,175,197,0.25)', overflow: 'hidden' }} />
+              {!import.meta.env.VITE_MAPBOX_TOKEN ? (
+                <div style={{ padding: 16, borderRadius: 8, border: '1px solid rgba(245,158,11,0.35)', background: 'rgba(245,158,11,0.08)', color: '#FCD34D', fontSize: 12, lineHeight: 1.45 }}>
+                  El GeoJSON está cargado, pero falta la variable de entorno <code style={{ color: '#FDE68A' }}>VITE_MAPBOX_TOKEN</code> en el frontend; sin token no se puede dibujar el mapa.
+                </div>
+              ) : (
+                <div ref={mapContainerRef} style={{ width: '100%', height: 220, borderRadius: 8, border: '1px solid rgba(0,175,197,0.25)', overflow: 'hidden' }} />
+              )}
             </div>
           )}
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:0 }}>
