@@ -413,16 +413,16 @@ function FraseDelDia({ t, fs, usuario }) {
   useEffect(() => {
     try {
       const guardado = JSON.parse(localStorage.getItem(storageKey) || 'null')
-      if (guardado?.rechazado) return
+      // Si ya tiene la frase de hoy en cache, mostrarla directamente
       if (guardado?.frase && guardado?.fecha === hoyISO()) {
         setFrase(guardado.frase)
         setEstado('visible')
         setTimeout(() => setVisible(true), 200)
         return
       }
-      if (guardado?.aceptado) { generarFrase(); return }
     } catch {}
-    setTimeout(() => setEstado('pregunta'), 600)
+    // Generar frase automáticamente para todos (sin preguntar)
+    setTimeout(() => generarFrase(), 400)
   }, [])
 
   const generarFrase = async () => {
@@ -458,8 +458,7 @@ function FraseDelDia({ t, fs, usuario }) {
     }
   }
 
-  const aceptar  = () => { localStorage.setItem(storageKey, JSON.stringify({ aceptado: true, fecha: hoyISO() })); generarFrase() }
-  const rechazar = () => { localStorage.setItem(storageKey, JSON.stringify({ rechazado: true })); setEstado('idle') }
+  const aceptar  = () => generarFrase()
 
   const TIPO_COLOR = { reflexiva: '#8B5CF6', motivadora: '#10B981', 'bíblica': '#F59E0B' }
   const TIPO_ICONO = { reflexiva: '💡', motivadora: '🚀', 'bíblica': '📖' }
@@ -472,32 +471,6 @@ function FraseDelDia({ t, fs, usuario }) {
       background: t.bgCard, border: `1px solid ${t.border}`,
       borderRadius: '12px', padding: '16px 20px', marginBottom: '20px',
     }}>
-      {estado === 'pregunta' && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-          <div style={{ fontSize: '24px' }}>✨</div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: fs.card, fontWeight: '700', color: t.text, marginBottom: '3px' }}>
-              ¿Deseas recibir tu frase del día?
-            </div>
-            <div style={{ fontSize: fs.base, color: t.textMuted }}>
-              Una reflexión, frase motivadora o versículo bíblico personalizado para ti.
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
-            <button onClick={aceptar} style={{
-              background: t.primary, color: '#fff', border: 'none',
-              borderRadius: '8px', padding: '7px 16px',
-              fontSize: fs.base, fontWeight: '700', cursor: 'pointer',
-            }}>Sí, quiero</button>
-            <button onClick={rechazar} style={{
-              background: 'transparent', color: t.textMuted,
-              border: `1px solid ${t.border}`, borderRadius: '8px',
-              padding: '7px 12px', fontSize: fs.base, cursor: 'pointer',
-            }}>No, gracias</button>
-          </div>
-        </div>
-      )}
-
       {estado === 'cargando' && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
