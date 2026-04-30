@@ -492,8 +492,8 @@ useEffect(() => {
   const keyCacheFila = (cap, it) => [cap, it || '', ubicacionTramo, ubicacionCalzada, filtroEstado, busquedaTipo, busquedaV1, busquedaV2].join('|')
 
   /**
-   * Carga el listado completo: 1 request de conteo + N páginas en PARALELO (Promise.all).
-   * Antes era serial (while-loop), lo que podía tomar 30 s para capítulos grandes.
+   * Carga el listado completo: 1 request de conteo + N páginas con concurrencia limitada (max 3).
+   * Limitar a 3 simultáneos evita saturar el pool de conexiones de Supabase.
    */
   async function fetchPresupuestoPaginasCompletas(pQuery) {
     const h = { Authorization: `Bearer ${token}` }
@@ -506,22 +506,28 @@ useEffect(() => {
     }
     if (totalN === 0) return { rows: [], total: 0 }
 
-    // Calcular todos los offsets de una vez y lanzar todas las páginas en paralelo
     const offsets = []
     for (let off = 0; off < totalN; off += PRES_PTO_CHUNK) offsets.push(off)
-    const pages = await Promise.all(
-      offsets.map(off => {
-        const p = new URLSearchParams(pQuery.toString())
-        p.set('limit', String(PRES_PTO_CHUNK))
-        p.set('offset', String(off))
-        return fetch(`${API}/presupuesto/${contratoId}?${p.toString()}`, { headers: h })
-          .then(r => r.ok ? r.json() : [])
-          .then(d => Array.isArray(d) ? d : [])
-          .catch(() => [])
-      })
-    )
-    const rows = pages.flat()
-    return { rows, total: totalN }
+
+    const fetchPage = (off) => {
+      const p = new URLSearchParams(pQuery.toString())
+      p.set('limit', String(PRES_PTO_CHUNK))
+      p.set('offset', String(off))
+      return fetch(`${API}/presupuesto/${contratoId}?${p.toString()}`, { headers: h })
+        .then(r => r.ok ? r.json() : [])
+        .then(d => Array.isArray(d) ? d : [])
+        .catch(() => [])
+    }
+
+    // Concurrencia máxima de 3 páginas simultáneas para no saturar Supabase
+    const CONCURRENCY = 3
+    const allRows = []
+    for (let i = 0; i < offsets.length; i += CONCURRENCY) {
+      const batch = offsets.slice(i, i + CONCURRENCY)
+      const batchPages = await Promise.all(batch.map(fetchPage))
+      allRows.push(...batchPages.flat())
+    }
+    return { rows: allRows, total: totalN }
   }
 
 async function cargarRegistros(modoPapelera, forzar = false) {
@@ -763,7 +769,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     document.addEventListener('visibilitychange', onVis)
     window.addEventListener('focus', onVis)
-    const iv = setInterval(tick, 1500)
+    const iv = setInterval(tick, 3000)
     return () => {
       document.removeEventListener('visibilitychange', onVis)
       window.removeEventListener('focus', onVis)

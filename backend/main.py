@@ -4658,9 +4658,16 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
                 "payload": payload_cad,
             })
 
-    # Paso 2: persistir en 2 llamadas en vez de N — upsert batch + insert batch CAD
+    # Paso 2: updates en paralelo (ThreadPoolExecutor) + insert batch CAD
+    # NO se usa upsert porque su default_to_null=True pondría NULL en columnas no incluidas
+    def _upd(item):
+        rid  = item["id"]
+        data = {k: v for k, v in item.items() if k != "id"}
+        supabase.table("presupuesto").update(data).eq("id", rid).execute()
+
     if batch_ppto:
-        supabase.table("presupuesto").upsert(batch_ppto, on_conflict="id").execute()
+        with ThreadPoolExecutor(max_workers=min(len(batch_ppto), 8)) as ex:
+            list(ex.map(_upd, batch_ppto))
     if batch_cad:
         supabase.table("cad_queue").insert(batch_cad).execute()
 
