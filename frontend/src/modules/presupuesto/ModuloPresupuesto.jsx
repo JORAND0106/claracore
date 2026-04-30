@@ -423,6 +423,7 @@ useEffect(() => {
   const [verPapelera, setVerPapelera] = useState(false)
   const _pptoCacheRef   = useRef(null)   // { data, ts, papelera } – solo para papelera
   const _pptoCachePorCap = useRef({})    // { [capitulo]: { data, ts } }
+  const _lastWriteAtRef  = useRef(0)     // timestamp de la última escritura; suprime polling 6 s post-write
   // Caché corta: otras sesiones (p. ej. interventoría) deben ver ediciones con latencia de segundos, no minutos
   const PPTO_CACHE_TTL  = 2 * 1000  // 2 s — vista papelera / lista plana
   const CAP_CACHE_TTL   = 2 * 1000  // 2 s — grilla por capítulo e ítem (antes 5–10 min)
@@ -491,41 +492,36 @@ useEffect(() => {
   const keyCacheFila = (cap, it) => [cap, it || '', ubicacionTramo, ubicacionCalzada, filtroEstado, busquedaTipo, busquedaV1, busquedaV2].join('|')
 
   /**
-   * Misma query que el listado; acumula offset en bloques. Conteo: GET conteo; filas: GET con limit+offset.
-   * Los callers hacen un solo setState con el resultado.
+   * Carga el listado completo: 1 request de conteo + N páginas en PARALELO (Promise.all).
+   * Antes era serial (while-loop), lo que podía tomar 30 s para capítulos grandes.
    */
   async function fetchPresupuestoPaginasCompletas(pQuery) {
     const h = { Authorization: `Bearer ${token}` }
-    const pConteo = new URLSearchParams(pQuery.toString())
-    const qC = pConteo.toString()
+    const qC = new URLSearchParams(pQuery.toString()).toString()
     const resC = await fetch(`${API}/presupuesto/${contratoId}/conteo${qC ? `?${qC}` : ''}`, { headers: h })
     let totalN = 0
-    let conteoOk = false
     if (resC.ok) {
-      conteoOk = true
       const j = await resC.json()
       if (j && typeof j.total === 'number') totalN = j.total
     }
-    if (conteoOk && totalN === 0) {
-      return { rows: [], total: 0 }
-    }
-    const acc = []
-    let off = 0
-    while (true) {
-      const p = new URLSearchParams(pQuery.toString())
-      p.set('limit', String(PRES_PTO_CHUNK))
-      p.set('offset', String(off))
-      const q = p.toString()
-      const res = await fetch(`${API}/presupuesto/${contratoId}${q ? `?${q}` : ''}`, { headers: h })
-      if (!res.ok) break
-      const data = await res.json()
-      const list = Array.isArray(data) ? data : []
-      if (list.length === 0) break
-      acc.push(...list)
-      if (list.length < PRES_PTO_CHUNK) break
-      off += list.length
-    }
-    return { rows: acc, total: totalN > 0 ? totalN : acc.length }
+    if (totalN === 0) return { rows: [], total: 0 }
+
+    // Calcular todos los offsets de una vez y lanzar todas las páginas en paralelo
+    const offsets = []
+    for (let off = 0; off < totalN; off += PRES_PTO_CHUNK) offsets.push(off)
+    const pages = await Promise.all(
+      offsets.map(off => {
+        const p = new URLSearchParams(pQuery.toString())
+        p.set('limit', String(PRES_PTO_CHUNK))
+        p.set('offset', String(off))
+        return fetch(`${API}/presupuesto/${contratoId}?${p.toString()}`, { headers: h })
+          .then(r => r.ok ? r.json() : [])
+          .then(d => Array.isArray(d) ? d : [])
+          .catch(() => [])
+      })
+    )
+    const rows = pages.flat()
+    return { rows, total: totalN }
   }
 
 async function cargarRegistros(modoPapelera, forzar = false) {
@@ -708,6 +704,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }, [contratoId, detalleConItem, ubicacionTramo, ubicacionCalzada, filtroEstado, busquedaTipo, busquedaV1, busquedaV2])
 
   async function recargarCapActual(limpiarTodo = false) {
+    // Suprimir polling durante la recarga para que el cargaId no sea invalidado por el tick
+    _lastWriteAtRef.current = Date.now()
     if (limpiarTodo) {
       _pptoCachePorCap.current = {}
       _pptoCacheRef.current = null
@@ -743,6 +741,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (document.visibilityState !== 'visible') return
       if (cargaPptoInFlightRef.current || loading) return
       if (buscandoFiltroObra) return
+      // No sobreescribir estado local durante 8 s después de escritura o recarga manual del usuario
+      if (Date.now() - _lastWriteAtRef.current < 8000) return
       if (detalleConItem) {
         skipDebounceFiltrosRef.current = true
         refreshRegistrosDetalle({ forzar: true, syncPreserveSize: true })
@@ -1034,6 +1034,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const cap = modalModoCapitulo
     if (!String(cap || '').trim() || !contratoId) return
     const itemDrill = drill.find((d) => d.campo === 'item')?.valor || null
+    // Suprimir polling para que no invalide el cargaId de esta recarga
+    _lastWriteAtRef.current = Date.now()
     setRefrescandoRevisorTramos(true)
     try {
       await cargarCapituloData(cap, itemDrill, { forzar: true, syncPreserveSize: false })
@@ -1329,6 +1331,32 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (editCapitulo)   body.capitulo    = editCapitulo
     if (editItem)       { body.item = editItem; body.descripcion = precioSeleccionado?.descripcion ?? null }
     if (precioSeleccionado) body.vlr_unitario = precioSeleccionado.precio_unitario
+
+    // Calcular resultado esperado localmente y aplicarlo antes del fetch
+    const computarFila = (r) => {
+      if (!ids.includes(r.id)) return r
+      const dim = dims.find(d => d.id === r.id)
+      const ancho   = (dim?.ancho != null ? dim.ancho : (r.ancho ?? 0)) || 0
+      const espesor = (dim?.espesor != null ? dim.espesor : (r.espesor ?? 0)) || 0
+      const area    = (dim?.area_long_nod != null ? dim.area_long_nod : (r.area_long_nod ?? 0)) || 0
+      const vlr     = precioSeleccionado?.precio_unitario ?? r.vlr_unitario ?? 0
+      const cant    = (ancho > 0 || espesor > 0) ? Math.round(area * ancho * espesor * 100) / 100 : Math.round(area * 100) / 100
+      const costo   = Math.round(cant * vlr)
+      return {
+        ...r,
+        ...(editCapitulo && { capitulo: editCapitulo }),
+        ...(editItem && { item: editItem, descripcion: precioSeleccionado?.descripcion ?? r.descripcion }),
+        ...(dim && { ancho, espesor, area_long_nod: area }),
+        cant_total:    cant,
+        costo_directo: costo,
+        vlr_unitario:  vlr,
+      }
+    }
+    const snapOriginal = registros.filter(r => ids.includes(r.id))
+    setRegistros(prev => prev.map(computarFila))
+    setEditCapitulo(''); setEditItem(''); setEditDims({}); setSeleccionados(new Set()); setModalConfirm(false)
+    _lastWriteAtRef.current = Date.now()
+
     setGuardandoBulk(true)
     const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-recalcular`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -1337,27 +1365,12 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setGuardandoBulk(false)
     if (res.ok) {
       if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario, destinatarioId)
-      // Patch local — actualizar registros en memoria sin recargar
+    } else {
+      // Revertir si falló
       setRegistros(prev => prev.map(r => {
-        if (!ids.includes(r.id)) return r
-        const dim = dims.find(d => d.id === r.id)
-        const ancho   = (dim?.ancho != null ? dim.ancho : (r.ancho ?? 0)) || 0
-        const espesor = (dim?.espesor != null ? dim.espesor : (r.espesor ?? 0)) || 0
-        const area    = (dim?.area_long_nod != null ? dim.area_long_nod : (r.area_long_nod ?? 0)) || 0
-        const vlr     = precioSeleccionado?.precio_unitario ?? r.vlr_unitario ?? 0
-        const cant    = (ancho > 0 || espesor > 0) ? Math.round(area * ancho * espesor * 100) / 100 : Math.round(area * 100) / 100
-        const costo   = Math.round(cant * vlr)
-        return {
-          ...r,
-          ...(editCapitulo && { capitulo: editCapitulo }),
-          ...(editItem && { item: editItem, descripcion: precioSeleccionado?.descripcion ?? r.descripcion }),
-          ...(dim && { ancho, espesor, area_long_nod: area }),
-          cant_total:    cant,
-          costo_directo: costo,
-          vlr_unitario:  vlr,
-        }
+        const orig = snapOriginal.find(x => x.id === r.id)
+        return orig ? orig : r
       }))
-      setEditCapitulo(''); setEditItem(''); setEditDims({}); setSeleccionados(new Set()); setModalConfirm(false)
     }
   }
 
@@ -1373,18 +1386,19 @@ async function ejecutarBulkEstadoDirecto(estado) {
     if (comentarioData === null) return
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
+    // Actualización optimista inmediata
+    setRegistros(prev => prev.map(r => aplicarCambioEstadoLocal(r, selIds, estado)))
+    setBulkEstado(''); setSeleccionados(new Set())
+    _lastWriteAtRef.current = Date.now()
     setGuardandoBulk(true)
     const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ ids: [...seleccionados], revisado: estado })
+      body: JSON.stringify({ ids: selIds, revisado: estado })
     })
     setGuardandoBulk(false)
     if (res.ok) {
-      if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario, destinatarioId)
-      const idsSelec = [...seleccionados]
-      setBulkEstado(''); setSeleccionados(new Set())
-      lanzarClaraLinkEstado(idsSelec, estado)
-      setRegistros(prev => prev.map(r => aplicarCambioEstadoLocal(r, idsSelec, estado)))
+      if (comentario.trim()) await crearComentarios(selIds, 'validacion', comentario, destinatarioId)
+      lanzarClaraLinkEstado(selIds, estado)
     }
   }
 
@@ -1400,19 +1414,20 @@ async function ejecutarBulkEstadoDirecto(estado) {
     if (comentarioData === null) return
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
+    const estadoAplicado = bulkEstado
+    // Actualización optimista inmediata
+    setRegistros(prev => prev.map(r => aplicarCambioEstadoLocal(r, selIds, estadoAplicado)))
+    setBulkEstado(''); setSeleccionados(new Set())
+    _lastWriteAtRef.current = Date.now()
     setGuardandoBulk(true)
     const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ ids: [...seleccionados], revisado: bulkEstado })
+      body: JSON.stringify({ ids: selIds, revisado: estadoAplicado })
     })
     setGuardandoBulk(false)
     if (res.ok) {
-      if (comentario.trim()) await crearComentarios([...seleccionados], 'validacion', comentario, destinatarioId)
-      const idsSelec = [...seleccionados]
-      const estadoAplicado = bulkEstado
-      setBulkEstado(''); setSeleccionados(new Set())
-      lanzarClaraLinkEstado(idsSelec, estadoAplicado)
-      setRegistros(prev => prev.map(r => aplicarCambioEstadoLocal(r, idsSelec, estadoAplicado)))
+      if (comentario.trim()) await crearComentarios(selIds, 'validacion', comentario, destinatarioId)
+      lanzarClaraLinkEstado(selIds, estadoAplicado)
     }
   }
 
@@ -1428,19 +1443,27 @@ async function ejecutarBulkEstadoDirecto(estado) {
     if (comentarioData === null) return
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
+    const estadoPre = bulkPreInterv
+    // Capturar estado original para revertir si falla
+    const snapOriginal = registros.filter(r => selIds.includes(r.id))
+    // Actualización optimista inmediata
+    setRegistros(prev => prev.map(r => aplicarCambioPreIntervLocal(r, selIds, estadoPre)))
+    setBulkPreInterv(''); setSeleccionados(new Set())
+    _lastWriteAtRef.current = Date.now()
     setGuardandoBulk(true)
     const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-pre-interv`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ ids: selIds, estado: bulkPreInterv })
+      body: JSON.stringify({ ids: selIds, estado: estadoPre })
     })
     setGuardandoBulk(false)
     if (res.ok) {
       if (comentario.trim()) await crearComentarios(selIds, 'validacion', comentario, destinatarioId)
-      const idsSelec = [...selIds]
-      const estadoPre = bulkPreInterv
-      setBulkPreInterv(''); setSeleccionados(new Set())
-      setRegistros(prev => prev.map(r => aplicarCambioPreIntervLocal(r, idsSelec, estadoPre)))
     } else {
+      // Revertir al estado original
+      setRegistros(prev => prev.map(r => {
+        const orig = snapOriginal.find(x => x.id === r.id)
+        return orig ? orig : r
+      }))
       try {
         const d = await res.json()
         alert(d.detail || 'No se pudo aplicar la depuración previa.')
@@ -1496,8 +1519,15 @@ async function ejecutarBulkEstadoDirecto(estado) {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify(body)
     })
-    if (res.ok) { setEditando(null); await recargarCapActual() }
-    else {
+    if (res.ok) {
+      const d = await res.json()
+      setEditando(null)
+      if (d && d.id) {
+        setRegistros(prev => prev.map(r => r.id === d.id ? d : r))
+      }
+      // Actualizar totales del panel izquierdo en background sin bloquear la UI
+      cargarCapitulos().catch(() => {})
+    } else {
       try {
         const d = await res.json()
         alert(d.detail || 'No se pudo guardar la edición.')
@@ -1590,16 +1620,22 @@ async function highlightEnDwg(registro) {
     if (comentarioData === null) return
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
+    // Actualización optimista inmediata — el usuario ve el cambio al instante
+    setRegistros(prev => prev.map(r => aplicarCambioEstadoLocal(r, [id], nuevoEstado)))
+    _lastWriteAtRef.current = Date.now()
     const token = getToken()
     const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ ids: [id], revisado: nuevoEstado })
     })
-    if (!res.ok) return
+    if (!res.ok) {
+      // Revertir si falló
+      setRegistros(prev => prev.map(r => r.id === id ? row : r))
+      return
+    }
     if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioId)
     lanzarClaraLinkEstado([id], nuevoEstado)
-    setRegistros(prev => prev.map(r => aplicarCambioEstadoLocal(r, [id], nuevoEstado)))
   }
 
   async function cambiarPreIntervDirecto(id, nuevoEstado) {
@@ -1610,6 +1646,9 @@ async function highlightEnDwg(registro) {
     if (comentarioData === null) return
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
+    // Actualización optimista inmediata
+    setRegistros(prev => prev.map(r => aplicarCambioPreIntervLocal(r, [id], nuevoEstado)))
+    _lastWriteAtRef.current = Date.now()
     const tok = getToken()
     const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-pre-interv`, {
       method: 'PUT',
@@ -1617,6 +1656,8 @@ async function highlightEnDwg(registro) {
       body: JSON.stringify({ ids: [id], estado: nuevoEstado })
     })
     if (!res.ok) {
+      // Revertir si falló
+      setRegistros(prev => prev.map(r => r.id === id ? row : r))
       try {
         const d = await res.json()
         alert(d.detail || 'No se pudo guardar la depuración previa.')
@@ -1626,7 +1667,6 @@ async function highlightEnDwg(registro) {
       return
     }
     if (comentario.trim()) await crearComentarios([id], 'validacion', comentario, destinatarioId)
-    setRegistros(prev => prev.map(r => aplicarCambioPreIntervLocal(r, [id], nuevoEstado)))
   }
 
 async function darDeBaja(id) {
@@ -2272,6 +2312,16 @@ async function restaurar(id) {
                                       if (w !== undefined) pay.ancho = w
                                       if (espN !== undefined) pay.espesor = espN
                                       if (Object.keys(pay).length === 0) return
+                                      // Calcular resultado localmente y aplicar de forma optimista
+                                      const aF = pay.area_long_nod ?? r.area_long_nod ?? 0
+                                      const wF = pay.ancho ?? r.ancho ?? 0
+                                      const eF = pay.espesor ?? r.espesor ?? 0
+                                      const cant = (wF || eF) ? Math.round(aF * wF * eF * 100) / 100 : Math.round(aF * 100) / 100
+                                      const costo = Math.round(cant * (r.vlr_unitario || 0))
+                                      const optimisticRow = { ...r, ...pay, cant_total: cant, costo_directo: costo }
+                                      setRegistros(prev => prev.map(x => x.id === r.id ? optimisticRow : x))
+                                      setEditDims(p => { const n = {...p}; delete n[r.id]; return n })
+                                      _lastWriteAtRef.current = Date.now()
                                       const res = await fetch(`${API}/presupuesto/item/${r.id}`, {
                                         method: 'PUT',
                                         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -2280,7 +2330,10 @@ async function restaurar(id) {
                                       if (res.ok) {
                                         const updated = await res.json()
                                         setRegistros(prev => prev.map(x => x.id === r.id ? updated : x))
-                                        setEditDims(p => { const n = {...p}; delete n[r.id]; return n })
+                                      } else {
+                                        // Revertir si falló
+                                        setRegistros(prev => prev.map(x => x.id === r.id ? r : x))
+                                        setEditDims(p => ({ ...p, [r.id]: d }))
                                       }
                                     }}
                                     style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'3px 8px', fontSize:'var(--cc-sm)', cursor:'pointer', fontWeight:'700', flexShrink:0 }}>
@@ -2635,7 +2688,7 @@ async function restaurar(id) {
                             </div>
                           </div>
                           <button disabled={popupGuardando} onClick={async () => {
-                            setPopupGuardando(true); setPopupMsg('')
+                            setPopupMsg('')
                             const pArea = popupDims.area_long_nod === '' ? NaN : parseFloat(popupDims.area_long_nod)
                             const pAncho = popupDims.ancho === '' ? NaN : parseFloat(popupDims.ancho)
                             const pEsp = popupDims.espesor === '' ? NaN : parseFloat(popupDims.espesor)
@@ -2651,20 +2704,31 @@ async function restaurar(id) {
                               cant_total: cant,
                               costo_directo: costo
                             }
+                            // Actualización optimista inmediata
+                            const optimisticRow = { ...r, ...body }
+                            setModalDetallePpto(optimisticRow)
+                            setRegistros(prev => prev.map(x => x.id === r.id ? optimisticRow : x))
+                            setPopupMsg('✅ Dimensiones actualizadas')
+                            _lastWriteAtRef.current = Date.now()
+                            setPopupGuardando(true)
                             const res = await fetch(`${API}/presupuesto/item/${r.id}`, {
                               method:'PUT', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
                               body: JSON.stringify(body)
                             })
                             if (res.ok) {
-                              const updated = await fetch(`${API}/presupuesto/item/${r.id}`, { headers:{ Authorization:`Bearer ${token}` } })
-                              if (updated.ok) {
-                                const d = await updated.json()
+                              const d = await res.json()
+                              if (d && d.id) {
                                 setModalDetallePpto(d)
                                 setModalDetallePptoEditable(puedeEditarFilaPptoNoSelladoOReabrir(d))
+                                setRegistros(prev => prev.map(x => x.id === d.id ? d : x))
                               }
                               { const c = drill.find(d=>d.campo==='capitulo')?.valor; if(c) delete _pptoCachePorCap.current[c] }
-                              setPopupMsg('✅ Dimensiones actualizadas')
-                            } else setPopupMsg('❌ Error al guardar')
+                            } else {
+                              // Revertir si falló
+                              setModalDetallePpto(r)
+                              setRegistros(prev => prev.map(x => x.id === r.id ? r : x))
+                              setPopupMsg('❌ Error al guardar')
+                            }
                             setPopupGuardando(false)
                           }}
                             style={{ background:'#F59E0B', color:'#fff', border:'none', borderRadius:'7px', padding:'7px 18px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', opacity: popupGuardando ? 0.6 : 1 }}>
@@ -2709,13 +2773,13 @@ async function restaurar(id) {
                             )}
                           </div>
                           <button disabled={popupGuardando || (!popupCap && !popupItem)} onClick={async () => {
-                            setPopupGuardando(true); setPopupMsg('')
+                            setPopupMsg('')
                             let motivoReap = null
                             if (esSellado(r) && puedeReabrirTrasAprob) {
                               const com = await pedirComentario('reapertura', true)
-                              if (com == null) { setPopupGuardando(false); return }
+                              if (com == null) { return }
                               motivoReap = String(com.mensaje || '').trim()
-                              if (motivoReap.length < 15) { alert('El motivo de reapertura debe tener al menos 15 caracteres (visible para Interventoría).'); setPopupGuardando(false); return }
+                              if (motivoReap.length < 15) { alert('El motivo de reapertura debe tener al menos 15 caracteres (visible para Interventoría).'); return }
                             }
                             const precio = listadoPrecios.find(p => p.item_numero === popupItem)
                             const vlr    = precio?.valor_unitario || precio?.vlr_unitario || r.vlr_unitario || 0
@@ -2727,21 +2791,30 @@ async function restaurar(id) {
                               costo_directo: Math.round(cant * vlr),
                               ...(motivoReap ? { motivo_edicion_tras_sellado: motivoReap } : {}),
                             }
-                            if (!(await adjuntarMotivoSiEdicionContratistaConInterv(r, body))) { setPopupGuardando(false); return }
+                            if (!(await adjuntarMotivoSiEdicionContratistaConInterv(r, body))) { return }
+                            // Actualización optimista inmediata
+                            const optimisticRow = { ...r, ...body }
+                            setModalDetallePpto(optimisticRow)
+                            setRegistros(prev => prev.map(x => x.id === r.id ? optimisticRow : x))
+                            setPopupMsg('✅ Capítulo/ítem actualizado')
+                            _lastWriteAtRef.current = Date.now()
+                            setPopupGuardando(true)
                             const res = await fetch(`${API}/presupuesto/item/${r.id}`, {
                               method:'PUT', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
                               body: JSON.stringify(body)
                             })
                             if (res.ok) {
-                              const updated = await fetch(`${API}/presupuesto/item/${r.id}`, { headers:{ Authorization:`Bearer ${token}` } })
-                              if (updated.ok) {
-                                const d = await updated.json()
+                              const d = await res.json()
+                              if (d && d.id) {
                                 setModalDetallePpto(d)
                                 setModalDetallePptoEditable(puedeEditarFilaPptoNoSelladoOReabrir(d))
+                                setRegistros(prev => prev.map(x => x.id === d.id ? d : x))
                               }
                               { const c = drill.find(d=>d.campo==='capitulo')?.valor; if(c) delete _pptoCachePorCap.current[c] }
-                              setPopupMsg('✅ Capítulo/ítem actualizado')
                             } else {
+                              // Revertir si falló
+                              setModalDetallePpto(r)
+                              setRegistros(prev => prev.map(x => x.id === r.id ? r : x))
                               try { const d = await res.json(); setPopupMsg(`❌ ${d.detail || 'Error al guardar'}`) } catch { setPopupMsg('❌ Error al guardar') }
                             }
                             setPopupGuardando(false)

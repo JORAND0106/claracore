@@ -1219,7 +1219,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
 // ─── HOJA REGISTRO ────────────────────────────────────────────────────────────
 function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, seleccionado, onToggleSeleccion, onItemAsignado, hdrs, actasList = [],
   mostrarSeleccionValidacion = false, seleccionadoValidacion = false, onToggleSeleccionValidacion,
-  esDeveloper = false, onDevEliminarRegistro = null, devEliminando = false }) {
+  esDeveloper = false, onDevEliminarRegistro = null, devEliminando = false, onOptimisticValidacion = null }) {
   const [competencia,    setCompetencia]    = useState(registro.competencia    || '')
   const [itemBusqueda,   setItemBusqueda]   = useState(registro.item_numero || '')
   const [itemsLista,     setItemsLista]     = useState([])
@@ -1560,6 +1560,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     if (nivel === 2 && registro.nivel2_objeto_pago_sub !== undefined) {
       body.objeto_pago_sub = registro.nivel2_objeto_pago_sub
     }
+    // Actualización optimista inmediata — el usuario ve el cambio al instante
+    onOptimisticValidacion?.(registro.id, nivel, estadoValidando)
     try {
       const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/${sufijo}`, {
         method: 'PUT', headers: hdrs, body: JSON.stringify(body)
@@ -1570,6 +1572,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       }
       onItemAsignado()
     } catch(e) {
+      // Revertir estado optimista si falló
+      onOptimisticValidacion?.(registro.id, nivel, registro[`nivel${nivel}_estado`] || 'No Revisado')
       alert(`No se pudo aplicar la validación: ${e.message}`)
     }
   }
@@ -2440,6 +2444,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [msgMasivo, setMsgMasivo]                  = useState('')
   const [ejecutandoMasivo, setEjecutandoMasivo]    = useState(false)
   const [devEliminando, setDevEliminando]          = useState(false)
+  const [recargando, setRecargando]                = useState(false)
+  const recargarSeqRef                             = useRef(0)
 
   // Sincronizar cuando el padre reemplaza el resumen de grilla por el detalle completo (apertura optimista)
   useEffect(() => {
@@ -2531,14 +2537,28 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   })()
 
   const recargar = async () => {
+    const seq = ++recargarSeqRef.current
+    setRecargando(true)
     try {
       const build = urlReporteDetalleFn || ((id) => `${API_URL}/sicoe-obra/${contrato_id}/reportes/${id}`)
       const url = build(reporte.id)
       const res  = await fetch(url, { headers: hdrs })
       const data = await res.json()
+      // Descartar si llegó una recarga más reciente mientras esperábamos
+      if (seq !== recargarSeqRef.current) return
       setReporte(data)
       setRegistros((data.registros || []).map((row) => ({ ...row })))
-    } catch(e) {}
+    } catch(e) {
+    } finally {
+      if (seq === recargarSeqRef.current) setRecargando(false)
+    }
+  }
+
+  // Actualización optimista: aplica el nuevo estado en memoria antes de que recargar() termine
+  const aplicarOptimisticValidacion = (registroId, nivel, nuevoEstado) => {
+    const campo = CAMPO_POR_NIVEL[nivel]
+    if (!campo) return
+    setRegistros(prev => prev.map(r => r.id === registroId ? { ...r, [campo]: nuevoEstado } : r))
   }
 
   const cargarComentariosRegistro = async (regId, rolOrigen) => {
@@ -2777,10 +2797,18 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setEjecutandoMasivo(true)
     setMsgMasivo('')
     const sufijo = nv === 2 ? 'validar-masivo-nivel2' : 'validar-masivo-nivel3'
+    const campoNivel = CAMPO_POR_NIVEL[nv]
     const body = { estado, ids_registros: ids }
     if (comentarioData) {
       body.comentario_data = { ...comentarioData, rol_origen: nivelInfo.rolOrigen }
     }
+    // Actualización optimista inmediata de todos los registros seleccionados
+    const snapOriginal = registros.filter(r => ids.includes(r.id))
+    if (campoNivel) {
+      setRegistros(prev => prev.map(r => ids.includes(r.id) ? { ...r, [campoNivel]: estado } : r))
+    }
+    if (idsOverride == null) setSeleccionadosValidacion([])
+    else setPortadaResumenEstado(null)
     try {
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/${sufijo}`, {
         method: 'PUT', headers: hdrs, body: JSON.stringify(body)
@@ -2788,10 +2816,15 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || `Error ${res.status}`)
       setMsgMasivo(`✅ ${data.actualizados} actualizado(s), ${data.omitidos} omitido(s) por no cumplir el nivel anterior.`)
-      if (idsOverride == null) setSeleccionadosValidacion([])
-      else setPortadaResumenEstado(null)
       recargar()
     } catch (e) {
+      // Revertir estado optimista si falló
+      if (campoNivel) {
+        setRegistros(prev => prev.map(r => {
+          const orig = snapOriginal.find(x => x.id === r.id)
+          return orig ? orig : r
+        }))
+      }
       setMsgMasivo(`❌ ${e.message}`)
     }
     setEjecutandoMasivo(false)
@@ -2921,10 +2954,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             )}
             <button
               type="button"
+              disabled={recargando}
               onClick={() => { void recargar() }}
               title="Vuelve a cargar desde el servidor. Si abriste el reporte con filtros de búsqueda, se mantienen y solo se actualizan las líneas que cumplen esos criterios."
-              style={{ background:'rgba(255,255,255,0.22)', border:'1px solid rgba(255,255,255,0.35)', color:'#fff', borderRadius:'8px', padding:'6px 12px', fontSize:'var(--cc-sm)', fontWeight:'800', cursor:'pointer', whiteSpace:'nowrap' }}
-            >⟳ Actualizar</button>
+              style={{ background:'rgba(255,255,255,0.22)', border:'1px solid rgba(255,255,255,0.35)', color:'#fff', borderRadius:'8px', padding:'6px 12px', fontSize:'var(--cc-sm)', fontWeight:'800', cursor: recargando ? 'wait' : 'pointer', whiteSpace:'nowrap', opacity: recargando ? 0.7 : 1 }}
+            >{recargando ? '⏳ Cargando...' : '⟳ Actualizar'}</button>
             <button onClick={onClose} style={{ background:'rgba(255,255,255,0.2)', border:'none', color:'#fff', borderRadius:'50%', width:'34px', height:'34px', fontSize:'var(--cc-lg)', cursor:'pointer', fontWeight:'900', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
           </div>
         </div>
@@ -3558,6 +3592,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           seleccionadoValidacion={seleccionadosValidacion.includes(reg.id)}
                           onToggleSeleccionValidacion={() => toggleSeleccionValidacion(reg.id)}
                           onItemAsignado={recargar}
+                          onOptimisticValidacion={aplicarOptimisticValidacion}
                           hdrs={hdrs}
                           esDeveloper={esDeveloper}
                           onDevEliminarRegistro={devEliminarRegistro}
@@ -3705,6 +3740,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           seleccionadoValidacion={seleccionadosValidacion.includes(reg.id)}
                           onToggleSeleccionValidacion={() => toggleSeleccionValidacion(reg.id)}
                           onItemAsignado={recargar}
+                          onOptimisticValidacion={aplicarOptimisticValidacion}
                           hdrs={hdrs}
                           esDeveloper={esDeveloper}
                           onDevEliminarRegistro={devEliminarRegistro}
@@ -4343,8 +4379,11 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     const hayFiltros = Object.values(filtros).some(v => v !== '') || capasEfectivas.length > 0
     if (!hayFiltros && nivelInfo.nivelValidacion) return
     if (!tieneParametrosBusquedaSicoe(filtros, capasEfectivas)) return
-    buscarReportes(filtros, 0, capasEfectivas)
-    cargarAnalisis(filtros, capasEfectivas)
+    // Lanzar grilla y panel de análisis en paralelo — cada uno tiene su propio seq guard
+    Promise.all([
+      buscarReportes(filtros, 0, capasEfectivas),
+      cargarAnalisis(filtros, capasEfectivas),
+    ]).catch(() => {})
   }
 
   const fmtPesos = v => formatCOP(Number(v) || 0)
@@ -5578,12 +5617,12 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                 padding:'4px 12px',
                 fontSize:'var(--cc-label)',
                 fontWeight:'700',
-                cursor:(cargando || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) ? 'not-allowed' : 'pointer',
+                cursor:(cargando || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) ? 'wait' : 'pointer',
                 opacity:(cargando || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) ? 0.55 : 1,
                 whiteSpace:'nowrap',
               }}
             >
-              ⟳ Actualizar
+              {cargando ? '⏳ Cargando...' : '⟳ Actualizar'}
             </button>
             {puedeExportar && busquedaRealizada && (
               <button

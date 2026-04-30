@@ -4585,9 +4585,9 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
             detail="Solo el cargo Desarrollador puede modificar dimensiones en lote (presupuesto).",
         )
     dims_map = {d.id: d for d in (body.dims or [])}
-    # Traer también handles y layers para cad_queue
+    # Traer también handles, layers e id_pol para cad_queue y reconstrucción de id_pol
     rows = supabase.table("presupuesto").select(
-        "id, area_long_nod, ancho, espesor, cant_total, vlr_unitario, ent_handle, txt_handle, layer_ent, layer_txt, color_hex, competencia"
+        "id, area_long_nod, ancho, espesor, cant_total, vlr_unitario, ent_handle, txt_handle, layer_ent, layer_txt, color_hex, competencia, id_pol"
     ).in_("id", body.ids).execute().data
     for r in rows:
         rid = r["id"]
@@ -4641,13 +4641,10 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
         if body.item        is not None: data["item"]        = body.item
         if body.descripcion is not None: data["descripcion"] = body.descripcion
         if body.vlr_unitario is not None: data["vlr_unitario"] = body.vlr_unitario
-        # Reconstruir id_pol si cambia el ítem
+        # Reconstruir id_pol si cambia el ítem (usa id_pol ya incluido en el select inicial)
         new_id_pol = None
         if body.item is not None:
-            rows_idpol = supabase.table("presupuesto").select("id_pol").eq("id", rid).execute().data
-            old_id_pol = (rows_idpol[0].get("id_pol") or "") if rows_idpol else ""
-            # Extraer sufijo: todo lo que va después del 
-            #  "._"
+            old_id_pol = r.get("id_pol") or ""
             if "._" in old_id_pol:
                 sufijo = old_id_pol[old_id_pol.index("._"):]   # ej: "._1558"
             else:
@@ -4710,21 +4707,19 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
     es_interventoria_sellar = current_user.get("rol_nombre") == "Interventoría"
     sellar = body.revisado == "Aprobado" and es_interventoria_sellar
     nombre_usuario = current_user.get("nombre") or current_user.get("email") or "Usuario"
-    for rid in body.ids:
-        data_upd = {"revisado": body.revisado, "updated_at": "now()"}
-        if sellar:
-            data_upd["sellado"] = True
-        if body.revisado == "Aprobado":
-            data_upd["validado_por"] = nombre_usuario
-            data_upd["validado_en"]  = datetime.utcnow().isoformat()
-        elif body.revisado != "Aprobado":
-            # Si cambia de Aprobado a otro estado, limpiar
-            data_upd["validado_por"] = None
-            data_upd["validado_en"]  = None
-        supabase.table("presupuesto").update(data_upd).eq("id", rid).execute()
-        
+    data_upd = {"revisado": body.revisado, "updated_at": "now()"}
+    if sellar:
+        data_upd["sellado"] = True
+    if body.revisado == "Aprobado":
+        data_upd["validado_por"] = nombre_usuario
+        data_upd["validado_en"]  = datetime.utcnow().isoformat()
+    else:
+        data_upd["validado_por"] = None
+        data_upd["validado_en"]  = None
+    # Una sola query batch en lugar de N queries secuenciales
+    supabase.table("presupuesto").update(data_upd).in_("id", body.ids).execute()
     registrar_log(current_user, "VALIDAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id),
-        {"contrato_id": contrato_id, "cantidad_registros": len(body.ids), "estado": body.revisado})            
+        {"contrato_id": contrato_id, "cantidad_registros": len(body.ids), "estado": body.revisado})
     return {"actualizados": len(body.ids)}
 
 
@@ -4749,15 +4744,15 @@ def bulk_pre_interv(contrato_id: int, body: PresupuestoBulkPreInterv, current_us
                 detail="Solo Residente de Costos u Residente de Obra puede validar esta etapa.",
             )
     nombre_usuario = current_user.get("nombre") or current_user.get("email") or "Usuario"
-    for rid in body.ids:
-        data_upd = {"pre_interv_estado": body.estado, "updated_at": "now()"}
-        if body.estado == "Aprobado":
-            data_upd["pre_interv_por"] = nombre_usuario
-            data_upd["pre_interv_en"] = datetime.utcnow().isoformat()
-        else:
-            data_upd["pre_interv_por"] = None
-            data_upd["pre_interv_en"] = None
-        supabase.table("presupuesto").update(data_upd).eq("id", rid).execute()
+    data_upd = {"pre_interv_estado": body.estado, "updated_at": "now()"}
+    if body.estado == "Aprobado":
+        data_upd["pre_interv_por"] = nombre_usuario
+        data_upd["pre_interv_en"] = datetime.utcnow().isoformat()
+    else:
+        data_upd["pre_interv_por"] = None
+        data_upd["pre_interv_en"] = None
+    # Una sola query batch en lugar de N queries secuenciales
+    supabase.table("presupuesto").update(data_upd).in_("id", body.ids).execute()
     registrar_log(
         current_user, "VALIDAR", "PRESUPUESTO", "presupuesto_pre_interv", str(contrato_id),
         {"contrato_id": contrato_id, "cantidad_registros": len(body.ids), "estado": body.estado},
