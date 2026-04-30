@@ -631,6 +631,8 @@ class DimOverride(BaseModel):
     ancho: Optional[float] = None
     espesor: Optional[float] = None
     area_long_nod: Optional[float] = None
+    capitulo: Optional[str] = None
+    item: Optional[str] = None
 
 class PresupuestoBulkRecalc(BaseModel):
     ids: List[int]
@@ -4621,23 +4623,26 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
                 "updated_at": ts, "calculo_por": calculo_por, "calculo_en": ts,
                 **data_ancho,
             }
-        if body.capitulo    is not None: data["capitulo"]    = body.capitulo
-        if body.item        is not None: data["item"]        = body.item
-        if body.descripcion is not None: data["descripcion"] = body.descripcion
+        # Capitulo/item: valor por fila (dim) tiene prioridad sobre el valor global del body
+        cap_eff  = (dim.capitulo if dim and dim.capitulo is not None else None) or body.capitulo
+        item_eff = (dim.item     if dim and dim.item     is not None else None) or body.item
+        if cap_eff  is not None: data["capitulo"]    = cap_eff
+        if item_eff is not None: data["item"]        = item_eff
+        if body.descripcion  is not None: data["descripcion"]  = body.descripcion
         if body.vlr_unitario is not None: data["vlr_unitario"] = body.vlr_unitario
 
         new_id_pol = None
-        if body.item is not None:
+        if item_eff is not None:
             old_id_pol = r.get("id_pol") or ""
             sufijo = old_id_pol[old_id_pol.index("._"):] if "._" in old_id_pol else f"._{rid}"
-            new_id_pol = f"{body.item}{sufijo}"
+            new_id_pol = f"{item_eff}{sufijo}"
             data["id_pol"] = new_id_pol
 
         batch_ppto.append({"id": rid, **data})
 
-        if body.capitulo is not None or body.item is not None:
-            nuevo_cap  = body.capitulo or ""
-            nuevo_item = body.item     or ""
+        if cap_eff is not None or item_eff is not None:
+            nuevo_cap  = cap_eff  or ""
+            nuevo_item = item_eff or ""
             comp       = r.get("competencia") or ""
             cap6       = nuevo_cap.replace(".", "")[:5]
             new_layer_ent = f"{cap6}_{comp}_{nuevo_item}"

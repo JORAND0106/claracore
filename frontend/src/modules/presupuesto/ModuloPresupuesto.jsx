@@ -1305,17 +1305,20 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   const precioSeleccionado = useMemo(() => listadoPrecios.find(p => p.item_numero === editItem) || null, [listadoPrecios, editItem])
   const hayModificaciones = seleccionados.size > 0 && (
     editCapitulo !== '' || editItem !== '' ||
-    (puedeEditarDimensiones && [...seleccionados].some(id => editDims[id]))
+    (puedeEditar && [...seleccionados].some(id => editDims[id]))
   ) && ![...seleccionados].some(id => esSellado(registros.find(r => r.id === id)))
 
   async function ejecutarRecalcular() {
     const ids = [...seleccionados]
-    const tieneDims  = ids.some(id => editDims[id])
+    const tieneDims = ids.some(id => {
+      const d = editDims[id]
+      return d && (d.ancho != null || d.espesor != null || d.area_long_nod != null)
+    })
     if (tieneDims && !puedeEditarDimensiones) {
       alert('Solo el cargo Desarrollador puede guardar cambios de dimensiones en lote.')
       return
     }
-    const tieneItem  = !!(editCapitulo || editItem)
+    const tieneItem = !!(editCapitulo || editItem)
     const tipoComent = tieneItem ? 'item_capitulo' : 'dims'
 
     // Pedir comentario (obligatorio)
@@ -1678,10 +1681,6 @@ async function highlightEnDwg(registro) {
 async function darDeBaja(id) {
     const row = registros.find(rr => rr.id === id)
     if (esSellado(row)) return
-    if (!dwgEnlazado) {
-      alert('⚠️ Para dar de baja un registro necesitas tener el DWG enlazado.')
-      return
-    }
     const comentarioData = await pedirComentario('validacion', true) // obligatorio
     if (comentarioData === null) return
     const comentario = comentarioData?.mensaje || ''
@@ -2170,7 +2169,7 @@ async function restaurar(id) {
                   }
                   return (
                     <div key={key}>
-                      {regs.length > 0 && puedeValidar && (
+                      {regs.length > 0 && (puedeValidar || puedeEliminar) && (
                         <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'8px', padding:'6px 10px', background:t.bg, borderRadius:'8px' }}>
                           <input type="checkbox" checked={todosSelec} onChange={toggleTab}
                             style={{ width:'14px', height:'14px', cursor:'pointer' }} />
@@ -2178,13 +2177,37 @@ async function restaurar(id) {
                             {todosSelec ? 'Deseleccionar todos' : `Seleccionar todos (${regs.length})`}
                           </span>
                           {algunoSelec && (
-                            <div style={{ marginLeft:'auto', display:'flex', gap:'4px' }}>
-                              {SEMAFORO.map(s => (
+                            <div style={{ marginLeft:'auto', display:'flex', gap:'4px', flexWrap:'wrap' }}>
+                              {puedeValidar && SEMAFORO.map(s => (
                                 <button key={s.valor} onClick={() => validarTab(s.valor)}
                                   style={{ background:t.bgCard, border:`1.5px solid ${s.color}`, borderRadius:'6px', padding:'3px 8px', fontSize:'var(--cc-sm)', cursor:'pointer', color:s.color, fontWeight:'700' }}>
                                   {s.label} {s.valor}
                                 </button>
                               ))}
+                              {puedeEliminar && (
+                                <button onClick={async () => {
+                                  const idsBaja = [...selTab].filter(id => {
+                                    const row = regs.find(x => x.id === id)
+                                    return row && !esSellado(row)
+                                  })
+                                  if (idsBaja.length === 0) return
+                                  const comentarioData = await pedirComentario('validacion', true)
+                                  if (comentarioData === null) return
+                                  const comentario = comentarioData?.mensaje || ''
+                                  const destinatarioId = comentarioData?.destinatarioId || null
+                                  for (const id of idsBaja) {
+                                    const res = await fetch(`${API}/presupuesto/item/${id}/dar-baja`, {
+                                      method: 'PUT', headers: { Authorization: `Bearer ${token}` }
+                                    })
+                                    if (res.ok) await crearComentarios([id], 'validacion', `[BAJA] ${comentario}`, destinatarioId)
+                                  }
+                                  setSelTramoTab(prev => ({ ...prev, [key]: new Set() }))
+                                  await recargarCapActual()
+                                }}
+                                  style={{ background:'#EF444418', border:'1px solid #EF444444', borderRadius:'6px', padding:'3px 8px', fontSize:'var(--cc-sm)', cursor:'pointer', color:'#EF4444', fontWeight:'700' }}>
+                                  🗑️ Dar de baja ({[...selTab].filter(id => regs.find(x => x.id === id) && !esSellado(regs.find(x => x.id === id))).length})
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>
@@ -2831,8 +2854,8 @@ async function restaurar(id) {
                         </div>
                       )}
 
-                      {/* ── Dar de baja — solo si DWG enlazado; no en sellado (reabrir antes con el flujo contratista) ── */}
-                      {puedeEliminar && dwgEnlazado && !esSellado(r) && (
+                      {/* ── Dar de baja — no disponible en registros sellados (reabrir antes con el flujo contratista) ── */}
+                      {puedeEliminar && !esSellado(r) && (
                         <button onClick={async () => {
                           if (!window.confirm('¿Dar de baja este registro?')) return
                           setModalDetallePpto(null); setModalDetallePptoEditable(false)
@@ -3435,7 +3458,7 @@ async function restaurar(id) {
                 </button>
               </>)}
 
-              {puedeEliminar && !verPapelera && dwgEnlazado && seleccionados.size > 1 && (
+              {puedeEliminar && !verPapelera && seleccionados.size > 1 && (
                 <button onClick={async () => {
                   const idsBaja = [...seleccionados].filter(id => !esSellado(registros.find(rr => rr.id === id)))
                   if (idsBaja.length === 0) {
@@ -3549,11 +3572,10 @@ async function restaurar(id) {
             </thead>
             <tbody>
               {registrosPagina.map(r => {
-                const isEdit = editando === r.id && puedeEditarFilaPptoNoSelladoOReabrir(r)
                 const bgSellado = esSellado(r) ? 'rgba(22,101,52,0.06)' : 'transparent'
                 return (
                   <tr key={r.id} data-id={r.id} style={{ background: filaZoom===r.id ? '#F59E0B22' : seleccionados.has(r.id) ? (t.primary+'18') : bgSellado, cursor: r.x_label ? 'crosshair' : 'default', outline: filaZoom===r.id ? '2px solid #F59E0B88' : 'none', transition:'background 0.3s, outline 0.3s' }}
-                    onClick={() => { if (!isEdit) { zoomEnDwg(r); highlightEnDwg(r); if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && r.pk_id) { const td = document.getElementById(`zoom-feedback-${r.id}`); if(td){td.style.opacity='1'; setTimeout(()=>{td.style.opacity='0'},2000)} } } }}>
+                    onClick={() => { zoomEnDwg(r); highlightEnDwg(r); if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && r.pk_id) { const td = document.getElementById(`zoom-feedback-${r.id}`); if(td){td.style.opacity='1'; setTimeout(()=>{td.style.opacity='0'},2000)} } }}>
                     <td style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                         <input type="checkbox" checked={seleccionados.has(r.id)} disabled={esSellado(r)} onChange={() => toggleSel(r.id)}
@@ -3576,58 +3598,37 @@ async function restaurar(id) {
                         {r.id_pol||r.pk_id||'-'}
                       </span>
                     </td>
-                    <td style={tdStyle}>
-                      {isEdit ? <input value={editValues.capitulo} onChange={e=>setEditValues({...editValues,capitulo:e.target.value})}
-                        style={{ width:'120px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'var(--cc-sm)' }} onClick={e=>e.stopPropagation()} />
-                        : r.capitulo}
-                    </td>
+                    <td style={tdStyle}>{r.capitulo}</td>
                     <td style={{ ...tdStyle, fontSize:'var(--cc-sm)', color:t.textMuted }}>{r.competencia||'—'}</td>
-                    <td style={tdStyle}>
-                      {isEdit ? <input value={editValues.item} onChange={e=>setEditValues({...editValues,item:e.target.value})}
-                        style={{ width:'80px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'var(--cc-sm)' }} onClick={e=>e.stopPropagation()} />
-                        : r.item}
-                    </td>
+                    <td style={tdStyle}>{r.item}</td>
                     <td style={{ ...tdStyle,maxWidth:'220px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{r.descripcion}</td>
                     <td style={tdStyle}>{r.und}</td>
                     <td style={{ ...tdStyle }}>{r.no_inicio || '-'}</td>
                     <td style={{ ...tdStyle }}>{r.no_final || '-'}</td>
                     <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
-                      {isEdit && puedeEditarDimensiones
-                        ? <input type="number" value={editValues.area_long_nod} onChange={e=>setEditValues({...editValues,area_long_nod:e.target.value})}
-                            style={{ width:'80px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'var(--cc-sm)' }} />
-                        : puedeEditarDimensiones && seleccionados.has(r.id) && !esSellado(r)
+                      {puedeEditarDimensiones && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.area_long_nod ?? (r.area_long_nod ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], area_long_nod: v } })) }}
-                            style={{ width:'80px',background:t.inputBg,border:`1.5px solid ${t.primary}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'var(--cc-sm)' }} />
+                            style={{ width:'72px',background:'transparent',border:'none',borderBottom:`1.5px solid #F59E0B`,outline:'none',padding:'2px 2px',color:t.text,fontSize:'var(--cc-sm)',textAlign:'right' }} />
                         : fmtN(r.area_long_nod)}
                     </td>
                     <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
-                      {isEdit && puedeEditarDimensiones
-                        ? <input type="number" value={editValues.ancho} onChange={e=>setEditValues({...editValues,ancho:e.target.value})}
-                            style={{ width:'70px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'var(--cc-sm)' }} />
-                        : puedeEditarDimensiones && seleccionados.has(r.id) && !esSellado(r)
+                      {puedeEditar && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.ancho ?? (r.ancho ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], ancho: v } })) }}
-                            style={{ width:'70px',background:t.inputBg,border:`1.5px solid ${t.primary}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'var(--cc-sm)' }} />
+                            style={{ width:'60px',background:'transparent',border:'none',borderBottom:`1.5px solid ${t.primary}`,outline:'none',padding:'2px 2px',color:t.text,fontSize:'var(--cc-sm)',textAlign:'right' }} />
                         : fmtN(r.ancho)}
                     </td>
                     <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
-                      {isEdit && puedeEditarDimensiones
-                        ? <input type="number" value={editValues.espesor} onChange={e=>setEditValues({...editValues,espesor:e.target.value})}
-                            style={{ width:'70px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'var(--cc-sm)' }} />
-                        : puedeEditarDimensiones && seleccionados.has(r.id) && !esSellado(r)
+                      {puedeEditar && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.espesor ?? (r.espesor ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], espesor: v } })) }}
-                            style={{ width:'70px',background:t.inputBg,border:`1.5px solid ${t.primary}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'var(--cc-sm)' }} />
+                            style={{ width:'60px',background:'transparent',border:'none',borderBottom:`1.5px solid ${t.primary}`,outline:'none',padding:'2px 2px',color:t.text,fontSize:'var(--cc-sm)',textAlign:'right' }} />
                         : fmtN(r.espesor)}
                     </td>
                     <td style={{ ...tdStyle,textAlign:'right',fontWeight:'600' }}>{fmtN(r.cant_total)}</td>
                     {nivelInfo.verValoresEconomicos && (
-                    <td style={{ ...tdStyle,textAlign:'right' }}>
-                      {isEdit ? <input type="number" value={editValues.vlr_unitario} onChange={e=>setEditValues({...editValues,vlr_unitario:e.target.value})}
-                        style={{ width:'90px',background:t.inputBg,border:`1px solid ${t.border}`,borderRadius:'4px',padding:'3px 6px',color:t.text,fontSize:'var(--cc-sm)' }} onClick={e=>e.stopPropagation()} />
-                        : fmt(r.vlr_unitario)}
-                    </td>
+                    <td style={{ ...tdStyle,textAlign:'right' }}>{fmt(r.vlr_unitario)}</td>
                     )}
                     {nivelInfo.verValoresEconomicos && (
                     <td style={{ ...tdStyle,textAlign:'right',fontWeight:'700',color:t.primary }}>{fmt(r.costo_directo)}</td>
@@ -3758,7 +3759,7 @@ async function restaurar(id) {
                         })}
                       </div>
                     </td>
-                    {puedeEliminar && !verPapelera && dwgEnlazado && (
+                    {puedeEliminar && !verPapelera && (
                       <td style={{ ...tdStyle }} onClick={e => e.stopPropagation()}>
                         {seleccionados.has(r.id) && (
                           <button onClick={() => !esSellado(r) && darDeBaja(r.id)}
@@ -3782,28 +3783,6 @@ async function restaurar(id) {
                       </td>
                     )}
 
-                    {puedeEditar && (
-                      <td style={tdStyle} onClick={e=>e.stopPropagation()}>
-                        {esSellado(r) && !puedeReabrirTrasAprob ? (
-                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
-                            <button
-                              type="button"
-                              onClick={() => abrirDetallePptoDesdeFila(r)}
-                              title="Abrir panel de detalle (lectura si no puede reabrir; con permiso contratista — reapertura)"
-                              style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '4px', padding: '4px 8px', fontSize: 'var(--cc-sm)', cursor: 'pointer', color: t.primary }}
-                            >✏️</button>
-                            <span title="Registro sellado — sin permiso de reapertura" style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>🔒</span>
-                          </div>
-                        ) : isEdit ? (
-                          <div style={{ display:'flex',gap:'4px' }}>
-                            <button onClick={() => guardarEdicion(r.id)} style={{ background:t.primary,color:'#fff',border:'none',borderRadius:'4px',padding:'4px 10px',fontSize:'var(--cc-sm)',cursor:'pointer' }}>✓</button>
-                            <button onClick={() => setEditando(null)} style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'4px',padding:'4px 8px',fontSize:'var(--cc-sm)',cursor:'pointer',color:t.textMuted }}>✕</button>
-                          </div>
-                        ) : (
-                          <button onClick={() => iniciarEdicion(r)} title="Edición rápida en la grilla (capítulo, ítem, valor). Use ✏️ en «Revisado» para el mismo panel que en tramos." style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'4px',padding:'4px 8px',fontSize:'var(--cc-sm)',cursor:'pointer',color:t.textMuted }}>✏️</button>
-                        )}
-                      </td>
-                    )}
                   </tr>
                 )
               })}
