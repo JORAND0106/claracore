@@ -3,6 +3,7 @@ import * as XLSX from "xlsx";
 import mapboxgl from "mapbox-gl";
 import { API_BASE } from "./apiBase";
 import { formatCOP } from "./utils/formatCOP";
+import { sanitizePlanoFeatureCollection } from "./geoPlanoSanitize";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -1774,8 +1775,10 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
   const [togglingFase, setTogglingFase] = useState(null); // id del contrato en proceso
+  const [planoArchivoLabel, setPlanoArchivoLabel] = useState(null); // nombre local o leyenda servidor
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
+  const planoFileInputRef = useRef(null);
 
   /** Límites y centro en una pasada (sin arrays enormes). Math.min(...array) falla con muchos vértices (>~65k args). */
   function boundsDesdeGeojson(geojson) {
@@ -1862,6 +1865,27 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
         { concepto_contractual: 'Importe histórico (sin desglose)', valor_mensual: String(d.costos_adicionales), tiempo_meses: '1' },
       ];
     }
+    const planoParsed = (() => {
+      const pg = d.plano_geojson;
+      if (pg == null || pg === '') return null;
+      if (typeof pg === 'string') {
+        try {
+          return JSON.parse(pg);
+        } catch {
+          return null;
+        }
+      }
+      return pg;
+    })();
+    const planoLimpio = planoParsed
+      ? sanitizePlanoFeatureCollection(
+          planoParsed.type === 'FeatureCollection' && Array.isArray(planoParsed.features)
+            ? planoParsed
+            : planoParsed.type === 'Feature' && planoParsed.geometry
+              ? { type: 'FeatureCollection', features: [planoParsed] }
+              : { type: 'FeatureCollection', features: [] }
+        )
+      : null;
     setForm({
       numero: d.numero || '',
       objeto: d.objeto || '',
@@ -1871,7 +1895,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
       entidad: d.entidad || '',
       entidad_otra: d.entidad_otra || '',
       logo_entidad: d.logo_entidad || '',
-      plano_geojson: d.plano_geojson || null,
+      plano_geojson: planoLimpio,
       centro_lat: d.centro_lat ?? null,
       centro_lng: d.centro_lng ?? null,
       logo_contratista: d.logo_contratista || '',
@@ -1884,6 +1908,19 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
       costo_directo_contrato: d.costo_directo_contrato != null ? String(d.costo_directo_contrato) : '',
       costos_adicionales_lista,
     });
+    setPlanoArchivoLabel(planoLimpio && (planoLimpio.features || []).length ? 'Plano guardado en servidor' : null);
+  }
+
+  function quitarPlanoGeojson() {
+    setForm((f) => ({ ...f, plano_geojson: null, centro_lat: null, centro_lng: null }));
+    setPlanoArchivoLabel(null);
+    if (planoFileInputRef.current) planoFileInputRef.current.value = '';
+  }
+
+  function abrirSelectorPlanoGeojson() {
+    const el = planoFileInputRef.current;
+    if (el) el.value = '';
+    el?.click();
   }
 
   function handlePlanoGeojson(e) {
@@ -1896,7 +1933,15 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     };
     reader.onload = (ev) => {
       try {
-        const parsed = JSON.parse(String(ev.target?.result || "{}"));
+        const raw = JSON.parse(String(ev.target?.result || "{}"));
+        const asFc =
+          raw.type === "FeatureCollection" && Array.isArray(raw.features)
+            ? raw
+            : raw.type === "Feature" && raw.geometry
+              ? { type: "FeatureCollection", features: [raw] }
+              : null;
+        if (!asFc) throw new Error("Se espera un FeatureCollection GeoJSON o una Feature.");
+        const parsed = sanitizePlanoFeatureCollection(asFc);
         const b = boundsDesdeGeojson(parsed);
         if (!b) throw new Error("El archivo no contiene coordenadas válidas (GeoJSON vacío o tipos no soportados).");
         setForm((f) => ({
@@ -1905,7 +1950,8 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
           centro_lng: Number(b.centroLng.toFixed(6)),
           centro_lat: Number(b.centroLat.toFixed(6)),
         }));
-        setMsg({ type: "success", text: `Plano GeoJSON cargado (${b.vertexCount.toLocaleString()} vértices) y centrado automáticamente.` });
+        setPlanoArchivoLabel(file.name);
+        setMsg({ type: "success", text: `Plano GeoJSON cargado (${b.vertexCount.toLocaleString()} vértices), geometría saneada para el mapa y centrado automático.` });
       } catch (err) {
         setMsg({ type: "error", text: `GeoJSON inválido: ${err.message}` });
       }
@@ -1931,6 +1977,8 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
   function cancelarEdicion() {
     setEditandoId(null);
     setForm(FORM_VACIO);
+    setPlanoArchivoLabel(null);
+    if (planoFileInputRef.current) planoFileInputRef.current.value = "";
     setMsg(null);
   }
 
@@ -2000,6 +2048,8 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
         setMsg({ type: 'success', text: 'Contrato creado correctamente' });
         setForm(FORM_VACIO);
         setEditandoId(null);
+        setPlanoArchivoLabel(null);
+        if (planoFileInputRef.current) planoFileInputRef.current.value = "";
       }
       recargarContratos();
     } catch (e) {
@@ -2009,7 +2059,37 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
 
   useEffect(() => {
     const token = import.meta.env.VITE_MAPBOX_TOKEN;
-    if (!mapContainerRef.current || !form.plano_geojson || !token) return;
+
+    const destruirMapaPreview = () => {
+      if (mapRef.current) {
+        try {
+          mapRef.current.remove();
+        } catch {
+          /* ignore */
+        }
+        mapRef.current = null;
+      }
+    };
+
+    if (!form.plano_geojson || !token) {
+      destruirMapaPreview();
+      return;
+    }
+
+    if (!mapContainerRef.current) {
+      destruirMapaPreview();
+      return;
+    }
+
+    let plano = form.plano_geojson;
+    if (typeof plano === "string") {
+      try {
+        plano = JSON.parse(plano);
+      } catch {
+        destruirMapaPreview();
+        return;
+      }
+    }
 
     mapboxgl.accessToken = token;
     if (!mapRef.current) {
@@ -2026,22 +2106,49 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     const sourceId = "contrato-plano-source";
     const fillId = "contrato-plano-fill";
     const lineId = "contrato-plano-line";
+    const labelId = "contrato-plano-labels";
 
     const renderPlano = () => {
       if (!map.getSource(sourceId)) {
-        map.addSource(sourceId, { type: "geojson", data: form.plano_geojson });
-        map.addLayer({ id: fillId, type: "fill", source: sourceId, paint: { "fill-color": "#00afc5", "fill-opacity": 0.18 } });
-        map.addLayer({ id: lineId, type: "line", source: sourceId, paint: { "line-color": "#00afc5", "line-width": 2 } });
+        map.addSource(sourceId, { type: "geojson", data: plano });
+        map.addLayer({ id: fillId, type: "fill", source: sourceId, paint: { "fill-color": "#00afc5", "fill-opacity": 0.18, "fill-antialias": true } });
+        map.addLayer({ id: lineId, type: "line", source: sourceId, paint: { "line-color": "#00afc5", "line-width": 3 } });
+        map.addLayer({
+          id: labelId,
+          type: "symbol",
+          source: sourceId,
+          filter: [">", ["length", ["to-string", ["coalesce", ["get", "etiqueta"], ["to-string", ["get", "pk_id"]], ["to-string", ["get", "PK_ID"]], ""]]], 0],
+          layout: {
+            "text-field": ["to-string", ["coalesce", ["get", "etiqueta"], ["get", "pk_id"], ["get", "PK_ID"], ""]],
+            "text-size": 10,
+            "text-anchor": "center",
+            "text-allow-overlap": false,
+            "text-ignore-placement": false,
+          },
+          paint: {
+            "text-color": "#ffffff",
+            "text-halo-color": "rgba(0,0,0,0.75)",
+            "text-halo-width": 1.2,
+          },
+        });
       } else {
-        map.getSource(sourceId).setData(form.plano_geojson);
+        map.getSource(sourceId).setData(plano);
       }
 
-      const b = boundsDesdeGeojson(form.plano_geojson);
+      const b = boundsDesdeGeojson(plano);
       if (b) {
         map.fitBounds(
           [[b.minLng, b.minLat], [b.maxLng, b.maxLat]],
-          { padding: 30, maxZoom: 16, duration: 300 }
+          { padding: 40, maxZoom: 17, duration: 320 }
         );
+        const clng = form.centro_lng;
+        const clat = form.centro_lat;
+        if (Number.isFinite(clng) && Number.isFinite(clat)) {
+          map.once("idle", () => {
+            const z = map.getZoom();
+            map.easeTo({ center: [clng, clat], zoom: z, duration: 280 });
+          });
+        }
       }
     };
 
@@ -2128,10 +2235,28 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
             <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => handleLogo('logo_entidad', e)} />
           </label>
           <label style={lbl}>CARGAR PLANO (GEOJSON)</label>
-          <label style={{ display: 'block', background: '#0a1628', border: '2px dashed #1E3A5F', borderRadius: 8, padding: 12, textAlign: 'center', cursor: 'pointer', color: '#4a7a87', fontSize: 12, marginBottom: 10 }}>
-            {form.plano_geojson ? '✅ Plano GeoJSON cargado' : '📂 Cargar archivo .geojson / .json'}
-            <input type="file" accept=".geojson,.json,application/geo+json,application/json" style={{ display: 'none' }} onChange={handlePlanoGeojson} />
-          </label>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+            <label style={{ display: "block", background: "#0a1628", border: "2px dashed #1E3A5F", borderRadius: 8, padding: 12, textAlign: "center", cursor: "pointer", color: "#4a7a87", fontSize: 12 }}>
+              {form.plano_geojson
+                ? (planoArchivoLabel ? `✅ ${planoArchivoLabel}` : "✅ Plano GeoJSON cargado")
+                : "📂 Elegir archivo .geojson / .json"}
+              <input ref={planoFileInputRef} type="file" accept=".geojson,.json,application/geo+json,application/json" style={{ display: "none" }} onChange={handlePlanoGeojson} />
+            </label>
+            {form.plano_geojson && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                <button type="button" onClick={abrirSelectorPlanoGeojson}
+                  style={{ background: "rgba(0,175,197,0.12)", border: "1px solid rgba(0,175,197,0.45)", borderRadius: 6, padding: "6px 12px", color: "#8acdd8", fontSize: 12, cursor: "pointer" }}>
+                  📎 Reemplazar por otro archivo
+                </button>
+                <button type="button" onClick={() => {
+                  if (window.confirm("¿Quitar el plano del formulario? La previsualización se borrará. Si guardas el contrato así, quedará sin plano hasta que subas otro archivo.")) quitarPlanoGeojson();
+                }}
+                  style={{ background: "transparent", border: "1px solid rgba(239,68,68,0.45)", borderRadius: 6, padding: "6px 12px", color: "#F87171", fontSize: 12, cursor: "pointer" }}>
+                  🗑️ Quitar plano
+                </button>
+              </div>
+            )}
+          </div>
           {form.centro_lat != null && form.centro_lng != null && (
             <div style={{ fontSize: 11, color: '#8acdd8', marginTop: -2, marginBottom: 12 }}>
               Punto medio detectado: Lat {form.centro_lat} / Lng {form.centro_lng}
@@ -3444,12 +3569,28 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
   };
 
   const hoy = new Date().toISOString().slice(0, 10);
-  const esVigente = (a) => {
-    const fi = a.fecha_inicio?.slice(0, 10);
-    const ff = a.fecha_fin?.slice(0, 10);
-    if (!fi || !ff) return false;
-    return fi <= hoy && ff >= hoy;
-  };
+  /** Única acta RPO «en período» (mismo criterio que API): calendario + desempate si solapan en un día. */
+  const actaRpoEnPeriodoId = useMemo(() => {
+    const rpos = actasTodas.filter((x) => {
+      if (String(x.tipo_grupo || "").toUpperCase() !== "RPO") return false;
+      const fi = x.fecha_inicio?.slice(0, 10);
+      const ff = x.fecha_fin?.slice(0, 10);
+      if (!fi || !ff) return false;
+      return fi <= hoy && ff >= hoy;
+    });
+    if (rpos.length === 0) return null;
+    rpos.sort((a, b) => {
+      const ai = a.fecha_inicio?.slice(0, 10) || "";
+      const bi = b.fecha_inicio?.slice(0, 10) || "";
+      if (ai !== bi) return bi.localeCompare(ai);
+      const na = a.numero_rpo != null ? Number(a.numero_rpo) : NaN;
+      const nb = b.numero_rpo != null ? Number(b.numero_rpo) : NaN;
+      if (!Number.isNaN(na) && !Number.isNaN(nb) && na !== nb) return nb - na;
+      return (Number(b.id) || 0) - (Number(a.id) || 0);
+    });
+    return rpos[0]?.id ?? null;
+  }, [actasTodas, hoy]);
+  const esVigente = (a) => actaRpoEnPeriodoId != null && Number(a.id) === Number(actaRpoEnPeriodoId);
 
   const labelTipoFila = (a) => {
     const g = String(a.tipo_grupo || "").toLowerCase();

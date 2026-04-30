@@ -304,9 +304,10 @@ useEffect(() => {
 
     useEffect(() => {
     if (!contratoId) return
-    fetch(`${API}/notificaciones/usuarios-destinatarios`, { headers: { Authorization: `Bearer ${token}` } })
+    const q = new URLSearchParams({ contrato_id: String(contratoId) })
+    fetch(`${API}/notificaciones/usuarios-destinatarios?${q}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : []).then(setUsuariosDestinatarios).catch(() => {})
-  }, [contratoId])
+  }, [contratoId, token])
 
     useEffect(() => {
     if (!contratoId) return

@@ -220,7 +220,8 @@ DECLARE
   nom_asig text;
   mat jsonb;
 BEGIN
-  -- Mismo criterio que GET /actas/.../lista (actas.asignado_a → usuarios)
+  -- Mismo criterio que API acta RPO vigente: hoy ∈ [fecha_inicio, fecha_fin]; actas futuras no compiten.
+  -- Si un día cae en dos períodos, gana fecha_inicio más reciente (transición natural al vencer el mes).
   SELECT
     a.id,
     a.numero_rpo::text,
@@ -232,7 +233,7 @@ BEGIN
     AND a.tipo_grupo = 'RPO'
     AND a.fecha_inicio <= CURRENT_DATE
     AND a.fecha_fin >= CURRENT_DATE
-  ORDER BY a.id DESC
+  ORDER BY a.fecha_inicio DESC, a.numero_rpo DESC NULLS LAST, a.id DESC
   LIMIT 1;
 
   mat := public.dashboard_matriz_validacion_agg(p_contrato_id, aid);
@@ -253,7 +254,7 @@ END;
 $bundle$;
 
 COMMENT ON FUNCTION public.dashboard_matriz_validacion_vigente_bundle(bigint) IS
-  'Matriz validación: acta RPO vigente por período + agregación en una llamada.';
+  'Matriz validación: acta RPO en período (calendario; desempate en solape por fecha_inicio desc) + agregación.';
 
 GRANT EXECUTE ON FUNCTION public._norm_estado_matriz(text) TO authenticated, service_role, anon;
 GRANT EXECUTE ON FUNCTION public.dashboard_matriz_validacion_agg(bigint, bigint) TO authenticated, service_role, anon;

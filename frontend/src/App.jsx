@@ -14,6 +14,7 @@ import ExcelJS from 'exceljs'
 import { API_BASE, logApiFailure } from './apiBase'
 import { applyClaraTypography, getDashTypoUI } from './typographyScale'
 import { formatCOP, formatCOPShort } from './utils/formatCOP'
+import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
 
 const _VITE_MAPBOX = import.meta.env.VITE_MAPBOX_TOKEN
 if (_VITE_MAPBOX) mapboxgl.accessToken = _VITE_MAPBOX
@@ -76,6 +77,162 @@ function _sicoeFeaturePkId(f) {
   if (!p) return ''
   return String(p.PK_ID ?? p.pk_id ?? p.Layer ?? p.layer ?? p.Name ?? '').trim()
 }
+
+/** Misma semántica que en portada SICOE: `enlace_soporte` JSON array o string suelto. */
+function parseEnlacesSoporteReporte(raw) {
+  if (raw == null || raw === '') return []
+  try {
+    const p = JSON.parse(raw)
+    if (Array.isArray(p)) return p.map(String).filter(Boolean)
+    return [String(p)]
+  } catch {
+    return [String(raw)]
+  }
+}
+
+/** Texto para etiqueta en mapa: abscisas (`etiqueta`) o PK en polígonos. */
+function _mapLabelPlanoFeature(f, pkidResolved) {
+  const p = f?.properties
+  if (!p) return String(pkidResolved || '').trim()
+  const et = String(p.etiqueta ?? p.Etiqueta ?? '').trim()
+  if (et) return et
+  return String(pkidResolved ?? p.pk_id ?? '').trim()
+}
+
+/** Filtros separados: PK en polígonos vs abscisa en puntos (no mezclar en una sola capa). */
+const _FILTER_MAPBOX_LABEL_PK = [
+  'all',
+  ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
+  ['>', ['length', ['to-string', ['get', 'pk_id']]], 0],
+]
+const _FILTER_MAPBOX_LABEL_ABSCISA = [
+  'all',
+  ['any', ['==', ['geometry-type'], 'Point'], ['==', ['geometry-type'], 'MultiPoint']],
+  ['>', ['length', ['to-string', ['coalesce', ['get', 'etiqueta'], ['get', 'Etiqueta'], '']]], 0],
+]
+
+/** Etiquetas: fuente Regular (no semibold) y tamaño que escala con el zoom. */
+function _mapboxPlanoSymbolLayout(textField, isMini = false) {
+  const stops = isMini
+    ? [10, 11, 12, 13, 15, 16, 18, 20]
+    : [11, 14, 14, 20, 17, 28, 20, 36]
+  return {
+    'text-field': textField,
+    'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
+    'text-size': ['interpolate', ['linear'], ['zoom'], ...stops],
+    'text-anchor': 'center',
+    'text-allow-overlap': false,
+    'text-ignore-placement': false,
+  }
+}
+
+/** GeoJSON del contrato (FeatureCollection, JSON string u objeto). Siempre devuelve FeatureCollection con array features. */
+function _normalizeContratoPlanoGeojson(plano) {
+  if (plano == null || plano === '') return { type: 'FeatureCollection', features: [] }
+  let p = plano
+  if (typeof p === 'string') {
+    try { p = JSON.parse(p) } catch { return { type: 'FeatureCollection', features: [] } }
+  }
+  if (!p || typeof p !== 'object') return { type: 'FeatureCollection', features: [] }
+  let fc
+  if (p.type === 'FeatureCollection' && Array.isArray(p.features)) fc = p
+  else if (p.type === 'Feature' && p.geometry) fc = { type: 'FeatureCollection', features: [p] }
+  else if (Array.isArray(p.features)) fc = { type: 'FeatureCollection', features: p.features }
+  else return { type: 'FeatureCollection', features: [] }
+  return sanitizePlanoFeatureCollection(fc)
+}
+
+function _esFeaturePlanoDibujoExterno(f) {
+  const p = f?.properties
+  if (!p) return false
+  const layer = String(p.Layer ?? p.layer ?? '').trim().toLowerCase()
+  return layer === 'dibujo externo'
+}
+
+/** Recorre árbol de coordenadas GeoJSON y emite [lng, lat] (sin arrays enormes para Math.min). */
+function _forEachLngLatInGeojsonCoords(node, fn) {
+  if (!Array.isArray(node)) return
+  if (typeof node[0] === 'number' && typeof node[1] === 'number') {
+    fn(node[0], node[1])
+    return
+  }
+  for (let i = 0; i < node.length; i++) _forEachLngLatInGeojsonCoords(node[i], fn)
+}
+
+function _boundsFromGeometry(geom) {
+  if (!geom || !geom.type) return null
+  let minLng = Infinity
+  let maxLng = -Infinity
+  let minLat = Infinity
+  let maxLat = -Infinity
+  let n = 0
+  const consider = (lng, lat) => {
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) return
+    n += 1
+    if (lng < minLng) minLng = lng
+    if (lng > maxLng) maxLng = lng
+    if (lat < minLat) minLat = lat
+    if (lat > maxLat) maxLat = lat
+  }
+  const walk = (g) => {
+    if (!g || !g.type) return
+    if (g.type === 'GeometryCollection') {
+      const geoms = g.geometries || []
+      for (let i = 0; i < geoms.length; i++) walk(geoms[i])
+      return
+    }
+    if (g.coordinates) _forEachLngLatInGeojsonCoords(g.coordinates, consider)
+  }
+  walk(geom)
+  if (!n) return null
+  return { minLng, maxLng, minLat, maxLat }
+}
+
+/** BBox de todas las features (polígono, línea, punto). */
+function _boundsFromFeatureCollection(fc) {
+  const feats = fc?.features
+  if (!Array.isArray(feats) || feats.length === 0) return null
+  let minLng = Infinity
+  let maxLng = -Infinity
+  let minLat = Infinity
+  let maxLat = -Infinity
+  let any = false
+  for (const f of feats) {
+    const b = f?.type === 'Feature' ? _boundsFromGeometry(f.geometry) : _boundsFromGeometry(f)
+    if (!b) continue
+    any = true
+    if (b.minLng < minLng) minLng = b.minLng
+    if (b.maxLng > maxLng) maxLng = b.maxLng
+    if (b.minLat < minLat) minLat = b.minLat
+    if (b.maxLat > maxLat) maxLat = b.maxLat
+  }
+  if (!any) return null
+  return { minLng, maxLng, minLat, maxLat }
+}
+
+function _mapboxFitBoundsLngLat(map, bounds, opt = {}) {
+  if (!map || !bounds) return
+  let { minLng, maxLng, minLat, maxLat } = bounds
+  if (minLng === maxLng) { minLng -= 1e-4; maxLng += 1e-4 }
+  if (minLat === maxLat) { minLat -= 1e-4; maxLat += 1e-4 }
+  const {
+    padding = 40,
+    bearing = 0,
+    maxZoom = 17,
+    minZoom,
+    duration = 0,
+    pitch = 0,
+  } = opt
+  map.fitBounds([[minLng, minLat], [maxLng, maxLat]], {
+    padding,
+    bearing,
+    pitch,
+    maxZoom,
+    ...(minZoom != null ? { minZoom } : {}),
+    duration,
+  })
+}
+
 const POLITICAS_TEXTO_VERSION = '1.0'
 const TEST_MODE = String(import.meta.env.VITE_TEST_MODE || '').toLowerCase() === 'true'
 
@@ -154,8 +311,10 @@ function TestModeBadge() {
   return (
     <div style={{
       position: 'fixed',
-      top: 12,
+      bottom: 12,
       right: 12,
+      top: 'auto',
+      left: 'auto',
       zIndex: 100000,
       background: '#F59E0B',
       color: '#111827',
@@ -165,7 +324,10 @@ function TestModeBadge() {
       fontSize: 'var(--cc-label)',
       fontWeight: '800',
       letterSpacing: '0.4px',
-      boxShadow: '0 4px 14px rgba(0,0,0,0.2)'
+      boxShadow: '0 4px 14px rgba(0,0,0,0.2)',
+      maxWidth: 'min(92vw, 280px)',
+      textAlign: 'center',
+      lineHeight: 1.25,
     }}>
       ENTORNO LOCAL DE PRUEBA
     </div>
@@ -687,7 +849,31 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t }) {
   )
 }
 
-// ─── HELPER: NIVEL DE VALIDACIÓN ─────────────────────────────────────────────
+/** Payload JSON para /reportes/buscar, /analisis y exportar (soporta { nivel, estado } o legado { cargo_id, estado }). */
+function sicoeSerializarCapasValidacion(capas) {
+  if (!Array.isArray(capas)) return []
+  return capas.map((c) => {
+    const est = String(c?.estado || '').trim()
+    if (!est) return null
+    if (c?.nivel != null && c.nivel !== '') {
+      const n = parseInt(c.nivel, 10)
+      if (Number.isFinite(n) && n >= 1 && n <= 3) return { nivel: n, estado: est }
+    }
+    if (c?.cargo_id != null && c.cargo_id !== '') {
+      const id = parseInt(c.cargo_id, 10)
+      if (Number.isFinite(id)) return { cargo_id: id, estado: est }
+    }
+    return null
+  }).filter(Boolean)
+}
+
+function capasInicialesValidacionFromUser(usuario) {
+  const ni = determinarNivelValidacion(usuario)
+  if (!ni.nivelValidacion) return []
+  return [{ nivel: ni.nivelValidacion, estado: 'No Revisado' }]
+}
+
+// ─── HELPER: NIVEL DE VALIDACIÓN (rol + permiso validar; sin rol válido → no valida) ─
 function determinarNivelValidacion(usuario) {
   const norm = (txt) =>
     String(txt || '')
@@ -720,34 +906,25 @@ function determinarNivelValidacion(usuario) {
   const verValoresEconomicos = !(esOperativoContratista || esOperativoInterventoria || esApoyoTecnico)
 
   let nivelValidacion = null
-  const esDev = cargo.includes('desarrollador')
-
-  if (esDev) {
-    nivelValidacion = 1  // Dev ve nivel Inspector por defecto para capacitación
-  } else if (esContratista && puedeValidar &&
-      (cargo.includes('inspector') || cargo.includes('topógrafo') || cargo.includes('topografo'))) {
-    nivelValidacion = 1
-  } else if (esContratista && puedeValidar &&
-      (cargo.includes('residente') || cargo.includes('director de obra'))) {
-    nivelValidacion = 2
-  } else if (esInterventoria && !esOperativoInterventoria && puedeValidar &&
-      (cargo.includes('residente') || cargo.includes('director'))) {
-    nivelValidacion = 3
-  } else if (esApoyoTecnico) {
-    // Apoyo técnico de interventoría opera como visor/comentarista de nivel 3.
-    nivelValidacion = 3
+  if (puedeValidar && rol) {
+    if (rol === 'operativo contratista') nivelValidacion = 1
+    else if (rol === 'contratista') nivelValidacion = 2
+    else if (rol === 'interventoria') nivelValidacion = 3
+    else nivelValidacion = null
   }
+
+  const nivelValidacionComentario = nivelValidacion ?? (esApoyoTecnico ? 3 : null)
 
   const rolOrigen = esInterventoria ? 'interventoria'
                   : esSubRol        ? 'subcontratista'
                   : 'contratista'
 
   /** Residente de Costos u Obra: depura antes de que Interventoría vea el registro. */
-  const puedePrevalidarAntesInterv = esContratista && puedeValidar &&
+  const puedePrevalidarAntesInterv = rol === 'contratista' && puedeValidar &&
     (cargo.includes('residente de costos') || cargo.includes('residente de obra'))
 
   return {
-    nivelValidacion, puedeEditar, puedeValidar, esApoyoTecnico, esSubcontratista, esSoloComentarista,
+    nivelValidacion, nivelValidacionComentario, puedeEditar, puedeValidar, esApoyoTecnico, esSubcontratista, esSoloComentarista,
     verValoresEconomicos, rolOrigen, esInterventoria, puedePrevalidarAntesInterv,
   }
 }
@@ -1345,15 +1522,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const confirmarValidacion = async (comentarioData) => {
     setMostrarPopupValidacion(false)
     const nivel = nivelInfo.nivelValidacion
-    if (!nivel) return
+    const nvCom = nivelInfo.nivelValidacionComentario
     // Perfil solo-comentar: registra comentario completo sin cambiar estado.
     if (!nivelInfo.puedeValidar) {
-      if (!comentarioData) return
+      if (!comentarioData || !nvCom) return
       const body = {
         ...comentarioData,
         rol_origen: nivelInfo.rolOrigen,
         tipo: 'validacion',
-        nivel_validacion: nivel,
+        nivel_validacion: nvCom,
       }
       try {
         const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/comentarios`, {
@@ -1376,6 +1553,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       }
       return
     }
+    if (!nivel) return
     const sufijo = nivel === 1 ? 'validar-nivel1' : nivel === 2 ? 'validar-nivel2' : 'validar-nivel3'
     const body = { estado: estadoValidando }
     if (comentarioData) body.comentario_data = { ...comentarioData, rol_origen: nivelInfo.rolOrigen }
@@ -1583,7 +1761,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       )}
 
       {/* ─ Sección: Asignación de Ítem ─ */}
-      {(editableCampos || nivelInfo.nivelValidacion) && (
+      {(editableCampos || nivelInfo.nivelValidacion || nivelInfo.nivelValidacionComentario) && (
         <div style={{ background:t.bg, borderRadius:'10px', padding:'16px', marginBottom:'16px', border:`1px solid ${C.borde}` }}>
           <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>🔖 Asignación de Ítem</div>
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 2fr', gap:'12px' }}>
@@ -1981,10 +2159,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       })()}
 
       {/* ─ Sección: Solo comentar (sin validar) ─ */}
-      {nivelInfo.nivelValidacion && !nivelInfo.puedeValidar && (nivelInfo.esSoloComentarista || nivelInfo.esApoyoTecnico) && (
+      {nivelInfo.nivelValidacionComentario && !nivelInfo.puedeValidar && (nivelInfo.esSoloComentarista || nivelInfo.esApoyoTecnico) && (
         <div style={{ marginBottom:'16px', background:t.bg, borderRadius:'10px', padding:'16px', border:`1px solid ${C.borde}` }}>
           <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.textMuted, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>
-            💬 Comentarios de validación · Nivel {nivelInfo.nivelValidacion}
+            💬 Comentarios de validación · Nivel {nivelInfo.nivelValidacionComentario}
           </div>
           <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted, marginBottom:'10px' }}>
             Este cargo no valida estados. Solo puede registrar comentarios dirigidos.
@@ -2073,7 +2251,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           t={t} usuario={usuario} registro={registro}
           contrato_id={contrato_id} API_URL={API} hdrs={hdrs}
           estadoValidando={estadoValidando}
-          nivelValidacion={nivelInfo.nivelValidacion}
+          nivelValidacion={nivelInfo.puedeValidar ? nivelInfo.nivelValidacion : nivelInfo.nivelValidacionComentario}
           obligatorio={!nivelInfo.puedeValidar || estadoValidando !== 'Aprobado'}
           onConfirmar={confirmarValidacion}
           onCancelar={() => setMostrarPopupValidacion(false)}
@@ -2137,9 +2315,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     'nivel3_estado': 'nivel2_estado',
   }
 
+  const CAMPO_POR_NIVEL = { 1: 'nivel1_estado', 2: 'nivel2_estado', 3: 'nivel3_estado' }
+
   // Determinar si hay un filtro de validación activo para este usuario
   const camponivelActivo = filtroValidacion
-    ? CARGO_NIVEL_CAMPO[filtroValidacion.cargo_id] || null
+    ? (CAMPO_POR_NIVEL[filtroValidacion.nivel] ?? CARGO_NIVEL_CAMPO[filtroValidacion.cargo_id] ?? null)
     : null
   const estadoFiltroActivo = filtroValidacion?.estado || null
   const prereqCampo = camponivelActivo ? CARGO_NIVEL_PREREQ[camponivelActivo] : null
@@ -2256,7 +2436,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [comentariosData, setComentariosData]      = useState([])
   const [loadingComentarios, setLoadingComentarios] = useState(false)
   const [comentariosError, setComentariosError]    = useState(null)
-  const [popupMasivo, setPopupMasivo]              = useState(null)   // { estado } o null
+  const [popupMasivo, setPopupMasivo]              = useState(null)   // { estado, idsOverride?: number[] } o null
   const [msgMasivo, setMsgMasivo]                  = useState('')
   const [ejecutandoMasivo, setEjecutandoMasivo]    = useState(false)
   const [devEliminando, setDevEliminando]          = useState(false)
@@ -2331,7 +2511,24 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   const nvMasivo = nivelInfo.nivelValidacion
   const puedeMasivaNivel = (nvMasivo === 2 || nvMasivo === 3) && nivelInfo.puedeValidar
-  const registroParaPopupMasivo = registrosVisibles.find(r => r.id === seleccionadosValidacion[0]) || registros[0] || {}
+  const registroParaPopupMasivo = (() => {
+    if (popupMasivo?.idsOverride?.length) {
+      const id0 = popupMasivo.idsOverride[0]
+      return registrosVisibles.find(r => r.id === id0) || registros.find(r => r.id === id0) || {}
+    }
+    return registrosVisibles.find(r => r.id === seleccionadosValidacion[0]) || registros[0] || {}
+  })()
+
+  const idsPortadaResumenMasivoElegibles = (() => {
+    if (!portadaResumenEstado || !puedeMasivaNivel) return []
+    return registrosPortadaResumenFiltrados.filter((r) => {
+      if (reporteExcluidoValidacionAvanzada) return false
+      if (!String(r.item_numero || '').trim()) return false
+      if (nvMasivo === 2) return (r.nivel1_estado || 'No Revisado') === 'Aprobado'
+      if (nvMasivo === 3) return (r.nivel2_estado || 'No Revisado') === 'Aprobado'
+      return false
+    }).map((r) => r.id)
+  })()
 
   const recargar = async () => {
     try {
@@ -2568,18 +2765,19 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setSeleccionadosValidacion(prev => prev.includes(rid) ? prev.filter(x => x !== rid) : [...prev, rid])
   }
 
-  const ejecutarMasivoSeleccion = async (estado, comentarioData) => {
+  const ejecutarMasivoSeleccion = async (estado, comentarioData, idsOverride = null) => {
     const nv = nivelInfo.nivelValidacion
     if (nv !== 2 && nv !== 3) return
-    if (seleccionadosValidacion.length === 0) {
-      alert('Selecciona al menos un registro en este ítem.')
+    const ids = idsOverride != null ? [...idsOverride] : [...seleccionadosValidacion]
+    if (ids.length === 0) {
+      alert(idsOverride != null ? 'No hay registros elegibles para validar en esta lista (revisa ítem asignado y nivel previo aprobado).' : 'Selecciona al menos un registro en este ítem.')
       return
     }
     setPopupMasivo(null)
     setEjecutandoMasivo(true)
     setMsgMasivo('')
     const sufijo = nv === 2 ? 'validar-masivo-nivel2' : 'validar-masivo-nivel3'
-    const body = { estado, ids_registros: [...seleccionadosValidacion] }
+    const body = { estado, ids_registros: ids }
     if (comentarioData) {
       body.comentario_data = { ...comentarioData, rol_origen: nivelInfo.rolOrigen }
     }
@@ -2590,7 +2788,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || `Error ${res.status}`)
       setMsgMasivo(`✅ ${data.actualizados} actualizado(s), ${data.omitidos} omitido(s) por no cumplir el nivel anterior.`)
-      setSeleccionadosValidacion([])
+      if (idsOverride == null) setSeleccionadosValidacion([])
+      else setPortadaResumenEstado(null)
       recargar()
     } catch (e) {
       setMsgMasivo(`❌ ${e.message}`)
@@ -2667,12 +2866,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             </button>
           ))}
         </div>
-        {msgMasivo && (
-          <div style={{ marginTop:'10px', fontSize:'var(--cc-sm)', color:t.text, background:t.bg,
-                        borderRadius:'8px', padding:'10px 14px', border:`1px solid ${t.border}` }}>
-            {msgMasivo}
-          </div>
-        )}
       </div>
     )
   }
@@ -2788,6 +2981,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
         {/* ─ Contenido del tab ─ */}
         <div style={{ flex:1, padding:'24px', overflowY:'auto' }}>
+          {msgMasivo && (
+            <div style={{
+              marginBottom:'16px', fontSize:'var(--cc-sm)', color:t.text, background:t.bg,
+              borderRadius:'10px', padding:'12px 16px', border:`1px solid ${t.border}`, lineHeight:1.45,
+            }}>
+              {msgMasivo}
+            </div>
+          )}
 
           {/* ── TAB PORTADA ── */}
           {tabActiva === 'portada' && (
@@ -2828,14 +3029,39 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   </div>
                   {portadaResumenEstado && (
                     <div style={{ borderTop:`1px solid ${t.border}`, paddingTop:'14px' }}>
-                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px' }}>
+                      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'10px', flexWrap:'wrap', gap:'8px' }}>
                         <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text }}>
                           Registros {portadaResumenEstado === 'No Revisado' ? 'sin revisar' : portadaResumenEstado.toLowerCase()} ({registrosPortadaResumenFiltrados.length})
                         </span>
-                        <button type="button" onClick={() => setPortadaResumenEstado(null)}
-                          style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'4px 10px', fontSize:'var(--cc-label)', color:t.textMuted, cursor:'pointer' }}>
-                          Cerrar lista
-                        </button>
+                        <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap' }}>
+                          {puedeMasivaNivel && portadaResumenEstado !== 'Aprobado' && idsPortadaResumenMasivoElegibles.length > 0 && (
+                            <>
+                              <span style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:'#0d9488' }}>Masivo N{nivelInfo.nivelValidacion}:</span>
+                              <button type="button" disabled={ejecutandoMasivo}
+                                onClick={() => ejecutarMasivoSeleccion('Aprobado', null, idsPortadaResumenMasivoElegibles)}
+                                style={{ padding:'5px 12px', borderRadius:'8px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
+                                  opacity: ejecutandoMasivo ? 0.6 : 1, background:'#16a34a18', color:'#16a34a', border:'1.5px solid #16a34a55' }}>
+                                ✅ Todos aprobados ({idsPortadaResumenMasivoElegibles.length})
+                              </button>
+                              <button type="button" disabled={ejecutandoMasivo}
+                                onClick={() => setPopupMasivo({ estado: 'Pendiente', idsOverride: idsPortadaResumenMasivoElegibles })}
+                                style={{ padding:'5px 12px', borderRadius:'8px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
+                                  opacity: ejecutandoMasivo ? 0.6 : 1, background:'#d9770618', color:'#d97706', border:'1.5px solid #d9770655' }}>
+                                🟡 Todos pendiente
+                              </button>
+                              <button type="button" disabled={ejecutandoMasivo}
+                                onClick={() => setPopupMasivo({ estado: 'Rechazado', idsOverride: idsPortadaResumenMasivoElegibles })}
+                                style={{ padding:'5px 12px', borderRadius:'8px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
+                                  opacity: ejecutandoMasivo ? 0.6 : 1, background:'#dc262618', color:'#dc2626', border:'1.5px solid #dc262655' }}>
+                                🔴 Todos rechazados
+                              </button>
+                            </>
+                          )}
+                          <button type="button" onClick={() => setPortadaResumenEstado(null)}
+                            style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'6px', padding:'4px 10px', fontSize:'var(--cc-label)', color:t.textMuted, cursor:'pointer' }}>
+                            Cerrar lista
+                          </button>
+                        </div>
                       </div>
                       {registrosPortadaResumenFiltrados.length === 0 ? (
                         <div style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>No hay registros en este estado.</div>
@@ -3532,15 +3758,15 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                       )}
                       <button
                         type="button"
-                        disabled={!nivelInfo.nivelValidacion}
-                        onClick={() => { if (nivelInfo.nivelValidacion) setPopupNuevoComentObra({ reg: modalComentarios.reg }) }}
+                        disabled={!(nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario)}
+                        onClick={() => { if (nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) setPopupNuevoComentObra({ reg: modalComentarios.reg }) }}
                         style={{
                           background: color, color:'#fff', border:'none', borderRadius:'10px', padding:'10px 20px',
-                          fontSize:'var(--cc-sm)', fontWeight:'700', cursor: nivelInfo.nivelValidacion ? 'pointer' : 'not-allowed',
-                          opacity: nivelInfo.nivelValidacion ? 1 : 0.5,
+                          fontSize:'var(--cc-sm)', fontWeight:'700', cursor: (nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) ? 'pointer' : 'not-allowed',
+                          opacity: (nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) ? 1 : 0.5,
                         }}
                       >Crear comentario</button>
-                      {!nivelInfo.nivelValidacion && (
+                      {!(nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) && (
                         <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'10px' }}>Tu perfil no tiene un nivel de validación asignado para iniciar comentarios.</div>
                       )}
                     </div>
@@ -3599,15 +3825,15 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 <div style={{ marginTop:'12px', borderTop:`1px solid ${t.border}`, paddingTop:'12px', flexShrink:0 }}>
                   <button
                     type="button"
-                    disabled={!nivelInfo.nivelValidacion}
-                    onClick={() => { if (nivelInfo.nivelValidacion) setPopupNuevoComentObra({ reg: modalComentarios.reg }) }}
+                    disabled={!(nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario)}
+                    onClick={() => { if (nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) setPopupNuevoComentObra({ reg: modalComentarios.reg }) }}
                     style={{
                       width:'100%',
-                      background: nivelInfo.nivelValidacion ? `${color}18` : t.bg,
-                      color: nivelInfo.nivelValidacion ? color : t.textMuted,
-                      border: `1.5px solid ${nivelInfo.nivelValidacion ? color + '55' : t.border}`,
+                      background: (nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) ? `${color}18` : t.bg,
+                      color: (nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) ? color : t.textMuted,
+                      border: `1.5px solid ${(nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) ? color + '55' : t.border}`,
                       borderRadius:'10px', padding:'10px 14px', fontSize:'var(--cc-sm)', fontWeight:'700',
-                      cursor: nivelInfo.nivelValidacion ? 'pointer' : 'not-allowed',
+                      cursor: (nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) ? 'pointer' : 'not-allowed',
                     }}
                   >＋ Nueva conversación</button>
                 </div>
@@ -3617,19 +3843,19 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         )
       })()}
 
-      {popupNuevoComentObra && nivelInfo.nivelValidacion && (
+      {popupNuevoComentObra && (nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) && (
         <PopupComentarioValidacion
           t={t} usuario={usuario} registro={popupNuevoComentObra.reg}
           contrato_id={contrato_id} API_URL={API_URL} hdrs={hdrs}
           estadoValidando="Mensaje"
-          nivelValidacion={nivelInfo.nivelValidacion}
+          nivelValidacion={nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario}
           obligatorio={true}
           modoConversacion={true}
           zIndexOverlay={10400}
           onConfirmar={async (comentarioData) => {
             if (!comentarioData) return
             const reg = popupNuevoComentObra.reg
-            const nv = nivelInfo.nivelValidacion
+            const nv = nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario
             const body = {
               ...comentarioData,
               rol_origen: nivelInfo.rolOrigen,
@@ -3681,7 +3907,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           estadoValidando={popupMasivo.estado}
           nivelValidacion={nvMasivo}
           obligatorio={true}
-          onConfirmar={comentarioData => ejecutarMasivoSeleccion(popupMasivo.estado, comentarioData)}
+          onConfirmar={comentarioData => ejecutarMasivoSeleccion(popupMasivo.estado, comentarioData, popupMasivo.idsOverride ?? null)}
           onCancelar={() => setPopupMasivo(null)}
         />
       )}
@@ -3854,7 +4080,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
 
   const perm = (usuario?.permisos || []).find(p => p.funcion_nombre === 'Reporte de Cantidades')
   const nivelInfo   = determinarNivelValidacion(usuario)
-  const puedeVer    = perm?.ver || nivelInfo.nivelValidacion !== null
+  const puedeVer    = perm?.ver || nivelInfo.nivelValidacion != null || nivelInfo.nivelValidacionComentario != null
   const puedeCrear  = perm?.crear
   const puedeEditar = perm?.editar
   const puedeExportar = perm?.exportar
@@ -3874,8 +4100,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     if (nivelInfo.esInterventoria) delete ef.subcontratista_id
     const tieneCapa =
       capas.length > 0 &&
-      capas[0].cargo_id != null && capas[0].cargo_id !== '' &&
-      String(capas[0].estado || '').trim() !== ''
+      sicoeSerializarCapasValidacion(capas).length > 0
     // Cualquier campo de la barra (incl. solo abscisa) cuenta: AND entre columnas al pulsar Buscar
     const tieneGrid = Object.values(ef).some(v => v !== '' && v != null)
     return tieneCapa || tieneGrid
@@ -3976,22 +4201,15 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     })
   }, [contrato_id, nivelInfo.esInterventoria])
 
-  // Auto-buscar al montar con el filtro de validación del cargo del usuario
+  // Auto-buscar al montar con el filtro de validación por nivel del usuario (rol + permiso)
   useEffect(() => {
     if (!contrato_id) return
-    const CARGO_ID_NIVEL = {54:1, 44:2, 45:2, 51:2, 56:2, 50:3, 58:3}
-    if (cargoIdUsuario && CARGO_ID_NIVEL[cargoIdUsuario]) {
-      // Usuario con nivel de validación → busca pre-filtrado por su cargo
-      const capasIniciales = [{
-        cargo_id: cargoIdUsuario,
-        cargo_nombre: cargoNombreUsuario,
-        estado: 'No Revisado'
-      }]
+    const capasIniciales = capasInicialesValidacionFromUser(usuario)
+    if (capasIniciales.length > 0) {
       buscarReportes(filtros, 0, capasIniciales)
       cargarAnalisis(filtros, capasIniciales)
     }
-    // Sin filtros en la grilla → no se carga datos (incl. editores: deben pulsar Buscar con criterios)
-  }, [contrato_id])
+  }, [contrato_id, usuario?.id, usuario?.rol_id, usuario?.cargo_id, usuario?.permisos])
 
   /** Mismos query params que la grilla (para detalle / export coherente). */
   const sicoeAppendParamsBusquedaActivos = (params) => {
@@ -4000,10 +4218,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     if (nivelInfo.esInterventoria) delete ef.subcontratista_id
     Object.entries(ef).forEach(([k, v]) => { if (v !== '' && v != null) params.append(k, v) })
     if (capasValidacion.length > 0) {
-      const payload = capasValidacion.map((c) => ({ cargo_id: c.cargo_id, estado: c.estado }))
-      params.append('validacion_capas', JSON.stringify(payload))
-      params.append('cargo_id', capasValidacion[0].cargo_id)
-      params.append('estado_validacion', capasValidacion[0].estado)
+      const ser = sicoeSerializarCapasValidacion(capasValidacion)
+      if (ser.length > 0) {
+        params.append('validacion_capas', JSON.stringify(ser))
+        const c0 = capasValidacion[0]
+        if (c0?.cargo_id != null && c0.cargo_id !== '') params.append('cargo_id', c0.cargo_id)
+        if (c0?.estado != null) params.append('estado_validacion', c0.estado)
+      }
     }
     const oObs = sicoeFiltroObsRef.current?.trim()
     const oNod = sicoeFiltroNodoRef.current?.trim()
@@ -4047,10 +4268,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       if (nivelInfo.esInterventoria) delete ef.subcontratista_id
       Object.entries(ef).forEach(([k, v]) => { if (v !== '' && v != null) params.append(k, v) })
       if (capas.length > 0) {
-        const payload = capas.map((c) => ({ cargo_id: c.cargo_id, estado: c.estado }))
-        params.append('validacion_capas', JSON.stringify(payload))
-        params.append('cargo_id', capas[0].cargo_id)
-        params.append('estado_validacion', capas[0].estado)
+        const ser = sicoeSerializarCapasValidacion(capas)
+        if (ser.length > 0) {
+          params.append('validacion_capas', JSON.stringify(ser))
+          const c0 = capas[0]
+          if (c0?.cargo_id != null && c0.cargo_id !== '') params.append('cargo_id', c0.cargo_id)
+          if (c0?.estado != null) params.append('estado_validacion', c0.estado)
+        }
       }
       const oObs = sicoeFiltroObsRef.current?.trim()
       const oNod = sicoeFiltroNodoRef.current?.trim()
@@ -4115,11 +4339,12 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
 
   /** Misma petición que «Buscar»: panel dinámico + grilla al día sin borrar filtros. */
   const refrescarVistaSicoeObra = () => {
-    const hayFiltros = Object.values(filtros).some(v => v !== '') || capasValidacion.length > 0
+    const capasEfectivas = capasValidacion.length > 0 ? capasValidacion : capasInicialesValidacionFromUser(usuario)
+    const hayFiltros = Object.values(filtros).some(v => v !== '') || capasEfectivas.length > 0
     if (!hayFiltros && nivelInfo.nivelValidacion) return
-    if (!tieneParametrosBusquedaSicoe(filtros, capasValidacion)) return
-    buscarReportes(filtros, 0, capasValidacion)
-    cargarAnalisis(filtros, capasValidacion)
+    if (!tieneParametrosBusquedaSicoe(filtros, capasEfectivas)) return
+    buscarReportes(filtros, 0, capasEfectivas)
+    cargarAnalisis(filtros, capasEfectivas)
   }
 
   const fmtPesos = v => formatCOP(Number(v) || 0)
@@ -4207,10 +4432,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         params.append(k, v)
       })
       if (capas.length > 0) {
-        const payload = capas.map((c) => ({ cargo_id: c.cargo_id, estado: c.estado }))
-        params.append('validacion_capas', JSON.stringify(payload))
-        params.append('cargo_id', capas[0].cargo_id)
-        params.append('estado_validacion', capas[0].estado)
+        const ser = sicoeSerializarCapasValidacion(capas)
+        if (ser.length > 0) {
+          params.append('validacion_capas', JSON.stringify(ser))
+          const c0 = capas[0]
+          if (c0?.cargo_id != null && c0.cargo_id !== '') params.append('cargo_id', c0.cargo_id)
+          if (c0?.estado != null) params.append('estado_validacion', c0.estado)
+        }
       }
       const oObsA = sicoeFiltroObsRef.current?.trim()
       const oNodA = sicoeFiltroNodoRef.current?.trim()
@@ -4259,21 +4487,33 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   }
 
   const hayFiltrosActivos = Object.values(filtros).some(v => v !== '')
-  const cargoIdUsuario     = usuario?.cargo_id || null
-  const cargoNombreUsuario = usuario?.cargo_nombre || usuario?.cargo || ''
 
-  const defaultCapasValidacion = useMemo(() => {
-    const CARGO_ID_NIVEL = { 54: 1, 44: 2, 45: 2, 51: 2, 56: 2, 50: 3, 58: 3 }
-    if (!cargoIdUsuario || !CARGO_ID_NIVEL[cargoIdUsuario]) return []
-    return [{ cargo_id: cargoIdUsuario, cargo_nombre: cargoNombreUsuario, estado: 'No Revisado' }]
-  }, [cargoIdUsuario, cargoNombreUsuario])
+  const NIVEL_VAL_FILTRO_LABEL = {
+    1: 'Nivel 1 · Operativo contratista',
+    2: 'Nivel 2 · Contratista',
+    3: 'Nivel 3 · Interventoría',
+  }
+  const nivelesDisponiblesEnFiltro = useMemo(() => {
+    if (nivelInfo.esApoyoTecnico) return [3]
+    if (nivelInfo.nivelValidacion) return [nivelInfo.nivelValidacion]
+    if (perm?.ver) return [1, 2, 3]
+    return [1, 2, 3]
+  }, [nivelInfo.esApoyoTecnico, nivelInfo.nivelValidacion, perm?.ver])
 
-  const [capasValidacion, setCapasValidacion] = useState(() => {
-    const CARGO_ID_NIVEL = { 54: 1, 44: 2, 45: 2, 51: 2, 56: 2, 50: 3, 58: 3 }
-    if (!cargoIdUsuario || !CARGO_ID_NIVEL[cargoIdUsuario]) return []
-    return [{ cargo_id: cargoIdUsuario, cargo_nombre: cargoNombreUsuario, estado: 'No Revisado' }]
-  })
-  const [capaTemp, setCapaTemp] = useState({ cargo_id: '', cargo_nombre: '', estado: '' })
+  const defaultCapasValidacion = useMemo(
+    () => capasInicialesValidacionFromUser(usuario),
+    [usuario?.id, usuario?.rol_id, usuario?.cargo_id, usuario?.permisos],
+  )
+
+  const [capasValidacion, setCapasValidacion] = useState(() => capasInicialesValidacionFromUser(usuario))
+  const [capaTemp, setCapaTemp] = useState({ nivel: '', estado: '' })
+
+  // Si el usuario llega sin permisos y luego los carga, alinear chips + refs con el nivel por rol.
+  useEffect(() => {
+    const next = defaultCapasValidacion
+    if (!next.length) return
+    setCapasValidacion((prev) => (prev.length > 0 ? prev : next))
+  }, [defaultCapasValidacion])
 
   const filtrosSicoeRef = useRef(filtros)
   filtrosSicoeRef.current = filtros
@@ -4351,41 +4591,6 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     analisis?.modo === 'capitulo_items'
   )
 
-  const [cargosValidacionList, setCargosValidacionList] = useState([])
-  useEffect(() => {
-    if (!contrato_id) return
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/cargos-validacion`,
-      { headers: { Authorization: `Bearer ${getToken()}` } })
-      .then(r => r.json())
-      .then(data => setCargosValidacionList(Array.isArray(data) ? data : []))
-      .catch(() => {})
-  }, [contrato_id])
-
-  useEffect(() => {
-    if (!Array.isArray(cargosValidacionList) || cargosValidacionList.length === 0) return
-    setCapasValidacion(prev => prev.map((c) => {
-      const nombreActual = String(c?.cargo_nombre || '').trim()
-      const pareceId = /^\d+$/.test(nombreActual) || /^cargo\s+\d+$/i.test(nombreActual)
-      if (nombreActual && !pareceId) return c
-      const match = cargosValidacionList.find(x => String(x.id) === String(c?.cargo_id))
-      return match?.nombre ? { ...c, cargo_nombre: match.nombre } : c
-    }))
-  }, [cargosValidacionList])
-
-  const CARGO_ID_NIVEL_VALIDO = {54:1, 44:2, 45:2, 51:2, 56:2, 50:3, 58:3}
-  const cargosDisponiblesEnFiltro = useMemo(() => {
-    if (nivelInfo.esApoyoTecnico) {
-      // Para apoyo técnico de interventoría solo se habilita el cargo "Residente de Interventoría".
-      return cargosValidacionList.filter(c =>
-        String(c?.nombre || '').toLowerCase().includes('residente') &&
-        String(c?.nombre || '').toLowerCase().includes('intervent')
-      )
-    }
-    if (!cargoIdUsuario || !CARGO_ID_NIVEL_VALIDO[cargoIdUsuario]) {
-      return cargosValidacionList  // Dev/Admin: ve todos
-    }
-    return cargosValidacionList.filter(c => c.id === cargoIdUsuario)
-  }, [cargosValidacionList, cargoIdUsuario, nivelInfo.esApoyoTecnico])
   const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'' }
   /** Abscisas y nodos en cabecera de reporte (grilla SICOE). */
   const fmtSicoeRangoCabecera = (a, b) => {
@@ -4712,7 +4917,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     setSicoeFiltroObs('')
     setSicoeFiltroNodo('')
     setCapasValidacion(defaultCapasValidacion)
-    setCapaTemp({ cargo_id: '', cargo_nombre: '', estado: '' })
+    setCapaTemp({ nivel: '', estado: '' })
     setFiltros(filtrosVacios)
     setReportes([])
     setAnalisis(null)
@@ -4845,8 +5050,9 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       const fNorm = { ...filtros }
       if (nivelInfo.esInterventoria) fNorm.subcontratista_id = null
       Object.keys(fNorm).forEach(k => { if (fNorm[k] === '' || fNorm[k] === undefined) fNorm[k] = null })
-      const capa0 = capasValidacion?.[0] || null
       const camposRequest = exportSeleccionCampos.filter(c => !CAMPOS_VIRTUALES_EXPORT.includes(c))
+      const serEx = sicoeSerializarCapasValidacion(capasValidacion)
+      const capaFirst = capasValidacion?.[0] || null
       const payload = {
         numero_reporte: fNorm.numero_reporte ?? null,
         numero_registro: fNorm.numero_registro ?? null,
@@ -4861,12 +5067,9 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         abs_inicio: fNorm.abs_inicio ?? null,
         abs_final: fNorm.abs_final ?? null,
         estado: fNorm.estado ?? null,
-        cargo_id: capa0?.cargo_id ?? null,
-        estado_validacion: capa0?.estado ?? null,
-        validacion_capas:
-          capasValidacion && capasValidacion.length > 0
-            ? JSON.stringify(capasValidacion.map((c) => ({ cargo_id: c.cargo_id, estado: c.estado })))
-            : null,
+        cargo_id: capaFirst?.cargo_id ?? null,
+        estado_validacion: capaFirst?.estado ?? null,
+        validacion_capas: serEx.length > 0 ? JSON.stringify(serEx) : null,
         q_observacion: (sicoeFiltroObsRef.current && String(sicoeFiltroObsRef.current).trim()) || null,
         q_nodo: (sicoeFiltroNodoRef.current && String(sicoeFiltroNodoRef.current).trim()) || null,
         campos: camposRequest,
@@ -5404,9 +5607,10 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
               </button>
             )}
             <button type="button" onClick={() => {
-              const hayFiltros = Object.values(filtros).some(v => v !== '') || capasValidacion.length > 0
+              const capasEfectivas = capasValidacion.length > 0 ? capasValidacion : defaultCapasValidacion
+              const hayFiltros = Object.values(filtros).some(v => v !== '') || capasEfectivas.length > 0
               if (!hayFiltros && nivelInfo.nivelValidacion) return
-              buscarReportes(filtros, 0, capasValidacion); cargarAnalisis(filtros, capasValidacion)
+              buscarReportes(filtros, 0, capasEfectivas); cargarAnalisis(filtros, capasEfectivas)
             }}
               style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'4px 14px', fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer' }}>
               Buscar
@@ -5567,18 +5771,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                   style={{ ...inpStyle, width: '100%', maxWidth: '80px', padding: '4px 6px', fontSize: 'var(--cc-label)', boxSizing: 'border-box' }} />
               </div>
               <div style={sicoeFGrow}>
-                <div style={filtroLbl}>Cargo (val.)</div>
-                <select value={capaTemp.cargo_id}
-                  onChange={e => {
-                    const sel = cargosDisponiblesEnFiltro.find(c => c.id === parseInt(e.target.value))
-                    setCapaTemp(p => ({ ...p,
-                      cargo_id: sel ? sel.id : '',
-                      cargo_nombre: sel ? sel.nombre : '',
-                    }))
-                  }} style={{ ...selStyle, width: '100%', padding: '4px 6px', fontSize: 'var(--cc-label)', boxSizing: 'border-box' }}>
-                  <option value="">Cargo…</option>
-                  {cargosDisponiblesEnFiltro.map(c => (
-                    <option key={c.id} value={c.id}>{c.nombre}</option>
+                <div style={filtroLbl}>Nivel val.</div>
+                <select value={capaTemp.nivel}
+                  onChange={e => setCapaTemp(p => ({ ...p, nivel: e.target.value === '' ? '' : parseInt(e.target.value, 10) }))}
+                  style={{ ...selStyle, width: '100%', padding: '4px 6px', fontSize: 'var(--cc-label)', boxSizing: 'border-box' }}>
+                  <option value="">Nivel…</option>
+                  {nivelesDisponiblesEnFiltro.map((n) => (
+                    <option key={n} value={n}>{NIVEL_VAL_FILTRO_LABEL[n] || `Nivel ${n}`}</option>
                   ))}
                 </select>
               </div>
@@ -5591,19 +5790,19 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
               </div>
               <div style={{ flex: '0 0 38px', alignSelf: 'flex-end' }}>
                 <div style={{ ...filtroLbl, opacity: 0, pointerEvents: 'none' }}>·</div>
-                <button type="button" disabled={!capaTemp.cargo_id || !capaTemp.estado}
+                <button type="button" disabled={!capaTemp.nivel || !capaTemp.estado}
                   onClick={() => {
-                    setCapasValidacion(p => [...p, capaTemp])
-                    setCapaTemp({ cargo_id: '', cargo_nombre: '', estado: '' })
+                    setCapasValidacion(p => [...p, { nivel: capaTemp.nivel, estado: capaTemp.estado }])
+                    setCapaTemp({ nivel: '', estado: '' })
                   }}
-                  style={{ background: (!capaTemp.cargo_id || !capaTemp.estado) ? t.border : t.primary, color: '#fff', border: 'none', borderRadius: '6px', padding: '4px 10px', fontSize: 'var(--cc-label)', fontWeight: '700', cursor: (!capaTemp.cargo_id || !capaTemp.estado) ? 'not-allowed' : 'pointer' }}>
+                  style={{ background: (!capaTemp.nivel || !capaTemp.estado) ? t.border : t.primary, color: '#fff', border: 'none', borderRadius: '6px', padding: '4px 10px', fontSize: 'var(--cc-label)', fontWeight: '700', cursor: (!capaTemp.nivel || !capaTemp.estado) ? 'not-allowed' : 'pointer' }}>
                   ＋
                 </button>
               </div>
               <div style={{ flex: '1.2 1 200px', minWidth: 0, minHeight: 28, display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center', alignSelf: 'center' }}>
                 {capasValidacion.map((c, i) => (
                   <span key={i} style={{ background: 'rgba(0,175,197,0.12)', border: '1px solid rgba(0,175,197,0.3)', borderRadius: '4px', padding: '2px 6px', fontSize: 'var(--cc-caption)', color: '#00afc5', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                    {c.cargo_nombre}: {c.estado}
+                    {(c.nivel != null ? (NIVEL_VAL_FILTRO_LABEL[c.nivel] || `Nivel ${c.nivel}`) : c.cargo_nombre)}: {c.estado}
                     <span role="button" tabIndex={0} onClick={() => setCapasValidacion(p => p.filter((_, j) => j !== i))} onKeyDown={e => { if (e.key === 'Enter') setCapasValidacion(p => p.filter((_, j) => j !== i)) }} style={{ cursor: 'pointer', color: '#ef4444', fontWeight: '700' }}>×</span>
                   </span>
                 ))}
@@ -5629,8 +5828,8 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
             </div>
             <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: '6px', lineHeight: 1.35 }}>
               {sicoePuedeRefinar
-                ? 'Refinar: panel y grilla se actualizan al escribir (~0,4 s). Añade capas de validación con Cargo + Estado y ＋.'
-                : 'Refinar: activo tras buscar con criterios. Validación: elige cargo y estado de aprobación, luego ＋.'}
+                ? 'Refinar: panel y grilla se actualizan al escribir (~0,4 s). Añade capas «Nivel de validación + Estado» y ＋.'
+                : 'Refinar: activo tras buscar con criterios. Validación: elige nivel (1–3) y estado, luego ＋.'}
             </div>
           </div>
 
@@ -6203,6 +6402,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   // Datos TAB 4 - Puntos topográficos
   const [puntos, setPuntos] = useState([{punto:'', norte:'', este:'', cota:'', descripcion:''}])
+  /** Enlace opcional (Topografía) → se fusiona en `enlace_soporte` del reporte al guardar. */
+  const [enlacePortadaWizard, setEnlacePortadaWizard] = useState('')
 
   const hdrs = { Authorization: `Bearer ${getToken()}` }
   const modoEdicion = !!reporteInicial
@@ -6230,16 +6431,11 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   useEffect(() => {
     if (!reporteInicial) {
       fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-reporte`, { headers: hdrs })
-        .then(r => r.json()).then(d => setNumeroReporte(d.siguiente))
-      fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes`, {
-        method: 'POST',
-        headers: { ...hdrs, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          descripcion_actividad: 'Borrador',
-          capitulo: 'Sin asignar',
-          estado: 'Borrador'
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.siguiente != null) setNumeroReporte(d.siguiente)
         })
-      }).then(r => r.json()).then(d => { if (d.id) setBorradorId(d.id) })
+        .catch(() => {})
     } else {
       setNumeroReporte(reporteInicial.numero_reporte)
     }
@@ -6288,6 +6484,14 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         foto_url: r.foto_url, foto_numero: r.foto_numero, _fotoOk: !!r.foto_url,
         grafico_url: r.grafico_url, grafico_numero: r.grafico_numero, _grafOk: !!r.grafico_url
       })))
+      {
+        const regs = reporteInicial.registros || []
+        const g0 = regs.find((r) => r.grafico_url)
+        if (g0) {
+          setReporteGraficoUrl(g0.grafico_url)
+          setReporteGraficoNumero(g0.grafico_numero)
+        }
+      }
       if (reporteInicial.puntos?.length) setPuntos(reporteInicial.puntos.map(p => ({
         punto: p.punto || '', norte: p.norte || '', este: p.este || '',
         cota: p.cota || '', descripcion: p.descripcion || ''
@@ -6529,7 +6733,23 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         if (!bData.id) throw new Error('No se pudo crear el borrador')
         idParaGuardar = bData.id
         setBorradorId(bData.id)
+        if (bData.numero_reporte != null) setNumeroReporte(bData.numero_reporte)
       }
+      const wEnlace = (enlacePortadaWizard || '').trim()
+      if (wEnlace) {
+        try {
+          new URL(wEnlace)
+        } catch {
+          alert('El enlace en la pestaña Topografía no es una URL válida (usa https://…).')
+          setTabActivo(3)
+          setGuardando(false)
+          return
+        }
+      }
+      const enlacesPrev = parseEnlacesSoporteReporte(reporteInicial?.enlace_soporte)
+      const enlacesMerged = [...enlacesPrev]
+      if (wEnlace && !enlacesMerged.includes(wEnlace)) enlacesMerged.push(wEnlace)
+
       const body = {
         descripcion_actividad: descripcion,
         subcontratista_id: subSeleccionado?.id || null,
@@ -6544,6 +6764,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         coord_lat: coordLat, coord_lng: coordLng,
         margen, abs_inicio: parseFloat(absInicio), abs_final: parseFloat(absFinal),
         nodo_ini: nodoIni, nodo_fin: nodoFin,
+        enlace_soporte: enlacesMerged.length ? JSON.stringify(enlacesMerged) : null,
       }
       const rUpd = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${idParaGuardar}`, {
         method: 'PUT', headers: { ...hdrs, 'Content-Type': 'application/json' },
@@ -6559,7 +6780,9 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           cantidad_total: reg.cantidad_total,
           unidad: reg.unidad, observacion: reg.observacion,
           foto_url: reg.foto_url, foto_numero: reg.foto_numero, foto_descripcion: reg.foto_descripcion,
-          grafico_url: reg.grafico_url, grafico_numero: reg.grafico_numero, grafico_descripcion: reg.grafico_descripcion
+          grafico_url: reg.grafico_url || reporteGraficoUrl || null,
+          grafico_numero: reg.grafico_numero ?? reporteGraficoNumero ?? null,
+          grafico_descripcion: reg.grafico_descripcion || (reporteGraficoUrl ? 'Gráfico del reporte' : null),
         }))
       }
       // Reintento: en móvil 4G el fetch largo a veces corta; el servidor puede haber quedado ok (idempotente: borra e inserta de nuevo)
@@ -7218,6 +7441,22 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   }} />
                 </label>
               </div>
+              <div style={{ marginTop:'16px', padding:'14px', background:t.bg, borderRadius:'12px', border:`1px solid ${t.border}` }}>
+                <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.textMuted, marginBottom:'6px', letterSpacing:'0.4px' }}>🔗 ENLACE (OPCIONAL)</div>
+                <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginBottom:'8px', lineHeight:1.45 }}>
+                  Si lo cargas, aparecerá en la portada del reporte, en <strong>Biblioteca de Soportes</strong> (Drive, SharePoint, etc.).
+                </div>
+                <input
+                  type="url"
+                  value={enlacePortadaWizard}
+                  onChange={(e) => setEnlacePortadaWizard(e.target.value)}
+                  placeholder="https://drive.google.com/..."
+                  style={inpStyle(false)}
+                />
+                {enlacePortadaWizard.trim() !== '' && (() => { try { new URL(enlacePortadaWizard.trim()); return false } catch { return true } })() && (
+                  <div style={{ fontSize:'var(--cc-label)', color:'#EF4444', marginTop:'6px' }}>⚠️ Usa una URL válida (https://…)</div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -7590,8 +7829,13 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
   const mapRef = useRef(null)
   const mapInstance = useRef(null)
   const [colores, setColores] = useState({})
-  const [loading, setLoading] = useState(true)
+  /** undefined = cargando; FeatureCollection cuando ya se obtuvo respuesta del API */
+  const [planoGeojson, setPlanoGeojson] = useState(undefined)
   const [seleccionado, setSeleccionado] = useState(null)
+  /** Qué etiquetas mostrar: PK (polígonos), abscisa (puntos), o ambas. */
+  const [capEtiquetas, setCapEtiquetas] = useState('ambos')
+  const capEtiquetasRef = useRef('ambos')
+  capEtiquetasRef.current = capEtiquetas
 
   const getColor = (pct, sobrecosto) => {
     if (sobrecosto) return '#DC2626'
@@ -7602,20 +7846,79 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
   }
 
   useEffect(() => {
-    if (!contratoId || !token) return
-    fetch(`${API}/cobro/${contratoId}/pkid-colores`, {
-      headers: { Authorization: `Bearer ${token}` }
-    }).then(r => r.ok ? r.json() : {}).then(data => {
-      setColores(data)
-      setLoading(false)
-    }).catch(() => setLoading(false))
-  }, [contratoId])
+    if (!contratoId || !token) {
+      setPlanoGeojson(_normalizeContratoPlanoGeojson(null))
+      setColores({})
+      return
+    }
+    let cancelled = false
+    setPlanoGeojson(undefined)
+    setColores({})
+    const hdrs = { Authorization: `Bearer ${token}` }
+    Promise.all([
+      fetch(`${API}/presupuesto/${contratoId}/pkid-colores`, { headers: hdrs })
+        .then(r => (r.ok ? r.json() : {}))
+        .catch((e) => {
+          logApiFailure(`plano-semaforo pkid-colores contrato=${contratoId}`, e)
+          return {}
+        }),
+      fetch(`${API}/contratos/${contratoId}`, { headers: hdrs })
+        .then(async r => {
+          if (!r.ok) {
+            logApiFailure(`plano-semaforo contratos/${contratoId}`, new Error(`HTTP ${r.status}`))
+            return null
+          }
+          const c = await r.json().catch(() => null)
+          return c?.plano_geojson ?? null
+        })
+        .catch((e) => {
+          logApiFailure(`plano-semaforo contratos/${contratoId}`, e)
+          return null
+        }),
+    ])
+      .then(([cols, rawPlano]) => {
+        if (cancelled) return
+        setColores(cols && typeof cols === 'object' ? cols : {})
+        setPlanoGeojson(_normalizeContratoPlanoGeojson(rawPlano))
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setColores({})
+          setPlanoGeojson(_normalizeContratoPlanoGeojson(null))
+        }
+      })
+    return () => { cancelled = true }
+  }, [contratoId, token])
+
+  const cargando = planoGeojson === undefined
+
+  const featsPlano = planoGeojson?.features
+  const nFeatsPlanoRaw = Array.isArray(featsPlano) ? featsPlano.length : 0
+  const nFeatsPlanoVisibles = !cargando && Array.isArray(featsPlano)
+    ? featsPlano.filter(f => !_esFeaturePlanoDibujoExterno(f)).length
+    : 0
+  const mapaSinTrazos = !cargando && nFeatsPlanoVisibles === 0
 
   useEffect(() => {
-    if (loading) return
-    if (!mapRef.current || mapInstance.current) return
+    const borrarMapa = () => {
+      const m = mapInstance.current
+      if (!m) return
+      try { m.remove() } catch { /* ignore */ }
+      mapInstance.current = null
+    }
 
-    // mapboxgl viene del import
+    if (!MAPBOX_TOKEN) {
+      borrarMapa()
+      return
+    }
+
+    if (cargando) {
+      borrarMapa()
+      return
+    }
+    if (!mapRef.current) return
+
+    borrarMapa()
 
     mapboxgl.accessToken = MAPBOX_TOKEN
 
@@ -7632,93 +7935,135 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
 
     map.on('load', () => {
-      fetch('/pOLIGONOS_1551t_Project_Feat.json')
-        .then(r => r.json())
-        .then(geojson => {
-          // Enriquecer GeoJSON con colores
-          const enriched = {
-            ...geojson,
-            features: geojson.features
-              .filter(f => f.properties.Layer !== 'dibujo externo')
-              .map(f => {
-                const pkid = String(f.properties.Layer).trim()
-                const data = colores[pkid] || {}
-                const pct = data.pct || 0
-                const sobrecosto = data.sobrecosto || false
-                return {
-                  ...f,
-                  properties: {
-                    ...f.properties,
-                    pk_id: pkid,
-                    pct,
-                    cobrado: data.cobrado || 0,
-                    presupuesto: data.presupuesto || 0,
-                    sobrecosto,
-                    color: getColor(pct, sobrecosto)
-                  }
-                }
-              })
-          }
-
-          map.addSource('poligonos', { type: 'geojson', data: enriched })
-
-          map.addLayer({
-            id: 'poligonos-fill',
-            type: 'fill',
-            source: 'poligonos',
-            paint: {
-              'fill-color': ['get', 'color'],
-              'fill-opacity': 0.75
+      const base = planoGeojson || { type: 'FeatureCollection', features: [] }
+      const enriched = {
+        ...base,
+        features: (base.features || [])
+          .filter(f => !_esFeaturePlanoDibujoExterno(f))
+          .map(f => {
+            const pkid = _sicoeFeaturePkId(f)
+            const data = colores[pkid] || {}
+            const pct = data.pct || 0
+            const sobrecosto = data.sobrecosto || false
+            const mapLabel = _mapLabelPlanoFeature(f, pkid)
+            return {
+              ...f,
+              properties: {
+                ...f.properties,
+                pk_id: pkid || f.properties?.pk_id,
+                pct,
+                cobrado: data.cobrado || 0,
+                presupuesto: data.presupuesto || 0,
+                sobrecosto,
+                color: getColor(pct, sobrecosto),
+                map_label: mapLabel
+              }
             }
           })
+      }
 
-          map.addLayer({
-            id: 'poligonos-outline',
-            type: 'line',
-            source: 'poligonos',
-            paint: {
-              'line-color': '#ffffff',
-              'line-width': 1,
-              'line-opacity': 0.4
-            }
-          })
+      map.addSource('poligonos', { type: 'geojson', data: enriched })
 
-          // Hover
-          map.on('mouseenter', 'poligonos-fill', () => { map.getCanvas().style.cursor = 'pointer' })
-          map.on('mouseleave', 'poligonos-fill', () => { map.getCanvas().style.cursor = '' })
+      map.addLayer({
+        id: 'poligonos-fill',
+        type: 'fill',
+        source: 'poligonos',
+        paint: {
+          'fill-color': ['get', 'color'],
+          'fill-opacity': 0.75,
+          'fill-antialias': true
+        }
+      })
 
-          // Click
-          map.on('click', 'poligonos-fill', (e) => {
-            const props = e.features[0].properties
-            setSeleccionado(props)
-          })
+      map.addLayer({
+        id: 'poligonos-stroke',
+        type: 'line',
+        source: 'poligonos',
+        paint: {
+          'line-color': ['coalesce', ['get', 'color'], '#10B981'],
+          'line-width': 4,
+          'line-opacity': 0.9
+        }
+      })
 
-          // Fit bounds al GeoJSON
-          const coords = enriched.features.flatMap(f => {
-            const geom = f.geometry
-            if (geom.type === 'Polygon') return geom.coordinates[0]
-            if (geom.type === 'MultiPolygon') return geom.coordinates.flat(2)
-            return []
-          })
-          if (coords.length > 0) {
-            const lngs = coords.map(c => c[0])
-            const lats = coords.map(c => c[1])
-            map.fitBounds(
-              [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
-              { padding: 40, bearing: 270, pitch: 0 }
-            )
-          }
-        })
+      const paintLabels = {
+        'text-color': '#ffffff',
+        'text-halo-color': 'rgba(0,0,0,0.75)',
+        'text-halo-width': 1.5
+      }
+      map.addLayer({
+        id: 'plano-labels-pk',
+        type: 'symbol',
+        source: 'poligonos',
+        filter: _FILTER_MAPBOX_LABEL_PK,
+        layout: _mapboxPlanoSymbolLayout(['get', 'pk_id']),
+        paint: paintLabels
+      })
+      map.addLayer({
+        id: 'plano-labels-abscisa',
+        type: 'symbol',
+        source: 'poligonos',
+        filter: _FILTER_MAPBOX_LABEL_ABSCISA,
+        layout: _mapboxPlanoSymbolLayout(['coalesce', ['get', 'etiqueta'], ['get', 'Etiqueta'], '']),
+        paint: paintLabels
+      })
+      {
+        const m = capEtiquetasRef.current
+        map.setLayoutProperty('plano-labels-pk', 'visibility', (m === 'ambos' || m === 'pk') ? 'visible' : 'none')
+        map.setLayoutProperty('plano-labels-abscisa', 'visibility', (m === 'ambos' || m === 'abscisa') ? 'visible' : 'none')
+      }
+
+      const setCursorPointer = () => { map.getCanvas().style.cursor = 'pointer' }
+      const setCursorDefault = () => { map.getCanvas().style.cursor = '' }
+      map.on('mouseenter', 'poligonos-fill', setCursorPointer)
+      map.on('mouseleave', 'poligonos-fill', setCursorDefault)
+      map.on('mouseenter', 'poligonos-stroke', setCursorPointer)
+      map.on('mouseleave', 'poligonos-stroke', setCursorDefault)
+
+      map.on('click', 'poligonos-fill', (e) => {
+        const props = e.features[0].properties
+        setSeleccionado(props)
+      })
+      map.on('click', 'poligonos-stroke', (e) => {
+        const props = e.features[0].properties
+        setSeleccionado(props)
+      })
+
+      const b = _boundsFromFeatureCollection(enriched)
+      if (b) {
+        _mapboxFitBoundsLngLat(map, b, { padding: 48, bearing: 270, maxZoom: 17 })
+      }
     })
 
     return () => {
       try { unregPlanoSem() } catch { /* ignore */ }
-      map.remove()
+      try { map.remove() } catch { /* ignore */ }
       mapInstance.current = null
     }
-  }, [loading])
+  }, [cargando, contratoId, t.bg, planoGeojson, colores])
+
+  useEffect(() => {
+    const map = mapInstance.current
+    if (!map || cargando) return
+    if (!map.getLayer('plano-labels-pk') || !map.getLayer('plano-labels-abscisa')) return
+    const m = capEtiquetas
+    map.setLayoutProperty('plano-labels-pk', 'visibility', (m === 'ambos' || m === 'pk') ? 'visible' : 'none')
+    map.setLayoutProperty('plano-labels-abscisa', 'visibility', (m === 'ambos' || m === 'abscisa') ? 'visible' : 'none')
+  }, [capEtiquetas, cargando])
 
   const fmt = n => n != null ? formatCOP(n) : '—'
+
+  if (!MAPBOX_TOKEN) {
+    return (
+      <div style={{ padding: '24px', borderRadius: '12px', border: `1px solid ${t.border}`, background: t.bgCard, color: t.text, maxWidth: '520px' }}>
+        <div style={{ fontWeight: '700', marginBottom: '10px', color: t.primary }}>Mapbox sin token</div>
+        <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.5 }}>
+          Falta <code style={{ fontSize: '12px' }}>VITE_MAPBOX_TOKEN</code> en el <code style={{ fontSize: '12px' }}>.env</code> del proyecto <strong>frontend</strong>.
+          Añade el token, guarda el archivo y <strong>reinicia</strong> <code style={{ fontSize: '12px' }}>npm run dev</code> (Vite solo lee variables al arrancar).
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div style={{ position:'relative', height:'calc(100vh - 140px)', borderRadius:'12px', overflow:'hidden', border:`1px solid ${t.border}` }}>
@@ -7727,9 +8072,53 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
       <div ref={mapRef} style={{ width:'100%', height:'100%' }} />
 
       {/* Loading */}
-      {loading && (
+      {cargando && (
         <div style={{ position:'absolute',top:0,left:0,right:0,bottom:0,background:t.bg,display:'flex',alignItems:'center',justifyContent:'center',fontSize:'var(--cc-body)',color:t.textMuted }}>
           ⏳ Cargando plano...
+        </div>
+      )}
+
+      <div style={{ position:'absolute',top:'72px',left:'12px',zIndex:5,background:t.bgCard+'EE',border:`1px solid ${t.border}`,borderRadius:'10px',padding:'8px 10px',boxShadow:'0 2px 12px rgba(0,0,0,0.2)' }}>
+        <div style={{ fontSize:'var(--cc-caption)',fontWeight:'600',color:t.textMuted,marginBottom:'6px' }}>Etiquetas del plano</div>
+        <div style={{ display:'flex',flexWrap:'wrap',gap:'6px' }}>
+          {[
+            ['pk', 'PK'],
+            ['abscisa', 'Abscisa'],
+            ['ambos', 'Ambas'],
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setCapEtiquetas(key)}
+              style={{
+                background: capEtiquetas === key ? t.primary : 'transparent',
+                color: capEtiquetas === key ? '#fff' : t.textMuted,
+                border: `1.5px solid ${capEtiquetas === key ? t.primary : t.border}`,
+                borderRadius: '16px',
+                padding: '3px 10px',
+                fontSize: 'var(--cc-caption)',
+                fontWeight: capEtiquetas === key ? '600' : '400',
+                cursor: 'pointer',
+              }}
+            >{label}</button>
+          ))}
+        </div>
+      </div>
+
+      {mapaSinTrazos && (
+        <div style={{ position:'absolute',top:'16px',left:'50%',transform:'translateX(-50%)',maxWidth:'min(92vw, 440px)',background:t.bgCard+'F5',border:`1px solid ${t.border}`,borderRadius:'10px',padding:'12px 16px',boxShadow:t.shadow,zIndex:6,textAlign:'center' }}>
+          <div style={{ fontSize:'var(--cc-sm)',fontWeight:'700',color:t.text,marginBottom:'6px' }}>No hay trazos para mostrar en el semáforo</div>
+          <div style={{ fontSize:'var(--cc-caption)',color:t.textMuted,lineHeight:1.45 }}>
+            {nFeatsPlanoRaw === 0 ? (
+              <>
+                Este contrato no tiene <strong>plano_geojson</strong> guardado en la base (o el API falló). En <strong>Admin → Contratos</strong> carga el GeoJSON y pulsa <strong>Guardar</strong>; luego recarga esta vista. En local: backend en <code style={{fontSize:'11px'}}>127.0.0.1:8000</code> y <code style={{fontSize:'11px'}}>npm run dev</code> en <code style={{fontSize:'11px'}}>frontend</code>.
+              </>
+            ) : (
+              <>
+                Hay {nFeatsPlanoRaw} geometría(s) en el archivo, pero todas quedan excluidas por la propiedad de capa <strong>dibujo externo</strong>. Revisa capas en el GeoJSON o quita esa etiqueta de las features que deben verse en semáforo.
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -7748,7 +8137,7 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
       {seleccionado && (
         <div style={{ position:'absolute',top:'16px',right:'60px',background:t.bgCard+'EE',border:`1px solid ${t.border}`,borderRadius:'10px',padding:'14px 16px',boxShadow:'0 4px 16px rgba(0,0,0,0.3)',minWidth:'220px' }}>
           <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'10px' }}>
-            <div style={{ fontSize:'var(--cc-sm)',fontWeight:'700',color:t.primary }}>PK_ID: {seleccionado.pk_id}</div>
+            <div style={{ fontSize:'var(--cc-sm)',fontWeight:'700',color:t.primary }}>{(seleccionado.map_label || seleccionado.pk_id || '—')}</div>
             <button onClick={() => setSeleccionado(null)} style={{ background:'transparent',border:'none',cursor:'pointer',color:t.textMuted,fontSize:'var(--cc-lg)' }}>✕</button>
           </div>
           <div style={{ display:'flex',flexDirection:'column',gap:'6px' }}>
@@ -7773,45 +8162,78 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
   )
 }
 // ─── MINI MAPA SEMÁFORO (dashboard) ──────────────────────────────────────────
-function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null, bearing = 270 }) {
+function MiniMapaSemaforo({ t, colores, contratoId, token, height = 220, onPkidClick = null, bearing = 270 }) {
   const mapRef        = useRef(null)
   const mapInstance   = useRef(null)
   const onClickRef    = useRef(onPkidClick)
   const [listo, setListo] = useState(false)
   const [modo, setModo]   = useState('ambos')
+  const [capEtiquetas, setCapEtiquetas] = useState('ambos')
+  const capEtiquetasMiniRef = useRef('ambos')
+  capEtiquetasMiniRef.current = capEtiquetas
+  const [planoBase, setPlanoBase] = useState(undefined)
 
-  // Mantener ref actualizada sin re-inicializar el mapa
   useEffect(() => { onClickRef.current = onPkidClick }, [onPkidClick])
 
-  const getColorCobro = (pct) => {
+  useEffect(() => {
+    if (!contratoId || !token) {
+      setPlanoBase(_normalizeContratoPlanoGeojson(null))
+      return
+    }
+    let cancelled = false
+    setPlanoBase(undefined)
+    fetch(`${API_BASE}/contratos/${contratoId}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => (r.ok ? r.json() : null))
+      .then(c => {
+        if (cancelled) return
+        setPlanoBase(_normalizeContratoPlanoGeojson(c?.plano_geojson ?? null))
+      })
+      .catch(() => { if (!cancelled) setPlanoBase(_normalizeContratoPlanoGeojson(null)) })
+    return () => { cancelled = true }
+  }, [contratoId, token])
+
+  const getColorCobro = (pct, sobrecosto) => {
+    if (sobrecosto) return '#DC2626'
     if (pct >= 100) return '#DC2626'
     if (pct >= 90)  return '#EF4444'
     if (pct >= 70)  return '#F59E0B'
     return '#10B981'
   }
 
-  const buildFeatures = (geojson) =>
-    geojson.features
-      .filter(f => f.properties.Layer !== 'dibujo externo')
+  const buildFeatures = (geojson) => {
+    const feats = geojson?.features
+    if (!Array.isArray(feats)) return []
+    return feats
+      .filter(f => !_esFeaturePlanoDibujoExterno(f))
       .map(f => {
-        const pkid = String(f.properties.Layer).trim()
-        const d    = colores[pkid] || {}
+        const pkid = _sicoeFeaturePkId(f)
+        const d = colores[pkid] || {}
+        const sobrecosto = d.sobrecosto || false
         return {
           ...f,
           properties: {
             ...f.properties,
-            pk_id:       pkid,
-            pct:         d.pct || 0,
+            pk_id: pkid || f.properties?.pk_id,
+            map_label: _mapLabelPlanoFeature(f, pkid),
+            pct: d.pct || 0,
             tiene_cobro: d.cobrado > 0 ? 1 : 0,
-            tiene_ppto:  d.presupuesto > 0 ? 1 : 0,
-            color_cobro: d.cobrado != null ? getColorCobro(d.pct || 0) : '#334155',
-            color_ppto:  d.presupuesto > 0 ? '#0077B6' : '#334155',
+            tiene_ppto: d.presupuesto > 0 ? 1 : 0,
+            color_cobro: d.cobrado != null ? getColorCobro(d.pct || 0, sobrecosto) : '#334155',
+            color_ppto: d.presupuesto > 0 ? '#0077B6' : '#334155',
           }
         }
       })
+  }
 
   useEffect(() => {
-    if (!mapRef.current || mapInstance.current) return
+    if (planoBase === undefined) return
+    if (!mapRef.current) return
+    if (mapInstance.current) {
+      try { mapInstance.current.remove() } catch { /* ignore */ }
+      mapInstance.current = null
+      setListo(false)
+    }
+
     mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
     const map = new mapboxgl.Map({
       container: mapRef.current,
@@ -7822,59 +8244,98 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null, bearin
     mapInstance.current = map
     map.addControl(new mapboxgl.NavigationControl(), 'top-right')
     map.on('load', () => {
-      fetch('/pOLIGONOS_1551t_Project_Feat.json')
-        .then(r => r.json())
-        .then(geojson => {
-          const features = buildFeatures(geojson)
-          const data = { ...geojson, features }
-          map.addSource('mini-pols', { type: 'geojson', data })
-          map.addLayer({ id: 'mini-fill-ppto', type: 'fill', source: 'mini-pols',
-            paint: { 'fill-color': ['get', 'color_ppto'], 'fill-opacity': ['case', ['==', ['get', 'tiene_ppto'], 1], 0.7, 0.1] }
-          })
-          map.addLayer({ id: 'mini-fill-cobro', type: 'fill', source: 'mini-pols',
-            paint: { 'fill-color': ['get', 'color_cobro'], 'fill-opacity': ['case', ['==', ['get', 'tiene_cobro'], 1], 0.7, 0.1] }
-          })
-          map.addLayer({ id: 'mini-labels', type: 'symbol', source: 'mini-pols',
-            layout: {
-              'text-field': ['get', 'pk_id'],
-              'text-size': 9,
-              'text-anchor': 'center',
-              'text-allow-overlap': false,
-              'text-ignore-placement': false,
-            },
-            paint: { 'text-color': '#ffffff', 'text-halo-color': 'rgba(0,0,0,0.6)', 'text-halo-width': 1 }
-          })
-          // Click handlers
-          map.on('click', 'mini-fill-cobro', (e) => {
-            const pkid = e.features[0]?.properties?.pk_id
-            if (pkid && onClickRef.current) onClickRef.current(pkid)
-          })
-          map.on('click', 'mini-fill-ppto', (e) => {
-            const pkid = e.features[0]?.properties?.pk_id
-            if (pkid && onClickRef.current) onClickRef.current(pkid)
-          })
-          map.on('mouseenter', 'mini-fill-cobro', () => { if (onClickRef.current) map.getCanvas().style.cursor = 'pointer' })
-          map.on('mouseleave', 'mini-fill-cobro', () => { map.getCanvas().style.cursor = '' })
-          map.on('mouseenter', 'mini-fill-ppto',  () => { if (onClickRef.current) map.getCanvas().style.cursor = 'pointer' })
-          map.on('mouseleave', 'mini-fill-ppto',  () => { map.getCanvas().style.cursor = '' })
-          const coords = features.flatMap(f => {
-            const g = f.geometry
-            if (g.type === 'Polygon') return g.coordinates[0]
-            if (g.type === 'MultiPolygon') return g.coordinates.flat(2)
-            return []
-          })
-          if (coords.length > 0) {
-            const lngs = coords.map(c => c[0]), lats = coords.map(c => c[1])
-            map.fitBounds([[Math.min(...lngs), Math.min(...lats)],[Math.max(...lngs), Math.max(...lats)]], { padding: 20, duration: 0, bearing, pitch: 0 })
-          }
-          setListo(true)
-        })
+      const features = buildFeatures(planoBase)
+      const data = { ...planoBase, type: planoBase.type || 'FeatureCollection', features }
+      map.addSource('mini-pols', { type: 'geojson', data })
+      map.addLayer({ id: 'mini-fill-ppto', type: 'fill', source: 'mini-pols',
+        paint: { 'fill-color': ['get', 'color_ppto'], 'fill-opacity': ['case', ['==', ['get', 'tiene_ppto'], 1], 0.7, 0.1] }
+      })
+      map.addLayer({ id: 'mini-fill-cobro', type: 'fill', source: 'mini-pols',
+        paint: { 'fill-color': ['get', 'color_cobro'], 'fill-opacity': ['case', ['==', ['get', 'tiene_cobro'], 1], 0.7, 0.1] }
+      })
+      map.addLayer({
+        id: 'mini-line-ppto',
+        type: 'line',
+        source: 'mini-pols',
+        filter: ['any', ['==', ['geometry-type'], 'LineString'], ['==', ['geometry-type'], 'MultiLineString']],
+        paint: {
+          'line-color': ['get', 'color_ppto'],
+          'line-width': 4,
+          'line-opacity': ['case', ['==', ['get', 'tiene_ppto'], 1], 0.85, 0.12]
+        }
+      })
+      map.addLayer({
+        id: 'mini-line-cobro',
+        type: 'line',
+        source: 'mini-pols',
+        filter: ['any', ['==', ['geometry-type'], 'LineString'], ['==', ['geometry-type'], 'MultiLineString']],
+        paint: {
+          'line-color': ['get', 'color_cobro'],
+          'line-width': 4,
+          'line-opacity': ['case', ['==', ['get', 'tiene_cobro'], 1], 0.88, 0.12]
+        }
+      })
+      const miniPaintLbl = { 'text-color': '#ffffff', 'text-halo-color': 'rgba(0,0,0,0.6)', 'text-halo-width': 1 }
+      map.addLayer({
+        id: 'mini-labels-pk',
+        type: 'symbol',
+        source: 'mini-pols',
+        filter: _FILTER_MAPBOX_LABEL_PK,
+        layout: _mapboxPlanoSymbolLayout(['get', 'pk_id'], true),
+        paint: miniPaintLbl,
+      })
+      map.addLayer({
+        id: 'mini-labels-abscisa',
+        type: 'symbol',
+        source: 'mini-pols',
+        filter: _FILTER_MAPBOX_LABEL_ABSCISA,
+        layout: _mapboxPlanoSymbolLayout(['coalesce', ['get', 'etiqueta'], ['get', 'Etiqueta'], ''], true),
+        paint: miniPaintLbl,
+      })
+      {
+        const m = capEtiquetasMiniRef.current
+        map.setLayoutProperty('mini-labels-pk', 'visibility', (m === 'ambos' || m === 'pk') ? 'visible' : 'none')
+        map.setLayoutProperty('mini-labels-abscisa', 'visibility', (m === 'ambos' || m === 'abscisa') ? 'visible' : 'none')
+      }
+      map.on('click', 'mini-fill-cobro', (e) => {
+        const pkid = e.features[0]?.properties?.pk_id
+        if (pkid && onClickRef.current) onClickRef.current(pkid)
+      })
+      map.on('click', 'mini-fill-ppto', (e) => {
+        const pkid = e.features[0]?.properties?.pk_id
+        if (pkid && onClickRef.current) onClickRef.current(pkid)
+      })
+      map.on('click', 'mini-line-cobro', (e) => {
+        const pkid = e.features[0]?.properties?.pk_id
+        if (pkid && onClickRef.current) onClickRef.current(pkid)
+      })
+      map.on('click', 'mini-line-ppto', (e) => {
+        const pkid = e.features[0]?.properties?.pk_id
+        if (pkid && onClickRef.current) onClickRef.current(pkid)
+      })
+      map.on('mouseenter', 'mini-fill-cobro', () => { if (onClickRef.current) map.getCanvas().style.cursor = 'pointer' })
+      map.on('mouseleave', 'mini-fill-cobro', () => { map.getCanvas().style.cursor = '' })
+      map.on('mouseenter', 'mini-fill-ppto',  () => { if (onClickRef.current) map.getCanvas().style.cursor = 'pointer' })
+      map.on('mouseleave', 'mini-fill-ppto',  () => { map.getCanvas().style.cursor = '' })
+      map.on('mouseenter', 'mini-line-cobro', () => { if (onClickRef.current) map.getCanvas().style.cursor = 'pointer' })
+      map.on('mouseleave', 'mini-line-cobro', () => { map.getCanvas().style.cursor = '' })
+      map.on('mouseenter', 'mini-line-ppto',  () => { if (onClickRef.current) map.getCanvas().style.cursor = 'pointer' })
+      map.on('mouseleave', 'mini-line-ppto',  () => { map.getCanvas().style.cursor = '' })
+      const bMini = _boundsFromFeatureCollection(data)
+      if (bMini) {
+        _mapboxFitBoundsLngLat(map, bMini, { padding: 24, bearing, maxZoom: 17 })
+      }
+      setListo(true)
     })
     return () => {
       try { unregMiniAttrib() } catch { /* ignore */ }
-      if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null; setListo(false) }
+      if (mapInstance.current) {
+        mapInstance.current.remove()
+        mapInstance.current = null
+        setListo(false)
+      }
     }
-  }, [bearing])
+  }, [bearing, contratoId, t.bg, planoBase])
 
   useEffect(() => {
     const map = mapInstance.current
@@ -7896,7 +8357,28 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null, bearin
         map.setPaintProperty('mini-fill-cobro', 'fill-opacity', ['case', ['==', ['get', 'tiene_cobro'], 1], 0.55, 0.05])
       }
     }
+    if (map.getLayer('mini-line-ppto') && map.getLayer('mini-line-cobro')) {
+      if (modo === 'presupuesto') {
+        map.setPaintProperty('mini-line-ppto', 'line-opacity', ['case', ['==', ['get', 'tiene_ppto'], 1], 0.9, 0.06])
+        map.setPaintProperty('mini-line-cobro', 'line-opacity', 0)
+      } else if (modo === 'cobro') {
+        map.setPaintProperty('mini-line-ppto', 'line-opacity', 0)
+        map.setPaintProperty('mini-line-cobro', 'line-opacity', ['case', ['==', ['get', 'tiene_cobro'], 1], 0.92, 0.06])
+      } else {
+        map.setPaintProperty('mini-line-ppto', 'line-opacity', ['case', ['==', ['get', 'tiene_ppto'], 1], 0.5, 0.05])
+        map.setPaintProperty('mini-line-cobro', 'line-opacity', ['case', ['==', ['get', 'tiene_cobro'], 1], 0.65, 0.06])
+      }
+    }
   }, [colores, listo, modo])
+
+  useEffect(() => {
+    const map = mapInstance.current
+    if (!map || !listo) return
+    if (!map.getLayer('mini-labels-pk') || !map.getLayer('mini-labels-abscisa')) return
+    const m = capEtiquetas
+    map.setLayoutProperty('mini-labels-pk', 'visibility', (m === 'ambos' || m === 'pk') ? 'visible' : 'none')
+    map.setLayoutProperty('mini-labels-abscisa', 'visibility', (m === 'ambos' || m === 'abscisa') ? 'visible' : 'none')
+  }, [capEtiquetas, listo])
 
   const btnModo = (key, label, color) => (
     <button key={key} onClick={() => setModo(key)} style={{
@@ -7911,10 +8393,34 @@ function MiniMapaSemaforo({ t, colores, height = 220, onPkidClick = null, bearin
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
-      <div style={{ display:'flex', gap:'6px', justifyContent:'center' }}>
+      <div style={{ display:'flex', gap:'6px', justifyContent:'center', flexWrap:'wrap' }}>
         {btnModo('presupuesto', '📋 Presupuesto', '#0077B6')}
         {btnModo('cobro',       '💰 Cobro',       '#00A896')}
         {btnModo('ambos',       '⚡ Ambos',        '#7C3AED')}
+      </div>
+      <div style={{ display:'flex', gap:'6px', justifyContent:'center', alignItems:'center', flexWrap:'wrap', fontSize:'var(--cc-caption)', color:t.textMuted }}>
+        <span style={{ marginRight:'2px' }}>Etiquetas:</span>
+        {[
+          ['pk', 'PK'],
+          ['abscisa', 'Abscisa'],
+          ['ambos', 'Ambas'],
+        ].map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setCapEtiquetas(key)}
+            style={{
+              background: capEtiquetas === key ? t.primary : 'transparent',
+              color: capEtiquetas === key ? '#fff' : t.textMuted,
+              border: `1px solid ${capEtiquetas === key ? t.primary : t.border}`,
+              borderRadius: '14px',
+              padding: '2px 8px',
+              fontSize: 'var(--cc-caption)',
+              fontWeight: capEtiquetas === key ? '600' : '400',
+              cursor: 'pointer',
+            }}
+          >{label}</button>
+        ))}
       </div>
       <div style={{ position:'relative', width:'100%', height:`${height}px`, borderRadius:'8px', overflow:'hidden' }}>
         <div ref={mapRef} style={{ width:'100%', height:'100%' }} />
@@ -7991,7 +8497,13 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   }
 
   const cargarDestinatarios = async () => {
-    const r = await fetch(`${API}/notificaciones/usuarios-destinatarios`, { headers: h }).catch(() => null)
+    const p = new URLSearchParams()
+    if (contratoCtx != null && contratoCtx !== '') p.set('contrato_id', String(contratoCtx))
+    const qs = p.toString()
+    const r = await fetch(
+      `${API}/notificaciones/usuarios-destinatarios${qs ? `?${qs}` : ''}`,
+      { headers: h }
+    ).catch(() => null)
     if (r?.ok) {
       const data = await r.json()
       const ordenados = (Array.isArray(data) ? data : []).slice().sort((a, b) => {
@@ -9794,7 +10306,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>🗺️ PLANO SEMÁFORO</span>
                         <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>{Object.keys(miniMapaColores).length} PK_IDs</span>
                       </div>
-                      <MiniMapaSemaforo t={t} colores={miniMapaColores} height={240} onPkidClick={dashDrill.length >= 2 ? abrirPopupPkid : null} />
+                      <MiniMapaSemaforo t={t} colores={miniMapaColores} contratoId={contratoIdDash} token={getToken()} height={240} onPkidClick={dashDrill.length >= 2 ? abrirPopupPkid : null} />
                     </div>
 
                     {/* Área drill */}
@@ -10021,6 +10533,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     <MiniMapaSemaforo
                       t={t}
                       colores={analisisMapaColores}
+                      contratoId={contratoIdDash}
+                      token={getToken()}
                       height={260}
                       bearing={270}
                       onPkidClick={analisisSeleccion ? abrirAnalisisMapaPopup : null}
@@ -10217,7 +10731,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         </div>
                       ) : <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontStyle:'italic' }}>← Clic en fila para ver en plano</span>}
                     </div>
-                    <MiniMapaSemaforo t={t} colores={liqMapaColores} height={260} bearing={270} onPkidClick={liqSeleccion ? abrirLiqMapaPopup : null} />
+                    <MiniMapaSemaforo t={t} colores={liqMapaColores} contratoId={contratoIdDash} token={getToken()} height={260} bearing={270} onPkidClick={liqSeleccion ? abrirLiqMapaPopup : null} />
                     <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginTop:'6px', textAlign:'center' }}>
                       {Object.keys(liqMapaColores).length > 0 ? `${Object.keys(liqMapaColores).length} PK_IDs activos` : liqSeleccion ? 'Sin PK_IDs para este registro' : 'Selecciona una fila'}
                     </div>

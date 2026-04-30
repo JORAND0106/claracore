@@ -1155,6 +1155,24 @@ def _require_contract_access(current_user, contrato_id: int):
     if caller_contrato and int(caller_contrato) != int(contrato_id):
         raise HTTPException(status_code=403, detail="No tienes acceso a información de otro contrato")
 
+
+def _usuario_vinculado_a_contrato(usuario_id: int, contrato_id: int) -> bool:
+    """True si contrato es el principal del usuario o está en usuario_contratos."""
+    try:
+        cid = int(contrato_id)
+        uid = int(usuario_id)
+    except (TypeError, ValueError):
+        return False
+    u = supabase.table("usuarios").select("contrato_id").eq("id", uid).limit(1).execute().data
+    if u and u[0].get("contrato_id") is not None:
+        try:
+            if int(u[0]["contrato_id"]) == cid:
+                return True
+        except (TypeError, ValueError):
+            pass
+    uc = supabase.table("usuario_contratos").select("id").eq("usuario_id", uid).eq("contrato_id", cid).limit(1).execute().data
+    return bool(uc)
+
 from informes import router as informes_router
 app.include_router(informes_router, prefix="/informes")
 
@@ -1218,6 +1236,142 @@ CARGO_NIVEL_PRERREQUISITO = {
     'nivel3_estado': ('nivel2_estado', 'Aprobado'),
 }
 
+# Filtros Sicoe y capas JSON pueden usar { "nivel": 1|2|3, "estado": "..." } en lugar de cargo_id.
+NIVEL_VALIDACION_NUM_A_CAMPO = {
+    1: "nivel1_estado",
+    2: "nivel2_estado",
+    3: "nivel3_estado",
+}
+
+# Misma semántica que el filtro UI (rol + nivel), no cargo_id.
+NIVEL_VALIDACION_ENCABEZADO = {
+    1: "Nivel 1 · Operativo contratista",
+    2: "Nivel 2 · Contratista",
+    3: "Nivel 3 · Interventoría",
+}
+
+
+def _sicoe_norm_txt(s: Optional[str]) -> str:
+    if s is None:
+        return ""
+    import unicodedata
+    t = unicodedata.normalize("NFD", str(s).strip().lower())
+    return "".join(c for c in t if unicodedata.category(c) != "Mn")
+
+
+def _capa_campo_validacion(capa: dict) -> Optional[str]:
+    if not isinstance(capa, dict):
+        return None
+    campo = capa.get("campo")
+    if campo in ("nivel1_estado", "nivel2_estado", "nivel3_estado"):
+        return str(campo)
+    nv = capa.get("nivel")
+    if nv is not None and str(nv).strip() != "":
+        try:
+            n = int(nv)
+            return NIVEL_VALIDACION_NUM_A_CAMPO.get(n)
+        except (TypeError, ValueError):
+            pass
+    cid = capa.get("cargo_id")
+    if cid is not None and str(cid).strip() != "":
+        try:
+            return CARGO_ID_NIVEL_MAP.get(int(cid))
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _sicoe_capa_etiqueta_panel(capx: dict) -> str:
+    """Etiqueta del panel dinámico por capa: nivel (rol) o nombre de cargo (legado)."""
+    if not isinstance(capx, dict):
+        return "Validación"
+    nv = capx.get("nivel")
+    if nv is not None and str(nv).strip() != "":
+        try:
+            ni = int(nv)
+            return NIVEL_VALIDACION_ENCABEZADO.get(ni) or f"Nivel {ni}"
+        except (TypeError, ValueError):
+            pass
+    cid = capx.get("cargo_id")
+    if cid is not None and str(cid).strip() != "":
+        try:
+            ci = int(cid)
+            lbl = f"cargo {ci}"
+            try:
+                crow = supabase.table("cargos").select("nombre").eq("id", ci).single().execute().data
+                if crow and crow.get("nombre"):
+                    lbl = crow["nombre"]
+            except Exception:
+                pass
+            return lbl
+        except (TypeError, ValueError):
+            pass
+    fld = capx.get("campo") or _capa_campo_validacion(capx)
+    if fld == "nivel1_estado":
+        return NIVEL_VALIDACION_ENCABEZADO[1]
+    if fld == "nivel2_estado":
+        return NIVEL_VALIDACION_ENCABEZADO[2]
+    if fld == "nivel3_estado":
+        return NIVEL_VALIDACION_ENCABEZADO[3]
+    return "Validación"
+
+
+def _sicoe_db_nivel_validacion_usuario(user_id: int) -> Optional[int]:
+    """Nivel 1–3 según rol + permiso validar «Reporte de cantidades». Sin rol o sin permiso → None."""
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    try:
+        urows = supabase.table("usuarios").select("rol_id, cargo_id").eq("id", uid).limit(1).execute().data
+        if not urows:
+            return None
+        u = urows[0]
+    except Exception:
+        return None
+    rn = ""
+    if u.get("rol_id"):
+        try:
+            rrows = supabase.table("roles").select("nombre").eq("id", u["rol_id"]).limit(1).execute().data
+            if rrows:
+                rn = _sicoe_norm_txt(rrows[0].get("nombre"))
+        except Exception:
+            pass
+    if not rn:
+        return None
+    puede_validar = False
+    if u.get("cargo_id"):
+        try:
+            permisos_raw = supabase.table("permisos").select("validar, funcion_id").eq("cargo_id", u["cargo_id"]).execute().data
+            fn_rows = supabase.table("funciones").select("id, nombre").execute().data
+            fn_map = {f["id"]: f["nombre"] for f in (fn_rows or [])}
+            for p in permisos_raw or []:
+                fn = (fn_map.get(p.get("funcion_id")) or "")
+                fn = str(fn).strip().lower()
+                if "reporte de cantidades" in fn and p.get("validar"):
+                    puede_validar = True
+                    break
+        except Exception:
+            pass
+    if not puede_validar:
+        return None
+    if rn == "operativo contratista":
+        return 1
+    if rn == "contratista":
+        return 2
+    if rn == "interventoria":
+        return 3
+    return None
+
+
+def _require_sicoe_puede_validar_nivel(user_id: int, nivel: int) -> None:
+    got = _sicoe_db_nivel_validacion_usuario(user_id)
+    if got != nivel:
+        raise HTTPException(
+            status_code=403,
+            detail="Tu rol no autoriza validar en este nivel o falta permiso de validación en Reporte de cantidades.",
+        )
+
 
 def _estado_registro_eq_desde_filtro_ui(evp: str) -> str:
     """Alinea plural de la UI con el valor almacenado en so_registros."""
@@ -1241,16 +1395,35 @@ def _parse_validacion_capas_param(
             raw = json.loads(validacion_capas)
             if isinstance(raw, list):
                 for c in raw:
-                    if not isinstance(c, dict) or c.get("cargo_id") is None:
+                    if not isinstance(c, dict):
                         continue
                     est = (c.get("estado") or "").strip()
                     if not est:
                         continue
-                    out.append({"cargo_id": int(c["cargo_id"]), "estado": est})
+                    fld = _capa_campo_validacion(c)
+                    if fld:
+                        row: dict = {"estado": est, "campo": fld}
+                        if c.get("nivel") is not None:
+                            try:
+                                row["nivel"] = int(c["nivel"])
+                            except (TypeError, ValueError):
+                                pass
+                        if c.get("cargo_id") is not None:
+                            try:
+                                row["cargo_id"] = int(c["cargo_id"])
+                            except (TypeError, ValueError):
+                                pass
+                        out.append(row)
         except (json.JSONDecodeError, TypeError, ValueError, KeyError):
             pass
     if not out and cargo_id is not None and (estado_validacion or "").strip():
-        out = [{"cargo_id": int(cargo_id), "estado": str(estado_validacion).strip()}]
+        fld = CARGO_ID_NIVEL_MAP.get(int(cargo_id))
+        if fld:
+            out = [{
+                "cargo_id": int(cargo_id),
+                "estado": str(estado_validacion).strip(),
+                "campo": fld,
+            }]
     return out
 
 
@@ -1266,12 +1439,11 @@ def _so_registros_q_y_capas_validacion(
 ):
     """AND en la misma fila de so_registros: todas las capas (cargo+estado) a la vez."""
     for capa in capas:
-        cv = int(capa["cargo_id"])
+        fld = capa.get("campo") or _capa_campo_validacion(capa)
+        if not fld:
+            continue
         evp = (capa.get("estado") or "").strip()
         if not evp:
-            continue
-        fld = CARGO_ID_NIVEL_MAP.get(cv)
-        if not fld:
             continue
         prereq = CARGO_NIVEL_PRERREQUISITO.get(fld)
         if prereq:
@@ -1303,8 +1475,8 @@ def _so_registros_q_y_capas_validacion(
 
 def _validacion_cualquier_nivel2_o_3(capas: List[dict]) -> bool:
     for c in capas:
-        f = CARGO_ID_NIVEL_MAP.get(int(c.get("cargo_id", 0)))
-        if f and _es_validacion_avanzada(f):
+        fld = c.get("campo") or _capa_campo_validacion(c)
+        if fld and _es_validacion_avanzada(fld):
             return True
     return False
 
@@ -1755,17 +1927,14 @@ def _sicoe_ocultar_costo_directo_reportes(current_user) -> bool:
     return rol in ("operativo contratista", "operativo interventoria", "operativo interventoría")
 
 
-def _filtrar_registros_validacion_sicoe(
+def _filtrar_registros_validacion_por_campo(
     regs: list,
-    cargo_id: Optional[int],
+    fld: str,
     estado_validacion: Optional[str],
     reporte_row: Optional[dict] = None,
 ) -> list:
-    """Misma semántica que la búsqueda por cargo: nivel 2/3 solo si cumple prerrequisito del nivel previo."""
-    if not regs or cargo_id is None or not (estado_validacion or "").strip():
-        return regs
-    fld = CARGO_ID_NIVEL_MAP.get(cargo_id)
-    if not fld:
+    """Filtra registros por campo nivelX_estado y estado UI (coherente con búsqueda Sicoe)."""
+    if not regs or not fld or not (estado_validacion or "").strip():
         return regs
     if _es_validacion_avanzada(fld) and reporte_row is not None:
         if reporte_row.get("estado") in ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA:
@@ -1792,6 +1961,21 @@ def _filtrar_registros_validacion_sicoe(
     return out
 
 
+def _filtrar_registros_validacion_sicoe(
+    regs: list,
+    cargo_id: Optional[int],
+    estado_validacion: Optional[str],
+    reporte_row: Optional[dict] = None,
+) -> list:
+    """Misma semántica que la búsqueda por cargo: nivel 2/3 solo si cumple prerrequisito del nivel previo."""
+    if not regs or cargo_id is None or not (estado_validacion or "").strip():
+        return regs
+    fld = CARGO_ID_NIVEL_MAP.get(int(cargo_id))
+    if not fld:
+        return regs
+    return _filtrar_registros_validacion_por_campo(regs, fld, estado_validacion, reporte_row)
+
+
 def _filtrar_registros_validacion_capas_sicoe(
     regs: list,
     capas: List[dict],
@@ -1802,9 +1986,10 @@ def _filtrar_registros_validacion_capas_sicoe(
         return regs
     out = regs
     for c in capas:
-        out = _filtrar_registros_validacion_sicoe(
-            out, int(c["cargo_id"]), c.get("estado"), reporte_row
-        )
+        fld = c.get("campo") or _capa_campo_validacion(c)
+        if not fld:
+            continue
+        out = _filtrar_registros_validacion_por_campo(out, fld, c.get("estado"), reporte_row)
     return out
 
 
@@ -5688,9 +5873,11 @@ def marcar_leida(notif_id: int, current_user=Depends(get_current_user)):
     return {"ok": True}
 
 @app.get("/notificaciones/usuarios-destinatarios")
-def get_usuarios_destinatarios(current_user=Depends(get_current_user)):
-    """Usuarios activos del mismo contrato (o contratos vinculados) para el selector de destinatario.
-    Desarrollador sin contrato asignado conserva el listado global para operación de plataforma."""
+def get_usuarios_destinatarios(
+    contrato_id: Optional[int] = Query(None, description="Acota destinatarios a este contrato (recomendado)"),
+    current_user=Depends(get_current_user),
+):
+    """Usuarios activos del contrato para el selector de destinatario. No devuelve toda la plataforma."""
     uid = int(current_user.get("sub", 0))
     urow = supabase.table("usuarios").select("contrato_id, cargo_id").eq("id", uid).limit(1).execute().data
     urow = urow[0] if urow else {}
@@ -5700,16 +5887,33 @@ def get_usuarios_destinatarios(current_user=Depends(get_current_user)):
         if crow:
             cargo_nom = (crow[0].get("nombre") or "").strip().lower()
 
+    es_dev = cargo_nom == "desarrollador"
     scope = set()
-    if urow.get("contrato_id") is not None:
+
+    if contrato_id is not None:
         try:
-            scope.add(int(urow["contrato_id"]))
+            cid = int(contrato_id)
         except (TypeError, ValueError):
-            pass
-    for r in supabase.table("usuario_contratos").select("contrato_id").eq("usuario_id", uid).execute().data or []:
-        if r.get("contrato_id") is not None:
+            raise HTTPException(status_code=400, detail="contrato_id inválido")
+        if not es_dev and not _usuario_vinculado_a_contrato(uid, cid):
+            raise HTTPException(status_code=403, detail="No tienes acceso a destinatarios de ese contrato")
+        scope.add(cid)
+    else:
+        if urow.get("contrato_id") is not None:
             try:
-                scope.add(int(r["contrato_id"]))
+                scope.add(int(urow["contrato_id"]))
+            except (TypeError, ValueError):
+                pass
+        for r in supabase.table("usuario_contratos").select("contrato_id").eq("usuario_id", uid).execute().data or []:
+            if r.get("contrato_id") is not None:
+                try:
+                    scope.add(int(r["contrato_id"]))
+                except (TypeError, ValueError):
+                    pass
+        jwt_cid = current_user.get("contrato_id")
+        if jwt_cid is not None and str(jwt_cid).strip() != "":
+            try:
+                scope.add(int(jwt_cid))
             except (TypeError, ValueError):
                 pass
 
@@ -5721,11 +5925,6 @@ def get_usuarios_destinatarios(current_user=Depends(get_current_user)):
         ]
 
     if not scope:
-        if cargo_nom == "desarrollador":
-            rows = supabase.table("usuarios").select("id, nombre, apellidos, cargo_id").eq("activo", True).execute().data or []
-            out = _rows_to_out(rows)
-            out.sort(key=lambda x: (x.get("nombre") or "").lower())
-            return out
         return []
 
     scope_l = list(scope)
@@ -6420,17 +6619,39 @@ def listar_capitulos_obra(contrato_id: int, current_user=Depends(get_current_use
 
 @app.get("/sicoe-obra/{contrato_id}/next-reporte")
 def next_numero_reporte(contrato_id: int, current_user=Depends(get_current_user)):
-    def _q():
-        rows = supabase.table("so_reportes")\
-            .select("numero_reporte")\
-            .eq("contrato_id", contrato_id)\
-            .order("numero_reporte", desc=True)\
-            .limit(1).execute().data
-        return rows
-    rows = supabase_execute(_q)
-    ultimo = rows[0]["numero_reporte"] if rows else 0
-    # Mismo criterio que la RPC en BD (piso 35000): sico_consecutivos_desde_pisos.sql
-    sig = max(35000, ultimo + 1) if ultimo is not None else 35000
+    """Vista previa del siguiente número (sin llamar a la RPC ni reservar). Misma lógica que
+    `siguiente_numero_reporte` (incl. contratos con sicoe_consecutivos_desde_uno)."""
+
+    def _contrato():
+        return supabase.table("contratos").select("sicoe_consecutivos_desde_uno")\
+            .eq("id", contrato_id).limit(1).execute().data
+
+    def _max_num():
+        return supabase.table("so_reportes").select("numero_reporte")\
+            .eq("contrato_id", contrato_id).order("numero_reporte", desc=True).limit(1).execute().data
+
+    def _rsv():
+        return supabase.table("sico_ultimo_numero_reporte").select("reservado_hasta")\
+            .eq("contrato_id", contrato_id).limit(1).execute().data
+
+    crows = supabase_execute(_contrato)
+    desde_uno = bool(crows and crows[0].get("sicoe_consecutivos_desde_uno"))
+    mrows = supabase_execute(_max_num)
+    m_tab = mrows[0]["numero_reporte"] if mrows else 0
+    if m_tab is None:
+        m_tab = 0
+    urows = supabase_execute(_rsv)
+    if urows:
+        rsv = urows[0].get("reservado_hasta")
+    else:
+        rsv = 0 if desde_uno else 34999
+    if rsv is None:
+        rsv = 0 if desde_uno else 34999
+    piso = 35000
+    if desde_uno:
+        sig = max(m_tab + 1, rsv + 1)
+    else:
+        sig = max(piso, m_tab + 1, rsv + 1)
     return {"siguiente": sig}
 
 @app.get("/sicoe-obra/{contrato_id}/nodos")
@@ -6529,7 +6750,7 @@ def buscar_reportes_obra(
     _ev_l = None
     if capas_v:
         try:
-            _nivel_l = CARGO_ID_NIVEL_MAP.get(int(capas_v[0]["cargo_id"]))
+            _nivel_l = capas_v[0].get("campo") or _capa_campo_validacion(capas_v[0])
             _ev_l = (capas_v[0].get("estado") or "").strip()
         except (TypeError, ValueError, KeyError, IndexError):
             _nivel_l = None
@@ -7306,7 +7527,7 @@ def analisis_registros_obra(
     _val_estado_l = None
     if capas_ana and not _estado_filtro_omite_validacion_por_cargo(estado):
         _c0 = capas_ana[0]
-        _c = CARGO_ID_NIVEL_MAP.get(int(_c0["cargo_id"]))
+        _c = _capa_campo_validacion(_c0)
         if _c:
             _val_campo_l = _c
             _val_estado_l = (_c0.get("estado") or "").strip()
@@ -7631,16 +7852,9 @@ def analisis_registros_obra(
             partes.append(f"Abs. ≤ {abs_final}")
         if capas_ana:
             for capx in capas_ana:
-                cid = int(capx["cargo_id"])
                 evx = (capx.get("estado") or "").strip()
-                cargo_lbl = f"cargo {cid}"
-                try:
-                    c = supabase.table("cargos").select("nombre").eq("id", cid).single().execute().data
-                    if c and c.get("nombre"):
-                        cargo_lbl = c["nombre"]
-                except Exception:
-                    pass
-                partes.append(f"Val. {cargo_lbl}: {evx}")
+                cap_lbl = _sicoe_capa_etiqueta_panel(capx)
+                partes.append(f"Val. {cap_lbl}: {evx}")
         encabezado = " · ".join(partes) if partes else "Todos los registros"
 
     tc  = round(sum(g["costo_directo"]   for g in grupos_list), 0)
@@ -8870,7 +9084,11 @@ def crear_puntos(contrato_id: int, body: PuntosCreate, current_user=Depends(get_
 
 # ─── SICOE OBRA: Verificar acta RPO vigente ──────────────────────────────────
 def _acta_rpo_vigente_row(contrato_id: int):
-    """Acta RPO cuyo período [fecha_inicio, fecha_fin] contiene hoy (tipo RPO)."""
+    """
+    Acta RPO en período: hoy ∈ [fecha_inicio, fecha_fin]. Actas futuras (aún sin vigencia) no compiten.
+    Si dos períodos solapan en un día (p. ej. cierre 30/04 y el siguiente 01/05), gana el de fecha_inicio
+    más reciente; empate → numero_rpo desc, luego id desc — alineado con transición natural al vencer el mes.
+    """
     from datetime import date
     today = date.today().isoformat()
 
@@ -8881,7 +9099,11 @@ def _acta_rpo_vigente_row(contrato_id: int):
             .eq("tipo_grupo", "RPO")\
             .lte("fecha_inicio", today)\
             .gte("fecha_fin", today)\
-            .order("id", desc=True).limit(1).execute().data
+            .order("fecha_inicio", desc=True)\
+            .order("numero_rpo", desc=True)\
+            .order("id", desc=True)\
+            .limit(1)\
+            .execute().data
 
     actas = supabase_execute(_q)
     row = actas[0] if actas else None
@@ -8914,7 +9136,9 @@ def _parse_iso_to_date(val) -> Optional[date]:
 
 
 def _acta_rpo_id_vigente_para_fecha(contrato_id: int, ref_date) -> Optional[int]:
-    """Acta RPO (tipo_grupo RPO) cuyo período [fecha_inicio, fecha_fin] contiene ref_date."""
+    """
+    Acta RPO cuyo período contiene ref_date (mismo criterio que _acta_rpo_vigente_row con ref_date en lugar de hoy).
+    """
     d = _parse_iso_to_date(ref_date)
     if not d:
         return None
@@ -8927,6 +9151,8 @@ def _acta_rpo_id_vigente_para_fecha(contrato_id: int, ref_date) -> Optional[int]
             .eq("tipo_grupo", "RPO")\
             .lte("fecha_inicio", ds)\
             .gte("fecha_fin", ds)\
+            .order("fecha_inicio", desc=True)\
+            .order("numero_rpo", desc=True)\
             .order("id", desc=True)\
             .limit(1)\
             .execute().data
@@ -9512,6 +9738,7 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
             detail="Se requiere comentario_data cuando el estado es Pendiente o Rechazado.")
     try:
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        _require_sicoe_puede_validar_nivel(autor_id, 1)
         def _get_n3():
             return supabase.table("so_registros").select("nivel3_estado, reporte_id")\
                 .eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
@@ -9601,6 +9828,7 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
         raise HTTPException(status_code=422, detail=f"Estado inválido. Acepta: {ESTADOS}")
     try:
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        _require_sicoe_puede_validar_nivel(autor_id, 2)
         # Verificar nivel1
         def _get():
             return supabase.table("so_registros")\
@@ -9703,6 +9931,7 @@ def validar_nivel3(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
             detail="Se requiere comentario_data cuando el estado es Pendiente o Rechazado.")
     try:
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        _require_sicoe_puede_validar_nivel(autor_id, 3)
         # Verificar nivel2
         def _get():
             return supabase.table("so_registros")\
@@ -11399,6 +11628,7 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
 
     try:
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        _require_sicoe_puede_validar_nivel(autor_id, 2)
         actualizados = 0
         omitidos = 0
 
@@ -11474,6 +11704,7 @@ def validar_masivo_nivel3(contrato_id: int, reporte_id: int, body: ValidarMasivo
             detail="Se requiere comentario_data cuando el estado es Pendiente o Rechazado.")
     try:
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        _require_sicoe_puede_validar_nivel(autor_id, 3)
         actualizados = 0
         omitidos = 0
 
