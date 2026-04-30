@@ -4111,32 +4111,28 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
     _DIMK = ("area_long_nod", "ancho", "espesor")
     toco_dimensiones = any(k in data for k in _DIMK)
     if toco_dimensiones:
-        current = supabase.table("presupuesto").select("area_long_nod, ancho, espesor, vlr_unitario, cant_total").eq("id", item_id).execute().data
-        if current:
-            c = current[0]
+        # prev_row ya tiene select("*") — reutilizar en vez de hacer un segundo SELECT
+        def _dim_merged(k: str) -> float:
+            if k not in data:
+                return float(prev_row.get(k) or 0)
+            v = data.get(k)
+            if v is None:
+                return float(prev_row.get(k) or 0)
+            return float(v or 0)
 
-            def _dim_merged(k: str) -> float:
-                if k not in data:
-                    return float(c.get(k) or 0)
-                v = data.get(k)
-                if v is None:
-                    return float(c.get(k) or 0)
-                return float(v or 0)
-
-            area = _dim_merged("area_long_nod")
-            ancho = _dim_merged("ancho")
-            esp = _dim_merged("espesor")
-            if "vlr_unitario" in data and data.get("vlr_unitario") is not None:
-                vlr = float(data.get("vlr_unitario") or 0)
-            else:
-                vlr = float(c.get("vlr_unitario") or 0)
-            cant = round(area * ancho * esp, 2) if (ancho or esp) else round(area, 2)
-            # Persistir dimensiones y totales de forma coherente (no dejar null que borre columnas)
-            data["area_long_nod"] = area
-            data["ancho"] = ancho
-            data["espesor"] = esp
-            data["cant_total"] = cant
-            data["costo_directo"] = round(cant * vlr, 0)
+        area = _dim_merged("area_long_nod")
+        ancho = _dim_merged("ancho")
+        esp = _dim_merged("espesor")
+        if "vlr_unitario" in data and data.get("vlr_unitario") is not None:
+            vlr = float(data.get("vlr_unitario") or 0)
+        else:
+            vlr = float(prev_row.get("vlr_unitario") or 0)
+        cant = round(area * ancho * esp, 2) if (ancho or esp) else round(area, 2)
+        data["area_long_nod"] = area
+        data["ancho"] = ancho
+        data["espesor"] = esp
+        data["cant_total"] = cant
+        data["costo_directo"] = round(cant * vlr, 0)
     if toco_dimensiones:
         data["calculo_por"] = _calculo_usuario_label(current_user)
         data["calculo_en"] = datetime.now(timezone.utc).isoformat()
@@ -4183,45 +4179,37 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
                 pass
 
     # ── Encolar cambio de layer en CAD si cambió ítem o capítulo ──────────────
+    # prev_row ya tiene todos los campos necesarios — sin SELECT adicional
     if "capitulo" in data or "item" in data:
         try:
-            r = supabase.table("presupuesto").select(
-                "contrato_id, ent_handle, txt_handle, layer_ent, layer_txt, color_hex, competencia, capitulo, item, id_pol"
-            ).eq("id", item_id).execute().data
-            if r:
-                row = r[0]
-                nuevo_cap  = data.get("capitulo") or row.get("capitulo") or ""
-                nuevo_item = data.get("item")     or row.get("item")     or ""
-                comp       = row.get("competencia") or ""
-                cap6       = nuevo_cap.replace(".", "")[:5]
-                new_layer_ent = f"{cap6}_{comp}_{nuevo_item}"
-                new_layer_txt = f"txt_{cap6}_{comp}_{nuevo_item}"
-                old_id_pol = row.get("id_pol") or ""
-                if "._" in old_id_pol:
-                    sufijo = old_id_pol[old_id_pol.index("._"):]
-                else:
-                    sufijo = f"._{item_id}"
-                new_id_pol = f"{nuevo_item}{sufijo}"
-                payload_cad = {
-                    "ent_handle": row.get("ent_handle") or "",
-                    "txt_handle": row.get("txt_handle") or "",
-                    "layer_ent":  new_layer_ent,
-                    "layer_txt":  new_layer_txt,
-                    "color_hex":  row.get("color_hex") or "",
-                    "new_text":   new_id_pol,
-                }
-                supabase.table("cad_queue").insert({
-                    "contrato_id": row["contrato_id"],
-                    "tipo": "cambiar_layer",
-                    "estado": "pendiente",
-                    "payload": payload_cad
-                }).execute()
-                # Actualizar layers en presupuesto también
-                supabase.table("presupuesto").update({
-                    "layer_ent": new_layer_ent,
-                    "layer_txt": new_layer_txt,
-                    "id_pol":    new_id_pol,
-                }).eq("id", item_id).execute()
+            nuevo_cap  = data.get("capitulo") or prev_row.get("capitulo") or ""
+            nuevo_item = data.get("item")     or prev_row.get("item")     or ""
+            comp       = prev_row.get("competencia") or ""
+            cap6       = nuevo_cap.replace(".", "")[:5]
+            new_layer_ent = f"{cap6}_{comp}_{nuevo_item}"
+            new_layer_txt = f"txt_{cap6}_{comp}_{nuevo_item}"
+            old_id_pol = prev_row.get("id_pol") or ""
+            sufijo = old_id_pol[old_id_pol.index("._"):] if "._" in old_id_pol else f"._{item_id}"
+            new_id_pol = f"{nuevo_item}{sufijo}"
+            payload_cad = {
+                "ent_handle": prev_row.get("ent_handle") or "",
+                "txt_handle": prev_row.get("txt_handle") or "",
+                "layer_ent":  new_layer_ent,
+                "layer_txt":  new_layer_txt,
+                "color_hex":  prev_row.get("color_hex") or "",
+                "new_text":   new_id_pol,
+            }
+            supabase.table("cad_queue").insert({
+                "contrato_id": prev_row.get("contrato_id"),
+                "tipo": "cambiar_layer",
+                "estado": "pendiente",
+                "payload": payload_cad,
+            }).execute()
+            supabase.table("presupuesto").update({
+                "layer_ent": new_layer_ent,
+                "layer_txt": new_layer_txt,
+                "id_pol":    new_id_pol,
+            }).eq("id", item_id).execute()
         except: pass
 
     updated = supabase.table("presupuesto").select("*").eq("id", item_id).execute().data
@@ -4589,6 +4577,14 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
     rows = supabase.table("presupuesto").select(
         "id, area_long_nod, ancho, espesor, cant_total, vlr_unitario, ent_handle, txt_handle, layer_ent, layer_txt, color_hex, competencia, id_pol"
     ).in_("id", body.ids).execute().data
+
+    ts          = datetime.now(timezone.utc).isoformat()
+    calculo_por = _calculo_usuario_label(current_user)
+
+    # Paso 1: calcular todos los payloads en memoria (sin tocar la BD)
+    batch_ppto   = []   # para upsert en una sola llamada
+    batch_cad    = []   # para insert en una sola llamada
+
     for r in rows:
         rid = r["id"]
         dim = dims_map.get(rid)
@@ -4602,57 +4598,43 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
             area = float(dim.area_long_nod) if dim.area_long_nod is not None else float(r.get("area_long_nod") or 0)
             ancho = float(dim.ancho) if dim.ancho is not None else float(r.get("ancho") or 0)
             espesor = float(dim.espesor) if dim.espesor is not None else float(r.get("espesor") or 0)
-            if (ancho or espesor):
-                cant = round(area * ancho * espesor, 2)
-            else:
-                cant = round(area, 2)
+            cant = round(area * ancho * espesor, 2) if (ancho or espesor) else round(area, 2)
             costo = round(cant * vlr, 0)
             data = {
-                "area_long_nod": area,
-                "ancho": ancho,
-                "espesor": espesor,
-                "cant_total": cant,
-                "costo_directo": costo,
-                "updated_at": "now()",
-                "calculo_por": _calculo_usuario_label(current_user),
-                "calculo_en": datetime.now(timezone.utc).isoformat(),
+                "area_long_nod": area, "ancho": ancho, "espesor": espesor,
+                "cant_total": cant, "costo_directo": costo,
+                "updated_at": ts, "calculo_por": calculo_por, "calculo_en": ts,
             }
         else:
             ancho   = (dim.ancho   if dim and dim.ancho   is not None else None) or r.get("ancho")   or 1
             espesor = (dim.espesor if dim and dim.espesor is not None else None) or r.get("espesor") or 1
             area    = r.get("area_long_nod") or 0
-            # Recalcular cant_total con las nuevas dimensiones parciales (ancho/esp) si aplica
             if dim and (dim.ancho is not None or dim.espesor is not None):
                 cant = round(float(area) * float(ancho) * float(espesor), 2)
-                data_ancho   = {"ancho": ancho, "espesor": espesor}
+                data_ancho = {"ancho": ancho, "espesor": espesor}
             else:
                 cant = r.get("cant_total") or 0
-                data_ancho   = {}
+                data_ancho = {}
             costo = round(float(cant) * vlr, 0)
             data  = {
-                "cant_total": cant,
-                "costo_directo": costo,
-                "updated_at": "now()",
-                "calculo_por": _calculo_usuario_label(current_user),
-                "calculo_en": datetime.now(timezone.utc).isoformat(),
+                "cant_total": cant, "costo_directo": costo,
+                "updated_at": ts, "calculo_por": calculo_por, "calculo_en": ts,
                 **data_ancho,
             }
         if body.capitulo    is not None: data["capitulo"]    = body.capitulo
         if body.item        is not None: data["item"]        = body.item
         if body.descripcion is not None: data["descripcion"] = body.descripcion
         if body.vlr_unitario is not None: data["vlr_unitario"] = body.vlr_unitario
-        # Reconstruir id_pol si cambia el ítem (usa id_pol ya incluido en el select inicial)
+
         new_id_pol = None
         if body.item is not None:
             old_id_pol = r.get("id_pol") or ""
-            if "._" in old_id_pol:
-                sufijo = old_id_pol[old_id_pol.index("._"):]   # ej: "._1558"
-            else:
-                sufijo = f"._{rid}"
-            new_id_pol = f"{body.item}{sufijo}"   # ej: "8.01._1558"
+            sufijo = old_id_pol[old_id_pol.index("._"):] if "._" in old_id_pol else f"._{rid}"
+            new_id_pol = f"{body.item}{sufijo}"
             data["id_pol"] = new_id_pol
-        supabase.table("presupuesto").update(data).eq("id", rid).execute()
-        # ── Encolar operación CAD si cambió ítem/capítulo ──────────────────
+
+        batch_ppto.append({"id": rid, **data})
+
         if body.capitulo is not None or body.item is not None:
             nuevo_cap  = body.capitulo or ""
             nuevo_item = body.item     or ""
@@ -4661,20 +4643,27 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
             new_layer_ent = f"{cap6}_{comp}_{nuevo_item}"
             new_layer_txt = f"txt_{cap6}_{comp}_{nuevo_item}"
             payload_cad = {
-                "ent_handle":  r.get("ent_handle") or "",
-                "txt_handle":  r.get("txt_handle") or "",
-                "layer_ent":   new_layer_ent,
-                "layer_txt":   new_layer_txt,
-                "color_hex":   r.get("color_hex") or "",
+                "ent_handle": r.get("ent_handle") or "",
+                "txt_handle": r.get("txt_handle") or "",
+                "layer_ent":  new_layer_ent,
+                "layer_txt":  new_layer_txt,
+                "color_hex":  r.get("color_hex") or "",
             }
             if new_id_pol:
                 payload_cad["new_text"] = new_id_pol
-            supabase.table("cad_queue").insert({
+            batch_cad.append({
                 "contrato_id": contrato_id,
                 "tipo": "cambiar_layer",
                 "estado": "pendiente",
-                "payload": payload_cad
-            }).execute()
+                "payload": payload_cad,
+            })
+
+    # Paso 2: persistir en 2 llamadas en vez de N — upsert batch + insert batch CAD
+    if batch_ppto:
+        supabase.table("presupuesto").upsert(batch_ppto, on_conflict="id").execute()
+    if batch_cad:
+        supabase.table("cad_queue").insert(batch_cad).execute()
+
     registrar_log(current_user, "RECALCULAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id),
         {"contrato_id": contrato_id, "cantidad_registros": len(rows),
          "capitulo": body.capitulo, "item": body.item})

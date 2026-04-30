@@ -763,7 +763,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     document.addEventListener('visibilitychange', onVis)
     window.addEventListener('focus', onVis)
-    const iv = setInterval(tick, 3000)
+    const iv = setInterval(tick, 1500)
     return () => {
       document.removeEventListener('visibilitychange', onVis)
       window.removeEventListener('focus', onVis)
