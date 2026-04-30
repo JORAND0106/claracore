@@ -1368,7 +1368,9 @@ def _sicoe_db_nivel_validacion_usuario(user_id: int) -> Optional[int]:
 
 def _require_sicoe_puede_validar_nivel(user_id: int, nivel: int) -> None:
     got = _sicoe_db_nivel_validacion_usuario(user_id)
-    if got != nivel:
+    # Un usuario puede validar en su propio nivel y en cualquier nivel inferior
+    # (interventor nivel 3 puede validar 2 y 3; contratista nivel 2 puede validar 1 y 2)
+    if got is None or got < nivel:
         raise HTTPException(
             status_code=403,
             detail="Tu rol no autoriza validar en este nivel o falta permiso de validación en Reporte de cantidades.",
@@ -4569,10 +4571,12 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
     if not body.ids:
         raise HTTPException(status_code=400, detail="No hay registros seleccionados")
     _reject_if_presupuesto_sellado(supabase, body.ids)
-    if (body.dims or []) and not _es_desarrollador(current_user):
+    # Solo area_long_nod está restringido al Desarrollador (viene del plano CAD)
+    has_area_change = any(d.area_long_nod is not None for d in (body.dims or []))
+    if has_area_change and not _es_desarrollador(current_user):
         raise HTTPException(
             status_code=403,
-            detail="Solo el cargo Desarrollador puede modificar dimensiones en lote (presupuesto).",
+            detail="Solo el cargo Desarrollador puede modificar el campo Área/Long/Nodo (viene del plano CAD).",
         )
     dims_map = {d.id: d for d in (body.dims or [])}
     # Traer también handles, layers e id_pol para cad_queue y reconstrucción de id_pol
@@ -4663,16 +4667,12 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
                 "payload": payload_cad,
             })
 
-    # Paso 2: updates en paralelo (ThreadPoolExecutor) + insert batch CAD
-    # NO se usa upsert porque su default_to_null=True pondría NULL en columnas no incluidas
-    def _upd(item):
+    # Paso 2: updates secuenciales (ThreadPoolExecutor agota el pool de conexiones de Supabase)
+    # El optimistic update del frontend hace que la UI sea instantánea de todas formas
+    for item in batch_ppto:
         rid  = item["id"]
         data = {k: v for k, v in item.items() if k != "id"}
         supabase.table("presupuesto").update(data).eq("id", rid).execute()
-
-    if batch_ppto:
-        with ThreadPoolExecutor(max_workers=min(len(batch_ppto), 8)) as ex:
-            list(ex.map(_upd, batch_ppto))
     if batch_cad:
         supabase.table("cad_queue").insert(batch_cad).execute()
 
