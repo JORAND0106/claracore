@@ -1310,12 +1310,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   async function ejecutarRecalcular() {
     const ids = [...seleccionados]
-    const tieneDims = ids.some(id => {
-      const d = editDims[id]
-      return d && (d.ancho != null || d.espesor != null || d.area_long_nod != null)
-    })
-    if (tieneDims && !puedeEditarDimensiones) {
-      alert('Solo el cargo Desarrollador puede guardar cambios de dimensiones en lote.')
+    // Solo area_long_nod está restringido al Desarrollador; ancho/espesor los puede editar cualquier editor
+    const tieneAreaLong = ids.some(id => editDims[id]?.area_long_nod != null)
+    if (tieneAreaLong && !puedeEditarDimensiones) {
+      alert('Solo el cargo Desarrollador puede modificar el campo Área/Long (viene del plano CAD).')
       return
     }
     const tieneItem = !!(editCapitulo || editItem)
@@ -1333,7 +1331,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         id,
         ancho: d.ancho !== '' && d.ancho != null ? parseFloat(d.ancho) : null,
         espesor: d.espesor !== '' && d.espesor != null ? parseFloat(d.espesor) : null,
-        area_long_nod: d.area_long_nod !== '' && d.area_long_nod != null ? parseFloat(d.area_long_nod) : null,
+        // area_long_nod solo si el usuario es Desarrollador
+        area_long_nod: puedeEditarDimensiones && d.area_long_nod !== '' && d.area_long_nod != null ? parseFloat(d.area_long_nod) : null,
       }
     })
     const body = { ids, dims: dims.length > 0 ? dims : null }
