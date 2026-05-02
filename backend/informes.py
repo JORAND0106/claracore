@@ -25,6 +25,7 @@ from mail_smtp import try_send_text_email
 from supabase import create_client as _create_client
 from ccd_conciliacion import (
     _bloque_capitulo_matriz,
+    _nivel_norm_matriz as _norm_estado_n3,
     _orden_titulo_capitulo_obra,
     aggregate_items_conciliacion,
     fetch_registros_acta_todas_sico_obra,
@@ -395,6 +396,64 @@ def _nombre_archivo_cc_sub_001(corte: dict, sub: dict, corte_id: int) -> str:
     return _safe_filename_part(base.replace(".pdf", "")) + ".pdf"
 
 
+def _parse_numero_contrato(numero: str) -> tuple:
+    """Extrae (numero_corto, año) de strings como 'IDU-1551-2017' o 'ICCU-CTO-1614-2025'.
+
+    Regla: el último segmento separado por '-' es el año y el penúltimo es el número.
+    Ejemplos:
+      'IDU-1551-2017'      → ('1551', '2017')
+      'ICCU-CTO-1614-2025' → ('1614', '2025')
+    Si no hay suficientes segmentos devuelve (numero_completo, '').
+    """
+    partes = (numero or "").strip().split("-")
+    if len(partes) >= 2:
+        return partes[-2].strip(), partes[-1].strip()
+    return (numero or "").strip(), ""
+
+
+def _logo_url_pdf_safe(url: str) -> str:
+    """Convierte un data-URL de GIF a PNG (xhtml2pdf no renderiza GIF).
+
+    Para URLs externas (http/https) o data-URLs PNG/JPEG devuelve el valor tal cual.
+    Si la conversión falla, devuelve el URL original y se deja que xhtml2pdf lo intente.
+    """
+    if not url or not url.startswith("data:image/gif;base64,"):
+        return url
+    try:
+        import base64, io
+        from PIL import Image  # Pillow es dependencia de xhtml2pdf
+
+        b64_data = url.split(",", 1)[1]
+        img_bytes = base64.b64decode(b64_data)
+        img = Image.open(io.BytesIO(img_bytes))
+        img = img.convert("RGBA")  # preserva transparencia del GIF
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        png_b64 = base64.b64encode(buf.getvalue()).decode()
+        return f"data:image/png;base64,{png_b64}"
+    except Exception:
+        return url  # fallback silencioso
+
+
+def _html_logo_entidad(logo_url: Optional[str]) -> str:
+    """Recuadro del logo de la entidad para el encabezado del FO-EO-04.
+
+    Si no hay URL muestra un placeholder con borde punteado.
+    Convierte GIF a PNG antes de embeber (limitación de xhtml2pdf).
+    """
+    if not logo_url or not str(logo_url).strip():
+        return (
+            '<div style="border:1px dashed #cbd5e1;min-height:50px;'
+            'text-align:center;padding:6px 4px;font-size:5pt;color:#94a3b8;">'
+            'Logo<br/>entidad</div>'
+        )
+    u = html.escape(_logo_url_pdf_safe(str(logo_url).strip()), quote=True)
+    return (
+        f'<img src="{u}" alt="" '
+        'style="max-width:100%;max-height:44px;display:block;margin:0 auto;object-fit:contain;" />'
+    )
+
+
 def _html_logo_contratista(contrato: dict, compact: bool = False, compact_box_height: str = "") -> str:
     """Logo del contratista (URL en BD). xhtml2pdf intenta cargar la URL; si falla, queda placeholder.
     compact=True: CC-SUB-002; si compact_box_height (p.ej. \"1.28cm\") el logo llena ese rectángulo (object-fit: contain)."""
@@ -409,7 +468,7 @@ def _html_logo_contratista(contrato: dict, compact: bool = False, compact_box_he
             f'<div style="display:table-cell;width:100%;height:{h};vertical-align:middle;text-align:center;'
             f'font-size:{fs};color:#94a3b8;">LOGO</div></div>'
         )
-    u = html.escape(str(url).strip(), quote=True)
+    u = html.escape(_logo_url_pdf_safe(str(url).strip()), quote=True)
     if compact and box:
         return (
             f'<div style="width:100%;height:{box};min-height:{box};box-sizing:border-box;padding:0;margin:0;'
@@ -466,12 +525,18 @@ class CcdEstiloPdfBody(BaseModel):
 class CcdFirmaConfigBody(BaseModel):
     elaboro_nombre: Optional[str] = None
     elaboro_cargo: Optional[str] = None
+    elaboro2_nombre: Optional[str] = None
+    elaboro2_cargo: Optional[str] = None
     reviso_nombre: Optional[str] = None
     reviso_cargo: Optional[str] = None
+    reviso2_nombre: Optional[str] = None
+    reviso2_cargo: Optional[str] = None
     aprobo_nombre: Optional[str] = None
     aprobo_cargo: Optional[str] = None
     elaboro_usuario_id: Optional[int] = None
+    elaboro2_usuario_id: Optional[int] = None
     reviso_usuario_id: Optional[int] = None
+    reviso2_usuario_id: Optional[int] = None
     aprobo_usuario_id: Optional[int] = None
     estilo_pdf: Optional[CcdEstiloPdfBody] = None
 
@@ -614,12 +679,18 @@ def _ccd_config_from_row(r: Dict[str, Any], formato_codigo: str) -> Dict[str, An
     return {
         "elaboro_nombre": str(r.get("elaboro_nombre") or "").strip(),
         "elaboro_cargo": str(r.get("elaboro_cargo") or "").strip(),
+        "elaboro2_nombre": str(r.get("elaboro2_nombre") or "").strip(),
+        "elaboro2_cargo": str(r.get("elaboro2_cargo") or "").strip(),
         "reviso_nombre": str(r.get("reviso_nombre") or "").strip(),
         "reviso_cargo": str(r.get("reviso_cargo") or "").strip(),
+        "reviso2_nombre": str(r.get("reviso2_nombre") or "").strip(),
+        "reviso2_cargo": str(r.get("reviso2_cargo") or "").strip(),
         "aprobo_nombre": str(r.get("aprobo_nombre") or "").strip(),
         "aprobo_cargo": str(r.get("aprobo_cargo") or "").strip(),
         "elaboro_usuario_id": _opt_usuario_id(r.get("elaboro_usuario_id")),
+        "elaboro2_usuario_id": _opt_usuario_id(r.get("elaboro2_usuario_id")),
         "reviso_usuario_id": _opt_usuario_id(r.get("reviso_usuario_id")),
+        "reviso2_usuario_id": _opt_usuario_id(r.get("reviso2_usuario_id")),
         "aprobo_usuario_id": _opt_usuario_id(r.get("aprobo_usuario_id")),
         "estilo_pdf": _merge_estilo_pdf(r.get("estilo_pdf"), formato_codigo),
     }
@@ -628,10 +699,26 @@ def _ccd_config_from_row(r: Dict[str, Any], formato_codigo: str) -> Dict[str, An
 def _ccd_formato_firma_row_get(contrato_id: int, formato_codigo: str) -> Optional[Dict[str, Any]]:
     """Lee fila; reintenta con menos columnas si el esquema aún no tiene aprobo_* o estilo_pdf."""
     selects = (
-        "elaboro_nombre, elaboro_cargo, reviso_nombre, reviso_cargo, aprobo_nombre, aprobo_cargo, estilo_pdf, elaboro_usuario_id, reviso_usuario_id, aprobo_usuario_id",
+        # Completo: incluye elaboro2/reviso2 y todos los _usuario_id
+        (
+            "elaboro_nombre, elaboro_cargo, elaboro2_nombre, elaboro2_cargo,"
+            " reviso_nombre, reviso_cargo, reviso2_nombre, reviso2_cargo,"
+            " aprobo_nombre, aprobo_cargo, estilo_pdf,"
+            " elaboro_usuario_id, elaboro2_usuario_id, reviso_usuario_id, reviso2_usuario_id, aprobo_usuario_id"
+        ),
+        # Sin elaboro2/reviso2
+        (
+            "elaboro_nombre, elaboro_cargo, reviso_nombre, reviso_cargo,"
+            " aprobo_nombre, aprobo_cargo, estilo_pdf,"
+            " elaboro_usuario_id, reviso_usuario_id, aprobo_usuario_id"
+        ),
+        # Sin aprobo
         "elaboro_nombre, elaboro_cargo, reviso_nombre, reviso_cargo, estilo_pdf, elaboro_usuario_id, reviso_usuario_id, aprobo_usuario_id",
+        # Sin _usuario_id de aprobo
         "elaboro_nombre, elaboro_cargo, reviso_nombre, reviso_cargo, estilo_pdf, elaboro_usuario_id, reviso_usuario_id",
+        # Solo nombres básicos + estilo
         "elaboro_nombre, elaboro_cargo, reviso_nombre, reviso_cargo, estilo_pdf",
+        # Mínimo absoluto
         "elaboro_nombre, elaboro_cargo, reviso_nombre, reviso_cargo",
     )
     last_exc: Optional[BaseException] = None
@@ -673,85 +760,57 @@ def _get_ccd_firma_from_contrato_json(contrato_id: int, formato_codigo: str) -> 
             .data
             or []
         )
-        if not rows:
-            return {
-                "elaboro_nombre": "",
-                "elaboro_cargo": "",
-                "reviso_nombre": "",
-                "reviso_cargo": "",
-                "aprobo_nombre": "",
-                "aprobo_cargo": "",
-                "elaboro_usuario_id": None,
-                "reviso_usuario_id": None,
+        _blank = {
+            "elaboro_nombre": "", "elaboro_cargo": "",
+            "elaboro2_nombre": "", "elaboro2_cargo": "",
+            "reviso_nombre": "", "reviso_cargo": "",
+            "reviso2_nombre": "", "reviso2_cargo": "",
+            "aprobo_nombre": "", "aprobo_cargo": "",
+            "elaboro_usuario_id": None, "elaboro2_usuario_id": None,
+            "reviso_usuario_id": None, "reviso2_usuario_id": None,
                 "aprobo_usuario_id": None,
                 "estilo_pdf": _merge_estilo_pdf(None, formato_codigo),
             }
+        if not rows:
+            return dict(_blank)
         raw = rows[0].get("ccd_firma_config")
         if raw is None:
-            return {
-                "elaboro_nombre": "",
-                "elaboro_cargo": "",
-                "reviso_nombre": "",
-                "reviso_cargo": "",
-                "aprobo_nombre": "",
-                "aprobo_cargo": "",
-                "elaboro_usuario_id": None,
-                "reviso_usuario_id": None,
-                "aprobo_usuario_id": None,
-                "estilo_pdf": _merge_estilo_pdf(None, formato_codigo),
-            }
+            return dict(_blank)
         if isinstance(raw, str):
             raw = json.loads(raw)
         if not isinstance(raw, dict):
-            return {
-                "elaboro_nombre": "",
-                "elaboro_cargo": "",
-                "reviso_nombre": "",
-                "reviso_cargo": "",
-                "aprobo_nombre": "",
-                "aprobo_cargo": "",
-                "elaboro_usuario_id": None,
-                "reviso_usuario_id": None,
-                "aprobo_usuario_id": None,
-                "estilo_pdf": _merge_estilo_pdf(None, formato_codigo),
-            }
+            return dict(_blank)
         block = raw.get(formato_codigo)
         if not isinstance(block, dict):
-            return {
-                "elaboro_nombre": "",
-                "elaboro_cargo": "",
-                "reviso_nombre": "",
-                "reviso_cargo": "",
-                "aprobo_nombre": "",
-                "aprobo_cargo": "",
-                "elaboro_usuario_id": None,
-                "reviso_usuario_id": None,
-                "aprobo_usuario_id": None,
-                "estilo_pdf": _merge_estilo_pdf(None, formato_codigo),
-            }
+            return dict(_blank)
         return {
             "elaboro_nombre": str(block.get("elaboro_nombre") or "").strip(),
             "elaboro_cargo": str(block.get("elaboro_cargo") or "").strip(),
+            "elaboro2_nombre": str(block.get("elaboro2_nombre") or "").strip(),
+            "elaboro2_cargo": str(block.get("elaboro2_cargo") or "").strip(),
             "reviso_nombre": str(block.get("reviso_nombre") or "").strip(),
             "reviso_cargo": str(block.get("reviso_cargo") or "").strip(),
+            "reviso2_nombre": str(block.get("reviso2_nombre") or "").strip(),
+            "reviso2_cargo": str(block.get("reviso2_cargo") or "").strip(),
             "aprobo_nombre": str(block.get("aprobo_nombre") or "").strip(),
             "aprobo_cargo": str(block.get("aprobo_cargo") or "").strip(),
             "elaboro_usuario_id": _opt_usuario_id(block.get("elaboro_usuario_id")),
+            "elaboro2_usuario_id": _opt_usuario_id(block.get("elaboro2_usuario_id")),
             "reviso_usuario_id": _opt_usuario_id(block.get("reviso_usuario_id")),
+            "reviso2_usuario_id": _opt_usuario_id(block.get("reviso2_usuario_id")),
             "aprobo_usuario_id": _opt_usuario_id(block.get("aprobo_usuario_id")),
             "estilo_pdf": _merge_estilo_pdf(block.get("estilo_pdf"), formato_codigo),
         }
     except Exception as e:
         _log.warning("ccd_firma_config en contratos no disponible: %s", e)
         return {
-            "elaboro_nombre": "",
-            "elaboro_cargo": "",
-            "reviso_nombre": "",
-            "reviso_cargo": "",
-            "aprobo_nombre": "",
-            "aprobo_cargo": "",
-            "elaboro_usuario_id": None,
-            "reviso_usuario_id": None,
+            "elaboro_nombre": "", "elaboro_cargo": "",
+            "elaboro2_nombre": "", "elaboro2_cargo": "",
+            "reviso_nombre": "", "reviso_cargo": "",
+            "reviso2_nombre": "", "reviso2_cargo": "",
+            "aprobo_nombre": "", "aprobo_cargo": "",
+            "elaboro_usuario_id": None, "elaboro2_usuario_id": None,
+            "reviso_usuario_id": None, "reviso2_usuario_id": None,
             "aprobo_usuario_id": None,
             "estilo_pdf": _merge_estilo_pdf(None, formato_codigo),
         }
@@ -770,16 +829,23 @@ def _get_ccd_firma_config(contrato_id: int, formato_codigo: str) -> Dict[str, An
     if row:
         cfg = _ccd_config_from_row(row, formato_codigo)
         jcfg = _get_ccd_firma_from_contrato_json(contrato_id, formato_codigo)
-        if cfg.get("elaboro_usuario_id") is None and jcfg.get("elaboro_usuario_id") is not None:
-            cfg["elaboro_usuario_id"] = jcfg.get("elaboro_usuario_id")
-        if cfg.get("reviso_usuario_id") is None and jcfg.get("reviso_usuario_id") is not None:
-            cfg["reviso_usuario_id"] = jcfg.get("reviso_usuario_id")
-        if cfg.get("aprobo_usuario_id") is None and jcfg.get("aprobo_usuario_id") is not None:
-            cfg["aprobo_usuario_id"] = jcfg.get("aprobo_usuario_id")
-        if not (cfg.get("aprobo_nombre") or "").strip() and (jcfg.get("aprobo_nombre") or "").strip():
-            cfg["aprobo_nombre"] = jcfg.get("aprobo_nombre") or ""
-        if not (cfg.get("aprobo_cargo") or "").strip() and (jcfg.get("aprobo_cargo") or "").strip():
-            cfg["aprobo_cargo"] = jcfg.get("aprobo_cargo") or ""
+        # El JSON backup se actualiza en cada guardado (fuente de verdad para
+        # nombre/cargo/id). La tabla puede tener datos desactualizados si el
+        # UPDATE falló silenciosamente (columnas faltantes, RLS, etc.).
+        # Regla: JSON gana sobre tabla para todos los campos de firmantes.
+        _CAMPOS_FIRMANTE = (
+            "elaboro_nombre",  "elaboro_cargo",  "elaboro_usuario_id",
+            "elaboro2_nombre", "elaboro2_cargo", "elaboro2_usuario_id",
+            "reviso_nombre",   "reviso_cargo",   "reviso_usuario_id",
+            "reviso2_nombre",  "reviso2_cargo",  "reviso2_usuario_id",
+            "aprobo_nombre",   "aprobo_cargo",   "aprobo_usuario_id",
+        )
+        for _k in _CAMPOS_FIRMANTE:
+            jv = jcfg.get(_k)
+            # JSON tiene dato válido → usarlo (puede ser None/vacío = "borrado")
+            if _k in jcfg:
+                cfg[_k] = jv
+        # estilo_pdf: tabla gana (columna JSONB dedicada), JSON como fallback
         ep = row.get("estilo_pdf")
         if ep in (None, "", {}):
             cfg["estilo_pdf"] = jcfg.get("estilo_pdf") or cfg["estilo_pdf"]
@@ -788,13 +854,22 @@ def _get_ccd_firma_config(contrato_id: int, formato_codigo: str) -> Dict[str, An
 
 
 def _list_firmantes_candidatos_contrato(contrato_id: int) -> List[Dict[str, Any]]:
-    """Usuarios del contrato (principal + usuario_contratos) con cargo para elegir Elaboró/Revisó."""
+    """Usuarios activos del contrato (principal + usuario_contratos) con cargo para elegir Elaboró/Revisó."""
     try:
-        uc = _sb.table("usuario_contratos").select("usuario_id").eq("contrato_id", contrato_id).execute().data or []
+        # IDs desde la tabla de relación many-to-many
+        uc = (
+            _sb.table("usuario_contratos")
+            .select("usuario_id")
+            .eq("contrato_id", contrato_id)
+            .execute()
+            .data
+            or []
+        )
         ids_uc = [r["usuario_id"] for r in uc]
+        # IDs de usuarios cuyo contrato principal es este
         pr = (
             _sb.table("usuarios")
-            .select("id, nombre, apellidos, cargo_id")
+            .select("id")
             .eq("contrato_id", contrato_id)
             .execute()
             .data
@@ -804,16 +879,19 @@ def _list_firmantes_candidatos_contrato(contrato_id: int) -> List[Dict[str, Any]
         todos_ids = list(dict.fromkeys(ids_uc + ids_principal))
         if not todos_ids:
             return []
+        # Recuperar datos; campo activo = True/False (no "estado")
         rows = (
             _sb.table("usuarios")
-            .select("id, nombre, apellidos, cargo_id, estado")
+            .select("id, nombre, apellidos, cargo_id, activo")
             .in_("id", todos_ids)
             .execute()
             .data
             or []
         )
-        rows_ap = [r for r in rows if (r.get("estado") or "").lower() == "aprobado"]
-        rows = rows_ap if rows_ap else rows
+        # Preferir solo activos; si ninguno lo es, mostrar todos
+        rows_activos = [r for r in rows if r.get("activo") is True]
+        rows = rows_activos if rows_activos else rows
+        # Mapa cargo_id → nombre de cargo
         carg_rows = _sb.table("cargos").select("id, nombre").execute().data or []
         cmap = {c["id"]: (c.get("nombre") or "").strip() for c in carg_rows}
         out: List[Dict[str, Any]] = []
@@ -839,12 +917,18 @@ def _upsert_ccd_firma_in_contrato_json(contrato_id: int, formato_codigo: str, bo
     patch = {
         "elaboro_nombre": (body.elaboro_nombre or "").strip() or None,
         "elaboro_cargo": (body.elaboro_cargo or "").strip() or None,
+        "elaboro2_nombre": (body.elaboro2_nombre or "").strip() or None,
+        "elaboro2_cargo": (body.elaboro2_cargo or "").strip() or None,
         "reviso_nombre": (body.reviso_nombre or "").strip() or None,
         "reviso_cargo": (body.reviso_cargo or "").strip() or None,
+        "reviso2_nombre": (body.reviso2_nombre or "").strip() or None,
+        "reviso2_cargo": (body.reviso2_cargo or "").strip() or None,
         "aprobo_nombre": (body.aprobo_nombre or "").strip() or None,
         "aprobo_cargo": (body.aprobo_cargo or "").strip() or None,
         "elaboro_usuario_id": body.elaboro_usuario_id,
+        "elaboro2_usuario_id": body.elaboro2_usuario_id,
         "reviso_usuario_id": body.reviso_usuario_id,
+        "reviso2_usuario_id": body.reviso2_usuario_id,
         "aprobo_usuario_id": body.aprobo_usuario_id,
         "estilo_pdf": est,
     }
@@ -873,12 +957,18 @@ def _upsert_ccd_firma_config(contrato_id: int, formato_codigo: str, body: CcdFir
         "formato_codigo": formato_codigo,
         "elaboro_nombre": (body.elaboro_nombre or "").strip() or None,
         "elaboro_cargo": (body.elaboro_cargo or "").strip() or None,
+        "elaboro2_nombre": (body.elaboro2_nombre or "").strip() or None,
+        "elaboro2_cargo": (body.elaboro2_cargo or "").strip() or None,
         "reviso_nombre": (body.reviso_nombre or "").strip() or None,
         "reviso_cargo": (body.reviso_cargo or "").strip() or None,
+        "reviso2_nombre": (body.reviso2_nombre or "").strip() or None,
+        "reviso2_cargo": (body.reviso2_cargo or "").strip() or None,
         "aprobo_nombre": (body.aprobo_nombre or "").strip() or None,
         "aprobo_cargo": (body.aprobo_cargo or "").strip() or None,
         "elaboro_usuario_id": body.elaboro_usuario_id,
+        "elaboro2_usuario_id": body.elaboro2_usuario_id,
         "reviso_usuario_id": body.reviso_usuario_id,
+        "reviso2_usuario_id": body.reviso2_usuario_id,
         "aprobo_usuario_id": body.aprobo_usuario_id,
         "estilo_pdf": est,
     }
@@ -901,9 +991,15 @@ def _upsert_ccd_firma_config(contrato_id: int, formato_codigo: str, body: CcdFir
         def _do_write(rw: Dict[str, Any]) -> None:
             if ex:
                 upd = {k: v for k, v in rw.items() if k not in ("contrato_id", "formato_codigo")}
-                _sb.table("ccd_formato_firma").update(upd).eq("id", ex[0]["id"]).execute()
+                res = _sb.table("ccd_formato_firma").update(upd).eq("id", ex[0]["id"]).execute()
+                if hasattr(res, "error") and res.error:
+                    raise Exception(f"Supabase update error: {res.error}")
+                # Nota: res.data == [] puede ocurrir en supabase-py v2 incluso en UPDATEs exitosos
+                # (depende del header Prefer/RETURNING). No tratarlo como fallo.
             else:
-                _sb.table("ccd_formato_firma").insert(rw).execute()
+                res = _sb.table("ccd_formato_firma").insert(rw).execute()
+                if hasattr(res, "error") and res.error:
+                    raise Exception(f"Supabase insert error: {res.error}")
 
         def _missing_schema_err(exc: BaseException) -> bool:
             et = _err_txt(exc)
@@ -920,21 +1016,32 @@ def _upsert_ccd_firma_config(contrato_id: int, formato_codigo: str, body: CcdFir
             )
 
         _RM_APROBO = ("aprobo_nombre", "aprobo_cargo", "aprobo_usuario_id")
-        _RM_UIDS = ("elaboro_usuario_id", "reviso_usuario_id", "aprobo_usuario_id")
+        _RM_UIDS = ("elaboro_usuario_id", "reviso_usuario_id", "aprobo_usuario_id",
+                    "elaboro2_usuario_id", "reviso2_usuario_id")
+        _RM_ELABORO2_REVISO2 = (
+            "elaboro2_nombre", "elaboro2_cargo", "elaboro2_usuario_id",
+            "reviso2_nombre", "reviso2_cargo", "reviso2_usuario_id",
+        )
         _RM_ESTILO = ("estilo_pdf",)
 
         try:
             _do_write(row_write)
+            # Siempre sincronizar el JSON backup (fuente de verdad para lectura).
+            _upsert_ccd_firma_in_contrato_json(contrato_id, formato_codigo, body)
         except Exception as e2:
             if not _missing_schema_err(e2):
                 raise
             last_strip_exc: Optional[BaseException] = e2
             wrote = False
             for rm in (
+                _RM_ELABORO2_REVISO2,
                 _RM_APROBO,
+                tuple(set(_RM_ELABORO2_REVISO2) | set(_RM_APROBO)),
                 _RM_UIDS,
                 tuple(set(_RM_APROBO) | set(_RM_UIDS)),
+                tuple(set(_RM_ELABORO2_REVISO2) | set(_RM_APROBO) | set(_RM_UIDS)),
                 tuple(set(_RM_APROBO) | set(_RM_UIDS) | set(_RM_ESTILO)),
+                tuple(set(_RM_ELABORO2_REVISO2) | set(_RM_APROBO) | set(_RM_UIDS) | set(_RM_ESTILO)),
             ):
                 rm_set = set(rm)
                 rw = {k: v for k, v in row_write.items() if k not in rm_set}
@@ -1341,7 +1448,9 @@ def ccd_put_config_firma(
     _perm_informes_ccd(current_user, "editar")
     if formato_codigo not in FORMATOS_CCD:
         raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
-    return _upsert_ccd_firma_config(contrato_id, formato_codigo, body)
+    _upsert_ccd_firma_config(contrato_id, formato_codigo, body)
+    # Devuelve el config tal como quedó en BD (permite al frontend detectar fallos silenciosos)
+    return _get_ccd_firma_config(contrato_id, formato_codigo)
 
 
 def _corte_pertenece_contrato(contrato_id: int, corte_id: int) -> bool:
@@ -1407,6 +1516,158 @@ def _ccd_enviar_correo_confirmacion_firma(
         _log.warning("CCD firma: no se pudo enviar correo de confirmación a %s", email)
 
 
+# ── Snapshot inmutable de firmantes por documento ─────────────────────────────
+
+def _snapshot_key_corte(contrato_id: int, formato_codigo: str, corte_id: int) -> Optional[Dict[str, Any]]:
+    """Lee el snapshot guardado para un corte, o None si no existe."""
+    try:
+        rows = (
+            _sb.table("ccd_documento_firma_snapshot")
+            .select("*")
+            .eq("contrato_id", contrato_id)
+            .eq("formato_codigo", formato_codigo)
+            .eq("corte_id", corte_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return rows[0] if rows else None
+    except Exception as e:
+        _log.debug("ccd_documento_firma_snapshot (corte) get: %s", e)
+        return None
+
+
+def _snapshot_key_contexto(
+    contrato_id: int, formato_codigo: str, contexto_tipo: str, contexto_id: int
+) -> Optional[Dict[str, Any]]:
+    """Lee el snapshot guardado para un documento de contexto (semana/acta_rpo), o None."""
+    try:
+        rows = (
+            _sb.table("ccd_documento_firma_snapshot")
+            .select("*")
+            .eq("contrato_id", contrato_id)
+            .eq("formato_codigo", formato_codigo)
+            .eq("contexto_tipo", contexto_tipo)
+            .eq("contexto_id", contexto_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        return rows[0] if rows else None
+    except Exception as e:
+        _log.debug("ccd_documento_firma_snapshot (contexto) get: %s", e)
+        return None
+
+
+def _snapshot_to_firma_cfg(snap: Dict[str, Any]) -> Dict[str, Any]:
+    """Convierte un snapshot de tabla en el mismo formato que _get_ccd_firma_config."""
+    return {
+        "elaboro_nombre":      str(snap.get("elaboro_nombre") or "").strip(),
+        "elaboro_cargo":       str(snap.get("elaboro_cargo") or "").strip(),
+        "elaboro_usuario_id":  _opt_usuario_id(snap.get("elaboro_usuario_id")),
+        "elaboro2_nombre":     str(snap.get("elaboro2_nombre") or "").strip(),
+        "elaboro2_cargo":      str(snap.get("elaboro2_cargo") or "").strip(),
+        "elaboro2_usuario_id": _opt_usuario_id(snap.get("elaboro2_usuario_id")),
+        "reviso_nombre":       str(snap.get("reviso_nombre") or "").strip(),
+        "reviso_cargo":        str(snap.get("reviso_cargo") or "").strip(),
+        "reviso_usuario_id":   _opt_usuario_id(snap.get("reviso_usuario_id")),
+        "reviso2_nombre":      str(snap.get("reviso2_nombre") or "").strip(),
+        "reviso2_cargo":       str(snap.get("reviso2_cargo") or "").strip(),
+        "reviso2_usuario_id":  _opt_usuario_id(snap.get("reviso2_usuario_id")),
+        "aprobo_nombre":       str(snap.get("aprobo_nombre") or "").strip(),
+        "aprobo_cargo":        str(snap.get("aprobo_cargo") or "").strip(),
+        "aprobo_usuario_id":   _opt_usuario_id(snap.get("aprobo_usuario_id")),
+    }
+
+
+def _guardar_snapshot_si_no_existe(
+    contrato_id: int,
+    formato_codigo: str,
+    fc: Dict[str, Any],
+    *,
+    corte_id: Optional[int] = None,
+    contexto_tipo: Optional[str] = None,
+    contexto_id: Optional[int] = None,
+) -> None:
+    """
+    Guarda un snapshot del config de firmantes la primera vez que se firma un documento.
+    Si ya existe un snapshot, no hace nada (inmutabilidad garantizada).
+    Silencia cualquier error para no bloquear el flujo principal.
+    """
+    try:
+        # Verificar si ya existe
+        if corte_id is not None:
+            if _snapshot_key_corte(contrato_id, formato_codigo, corte_id):
+                return  # ya hay snapshot → no sobreescribir
+            row = {"corte_id": corte_id}
+        elif contexto_tipo and contexto_id is not None:
+            if _snapshot_key_contexto(contrato_id, formato_codigo, contexto_tipo, contexto_id):
+                return  # ya hay snapshot → no sobreescribir
+            row = {"contexto_tipo": contexto_tipo, "contexto_id": contexto_id}
+        else:
+            return
+
+        row.update({
+            "contrato_id":         contrato_id,
+            "formato_codigo":      formato_codigo,
+            "elaboro_nombre":      fc.get("elaboro_nombre") or None,
+            "elaboro_cargo":       fc.get("elaboro_cargo") or None,
+            "elaboro_usuario_id":  fc.get("elaboro_usuario_id") or None,
+            "elaboro2_nombre":     fc.get("elaboro2_nombre") or None,
+            "elaboro2_cargo":      fc.get("elaboro2_cargo") or None,
+            "elaboro2_usuario_id": fc.get("elaboro2_usuario_id") or None,
+            "reviso_nombre":       fc.get("reviso_nombre") or None,
+            "reviso_cargo":        fc.get("reviso_cargo") or None,
+            "reviso_usuario_id":   fc.get("reviso_usuario_id") or None,
+            "reviso2_nombre":      fc.get("reviso2_nombre") or None,
+            "reviso2_cargo":       fc.get("reviso2_cargo") or None,
+            "reviso2_usuario_id":  fc.get("reviso2_usuario_id") or None,
+            "aprobo_nombre":       fc.get("aprobo_nombre") or None,
+            "aprobo_cargo":        fc.get("aprobo_cargo") or None,
+            "aprobo_usuario_id":   fc.get("aprobo_usuario_id") or None,
+        })
+        _sb.table("ccd_documento_firma_snapshot").insert(row).execute()
+        _log.info(
+            "ccd_documento_firma_snapshot: snapshot guardado — formato=%s contrato=%s %s",
+            formato_codigo, contrato_id,
+            f"corte={corte_id}" if corte_id else f"{contexto_tipo}={contexto_id}",
+        )
+    except Exception as e:
+        _log.warning("ccd_documento_firma_snapshot: no se pudo guardar snapshot: %s", e)
+
+
+def _get_firma_cfg_para_documento(
+    contrato_id: int,
+    formato_codigo: str,
+    *,
+    corte_id: Optional[int] = None,
+    contexto_tipo: Optional[str] = None,
+    contexto_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Devuelve la configuración de firmantes para un documento:
+    - Si existe snapshot inmutable → lo usa (prioridad absoluta).
+    - Si no existe → usa la biblioteca actual (_get_ccd_firma_config).
+    Así los documentos firmados conservan sus firmantes originales.
+    """
+    snap: Optional[Dict[str, Any]] = None
+    if corte_id is not None:
+        snap = _snapshot_key_corte(contrato_id, formato_codigo, corte_id)
+    elif contexto_tipo and contexto_id is not None:
+        snap = _snapshot_key_contexto(contrato_id, formato_codigo, contexto_tipo, contexto_id)
+
+    if snap:
+        cfg_snap = _snapshot_to_firma_cfg(snap)
+        # Complementar con estilo_pdf y otros campos no-snapshot desde la biblioteca
+        cfg_lib = _get_ccd_firma_config(contrato_id, formato_codigo)
+        cfg_snap["estilo_pdf"] = cfg_lib.get("estilo_pdf", {})
+        return cfg_snap
+
+    return _get_ccd_firma_config(contrato_id, formato_codigo)
+
+
 @router.post("/{contrato_id}/ccd/corte/{corte_id}/registrar-firma/{formato_codigo}")
 def ccd_registrar_firma_corte(
     contrato_id: int,
@@ -1462,6 +1723,8 @@ def ccd_registrar_firma_corte(
                 f"Detalle: {e!s}"
             ),
         ) from e
+    # Snapshot inmutable: guardar config de firmantes al momento de la primera firma.
+    _guardar_snapshot_si_no_existe(contrato_id, formato_codigo, fc, corte_id=corte_id)
     _ccd_enviar_correo_confirmacion_firma(
         current_user, contrato_id, formato_codigo, slot, corte_id=corte_id
     )
@@ -1747,6 +2010,11 @@ def ccd_registrar_firma_contexto(
                 f"Detalle: {e!s}"
             ),
         ) from e
+    # Snapshot inmutable: guardar config de firmantes al momento de la primera firma.
+    _guardar_snapshot_si_no_existe(
+        contrato_id, formato_codigo, fc,
+        contexto_tipo=contexto_tipo, contexto_id=contexto_id,
+    )
     ref = ""
     if contexto_tipo == "semana":
         sm = _row("so_semanas", "numero_semana", id=contexto_id)
@@ -1791,8 +2059,8 @@ def ccd_firmas_registradas_contexto(
         )
     except Exception as e:
         _log.debug("firmas contexto: %s", e)
-        return {"elaboro": None, "reviso": None, "aprobo": None, "tabla_disponible": False}
-    out: Dict[str, Any] = {"elaboro": None, "reviso": None, "aprobo": None, "tabla_disponible": True}
+        return {"elaboro": None, "elaboro2": None, "reviso": None, "reviso2": None, "aprobo": None, "tabla_disponible": False}
+    out: Dict[str, Any] = {"elaboro": None, "elaboro2": None, "reviso": None, "reviso2": None, "aprobo": None, "tabla_disponible": True}
     for r in rows:
         sl = (r.get("slot") or "").strip()
         item = {"usuario_id": r.get("usuario_id"), "created_at": r.get("created_at"), "registrada": True}
@@ -1827,7 +2095,9 @@ def _pdf_bytes_conciliacion_informe_v1(
     u = current_user if isinstance(current_user, dict) else dict(current_user)
     usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
     usuario_cargo = u.get("cargo_nombre", "—") or "—"
-    firma_cfg = _get_ccd_firma_config(contrato_id, formato_codigo)
+    firma_cfg = _get_firma_cfg_para_documento(
+        contrato_id, formato_codigo, contexto_tipo=contexto_tipo, contexto_id=contexto_id
+    )
     fc = firma_cfg or {}
     e_uid = _opt_usuario_id(fc.get("elaboro_usuario_id"))
     r_uid = _opt_usuario_id(fc.get("reviso_usuario_id"))
@@ -3344,7 +3614,7 @@ def _pdf_bytes_informe_gerencia_pareja(
     un = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
     uc = u.get("cargo_nombre", "—") or "—"
     fmtc = CODIGO_FORMATO_CCD_CC_GER_001
-    firma_cfg = _get_ccd_firma_config(contrato_id, fmtc)
+    firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmtc, contexto_tipo="acta_rpo", contexto_id=ap)
     fc2 = firma_cfg or {}
     e_uid2 = _opt_usuario_id(fc2.get("elaboro_usuario_id"))
     r_uid2 = _opt_usuario_id(fc2.get("reviso_usuario_id"))
@@ -3401,7 +3671,7 @@ def _pdf_bytes_informe_gerencia_matriz(
     un = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
     uc = u.get("cargo_nombre", "—") or "—"
     fmtc = CODIGO_FORMATO_CCD_CC_GER_001
-    firma_cfg = _get_ccd_firma_config(contrato_id, fmtc)
+    firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmtc, contexto_tipo="acta_rpo", contexto_id=ap_id)
     fc2 = firma_cfg or {}
     e_uid2 = _opt_usuario_id(fc2.get("elaboro_usuario_id"))
     r_uid2 = _opt_usuario_id(fc2.get("reviso_usuario_id"))
@@ -3447,7 +3717,7 @@ def _generar_pdf_bytes_corte_sub_desde_ctx(
     total_costo = ctx["total_costo"]
     usuario_nombre = ctx["usuario_nombre"]
     usuario_cargo = ctx["usuario_cargo"]
-    firma_cfg = _get_ccd_firma_config(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_001)
+    firma_cfg = _get_firma_cfg_para_documento(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_001, corte_id=corte_id)
     fmt001 = CODIGO_FORMATO_CCD_CC_SUB_001
     e_uid = _opt_usuario_id(firma_cfg.get("elaboro_usuario_id"))
     r_uid = _opt_usuario_id(firma_cfg.get("reviso_usuario_id"))
@@ -3760,36 +4030,29 @@ def _nombre_coincide_firma_cfg(nombre_en_config: str, current_user: Optional[dic
 
 
 def _slot_firma_usuario_en_config(fc: Dict[str, Any], uid: int, current_user: dict) -> Optional[str]:
-    """Elaboró / Revisó / Aprobó según ids guardados o, si faltan, por nombre (prioridad elaboro → reviso → aprobo)."""
-    eid = _opt_usuario_id(fc.get("elaboro_usuario_id"))
-    rid = _opt_usuario_id(fc.get("reviso_usuario_id"))
-    aid = _opt_usuario_id(fc.get("aprobo_usuario_id"))
-    if eid and int(eid) == int(uid):
-        return "elaboro"
-    if rid and int(rid) == int(uid):
-        return "reviso"
-    if aid and int(aid) == int(uid):
-        return "aprobo"
-    en = str(fc.get("elaboro_nombre") or "")
-    rn = str(fc.get("reviso_nombre") or "")
-    an = str(fc.get("aprobo_nombre") or "")
-    m_el = _nombre_coincide_firma_cfg(en, current_user)
-    m_rev = _nombre_coincide_firma_cfg(rn, current_user)
-    m_ap = _nombre_coincide_firma_cfg(an, current_user)
-    if m_el and m_rev and m_ap:
-        return "elaboro"
-    if m_el and m_rev:
-        return "elaboro"
-    if m_el and m_ap:
-        return "elaboro"
-    if m_rev and m_ap:
-        return "reviso"
-    if m_el:
-        return "elaboro"
-    if m_rev:
-        return "reviso"
-    if m_ap:
-        return "aprobo"
+    """Elaboró / Elaboró2 / Revisó / Revisó2 / Aprobó según ids guardados o, si faltan, por nombre."""
+    uid_i = int(uid)
+    slots_id = [
+        ("elaboro",  _opt_usuario_id(fc.get("elaboro_usuario_id"))),
+        ("elaboro2", _opt_usuario_id(fc.get("elaboro2_usuario_id"))),
+        ("reviso",   _opt_usuario_id(fc.get("reviso_usuario_id"))),
+        ("reviso2",  _opt_usuario_id(fc.get("reviso2_usuario_id"))),
+        ("aprobo",   _opt_usuario_id(fc.get("aprobo_usuario_id"))),
+    ]
+    for slot_name, sid in slots_id:
+        if sid and int(sid) == uid_i:
+            return slot_name
+    # Fallback por nombre cuando no hay usuario_id registrado
+    slots_nombre = [
+        ("elaboro",  str(fc.get("elaboro_nombre") or "")),
+        ("elaboro2", str(fc.get("elaboro2_nombre") or "")),
+        ("reviso",   str(fc.get("reviso_nombre") or "")),
+        ("reviso2",  str(fc.get("reviso2_nombre") or "")),
+        ("aprobo",   str(fc.get("aprobo_nombre") or "")),
+    ]
+    for slot_name, nombre in slots_nombre:
+        if _nombre_coincide_firma_cfg(nombre, current_user):
+            return slot_name
     return None
 
 
@@ -3958,7 +4221,7 @@ def pdf_memoria_item(
         registros = ctx["registros"]
         usuario_nombre = ctx["usuario_nombre"]
         usuario_cargo = ctx["usuario_cargo"]
-        firma_cfg = _get_ccd_firma_config(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_002)
+        firma_cfg = _get_firma_cfg_para_documento(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_002, corte_id=corte_id)
         fc = firma_cfg or {}
         fmt002 = CODIGO_FORMATO_CCD_CC_SUB_002
         e_uid = _opt_usuario_id(fc.get("elaboro_usuario_id"))
@@ -4024,7 +4287,7 @@ def pdf_memoria_corte_completo(
                 detail="No hay registros aprobados en este corte para generar memorias",
             )
 
-        firma_cfg = _get_ccd_firma_config(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_002)
+        firma_cfg = _get_firma_cfg_para_documento(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_002, corte_id=corte_id)
         fc = firma_cfg or {}
         fmt002 = CODIGO_FORMATO_CCD_CC_SUB_002
         e_uid = _opt_usuario_id(fc.get("elaboro_usuario_id"))
@@ -4225,7 +4488,7 @@ def pdf_cc_sem_002_semana(
         ],
     }
     fmt = CODIGO_FORMATO_CCD_CC_SEM_002
-    firma_cfg = _get_ccd_firma_config(contrato_id, fmt)
+    firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="semana", contexto_id=semana_id)
     fc = firma_cfg or {}
     e_uid = _opt_usuario_id(fc.get("elaboro_usuario_id"))
     r_uid = _opt_usuario_id(fc.get("reviso_usuario_id"))
@@ -4320,7 +4583,7 @@ def pdf_cc_sem_002_semana_completo(
             ],
         }
         fmt = CODIGO_FORMATO_CCD_CC_SEM_002
-        firma_cfg = _get_ccd_firma_config(contrato_id, fmt)
+        firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="semana", contexto_id=semana_id)
         fc = firma_cfg or {}
         e_uid = _opt_usuario_id(fc.get("elaboro_usuario_id"))
         r_uid = _opt_usuario_id(fc.get("reviso_usuario_id"))
@@ -4444,7 +4707,7 @@ def pdf_cc_mes_002_acta(
         ],
     }
     fmt = CODIGO_FORMATO_CCD_CC_MES_002
-    firma_cfg = _get_ccd_firma_config(contrato_id, fmt)
+    firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="acta_rpo", contexto_id=acta_id)
     fc = firma_cfg or {}
     e_uid = _opt_usuario_id(fc.get("elaboro_usuario_id"))
     r_uid = _opt_usuario_id(fc.get("reviso_usuario_id"))
@@ -4769,7 +5032,7 @@ def pdf_cc_sem_002_semana_con_sello_firma(
         ],
     }
     fmt = CODIGO_FORMATO_CCD_CC_SEM_002
-    firma_cfg = _get_ccd_firma_config(contrato_id, fmt)
+    firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="semana", contexto_id=semana_id)
     fc = firma_cfg or {}
     e_uid = _opt_usuario_id(fc.get("elaboro_usuario_id"))
     r_uid = _opt_usuario_id(fc.get("reviso_usuario_id"))
@@ -4867,7 +5130,7 @@ def pdf_cc_sem_002_semana_completo_con_sello_firma(
             ],
         }
         fmt = CODIGO_FORMATO_CCD_CC_SEM_002
-        firma_cfg = _get_ccd_firma_config(contrato_id, fmt)
+        firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="semana", contexto_id=semana_id)
         fc = firma_cfg or {}
         e_uid = _opt_usuario_id(fc.get("elaboro_usuario_id"))
         r_uid = _opt_usuario_id(fc.get("reviso_usuario_id"))
@@ -4995,7 +5258,7 @@ def pdf_cc_mes_002_acta_con_sello_firma(
         ],
     }
     fmt = CODIGO_FORMATO_CCD_CC_MES_002
-    firma_cfg = _get_ccd_firma_config(contrato_id, fmt)
+    firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="acta_rpo", contexto_id=acta_id)
     fc = firma_cfg or {}
     e_uid = _opt_usuario_id(fc.get("elaboro_usuario_id"))
     r_uid = _opt_usuario_id(fc.get("reviso_usuario_id"))
@@ -5056,7 +5319,7 @@ def excel_memoria_item(
     _perm_informes_ccd(current_user, "exportar")
     try:
         ctx = _contexto_memoria_item(contrato_id, corte_id, item_numero, current_user)
-        firma_cfg = _get_ccd_firma_config(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_002)
+        firma_cfg = _get_firma_cfg_para_documento(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_002, corte_id=corte_id)
         xbytes = _memoria_item_excel_bytes(
             ctx["contrato"],
             ctx["sub"],
@@ -5095,7 +5358,7 @@ def excel_memoria_corte_completo(
                 status_code=404,
                 detail="No hay registros aprobados en este corte para generar memorias",
             )
-        firma_cfg = _get_ccd_firma_config(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_002)
+        firma_cfg = _get_firma_cfg_para_documento(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_002, corte_id=corte_id)
         xbytes = _memoria_corte_completo_excel_bytes(
             contrato_id, corte_id, numeros, current_user, firma_cfg
         )
@@ -5124,7 +5387,7 @@ def excel_corte_subcontratista(
     _perm_informes_ccd(current_user, "exportar")
     try:
         ctx = _contexto_corte_sub(contrato_id, corte_id, current_user)
-        firma_cfg = _get_ccd_firma_config(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_001)
+        firma_cfg = _get_firma_cfg_para_documento(contrato_id, CODIGO_FORMATO_CCD_CC_SUB_001, corte_id=corte_id)
         xbytes = _corte_sub_001_excel_bytes(
             ctx["contrato"],
             ctx["sub"],
@@ -5227,232 +5490,1580 @@ def excel_cc_sem_002_semana_completo(
 
 # ── Preview / desarrollo ───────────────────────────────────────────────────────
 
-def _html_idu_fo_eo_04_v2_plantilla_vacia() -> str:
-    """Plantilla FO-EO-04 V2.0 (IDU): vista previa sin datos de obra — fondo blanco, bordes negros."""
-    bd = "border:1px solid #000"
-    z = "—"
-    obs = (
-        "Las dimensiones de la presente cantidad se soportan en los archivos que surgen de las respectivas "
-        "conciliaciones semanales, realizadas entre contratista e interventoría. Toda esta información se adjunta "
-        "en la entrega mensual para la verificación final del acta de recibo parcial de obra."
-    )
-    logo = (
-        '<span style="font-size:16pt;font-weight:800;letter-spacing:0.5px;color:#0369a1;">i'
-        '<span style="color:#dc2626;font-size:12pt;vertical-align:super;">●</span>'
-        '<span style="color:#0369a1;">du</span></span>'
-    )
-    filas_vacias = 8
-    filas_det = "".join(
-        f'<tr style="height:14px;">'
-        f'<td style="{bd};padding:2px 3px;font-size:6.5pt;">{z}</td>'
-        f'<td style="{bd};padding:2px 3px;font-size:6.5pt;text-align:center;">{z}</td>'
-        f'<td style="{bd};padding:2px 3px;font-size:6.5pt;text-align:center;">{z}</td>'
-        f'<td style="{bd};padding:2px 3px;font-size:6.5pt;text-align:center;">{z}</td>'
-        f'<td style="{bd};padding:2px 3px;font-size:6.5pt;text-align:center;">{z}</td>'
-        f'<td style="{bd};padding:2px 3px;font-size:6.5pt;text-align:right;">{z}</td>'
-        f"</tr>"
-        for _ in range(filas_vacias)
-    )
-    tot_rows = [
+def _orden_item_numero(num: str) -> tuple:
+    """Sort key natural para números de ítem: NP-001 < NP-010, 1.01 < 1.10 < 2.01."""
+    parts = re.split(r"(\d+)", (num or "").strip().upper())
+    return tuple(int(p) if p.isdigit() else p for p in parts)
+
+
+def _fetch_foto_grafico_item(
+    contrato_id: int, acta_id: int, item_numero: str, capitulo: str = ""
+) -> dict:
+    """
+    Devuelve dict con {foto_url, foto_numero, grafico_url, grafico_numero} del primer
+    registro que coincida con contrato + acta + ítem + capítulo.
+    """
+    empty = {"foto_url": None, "foto_numero": None, "grafico_url": None, "grafico_numero": None}
+    if not item_numero:
+        return empty
+
+    def _extraer(rows: list) -> dict:
+        foto_url = next(
+            (r.get("foto_url") for r in rows if str(r.get("foto_url") or "").strip()), None
+        )
+        foto_num = next(
+            (r.get("foto_numero") for r in rows if str(r.get("foto_url") or "").strip()), None
+        )
+        graf_url = next(
+            (r.get("grafico_url") for r in rows if str(r.get("grafico_url") or "").strip()), None
+        )
+        graf_num = next(
+            (r.get("grafico_numero") for r in rows if str(r.get("grafico_url") or "").strip()), None
+        )
+        return {"foto_url": foto_url, "foto_numero": foto_num,
+                "grafico_url": graf_url, "grafico_numero": graf_num}
+
+    def _q_registros(q):
+        """Aplica filtros comunes a una query de so_registros."""
+        q = q.eq("item_numero", item_numero)
+        if (capitulo or "").strip():
+            q = q.eq("capitulo", capitulo.strip())
+        return q
+
+    try:
+        sel = "foto_url, foto_numero, grafico_url, grafico_numero"
+
+        # 1. Vía so_reportes.acta_rpo_id → reporte_ids → so_registros (semántica dashboard)
+        if acta_id:
+            rp_batch = (
+                _sb.table("so_reportes")
+                .select("id")
+                .eq("contrato_id", int(contrato_id))
+                .eq("acta_rpo_id", int(acta_id))
+                .limit(1000)
+                .execute()
+                .data or []
+            )
+            reporte_ids = [r["id"] for r in rp_batch if r.get("id")]
+            if reporte_ids:
+                CHUNK = 200
+                rows: list = []
+                for i in range(0, len(reporte_ids), CHUNK):
+                    q = (
+                        _sb.table("so_registros")
+                        .select(sel)
+                        .eq("contrato_id", int(contrato_id))
+                        .in_("reporte_id", reporte_ids[i : i + CHUNK])
+                    )
+                    part = _q_registros(q).limit(200).execute().data or []
+                    rows.extend(part)
+                result = _extraer(rows)
+                if result["foto_url"] or result["grafico_url"]:
+                    _log.info("fetch_foto_grafico via reportes: item=%s cap=%s acta=%s foto=#%s grf=#%s",
+                              item_numero, capitulo, acta_id, result["foto_numero"], result["grafico_numero"])
+                    return result
+
+        # 2. Fallback directo por so_registros.acta_rpo_id
+        if acta_id:
+            q = (
+                _sb.table("so_registros")
+                .select(sel)
+                .eq("contrato_id", int(contrato_id))
+                .eq("acta_rpo_id", int(acta_id))
+            )
+            rows_d = _q_registros(q).limit(100).execute().data or []
+            result = _extraer(rows_d)
+            if result["foto_url"] or result["grafico_url"]:
+                _log.info("fetch_foto_grafico via acta_rpo_id: item=%s cap=%s foto=#%s grf=#%s",
+                          item_numero, capitulo, result["foto_numero"], result["grafico_numero"])
+                return result
+
+        _log.info("fetch_foto_grafico: sin imagen para item=%s cap=%s acta=%s", item_numero, capitulo, acta_id)
+        return empty
+
+    except Exception as exc:
+        _log.warning("fetch_foto_grafico_item ERROR item=%s: %s", item_numero, exc)
+        return empty
+
+
+def _url_a_data_url_pdf(url: Optional[str]) -> Optional[str]:
+    """
+    Descarga una imagen desde una URL y la convierte a data-URL base64 (PDF-safe).
+    Convierte GIF → PNG automáticamente (xhtml2pdf no renderiza GIF).
+    Devuelve None si falla o si la URL está vacía.
+    """
+    if not url or not str(url).strip().startswith("http"):
+        return None
+    try:
+        import base64, io
+        resp = requests.get(url.strip(), timeout=15)
+        resp.raise_for_status()
+        ct = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
+        data = resp.content
+        # Convertir GIF a PNG
+        if ct == "image/gif" or url.lower().endswith(".gif"):
+            from PIL import Image
+            img = Image.open(io.BytesIO(data)).convert("RGBA")
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            data = buf.getvalue()
+            ct = "image/png"
+        b64 = base64.b64encode(data).decode()
+        return f"data:{ct};base64,{b64}"
+    except Exception as exc:
+        _log.warning("_url_a_data_url_pdf ERROR url=%s: %s", (url or "")[:80], exc)
+        return None
+
+
+def _fetch_total_actas_anteriores(
+    contrato_id: int, acta_id: int, item_numero: str, capitulo: str = ""
+) -> float:
+    """
+    Opción A: suma de cantidad_total N3-Aprobado para el capítulo+ítem en todas
+    las actas del contrato con consecutivo < al del acta actual.
+    Fallback: si consecutivo es NULL, compara por id < acta_id.
+    """
+    if not acta_id or not item_numero:
+        return 0.0
+    try:
+        acta_row = (
+            _sb.table("actas")
+            .select("id, consecutivo")
+            .eq("id", int(acta_id))
+            .single()
+            .execute()
+            .data
+            or {}
+        )
+        consec = acta_row.get("consecutivo")
+
+        # Obtener IDs de actas anteriores (mismo contrato, consecutivo menor)
+        if consec is not None:
+            prev_actas = (
+                _sb.table("actas")
+                .select("id")
+                .eq("contrato_id", int(contrato_id))
+                .lt("consecutivo", int(consec))
+                .execute()
+                .data
+                or []
+            )
+        else:
+            prev_actas = (
+                _sb.table("actas")
+                .select("id")
+                .eq("contrato_id", int(contrato_id))
+                .lt("id", int(acta_id))
+                .execute()
+                .data
+                or []
+            )
+
+        prev_ids = [r["id"] for r in prev_actas if r.get("id")]
+        if not prev_ids:
+            return 0.0
+
+        # Sumar cantidad_total filtrando por capítulo + ítem + N3 Aprobado
+        _PAGE = 1000
+        CHUNK = 200
+        total = 0.0
+        cap_strip = (capitulo or "").strip()
+
+        for i in range(0, len(prev_ids), CHUNK):
+            chunk = prev_ids[i : i + CHUNK]
+            off = 0
+            while True:
+                q = (
+                    _sb.table("so_registros")
+                    .select("cantidad_total, nivel3_estado, capitulo")
+                    .eq("contrato_id", int(contrato_id))
+                    .in_("acta_rpo_id", chunk)
+                    .eq("item_numero", item_numero)
+                )
+                if cap_strip:
+                    q = q.eq("capitulo", cap_strip)
+                rows = q.range(off, off + _PAGE - 1).execute().data or []
+                for r in rows:
+                    if _norm_estado_n3(r.get("nivel3_estado")) == "Aprobado":
+                        total += float(r.get("cantidad_total") or 0)
+                if len(rows) < _PAGE:
+                    break
+                off += _PAGE
+
+        _log.info(
+            "fo_eo_04 actas_anteriores: contrato=%s acta=%s item=%s cap=%s prev_actas=%s total=%.3f",
+            contrato_id, acta_id, item_numero, cap_strip, len(prev_ids), total,
+        )
+        return total
+    except Exception as exc:
+        _log.warning("fetch_total_actas_anteriores ERROR item=%s: %s", item_numero, exc)
+        return 0.0
+
+
+def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> dict:
+    """
+    Calcula totales N3-Aprobado de actas anteriores para TODOS los ítems en un solo lote.
+    Reemplaza N llamadas secuenciales a _fetch_total_actas_anteriores por ~3 queries.
+    Returns: dict { (item_numero, capitulo): total_float }
+    """
+    from collections import defaultdict
+    if not items or not acta_id:
+        return {}
+    try:
+        # 1. Consecutivo del acta actual (1 query)
+        acta_row = (
+            _sb.table("actas").select("id, consecutivo")
+            .eq("id", int(acta_id)).single().execute().data or {}
+        )
+        consec = acta_row.get("consecutivo")
+
+        # 2. IDs de actas anteriores (1 query)
+        q_prev = _sb.table("actas").select("id").eq("contrato_id", int(contrato_id))
+        if consec is not None:
+            q_prev = q_prev.lt("consecutivo", int(consec))
+        else:
+            q_prev = q_prev.lt("id", int(acta_id))
+        prev_ids = [r["id"] for r in (q_prev.execute().data or []) if r.get("id")]
+
+        # Resultado vacío pero bien formado para todos los ítems
+        default_result: dict = {
+            ((item.get("item_numero") or "").strip(), (item.get("capitulo") or "").strip()): 0.0
+            for item in items
+        }
+        if not prev_ids:
+            return default_result
+
+        # 3. Fetch so_registros en batch para todos los ítems relevantes
+        items_set = {
+            ((item.get("item_numero") or "").strip(), (item.get("capitulo") or "").strip())
+            for item in items
+        }
+        item_nums = list({k[0] for k in items_set if k[0]})
+        _PAGE = 1000
+        CHUNK = 200
+        totales: dict = defaultdict(float)
+
+        for i in range(0, len(prev_ids), CHUNK):
+            chunk = prev_ids[i: i + CHUNK]
+            off = 0
+            while True:
+                q = (
+                    _sb.table("so_registros")
+                    .select("item_numero, capitulo, cantidad_total, nivel3_estado")
+                    .eq("contrato_id", int(contrato_id))
+                    .in_("acta_rpo_id", chunk)
+                    .in_("item_numero", item_nums)
+                    .range(off, off + _PAGE - 1)
+                )
+                rows = q.execute().data or []
+                for r in rows:
+                    if _norm_estado_n3(r.get("nivel3_estado")) == "Aprobado":
+                        k = (
+                            (r.get("item_numero") or "").strip(),
+                            (r.get("capitulo") or "").strip(),
+                        )
+                        if k in items_set:
+                            totales[k] += float(r.get("cantidad_total") or 0)
+                if len(rows) < _PAGE:
+                    break
+                off += _PAGE
+
+        _log.info(
+            "fo_eo_04 totales_batch: acta=%s prev_actas=%s items=%s",
+            acta_id, len(prev_ids), len(items_set),
+        )
+        # Combinar: ítems con datos + ítems sin registros anteriores (→ 0.0)
+        result = {**default_result, **dict(totales)}
+        return result
+    except Exception as exc:
+        _log.warning("fetch_totales_batch ERROR: %s", exc)
+        return {}
+
+
+def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
+    """
+    Ítems N3-Aprobado del acta, agrupados por semana de aprobación.
+    Optimizado: so_semanas y listado_precios se consultan en paralelo.
+    """
+    from collections import defaultdict
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    if not acta_id:
+        return []
+    try:
+        # 1. Registros del acta (paginado)
+        _PAGE = 1000
+        sel = (
+            "capitulo, item_numero, item_descripcion, unidad, "
+            "nivel3_estado, cantidad_total, semana_id, "
+            "foto_url, foto_numero, grafico_url, grafico_numero"
+        )
+        rows: list = []
+        off = 0
+        for _ in range(200):
+            part = (
+                _sb.table("so_registros")
+                .select(sel)
+                .eq("contrato_id", int(contrato_id))
+                .eq("acta_rpo_id", int(acta_id))
+                .not_.is_("item_numero", "null")
+                .neq("item_numero", "")
+                .range(off, off + _PAGE - 1)
+                .execute()
+                .data
+                or []
+            )
+            rows.extend(part)
+            if len(part) < _PAGE:
+                break
+            off += _PAGE
+        _log.info("fo_eo_04 fetch_items_n3: acta=%s total_rows=%s", acta_id, len(rows))
+
+        # 2. Filtrar N3 aprobado
+        aprobados = [r for r in rows if _norm_estado_n3(r.get("nivel3_estado")) == "Aprobado"]
+        if not aprobados:
+            return []
+
+        # 3. Agrupar por item_numero × semana_id
+        items_sem: dict = defaultdict(lambda: defaultdict(float))
+        items_meta: dict = {}
+        items_foto: dict = {}
+
+        for r in aprobados:
+            num = (r.get("item_numero") or "").strip()
+            if not num:
+                continue
+            sem_id = r.get("semana_id")
+            items_sem[num][sem_id] += float(r.get("cantidad_total") or 0)
+            if num not in items_meta:
+                items_meta[num] = {
+                    "item_numero": num,
+                    "unidad": (r.get("unidad") or "").strip(),
+                    "capitulo": (r.get("capitulo") or "").strip(),
+                    "item_descripcion": (r.get("item_descripcion") or "").strip(),
+                }
+            if num not in items_foto:
+                items_foto[num] = {"foto_url": None, "foto_numero": None,
+                                   "grafico_url": None, "grafico_numero": None}
+            fi = items_foto[num]
+            if not fi["foto_url"] and str(r.get("foto_url") or "").strip():
+                fi["foto_url"] = r["foto_url"]
+                fi["foto_numero"] = r.get("foto_numero")
+            if not fi["grafico_url"] and str(r.get("grafico_url") or "").strip():
+                fi["grafico_url"] = r["grafico_url"]
+                fi["grafico_numero"] = r.get("grafico_numero")
+        _log.info("fo_eo_04 fetch_items_n3: items_unicos=%s", len(items_meta))
+
+        # 4+5. so_semanas y listado_precios EN PARALELO (son independientes)
+        all_sem_ids = list({sid for sems in items_sem.values() for sid in sems if sid})
+        sem_info: dict = {}
+        esp_map: dict = {}
+
+        def _fetch_semanas():
+            if not all_sem_ids:
+                return {}
+            try:
+                s_rows = (
+                    _sb.table("so_semanas")
+                    .select("id, numero_semana, fecha_inicio, fecha_fin")
+                    .in_("id", all_sem_ids)
+                    .execute()
+                    .data or []
+                )
+                return {s["id"]: s for s in s_rows}
+            except Exception as exc:
+                _log.warning("fetch_items_n3: semanas: %s", exc)
+                return {}
+
+        def _fetch_esp():
+            try:
+                lp = (
+                    _sb.table("listado_precios")
+                    .select("item_numero, especificacion_tecnica")
+                    .eq("contrato_id", int(contrato_id))
+                    .execute()
+                    .data or []
+                )
+                return {(r.get("item_numero") or "").strip(): (r.get("especificacion_tecnica") or "") for r in lp}
+            except Exception as exc:
+                _log.warning("fetch_items_n3: listado_precios: %s", exc)
+                return {}
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_sem = pool.submit(_fetch_semanas)
+            f_esp = pool.submit(_fetch_esp)
+            sem_info = f_sem.result()
+            esp_map  = f_esp.result()
+
+        # 6. Construir lista final con semanas ordenadas por numero_semana
+        result: list = []
+        for num, meta in items_meta.items():
+            sem_entries: list = []
+            total_acta = 0.0
+            for sem_id, cantidad in items_sem[num].items():
+                info = sem_info.get(sem_id, {}) if sem_id else {}
+                sem_entries.append({
+                    "numero_semana": info.get("numero_semana"),
+                    "fecha_inicio": (info.get("fecha_inicio") or "")[:10],
+                    "fecha_fin": (info.get("fecha_fin") or "")[:10],
+                    "cantidad": cantidad,
+                })
+                total_acta += cantidad
+            sem_entries.sort(key=lambda s: (s.get("numero_semana") or 0))
+            meta["semanas"] = sem_entries
+            meta["total_acta"] = total_acta
+            meta["especificacion_tecnica"] = esp_map.get(num, "")
+            # Fotos directamente de los registros N3-aprobados del acta
+            fi = items_foto.get(num, {})
+            meta["foto_url"]       = fi.get("foto_url")
+            meta["foto_numero"]    = fi.get("foto_numero")
+            meta["grafico_url"]    = fi.get("grafico_url")
+            meta["grafico_numero"] = fi.get("grafico_numero")
+            _log.info("fo_eo_04 item=%s foto=#%s grf=#%s", num, meta["foto_numero"], meta["grafico_numero"])
+            result.append(meta)
+
+        return sorted(
+            result,
+            key=lambda r: (
+                _orden_titulo_capitulo_obra(r.get("capitulo") or ""),
+                _orden_item_numero(r.get("item_numero") or ""),
+            ),
+        )
+    except Exception as exc:
+        _log.warning("fetch_items_n3_acta ERROR: %s", exc)
+        return []
+
+
+def _combine_html_pages(htmls: list) -> str:
+    """Une múltiples páginas HTML en un solo documento con saltos de página entre ellas."""
+    if not htmls:
+        return ""
+    if len(htmls) == 1:
+        return htmls[0]
+    # Quita el cierre del primer documento
+    base = htmls[0].rstrip()
+    if base.endswith("</body></html>"):
+        base = base[: -len("</body></html>")].rstrip()
+    parts = [base]
+    for page_html in htmls[1:]:
+        # Extrae solo el contenido del body
+        body_start = page_html.find("<body>")
+        body_end = page_html.rfind("</body>")
+        if body_start != -1 and body_end != -1:
+            body_content = page_html[body_start + len("<body>") : body_end].strip()
+        else:
+            body_content = page_html
+        parts.append(
+            '\n<div style="page-break-before:always;height:0;margin:0;padding:0;"></div>\n'
+            + body_content
+        )
+    parts.append("\n</body></html>")
+    return "".join(parts)
+
+
+def _render_items_n3_html(
+    items: list,
+    navy: str,
+    navy_hdr: str,
+    bg_hdr: str,
+    bd: str,
+    z: str,
+) -> str:
+    """
+    Genera HTML para la sección de ítems N3 aprobados del acta.
+
+    Sin ítems → plantilla estática (ÍTEM No / UNIDAD / ESPECIFICACIÓN / CAPÍTULO / DESCRIPCIÓN)
+                con 13 filas vacías.
+    Con ítems → bloque por ítem (encabezado CAPÍTULO + info ítem + tabla de medidas de 5 filas),
+                ordenados por capítulo y número de ítem.
+    """
+    bd_top_none = f"border:1px solid {navy};border-top:none"
+    col_labels = ["UBICACI\u00d3N", "LARGO", "ANCHO", "ALTO", "CANTIDAD", "TOTAL"]
+    col_widths = ["40%", "13%", "13%", "13%", "12%", "9%"]
+    tot_labels = [
         "TOTAL EJECUTADO PRESENTE ACTA",
         "TOTAL EJECUTADO ACTAS ANTERIORES",
         "TOTAL EJECUTADO ACUMULADO",
         "TOTAL POR EJECUTAR",
     ]
-    tot_block = "".join(
-        f'<tr><td colspan="4" style="{bd};padding:3px 4px;font-size:6.5pt;text-align:right;font-weight:bold;">'
-        f"{_h(lbl)}</td>"
-        f'<td colspan="2" style="{bd};padding:3px 4px;font-size:6.5pt;text-align:right;">{z}</td></tr>'
-        for lbl in tot_rows
+
+    def _meas_header() -> str:
+        cells = "".join(
+            f'<td style="{bd};border-top:none;padding:3px 4px;font-size:6.5pt;'
+            f'font-weight:bold;text-align:center;color:{navy_hdr};width:{w};">{lbl}</td>'
+            for lbl, w in zip(col_labels, col_widths)
+        )
+        return (
+            f'<table width="100%" cellspacing="0" cellpadding="0" '
+            f'style="border-collapse:collapse;{bd_top_none};">'
+            f'<tr style="background-color:{bg_hdr};">{cells}</tr>'
+        )
+
+    def _meas_row_empty() -> str:
+        return (
+            f'<tr style="height:15px;">'
+            f'<td style="{bd};padding:2px 4px;font-size:6pt;color:{navy};">{z}</td>'
+            f'<td style="{bd};padding:2px 3px;font-size:6pt;text-align:center;color:{navy};">{z}</td>'
+            f'<td style="{bd};padding:2px 3px;font-size:6pt;text-align:center;color:{navy};">{z}</td>'
+            f'<td style="{bd};padding:2px 3px;font-size:6pt;text-align:center;color:{navy};">{z}</td>'
+            f'<td style="{bd};padding:2px 3px;font-size:6pt;text-align:center;color:{navy};">{z}</td>'
+            f'<td style="{bd};padding:2px 3px;font-size:6pt;text-align:right;color:{navy};">{z}</td>'
+            f'</tr>'
+        )
+
+    def _tot_rows() -> str:
+        return "".join(
+            f'<tr><td colspan="4" style="{bd};padding:3px 5px;font-size:6.5pt;text-align:right;'
+            f'font-weight:bold;color:{navy_hdr};background-color:{bg_hdr};">{_h(lbl)}</td>'
+            f'<td colspan="2" style="{bd};padding:3px 5px;font-size:6.5pt;text-align:right;color:{navy};">{z}</td></tr>'
+            for lbl in tot_labels
+        )
+
+    def _meas_table(n_filas: int) -> str:
+        return _meas_header() + _meas_row_empty() * n_filas + _tot_rows() + "</table>"
+
+    # ── Plantilla vacía (sin ítems) ──────────────────────────────────────────
+    if not items:
+        return (
+            f'<table width="100%" cellspacing="0" cellpadding="0" '
+            f'style="border-collapse:collapse;{bd_top_none};">'
+            # Fila 1: ÍTEM No | UNIDAD | ESPECIFICACIÓN TÉCNICA
+            f'<tr>'
+            f'<td style="border-right:1px solid {navy};width:20%;padding:4px 7px;vertical-align:top;">'
+            f'<div style="font-weight:bold;font-size:6pt;color:{navy_hdr};">&#205;TEM No</div>'
+            f'<div style="min-height:14px;border-bottom:1px solid {navy};">&nbsp;</div>'
+            f'</td>'
+            f'<td style="border-right:1px solid {navy};width:12%;padding:4px 7px;vertical-align:top;">'
+            f'<div style="font-weight:bold;font-size:6pt;color:{navy_hdr};">UNIDAD</div>'
+            f'<div style="min-height:14px;border-bottom:1px solid {navy};">&nbsp;</div>'
+            f'</td>'
+            f'<td style="width:68%;padding:4px 7px;vertical-align:top;">'
+            f'<div style="font-weight:bold;font-size:6pt;color:{navy_hdr};">ESPECIFICACI&#211;N T&#201;CNICA</div>'
+            f'<div style="min-height:14px;border-bottom:1px solid {navy};">&nbsp;</div>'
+            f'</td>'
+            f'</tr>'
+            # Fila 2: CAPÍTULO (debajo de ESPECIFICACIÓN TÉCNICA, sin línea separadora)
+            f'<tr>'
+            f'<td colspan="3" style="border-top:1px solid {navy};padding:4px 7px;">'
+            f'<div style="font-weight:bold;font-size:6pt;color:{navy_hdr};">CAP&#205;TULO</div>'
+            f'<div style="min-height:14px;border-bottom:1px solid {navy};">&nbsp;</div>'
+            f'</td>'
+            f'</tr>'
+            # Fila 3: DESCRIPCIÓN (sin línea separadora desde CAPÍTULO)
+            f'<tr>'
+            f'<td colspan="3" style="border-top:1px solid {navy};padding:4px 7px;">'
+            f'<div style="font-weight:bold;font-size:6pt;color:{navy_hdr};">DESCRIPCI&#211;N DEL &#205;TEM</div>'
+            f'<div style="min-height:15px;">&nbsp;</div>'
+            f'</td>'
+            f'</tr>'
+            f'</table>'
+            + _meas_table(13)
+        )
+
+    # ── Ítems reales: un bloque por ítem, agrupados por capítulo ─────────────
+    parts: list = []
+    current_cap: Optional[str] = None
+
+    for item in items:
+        cap = (item.get("capitulo") or "Sin cap\u00edtulo").strip()
+        item_num = _h(item.get("item_numero") or "")
+        unidad = _h(item.get("unidad") or "")
+        descripcion = _h(item.get("item_descripcion") or "")
+
+        # Encabezado de capítulo cuando cambia
+        if cap != current_cap:
+            current_cap = cap
+            parts.append(
+                f'<table width="100%" cellspacing="0" cellpadding="0" '
+                f'style="border-collapse:collapse;{bd_top_none};">'
+                f'<tr style="background-color:{bg_hdr};">'
+                f'<td style="padding:3px 8px;font-weight:bold;font-size:7pt;color:{navy_hdr};">'
+                f'CAP&#205;TULO: {_h(cap)}'
+                f'</td></tr></table>'
+            )
+
+        # Info del ítem: ÍTEM No | UNIDAD | DESCRIPCIÓN
+        parts.append(
+            f'<table width="100%" cellspacing="0" cellpadding="0" '
+            f'style="border-collapse:collapse;{bd_top_none};">'
+            f'<tr>'
+            f'<td style="border-right:1px solid {navy};width:20%;padding:4px 7px;vertical-align:top;">'
+            f'<div style="font-weight:bold;font-size:6pt;color:{navy_hdr};">&#205;TEM No</div>'
+            f'<div style="font-size:8pt;font-weight:bold;color:{navy_hdr};">{item_num}</div>'
+            f'</td>'
+            f'<td style="border-right:1px solid {navy};width:12%;padding:4px 7px;vertical-align:top;">'
+            f'<div style="font-weight:bold;font-size:6pt;color:{navy_hdr};">UNIDAD</div>'
+            f'<div style="font-size:8pt;color:{navy_hdr};">{unidad}</div>'
+            f'</td>'
+            f'<td style="width:68%;padding:4px 7px;vertical-align:top;">'
+            f'<div style="font-weight:bold;font-size:6pt;color:{navy_hdr};">DESCRIPCI&#211;N DEL &#205;TEM</div>'
+            f'<div style="font-size:7pt;color:{navy_hdr};">{descripcion}</div>'
+            f'</td>'
+            f'</tr>'
+            f'</table>'
+        )
+
+        # Tabla de medidas (5 filas vacías por ítem)
+        parts.append(_meas_table(5))
+
+    return "".join(parts)
+
+
+def _html_fo_eo_04_firmas_4(
+    navy: str,
+    navy_hdr: str,
+    bd: str,
+    elaboro_nombre: str,
+    elaboro_cargo: str,
+    elaboro2_nombre: str,
+    elaboro2_cargo: str,
+    reviso_nombre: str,
+    reviso_cargo: str,
+    reviso2_nombre: str,
+    reviso2_cargo: str,
+) -> str:
+    """Bloque de firmas: col izquierda = Elaboró (1 arriba, 2 abajo); col derecha = Revisó (1 arriba, 2 abajo)."""
+    import html as _html_mod
+
+    def _fila_firma(nombre: str, cargo: str, borde_top: bool = False) -> str:
+        nombre_h = _html_mod.escape(nombre) if nombre else "&nbsp;"
+        cargo_h  = _html_mod.escape(cargo) if cargo else "&nbsp;"
+        bt = f"border-top:1px solid {navy};" if borde_top else ""
+        return f"""<tr>
+<td style="vertical-align:top;{bt}padding:7px 10px;">
+  <div style="font-size:8pt;color:#64748b;margin-bottom:4px;">Firma Aux.</div>
+  <div style="min-height:30px;border-bottom:1px solid {navy};margin-bottom:5px;">&nbsp;</div>
+  <div style="font-size:8.5pt;font-weight:bold;color:{navy};text-align:center;border-bottom:1px solid {navy};padding:2px 0;margin-bottom:2px;">{nombre_h}</div>
+  <div style="font-size:8pt;color:#475569;text-align:center;">{cargo_h}</div>
+</td>
+</tr>"""
+
+    def _columna(titulo: str, n1: str, c1: str, n2: str, c2: str) -> str:
+        return f"""<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+<tr>
+<td style="font-weight:bold;text-align:center;font-size:8.5pt;padding:4px 6px;
+           background-color:#dce8f0;color:{navy_hdr};
+           border-bottom:1px solid {navy};">{titulo}</td>
+</tr>
+{_fila_firma(n1, c1, borde_top=False)}
+{_fila_firma(n2, c2, borde_top=True)}
+</table>"""
+
+    elab_col  = _columna("ELABOR\u00d3", elaboro_nombre, elaboro_cargo, elaboro2_nombre, elaboro2_cargo)
+    revis_col = _columna("REVIS\u00d3",  reviso_nombre,  reviso_cargo,  reviso2_nombre,  reviso2_cargo)
+
+    return f"""<table width="100%" cellspacing="0" cellpadding="0"
+       style="border-collapse:collapse;margin-top:8px;{bd};">
+<tr>
+<td width="50%" style="vertical-align:top;{bd};padding:0;">
+{elab_col}
+</td>
+<td width="50%" style="vertical-align:top;{bd};padding:0;border-left:none;">
+{revis_col}
+</td>
+</tr>
+</table>"""
+
+
+def _html_idu_fo_eo_04_v2_plantilla_vacia(
+    logo_entidad: Optional[str] = None,
+    entidad: str = "IDU",
+    subsistema: str = "vial",
+    num_contrato: str = "",
+    año_contrato: str = "",
+    objeto_contrato: str = "",
+    num_acta: str = "",
+    fecha_desde: str = "",
+    fecha_hasta: str = "",
+    # Partes firmantes (del contrato / admin)
+    contratista: str = "",
+    interventoria: str = "",
+    supervisor: str = "",
+    # Elaboró / Revisó (Biblioteca CCD – 2 por sección)
+    elaboro_nombre: str = "",
+    elaboro_cargo: str = "",
+    elaboro2_nombre: str = "",
+    elaboro2_cargo: str = "",
+    reviso_nombre: str = "",
+    reviso_cargo: str = "",
+    reviso2_nombre: str = "",
+    reviso2_cargo: str = "",
+    # Datos específicos del ítem (vacíos = plantilla en blanco)
+    item_numero: str = "",
+    item_unidad: str = "",
+    item_especificacion: str = "",
+    item_capitulo: str = "",
+    item_descripcion: str = "",
+    # Filas semanales: lista de {numero_semana, fecha_inicio, fecha_fin, cantidad}
+    semanas_item: Optional[list] = None,
+    # Totales de actas anteriores (Opción A: actas con consecutivo < actual)
+    total_actas_anteriores: Optional[float] = None,
+    # Imágenes del ítem (URL directa de Cloudinary)
+    foto_url: Optional[str] = None,
+    foto_numero: Optional[int] = None,
+    grafico_url: Optional[str] = None,
+    grafico_numero: Optional[int] = None,
+) -> str:
+    """Plantilla FO-EO-04 V2.0: vista previa sin datos de obra.
+
+    Estructura y proporciones extraídas del SVG original (A3 portrait, 841.96×1201.02 pt).
+    Colores: navy=#102a42 (texto), navy_hdr=#192739 (encabezados), bg_hdr=#dce8f0 (fondo filas cabecera).
+    Columnas: UBICACIÓN 40% · LARGO 13% · ANCHO 13% · ALTO 13% · CANTIDAD 12% · TOTAL 9%.
+    Filas de datos: 13 (coincide con el formulario original IDU).
+
+    entidad:   'IDU' | 'ICCU' | 'ENEL' | 'EAB' | cualquier nombre — determina la sección institucional.
+    subsistema: 'vial' | 'transporte' — solo aplica cuando entidad == 'IDU'.
+    """
+    # Paleta de colores extraída del SVG original
+    navy = "#102a42"        # texto principal de filas
+    navy_hdr = "#192739"    # texto de encabezados y etiquetas clave
+    bg_hdr = "#dce8f0"      # fondo suave azul-marino para filas de cabecera (≈ rgba(28,55,90,0.16) sobre blanco)
+    bd = f"border:1px solid {navy}"
+    z = "\u2014"  # em dash como valor vacío
+
+    obs = (
+        "Las dimensiones de la presente cantidad se soportan en los archivos que surgen de las respectivas "
+        "conciliaciones semanales, realizadas entre contratista e interventoría. Toda esta información se adjunta "
+        "en la entrega mensual para la verificación final del acta de recibo parcial de obra."
     )
+
+    # Logo de la entidad desde el contrato (admite PNG, JPEG, WebP y GIF)
+    logo_entidad_html = _html_logo_entidad(logo_entidad)
+
+    # ── Sección institucional debajo del encabezado ──────────────────────────
+    _lbl_inst = (
+        f'font-size:6.5pt;font-weight:bold;color:{navy_hdr};text-transform:uppercase;'
+    )
+    entidad_upper = (entidad or "IDU").strip().upper()
+
+    if entidad_upper == "IDU":
+        _sub_txt = (
+            "DE EJECUCI&#211;N DEL SUBSISTEMA VIAL"
+            if subsistema == "vial"
+            else "DE EJECUCI&#211;N DEL SUBSISTEMA DE TRANSPORTE"
+        )
+        seccion_institucional = (
+            # TD exterior: borde izq/der/top pero SIN borde inferior (el siguiente bloque lo provee)
+            f'<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">'
+            f'<tr><td style="border:1px solid {navy};border-top:none;border-bottom:none;padding:0;">'
+            # Fila 1: Subdirección General (div, sin borde)
+            f'<div style="text-align:center;padding:3px 8px;{_lbl_inst}">'
+            f'SUBDIRECCI&#211;N GENERAL DE INFRAESTRUCTURA'
+            f'</div>'
+            # Fila 2: Dirección + Subdirección (tabla interna sin bordes)
+            f'<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">'
+            f'<tr>'
+            f'<td style="width:38%;padding:3px 7px;{_lbl_inst}">DIRECCI&#211;N T&#201;CNICA DE CONSTRUCCIONES</td>'
+            f'<td style="width:62%;padding:3px 7px;{_lbl_inst}">SUBDIRECCI&#211;N T&#201;CNICA &nbsp; {_sub_txt}</td>'
+            f'</tr>'
+            f'</table>'
+            f'</td></tr>'
+            f'</table>'
+        )
+    elif entidad_upper == "ICCU":
+        seccion_institucional = (
+            f'<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">'
+            f'<tr><td style="border:1px solid {navy};border-top:none;border-bottom:none;text-align:center;padding:3px 8px;{_lbl_inst}">'
+            f'INSTITUTO DE CAMINOS Y CONSTRUCCIONES DE CUNDINAMARCA'
+            f'</td></tr></table>'
+        )
+    else:
+        seccion_institucional = (
+            f'<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">'
+            f'<tr><td style="border:1px solid {navy};border-top:none;border-bottom:none;text-align:center;padding:3px 8px;{_lbl_inst}">'
+            f'{_h(entidad)}'
+            f'</td></tr></table>'
+        )
+
+    def _fmt_fecha(iso: str) -> str:
+        """'2024-03-11' → '11/03/2024'"""
+        if not iso or len(iso) < 10:
+            return iso or ""
+        try:
+            y, m, d = iso[:10].split("-")
+            return f"{d}/{m}/{y}"
+        except Exception:
+            return iso
+
+    def _fmt_cant(v) -> str:
+        """Formato numérico con 3 decimales (punto miles, coma decimal)."""
+        try:
+            n = float(v)
+            formatted = f"{n:,.3f}"
+            return formatted.replace(",", "X").replace(".", ",").replace("X", ".")
+        except Exception:
+            return z
+
+    # ── Estilos de la grilla: líneas muy sutiles punteadas ──────────────────
+    # Color muy suave para que las líneas sean casi imperceptibles
+    bd_row = "border:1px dotted #aec6d4"
+    # Tamaño de fuente de datos: +2pt respecto al diseño base (6pt → 8pt)
+    fs_data = "8pt"
+    fs_hdr_grid = "8.5pt"
+    # Siempre 10 filas visibles en la grilla
+    TOTAL_FILAS = 10
+
+    # ── Filas de datos: una por semana N3 + vacías hasta completar 10 ───────
+    if semanas_item:
+        data_rows: list = []
+        for s in semanas_item:
+            num_sem = s.get("numero_semana")
+            fi = _fmt_fecha(s.get("fecha_inicio", ""))
+            ff = _fmt_fecha(s.get("fecha_fin", ""))
+            periodo = f"{fi} - {ff}" if (fi or ff) else z
+            ubicacion = f"Semana {num_sem} \u00b7 {periodo}" if num_sem else f"Semana {z} \u00b7 {periodo}"
+            cant_fmt = _fmt_cant(s.get("cantidad"))
+            data_rows.append((ubicacion, cant_fmt))
+        total_acta_fmt = _fmt_cant(sum(s.get("cantidad", 0) for s in semanas_item))
+    else:
+        data_rows = []
+        total_acta_fmt = z
+
+    _vm = "vertical-align:middle;"
+    filas_det = ""
+    for i in range(TOTAL_FILAS):
+        if i < len(data_rows):
+            ubicacion, cant_fmt = data_rows[i]
+            filas_det += (
+                f'<tr style="height:22px;">'
+                f'<td style="{bd_row};padding:3px 5px;font-size:{fs_data};color:{navy};{_vm}">{_h(ubicacion)}</td>'
+                f'<td style="{bd_row};padding:3px 3px;font-size:{fs_data};text-align:center;color:{navy};{_vm}">{z}</td>'
+                f'<td style="{bd_row};padding:3px 3px;font-size:{fs_data};text-align:center;color:{navy};{_vm}">{z}</td>'
+                f'<td style="{bd_row};padding:3px 3px;font-size:{fs_data};text-align:center;color:{navy};{_vm}">{z}</td>'
+                f'<td style="{bd_row};padding:3px 3px;font-size:{fs_data};text-align:center;color:{navy};{_vm}">{z}</td>'
+                f'<td style="{bd_row};padding:3px 3px;font-size:{fs_data};text-align:center;font-weight:bold;color:{navy};{_vm}">{cant_fmt}</td>'
+                f'</tr>'
+            )
+        else:
+            filas_det += (
+                f'<tr style="height:22px;">'
+                f'<td style="{bd_row};padding:3px 4px;font-size:{fs_data};color:{navy};{_vm}">&nbsp;</td>'
+                f'<td style="{bd_row};padding:3px 3px;font-size:{fs_data};text-align:center;color:{navy};{_vm}">&nbsp;</td>'
+                f'<td style="{bd_row};padding:3px 3px;font-size:{fs_data};text-align:center;color:{navy};{_vm}">&nbsp;</td>'
+                f'<td style="{bd_row};padding:3px 3px;font-size:{fs_data};text-align:center;color:{navy};{_vm}">&nbsp;</td>'
+                f'<td style="{bd_row};padding:3px 3px;font-size:{fs_data};text-align:center;color:{navy};{_vm}">&nbsp;</td>'
+                f'<td style="{bd_row};padding:3px 3px;font-size:{fs_data};text-align:center;color:{navy};{_vm}">&nbsp;</td>'
+                f'</tr>'
+            )
+
+    # Calcular totales
+    _t_presente = sum(s.get("cantidad", 0) for s in semanas_item) if semanas_item else 0.0
+    _t_anteriores = total_actas_anteriores if total_actas_anteriores is not None else None
+    _t_acumulado = (_t_presente + _t_anteriores) if _t_anteriores is not None else None
+
+    tot_rows = [
+        ("TOTAL EJECUTADO PRESENTE ACTA",    total_acta_fmt),
+        ("TOTAL EJECUTADO ACTAS ANTERIORES", _fmt_cant(_t_anteriores) if _t_anteriores is not None else z),
+        ("TOTAL EJECUTADO ACUMULADO",        _fmt_cant(_t_acumulado)  if _t_acumulado  is not None else z),
+        ("TOTAL POR EJECUTAR",               z),
+    ]
+    tot_block = "".join(
+        f'<tr><td colspan="4" style="{bd};padding:3px 5px;font-size:{fs_hdr_grid};text-align:right;'
+        f'font-weight:bold;color:{navy_hdr};background-color:{bg_hdr};">'
+        f"{_h(lbl)}</td>"
+        f'<td colspan="2" style="{bd};padding:3px 5px;font-size:{fs_hdr_grid};text-align:center;'
+        f'font-weight:{"bold" if val != z else "normal"};color:{navy};">{val}</td></tr>'
+        for lbl, val in tot_rows
+    )
+
     return f"""<!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml">
-<head><meta charset="UTF-8"/><title>FO-EO-04 V2.0 — IDU</title>
+<head><meta charset="UTF-8"/><title>FO-EO-04 V2.0 \u2014 IDU</title>
 <style type="text/css">
-@page {{ size: letter portrait; margin: 10mm 12mm; }}
-body {{ margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:7pt;color:#111;line-height:1.2; }}
-.lbl {{ font-size:6pt;font-weight:bold;text-transform:uppercase; }}
-.hint {{ font-size:5.5pt;color:#444;margin-top:1px; }}
+@page {{ size: A3 portrait; margin: 10mm 12mm; }}
+body {{ margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:7pt;color:{navy};line-height:1.2; }}
+.lbl {{ font-size:5.5pt;font-weight:bold;text-transform:uppercase;color:{navy_hdr}; }}
+.hint {{ font-size:5pt;color:#4a5568;margin-top:1px; }}
 </style></head><body>
+
+<!-- ═══ ENCABEZADO INSTITUCIONAL ═══ -->
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd}">
-<tr>
-<td width="16%" style="vertical-align:top;{bd};padding:5px 6px;">
-<div class="lbl">Código</div>
-<div style="font-size:8pt;font-weight:bold;margin-top:2px;">FO-EO-04</div>
+
+  <!-- FILA 1: Título (colspan 3) + Logo (rowspan 2) -->
+  <tr>
+    <td colspan="3" style="text-align:center;padding:3px 14px;
+                           border-bottom:1px solid {navy};border-right:1px solid {navy};">
+      <div style="font-size:6pt;color:{navy};">FORMATO</div>
+      <div style="font-size:8.5pt;font-weight:bold;color:{navy_hdr};margin-top:1px;">
+        MEMORIA DE C&#193;LCULO DE CANTIDADES DE OBRA
+      </div>
 </td>
-<td width="58%" style="vertical-align:middle;{bd};padding:6px 8px;text-align:center;">
-<div style="font-size:8.5pt;font-weight:bold;letter-spacing:0.02em;">FORMATO MEMORIA DE CÁLCULO DE CANTIDADES DE OBRA</div>
-<div style="font-size:6.5pt;margin-top:3px;font-weight:bold;">PROCESO CONSTRUCCIÓN DE PROYECTOS</div>
+    <td rowspan="2" style="width:14%;vertical-align:middle;text-align:center;padding:2px 6px;">
+      {logo_entidad_html}
 </td>
-<td width="26%" style="vertical-align:middle;{bd};padding:4px 6px;">
-<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
-<tr>
-<td style="vertical-align:middle;padding:2px 4px 2px 0;">
-<div class="lbl">Versión</div>
-<div style="font-size:9pt;font-weight:bold;">2.0</div>
+  </tr>
+
+  <!-- FILA 2: CÓDIGO | PROCESO | VERSIÓN -->
+  <tr>
+    <td style="width:17%;border-right:1px solid {navy};padding:2px 6px;
+               text-align:center;vertical-align:middle;">
+      <div class="lbl">C&#243;digo</div>
+      <div style="font-size:7pt;font-weight:bold;color:{navy_hdr};">FO-EO-04</div>
 </td>
-<td style="text-align:right;vertical-align:middle;width:55%;">{logo}</td>
+    <td style="width:55%;border-right:1px solid {navy};padding:2px 6px;
+               text-align:center;vertical-align:middle;">
+      <div class="lbl">Proceso</div>
+      <div style="font-size:7pt;font-weight:bold;color:{navy_hdr};">CONSTRUCCI&#211;N DE PROYECTOS</div>
+    </td>
+    <td style="width:14%;padding:2px 6px;text-align:center;vertical-align:middle;">
+      <div class="lbl">Versi&#243;n</div>
+      <div style="font-size:7pt;font-weight:bold;color:{navy_hdr};">2.0</div>
+</td>
 </tr>
+
 </table>
-</td>
-</tr>
-</table>
-<div style="text-align:center;font-size:6.5pt;font-weight:bold;padding:4px 6px;{bd};border-top:none;">
-SUBDIRECCIÓN GENERAL DE INFRAESTRUCTURA
-</div>
+
+<!-- ═══ SECCIÓN INSTITUCIONAL (condicional por entidad) ═══ -->
+{seccion_institucional}
+
+<!-- ═══ DATOS GENERALES DEL CONTRATO ═══ -->
 <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd};border-top:none;">
 <tr>
-<td style="width:34%;{bd};padding:4px 6px;font-size:6.5pt;font-weight:bold;text-align:center;border-top:none;">DIRECCIÓN TÉCNICA DE CONSTRUCCIONES</td>
-<td style="width:33%;{bd};padding:4px 6px;font-size:6.5pt;font-weight:bold;text-align:center;">SUBDIRECCIÓN TÉCNICA</td>
-<td style="width:33%;{bd};padding:4px 6px;font-size:6.5pt;font-weight:bold;text-align:center;">DE EJECUCIÓN DEL SUBSISTEMA VIAL</td>
+  <td style="{bd};padding:4px 7px;border-top:none;border-bottom:none;">
+    <table width="50%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
+    <tr>
+      <td style="padding-right:5px;font-weight:bold;color:{navy_hdr};font-size:7pt;white-space:nowrap;vertical-align:bottom;">
+        CONTRATO No
+      </td>
+      <td style="padding:0 6px 0 0;vertical-align:bottom;">
+        <div style="border-bottom:1px solid {navy};min-width:55px;text-align:center;
+                    font-size:8pt;font-weight:bold;color:{navy_hdr};padding:0 4px;">
+          {_h(num_contrato)}
+        </div>
+        <div style="font-size:4.5pt;color:#6b7280;text-align:center;margin-top:1px;">
+          (N&#250;mero de Contrato)
+        </div>
+      </td>
+      <td style="padding-right:5px;font-weight:bold;color:{navy_hdr};font-size:7pt;white-space:nowrap;vertical-align:bottom;">
+        DE
+      </td>
+      <td style="padding:0;vertical-align:bottom;">
+        <div style="border-bottom:1px solid {navy};min-width:40px;text-align:center;
+                    font-size:8pt;font-weight:bold;color:{navy_hdr};padding:0 4px;">
+          {_h(año_contrato)}
+        </div>
+        <div style="font-size:4.5pt;color:#6b7280;text-align:center;margin-top:1px;">
+          (A&#241;o de suscripci&#243;n)
+        </div>
+</td>
+</tr>
+    </table>
+    <div style="margin-top:5px;font-weight:bold;color:{navy_hdr};">OBJETO DEL CONTRATO</div>
+    <div style="border:1px solid {navy};padding:4px 6px;margin-top:2px;
+                font-size:7pt;color:{navy_hdr};min-height:22px;line-height:1.4;">
+      {_h(objeto_contrato) if objeto_contrato else "&nbsp;"}
+    </div>
+</td>
+</tr>
+<tr>
+  <td style="{bd};padding:4px 7px;border-top:none;">
+    <!-- RECIBO PARCIAL: 6 celdas alternando label / valor -->
+    <table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:4px;"><tr>
+    <td style="width:16%;font-weight:bold;color:{navy_hdr};vertical-align:bottom;white-space:nowrap;">RECIBO PARCIAL No.</td>
+    <td style="width:10%;border-bottom:1px solid {navy};text-align:center;font-size:8pt;font-weight:bold;color:{navy_hdr};vertical-align:bottom;">{_h(num_acta)}</td>
+    <td style="width:36%;font-weight:bold;color:{navy_hdr};vertical-align:bottom;padding-left:8px;white-space:nowrap;">CORRESPONDIENTE AL PERIODO DESDE</td>
+    <td style="width:14%;border-bottom:1px solid {navy};text-align:center;font-size:8pt;font-weight:bold;color:{navy_hdr};vertical-align:bottom;">{_h(fecha_desde)}</td>
+    <td style="width:6%;font-weight:bold;color:{navy_hdr};vertical-align:bottom;padding-left:8px;white-space:nowrap;">HASTA</td>
+    <td style="width:18%;border-bottom:1px solid {navy};text-align:center;font-size:8pt;font-weight:bold;color:{navy_hdr};vertical-align:bottom;">{_h(fecha_hasta)}</td>
+    </tr></table>
+    <!-- ITEM No | UNIDAD | ESPECIFICACIÓN TÉCNICA | CAPÍTULO (una sola línea) -->
+    <table width="100%" cellspacing="0" cellpadding="0" style="margin-top:3px;border-collapse:collapse;">
+    <tr>
+      <td style="width:15%;white-space:nowrap;vertical-align:bottom;padding-bottom:2px;">
+        <span style="font-weight:bold;color:{navy_hdr};">ITEM No</span>&nbsp;
+        <span style="border-bottom:1px solid {navy};display:inline-block;min-width:42px;font-size:8pt;font-weight:bold;color:{navy_hdr};">{_h(item_numero) if item_numero else "&nbsp;"}</span>
+</td>
+      <td style="width:10%;white-space:nowrap;vertical-align:bottom;padding-bottom:2px;">
+        <span style="font-weight:bold;color:{navy_hdr};">UNIDAD</span>&nbsp;
+        <span style="border-bottom:1px solid {navy};display:inline-block;min-width:30px;font-size:8pt;color:{navy_hdr};">{_h(item_unidad) if item_unidad else "&nbsp;"}</span>
+</td>
+      <td style="width:45%;white-space:nowrap;vertical-align:bottom;padding-bottom:2px;">
+        <span style="font-weight:bold;color:{navy_hdr};">ESPECIFICACI&#211;N T&#201;CNICA</span>&nbsp;
+        <span style="border-bottom:1px solid {navy};display:inline-block;min-width:80px;font-size:8pt;color:{navy_hdr};">{_h(item_especificacion) if item_especificacion else "&nbsp;"}</span>
+</td>
+      <td style="width:30%;vertical-align:bottom;padding-bottom:2px;">
+        <span style="border-bottom:1px solid {navy};display:inline-block;width:100%;font-size:8pt;font-weight:bold;color:{navy_hdr};text-align:center;">{_h(item_capitulo) if item_capitulo else "&nbsp;"}</span>
+</td>
+</tr>
+    </table>
+    <!-- DESCRIPCIÓN DEL ÍTEM: en recuadro (como OBJETO DEL CONTRATO) -->
+    <div style="margin-top:3px;font-weight:bold;font-size:6pt;color:{navy_hdr};">DESCRIPCI&#211;N DEL &#205;TEM</div>
+    <div style="border:1px solid {navy};padding:3px 6px;margin-top:1px;font-size:7pt;
+                color:{navy_hdr};min-height:18px;line-height:1.4;">
+      {_h(item_descripcion) if item_descripcion else "&nbsp;"}
+    </div>
+</td>
+</tr>
+<tr>
+  <td style="{bd};padding:3px 7px;border-top:none;">
+    <!-- CONTRATISTA -->
+    <table width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:2px;">
+    <tr>
+      <td style="width:20%;font-weight:bold;font-size:6.5pt;color:{navy_hdr};white-space:nowrap;vertical-align:bottom;">CONTRATISTA</td>
+      <td style="border-bottom:1px solid {navy};font-size:7.5pt;font-weight:bold;color:{navy_hdr};vertical-align:bottom;padding-left:4px;">{_h(contratista) if contratista else "&nbsp;"}</td>
+</tr>
+    </table>
+    <!-- INTERVENTORÍA -->
+    <table width="100%" cellspacing="0" cellpadding="0" style="margin-bottom:2px;">
+    <tr>
+      <td style="width:20%;font-weight:bold;font-size:6.5pt;color:{navy_hdr};white-space:nowrap;vertical-align:bottom;">INTERVENTOR&#205;A</td>
+      <td style="border-bottom:1px solid {navy};font-size:7.5pt;font-weight:bold;color:{navy_hdr};vertical-align:bottom;padding-left:4px;">{_h(interventoria) if interventoria else "&nbsp;"}</td>
+</tr>
+    </table>
+    <!-- SUPERVISOR -->
+    <table width="100%" cellspacing="0" cellpadding="0">
+    <tr>
+      <td style="width:20%;font-weight:bold;font-size:6.5pt;color:{navy_hdr};white-space:nowrap;vertical-align:bottom;">SUPERVISOR(A)</td>
+      <td style="border-bottom:1px solid {navy};font-size:7.5pt;font-weight:bold;color:{navy_hdr};vertical-align:bottom;padding-left:4px;">{_h(supervisor) if supervisor else "&nbsp;"}</td>
+    </tr>
+    </table>
+</td>
 </tr>
 </table>
-<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd};border-top:none;">
-<tr>
-<td style="{bd};padding:4px 6px;border-top:none;">
-<span style="font-weight:bold;">CONTRATO No</span>
-<span style="border-bottom:1px solid #000;display:inline-block;min-width:42px;margin:0 4px;">&nbsp;</span>
-<span style="font-weight:bold;">DE</span>
-<span style="border-bottom:1px solid #000;display:inline-block;min-width:28px;margin:0 4px;">&nbsp;</span>
-<div class="hint">Número de contrato &nbsp;&nbsp;&nbsp; Año de suscripción</div>
-</td>
-</tr>
-<tr>
-<td style="{bd};padding:4px 6px;">
-<div style="font-weight:bold;margin-bottom:3px;">OBJETO DEL CONTRATO</div>
-<div style="min-height:36px;border-bottom:1px solid #ccc;">&nbsp;</div>
-</td>
-</tr>
-<tr>
-<td style="{bd};padding:4px 6px;">
-<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;"><tr>
-<td style="width:38%;vertical-align:bottom;">
-<span style="font-weight:bold;">RECIBO PARCIAL No</span>
-<span style="border-bottom:1px solid #000;display:inline-block;min-width:48px;">&nbsp;</span>
-</td>
-<td style="width:37%;vertical-align:bottom;">
-<span style="font-weight:bold;">CORRESPONDIENTE AL PERIODO DESDE</span>
-<span style="border-bottom:1px solid #000;display:inline-block;min-width:56px;">&nbsp;</span>
-</td>
-<td style="width:25%;vertical-align:bottom;">
-<span style="font-weight:bold;">HASTA</span>
-<span style="border-bottom:1px solid #000;display:inline-block;min-width:56px;">&nbsp;</span>
-</td>
-</tr></table>
-</td>
-</tr>
-<tr>
-<td style="{bd};padding:4px 6px;">
-<table width="100%" cellspacing="0" cellpadding="0"><tr>
-<td style="width:28%;"><span style="font-weight:bold;">ITEM No</span> <span style="border-bottom:1px solid #000;display:inline-block;min-width:52px;">&nbsp;</span></td>
-<td style="width:22%;"><span style="font-weight:bold;">UNIDAD</span> <span style="border-bottom:1px solid #000;display:inline-block;min-width:36px;">&nbsp;</span></td>
-<td style="width:50%;"><span style="font-weight:bold;">ESPECIFICACIÓN TÉCNICA</span> <span style="border-bottom:1px solid #000;display:inline-block;min-width:120px;">&nbsp;</span></td>
-</tr></table>
-</td>
-</tr>
-<tr>
-<td style="{bd};padding:4px 6px;">
-<div style="font-weight:bold;margin-bottom:2px;">DESCRIPCIÓN DEL ÍTEM</div>
-<div style="min-height:18px;border-bottom:1px solid #ccc;">&nbsp;</div>
-</td>
-</tr>
-<tr>
-<td style="{bd};padding:4px 6px;">
-<div style="font-weight:bold;">CONTRATISTA</div>
-<div style="border-bottom:1px solid #000;min-height:14px;margin-top:2px;">&nbsp;</div>
-<div class="hint">Escriba el nombre o razón social del contratista</div>
-</td>
-</tr>
-<tr>
-<td style="{bd};padding:4px 6px;">
-<div style="font-weight:bold;">INTERVENTORÍA</div>
-<div style="border-bottom:1px solid #000;min-height:14px;margin-top:2px;">&nbsp;</div>
-<div class="hint">Escriba el nombre o razón social del interventor</div>
-</td>
-</tr>
-<tr>
-<td style="{bd};padding:4px 6px;">
-<div style="font-weight:bold;">SUPERVISOR(A)</div>
-<div style="border-bottom:1px solid #000;min-height:14px;margin-top:2px;">&nbsp;</div>
-<div class="hint">Escriba el nombre del Supervisor (a) delegado (a) por el IDU</div>
-</td>
-</tr>
-</table>
-<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;{bd};border-top:none;margin-top:0;">
-<tr style="background:#f3f4f6;">
-<td style="{bd};padding:3px 4px;font-size:6.5pt;font-weight:bold;text-align:center;width:34%;">UBICACIÓN</td>
-<td style="{bd};padding:3px 4px;font-size:6.5pt;font-weight:bold;text-align:center;width:11%;">LARGO</td>
-<td style="{bd};padding:3px 4px;font-size:6.5pt;font-weight:bold;text-align:center;width:11%;">ANCHO</td>
-<td style="{bd};padding:3px 4px;font-size:6.5pt;font-weight:bold;text-align:center;width:11%;">ALTO</td>
-<td style="{bd};padding:3px 4px;font-size:6.5pt;font-weight:bold;text-align:center;width:11%;">CANTIDAD</td>
-<td style="{bd};padding:3px 4px;font-size:6.5pt;font-weight:bold;text-align:center;width:22%;">TOTAL</td>
+
+<!-- ═══ TABLA DE CANTIDADES ═══
+     Proporciones del SVG original: UBICACIÓN 40% · LARGO/ANCHO/ALTO 13% c/u · CANTIDAD 12% · TOTAL 9% -->
+<table width="100%" cellspacing="0" cellpadding="0"
+       style="border-collapse:collapse;{bd};border-top:none;margin-top:0;">
+<tr style="background-color:{bg_hdr};">
+  <td style="{bd};padding:3px 5px;font-size:{fs_hdr_grid};font-weight:bold;text-align:center;
+            width:40%;color:{navy_hdr};">UBICACI&#211;N</td>
+  <td style="{bd};padding:3px 4px;font-size:{fs_hdr_grid};font-weight:bold;text-align:center;
+            width:13%;color:{navy_hdr};">LARGO</td>
+  <td style="{bd};padding:3px 4px;font-size:{fs_hdr_grid};font-weight:bold;text-align:center;
+            width:13%;color:{navy_hdr};">ANCHO</td>
+  <td style="{bd};padding:3px 4px;font-size:{fs_hdr_grid};font-weight:bold;text-align:center;
+            width:13%;color:{navy_hdr};">ALTO</td>
+  <td style="{bd};padding:3px 4px;font-size:{fs_hdr_grid};font-weight:bold;text-align:center;
+            width:12%;color:{navy_hdr};">CANTIDAD</td>
+  <td style="{bd};padding:3px 4px;font-size:{fs_hdr_grid};font-weight:bold;text-align:center;
+            width:9%;color:{navy_hdr};">TOTAL</td>
 </tr>
 {filas_det}
 {tot_block}
 </table>
-<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-top:6px;{bd};border-top:none;">
+
+<!-- ═══ PLANO / FOTOGRAFÍA ═══ -->
+<table width="100%" cellspacing="0" cellpadding="0"
+       style="border-collapse:collapse;margin-top:6px;{bd};border-top:none;">
 <tr>
 <td width="50%" style="vertical-align:top;{bd};padding:0;border-top:none;">
-<div style="font-weight:bold;font-size:6.5pt;padding:3px 4px;{bd};border:none;border-bottom:1px solid #000;text-align:center;">PLANO/ESQUEMA</div>
-<div style="min-height:78px;padding:6px;">&nbsp;</div>
+  <div style="font-weight:bold;font-size:6.5pt;padding:3px 5px;
+              border-bottom:1px solid {navy};text-align:center;
+              background-color:{bg_hdr};color:{navy_hdr};">PLANO/ESQUEMA</div>
+  <div style="height:240px;min-height:240px;max-height:240px;padding:6px;text-align:center;overflow:hidden;">
+    {"<img src='" + html.escape(grafico_url, quote=True) + "' alt='Grafico' style='max-width:98%;max-height:228px;display:block;margin:0 auto;' />" if grafico_url else
+     "<div style='font-size:6pt;color:#94a3b8;padding-top:100px;'>Sin gr&aacute;fico</div>"}
+  </div>
+  <div style="height:16px;min-height:16px;font-size:5.5pt;text-align:center;padding:2px;border-top:1px solid {navy};color:{navy_hdr};">
+    {"Gr&aacute;fico #" + str(grafico_numero) if grafico_numero else "&nbsp;"}
+  </div>
 </td>
 <td width="50%" style="vertical-align:top;{bd};padding:0;border-top:none;border-left:none;">
-<div style="font-weight:bold;font-size:6.5pt;padding:3px 4px;{bd};border:none;border-bottom:1px solid #000;text-align:center;">FOTOGRAFÍA</div>
-<div style="min-height:78px;padding:6px;">&nbsp;</div>
+  <div style="font-weight:bold;font-size:6.5pt;padding:3px 5px;
+              border-bottom:1px solid {navy};text-align:center;
+              background-color:{bg_hdr};color:{navy_hdr};">FOTOGRAF&#205;A</div>
+  <div style="height:240px;min-height:240px;max-height:240px;padding:6px;text-align:center;overflow:hidden;">
+    {"<img src='" + html.escape(foto_url, quote=True) + "' alt='Foto' style='max-width:98%;max-height:228px;display:block;margin:0 auto;' />" if foto_url else
+     "<div style='font-size:6pt;color:#94a3b8;padding-top:100px;'>Sin fotograf&iacute;a</div>"}
+</div>
+  <div style="height:16px;min-height:16px;font-size:5.5pt;text-align:center;padding:2px;border-top:1px solid {navy};color:{navy_hdr};">
+    {"Foto #" + str(foto_numero) if foto_numero else "&nbsp;"}
+  </div>
 </td>
 </tr>
 </table>
-<div style="margin-top:6px;{bd};padding:4px 6px;">
-<div style="font-weight:bold;margin-bottom:3px;">OBSERVACIONES</div>
-<div style="font-size:6.5pt;text-align:justify;line-height:1.35;">{_h(obs)}</div>
+
+<!-- ═══ OBSERVACIONES ═══ -->
+<div style="margin-top:6px;{bd};padding:5px 7px;">
+  <div style="font-weight:bold;margin-bottom:3px;color:{navy_hdr};">OBSERVACIONES</div>
+  <div style="font-size:7pt;text-align:justify;line-height:1.4;color:{navy};">{_h(obs)}</div>
 </div>
-<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-top:8px;{bd};">
-<tr>
-<td width="50%" style="vertical-align:top;{bd};padding:8px 10px;">
-<div style="font-weight:bold;text-align:center;margin-bottom:8px;">ELABORÓ</div>
-<div style="min-height:28px;border-bottom:1px solid #000;margin-bottom:6px;">&nbsp;</div>
-<div style="min-height:28px;border-bottom:1px solid #000;margin-bottom:4px;">&nbsp;</div>
-<div class="hint" style="text-align:center;">Firma / nombre y cargo</div>
-</td>
-<td width="50%" style="vertical-align:top;{bd};padding:8px 10px;border-left:none;">
-<div style="font-weight:bold;text-align:center;margin-bottom:8px;">REVISÓ</div>
-<div style="min-height:28px;border-bottom:1px solid #000;margin-bottom:6px;">&nbsp;</div>
-<div style="min-height:28px;border-bottom:1px solid #000;margin-bottom:4px;">&nbsp;</div>
-<div class="hint" style="text-align:center;">Firma / nombre y cargo</div>
-</td>
-</tr>
-</table>
-<div style="font-size:5.5pt;text-align:center;margin-top:10px;padding:4px;color:#333;">
-ORIGINAL: INTERVENTORÍA | 1ra COPIA: CONTRATISTA | 2da COPIA: DEPENDENCIA RESPONSABLE DEL CONTRATO
+
+<!-- ═══ FIRMAS: ELABORÓ / REVISÓ (2 × 2) ═══ -->
+{_html_fo_eo_04_firmas_4(navy, navy_hdr, bd, elaboro_nombre, elaboro_cargo, elaboro2_nombre, elaboro2_cargo, reviso_nombre, reviso_cargo, reviso2_nombre, reviso2_cargo)}
+
+<!-- ═══ DISTRIBUCIÓN ═══ -->
+<div style="font-size:5.5pt;text-align:center;margin-top:10px;padding:4px;color:#334155;">
+ORIGINAL: INTERVENTOR&#205;A &nbsp;|&nbsp; 1ra COPIA: CONTRATISTA &nbsp;|&nbsp; 2da COPIA: DEPENDENCIA RESPONSABLE DEL CONTRATO
 </div>
-<div style="font-size:5.5pt;text-align:center;margin-top:4px;color:#64748b;">Vista previa ClaraCore · sin datos de obra · {CODIGO_FORMATO_IDU_FO_EO_04_V2}</div>
+<div style="font-size:5pt;text-align:center;margin-top:3px;color:#64748b;">
+Vista previa ClaraCore &middot; sin datos de obra &middot; {CODIGO_FORMATO_IDU_FO_EO_04_V2}
+</div>
 </body></html>"""
+
+
+def _build_fo_eo_04_pdf_bytes(
+    contrato_id: int,
+    formato_codigo: str,
+    subsistema: str,
+    acta_id: Optional[int],
+    supervisor: str,
+) -> tuple:
+    """
+    Genera los bytes del PDF FO-IDU-EO-04-V2.
+    Optimización principal: _fetch_totales_batch reemplaza N llamadas secuenciales
+    a _fetch_total_actas_anteriores por un único lote de ~3 queries.
+    Devuelve (pdf_bytes, fname, contrato_numero).
+    """
+    def _fmt_fecha(f: object) -> str:
+        if not f:
+            return ""
+        try:
+            from datetime import date as _date
+            d = _date.fromisoformat(str(f)[:10])
+            return f"{d.day:02d}/{d.month:02d}/{d.year}"
+        except Exception:
+            return str(f)[:10]
+
+    # ── Datos del contrato ────────────────────────────────────────────────────
+    logo_entidad: Optional[str] = None
+    entidad: str = "IDU"
+    num_contrato: str = ""
+    año_contrato: str = ""
+    objeto_contrato: str = ""
+    contratista_nombre: str = ""
+    interventoria_nombre: str = ""
+    contrato_numero_raw: str = ""
+    try:
+        contrato_row = _row(
+            "contratos",
+            "logo_entidad, entidad, entidad_otra, numero, objeto, contratista, interventoria",
+            id=contrato_id,
+        )
+        if contrato_row:
+            logo_entidad = contrato_row.get("logo_entidad") or None
+            ent = (contrato_row.get("entidad") or "").strip().upper()
+            if ent == "OTRA":
+                ent = (contrato_row.get("entidad_otra") or "OTRA").strip().upper()
+            entidad = ent or "IDU"
+            num_contrato, año_contrato = _parse_numero_contrato(contrato_row.get("numero") or "")
+            objeto_contrato      = (contrato_row.get("objeto") or "").strip()
+            contratista_nombre   = (contrato_row.get("contratista") or "").strip()
+            interventoria_nombre = (contrato_row.get("interventoria") or "").strip()
+            contrato_numero_raw  = (contrato_row.get("numero") or "").strip()
+    except Exception:
+        pass
+
+    # ── Datos del acta ────────────────────────────────────────────────────────
+    num_acta: str = ""
+    fecha_desde: str = ""
+    fecha_hasta: str = ""
+    if acta_id:
+        try:
+            acta_row = _row("actas", "id, numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id)
+            if acta_row:
+                num_acta    = str(acta_row.get("numero_rpo") or acta_row.get("consecutivo") or "")
+                fecha_desde = _fmt_fecha(acta_row.get("fecha_inicio"))
+                fecha_hasta = _fmt_fecha(acta_row.get("fecha_fin"))
+        except Exception:
+            pass
+
+    subsistema_norm = subsistema.strip().lower()
+    if subsistema_norm not in ("vial", "transporte"):
+        subsistema_norm = "vial"
+
+    firma_cfg: Dict[str, Any] = {}
+    try:
+        firma_cfg = _get_firma_cfg_para_documento(
+            contrato_id, formato_codigo,
+            contexto_tipo="acta_rpo" if acta_id else None,
+            contexto_id=acta_id if acta_id else None,
+        )
+    except Exception:
+        pass
+
+    _base_kwargs = dict(
+        logo_entidad=logo_entidad,
+        entidad=entidad,
+        subsistema=subsistema_norm,
+        num_contrato=num_contrato,
+        año_contrato=año_contrato,
+        objeto_contrato=objeto_contrato,
+        num_acta=num_acta,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        contratista=contratista_nombre,
+        interventoria=interventoria_nombre,
+        supervisor=supervisor.strip(),
+        elaboro_nombre=str(firma_cfg.get("elaboro_nombre") or "").strip(),
+        elaboro_cargo=str(firma_cfg.get("elaboro_cargo") or "").strip(),
+        elaboro2_nombre=str(firma_cfg.get("elaboro2_nombre") or "").strip(),
+        elaboro2_cargo=str(firma_cfg.get("elaboro2_cargo") or "").strip(),
+        reviso_nombre=str(firma_cfg.get("reviso_nombre") or "").strip(),
+        reviso_cargo=str(firma_cfg.get("reviso_cargo") or "").strip(),
+        reviso2_nombre=str(firma_cfg.get("reviso2_nombre") or "").strip(),
+        reviso2_cargo=str(firma_cfg.get("reviso2_cargo") or "").strip(),
+    )
+
+    items_n3 = _fetch_items_n3_acta(acta_id, contrato_id) if acta_id else []
+
+    if items_n3:
+        # Totales de actas anteriores: 1 lote → O(1) queries en lugar de O(N ítems)
+        totales_batch = _fetch_totales_batch(contrato_id, acta_id, items_n3) if acta_id else {}
+
+        pages = []
+        for item in items_n3:
+            item_num = (item.get("item_numero") or "").strip()
+            item_cap = (item.get("capitulo") or "").strip()
+            t_anteriores = totales_batch.get((item_num, item_cap), 0.0) if acta_id else None
+            pages.append(
+                _html_idu_fo_eo_04_v2_plantilla_vacia(
+                    **_base_kwargs,
+                    item_numero=item_num,
+                    item_unidad=item.get("unidad") or "",
+                    item_especificacion=item.get("especificacion_tecnica") or "",
+                    item_capitulo=item_cap,
+                    item_descripcion=item.get("item_descripcion") or "",
+                    semanas_item=item.get("semanas") or [],
+                    total_actas_anteriores=t_anteriores,
+                    foto_url=item.get("foto_url"),
+                    foto_numero=item.get("foto_numero"),
+                    grafico_url=item.get("grafico_url"),
+                    grafico_numero=item.get("grafico_numero"),
+                )
+            )
+        html = _combine_html_pages(pages)
+    else:
+        html = _html_idu_fo_eo_04_v2_plantilla_vacia(**_base_kwargs)
+
+    pdf_bytes = _to_pdf(html)
+    suffix = f"_acta{num_acta}" if num_acta else ""
+    fname  = _safe_filename_part(f"{formato_codigo}{suffix}.pdf")
+    return pdf_bytes, fname, contrato_numero_raw
+
+
+# ── Sistema de jobs en background para generación progresiva de PDF ──────────
+
+import uuid as _uuid_mod
+import threading as _threading_mod
+import time as _time_mod
+
+_pdf_jobs: dict = {}
+_pdf_jobs_lock = _threading_mod.Lock()
+
+def _pdf_jobs_cleanup():
+    """Elimina jobs con más de 30 minutos de antigüedad."""
+    ahora = _time_mod.time()
+    with _pdf_jobs_lock:
+        caducados = [k for k, v in _pdf_jobs.items() if ahora - v.get("created_at", 0) > 1800]
+        for k in caducados:
+            del _pdf_jobs[k]
+
+
+def _build_fo_eo_04_pdf_bytes_prog(
+    contrato_id: int,
+    formato_codigo: str,
+    subsistema: str,
+    acta_id: Optional[int],
+    supervisor: str,
+    on_progress=None,
+) -> tuple:
+    """
+    Igual que _build_fo_eo_04_pdf_bytes pero reporta progreso a través de on_progress(dict).
+    on_progress recibe: {"pct": int 0-100, "msg": str, "current_item": int|None, "total_items": int|None}
+    """
+    def _prog(pct: int, msg: str, current_item: Optional[int] = None, total_items: Optional[int] = None):
+        if on_progress:
+            on_progress({"pct": pct, "msg": msg, "current_item": current_item, "total_items": total_items})
+
+    def _fmt_fecha(f: object) -> str:
+        if not f:
+            return ""
+        try:
+            from datetime import date as _date
+            d = _date.fromisoformat(str(f)[:10])
+            return f"{d.day:02d}/{d.month:02d}/{d.year}"
+        except Exception:
+            return str(f)[:10]
+
+    _prog(5, "Leyendo datos del contrato…")
+    logo_entidad: Optional[str] = None
+    entidad: str = "IDU"
+    num_contrato: str = ""
+    año_contrato: str = ""
+    objeto_contrato: str = ""
+    contratista_nombre: str = ""
+    interventoria_nombre: str = ""
+    contrato_numero_raw: str = ""
+    try:
+        contrato_row = _row(
+            "contratos",
+            "logo_entidad, entidad, entidad_otra, numero, objeto, contratista, interventoria",
+            id=contrato_id,
+        )
+        if contrato_row:
+            logo_entidad = contrato_row.get("logo_entidad") or None
+            ent = (contrato_row.get("entidad") or "").strip().upper()
+            if ent == "OTRA":
+                ent = (contrato_row.get("entidad_otra") or "OTRA").strip().upper()
+            entidad = ent or "IDU"
+            num_contrato, año_contrato = _parse_numero_contrato(contrato_row.get("numero") or "")
+            objeto_contrato      = (contrato_row.get("objeto") or "").strip()
+            contratista_nombre   = (contrato_row.get("contratista") or "").strip()
+            interventoria_nombre = (contrato_row.get("interventoria") or "").strip()
+            contrato_numero_raw  = (contrato_row.get("numero") or "").strip()
+    except Exception:
+        pass
+
+    _prog(15, "Consultando datos del acta…")
+    num_acta: str = ""
+    fecha_desde: str = ""
+    fecha_hasta: str = ""
+    if acta_id:
+        try:
+            acta_row = _row("actas", "id, numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id)
+            if acta_row:
+                num_acta    = str(acta_row.get("numero_rpo") or acta_row.get("consecutivo") or "")
+                fecha_desde = _fmt_fecha(acta_row.get("fecha_inicio"))
+                fecha_hasta = _fmt_fecha(acta_row.get("fecha_fin"))
+        except Exception:
+            pass
+
+    _prog(22, "Consultando configuración de firmas…")
+    subsistema_norm = subsistema.strip().lower()
+    if subsistema_norm not in ("vial", "transporte"):
+        subsistema_norm = "vial"
+    firma_cfg: Dict[str, Any] = {}
+    try:
+        firma_cfg = _get_firma_cfg_para_documento(
+            contrato_id, formato_codigo,
+            contexto_tipo="acta_rpo" if acta_id else None,
+            contexto_id=acta_id if acta_id else None,
+        )
+    except Exception:
+        pass
+
+    _base_kwargs = dict(
+        logo_entidad=logo_entidad,
+        entidad=entidad,
+        subsistema=subsistema_norm,
+        num_contrato=num_contrato,
+        año_contrato=año_contrato,
+        objeto_contrato=objeto_contrato,
+        num_acta=num_acta,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        contratista=contratista_nombre,
+        interventoria=interventoria_nombre,
+        supervisor=supervisor.strip(),
+        elaboro_nombre=str(firma_cfg.get("elaboro_nombre") or "").strip(),
+        elaboro_cargo=str(firma_cfg.get("elaboro_cargo") or "").strip(),
+        elaboro2_nombre=str(firma_cfg.get("elaboro2_nombre") or "").strip(),
+        elaboro2_cargo=str(firma_cfg.get("elaboro2_cargo") or "").strip(),
+        reviso_nombre=str(firma_cfg.get("reviso_nombre") or "").strip(),
+        reviso_cargo=str(firma_cfg.get("reviso_cargo") or "").strip(),
+        reviso2_nombre=str(firma_cfg.get("reviso2_nombre") or "").strip(),
+        reviso2_cargo=str(firma_cfg.get("reviso2_cargo") or "").strip(),
+    )
+
+    _prog(30, "Obteniendo ítems aprobados en Nivel 3…")
+    items_n3 = _fetch_items_n3_acta(acta_id, contrato_id) if acta_id else []
+    n_items = len(items_n3)
+
+    if items_n3:
+        _prog(48, f"Calculando totales de actas anteriores ({n_items} ítem{'s' if n_items != 1 else ''})…",
+              total_items=n_items)
+        totales_batch = _fetch_totales_batch(contrato_id, acta_id, items_n3) if acta_id else {}
+
+        pages = []
+        for i, item in enumerate(items_n3):
+            item_num = (item.get("item_numero") or "").strip()
+            item_cap = (item.get("capitulo") or "").strip()
+            desc_corta = (item.get("item_descripcion") or item_num or "")[:40]
+            pct_page = 55 + int(20 * (i + 1) / max(n_items, 1))
+            _prog(pct_page, f"Página {i+1}/{n_items}: {desc_corta}",
+                  current_item=i + 1, total_items=n_items)
+            t_anteriores = totales_batch.get((item_num, item_cap), 0.0) if acta_id else None
+            pages.append(
+                _html_idu_fo_eo_04_v2_plantilla_vacia(
+                    **_base_kwargs,
+                    item_numero=item_num,
+                    item_unidad=item.get("unidad") or "",
+                    item_especificacion=item.get("especificacion_tecnica") or "",
+                    item_capitulo=item_cap,
+                    item_descripcion=item.get("item_descripcion") or "",
+                    semanas_item=item.get("semanas") or [],
+                    total_actas_anteriores=t_anteriores,
+                    foto_url=item.get("foto_url"),
+                    foto_numero=item.get("foto_numero"),
+                    grafico_url=item.get("grafico_url"),
+                    grafico_numero=item.get("grafico_numero"),
+                )
+            )
+        _prog(76, f"Renderizando PDF ({n_items} página{'s' if n_items != 1 else ''})…",
+              total_items=n_items)
+        html = _combine_html_pages(pages)
+    else:
+        _prog(76, "Generando plantilla vacía…")
+        html = _html_idu_fo_eo_04_v2_plantilla_vacia(**_base_kwargs)
+
+    pdf_bytes = _to_pdf(html)
+    _prog(100, "¡Listo!", total_items=n_items or None)
+    suffix = f"_acta{num_acta}" if num_acta else ""
+    fname  = _safe_filename_part(f"{formato_codigo}{suffix}.pdf")
+    return pdf_bytes, fname, contrato_numero_raw
+
+
+@router.post("/{contrato_id}/ccd/pdf-job/iniciar")
+def ccd_pdf_job_iniciar(
+    contrato_id: int,
+    formato_codigo: str,
+    subsistema: str = "vial",
+    acta_id: Optional[int] = None,
+    supervisor: str = "",
+    current_user=Depends(_get_user),
+):
+    """Inicia la generación del PDF en background. Devuelve {job_id} para hacer polling."""
+    _perm_informes_ccd(current_user, "ver")
+    if formato_codigo not in FORMATOS_CCD:
+        raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
+    meta = FORMATOS_CCD[formato_codigo]
+    if meta.get("plantilla_html") != "idu_memoria_fo_eo_04_v2":
+        raise HTTPException(status_code=404, detail="Job de PDF no disponible para este formato")
+
+    _pdf_jobs_cleanup()
+    job_id = str(_uuid_mod.uuid4())
+    with _pdf_jobs_lock:
+        _pdf_jobs[job_id] = {
+            "status": "pendiente",
+            "pct": 0,
+            "msg": "Iniciando…",
+            "current_item": None,
+            "total_items": None,
+            "bytes": None,
+            "fname": None,
+            "error": None,
+            "contrato_id": contrato_id,
+            "created_at": _time_mod.time(),
+        }
+
+    def _run():
+        def on_progress(d: dict):
+            with _pdf_jobs_lock:
+                if job_id in _pdf_jobs:
+                    _pdf_jobs[job_id].update({
+                        "pct": d.get("pct", 0),
+                        "msg": d.get("msg", ""),
+                        "current_item": d.get("current_item"),
+                        "total_items": d.get("total_items"),
+                    })
+        try:
+            pdf_bytes, fname, _ = _build_fo_eo_04_pdf_bytes_prog(
+                contrato_id, formato_codigo, subsistema, acta_id, supervisor,
+                on_progress=on_progress,
+            )
+            with _pdf_jobs_lock:
+                if job_id in _pdf_jobs:
+                    _pdf_jobs[job_id].update({"status": "listo", "pct": 100, "bytes": pdf_bytes, "fname": fname})
+        except Exception as exc:
+            _log.exception("ccd_pdf_job error job_id=%s", job_id)
+            with _pdf_jobs_lock:
+                if job_id in _pdf_jobs:
+                    _pdf_jobs[job_id].update({"status": "error", "error": str(exc)})
+
+    t = _threading_mod.Thread(target=_run, daemon=True, name=f"pdf-job-{job_id[:8]}")
+    t.start()
+    return {"job_id": job_id}
+
+
+@router.get("/{contrato_id}/ccd/pdf-job/{job_id}/estado")
+def ccd_pdf_job_estado(
+    contrato_id: int,
+    job_id: str,
+    current_user=Depends(_get_user),
+):
+    """Retorna el estado actual del job (para polling desde el frontend)."""
+    _perm_informes_ccd(current_user, "ver")
+    with _pdf_jobs_lock:
+        job = _pdf_jobs.get(job_id)
+    if not job or job.get("contrato_id") != contrato_id:
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+    return {
+        "status": job.get("status"),
+        "pct": job.get("pct", 0),
+        "msg": job.get("msg", ""),
+        "current_item": job.get("current_item"),
+        "total_items": job.get("total_items"),
+        "error": job.get("error"),
+    }
+
+
+@router.get("/{contrato_id}/ccd/pdf-job/{job_id}/pdf")
+def ccd_pdf_job_resultado(
+    contrato_id: int,
+    job_id: str,
+    current_user=Depends(_get_user),
+):
+    """Retorna los bytes del PDF una vez que el job ha finalizado."""
+    _perm_informes_ccd(current_user, "ver")
+    with _pdf_jobs_lock:
+        job = dict(_pdf_jobs.get(job_id) or {})
+    if not job or job.get("contrato_id") != contrato_id:
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+    if job.get("status") != "listo" or not job.get("bytes"):
+        raise HTTPException(status_code=409, detail="PDF aún no está listo")
+    return Response(
+        content=job["bytes"],
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{job.get("fname", "memoria.pdf")}"'},
+    )
 
 
 @router.get("/{contrato_id}/ccd/preview-plantilla-vacia/{formato_codigo}")
 def ccd_preview_plantilla_vacia_pdf(
     contrato_id: int,
     formato_codigo: str,
+    subsistema: str = "vial",
+    acta_id: Optional[int] = None,
+    supervisor: str = "",
     current_user=Depends(_get_user),
 ):
-    """PDF de plantilla sin datos (vista previa de diseño) para formatos que la expongan."""
+    """PDF de plantilla (vista previa inline) — FO-IDU-EO-04-V2.
+
+    Query params:
+      subsistema: 'vial' (default) | 'transporte'  — solo aplica cuando la entidad es IDU.
+    """
     _perm_informes_ccd(current_user, "ver")
-    del contrato_id  # reservado para permisos por contrato / marca de agua futura
     if formato_codigo not in FORMATOS_CCD:
         raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
     meta = FORMATOS_CCD[formato_codigo]
     if meta.get("plantilla_html") != "idu_memoria_fo_eo_04_v2":
-        raise HTTPException(
-            status_code=404,
-            detail="Vista previa vacía no disponible para este formato",
-        )
-    html = _html_idu_fo_eo_04_v2_plantilla_vacia()
-    pdf_bytes = _to_pdf(html)
-    fname = _safe_filename_part(f"preview_{formato_codigo}_plantilla_vacia.pdf")
+        raise HTTPException(status_code=404, detail="Vista previa vacía no disponible para este formato")
+    pdf_bytes, fname, _ = _build_fo_eo_04_pdf_bytes(contrato_id, formato_codigo, subsistema, acta_id, supervisor)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{fname}"'},
+    )
+
+
+@router.get("/{contrato_id}/ccd/preview-plantilla-vacia/{formato_codigo}/con-sello-firma")
+def ccd_preview_plantilla_vacia_con_sello(
+    contrato_id: int,
+    formato_codigo: str,
+    subsistema: str = "vial",
+    acta_id: Optional[int] = None,
+    supervisor: str = "",
+    current_user=Depends(_get_user),
+):
+    """PDF FO-IDU-EO-04-V2 + página de sello ClaraCore (firma de perfil, SHA-256, fecha)."""
+    _perm_informes_ccd(current_user, "ver")
+    if formato_codigo not in FORMATOS_CCD:
+        raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
+    meta = FORMATOS_CCD[formato_codigo]
+    if meta.get("plantilla_html") != "idu_memoria_fo_eo_04_v2":
+        raise HTTPException(status_code=404, detail="Vista previa vacía no disponible para este formato")
+    pdf_bytes, fname, contrato_numero = _build_fo_eo_04_pdf_bytes(
+        contrato_id, formato_codigo, subsistema, acta_id, supervisor
+    )
+    return _attachment_pdf_con_pagina_sello_usuario(
+        pdf_bytes,
+        current_user,
+        titulo_doc=f"Memoria de cálculo {formato_codigo}" + (f" — Acta {acta_id}" if acta_id else ""),
+        formato_ccd=formato_codigo,
+        contrato_numero=contrato_numero,
+        nombre_archivo_pdf=fname,
     )
 
 
@@ -6295,7 +7906,7 @@ def _cc_sem_002_item_excel_bytes(
         ],
     }
     fmt = CODIGO_FORMATO_CCD_CC_SEM_002
-    firma_cfg = _get_ccd_firma_config(contrato_id, fmt)
+    firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="semana", contexto_id=semana_id)
     sub, corte = _sub_corte_dummy_memoria()
     wb = Workbook()
     ws = wb.active
@@ -6355,7 +7966,7 @@ def _cc_sem_002_semana_completo_excel_bytes(contrato_id: int, semana_id: int, cu
         ],
     }
     fmt = CODIGO_FORMATO_CCD_CC_SEM_002
-    firma_cfg = _get_ccd_firma_config(contrato_id, fmt)
+    firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="semana", contexto_id=semana_id)
     sub, corte = _sub_corte_dummy_memoria()
     pie = f"Semana N° {nsem} · {fi} — {ff}"
 
@@ -6867,7 +8478,7 @@ def _cc_sem_001_excel_bytes(contrato_id: int, semana_id: int, current_user: dict
     u = current_user if isinstance(current_user, dict) else dict(current_user)
     usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
     usuario_cargo = u.get("cargo_nombre", "—") or "—"
-    firma_cfg = _get_ccd_firma_config(contrato_id, CODIGO_FORMATO_CCD_CC_SEM_001)
+    firma_cfg = _get_firma_cfg_para_documento(contrato_id, CODIGO_FORMATO_CCD_CC_SEM_001, contexto_tipo="semana", contexto_id=semana_id)
     wb = Workbook()
     ws = wb.active
     assert ws is not None

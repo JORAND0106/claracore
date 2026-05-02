@@ -1,4 +1,22 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
+import { OfflineProvider, useOffline } from './offline/OfflineContext'
+import { OfflineBanner, PrepareOfflineBtn, ConflictModal, ForceOfflineToggle } from './offline/OfflineUI'
+import {
+  buscarReportesOffline,
+  calcularAnalisisOffline,
+  getCapitulosOffline,
+  getActasOffline,
+  getSemanasOffline,
+  getSubcontratistasOffline,
+  getTramosOffline,
+  getCostadosOffline,
+  getPreciosOffline,
+  getNextNumeroReporteOffline,
+  getRegistrosOffline,
+  aplicarValidacionLocal,
+  crearReporteLocal,
+  crearRegistroLocal,
+} from './offline/offlineRouter'
 import AdminPanel from './AdminPanel'
 import ModuloInformes from './ModuloInformes'
 import ModuloGuias from './ModuloGuias'
@@ -888,8 +906,10 @@ function determinarNivelValidacion(usuario) {
   const permRpt  = permisos.find(p =>
     (p.funcion_nombre || '').toLowerCase().includes('reporte de cantidades')
   )
-  const puedeValidar = !!(permRpt?.validar)
   const puedeEditar  = !!(permRpt?.editar)
+  // Validar en Sicoe Obra se autoriza por rol directamente, sin requerir permiso de tabla
+  const rolesQueValidan = ['operativo contratista', 'contratista', 'interventoria']
+  const puedeValidar = rolesQueValidan.includes(norm(usuario?.rol_nombre || usuario?.rol || '')) || !!(permRpt?.validar)
 
   const esContratista   = rol === 'contratista' || rol === 'operativo contratista'
   const esInterventoria = rol === 'interventoria' || rol === 'operativo interventoria'
@@ -1220,6 +1240,8 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
 function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, seleccionado, onToggleSeleccion, onItemAsignado, hdrs, actasList = [],
   mostrarSeleccionValidacion = false, seleccionadoValidacion = false, onToggleSeleccionValidacion,
   esDeveloper = false, onDevEliminarRegistro = null, devEliminando = false, onOptimisticValidacion = null }) {
+  const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
+  const isOnline = !efectivoOffline
   const [competencia,    setCompetencia]    = useState(registro.competencia    || '')
   const [itemBusqueda,   setItemBusqueda]   = useState(registro.item_numero || '')
   const [itemsLista,     setItemsLista]     = useState([])
@@ -1285,6 +1307,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const esNivel3Aprobado = registro?.nivel3_estado === 'Aprobado'
   const editableCampos = puedeEditar && !esNivel3Aprobado
   const soloCorteNivel3 = puedeEditar && esNivel3Aprobado
+  // Foto y gráfico: editables siempre que el usuario tenga permiso (no afectan valor ni cantidad)
+  const editableFotoGrafico = puedeEditar
 
   useEffect(() => {
     setCorteSel(registro.corte_id != null ? String(registro.corte_id) : '')
@@ -1383,6 +1407,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const costoDirecto = Math.round(cantTotal * vlrUnitario)
 
   const tieneCoordenadas = (reporte.puntos || []).length > 0
+  /** Contrato 2 no exige topografía para aprobar N2; el resto sí (alineado con backend). */
+  const exigeTopoAprobarN2 = Number(contrato_id) !== 2
 
   // Derivar competencias y lista de ítems cuando cambian los ítems del capítulo o la competencia seleccionada
   useEffect(() => {
@@ -1434,10 +1460,6 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   const guardarCambios = async () => {
     const idItem = itemListadoId
-    if (idItem && !tieneCoordenadas) {
-      alert('Se requieren coordenadas topográficas. Diligéncialas en la Portada primero.')
-      return
-    }
     setGuardando(true)
     try {
       // 1. Guardar dimensiones + observacion
@@ -1513,18 +1535,24 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }
 
   const ejecutarValidacion = (estado) => {
-    const esAprobado = estado === 'Aprobado'
+    const nv = nivelInfo.nivelValidacion
+    if (exigeTopoAprobarN2 && nv === 2 && estado === 'Aprobado' && !(reporte.puntos || []).length) {
+      alert(
+        'No puedes aprobar en Nivel 2 sin coordenadas topográficas en la portada de este reporte. ' +
+        'Solicita al topógrafo que las registre; el residente de costos puede seguir asignando ítem sin ellas.'
+      )
+      return
+    }
     setEstadoValidando(estado)
-    // Aprobado sin obligatorio puede confirmarse directo, pero abrimos popup para dar opción
     setMostrarPopupValidacion(true)
   }
 
   const confirmarValidacion = async (comentarioData) => {
-    setMostrarPopupValidacion(false)
     const nivel = nivelInfo.nivelValidacion
     const nvCom = nivelInfo.nivelValidacionComentario
     // Perfil solo-comentar: registra comentario completo sin cambiar estado.
     if (!nivelInfo.puedeValidar) {
+      setMostrarPopupValidacion(false)
       if (!comentarioData || !nvCom) return
       const body = {
         ...comentarioData,
@@ -1553,7 +1581,18 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       }
       return
     }
-    if (!nivel) return
+    if (!nivel) {
+      setMostrarPopupValidacion(false)
+      return
+    }
+    if (exigeTopoAprobarN2 && nivel === 2 && estadoValidando === 'Aprobado' && !(reporte.puntos || []).length) {
+      alert(
+        'No puedes aprobar en Nivel 2 sin coordenadas topográficas en la portada. ' +
+        'Solicita al topógrafo que las registre antes de aprobar.'
+      )
+      return
+    }
+    setMostrarPopupValidacion(false)
     const sufijo = nivel === 1 ? 'validar-nivel1' : nivel === 2 ? 'validar-nivel2' : 'validar-nivel3'
     const body = { estado: estadoValidando }
     if (comentarioData) body.comentario_data = { ...comentarioData, rol_origen: nivelInfo.rolOrigen }
@@ -1562,6 +1601,27 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     }
     // Actualización optimista inmediata — el usuario ve el cambio al instante
     onOptimisticValidacion?.(registro.id, nivel, estadoValidando)
+
+    // ── Modo offline: guardar en IndexedDB y encolar mutación ──────────────
+    if (!isOnline && isOfflineReady) {
+      try {
+        const campo = `nivel${nivel}_estado`
+        await aplicarValidacionLocal(registro.id, campo, estadoValidando)
+        await enqueueMutation({
+          type: `validar_nivel${nivel}`,
+          method: 'PUT',
+          endpoint: `/sicoe-obra/${contrato_id}/registros/${registro.id}/${sufijo}`,
+          body,
+        })
+        onItemAsignado()
+      } catch (e) {
+        onOptimisticValidacion?.(registro.id, nivel, registro[`nivel${nivel}_estado`] || 'No Revisado')
+        alert(`Error guardando validación offline: ${e.message}`)
+      }
+      return
+    }
+
+    // ── Modo online: fetch normal ───────────────────────────────────────────
     try {
       const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/${sufijo}`, {
         method: 'PUT', headers: hdrs, body: JSON.stringify(body)
@@ -1938,7 +1998,9 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:'#F59E0B', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'8px' }}>📐 Coordenadas Topográficas</div>
         {!tieneCoordenadas ? (
           <div style={{ background:'#EF444415', border:'1px solid #EF444444', borderRadius:'8px', padding:'12px 16px', color:'#EF4444', fontSize:'var(--cc-sm)', fontWeight:'600' }}>
-            ⚠️ Sin coordenadas topográficas. El topógrafo debe diligenciarlas en la Portada antes de asignar el ítem.
+            {exigeTopoAprobarN2
+              ? '⚠️ Sin coordenadas topográficas. El topógrafo debe diligenciarlas en la Portada — necesarias para aprobar en Nivel 2 (no bloquean asignar ítem).'
+              : '⚠️ Sin coordenadas topográficas. El topógrafo puede diligenciarlas en la Portada cuando corresponda.'}
           </div>
         ) : (
           <div style={{ overflowX:'auto' }}>
@@ -1991,7 +2053,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 )}
                 <div style={{ padding:'6px 10px', fontSize:'var(--cc-label)', color:t.textMuted, background:t.bg, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
                   <span>📷 {strRefCarpeta ? <span style={{ fontFamily: 'ui-monospace, Consolas, monospace' }}>#{strRefCarpeta}</span> : '—'}</span>
-                  {editableCampos && (
+                  {editableFotoGrafico && (
                     <div style={{ display:'flex', gap:'8px' }}>
                       <label style={{ cursor:'pointer', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600' }}>
                         Cambiar
@@ -2007,7 +2069,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               </>
             ) : (
               <div style={{ display:'flex', flexDirection:'column', background:t.bg, borderRadius:'8px', overflow:'hidden', height:'160px' }}>
-                <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flex:1, gap:'6px', borderBottom:`1px solid ${t.border}`, cursor: editableCampos ? 'pointer' : 'default', opacity: editableCampos ? 1 : 0.65 }}>
+                <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flex:1, gap:'6px', borderBottom:`1px solid ${t.border}`, cursor: editableFotoGrafico ? 'pointer' : 'default', opacity: editableFotoGrafico ? 1 : 0.65 }}>
                   {uploadingFoto
                     ? <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)' }}>⏳ Subiendo...</span>
                     : <>
@@ -2016,10 +2078,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                         <span style={{ fontSize:'var(--cc-label)', color:t.primary, fontWeight:'600' }}>Toca para cargar</span>
                       </>
                   }
-                  <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto || !editableCampos}
+                  <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingFoto || !editableFotoGrafico}
                     onChange={e => { const f = e.target.files[0]; if (f) subirFoto(f) }} />
                 </label>
-                {editableCampos && (
+                {editableFotoGrafico && (
                 <button onClick={() => setModalGaleriaHoja(true)}
                   style={{ padding:'8px', background:'transparent', border:'none', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600', cursor:'pointer' }}>
                   🖼️ Usar foto de la galería
@@ -2048,12 +2110,19 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             {grafVista ? (
               <>
                 <img src={grafVista} alt="Gráfico" referrerPolicy="no-referrer" style={{ width:'100%', maxHeight:'220px', objectFit:'cover', display:'block' }} />
-                <div style={{ padding:'6px 10px', fontSize:'var(--cc-label)', color:t.textMuted, background:t.bg }}>
-                  📐 Gráfico (compartido del reporte)
+                <div style={{ padding:'6px 10px', fontSize:'var(--cc-label)', color:t.textMuted, background:t.bg, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                  <span>📐 Gráfico / Plano</span>
+                  {editableFotoGrafico && (
+                    <label style={{ cursor:'pointer', color:t.primary, fontSize:'var(--cc-label)', fontWeight:'600' }}>
+                      Cambiar
+                      <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf}
+                        onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f) }} />
+                    </label>
+                  )}
                 </div>
               </>
             ) : (
-              <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'160px', background:t.bg, cursor: editableCampos ? 'pointer' : 'default', gap:'8px', opacity: editableCampos ? 1 : 0.65 }}>
+              <label style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'160px', background:t.bg, cursor: editableFotoGrafico ? 'pointer' : 'default', gap:'8px', opacity: editableFotoGrafico ? 1 : 0.65 }}>
                 {uploadingGraf
                   ? <span style={{ color:t.textMuted, fontSize:'var(--cc-sm)' }}>⏳ Subiendo...</span>
                   : <>
@@ -2062,7 +2131,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                       <span style={{ fontSize:'var(--cc-label)', color:t.primary, fontWeight:'600' }}>Toca para cargar</span>
                     </>
                 }
-                <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf || !editableCampos}
+                <input type="file" accept="image/*" style={{ display:'none' }} disabled={uploadingGraf || !editableFotoGrafico}
                   onChange={e => { const f = e.target.files[0]; if (f) subirGrafico(f) }} />
               </label>
             )}
@@ -2300,6 +2369,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
 // ─── CARPETA REPORTE ──────────────────────────────────────────────────────────
 function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [], capasFiltroValidacion = null, urlReporteDetalle: urlReporteDetalleFn }) {
+  const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
+  const isOnline = !efectivoOffline
   const filtroValidacion = capasFiltroValidacion && capasFiltroValidacion[0] ? capasFiltroValidacion[0] : null
   const [reporte, setReporte]                     = useState(repoProp)
   const [registros, setRegistros]                 = useState(repoProp.registros || [])
@@ -2788,6 +2859,13 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const ejecutarMasivoSeleccion = async (estado, comentarioData, idsOverride = null) => {
     const nv = nivelInfo.nivelValidacion
     if (nv !== 2 && nv !== 3) return
+    if (Number(contrato_id) !== 2 && nv === 2 && estado === 'Aprobado' && !(reporte.puntos || []).length) {
+      alert(
+        'No puedes aprobar en bloque en Nivel 2 sin coordenadas topográficas en la portada de este reporte. ' +
+        'Regístralas en la pestaña Portada o pide al topógrafo que lo haga.'
+      )
+      return
+    }
     const ids = idsOverride != null ? [...idsOverride] : [...seleccionadosValidacion]
     if (ids.length === 0) {
       alert(idsOverride != null ? 'No hay registros elegibles para validar en esta lista (revisa ítem asignado y nivel previo aprobado).' : 'Selecciona al menos un registro en este ítem.')
@@ -2809,6 +2887,27 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     }
     if (idsOverride == null) setSeleccionadosValidacion([])
     else setPortadaResumenEstado(null)
+
+    // ── Modo offline: actualizar IndexedDB + encolar mutación masiva ────────
+    if (!isOnline && isOfflineReady) {
+      try {
+        await Promise.all(ids.map(rid => aplicarValidacionLocal(rid, campoNivel, estado)))
+        await enqueueMutation({
+          type: `validar_masivo_nivel${nv}`,
+          method: 'PUT',
+          endpoint: `/sicoe-obra/${contrato_id}/reportes/${reporte.id}/${sufijo}`,
+          body,
+        })
+        setMsgMasivo(`✓ ${ids.length} registro(s) validados (pendiente sync)`)
+      } catch (e) {
+        if (campoNivel) setRegistros(prev => prev.map(r => { const s = snapOriginal.find(o => o.id === r.id); return s ? { ...r, [campoNivel]: s[campoNivel] } : r }))
+        setMsgMasivo(`Error offline: ${e.message}`)
+      } finally {
+        setEjecutandoMasivo(false)
+      }
+      return
+    }
+
     try {
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/${sufijo}`, {
         method: 'PUT', headers: hdrs, body: JSON.stringify(body)
@@ -3340,7 +3439,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   </div>
                 ) : (reporte.puntos || []).length === 0 ? (
                   <div style={{ background:'#EF444415', border:'1px solid #EF444433', borderRadius:'8px', padding:'12px 16px', color:'#EF4444', fontSize:'var(--cc-sm)', fontWeight:'600', textAlign:'center' }}>
-                    ⚠️ Sin coordenadas registradas. Haz clic en "Editar Topografía" para ingresarlas — obligatorio para asignar ítems.
+                    {Number(contrato_id) === 2
+                      ? '⚠️ Sin coordenadas registradas. Haz clic en "Editar Topografía" para ingresarlas.'
+                      : '⚠️ Sin coordenadas registradas. Haz clic en "Editar Topografía" para ingresarlas — obligatorias para aprobar en Nivel 2.'}
                   </div>
                 ) : (
                   <div style={{ overflowX:'auto' }}>
@@ -3994,9 +4095,43 @@ function SicoePanelDataBarCell({ value, max, color, text, textColor, trackBg = '
 }
 
 // ─── MÓDULO SICOE OBRA ────────────────────────────────────────────────────────
+/** Banner flotante que consume el contexto offline (debe estar dentro de OfflineProvider) */
+function OfflineStatusBanner() {
+  const { efectivoOffline, pendingCount } = useOffline()
+  if (!efectivoOffline && pendingCount === 0) return null
+  return <OfflineBanner />
+}
+
+/** Coincide N° registro buscado con filas de so_registros (tipos mixtos en API). */
+function sicoeRegistroCoincideNumeroBusqueda(row, numeroRegFiltro) {
+  const nRaw = String(numeroRegFiltro ?? '').trim()
+  if (!nRaw) return false
+  const nr = row?.numero_registro
+  if (nr == null && nr !== 0) return false
+  if (String(nr).trim() === nRaw) return true
+  const nNum = Number(nRaw)
+  return Number.isFinite(nNum) && Number(nr) === nNum
+}
+
+function sicoeBuscarRegistroPorNumeroFiltro(registros, numeroRegFiltro) {
+  const nRaw = String(numeroRegFiltro ?? '').trim()
+  if (!nRaw || !Array.isArray(registros)) return null
+  return registros.find((r) => sicoeRegistroCoincideNumeroBusqueda(r, nRaw)) || null
+}
+
 function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistroNumero = null, onNavReporteConsumed }) {
   const API_URL = API_BASE
   const contrato_id = usuario?.contrato_id
+  const {
+    efectivoOffline,
+    isOfflineReady,
+    isOnline: hayRedNavegador,
+    forceOffline,
+    setForceOffline,
+    runSync,
+  } = useOffline()
+  // efectivoOffline = true cuando no hay red real O el usuario activó el toggle manual
+  const isOnline = !efectivoOffline
 
   const [reportes, setReportes] = useState([])
   const [cargando, setCargando] = useState(false)
@@ -4030,10 +4165,19 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const [reporteEditando, setReporteEditando]         = useState(null)
   const [modalCarpeta, setModalCarpeta]               = useState(false)
   const [reporteSeleccionado, setReporteSeleccionado] = useState(null)
+  /** Oferta de sincronizar al actualizar con teniendo red + modo manual sin conexión. */
+  const [sicoeSyncOfferOpen, setSicoeSyncOfferOpen] = useState(false)
+  const [sicoeSyncOfferBusy, setSicoeSyncOfferBusy] = useState(false)
+  const sicoeSyncOfferCapasRef = useRef(null)
 
   /** Evita que una respuesta antigua de red sobrescriba grilla/panel (p. ej. tras «Volver»). */
   const sicoeBusquedaSeqRef = useRef(0)
   const sicoeAnalisisSeqRef = useRef(0)
+  /** Refs para que cargarAnalisis/buscarReportes lean siempre el valor actual aunque sean closures viejas. */
+  const efectivoOfflineRef = useRef(efectivoOffline)
+  const isOfflineReadyRef = useRef(isOfflineReady)
+  efectivoOfflineRef.current = efectivoOffline
+  isOfflineReadyRef.current = isOfflineReady
   /** Refinamiento en servidor tras una búsqueda base (observación / nodo inicio o final). */
   const [sicoeFiltroObs, setSicoeFiltroObs] = useState('')
   const [sicoeFiltroNodo, setSicoeFiltroNodo] = useState('')
@@ -4057,6 +4201,9 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const buscarReportesSicoeRef = useRef(null)
   const cargarAnalisisSicoeRef = useRef(null)
   const sicoeFiltroPkSelRef = useRef('')
+  /** Misma resolución de acta RPO que la matriz del dashboard (vigente / acta explícita). */
+  const [sicoeMatrizSync, setSicoeMatrizSync] = useState(null)
+  const sicoeActaAutoOnceRef = useRef(false)
 
   useEffect(() => {
     if (!contrato_id) return
@@ -4220,32 +4367,90 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   useEffect(() => {
     if (!contrato_id) return
     const hdrs = { Authorization: `Bearer ${getToken()}` }
+
+    // Helper: si el fetch falla y hay cache, usar IndexedDB
+    const cargarFiltrosOffline = async () => {
+      if (!isOfflineReady) return
+      const [caps, actas, subc, tramos, costados] = await Promise.all([
+        getCapitulosOffline(contrato_id),
+        getActasOffline(contrato_id),
+        getSubcontratistasOffline(contrato_id),
+        getTramosOffline(contrato_id),
+        getCostadosOffline(contrato_id),
+      ])
+      setFiltroCapList(Array.isArray(caps) ? caps : [])
+      setFiltroActaList(Array.isArray(actas) ? actas : [])
+      setFiltroSubcList(Array.isArray(subc) ? subc : [])
+      setFiltroTramoList(Array.isArray(tramos) ? tramos : [])
+      setFiltroCostadoList(Array.isArray(costados) ? costados : [])
+    }
+
+    // Sin red o modo offline manual → IndexedDB directo
+    if (efectivoOffline && isOfflineReady) {
+      cargarFiltrosOffline().catch(() => {})
+      return
+    }
+
+    // Con red → fetch, con fallback a IndexedDB si falla
     const pSub = nivelInfo.esInterventoria
       ? Promise.resolve([])
-      : fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs }).then(r => r.json()).catch(() => [])
+      : fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs }).then(r => r.json()).catch(() => null)
     Promise.all([
       pSub,
-      fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos`, { headers: hdrs }).then(r => r.json()).catch(() => []),
-      fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/tramoscostados`, { headers: hdrs }).then(r => r.json()).catch(() => ({})),
-      fetch(`${API_URL}/actas/${contrato_id}/lista`, { headers: hdrs }).then(r => r.json()).catch(() => []),
-    ]).then(([subc, caps, tc, actas]) => {
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos`, { headers: hdrs }).then(r => r.json()).catch(() => null),
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/tramoscostados`, { headers: hdrs }).then(r => r.json()).catch(() => null),
+      fetch(`${API_URL}/actas/${contrato_id}/lista`, { headers: hdrs }).then(r => r.json()).catch(() => null),
+    ]).then(async ([subc, caps, tc, actas]) => {
+      // Si TODOS fallaron (null) → red caída → usar IndexedDB
+      if (subc === null && caps === null && tc === null && actas === null) {
+        await cargarFiltrosOffline()
+        return
+      }
       setFiltroSubcList(Array.isArray(subc) ? subc : [])
       setFiltroCapList(Array.isArray(caps) ? caps : [])
       setFiltroTramoList(Array.isArray(tc?.tramos) ? tc.tramos : [])
       setFiltroCostadoList(Array.isArray(tc?.costados) ? tc.costados : [])
       setFiltroActaList(Array.isArray(actas) ? actas.filter(a => a.numero_rpo != null).map(a => ({ id: a.id, numero_rpo: a.numero_rpo })) : [])
-    })
-  }, [contrato_id, nivelInfo.esInterventoria])
+    }).catch(() => cargarFiltrosOffline())
+  }, [contrato_id, nivelInfo.esInterventoria, isOfflineReady, efectivoOffline])
 
-  // Auto-buscar al montar con el filtro de validación por nivel del usuario (rol + permiso)
   useEffect(() => {
-    if (!contrato_id) return
-    const capasIniciales = capasInicialesValidacionFromUser(usuario)
-    if (capasIniciales.length > 0) {
-      buscarReportes(filtros, 0, capasIniciales)
-      cargarAnalisis(filtros, capasIniciales)
+    sicoeActaAutoOnceRef.current = false
+  }, [contrato_id])
+
+  // Auto-buscar desde caché cuando se activa el modo offline manual
+  // Llama tanto a la grilla como al panel dinámico
+  useEffect(() => {
+    if (efectivoOffline && isOfflineReady && tieneParametrosBusquedaSicoe(filtros, capasValidacion)) {
+      const capas = capasValidacion.length > 0 ? capasValidacion : capasInicialesValidacionFromUser(usuario)
+      buscarReportes(filtros, 0, capas)
+      cargarAnalisis(filtros, capas)
     }
-  }, [contrato_id, usuario?.id, usuario?.rol_id, usuario?.cargo_id, usuario?.permisos])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [efectivoOffline])
+
+  useEffect(() => {
+    if (!contrato_id) {
+      setSicoeMatrizSync({ actaRpo: '', filtro: '' })
+      return
+    }
+    const ac = new AbortController()
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/dashboard-matriz-validacion`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+      signal: ac.signal,
+    })
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((j) => {
+        const fm = (j && j.filtro) || ''
+        let ar = ''
+        if (fm === 'vigente' || fm === 'acta') {
+          if (j?.acta_rpo != null) ar = String(j.acta_rpo)
+        }
+        setSicoeMatrizSync({ actaRpo: ar, filtro: fm })
+      })
+      .catch(() => setSicoeMatrizSync({ actaRpo: '', filtro: '' }))
+    return () => ac.abort()
+  }, [contrato_id])
 
   /** Mismos query params que la grilla (para detalle / export coherente). */
   const sicoeAppendParamsBusquedaActivos = (params) => {
@@ -4291,6 +4496,34 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       setCargando(false)
       return
     }
+
+    // Helper: leer de IndexedDB
+    const usarIndexedDB = async () => {
+      const { reportes: lista, hay_mas } = await buscarReportesOffline(
+        contrato_id, nuevosFiltros, nuevoOffset, 50, capas
+      )
+      if (nuevoOffset === 0) setReportes(lista)
+      else setReportes(prev => [...prev, ...lista])
+      setHayMas(hay_mas)
+      setOffsetActual(nuevoOffset + 50)
+      setBusquedaRealizada(true)
+      setBusquedaAmplia(false)
+    }
+
+    // Sin red (o modo offline manual) → IndexedDB directo (sin seq check: offline no tiene race de red)
+    if (efectivoOfflineRef.current && isOfflineReadyRef.current) {
+      setCargando(true)
+      try {
+        await usarIndexedDB()
+      } catch(e) {
+        console.warn('[Offline] buscarReportes local falló:', e)
+        setReportes([])
+      } finally {
+        setCargando(false)
+      }
+      return
+    }
+
     const seq = ++sicoeBusquedaSeqRef.current
     setCargando(true)
     const esBusquedaAmplia = capas.length > 0 &&
@@ -4348,18 +4581,15 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         const rep = lista[0]
         setReporteSeleccionado({ ...rep, _cargandoDetalle: true, registros: [], puntos: [] })
         setModalCarpeta(true)
-        const r2 = await fetch(urlReporteDetalle(rep.id), { headers: { Authorization: `Bearer ${getToken()}` } })
+        // Detalle sin aplicar_filtros_busqueda: si no, capas/validación pueden excluir la línea y no hay _autoRegistro
+        const r2 = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${rep.id}`, {
+          headers: { Authorization: `Bearer ${getToken()}` },
+        })
         const detalle = await r2.json()
         if (seq !== sicoeBusquedaSeqRef.current) return
         if (detalle?.id) {
-          const nRaw = String(nuevosFiltros.numero_registro).trim()
-          const nNum = Number(nRaw)
           const regs = Array.isArray(detalle.registros) ? detalle.registros : []
-          const regMatch = Number.isFinite(nNum)
-            ? regs.find(
-                (r) => r.numero_registro === nNum || String(r?.numero_registro ?? '') === nRaw,
-              )
-            : null
+          const regMatch = sicoeBuscarRegistroPorNumeroFiltro(regs, nuevosFiltros.numero_registro)
           setReporteSeleccionado({
             ...detalle,
             _cargandoDetalle: false,
@@ -4367,23 +4597,62 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
           })
         }
       }
-    } catch(e) {}
+    } catch(e) {
+      // Red caída → fallback a IndexedDB si hay cache
+      if (isOfflineReady && seq === sicoeBusquedaSeqRef.current) {
+        try { await usarIndexedDB() } catch { setReportes([]) }
+      }
+    }
     finally {
       if (seq === sicoeBusquedaSeqRef.current) setCargando(false)
     }
   }
 
+  const ejecutarRefrescoSicoe = async (capasEfectivas) => {
+    await Promise.all([
+      buscarReportes(filtros, 0, capasEfectivas),
+      cargarAnalisis(filtros, capasEfectivas),
+    ]).catch(() => {})
+  }
+
+  const sicoeCerrarSyncOfferContinuarLocal = async () => {
+    if (sicoeSyncOfferBusy) return
+    const capas = sicoeSyncOfferCapasRef.current
+    setSicoeSyncOfferOpen(false)
+    if (capas) await ejecutarRefrescoSicoe(capas)
+  }
+
+  const sicoeConfirmarSyncOffer = async () => {
+    if (sicoeSyncOfferBusy) return
+    setSicoeSyncOfferBusy(true)
+    try {
+      const capas = sicoeSyncOfferCapasRef.current
+      const res = await runSync()
+      if (res?.ok) {
+        setForceOffline(false)
+        if (hayRedNavegador) efectivoOfflineRef.current = false
+      }
+      setSicoeSyncOfferOpen(false)
+      if (capas) await ejecutarRefrescoSicoe(capas)
+    } finally {
+      setSicoeSyncOfferBusy(false)
+    }
+  }
+
   /** Misma petición que «Buscar»: panel dinámico + grilla al día sin borrar filtros. */
-  const refrescarVistaSicoeObra = () => {
+  const refrescarVistaSicoeObra = async () => {
     const capasEfectivas = capasValidacion.length > 0 ? capasValidacion : capasInicialesValidacionFromUser(usuario)
     const hayFiltros = Object.values(filtros).some(v => v !== '') || capasEfectivas.length > 0
     if (!hayFiltros && nivelInfo.nivelValidacion) return
     if (!tieneParametrosBusquedaSicoe(filtros, capasEfectivas)) return
-    // Lanzar grilla y panel de análisis en paralelo — cada uno tiene su propio seq guard
-    Promise.all([
-      buscarReportes(filtros, 0, capasEfectivas),
-      cargarAnalisis(filtros, capasEfectivas),
-    ]).catch(() => {})
+    // Red disponible según el navegador pero el usuario sigue en «Trabajar sin conexión»
+    if (hayRedNavegador && forceOffline) {
+      sicoeSyncOfferCapasRef.current = capasEfectivas
+      setSicoeSyncOfferBusy(false)
+      setSicoeSyncOfferOpen(true)
+      return
+    }
+    await ejecutarRefrescoSicoe(capasEfectivas)
   }
 
   const fmtPesos = v => formatCOP(Number(v) || 0)
@@ -4454,6 +4723,26 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       return
     }
     setCargandoAnalisis(true)
+
+    // Modo offline: calcular panel dinámico localmente desde IndexedDB.
+    if (efectivoOfflineRef.current && isOfflineReadyRef.current) {
+      try {
+        const data = await calcularAnalisisOffline(contrato_id, nuevosFiltros, capas)
+        if (data?.grupos?.length) {
+          setAnalisis(data)
+          setPanelExpandido(true)   // auto-expandir para que el usuario vea los datos
+        } else {
+          setAnalisis(null)
+        }
+      } catch(e) {
+        console.warn('[cargarAnalisis offline] ERROR:', e)
+        setAnalisis(null)
+      } finally {
+        setCargandoAnalisis(false)
+      }
+      return
+    }
+
     try {
       const params = new URLSearchParams()
       const ef = { ...nuevosFiltros }
@@ -4502,6 +4791,15 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   }
 
   const actualizarFiltrosDisponibles = async (filtrosActivos) => {
+    // Modo offline: leer desde IndexedDB sin tocar la red (ref para evitar stale closure)
+    if (efectivoOfflineRef.current && isOfflineReadyRef.current) {
+      try {
+        const caps = await getCapitulosOffline(contrato_id)
+        setFiltroCapList(Array.isArray(caps) ? caps : [])
+      } catch(e) {}
+      setFiltroItemList([])
+      return
+    }
     const hdrs = { Authorization: `Bearer ${getToken()}` }
     const params = new URLSearchParams()
     const fa = nivelInfo.esInterventoria
@@ -4532,12 +4830,11 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     2: 'Nivel 2 · Contratista',
     3: 'Nivel 3 · Interventoría',
   }
+  // Filtrar por nivel es una operación de VISTA — siempre disponibles los 3 niveles.
+  // El nivel del usuario restringe las ACCIONES (validar), no la consulta.
   const nivelesDisponiblesEnFiltro = useMemo(() => {
-    if (nivelInfo.esApoyoTecnico) return [3]
-    if (nivelInfo.nivelValidacion) return [nivelInfo.nivelValidacion]
-    if (perm?.ver) return [1, 2, 3]
     return [1, 2, 3]
-  }, [nivelInfo.esApoyoTecnico, nivelInfo.nivelValidacion, perm?.ver])
+  }, [])
 
   const defaultCapasValidacion = useMemo(
     () => capasInicialesValidacionFromUser(usuario),
@@ -4560,6 +4857,25 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const capasSicoeRef = useRef(capasValidacion)
   capasSicoeRef.current = capasValidacion
 
+  // Auto-buscar al montar: acta alineada a la matriz del dashboard + capas por rol (mismo universo de líneas con ítem).
+  // En modo offline este efecto se omite: el auto-search de [efectivoOffline] ya maneja la carga desde caché.
+  useEffect(() => {
+    if (!contrato_id || sicoeMatrizSync === null) return
+    if (efectivoOfflineRef.current) return   // offline: no interferir con la carga desde caché
+    const capasIniciales = capasInicialesValidacionFromUser(usuario)
+    if (capasIniciales.length === 0) return
+    const ar = sicoeMatrizSync.actaRpo
+    const base = { ...filtrosSicoeRef.current }
+    let fMerged = base
+    if (ar && !sicoeActaAutoOnceRef.current && !String(base.acta_rpo || '').trim()) {
+      fMerged = { ...base, acta_rpo: ar }
+      sicoeActaAutoOnceRef.current = true
+      setFiltros(fMerged)
+    }
+    buscarReportes(fMerged, 0, capasIniciales)
+    cargarAnalisis(fMerged, capasIniciales)
+  }, [contrato_id, sicoeMatrizSync, usuario?.id, usuario?.rol_id, usuario?.cargo_id, usuario?.permisos])
+
   buscarReportesSicoeRef.current = buscarReportes
   cargarAnalisisSicoeRef.current = cargarAnalisis
   sicoeMapFiltroApplyPkRef.current = (pkIdInt) => {
@@ -4580,7 +4896,15 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       const u = urlReporteDetalle(rid)
       const r = await fetch(u, { headers: { Authorization: `Bearer ${getToken()}` } })
       const data = await r.json()
-      if (data?.id) setReporteSeleccionado({ ...data, _cargandoDetalle: false })
+      if (data?.id) {
+        const regF = String(filtrosSicoeRef.current?.numero_registro ?? '').trim()
+        const regMatch = regF ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regF) : null
+        setReporteSeleccionado({
+          ...data,
+          _cargandoDetalle: false,
+          ...(regMatch ? { _autoRegistro: regMatch.id } : {}),
+        })
+      }
     } catch { /* ignore */ }
   }
 
@@ -4967,8 +5291,12 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     setBusquedaRealizada(false)
     setHayMas(false)
     setOffsetActual(0)
-    fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos`, { headers: { Authorization: `Bearer ${getToken()}` } })
-      .then(r => r.json()).then(caps => setFiltroCapList(Array.isArray(caps) ? caps : [])).catch(() => {})
+    if (efectivoOfflineRef.current && isOfflineReadyRef.current) {
+      getCapitulosOffline(contrato_id).then(caps => setFiltroCapList(Array.isArray(caps) ? caps : [])).catch(() => {})
+    } else {
+      fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/capitulos`, { headers: { Authorization: `Bearer ${getToken()}` } })
+        .then(r => r.json()).then(caps => setFiltroCapList(Array.isArray(caps) ? caps : [])).catch(() => {})
+    }
   }
 
   // ── Exportar registros (popup con campos seleccionables) ─────────────────
@@ -5267,18 +5595,150 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
 
   return (
     <div>
+      {/* ── Banners offline ── */}
+      <OfflineStatusBanner />
+      <ConflictModal />
+
+      {sicoeSyncOfferOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10050,
+            background: t.overlay,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+          onClick={() => { if (!sicoeSyncOfferBusy) void sicoeCerrarSyncOfferContinuarLocal() }}
+          role="presentation"
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 1040,
+              background: t.bgCard,
+              border: `1px solid ${t.border}`,
+              borderRadius: 24,
+              boxShadow: '0 24px 80px rgba(0,0,0,0.35)',
+              overflow: 'hidden',
+            }}
+            onClick={e => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sicoe-sync-offer-title"
+          >
+            <div style={{
+              padding: '20px 32px',
+              borderBottom: `1px solid ${t.border}`,
+              background: '#0F1923',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 16,
+            }}>
+              <div id="sicoe-sync-offer-title" style={{ fontSize: 'var(--cc-h1)', fontWeight: 900, color: '#fff', letterSpacing: '-0.02em' }}>
+                ☁️ Hay conexión
+              </div>
+              <button
+                type="button"
+                disabled={sicoeSyncOfferBusy}
+                onClick={() => void sicoeCerrarSyncOfferContinuarLocal()}
+                aria-label="Cerrar"
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#94A3B8',
+                  cursor: sicoeSyncOfferBusy ? 'default' : 'pointer',
+                  fontSize: 28,
+                  lineHeight: 1,
+                  opacity: sicoeSyncOfferBusy ? 0.45 : 1,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ padding: '44px 48px 40px' }}>
+              <p style={{
+                margin: 0,
+                color: t.text,
+                fontSize: 'clamp(1.35rem, 3.2vw, 1.85rem)',
+                fontWeight: 800,
+                lineHeight: 1.35,
+                letterSpacing: '-0.02em',
+              }}>
+                ¿Sincronizar pendientes y quitar modo sin conexión?
+              </p>
+              <p style={{ margin: '14px 0 0', color: t.textMuted, fontSize: 'var(--cc-body)', lineHeight: 1.45, maxWidth: 720 }}>
+                Si no: sigues offline; solo se refresca la vista desde la caché.
+              </p>
+              {sicoeSyncOfferBusy && (
+                <p style={{ margin: '28px 0 0', color: t.primary, fontSize: 'var(--cc-body)', fontWeight: 800 }}>
+                  ⟳ Sincronizando…
+                </p>
+              )}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 36, justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  disabled={sicoeSyncOfferBusy}
+                  onClick={() => void sicoeCerrarSyncOfferContinuarLocal()}
+                  style={{
+                    flex: '1 1 220px',
+                    background: t.bg,
+                    border: `1px solid ${t.border}`,
+                    borderRadius: 12,
+                    padding: '16px 22px',
+                    color: t.textMuted,
+                    fontWeight: 800,
+                    fontSize: 'var(--cc-body)',
+                    cursor: sicoeSyncOfferBusy ? 'not-allowed' : 'pointer',
+                    opacity: sicoeSyncOfferBusy ? 0.55 : 1,
+                  }}
+                >
+                  No — solo refrescar
+                </button>
+                <button
+                  type="button"
+                  disabled={sicoeSyncOfferBusy}
+                  onClick={() => void sicoeConfirmarSyncOffer()}
+                  style={{
+                    flex: '1 1 240px',
+                    background: t.primary,
+                    border: 'none',
+                    borderRadius: 12,
+                    padding: '16px 22px',
+                    color: '#fff',
+                    fontWeight: 900,
+                    fontSize: 'var(--cc-body)',
+                    cursor: sicoeSyncOfferBusy ? 'not-allowed' : 'pointer',
+                    opacity: sicoeSyncOfferBusy ? 0.7 : 1,
+                  }}
+                >
+                  Sí — sincronizar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Header ── */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px' }}>
         <div>
           <h2 style={{ margin:0, color:t.text, fontSize:'var(--cc-title)', fontWeight:'800' }}>🏗️ SICOE Obra</h2>
           <p style={{ margin:0, color:t.textMuted, fontSize:'var(--cc-sm)' }}>Reporte de cantidades de campo</p>
         </div>
-        {puedeCrear && (
-          <button onClick={() => setModalNuevoReporte(true)} style={{
-            background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
-            padding:'10px 20px', fontWeight:'700', fontSize:'var(--cc-sm)', cursor:'pointer'
-          }}>+ Nuevo Reporte</button>
-        )}
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <PrepareOfflineBtn actaRpo={filtros.acta_rpo || null} />
+          <ForceOfflineToggle />
+          {puedeCrear && (
+            <button onClick={() => setModalNuevoReporte(true)} style={{
+              background: t.primary, color:'#fff', border:'none', borderRadius:'8px',
+              padding:'10px 20px', fontWeight:'700', fontSize:'var(--cc-sm)', cursor:'pointer'
+            }}>+ Nuevo Reporte</button>
+          )}
+        </div>
       </div>
 
       {/* ── Banner semana sin configurar ── */}
@@ -5486,7 +5946,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                   </tbody>
                   <tfoot>
                     <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
-                      <td colSpan={3} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
+                      <td colSpan={2} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
+                      <td style={{ padding:'7px 16px', textAlign:'right', color:t.text, fontSize:'var(--cc-sm)' }}>
+                        {(analisis.total_cantidad != null
+                          ? Number(analisis.total_cantidad)
+                          : (analisis.grupos || []).reduce((s, g) => s + (Number(g.cantidad_total) || 0), 0)
+                        ).toLocaleString('es-CO', { maximumFractionDigits: 2 })}
+                      </td>
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'var(--cc-sm)' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
                       {nivelInfo.verValoresEconomicos ? (
@@ -5691,7 +6157,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                 {mostrarSugsActa && filtroActaList.filter(a => !filtros.acta_rpo || String(a.numero_rpo).startsWith(String(filtros.acta_rpo))).length > 0 && (
                   <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 50, background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: '8px', minWidth: '120px', maxHeight: '200px', overflowY: 'auto', boxShadow: '0 4px 16px #0004', marginTop: '2px' }}>
                     {filtroActaList.filter(a => !filtros.acta_rpo || String(a.numero_rpo).startsWith(String(filtros.acta_rpo))).map(a => (
-                      <div key={a.numero_rpo}
+                      <div key={a.id ?? a.numero_rpo}
                         onMouseDown={() => {
                           setF('acta_rpo', String(a.numero_rpo))
                           setMostrarSugsActa(false)
@@ -6043,14 +6509,60 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
               } else if (esSub || puedeVer) {
                 setReporteSeleccionado({ ...rep, _cargandoDetalle: true, registros: [], puntos: [] })
                 setModalCarpeta(true)
+                const regNumBusqueda = String(filtros.numero_registro ?? '').trim()
                 ;(async () => {
                   try {
-                    const r = await fetch(urlReporteDetalle(rep.id), { headers: { Authorization: `Bearer ${getToken()}` } })
-                    const data = await r.json()
-                    if (data?.id) setReporteSeleccionado({ ...data, _cargandoDetalle: false })
+                    if (efectivoOffline && isOfflineReady) {
+                      const regs = await getRegistrosOffline(contrato_id, rep.id)
+                      const regMatch = regNumBusqueda
+                        ? sicoeBuscarRegistroPorNumeroFiltro(regs || [], regNumBusqueda)
+                        : null
+                      setReporteSeleccionado({
+                        ...rep,
+                        registros: regs || [],
+                        puntos: [],
+                        _cargandoDetalle: false,
+                        _offline: true,
+                        ...(regMatch ? { _autoRegistro: regMatch.id } : {}),
+                      })
+                    } else {
+                      const r = await fetch(urlReporteDetalle(rep.id), { headers: { Authorization: `Bearer ${getToken()}` } })
+                      const data = await r.json()
+                      if (data?.id) {
+                        const regMatch = regNumBusqueda
+                          ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
+                          : null
+                        setReporteSeleccionado({
+                          ...data,
+                          _cargandoDetalle: false,
+                          ...(regMatch ? { _autoRegistro: regMatch.id } : {}),
+                        })
+                      }
+                    }
                   } catch {
-                    setModalCarpeta(false)
-                    setReporteSeleccionado(null)
+                    // Fallback: intentar IndexedDB si el fetch falló
+                    if (isOfflineReady) {
+                      try {
+                        const regs = await getRegistrosOffline(contrato_id, rep.id)
+                        const regMatchFb = regNumBusqueda
+                          ? sicoeBuscarRegistroPorNumeroFiltro(regs || [], regNumBusqueda)
+                          : null
+                        setReporteSeleccionado({
+                          ...rep,
+                          registros: regs || [],
+                          puntos: [],
+                          _cargandoDetalle: false,
+                          _offline: true,
+                          ...(regMatchFb ? { _autoRegistro: regMatchFb.id } : {}),
+                        })
+                      } catch {
+                        setModalCarpeta(false)
+                        setReporteSeleccionado(null)
+                      }
+                    } else {
+                      setModalCarpeta(false)
+                      setReporteSeleccionado(null)
+                    }
                   }
                 })()
               }
@@ -6185,6 +6697,8 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
           t={t} usuario={usuario} token={getToken()}
           API_URL={API_URL} contrato_id={contrato_id}
           reporteInicial={reporteEditando}
+          isOnline={isOnline}
+          isOfflineReady={isOfflineReady}
           onClose={() => { setModalNuevoReporte(false); setReporteEditando(null) }}
           onGuardado={() => { setModalNuevoReporte(false); setReporteEditando(null); buscarReportes(filtros, 0, capasValidacion) }}
         />
@@ -6379,7 +6893,7 @@ function GaleriaFotos({ contrato_id, API_URL, hdrs, tipo, fechaDesde, fechaHasta
 }
 
 // ─── MODAL NUEVO REPORTE ──────────────────────────────────────────────────────
-function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, onGuardado, reporteInicial }) {
+function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, onGuardado, reporteInicial, isOnline = true, isOfflineReady = false }) {
   const [tabActivo, setTabActivo] = useState(0)
   const [guardando, setGuardando] = useState(false)
   const [errores, setErrores] = useState({})
@@ -6468,16 +6982,38 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   }, [contrato_id])
 
   useEffect(() => {
+    // ── Número de reporte ────────────────────────────────────────────────────
     if (!reporteInicial) {
-      fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-reporte`, { headers: hdrs })
-        .then((r) => r.json())
-        .then((d) => {
-          if (d.siguiente != null) setNumeroReporte(d.siguiente)
-        })
-        .catch(() => {})
+      if (!isOnline && isOfflineReady) {
+        // Offline: asignar número temporal — el servidor lo renumerará al sincronizar
+        getNextNumeroReporteOffline(contrato_id).then(n => setNumeroReporte(n))
+      } else {
+        fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-reporte`, { headers: hdrs })
+          .then((r) => r.json())
+          .then((d) => { if (d.siguiente != null) setNumeroReporte(d.siguiente) })
+          .catch(() => {})
+      }
     } else {
       setNumeroReporte(reporteInicial.numero_reporte)
     }
+
+    // ── Datos maestros: subcontratistas, inspectores, capítulos, PK-IDs ──────
+    if (!isOnline && isOfflineReady) {
+      // Offline: capítulos desde IndexedDB, el resto vacío (no es crítico para crear el reporte)
+      getPreciosOffline(contrato_id).then(d => {
+        if (Array.isArray(d)) {
+          const caps = [...new Set(d.map(r => r.capitulo).filter(Boolean))]
+          const sorted = caps.sort((a, b) => {
+            const na = parseInt(String(a).match(/^(\d+)/)?.[1] || '9999')
+            const nb = parseInt(String(b).match(/^(\d+)/)?.[1] || '9999')
+            return na - nb
+          })
+          setCapitulos(sorted.map(c => ({ capitulo: c })))
+        }
+      })
+      return
+    }
+
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs })
       .then(r => r.json()).then(d => setSubcontratistas(Array.isArray(d) ? d : []))
     fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: hdrs })
@@ -6536,7 +7072,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         cota: p.cota || '', descripcion: p.descripcion || ''
       })))
     }
-  }, [])
+  }, [isOnline, isOfflineReady])
 
   useEffect(() => {
     if (reporteInicial?.pk_id_id && pkIds.length > 0 && !pkSeleccionado) {
@@ -6732,6 +7268,62 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
     if (!validarTab1()) { setTabActivo(0); return }
     if (registros.length === 0) { alert('Debe tener al menos un registro en el TAB 3'); setTabActivo(2); return }
     setGuardando(true)
+
+    // ── Modo offline: guardar localmente y encolar ────────────────────────────
+    if (!isOnline && isOfflineReady) {
+      try {
+        const localId = `local_${Date.now()}`
+        const reporteData = {
+          numero_reporte: numeroReporte,
+          descripcion_actividad: descripcion || 'Borrador',
+          capitulo: capituloSel || 'Sin asignar',
+          estado: 'Sin Asignar Ítem',
+          margen: margen || null,
+          abs_inicio: parseFloat(absInicio) || null,
+          abs_final: parseFloat(absFinal) || null,
+          nodo_ini: nodoIni || null,
+          nodo_fin: nodoFin || null,
+        }
+        const reporteLocal = await crearReporteLocal(contrato_id, { id: localId, ...reporteData })
+        for (let i = 0; i < registros.length; i++) {
+          const reg = registros[i]
+          await crearRegistroLocal(contrato_id, localId, {
+            nombre: reg.nombre, descripcion: reg.observacion,
+            longitud: parseFloat(reg.longitud) || null,
+            ancho: parseFloat(reg.ancho) || null,
+            espesor: parseFloat(reg.espesor) || null,
+            cantidad: parseFloat(reg.cantidad) || null,
+            unidad: reg.unidad, observacion: reg.observacion,
+            foto_url: reg.foto_url, foto_numero: reg.foto_numero,
+            grafico_url: reg.grafico_url, grafico_numero: reg.grafico_numero,
+          })
+        }
+        await enqueueMutation({
+          type: 'create_reporte',
+          method: 'POST',
+          endpoint: `/sicoe-obra/${contrato_id}/reportes-offline`,
+          body: { ...reporteData, registros: registros.map(r => ({
+            nombre: r.nombre, descripcion: r.observacion,
+            longitud: parseFloat(r.longitud) || null,
+            ancho: parseFloat(r.ancho) || null,
+            espesor: parseFloat(r.espesor) || null,
+            cantidad: parseFloat(r.cantidad) || null,
+            unidad: r.unidad, observacion: r.observacion,
+            foto_url: r.foto_url, foto_numero: r.foto_numero,
+            grafico_url: r.grafico_url, grafico_numero: r.grafico_numero,
+          }))},
+          localData: reporteLocal,
+          localTable: 'so_reportes',
+          localId,
+        })
+        onGuardado()
+      } catch (e) {
+        alert(`Error guardando offline: ${e.message}`)
+      }
+      setGuardando(false)
+      return
+    }
+
     const httpErr = async (res) => {
       const t = await res.text()
       try {
@@ -9010,7 +9602,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [notifNavegar, setNotifNavegar] = useState(null)
   const colsGrid = '1fr 1fr'
   const [miniMapaColores, setMiniMapaColores] = useState({})
-  const [popupPkid,      setPopupPkid]      = useState(null)  // {pkid, data}
+  const [popupPkid,      setPopupPkid]      = useState(null)  // {pkid, data, error?}
   const [popupLoading,   setPopupLoading]   = useState(false)
   const [zoomingPkid,    setZoomingPkid]    = useState(false)
   const [dwgEnlazadoDash, setDwgEnlazadoDash] = useState(false)
@@ -9207,18 +9799,51 @@ async function refrescarDashDrillSilencioso(drill) {
   useEffect(() => { if (contratoIdDash) { setDashDrillPag(0); cargarDashDrill(dashDrill) } }, [contratoIdDash, dashDrill])
 
   async function abrirPopupPkid(pkid) {
-    if (dashDrill.length < 2) return
-    setPopupLoading(true); setPopupPkid({ pkid, data: null })
-    const tok = getToken()
-    const params = new URLSearchParams({ pk_id: pkid })
-    if (dashDrill[1]) params.set('item', dashDrill[1].valor)
-    if (dashDrill[0]) params.set('capitulo', dashDrill[0].valor)
-    const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-detalle?${params}`, {
-      headers: { Authorization: `Bearer ${tok}` }
-    })
-    const data = res.ok ? await res.json() : null
-    setPopupPkid({ pkid, data })
-    setPopupLoading(false)
+    if (dashDrill.length < 2 || !contratoIdDash) return
+    const pkNorm = String(pkid ?? '').trim()
+    if (!pkNorm) return
+    setPopupLoading(true)
+    setPopupPkid({ pkid: pkNorm, data: null, error: null })
+    try {
+      const tok = getToken()
+      const params = new URLSearchParams({ pk_id: pkNorm })
+      if (dashDrill[1]) params.set('item', dashDrill[1].valor)
+      if (dashDrill[0]) params.set('capitulo', dashDrill[0].valor)
+      const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-detalle?${params}`, {
+        headers: { Authorization: `Bearer ${tok}` },
+      })
+      let data = null
+      let error = null
+      const text = await res.text().catch(() => '')
+      if (res.ok) {
+        try {
+          data = text ? JSON.parse(text) : null
+        } catch {
+          data = null
+          error = 'La respuesta del servidor no es JSON válido.'
+        }
+      } else {
+        try {
+          const j = text ? JSON.parse(text) : null
+          const d = j?.detail
+          error = typeof d === 'string' ? d : (d != null ? JSON.stringify(d) : (text?.slice(0, 240) || `Error ${res.status}`))
+        } catch {
+          error = text?.slice(0, 240) || `Error ${res.status}`
+        }
+      }
+      if (!error && !data) {
+        error = 'Respuesta vacía del servidor.'
+      }
+      setPopupPkid({ pkid: pkNorm, data, error: data ? null : error })
+    } catch (e) {
+      setPopupPkid({
+        pkid: String(pkid ?? '').trim(),
+        data: null,
+        error: e?.message || 'No se pudo conectar con el servidor.',
+      })
+    } finally {
+      setPopupLoading(false)
+    }
   }
 
 async function enviarZoomPkid(pkid) {
@@ -9313,16 +9938,40 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
   async function abrirAnalisisMapaPopup(pkid) {
     if (!analisisSeleccion) return
-    setAnalisisMapaPopupLoading(true); setAnalisisMapaPopup({ pkid, data: null })
-    const tok = getToken()
-    const params = new URLSearchParams({ pk_id: pkid })
-    if (analisisSeleccion.capitulo) params.set('capitulo', analisisSeleccion.capitulo)
-    if (analisisSeleccion.item)     params.set('item', analisisSeleccion.item)
-    const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-detalle?${params}`, {
-      headers: { Authorization: `Bearer ${tok}` }
-    })
-    setAnalisisMapaPopup({ pkid, data: res.ok ? await res.json() : null })
-    setAnalisisMapaPopupLoading(false)
+    setAnalisisMapaPopupLoading(true); setAnalisisMapaPopup({ pkid, data: null, error: null })
+    try {
+      const tok = getToken()
+      const params = new URLSearchParams({ pk_id: String(pkid ?? '').trim() })
+      if (analisisSeleccion.capitulo) params.set('capitulo', analisisSeleccion.capitulo)
+      if (analisisSeleccion.item)     params.set('item', analisisSeleccion.item)
+      const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-detalle?${params}`, {
+        headers: { Authorization: `Bearer ${tok}` }
+      })
+      const text = await res.text().catch(() => '')
+      let data = null
+      let error = null
+      if (res.ok) {
+        try {
+          data = text ? JSON.parse(text) : null
+        } catch {
+          error = 'La respuesta del servidor no es JSON válido.'
+        }
+      } else {
+        try {
+          const j = text ? JSON.parse(text) : null
+          const d = j?.detail
+          error = typeof d === 'string' ? d : (d != null ? JSON.stringify(d) : (text?.slice(0, 240) || `Error ${res.status}`))
+        } catch {
+          error = text?.slice(0, 240) || `Error ${res.status}`
+        }
+      }
+      if (!error && !data) error = 'Respuesta vacía del servidor.'
+      setAnalisisMapaPopup({ pkid, data, error: data ? null : error })
+    } catch (e) {
+      setAnalisisMapaPopup({ pkid, data: null, error: e?.message || 'No se pudo conectar con el servidor.' })
+    } finally {
+      setAnalisisMapaPopupLoading(false)
+    }
   }
 
   async function cargarLiquidacion(nivel = liqNivel) {
@@ -9367,16 +10016,40 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
   async function abrirLiqMapaPopup(pkid) {
     if (!liqSeleccion) return
-    setLiqMapaPopupLoad(true); setLiqMapaPopup({ pkid, data: null })
-    const tok = getToken()
-    const params = new URLSearchParams({ pk_id: pkid })
-    if (liqSeleccion.capitulo) params.set('capitulo', liqSeleccion.capitulo)
-    if (liqSeleccion.item)     params.set('item', liqSeleccion.item)
-    const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-detalle?${params}`, {
-      headers: { Authorization: `Bearer ${tok}` }
-    })
-    setLiqMapaPopup({ pkid, data: res.ok ? await res.json() : null })
-    setLiqMapaPopupLoad(false)
+    setLiqMapaPopupLoad(true); setLiqMapaPopup({ pkid, data: null, error: null })
+    try {
+      const tok = getToken()
+      const params = new URLSearchParams({ pk_id: String(pkid ?? '').trim() })
+      if (liqSeleccion.capitulo) params.set('capitulo', liqSeleccion.capitulo)
+      if (liqSeleccion.item)     params.set('item', liqSeleccion.item)
+      const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-detalle?${params}`, {
+        headers: { Authorization: `Bearer ${tok}` }
+      })
+      const text = await res.text().catch(() => '')
+      let data = null
+      let error = null
+      if (res.ok) {
+        try {
+          data = text ? JSON.parse(text) : null
+        } catch {
+          error = 'La respuesta del servidor no es JSON válido.'
+        }
+      } else {
+        try {
+          const j = text ? JSON.parse(text) : null
+          const d = j?.detail
+          error = typeof d === 'string' ? d : (d != null ? JSON.stringify(d) : (text?.slice(0, 240) || `Error ${res.status}`))
+        } catch {
+          error = text?.slice(0, 240) || `Error ${res.status}`
+        }
+      }
+      if (!error && !data) error = 'Respuesta vacía del servidor.'
+      setLiqMapaPopup({ pkid, data, error: data ? null : error })
+    } catch (e) {
+      setLiqMapaPopup({ pkid, data: null, error: e?.message || 'No se pudo conectar con el servidor.' })
+    } finally {
+      setLiqMapaPopupLoad(false)
+    }
   }
 
   const liqFiltrado = useMemo(() => {
@@ -10953,7 +11626,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     )}
                   </div>
                 )
-              })() : <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>Sin datos</div>}
+              })() : liqMapaPopup.error ? (
+                <div style={{ textAlign:'center', padding:'40px', color:'#EF4444', fontSize:'var(--cc-sm)', lineHeight:1.5 }}>{liqMapaPopup.error}</div>
+              ) : (
+                <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>Sin datos</div>
+              )}
             </div>
           </div>
         )}
@@ -11082,7 +11759,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     </div>
                   </div>
                 )
-              })() : (
+              })() : popupPkid.error ? (
+                <div style={{ textAlign:'center', padding:'40px', color:'#EF4444', fontSize:'var(--cc-sm)', lineHeight:1.5 }}>{popupPkid.error}</div>
+              ) : (
                 <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>Sin datos</div>
               )}
             </div>
@@ -11167,7 +11846,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     )}
                   </div>
                 )
-              })() : <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>Sin datos</div>}
+              })() : analisisMapaPopup.error ? (
+                <div style={{ textAlign:'center', padding:'40px', color:'#EF4444', fontSize:'var(--cc-sm)', lineHeight:1.5 }}>{analisisMapaPopup.error}</div>
+              ) : (
+                <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>Sin datos</div>
+              )}
             </div>
           </div>
         )}
@@ -11215,19 +11898,25 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         )}
         {dashCarpetaReporte && (
           <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.6)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}>
-            <CarpetaReporte
-              t={t} usuario={usuario} API_URL={API_URL} contrato_id={contratoIdDash}
-              reporte={dashCarpetaReporte}
-              actasList={[]}
-              onClose={() => { setDashCarpetaReporte(null); setDashRegistroNumero(null) }}
-              onActualizar={() => { setDashCarpetaReporte(null); setDashRegistroNumero(null) }}
-            />
+            <OfflineProvider contratoId={contratoIdDash} authToken={getToken()}>
+              <CarpetaReporte
+                t={t} usuario={usuario} API_URL={API_URL} contrato_id={contratoIdDash}
+                reporte={dashCarpetaReporte}
+                actasList={[]}
+                onClose={() => { setDashCarpetaReporte(null); setDashRegistroNumero(null) }}
+                onActualizar={() => { setDashCarpetaReporte(null); setDashRegistroNumero(null) }}
+              />
+            </OfflineProvider>
           </div>
         )}
         {moduloActivo === 'presupuesto' && <ModuloPresupuesto t={t} usuario={usuario} token={getToken()} s={s} navRegistroId={navRegistroId} onNavRegistroConsumed={() => setNavRegistroId(null)} />}
 
 
-        {moduloActivo === 'sicoe_obra' && <ModuloSicoeObra t={t} usuario={usuario} token={getToken()} s={s} navRegistroNumero={navRegistroNumero} onNavReporteConsumed={() => setNavRegistroNumero(null)} />}
+        {moduloActivo === 'sicoe_obra' && (
+          <OfflineProvider contratoId={usuario?.contrato_id} authToken={getToken()}>
+            <ModuloSicoeObra t={t} usuario={usuario} token={getToken()} s={s} navRegistroNumero={navRegistroNumero} onNavReporteConsumed={() => setNavRegistroNumero(null)} />
+          </OfflineProvider>
+        )}
 
         {moduloActivo === 'informes' && (
           tienePermisoInformesCcd ? (
@@ -11322,6 +12011,13 @@ export default function App() {
   const [usuario, setUsuario] = useState(() => {
     try { return JSON.parse(localStorage.getItem('cc_usuario')) } catch { return null }
   })
+
+  // ── Registro del Service Worker (offline app shell) ───────────────────────
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {})
+    }
+  }, [])
 
   // ── Detección de nueva versión ─────────────────────────────────────────────
   const [hayNuevaVersion, setHayNuevaVersion] = useState(false)

@@ -545,6 +545,18 @@ export default function ModuloInformes({
   const [formatosMesAbierto, setFormatosMesAbierto] = useState(false)
   /** Formatos de entidades contratantes (p. ej. IDU FO-EO-04); cerrada por defecto. */
   const [formatosEntExtAbierto, setFormatosEntExtAbierto] = useState(false)
+  /** Subsistema seleccionado para la vista previa del FO-IDU-EO-04-V2 */
+  const [subsistemaFoEo04, setSubsistemaFoEo04] = useState('vial')
+  /** Acta seleccionada para la vista previa del FO-IDU-EO-04-V2 */
+  const [actaIdFoEo04, setActaIdFoEo04] = useState('')
+  /** Lista de actas RPO disponibles para el contrato */
+  const [actasRpoFoEo04, setActasRpoFoEo04] = useState([])
+  /** Nombre del supervisor(a) — se persiste en localStorage por contrato */
+  const [supervisorFoEo04, setSupervisorFoEo04] = useState('')
+  /** Job de generación progresiva de PDF para FO-IDU-EO-04-V2 */
+  const [foEo04Job, setFoEo04Job] = useState(null)
+  // { id, status, pct, msg, currentItem, totalItems, pdfUrl, error }
+  const foEo04JobPollRef = useRef(null)
   const [formatoMes001Abierto, setFormatoMes001Abierto] = useState(false)
   const [formatoMes002Abierto, setFormatoMes002Abierto] = useState(false)
   /** CC-MES-002: filas por ítem; recogido por defecto (mismo criterio que CC-SUB/CC-SEM). */
@@ -570,6 +582,7 @@ export default function ModuloInformes({
     'CC-MES-001': null,
     'CC-MES-002': null,
     'CC-GER-001': null,
+    'FO-IDU-EO-04-V2': null,
   })
   const [registrarFirmaBusy, setRegistrarFirmaBusy] = useState(false)
   // null | { fase:'cargando', tipo } | { fase:'ok', tipo, datos } | { fase:'error', tipo, mensaje }
@@ -666,9 +679,15 @@ export default function ModuloInformes({
           elaboro_nombre: '',
           elaboro_cargo: '',
           elaboro_usuario_id: null,
+          elaboro2_nombre: '',
+          elaboro2_cargo: '',
+          elaboro2_usuario_id: null,
           reviso_nombre: '',
           reviso_cargo: '',
           reviso_usuario_id: null,
+          reviso2_nombre: '',
+          reviso2_cargo: '',
+          reviso2_usuario_id: null,
           aprobo_nombre: '',
           aprobo_cargo: '',
           aprobo_usuario_id: null,
@@ -687,9 +706,15 @@ export default function ModuloInformes({
               elaboro_nombre: cf.elaboro_nombre ?? '',
               elaboro_cargo: cf.elaboro_cargo ?? '',
               elaboro_usuario_id: cf.elaboro_usuario_id ?? null,
+              elaboro2_nombre: cf.elaboro2_nombre ?? '',
+              elaboro2_cargo: cf.elaboro2_cargo ?? '',
+              elaboro2_usuario_id: cf.elaboro2_usuario_id ?? null,
               reviso_nombre: cf.reviso_nombre ?? '',
               reviso_cargo: cf.reviso_cargo ?? '',
               reviso_usuario_id: cf.reviso_usuario_id ?? null,
+              reviso2_nombre: cf.reviso2_nombre ?? '',
+              reviso2_cargo: cf.reviso2_cargo ?? '',
+              reviso2_usuario_id: cf.reviso2_usuario_id ?? null,
               aprobo_nombre: cf.aprobo_nombre ?? '',
               aprobo_cargo: cf.aprobo_cargo ?? '',
               aprobo_usuario_id: cf.aprobo_usuario_id ?? null,
@@ -810,6 +835,27 @@ export default function ModuloInformes({
   useEffect(() => {
     if (!formatoMes002Abierto) setCcMes002ListadoItemsAbierto(false)
   }, [formatoMes002Abierto])
+
+  /** Actas RPO + supervisor guardado: carga cuando se abre la sección de Formatos Entidades Externas */
+  useEffect(() => {
+    if (!formatosEntExtAbierto || !contratoId) return
+    // Restaurar supervisor guardado para este contrato
+    const savedSup = localStorage.getItem(`supervisor_fo_eo_04_${contratoId}`) || ''
+    setSupervisorFoEo04(savedSup)
+    const authToken = getAuthToken()
+    if (!authToken) return
+    fetchConFallback(`/informes/${contratoId}/ccd/actas-rpo`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then(r => r.ok ? r.json() : [])
+      .then(data => {
+        setActasRpoFoEo04(Array.isArray(data) ? data : [])
+        if (Array.isArray(data) && data.length > 0 && !actaIdFoEo04) {
+          setActaIdFoEo04(String(data[0].id))
+        }
+      })
+      .catch(() => {})
+  }, [formatosEntExtAbierto, contratoId])
 
   /** Semanas (pesado en servidor): solo al abrir «Formatos Semanales»; una vez por contrato. */
   useEffect(() => {
@@ -989,6 +1035,31 @@ export default function ModuloInformes({
       cancelled = true
     }
   }, [contratoId, gerAutoActaId])
+
+  // Carga firmas registradas para FO-IDU-EO-04-V2 cuando cambia el acta seleccionada
+  useEffect(() => {
+    const cod = 'FO-IDU-EO-04-V2'
+    if (contratoId == null || contratoId === '' || !actaIdFoEo04) {
+      setFirmasCcd((prev) => ({ ...prev, [cod]: null }))
+      return
+    }
+    const aid = parseInt(String(actaIdFoEo04), 10)
+    if (!Number.isFinite(aid)) {
+      setFirmasCcd((prev) => ({ ...prev, [cod]: null }))
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) return
+    let cancelled = false
+    fetchConFallback(
+      `/informes/${contratoId}/ccd/contexto/acta_rpo/${aid}/firmas-registradas/${encodeURIComponent(cod)}`,
+      { headers: { Authorization: `Bearer ${authToken}` } }
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => { if (!cancelled) setFirmasCcd((prev) => ({ ...prev, [cod]: data })) })
+      .catch(() => { if (!cancelled) setFirmasCcd((prev) => ({ ...prev, [cod]: null })) })
+    return () => { cancelled = true }
+  }, [contratoId, actaIdFoEo04])
 
   useEffect(() => {
     if (contratoId == null || contratoId === '') {
@@ -1716,6 +1787,40 @@ export default function ModuloInformes({
     }
   }
 
+  async function registrarFirmaFoEo04() {
+    const cod = 'FO-IDU-EO-04-V2'
+    if (!puedeValidarCcd) {
+      setError('No tienes permiso para registrar firmas (acción Validar en Informes CCD).')
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) { setError('Sesion no autenticada.'); return }
+    if (!actaIdFoEo04) { setError('Selecciona un acta para registrar la firma.'); return }
+    const aid = parseInt(String(actaIdFoEo04), 10)
+    if (!Number.isFinite(aid)) { setError('Acta no válida.'); return }
+    setFirmaRegistroBusy(cod)
+    setError(null)
+    try {
+      const r = await fetchConFallback(
+        `/informes/${contratoId}/ccd/contexto/acta_rpo/${aid}/registrar-firma/${encodeURIComponent(cod)}`,
+        { method: 'POST', headers: { Authorization: `Bearer ${authToken}` } }
+      )
+      if (!r?.ok) { setError(r ? await leerErrorRespuesta(r) : 'No se pudo registrar la firma.'); return }
+      const rr = await fetchConFallback(
+        `/informes/${contratoId}/ccd/contexto/acta_rpo/${aid}/firmas-registradas/${encodeURIComponent(cod)}`,
+        { headers: { Authorization: `Bearer ${authToken}` } }
+      )
+      if (rr?.ok) {
+        const data = await rr.json()
+        setFirmasCcd((prev) => ({ ...prev, [cod]: data }))
+      }
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setFirmaRegistroBusy(null)
+    }
+  }
+
   async function descargarExcelMemoriaCorteCompleto() {
     if (!puedeExportarCcd) {
       setError('No tienes permiso para exportar a Excel (acción Exportar en Informes CCD).')
@@ -2160,15 +2265,13 @@ export default function ModuloInformes({
       }
       if (!u) {
         if (campo === 'elaboro') {
-          return {
-            ...p,
-            [codigoFormato]: {
-              ...cur,
-              elaboro_nombre: '',
-              elaboro_cargo: '',
-              elaboro_usuario_id: null,
-            },
-          }
+          return { ...p, [codigoFormato]: { ...cur, elaboro_nombre: '', elaboro_cargo: '', elaboro_usuario_id: null } }
+        }
+        if (campo === 'elaboro2') {
+          return { ...p, [codigoFormato]: { ...cur, elaboro2_nombre: '', elaboro2_cargo: '', elaboro2_usuario_id: null } }
+        }
+        if (campo === 'reviso2') {
+          return { ...p, [codigoFormato]: { ...cur, reviso2_nombre: '', reviso2_cargo: '', reviso2_usuario_id: null } }
         }
         if (campo === 'aprobo') {
           return {
@@ -2213,6 +2316,28 @@ export default function ModuloInformes({
           },
         }
       }
+      if (campo === 'elaboro2') {
+        return {
+          ...p,
+          [codigoFormato]: {
+            ...cur,
+            elaboro2_nombre: u.nombre_completo,
+            elaboro2_cargo: u.cargo,
+            elaboro2_usuario_id: u.id,
+          },
+        }
+      }
+      if (campo === 'reviso2') {
+        return {
+          ...p,
+          [codigoFormato]: {
+            ...cur,
+            reviso2_nombre: u.nombre_completo,
+            reviso2_cargo: u.cargo,
+            reviso2_usuario_id: u.id,
+          },
+        }
+      }
       return {
         ...p,
         [codigoFormato]: {
@@ -2226,7 +2351,7 @@ export default function ModuloInformes({
   }
 
   /** Plantilla PDF sin datos (misma modal de vista previa que el resto de informes). */
-  async function abrirPreviewPlantillaVacia(codigoFormato) {
+  async function abrirPreviewPlantillaVacia(codigoFormato, subsistema = null) {
     const authToken = getAuthToken()
     if (!authToken || !contratoId) {
       setError('Sesión no autenticada.')
@@ -2244,8 +2369,13 @@ export default function ModuloInformes({
     })
     setError(null)
     try {
+      const params = new URLSearchParams()
+      if (subsistema) params.set('subsistema', subsistema)
+      if (actaIdFoEo04) params.set('acta_id', actaIdFoEo04)
+      if (supervisorFoEo04.trim()) params.set('supervisor', supervisorFoEo04.trim())
+      const qs = params.toString() ? `?${params.toString()}` : ''
       const r = await fetchConFallback(
-        `/informes/${contratoId}/ccd/preview-plantilla-vacia/${encodeURIComponent(codigoFormato)}`,
+        `/informes/${contratoId}/ccd/preview-plantilla-vacia/${encodeURIComponent(codigoFormato)}${qs}`,
         { headers: { Authorization: `Bearer ${authToken}` } }
       )
       if (!r.ok) {
@@ -2268,6 +2398,107 @@ export default function ModuloInformes({
     }
   }
 
+  async function abrirPreviewFoEo04ConProgreso() {
+    const authToken = getAuthToken()
+    if (!authToken || !contratoId) { setError('Sesión no autenticada.'); return }
+
+    // Limpiar job anterior y su poll
+    if (foEo04JobPollRef.current) {
+      clearTimeout(foEo04JobPollRef.current)
+      foEo04JobPollRef.current = null
+    }
+    if (vistaPrevia?.pdfUrl) {
+      try { URL.revokeObjectURL(vistaPrevia.pdfUrl) } catch { /* noop */ }
+    }
+    setVistaPrevia({ fase: 'progreso', tipo: 'idu-plantilla-vacia' })
+    setFoEo04Job({ id: null, status: 'iniciando', pct: 0, msg: 'Iniciando…', currentItem: null, totalItems: null })
+    setError(null)
+
+    try {
+      // 1. Iniciar job en backend
+      const params = new URLSearchParams({ formato_codigo: 'FO-IDU-EO-04-V2', subsistema: subsistemaFoEo04 })
+      if (actaIdFoEo04) params.set('acta_id', actaIdFoEo04)
+      if (supervisorFoEo04.trim()) params.set('supervisor', supervisorFoEo04.trim())
+
+      const rInit = await fetchConFallback(
+        `/informes/${contratoId}/ccd/pdf-job/iniciar?${params.toString()}`,
+        { method: 'POST', headers: { Authorization: `Bearer ${authToken}` } }
+      )
+      if (!rInit.ok) {
+        const msg = await leerErrorRespuesta(rInit)
+        setVistaPrevia({ fase: 'error', tipo: 'idu-plantilla-vacia', mensaje: msg })
+        setFoEo04Job(null)
+        return
+      }
+      const { job_id } = await rInit.json()
+      setFoEo04Job((prev) => ({ ...prev, id: job_id, status: 'progresando' }))
+
+      // 2. Polling con setTimeout recursivo (evita solapamiento de llamadas async)
+      let done = false
+      const poll = async () => {
+        if (done) return
+        try {
+          const rEstado = await fetchConFallback(
+            `/informes/${contratoId}/ccd/pdf-job/${job_id}/estado`,
+            { headers: { Authorization: `Bearer ${authToken}` } }
+          )
+          if (done) return
+          if (!rEstado.ok) {
+            if (!done) foEo04JobPollRef.current = setTimeout(poll, 1500)
+            return
+          }
+          const estado = await rEstado.json()
+          if (done) return
+
+          if (estado.status === 'listo') {
+            done = true
+            foEo04JobPollRef.current = null
+            // Actualizar progreso a 100% antes de descargar
+            setFoEo04Job((prev) => ({ ...prev, status: 'listo', pct: 100, currentItem: estado.total_items, totalItems: estado.total_items }))
+            // Descargar PDF
+            const rPdf = await fetchConFallback(
+              `/informes/${contratoId}/ccd/pdf-job/${job_id}/pdf`,
+              { headers: { Authorization: `Bearer ${authToken}` } }
+            )
+            if (!rPdf.ok) {
+              setVistaPrevia({ fase: 'error', tipo: 'idu-plantilla-vacia', mensaje: await leerErrorRespuesta(rPdf) })
+              setFoEo04Job(null)
+              return
+            }
+            const blob = await rPdf.blob()
+            const pdfUrl = URL.createObjectURL(blob)
+            // Una sola actualización de estado → sin parpadeo
+            setFoEo04Job(null)
+            setVistaPrevia({ fase: 'ok', tipo: 'idu-plantilla-vacia-pdf', pdfUrl })
+          } else if (estado.status === 'error') {
+            done = true
+            foEo04JobPollRef.current = null
+            setVistaPrevia({ fase: 'error', tipo: 'idu-plantilla-vacia', mensaje: estado.error || 'Error al generar el PDF.' })
+            setFoEo04Job(null)
+          } else {
+            // Aún en progreso — actualizar y programar siguiente poll
+            setFoEo04Job((prev) => ({
+              ...prev,
+              status: estado.status,
+              pct: estado.pct ?? prev?.pct ?? 0,
+              currentItem: estado.current_item ?? null,
+              totalItems: estado.total_items ?? null,
+            }))
+            foEo04JobPollRef.current = setTimeout(poll, 1200)
+          }
+        } catch {
+          // Error de red temporal → reintentar
+          if (!done) foEo04JobPollRef.current = setTimeout(poll, 2000)
+        }
+      }
+      foEo04JobPollRef.current = setTimeout(poll, 800)
+    } catch (e) {
+      if (foEo04JobPollRef.current) { clearTimeout(foEo04JobPollRef.current); foEo04JobPollRef.current = null }
+      setVistaPrevia({ fase: 'error', tipo: 'idu-plantilla-vacia', mensaje: String(e?.message || e) })
+      setFoEo04Job(null)
+    }
+  }
+
   async function guardarCfgFirmaCcd(codigoFormato) {
     if (!puedeEditarCcd) return
     const authToken = getAuthToken()
@@ -2287,6 +2518,13 @@ export default function ModuloInformes({
         setError(msg)
         return
       }
+      // Verificar que el servidor haya devuelto datos (detecta fallos silenciosos)
+      const saved = await r.json().catch(() => null)
+      if (!saved || typeof saved !== 'object') {
+        setError('No se pudo confirmar el guardado. Intenta de nuevo.')
+      }
+      // No sobreescribir el estado local — los datos del usuario son correctos.
+      // La persistencia queda garantizada por el backend.
     } catch (e) {
       setError(String(e?.message || e))
     } finally {
@@ -2563,7 +2801,88 @@ export default function ModuloInformes({
                     </div>
                   </div>
                 )}
-                {(fmt.slots_firma || []).length > 0 && (
+
+                {/* ── 4 firmantes exclusivos de FO-IDU-EO-04-V2 ── */}
+                {fmt.codigo === 'FO-IDU-EO-04-V2' && puedeEditarCcd && (() => {
+                  const cfgF = cfgFirmaCcd['FO-IDU-EO-04-V2'] || {}
+                  const slotStyles = {
+                    border: `1px solid ${t.border}`, borderRadius: '8px',
+                    padding: '10px 12px', background: t.bg,
+                  }
+                  const lbl = { fontSize: '11px', display: 'block', marginBottom: '4px', color: t.textMuted }
+                  const renderSlot = (titulo, campo) => {
+                    const nombreVal = cfgF[`${campo}_nombre`] || ''
+                    const cargoVal = cfgF[`${campo}_cargo`] || ''
+                    const uidVal = cfgF[`${campo}_usuario_id`] || ''
+                    return (
+                      <div style={slotStyles}>
+                        <div style={{ fontWeight: '800', color: t.text, fontSize: Math.max(11, f.sub - 1) + 'px', marginBottom: '8px' }}>
+                          {titulo}
+                        </div>
+                        <label style={lbl}>Usuario del catálogo del contrato</label>
+                        <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
+                          <select
+                            style={{ ...select, fontSize: '13px', flex: 1 }}
+                            value={uidVal}
+                            onChange={(e) => aplicarFirmante(campo, e.target.value, 'FO-IDU-EO-04-V2')}
+                          >
+                            <option value="">— Elegir —</option>
+                            {firmantesCcd.map((u) => (
+                              <option key={u.id} value={u.id}>{u.nombre_completo} ({u.cargo})</option>
+                            ))}
+                          </select>
+                          {nombreVal && (
+                            <button
+                              type="button"
+                              title="Quitar usuario de este slot"
+                              onClick={() => aplicarFirmante(campo, '', 'FO-IDU-EO-04-V2')}
+                              style={{ padding: '4px 8px', borderRadius: '5px', border: '1px solid #fca5a5', background: '#fef2f2', color: '#dc2626', cursor: 'pointer', fontSize: '13px', fontWeight: '700', flexShrink: 0 }}
+                            >✕</button>
+                          )}
+                        </div>
+                        <input
+                          placeholder="Nombre (editable)"
+                          value={nombreVal}
+                          onChange={(e) => {
+                            const v = e.target.value
+                            setCfgFirmaCcd((p) => ({
+                              ...p,
+                              'FO-IDU-EO-04-V2': { ...(p['FO-IDU-EO-04-V2'] || {}), [`${campo}_nombre`]: v },
+                            }))
+                          }}
+                          style={{ ...select, marginBottom: '6px', fontSize: '13px' }}
+                        />
+                        <input
+                          placeholder="Cargo"
+                          value={cargoVal}
+                          onChange={(e) => {
+                            const v = e.target.value
+                            setCfgFirmaCcd((p) => ({
+                              ...p,
+                              'FO-IDU-EO-04-V2': { ...(p['FO-IDU-EO-04-V2'] || {}), [`${campo}_cargo`]: v },
+                            }))
+                          }}
+                          style={{ ...select, fontSize: '13px' }}
+                        />
+                      </div>
+                    )
+                  }
+                  return (
+                    <div style={{ marginBottom: '12px' }}>
+                      <div style={{ fontSize: Math.max(11, f.sub - 1) + 'px', fontWeight: '700', color: t.text, marginBottom: '8px' }}>
+                        Firmas — Elaboró (2) · Revisó (2)
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                        {renderSlot('Elaboró 1', 'elaboro')}
+                        {renderSlot('Elaboró 2', 'elaboro2')}
+                        {renderSlot('Revisó 1', 'reviso')}
+                        {renderSlot('Revisó 2', 'reviso2')}
+                      </div>
+                    </div>
+                  )
+                })()}
+
+                {(fmt.slots_firma || []).length > 0 && fmt.codigo !== 'FO-IDU-EO-04-V2' && (
                   <div
                     style={{
                       display: 'grid',
@@ -2587,123 +2906,66 @@ export default function ModuloInformes({
                         </div>
                         {slot.origen === 'configuracion' && puedeEditarSlotsConfig && (
                           <>
-                            {slot.id === 'elaboro' && (
-                              <>
-                                <label style={{ fontSize: '11px', display: 'block', marginBottom: '4px' }}>Usuario / cargo (catálogo del contrato)</label>
-                                <select
-                                  style={{ ...select, fontSize: '13px', marginBottom: '6px' }}
-                                  value=""
-                                  onChange={(e) => aplicarFirmante('elaboro', e.target.value, fmt.codigo)}
-                                >
-                                  <option value="">— Elegir —</option>
-                                  {firmantesCcd.map((u) => (
-                                    <option key={u.id} value={u.id}>
-                                      {u.nombre_completo} ({u.cargo})
-                                    </option>
-                                  ))}
-                                </select>
-                                <input
-                                  placeholder="Nombre (editable)"
-                                  value={cfgF.elaboro_nombre}
-                                  onChange={(e) =>
-                                    setCfgFirmaCcd((p) => ({
-                                      ...p,
-                                      [fmt.codigo]: { ...cfgF, elaboro_nombre: e.target.value },
-                                    }))
-                                  }
-                                  style={{ ...select, marginBottom: '6px', fontSize: '13px' }}
-                                />
-                                <input
-                                  placeholder="Cargo"
-                                  value={cfgF.elaboro_cargo}
-                                  onChange={(e) =>
-                                    setCfgFirmaCcd((p) => ({
-                                      ...p,
-                                      [fmt.codigo]: { ...cfgF, elaboro_cargo: e.target.value },
-                                    }))
-                                  }
-                                  style={{ ...select, fontSize: '13px' }}
-                                />
-                              </>
-                            )}
-                            {slot.id === 'reviso' && (
-                              <>
-                                <label style={{ fontSize: '11px', display: 'block', marginBottom: '4px' }}>Usuario / cargo (catálogo del contrato)</label>
-                                <select
-                                  style={{ ...select, fontSize: '13px', marginBottom: '6px' }}
-                                  value=""
-                                  onChange={(e) => aplicarFirmante('reviso', e.target.value, fmt.codigo)}
-                                >
-                                  <option value="">— Elegir —</option>
-                                  {firmantesCcd.map((u) => (
-                                    <option key={u.id} value={u.id}>
-                                      {u.nombre_completo} ({u.cargo})
-                                    </option>
-                                  ))}
-                                </select>
-                                <input
-                                  placeholder="Nombre (editable)"
-                                  value={cfgF.reviso_nombre}
-                                  onChange={(e) =>
-                                    setCfgFirmaCcd((p) => ({
-                                      ...p,
-                                      [fmt.codigo]: { ...cfgF, reviso_nombre: e.target.value },
-                                    }))
-                                  }
-                                  style={{ ...select, marginBottom: '6px', fontSize: '13px' }}
-                                />
-                                <input
-                                  placeholder="Cargo"
-                                  value={cfgF.reviso_cargo}
-                                  onChange={(e) =>
-                                    setCfgFirmaCcd((p) => ({
-                                      ...p,
-                                      [fmt.codigo]: { ...cfgF, reviso_cargo: e.target.value },
-                                    }))
-                                  }
-                                  style={{ ...select, fontSize: '13px' }}
-                                />
-                              </>
-                            )}
-                            {slot.id === 'aprobo' && (
-                              <>
-                                <label style={{ fontSize: '11px', display: 'block', marginBottom: '4px' }}>Usuario / cargo (catálogo del contrato)</label>
-                                <select
-                                  style={{ ...select, fontSize: '13px', marginBottom: '6px' }}
-                                  value=""
-                                  onChange={(e) => aplicarFirmante('aprobo', e.target.value, fmt.codigo)}
-                                >
-                                  <option value="">— Elegir —</option>
-                                  {firmantesCcd.map((u) => (
-                                    <option key={u.id} value={u.id}>
-                                      {u.nombre_completo} ({u.cargo})
-                                    </option>
-                                  ))}
-                                </select>
-                                <input
-                                  placeholder="Nombre (editable)"
-                                  value={cfgF.aprobo_nombre || ''}
-                                  onChange={(e) =>
-                                    setCfgFirmaCcd((p) => ({
-                                      ...p,
-                                      [fmt.codigo]: { ...cfgF, aprobo_nombre: e.target.value },
-                                    }))
-                                  }
-                                  style={{ ...select, marginBottom: '6px', fontSize: '13px' }}
-                                />
-                                <input
-                                  placeholder="Cargo"
-                                  value={cfgF.aprobo_cargo || ''}
-                                  onChange={(e) =>
-                                    setCfgFirmaCcd((p) => ({
-                                      ...p,
-                                      [fmt.codigo]: { ...cfgF, aprobo_cargo: e.target.value },
-                                    }))
-                                  }
-                                  style={{ ...select, fontSize: '13px' }}
-                                />
-                              </>
-                            )}
+                            {['elaboro', 'reviso', 'aprobo'].includes(slot.id) && (() => {
+                              const campo = slot.id
+                              const nombreKey = `${campo}_nombre`
+                              const cargoKey = `${campo}_cargo`
+                              const uidKey = `${campo}_usuario_id`
+                              const nombreVal = cfgF[nombreKey] || ''
+                              const cargoVal = cfgF[cargoKey] || ''
+                              const uidVal = cfgF[uidKey] || ''
+                              return (
+                                <>
+                                  <label style={{ fontSize: '11px', display: 'block', marginBottom: '4px' }}>Usuario / cargo (catálogo del contrato)</label>
+                                  <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
+                                    <select
+                                      style={{ ...select, fontSize: '13px', flex: 1 }}
+                                      value={uidVal}
+                                      onChange={(e) => aplicarFirmante(campo, e.target.value, fmt.codigo)}
+                                    >
+                                      <option value="">— Elegir —</option>
+                                      {firmantesCcd.map((u) => (
+                                        <option key={u.id} value={u.id}>
+                                          {u.nombre_completo} ({u.cargo})
+                                        </option>
+                                      ))}
+                                    </select>
+                                    {nombreVal && (
+                                      <button
+                                        type="button"
+                                        title="Quitar usuario de este slot"
+                                        onClick={() => aplicarFirmante(campo, '', fmt.codigo)}
+                                        style={{ padding: '4px 8px', borderRadius: '5px', border: '1px solid #fca5a5', background: '#fef2f2', color: '#dc2626', cursor: 'pointer', fontSize: '13px', fontWeight: '700', flexShrink: 0 }}
+                                      >✕</button>
+                                    )}
+                                  </div>
+                                  <input
+                                    placeholder="Nombre (editable)"
+                                    value={nombreVal}
+                                    onChange={(e) => {
+                                      const v = e.target.value
+                                      setCfgFirmaCcd((p) => ({
+                                        ...p,
+                                        [fmt.codigo]: { ...(p[fmt.codigo] || {}), [nombreKey]: v },
+                                      }))
+                                    }}
+                                    style={{ ...select, marginBottom: '6px', fontSize: '13px' }}
+                                  />
+                                  <input
+                                    placeholder="Cargo"
+                                    value={cargoVal}
+                                    onChange={(e) => {
+                                      const v = e.target.value
+                                      setCfgFirmaCcd((p) => ({
+                                        ...p,
+                                        [fmt.codigo]: { ...(p[fmt.codigo] || {}), [cargoKey]: v },
+                                      }))
+                                    }}
+                                    style={{ ...select, fontSize: '13px' }}
+                                  />
+                                </>
+                              )
+                            })()}
                           </>
                         )}
                         {slot.origen === 'subcontratista' && (
@@ -2943,7 +3205,7 @@ export default function ModuloInformes({
                   </div>
                   )
                 })()}
-                {(puedeEditarSlotsConfig || puedePersonalizarEstiloPdf) && (
+                {(puedeEditarSlotsConfig || puedePersonalizarEstiloPdf || (fmt.codigo === 'FO-IDU-EO-04-V2' && puedeEditarCcd)) && (
                   <button
                     type="button"
                     onClick={() => guardarCfgFirmaCcd(fmt.codigo)}
@@ -4599,38 +4861,166 @@ export default function ModuloInformes({
                   style={{
                     display: 'flex',
                     flexWrap: 'wrap',
-                    alignItems: 'center',
-                    gap: '8px',
-                    padding: '8px 10px',
+                    alignItems: 'flex-start',
+                    gap: '10px',
+                    padding: '10px',
                     borderRadius: '8px',
                     border: `1px solid ${t.border}`,
                     background: t.bgCard,
                   }}
                 >
+                  {/* Columna izquierda: Supervisor + Subdirección */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: '1 1 200px', minWidth: '170px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <label style={{ fontSize: (ui.hint - 1) + 'px', color: t.textMuted, fontWeight: '600' }}>
+                        Supervisor(a) <span style={{ color: '#ef4444' }}>*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={supervisorFoEo04}
+                        onChange={e => {
+                          setSupervisorFoEo04(e.target.value)
+                          localStorage.setItem(`supervisor_fo_eo_04_${contratoId}`, e.target.value)
+                        }}
+                        placeholder="Nombre del supervisor(a) delegado(a)"
+                        style={{
+                          fontSize: ui.hint + 'px',
+                          padding: '4px 8px',
+                          borderRadius: '6px',
+                          border: `1px solid ${supervisorFoEo04.trim() ? t.border : '#ef4444'}`,
+                          background: t.bgCard,
+                          color: t.text,
+                          outline: 'none',
+                        }}
+                      />
+                      {!supervisorFoEo04.trim() && (
+                        <span style={{ fontSize: (ui.hint - 1) + 'px', color: '#ef4444' }}>
+                          Requerido para generar el formato
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <label style={{ fontSize: (ui.hint - 1) + 'px', color: t.textMuted, fontWeight: '600' }}>
+                        Subdirección Técnica
+                      </label>
+                      <select
+                        value={subsistemaFoEo04}
+                        onChange={e => setSubsistemaFoEo04(e.target.value)}
+                        style={{ fontSize: ui.hint + 'px', padding: '4px 8px', borderRadius: '6px', border: `1px solid ${t.border}`, background: t.bgCard, color: t.text, cursor: 'pointer' }}
+                      >
+                        <option value="vial">De Ejecución del Subsistema Vial</option>
+                        <option value="transporte">De Ejecución del Subsistema de Transporte</option>
+                      </select>
+                    </div>
+                  </div>
+                  {/* Separador */}
+                  <span style={{ flex: '1 1 8px' }} aria-hidden />
+
+                  {/* Columna derecha: Acta + badges + botones */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-end' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', width: '100%' }}>
+                      <label style={{ fontSize: (ui.hint - 1) + 'px', color: t.textMuted, fontWeight: '600' }}>
+                        Acta / Recibo Parcial
+                      </label>
+                      <select
+                        value={actaIdFoEo04}
+                        onChange={e => setActaIdFoEo04(e.target.value)}
+                        style={{ fontSize: ui.hint + 'px', padding: '4px 8px', borderRadius: '6px', border: `1px solid ${t.border}`, background: t.bgCard, color: t.text, cursor: 'pointer' }}
+                      >
+                        <option value="">— Sin acta —</option>
+                        {actasRpoFoEo04.map(a => (
+                          <option key={a.id} value={String(a.id)}>
+                            Acta RPO {a.numero_rpo ?? a.consecutivo}
+                            {a.fecha_inicio ? ` (${a.fecha_inicio.slice(0,10)})` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', justifyContent: 'flex-end' }}>
+                  {actaIdFoEo04 && (() => {
+                    const fs = firmasCcd['FO-IDU-EO-04-V2']
+                    if (!fs) return null
+                    const badges = [
+                      { key: 'elaboro',  label: 'E1', titulo: 'Elaboró 1' },
+                      { key: 'elaboro2', label: 'E2', titulo: 'Elaboró 2' },
+                      { key: 'reviso',   label: 'R1', titulo: 'Revisó 1'  },
+                      { key: 'reviso2',  label: 'R2', titulo: 'Revisó 2'  },
+                    ]
+                    return (
+                      <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                        {badges.map(({ key, label, titulo }) => (
+                          <span
+                            key={key}
+                            style={chipFirmaEstado(!!fs[key])}
+                            title={fs[key] ? `${titulo}: firma registrada` : `${titulo}: pendiente`}
+                          >
+                            {label} {fs[key] ? '✓' : '·'}
+                          </span>
+                        ))}
+                      </div>
+                    )
+                  })()}
+                  {/* Botón: vista previa con progreso */}
                   <button
                     type="button"
                     style={btnCcdToolbar(
-                      vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-plantilla-vacia',
+                      ['cargando','progreso'].includes(vistaPrevia?.fase) && vistaPrevia?.tipo === 'idu-plantilla-vacia',
                       'vista'
                     )}
-                    onClick={() => abrirPreviewPlantillaVacia('FO-IDU-EO-04-V2')}
+                    onClick={abrirPreviewFoEo04ConProgreso}
                     disabled={
-                      vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-plantilla-vacia'
+                      !supervisorFoEo04.trim() ||
+                      (['cargando','progreso'].includes(vistaPrevia?.fase) && vistaPrevia?.tipo === 'idu-plantilla-vacia')
                     }
-                    title="Abre el PDF de plantilla vacía en el visor (mismo modal que otros informes)"
-                    aria-label="Vista previa plantilla vacía FO-IDU-EO-04-V2"
+                    title={!supervisorFoEo04.trim() ? 'Ingrese el nombre del supervisor(a) para continuar' : 'Vista previa PDF'}
+                    aria-label="Vista previa FO-IDU-EO-04-V2"
                   >
-                    {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-plantilla-vacia' ? (
-                      <span style={{ fontSize: ui.body + 'px' }} aria-hidden>
-                        ⏳
-                      </span>
+                    {['cargando','progreso'].includes(vistaPrevia?.fase) && vistaPrevia?.tipo === 'idu-plantilla-vacia' ? (
+                      <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                     ) : (
                       <IconoVistaPrevia size={ui.iconSvg} />
                     )}
                   </button>
-                  <span style={{ fontSize: ui.body + 'px', color: t.text, fontWeight: '600' }}>
-                    Vista previa plantilla vacía (PDF)
-                  </span>
+                  {/* Botón: descargar PDF con sello */}
+                  <button
+                    type="button"
+                    style={btnCcdToolbar(concPdfBusy, 'pdf')}
+                    onClick={() => {
+                      const qs = new URLSearchParams({
+                        subsistema: subsistemaFoEo04 || 'vial',
+                        supervisor: supervisorFoEo04.trim(),
+                        ...(actaIdFoEo04 ? { acta_id: actaIdFoEo04 } : {}),
+                      }).toString()
+                      descargarPdfConc(
+                        `/informes/${contratoId}/ccd/preview-plantilla-vacia/FO-IDU-EO-04-V2/con-sello-firma?${qs}`,
+                        'FO-IDU-EO-04-V2.pdf'
+                      )
+                    }}
+                    disabled={!supervisorFoEo04.trim() || concPdfBusy}
+                    title={!supervisorFoEo04.trim() ? 'Ingrese el nombre del supervisor(a) para continuar' : 'Descargar PDF con página de sello (firma del perfil, fecha, huella SHA-256)'}
+                    aria-label="Descargar PDF FO-IDU-EO-04-V2 con sello"
+                  >
+                    {concPdfBusy
+                      ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                      : <IconoPdfSello size={ui.iconSvg} />}
+                  </button>
+                  {/* Botón: registrar firma */}
+                  {puedeValidarCcd && (
+                    <button
+                      type="button"
+                      style={btnCcdToolbar(firmaRegistroBusy === 'FO-IDU-EO-04-V2', 'firma')}
+                      onClick={registrarFirmaFoEo04}
+                      disabled={!actaIdFoEo04 || firmaRegistroBusy === 'FO-IDU-EO-04-V2'}
+                      title={!actaIdFoEo04 ? 'Selecciona un acta para registrar tu firma' : 'Registrar tu firma del perfil (Elaboró o Revisó según Biblioteca CCD)'}
+                      aria-label="Registrar mi firma FO-IDU-EO-04-V2"
+                    >
+                      {firmaRegistroBusy === 'FO-IDU-EO-04-V2'
+                        ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                        : <IconoFirmaRegistrar size={ui.iconSvg} />}
+                    </button>
+                  )}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -4643,6 +5033,8 @@ export default function ModuloInformes({
       {vistaPrevia && (() => {
         const esVistaPreviaGerencia =
           vistaPrevia.tipo === 'corte-ger' || vistaPrevia.tipo === 'corte-ger-pdf'
+        const esVistaIDUEO04 =
+          vistaPrevia.tipo === 'idu-plantilla-vacia' || vistaPrevia.tipo === 'idu-plantilla-vacia-pdf'
         return (
         <div
           role="dialog"
@@ -4657,7 +5049,7 @@ export default function ModuloInformes({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            padding: '16px',
+            padding: '8px',
             boxSizing: 'border-box',
           }}
           onClick={cerrarVistaPrevia}
@@ -4666,9 +5058,9 @@ export default function ModuloInformes({
             onClick={e => e.stopPropagation()}
             style={{
               width: '100%',
-              maxWidth: esVistaPreviaGerencia ? 'min(100%, 1344px)' : '960px',
-              height: 'min(92vh, 880px)',
-              maxHeight: '92vh',
+              maxWidth: esVistaPreviaGerencia ? 'min(100%, 1344px)' : esVistaIDUEO04 ? 'min(100%, 1400px)' : '960px',
+              height: esVistaIDUEO04 ? 'min(98vh, 1800px)' : 'min(92vh, 880px)',
+              maxHeight: esVistaIDUEO04 ? '98vh' : '92vh',
               overflow: 'hidden',
               display: 'flex',
               flexDirection: 'column',
@@ -4748,6 +5140,76 @@ export default function ModuloInformes({
               </div>
             )}
 
+            {vistaPrevia.fase === 'progreso' && (() => {
+              const job = foEo04Job || {}
+              const pct = Math.min(Math.max(job.pct || 0, 0), 100)
+              const curr = job.currentItem
+              const tot  = job.totalItems
+              // Etiqueta de fase estable (no cambia con cada ítem)
+              const fase = pct < 30
+                ? 'Consultando información del acta…'
+                : pct < 55
+                ? 'Calculando cantidades…'
+                : pct < 76
+                ? `Generando memorias${tot ? ` (${curr || '…'} de ${tot})` : '…'}`
+                : 'Creando archivo PDF…'
+              return (
+                <div style={{
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '48px 32px',
+                  gap: '20px',
+                }}>
+                  {/* Ícono */}
+                  <div style={{ fontSize: '44px', lineHeight: 1, userSelect: 'none' }}>📄</div>
+
+                  {/* Título estable */}
+                  <div style={{ fontWeight: '700', fontSize: (f.body + 2) + 'px', color: '#1e293b', textAlign: 'center' }}>
+                    Generando memorias de cálculo
+                  </div>
+
+                  {/* Barra de progreso */}
+                  <div style={{ width: '100%', maxWidth: '520px' }}>
+                    <div style={{
+                      width: '100%',
+                      height: '12px',
+                      backgroundColor: '#e2e8f0',
+                      borderRadius: '99px',
+                      overflow: 'hidden',
+                    }}>
+                      <div style={{
+                        height: '100%',
+                        width: `${pct}%`,
+                        backgroundColor: pct >= 100 ? '#16a34a' : '#3b82f6',
+                        borderRadius: '99px',
+                        transition: 'width 0.8s ease',
+                      }} />
+                    </div>
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      marginTop: '6px',
+                      fontSize: f.sub + 'px',
+                      color: '#64748b',
+                    }}>
+                      <span>{fase}</span>
+                      <span style={{ fontWeight: '600', color: '#1e293b' }}>{pct}%</span>
+                    </div>
+                  </div>
+
+                  {/* Nota solo si hay muchos ítems */}
+                  {(tot || 0) > 20 && (
+                    <div style={{ fontSize: (f.sub - 1) + 'px', color: '#94a3b8', textAlign: 'center', maxWidth: '400px' }}>
+                      Por favor espere sin cerrar esta ventana.
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+
             {vistaPrevia.fase === 'error' && (
               <div style={{ padding: '16px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', color: '#b91c1c', fontSize: f.sub + 'px' }}>
                 {vistaPrevia.mensaje}
@@ -4772,7 +5234,7 @@ export default function ModuloInformes({
                   style={{
                     width: '100%',
                     flex: 1,
-                    minHeight: 'min(72vh, 640px)',
+                    minHeight: esVistaIDUEO04 ? 'min(90vh, 1600px)' : 'min(72vh, 640px)',
                     border: 'none',
                     borderRadius: '8px',
                     backgroundColor: '#ffffff',
