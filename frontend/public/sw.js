@@ -3,9 +3,9 @@
  * abra sin conexión. Las llamadas a la API son manejadas por el
  * código React (no por el SW), para que IndexedDB controle los datos.
  */
-const CACHE_NAME = 'claracore-shell-v1'
+const CACHE_NAME = 'claracore-shell-v2'
 
-// Archivos del app shell (Vite los genera con hashes; usamos la raíz)
+// App shell (el favicon se pide por URL propia; index.html usa ?v= para romper caché del icono)
 const SHELL_URLS = ['/', '/index.html']
 
 self.addEventListener('install', (event) => {
@@ -26,6 +26,12 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url)
+
+  // Favicon: nunca desde cache del SW (el navegador ya cachea bastante; evita icono “pegado” tras deploy)
+  if (url.pathname === '/favicon.png' || /^\/favicon\.(ico|svg)$/.test(url.pathname)) {
+    event.respondWith(fetch(event.request))
+    return
+  }
 
   // Llamadas a la API → siempre red (la app React decide qué hacer offline)
   if (url.pathname.startsWith('/api') ||

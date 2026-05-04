@@ -3,8 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="google" content="notranslate" />
-    <link rel="icon" type="image/png" href="/favicon.png" />
-    <link rel="apple-touch-icon" href="/favicon.png" />
+    <!-- ?v= rompe caché agresiva del favicon en Chrome/Edge (tras deploy, sube el número si cambias el PNG) -->
+    <link rel="icon" type="image/png" href="/favicon.png?v=3" />
+    <link rel="apple-touch-icon" href="/favicon.png?v=3" />
+    <link rel="shortcut icon" type="image/png" href="/favicon.png?v=3" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Clara.Core</title>
     <!-- Mapbox: el bundle (mapbox-gl npm + CSS en App) evita cargar GL dos veces; solo precalentamos red -->

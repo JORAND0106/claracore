@@ -925,6 +925,13 @@ function determinarNivelValidacion(usuario) {
   // Operativos y apoyo técnico no ven valores económicos.
   const verValoresEconomicos = !(esOperativoContratista || esOperativoInterventoria || esApoyoTecnico)
 
+  const cargoIdNum = usuario?.cargo_id != null && String(usuario.cargo_id).trim() !== ''
+    ? parseInt(String(usuario.cargo_id), 10)
+    : NaN
+  const nivelDesdeCargoId = Number.isFinite(cargoIdNum)
+    ? ({ 54: 1, 44: 2, 45: 2, 51: 2, 56: 2, 50: 3, 58: 3 })[cargoIdNum]
+    : undefined
+
   let nivelValidacion = null
   if (puedeValidar && rol) {
     if (rol === 'operativo contratista') nivelValidacion = 1
@@ -932,10 +939,14 @@ function determinarNivelValidacion(usuario) {
     else if (rol === 'interventoria') nivelValidacion = 3
     else nivelValidacion = null
   }
+  if (puedeValidar && nivelValidacion == null && !esSoloComentarista && nivelDesdeCargoId != null) {
+    nivelValidacion = nivelDesdeCargoId
+  }
 
   const nivelValidacionComentario = nivelValidacion ?? (esApoyoTecnico ? 3 : null)
 
-  const rolOrigen = esInterventoria ? 'interventoria'
+  const esInterventoriaSicoe = esInterventoria || nivelValidacion === 3
+  const rolOrigen = esInterventoriaSicoe ? 'interventoria'
                   : esSubRol        ? 'subcontratista'
                   : 'contratista'
 
@@ -945,7 +956,7 @@ function determinarNivelValidacion(usuario) {
 
   return {
     nivelValidacion, nivelValidacionComentario, puedeEditar, puedeValidar, esApoyoTecnico, esSubcontratista, esSoloComentarista,
-    verValoresEconomicos, rolOrigen, esInterventoria, puedePrevalidarAntesInterv,
+    verValoresEconomicos, rolOrigen, esInterventoria: esInterventoriaSicoe, puedePrevalidarAntesInterv,
   }
 }
 

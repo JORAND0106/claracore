@@ -1318,14 +1318,24 @@ def _sicoe_capa_etiqueta_panel(capx: dict) -> str:
     return "Validación"
 
 
+def _sicoe_nivel_num_desde_campo(campo: Optional[str]) -> Optional[int]:
+    if campo == "nivel1_estado":
+        return 1
+    if campo == "nivel2_estado":
+        return 2
+    if campo == "nivel3_estado":
+        return 3
+    return None
+
+
 def _sicoe_db_nivel_validacion_usuario(user_id: int) -> Optional[int]:
-    """Nivel 1–3 según rol. El rol de por sí autoriza la validación en Sicoe Obra."""
+    """Nivel 1–3 según rol y, si aplica, cargo_id (mismo criterio que CARGO_ID_NIVEL_MAP / panel de acceso)."""
     try:
         uid = int(user_id)
     except (TypeError, ValueError):
         return None
     try:
-        urows = supabase.table("usuarios").select("rol_id").eq("id", uid).limit(1).execute().data
+        urows = supabase.table("usuarios").select("rol_id, cargo_id").eq("id", uid).limit(1).execute().data
         if not urows:
             return None
         u = urows[0]
@@ -1344,6 +1354,20 @@ def _sicoe_db_nivel_validacion_usuario(user_id: int) -> Optional[int]:
     if rn == "contratista":
         return 2
     if rn == "interventoria":
+        return 3
+    # Perfil solo lectura / comentarios en interventoría: no validar por cargo aunque el mapa tenga N3
+    if rn == "operativo interventoria":
+        return None
+    try:
+        cid = int(u.get("cargo_id")) if u.get("cargo_id") is not None else None
+    except (TypeError, ValueError):
+        cid = None
+    if cid is not None:
+        n_cargo = _sicoe_nivel_num_desde_campo(CARGO_ID_NIVEL_MAP.get(cid))
+        if n_cargo is not None:
+            return n_cargo
+    # Rol con nombre extendido p. ej. «Residente de Interventoría» como nombre de rol en BD
+    if rn and "interventoria" in rn:
         return 3
     return None
 
