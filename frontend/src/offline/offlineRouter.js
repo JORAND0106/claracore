@@ -147,6 +147,14 @@ function aplicarCapasFiltro(registros, capas) {
 export async function calcularAnalisisOffline(contratoId, filtros = {}, capas = []) {
   const cid = Number(contratoId)
 
+  if (filtros.etiqueta_validacion && String(filtros.etiqueta_validacion).trim()) {
+    return {
+      grupos: [], modo: 'general', encabezado: 'Etiqueta de validación (requiere conexión)',
+      total_registros: 0, total_costo_directo: 0, total_cantidad: 0,
+      total_aprobados: 0, total_pendientes: 0, total_rechazados: 0,
+    }
+  }
+
   // Cargar actas para resolver acta_rpo → acta_id
   const actas = await byContrato(db.actas, contratoId)
   const actaByRpo = {}
@@ -281,6 +289,10 @@ export async function calcularAnalisisOffline(contratoId, filtros = {}, capas = 
 
 export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0, limit = 50, capas = []) {
   const cid = Number(contratoId)
+  if (filtros.etiqueta_validacion && String(filtros.etiqueta_validacion).trim()) {
+    return { reportes: [], hay_mas: false }
+  }
+
   console.log('[buscarReportesOffline] contrato:', cid, 'filtros:', filtros, 'capas:', capas.length)
 
   const [actas, semanas, todosRegistros] = await Promise.all([

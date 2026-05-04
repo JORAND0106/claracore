@@ -591,7 +591,7 @@ export default function ModuloInformes({
   const [actasConc, setActasConc] = useState([])
   const [semanaConcId, setSemanaConcId] = useState('')
   const [actaConcId, setActaConcId] = useState('')
-  /** CC-GER-001: acta presente = siempre la última RPO (mismo criterio que /json/informe-gerencia-matriz). */
+  /** CC-GER-001: acta presente = RPO en período (misma lógica que matriz SICOE), vía /json/informe-gerencia-matriz. */
   const [gerAutoActaId, setGerAutoActaId] = useState(null)
   const [gerMatDato, setGerMatDato] = useState(null)
   const [formatosInformeGerAbierto, setFormatosInformeGerAbierto] = useState(false)
@@ -1615,7 +1615,7 @@ export default function ModuloInformes({
       setVistaPrevia({
         fase: 'error',
         tipo: 'corte-ger',
-        mensaje: 'Cargando acta (última RPO) o sin actas en el contrato. Espera o revisa SICOE.',
+        mensaje: 'Sin acta RPO en período o aún cargando datos. Espera un momento o revisa fechas de actas en SICOE.',
       })
       return
     }

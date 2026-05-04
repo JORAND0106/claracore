@@ -5,6 +5,7 @@ import logging
 import math
 import re
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
 _log = logging.getLogger("uvicorn.error")
@@ -759,76 +760,93 @@ def informe_gerencia_matriz_maps_por_rpc(
     """
     cid, ap = int(contrato_id), int(acta_presente_id)
     _ = items_cobro  # Col. 1 = todo ítem con registro (matriz HABILITADO), sin filtrar por tabla cobro
+    acta_ant_i = int(acta_anterior_id) if acta_anterior_id is not None else 0
+    ids_c3 = [int(x) for x in (acta_ids_acumulado or []) if x is not None]
 
-    try:
-        c1q = (
-            sb.rpc(
-                "rpo_ger_suma_por_capitulo_bloque_col1_hab_cobro",
-                {
-                    "p_contrato_id": cid,
-                    "p_acta_id": ap,
-                    "p_items_cobro": None,
-                },
-            )
-            .execute()
-            .data
-            or []
-        )
-    except Exception as e:
-        _log.warning("rpo_ger col1: %s", e)
-        return None
-    c2m: Dict[Tuple[str, str], float] = {}
-    if acta_anterior_id is not None and int(acta_anterior_id) > 0:
+    def _run_c1():
         try:
-            c2d = (
+            return (
                 sb.rpc(
-                    "rpo_ger_suma_por_capitulo_bloque_cascade",
+                    "rpo_ger_suma_por_capitulo_bloque_col1_hab_cobro",
                     {
                         "p_contrato_id": cid,
-                        "p_acta_ids": [int(acta_anterior_id)],
+                        "p_acta_id": ap,
+                        "p_items_cobro": None,
                     },
                 )
                 .execute()
                 .data
                 or []
             )
-            c2m = _mapa_cap_bloque_desde_rpc_rows(c2d)
+        except Exception as e:
+            _log.warning("rpo_ger col1: %s", e)
+            raise
+
+    def _run_c2():
+        if acta_ant_i <= 0:
+            return []
+        try:
+            return (
+                sb.rpc(
+                    "rpo_ger_suma_por_capitulo_bloque_cascade",
+                    {
+                        "p_contrato_id": cid,
+                        "p_acta_ids": [acta_ant_i],
+                    },
+                )
+                .execute()
+                .data
+                or []
+            )
         except Exception as e2:
             _log.warning("rpo_ger cascade ant: %s", e2)
-            return None
-    try:
-        c3d = (
-            sb.rpc(
-                "rpo_ger_suma_por_capitulo_bloque_solo_n3",
-                {
-                    "p_contrato_id": cid,
-                    "p_acta_ids": [int(x) for x in (acta_ids_acumulado or []) if x is not None],
-                },
+            raise
+
+    def _run_c3():
+        try:
+            return (
+                sb.rpc(
+                    "rpo_ger_suma_por_capitulo_bloque_solo_n3",
+                    {"p_contrato_id": cid, "p_acta_ids": ids_c3},
+                )
+                .execute()
+                .data
+                or []
             )
-            .execute()
-            .data
-            or []
-        )
-    except Exception as e3:
-        _log.warning("rpo_ger solo_n3 acum: %s", e3)
-        return None
-    try:
-        c4d = (
-            sb.rpc(
-                "rpo_ger_suma_por_capitulo_bloque_pendiente",
-                {
-                    "p_contrato_id": cid,
-                    "p_acta_id": ap,
-                },
+        except Exception as e3:
+            _log.warning("rpo_ger solo_n3 acum: %s", e3)
+            raise
+
+    def _run_c4():
+        try:
+            return (
+                sb.rpc(
+                    "rpo_ger_suma_por_capitulo_bloque_pendiente",
+                    {"p_contrato_id": cid, "p_acta_id": ap},
+                )
+                .execute()
+                .data
+                or []
             )
-            .execute()
-            .data
-            or []
-        )
-    except Exception as e4:
-        _log.warning("rpo_ger pend: %s", e4)
+        except Exception as e4:
+            _log.warning("rpo_ger pend: %s", e4)
+            raise
+
+    try:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            f1 = pool.submit(_run_c1)
+            f2 = pool.submit(_run_c2)
+            f3 = pool.submit(_run_c3)
+            f4 = pool.submit(_run_c4)
+            c1q = f1.result()
+            c2d = f2.result()
+            c3d = f3.result()
+            c4d = f4.result()
+    except Exception:
         return None
+
     c1m = _mapa_cap_bloque_desde_rpc_rows(c1q)
+    c2m = _mapa_cap_bloque_desde_rpc_rows(c2d)
     c3m = _mapa_cap_bloque_desde_rpc_rows(c3d)
     c4m = _mapa_cap_bloque_desde_rpc_rows(c4d)
     return {"c1": c1m, "c2": c2m, "c3": c3m, "c4": c4m}

@@ -5,7 +5,8 @@ import io, csv, requests as req_http
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Any, Dict, Set
+from collections import defaultdict
 from supabase import create_client, ClientOptions
 import httpx
 from passlib.context import CryptContext
@@ -1003,6 +1004,103 @@ def _caller_cargo_id(current_user) -> Optional[int]:
         return None
 
 
+def _cargo_permiso_editar_registros_presupuesto(current_user) -> bool:
+    """Matriz de permisos: función «editar registros presupuesto» con acción editar (alineado con el frontend)."""
+    cid = _caller_cargo_id(current_user)
+    if cid is None:
+        return False
+    try:
+        perms = supabase_execute(
+            lambda: supabase.table("permisos")
+            .select("funcion_id, editar")
+            .eq("cargo_id", cid)
+            .execute()
+            .data
+        ) or []
+        fids = [p["funcion_id"] for p in perms if p.get("editar")]
+        if not fids:
+            return False
+        funcs = supabase_execute(
+            lambda: supabase.table("funciones").select("id, nombre").in_("id", fids).execute().data
+        ) or []
+        want = "editar registros presupuesto"
+        for f in funcs:
+            if (f.get("nombre") or "").strip().lower() == want:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _cargo_permiso_validar_presupuesto(current_user) -> bool:
+    """Matriz: función «editar registros presupuesto» con acción validar."""
+    cid = _caller_cargo_id(current_user)
+    if cid is None:
+        return False
+    try:
+        perms = supabase_execute(
+            lambda: supabase.table("permisos")
+            .select("funcion_id, validar")
+            .eq("cargo_id", cid)
+            .execute()
+            .data
+        ) or []
+        fids = [p["funcion_id"] for p in perms if p.get("validar")]
+        if not fids:
+            return False
+        funcs = supabase_execute(
+            lambda: supabase.table("funciones").select("id, nombre").in_("id", fids).execute().data
+        ) or []
+        want = "editar registros presupuesto"
+        for f in funcs:
+            if (f.get("nombre") or "").strip().lower() == want:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _cargo_permiso_validar_reporte_cantidades_user_id(user_id: int) -> bool:
+    """Matriz: función «reporte de cantidades» con acción validar (SICOE obra)."""
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    try:
+        urows = supabase.table("usuarios").select("cargo_id").eq("id", uid).limit(1).execute().data
+        u = urows[0] if urows else None
+        if not u or u.get("cargo_id") is None:
+            return False
+        cid = int(u["cargo_id"])
+    except (TypeError, ValueError, KeyError):
+        return False
+    try:
+        perms = supabase_execute(
+            lambda: supabase.table("permisos")
+            .select("funcion_id, validar")
+            .eq("cargo_id", cid)
+            .execute()
+            .data
+        ) or []
+        fids = [p["funcion_id"] for p in perms if p.get("validar")]
+        if not fids:
+            return False
+        funcs = supabase_execute(
+            lambda: supabase.table("funciones").select("id, nombre").in_("id", fids).execute().data
+        ) or []
+        want = "reporte de cantidades"
+        for f in funcs:
+            if (f.get("nombre") or "").strip().lower() == want:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _puede_editar_dimensiones_presupuesto(current_user) -> bool:
+    return _es_desarrollador(current_user) or _cargo_permiso_editar_registros_presupuesto(current_user)
+
+
 def _caller_rol_id(current_user) -> Optional[int]:
     """rol_id del usuario autenticado (tabla usuarios → tabla roles)."""
     try:
@@ -1252,6 +1350,76 @@ NIVEL_VALIDACION_ENCABEZADO = {
     3: "Nivel 3 · Interventoría",
 }
 
+# Mismo catálogo que el desplegable de validación en frontend (ETIQUETAS_VALIDACION).
+SICOE_ETIQUETAS_VALIDACION = (
+    "01. Ensayos de Laboratorio",
+    "02. Certificados de Calidad",
+    "03. Información y/o Entrega Topografía",
+    "04. Entrega en obra",
+    "05. Informe o Concepto Especialista",
+    "06. Incluida dentro del precio",
+    "07. Reportado en actas anteriores",
+    "08. Pendiente por aprobación de precio",
+    "09. Actividad sin concluir",
+    "10. Precio no corresponde con la actividad",
+    "11. Actualizar información",
+    "12. Reproceso",
+    "13. Actividad no ejecutada",
+    "14. Relacionada con Balance de Obra",
+)
+SICOE_ETIQUETAS_VALIDACION_SET = frozenset(SICOE_ETIQUETAS_VALIDACION)
+
+
+def _sicoe_parse_etiqueta_validacion_param(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    t = str(raw).strip()
+    if not t:
+        return None
+    if t not in SICOE_ETIQUETAS_VALIDACION_SET:
+        raise HTTPException(
+            status_code=422,
+            detail="etiqueta_validacion no está en el catálogo de etiquetas de validación.",
+        )
+    return t
+
+
+def _sicoe_fetch_registro_ids_etiqueta_validacion(contrato_id: int, etiqueta: str) -> Set[int]:
+    """registro_id con al menos un comentario tipo validación y etiqueta exacta."""
+    out: Set[int] = set()
+    off = 0
+    page = 1000
+    while True:
+        def _pg(o=off):
+            return (
+                supabase.table("so_registro_comentarios")
+                .select("registro_id")
+                .eq("contrato_id", contrato_id)
+                .eq("tipo", "validacion")
+                .eq("etiqueta", etiqueta)
+                .range(o, o + page - 1)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_pg)
+        for row in batch:
+            rid = row.get("registro_id")
+            if rid is not None:
+                try:
+                    out.add(int(rid))
+                except (TypeError, ValueError):
+                    pass
+        if len(batch) < page:
+            break
+        off += page
+    return out
+
+
+def _sicoe_chunks_int(ids: List[int], size: int):
+    for i in range(0, len(ids), size):
+        yield ids[i : i + size]
+
 
 def _sicoe_norm_txt(s: Optional[str]) -> str:
     if s is None:
@@ -1372,12 +1540,19 @@ def _sicoe_db_nivel_validacion_usuario(user_id: int) -> Optional[int]:
     return None
 
 
-def _require_sicoe_puede_validar_nivel(user_id: int, nivel: int) -> None:
+def _require_sicoe_puede_validar_nivel(current_user, user_id: int, nivel: int) -> None:
+    if _es_desarrollador(current_user):
+        return
+    if not _cargo_permiso_validar_reporte_cantidades_user_id(user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permiso de validación en «Reporte de cantidades» (matriz de accesos).",
+        )
     got = _sicoe_db_nivel_validacion_usuario(user_id)
     if got != nivel:
         raise HTTPException(
             status_code=403,
-            detail="Tu rol no autoriza validar en este nivel o falta permiso de validación en Reporte de cantidades.",
+            detail="Tu rol no autoriza validar en este nivel de SICOE obra.",
         )
 
 
@@ -1787,6 +1962,7 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     require_item: bool = False,
     capas_v: Optional[List[dict]] = None,
     estado: Optional[str] = None,
+    registro_id_in: Optional[List[int]] = None,
 ):
     """AND sobre columnas de so_registros; misma semántica que /reportes/buscar y /analisis."""
     if numero_registro is not None:
@@ -1823,6 +1999,11 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
         q = _so_reg_item_asignado(q)
     elif _estado_filtro_es_sin_asignar_item(estado):
         q = _so_reg_sin_item_asignado(q)
+    if registro_id_in is not None:
+        if len(registro_id_in) == 0:
+            q = q.eq("id", -1)
+        else:
+            q = q.in_("id", registro_id_in)
     return q
 
 
@@ -1859,6 +2040,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
     reporte_ids_restrict: Optional[List[int]] = None,
     capas_v: Optional[List[dict]] = None,
     estado: Optional[str] = None,
+    registro_ids_etiqueta: Optional[Set[int]] = None,
 ) -> set:
     """
     reporte_id tales que existe al menos una fila en so_registros que cumple todos
@@ -1869,6 +2051,79 @@ def _sicoe_collect_reporte_ids_misma_linea(
     """
     ids: set = set()
     capas_ok = bool(capas_v)
+
+    if registro_ids_etiqueta is not None:
+        if not registro_ids_etiqueta:
+            return set()
+        reg_list = sorted(registro_ids_etiqueta)
+        CHUNK_R = 200
+        if reporte_ids_restrict is not None:
+            CHUNK_REP = 500
+            for reg_chunk in _sicoe_chunks_int(reg_list, CHUNK_R):
+                rc = list(reg_chunk)
+                for i in range(0, len(reporte_ids_restrict), CHUNK_REP):
+                    rep_chunk = reporte_ids_restrict[i : i + CHUNK_REP]
+                    rp = list(rep_chunk)
+
+                    def _chunk_page(c=rc, rp_fix=rp):
+                        q = supabase.table("so_registros").select("reporte_id").eq("contrato_id", contrato_id)
+                        q = _sicoe_so_registros_q_linea_filtros_busqueda(
+                            q,
+                            numero_registro=numero_registro,
+                            abs_inicio=abs_inicio,
+                            abs_final=abs_final,
+                            capitulo=capitulo,
+                            item=item,
+                            subcontratista_id=subcontratista_id,
+                            tramo=tramo,
+                            costado=costado,
+                            pk_id=pk_id,
+                            q_observacion=q_observacion,
+                            semana_id=semana_id,
+                            reporte_id_in=rp_fix,
+                            require_item=True,
+                            capas_v=(capas_v if capas_ok else None),
+                            estado=estado,
+                            registro_id_in=c,
+                        )
+                        return q.limit(5000).execute().data
+
+                    for row in supabase_execute(_chunk_page):
+                        rid = row.get("reporte_id")
+                        if rid:
+                            ids.add(rid)
+        else:
+            for reg_chunk in _sicoe_chunks_int(reg_list, CHUNK_R):
+                rc = list(reg_chunk)
+
+                def _one_page(c=rc):
+                    q = supabase.table("so_registros").select("reporte_id").eq("contrato_id", contrato_id)
+                    q = _sicoe_so_registros_q_linea_filtros_busqueda(
+                        q,
+                        numero_registro=numero_registro,
+                        abs_inicio=abs_inicio,
+                        abs_final=abs_final,
+                        capitulo=capitulo,
+                        item=item,
+                        subcontratista_id=subcontratista_id,
+                        tramo=tramo,
+                        costado=costado,
+                        pk_id=pk_id,
+                        q_observacion=q_observacion,
+                        semana_id=semana_id,
+                        acta_rpo_id=acta_rpo_id,
+                        require_item=(acta_rpo_id is not None),
+                        capas_v=(capas_v if capas_ok else None),
+                        estado=estado,
+                        registro_id_in=c,
+                    )
+                    return q.limit(5000).execute().data
+
+                for row in supabase_execute(_one_page):
+                    rid = row.get("reporte_id")
+                    if rid:
+                        ids.add(rid)
+        return ids
 
     if reporte_ids_restrict is not None:
         # Iterar en chunks sobre los report_ids del acta; no necesita paginación ilimitada
@@ -4040,6 +4295,7 @@ _PPTO_CT_SUBSTANTIVE = frozenset(
     {
         "capitulo", "competencia", "item", "descripcion", "und",
         "vlr_unitario", "observacion_externa", "costo_directo",
+        "area_long_nod", "ancho", "espesor",
     }
 )
 
@@ -4126,12 +4382,12 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
             data["validado_por"] = None
             data["validado_en"] = None
             reset_interv_comment = motivo_interv
-    if not _es_desarrollador(current_user):
+    if not _puede_editar_dimensiones_presupuesto(current_user):
         for k in ("area_long_nod", "ancho", "espesor", "cant_total"):
             if k in data:
                 raise HTTPException(
                     status_code=403,
-                    detail="Solo el cargo Desarrollador puede modificar dimensiones o la cantidad total en presupuesto.",
+                    detail="No tiene permiso para modificar dimensiones o la cantidad total en presupuesto (requiere Desarrollador o permiso «editar registros presupuesto» con edición).",
                 )
     # Cualquier clave de dimensión presente en el body (aunque venga null en JSON) dispara
     # recálculo. Antes, solo "not None" fallaba con null explícito y .get() no fusionaba con la fila.
@@ -4167,6 +4423,15 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
         cant0 = float(prev_row.get("cant_total") or 0)
         vlr0 = float(data.get("vlr_unitario") or 0)
         data["costo_directo"] = round(cant0 * vlr0, 0)
+    if "revisado" in data and not reabrir:
+        nu = str(data.get("revisado") or "No Revisado").strip()
+        prev_rev_cmp = str(prev_row.get("revisado") or "No Revisado").strip()
+        if nu != prev_rev_cmp and not reset_interv_comment:
+            if not _es_desarrollador(current_user) and not _cargo_permiso_validar_presupuesto(current_user):
+                raise HTTPException(
+                    status_code=403,
+                    detail="No tiene permiso de validación en «editar registros presupuesto» para cambiar el estado «revisado».",
+                )
     data["updated_at"] = "now()"
     supabase.table("presupuesto").update(data).eq("id", item_id).execute()
 
@@ -4708,6 +4973,11 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
 def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depends(get_current_user)):
     if not body.ids:
         raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    if not _es_desarrollador(current_user) and not _cargo_permiso_validar_presupuesto(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permiso de validación en «editar registros presupuesto» (matriz de accesos).",
+        )
     # Traer sellado, pre_interv y datos CAD
     rows_info = supabase.table("presupuesto").select(
         "id, x_label, y_label, layer_txt, rev_block_handle, sellado, pre_interv_estado"
@@ -4760,6 +5030,11 @@ def bulk_pre_interv(contrato_id: int, body: PresupuestoBulkPreInterv, current_us
     cargo = (current_user.get("cargo_nombre") or "").strip().lower()
     es_dev = cargo == "desarrollador" or rol == "desarrollador"
     if not es_dev:
+        if not _cargo_permiso_validar_presupuesto(current_user):
+            raise HTTPException(
+                status_code=403,
+                detail="No tiene permiso de validación en «editar registros presupuesto» (matriz de accesos).",
+            )
         if rol not in ("contratista", "operativo contratista"):
             raise HTTPException(status_code=403, detail="Solo el contratista puede gestionar la depuración previa.")
         if not _cargo_puede_prevalidar_interventoria(cargo):
@@ -5740,6 +6015,135 @@ def admin_inicio_novedad_mejorar_texto(
 # NOTIFICACIONES
 # ─────────────────────────────────────────────
 
+def _remitente_nombre_from_user(current_user) -> str:
+    return (current_user.get("nombre") or current_user.get("email") or "").strip() or "Usuario"
+
+
+def _resolver_contrato_notificacion(
+    current_user,
+    destinatario_id: Optional[int],
+    contrato_id_explicit: Optional[int],
+) -> Optional[int]:
+    """Rellena contrato_id cuando el cliente envía null: evita que el buzón (filtrado por contrato) oculte el mensaje."""
+    if contrato_id_explicit is not None:
+        try:
+            return int(contrato_id_explicit)
+        except (TypeError, ValueError):
+            pass
+    try:
+        uid = int(current_user.get("sub", 0))
+    except (TypeError, ValueError):
+        uid = 0
+    if uid:
+        urows = supabase.table("usuarios").select("contrato_id").eq("id", uid).limit(1).execute().data
+        u = urows[0] if urows else {}
+        if u.get("contrato_id") is not None:
+            try:
+                return int(u["contrato_id"])
+            except (TypeError, ValueError):
+                pass
+        uc = (
+            supabase.table("usuario_contratos")
+            .select("contrato_id")
+            .eq("usuario_id", uid)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if uc and uc[0].get("contrato_id") is not None:
+            try:
+                return int(uc[0]["contrato_id"])
+            except (TypeError, ValueError):
+                pass
+    if destinatario_id is not None:
+        try:
+            did = int(destinatario_id)
+        except (TypeError, ValueError):
+            return None
+        u2 = supabase.table("usuarios").select("contrato_id").eq("id", did).limit(1).execute().data
+        u2r = u2[0] if u2 else {}
+        if u2r.get("contrato_id") is not None:
+            try:
+                return int(u2r["contrato_id"])
+            except (TypeError, ValueError):
+                pass
+        uc2 = (
+            supabase.table("usuario_contratos")
+            .select("contrato_id")
+            .eq("usuario_id", did)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if uc2 and uc2[0].get("contrato_id") is not None:
+            try:
+                return int(uc2[0]["contrato_id"])
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def _filtro_query_notif_contrato_o_nulo(q, contrato_id: Optional[int]):
+    """Incluye filas con contrato_id NULL (mensajes legados / remitentes sin contrato principal en usuarios)."""
+    if contrato_id is None:
+        return q
+    try:
+        cid = int(contrato_id)
+    except (TypeError, ValueError):
+        return q
+    return q.or_(f"contrato_id.eq.{cid},contrato_id.is.null")
+
+
+def _push_notif_validacion_sicoe_destinatarios(
+    current_user,
+    autor_id: int,
+    contrato_id: int,
+    registro_id: int,
+    asunto: str,
+    mensaje: str,
+    comentario_data: Optional[dict],
+) -> None:
+    if not comentario_data:
+        return
+    rem_nom = _remitente_nombre_from_user(current_user)
+    for dest in comentario_data.get("destinatarios") or []:
+        dest_id = dest.get("id") if isinstance(dest, dict) else None
+        if not dest_id:
+            continue
+        try:
+            did = int(dest_id)
+        except (TypeError, ValueError):
+            continue
+        if did == autor_id:
+            continue
+        row = {
+            "destinatario_id": did,
+            "remitente_id": autor_id,
+            "remitente_nombre": rem_nom,
+            "contrato_id": contrato_id,
+            "tipo": "validacion",
+            "modulo": "sicoe_obra",
+            "entidad_tipo": "registro",
+            "entidad_id": str(registro_id),
+            "asunto": asunto,
+            "mensaje": mensaje or "",
+            "leido": False,
+        }
+        try:
+            supabase_execute(lambda: supabase.table("notificaciones").insert(row).execute().data)
+        except Exception as e:
+            try:
+                _log_api.warning(
+                    "notificación SICOE validación: insert falló destinatario=%s contrato=%s reg=%s %s",
+                    did,
+                    contrato_id,
+                    registro_id,
+                    e,
+                )
+            except Exception:
+                pass
+
+
 class NotificacionCreate(BaseModel):
     destinatario_id: Optional[int] = None  # None = broadcast a todos
     asunto: str
@@ -5755,7 +6159,7 @@ class NotificacionCreate(BaseModel):
 def crear_notificacion(body: NotificacionCreate, current_user=Depends(get_current_user)):
     """Envía una notificación. Si destinatario_id es None y tipo=BROADCAST, envía a todos."""
     uid = int(current_user.get("sub", 0))
-    nombre = current_user.get("nombre") or current_user.get("email", "")
+    nombre = _remitente_nombre_from_user(current_user)
 
     if body.tipo == "BROADCAST":
         # Enviar a todos los usuarios activos excepto el remitente
@@ -5764,15 +6168,17 @@ def crear_notificacion(body: NotificacionCreate, current_user=Depends(get_curren
         for u in usuarios:
             if u["id"] == uid:
                 continue
+            dest_id = int(u["id"])
+            rcid = _resolver_contrato_notificacion(current_user, dest_id, body.contrato_id)
             rows.append({
                 "remitente_id":     uid,
                 "remitente_nombre": nombre,
-                "destinatario_id":  u["id"],
+                "destinatario_id":  dest_id,
                 "asunto":           body.asunto,
                 "mensaje":          body.mensaje,
                 "tipo":             body.tipo,
                 "modulo":           body.modulo,
-                "contrato_id":      body.contrato_id,
+                "contrato_id":      rcid,
                 "entidad_tipo":     body.entidad_tipo,
                 "entidad_id":       body.entidad_id,
                 "padre_id":         body.padre_id,
@@ -5783,6 +6189,7 @@ def crear_notificacion(body: NotificacionCreate, current_user=Depends(get_curren
             {"asunto": body.asunto, "destinatarios": len(rows)})
         return {"enviados": len(rows)}
     else:
+        rcid = _resolver_contrato_notificacion(current_user, body.destinatario_id, body.contrato_id)
         row = {
             "remitente_id":     uid,
             "remitente_nombre": nombre,
@@ -5791,7 +6198,7 @@ def crear_notificacion(body: NotificacionCreate, current_user=Depends(get_curren
             "mensaje":          body.mensaje,
             "tipo":             body.tipo,
             "modulo":           body.modulo,
-            "contrato_id":      body.contrato_id,
+            "contrato_id":      rcid,
             "entidad_tipo":     body.entidad_tipo,
             "entidad_id":       body.entidad_id,
             "padre_id":         body.padre_id,
@@ -5825,8 +6232,7 @@ def get_notificaciones_recibidas(
     q = supabase.table("notificaciones").select("*") \
         .eq("destinatario_id", uid) \
         .order("created_at", desc=True)
-    if contrato_id is not None:
-        q = q.eq("contrato_id", contrato_id)
+    q = _filtro_query_notif_contrato_o_nulo(q, contrato_id)
     if solo_no_leidas:
         q = q.eq("leido", False)
     q = q.range(offset, offset + limit - 1)
@@ -5844,8 +6250,7 @@ def get_notificaciones_enviadas(
     q = supabase.table("notificaciones").select("*") \
         .eq("remitente_id", uid) \
         .order("created_at", desc=True)
-    if contrato_id is not None:
-        q = q.eq("contrato_id", contrato_id)
+    q = _filtro_query_notif_contrato_o_nulo(q, contrato_id)
     return q.range(offset, offset + limit - 1).execute().data
 
 @app.get("/notificaciones/no-leidas-count")
@@ -5860,8 +6265,7 @@ def get_no_leidas_count(
             .eq("destinatario_id", uid) \
             .eq("leido", False) \
             .is_("padre_id", "null")
-        if contrato_id is not None:
-            q = q.eq("contrato_id", contrato_id)
+        q = _filtro_query_notif_contrato_o_nulo(q, contrato_id)
         result = q.execute()
         return {"count": result.count or 0}
     except Exception:
@@ -6889,6 +7293,7 @@ def buscar_reportes_obra(
     validacion_capas: Optional[str] = None,
     q_observacion: Optional[str] = None,
     q_nodo: Optional[str] = None,
+    etiqueta_validacion: Optional[str] = None,
     offset: int = 0,
     limit: int = 50,
     current_user=Depends(get_current_user)
@@ -6953,6 +7358,13 @@ def buscar_reportes_obra(
         except Exception:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
+    etiqueta_f = _sicoe_parse_etiqueta_validacion_param(etiqueta_validacion)
+    registro_ids_etiqueta = (
+        _sicoe_fetch_registro_ids_etiqueta_validacion(contrato_id, etiqueta_f)
+        if etiqueta_f
+        else None
+    )
+
     unified_line = any([
         numero_registro is not None,
         abs_inicio is not None or abs_final is not None,
@@ -6962,6 +7374,7 @@ def buscar_reportes_obra(
         capas_aplican_a_lineas,
         semana_id_filtro is not None,
         acta_id_filtro is not None,
+        bool(etiqueta_f),
     ])
 
     if unified_line:
@@ -6981,6 +7394,7 @@ def buscar_reportes_obra(
             acta_rpo_id=acta_id_filtro,
             capas_v=(capas_v if capas_aplican_a_lineas else None),
             estado=estado,
+            registro_ids_etiqueta=registro_ids_etiqueta,
         )
         if not ids_unif:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
@@ -7086,10 +7500,12 @@ def buscar_reportes_obra(
         try:
             _rb_l = reporte_ids_batch
 
-            def _reg_estados_q_base():
+            def _reg_estados_q_base(reg_id_filter: Optional[List[int]] = None):
                 q = supabase.table("so_registros")\
                     .select("reporte_id, costo_directo, nivel1_estado, nivel2_estado, nivel3_estado, sub_estado, semana_id, acta_rpo_id, item_numero, capitulo, subcontratista_id, tramo, margen")\
                     .in_("reporte_id", _rb_l)
+                if reg_id_filter is not None:
+                    q = q.in_("id", reg_id_filter)
 
                 if numero_registro is not None:
                     q = q.eq("numero_registro", numero_registro)
@@ -7127,17 +7543,34 @@ def buscar_reportes_obra(
                 return q
 
             reg_estados = []
-            _re_off = 0
-            _re_page = 1000
-            while True:
-                def _re_fetch(o=_re_off):
-                    return _reg_estados_q_base().range(o, o + _re_page - 1).execute().data
+            if registro_ids_etiqueta is not None and not registro_ids_etiqueta:
+                reg_estados = []
+            elif registro_ids_etiqueta is not None:
+                for rg_chunk in _sicoe_chunks_int(sorted(registro_ids_etiqueta), 200):
+                    rc = list(rg_chunk)
+                    _re_off = 0
+                    _re_page = 1000
+                    while True:
+                        def _re_fetch(o=_re_off, ids=rc):
+                            return _reg_estados_q_base(ids).range(o, o + _re_page - 1).execute().data
 
-                _batch = supabase_execute(_re_fetch)
-                reg_estados.extend(_batch)
-                if len(_batch) < _re_page:
-                    break
-                _re_off += _re_page
+                        _batch = supabase_execute(_re_fetch)
+                        reg_estados.extend(_batch)
+                        if len(_batch) < _re_page:
+                            break
+                        _re_off += _re_page
+            else:
+                _re_off = 0
+                _re_page = 1000
+                while True:
+                    def _re_fetch(o=_re_off):
+                        return _reg_estados_q_base().range(o, o + _re_page - 1).execute().data
+
+                    _batch = supabase_execute(_re_fetch)
+                    reg_estados.extend(_batch)
+                    if len(_batch) < _re_page:
+                        break
+                    _re_off += _re_page
             if _estado_filtro_es_sin_asignar_item(estado):
                 reg_estados = [
                     x for x in reg_estados
@@ -7230,6 +7663,7 @@ class ExportarRegistrosBody(BaseModel):
 
     q_observacion: Optional[str] = None
     q_nodo: Optional[str] = None
+    etiqueta_validacion: Optional[str] = None
 
 
 @app.get("/sicoe-obra/{contrato_id}/registros/campos")
@@ -7360,6 +7794,13 @@ def exportar_registros_sicoe(
                 reporte_ids_base = list(ids_n)
             if not reporte_ids_base:
                 return []
+
+    reg_ids_export_etiqueta = None
+    if body.etiqueta_validacion:
+        ev_ex = _sicoe_parse_etiqueta_validacion_param(body.etiqueta_validacion)
+        reg_ids_export_etiqueta = _sicoe_fetch_registro_ids_etiqueta_validacion(contrato_id, ev_ex)
+        if not reg_ids_export_etiqueta:
+            return []
 
     # Abscisa en línea (misma semántica que analisis / grilla); no precalcular miles de reporte_id
 
@@ -7522,6 +7963,32 @@ def exportar_registros_sicoe(
 
     def _fetch_by_reporte_id_list(id_list: List[int]):
         out: list = []
+        if reg_ids_export_etiqueta is not None:
+            for rg_chunk in _sicoe_chunks_int(sorted(reg_ids_export_etiqueta), 200):
+                rc = list(rg_chunk)
+                off = 0
+                while True:
+                    o = off
+
+                    def _run_fetch():
+                        q = (
+                            supabase.table("so_registros")
+                            .select(",".join(campos_aux))
+                            .in_("reporte_id", id_list)
+                            .in_("id", rc)
+                        )
+                        q = _aplicar_filtros_reg(q)
+                        return q.range(o, o + batch_size).execute().data
+
+                    batch = supabase_execute(_run_fetch)
+                    if not batch:
+                        break
+                    out.extend(batch)
+                    if len(batch) < batch_size + 1:
+                        break
+                    off += batch_size + 1
+            return out
+
         off = 0
         base_q = (
             supabase.table("so_registros")
@@ -7530,7 +7997,12 @@ def exportar_registros_sicoe(
         )
         base_q = _aplicar_filtros_reg(base_q)
         while True:
-            batch = supabase_execute(lambda: base_q.range(off, off + batch_size).execute().data)
+            o = off
+
+            def _run_fetch_plain():
+                return base_q.range(o, o + batch_size).execute().data
+
+            batch = supabase_execute(_run_fetch_plain)
             if not batch:
                 break
             out.extend(batch)
@@ -7540,17 +8012,42 @@ def exportar_registros_sicoe(
         return out
 
     if reporte_ids_base is None:
-        base_q = supabase.table("so_registros").select(",".join(campos_aux))
-        base_q = _aplicar_filtros_reg(base_q)
-        off = 0
-        while True:
-            batch = supabase_execute(lambda: base_q.range(off, off + batch_size).execute().data)
-            if not batch:
-                break
-            registros.extend(batch)
-            if len(batch) < batch_size + 1:
-                break
-            off += batch_size + 1
+        if reg_ids_export_etiqueta is not None:
+            for rg_chunk in _sicoe_chunks_int(sorted(reg_ids_export_etiqueta), 200):
+                rc = list(rg_chunk)
+                off = 0
+                while True:
+                    o = off
+
+                    def _run_fetch_full():
+                        q = supabase.table("so_registros").select(",".join(campos_aux)).in_("id", rc)
+                        q = _aplicar_filtros_reg(q)
+                        return q.range(o, o + batch_size).execute().data
+
+                    batch = supabase_execute(_run_fetch_full)
+                    if not batch:
+                        break
+                    registros.extend(batch)
+                    if len(batch) < batch_size + 1:
+                        break
+                    off += batch_size + 1
+        else:
+            base_q = supabase.table("so_registros").select(",".join(campos_aux))
+            base_q = _aplicar_filtros_reg(base_q)
+            off = 0
+            while True:
+                o = off
+
+                def _run_fetch_all():
+                    return base_q.range(o, o + batch_size).execute().data
+
+                batch = supabase_execute(_run_fetch_all)
+                if not batch:
+                    break
+                registros.extend(batch)
+                if len(batch) < batch_size + 1:
+                    break
+                off += batch_size + 1
         registros = _enriquecer_registros_export(registros)
         try:
             u_log = _audit_user_contrato(current_user, contrato_id)
@@ -7609,6 +8106,7 @@ def analisis_registros_obra(
     validacion_capas: Optional[str] = None,
     q_observacion: Optional[str] = None,
     q_nodo: Optional[str] = None,
+    etiqueta_validacion: Optional[str] = None,
     current_user=Depends(get_current_user)
 ):
     """Agregados del panel dinámico: cada query param activo es un filtro AND sobre el universo de registros."""
@@ -7731,51 +8229,94 @@ def analisis_registros_obra(
     _abs_ai = abs_inicio
     _abs_af = abs_final
 
+    reg_ids_etiqueta_ana = None
+    if etiqueta_validacion:
+        ev_a = _sicoe_parse_etiqueta_validacion_param(etiqueta_validacion)
+        reg_ids_etiqueta_ana = _sicoe_fetch_registro_ids_etiqueta_validacion(contrato_id, ev_a)
+
     # ── 5. Obtener registros: todos los filtros de barra se combinan con AND ───
     registros = []
     try:
-        _a_l=acta_id; _s_l=semana_id; _it_l=item; _rp_l=reporte_ids_base
+        _a_l = acta_id
+        _s_l = semana_id
+        _it_l = item
+        _rp_l = reporte_ids_base
         _capas_sql = capas_ana
         _nr = numero_registro
-        off = 0
-        while True:
-            def _regs(o=off):
-                q = supabase.table("so_registros")\
-                    .select("reporte_id, costo_directo, cantidad_total, item_numero, item_descripcion, unidad, acta_rpo_id, nivel1_estado, nivel2_estado, nivel3_estado, capitulo, subcontratista_id")\
-                    .eq("contrato_id", contrato_id)
-                q = _so_reg_filtro_abs_solape(q, _abs_ai, _abs_af)
-                if _nr is not None:
-                    q = q.eq("numero_registro", _nr)
-                if _a_l is not None:  q = q.eq("acta_rpo_id", _a_l)
-                if _s_l is not None:  q = q.eq("semana_id", _s_l)
-                if _it_l:             q = q.ilike("item_numero", f"%{_it_l}%")
-                if _cap_l:            q = q.eq("capitulo", _cap_l)
-                if _sub_l is not None: q = q.eq("subcontratista_id", _sub_l)
-                if _rp_l is not None: q = q.in_("reporte_id", _rp_l)
-                if tramo:
-                    q = q.eq("tramo", tramo)
-                if costado:
-                    q = _so_reg_filtro_costado(q, costado)
-                if pk_id is not None:
-                    q = q.eq("pk_id_id", pk_id)
-                if q_observacion is not None and str(q_observacion).strip():
-                    q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
-                if _a_l is not None and not _estado_filtro_es_sin_asignar_item(estado):
-                    q = _so_reg_item_asignado(q)
-                if _capas_sql and not _estado_filtro_omite_validacion_por_cargo(estado):
-                    q = _so_registros_q_y_capas_validacion(
-                        q, _capas_sql, pk_id, tramo, costado, _cap_l, _sub_l, _it_l
-                    )
-                if _estado_filtro_es_sin_asignar_item(estado):
-                    q = _so_reg_sin_item_asignado(q)
-                return q.range(o, o + 999).execute().data
-            batch = supabase_execute(_regs)
-            raw_len = len(batch)
-            registros.extend(batch)
-            if raw_len < 1000:
-                break
-            off += 1000
-    except Exception as e:
+
+        def _build_regs_q(reg_id_filter: Optional[List[int]] = None):
+            q = supabase.table("so_registros")\
+                .select("reporte_id, costo_directo, cantidad_total, item_numero, item_descripcion, unidad, acta_rpo_id, nivel1_estado, nivel2_estado, nivel3_estado, capitulo, subcontratista_id")\
+                .eq("contrato_id", contrato_id)
+            q = _so_reg_filtro_abs_solape(q, _abs_ai, _abs_af)
+            if _nr is not None:
+                q = q.eq("numero_registro", _nr)
+            if _a_l is not None:
+                q = q.eq("acta_rpo_id", _a_l)
+            if _s_l is not None:
+                q = q.eq("semana_id", _s_l)
+            if _it_l:
+                q = q.ilike("item_numero", f"%{_it_l}%")
+            if _cap_l:
+                q = q.eq("capitulo", _cap_l)
+            if _sub_l is not None:
+                q = q.eq("subcontratista_id", _sub_l)
+            if _rp_l is not None:
+                q = q.in_("reporte_id", _rp_l)
+            if reg_id_filter is not None:
+                q = q.in_("id", reg_id_filter)
+            if tramo:
+                q = q.eq("tramo", tramo)
+            if costado:
+                q = _so_reg_filtro_costado(q, costado)
+            if pk_id is not None:
+                q = q.eq("pk_id_id", pk_id)
+            if q_observacion is not None and str(q_observacion).strip():
+                q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
+            if _a_l is not None and not _estado_filtro_es_sin_asignar_item(estado):
+                q = _so_reg_item_asignado(q)
+            if _capas_sql and not _estado_filtro_omite_validacion_por_cargo(estado):
+                q = _so_registros_q_y_capas_validacion(
+                    q, _capas_sql, pk_id, tramo, costado, _cap_l, _sub_l, _it_l
+                )
+            if _estado_filtro_es_sin_asignar_item(estado):
+                q = _so_reg_sin_item_asignado(q)
+            return q
+
+        if reg_ids_etiqueta_ana is not None:
+            if not reg_ids_etiqueta_ana:
+                registros = []
+            else:
+                for rg_chunk in _sicoe_chunks_int(sorted(reg_ids_etiqueta_ana), 200):
+                    rc = list(rg_chunk)
+                    off = 0
+                    while True:
+                        o = off
+
+                        def _fetch():
+                            return _build_regs_q(rc).range(o, o + 999).execute().data
+
+                        batch = supabase_execute(_fetch)
+                        raw_len = len(batch)
+                        registros.extend(batch)
+                        if raw_len < 1000:
+                            break
+                        off += 1000
+        else:
+            off = 0
+            while True:
+                o = off
+
+                def _fetch():
+                    return _build_regs_q().range(o, o + 999).execute().data
+
+                batch = supabase_execute(_fetch)
+                raw_len = len(batch)
+                registros.extend(batch)
+                if raw_len < 1000:
+                    break
+                off += 1000
+    except Exception:
         if not registros:
             registros = []
 
@@ -8283,10 +8824,16 @@ def obtener_reporte(
     validacion_capas: Optional[str] = Query(None),
     q_observacion: Optional[str] = Query(None),
     q_nodo: Optional[str] = Query(None),
+    etiqueta_validacion: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
     capas_v = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
     capas_aplican_a_lineas = bool(capas_v) and not _estado_filtro_omite_validacion_por_cargo(estado)
+
+    reg_tag_detalle = None
+    if aplicar_filtros_busqueda and etiqueta_validacion:
+        ev_d = _sicoe_parse_etiqueta_validacion_param(etiqueta_validacion)
+        reg_tag_detalle = _sicoe_fetch_registro_ids_etiqueta_validacion(contrato_id, ev_d)
 
     def _r():
         return supabase.table("so_reportes").select("*, subcontratistas(razon_social), pk_ids(pk_id, civ, tramo, infraestructura, calzada, abs_inicio, abs_final)")\
@@ -8332,6 +8879,9 @@ def obtener_reporte(
             except Exception:
                 return []
 
+        if reg_tag_detalle is not None and not reg_tag_detalle:
+            return []
+
         out = []
         off = 0
         page = 1000
@@ -8363,6 +8913,8 @@ def obtener_reporte(
             if len(batch) < page:
                 break
             off += page
+        if reg_tag_detalle is not None:
+            out = [r for r in out if r.get("id") in reg_tag_detalle]
         return out
 
     def _pts():
@@ -10046,7 +10598,7 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
             detail="Se requiere comentario_data cuando el estado es Pendiente o Rechazado.")
     try:
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
-        _require_sicoe_puede_validar_nivel(autor_id, 1)
+        _require_sicoe_puede_validar_nivel(current_user, autor_id, 1)
         def _get_n3():
             return supabase.table("so_registros").select("nivel3_estado, reporte_id")\
                 .eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
@@ -10089,27 +10641,15 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
             _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
                                  tipo_override="validacion", nivel_validacion_override="Nivel 1",
                                  audit_user=current_user)
-            destinatarios = body.comentario_data.get("destinatarios") or []
-            for dest in destinatarios:
-                dest_id = dest.get("id") if isinstance(dest, dict) else None
-                if dest_id:
-                    try:
-                        def _notif(did=dest_id):
-                            return supabase.table("notificaciones").insert({
-                                "destinatario_id": did,
-                                "remitente_id": autor_id,
-                                "contrato_id": contrato_id,
-                                "tipo": "validacion",
-                                "modulo": "sicoe_obra",
-                                "entidad_tipo": "registro",
-                                "entidad_id": str(registro_id),
-                                "asunto": f"Validación Nivel 1: {body.estado}",
-                                "mensaje": body.comentario_data.get("mensaje", ""),
-                                "leido": False
-                            }).execute().data
-                        supabase_execute(_notif)
-                    except Exception:
-                        pass
+            _push_notif_validacion_sicoe_destinatarios(
+                current_user,
+                autor_id,
+                contrato_id,
+                registro_id,
+                f"Validación Nivel 1: {body.estado}",
+                body.comentario_data.get("mensaje", "") or "",
+                body.comentario_data,
+            )
         try:
             u_log = _audit_user_contrato(current_user, contrato_id)
             after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
@@ -10136,7 +10676,7 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
         raise HTTPException(status_code=422, detail=f"Estado inválido. Acepta: {ESTADOS}")
     try:
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
-        _require_sicoe_puede_validar_nivel(autor_id, 2)
+        _require_sicoe_puede_validar_nivel(current_user, autor_id, 2)
         # Verificar nivel1
         def _get():
             return supabase.table("so_registros")\
@@ -10197,27 +10737,15 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
             _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
                                  tipo_override="validacion", nivel_validacion_override="Nivel 2",
                                  audit_user=current_user)
-            destinatarios = body.comentario_data.get("destinatarios") or []
-            for dest in destinatarios:
-                dest_id = dest.get("id") if isinstance(dest, dict) else None
-                if dest_id:
-                    try:
-                        def _notif(did=dest_id):
-                            return supabase.table("notificaciones").insert({
-                                "destinatario_id": did,
-                                "remitente_id": autor_id,
-                                "contrato_id": contrato_id,
-                                "tipo": "validacion",
-                                "modulo": "sicoe_obra",
-                                "entidad_tipo": "registro",
-                                "entidad_id": str(registro_id),
-                                "asunto": f"Validación Nivel 2: {body.estado}",
-                                "mensaje": body.comentario_data.get("mensaje", ""),
-                                "leido": False
-                            }).execute().data
-                        supabase_execute(_notif)
-                    except Exception:
-                        pass
+            _push_notif_validacion_sicoe_destinatarios(
+                current_user,
+                autor_id,
+                contrato_id,
+                registro_id,
+                f"Validación Nivel 2: {body.estado}",
+                body.comentario_data.get("mensaje", "") or "",
+                body.comentario_data,
+            )
         try:
             u_log = _audit_user_contrato(current_user, contrato_id)
             after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
@@ -10247,7 +10775,7 @@ def validar_nivel3(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
             detail="Se requiere comentario_data cuando el estado es Pendiente o Rechazado.")
     try:
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
-        _require_sicoe_puede_validar_nivel(autor_id, 3)
+        _require_sicoe_puede_validar_nivel(current_user, autor_id, 3)
         # Verificar nivel2
         def _get():
             return supabase.table("so_registros")\
@@ -10289,6 +10817,15 @@ def validar_nivel3(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
             _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
                                  tipo_override="validacion", nivel_validacion_override="Nivel 3",
                                  audit_user=current_user)
+            _push_notif_validacion_sicoe_destinatarios(
+                current_user,
+                autor_id,
+                contrato_id,
+                registro_id,
+                f"Validación Nivel 3: {body.estado}",
+                body.comentario_data.get("mensaje", "") or "",
+                body.comentario_data,
+            )
         try:
             u_log = _audit_user_contrato(current_user, contrato_id)
             after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
@@ -10315,6 +10852,12 @@ def validar_sub(contrato_id: int, registro_id: int, body: ValidarSubBody,
         raise HTTPException(status_code=422, detail=f"Estado inválido. Acepta: {ESTADOS}")
     try:
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        if not _es_desarrollador(current_user):
+            if not _cargo_permiso_validar_reporte_cantidades_user_id(autor_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="No tiene permiso de validación en «Reporte de cantidades» (matriz de accesos).",
+                )
         # Verificar nivel2_objeto_pago_sub
         def _get():
             return supabase.table("so_registros")\
@@ -10387,6 +10930,52 @@ def _parse_rpc_dashboard_resumen_raw(raw):
     return None
 
 
+def _parse_rpc_jsonb_value(raw):
+    """Primer valor jsonb devuelto por RPC (PostgREST devuelve [{ función: <payload> }])."""
+    if raw is None:
+        return None
+    if isinstance(raw, list) and len(raw) > 0:
+        row = raw[0]
+        if isinstance(row, dict):
+            for v in row.values():
+                return v
+    if isinstance(raw, dict):
+        return raw
+    return None
+
+
+def _dash_norm_item_key_py(s: Optional[str]) -> str:
+    """Alinea claves presupuesto.item ↔ so_registros.item_numero (p. ej. '4.22.' → '4.22')."""
+    if s is None:
+        return ""
+    t = str(s).strip()
+    if not t:
+        return ""
+    return re.sub(r"\.+$", "", t)
+
+
+def _dash_norm_capitulo_key_py(s: Optional[str]) -> str:
+    """Misma lógica que _dash_norm_capitulo_key en SQL: obra vs presupuesto con distinto espaciado."""
+    if s is None:
+        return "Sin capítulo"
+    t = str(s).strip()
+    if not t:
+        return "Sin capítulo"
+    t = re.sub(r"\s+", " ", t)
+    t = re.sub(r"^(\d+\.)\s+", r"\1", t)
+    return t
+
+
+def _dash_pk_disp_key_py(v: Any) -> str:
+    """Clave display PK para cruzar presupuesto.pk_id ↔ pk_ids.pk_id (como texto estable)."""
+    if v is None:
+        return "(sin pk)"
+    s = str(v).strip()
+    if not s:
+        return "(sin pk)"
+    return s
+
+
 @app.get("/sicoe-obra/{contrato_id}/dashboard-resumen")
 def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_user)):
     try:
@@ -10399,7 +10988,7 @@ def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_us
 
             hit = _parse_rpc_dashboard_resumen_raw(supabase_execute(_rpc))
             if hit is not None and isinstance(hit.get("comparativo_capitulos"), list):
-                return hit
+                return _dashboard_resumen_merge_extras(contrato_id, hit)
         except Exception:
             pass
 
@@ -10473,7 +11062,7 @@ def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_us
             for c in caps
         ]
 
-        return {
+        base = {
             "total_presupuesto": ppto_total,
             "total_cobrado": round(total_cobrado, 2),
             "delta": round(ppto_total - total_cobrado, 2),
@@ -10482,6 +11071,7 @@ def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_us
             "comparativo_capitulos": comparativo,
             "por_acta": por_acta,
         }
+        return _dashboard_resumen_merge_extras(contrato_id, base)
     except HTTPException:
         raise
     except Exception as e:
@@ -10504,6 +11094,263 @@ def _matriz_validacion_norm_estado(v) -> str:
     if "no revis" in sl or sl == "no revisado":
         return "No Revisado"
     return s
+
+
+def _dash_norm_cap(s: Optional[str]) -> str:
+    t = (s or "").strip()
+    return t if t else "Sin capítulo"
+
+
+def _so_reg_cola_n1_n2_aprobados(reg: dict) -> bool:
+    return (
+        _matriz_validacion_norm_estado(reg.get("nivel1_estado")) == "Aprobado"
+        and _matriz_validacion_norm_estado(reg.get("nivel2_estado")) == "Aprobado"
+    )
+
+
+def _so_reg_en_cola_interventoria(reg: dict) -> bool:
+    """Línea lista para revisión N3: ítem asignado y N1+N2 aprobados."""
+    if not (reg.get("item_numero") or "").strip():
+        return False
+    return _so_reg_cola_n1_n2_aprobados(reg)
+
+
+def _dashboard_resumen_scan_caps(contrato_id: int) -> Dict[str, Any]:
+    """
+    Por capítulo: costo/cant SICOE N3 aprobado, SICOE N3 no revisado (en cola),
+    y presupuesto ClaraCore partido por columna revisado (aprobado vs resto).
+    """
+    sicoe_ap_c = defaultdict(float)
+    sicoe_ap_q = defaultdict(float)
+    sicoe_nr_c = defaultdict(float)
+    sicoe_nr_q = defaultdict(float)
+    off = 0
+    while True:
+        def _b(o=off):
+            return (
+                supabase.table("so_registros")
+                .select(
+                    "capitulo, costo_directo, cantidad_total, item_numero, "
+                    "nivel1_estado, nivel2_estado, nivel3_estado"
+                )
+                .eq("contrato_id", contrato_id)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_b) or []
+        for reg in batch:
+            if not (reg.get("item_numero") or "").strip():
+                continue
+            cap = _dash_norm_cap(reg.get("capitulo"))
+            cd = float(reg.get("costo_directo") or 0)
+            cq = float(reg.get("cantidad_total") or 0)
+            n3 = _matriz_validacion_norm_estado(reg.get("nivel3_estado"))
+            if n3 == "Aprobado":
+                sicoe_ap_c[cap] += cd
+                sicoe_ap_q[cap] += cq
+            elif _so_reg_en_cola_interventoria(reg) and n3 == "No Revisado":
+                sicoe_nr_c[cap] += cd
+                sicoe_nr_q[cap] += cq
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    ppto_ap_c = defaultdict(float)
+    ppto_nr_c = defaultdict(float)
+    off = 0
+    while True:
+        def _pp(o=off):
+            return (
+                supabase.table("presupuesto")
+                .select("capitulo, costo_directo, revisado")
+                .eq("contrato_id", contrato_id)
+                .eq("dado_de_baja", False)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_pp) or []
+        for r in batch:
+            cap = _dash_norm_cap(r.get("capitulo"))
+            cost = float(r.get("costo_directo") or 0)
+            if _matriz_validacion_norm_estado(r.get("revisado")) == "Aprobado":
+                ppto_ap_c[cap] += cost
+            else:
+                ppto_nr_c[cap] += cost
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    return {
+        "sicoe_ap_c": dict(sicoe_ap_c),
+        "sicoe_ap_q": dict(sicoe_ap_q),
+        "sicoe_nr_c": dict(sicoe_nr_c),
+        "sicoe_nr_q": dict(sicoe_nr_q),
+        "ppto_ap_c": dict(ppto_ap_c),
+        "ppto_nr_c": dict(ppto_nr_c),
+    }
+
+
+def _dashboard_resumen_merge_extras(contrato_id: int, hit: dict) -> dict:
+    """Si el RPC ya trae dashboard_schema=2, no escanear tablas. Si no, enriquecer con scan Python."""
+    if hit.get("dashboard_schema") == 2:
+        return hit
+    try:
+        ex = _dashboard_resumen_scan_caps(contrato_id)
+    except Exception:
+        return hit
+    comp = hit.get("comparativo_capitulos")
+    if not isinstance(comp, list):
+        return hit
+    tot_nr = tot_pap = tot_pnr = 0.0
+    for row in comp:
+        if not isinstance(row, dict):
+            continue
+        cap = row.get("capitulo")
+        nr = float(ex["sicoe_nr_c"].get(cap, 0))
+        pap = float(ex["ppto_ap_c"].get(cap, 0))
+        pnr = float(ex["ppto_nr_c"].get(cap, 0))
+        row["sicoe_no_revisado_n3"] = round(nr, 2)
+        row["presupuesto_aprobado_n3"] = round(pap, 2)
+        row["presupuesto_no_revisado_n3"] = round(pnr, 2)
+        row["sicoe_aprobado_n3"] = float(row.get("cobrado") or 0)
+        tot_nr += nr
+        tot_pap += pap
+        tot_pnr += pnr
+    hit["total_sicoe_n3_no_revisado"] = round(tot_nr, 2)
+    hit["total_presupuesto_aprobado_n3"] = round(tot_pap, 2)
+    hit["total_presupuesto_no_revisado_n3"] = round(tot_pnr, 2)
+    return hit
+
+
+def _drill_agg_by_item(contrato_id: int, capitulo: str, item_filtro: Optional[str] = None) -> List[dict]:
+    """Ítems de un capítulo: presupuesto ClaraCore (revisado), SICOE N3 ap / no rev."""
+    ppto_by: Dict[str, List[dict]] = {}
+    rows_p = _ppto_rows_capitulo(contrato_id, capitulo)
+    for r in rows_p:
+        it = _dash_norm_item_key_py(r.get("item"))
+        if not it:
+            continue
+        ppto_by.setdefault(it, []).append(r)
+
+    ap_c = defaultdict(float)
+    ap_q = defaultdict(float)
+    nr_c = defaultdict(float)
+    nr_q = defaultdict(float)
+    off = 0
+    while True:
+        def _sr(o=off):
+            return (
+                supabase.table("so_registros")
+                .select(
+                    "item_numero, costo_directo, cantidad_total, "
+                    "nivel1_estado, nivel2_estado, nivel3_estado"
+                )
+                .eq("contrato_id", contrato_id)
+                .eq("capitulo", capitulo)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_sr) or []
+        for reg in batch:
+            it = _dash_norm_item_key_py(reg.get("item_numero"))
+            if not it:
+                continue
+            cd = float(reg.get("costo_directo") or 0)
+            cq = float(reg.get("cantidad_total") or 0)
+            n3 = _matriz_validacion_norm_estado(reg.get("nivel3_estado"))
+            if n3 == "Aprobado":
+                ap_c[it] += cd
+                ap_q[it] += cq
+            elif _so_reg_en_cola_interventoria(reg) and n3 == "No Revisado":
+                nr_c[it] += cd
+                nr_q[it] += cq
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    keys = sorted(set(list(ppto_by.keys()) + list(ap_c.keys()) + list(nr_c.keys())), key=lambda x: str(x))
+    out = []
+    for k in keys:
+        rows_it = ppto_by.get(k, [])
+        p_cost = sum(float(x.get("costo_directo") or 0) for x in rows_it)
+        p_cant = sum(float(x.get("cant_total") or 0) for x in rows_it)
+        revsplit = _ppto_costo_por_revisado(rows_it)
+        pap = float(revsplit.get("Aprobado") or 0)
+        pnr = float(revsplit.get("No Revisado") or 0) + float(revsplit.get("Pendiente") or 0) + float(revsplit.get("Rechazado") or 0)
+        desc = ""
+        for x in rows_it:
+            if x.get("descripcion"):
+                desc = str(x["descripcion"])
+                break
+        apc = ap_c.get(k, 0)
+        nrc = nr_c.get(k, 0)
+        out.append({
+            "item": k,
+            "nombre": k,
+            "descripcion": desc,
+            "presupuesto": p_cost,
+            "cobrado": round(apc, 2),
+            "presupuesto_aprobado_n3": round(pap, 2),
+            "presupuesto_no_revisado_n3": round(pnr, 2),
+            "sicoe_no_revisado_n3": round(nrc, 2),
+            "delta": round(p_cost - apc, 2),
+            "pct": round(apc / p_cost * 100, 1) if p_cost else 0,
+            "cant_ppto": round(p_cant, 3),
+            "cant_sicoe_aprobado": round(ap_q.get(k, 0), 3),
+            "cant_sicoe_no_revisado": round(nr_q.get(k, 0), 3),
+        })
+    if item_filtro and str(item_filtro).strip():
+        itf = _dash_norm_item_key_py(str(item_filtro).strip())
+        out = [row for row in out if row["item"] == itf]
+    return out
+
+
+def _drill_agg_capitulos(contrato_id: int) -> List[dict]:
+    """Listado por capítulo con los tres comparativos (sin cobro)."""
+    def _ppto():
+        return supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
+
+    ppto_raw = supabase_execute(_ppto) or []
+    ppto_caps = {r["capitulo"]: float(r.get("presupuesto") or 0) for r in ppto_raw}
+    ex = _dashboard_resumen_scan_caps(contrato_id)
+    caps = sorted(
+        set(
+            list(ppto_caps.keys())
+            + list(ex["sicoe_ap_c"].keys())
+            + list(ex["sicoe_nr_c"].keys())
+            + list(ex["ppto_ap_c"].keys())
+            + list(ex["ppto_nr_c"].keys())
+        ),
+        key=lambda x: str(x),
+    )
+    out = []
+    for cap in caps:
+        apc = float(ex["sicoe_ap_c"].get(cap, 0))
+        nrc = float(ex["sicoe_nr_c"].get(cap, 0))
+        pap = float(ex["ppto_ap_c"].get(cap, 0))
+        pnr = float(ex["ppto_nr_c"].get(cap, 0))
+        pp = float(ppto_caps.get(cap, 0))
+        out.append({
+            "nombre": cap,
+            "descripcion": "",
+            "presupuesto": pp,
+            "cobrado": round(apc, 2),
+            "presupuesto_aprobado_n3": round(pap, 2),
+            "presupuesto_no_revisado_n3": round(pnr, 2),
+            "sicoe_no_revisado_n3": round(nrc, 2),
+            "delta": round(pp - apc, 2),
+            "pct": round(apc / pp * 100, 1) if pp else 0,
+            "cant_ppto": 0,
+            "cant_sicoe_aprobado": round(float(ex["sicoe_ap_q"].get(cap, 0)), 3),
+            "cant_sicoe_no_revisado": round(float(ex["sicoe_nr_q"].get(cap, 0)), 3),
+        })
+    return out
 
 
 def _matriz_validacion_bloque_capitulo(capitulo: Optional[str]) -> str:
@@ -10787,65 +11634,45 @@ def dashboard_drill_obra(
     current_user=Depends(get_current_user)
 ):
     try:
-        campo = "item" if capitulo else "capitulo"
-
-        # 1. Obra aprobada desde vista
         if capitulo:
-            def _obra():
-                q = supabase.table("vista_dashboard_drill_item")\
-                    .select("*").eq("contrato_id", contrato_id)\
-                    .eq("capitulo", capitulo)
-                if item: q = q.ilike("item_numero", f"%{item}%")
-                return q.execute().data
-        else:
-            def _obra():
-                return supabase.table("vista_dashboard_drill_capitulo")\
-                    .select("*").eq("contrato_id", contrato_id).execute().data
-        obra_rows = supabase_execute(_obra)
+            try:
+                def _rpc_items():
+                    return (
+                        supabase.rpc(
+                            "dashboard_drill_items_agg",
+                            {"p_contrato_id": contrato_id, "p_capitulo": capitulo},
+                        )
+                        .execute()
+                        .data
+                    )
 
-        # 2. Presupuesto desde vista
-        def _ppto():
-            q = supabase.table("vista_dashboard_ppto_drill")\
-                .select("*").eq("contrato_id", contrato_id)
-            if capitulo: q = q.eq("capitulo", capitulo)
-            if item: q = q.eq("item", item)
-            return q.execute().data
-        ppto = supabase_execute(_ppto)
+                items = _parse_rpc_jsonb_value(supabase_execute(_rpc_items))
+                if isinstance(items, list):
+                    if item:
+                        itn = _dash_norm_item_key_py(str(item).strip())
+                        items = [
+                            row
+                            for row in items
+                            if isinstance(row, dict) and _dash_norm_item_key_py(row.get("item")) == itn
+                        ]
+                    return {"campo": "item", "items": items}
+            except Exception:
+                pass
+            result = _drill_agg_by_item(contrato_id, capitulo, item)
+            return {"campo": "item", "items": result}
+        if item:
+            raise HTTPException(status_code=422, detail="Indica capitulo junto con item.")
+        try:
+            def _rpc_caps():
+                return supabase.rpc("dashboard_drill_capitulos_agg", {"p_contrato_id": contrato_id}).execute().data
 
-        # 3. Agregar presupuesto
-        agg_p = {}; agg_p_cant = {}; desc_map = {}
-        for r in ppto:
-            k = r.get(campo) or "(sin valor)"
-            agg_p[k] = agg_p.get(k, 0) + float(r.get("costo_directo") or 0)
-            agg_p_cant[k] = agg_p_cant.get(k, 0) + float(r.get("cant_total") or 0)
-            if campo == "item" and r.get("descripcion") and k not in desc_map:
-                desc_map[k] = r["descripcion"]
-
-        # 4. Agregar obra
-        agg_c = {}; agg_c_cant = {}
-        for r in obra_rows:
-            if campo == "item":
-                k = r.get("item_numero") or "(sin valor)"
-                if k not in desc_map and r.get("item_descripcion"):
-                    desc_map[k] = r["item_descripcion"]
-            else:
-                k = r.get("capitulo") or "Sin capítulo"
-            agg_c[k] = agg_c.get(k, 0) + float(r.get("cobrado") or 0)
-            agg_c_cant[k] = agg_c_cant.get(k, 0) + float(r.get("cant_cobro") or 0)
-
-        keys = sorted(set(list(agg_p.keys()) + list(agg_c.keys())), key=lambda x: str(x))
-        result = []
-        for k in keys:
-            p = agg_p.get(k, 0); c = agg_c.get(k, 0)
-            result.append({
-                "nombre": k, "descripcion": desc_map.get(k, ""),
-                "presupuesto": p, "cobrado": round(c, 2),
-                "delta": round(p - c, 2),
-                "pct": round(c / p * 100, 1) if p else 0,
-                "cant_ppto": round(agg_p_cant.get(k, 0), 3),
-                "cant_cobro": round(agg_c_cant.get(k, 0), 3),
-            })
-        return {"campo": campo, "items": result}
+            caps = _parse_rpc_jsonb_value(supabase_execute(_rpc_caps))
+            if isinstance(caps, list):
+                return {"campo": "capitulo", "items": caps}
+        except Exception:
+            pass
+        result = _drill_agg_capitulos(contrato_id)
+        return {"campo": "capitulo", "items": result}
     except HTTPException:
         raise
     except Exception as e:
@@ -10853,81 +11680,211 @@ def dashboard_drill_obra(
 
 
 def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], item: Optional[str]) -> Dict[str, Any]:
-    """Misma lógica que GET dashboard-pkid-tabla (para API y export Excel)."""
+    """Por PK_ID: presupuesto por revisado; SICOE N3 aprobado; obra en cola (N1+N2 aprob., N3 no aprob.) partida en no revisado / pendiente / rechazado. cant_sicoe_no_revisado = solo bucket no revisado (no incluye pend. ni rech.). Δ = ppto aprobado N3 − obra N3 aprobada."""
+    try:
+        def _rpc_pk():
+            return (
+                supabase.rpc(
+                    "dashboard_pkid_tabla_agg",
+                    {
+                        "p_contrato_id": contrato_id,
+                        "p_capitulo": capitulo or "",
+                        "p_item": item or "",
+                    },
+                )
+                .execute()
+                .data
+            )
+
+        hit = _parse_rpc_jsonb_value(supabase_execute(_rpc_pk))
+        if isinstance(hit, dict) and isinstance(hit.get("rows"), list):
+            return hit
+    except Exception:
+        pass
+
     registros = []
     off = 0
+    it_norm = _dash_norm_item_key_py(item) if item else ""
     while True:
         def _regs(o=off):
-            q = supabase.table("so_registros")\
-                .select("pk_id_id, pk_ids(pk_id), costo_directo, cantidad_total, item_numero")\
-                .eq("contrato_id", contrato_id)\
-                .eq("nivel3_estado", "Aprobado")
-            if capitulo: q = q.eq("capitulo", capitulo)
-            if item: q = q.ilike("item_numero", f"%{item}%")
+            q = supabase.table("so_registros").select(
+                "pk_id_id, pk_ids(pk_id), costo_directo, cantidad_total, item_numero, "
+                "nivel1_estado, nivel2_estado, nivel3_estado"
+            ).eq("contrato_id", contrato_id)
+            if capitulo:
+                q = q.eq("capitulo", capitulo)
             return q.range(o, o + 999).execute().data
+
         batch = supabase_execute(_regs)
-        registros.extend(batch)
-        if len(batch) < 1000: break
+        for reg in batch or []:
+            if it_norm and _dash_norm_item_key_py(reg.get("item_numero")) != it_norm:
+                continue
+            registros.append(reg)
+        if len(batch) < 1000:
+            break
         off += 1000
 
-    q_p = supabase.table("presupuesto")\
-        .select("pk_id, cant_total, costo_directo, descripcion, revisado")\
-        .eq("contrato_id", contrato_id).eq("dado_de_baja", False)
-    if item: q_p = q_p.eq("item", item)
-    elif capitulo: q_p = q_p.eq("capitulo", capitulo)
+    q_p = (
+        supabase.table("presupuesto")
+        .select("pk_id, item, cant_total, costo_directo, descripcion, revisado, capitulo")
+        .eq("contrato_id", contrato_id)
+        .eq("dado_de_baja", False)
+    )
+    cap_key = _dash_norm_capitulo_key_py(capitulo) if capitulo else None
     ppto = []
     off = 0
     while True:
         batch = q_p.range(off, off + 999).execute().data
-        ppto.extend(batch)
-        if len(batch) < 1000: break
+        for r in batch or []:
+            if cap_key and _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_key:
+                continue
+            if it_norm and _dash_norm_item_key_py(r.get("item")) != it_norm:
+                continue
+            ppto.append(r)
+        if len(batch) < 1000:
+            break
         off += 1000
 
-    agg_p = {}
-    for r in ppto:
-        k = r.get("pk_id") or "(sin pk)"
-        if k not in agg_p:
-            agg_p[k] = {"cant": 0.0, "costo": 0.0, "desc": "", "_rev_track": []}
-        cost_line = float(r.get("costo_directo") or 0)
-        agg_p[k]["cant"] += float(r.get("cant_total") or 0)
-        agg_p[k]["costo"] += cost_line
-        agg_p[k]["_rev_track"].append((cost_line, r.get("revisado")))
-        if not agg_p[k]["desc"] and r.get("descripcion"):
-            agg_p[k]["desc"] = r["descripcion"]
+    def _empty_m():
+        return {"cant": 0.0, "costo": 0.0}
 
-    agg_c = {}
+    agg_meta: Dict[str, Any] = {}
+    agg_p_ap: Dict[str, Any] = {}
+    agg_p_nr: Dict[str, Any] = {}
+    agg_p_pd: Dict[str, Any] = {}
+    agg_p_rj: Dict[str, Any] = {}
+
+    for r in ppto:
+        k = _dash_pk_disp_key_py(r.get("pk_id"))
+        if k not in agg_meta:
+            agg_meta[k] = {"desc": "", "_rev_track": []}
+        cost_line = float(r.get("costo_directo") or 0)
+        agg_meta[k]["_rev_track"].append((cost_line, r.get("revisado")))
+        if not agg_meta[k]["desc"] and r.get("descripcion"):
+            agg_meta[k]["desc"] = r["descripcion"]
+        rv = _matriz_validacion_norm_estado(r.get("revisado"))
+        cq = float(r.get("cant_total") or 0)
+        cd = float(r.get("costo_directo") or 0)
+        if rv == "Aprobado":
+            tgt = agg_p_ap
+        elif rv == "Pendiente":
+            tgt = agg_p_pd
+        elif rv == "Rechazado":
+            tgt = agg_p_rj
+        else:
+            tgt = agg_p_nr
+        if k not in tgt:
+            tgt[k] = _empty_m()
+        tgt[k]["cant"] += cq
+        tgt[k]["costo"] += cd
+
+    agg_sicoe_ap: Dict[str, Any] = {}
+    agg_sicoe_nr: Dict[str, Any] = {}
+    agg_sicoe_pe: Dict[str, Any] = {}
+    agg_sicoe_rej: Dict[str, Any] = {}
     for r in registros:
         pk_join = r.get("pk_ids") or {}
-        k = pk_join.get("pk_id") or str(r.get("pk_id_id") or "(sin pk)")
-        if k not in agg_c: agg_c[k] = {"cant": 0.0, "costo": 0.0}
-        agg_c[k]["cant"] += float(r.get("cantidad_total") or 0)
-        agg_c[k]["costo"] += float(r.get("costo_directo") or 0)
+        pk_raw = pk_join.get("pk_id")
+        pk = _dash_pk_disp_key_py(pk_raw) if pk_raw is not None and str(pk_raw).strip() != "" else _dash_pk_disp_key_py(r.get("pk_id_id"))
+        cd = float(r.get("costo_directo") or 0)
+        cq = float(r.get("cantidad_total") or 0)
+        n3 = _matriz_validacion_norm_estado(r.get("nivel3_estado"))
+        if n3 == "Aprobado":
+            if pk not in agg_sicoe_ap:
+                agg_sicoe_ap[pk] = _empty_m()
+            agg_sicoe_ap[pk]["cant"] += cq
+            agg_sicoe_ap[pk]["costo"] += cd
+            continue
+        if _so_reg_cola_n1_n2_aprobados(r):
+            if n3 == "Pendiente":
+                tgt = agg_sicoe_pe
+            elif n3 == "Rechazado":
+                tgt = agg_sicoe_rej
+            else:
+                tgt = agg_sicoe_nr
+            if pk not in tgt:
+                tgt[pk] = _empty_m()
+            tgt[pk]["cant"] += cq
+            tgt[pk]["costo"] += cd
 
-    keys = sorted(set(list(agg_p.keys()) + list(agg_c.keys())), key=lambda x: str(x))
+    keys = sorted(
+        set(
+            list(agg_meta.keys())
+            + list(agg_p_ap.keys())
+            + list(agg_p_nr.keys())
+            + list(agg_p_pd.keys())
+            + list(agg_p_rj.keys())
+            + list(agg_sicoe_ap.keys())
+            + list(agg_sicoe_nr.keys())
+            + list(agg_sicoe_pe.keys())
+            + list(agg_sicoe_rej.keys())
+        ),
+        key=lambda x: str(x),
+    )
     rows = []
     for k in keys:
-        p = agg_p.get(k, {"cant": 0.0, "costo": 0.0, "desc": "", "_rev_track": []})
-        c = agg_c.get(k, {"cant": 0.0, "costo": 0.0})
-        tr = p.get("_rev_track") or []
+        pap = agg_p_ap.get(k, _empty_m())
+        pnr = agg_p_nr.get(k, _empty_m())
+        ppd = agg_p_pd.get(k, _empty_m())
+        prj = agg_p_rj.get(k, _empty_m())
+        sic = agg_sicoe_ap.get(k, _empty_m())
+        snr = agg_sicoe_nr.get(k, _empty_m())
+        spe = agg_sicoe_pe.get(k, _empty_m())
+        srj = agg_sicoe_rej.get(k, _empty_m())
+        cant_ppto = pap["cant"] + pnr["cant"] + ppd["cant"] + prj["cant"]
+        costo_ppto = pap["costo"] + pnr["costo"] + ppd["costo"] + prj["costo"]
+        dcant = pap["cant"] - sic["cant"]
+        dcosto = pap["costo"] - sic["costo"]
+        meta = agg_meta.get(k, {"desc": "", "_rev_track": []})
+        tr = meta.get("_rev_track") or []
         rev_dom = "No Revisado"
         if tr:
             rev_dom = _matriz_validacion_norm_estado(max(tr, key=lambda x: float(x[0] or 0))[1])
         rows.append({
             "pk_id": k,
-            "cant_ppto": round(p["cant"], 2), "costo_ppto": round(p["costo"], 0),
-            "cant_sicoe": round(c["cant"], 2), "costo_sicoe": round(c["costo"], 0),
-            "delta_cant": round(p["cant"] - c["cant"], 2),
-            "delta_costo": round(p["costo"] - c["costo"], 0),
-            "descripcion": p.get("desc", ""),
+            "cant_ppto": round(cant_ppto, 2),
+            "costo_ppto": round(costo_ppto, 0),
+            "cant_ppto_aprobado_n3": round(pap["cant"], 2),
+            "costo_ppto_aprobado_n3": round(pap["costo"], 0),
+            "cant_ppto_estado_no_revisado": round(pnr["cant"], 2),
+            "costo_ppto_estado_no_revisado": round(pnr["costo"], 0),
+            "cant_ppto_estado_pendiente": round(ppd["cant"], 2),
+            "costo_ppto_estado_pendiente": round(ppd["costo"], 0),
+            "cant_ppto_estado_rechazado": round(prj["cant"], 2),
+            "costo_ppto_estado_rechazado": round(prj["costo"], 0),
+            "cant_sicoe_aprobado": round(sic["cant"], 2),
+            "costo_sicoe_aprobado": round(sic["costo"], 0),
+            "cant_sicoe_no_revisado": round(snr["cant"], 2),
+            "costo_sicoe_no_revisado": round(snr["costo"], 0),
+            "cant_sicoe_pendiente": round(spe["cant"], 2),
+            "costo_sicoe_pendiente": round(spe["costo"], 0),
+            "cant_sicoe_rechazado": round(srj["cant"], 2),
+            "costo_sicoe_rechazado": round(srj["costo"], 0),
+            "cant_sicoe": round(sic["cant"], 2),
+            "costo_sicoe": round(sic["costo"], 0),
+            "cant_facturado": 0.0,
+            "costo_facturado": 0.0,
+            "delta_cant": round(dcant, 2),
+            "delta_costo": round(dcosto, 0),
+            "descripcion": meta.get("desc", ""),
             "revisado": rev_dom,
         })
 
     desc_item = ""
-    if item:
-        d = supabase.table("presupuesto").select("descripcion")\
-            .eq("contrato_id", contrato_id).eq("item", item)\
-            .not_.is_("descripcion", "null").limit(1).execute().data
-        if d: desc_item = d[0].get("descripcion") or ""
+    if item and capitulo:
+        d = (
+            supabase.table("presupuesto")
+            .select("descripcion, item")
+            .eq("contrato_id", contrato_id)
+            .eq("capitulo", capitulo)
+            .not_.is_("descripcion", "null")
+            .execute()
+            .data
+        ) or []
+        for row in d:
+            if _dash_norm_item_key_py(row.get("item")) == it_norm and row.get("descripcion"):
+                desc_item = row["descripcion"] or ""
+                break
 
     por_cobrar = sum(r["delta_costo"] for r in rows if r["delta_costo"] > 0)
     devolucion = sum(abs(r["delta_costo"]) for r in rows if r["delta_costo"] < 0)
@@ -11348,7 +12305,8 @@ def dashboard_pkid_tabla_obra(
 ):
     """
     Reemplaza /cobro/{contrato_id}/pkid-tabla para el Dashboard.
-    Retorna misma forma: {rows: [{pk_id, cant_ppto, costo_ppto, cant_sicoe, costo_sicoe, delta_cant, delta_costo}]}
+    Retorna {rows, por_cobrar, devolucion, descripcion_item}: filas con presupuesto por estado revisado,
+    SICOE solo N3 aprobado, delta_cant/costo = ppto aprobado N3 − obra aprobada N3.
     """
     try:
         return _dashboard_pkid_tabla_obra_core(contrato_id, capitulo, item)
@@ -11406,57 +12364,57 @@ def dashboard_pkid_colores_obra(
     Retorna misma forma: {pk_id: {cobrado, presupuesto, pct, sobrecosto}}
     """
     try:
-        reporte_ids = None
-        if capitulo:
-            def _reps():
-                return supabase.table("so_reportes")\
-                    .select("id").eq("contrato_id", contrato_id)\
-                    .eq("capitulo", capitulo).execute().data
-            reporte_ids = [r["id"] for r in supabase_execute(_reps)]
+        ppto_agg = {}
+        off = 0
+        while True:
+            def _fp(o=off):
+                q = supabase.table("presupuesto").select("pk_id, costo_directo").eq("contrato_id", contrato_id).eq("dado_de_baja", False)
+                if item:
+                    q = q.eq("item", item)
+                elif capitulo:
+                    q = q.eq("capitulo", capitulo)
+                return q.range(o, o + 999).execute().data
 
-        # Registros aprobados
-        registros = []
+            batch = supabase_execute(_fp) or []
+            for r in batch:
+                k = str(r.get("pk_id") or "").strip()
+                if k:
+                    ppto_agg[k] = ppto_agg.get(k, 0) + float(r.get("costo_directo") or 0)
+            if len(batch) < 1000:
+                break
+            off += 1000
+
+        sicoe_ap_agg = {}
         off = 0
         while True:
             def _regs(o=off):
-                q = supabase.table("so_registros")\
-                    .select("pk_id_id, pk_ids(pk_id), costo_directo")\
-                    .eq("contrato_id", contrato_id)\
-                    .eq("nivel3_estado", "Aprobado")
-                if capitulo: q = q.eq("capitulo", capitulo)
-                if item: q = q.ilike("item_numero", f"%{item}%")
+                q = supabase.table("so_registros").select("pk_id_id, pk_ids(pk_id), costo_directo").eq("contrato_id", contrato_id).eq("nivel3_estado", "Aprobado")
+                if capitulo:
+                    q = q.eq("capitulo", capitulo)
+                if item:
+                    q = q.ilike("item_numero", f"%{item}%")
                 return q.range(o, o + 999).execute().data
-            batch = supabase_execute(_regs)
-            registros.extend(batch)
-            if len(batch) < 1000: break
+
+            batch = supabase_execute(_regs) or []
+            for r in batch:
+                pk_join = r.get("pk_ids") or {}
+                k = str(pk_join.get("pk_id") or r.get("pk_id_id") or "").strip()
+                if k:
+                    sicoe_ap_agg[k] = sicoe_ap_agg.get(k, 0) + float(r.get("costo_directo") or 0)
+            if len(batch) < 1000:
+                break
             off += 1000
 
-        cobro_agg = {}
-        for r in registros:
-            pk_join = r.get("pk_ids") or {}
-            k = pk_join.get("pk_id") or str(r.get("pk_id_id") or "")
-            if k: cobro_agg[k] = cobro_agg.get(k, 0) + float(r.get("costo_directo") or 0)
-
-        q_p = supabase.table("presupuesto")\
-            .select("pk_id, costo_directo").eq("contrato_id", contrato_id)
-        if item: q_p = q_p.eq("item", item)
-        elif capitulo: q_p = q_p.eq("capitulo", capitulo)
-        try:
-            ppto_rows = q_p.execute().data
-        except Exception:
-            ppto_rows = []
-        ppto_agg = {}
-        for r in ppto_rows:
-            k = str(r.get("pk_id") or "").strip()
-            if k: ppto_agg[k] = ppto_agg.get(k, 0) + float(r.get("costo_directo") or 0)
-
         result = {}
-        for pk in set(list(cobro_agg.keys()) + list(ppto_agg.keys())):
-            c = cobro_agg.get(pk, 0); p = ppto_agg.get(pk, 0)
+        for pk in set(list(ppto_agg.keys()) + list(sicoe_ap_agg.keys())):
+            p = ppto_agg.get(pk, 0)
+            sap = sicoe_ap_agg.get(pk, 0)
             result[pk] = {
-                "cobrado": round(c, 2), "presupuesto": round(p, 2),
-                "pct": round(c / p * 100, 1) if p else 0,
-                "sobrecosto": c > p,
+                "cobrado": round(sap, 2),
+                "presupuesto": round(p, 2),
+                "sicoe_aprobado": round(sap, 2),
+                "pct": round(sap / p * 100, 1) if p else 0,
+                "sobrecosto": sap > p,
             }
         return result
     except HTTPException:
@@ -11474,88 +12432,95 @@ def dashboard_pkid_detalle_obra(
     current_user=Depends(get_current_user)
 ):
     """
-    Reemplaza /cobro/{contrato_id}/pkid-detalle para el popup de detalle por PK_ID.
-    Retorna misma forma: {ppto, cobro, totales}
+    Detalle PK_ID: presupuesto ClaraCore y líneas SICOE por estado N3 (sin tabla cobro).
     """
     try:
         _require_contract_access(current_user, contrato_id)
         pk_id_s = str(pk_id).strip() if pk_id is not None and str(pk_id).strip() != "" else None
 
-        # Presupuesto
-        q_p = supabase.table("presupuesto")\
-            .select("id, id_pol, no_inicio, no_final, cant_total, costo_directo, descripcion, item, ent_handle, x_label, y_label")\
-            .eq("contrato_id", contrato_id).eq("dado_de_baja", False)
+        q_p = (
+            supabase.table("presupuesto")
+            .select(
+                "id, id_pol, no_inicio, no_final, cant_total, costo_directo, descripcion, item, ent_handle, "
+                "x_label, y_label, revisado, capitulo, pk_id, pre_interv_estado, pre_interv_por, pre_interv_en, "
+                "sellado, area_long_nod, ancho, espesor, vlr_unitario, und, tipo_ejecucion"
+            )
+            .eq("contrato_id", contrato_id)
+            .eq("dado_de_baja", False)
+        )
         if pk_id_s:
             q_p = q_p.eq("pk_id", pk_id_s)
-        if item:
-            q_p = q_p.eq("item", item)
-        elif capitulo:
-            q_p = q_p.eq("capitulo", capitulo)
+        ppto_raw = supabase_execute(lambda: q_p.execute().data) or []
+        it_norm = _dash_norm_item_key_py(item) if item else ""
+        cap_key_det = _dash_norm_capitulo_key_py(capitulo) if capitulo else None
+        ppto = []
+        for r in ppto_raw:
+            if cap_key_det and _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_key_det:
+                continue
+            if it_norm and _dash_norm_item_key_py(r.get("item")) != it_norm:
+                continue
+            ppto.append(r)
 
-        def _exec_ppto():
-            return q_p.execute().data
-
-        ppto = supabase_execute(_exec_ppto) or []
-
-        # Resolver pk_id_id: código PK en catálogo, o id interno (fallback cuando la agregación usó pk_id_id como clave)
         pkid_id_val = None
         if pk_id_s:
-            def _pk_by_code():
-                return supabase.table("pk_ids").select("id")\
-                    .eq("contrato_id", contrato_id).eq("pk_id", pk_id_s).limit(1).execute().data
-
-            res = supabase_execute(_pk_by_code)
+            res = supabase_execute(
+                lambda: supabase.table("pk_ids")
+                .select("id")
+                .eq("contrato_id", contrato_id)
+                .eq("pk_id", pk_id_s)
+                .limit(1)
+                .execute()
+                .data
+            )
             if res:
                 pkid_id_val = res[0]["id"]
             if not pkid_id_val:
                 try:
                     nid = int(pk_id_s, 10)
-                    def _pk_by_int():
-                        return supabase.table("pk_ids").select("id")\
-                            .eq("contrato_id", contrato_id).eq("id", nid).limit(1).execute().data
-
-                    res2 = supabase_execute(_pk_by_int)
+                    res2 = supabase_execute(
+                        lambda: supabase.table("pk_ids")
+                        .select("id")
+                        .eq("contrato_id", contrato_id)
+                        .eq("id", nid)
+                        .limit(1)
+                        .execute()
+                        .data
+                    )
                     if res2:
                         pkid_id_val = res2[0]["id"]
                 except (ValueError, TypeError):
                     pass
 
-        # Registros aprobados para este pk_id.
-        # Si viniera pk_id en la URL pero no hubo match en catálogo, NO consultar todo el ítem/capítulo
-        # (consulta masiva → timeout/502 y el popup queda en «Sin datos»).
-        cobro_rows = []
+        sicoe_rows = []
         if pk_id_s and not pkid_id_val:
-            cobro_rows = []
+            sicoe_rows = []
         else:
-            q_c = supabase.table("so_registros")\
-                .select("id, numero_registro, tramo, nodo_ini, nodo_fin, cantidad_total, costo_directo, item_descripcion, item_numero, acta_rpo_id, calzada, reporte_id")\
-                .eq("contrato_id", contrato_id).eq("nivel3_estado", "Aprobado")
+            q_s = supabase.table("so_registros").select(
+                "id, numero_registro, tramo, nodo_ini, nodo_fin, cantidad_total, costo_directo, "
+                "item_descripcion, item_numero, acta_rpo_id, calzada, reporte_id, observacion, "
+                "nivel1_estado, nivel2_estado, nivel3_estado"
+            ).eq("contrato_id", contrato_id)
             if pkid_id_val:
-                q_c = q_c.eq("pk_id_id", pkid_id_val)
-            if capitulo and not item:
-                q_c = q_c.eq("capitulo", capitulo)
-            if item:
-                q_c = q_c.ilike("item_numero", f"%{item}%")
+                q_s = q_s.eq("pk_id_id", pkid_id_val)
+            if capitulo:
+                q_s = q_s.eq("capitulo", capitulo)
+            sicoe_raw = supabase_execute(lambda: q_s.execute().data) or []
+            sicoe_rows = []
+            for r in sicoe_raw:
+                if it_norm and _dash_norm_item_key_py(r.get("item_numero")) != it_norm:
+                    continue
+                sicoe_rows.append(r)
 
-            def _exec_c():
-                return q_c.execute().data
+        acta_ids = list({r["acta_rpo_id"] for r in sicoe_rows if r.get("acta_rpo_id")})
+        acta_map = {}
+        if acta_ids:
+            for a in supabase_execute(
+                lambda: supabase.table("actas").select("id, numero_rpo").in_("id", acta_ids).execute().data
+            ) or []:
+                acta_map[a["id"]] = a.get("numero_rpo") or a["id"]
 
-            cobro_rows = supabase_execute(_exec_c) or []
-
-        # Resolver numero_rpo para cada registro
-        acta_ids2 = list({r["acta_rpo_id"] for r in cobro_rows if r.get("acta_rpo_id")})
-        acta_map2 = {}
-        if acta_ids2:
-            def _am2():
-                return supabase.table("actas").select("id, numero_rpo")\
-                    .in_("id", acta_ids2).execute().data
-
-            for a in supabase_execute(_am2) or []:
-                acta_map2[a["id"]] = a.get("numero_rpo") or a["id"]
-
-        cobro_fmt = []
-        for r in cobro_rows:
-            cobro_fmt.append({
+        def _fmt_sicoe(r: dict) -> dict:
+            return {
                 "registro": r.get("numero_registro"),
                 "id_pol": None,
                 "registro_id": r.get("id"),
@@ -11567,26 +12532,99 @@ def dashboard_pkid_detalle_obra(
                 "costo_directo": float(r.get("costo_directo") or 0),
                 "descripcion": r.get("item_descripcion") or "",
                 "item": r.get("item_numero") or "",
-                "acta": acta_map2.get(r.get("acta_rpo_id")),
+                "acta": acta_map.get(r.get("acta_rpo_id")),
                 "calzada": r.get("calzada") or "",
-            })
+                "observacion": (r.get("observacion") or "").strip(),
+                "nivel3_estado": _matriz_validacion_norm_estado(r.get("nivel3_estado")),
+            }
 
-        cant_ppto  = sum(float(r.get("cant_total") or 0) for r in ppto)
+        sicoe_aprobado = []
+        for r in sicoe_rows:
+            fr = _fmt_sicoe(r)
+            n3 = _matriz_validacion_norm_estado(r.get("nivel3_estado"))
+            if n3 == "Aprobado":
+                sicoe_aprobado.append(fr)
+
+        ppto_aprobado = []
+        ppto_no_revisado = []
+        ppto_pendiente = []
+        ppto_rechazado = []
+        for r in ppto:
+            st = _matriz_validacion_norm_estado(r.get("revisado"))
+            if st == "Aprobado":
+                ppto_aprobado.append(r)
+            elif st == "Pendiente":
+                ppto_pendiente.append(r)
+            elif st == "Rechazado":
+                ppto_rechazado.append(r)
+            else:
+                ppto_no_revisado.append(r)
+
+        facturacion = []
+
+        def _sum(lst, kc, kv):
+            return sum(float(x.get(kv) or 0) for x in lst)
+
+        cant_ap = _sum(sicoe_aprobado, "", "cantidad")
+        cost_ap = _sum(sicoe_aprobado, "", "costo_directo")
+
+        def _sum_ppto(lst):
+            cq = sum(float(x.get("cant_total") or 0) for x in lst)
+            ks = sum(float(x.get("costo_directo") or 0) for x in lst)
+            return cq, ks
+
+        cant_nr_p, cost_nr_p = _sum_ppto(ppto_no_revisado)
+        cant_pd_p, cost_pd_p = _sum_ppto(ppto_pendiente)
+        cant_rj_p, cost_rj_p = _sum_ppto(ppto_rechazado)
+
+        cant_ppto = sum(float(r.get("cant_total") or 0) for r in ppto)
         costo_ppto = sum(float(r.get("costo_directo") or 0) for r in ppto)
-        cant_cobro  = sum(float(r.get("cantidad_total") or 0) for r in cobro_rows)
-        costo_cobro = sum(float(r.get("costo_directo") or 0) for r in cobro_rows)
+        cant_ppto_ap = cost_ppto_ap = 0.0
+        cant_ppto_nap = cost_ppto_nap = 0.0
+        for r in ppto:
+            c = float(r.get("cant_total") or 0)
+            co = float(r.get("costo_directo") or 0)
+            if _matriz_validacion_norm_estado(r.get("revisado")) == "Aprobado":
+                cant_ppto_ap += c
+                cost_ppto_ap += co
+            else:
+                cant_ppto_nap += c
+                cost_ppto_nap += co
 
         return {
             "ppto": ppto,
-            "cobro": cobro_fmt,
+            "ppto_por_revisado": {
+                "aprobado": ppto_aprobado,
+                "no_revisado": ppto_no_revisado,
+                "pendiente": ppto_pendiente,
+                "rechazado": ppto_rechazado,
+            },
+            "sicoe": {
+                "aprobado": sicoe_aprobado,
+            },
+            "cobro": facturacion,
             "totales": {
-                "cant_ppto":   round(cant_ppto, 2),
-                "costo_ppto":  round(costo_ppto, 0),
-                "cant_cobro":  round(cant_cobro, 2),
-                "costo_cobro": round(costo_cobro, 0),
-                "delta_cant":  round(cant_ppto - cant_cobro, 2),
-                "delta_costo": round(costo_ppto - costo_cobro, 0),
-            }
+                "cant_ppto": round(cant_ppto, 2),
+                "costo_ppto": round(costo_ppto, 0),
+                "cant_ppto_aprobado_n3": round(cant_ppto_ap, 2),
+                "costo_ppto_aprobado_n3": round(cost_ppto_ap, 0),
+                "cant_ppto_no_revisado_n3": round(cant_ppto_nap, 2),
+                "costo_ppto_no_revisado_n3": round(cost_ppto_nap, 0),
+                "cant_ppto_estado_no_revisado": round(cant_nr_p, 2),
+                "costo_ppto_estado_no_revisado": round(cost_nr_p, 0),
+                "cant_ppto_estado_pendiente": round(cant_pd_p, 2),
+                "costo_ppto_estado_pendiente": round(cost_pd_p, 0),
+                "cant_ppto_estado_rechazado": round(cant_rj_p, 2),
+                "costo_ppto_estado_rechazado": round(cost_rj_p, 0),
+                "cant_sicoe_aprobado": round(cant_ap, 2),
+                "costo_sicoe_aprobado": round(cost_ap, 0),
+                "cant_sicoe_no_revisado": 0.0,
+                "costo_sicoe_no_revisado": 0.0,
+                "cant_cobro": 0.0,
+                "costo_cobro": 0.0,
+                "delta_cant": round(cant_ppto - cant_ap, 2),
+                "delta_costo": round(costo_ppto - cost_ap, 0),
+            },
         }
     except HTTPException:
         raise
@@ -11727,35 +12765,17 @@ def crear_comentario(contrato_id: int, registro_id: int, body: ComentarioCreate,
         creado = _insertar_comentario(contrato_id, registro_id, autor_id, comentario_data, audit_user=current_user)
 
         # Notificación directa a destinatarios explícitos
-        destinatarios = comentario_data.get("destinatarios") or []
         asunto = (comentario_data.get("asunto") or "Comentario de validación").strip() or "Comentario de validación"
         mensaje = comentario_data.get("mensaje") or ""
-        for d in destinatarios:
-            if not isinstance(d, dict):
-                continue
-            try:
-                did = int(d.get("id"))
-            except Exception:
-                continue
-            if did == autor_id:
-                continue
-            try:
-                def _notif():
-                    return supabase.table("notificaciones").insert({
-                        "destinatario_id": did,
-                        "remitente_id": autor_id,
-                        "contrato_id": contrato_id,
-                        "tipo": "validacion",
-                        "modulo": "sicoe_obra",
-                        "entidad_tipo": "registro",
-                        "entidad_id": str(registro_id),
-                        "asunto": asunto,
-                        "mensaje": mensaje,
-                        "leido": False,
-                    }).execute().data
-                supabase_execute(_notif)
-            except Exception:
-                pass
+        _push_notif_validacion_sicoe_destinatarios(
+            current_user,
+            autor_id,
+            contrato_id,
+            registro_id,
+            asunto,
+            mensaje,
+            comentario_data,
+        )
 
         return {"ok": True, "comentario_id": creado.get("id")}
     except HTTPException:
@@ -11981,7 +13001,7 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
 
     try:
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
-        _require_sicoe_puede_validar_nivel(autor_id, 2)
+        _require_sicoe_puede_validar_nivel(current_user, autor_id, 2)
         actualizados = 0
         omitidos = 0
 
@@ -12101,7 +13121,7 @@ def validar_masivo_nivel3(contrato_id: int, reporte_id: int, body: ValidarMasivo
             detail="Se requiere comentario_data cuando el estado es Pendiente o Rechazado.")
     try:
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
-        _require_sicoe_puede_validar_nivel(autor_id, 3)
+        _require_sicoe_puede_validar_nivel(current_user, autor_id, 3)
         actualizados = 0
         omitidos = 0
 

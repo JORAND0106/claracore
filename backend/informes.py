@@ -8,7 +8,8 @@ import difflib
 import math
 import os as _os
 import re
-from datetime import datetime
+from datetime import datetime, date
+from concurrent.futures import ThreadPoolExecutor
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -2191,6 +2192,49 @@ def _actas_rpo_consecutivo_ascendente(contrato_id: int) -> List[Dict[str, Any]]:
     return [r for r in rows if r.get("id") is not None]
 
 
+def _parse_fecha_acta_informe(val: Any) -> Optional[date]:
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    s = str(val).strip()[:10]
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def _acta_rpo_vigente_desde_lista_actas(actas: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Misma semántica que main._acta_rpo_vigente_row (orden SQL: fecha_inicio desc, numero_rpo desc, id desc)."""
+    today = date.today()
+    cand: List[Dict[str, Any]] = []
+    for a in actas:
+        fi = _parse_fecha_acta_informe(a.get("fecha_inicio"))
+        ff = _parse_fecha_acta_informe(a.get("fecha_fin"))
+        if fi and ff and fi <= today <= ff:
+            cand.append(a)
+    if not cand:
+        return None
+
+    def _sort_key(a: Dict[str, Any]):
+        fi = _parse_fecha_acta_informe(a.get("fecha_inicio")) or date.min
+        try:
+            nr = int(a.get("numero_rpo") or 0)
+        except (TypeError, ValueError):
+            nr = 0
+        try:
+            aid = int(a.get("id") or 0)
+        except (TypeError, ValueError):
+            aid = 0
+        return (-fi.toordinal(), -nr, -aid)
+
+    return sorted(cand, key=_sort_key)[0]
+
+
 _ECON_OH_KEYS = (
     "valor_comp_ambiental",
     "valor_comp_social",
@@ -2254,23 +2298,42 @@ def _suma_historico_economia_rpo_antes_presente(
 
 def _resolver_acta_gerencia_presente_y_anterior(
     contrato_id: int, acta_presente_id: Optional[int] = None
-) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    Acta «vigente» = mayor consecutivo (última RPO), salvo `acta_presente_id` (override).
-    Anterior = la RPO inmediata previa en consecutivo.
+    Acta «presente» (columna 1) por defecto: **RPO en período** — hoy ∈ [fecha_inicio, fecha_fin],
+    alineado con la matriz SICOE / acta vigente. Si no hay ninguna (p. ej. sin actas o hueco entre períodos),
+    se usa la de **mayor consecutivo** (legado). Con `acta_presente_id` se fuerza un acta concreta.
+    Anterior = RPO inmediata previa por consecutivo respecto al presente.
+    Devuelve también la lista de actas RPO ya cargada (orden ascendente por consecutivo) para evitar otra consulta.
     """
     actas = _actas_rpo_consecutivo_ascendente(contrato_id)
     if not actas:
-        return None, None
+        return None, None, []
     if acta_presente_id is not None and _acta_pertenece_contrato(contrato_id, int(acta_presente_id)):
         for i, a in enumerate(actas):
             if int(a.get("id") or 0) == int(acta_presente_id):
-                presente = a
-                anterior = actas[i - 1] if i > 0 else None
-                return presente, anterior
+                return a, (actas[i - 1] if i > 0 else None), actas
+    vig = _acta_rpo_vigente_desde_lista_actas(actas)
+    if vig and vig.get("id"):
+        vid = int(vig["id"])
+        for i, a in enumerate(actas):
+            if int(a.get("id") or 0) == vid:
+                return a, (actas[i - 1] if i > 0 else None), actas
+        c_v = int(vig.get("consecutivo") or 0)
+        anterior = None
+        best_c = -1
+        for a in actas:
+            try:
+                ac = int(a.get("consecutivo") or 0)
+            except (TypeError, ValueError):
+                continue
+            if ac < c_v and ac > best_c:
+                best_c = ac
+                anterior = a
+        return vig, anterior, actas
     presente = actas[-1]
     anterior = actas[-2] if len(actas) >= 2 else None
-    return presente, anterior
+    return presente, anterior, actas
 
 
 def _construir_datos_informe_gerencia_matriz_fallback_por_capitulo(
@@ -2847,9 +2910,9 @@ def _embalaje_informe_gerencia_bloques(
         "acta_presente": pres,
         "acta_anterior": ant,
         "criterio": (
-            "C1: acta vigente del contrato, matriz SICOE «HABILITADO» — costo directo con ítem. "
-            "C2: acta anterior a la vigente, cascada N1·N2·N3. "
-            "C3: total aprobado solo interventoría (nivel 3), acumulado hasta el acta vigente. "
+            "C1: acta **presente** = RPO en período (hoy ∈ [inicio, fin]), alineada a matriz SICOE; matriz «HABILITADO» — costo directo con ítem. "
+            "C2: acta anterior en consecutivo, cascada N1·N2·N3. "
+            "C3: total aprobado solo interventoría (nivel 3), acumulado hasta el acta presente. "
             "C4: pendiente en al menos un nivel. Tras subtotal bloque obra: fila AIU = subtotal·tasa AIU (contrato). "
             "Tras subtotal bloque ensayos/14-15: fila IVA = subtotal·tasa IVA (contrato, p. ej. 0,19=19 %)."
         ),
@@ -2885,40 +2948,71 @@ def _embalaje_informe_gerencia_bloques(
 def _construir_datos_informe_gerencia_matriz(
     contrato_id: int, acta_presente_override: Optional[int] = None
 ) -> Dict[str, Any]:
-    pres, ant = _resolver_acta_gerencia_presente_y_anterior(contrato_id, acta_presente_override)
+    pres, ant, actas_asc = _resolver_acta_gerencia_presente_y_anterior(
+        int(contrato_id), acta_presente_override
+    )
     if not pres or not pres.get("id"):
         raise HTTPException(404, "No hay actas RPO (cobro) en el contrato para el informe de gerencia")
     ap_id = int(pres["id"])
     c_pres = int(pres.get("consecutivo") or 0) or 0
-    actas_asc = _actas_rpo_consecutivo_ascendente(contrato_id)
     ids_cascade_hasta: List[int] = [
         int(a["id"])
         for a in actas_asc
         if a.get("id") is not None and int(a.get("consecutivo") or 0) <= c_pres
     ]
     a_ant = int(ant["id"]) if (ant and ant.get("id")) else None
+    _seen_rsum: set = set()
+    ids_rsum: List[int] = []
+    for x in [ap_id] + ([int(a_ant)] if a_ant is not None else []) + list(ids_cascade_hasta):
+        try:
+            xi = int(x)
+        except (TypeError, ValueError):
+            continue
+        if xi not in _seen_rsum:
+            _seen_rsum.add(xi)
+            ids_rsum.append(xi)
+
+    def _rpc_resumen() -> Dict[Any, Any]:
+        return rpo_resumen_actas_rpc(_sb, contrato_id, ids_rsum) or {}
+
+    def _row_contrato() -> Dict[str, Any]:
+        return (
+            _row(
+                "contratos",
+                "aiu, iva, costo_directo_contrato, valor_componente_ambiental, "
+                "valor_componente_social, valor_componente_pmt, costos_adicionales_lista",
+                id=contrato_id,
+            )
+            or {}
+        )
+
+    def _rpc_maps() -> Optional[Dict[str, Dict[Tuple[str, str], float]]]:
+        return informe_gerencia_matriz_maps_por_rpc(
+            _sb, contrato_id, ap_id, a_ant, ids_cascade_hasta, None
+        )
+
+    def _rpc_conc_p() -> Optional[Dict[str, Any]]:
+        return rpo_conciliacion_un_acta_rpc(_sb, contrato_id, ap_id)
+
+    with ThreadPoolExecutor(max_workers=4) as _pool_ger:
+        _f_res = _pool_ger.submit(_rpc_resumen)
+        _f_ctr = _pool_ger.submit(_row_contrato)
+        _f_map = _pool_ger.submit(_rpc_maps)
+        _f_con = _pool_ger.submit(_rpc_conc_p)
+        r_all = _f_res.result()
+        ctr_r = _f_ctr.result()
+        maps = _f_map.result()
+        d_p = _f_con.result()
+
+    t_presente_lista = float((r_all.get(int(ap_id)) or {}).get("costo_directo_total", 0) or 0)
     t2 = 0.0
-    r_presente = rpo_resumen_actas_rpc(_sb, contrato_id, [ap_id]) or {}
-    t_presente_lista = float((r_presente.get(int(ap_id)) or {}).get("costo_directo_total", 0) or 0)
     if a_ant is not None:
-        r_one = rpo_resumen_actas_rpc(_sb, contrato_id, [int(a_ant)])
-        if r_one:
-            t2 = float((r_one.get(int(a_ant)) or {}).get("costo_directo_total", 0) or 0)
-    rsum_acum = rpo_resumen_actas_rpc(_sb, contrato_id, ids_cascade_hasta) or {}
+        t2 = float((r_all.get(int(a_ant)) or {}).get("costo_directo_total", 0) or 0)
     t_acc = 0.0
     for _oid in ids_cascade_hasta:
-        t_acc += float((rsum_acum.get(int(_oid)) or {}).get("costo_directo_total", 0) or 0)
+        t_acc += float((r_all.get(int(_oid)) or {}).get("costo_directo_total", 0) or 0)
     aiu_c: Optional[float] = None
     iva_c: Optional[float] = None
-    ctr_r = (
-        _row(
-            "contratos",
-            "aiu, iva, costo_directo_contrato, valor_componente_ambiental, "
-            "valor_componente_social, valor_componente_pmt, costos_adicionales_lista",
-            id=contrato_id,
-        )
-        or {}
-    )
     if ctr_r.get("aiu") is not None:
         try:
             aiu_c = float(ctr_r["aiu"])
@@ -2930,13 +3024,13 @@ def _construir_datos_informe_gerencia_matriz(
         except (TypeError, ValueError):
             iva_c = None
 
-    maps = informe_gerencia_matriz_maps_por_rpc(
-        _sb, contrato_id, ap_id, a_ant, ids_cascade_hasta, None
-    )
-    d_p = rpo_conciliacion_un_acta_rpc(_sb, contrato_id, ap_id)
     if d_p is None:
         d_p = (rpo_conciliacion_por_contrato(_sb, contrato_id, [ap_id]) or {}).get(ap_id) or _rpo_gerencia_vacio()
     if maps is None:
+        _log.warning(
+            "CC-GER-001: RPC informe gerencia no disponible o falló; usando fallback Python (lento). "
+            "Verifique funciones rpo_ger_* en Supabase (backend/sql/rpo_informe_gerencia.sql)."
+        )
         return _construir_datos_informe_gerencia_matriz_fallback_por_capitulo(
             contrato_id, pres, ant, ap_id, c_pres, a_ant, ids_cascade_hasta, t2, t_acc, aiu_c, iva_c, ctr_r
         )
@@ -3679,15 +3773,23 @@ def _pdf_bytes_informe_gerencia_matriz(
     enom2 = str(fc2.get("elaboro_nombre") or "").strip()
     rnom2 = str(fc2.get("reviso_nombre") or "").strip()
     anom2 = str(fc2.get("aprobo_nombre") or "").strip()
-    el_ur = _firma_data_uri_para_slot_contexto(
-        contrato_id, "acta_rpo", ap_id, fmtc, "elaboro", e_uid2, enom2, current_user
-    )
-    re_ur = _firma_data_uri_para_slot_contexto(
-        contrato_id, "acta_rpo", ap_id, fmtc, "reviso", r_uid2, rnom2, current_user
-    )
-    ap_ur = _firma_data_uri_para_slot_contexto(
-        contrato_id, "acta_rpo", ap_id, fmtc, "aprobo", a_uid2, anom2, current_user
-    )
+    el_ur = re_ur = ap_ur = None
+    with ThreadPoolExecutor(max_workers=3) as _pool:
+        fut_el = _pool.submit(
+            _firma_data_uri_para_slot_contexto,
+            contrato_id, "acta_rpo", ap_id, fmtc, "elaboro", e_uid2, enom2, current_user,
+        )
+        fut_re = _pool.submit(
+            _firma_data_uri_para_slot_contexto,
+            contrato_id, "acta_rpo", ap_id, fmtc, "reviso", r_uid2, rnom2, current_user,
+        )
+        fut_ap = _pool.submit(
+            _firma_data_uri_para_slot_contexto,
+            contrato_id, "acta_rpo", ap_id, fmtc, "aprobo", a_uid2, anom2, current_user,
+        )
+        el_ur = fut_el.result()
+        re_ur = fut_re.result()
+        ap_ur = fut_ap.result()
     html = _html_informe_gerencia_cc_ger_001_matriz(
         contrato,
         datos,
@@ -4886,7 +4988,9 @@ def json_informe_gerencia_pareja(
 def json_informe_gerencia_matriz(
     contrato_id: int,
     acta_presente: Optional[int] = Query(
-        None, description="Opcional. Si se omite: acta RPO con mayor consecutivo (vigente)."
+        None,
+        description="Opcional. Si se omite: acta RPO **en período** (hoy ∈ fechas del acta), "
+        "igual que la matriz SICOE; si no aplica ninguna, la de mayor consecutivo.",
     ),
     current_user=Depends(_get_user),
 ):
@@ -4906,7 +5010,8 @@ def json_informe_gerencia_matriz(
 def pdf_cc_ger_001_pareja(
     contrato_id: int,
     acta_presente: Optional[int] = Query(
-        None, description="Opcional. Si se omite: RPO de mayor consecutivo. acta_referencia ya no aplica (v2 matriz)."
+        None,
+        description="Opcional. Si se omite: acta RPO en período (matriz SICOE); si no hay, mayor consecutivo.",
     ),
     acta_referencia: Optional[int] = Query(
         None, description="(Deprecada en v2) se ignora; usaba comparación 2 actas en modo clásico."
@@ -4917,7 +5022,7 @@ def pdf_cc_ger_001_pareja(
     current_user=Depends(_get_user),
 ):
     """
-    PDF CC-GER-001. Por defecto: 4 columnas (horizontal) sin elegir el acta (última RPO).
+    PDF CC-GER-001. Por defecto: 4 columnas (horizontal). Acta presente = RPO en período (misma lógica que matriz SICOE), salvo `acta_presente`.
     modo=pareja: comparación 2 actas; acta_presente requerida; acta_referencia opcional.
     """
     _perm_informes_ccd(current_user, "ver")
@@ -4949,7 +5054,10 @@ def pdf_cc_ger_001_pareja(
 @router.get("/{contrato_id}/pdf/cc-ger-001/con-sello-firma")
 def pdf_cc_ger_001_pareja_con_sello_firma(
     contrato_id: int,
-    acta_presente: Optional[int] = Query(None, description="Opcional en matriz; mayor consecutivo si se omite."),
+    acta_presente: Optional[int] = Query(
+        None,
+        description="Opcional en matriz: RPO en período por defecto; forzar id de acta si se requiere.",
+    ),
     acta_referencia: Optional[int] = Query(
         None, description="(Deprecada) solo modo pareja; ignorada en matriz v2"
     ),

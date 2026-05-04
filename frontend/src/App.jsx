@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, Fragment } from 'react'
 import { OfflineProvider, useOffline } from './offline/OfflineContext'
 import { OfflineBanner, PrepareOfflineBtn, ConflictModal, ForceOfflineToggle } from './offline/OfflineUI'
 import {
@@ -891,7 +891,7 @@ function capasInicialesValidacionFromUser(usuario) {
   return [{ nivel: ni.nivelValidacion, estado: 'No Revisado' }]
 }
 
-// ─── HELPER: NIVEL DE VALIDACIÓN (rol + permiso validar; sin rol válido → no valida) ─
+// ─── HELPER: NIVEL DE VALIDACIÓN SICOE (permiso «validar» en Reporte de cantidades + rol/cargo; sin permiso → no valida) ─
 function determinarNivelValidacion(usuario) {
   const norm = (txt) =>
     String(txt || '')
@@ -907,9 +907,9 @@ function determinarNivelValidacion(usuario) {
     (p.funcion_nombre || '').toLowerCase().includes('reporte de cantidades')
   )
   const puedeEditar  = !!(permRpt?.editar)
-  // Validar en Sicoe Obra se autoriza por rol directamente, sin requerir permiso de tabla
-  const rolesQueValidan = ['operativo contratista', 'contratista', 'interventoria']
-  const puedeValidar = rolesQueValidan.includes(norm(usuario?.rol_nombre || usuario?.rol || '')) || !!(permRpt?.validar)
+  const esDevCargo = norm(usuario?.cargo_nombre || '') === 'desarrollador'
+  const permisoValidarSicoe = !!(permRpt?.validar)
+  const puedeValidar = esDevCargo || permisoValidarSicoe
 
   const esContratista   = rol === 'contratista' || rol === 'operativo contratista'
   const esInterventoria = rol === 'interventoria' || rol === 'operativo interventoria'
@@ -4155,6 +4155,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     tramo: '', costado: '', pk_id: '',
     abs_inicio: '', abs_final: '', estado: '',
     cargo: '', estado_registro: '',
+    etiqueta_validacion: '',
   })
   /** Mapa de PK en panel de filtros: colapsable para ahorrar espacio. */
   const [sicoeMapaFiltroAbierto, setSicoeMapaFiltroAbierto] = useState(false)
@@ -4759,7 +4760,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       const ef = { ...nuevosFiltros }
       if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
       if (nivelInfo.esInterventoria) delete ef.subcontratista_id
-      const camposAnalisis = ['acta_rpo','semana','subcontratista_id','capitulo','item','tramo','costado','abs_inicio','abs_final','estado','numero_reporte','numero_registro','pk_id']
+      const camposAnalisis = ['acta_rpo','semana','subcontratista_id','capitulo','item','tramo','costado','abs_inicio','abs_final','estado','numero_reporte','numero_registro','pk_id','etiqueta_validacion']
       camposAnalisis.forEach(k => {
         const v = ef[k]
         if (v === '' || v == null) return
@@ -4965,7 +4966,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     analisis?.modo === 'capitulo_items'
   )
 
-  const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'' }
+  const filtrosVacios = { numero_reporte:'', numero_registro:'', semana:'', acta_rpo:'', subcontratista_id:'', capitulo:'', item:'', tramo:'', costado:'', pk_id:'', abs_inicio:'', abs_final:'', estado:'', cargo:'', estado_registro:'', etiqueta_validacion:'' }
   /** Abscisas y nodos en cabecera de reporte (grilla SICOE). */
   const fmtSicoeRangoCabecera = (a, b) => {
     const pa = a != null && String(a).trim() !== '' ? String(a).trim() : '—'
@@ -5445,6 +5446,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         abs_inicio: fNorm.abs_inicio ?? null,
         abs_final: fNorm.abs_final ?? null,
         estado: fNorm.estado ?? null,
+        etiqueta_validacion: (fNorm.etiqueta_validacion && String(fNorm.etiqueta_validacion).trim()) || null,
         cargo_id: capaFirst?.cargo_id ?? null,
         estado_validacion: capaFirst?.estado ?? null,
         validacion_capas: serEx.length > 0 ? JSON.stringify(serEx) : null,
@@ -6257,6 +6259,19 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
                     ))}
                   </div>
                 )}
+              </div>
+              <div style={{ flex: '1.2 1 260px', minWidth: 0 }}>
+                <div style={filtroLbl}>Etiqueta val.</div>
+                <select
+                  value={filtros.etiqueta_validacion}
+                  onChange={e => setF('etiqueta_validacion', e.target.value)}
+                  style={{ ...selStyle, width: '100%', padding: '4px 6px', fontSize: 'var(--cc-label)', boxSizing: 'border-box' }}
+                >
+                  <option value="">— Todas —</option>
+                  {ETIQUETAS_VALIDACION.map((lab) => (
+                    <option key={lab} value={lab}>{lab}</option>
+                  ))}
+                </select>
               </div>
               <div style={sicoeFGrow}>
                 <div style={filtroLbl}>Tramo</div>
@@ -8814,6 +8829,7 @@ function MiniMapaSemaforo({ t, colores, contratoId, token, height = 220, onPkidC
   const capEtiquetasMiniRef = useRef('ambos')
   capEtiquetasMiniRef.current = capEtiquetas
   const [planoBase, setPlanoBase] = useState(undefined)
+  const miniColoresJsonRef = useRef('')
 
   useEffect(() => { onClickRef.current = onPkidClick }, [onPkidClick])
 
@@ -8967,10 +8983,12 @@ function MiniMapaSemaforo({ t, colores, contratoId, token, height = 220, onPkidC
       if (bMini) {
         _mapboxFitBoundsLngLat(map, bMini, { padding: 24, bearing, maxZoom: 17 })
       }
+      try { miniColoresJsonRef.current = JSON.stringify(colores ?? {}) } catch { miniColoresJsonRef.current = '' }
       setListo(true)
     })
     return () => {
       try { unregMiniAttrib() } catch { /* ignore */ }
+      miniColoresJsonRef.current = ''
       if (mapInstance.current) {
         mapInstance.current.remove()
         mapInstance.current = null
@@ -8983,10 +9001,22 @@ function MiniMapaSemaforo({ t, colores, contratoId, token, height = 220, onPkidC
     const map = mapInstance.current
     if (!map || !listo) return
     const src = map.getSource('mini-pols')
-    if (src) {
-      const raw = src._data
-      if (raw && raw.features) src.setData({ ...raw, features: buildFeatures(raw) })
+    if (!src) return
+    let serial = ''
+    try {
+      serial = JSON.stringify(colores ?? {})
+    } catch {
+      serial = ''
     }
+    if (serial === miniColoresJsonRef.current) return
+    miniColoresJsonRef.current = serial
+    const raw = src._data
+    if (raw && raw.features) src.setData({ ...raw, features: buildFeatures(raw) })
+  }, [colores, listo])
+
+  useEffect(() => {
+    const map = mapInstance.current
+    if (!map || !listo) return
     if (map.getLayer('mini-fill-ppto') && map.getLayer('mini-fill-cobro')) {
       if (modo === 'presupuesto') {
         map.setPaintProperty('mini-fill-ppto', 'fill-opacity', ['case', ['==', ['get', 'tiene_ppto'], 1], 0.85, 0.08])
@@ -9011,7 +9041,7 @@ function MiniMapaSemaforo({ t, colores, contratoId, token, height = 220, onPkidC
         map.setPaintProperty('mini-line-cobro', 'line-opacity', ['case', ['==', ['get', 'tiene_cobro'], 1], 0.65, 0.06])
       }
     }
-  }, [colores, listo, modo])
+  }, [modo, listo])
 
   useEffect(() => {
     const map = mapInstance.current
@@ -9554,6 +9584,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashCarpetaReporte, setDashCarpetaReporte] = useState(null)
   const [dashRegistroNumero, setDashRegistroNumero] = useState(null)
   const [dashDetallePpto, setDashDetallePpto] = useState(null)
+  const [dashDetallePptoSaving, setDashDetallePptoSaving] = useState(false)
   const [menuAbierto, setMenuAbierto] = useState(false)
   const [tabInferior, setTabInferior] = useState('gantt')
   const [analisis, setAnalisis] = useState('financiero')
@@ -9606,10 +9637,12 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [actaFiltroMatriz, setActaFiltroMatriz] = useState('vigente')
   /** Actas del contrato (misma fuente que módulo actas): RPO + nombre asignado para el dropdown de la matriz */
   const [actasListaMatriz, setActasListaMatriz] = useState([])
-  const dashDrillCache = useRef({})   // caché ítems: { 'capitulo': { data, ts } }
-  const dashTablaCache = useRef({})   // caché tabla: { 'cap|item': { data, ts } }
+  const dashDrillCache = useRef({})   // caché ítems: { '${contrato}|${cap}': { data, ts } }
+  const dashTablaCache = useRef({})   // caché tabla: { '${contrato}|cap|item': { data, ts } }
+  const dashDrillFetchSeqRef = useRef(0) // evita race: respuestas viejas no sobrescriben drill
   const CACHE_TTL = 5 * 60 * 1000    // 5 minutos en ms
   const [popupCapitulo, setPopupCapitulo] = useState(false)
+  const popupCapituloRef = useRef(false)
   const [notifNavegar, setNotifNavegar] = useState(null)
   const colsGrid = '1fr 1fr'
   const [miniMapaColores, setMiniMapaColores] = useState({})
@@ -9623,7 +9656,28 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const du = useMemo(() => getDashTypoUI(fontSize), [fontSize])
 
   useEffect(() => {
+    const id = dashDetallePpto?.id
+    if (!id) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const tok = getToken()
+        const res = await fetch(`${API_URL}/presupuesto/item/${id}`, { headers: { Authorization: `Bearer ${tok}` } })
+        if (!res.ok || cancelled) return
+        const row = await res.json()
+        if (!cancelled && row?.id) {
+          setDashDetallePpto(prev => (prev && prev.id === id ? { ...prev, ...row } : prev))
+        }
+      } catch (_) {}
+    })()
+    return () => { cancelled = true }
+  }, [dashDetallePpto?.id])
+
+  useEffect(() => {
     if (!contratoIdDash) return
+    dashDrillCache.current = {}
+    dashTablaCache.current = {}
+    dashDrillFetchSeqRef.current += 1
     const tok = getToken()
     fetch(`${API_URL}/presupuesto/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
       .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiPpto(d) })
@@ -9639,6 +9693,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
 // ── Auto-refresh dashboard (menos frecuente → menos carga en Azure y menos 502 por saturación) ──
   const dashDrillRef = useRef([])
   useEffect(() => { dashDrillRef.current = dashDrill }, [dashDrill])
+  useEffect(() => { popupCapituloRef.current = popupCapitulo }, [popupCapitulo])
 
   useEffect(() => {
     if (!contratoIdDash) return
@@ -9648,15 +9703,17 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiPpto(d) }).catch(() => {})
       fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-resumen`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiCobro(d) }).catch(() => {})
-      if (dashDrillRef.current.length > 0 && !popupCapitulo) refrescarDashDrillSilencioso(dashDrillRef.current)
+      if (dashDrillRef.current.length > 0 && !popupCapituloRef.current) refrescarDashDrillSilencioso(dashDrillRef.current)
       fetch(`${API_URL}/cad-queue/${contratoIdDash}/estado`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setDwgEnlazadoDash(d.enlazado) }).catch(() => {})
       const params2 = new URLSearchParams()
       if (dashDrillRef.current[0]) params2.set('capitulo', dashDrillRef.current[0].valor)
       if (dashDrillRef.current[1]) params2.set('item', dashDrillRef.current[1].valor)
-      fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-colores?${params2}`, {
-        headers: { Authorization: `Bearer ${tok}` }
-      }).then(r => r.ok ? r.json() : {}).then(setMiniMapaColores).catch(() => {})
+      if (!popupCapituloRef.current) {
+        fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-colores?${params2}`, {
+          headers: { Authorization: `Bearer ${tok}` }
+        }).then(r => r.ok ? r.json() : {}).then(setMiniMapaColores).catch(() => {})
+      }
     }
     recargar()
     const iv = setInterval(recargar, 75000)
@@ -9706,29 +9763,58 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     return () => ac.abort()
   }, [contratoIdDash, actaFiltroMatriz])
 
+  function mapDrillCapituloItems(payload) {
+    if (!payload || payload.campo !== 'item' || !Array.isArray(payload.items)) return null
+    return payload.items.map(r => ({
+      item: r.item || r.nombre, descripcion: r.descripcion || '',
+      presupuesto: r.presupuesto || 0, cobrado: r.cobrado || 0,
+      presupuesto_aprobado_n3: r.presupuesto_aprobado_n3 ?? 0,
+      presupuesto_no_revisado_n3: r.presupuesto_no_revisado_n3 ?? 0,
+      sicoe_no_revisado_n3: r.sicoe_no_revisado_n3 ?? 0,
+      cant_ppto: r.cant_ppto || 0,
+      cant_sicoe_aprobado: r.cant_sicoe_aprobado ?? 0,
+      cant_sicoe_no_revisado: r.cant_sicoe_no_revisado ?? 0,
+    }))
+  }
+
   async function cargarDashDrill(drill) {
     if (!contratoIdDash) return
+    if (!drill?.length) {
+      dashDrillFetchSeqRef.current += 1
+      setDashData(null)
+      setDashTabla(null)
+      setDashLoading(false)
+      setDashTablaLoad(false)
+      return
+    }
     const tok = getToken()
     const params = new URLSearchParams()
     drill.forEach(d => params.set(d.campo, d.valor))
 
     // ── Nivel 2: tabla pkid-tabla ──
     if (drill.length >= 2) {
-      const cacheKey = `${drill[0]?.valor}|${drill[1]?.valor}`
+      const fetchSeq = ++dashDrillFetchSeqRef.current
+      const cacheKey = `${contratoIdDash}|${drill[0]?.valor}|${drill[1]?.valor}`
       const cached = dashTablaCache.current[cacheKey]
       const ahora = Date.now()
       if (cached && (ahora - cached.ts) < CACHE_TTL) {
-        setDashTabla(cached.data)             // instantáneo desde caché
+        setDashTabla(cached.data)
         setDashTablaLoad(false)
-        // refresco silencioso en background
         fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
           .then(r => r.ok ? r.json() : null)
-          .then(data => { if (data) { dashTablaCache.current[cacheKey] = { data, ts: Date.now() }; setDashTabla(data) } })
+          .then(data => {
+            if (fetchSeq !== dashDrillFetchSeqRef.current) return
+            if (data) {
+              dashTablaCache.current[cacheKey] = { data, ts: Date.now() }
+              setDashTabla(data)
+            }
+          })
           .catch(() => {})
         return
       }
       setDashTablaLoad(true); setDashTabla(null)
       const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+      if (fetchSeq !== dashDrillFetchSeqRef.current) { setDashTablaLoad(false); return }
       if (res.ok) {
         const data = await res.json()
         dashTablaCache.current[cacheKey] = { data, ts: Date.now() }
@@ -9740,68 +9826,63 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
 
     // ── Nivel 1: ítems del capítulo ──
     setDashTabla(null)
-    const cacheKey = drill[0]?.valor || '__todos__'
+    const fetchSeq = ++dashDrillFetchSeqRef.current
+    const cacheKey = `${contratoIdDash}|${drill[0]?.valor || '__todos__'}`
     const cached = dashDrillCache.current[cacheKey]
     const ahora = Date.now()
     if (cached && (ahora - cached.ts) < CACHE_TTL) {
-      setDashData(cached.data)               // instantáneo desde caché
+      setDashData(cached.data)
       setDashLoading(false)
-      // refresco silencioso en background
       fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null)
         .then(data => {
-          if (data) {
-            const lista = (data.items || data).map(r => ({
-              item: r.item || r.nombre, descripcion: r.descripcion || '',
-              presupuesto: r.presupuesto || 0, cobrado: r.cobrado || 0,
-              cant_ppto: r.cant_ppto || 0, cant_cobro: r.cant_cobro || r.cant_sicoe || 0,
-            }))
-            dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
-            setDashData(lista)
-          }
+          if (fetchSeq !== dashDrillFetchSeqRef.current) return
+          const lista = mapDrillCapituloItems(data)
+          if (!lista) return
+          dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
+          setDashData(lista)
         })
         .catch(() => {})
       return
     }
     setDashLoading(true)
     const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+    if (fetchSeq !== dashDrillFetchSeqRef.current) { setDashLoading(false); return }
     if (res.ok) {
       const data = await res.json()
-      const lista = (data.items || data).map(r => ({
-        item: r.item || r.nombre, descripcion: r.descripcion || '',
-        presupuesto: r.presupuesto || 0, cobrado: r.cobrado || 0,
-        cant_ppto: r.cant_ppto || 0, cant_cobro: r.cant_cobro || r.cant_sicoe || 0,
-      }))
-      dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
-      setDashData(lista)
+      const lista = mapDrillCapituloItems(data)
+      if (lista) {
+        dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
+        setDashData(lista)
+      }
     }
     setDashLoading(false)
   }
 
-async function refrescarDashDrillSilencioso(drill) {
-    // Refresco en background — NO toca loading ni borra lo que se ve
+  async function refrescarDashDrillSilencioso(drill) {
+    if (!contratoIdDash || !drill?.length) return
+    const seqAtStart = dashDrillFetchSeqRef.current
     const tok = getToken()
     const params = new URLSearchParams()
     drill.forEach(d => params.set(d.campo, d.valor))
     if (drill.length >= 2) {
-      const cacheKey = `${drill[0]?.valor}|${drill[1]?.valor}`
+      const cacheKey = `${contratoIdDash}|${drill[0]?.valor}|${drill[1]?.valor}`
       fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null)
-        .then(data => { if (data) { dashTablaCache.current[cacheKey] = { data, ts: Date.now() } } })
+        .then(data => {
+          if (seqAtStart !== dashDrillFetchSeqRef.current) return
+          if (data) dashTablaCache.current[cacheKey] = { data, ts: Date.now() }
+        })
         .catch(() => {})
     } else if (drill.length === 1) {
-      const cacheKey = drill[0]?.valor || '__todos__'
+      const cacheKey = `${contratoIdDash}|${drill[0]?.valor || '__todos__'}`
       fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null)
         .then(data => {
-          if (data) {
-            const lista = (data.items || data).map(r => ({
-              item: r.item || r.nombre, descripcion: r.descripcion || '',
-              presupuesto: r.presupuesto || 0, cobrado: r.cobrado || 0,
-              cant_ppto: r.cant_ppto || 0, cant_cobro: r.cant_cobro || r.cant_sicoe || 0,
-            }))
-            dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
-          }
+          if (seqAtStart !== dashDrillFetchSeqRef.current) return
+          const lista = mapDrillCapituloItems(data)
+          if (!lista) return
+          dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
         })
         .catch(() => {})
     }
@@ -9897,6 +9978,23 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
     if (notif.entidad_id && notif.modulo === 'PRESUPUESTO') {
       setNavRegistroId(parseInt(notif.entidad_id))
     }
+  }
+
+  async function abrirRegistroSicoeObraDesdePopup(registroId) {
+    if (!registroId || !contratoIdDash) return
+    try {
+      const tok = getToken()
+      const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/registros/${registroId}/reporte`, {
+        headers: { Authorization: `Bearer ${tok}` }
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data?.id) {
+          setDashCarpetaReporte({ ...data, _autoRegistro: registroId })
+          setDashRegistroNumero(registroId)
+        }
+      }
+    } catch (_) {}
   }
     useEffect(() => {
     if (!contratoIdDash) return
@@ -10134,6 +10232,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
     const nombre = (p.funcion_nombre || '').toLowerCase()
     return nombre === 'editar registros presupuesto' && p.ver
   })
+  const permisoMatrizEditarPpto = (usuario?.permisos || []).find(p =>
+    (p.funcion_nombre || '').toLowerCase() === 'editar registros presupuesto'
+  )
+  const puedeEditarDimensionesPresupuesto = esDeveloper || !!(permisoMatrizEditarPpto?.editar)
 
   const s = {
     app: { fontFamily: "'Segoe UI', sans-serif", background: t.bg, minHeight: '100vh', color: t.text, fontSize: 'var(--cc-body)' },
@@ -10382,9 +10484,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           const fmtD = n => n != null ? formatCOP(n) : '—'
           const fmtM = n => formatCOPShort(n)
           const ppto  = kpiPpto?.costo_total  || 0
-          const cobro = kpiCobro?.total_cobrado || 0
-          const delta = ppto - cobro
-          const pct   = ppto ? Math.min(100, Math.round(cobro/ppto*100)) : 0
+          const sicoeAp = kpiCobro?.total_cobrado || 0
+          const pptoApN3 = kpiCobro?.total_presupuesto_aprobado_n3 ?? 0
+          const pptoNrN3 = kpiCobro?.total_presupuesto_no_revisado_n3 ?? 0
+          const maxTrio = Math.max(sicoeAp, pptoApN3, pptoNrN3, 1)
+          const delta = ppto - sicoeAp
+          const pct   = ppto ? Math.min(100, Math.round(sicoeAp/ppto*100)) : 0
           const alerta = pct >= 90 ? '#EF4444' : pct >= 70 ? '#F59E0B' : '#10B981'
 
           // Datos para gráficos
@@ -10406,7 +10511,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
             {dashTab === 'resumen' && <>
             {/* ── KPIs compactos ── */}
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:'10px', marginBottom:'16px' }}>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px', marginBottom:'16px' }}>
               {(() => {
                 const esLiq = usuario?.contrato_fase === 'LIQUIDACION'
                 let kpis
@@ -10414,7 +10519,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   // Cargando datos de liquidación — mostrar skeleton
                   kpis = [
                     { label:'VALOR ACTUAL CONTRATO', value:'...', sub:'Calculando', color:'#0077B6', icon:'📋' },
-                    { label:'SICOE ACUMULADO',        value: fmtD(cobro), sub: kpiCobro ? `${kpiCobro.actas?.length||0} actas` : '—', color:'#00A896', icon:'💰' },
+                    { label:'SICOE ACUMULADO',        value: fmtD(sicoeAp), sub: kpiCobro ? `${kpiCobro.actas?.length||0} actas` : '—', color:'#00A896', icon:'💰' },
                     { label:'SALDO LIQUIDACIÓN',      value:'...', sub:'Calculando', color:'#F59E0B', icon:'📊' },
                     { label:'% EJECUCIÓN',            value:'...', sub:'Calculando', color:'#F59E0B', icon:'⚡' },
                   ]
@@ -10424,7 +10529,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   const sumPorCobrar  = todoLiq.filter(r=>r.categoria==='POR_COBRAR').reduce((s,r)=>s+(r.delta_costo||0),0)
                   const sumDevolucion = todoLiq.filter(r=>r.categoria==='DEVOLUCION').reduce((s,r)=>s+Math.abs(r.delta_costo||0),0)
                   const sumSupercobro = todoLiq.filter(r=>r.categoria==='SUPERCOBRO').reduce((s,r)=>s+Math.abs(r.delta_costo||0),0)
-                  const cobroLiq    = cobro
+                  const cobroLiq    = sicoeAp
                   const valorActual = cobroLiq + sumPorCobrar - sumDevolucion - sumSupercobro
                   const saldoNeto   = valorActual - cobroLiq   // = sumPorCobrar - sumDevolucion - sumSupercobro
                   const pctLiq      = valorActual > 0 ? Math.min(999, Math.round(cobroLiq / valorActual * 100)) : 0
@@ -10437,10 +10542,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   ]
                 } else {
                   kpis = [
-                    { label:'PRESUPUESTO TOTAL', value: fmtD(ppto), sub: kpiPpto ? `${kpiPpto.total_registros} ítems` : '—', color:'#0077B6', icon:'📋' },
-                    { label:'SICOE ACUMULADO',   value: fmtD(cobro), sub: kpiCobro ? `${kpiCobro.actas?.length||0} actas` : '—', color:'#00A896', icon:'💰' },
-                    { label:'SALDO DISPONIBLE',  value: fmtD(delta), sub: delta < 0 ? '⚠️ Sobrecosto' : 'Sin sobrecosto', color: delta < 0 ? '#EF4444' : '#10B981', icon:'📊' },
-                    { label:'% CONSUMO',         value: `${pct}%`, sub: pct >= 90 ? '🔴 Crítico' : pct >= 70 ? '🟡 Alerta' : '🟢 Normal', color: alerta, icon:'⚡' },
+                    { label:'SICOE N3 APROBADO', value: fmtD(sicoeAp), sub: kpiCobro ? `${kpiCobro.actas?.length||0} actas` : '—', color:'#0077B6', icon:'🏛️' },
+                    { label:'PPTO. CLARACORE APROB. N3', value: fmtD(pptoApN3), sub: 'Columna revisado = Aprobado', color:'#0f766e', icon:'✅' },
+                    { label:'PPTO. CLARACORE NO REVIS. N3', value: fmtD(pptoNrN3), sub: 'Pendiente / No revisado / Rechazado', color:'#ca8a04', icon:'📋' },
                   ]
                 }
                 return kpis.map(k => (
@@ -10453,17 +10557,27 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               })()}
             </div>
 
-            {/* ── Barra de consumo global ── */}
+            {/* ── Tres barras: facturado · SICOE N3 aprob. · SICOE N3 no rev. ── */}
             <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'14px 20px', marginBottom:'20px', boxShadow:t.shadow }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
-                <span style={{ fontSize:`${du.body}px`, fontWeight:'700', color:t.text }}>Avance financiero del contrato</span>
-                <span style={{ fontSize:`${du.body}px`, fontWeight:'700', color:alerta }}>{pct}% ejecutado</span>
-              </div>
-              <div style={{ height:'10px', background:t.border, borderRadius:'5px', overflow:'hidden' }}>
-                <div style={{ height:'100%', width:`${pct}%`, background:`linear-gradient(90deg, #0077B6, ${alerta})`, borderRadius:'5px', transition:'width 0.8s ease' }} />
-              </div>
-              <div style={{ display:'flex', justifyContent:'space-between', marginTop:'6px', fontSize:`${du.sub}px`, color:t.textMuted }}>
-                <span style={{color:alerta,fontWeight:'600'}}>{fmtD(cobro)}</span><span>{fmtD(ppto)}</span>
+              <div style={{ fontSize:`${du.body}px`, fontWeight:'700', color:t.text, marginBottom:'10px' }}>Comparativo global (costos)</div>
+              {[
+                { label:'SICOE aprobado Nivel 3', val: sicoeAp, color:'#0077B6' },
+                { label:'Presupuesto ClaraCore aprobado (N3)', val: pptoApN3, color:'#0f766e' },
+                { label:'Presupuesto ClaraCore no revisado (N3)', val: pptoNrN3, color:'#ca8a04' },
+              ].map((row) => (
+                <div key={row.label} style={{ marginBottom:'8px' }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', fontSize:`${du.sub}px`, color:t.textMuted, marginBottom:'3px' }}>
+                    <span>{row.label}</span>
+                    <span style={{ fontWeight:'700', color:row.color }}>{fmtD(row.val)}</span>
+                  </div>
+                  <div style={{ height:'8px', background:t.border, borderRadius:'4px', overflow:'hidden' }}>
+                    <div style={{ height:'100%', width:`${Math.min(100, (row.val / maxTrio) * 100)}%`, background:row.color, borderRadius:'4px', transition:'width 0.6s ease' }} />
+                  </div>
+                </div>
+              ))}
+              <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'6px' }}>
+                Presupuesto ClaraCore: <strong style={{ color:t.text }}>{fmtD(ppto)}</strong>
+                {pct ? <> · SICOE N3 sobre ppto: <strong style={{ color:alerta }}>{pct}%</strong></> : null}
               </div>
             </div>
 
@@ -10484,7 +10598,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   </div>
                     <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>Aprobado Interventoría · acumulado por Acta RPO</div>
                   </div>
-                  <div style={{ fontSize:`${du.kpiValue - 2}px`, fontWeight:'800', color:t.primary }}>{fmtD(cobro)}</div>
+                  <div style={{ fontSize:`${du.kpiValue - 2}px`, fontWeight:'800', color:t.primary }}>{fmtD(sicoeAp)}</div>
                 </div>
                 {porActa.length === 0 ? (
                   <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin registros aprobados por Interventoría</div>
@@ -10584,41 +10698,52 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, flex: panelFoco==='ppto-cobro' ? '1 1 100%' : '1 1 calc(50% - 8px)', minWidth: panelFoco==='ppto-cobro' ? '100%' : 'min(300px, 100%)', boxSizing:'border-box' }}>
                 <div style={{ marginBottom:'14px' }}>
                   <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                    <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>📊 Presupuesto vs Obra Aprobada</div>
+                    <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>📊 SICOE y presupuesto (revisado) por capítulo</div>
                     <button onClick={() => setPanelFoco(p => p === 'ppto-cobro' ? null : 'ppto-cobro')}
                       style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:`${du.title + 1}px`, padding:'0' }}
                       title="Expandir panel">
                       {panelFoco === 'ppto-cobro' ? '⊠' : '⤢'}
                     </button>
                   </div>
-                  <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>Por capítulo — barras horizontales · orden numérico · Obra = aprobado Interventoría (N3)</div>
+                  <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>SICOE N3 aprobado · Presupuesto aprobado en polígonos (revisado) · Presupuesto aún no aprobado — sin módulo cobro</div>
                 </div>
                 {(() => {
                   const comp = sortComparativoCapitulos(kpiCobro?.comparativo_capitulos || [])
                   if (comp.length === 0) return (
                     <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:`${du.body}px` }}>Sin datos</div>
                   )
-                  const maxVal = Math.max(...comp.map(c => Math.max(c.presupuesto||0, c.cobrado||0)), 1)
+                  const maxVal = Math.max(
+                    ...comp.map(c => Math.max(
+                      Number(c.presupuesto_aprobado_n3) || 0,
+                      Number(c.cobrado) || 0,
+                      Number(c.presupuesto_no_revisado_n3) || 0,
+                      0
+                    )),
+                    1
+                  )
                   const PAD_R = 12
                   const PAD_TOP = 10
-                  const GAP_BARS = 3
-                  const BAR_H = du.barH
-                  const ROW_INNER = 4 + BAR_H + GAP_BARS + BAR_H
+                  const GAP_BARS = 4
+                  const BAR_H = Math.max(5, du.barH - 1)
+                  const ROW_INNER = 4 + BAR_H * 3 + GAP_BARS * 2
                   const ROW_H = ROW_INNER + du.rowGap
                   const TEXT_START = 26
                   const BAR_START = TEXT_START + du.padLabelW + 8
-                  const vbW = Math.max(760, BAR_START + 420)
+                  const vbW = Math.max(820, BAR_START + 440)
                   const chartW = vbW - PAD_R - BAR_START
                   const scaleW = (v) => (Math.min(v, maxVal) / maxVal) * chartW
                   const chartBottom = PAD_TOP + comp.length * ROW_H
                   const AXIS_H = 22
                   const vbH = chartBottom + AXIS_H
                   const maxChars = Math.max(12, Math.floor(du.padLabelW / 5.2))
+                  const C_PP_AP = '#0f766e'
+                  const C_AP = '#0077B6'
+                  const C_PP_NR = '#ca8a04'
 
                   return (
-                    <div style={{ maxHeight:'min(440px, 58vh)', overflowY:'auto', overflowX:'hidden', width:'100%', paddingRight:'2px' }}>
+                    <div style={{ maxHeight:'min(520px, 62vh)', overflowY:'auto', overflowX:'hidden', width:'100%', paddingRight:'2px' }}>
                       <div style={{ fontSize:`${du.chartAxis}px`, color:t.textMuted, marginBottom:'6px' }}>
-                        Escala: {fmtM(0)} — {fmtM(maxVal * 0.25)} — {fmtM(maxVal * 0.5)} — {fmtM(maxVal * 0.75)} — {fmtM(maxVal)}
+                        Escala (mayor de los tres por vista): {fmtM(0)} — {fmtM(maxVal * 0.5)} — {fmtM(maxVal)}
                       </div>
                       <svg width="100%" height={vbH} viewBox={`0 0 ${vbW} ${vbH}`} preserveAspectRatio="xMinYMin meet" style={{ overflow:'visible', display:'block', maxWidth:'100%' }}>
                         {[0, 25, 50, 75, 100].map(pct => {
@@ -10629,81 +10754,32 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         })}
                         {comp.map((cap, i) => {
                           const rowY = PAD_TOP + i * ROW_H
-                          const yP = rowY + 4
-                          const yC = rowY + 4 + BAR_H + GAP_BARS
-                          const wP = Math.max(scaleW(cap.presupuesto || 0), 2)
-                          const wC = Math.max(scaleW(cap.cobrado || 0), 2)
-                          const sobrecosto = (cap.cobrado || 0) > (cap.presupuesto || 0)
-                          const colorC = sobrecosto ? '#DC2626' : '#00A896'
+                          const y1 = rowY + 4
+                          const y2 = y1 + BAR_H + GAP_BARS
+                          const y3 = y2 + BAR_H + GAP_BARS
+                          const ap = Number(cap.cobrado) || 0
+                          const ppA = Number(cap.presupuesto_aprobado_n3) || 0
+                          const ppN = Number(cap.presupuesto_no_revisado_n3) || 0
+                          const w1 = Math.max(scaleW(ap), 2)
+                          const w2 = Math.max(scaleW(ppA), 2)
+                          const w3 = Math.max(scaleW(ppN), 2)
                           const isSelected = dashDrill[0]?.valor === cap.capitulo
                           const rawCap = cap.capitulo || ''
                           const nomCap = rawCap.length > maxChars ? `${rawCap.slice(0, maxChars)}…` : rawCap
                           const tipId = `tip-vs-h-${i}`
+                          const openCap = () => { setDashDrill([{ campo: 'capitulo', valor: cap.capitulo }]); setPopupCapitulo(true) }
                           return (
                             <g key={`${rawCap}-${i}`}>
-                              <text
-                                x={TEXT_START - 4}
-                                y={rowY + ROW_INNER / 2}
-                                textAnchor="end"
-                                dominantBaseline="middle"
-                                fontSize={du.chartLabel}
-                                fill={t.primary}
-                                fontWeight="700"
-                                style={{ userSelect: 'none' }}
-                              >
-                                {i + 1}
+                              <text x={TEXT_START - 4} y={rowY + ROW_INNER / 2} textAnchor="end" dominantBaseline="middle" fontSize={du.chartLabel} fill={t.primary} fontWeight="700" style={{ userSelect: 'none' }}>{i + 1}</text>
+                              <text x={TEXT_START} y={rowY + ROW_INNER / 2} textAnchor="start" dominantBaseline="middle" fontSize={du.chartLabel} fill={t.textMuted} style={{ userSelect: 'none' }}>
+                                <title>{rawCap}</title>{nomCap}
                               </text>
-                              <text
-                                x={TEXT_START}
-                                y={rowY + ROW_INNER / 2}
-                                textAnchor="start"
-                                dominantBaseline="middle"
-                                fontSize={du.chartLabel}
-                                fill={t.textMuted}
-                                style={{ userSelect: 'none' }}
-                              >
-                                <title>{rawCap}</title>
-                                {nomCap}
-                              </text>
-                              <rect
-                                x={BAR_START}
-                                y={yP}
-                                width={wP}
-                                height={BAR_H}
-                                fill="#0077B6"
-                                rx="2"
-                                opacity={isSelected ? 1 : 0.88}
-                                style={{ cursor: 'pointer' }}
-                                onClick={() => { setDashDrill([{ campo: 'capitulo', valor: cap.capitulo }]); setPopupCapitulo(true) }}
-                              />
-                              <rect
-                                x={BAR_START}
-                                y={yC}
-                                width={wC}
-                                height={BAR_H}
-                                fill={colorC}
-                                rx="2"
-                                opacity={isSelected ? 1 : 0.88}
-                                style={{ cursor: 'pointer' }}
-                                onClick={() => { setDashDrill([{ campo: 'capitulo', valor: cap.capitulo }]); setPopupCapitulo(true) }}
-                              />
-                              <rect
-                                x={0}
-                                y={rowY}
-                                width={vbW}
-                                height={ROW_INNER}
-                                fill="transparent"
-                                style={{ cursor: 'pointer' }}
-                                onClick={() => { setDashDrill([{ campo: 'capitulo', valor: cap.capitulo }]); setPopupCapitulo(true) }}
-                                onMouseEnter={() => {
-                                  const tip = document.getElementById(tipId)
-                                  if (tip) tip.style.display = 'block'
-                                }}
-                                onMouseLeave={() => {
-                                  const tip = document.getElementById(tipId)
-                                  if (tip) tip.style.display = 'none'
-                                }}
-                              />
+                              <rect x={BAR_START} y={y1} width={w1} height={BAR_H} fill={C_AP} rx="2" opacity={isSelected ? 1 : 0.9} style={{ cursor: 'pointer' }} onClick={openCap} />
+                              <rect x={BAR_START} y={y2} width={w2} height={BAR_H} fill={C_PP_AP} rx="2" opacity={isSelected ? 1 : 0.9} style={{ cursor: 'pointer' }} onClick={openCap} />
+                              <rect x={BAR_START} y={y3} width={w3} height={BAR_H} fill={C_PP_NR} rx="2" opacity={isSelected ? 1 : 0.9} style={{ cursor: 'pointer' }} onClick={openCap} />
+                              <rect x={0} y={rowY} width={vbW} height={ROW_INNER} fill="transparent" style={{ cursor: 'pointer' }} onClick={openCap}
+                                onMouseEnter={() => { const el = document.getElementById(tipId); if (el) el.style.display = 'block' }}
+                                onMouseLeave={() => { const el = document.getElementById(tipId); if (el) el.style.display = 'none' }} />
                             </g>
                           )
                         })}
@@ -10711,56 +10787,39 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                           const x = BAR_START + (pct / 100) * chartW
                           const val = maxVal * (pct / 100)
                           return (
-                            <text key={`ax-${pct}`} x={x} y={chartBottom + 14} textAnchor="middle" fontSize={du.chartAxis} fill={t.textMuted} style={{ userSelect: 'none' }}>
-                              {fmtM(val)}
-                            </text>
+                            <text key={`ax-${pct}`} x={x} y={chartBottom + 14} textAnchor="middle" fontSize={du.chartAxis} fill={t.textMuted} style={{ userSelect: 'none' }}>{fmtM(val)}</text>
                           )
                         })}
                         {comp.map((cap, i) => {
                           const rowY = PAD_TOP + i * ROW_H
-                          const wP = Math.max(scaleW(cap.presupuesto || 0), 2)
-                          const wC = Math.max(scaleW(cap.cobrado || 0), 2)
-                          const sobrecosto = (cap.cobrado || 0) > (cap.presupuesto || 0)
-                          const colorC = sobrecosto ? '#DC2626' : '#00A896'
+                          const ap = Number(cap.cobrado) || 0
+                          const ppA = Number(cap.presupuesto_aprobado_n3) || 0
+                          const ppN = Number(cap.presupuesto_no_revisado_n3) || 0
                           const tipId = `tip-vs-h-${i}`
-                          const tx = Math.min(BAR_START + Math.max(wP, wC) + 8, vbW - 222)
+                          const tx = Math.min(BAR_START + 8, vbW - 240)
                           return (
                             <g key={`tip-${tipId}`} id={tipId} style={{ display: 'none', pointerEvents: 'none' }}>
-                              <rect
-                                x={tx}
-                                y={Math.max(4, rowY - 4)}
-                                width="215"
-                                height="56"
-                                rx="6"
-                                fill={t.bgCard}
-                                stroke={t.border}
-                                strokeWidth="1"
-                                style={{ filter: 'drop-shadow(0 2px 8px rgba(0,0,0,0.25))' }}
-                              />
+                              <rect x={tx} y={Math.max(4, rowY - 4)} width="230" height="60" rx="6" fill={t.bgCard} stroke={t.border} strokeWidth="1" style={{ filter: 'drop-shadow(0 2px 8px rgba(0,0,0,0.25))' }} />
                               <text x={tx + 10} y={Math.max(14, rowY + 6)} fontSize={du.chartTip} fontWeight="700" fill={t.text}>
-                                {(cap.capitulo || '').length > 32 ? `${(cap.capitulo || '').slice(0, 32)}…` : (cap.capitulo || '')}
+                                {(cap.capitulo || '').length > 30 ? `${(cap.capitulo || '').slice(0, 30)}…` : (cap.capitulo || '')}
                               </text>
-                              <rect x={tx + 10} y={Math.max(20, rowY + 12)} width="8" height="8" rx="1" fill="#0077B6" />
-                              <text x={tx + 22} y={Math.max(28, rowY + 20)} fontSize={du.chartTip} fill={t.textMuted}>
-                                Ppto: <tspan fontWeight="700" fill="#0077B6">{fmtD(cap.presupuesto)}</tspan>
-                              </text>
-                              <rect x={tx + 10} y={Math.max(34, rowY + 26)} width="8" height="8" rx="1" fill={colorC} />
-                              <text x={tx + 22} y={Math.max(42, rowY + 34)} fontSize={du.chartTip} fill={t.textMuted}>
-                                Obra: <tspan fontWeight="700" fill={colorC}>{fmtD(cap.cobrado)}</tspan>
-                              </text>
+                              <text x={tx + 10} y={Math.max(26, rowY + 20)} fontSize={du.chartTip} fill={t.textMuted}>Ppto CC: <tspan fontWeight="700" fill="#64748b">{fmtD(cap.presupuesto)}</tspan></text>
+                              <text x={tx + 10} y={Math.max(26, rowY + 20)} fontSize={du.chartTip} fill={t.textMuted}>SICOE N3 ✓: <tspan fontWeight="700" fill={C_AP}>{fmtD(ap)}</tspan></text>
+                              <text x={tx + 10} y={Math.max(38, rowY + 32)} fontSize={du.chartTip} fill={t.textMuted}>Ppto rev. ✓: <tspan fontWeight="700" fill={C_PP_AP}>{fmtD(ppA)}</tspan></text>
+                              <text x={tx + 10} y={Math.max(50, rowY + 44)} fontSize={du.chartTip} fill={t.textMuted}>Ppto no rev.: <tspan fontWeight="700" fill={C_PP_NR}>{fmtD(ppN)}</tspan></text>
                             </g>
                           )
                         })}
                       </svg>
                       <div style={{ display:'flex', flexWrap:'wrap', gap:'12px', marginTop:'8px', justifyContent:'center' }}>
                         <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:`${du.legend}px`, color:t.textMuted }}>
-                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#0077B6' }}/> Presupuesto
+                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#0077B6' }}/> SICOE N3 aprobado
                         </div>
                         <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:`${du.legend}px`, color:t.textMuted }}>
-                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#00A896' }}/> Obra Aprobada
+                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#0f766e' }}/> Ppto. aprobado (revisado)
                         </div>
                         <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:`${du.legend}px`, color:t.textMuted }}>
-                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#DC2626' }}/> Sobrecosto
+                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#ca8a04' }}/> Ppto. no revisado
                         </div>
                       </div>
                     </div>
@@ -11035,33 +11094,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     {/* Área drill */}
                     <div style={{ padding:'16px 24px', flex:1 }}>
 
-                      {/* Totales ítem */}
-                      {dashDrill[1] && dashTabla && (() => {
-                        const filas = dashTabla.rows || dashTabla.filas || []
-                        const totalCantSicoe  = filas.reduce((s,f) => s + (f.cant_ppto||0), 0)
-                        const totalCostSicoe  = filas.reduce((s,f) => s + (f.costo_ppto||0), 0)
-                        const totalCantCobro  = filas.reduce((s,f) => s + (f.cant_sicoe||0), 0)
-                        const totalCostCobro  = filas.reduce((s,f) => s + (f.costo_sicoe||0), 0)
-                        const totalDeltaCant  = filas.reduce((s,f) => s + (f.delta_cant ?? ((f.cant_ppto||0)-(f.cant_sicoe||0))), 0)
-                        const totalDeltaCosto = filas.reduce((s,f) => s + (f.delta_costo ?? ((f.costo_ppto||0)-(f.costo_sicoe||0))), 0)
-                        const fmtD = n => n != null ? formatCOP(n) : '—'
-                        return (
-                          <div style={{ display:'flex', alignItems:'center', gap:'6px', marginBottom:'12px', flexWrap:'wrap' }}>
-                            <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:'#0077B6', background:'#0077B618', borderRadius:'20px', padding:'3px 10px' }}>Cant SICOE: {totalCantSicoe.toFixed(2)}</span>
-                            <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:'#0077B6', background:'#0077B618', borderRadius:'20px', padding:'3px 10px' }}>Costo SICOE: {fmtD(totalCostSicoe)}</span>
-                            <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:'#00A896', background:'#00A89618', borderRadius:'20px', padding:'3px 10px' }}>Cant Cobro: {totalCantCobro.toFixed(2)}</span>
-                            <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:'#00A896', background:'#00A89618', borderRadius:'20px', padding:'3px 10px' }}>Costo Cobro: {fmtD(totalCostCobro)}</span>
-                            <span style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>|</span>
-                            <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color: totalDeltaCant >= 0 ? '#10B981' : '#EF4444', background: totalDeltaCant >= 0 ? '#10B98118' : '#EF444418', borderRadius:'20px', padding:'3px 10px' }}>
-                              Δ Cant: {totalDeltaCant >= 0 ? '+' : ''}{totalDeltaCant.toFixed(2)}
-                            </span>
-                            <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color: totalDeltaCosto >= 0 ? '#10B981' : '#EF4444', background: totalDeltaCosto >= 0 ? '#10B98118' : '#EF444418', borderRadius:'20px', padding:'3px 10px' }}>
-                              Δ Costo: {totalDeltaCosto >= 0 ? '+' : ''}{fmtD(totalDeltaCosto)}
-                            </span>
-                          </div>
-                        )
-                      })()}
-
                       {/* Nivel 1: ítems */}
                       {dashDrill.length === 1 && (
                         dashLoading ? (
@@ -11071,9 +11103,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                           const totalPags = Math.ceil(dashData.length / POR_PAG)
                           const paginaItems = dashDrillPag || 0
                           const slice = dashData.slice(paginaItems * POR_PAG, (paginaItems + 1) * POR_PAG)
-                          const maxV = Math.max(...slice.map(d => Math.max(d.presupuesto||0, d.cobrado||0)), 1)
-                          const BAR_W = 26, GAP = 10, PAD_L = 8, PAD_R = 8, H = 240, PAD_T = 14, PAD_B = 32
-                          const totalW = PAD_L + slice.length * (BAR_W*2 + GAP + 8) + PAD_R
+                          const maxV = Math.max(...slice.map(d => Math.max(
+                            Number(d.cobrado)||0, Number(d.presupuesto_aprobado_n3)||0, Number(d.presupuesto_no_revisado_n3)||0
+                          )), 1)
+                          const BAR_W = 10, GAP_IN = 3, GAP_GRP = 14, PAD_L = 8, PAD_R = 8, H = 240, PAD_T = 14, PAD_B = 32
+                          const grpW = BAR_W * 3 + GAP_IN * 2
+                          const totalW = PAD_L + slice.length * (grpW + GAP_GRP) + PAD_R
                           const scaleH = v => PAD_T + (1 - v/maxV) * (H - PAD_T - PAD_B)
                           const fmtD = n => n != null ? formatCOP(n) : '—'
                           return (
@@ -11095,38 +11130,54 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                                 <svg width="100%" viewBox={`0 0 ${totalW} ${H}`} style={{ overflow:'visible', display:'block' }}>
                                   {[0,50,100].map(pct => { const y=PAD_T+(1-pct/100)*(H-PAD_T-PAD_B); return <line key={pct} x1={PAD_L} x2={totalW} y1={y} y2={y} stroke={t.border} strokeWidth="0.5" strokeDasharray="3,3"/> })}
                                   {slice.map((item, i) => {
-                                    const x=PAD_L+i*(BAR_W*2+GAP+8), yP=scaleH(item.presupuesto||0), yC=scaleH(item.cobrado||0)
-                                    const hP=H-PAD_B-yP, hC=H-PAD_B-yC
+                                    const x0 = PAD_L + i * (grpW + GAP_GRP)
+                                    const ap = Number(item.cobrado)||0, ppA = Number(item.presupuesto_aprobado_n3)||0, ppN = Number(item.presupuesto_no_revisado_n3)||0
+                                    const yA = scaleH(ap), yP1 = scaleH(ppA), yP2 = scaleH(ppN)
+                                    const hA = H-PAD_B-yA, hP1 = H-PAD_B-yP1, hP2 = H-PAD_B-yP2
                                     const nomCorto=String(item.item||'').length>6?String(item.item||'').slice(0,6)+'…':String(item.item||'')
+                                    const cx = x0 + grpW/2
+                                    const tipId = `tip-drill-p${paginaItems}-i${i}`
+                                    const tipX = Math.min(Math.max(8, x0 - 32), totalW - 242)
+                                    const tipY = PAD_T + 4
+                                    const showTip = (show) => {
+                                      const tip = document.getElementById(tipId)
+                                      if (tip) tip.style.display = show ? 'block' : 'none'
+                                    }
                                     return (
-                                      <g key={i} onClick={() => setDashDrill([dashDrill[0], {campo:'item', valor:item.item, descripcion:item.descripcion||''}])} style={{cursor:'pointer'}}>
-                                        <rect x={x} y={yP} width={BAR_W} height={Math.max(hP,2)} fill="#0077B6" rx="2" opacity="0.85"
-                                          onMouseEnter={e=>{e.currentTarget.style.opacity='1';const tip=document.getElementById(`tip-drill-${i}`);if(tip)tip.style.display='block'}}
-                                          onMouseLeave={e=>{e.currentTarget.style.opacity='0.85';const tip=document.getElementById(`tip-drill-${i}`);if(tip)tip.style.display='none'}}/>
-                                        <rect x={x+BAR_W+2} y={yC} width={BAR_W} height={Math.max(hC,2)} fill="#00A896" rx="2" opacity="0.85"
-                                          onMouseEnter={e=>{e.currentTarget.style.opacity='1';const tip=document.getElementById(`tip-drill-${i}`);if(tip)tip.style.display='block'}}
-                                          onMouseLeave={e=>{e.currentTarget.style.opacity='0.85';const tip=document.getElementById(`tip-drill-${i}`);if(tip)tip.style.display='none'}}/>
-                                        <text x={x+BAR_W} y={H-8} textAnchor="middle" fontSize="9" fill={t.textMuted}>{nomCorto}</text>
-                                        <g id={`tip-drill-${i}`} style={{display:'none',pointerEvents:'none'}}>
-                                          <rect x={Math.min(x-10,Math.max(totalW,300)-220)} y={H-PAD_B-100} width="215" height="100" rx="5" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
-                                          <text x={Math.min(x-10,Math.max(totalW,300)-220)+10} y={H-PAD_B-84} fontSize="10" fontWeight="700" fill={t.text}>{String(item.item||'').length>24?String(item.item||'').slice(0,24)+'…':String(item.item||'')}</text>
-                                          <text x={Math.min(x-10,Math.max(totalW,300)-220)+10} y={H-PAD_B-72} fontSize="8" fill={t.textMuted}>{String(item.descripcion||'').length>32?String(item.descripcion||'').slice(0,32)+'…':String(item.descripcion||'')}</text>
-                                          <rect x={Math.min(x-10,Math.max(totalW,300)-220)+10} y={H-PAD_B-62} width="8" height="8" rx="1" fill="#0077B6"/>
-                                          <text x={Math.min(x-10,Math.max(totalW,300)-220)+22} y={H-PAD_B-55} fontSize="9" fill={t.textMuted}>Ppto: <tspan fontWeight="700" fill="#0077B6">{fmtD(item.presupuesto)}</tspan></text>
-                                          <text x={Math.min(x-10,Math.max(totalW,300)-220)+22} y={H-PAD_B-42} fontSize="9" fill={t.textMuted}>Cant: <tspan fontWeight="700" fill="#0077B6">{(item.cant_ppto||0).toFixed(2)}</tspan></text>
-                                          <rect x={Math.min(x-10,Math.max(totalW,300)-220)+10} y={H-PAD_B-32} width="8" height="8" rx="1" fill="#00A896"/>
-                                          <text x={Math.min(x-10,Math.max(totalW,300)-220)+22} y={H-PAD_B-25} fontSize="9" fill={t.textMuted}>Cobro: <tspan fontWeight="700" fill="#00A896">{fmtD(item.cobrado)}</tspan></text>
-                                          <text x={Math.min(x-10,Math.max(totalW,300)-220)+22} y={H-PAD_B-12} fontSize="9" fill={t.textMuted}>Cant: <tspan fontWeight="700" fill="#00A896">{(item.cant_cobro||0).toFixed(2)}</tspan></text>
+                                      <g key={`${paginaItems}-${i}-${item.item || i}`} onClick={() => setDashDrill([dashDrill[0], {campo:'item', valor:item.item, descripcion:item.descripcion||''}])} style={{cursor:'pointer'}}>
+                                        <rect x={x0} y={yA} width={BAR_W} height={Math.max(hA,2)} fill="#0077B6" rx="2" opacity="0.88"
+                                          onMouseEnter={e=>{e.currentTarget.style.opacity='1';showTip(true)}}
+                                          onMouseLeave={e=>{e.currentTarget.style.opacity='0.88';showTip(false)}}/>
+                                        <rect x={x0+BAR_W+GAP_IN} y={yP1} width={BAR_W} height={Math.max(hP1,2)} fill="#0f766e" rx="2" opacity="0.88"
+                                          onMouseEnter={e=>{e.currentTarget.style.opacity='1';showTip(true)}}
+                                          onMouseLeave={e=>{e.currentTarget.style.opacity='0.88';showTip(false)}}/>
+                                        <rect x={x0+2*(BAR_W+GAP_IN)} y={yP2} width={BAR_W} height={Math.max(hP2,2)} fill="#ca8a04" rx="2" opacity="0.88"
+                                          onMouseEnter={e=>{e.currentTarget.style.opacity='1';showTip(true)}}
+                                          onMouseLeave={e=>{e.currentTarget.style.opacity='0.88';showTip(false)}}/>
+                                        <text x={cx} y={H-8} textAnchor="middle" fontSize="9" fill={t.textMuted}>{nomCorto}</text>
+                                        <g id={tipId} style={{display:'none',pointerEvents:'none'}}>
+                                          <rect x={tipX} y={tipY} width="234" height="128" rx="6" fill={t.bgCard} stroke={t.border} strokeWidth="1"/>
+                                          <text x={tipX+10} y={tipY+18} fontSize="10" fontWeight="700" fill={t.text}>{String(item.item||'—').length>28?String(item.item||'').slice(0,28)+'…':String(item.item||'—')}</text>
+                                          <text x={tipX+10} y={tipY+36} fontSize="8" fill={t.textMuted}>{String(item.descripcion||'').length>38?String(item.descripcion||'').slice(0,38)+'…':String(item.descripcion||'')}</text>
+                                          <text x={tipX+10} y={tipY+54} fontSize="9" fill={t.textMuted}>SICOE N3 ✓: <tspan fontWeight="700" fill="#0077B6">{fmtD(ap)}</tspan></text>
+                                          <text x={tipX+10} y={tipY+70} fontSize="9" fill={t.textMuted}>Ppto val. N3 ✓: <tspan fontWeight="700" fill="#0f766e">{fmtD(ppA)}</tspan></text>
+                                          <text x={tipX+10} y={tipY+86} fontSize="9" fill={t.textMuted}>Ppto (no val. N3): <tspan fontWeight="700" fill="#ca8a04">{fmtD(ppN)}</tspan></text>
+                                          <text x={tipX+10} y={tipY+102} fontSize="9" fill={t.textMuted}>Ppto total ítem: <tspan fontWeight="700" fill="#64748b">{fmtD(item.presupuesto)}</tspan></text>
+                                          <text x={tipX+10} y={tipY+118} fontSize="8" fill={t.textMuted}>Cant. SICOE N3 ✓: {(item.cant_sicoe_aprobado??0).toFixed(2)} · Cant. ppto total: {(item.cant_ppto??0).toFixed(2)}</text>
                                         </g>
                                       </g>
                                     )
                                   })}
                                 </svg>
                               </div>
-                              <div style={{ display:'flex', gap:'12px', marginTop:'6px', justifyContent:'center' }}>
-                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'var(--cc-caption)', color:t.textMuted }}><div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#0077B6' }}/> Presupuesto</div>
-                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'var(--cc-caption)', color:t.textMuted }}><div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#00A896' }}/> Cobro</div>
+                              <div style={{ display:'flex', gap:'12px', marginTop:'6px', justifyContent:'center', flexWrap:'wrap' }}>
+                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'var(--cc-caption)', color:t.textMuted }}><div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#0077B6' }}/> SICOE N3 ap.</div>
+                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'var(--cc-caption)', color:t.textMuted }}><div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#0f766e' }}/> Ppto. rev. ✓</div>
+                                <div style={{ display:'flex', alignItems:'center', gap:'4px', fontSize:'var(--cc-caption)', color:t.textMuted }}><div style={{ width:'10px', height:'10px', borderRadius:'2px', background:'#ca8a04' }}/> Ppto. no rev.</div>
                               </div>
+                              <p style={{ margin:'8px 0 0', fontSize:'var(--cc-caption)', color:t.textMuted, textAlign:'center', lineHeight:1.45, maxWidth:'720px', marginLeft:'auto', marginRight:'auto' }}>
+                                <strong style={{ color:t.text }}>Nota:</strong> las barras verdes y naranjas son <strong>presupuesto</strong> (validado N3 ✓ y resto). La tabla por PK lista siempre obra SICOE N3 ✓, montos de presupuesto por estado (aprobado / pendiente / rechazado) y Δ respecto al aprobado N3.
+                              </p>
                             </div>
                           )
                         })() : <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin ítems</div>
@@ -11137,32 +11188,91 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         dashTablaLoad ? (
                           <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>⏳ Cargando tabla...</div>
                         ) : dashTabla ? (
-                          <div style={{ overflowX:'auto' }}>
-                            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
-                              <thead>
-                                <tr>{['PK_ID','Cant. SICOE','Costo SICOE','Cant. Cobro','Costo Cobro','Δ Cant','Δ Costo'].map(h => (
-                                  <th key={h} style={{ padding:'6px 8px', fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'right', whiteSpace:'nowrap' }}>{h}</th>
-                                ))}</tr>
-                              </thead>
-                              <tbody>
-                                {(dashTabla.rows || dashTabla.filas || []).map((row, i) => {
-                                  const dCant  = row.delta_cant  ?? ((row.cant_ppto||0)-(row.cant_sicoe||0))
-                                  const dCosto = row.delta_costo ?? ((row.costo_ppto||0)-(row.costo_sicoe||0))
-                                  const fmtD = n => n != null ? formatCOP(n) : '—'
-                                  return (
-                                    <tr key={i} style={{ background: i%2===0?'transparent':t.bg+'88' }}>
-                                      <td style={{ padding:'5px 8px', fontWeight:'600', color:t.primary, textAlign:'right' }}>{row.pk_id||row.id_pol||'—'}</td>
-                                      <td style={{ padding:'5px 8px', textAlign:'right', color:t.text }}>{(row.cant_ppto||0).toFixed(2)}</td>
-                                      <td style={{ padding:'5px 8px', textAlign:'right', color:'#0077B6', fontWeight:'600' }}>{fmtD(row.costo_ppto)}</td>
-                                      <td style={{ padding:'5px 8px', textAlign:'right', color:t.text }}>{(row.cant_sicoe||0).toFixed(2)}</td>
-                                      <td style={{ padding:'5px 8px', textAlign:'right', color:'#00A896', fontWeight:'600' }}>{fmtD(row.costo_sicoe)}</td>
-                                      <td style={{ padding:'5px 8px', textAlign:'right', color:dCant>=0?'#10B981':'#EF4444', fontWeight:'600' }}>{dCant>=0?'+':''}{dCant.toFixed(2)}</td>
-                                      <td style={{ padding:'5px 8px', textAlign:'right', color:dCosto>=0?'#10B981':'#EF4444', fontWeight:'600' }}>{dCosto>=0?'+':''}{fmtD(dCosto)}</td>
-                                    </tr>
-                                  )
-                                })}
-                              </tbody>
-                            </table>
+                          <div style={{ width:'100%', overflowX:'auto' }}>
+                            {(() => {
+                              const filas = dashTabla.rows || dashTabla.filas || []
+                              const fmtD = n => n != null ? formatCOP(n) : '—'
+                              const thSum = (content, color, bg) => (
+                                <th style={{ padding:'4px 6px', fontSize:'var(--cc-caption)', fontWeight:'800', color, background: bg, borderBottom:`1px solid ${t.border}`, textAlign:'right', whiteSpace:'nowrap', lineHeight:1.35 }}>{content}</th>
+                              )
+                              const thH = { padding:'5px 6px', fontSize:'9px', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'right', whiteSpace:'normal', lineHeight:1.25 }
+                              const numCell = (v) => {
+                                if (v == null || v === '') return 0
+                                const n = Number(v)
+                                return Number.isFinite(n) ? n : 0
+                              }
+                              const TABLA_PK_COLS = [
+                                { key:'sq', label:'SICOE N3', field:'cant_sicoe_aprobado', kind:'qty', color:t.text, sumBg:'transparent' },
+                                { key:'sc', label:'COSTO SICOE N3', field:'costo_sicoe_aprobado', kind:'money', color:'#0077B6', sumBg:'#0077B612' },
+                                { key:'pq', label:'APROBADO PPTO N3', field:'cant_ppto_aprobado_n3', kind:'qty', color:t.text, sumBg:'transparent' },
+                                { key:'pc', label:'COSTO APROBADO PPTO N3', field:'costo_ppto_aprobado_n3', kind:'money', color:'#0f766e', sumBg:'#0f766e18' },
+                                { key:'pnrq', label:'NO REVISADO PPTO N3', field:'cant_ppto_estado_no_revisado', kind:'qty', color:t.text, sumBg:'transparent' },
+                                { key:'pnrc', label:'COSTO NO REVISADO PPTO N3', field:'costo_ppto_estado_no_revisado', kind:'money', color:'#b45309', sumBg:'#ca8a0412' },
+                                { key:'pdc', label:'COSTO PENDIENTE PPTO N3', field:'costo_ppto_estado_pendiente', kind:'money', color:'#7c3aed', sumBg:'#a855f712' },
+                                { key:'prc', label:'COSTO RECHAZADO PPTO N3', field:'costo_ppto_estado_rechazado', kind:'money', color:'#dc2626', sumBg:'#ef444412' },
+                              ]
+                              const rowDeltaCant  = (f) => numCell(f.cant_ppto_aprobado_n3) - numCell(f.cant_sicoe_aprobado ?? f.cant_sicoe)
+                              const rowDeltaCosto = (f) => numCell(f.costo_ppto_aprobado_n3) - numCell(f.costo_sicoe_aprobado ?? f.costo_sicoe)
+                              const totalDeltaCant  = filas.reduce((s, f) => s + rowDeltaCant(f), 0)
+                              const totalDeltaCosto = filas.reduce((s, f) => s + rowDeltaCosto(f), 0)
+                              const deltaHint = 'Δ = APROBADO PPTO N3 − SICOE N3 ✓ (cantidad y costo directo) por PK.'
+                              if (!filas.length) {
+                                return <div style={{ textAlign:'center', padding:'16px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin filas</div>
+                              }
+                              const sumField = (field, kind) => {
+                                const s = filas.reduce((a, f) => a + numCell(f[field]), 0)
+                                return kind === 'qty' ? s.toFixed(2) : fmtD(s)
+                              }
+                              const pctEach = 88 / (TABLA_PK_COLS.length + 2)
+                              return (
+                                <div style={{ width:'100%' }}>
+                                  <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)', tableLayout:'fixed', minWidth:'1120px' }}>
+                                    <colgroup>
+                                      <col style={{ width:'11%', minWidth:'72px' }} />
+                                      {TABLA_PK_COLS.map(c => (
+                                        <col key={c.key} style={{ width:`${pctEach}%`, minWidth:'84px' }} />
+                                      ))}
+                                      <col style={{ width:`${pctEach}%`, minWidth:'72px' }} />
+                                      <col style={{ width:`${pctEach}%`, minWidth:'88px' }} />
+                                    </colgroup>
+                                    <thead>
+                                      <tr>
+                                        <th style={{ ...thH, borderBottom:`1px solid ${t.border}44`, fontSize:'var(--cc-caption)' }}>Σ</th>
+                                        {TABLA_PK_COLS.map(c => thSum(sumField(c.field, c.kind), c.kind === 'money' ? c.color : t.text, c.sumBg))}
+                                        {thSum(`${totalDeltaCant >= 0 ? '+' : ''}${totalDeltaCant.toFixed(2)}`, totalDeltaCant >= 0 ? '#10B981' : '#EF4444', totalDeltaCant >= 0 ? '#10B98112' : '#EF444412')}
+                                        {thSum(`${totalDeltaCosto >= 0 ? '+' : ''}${fmtD(totalDeltaCosto)}`, totalDeltaCosto >= 0 ? '#10B981' : '#EF4444', totalDeltaCosto >= 0 ? '#10B98112' : '#EF444412')}
+                                      </tr>
+                                      <tr>
+                                        <th style={{ ...thH, color:t.textMuted, fontWeight:'800' }}>PK_ID</th>
+                                        {TABLA_PK_COLS.map(c => (
+                                          <th key={c.key} style={{ ...thH, color:t.text, fontWeight:'700' }}>{c.label}</th>
+                                        ))}
+                                        <th title={deltaHint} style={{ ...thH, color:t.text, fontWeight:'700' }}>▲ CANT.</th>
+                                        <th title={deltaHint} style={{ ...thH, color:t.text, fontWeight:'700' }}>▲ COSTO DIRECTO</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {filas.map((row, i) => {
+                                        const dCant = rowDeltaCant(row)
+                                        const dCosto = rowDeltaCosto(row)
+                                        return (
+                                          <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : t.bg + '88' }}>
+                                            <td style={{ padding:'5px 6px', fontWeight:'600', color:t.primary, textAlign:'right', wordBreak:'break-word' }}>{row.pk_id || row.id_pol || '—'}</td>
+                                            {TABLA_PK_COLS.map(c => (
+                                              <td key={c.key} style={{ padding:'5px 6px', textAlign:'right', color: c.kind === 'money' ? c.color : t.text, fontWeight: c.kind === 'money' ? '600' : '400' }}>
+                                                {c.kind === 'qty' ? numCell(row[c.field]).toFixed(2) : fmtD(row[c.field])}
+                                              </td>
+                                            ))}
+                                            <td style={{ padding:'5px 6px', textAlign:'right', color: dCant >= 0 ? '#10B981' : '#EF4444', fontWeight:'600' }}>{dCant >= 0 ? '+' : ''}{Number(dCant).toFixed(2)}</td>
+                                            <td style={{ padding:'5px 6px', textAlign:'right', color: dCosto >= 0 ? '#10B981' : '#EF4444', fontWeight:'600' }}>{dCosto >= 0 ? '+' : ''}{fmtD(dCosto)}</td>
+                                          </tr>
+                                        )
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )
+                            })()}
                           </div>
                         ) : <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin datos</div>
                       )}
@@ -11582,7 +11692,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 <div>
                   <div style={{ fontSize:'var(--cc-lg)', fontWeight:'700', color:t.textMuted }}>{liqSeleccion?.capitulo}</div>
                   <div style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:t.primary, marginTop:'2px' }}>
-                    {liqSeleccion?.item} — {liqMapaPopup.data?.ppto?.[0]?.descripcion || liqMapaPopup.data?.cobro?.[0]?.descripcion || ''}
+                    {liqSeleccion?.item} — {liqMapaPopup.data?.ppto?.[0]?.descripcion || ''}
                   </div>
                   <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'3px' }}>PK_ID: <strong style={{ color:t.text }}>{liqMapaPopup.pkid}</strong></div>
                 </div>
@@ -11648,7 +11758,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         {popupPkid && (
           <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.55)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}
             onClick={() => setPopupPkid(null)}>
-            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'960px', maxWidth:'98vw', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
+            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'min(1840px, 98vw)', maxWidth:'98vw', maxHeight:'88vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
               onClick={e => e.stopPropagation()}>
               {/* Header */}
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px' }}>
@@ -11657,11 +11767,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     {dashDrill[0]?.valor}
                   </div>
                   <div style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:t.primary, marginTop:'2px' }}>
-                    {dashDrill[1]?.valor} — {popupPkid.data?.ppto?.[0]?.descripcion || popupPkid.data?.cobro?.[0]?.descripcion || ''}
+                    {dashDrill[1]?.valor} — {popupPkid.data?.ppto?.[0]?.descripcion || popupPkid.data?.sicoe?.aprobado?.[0]?.descripcion || ''}
                   </div>
                   <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'3px' }}>
                     PK_ID: <strong style={{ color:t.text }}>{popupPkid.pkid}</strong>
-                    {(() => { const p0 = popupPkid.data?.ppto?.[0] || popupPkid.data?.cobro?.[0]; const ip = p0?.id_pol; return ip != null && String(ip).trim() ? <> · <span style={{ color:t.text }}>ID_Pol: <strong>{ip}</strong></span></> : null })()}
+                    {(() => { const p0 = popupPkid.data?.ppto?.[0]; const ip = p0?.id_pol; return ip != null && String(ip).trim() ? <> · <span style={{ color:t.text }}>ID_Pol: <strong>{ip}</strong></span></> : null })()}
                   </div>
                 </div>
                 <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
@@ -11681,92 +11791,97 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               {popupLoading ? (
                 <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>⏳ Cargando...</div>
               ) : popupPkid.data ? (() => {
-                const { ppto, cobro, totales } = popupPkid.data
-                          const fmtD = n => n != null ? formatCOP(n) : '—'
+                const pptoPR = popupPkid.data.ppto_por_revisado || {}
+                const sicoe = popupPkid.data.sicoe || {}
+                const totales = popupPkid.data.totales || {}
+                const fmtD = n => n != null ? formatCOP(n) : '—'
                 const fmtN = n => n != null ? Number(n).toFixed(2) : '—'
-                const thS = { padding:'6px 10px', fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
-                const tdS = { padding:'6px 10px', fontSize:'var(--cc-label)', color:t.text, borderBottom:`1px solid ${t.border}` }
-                return (
-                  <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:'16px' }}>
-                    {/* Dos columnas */}
-                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px' }}>
-                      {/* PRESUPUESTO */}
-                      <div>
-                        <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:'#0077B6', marginBottom:'8px', padding:'6px 10px', background:'#0077B611', borderRadius:'6px' }}>
-                          📋 Presupuesto ({ppto.length} registros)
-                        </div>
-                        <div style={{ overflowX:'auto' }}>
-                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
-                            <thead>
-                              <tr>{['ID_Pol','Nodo Ini','Nodo Fin','Cant','Costo'].map(h => <th key={h} style={thS}>{h}</th>)}</tr>
-                            </thead>
-                            <tbody>
-                              {ppto.length === 0
-                                ? <tr><td colSpan={5} style={{...tdS, textAlign:'center', color:t.textMuted}}>Sin registros</td></tr>
-                                : ppto.map((r,i) => (
-                                  <tr key={i} style={{ cursor:'pointer' }} onClick={() => setDashDetallePpto(r)}>
-                                    <td style={{...tdS, fontWeight:'600', color:t.primary, textDecoration:'underline'}}>{r.id_pol || '—'}</td>
-                                    <td style={tdS}>{r.no_inicio || '—'}</td>
-                                    <td style={tdS}>{r.no_final || '—'}</td>
-                                    <td style={{...tdS, textAlign:'right'}}>{fmtN(r.cant_total)}</td>
-                                    <td style={{...tdS, textAlign:'right'}}>{fmtD(r.costo_directo)}</td>
-                                  </tr>
-                                ))
-                              }
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                      {/* COBRO */}
-                      <div>
-                        <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:'#00A896', marginBottom:'8px', padding:'6px 10px', background:'#00A89611', borderRadius:'6px' }}>
-                          💰 Cobro ({cobro.length} registros)
-                        </div>
-                        <div style={{ overflowX:'auto' }}>
-                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
-                            <thead>
-                              <tr>{['ID_Pol','Registro','Acta','Tramo Ini','Tramo Fin','Cant','Costo'].map(h => <th key={h} style={thS}>{h}</th>)}</tr>
-                            </thead>
-                            <tbody>
-                              {cobro.length === 0
-                                ? <tr><td colSpan={7} style={{...tdS, textAlign:'center', color:t.textMuted}}>Sin registros</td></tr>
-                                : cobro.map((r,i) => (
-                                  <tr key={i} style={{ cursor:'pointer' }} onClick={async () => {
-                                    const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/reportes/${r.reporte_id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
-                                    const data = await res.json()
-                                    if (data?.id) { setDashCarpetaReporte({ ...data, _autoRegistro: r.registro_id }); setDashRegistroNumero(r.registro_id) }
-                                  }}>
-                                    <td style={{...tdS, fontWeight:'600', color:t.text, fontSize:'var(--cc-caption)', maxWidth:'120px', wordBreak:'break-all'}} title={r.id_pol || ''}>{r.id_pol != null && String(r.id_pol).trim() ? String(r.id_pol) : '—'}</td>
-                                    <td style={{...tdS, fontWeight:'600', color:'#00A896', textDecoration:'underline'}}>{r.registro || '—'}</td>
-                                    <td style={tdS}>{r.acta || '—'}</td>
-                                    <td style={tdS}>{r.tramo_inicio || '—'}</td>
-                                    <td style={tdS}>{r.tramo_final || '—'}</td>
-                                    <td style={{...tdS, textAlign:'right'}}>{fmtN(r.cantidad || r.longitud)}</td>
-                                    <td style={{...tdS, textAlign:'right'}}>{fmtD(r.costo_directo)}</td>
-                                  </tr>
-                                ))
-                              }
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
+                const thS = { padding:'6px 8px', fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
+                const tdS = { padding:'6px 8px', fontSize:'var(--cc-label)', color:t.text, borderBottom:`1px solid ${t.border}` }
+                const tdNodo = { ...tdS, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }
+                const secColFlex = { flex:'1 1 0px', minWidth:0, display:'flex', flexDirection:'column', background:t.bg, borderRadius:'10px', border:`1px solid ${t.border}`, overflow:'hidden', maxHeight:'min(72vh, 620px)' }
+                const secHdr = (bgTint, fg) => ({ flexShrink:0, padding:'8px 10px', fontSize:'var(--cc-label)', fontWeight:'700', color:fg, background:bgTint, borderBottom:`1px solid ${t.border}` })
+                const sicoeCols = ['Registro','Acta','T. ini','T. fin','Cant','Costo']
+                const pptoCols = ['ID_Pol','Nodo Ini','Nodo Fin','Cant','Costo']
+                const rowSicoe = (r, i) => (
+                  <tr key={i}>
+                    <td
+                      role={r.registro_id ? 'button' : undefined}
+                      style={{...tdS, fontWeight:'600', color:t.primary, cursor: r.registro_id ? 'pointer' : 'default', textDecoration: r.registro_id ? 'underline' : 'none' }}
+                      onClick={() => { if (r.registro_id) abrirRegistroSicoeObraDesdePopup(r.registro_id) }}
+                      title={r.registro_id ? 'Abrir reporte SICOE Obra con este registro' : ''}
+                    >{r.registro ?? '—'}</td>
+                    <td style={tdS}>{r.acta ?? '—'}</td>
+                    <td style={tdNodo} title={r.tramo_inicio}>{r.tramo_inicio ?? '—'}</td>
+                    <td style={tdNodo} title={r.tramo_final}>{r.tramo_final ?? '—'}</td>
+                    <td style={{...tdS, textAlign:'right', whiteSpace:'nowrap' }}>{fmtN(r.cantidad)}</td>
+                    <td style={{...tdS, textAlign:'right', whiteSpace:'nowrap' }}>{fmtD(r.costo_directo)}</td>
+                  </tr>
+                )
+                const rowPpto = (r, i) => (
+                  <tr key={i} style={{ cursor:'pointer' }} title="Ver detalle del polígono (presupuesto)" onClick={() => setDashDetallePpto(r)}>
+                    <td style={{...tdS, fontWeight:'600', color:t.primary, textDecoration:'underline'}} title="ID_Pol — abrir detalle">{r.id_pol || '—'}</td>
+                    <td style={tdNodo} title={r.no_inicio}>{r.no_inicio || '—'}</td>
+                    <td style={tdNodo} title={r.no_final}>{r.no_final || '—'}</td>
+                    <td style={{...tdS, textAlign:'right', whiteSpace:'nowrap'}}>{fmtN(r.cant_total)}</td>
+                    <td style={{...tdS, textAlign:'right', whiteSpace:'nowrap'}}>{fmtD(r.costo_directo)}</td>
+                  </tr>
+                )
+                const tabScroll = { flex:1, minHeight:'120px', overflow:'auto' }
+                const colFoot = (cantKey, costKey, accent) => (
+                  <div style={{ flexShrink:0, borderTop:`1px solid ${t.border}`, padding:'10px 10px', background:t.bgCard }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:'6px', gap:'8px' }}>
+                      <span style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted }}>Cant.</span>
+                      <span style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:accent, textAlign:'right' }}>{fmtN(totales[cantKey] ?? 0)}</span>
                     </div>
-
-                    {/* Footer deltas */}
-                    <div style={{ borderTop:`2px solid ${t.border}`, paddingTop:'10px', display:'flex', gap:'8px', flexWrap:'nowrap', overflowX:'auto' }}>
-                      {[
-                        { label:'Cant. Ppto',  val: fmtN(totales.cant_ppto),   color:'#0077B6' },
-                        { label:'Costo Ppto',  val: fmtD(totales.costo_ppto),  color:'#0077B6' },
-                        { label:'Cant. Cobro', val: fmtN(totales.cant_cobro),  color:'#00A896' },
-                        { label:'Costo Cobro', val: fmtD(totales.costo_cobro), color:'#00A896' },
-                        { label:'Δ Cantidad',  val: `${totales.delta_cant >= 0?'+':''}${fmtN(totales.delta_cant)}`,   color: totales.delta_cant  >= 0 ? '#10B981' : '#EF4444' },
-                        { label:'Δ Costo',     val: `${totales.delta_costo >= 0?'+':''}${fmtD(totales.delta_costo)}`, color: totales.delta_costo >= 0 ? '#10B981' : '#EF4444' },
-                      ].map(({label, val, color}) => (
-                        <div key={label} style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', flex:1, minWidth:'100px' }}>
-                          <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.4px', marginBottom:'2px', whiteSpace:'nowrap' }}>{label}</div>
-                          <div style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color, whiteSpace:'nowrap' }}>{val}</div>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', gap:'8px' }}>
+                      <span style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted }}>Costo</span>
+                      <span style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:accent, textAlign:'right', wordBreak:'break-word' }}>{fmtD(totales[costKey] ?? 0)}</span>
+                    </div>
+                  </div>
+                )
+                const apSic = sicoe.aprobado || []
+                const apPpto = pptoPR.aprobado || []
+                const nrList = pptoPR.no_revisado || []
+                const pdList = pptoPR.pendiente || []
+                const rjList = pptoPR.rechazado || []
+                const pkidColDefs = [
+                  { key:'sicoe', rows: apSic, label:'SICOE · obra N3 aprobada', icon:'✅', hdr:['#0077B618','#0077B6'], cantK:'cant_sicoe_aprobado', costK:'costo_sicoe_aprobado', accent:'#0077B6', kind:'sicoe' },
+                  { key:'ppto_ap', rows: apPpto, label:'Presup. · val. N3 ✓', icon:'📋', hdr:['#0f766e22','#0f766e'], cantK:'cant_ppto_aprobado_n3', costK:'costo_ppto_aprobado_n3', accent:'#0f766e', kind:'ppto' },
+                  { key:'ppto_nr', rows: nrList, label:'Presup. · no revisado', icon:'🟠', hdr:['#ca8a0418','#b45309'], cantK:'cant_ppto_estado_no_revisado', costK:'costo_ppto_estado_no_revisado', accent:'#b45309', kind:'ppto' },
+                  { key:'ppto_pd', rows: pdList, label:'Presup. · pendiente', icon:'⏳', hdr:['#a855f718','#7c3aed'], cantK:'cant_ppto_estado_pendiente', costK:'costo_ppto_estado_pendiente', accent:'#7c3aed', kind:'ppto' },
+                  { key:'ppto_rj', rows: rjList, label:'Presup. · rechazado', icon:'⛔', hdr:['#ef444418','#dc2626'], cantK:'cant_ppto_estado_rechazado', costK:'costo_ppto_estado_rechazado', accent:'#dc2626', kind:'ppto' },
+                ]
+                const pkidVisibleCols = pkidColDefs.filter(c => (c.rows?.length ?? 0) > 0)
+                return (
+                  <div style={{ flex:1, minHeight:0, display:'flex', flexDirection:'column', width:'100%' }}>
+                    <div style={{ flex:1, minHeight:'200px', width:'100%', paddingBottom:'4px' }}>
+                      {pkidVisibleCols.length === 0 ? (
+                        <div style={{ textAlign:'center', padding:'32px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin registros en ningún grupo para este PK.</div>
+                      ) : (
+                        <div style={{ display:'flex', flexDirection:'row', alignItems:'stretch', gap:'12px', width:'100%', height:'100%' }}>
+                          {pkidVisibleCols.map(col => (
+                            <div key={col.key} style={secColFlex}>
+                              <div style={secHdr(col.hdr[0], col.hdr[1])}>{col.icon} {col.label} ({col.rows.length})</div>
+                              <div style={tabScroll}>
+                                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)', tableLayout:'fixed' }}>
+                                  <thead><tr>{(col.kind === 'sicoe' ? sicoeCols : pptoCols).map(h => <th key={h} style={thS}>{h}</th>)}</tr></thead>
+                                  <tbody>{col.kind === 'sicoe' ? col.rows.map(rowSicoe) : col.rows.map(rowPpto)}</tbody>
+                                </table>
+                              </div>
+                              {colFoot(col.cantK, col.costK, col.accent)}
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      )}
+                    </div>
+                    <div style={{ flexShrink:0, marginTop:'10px', paddingTop:'12px', borderTop:`1px solid ${t.border}`, display:'flex', flexWrap:'wrap', justifyContent:'center', gap:'20px', fontSize:'var(--cc-sm)' }}>
+                      <span style={{ fontWeight:'800', color: totales.delta_cant >= 0 ? '#10B981' : '#EF4444' }}>
+                        Δ Cant (ppto políg. − obra N3 ✓): {totales.delta_cant >= 0 ? '+' : ''}{fmtN(totales.delta_cant)}
+                      </span>
+                      <span style={{ fontWeight:'800', color: totales.delta_costo >= 0 ? '#10B981' : '#EF4444' }}>
+                        Δ Costo: {totales.delta_costo >= 0 ? '+' : ''}{fmtD(totales.delta_costo)}
+                      </span>
                     </div>
                   </div>
                 )
@@ -11783,17 +11898,17 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         {analisisMapaPopup && (
           <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.55)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}
             onClick={() => setAnalisisMapaPopup(null)}>
-            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'960px', maxWidth:'98vw', maxHeight:'85vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
+            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'min(1840px, 98vw)', maxWidth:'98vw', maxHeight:'88vh', display:'flex', flexDirection:'column', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
               onClick={e => e.stopPropagation()}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px' }}>
                 <div>
                   <div style={{ fontSize:'var(--cc-lg)', fontWeight:'700', color:t.textMuted }}>{analisisSeleccion?.capitulo}</div>
                   <div style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:t.primary, marginTop:'2px' }}>
-                    {analisisSeleccion?.item && `${analisisSeleccion.item} — `}{analisisMapaPopup.data?.ppto?.[0]?.descripcion || analisisMapaPopup.data?.cobro?.[0]?.descripcion || ''}
+                    {analisisSeleccion?.item && `${analisisSeleccion.item} — `}{analisisMapaPopup.data?.ppto?.[0]?.descripcion || analisisMapaPopup.data?.sicoe?.aprobado?.[0]?.descripcion || ''}
                   </div>
                   <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginTop:'3px' }}>
                     PK_ID: <strong style={{ color:t.text }}>{analisisMapaPopup.pkid}</strong>
-                    {(() => { const p0 = analisisMapaPopup.data?.ppto?.[0] || analisisMapaPopup.data?.cobro?.[0]; const ip = p0?.id_pol; return ip != null && String(ip).trim() ? <> · <span style={{ color:t.text }}>ID_Pol: <strong>{ip}</strong></span></> : null })()}
+                    {(() => { const p0 = analisisMapaPopup.data?.ppto?.[0]; const ip = p0?.id_pol; return ip != null && String(ip).trim() ? <> · <span style={{ color:t.text }}>ID_Pol: <strong>{ip}</strong></span></> : null })()}
                   </div>
                 </div>
                 <button onClick={() => setAnalisisMapaPopup(null)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
@@ -11801,60 +11916,98 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               {analisisMapaPopupLoading ? (
                 <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>⏳ Cargando...</div>
               ) : analisisMapaPopup.data ? (() => {
-                const { ppto, cobro, totales } = analisisMapaPopup.data
+                const pptoPR = analisisMapaPopup.data.ppto_por_revisado || {}
+                const sicoe = analisisMapaPopup.data.sicoe || {}
+                const totales = analisisMapaPopup.data.totales || {}
                 const fmtD3 = n => n != null ? formatCOP(n) : '—'
                 const fmtN3 = n => n != null ? Number(n).toFixed(2) : '—'
-                const thS = { padding:'6px 10px', fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
-                const tdS = { padding:'6px 10px', fontSize:'var(--cc-label)', color:t.text, borderBottom:`1px solid ${t.border}` }
-                return (
-                  <div style={{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column', gap:'16px' }}>
-                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px' }}>
-                      <div style={{ background:t.bg, borderRadius:'10px', overflow:'hidden' }}>
-                        <div style={{ padding:'8px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#0077B6', borderBottom:`1px solid ${t.border}`, background:'#0077B608' }}>📋 Presupuesto ({ppto?.length||0} registros)</div>
-                        {ppto?.length > 0 ? (
-                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
-                            <thead><tr>{['ID_Pol','Nodo Ini','Nodo Fin','Cant','Costo'].map(h=><th key={h} style={thS}>{h}</th>)}</tr></thead>
-                            <tbody>{ppto.map((p,i)=><tr key={i}><td style={tdS}>{p.id_polilinia}</td><td style={tdS}>{p.nodo_ini}</td><td style={tdS}>{p.nodo_fin}</td><td style={tdS}>{fmtN3(p.cantidad)}</td><td style={tdS}>{fmtD3(p.costo_directo)}</td></tr>)}</tbody>
-                          </table>
-                        ) : <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin registros</div>}
-                      </div>
-                      <div style={{ background:t.bg, borderRadius:'10px', overflow:'hidden' }}>
-                        <div style={{ padding:'8px 12px', fontSize:'var(--cc-label)', fontWeight:'700', color:'#00A896', borderBottom:`1px solid ${t.border}`, background:'#00A89608' }}>💰 Cobro ({cobro?.length||0} registros)</div>
-                        {cobro?.length > 0 ? (
-                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)' }}>
-                            <thead><tr>{['ID_Pol','Registro','Acta','Tramo Ini','Tramo Fin','Cant','Costo'].map(h=><th key={h} style={thS}>{h}</th>)}</tr></thead>
-                            <tbody>{cobro.map((c,i) => (
-                              <tr key={i}>
-                                <td style={{...tdS, fontWeight:'600', fontSize:'var(--cc-caption)', maxWidth:'120px', wordBreak:'break-all'}} title={c.id_pol || ''}>{c.id_pol != null && String(c.id_pol).trim() ? String(c.id_pol) : '—'}</td>
-                                <td style={{...tdS,color:'#00A896',fontWeight:'700'}}>{c.registro ?? '—'}</td>
-                                <td style={tdS}>{c.acta ?? '—'}</td>
-                                <td style={tdS}>{c.tramo_inicio ?? c.nodo_ini ?? '—'}</td>
-                                <td style={tdS}>{c.tramo_final ?? c.nodo_fin ?? '—'}</td>
-                                <td style={tdS}>{fmtN3(c.cantidad ?? c.longitud)}</td>
-                                <td style={tdS}>{fmtD3(c.costo_directo)}</td>
-                              </tr>
-                            ))}</tbody>
-                          </table>
-                        ) : <div style={{ padding:'20px', textAlign:'center', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin registros</div>}
-                      </div>
+                const thS = { padding:'6px 8px', fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, borderBottom:`1px solid ${t.border}`, textAlign:'left', whiteSpace:'nowrap' }
+                const tdS = { padding:'6px 8px', fontSize:'var(--cc-label)', color:t.text, borderBottom:`1px solid ${t.border}` }
+                const tdNodo = { ...tdS, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }
+                const secColFlex = { flex:'1 1 0px', minWidth:0, display:'flex', flexDirection:'column', background:t.bg, borderRadius:'10px', border:`1px solid ${t.border}`, overflow:'hidden', maxHeight:'min(72vh, 620px)' }
+                const secHdr = (bgTint, fg) => ({ flexShrink:0, padding:'8px 10px', fontSize:'var(--cc-label)', fontWeight:'700', color:fg, background:bgTint, borderBottom:`1px solid ${t.border}` })
+                const sicoeCols = ['Registro','Acta','T. ini','T. fin','Cant','Costo']
+                const pptoCols = ['ID_Pol','Nodo Ini','Nodo Fin','Cant','Costo']
+                const rowSicoe = (r, i) => (
+                  <tr key={i}>
+                    <td
+                      role={r.registro_id ? 'button' : undefined}
+                      style={{...tdS, fontWeight:'600', color:t.primary, cursor: r.registro_id ? 'pointer' : 'default', textDecoration: r.registro_id ? 'underline' : 'none' }}
+                      onClick={() => { if (r.registro_id) abrirRegistroSicoeObraDesdePopup(r.registro_id) }}
+                      title={r.registro_id ? 'Abrir reporte SICOE Obra con este registro' : ''}
+                    >{r.registro ?? '—'}</td>
+                    <td style={tdS}>{r.acta ?? '—'}</td>
+                    <td style={tdNodo} title={r.tramo_inicio}>{r.tramo_inicio ?? '—'}</td>
+                    <td style={tdNodo} title={r.tramo_final}>{r.tramo_final ?? '—'}</td>
+                    <td style={{...tdS, textAlign:'right', whiteSpace:'nowrap' }}>{fmtN3(r.cantidad)}</td>
+                    <td style={{...tdS, textAlign:'right', whiteSpace:'nowrap' }}>{fmtD3(r.costo_directo)}</td>
+                  </tr>
+                )
+                const rowPpto = (r, i) => (
+                  <tr key={i} style={{ cursor:'pointer' }} title="Ver detalle del polígono (presupuesto)" onClick={() => setDashDetallePpto(r)}>
+                    <td style={{...tdS, fontWeight:'600', color:t.primary, textDecoration:'underline'}} title="ID_Pol — abrir detalle">{r.id_pol || '—'}</td>
+                    <td style={tdNodo} title={r.no_inicio}>{r.no_inicio || '—'}</td>
+                    <td style={tdNodo} title={r.no_final}>{r.no_final || '—'}</td>
+                    <td style={{...tdS, textAlign:'right', whiteSpace:'nowrap'}}>{fmtN3(r.cant_total)}</td>
+                    <td style={{...tdS, textAlign:'right', whiteSpace:'nowrap'}}>{fmtD3(r.costo_directo)}</td>
+                  </tr>
+                )
+                const tabScroll = { flex:1, minHeight:'120px', overflow:'auto' }
+                const colFoot = (cantKey, costKey, accent) => (
+                  <div style={{ flexShrink:0, borderTop:`1px solid ${t.border}`, padding:'10px 10px', background:t.bgCard }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:'6px', gap:'8px' }}>
+                      <span style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted }}>Cant.</span>
+                      <span style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:accent, textAlign:'right' }}>{fmtN3(totales[cantKey] ?? 0)}</span>
                     </div>
-                    {totales && (
-                      <div style={{ borderTop:`2px solid ${t.border}`, paddingTop:'10px', display:'flex', gap:'8px', flexWrap:'nowrap', overflowX:'auto' }}>
-                        {[
-                          { label:'Cant. Ppto',  val: fmtN3(totales.cant_ppto),   color:'#0077B6' },
-                          { label:'Costo Ppto',  val: fmtD3(totales.costo_ppto),  color:'#0077B6' },
-                          { label:'Cant. Cobro', val: fmtN3(totales.cant_cobro),  color:'#00A896' },
-                          { label:'Costo Cobro', val: fmtD3(totales.costo_cobro), color:'#00A896' },
-                          { label:'Δ Cantidad',  val: `${totales.delta_cant>=0?'+':''}${fmtN3(totales.delta_cant)}`,   color: totales.delta_cant>=0?'#10B981':'#EF4444' },
-                          { label:'Δ Costo',     val: `${totales.delta_costo>=0?'+':''}${fmtD3(totales.delta_costo)}`, color: totales.delta_costo>=0?'#10B981':'#EF4444' },
-                        ].map(({label,val,color}) => (
-                          <div key={label} style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'6px', padding:'5px 10px', flex:1, minWidth:'100px' }}>
-                            <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.4px', marginBottom:'2px', whiteSpace:'nowrap' }}>{label}</div>
-                            <div style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color, whiteSpace:'nowrap' }}>{val}</div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', gap:'8px' }}>
+                      <span style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted }}>Costo</span>
+                      <span style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:accent, textAlign:'right', wordBreak:'break-word' }}>{fmtD3(totales[costKey] ?? 0)}</span>
+                    </div>
+                  </div>
+                )
+                const apSic = sicoe.aprobado || []
+                const apPpto = pptoPR.aprobado || []
+                const nrList = pptoPR.no_revisado || []
+                const pdList = pptoPR.pendiente || []
+                const rjList = pptoPR.rechazado || []
+                const analColDefs = [
+                  { key:'sicoe', rows: apSic, label:'SICOE · obra N3 aprobada', icon:'✅', hdr:['#0077B618','#0077B6'], cantK:'cant_sicoe_aprobado', costK:'costo_sicoe_aprobado', accent:'#0077B6', kind:'sicoe' },
+                  { key:'ppto_ap', rows: apPpto, label:'Presup. · val. N3 ✓', icon:'📋', hdr:['#0f766e22','#0f766e'], cantK:'cant_ppto_aprobado_n3', costK:'costo_ppto_aprobado_n3', accent:'#0f766e', kind:'ppto' },
+                  { key:'ppto_nr', rows: nrList, label:'Presup. · no revisado', icon:'🟠', hdr:['#ca8a0418','#b45309'], cantK:'cant_ppto_estado_no_revisado', costK:'costo_ppto_estado_no_revisado', accent:'#b45309', kind:'ppto' },
+                  { key:'ppto_pd', rows: pdList, label:'Presup. · pendiente', icon:'⏳', hdr:['#a855f718','#7c3aed'], cantK:'cant_ppto_estado_pendiente', costK:'costo_ppto_estado_pendiente', accent:'#7c3aed', kind:'ppto' },
+                  { key:'ppto_rj', rows: rjList, label:'Presup. · rechazado', icon:'⛔', hdr:['#ef444418','#dc2626'], cantK:'cant_ppto_estado_rechazado', costK:'costo_ppto_estado_rechazado', accent:'#dc2626', kind:'ppto' },
+                ]
+                const analVisibleCols = analColDefs.filter(c => (c.rows?.length ?? 0) > 0)
+                return (
+                  <div style={{ flex:1, minHeight:0, display:'flex', flexDirection:'column', width:'100%' }}>
+                    <div style={{ flex:1, minHeight:'200px', width:'100%', paddingBottom:'4px' }}>
+                      {analVisibleCols.length === 0 ? (
+                        <div style={{ textAlign:'center', padding:'32px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>Sin registros en ningún grupo para este PK.</div>
+                      ) : (
+                        <div style={{ display:'flex', flexDirection:'row', alignItems:'stretch', gap:'12px', width:'100%', height:'100%' }}>
+                          {analVisibleCols.map(col => (
+                            <div key={col.key} style={secColFlex}>
+                              <div style={secHdr(col.hdr[0], col.hdr[1])}>{col.icon} {col.label} ({col.rows.length})</div>
+                              <div style={tabScroll}>
+                                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-label)', tableLayout:'fixed' }}>
+                                  <thead><tr>{(col.kind === 'sicoe' ? sicoeCols : pptoCols).map(h => <th key={h} style={thS}>{h}</th>)}</tr></thead>
+                                  <tbody>{col.kind === 'sicoe' ? col.rows.map(rowSicoe) : col.rows.map(rowPpto)}</tbody>
+                                </table>
+                              </div>
+                              {colFoot(col.cantK, col.costK, col.accent)}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ flexShrink:0, marginTop:'10px', paddingTop:'12px', borderTop:`1px solid ${t.border}`, display:'flex', flexWrap:'wrap', justifyContent:'center', gap:'20px', fontSize:'var(--cc-sm)' }}>
+                      <span style={{ fontWeight:'800', color: totales.delta_cant >= 0 ? '#10B981' : '#EF4444' }}>
+                        Δ Cant (ppto políg. − obra N3 ✓): {totales.delta_cant >= 0 ? '+' : ''}{fmtN3(totales.delta_cant)}
+                      </span>
+                      <span style={{ fontWeight:'800', color: totales.delta_costo >= 0 ? '#10B981' : '#EF4444' }}>
+                        Δ Costo: {totales.delta_costo >= 0 ? '+' : ''}{fmtD3(totales.delta_costo)}
+                      </span>
+                    </div>
                   </div>
                 )
               })() : analisisMapaPopup.error ? (
@@ -11870,12 +12023,37 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         {dashDetallePpto && (
           <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.6)', zIndex:10000, display:'flex', alignItems:'center', justifyContent:'center' }}
             onClick={() => setDashDetallePpto(null)}>
-            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'500px', maxWidth:'96vw', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
+            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'min(580px, 96vw)', maxWidth:'96vw', maxHeight:'92vh', overflowY:'auto', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
               onClick={e => e.stopPropagation()}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'16px' }}>
-                <div style={{ fontSize:'var(--cc-lg)', fontWeight:'700', color:t.primary }}>📋 {dashDetallePpto.id_pol || '—'}</div>
-                <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
-                  <button onClick={() => {
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px', gap:'12px' }}>
+                <div>
+                  <div style={{ fontSize:'var(--cc-lg)', fontWeight:'700', color:t.primary }}>📋 {dashDetallePpto.id_pol || '—'}</div>
+                  <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginTop:'6px', display:'flex', flexWrap:'wrap', gap:'8px' }}>
+                    <span style={{ background:'#0077B618', color:'#0369a1', borderRadius:'6px', padding:'2px 8px', fontWeight:'700' }}>
+                      Interventoría (N3): {dashDetallePpto.revisado || 'No Revisado'}
+                    </span>
+                    <span style={{ background:'#64748b18', color:'#475569', borderRadius:'6px', padding:'2px 8px', fontWeight:'700' }}>
+                      Depuración: {(dashDetallePpto.pre_interv_estado == null || dashDetallePpto.pre_interv_estado === '') ? '— (legado)' : dashDetallePpto.pre_interv_estado}
+                    </span>
+                    {dashDetallePpto.sellado && (
+                      <span style={{ background:'#0f766e22', color:'#0f766e', borderRadius:'6px', padding:'2px 8px', fontWeight:'700' }}>Sellado ✓</span>
+                    )}
+                  </div>
+                </div>
+                <div style={{ display:'flex', gap:'8px', alignItems:'center', flexShrink:0 }}>
+                  {tienePermisoPresupuesto && (
+                    <button type="button" onClick={() => {
+                      const id = dashDetallePpto.id
+                      setDashDetallePpto(null)
+                      setPopupPkid(null)
+                      setAnalisisMapaPopup(null)
+                      setModuloActivo('presupuesto')
+                      if (id) setNavRegistroId(id)
+                    }} style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'6px 12px', color:t.text, fontSize:'var(--cc-caption)', fontWeight:'700', cursor:'pointer' }}>
+                      Ir a Presupuesto
+                    </button>
+                  )}
+                  <button type="button" onClick={() => {
                     const r = dashDetallePpto
                     const esTablet = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
                     if (!esTablet && r.x_label && r.y_label) {
@@ -11886,23 +12064,132 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   }} style={{ background:t.primary, border:'none', borderRadius:'8px', padding:'6px 14px', color:'#fff', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer' }}>
                     🎯 Ver en AutoCAD
                   </button>
-                  <button onClick={() => setDashDetallePpto(null)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
+                  <button type="button" onClick={() => setDashDetallePpto(null)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
                 </div>
               </div>
               <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
                 {[
                   ['Nodo Inicio', dashDetallePpto.no_inicio],
                   ['Nodo Final',  dashDetallePpto.no_final],
-                  ['Cantidad',    dashDetallePpto.cant_total],
+                  ['Und', dashDetallePpto.und],
+                  ['Cantidad',    dashDetallePpto.cant_total != null ? Number(dashDetallePpto.cant_total).toFixed(2) : null],
                   ['Costo Directo', formatCOP(dashDetallePpto.costo_directo || 0)],
+                  ['Vlr. unitario', dashDetallePpto.vlr_unitario != null ? formatCOP(dashDetallePpto.vlr_unitario) : null],
                   ['Ítem', dashDetallePpto.item],
                   ['Descripción', dashDetallePpto.descripcion],
-                ].map(([label, val]) => val ? (
+                ].map(([label, val]) => (val != null && val !== '') ? (
                   <div key={label} style={{ display:'flex', justifyContent:'space-between', gap:'12px', borderBottom:`1px solid ${t.border}`, paddingBottom:'8px' }}>
                     <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, fontWeight:'600' }}>{label}</span>
-                    <span style={{ fontSize:'var(--cc-sm)', color:t.text, textAlign:'right' }}>{val}</span>
+                    <span style={{ fontSize:'var(--cc-sm)', color:t.text, textAlign:'right', wordBreak:'break-word' }}>{val}</span>
                   </div>
                 ) : null)}
+
+                <div style={{ borderTop:`1px solid ${t.border}`, paddingTop:'12px', marginTop:'4px' }}>
+                  <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, marginBottom:'8px' }}>Dimensiones (long. · ancho · espesor)</div>
+                  {puedeEditarDimensionesPresupuesto && !dashDetallePpto.sellado ? (
+                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px' }}>
+                      {[
+                        ['area_long_nod','Longitud'],
+                        ['ancho','Ancho'],
+                        ['espesor','Espesor'],
+                      ].map(([key, lbl]) => (
+                        <label key={key} style={{ display:'flex', flexDirection:'column', gap:'4px', fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'600' }}>
+                          {lbl}
+                          <input
+                            type="number"
+                            step="any"
+                            value={dashDetallePpto[key] ?? ''}
+                            onChange={e => setDashDetallePpto(d => ({ ...d, [key]: e.target.value }))}
+                            style={{ width:'100%', boxSizing:'border-box', background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'8px', padding:'8px 10px', color:t.text, fontSize:'var(--cc-sm)' }}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize:'var(--cc-sm)', color:t.text, display:'flex', gap:'16px', flexWrap:'wrap', alignItems:'center' }}>
+                      <span><strong style={{ color:t.textMuted }}>Long.:</strong> {dashDetallePpto.area_long_nod ?? '—'}</span>
+                      <span><strong style={{ color:t.textMuted }}>Ancho:</strong> {dashDetallePpto.ancho ?? '—'}</span>
+                      <span><strong style={{ color:t.textMuted }}>Esp.:</strong> {dashDetallePpto.espesor ?? '—'}</span>
+                      {dashDetallePpto.sellado && <span style={{ color:t.textMuted }}>No editable — sellado.</span>}
+                      {!puedeEditarDimensionesPresupuesto && !dashDetallePpto.sellado && (
+                        <span style={{ color:t.textMuted }}>Sin permiso de edición de dimensiones.</span>
+                      )}
+                    </div>
+                  )}
+                  {puedeEditarDimensionesPresupuesto && !dashDetallePpto.sellado && (
+                    <button
+                      type="button"
+                      disabled={dashDetallePptoSaving}
+                      onClick={async () => {
+                        if (!dashDetallePpto?.id) return
+                        setDashDetallePptoSaving(true)
+                        try {
+                          const tok = getToken()
+                          const id = dashDetallePpto.id
+                          const parseDim = (x) => {
+                            const n = parseFloat(String(x ?? '').replace(',', '.'))
+                            return Number.isFinite(n) ? n : NaN
+                          }
+                          const al = parseDim(dashDetallePpto.area_long_nod)
+                          const an = parseDim(dashDetallePpto.ancho)
+                          const es = parseDim(dashDetallePpto.espesor)
+                          if (![al, an, es].every(Number.isFinite)) {
+                            window.alert('Indique valores numéricos válidos en longitud, ancho y espesor.')
+                            setDashDetallePptoSaving(false)
+                            return
+                          }
+                          const body = { area_long_nod: al, ancho: an, espesor: es }
+                          const tryPut = async (payload) => fetch(`${API_URL}/presupuesto/item/${id}`, {
+                            method: 'PUT',
+                            headers: { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload),
+                          })
+                          let res = await tryPut(body)
+                          if (res.status === 400) {
+                            let detail = ''
+                            try {
+                              const j = await res.json()
+                              detail = typeof j?.detail === 'string' ? j.detail : ''
+                            } catch (_) {}
+                            if (detail.toLowerCase().includes('motivo')) {
+                              const m = window.prompt(`${detail}\n\nMotivo (mín. 15 caracteres):`)
+                              if (m && m.length >= 15) res = await tryPut({ ...body, motivo_edicion_con_estado_interv: m })
+                            } else if (detail) {
+                              window.alert(detail)
+                              setDashDetallePptoSaving(false)
+                              return
+                            }
+                          }
+                          if (res.ok) {
+                            const row = await res.json()
+                            if (row?.id) setDashDetallePpto(row)
+                          } else {
+                            let msg = `No se guardó (${res.status})`
+                            try {
+                              const j = await res.json()
+                              if (typeof j?.detail === 'string') msg = j.detail
+                            } catch (_) {}
+                            window.alert(msg)
+                          }
+                        } catch (e) {
+                          window.alert(e?.message || 'Error de red al guardar.')
+                        } finally {
+                          setDashDetallePptoSaving(false)
+                        }
+                      }}
+                      style={{ marginTop:'12px', background:t.primary, border:'none', borderRadius:'8px', padding:'8px 18px', color:'#fff', fontWeight:'700', fontSize:'var(--cc-sm)', cursor:'pointer', opacity: dashDetallePptoSaving ? 0.7 : 1 }}
+                    >
+                      {dashDetallePptoSaving ? 'Guardando…' : 'Guardar dimensiones'}
+                    </button>
+                  )}
+                </div>
+
+                {(dashDetallePpto.validado_por || dashDetallePpto.pre_interv_por) && (
+                  <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginTop:'6px' }}>
+                    {dashDetallePpto.validado_por && <div>Validado por: {dashDetallePpto.validado_por}</div>}
+                    {dashDetallePpto.pre_interv_por && <div>Depuración por: {dashDetallePpto.pre_interv_por}</div>}
+                  </div>
+                )}
               </div>
             </div>
           </div>

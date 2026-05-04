@@ -15,7 +15,7 @@ function getToken() {
   return localStorage.getItem("cc_token") || sessionStorage.getItem("cc_token")
 }
 
-/** Misma lógica que en App.jsx: permisos de validación y visibilidad por rol. */
+/** Visibilidad y niveles de validación presupuesto (depuración / interventoría): permisos de «editar registros presupuesto», no Reporte de cantidades. */
 function determinarNivelValidacion(usuario) {
   const norm = (txt) =>
     String(txt || '')
@@ -27,11 +27,11 @@ function determinarNivelValidacion(usuario) {
   const rol     = norm(usuario?.rol_nombre || usuario?.rol || '')
   const cargo   = norm(usuario?.cargo_nombre || usuario?.cargo || '')
   const permisos = usuario?.permisos || []
-  const permRpt  = permisos.find(p =>
-    (p.funcion_nombre || '').toLowerCase().includes('reporte de cantidades')
+  const permPpto = permisos.find(p =>
+    (p.funcion_nombre || '').toLowerCase() === 'editar registros presupuesto'
   )
-  const puedeValidar = !!(permRpt?.validar)
-  const puedeEditar  = !!(permRpt?.editar)
+  const puedeValidar = !!(permPpto?.validar)
+  const puedeEditar  = !!(permPpto?.editar)
 
   const esContratista   = rol === 'contratista' || rol === 'operativo contratista'
   const esInterventoria = rol === 'interventoria' || rol === 'operativo interventoria'
@@ -330,9 +330,9 @@ useEffect(() => {
   }, [contratoId])
 
   const esDeveloper  = usuario?.cargo_nombre?.toLowerCase() === 'desarrollador'
-  /** Solo Desarrollador edita área / long. / NOD, ancho y espesor (y recálculo por dimensiones). */
-  const puedeEditarDimensiones = esDeveloper
   const _permPpto    = (usuario?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === 'editar registros presupuesto')
+  /** Desarrollador o permiso «editar registros presupuesto» con acción editar: dimensiones y recálculo. */
+  const puedeEditarDimensiones = esDeveloper || (_permPpto?.editar ?? false)
   const puedeEditar  = esDeveloper || (_permPpto?.editar   ?? false)
   /** Solo contratista (no Desarrollador) con permiso editar: puede reabrir registro sellado con motivo obligatorio. */
   const esRolContratistaPpto = (() => {
@@ -353,12 +353,12 @@ useEffect(() => {
     if (!esRolContratistaPpto || esDeveloper || esSellado(reg) || !body || typeof body !== 'object') return false
     const rv = String(reg?.revisado || 'No Revisado').trim()
     if (!ESTADOS_INTERV_CT_REQUIERE_MOTIVO.includes(rv)) return false
-    const keys = ['capitulo', 'item', 'descripcion', 'und', 'vlr_unitario', 'observacion_externa', 'costo_directo']
+    const keys = ['capitulo', 'item', 'descripcion', 'und', 'vlr_unitario', 'observacion_externa', 'costo_directo', 'area_long_nod', 'ancho', 'espesor']
     for (const k of keys) {
       if (!(k in body)) continue
       const a = body[k]
       const b = reg[k]
-      if (k === 'vlr_unitario' || k === 'costo_directo') {
+      if (k === 'vlr_unitario' || k === 'costo_directo' || k === 'area_long_nod' || k === 'ancho' || k === 'espesor') {
         const na = Number(a), nb = Number(b)
         if (Number.isFinite(na) && Number.isFinite(nb)) {
           if (Math.abs(na - nb) > 1e-4) return true
