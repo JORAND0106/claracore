@@ -1,17 +1,12 @@
 /**
- * ClaraCore Service Worker — cachea el app shell para que la app
- * abra sin conexión. Las llamadas a la API son manejadas por el
- * código React (no por el SW), para que IndexedDB controle los datos.
+ * ClaraCore Service Worker — refuerzo de disponibilidad offline.
+ * Importante: index.html y el documento de navegación usan red-primero
+ * para que un F5 normal cargue el bundle nuevo tras un deploy;
+ * el cache-first sobre el mismo CACHE_NAME dejaba la SPA “pegada” a JS viejo.
  */
-const CACHE_NAME = 'claracore-shell-v2'
-
-// App shell (el favicon se pide por URL propia; index.html usa ?v= para romper caché del icono)
-const SHELL_URLS = ['/', '/index.html']
+const CACHE_NAME = 'claracore-shell-v4'
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL_URLS))
-  )
   self.skipWaiting()
 })
 
@@ -40,21 +35,44 @@ self.addEventListener('fetch', (event) => {
     return // no interceptar
   }
 
-  // Navegación y assets del app shell → cache-first
+  // Vite en desarrollo: no cachear módulos ni HMR
+  if (url.pathname.startsWith('/@') ||
+      url.pathname.startsWith('/src/') ||
+      url.pathname.includes('/node_modules/')) {
+    return
+  }
+
+  // Documentos (pestaña): red-primero, actualiza caché al éxito → despliegues visibles sin Ctrl+Shift+R
+  if (event.request.mode === 'navigate' ||
+      url.pathname === '/' ||
+      url.pathname === '/index.html') {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response.ok) {
+            const clone = response.clone()
+            caches.open(CACHE_NAME).then((c) => c.put(event.request, clone))
+          }
+          return response
+        })
+        .catch(() => caches.match('/index.html').then((c) => c || caches.match('/')))
+    )
+    return
+  }
+
+  // Otros assets del mismo origen: cache-first con actualización en segundo plano cuando hay red
   event.respondWith(
-    caches.match(event.request).then(cached => {
-      if (cached) return cached
-      return fetch(event.request).then(response => {
-        // Guardar respuestas exitosas de navegación en cache
-        if (response.ok && event.request.mode === 'navigate') {
-          const clone = response.clone()
-          caches.open(CACHE_NAME).then(c => c.put(event.request, clone))
-        }
-        return response
-      }).catch(() => {
-        // Sin red y sin cache: devolver index.html para SPA routing
-        return caches.match('/index.html')
-      })
+    caches.match(event.request).then((cached) => {
+      const netFetch = fetch(event.request)
+        .then((response) => {
+          if (response.ok) {
+            const clone = response.clone()
+            caches.open(CACHE_NAME).then((c) => c.put(event.request, clone))
+          }
+          return response
+        })
+        .catch(() => cached)
+      return cached || netFetch
     })
   )
 })

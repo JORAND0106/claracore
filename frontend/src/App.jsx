@@ -953,9 +953,22 @@ function sicoeFiltrosOfflineConItems(filtros, itemsChips, itemsOp) {
   return next
 }
 
+function permisoReporteCantidades(usuario) {
+  const permisos = usuario?.permisos || []
+  const exact = permisos.find(
+    (p) => String(p.funcion_nombre || '').trim() === 'Reporte de Cantidades',
+  )
+  if (exact) return exact
+  return permisos.find((p) =>
+    (p.funcion_nombre || '').toLowerCase().includes('reporte de cantidades'),
+  )
+}
+
 function capasInicialesValidacionFromUser(usuario) {
   const ni = determinarNivelValidacion(usuario)
-  if (!ni.nivelValidacion) return []
+  if (!ni.nivelValidacion || !ni.puedeValidar) return []
+  // Quienes pueden editar registros exploran sin capa de validación impuesta al entrar.
+  if (ni.puedeEditar) return []
   return [{ nivel: ni.nivelValidacion, estado: 'No Revisado' }]
 }
 
@@ -970,10 +983,7 @@ function determinarNivelValidacion(usuario) {
       .replace(/\s+/g, ' ')
   const rol     = norm(usuario?.rol_nombre || usuario?.rol || '')
   const cargo   = norm(usuario?.cargo_nombre || usuario?.cargo || '')
-  const permisos = usuario?.permisos || []
-  const permRpt  = permisos.find(p =>
-    (p.funcion_nombre || '').toLowerCase().includes('reporte de cantidades')
-  )
+  const permRpt = permisoReporteCantidades(usuario)
   const puedeEditar  = !!(permRpt?.editar)
   const esDevCargo = norm(usuario?.cargo_nombre || '') === 'desarrollador'
   const permisoValidarSicoe = !!(permRpt?.validar)
@@ -2509,6 +2519,10 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     return registros.filter(r => String(r.item_numero || '').trim())
   })()
 
+  /** Líneas aún sin ítem: siempre visibles en la carpeta aunque haya filtros de validación,
+   *  si no el registro nuevo desaparece al recargar (dominio N2/N3 solo incluye filas con ítem). */
+  const esRegistroSinItemAsignado = (r) => !String(r?.item_numero || '').trim()
+
   // Estado: mostrar solo pendientes o todos
   const [soloMisPendientes, setSoloMisPendientes] = useState(!!capasF)
   // Mantiene visibles los registros ya cargados al entrar a la carpeta,
@@ -2543,8 +2557,12 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const registrosMostrados = !capasF
     ? registros
     : soloMisPendientes
-      ? registrosDominioValidacion.filter(r => registroCumpleFiltro(r) || registrosAnclados.has(r.id))
-      : registrosDominioValidacion.filter(cumplePrereqsVerTodos)
+      ? registros.filter(r =>
+          esRegistroSinItemAsignado(r)
+          || registroCumpleFiltro(r)
+          || registrosAnclados.has(r.id),
+        )
+      : registros.filter(r => esRegistroSinItemAsignado(r) || cumplePrereqsVerTodos(r))
 
   // Conteo de pendientes para mostrar en el badge del toggle
   const cantPendientes = registrosDominioValidacion.filter(registroCumpleFiltro).length
@@ -2567,8 +2585,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   useEffect(() => {
     if (!repoProp?._autoRegistro) return
     const id = Number(repoProp._autoRegistro)
-    setRegistroExpandido(id)
-    const reg = (repoProp.registros || []).find(r => r.id === id)
+    setRegistroExpandido(repoProp._autoRegistro)
+    const reg = (repoProp.registros || []).find(r => String(r.id) === String(id))
     const tabTarget = reg?.item_numero || 'sin_asignar'
     setTabActiva(tabTarget)
     setTimeout(() => {
@@ -2626,7 +2644,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     }
   }, [repoProp])
 
-  const perm        = (usuario?.permisos || []).find(p => p.funcion_nombre === 'Reporte de Cantidades')
+  const perm        = permisoReporteCantidades(usuario)
   const puedeEditar = perm?.editar
   const esDeveloper = (usuario?.cargo_nombre || '').toLowerCase() === 'desarrollador'
   const hdrs        = { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' }
@@ -2647,9 +2665,10 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setMsgMasivo('')
   }, [tabActiva])
 
-  const campoEstadoResumen = nivelInfo.nivelValidacion === 1 ? 'nivel1_estado'
-    : nivelInfo.nivelValidacion === 2 ? 'nivel2_estado'
-    : nivelInfo.nivelValidacion === 3 ? 'nivel3_estado'
+  const nivelParaResumenPortada = nivelInfo.puedeValidar ? nivelInfo.nivelValidacion : null
+  const campoEstadoResumen = nivelParaResumenPortada === 1 ? 'nivel1_estado'
+    : nivelParaResumenPortada === 2 ? 'nivel2_estado'
+    : nivelParaResumenPortada === 3 ? 'nivel3_estado'
     : null
 
   const normalizarEstadoParaConteo = (r) => {
@@ -2714,13 +2733,15 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       const res  = await fetch(url, { headers: hdrs })
       const data = await res.json()
       // Descartar si llegó una recarga más reciente mientras esperábamos
-      if (seq !== recargarSeqRef.current) return
+      if (seq !== recargarSeqRef.current) return null
       setReporte(data)
       setRegistros((data.registros || []).map((row) => ({ ...row })))
       if (Object.prototype.hasOwnProperty.call(data, 'enlace_soporte')) {
         setEnlaces(parseEnlacesSoporteReporte(data.enlace_soporte))
       }
+      return data
     } catch(e) {
+      return null
     } finally {
       if (seq === recargarSeqRef.current) setRecargando(false)
     }
@@ -2919,9 +2940,25 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const crearNuevoRegistro = async () => {
     setCreandoReg(true)
     try {
-      await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/nuevo-registro`, { method: 'POST', headers: hdrs })
-      await recargar()
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/nuevo-registro`, { method: 'POST', headers: hdrs })
+      const row = res.ok ? await res.json().catch(() => ({})) : {}
+      const data = await recargar()
       setTabActiva('sin_asignar')
+      let expandId = row?.id
+      if ((expandId == null || expandId === '') && row?.numero_registro != null && Array.isArray(data?.registros)) {
+        const hit = data.registros.find(
+          (r) => String(r.numero_registro) === String(row.numero_registro),
+        )
+        expandId = hit?.id
+      }
+      if (expandId != null && expandId !== '') {
+        setRegistroExpandido(expandId)
+        const rid = expandId
+        const scrollTo = () =>
+          document.getElementById(`registro-${rid}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        requestAnimationFrame(scrollTo)
+        setTimeout(scrollTo, 450)
+      }
     } catch(e) {}
     setCreandoReg(false)
   }
@@ -3237,7 +3274,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               {campoEstadoResumen && (
                 <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
                   <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase', marginBottom:'12px' }}>
-                    📊 Resumen del reporte · Nivel {nivelInfo.nivelValidacion}
+                    📊 Resumen del reporte · Nivel {nivelParaResumenPortada}
                   </div>
                   <div style={{ display:'flex', gap:'10px', flexWrap:'wrap', marginBottom: portadaResumenEstado ? '14px' : 0 }}>
                     {[
@@ -3672,7 +3709,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   ✅ Todos los registros tienen ítem asignado
                 </div>
               ) : regsSinAsignar.map(reg => {
-                const expandido = registroExpandido === reg.id
+                const expandido = registroExpandido != null && String(registroExpandido) === String(reg.id)
                 const puedeMarcarVal = puedeMasivaNivel && (
                   (nvMasivo === 2 && (reg.nivel1_estado || 'No Revisado') === 'Aprobado') ||
                   (nvMasivo === 3 && (reg.nivel2_estado || 'No Revisado') === 'Aprobado')
@@ -3818,7 +3855,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             <div key={itemNum} style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
               {renderBarraValidacionMasiva(registrosVisibles.filter(r => r.item_numero === itemNum))}
               {registrosVisibles.filter(r => r.item_numero === itemNum).map(reg => {
-                const expandido = registroExpandido === reg.id
+                const expandido = registroExpandido != null && String(registroExpandido) === String(reg.id)
                 const puedeMarcarVal = puedeMasivaNivel && (
                   (nvMasivo === 2 && (reg.nivel1_estado || 'No Revisado') === 'Aprobado') ||
                   (nvMasivo === 3 && (reg.nivel2_estado || 'No Revisado') === 'Aprobado')
@@ -4380,7 +4417,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     'En Papelera': '#374151',
   }
 
-  const perm = (usuario?.permisos || []).find(p => p.funcion_nombre === 'Reporte de Cantidades')
+  const perm = permisoReporteCantidades(usuario)
   const nivelInfo   = determinarNivelValidacion(usuario)
   const puedeVer    = perm?.ver || nivelInfo.nivelValidacion != null || nivelInfo.nivelValidacionComentario != null
   const puedeCrear  = perm?.crear
@@ -4573,8 +4610,8 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   }, [contrato_id])
 
   /** Mismos query params que la grilla (para detalle / export coherente). */
-  const sicoeAppendParamsBusquedaActivos = (params) => {
-    const ef = { ...filtros }
+  const sicoeAppendParamsBusquedaActivos = (params, efBase = null) => {
+    const ef = { ...(efBase || filtros) }
     if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
     if (nivelInfo.esInterventoria) delete ef.subcontratista_id
     delete ef.item
@@ -4604,7 +4641,10 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     if (!busquedaRealizada || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) return base
     const params = new URLSearchParams()
     params.set('aplicar_filtros_busqueda', '1')
-    sicoeAppendParamsBusquedaActivos(params)
+    const fe = { ...filtros }
+    // En edición, "Sin Asignar Ítem" no debe recortar líneas al asignar ítem (evita que desaparezcan del popup).
+    if (puedeEditar && String(fe.estado || '').trim() === 'Sin Asignar Ítem') fe.estado = ''
+    sicoeAppendParamsBusquedaActivos(params, fe)
     const qs = params.toString()
     return qs ? `${base}?${qs}` : base
   }
@@ -4775,7 +4815,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const refrescarVistaSicoeObra = async () => {
     const capasEfectivas = capasValidacion.length > 0 ? capasValidacion : capasInicialesValidacionFromUser(usuario)
     const hayFiltros = Object.values(filtros).some(v => v !== '') || capasEfectivas.length > 0
-    if (!hayFiltros && nivelInfo.nivelValidacion) return
+    if (!hayFiltros && nivelInfo.puedeValidar && !nivelInfo.puedeEditar && nivelInfo.nivelValidacion) return
     if (!tieneParametrosBusquedaSicoe(filtros, capasEfectivas)) return
     // Red disponible según el navegador pero el usuario sigue en «Trabajar sin conexión»
     if (hayRedNavegador && forceOffline) {
@@ -6475,7 +6515,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
             <button type="button" onClick={() => {
               const capasEfectivas = capasValidacion.length > 0 ? capasValidacion : defaultCapasValidacion
               const hayFiltros = Object.values(filtros).some(v => v !== '') || capasEfectivas.length > 0
-              if (!hayFiltros && nivelInfo.nivelValidacion) return
+              if (!hayFiltros && nivelInfo.puedeValidar && !nivelInfo.puedeEditar && nivelInfo.nivelValidacion) return
               buscarReportes(filtros, 0, capasEfectivas); cargarAnalisis(filtros, capasEfectivas)
             }}
               style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'4px 14px', fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer' }}>
@@ -12874,6 +12914,7 @@ export default function App() {
 
   // ── Registro del Service Worker (offline app shell) ───────────────────────
   useEffect(() => {
+    if (import.meta.env.DEV) return
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {})
     }
