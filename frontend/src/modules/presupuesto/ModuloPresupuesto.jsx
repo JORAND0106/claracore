@@ -330,6 +330,8 @@ useEffect(() => {
   }, [contratoId])
 
   const esDeveloper  = usuario?.cargo_nombre?.toLowerCase() === 'desarrollador'
+  /** Solo Desarrollador: editar No.Ini / No.Fin en la grilla (backend también lo exige). */
+  const puedeEditarNodosGrilla = esDeveloper
   const _permPpto    = (usuario?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === 'editar registros presupuesto')
   /** Desarrollador o permiso «editar registros presupuesto» con acción editar: dimensiones y recálculo. */
   const puedeEditarDimensiones = esDeveloper || (_permPpto?.editar ?? false)
@@ -1316,7 +1318,20 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       alert('Solo el cargo Desarrollador puede modificar el campo Área/Long (viene del plano CAD).')
       return
     }
+    const tieneCambioMedidas = ids.some(id => {
+      const d = editDims[id]
+      if (!d) return false
+      return (d.area_long_nod != null && d.area_long_nod !== '') || (d.ancho != null && d.ancho !== '') || (d.espesor != null && d.espesor !== '')
+    })
+    const tieneCambioNodos = esDeveloper && ids.some(id => {
+      const d = editDims[id]
+      return d && ('no_inicio' in d || 'no_final' in d)
+    })
     const tieneItem = !!(editCapitulo || editItem)
+    if (!tieneItem && !tieneCambioMedidas && !tieneCambioNodos) {
+      alert('No hay cambios para aplicar.')
+      return
+    }
     const tipoComent = tieneItem ? 'item_capitulo' : 'dims'
 
     // Pedir comentario (obligatorio)
@@ -1324,6 +1339,53 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (comentarioData === null) return  // canceló
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
+
+    let nodosMergeEnBulk = {}
+    if (tieneCambioNodos) {
+      const updatesById = {}
+      let intentosPut = 0
+      for (const id of ids) {
+        const d = editDims[id]
+        if (!d || (!('no_inicio' in d) && !('no_final' in d))) continue
+        const row = registros.find(r => r.id === id)
+        if (!row || esSellado(row)) continue
+        const payload = {}
+        if ('no_inicio' in d) payload.no_inicio = String(d.no_inicio ?? '').trim() || null
+        if ('no_final' in d) payload.no_final = String(d.no_final ?? '').trim() || null
+        if (Object.keys(payload).length === 0) continue
+        intentosPut += 1
+        const res = await fetch(`${API}/presupuesto/item/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(payload),
+        })
+        if (!res.ok) {
+          try {
+            const err = await res.json()
+            alert(err.detail || 'No se pudieron guardar los nodos.')
+          } catch {
+            alert('No se pudieron guardar los nodos.')
+          }
+          return
+        }
+        try {
+          const data = await res.json()
+          if (data?.id) updatesById[data.id] = data
+        } catch { /* ok */ }
+      }
+      if (intentosPut === 0 && !tieneItem && !tieneCambioMedidas) {
+        alert('No hay nodos editables en la selección (p. ej. todos los registros están sellados).')
+        return
+      }
+      if (!tieneItem && !tieneCambioMedidas) {
+        if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario, destinatarioId)
+        setRegistros(prev => prev.map(r => (updatesById[r.id] ? { ...r, ...updatesById[r.id] } : r)))
+        setEditCapitulo(''); setEditItem(''); setEditDims({}); setSeleccionados(new Set()); setModalConfirm(false)
+        cargarCapitulos().catch(() => {})
+        return
+      }
+      nodosMergeEnBulk = updatesById
+    }
 
     const dims = ids.filter(id => editDims[id]).map(id => {
       const d = editDims[id]
@@ -1361,7 +1423,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       }
     }
     const snapOriginal = registros.filter(r => ids.includes(r.id))
-    setRegistros(prev => prev.map(computarFila))
+    setRegistros(prev => prev.map(r => computarFila(nodosMergeEnBulk[r.id] ? { ...r, ...nodosMergeEnBulk[r.id] } : r)))
     setEditCapitulo(''); setEditItem(''); setEditDims({}); setSeleccionados(new Set()); setModalConfirm(false)
     _lastWriteAtRef.current = Date.now()
 
@@ -3552,8 +3614,8 @@ async function restaurar(id) {
                 <th style={thStyle}>Ítem</th>
                 <th style={thStyle}>Descripción</th>
                 <th style={thStyle}>Und</th>
-                <th style={thStyle}>No.Ini</th>
-                <th style={thStyle}>No.Fin</th>
+                <th style={thStyle} title={puedeEditarNodosGrilla ? 'Solo Desarrollador: edite con la fila seleccionada y Aplicar cambios' : undefined}>No.Ini</th>
+                <th style={thStyle} title={puedeEditarNodosGrilla ? 'Solo Desarrollador: edite con la fila seleccionada y Aplicar cambios' : undefined}>No.Fin</th>
                 <th style={thStyle}>Área/Long</th>
                 <th style={thStyle}>Ancho</th>
                 <th style={thStyle}>Espesor</th>
@@ -3602,8 +3664,22 @@ async function restaurar(id) {
                     <td style={tdStyle}>{r.item}</td>
                     <td style={{ ...tdStyle,maxWidth:'220px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{r.descripcion}</td>
                     <td style={tdStyle}>{r.und}</td>
-                    <td style={{ ...tdStyle }}>{r.no_inicio || '-'}</td>
-                    <td style={{ ...tdStyle }}>{r.no_final || '-'}</td>
+                    <td style={{ ...tdStyle }} onClick={e=>e.stopPropagation()}>
+                      {puedeEditarNodosGrilla && seleccionados.has(r.id) && !esSellado(r)
+                        ? <input type="text" value={editDims[r.id]?.no_inicio !== undefined ? editDims[r.id].no_inicio : (r.no_inicio || '')}
+                            onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...(p[r.id]||{}), no_inicio: e.target.value } }))}
+                            placeholder="No.Ini"
+                            style={{ width:'76px',background:'transparent',border:'none',borderBottom:`1.5px solid #7c3aed`,outline:'none',padding:'2px 4px',color:t.text,fontSize:'var(--cc-sm)' }} />
+                        : (r.no_inicio || '-')}
+                    </td>
+                    <td style={{ ...tdStyle }} onClick={e=>e.stopPropagation()}>
+                      {puedeEditarNodosGrilla && seleccionados.has(r.id) && !esSellado(r)
+                        ? <input type="text" value={editDims[r.id]?.no_final !== undefined ? editDims[r.id].no_final : (r.no_final || '')}
+                            onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...(p[r.id]||{}), no_final: e.target.value } }))}
+                            placeholder="No.Fin"
+                            style={{ width:'76px',background:'transparent',border:'none',borderBottom:`1.5px solid #7c3aed`,outline:'none',padding:'2px 4px',color:t.text,fontSize:'var(--cc-sm)' }} />
+                        : (r.no_final || '-')}
+                    </td>
                     <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
                       {puedeEditarDimensiones && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.area_long_nod ?? (r.area_long_nod ?? '')}

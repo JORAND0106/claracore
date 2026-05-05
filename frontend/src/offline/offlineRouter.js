@@ -98,44 +98,78 @@ const NIVEL_PRERREQUISITO = {
 }
 
 /**
- * Filtra un array de registros por las capas de validación activas.
- * Replica _so_registros_q_y_capas_validacion del backend:
- *  - Verifica el prerequisito de nivel superior
- *  - Para "No Revisado": campo es null / '' / 'No Revisado' Y item_numero asignado
- *  - Para nivel2/3 en cualquier estado: item_numero debe estar asignado
+ * Una capa con campo o estado vacío no restringe (mismo criterio que el backend al omitir capas inválidas).
  */
-function aplicarCapasFiltro(registros, capas) {
-  if (!capas || capas.length === 0) return registros
-  return registros.filter(reg => {
-    for (const capa of capas) {
-      const campo = capa.nivel ? NIVEL_CAMPO[capa.nivel] : CARGO_NIVEL_MAP[capa.cargo_id]
-      if (!campo) continue
-      const estado = (capa.estado || '').trim()
-      if (!estado) continue
+function registroCumpleUnaCapaValidacion(reg, capa) {
+  const campo = capa.nivel ? NIVEL_CAMPO[capa.nivel] : CARGO_NIVEL_MAP[capa.cargo_id]
+  if (!campo) return true
+  const estado = (capa.estado || '').trim()
+  if (!estado) return true
 
-      // Prerequisito: nivel2 exige nivel1=Aprobado; nivel3 exige nivel2=Aprobado
-      const prereq = NIVEL_PRERREQUISITO[campo]
-      if (prereq) {
-        if ((reg[prereq[0]] || '') !== prereq[1]) return false
-      }
+  const prereq = NIVEL_PRERREQUISITO[campo]
+  if (prereq) {
+    if ((reg[prereq[0]] || '') !== prereq[1]) return false
+  }
 
-      const est = reg[campo]
-      const esNoRevisado = estado === 'No Revisado' || estado === 'No Revisados'
-      if (esNoRevisado) {
-        // Campo debe ser null / '' / 'No Revisado'
-        if (est != null && est !== '' && est !== 'No Revisado') return false
-        // Todos los niveles en cola de validación exigen ítem asignado
-        if (!reg.item_numero) return false
-      } else {
-        if ((est || '') !== estado) return false
-        // Nivel 2 y 3: siempre exigen ítem asignado
-        if (campo === 'nivel2_estado' || campo === 'nivel3_estado') {
-          if (!reg.item_numero) return false
-        }
-      }
+  const est = reg[campo]
+  const esNoRevisado = estado === 'No Revisado' || estado === 'No Revisados'
+  if (esNoRevisado) {
+    if (est != null && est !== '' && est !== 'No Revisado') return false
+    if (!reg.item_numero) return false
+  } else {
+    if ((est || '') !== estado) return false
+    if (campo === 'nivel2_estado' || campo === 'nivel3_estado') {
+      if (!reg.item_numero) return false
     }
-    return true
+  }
+  return true
+}
+
+/**
+ * Filtra registros por capas de validación.
+ * `op`: 'and' (todas) o 'or' (cualquiera), alineado con `validacion_capas_op` del backend.
+ */
+function aplicarCapasFiltro(registros, capas, op = 'and') {
+  if (!capas || capas.length === 0) return registros
+  const o = (op || 'and').toLowerCase() === 'or' ? 'or' : 'and'
+  return registros.filter((reg) => {
+    if (o === 'or') return capas.some((c) => registroCumpleUnaCapaValidacion(reg, c))
+    return capas.every((c) => registroCumpleUnaCapaValidacion(reg, c))
   })
+}
+
+/** Contiene en item_numero; varios patrones Y/O — alineado con ilike %pat% del backend. */
+function filtroRegistroPorItemsLista(reg, itemsList, op = 'and') {
+  if (!itemsList || itemsList.length === 0) return true
+  const num = String(reg.item_numero || '')
+  const match = (pat) => num.toLowerCase().includes(String(pat).toLowerCase())
+  if (itemsList.length === 1) return match(itemsList[0])
+  const o = (op || 'and').toLowerCase() === 'or' ? 'or' : 'and'
+  if (o === 'or') return itemsList.some(match)
+  return itemsList.every(match)
+}
+
+function itemsListaYOpDesdeFiltros(filtros) {
+  const list = Array.isArray(filtros.items_filtro) && filtros.items_filtro.length
+    ? filtros.items_filtro.map((x) => String(x))
+    : filtros.item
+      ? [String(filtros.item)]
+      : []
+  const op = filtros.items_filtro_op || 'and'
+  return { list, op }
+}
+
+/** Misma semántica que `_estado_efectivo` del backend en análisis SICOE (main.py). */
+function estadoEfectivoSicoePanel(r) {
+  const n1 = String(r.nivel1_estado || '').trim()
+  const n2 = String(r.nivel2_estado || '').trim()
+  const n3 = String(r.nivel3_estado || '').trim()
+  const niveles = [n1, n2, n3]
+  if (niveles.some(n => n === 'Rechazado')) return 'Rechazado'
+  if (niveles.some(n => n === 'Pendiente')) return 'Pendiente'
+  const activos = niveles.filter(Boolean)
+  if (activos.length && activos.every(n => n === 'Aprobado')) return 'Aprobado'
+  return 'No Revisado'
 }
 
 // ── Panel dinámico offline (réplica básica de /analisis) ──────────────────────
@@ -144,7 +178,7 @@ function aplicarCapasFiltro(registros, capas) {
  * Calcula el análisis del panel dinámico localmente desde IndexedDB.
  * Agrupa registros por capítulo (modo capitulo_items).
  */
-export async function calcularAnalisisOffline(contratoId, filtros = {}, capas = []) {
+export async function calcularAnalisisOffline(contratoId, filtros = {}, capas = [], capasOp = 'and') {
   const cid = Number(contratoId)
 
   if (filtros.etiqueta_validacion && String(filtros.etiqueta_validacion).trim()) {
@@ -190,10 +224,11 @@ export async function calcularAnalisisOffline(contratoId, filtros = {}, capas = 
   console.log('[calcularAnalisisOffline] registros filtrados por reporte:', regs.length)
 
   // Aplicar filtros de registros (capas de validación + campos)
-  regs = aplicarCapasFiltro(regs, capas)
+  regs = aplicarCapasFiltro(regs, capas, capasOp)
   console.log('[calcularAnalisisOffline] registros tras capas:', regs.length)
   if (filtros.capitulo) regs = regs.filter(r => r.capitulo === filtros.capitulo)
-  if (filtros.item) regs = regs.filter(r => r.item_numero === filtros.item)
+  const { list: itemsLOff, op: itemsOpOff } = itemsListaYOpDesdeFiltros(filtros)
+  if (itemsLOff.length) regs = regs.filter((r) => filtroRegistroPorItemsLista(r, itemsLOff, itemsOpOff))
 
   const grupos = {}
 
@@ -219,10 +254,11 @@ export async function calcularAnalisisOffline(contratoId, filtros = {}, capas = 
       const cant = Number(r.cantidad_total) || 0
       const costo = Number(r.costo_directo) || 0
       g.total_registros++; g.cantidad_total += cant; g.costo_directo += costo
-      const n1 = r.nivel1_estado || '', n2 = r.nivel2_estado || '', n3 = r.nivel3_estado || ''
-      if (n1 === 'Rechazado' || n2 === 'Rechazado' || n3 === 'Rechazado') { g.rechazados_count++; g.rechazados += costo }
-      else if (n3 === 'Aprobado' || n2 === 'Aprobado' || n1 === 'Aprobado') { g.aprobados_count++; g.aprobados += costo }
-      else { g.no_revisados++; g.no_revisados_costo += costo; g.pendientes_count++; g.pendientes += costo }
+      const ee = estadoEfectivoSicoePanel(r)
+      if (ee === 'Rechazado') { g.rechazados_count++; g.rechazados += costo }
+      else if (ee === 'Pendiente') { g.pendientes_count++; g.pendientes += costo }
+      else if (ee === 'Aprobado') { g.aprobados_count++; g.aprobados += costo }
+      else { g.no_revisados++; g.no_revisados_costo += costo }
     })
 
     const gruposArr = Object.values(grupos).sort((a, b) => {
@@ -235,10 +271,13 @@ export async function calcularAnalisisOffline(contratoId, filtros = {}, capas = 
     const total_pendientes       = gruposArr.reduce((s, g) => s + g.pendientes, 0)
     const total_rechazados       = gruposArr.reduce((s, g) => s + g.rechazados, 0)
     const total_cantidad         = gruposArr.reduce((s, g) => s + g.cantidad_total, 0)
+    const total_no_revisados = gruposArr.reduce((s, g) => s + (g.no_revisados || 0), 0)
+    const total_no_revisados_costo = gruposArr.reduce((s, g) => s + (g.no_revisados_costo || 0), 0)
     return {
       grupos: gruposArr, modo: 'capitulo_items',
       total_registros: regs.length, total_costo_directo,
       total_aprobados, total_pendientes, total_rechazados, total_cantidad,
+      total_no_revisados, total_no_revisados_costo,
       encabezado: `Capítulo ${filtros.capitulo} (offline · ${regs.length} registros)`,
     }
 
@@ -258,9 +297,10 @@ export async function calcularAnalisisOffline(contratoId, filtros = {}, capas = 
       const g = grupos[cap]
       const costo = Number(r.costo_directo) || 0
       g.total_registros++; g.costo_directo += costo
-      const n1 = r.nivel1_estado || '', n2 = r.nivel2_estado || '', n3 = r.nivel3_estado || ''
-      if (n1 === 'Rechazado' || n2 === 'Rechazado' || n3 === 'Rechazado') { g.rechazados_count++; g.rechazados += costo }
-      else if (n3 === 'Aprobado' || n2 === 'Aprobado' || n1 === 'Aprobado') { g.aprobados_count++; g.aprobados += costo }
+      const ee = estadoEfectivoSicoePanel(r)
+      if (ee === 'Rechazado') { g.rechazados_count++; g.rechazados += costo }
+      else if (ee === 'Pendiente') { g.pendientes_count++; g.pendientes += costo }
+      else if (ee === 'Aprobado') { g.aprobados_count++; g.aprobados += costo }
       else { g.no_revisados++; g.no_revisados_costo += costo }
     })
 
@@ -287,7 +327,7 @@ export async function calcularAnalisisOffline(contratoId, filtros = {}, capas = 
 
 // ── Búsqueda completa de reportes (replica /reportes/buscar) ──────────────────
 
-export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0, limit = 50, capas = []) {
+export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0, limit = 50, capas = [], capasOp = 'and') {
   const cid = Number(contratoId)
   if (filtros.etiqueta_validacion && String(filtros.etiqueta_validacion).trim()) {
     return { reportes: [], hay_mas: false }
@@ -331,8 +371,9 @@ export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0
 
   // Filtrar registros si hay filtros de línea
   let reporteIdsDesdeRegistros = null
+  const { list: itemsBuscarList } = itemsListaYOpDesdeFiltros(filtros)
   const necesitaRegistros = !!(
-    filtros.capitulo || filtros.item || filtros.numero_registro ||
+    filtros.capitulo || itemsBuscarList.length || filtros.numero_registro ||
     filtros.cargo || filtros.estado_registro || capas.length > 0
   )
 
@@ -340,13 +381,16 @@ export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0
     let regs = todosRegistros
 
     if (filtros.capitulo) regs = regs.filter(r => r.capitulo === filtros.capitulo)
-    if (filtros.item) regs = regs.filter(r => r.item_numero === filtros.item)
+    const { list: itemsLBus, op: itemsOpBus } = itemsListaYOpDesdeFiltros(filtros)
+    if (itemsLBus.length) {
+      regs = regs.filter((r) => filtroRegistroPorItemsLista(r, itemsLBus, itemsOpBus))
+    }
     if (filtros.numero_registro) {
       regs = regs.filter(r => String(r.numero_registro) === String(filtros.numero_registro))
     }
 
     if (capas.length > 0) {
-      regs = aplicarCapasFiltro(regs, capas)
+      regs = aplicarCapasFiltro(regs, capas, capasOp)
     } else if (filtros.cargo && filtros.estado_registro) {
       const campoNivel = CARGO_NIVEL_MAP[parseInt(filtros.cargo)]
       if (campoNivel) {

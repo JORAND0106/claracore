@@ -5,7 +5,7 @@ import io, csv, requests as req_http
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
-from typing import List, Optional, Any, Dict, Set
+from typing import List, Optional, Any, Dict, Set, Tuple
 from collections import defaultdict
 from supabase import create_client, ClientOptions
 import httpx
@@ -614,6 +614,8 @@ class PresupuestoUpdate(BaseModel):
     und: Optional[str] = None
     calzada: Optional[str] = None
     tramo: Optional[str] = None
+    no_inicio: Optional[str] = None
+    no_final: Optional[str] = None
     vlr_unitario: Optional[float] = None
     area_long_nod: Optional[float] = None
     ancho: Optional[float] = None
@@ -1951,6 +1953,8 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     abs_final: Optional[float] = None,
     capitulo: Optional[str] = None,
     item: Optional[str] = None,
+    items: Optional[List[str]] = None,
+    items_op: Optional[str] = None,
     subcontratista_id: Optional[int] = None,
     tramo: Optional[str] = None,
     costado: Optional[str] = None,
@@ -1965,13 +1969,15 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     registro_id_in: Optional[List[int]] = None,
 ):
     """AND sobre columnas de so_registros; misma semántica que /reportes/buscar y /analisis."""
+    items_eff = list(items) if items else []
+    if not items_eff and item is not None and str(item).strip():
+        items_eff = [str(item).strip()]
     if numero_registro is not None:
         q = q.eq("numero_registro", numero_registro)
     q = _so_reg_filtro_abs_solape(q, abs_inicio, abs_final)
     if capitulo:
         q = q.eq("capitulo", capitulo)
-    if item:
-        q = q.ilike("item_numero", f"%{item}%")
+    q = _apply_item_patterns_to_so_registros_q(q, items_eff, items_op)
     if subcontratista_id is not None:
         q = q.eq("subcontratista_id", subcontratista_id)
     if tramo:
@@ -1991,7 +1997,7 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
         q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
     if capas_v:
         q = _so_registros_q_y_capas_validacion(
-            q, capas_v, pk_id, tramo, costado, capitulo, subcontratista_id, item
+            q, capas_v, pk_id, tramo, costado, capitulo, subcontratista_id, None
         )
     # require_item: alinea con la vista del dashboard (solo registros con ítem asignado)
     # Solo se aplica si el estado no es "sin_asignar_item" (filtro inverso explícito)
@@ -2030,6 +2036,8 @@ def _sicoe_collect_reporte_ids_misma_linea(
     abs_final: Optional[float] = None,
     capitulo: Optional[str] = None,
     item: Optional[str] = None,
+    items: Optional[List[str]] = None,
+    items_op: Optional[str] = None,
     subcontratista_id: Optional[int] = None,
     tramo: Optional[str] = None,
     costado: Optional[str] = None,
@@ -2041,6 +2049,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
     capas_v: Optional[List[dict]] = None,
     estado: Optional[str] = None,
     registro_ids_etiqueta: Optional[Set[int]] = None,
+    capas_v_op: Optional[str] = None,
 ) -> set:
     """
     reporte_id tales que existe al menos una fila en so_registros que cumple todos
@@ -2049,8 +2058,46 @@ def _sicoe_collect_reporte_ids_misma_linea(
     Cuando reporte_ids_restrict está presente, pagina sobre esos IDs en lugar de
     usar acta_rpo_id en la columna del registro (semántica correcta: acta del reporte).
     """
+    items_eff: List[str] = list(items) if items else []
+    if not items_eff and item is not None and str(item).strip():
+        items_eff = [str(item).strip()]
     ids: set = set()
     capas_ok = bool(capas_v)
+    if (
+        capas_ok
+        and not _estado_filtro_omite_validacion_por_cargo(estado)
+        and _parse_capas_validacion_op(capas_v_op) == "or"
+        and len(capas_v or []) > 1
+    ):
+        merged: set = set()
+        for c in capas_v or []:
+            if not (str(c.get("estado") or "").strip()):
+                continue
+            fld = c.get("campo") or _capa_campo_validacion(c)
+            if not fld:
+                continue
+            merged |= _sicoe_collect_reporte_ids_misma_linea(
+                contrato_id,
+                numero_registro=numero_registro,
+                abs_inicio=abs_inicio,
+                abs_final=abs_final,
+                capitulo=capitulo,
+                items=items_eff,
+                items_op=items_op,
+                subcontratista_id=subcontratista_id,
+                tramo=tramo,
+                costado=costado,
+                pk_id=pk_id,
+                q_observacion=q_observacion,
+                semana_id=semana_id,
+                acta_rpo_id=acta_rpo_id,
+                reporte_ids_restrict=reporte_ids_restrict,
+                capas_v=[c],
+                capas_v_op="and",
+                estado=estado,
+                registro_ids_etiqueta=registro_ids_etiqueta,
+            )
+        return merged
 
     if registro_ids_etiqueta is not None:
         if not registro_ids_etiqueta:
@@ -2073,7 +2120,8 @@ def _sicoe_collect_reporte_ids_misma_linea(
                             abs_inicio=abs_inicio,
                             abs_final=abs_final,
                             capitulo=capitulo,
-                            item=item,
+                            items=items_eff,
+                            items_op=items_op,
                             subcontratista_id=subcontratista_id,
                             tramo=tramo,
                             costado=costado,
@@ -2104,7 +2152,8 @@ def _sicoe_collect_reporte_ids_misma_linea(
                         abs_inicio=abs_inicio,
                         abs_final=abs_final,
                         capitulo=capitulo,
-                        item=item,
+                        items=items_eff,
+                        items_op=items_op,
                         subcontratista_id=subcontratista_id,
                         tramo=tramo,
                         costado=costado,
@@ -2139,7 +2188,8 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     abs_inicio=abs_inicio,
                     abs_final=abs_final,
                     capitulo=capitulo,
-                    item=item,
+                    items=items_eff,
+                    items_op=items_op,
                     subcontratista_id=subcontratista_id,
                     tramo=tramo,
                     costado=costado,
@@ -2173,7 +2223,8 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     abs_inicio=abs_inicio,
                     abs_final=abs_final,
                     capitulo=capitulo,
-                    item=item,
+                    items=items_eff,
+                    items_op=items_op,
                     subcontratista_id=subcontratista_id,
                     tramo=tramo,
                     costado=costado,
@@ -2258,14 +2309,78 @@ def _filtrar_registros_validacion_sicoe(
     return _filtrar_registros_validacion_por_campo(regs, fld, estado_validacion, reporte_row)
 
 
+def _parse_capas_validacion_op(val: Optional[str]) -> str:
+    """AND por defecto. OR acepta variantes en español / inglés."""
+    s = (str(val or "").strip().lower())
+    if s in ("or", "o", "||", "any", "cualquiera"):
+        return "or"
+    return "and"
+
+
+def _normalize_items_filtro_list(items_filtro_json: Optional[str], item_legacy: Optional[str]) -> List[str]:
+    """Varios ítems vía JSON `items_filtro` o un solo `item` (query legado). Sin duplicados, orden estable."""
+    out: List[str] = []
+    if items_filtro_json and str(items_filtro_json).strip():
+        try:
+            j = json.loads(items_filtro_json)
+            if isinstance(j, list):
+                out = [str(x).strip() for x in j if x is not None and str(x).strip()]
+        except Exception:
+            pass
+    if not out and item_legacy is not None and str(item_legacy).strip():
+        out = [str(item_legacy).strip()]
+    seen: Set[str] = set()
+    deduped: List[str] = []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            deduped.append(x)
+    return deduped
+
+
+def _apply_item_patterns_to_so_registros_q(q, items: List[str], items_op: Optional[str] = None):
+    """
+    Filtro por texto en item_numero (ilike %pat%). Varias patrones: Y (todas en la misma fila) u O (cualquiera).
+    Misma semántica de operador que validacion_capas_op.
+    """
+    if not items:
+        return q
+    if len(items) == 1:
+        return q.ilike("item_numero", f"%{items[0]}%")
+    op = _parse_capas_validacion_op(items_op)
+    if op == "or":
+        parts = [f"item_numero.ilike.%{it}%" for it in items]
+        try:
+            return q.or_(",".join(parts))
+        except Exception:
+            pass
+    for it in items:
+        q = q.ilike("item_numero", f"%{it}%")
+    return q
+
+
+def _registro_cumple_capa_validacion_sicoe(reg: dict, capa: dict, reporte_row: Optional[dict] = None) -> bool:
+    fld = capa.get("campo") or _capa_campo_validacion(capa)
+    if not fld or not (str(capa.get("estado") or "").strip()):
+        return False
+    return bool(_filtrar_registros_validacion_por_campo([reg], fld, capa.get("estado"), reporte_row))
+
+
 def _filtrar_registros_validacion_capas_sicoe(
     regs: list,
     capas: List[dict],
     reporte_row: Optional[dict] = None,
+    op: str = "and",
 ) -> list:
-    """Misma semántica AND que _so_registros_q_y_capas_validacion, en memoria (detalle de reporte)."""
+    """AND: todas las capas (legado). OR: basta que el registro cumpla una capa cualquiera."""
     if not capas:
         return regs
+    o = _parse_capas_validacion_op(op)
+    if o == "or" and len(capas) > 1:
+        return [
+            reg for reg in regs
+            if any(_registro_cumple_capa_validacion_sicoe(reg, c, reporte_row) for c in capas)
+        ]
     out = regs
     for c in capas:
         fld = c.get("campo") or _capa_campo_validacion(c)
@@ -3879,14 +3994,37 @@ def get_precio_stats(item_id: int, current_user=Depends(get_current_user)):
         ppto_q = ppto_q.eq("competencia", competencia)
     ppto_rows = ppto_q.execute().data or []
     cant_ppto = sum(float(r.get("cant_total") or 0) for r in ppto_rows)
-    cobro_q = supabase.table("cobro").select("cantidad, costo_directo").eq("contrato_id", contrato_id).eq("item", item_numero)
-    if capitulo:
-        cobro_q = cobro_q.eq("capitulo", capitulo)
-    if competencia:
-        cobro_q = cobro_q.eq("competencia", competencia)
-    cobro_rows = cobro_q.execute().data or []
-    cant_cobro  = sum(float(r.get("cantidad") or 0) for r in cobro_rows)
-    costo_cobro = sum(float(r.get("costo_directo") or 0) for r in cobro_rows)
+    cap_k = _dash_norm_capitulo_key_py(capitulo) if capitulo else None
+    comp_f = (competencia or "").strip()
+    cant_cobro = 0.0
+    costo_cobro = 0.0
+    off_cb = 0
+    it_key = _dash_norm_item_key_py(item_numero)
+    while True:
+        def _q_obra(o=off_cb):
+            q = (
+                supabase.table("so_registros")
+                .select("capitulo, competencia, item_numero, cantidad_total, costo_directo, nivel3_estado")
+                .eq("contrato_id", contrato_id)
+                .range(o, o + 999)
+            )
+            return q.execute().data
+
+        batch = supabase_execute(_q_obra) or []
+        for r in batch:
+            if _matriz_validacion_norm_estado(r.get("nivel3_estado")) != "Aprobado":
+                continue
+            if cap_k and _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_k:
+                continue
+            if comp_f and (r.get("competencia") or "").strip() != comp_f:
+                continue
+            if _dash_norm_item_key_py(r.get("item_numero")) != it_key:
+                continue
+            cant_cobro += float(r.get("cantidad_total") or 0)
+            costo_cobro += float(r.get("costo_directo") or 0)
+        if len(batch) < 1000:
+            break
+        off_cb += 1000
     costo_ppto  = round(cant_ppto * vlr_unitario)
     liq_q = supabase.table("presupuesto").select("cant_total").eq("contrato_id", contrato_id).eq("item", item_numero).eq("tipo_ejecucion", "Obra Ejecutada").eq("dado_de_baja", False)
     if capitulo:
@@ -4197,6 +4335,26 @@ def get_filtros_presupuesto(
     calzadas= sorted(set(r["calzada"]  for r in rows if r.get("calzada")))
     return {"capitulos": caps, "items": items, "tramos": tramos, "calzadas": calzadas}
 
+
+@app.get("/presupuesto/{contrato_id}/analisis-liquidacion")
+def presupuesto_analisis_liquidacion(
+    contrato_id: int,
+    nivel: str = Query("item", description="item | capitulo"),
+    current_user=Depends(get_current_user),
+):
+    """
+    Contratos en fase liquidación: compara «recalculado» vs obra aprobada (SICOE N3).
+    - Ítem con polígonos en presupuesto (tipo_ejecucion = Presupuesto de Obra): recalc = suma PPTO.
+    - Ítem sin polígonos: recalc = obra N3 ✓ (igual al cobro; categoría EJECUCION).
+    """
+    _require_contract_access(current_user, contrato_id)
+    n = (nivel or "item").strip().lower()
+    if n not in ("item", "capitulo"):
+        raise HTTPException(status_code=422, detail="nivel debe ser item o capitulo")
+    items = _liquidacion_analisis_items(contrato_id, n, current_user)
+    return {"items": items}
+
+
 @app.get("/presupuesto/{contrato_id}/resumen")
 def get_resumen_presupuesto(contrato_id: int, current_user=Depends(get_current_user)):
     try:
@@ -4331,6 +4489,11 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
     motivo_interv = str(_mi).strip() if _mi is not None else ""
     prev_row = supabase.table("presupuesto").select("*").eq("id", item_id).limit(1).execute().data
     prev_row = prev_row[0] if prev_row else {}
+    if ("no_inicio" in data or "no_final" in data) and not _es_desarrollador(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el cargo Desarrollador puede modificar los nodos (No.Ini / No.Fin) en presupuesto.",
+        )
     reabrir = False
     if prev_row.get("sellado"):
         if _es_desarrollador(current_user):
@@ -7282,6 +7445,8 @@ def buscar_reportes_obra(
     subcontratista_id: Optional[int] = None,
     capitulo: Optional[str] = None,
     item: Optional[str] = None,
+    items_filtro: Optional[str] = None,
+    items_filtro_op: Optional[str] = Query(None),
     tramo: Optional[str] = None,
     costado: Optional[str] = None,
     pk_id: Optional[int] = None,
@@ -7291,6 +7456,7 @@ def buscar_reportes_obra(
     cargo_id: Optional[int] = None,
     estado_validacion: Optional[str] = None,
     validacion_capas: Optional[str] = None,
+    validacion_capas_op: Optional[str] = Query(None),
     q_observacion: Optional[str] = None,
     q_nodo: Optional[str] = None,
     etiqueta_validacion: Optional[str] = None,
@@ -7301,6 +7467,13 @@ def buscar_reportes_obra(
     limit = min(limit, 100)
     _ocultar_costo_rep = _sicoe_ocultar_costo_directo_reportes(current_user)
     capas_v = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
+    _cap_op_buscar = _parse_capas_validacion_op(validacion_capas_op)
+    _defer_capas_or_grilla = (
+        bool(capas_v)
+        and not _estado_filtro_omite_validacion_por_cargo(estado)
+        and len(capas_v) > 1
+        and _cap_op_buscar == "or"
+    )
     _nivel_l = None
     _ev_l = None
     if capas_v:
@@ -7311,8 +7484,11 @@ def buscar_reportes_obra(
             _nivel_l = None
             _ev_l = None
 
+    items_buscar_norm = _normalize_items_filtro_list(items_filtro, item)
+    items_buscar_op = items_filtro_op
+
     has_reg_f = any([
-        capitulo, item, subcontratista_id is not None,
+        capitulo, bool(items_buscar_norm), subcontratista_id is not None,
         bool(tramo), bool(costado),
     ])
     capas_aplican_a_lineas = bool(capas_v) and not _estado_filtro_omite_validacion_por_cargo(estado)
@@ -7384,7 +7560,8 @@ def buscar_reportes_obra(
             abs_inicio=abs_inicio,
             abs_final=abs_final,
             capitulo=capitulo,
-            item=item,
+            items=items_buscar_norm,
+            items_op=items_buscar_op,
             subcontratista_id=subcontratista_id,
             tramo=tramo,
             costado=costado,
@@ -7393,6 +7570,7 @@ def buscar_reportes_obra(
             semana_id=semana_id_filtro,
             acta_rpo_id=acta_id_filtro,
             capas_v=(capas_v if capas_aplican_a_lineas else None),
+            capas_v_op=validacion_capas_op,
             estado=estado,
             registro_ids_etiqueta=registro_ids_etiqueta,
         )
@@ -7519,8 +7697,7 @@ def buscar_reportes_obra(
                     q = q.eq("capitulo", capitulo)
                 if subcontratista_id is not None:
                     q = q.eq("subcontratista_id", subcontratista_id)
-                if item:
-                    q = q.ilike("item_numero", f"%{item}%")
+                q = _apply_item_patterns_to_so_registros_q(q, items_buscar_norm, items_buscar_op)
                 if tramo:
                     q = q.eq("tramo", tramo)
                 if costado:
@@ -7534,9 +7711,10 @@ def buscar_reportes_obra(
                     q = _so_reg_item_asignado(q)
 
                 if capas_v and not _estado_filtro_omite_validacion_por_cargo(estado):
-                    q = _so_registros_q_y_capas_validacion(
-                        q, capas_v, pk_id, tramo, costado, capitulo, subcontratista_id, item
-                    )
+                    if not _defer_capas_or_grilla:
+                        q = _so_registros_q_y_capas_validacion(
+                            q, capas_v, pk_id, tramo, costado, capitulo, subcontratista_id, None
+                        )
 
                 if _estado_filtro_es_sin_asignar_item(estado):
                     q = _so_reg_sin_item_asignado(q)
@@ -7576,6 +7754,8 @@ def buscar_reportes_obra(
                     x for x in reg_estados
                     if not (str(x.get("item_numero") or "").strip())
                 ]
+            if _defer_capas_or_grilla:
+                reg_estados = _filtrar_registros_validacion_capas_sicoe(reg_estados, capas_v, None, "or")
             cargo_map = {r["id"]: {"n1": [], "n2": [], "n3": [], "sub": [], "count": 0} for r in rows}
             costo_map = {}
             for reg in reg_estados:
@@ -7649,6 +7829,8 @@ class ExportarRegistrosBody(BaseModel):
     subcontratista_id: Optional[int] = None
     capitulo: Optional[str] = None
     item: Optional[str] = None
+    items_filtro: Optional[str] = None
+    items_filtro_op: Optional[str] = None
     tramo: Optional[str] = None
     costado: Optional[str] = None
     pk_id: Optional[int] = None
@@ -7660,6 +7842,7 @@ class ExportarRegistrosBody(BaseModel):
     cargo_id: Optional[int] = None
     estado_validacion: Optional[str] = None
     validacion_capas: Optional[str] = None
+    validacion_capas_op: Optional[str] = None
 
     q_observacion: Optional[str] = None
     q_nodo: Optional[str] = None
@@ -7804,6 +7987,19 @@ def exportar_registros_sicoe(
 
     # Abscisa en línea (misma semántica que analisis / grilla); no precalcular miles de reporte_id
 
+    capas_exp_export = _parse_validacion_capas_param(
+        body.validacion_capas, body.cargo_id, body.estado_validacion
+    )
+    _cap_op_ex = _parse_capas_validacion_op(body.validacion_capas_op)
+    _defer_capas_or_export = (
+        bool(capas_exp_export)
+        and len(capas_exp_export) > 1
+        and _cap_op_ex == "or"
+        and not _estado_filtro_omite_validacion_por_cargo(body.estado)
+    )
+
+    items_export_norm = _normalize_items_filtro_list(body.items_filtro, body.item)
+
     # 3) Query base sobre so_registros
     def _aplicar_filtros_reg(q):
         q = q.eq("contrato_id", contrato_id)
@@ -7818,8 +8014,7 @@ def exportar_registros_sicoe(
             q = q.eq("subcontratista_id", body.subcontratista_id)
         if body.capitulo:
             q = q.eq("capitulo", body.capitulo)
-        if body.item:
-            q = q.ilike("item_numero", f"%{body.item}%")
+        q = _apply_item_patterns_to_so_registros_q(q, items_export_norm, body.items_filtro_op)
         if body.tramo:
             q = q.eq("tramo", body.tramo)
         if body.costado:
@@ -7831,21 +8026,18 @@ def exportar_registros_sicoe(
         if _estado_filtro_es_sin_asignar_item(body.estado):
             q = _so_reg_sin_item_asignado(q)
 
-        # Validación: _parse reúne validacion_capas JSON y/o cargo_id+estado (una o varias capas = AND)
+        # Validación: capas en AND en SQL, salvo OR con varias capas (filtro en memoria al final)
         if not _estado_filtro_omite_validacion_por_cargo(body.estado):
-            capas_exp = _parse_validacion_capas_param(
-                body.validacion_capas, body.cargo_id, body.estado_validacion
-            )
-            if capas_exp:
+            if capas_exp_export and not _defer_capas_or_export:
                 q = _so_registros_q_y_capas_validacion(
                     q,
-                    capas_exp,
+                    capas_exp_export,
                     body.pk_id,
                     body.tramo,
                     body.costado,
                     body.capitulo,
                     body.subcontratista_id,
-                    body.item,
+                    None,
                 )
 
         return q
@@ -8049,6 +8241,8 @@ def exportar_registros_sicoe(
                     break
                 off += batch_size + 1
         registros = _enriquecer_registros_export(registros)
+        if _defer_capas_or_export and registros:
+            registros = _filtrar_registros_validacion_capas_sicoe(registros, capas_exp_export, None, "or")
         try:
             u_log = _audit_user_contrato(current_user, contrato_id)
             registrar_log(
@@ -8070,6 +8264,8 @@ def exportar_registros_sicoe(
         registros.extend(_fetch_by_reporte_id_list(chunk))
 
     registros = _enriquecer_registros_export(registros)
+    if _defer_capas_or_export and registros:
+        registros = _filtrar_registros_validacion_capas_sicoe(registros, capas_exp_export, None, "or")
     try:
         u_log = _audit_user_contrato(current_user, contrato_id)
         registrar_log(
@@ -8085,6 +8281,44 @@ def exportar_registros_sicoe(
     return registros
 
 
+def _sicoe_analisis_fetch_registros_paginated(build_q):
+    """
+    Carga todas las filas filtradas para el panel /analisis. Antes: bucle secuencial de páginas
+    de 1000 filas (muy lento con muchas filas). Ahora: oleadas de varias páginas en paralelo;
+    tamaño de página configurable para proyectos con max-rows mayor en PostgREST.
+
+    build_q: callable sin argumentos que devuelve el query builder Supabase (sin .range).
+
+    Variables de entorno opcionales:
+      SICOE_ANALISIS_PAGE_SIZE   (default 1000; igual al toque habitual de PostgREST/Supabase.
+                                  Si en tu proyecto elevaste max-rows, puedes probar 3000–8000.)
+      SICOE_ANALISIS_FETCH_WORKERS (default 8; peticiones paralelas por oleada. Bajar si hay rate limit.)
+    """
+    PAGE = max(200, min(50000, int(os.getenv("SICOE_ANALISIS_PAGE_SIZE", "1000"))))
+    WORKERS = max(1, min(16, int(os.getenv("SICOE_ANALISIS_FETCH_WORKERS", "8"))))
+
+    def _page(off: int):
+        return supabase_execute(
+            lambda o=off: build_q().range(o, o + PAGE - 1).execute().data
+        )
+
+    out: list = []
+    first = _page(0)
+    out.extend(first)
+    if len(first) < PAGE:
+        return out
+    off = PAGE
+    while True:
+        offsets = [off + i * PAGE for i in range(WORKERS)]
+        with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+            waves = list(ex.map(_page, offsets))
+        for batch in waves:
+            out.extend(batch)
+            if len(batch) < PAGE:
+                return out
+        off += WORKERS * PAGE
+
+
 @app.get("/sicoe-obra/{contrato_id}/analisis")
 def analisis_registros_obra(
     contrato_id:      int,
@@ -8093,6 +8327,8 @@ def analisis_registros_obra(
     subcontratista_id: Optional[int]  = None,
     capitulo:         Optional[str]   = None,
     item:             Optional[str]   = None,
+    items_filtro:     Optional[str]   = None,
+    items_filtro_op:  Optional[str]   = Query(None),
     tramo:            Optional[str]   = None,
     costado:          Optional[str]   = None,
     abs_inicio:       Optional[float] = None,
@@ -8104,6 +8340,7 @@ def analisis_registros_obra(
     cargo_id:         Optional[int]   = None,
     estado_validacion: Optional[str]  = None,
     validacion_capas: Optional[str] = None,
+    validacion_capas_op: Optional[str] = Query(None),
     q_observacion: Optional[str] = None,
     q_nodo: Optional[str] = None,
     etiqueta_validacion: Optional[str] = None,
@@ -8114,9 +8351,11 @@ def analisis_registros_obra(
               "total_costo_directo":0,"total_registros":0,"total_cantidad":0,
               "total_aprobados":0,"total_pendientes":0,"total_rechazados":0}
 
+    items_ana = _normalize_items_filtro_list(items_filtro, item)
+
     # ── 1. Determinar modo jerárquico ─────────────────────────────────────────
     tiene_contexto = bool(acta_rpo or semana)
-    if item:
+    if len(items_ana) == 1:
         modo = "item_detalle"
     elif capitulo:
         modo = "capitulo_items"
@@ -8234,14 +8473,21 @@ def analisis_registros_obra(
         ev_a = _sicoe_parse_etiqueta_validacion_param(etiqueta_validacion)
         reg_ids_etiqueta_ana = _sicoe_fetch_registro_ids_etiqueta_validacion(contrato_id, ev_a)
 
-    # ── 5. Obtener registros: todos los filtros de barra se combinan con AND ───
+    # ── 5. Obtener registros: filtros de barra en AND; validación capas según validacion_capas_op ───
     registros = []
+    _defer_capas_or_ana = False
     try:
         _a_l = acta_id
         _s_l = semana_id
-        _it_l = item
         _rp_l = reporte_ids_base
-        _capas_sql = capas_ana
+        _cap_op_ana = _parse_capas_validacion_op(validacion_capas_op)
+        _defer_capas_or_ana = (
+            bool(capas_ana)
+            and len(capas_ana) > 1
+            and _cap_op_ana == "or"
+            and not _estado_filtro_omite_validacion_por_cargo(estado)
+        )
+        _capas_sql = None if _defer_capas_or_ana else capas_ana
         _nr = numero_registro
 
         def _build_regs_q(reg_id_filter: Optional[List[int]] = None):
@@ -8255,8 +8501,7 @@ def analisis_registros_obra(
                 q = q.eq("acta_rpo_id", _a_l)
             if _s_l is not None:
                 q = q.eq("semana_id", _s_l)
-            if _it_l:
-                q = q.ilike("item_numero", f"%{_it_l}%")
+            q = _apply_item_patterns_to_so_registros_q(q, items_ana, items_filtro_op)
             if _cap_l:
                 q = q.eq("capitulo", _cap_l)
             if _sub_l is not None:
@@ -8277,7 +8522,7 @@ def analisis_registros_obra(
                 q = _so_reg_item_asignado(q)
             if _capas_sql and not _estado_filtro_omite_validacion_por_cargo(estado):
                 q = _so_registros_q_y_capas_validacion(
-                    q, _capas_sql, pk_id, tramo, costado, _cap_l, _sub_l, _it_l
+                    q, _capas_sql, pk_id, tramo, costado, _cap_l, _sub_l, None
                 )
             if _estado_filtro_es_sin_asignar_item(estado):
                 q = _so_reg_sin_item_asignado(q)
@@ -8289,36 +8534,16 @@ def analisis_registros_obra(
             else:
                 for rg_chunk in _sicoe_chunks_int(sorted(reg_ids_etiqueta_ana), 200):
                     rc = list(rg_chunk)
-                    off = 0
-                    while True:
-                        o = off
-
-                        def _fetch():
-                            return _build_regs_q(rc).range(o, o + 999).execute().data
-
-                        batch = supabase_execute(_fetch)
-                        raw_len = len(batch)
-                        registros.extend(batch)
-                        if raw_len < 1000:
-                            break
-                        off += 1000
+                    part = _sicoe_analisis_fetch_registros_paginated(lambda c=rc: _build_regs_q(c))
+                    registros.extend(part)
         else:
-            off = 0
-            while True:
-                o = off
-
-                def _fetch():
-                    return _build_regs_q().range(o, o + 999).execute().data
-
-                batch = supabase_execute(_fetch)
-                raw_len = len(batch)
-                registros.extend(batch)
-                if raw_len < 1000:
-                    break
-                off += 1000
+            registros = _sicoe_analisis_fetch_registros_paginated(lambda: _build_regs_q())
     except Exception:
         if not registros:
             registros = []
+
+    if _defer_capas_or_ana and registros:
+        registros = _filtrar_registros_validacion_capas_sicoe(registros, capas_ana, None, "or")
 
     if _estado_filtro_es_sin_asignar_item(estado):
         registros = [
@@ -8444,14 +8669,26 @@ def analisis_registros_obra(
                     "label": label, "capitulo": cap,
                     "cantidad_total": 0.0, "costo_directo": 0.0,
                     "total_registros": 0,
+                    "no_revisados": 0,
+                    "no_revisados_costo": 0.0,
                     "aprobados": 0.0, "pendientes": 0.0, "rechazados": 0.0,
+                    "aprobados_count": 0, "pendientes_count": 0, "rechazados_count": 0,
                 }
             grupos[key]["cantidad_total"] += float(reg.get("cantidad_total") or 0)
             grupos[key]["costo_directo"]  += cd
             grupos[key]["total_registros"] += 1
-            if   ee == "Aprobado":   grupos[key]["aprobados"]  += cd
-            elif ee == "Pendiente":  grupos[key]["pendientes"] += cd
-            elif ee == "Rechazado":  grupos[key]["rechazados"] += cd
+            if   ee == "Aprobado":
+                grupos[key]["aprobados"]  += cd
+                grupos[key]["aprobados_count"] += 1
+            elif ee == "Pendiente":
+                grupos[key]["pendientes"] += cd
+                grupos[key]["pendientes_count"] += 1
+            elif ee == "Rechazado":
+                grupos[key]["rechazados"] += cd
+                grupos[key]["rechazados_count"] += 1
+            else:
+                grupos[key]["no_revisados"] += 1
+                grupos[key]["no_revisados_costo"] += cd
 
     import re as _re
     def _cap_sort_key(label):
@@ -8499,7 +8736,7 @@ def analisis_registros_obra(
             prefix = f"Semana {sn}"
         encabezado = f"{prefix} — {capitulo}" if prefix else (capitulo or "Ítems")
     elif modo == "item_detalle":
-        encabezado = f"Ítem: {item}"
+        encabezado = f"Ítem: {items_ana[0]}"
     else:  # general
         partes = []
         if numero_reporte is not None:
@@ -8512,8 +8749,12 @@ def analisis_registros_obra(
             partes.append(f"Subc. #{subcontratista_id}")
         if capitulo:
             partes.append(f"Cap.: {capitulo}")
-        if item:
-            partes.append(f"Ítem: {item}")
+        if items_ana:
+            if len(items_ana) == 1:
+                partes.append(f"Ítem: {items_ana[0]}")
+            else:
+                _op_h = "O" if _parse_capas_validacion_op(items_filtro_op) == "or" else "Y"
+                partes.append(f"Ítems ({_op_h}): " + " · ".join(items_ana))
         if tramo:
             partes.append(f"Tramo: {tramo}")
         if costado:
@@ -8813,6 +9054,8 @@ def obtener_reporte(
     subcontratista_id: Optional[int] = None,
     capitulo: Optional[str] = None,
     item: Optional[str] = None,
+    items_filtro: Optional[str] = Query(None),
+    items_filtro_op: Optional[str] = Query(None),
     tramo: Optional[str] = None,
     costado: Optional[str] = None,
     pk_id: Optional[int] = None,
@@ -8822,13 +9065,22 @@ def obtener_reporte(
     cargo_id: Optional[int] = Query(None),
     estado_validacion: Optional[str] = Query(None),
     validacion_capas: Optional[str] = Query(None),
+    validacion_capas_op: Optional[str] = Query(None),
     q_observacion: Optional[str] = Query(None),
     q_nodo: Optional[str] = Query(None),
     etiqueta_validacion: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
+    items_detalle_norm = _normalize_items_filtro_list(items_filtro, item)
     capas_v = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
     capas_aplican_a_lineas = bool(capas_v) and not _estado_filtro_omite_validacion_por_cargo(estado)
+    _cap_op_det = _parse_capas_validacion_op(validacion_capas_op)
+    _defer_capas_or_detalle = (
+        capas_aplican_a_lineas
+        and bool(capas_v)
+        and len(capas_v) > 1
+        and _cap_op_det == "or"
+    )
 
     reg_tag_detalle = None
     if aplicar_filtros_busqueda and etiqueta_validacion:
@@ -8895,7 +9147,8 @@ def obtener_reporte(
                     abs_inicio=abs_inicio,
                     abs_final=abs_final,
                     capitulo=capitulo,
-                    item=item,
+                    items=items_detalle_norm,
+                    items_op=items_filtro_op,
                     subcontratista_id=subcontratista_id,
                     tramo=tramo,
                     costado=costado,
@@ -8903,7 +9156,11 @@ def obtener_reporte(
                     q_observacion=q_observacion,
                     semana_id=semana_id_filtro,
                     acta_rpo_id=acta_id_filtro,
-                    capas_v=(capas_v if capas_aplican_a_lineas else None),
+                    capas_v=(
+                        None
+                        if _defer_capas_or_detalle
+                        else (capas_v if capas_aplican_a_lineas else None)
+                    ),
                     estado=estado,
                 )
                 return q.order("id").range(o, o + page - 1).execute().data
@@ -8913,6 +9170,8 @@ def obtener_reporte(
             if len(batch) < page:
                 break
             off += page
+        if _defer_capas_or_detalle:
+            out = _filtrar_registros_validacion_capas_sicoe(out, capas_v, None, "or")
         if reg_tag_detalle is not None:
             out = [r for r in out if r.get("id") in reg_tag_detalle]
         return out
@@ -10976,6 +11235,320 @@ def _dash_pk_disp_key_py(v: Any) -> str:
     return s
 
 
+# ── Liquidación contrato: recalc (= polígonos presupuesto) vs «cobro» (= SICOE N3 aprobado en so_registros) ──
+PRESUPUESTO_TIPO_POLIGONO = "Presupuesto de Obra"
+LIQ_SUPERCOBRO_COP = 20_000_000.0
+
+
+def _liquidacion_row_categoria(delta_costo: float, es_calculado: bool) -> str:
+    if not es_calculado:
+        return "EJECUCION"
+    if abs(delta_costo) < 0.5:
+        return "EQUILIBRIO"
+    if delta_costo < 0:
+        return "SUPERCOBRO" if abs(delta_costo) > LIQ_SUPERCOBRO_COP else "DEVOLUCION"
+    return "POR_COBRAR"
+
+
+def _liquidacion_pct_ejecucion(cobrado: float, recalculado: float) -> float:
+    if recalculado and recalculado > 0:
+        return round(cobrado / recalculado * 100, 1)
+    if cobrado and cobrado > 0:
+        return 999.0
+    return 0.0
+
+
+def _liquidacion_analisis_items(contrato_id: int, nivel: str, current_user) -> List[Dict[str, Any]]:
+    """Agrega por ítem o capítulo: ítems con polígono (tipo Presupuesto de Obra) usan cant/costo PPTO; el resto toma obra N3 ✓ como recalc (= cobro)."""
+    ppo: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    off = 0
+    pto_iv = _presupuesto_aplica_filtro_interventoria(current_user)
+    while True:
+        def _q_pres(o=off):
+            q = (
+                supabase.table("presupuesto")
+                .select("capitulo, item, tipo_ejecucion, cant_total, costo_directo, descripcion")
+                .eq("contrato_id", contrato_id)
+                .eq("dado_de_baja", False)
+            )
+            if pto_iv:
+                q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+            return q.range(o, o + 999).execute().data
+
+        batch = supabase_execute(_q_pres) or []
+        for r in batch:
+            ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
+            ik = _dash_norm_item_key_py(r.get("item"))
+            if not ik:
+                continue
+            k = (ck, ik)
+            if k not in ppo:
+                ppo[k] = {
+                    "cant_po": 0.0,
+                    "cost_po": 0.0,
+                    "desc": "",
+                    "calculado": False,
+                    "cap_raw": (r.get("capitulo") or "").strip() or ck,
+                    "item_raw": (r.get("item") or "").strip() or ik,
+                }
+            te = (r.get("tipo_ejecucion") or "").strip()
+            if te == PRESUPUESTO_TIPO_POLIGONO:
+                ppo[k]["calculado"] = True
+                ppo[k]["cant_po"] += float(r.get("cant_total") or 0)
+                ppo[k]["cost_po"] += float(r.get("costo_directo") or 0)
+            if not ppo[k]["desc"] and r.get("descripcion"):
+                ppo[k]["desc"] = str(r.get("descripcion"))[:400]
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    sic: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    off = 0
+    while True:
+        def _q_reg(o=off):
+            return (
+                supabase.table("so_registros")
+                .select("capitulo, item_numero, cantidad_total, costo_directo, nivel3_estado")
+                .eq("contrato_id", contrato_id)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_q_reg) or []
+        for r in batch:
+            if _matriz_validacion_norm_estado(r.get("nivel3_estado")) != "Aprobado":
+                continue
+            ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
+            ik = _dash_norm_item_key_py(r.get("item_numero"))
+            if not ik:
+                continue
+            k = (ck, ik)
+            if k not in sic:
+                sic[k] = {
+                    "cant": 0.0,
+                    "cost": 0.0,
+                    "cap_raw": (r.get("capitulo") or "").strip() or ck,
+                    "item_raw": (r.get("item_numero") or "").strip() or ik,
+                }
+            sic[k]["cant"] += float(r.get("cantidad_total") or 0)
+            sic[k]["cost"] += float(r.get("costo_directo") or 0)
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    keys_all = set(ppo.keys()) | set(sic.keys())
+    item_rows: List[Dict[str, Any]] = []
+    for k in sorted(keys_all, key=lambda x: (x[0], x[1])):
+        meta = ppo.get(k)
+        sg = sic.get(
+            k,
+            {"cant": 0.0, "cost": 0.0, "cap_raw": k[0], "item_raw": k[1]},
+        )
+        cant_cob = float(sg["cant"])
+        cob = float(sg["cost"])
+        if meta:
+            cap_raw = meta.get("cap_raw") or sg.get("cap_raw") or k[0]
+            item_raw = meta.get("item_raw") or sg.get("item_raw") or k[1]
+            desc = meta.get("desc") or ""
+            calc = bool(meta.get("calculado"))
+        else:
+            cap_raw = sg.get("cap_raw") or k[0]
+            item_raw = sg.get("item_raw") or k[1]
+            desc = ""
+            calc = False
+        if calc and meta:
+            cant_re = float(meta["cant_po"])
+            rec = float(meta["cost_po"])
+        else:
+            cant_re, rec = cant_cob, cob
+        delta_cant = cant_re - cant_cob
+        delta_cost = rec - cob
+        item_rows.append(
+            {
+                "capitulo": cap_raw,
+                "nombre": item_raw,
+                "descripcion": desc,
+                "cant_recalc": round(cant_re, 2),
+                "recalculado": round(rec, 0),
+                "cant_cobro": round(cant_cob, 2),
+                "cobrado": round(cob, 0),
+                "delta_cant": round(delta_cant, 2),
+                "delta_costo": round(delta_cost, 0),
+                "pct": _liquidacion_pct_ejecucion(cob, rec),
+                "categoria": _liquidacion_row_categoria(delta_cost, calc),
+                "_ck": k[0],
+                "_calc": calc,
+            }
+        )
+
+    if nivel != "capitulo":
+        for r in item_rows:
+            r.pop("_ck", None)
+            r.pop("_calc", None)
+        return item_rows
+
+    caps: Dict[str, Dict[str, Any]] = {}
+    for r in item_rows:
+        ck = r["_ck"]
+        if ck not in caps:
+            caps[ck] = {
+                "capitulo": r["capitulo"],
+                "nombre": r["capitulo"],
+                "cant_recalc": 0.0,
+                "recalculado": 0.0,
+                "cant_cobro": 0.0,
+                "cobrado": 0.0,
+                "any_calc": False,
+            }
+        caps[ck]["cant_recalc"] += float(r["cant_recalc"])
+        caps[ck]["recalculado"] += float(r["recalculado"])
+        caps[ck]["cant_cobro"] += float(r["cant_cobro"])
+        caps[ck]["cobrado"] += float(r["cobrado"])
+        if r.get("_calc"):
+            caps[ck]["any_calc"] = True
+
+    out: List[Dict[str, Any]] = []
+    for ck in sorted(caps.keys(), key=lambda x: x):
+        c = caps[ck]
+        d_cant = c["cant_recalc"] - c["cant_cobro"]
+        d_cost = c["recalculado"] - c["cobrado"]
+        ac = bool(c["any_calc"])
+        out.append(
+            {
+                "capitulo": c["capitulo"],
+                "nombre": c["nombre"],
+                "descripcion": "",
+                "cant_recalc": round(c["cant_recalc"], 2),
+                "recalculado": round(c["recalculado"], 0),
+                "cant_cobro": round(c["cant_cobro"], 2),
+                "cobrado": round(c["cobrado"], 0),
+                "delta_cant": round(d_cant, 2),
+                "delta_costo": round(d_cost, 0),
+                "pct": _liquidacion_pct_ejecucion(c["cobrado"], c["recalculado"]),
+                "categoria": _liquidacion_row_categoria(d_cost, ac),
+            }
+        )
+    return out
+
+
+def _dashboard_pkid_colores_liquidacion(
+    contrato_id: int,
+    capitulo: Optional[str],
+    item: Optional[str],
+) -> Dict[str, Any]:
+    """Mini mapa liquidación: por PK, referencia = Σ ítem (polígono si calculado) vs cobrado = SICOE N3 ✓."""
+    cap_k = _dash_norm_capitulo_key_py(capitulo) if capitulo else None
+    it_k = _dash_norm_item_key_py(item) if item else None
+
+    calculado: Dict[Tuple[str, str], bool] = {}
+    po_by: Dict[Tuple[str, str], Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    off = 0
+    while True:
+        def _qp(o=off):
+            return (
+                supabase.table("presupuesto")
+                .select("capitulo, item, pk_id, tipo_ejecucion, costo_directo")
+                .eq("contrato_id", contrato_id)
+                .eq("dado_de_baja", False)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_qp) or []
+        for r in batch:
+            ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
+            ik = _dash_norm_item_key_py(r.get("item"))
+            if not ik:
+                continue
+            if cap_k and ck != cap_k:
+                continue
+            if it_k and ik != it_k:
+                continue
+            key = (ck, ik)
+            te = (r.get("tipo_ejecucion") or "").strip()
+            if te == PRESUPUESTO_TIPO_POLIGONO:
+                calculado[key] = True
+                pk = _dash_pk_disp_key_py(r.get("pk_id"))
+                if pk != "(sin pk)":
+                    po_by[key][pk] += float(r.get("costo_directo") or 0)
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    sic_by: Dict[Tuple[str, str], Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    off = 0
+    while True:
+        def _qs(o=off):
+            return (
+                supabase.table("so_registros")
+                .select("capitulo, item_numero, costo_directo, nivel3_estado, pk_id_id, pk_ids(pk_id)")
+                .eq("contrato_id", contrato_id)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_qs) or []
+        for r in batch:
+            if _matriz_validacion_norm_estado(r.get("nivel3_estado")) != "Aprobado":
+                continue
+            ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
+            ik = _dash_norm_item_key_py(r.get("item_numero"))
+            if not ik:
+                continue
+            if cap_k and ck != cap_k:
+                continue
+            if it_k and ik != it_k:
+                continue
+            pk_join = r.get("pk_ids") or {}
+            pk_raw = pk_join.get("pk_id")
+            pk = (
+                _dash_pk_disp_key_py(pk_raw)
+                if pk_raw is not None and str(pk_raw).strip() != ""
+                else _dash_pk_disp_key_py(r.get("pk_id_id"))
+            )
+            if pk == "(sin pk)":
+                continue
+            sic_by[(ck, ik)][pk] += float(r.get("costo_directo") or 0)
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    keys_scope = set(po_by.keys()) | set(sic_by.keys())
+    if cap_k:
+        keys_scope = {x for x in keys_scope if x[0] == cap_k}
+    if it_k:
+        keys_scope = {x for x in keys_scope if x[1] == it_k}
+
+    all_pks: Set[str] = set()
+    for k in keys_scope:
+        all_pks.update(sic_by[k].keys())
+        all_pks.update(po_by[k].keys())
+
+    result: Dict[str, Any] = {}
+    for pk in all_pks:
+        sap = 0.0
+        pref = 0.0
+        for k in keys_scope:
+            sik = float(sic_by[k].get(pk, 0.0))
+            sap += sik
+            is_calc = bool(calculado.get(k, False))
+            if is_calc:
+                pref += float(po_by[k].get(pk, 0.0))
+            else:
+                pref += sik
+        result[pk] = {
+            "cobrado": round(sap, 2),
+            "presupuesto": round(pref, 2),
+            "sicoe_aprobado": round(sap, 2),
+            "pct": round(sap / pref * 100, 1) if pref else 0,
+            "sobrecosto": sap > pref,
+        }
+    return result
+
+
 @app.get("/sicoe-obra/{contrato_id}/dashboard-resumen")
 def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_user)):
     try:
@@ -12356,6 +12929,7 @@ def dashboard_pkid_colores_obra(
     contrato_id: int,
     capitulo: Optional[str] = None,
     item: Optional[str] = None,
+    liquidacion: Optional[str] = Query(None, description="1/true: referencia liquidación (PPTO polígono vs obra N3)"),
     current_user=Depends(get_current_user)
 ):
     """
@@ -12364,6 +12938,9 @@ def dashboard_pkid_colores_obra(
     Retorna misma forma: {pk_id: {cobrado, presupuesto, pct, sobrecosto}}
     """
     try:
+        liq = str(liquidacion or "").strip().lower() in ("1", "true", "yes", "on")
+        if liq:
+            return _dashboard_pkid_colores_liquidacion(contrato_id, capitulo, item)
         ppto_agg = {}
         off = 0
         while True:
@@ -12852,6 +13429,7 @@ def get_reporte_de_registro(
     cargo_id: Optional[int] = Query(None),
     estado_validacion: Optional[str] = Query(None),
     validacion_capas: Optional[str] = Query(None),
+    validacion_capas_op: Optional[str] = Query(None),
     current_user=Depends(get_current_user),
 ):
     try:
@@ -12881,7 +13459,9 @@ def get_reporte_de_registro(
         regs_raw = supabase_execute(_reg)
         _capas_gr = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
         if _capas_gr:
-            regs_raw = _filtrar_registros_validacion_capas_sicoe(regs_raw, _capas_gr, r)
+            regs_raw = _filtrar_registros_validacion_capas_sicoe(
+                regs_raw, _capas_gr, r, validacion_capas_op or "and"
+            )
         reg_ids = [reg["id"] for reg in regs_raw if reg.get("id")]
         num_comentarios_map = {}
         if reg_ids:
