@@ -189,6 +189,11 @@ export async function calcularAnalisisOffline(contratoId, filtros = {}, capas = 
     }
   }
 
+  const consultaDirectaIdentificador =
+    filtros.numero_reporte != null || filtros.numero_registro != null
+  const capasEff = consultaDirectaIdentificador ? [] : capas
+  const capasOpEff = consultaDirectaIdentificador ? 'and' : capasOp
+
   // Cargar actas para resolver acta_rpo → acta_id
   const actas = await byContrato(db.actas, contratoId)
   const actaByRpo = {}
@@ -196,7 +201,7 @@ export async function calcularAnalisisOffline(contratoId, filtros = {}, capas = 
 
   // Resolver acta_id para filtrar
   let actaIdFiltro = null
-  if (filtros.acta_rpo) {
+  if (filtros.acta_rpo && !consultaDirectaIdentificador) {
     const actaMatch = actaByRpo[String(filtros.acta_rpo)]
     actaIdFiltro = actaMatch?.id != null ? Number(actaMatch.id) : -1
   }
@@ -222,9 +227,12 @@ export async function calcularAnalisisOffline(contratoId, filtros = {}, capas = 
   console.log('[calcularAnalisisOffline] registros en caché:', todosRegs.length)
   let regs = todosRegs.filter(r => repIdSet.has(String(r.reporte_id)))
   console.log('[calcularAnalisisOffline] registros filtrados por reporte:', regs.length)
+  if (filtros.numero_registro != null) {
+    regs = regs.filter(r => String(r.numero_registro) === String(filtros.numero_registro))
+  }
 
   // Aplicar filtros de registros (capas de validación + campos)
-  regs = aplicarCapasFiltro(regs, capas, capasOp)
+  regs = aplicarCapasFiltro(regs, capasEff, capasOpEff)
   console.log('[calcularAnalisisOffline] registros tras capas:', regs.length)
   if (filtros.capitulo) regs = regs.filter(r => r.capitulo === filtros.capitulo)
   const { list: itemsLOff, op: itemsOpOff } = itemsListaYOpDesdeFiltros(filtros)
@@ -333,7 +341,12 @@ export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0
     return { reportes: [], hay_mas: false }
   }
 
-  console.log('[buscarReportesOffline] contrato:', cid, 'filtros:', filtros, 'capas:', capas.length)
+  const consultaDirectaIdentificador =
+    filtros.numero_reporte != null || filtros.numero_registro != null
+  const capasEff = consultaDirectaIdentificador ? [] : capas
+  const capasOpEff = consultaDirectaIdentificador ? 'and' : capasOp
+
+  console.log('[buscarReportesOffline] contrato:', cid, 'filtros:', filtros, 'capas:', capasEff.length)
 
   const [actas, semanas, todosRegistros] = await Promise.all([
     byContrato(db.actas, cid),
@@ -358,13 +371,13 @@ export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0
 
   // Resolver filtros de acta y semana
   let actaIdFiltro = null
-  if (filtros.acta_rpo) {
+  if (filtros.acta_rpo && !consultaDirectaIdentificador) {
     const actaMatch = actaByRpo[String(filtros.acta_rpo)]
     actaIdFiltro = actaMatch?.id != null ? Number(actaMatch.id) : -1
   }
 
   let semanaIdFiltro = null
-  if (filtros.semana) {
+  if (filtros.semana && !consultaDirectaIdentificador) {
     const semanaMatch = semanaByNum[String(filtros.semana)]
     semanaIdFiltro = semanaMatch?.id != null ? Number(semanaMatch.id) : -1
   }
@@ -374,7 +387,7 @@ export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0
   const { list: itemsBuscarList } = itemsListaYOpDesdeFiltros(filtros)
   const necesitaRegistros = !!(
     filtros.capitulo || itemsBuscarList.length || filtros.numero_registro ||
-    filtros.cargo || filtros.estado_registro || capas.length > 0
+    filtros.cargo || filtros.estado_registro || capasEff.length > 0
   )
 
   if (necesitaRegistros) {
@@ -389,8 +402,8 @@ export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0
       regs = regs.filter(r => String(r.numero_registro) === String(filtros.numero_registro))
     }
 
-    if (capas.length > 0) {
-      regs = aplicarCapasFiltro(regs, capas, capasOp)
+    if (capasEff.length > 0) {
+      regs = aplicarCapasFiltro(regs, capasEff, capasOpEff)
     } else if (filtros.cargo && filtros.estado_registro) {
       const campoNivel = CARGO_NIVEL_MAP[parseInt(filtros.cargo)]
       if (campoNivel) {

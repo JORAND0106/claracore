@@ -7467,6 +7467,13 @@ def buscar_reportes_obra(
     limit = min(limit, 100)
     _ocultar_costo_rep = _sicoe_ocultar_costo_directo_reportes(current_user)
     capas_v = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
+    consulta_directa_identificador = (
+        numero_reporte is not None or numero_registro is not None
+    )
+    if consulta_directa_identificador:
+        capas_v = []
+        semana = None
+        acta_rpo = None
     _cap_op_buscar = _parse_capas_validacion_op(validacion_capas_op)
     _defer_capas_or_grilla = (
         bool(capas_v)
@@ -7893,15 +7900,21 @@ def exportar_registros_sicoe(
         campos = []
     campos_aux = list(dict.fromkeys(campos + ["reporte_id", "acta_rpo_id", "semana_id"]))
 
+    consulta_directa_identificador = (
+        body.numero_reporte is not None or body.numero_registro is not None
+    )
+    acta_rpo_x = None if consulta_directa_identificador else body.acta_rpo
+    semana_x = None if consulta_directa_identificador else body.semana
+
     # 1) Resolver semana_id / acta_rpo_id
     semana_id_filtro = None
-    if body.semana is not None:
+    if semana_x is not None:
         try:
             sem_rows = supabase_execute(
                 lambda: supabase.table("so_semanas")
                 .select("id")
                 .eq("contrato_id", contrato_id)
-                .eq("numero_semana", body.semana)
+                .eq("numero_semana", semana_x)
                 .limit(1)
                 .execute()
                 .data
@@ -7911,13 +7924,13 @@ def exportar_registros_sicoe(
             semana_id_filtro = None
 
     acta_id_filtro = None
-    if body.acta_rpo is not None:
+    if acta_rpo_x is not None:
         try:
             acta_rows = supabase_execute(
                 lambda: supabase.table("actas")
                 .select("id")
                 .eq("contrato_id", contrato_id)
-                .eq("numero_rpo", body.acta_rpo)
+                .eq("numero_rpo", acta_rpo_x)
                 .limit(1)
                 .execute()
                 .data
@@ -7929,7 +7942,7 @@ def exportar_registros_sicoe(
                     lambda: supabase.table("actas")
                     .select("id")
                     .eq("contrato_id", contrato_id)
-                    .eq("consecutivo", body.acta_rpo)
+                    .eq("consecutivo", acta_rpo_x)
                     .limit(1)
                     .execute()
                     .data
@@ -7956,9 +7969,9 @@ def exportar_registros_sicoe(
                 q = _so_reportes_q_por_estado(q, body.estado)
             if body.subcontratista_id is not None:
                 q = q.eq("subcontratista_id", body.subcontratista_id)
-            if body.semana is not None and semana_id_filtro is not None:
+            if semana_x is not None and semana_id_filtro is not None:
                 q = q.eq("semana_id", semana_id_filtro)
-            if body.acta_rpo is not None and acta_id_filtro is not None:
+            if acta_rpo_x is not None and acta_id_filtro is not None:
                 q = q.eq("acta_rpo_id", acta_id_filtro)
             return q.limit(50000).execute().data
         rep_rows = supabase_execute(_rep_ids)
@@ -7990,6 +8003,8 @@ def exportar_registros_sicoe(
     capas_exp_export = _parse_validacion_capas_param(
         body.validacion_capas, body.cargo_id, body.estado_validacion
     )
+    if consulta_directa_identificador:
+        capas_exp_export = []
     _cap_op_ex = _parse_capas_validacion_op(body.validacion_capas_op)
     _defer_capas_or_export = (
         bool(capas_exp_export)
@@ -8353,6 +8368,13 @@ def analisis_registros_obra(
 
     items_ana = _normalize_items_filtro_list(items_filtro, item)
 
+    consulta_directa_identificador = (
+        numero_reporte is not None or numero_registro is not None
+    )
+    if consulta_directa_identificador:
+        acta_rpo = None
+        semana = None
+
     # ── 1. Determinar modo jerárquico ─────────────────────────────────────────
     tiene_contexto = bool(acta_rpo or semana)
     if len(items_ana) == 1:
@@ -8398,6 +8420,8 @@ def analisis_registros_obra(
 
     # ── 3. Campo de validación (KPI panel: primera capa; filtro SQL: todas con AND) ─
     capas_ana = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
+    if consulta_directa_identificador:
+        capas_ana = []
     _val_campo_l = None
     _val_estado_l = None
     if capas_ana and not _estado_filtro_omite_validacion_por_cargo(estado):
