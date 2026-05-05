@@ -10161,27 +10161,6 @@ function sortComparativoCapitulos(rows) {
   })
 }
 
-/** Agrega filas ítem de analisis-liquidación por capítulo para gráficos de resumen. */
-function comparativoCapitulosDesdeLiq(liqItems) {
-  const byCap = new Map()
-  for (const r of liqItems || []) {
-    const cap = r.capitulo || 'Sin capítulo'
-    if (!byCap.has(cap)) byCap.set(cap, { capitulo: cap, cobrado: 0, recalculado: 0 })
-    const x = byCap.get(cap)
-    x.cobrado += Number(r.cobrado) || 0
-    x.recalculado += Number(r.recalculado) || 0
-  }
-  return sortComparativoCapitulos(
-    [...byCap.values()].map((c) => ({
-      capitulo: c.capitulo,
-      cobrado: c.cobrado,
-      presupuesto: c.recalculado,
-      presupuesto_aprobado_n3: c.recalculado,
-      presupuesto_no_revisado_n3: 0,
-    }))
-  )
-}
-
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0, fontSize = 'normal', onFontSize, onOpenPerfil }) {
   const [moduloActivo, setModuloActivo] = useState('inicio')
@@ -10606,58 +10585,29 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
     const params = new URLSearchParams()
     if (dashDrill[0]) params.set('capitulo', dashDrill[0].valor)
     if (dashDrill[1]) params.set('item', dashDrill[1].valor)
-    if (usuario?.contrato_fase === 'LIQUIDACION') params.set('liquidacion', '1')
     fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-colores?${params}`, {
       headers: { Authorization: `Bearer ${tok}` }
     }).then(r => r.ok ? r.json() : {}).then(setMiniMapaColores).catch(() => {})
-  }, [contratoIdDash, dashDrill, usuario?.contrato_fase])
+  }, [contratoIdDash, dashDrill])
 
   async function cargarAnalisis(nivel) {
     if (!contratoIdDash) return
     setAnalisisLoading(true); setAnalisisData(null); setAnalisisPag(0)
     const tok = getToken()
-    const liq = usuario?.contrato_fase === 'LIQUIDACION'
     try {
-      if (liq) {
-        const n = nivel === 'capitulo' ? 'capitulo' : 'item'
-        const res = await fetch(`${API_URL}/presupuesto/${contratoIdDash}/analisis-liquidacion?nivel=${n}`, {
-          headers: { Authorization: `Bearer ${tok}` },
-        })
-        if (res.ok) {
-          const body = await res.json()
-          const items = body.items || []
-          setAnalisisData(
-            items.map((r) => ({
-              nombre: r.nombre || '',
-              capitulo: r.capitulo || '',
-              descripcion: r.descripcion || '',
-              presupuesto: Number(r.recalculado) || 0,
-              cobrado: Number(r.cobrado) || 0,
-              cant_ppto: Number(r.cant_recalc) || 0,
-              cant_cobro: Number(r.cant_cobro) || 0,
-              delta_cant: r.delta_cant,
-              delta_costo: r.delta_costo,
-              pct: r.pct,
-              categoria: r.categoria,
-              _liq: true,
-            }))
-          )
-        }
-      } else {
-        const url = `${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill`
-        const res = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } })
-        if (res.ok) {
-          const data = await res.json()
-          setAnalisisData((data.items || data).map(r => ({
-            nombre: r.nombre || r.item,
-            capitulo: r.capitulo || r.nombre || '',
-            descripcion: r.descripcion || '',
-            presupuesto: r.presupuesto || 0,
-            cobrado: r.cobrado || 0,
-            cant_ppto: r.cant_ppto || 0,
-            cant_cobro: r.cant_cobro || 0,
-          })))
-        }
+      const url = `${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill`
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } })
+      if (res.ok) {
+        const data = await res.json()
+        setAnalisisData((data.items || data).map(r => ({
+          nombre: r.nombre || r.item,
+          capitulo: r.capitulo || r.nombre || '',
+          descripcion: r.descripcion || '',
+          presupuesto: r.presupuesto || 0,
+          cobrado: r.cobrado || 0,
+          cant_ppto: r.cant_ppto || 0,
+          cant_cobro: r.cant_cobro || 0,
+        })))
       }
     } catch {}
     setAnalisisLoading(false)
@@ -10665,7 +10615,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
   useEffect(() => {
     if (contratoIdDash && dashTab === 'analisis') cargarAnalisis(analisisNivel)
-  }, [contratoIdDash, dashTab, analisisNivel, usuario?.contrato_fase])
+  }, [contratoIdDash, dashTab, analisisNivel])
 
   useEffect(() => {
     if (!contratoIdDash || !analisisSeleccion) { setAnalisisMapaColores({}); return }
@@ -10673,11 +10623,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
     const params = new URLSearchParams()
     if (analisisSeleccion.capitulo) params.set('capitulo', analisisSeleccion.capitulo)
     if (analisisSeleccion.item)     params.set('item', analisisSeleccion.item)
-    if (usuario?.contrato_fase === 'LIQUIDACION') params.set('liquidacion', '1')
     fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-colores?${params}`, {
       headers: { Authorization: `Bearer ${tok}` }
     }).then(r => r.ok ? r.json() : {}).then(setAnalisisMapaColores).catch(() => {})
-  }, [contratoIdDash, analisisSeleccion, usuario?.contrato_fase])
+  }, [contratoIdDash, analisisSeleccion])
 
   async function abrirAnalisisMapaPopup(pkid) {
     if (!analisisSeleccion) return
@@ -10743,10 +10692,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   }, [contratoIdDash, dashTab, liqNivel])
 
   useEffect(() => {
-    if (contratoIdDash && usuario?.contrato_fase === 'LIQUIDACION' && !liqData) cargarLiquidacion('item')
-  }, [contratoIdDash, usuario?.contrato_fase, liqData])
-
-  useEffect(() => {
     if (!contratoIdDash || !liqSeleccion) { setLiqMapaColores({}); return }
     const tok = getToken()
     const params = new URLSearchParams()
@@ -10809,20 +10754,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
   const analisisFiltrado = useMemo(() => {
     if (!analisisData) return []
-    const esLiqAnalisis = analisisData.some(r => r._liq)
     let data = analisisData.map(r => {
-      if (r._liq) {
-        const { _liq: _ignored, ...base } = r
-        const cat = r.categoria || 'EQUILIBRIO'
-        const delta_costo = r.delta_costo != null ? Number(r.delta_costo) : (r.presupuesto || 0) - (r.cobrado || 0)
-        const delta_cant = r.delta_cant != null ? Number(r.delta_cant) : (r.cant_ppto || 0) - (r.cant_cobro || 0)
-        const pct = r.pct != null ? Number(r.pct) : (r.presupuesto ? Math.round(r.cobrado / r.presupuesto * 100) : (r.cobrado > 0 ? 999 : 0))
-        const estado =
-          cat === 'SUPERCOBRO' || cat === 'DEVOLUCION' ? 'SOBRECOBRO'
-            : cat === 'POR_COBRAR' ? 'SUBCOBRO'
-              : 'EQUILIBRIO'
-        return { ...base, delta_costo, delta_cant, pct, estado, categoria: cat }
-      }
       const delta_costo = (r.presupuesto || 0) - (r.cobrado || 0)
       const delta_cant  = (r.cant_ppto   || 0) - (r.cant_cobro  || 0)
       const pct = r.presupuesto ? Math.round(r.cobrado / r.presupuesto * 100) : (r.cobrado > 0 ? 999 : 0)
@@ -10831,9 +10763,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         : r.cobrado < r.presupuesto * 0.95 ? 'SUBCOBRO' : 'EQUILIBRIO'
       return { ...r, delta_costo, delta_cant, pct, estado }
     })
-    if (esLiqAnalisis) {
-      data = data.filter(r => r.categoria !== 'EJECUCION')
-    }
     if (analisisDir === 'sobrecobro') data = data.filter(r => r.estado === 'SOBRECOBRO')
     else if (analisisDir === 'subcobro') data = data.filter(r => r.estado === 'SUBCOBRO')
     else if (analisisDir === 'equilibrio') data = data.filter(r => r.estado === 'EQUILIBRIO')
@@ -11138,14 +11067,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           const sicoeAp = kpiCobro?.total_cobrado || 0
           const pptoApN3 = kpiCobro?.total_presupuesto_aprobado_n3 ?? 0
           const pptoNrN3 = kpiCobro?.total_presupuesto_no_revisado_n3 ?? 0
-          const esLiqDash = usuario?.contrato_fase === 'LIQUIDACION'
-          const refLiqTotal =
-            esLiqDash && Array.isArray(liqData) && liqData.length > 0
-              ? liqData.reduce((s, r) => s + (Number(r.recalculado) || 0), 0)
-              : 0
-          const maxTrio = esLiqDash && refLiqTotal
-            ? Math.max(sicoeAp, refLiqTotal, 1)
-            : Math.max(sicoeAp, pptoApN3, pptoNrN3, 1)
+          const maxTrio = Math.max(sicoeAp, pptoApN3, pptoNrN3, 1)
           const delta = ppto - sicoeAp
           const pct   = ppto ? Math.min(100, Math.round(sicoeAp/ppto*100)) : 0
           const alerta = pct >= 90 ? '#EF4444' : pct >= 70 ? '#F59E0B' : '#10B981'
@@ -11171,40 +11093,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             {/* ── KPIs compactos ── */}
             <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px', marginBottom:'16px' }}>
               {(() => {
-                const esLiq = usuario?.contrato_fase === 'LIQUIDACION'
-                let kpis
-                if (esLiq && liqLoading) {
-                  // Cargando datos de liquidación — mostrar skeleton
-                  kpis = [
-                    { label:'VALOR ACTUAL CONTRATO', value:'...', sub:'Calculando', color:'#0077B6', icon:'📋' },
-                    { label:'SICOE ACUMULADO',        value: fmtD(sicoeAp), sub: kpiCobro ? `${kpiCobro.actas?.length||0} actas` : '—', color:'#00A896', icon:'💰' },
-                    { label:'SALDO LIQUIDACIÓN',      value:'...', sub:'Calculando', color:'#F59E0B', icon:'📊' },
-                    { label:'% EJECUCIÓN',            value:'...', sub:'Calculando', color:'#F59E0B', icon:'⚡' },
-                  ]
-                } else if (esLiq && liqData?.length > 0) {
-                  // Universo completo — sin filtro de categoría
-                  const todoLiq = liqData
-                  const sumPorCobrar  = todoLiq.filter(r=>r.categoria==='POR_COBRAR').reduce((s,r)=>s+(r.delta_costo||0),0)
-                  const sumDevolucion = todoLiq.filter(r=>r.categoria==='DEVOLUCION').reduce((s,r)=>s+Math.abs(r.delta_costo||0),0)
-                  const sumSupercobro = todoLiq.filter(r=>r.categoria==='SUPERCOBRO').reduce((s,r)=>s+Math.abs(r.delta_costo||0),0)
-                  const cobroLiq    = sicoeAp
-                  const valorActual = cobroLiq + sumPorCobrar - sumDevolucion - sumSupercobro
-                  const saldoNeto   = valorActual - cobroLiq   // = sumPorCobrar - sumDevolucion - sumSupercobro
-                  const pctLiq      = valorActual > 0 ? Math.min(999, Math.round(cobroLiq / valorActual * 100)) : 0
-                  const alertaLiq   = pctLiq >= 90 ? '#EF4444' : pctLiq >= 70 ? '#F59E0B' : '#10B981'
-                  kpis = [
-                    { label:'VALOR ACTUAL CONTRATO',  value: fmtD(valorActual), sub: `${todoLiq.filter(r=>r.categoria!=='EJECUCION').length} ítems en análisis`, color:'#0077B6', icon:'📋' },
-                    { label:'SICOE ACUMULADO',         value: fmtD(cobroLiq),    sub: kpiCobro ? `${kpiCobro.actas?.length||0} actas` : '—', color:'#00A896', icon:'💰' },
-                    { label: saldoNeto >= 0 ? 'POR COBRAR' : 'POR DEVOLUCIÓN', value: fmtD(Math.abs(saldoNeto)), sub: saldoNeto >= 0 ? '✅ Saldo positivo' : '⚠️ Saldo negativo', color: saldoNeto >= 0 ? '#10B981' : '#EF4444', icon:'📊' },
-                    { label:'% EJECUCIÓN',             value: `${pctLiq}%`,      sub: pctLiq >= 90 ? '🔴 Crítico' : pctLiq >= 70 ? '🟡 Alerta' : '🟢 Normal', color: alertaLiq, icon:'⚡' },
-                  ]
-                } else {
-                  kpis = [
-                    { label:'SICOE N3 APROBADO', value: fmtD(sicoeAp), sub: kpiCobro ? `${kpiCobro.actas?.length||0} actas` : '—', color:'#0077B6', icon:'🏛️' },
-                    { label:'PPTO. CLARACORE APROB. N3', value: fmtD(pptoApN3), sub: 'Columna revisado = Aprobado', color:'#0f766e', icon:'✅' },
-                    { label:'PPTO. CLARACORE NO REVIS. N3', value: fmtD(pptoNrN3), sub: 'Pendiente / No revisado / Rechazado', color:'#ca8a04', icon:'📋' },
-                  ]
-                }
+                const kpis = [
+                  { label:'SICOE N3 APROBADO', value: fmtD(sicoeAp), sub: kpiCobro ? `${kpiCobro.actas?.length||0} actas` : '—', color:'#0077B6', icon:'🏛️' },
+                  { label:'PPTO. CLARACORE APROB. N3', value: fmtD(pptoApN3), sub: 'Columna revisado = Aprobado', color:'#0f766e', icon:'✅' },
+                  { label:'PPTO. CLARACORE NO REVIS. N3', value: fmtD(pptoNrN3), sub: 'Pendiente / No revisado / Rechazado', color:'#ca8a04', icon:'📋' },
+                ]
                 return kpis.map(k => (
                   <div key={k.label} style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'10px 14px', boxShadow:t.shadow, borderLeft:`4px solid ${k.color}` }}>
                     <div style={{ fontSize:`${du.kpiLabel}px`, fontWeight:'700', color:t.textMuted, letterSpacing:'1.5px', marginBottom:'4px' }}>{k.icon} {k.label}</div>
@@ -11215,20 +11108,14 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               })()}
             </div>
 
-            {/* ── Tres barras: facturado · SICOE N3 aprob. · SICOE N3 no rev. (en liquidación: SICOE vs referencia recalculada) ── */}
+            {/* ── Tres barras: facturado · SICOE N3 aprob. · SICOE N3 no rev. ── */}
             <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'14px 20px', marginBottom:'20px', boxShadow:t.shadow }}>
               <div style={{ fontSize:`${du.body}px`, fontWeight:'700', color:t.text, marginBottom:'10px' }}>Comparativo global (costos)</div>
-              {(esLiqDash && refLiqTotal
-                ? [
-                    { label:'SICOE aprobado Nivel 3 (obra)', val: sicoeAp, color:'#0077B6' },
-                    { label:'Referencia liquidación (recálculo ítems)', val: refLiqTotal, color:'#0f766e' },
-                  ]
-                : [
-                    { label:'SICOE aprobado Nivel 3', val: sicoeAp, color:'#0077B6' },
-                    { label:'Presupuesto ClaraCore aprobado (N3)', val: pptoApN3, color:'#0f766e' },
-                    { label:'Presupuesto ClaraCore no revisado (N3)', val: pptoNrN3, color:'#ca8a04' },
-                  ]
-              ).map((row) => (
+              {[
+                { label:'SICOE aprobado Nivel 3', val: sicoeAp, color:'#0077B6' },
+                { label:'Presupuesto ClaraCore aprobado (N3)', val: pptoApN3, color:'#0f766e' },
+                { label:'Presupuesto ClaraCore no revisado (N3)', val: pptoNrN3, color:'#ca8a04' },
+              ].map((row) => (
                 <div key={row.label} style={{ marginBottom:'8px' }}>
                   <div style={{ display:'flex', justifyContent:'space-between', fontSize:`${du.sub}px`, color:t.textMuted, marginBottom:'3px' }}>
                     <span>{row.label}</span>
@@ -11240,21 +11127,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 </div>
               ))}
               <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'6px' }}>
-                {esLiqDash && refLiqTotal ? (
-                  <>
-                    Referencia liquidación agregada: <strong style={{ color:t.text }}>{fmtD(refLiqTotal)}</strong>
-                    {refLiqTotal ? (() => {
-                      const pr = Math.min(999, Math.round((sicoeAp / refLiqTotal) * 100))
-                      const cr = pr >= 90 ? '#EF4444' : pr >= 70 ? '#F59E0B' : '#10B981'
-                      return <> · SICOE N3 sobre referencia: <strong style={{ color: cr }}>{pr}%</strong></>
-                    })() : null}
-                  </>
-                ) : (
-                  <>
-                    Presupuesto ClaraCore: <strong style={{ color:t.text }}>{fmtD(ppto)}</strong>
-                    {pct ? <> · SICOE N3 sobre ppto: <strong style={{ color:alerta }}>{pct}%</strong></> : null}
-                  </>
-                )}
+                Presupuesto ClaraCore: <strong style={{ color:t.text }}>{fmtD(ppto)}</strong>
+                {pct ? <> · SICOE N3 sobre ppto: <strong style={{ color:alerta }}>{pct}%</strong></> : null}
               </div>
             </div>
 
@@ -11375,50 +11249,34 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'20px', boxShadow:t.shadow, flex: panelFoco==='ppto-cobro' ? '1 1 100%' : '1 1 calc(50% - 8px)', minWidth: panelFoco==='ppto-cobro' ? '100%' : 'min(300px, 100%)', boxSizing:'border-box' }}>
                 <div style={{ marginBottom:'14px' }}>
                   <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                    <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>
-                      {usuario?.contrato_fase === 'LIQUIDACION' && (liqData?.length > 0)
-                        ? '📊 SICOE y referencia de liquidación por capítulo'
-                        : '📊 SICOE y presupuesto (revisado) por capítulo'}
-                    </div>
+                    <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>📊 SICOE y presupuesto (revisado) por capítulo</div>
                     <button onClick={() => setPanelFoco(p => p === 'ppto-cobro' ? null : 'ppto-cobro')}
                       style={{ background:'transparent', border:'none', cursor:'pointer', color:t.textMuted, fontSize:`${du.title + 1}px`, padding:'0' }}
                       title="Expandir panel">
                       {panelFoco === 'ppto-cobro' ? '⊠' : '⤢'}
                     </button>
                   </div>
-                  <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>
-                    {usuario?.contrato_fase === 'LIQUIDACION' && (liqData?.length > 0)
-                      ? 'Obra N3 aprobada vs referencia recalculada (polígonos PPTO donde aplica; resto = obra).'
-                      : 'SICOE N3 aprobado · Presupuesto aprobado en polígonos (revisado) · Presupuesto aún no aprobado — sin módulo cobro'}
-                  </div>
+                  <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>SICOE N3 aprobado · Presupuesto aprobado en polígonos (revisado) · Presupuesto aún no aprobado — sin módulo cobro</div>
                 </div>
                 {(() => {
-                  const chartCapLiq = usuario?.contrato_fase === 'LIQUIDACION' && (liqData?.length > 0)
-                  const comp = chartCapLiq
-                    ? comparativoCapitulosDesdeLiq(liqData)
-                    : sortComparativoCapitulos(kpiCobro?.comparativo_capitulos || [])
+                  const comp = sortComparativoCapitulos(kpiCobro?.comparativo_capitulos || [])
                   if (comp.length === 0) return (
                     <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:`${du.body}px` }}>Sin datos</div>
                   )
                   const maxVal = Math.max(
-                    ...comp.map(c =>
-                      chartCapLiq
-                        ? Math.max(Number(c.presupuesto_aprobado_n3) || 0, Number(c.cobrado) || 0, 0)
-                        : Math.max(
-                            Number(c.presupuesto_aprobado_n3) || 0,
-                            Number(c.cobrado) || 0,
-                            Number(c.presupuesto_no_revisado_n3) || 0,
-                            0
-                          )
-                    ),
+                    ...comp.map(c => Math.max(
+                      Number(c.presupuesto_aprobado_n3) || 0,
+                      Number(c.cobrado) || 0,
+                      Number(c.presupuesto_no_revisado_n3) || 0,
+                      0
+                    )),
                     1
                   )
                   const PAD_R = 12
                   const PAD_TOP = 10
                   const GAP_BARS = 4
                   const BAR_H = Math.max(5, du.barH - 1)
-                  const nBars = chartCapLiq ? 2 : 3
-                  const ROW_INNER = 4 + BAR_H * nBars + GAP_BARS * (nBars - 1)
+                  const ROW_INNER = 4 + BAR_H * 3 + GAP_BARS * 2
                   const ROW_H = ROW_INNER + du.rowGap
                   const TEXT_START = 26
                   const BAR_START = TEXT_START + du.padLabelW + 8
@@ -11436,9 +11294,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   return (
                     <div style={{ maxHeight:'min(520px, 62vh)', overflowY:'auto', overflowX:'hidden', width:'100%', paddingRight:'2px' }}>
                       <div style={{ fontSize:`${du.chartAxis}px`, color:t.textMuted, marginBottom:'6px' }}>
-                        {chartCapLiq
-                          ? `Escala (mayor por capítulo: SICOE vs referencia liq.): ${fmtM(0)} — ${fmtM(maxVal * 0.5)} — ${fmtM(maxVal)}`
-                          : `Escala (mayor de los tres por vista): ${fmtM(0)} — ${fmtM(maxVal * 0.5)} — ${fmtM(maxVal)}`}
+                        Escala (mayor de los tres por vista): {fmtM(0)} — {fmtM(maxVal * 0.5)} — {fmtM(maxVal)}
                       </div>
                       <svg width="100%" height={vbH} viewBox={`0 0 ${vbW} ${vbH}`} preserveAspectRatio="xMinYMin meet" style={{ overflow:'visible', display:'block', maxWidth:'100%' }}>
                         {[0, 25, 50, 75, 100].map(pct => {
@@ -11471,9 +11327,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                               </text>
                               <rect x={BAR_START} y={y1} width={w1} height={BAR_H} fill={C_AP} rx="2" opacity={isSelected ? 1 : 0.9} style={{ cursor: 'pointer' }} onClick={openCap} />
                               <rect x={BAR_START} y={y2} width={w2} height={BAR_H} fill={C_PP_AP} rx="2" opacity={isSelected ? 1 : 0.9} style={{ cursor: 'pointer' }} onClick={openCap} />
-                              {!chartCapLiq ? (
-                                <rect x={BAR_START} y={y3} width={w3} height={BAR_H} fill={C_PP_NR} rx="2" opacity={isSelected ? 1 : 0.9} style={{ cursor: 'pointer' }} onClick={openCap} />
-                              ) : null}
+                              <rect x={BAR_START} y={y3} width={w3} height={BAR_H} fill={C_PP_NR} rx="2" opacity={isSelected ? 1 : 0.9} style={{ cursor: 'pointer' }} onClick={openCap} />
                               <rect x={0} y={rowY} width={vbW} height={ROW_INNER} fill="transparent" style={{ cursor: 'pointer' }} onClick={openCap}
                                 onMouseEnter={() => { const el = document.getElementById(tipId); if (el) el.style.display = 'block' }}
                                 onMouseLeave={() => { const el = document.getElementById(tipId); if (el) el.style.display = 'none' }} />
@@ -11498,21 +11352,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                           const tipPad = 8
                           const lineStep = 14
                           const yCap = tipTop + tipPad + lineStep
-                          if (chartCapLiq) {
-                            const ySicoe = yCap + lineStep
-                            const yRef = ySicoe + lineStep
-                            const tipH = yRef + tipPad - tipTop
-                            return (
-                              <g key={`tip-${tipId}`} id={tipId} style={{ display: 'none', pointerEvents: 'none' }}>
-                                <rect x={tx} y={tipTop} width="234" height={tipH} rx="6" fill={t.bgCard} stroke={t.border} strokeWidth="1" style={{ filter: 'drop-shadow(0 2px 8px rgba(0,0,0,0.25))' }} />
-                                <text x={tx + 10} y={yCap} fontSize={du.chartTip} fontWeight="700" fill={t.text}>
-                                  {(cap.capitulo || '').length > 30 ? `${(cap.capitulo || '').slice(0, 30)}…` : (cap.capitulo || '')}
-                                </text>
-                                <text x={tx + 10} y={ySicoe} fontSize={du.chartTip} fill={t.textMuted}>SICOE N3 ✓: <tspan fontWeight="700" fill={C_AP}>{fmtD(ap)}</tspan></text>
-                                <text x={tx + 10} y={yRef} fontSize={du.chartTip} fill={t.textMuted}>Ref. liquidación: <tspan fontWeight="700" fill={C_PP_AP}>{fmtD(ppA)}</tspan></text>
-                              </g>
-                            )
-                          }
                           const yPptoTot = yCap + lineStep
                           const ySicoe = yPptoTot + lineStep
                           const yRev = ySicoe + lineStep
@@ -11537,14 +11376,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                           <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#0077B6' }}/> SICOE N3 aprobado
                         </div>
                         <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:`${du.legend}px`, color:t.textMuted }}>
-                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#0f766e' }}/>
-                          {chartCapLiq ? 'Referencia liquidación' : 'Ppto. aprobado (revisado)'}
+                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#0f766e' }}/> Ppto. aprobado (revisado)
                         </div>
-                        {chartCapLiq ? null : (
-                          <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:`${du.legend}px`, color:t.textMuted }}>
-                            <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#ca8a04' }}/> Ppto. no revisado
-                          </div>
-                        )}
+                        <div style={{ display:'flex', alignItems:'center', gap:'5px', fontSize:`${du.legend}px`, color:t.textMuted }}>
+                          <div style={{ width:'12px', height:'12px', borderRadius:'2px', background:'#ca8a04' }}/> Ppto. no revisado
+                        </div>
                       </div>
                     </div>
                   )
@@ -12012,15 +11848,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             {dashTab === 'analisis' && (() => {
               const fmtD2 = n => n!=null ? formatCOP(n) : '—'
               const fmtM2 = n => formatCOPShort(n)
-              const analisisEsLiq = usuario?.contrato_fase === 'LIQUIDACION'
-              const devColor = (r) => {
-                if (analisisEsLiq) {
-                  if (r.categoria === 'SUPERCOBRO' || r.categoria === 'DEVOLUCION') return '#EF4444'
-                  if (r.categoria === 'POR_COBRAR') return '#F59E0B'
-                  return '#10B981'
-                }
-                return r.estado === 'SOBRECOBRO' ? '#EF4444' : r.estado === 'SUBCOBRO' ? '#F59E0B' : '#10B981'
-              }
               const nSobre = analisisFiltrado.filter(r=>r.estado==='SOBRECOBRO').length
               const nSub   = analisisFiltrado.filter(r=>r.estado==='SUBCOBRO').length
               const nEq    = analisisFiltrado.filter(r=>r.estado==='EQUILIBRIO').length
@@ -12034,19 +11861,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 if (analisisSortCol===key) setAnalisisSortDir(d=>d==='asc'?'desc':'asc')
                 else { setAnalisisSortCol(key); setAnalisisSortDir('desc') }
               }
-              const COLS = analisisEsLiq ? [
-                {key:'capitulo',    label:'Capítulo',         align:'left'},
-                {key:'nombre',      label:'Ítem',             align:'left'},
-                {key:'descripcion', label:'Descripción',      align:'left'},
-                {key:'cant_ppto',   label:'Cant. referencia', align:'right'},
-                {key:'presupuesto', label:'Costo referencia', align:'right'},
-                {key:'cant_cobro',  label:'Cant. obra N3',    align:'right'},
-                {key:'cobrado',     label:'Costo obra N3',    align:'right'},
-                {key:'delta_cant',  label:'Δ Cant',           align:'right'},
-                {key:'delta_costo', label:'Δ Costo',          align:'right'},
-                {key:'pct',         label:'% Ejec.',          align:'right'},
-                {key:'estado',      label:'Categoría',        align:'center'},
-              ] : [
+              const COLS = [
                 {key:'capitulo',    label:'Capítulo',    align:'left'},
                 {key:'nombre',      label:'Ítem',        align:'left'},
                 {key:'descripcion', label:'Descripción', align:'left'},
@@ -12070,19 +11885,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     </div>
                     <select value={analisisDir} onChange={e=>{setAnalisisDir(e.target.value);setAnalisisPag(0)}} style={{ background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'7px', padding:'5px 10px', color:t.text, fontSize:'var(--cc-label)', cursor:'pointer', outline:'none' }}>
                       <option value="todos">🔵 Todos los registros</option>
-                      {analisisEsLiq ? (
-                        <>
-                          <option value="sobrecobro">🔴 Supercobro / devolución — obra &gt; referencia</option>
-                          <option value="subcobro">🟡 Por cobrar — referencia &gt; obra</option>
-                          <option value="equilibrio">🟢 En equilibrio (Δ ≈ 0 en ítems polígono)</option>
-                        </>
-                      ) : (
-                        <>
-                          <option value="sobrecobro">🔴 Sobrecobro — Cobro &gt; PPTO</option>
-                          <option value="subcobro">🟡 Subcobro — PPTO &gt; Cobro</option>
-                          <option value="equilibrio">🟢 En equilibrio (±5%)</option>
-                        </>
-                      )}
+                      <option value="sobrecobro">🔴 Sobrecobro — Cobro &gt; PPTO</option>
+                      <option value="subcobro">🟡 Subcobro — PPTO &gt; Cobro</option>
+                      <option value="equilibrio">🟢 En equilibrio (±5%)</option>
                     </select>
                     <div style={{ display:'flex', alignItems:'center', gap:'6px', fontSize:'var(--cc-label)', color:t.textMuted }}>
                       <span>|Δ| desde</span>
@@ -12137,9 +11942,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   {/* KPI chips apilados a la derecha */}
                   <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
                     {[
-                      {key:'sobrecobro', label: analisisEsLiq ? 'SUPERCOBRO / DEVOL.' : 'SOBRECOBRO', count:nSobre, amount:sumSobre, color:'#EF4444', icon:'🔴', sub: analisisEsLiq ? 'Obra N3 por encima de la referencia' : 'Cobro excede el presupuesto'},
-                      {key:'subcobro',   label: analisisEsLiq ? 'POR COBRAR' : 'SUBCOBRO', count:nSub, amount:sumSub, color:'#F59E0B', icon:'🟡', sub: analisisEsLiq ? 'Referencia mayor que obra aprobada' : 'Saldo PPTO sin ejecutar'},
-                      {key:'equilibrio', label:'EQUILIBRIO', count:nEq, amount:null, color:'#10B981', icon:'🟢', sub: analisisEsLiq ? 'Sin desvío material (polígono)' : 'Desviación dentro de ±5%'},
+                      {key:'sobrecobro', label:'SOBRECOBRO', count:nSobre, amount:sumSobre,  color:'#EF4444', icon:'🔴', sub:'Cobro excede el presupuesto'},
+                      {key:'subcobro',   label:'SUBCOBRO',   count:nSub,   amount:sumSub,    color:'#F59E0B', icon:'🟡', sub:'Saldo PPTO sin ejecutar'},
+                      {key:'equilibrio', label:'EQUILIBRIO', count:nEq,    amount:null,      color:'#10B981', icon:'🟢', sub:'Desviación dentro de ±5%'},
                     ].map(k => (
                       <div key={k.label}
                         onClick={()=>{setAnalisisDir(d=>d===k.key?'todos':k.key);setAnalisisPag(0)}}
@@ -12157,13 +11962,13 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 {!analisisLoading && top10.length > 0 && (
                   <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'14px 16px', marginBottom:'14px', boxShadow:t.shadow }}>
                     <div style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text, marginBottom:'10px' }}>
-                      ⚡ Top 10 — Mayor desviación absoluta ({analisisEsLiq ? 'referencia vs obra N3' : 'costo'})
+                      ⚡ Top 10 — Mayor Desviación Absoluta de Costo
                       <span style={{ fontSize:'var(--cc-caption)', fontWeight:'400', color:t.textMuted, marginLeft:'8px' }}>sobre los registros filtrados</span>
                     </div>
                     {top10.map((r,i) => {
                       const maxAbs = Math.abs(top10[0].delta_costo)||1
                       const pctBar = Math.abs(r.delta_costo)/maxAbs*100
-                      const color = devColor(r)
+                      const color = r.estado==='SOBRECOBRO'?'#EF4444':r.estado==='SUBCOBRO'?'#F59E0B':'#10B981'
                       return (
                         <div key={i} style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'5px' }}>
                           <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, width:'24px', textAlign:'right', flexShrink:0 }}>#{i+1}</div>
@@ -12210,8 +12015,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         </thead>
                         <tbody>
                           {sliceA.map((r,i) => {
-                            const colorD = devColor(r)
-                            const badgeBg = colorD+'18'
+                            const colorD = r.estado==='SOBRECOBRO'?'#EF4444':r.estado==='SUBCOBRO'?'#F59E0B':'#10B981'
+                            const badgeBg = r.estado==='SOBRECOBRO'?'#EF444418':r.estado==='SUBCOBRO'?'#F59E0B18':'#10B98118'
                             const selKey = analisisNivel==='item' ? r.nombre : r.nombre
                             const isSelected = analisisSeleccion && (analisisNivel==='item' ? analisisSeleccion.item===r.nombre && analisisSeleccion.capitulo===r.capitulo : analisisSeleccion.capitulo===r.nombre)
                             return (
@@ -12236,7 +12041,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                                   </div>
                                 </td>
                                 <td style={{ padding:'6px 10px', textAlign:'center' }}>
-                                  <span style={{ background:badgeBg, color:colorD, borderRadius:'20px', padding:'2px 8px', fontSize:'var(--cc-caption)', fontWeight:'700' }}>{analisisEsLiq ? (r.categoria || r.estado) : r.estado}</span>
+                                  <span style={{ background:badgeBg, color:colorD, borderRadius:'20px', padding:'2px 8px', fontSize:'var(--cc-caption)', fontWeight:'700' }}>{r.estado}</span>
                                 </td>
                               </tr>
                             )
