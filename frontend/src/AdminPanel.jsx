@@ -4,6 +4,7 @@ import mapboxgl from "mapbox-gl";
 import { API_BASE } from "./apiBase";
 import { formatCOP } from "./utils/formatCOP";
 import { sanitizePlanoFeatureCollection } from "./geoPlanoSanitize";
+import ModuloNube from "./ModuloNube";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -299,27 +300,28 @@ function _sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function useApi(token) {
+function useApi(token, opts = {}) {
+  const { maxRetries = 5, timeoutMs = 55000 } = opts;
   const call = useCallback(async (method, path, body = null) => {
     const url = `${API}${path}`;
-    const opts = {
+    const optsFetch = {
       method,
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     };
-    if (body) opts.body = JSON.stringify(body);
-    const intentos = 5;
-    const timeoutPorIntentoMs = 55000;
+    if (body) optsFetch.body = JSON.stringify(body);
+    const intentos = maxRetries;
+    const timeoutPorIntentoMs = timeoutMs;
     let res;
     for (let i = 0; i < intentos; i++) {
-      const intentoOpts = { ...opts };
+      const intentoOpts = {};
       if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
         intentoOpts.signal = AbortSignal.timeout(timeoutPorIntentoMs);
       }
       try {
-        res = await fetch(url, intentoOpts);
+        res = await fetch(url, { ...optsFetch, ...intentoOpts });
         break;
       } catch (e) {
         if (!_esFalloRedTransitorio(e) || i === intentos - 1) {
@@ -356,7 +358,7 @@ function useApi(token) {
       }
       throw new Error("Respuesta no válida (no es JSON).");
     }
-  }, [token]);
+  }, [token, maxRetries, timeoutMs]);
   return call;
 }
 
@@ -383,6 +385,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
   const [ucContratos, setUcContratos] = useState({});
   const [addingContrato, setAddingContrato] = useState({});
   const [subcontratistas, setSubcontratistas] = useState({});
+  const [verifInactBusy, setVerifInactBusy] = useState(false);
 
   const col = C(theme);
 
@@ -392,7 +395,7 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
       const [udata, rdata, cdata] = await Promise.all([
         call("GET", "/admin/todos-usuarios"),
         call("GET", "/roles").catch(() => []),
-        call("GET", "/contratos").catch(() => []),
+        call("GET", "/admin/contratos-resumen").catch(() => []),
       ]);
       // Backend ya filtra Desarrollador (invisible para otros) pero lo muestra al propio Desarrollador
       setUsuarios(udata);
@@ -421,9 +424,29 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
 
   useEffect(() => {
     cargar();
-    call("POST", "/admin/verificar-inactividad").catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const ejecutarVerificarInactividad = async () => {
+    if (!window.confirm(
+      "Esta acción revisa usuarios aprobados (excepto cargos de dirección/admin) con más de 7 días sin un registro LOGIN en el sistema, y los pone en estado pendiente / inactivos.\n\n¿Ejecutar ahora?"
+    )) return;
+    setVerifInactBusy(true);
+    try {
+      const r = await call("POST", "/admin/verificar-inactividad");
+      const n = r && typeof r.afectados === "number" ? r.afectados : 0;
+      setMsg({
+        type: "success",
+        text: n
+          ? `Verificación completada: ${n} usuario(s) pasaron a pendiente por inactividad (revisa y reactiva si aplica).`
+          : "Verificación completada: ningún usuario afectado.",
+      });
+      await cargar(true);
+    } catch (e) {
+      setMsg({ type: "error", text: e.message || "No se pudo ejecutar la verificación." });
+    } finally {
+      setVerifInactBusy(false);
+    }
+  };
   const setEdit = (uid, field, val) => setEdits(e => ({ ...e, [uid]: { ...e[uid], [field]: val } }));
 
   const guardar = async (uid) => {
@@ -514,6 +537,20 @@ function SeccionUsuarios({ call, cargos, theme, userId }) {
           <span onClick={() => setMsg(null)} style={{ float: "right", cursor: "pointer", opacity: 0.6 }}>✕</span>
         </div>
       )}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+        <button
+          type="button"
+          style={{ ...S.btn("ghost", true), opacity: verifInactBusy ? 0.7 : 1 }}
+          disabled={verifInactBusy}
+          onClick={() => void ejecutarVerificarInactividad()}
+          title="Antes se ejecutaba sola al abrir esta pestaña y podía saturar el servidor. Úsala solo cuando quieras aplicar la política de 7 días."
+        >
+          {verifInactBusy ? "Verificando…" : "⏱ Verificar inactividad (7 días)"}
+        </button>
+        <span style={{ fontSize: "var(--cc-caption)", color: col.textSecondary, maxWidth: 520, lineHeight: 1.35 }}>
+          El listado ya no ejecuta esta comprobación en automático (evita bloqueos largos y desactivaciones masivas si había problemas con los logs de LOGIN).
+        </span>
+      </div>
       {loading ? (
         <div style={S.empty}><div style={{ color: "#00afc5" }}>Cargando...</div></div>
       ) : usuarios.length === 0 ? (
@@ -1398,8 +1435,8 @@ function SeccionLogs({ call, theme }) {
   const [filtSeveridad, setFiltSeveridad] = useState("")
   const [filtDesde,     setFiltDesde]     = useState("")
   const [filtHasta,     setFiltHasta]     = useState("")
-  /** Por defecto oculta LOGIN: las 50 filas recientes suelen llenarse solo de inicios de sesión y ocultan el trabajo real (PRESUPUESTO, etc.). */
-  const [filtOcultarLogin, setFiltOcultarLogin] = useState(true)
+  /** Por defecto mostrar también LOGIN para comprobar que la auditoría graba; el filtro permite ocultarlos. */
+  const [filtOcultarLogin, setFiltOcultarLogin] = useState(false)
   const [offset,        setOffset]        = useState(0)
   const LIMIT = 50
 
@@ -1422,9 +1459,21 @@ function SeccionLogs({ call, theme }) {
 
   useEffect(() => { cargarLogs(0) }, [filtUsuario, filtModulo, filtAccion, filtCategoria, filtSeveridad, filtDesde, filtHasta, filtOcultarLogin])
 
+  const POLL_MS = 180000
   useEffect(() => {
-    const iv = setInterval(() => cargarLogs(offset, { silent: true }), 30000)
-    return () => clearInterval(iv)
+    const tick = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return
+      void cargarLogs(offset, { silent: true })
+    }
+    const iv = setInterval(tick, POLL_MS)
+    const onVis = () => {
+      if (document.visibilityState === "visible") tick()
+    }
+    document.addEventListener("visibilitychange", onVis)
+    return () => {
+      clearInterval(iv)
+      document.removeEventListener("visibilitychange", onVis)
+    }
   }, [offset, filtUsuario, filtModulo, filtAccion, filtCategoria, filtSeveridad, filtDesde, filtHasta, filtOcultarLogin])
 
   async function cargarLogs(off = 0, opts = {}) {
@@ -5189,6 +5238,7 @@ const TAB_FUNCIONES = {
   subcontratistas: ["subcontratistas"],
   resets:          ["panel de administración"],
   actas:           ["actas"],
+  nube:            ["integración nube claracore"],
 };
 
 function _permisoTabVisible(p) {
@@ -5205,12 +5255,13 @@ const ADMIN_PANEL_TABS = [
   { id: "subcontratistas",  label: "Subcontratistas"       },
   { id: "resets",           label: "Reset Claves"          },
   { id: "actas",       label: "Actas", soloAdmin: false },
+  { id: "nube",         label: "Integración nube", soloAdmin: false },
   { id: "inicio",    label: "Página de inicio", soloAdmin: true },
   { id: "logs",      label: "📋 Logs del Sistema", soloAdmin: true },
 ];
 
 export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp }) {
-  const call = useApi(token);
+  const call = useApi(token, { maxRetries: 3, timeoutMs: 48000 });
   const [cargos, setCargos] = useState([]);
   const [contratos, setContratos] = useState([]);
   const t = tProp && tProp.text ? tProp : tFrom(activeTheme, null);
@@ -5219,9 +5270,11 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
   const isAdmin     = user?.cargo_nombre?.toLowerCase() === "administrador";
 
   const TABS = useMemo(() => {
-    return ADMIN_PANEL_TABS.filter((t) => {
-      if (isDeveloper || isAdmin) return true;
-      const funciones = TAB_FUNCIONES[t.id] || [];
+    return ADMIN_PANEL_TABS.filter((tabItem) => {
+      if (isDeveloper) return true;
+      const funciones = TAB_FUNCIONES[tabItem.id] || [];
+      /* Administrador: mismo acceso que siempre a pestañas clásicas; «Integración nube» exige permiso en matriz. */
+      if (isAdmin && tabItem.id !== "nube") return true;
       if (
         funciones.some((fname) =>
           (user?.permisos || []).some(
@@ -5231,7 +5284,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
       ) {
         return true;
       }
-      if (t.soloAdmin) return false;
+      if (tabItem.soloAdmin) return false;
       return false;
     });
   }, [user?.permisos, user?.cargo_nombre, isDeveloper, isAdmin]);
@@ -5262,6 +5315,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
     subcontratistas:  { title: "Subcontratistas",       sub: "Gestión de subcontratistas, cortes de facturación y precios por contrato" },
     resets:           { title: "Reset Claves",          sub: "Autoriza solicitudes de cambio de contraseña" },
     actas:       { title: "Actas", sub: "Crear actas RPO y administrativas; cierre anticipado y traslado de residuales (RPO)" },
+    nube:       { title: "Integración nube", sub: "Google Drive u OneDrive: carpetas ClaraCore para SST y ensayos" },
     inicio:    { title: "Página de inicio",       sub: "Novedades, textos e imagen de contexto en el módulo Inicio" },
     logs:      { title: "Logs del Sistema",       sub: "Auditoría completa de acciones en la plataforma" },
   };
@@ -5271,13 +5325,24 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
   }, [call]);
 
   const cargarContratos = useCallback(async () => {
-    try { setContratos(await call("GET", "/contratos")); } catch {}
+    try {
+      setContratos(await call("GET", "/contratos"));
+    } catch {}
   }, [call]);
+
+  const contratosPanelFetchRef = useRef(false);
 
   useEffect(() => {
     cargarCargos();
-    cargarContratos();
-  }, [cargarCargos, cargarContratos]);
+  }, [cargarCargos]);
+
+  useEffect(() => {
+    const needContratos = ["contratos", "precios", "subcontratistas", "actas", "nube", "inicio"].includes(tab);
+    if (needContratos && !contratosPanelFetchRef.current) {
+      contratosPanelFetchRef.current = true;
+      void cargarContratos();
+    }
+  }, [tab, cargarContratos]);
 
   // Permisos del usuario sobre "Listado de Precios" para pasar a la sección
   const precioPerms = (user?.permisos || []).find(
@@ -5349,6 +5414,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
             {tab === "precios"          && <SeccionListadoPrecios call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true, validar: true } : precioPerms} theme={activeTheme} />}
             {tab === "subcontratistas"  && <SeccionSubcontratistas call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, validar: true, exportar: true } : subPerms} theme={activeTheme} />}
             {tab === "actas"            && <SeccionActasRpo call={call} user={user} contratos={contratosVisibles} theme={activeTheme} />}
+            {tab === "nube"             && <ModuloNube usuario={user} t={t} contratos={contratosVisibles} />}
             {tab === "resets"           && <SeccionResets    call={call} theme={activeTheme} />}
             {tab === "inicio"           && (
               <SeccionInicioNovedades

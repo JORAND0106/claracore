@@ -20,6 +20,9 @@ import {
 import AdminPanel from './AdminPanel'
 import ModuloInformes from './ModuloInformes'
 import ModuloGuias from './ModuloGuias'
+import ModuloSST from './ModuloSST'
+import ModuloEnsayos from './ModuloEnsayos'
+import ModuloAuditorSST from './ModuloAuditorSST'
 import ModuloInicio from './ModuloInicio'
 import PerfilUsuarioModal from './PerfilUsuarioModal'
 import PoliticasConfidencialidadModal from './PoliticasConfidencialidadModal'
@@ -10857,6 +10860,17 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   )
   const puedeEditarDimensionesPresupuesto = esDeveloper || !!(permisoMatrizEditarPpto?.editar)
 
+  // Módulos experimentales: solo aparecen en el menú lateral si el cargo tiene Ver en Control de accesos
+  // (más el cargo Desarrollador). Administrador debe tener la función marcada igual que el resto.
+  const _permisoVerFuncion = (nombreLower) =>
+    esDeveloper ||
+    (usuario?.permisos || []).some(
+      (p) => (p.funcion_nombre || '').toLowerCase() === nombreLower && p.ver
+    )
+  const tieneModuloSst = _permisoVerFuncion('sst documental')
+  const tieneModuloEnsayos = _permisoVerFuncion('ensayos pip')
+  const tieneModuloAuditorSst = _permisoVerFuncion('auditor sst (ia)')
+
   const s = {
     app: { fontFamily: "'Segoe UI', sans-serif", background: t.bg, minHeight: '100vh', color: t.text, fontSize: 'var(--cc-body)' },
     header: { background: t.headerBg, borderBottom: `1px solid ${t.border}`, padding: 'var(--cc-space-4) var(--cc-space-5)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: t.shadow, marginTop: topOffset },
@@ -11047,6 +11061,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             ['gantt',        '📅', 'Gantt',           true],
             ['semaforo',     '🗺️', 'Plano Semáforo', true],
             ['guias',        '📖', 'Guías',          true],
+            ['sst',          '🦺', 'SST',            tieneModuloSst],
+            ['ensayos',      '🧪', 'Ensayos',        tieneModuloEnsayos],
+            ['auditor_sst',  '🛡️', 'Auditor SST',   tieneModuloAuditorSst],
           ].filter(([,,, visible]) => visible).map(([key, icon, label]) => (
             <button key={key} onClick={() => { setModuloActivo(key); setMenuAbierto(false) }} style={{
               background: moduloActivo === key ? t.primary+'22' : 'none',
@@ -12843,6 +12860,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         {moduloActivo === 'guias' && (
           <ModuloGuias t={t} usuario={usuario} token={getToken()} s={s} fontSize={fontSize} />
         )}
+
+        {moduloActivo === 'sst' && tieneModuloSst && <ModuloSST t={t} usuario={usuario} />}
+
+        {moduloActivo === 'ensayos' && tieneModuloEnsayos && <ModuloEnsayos t={t} usuario={usuario} />}
+
+        {moduloActivo === 'auditor_sst' && tieneModuloAuditorSst && <ModuloAuditorSST t={t} usuario={usuario} />}
 
         {/* ── Módulos próximamente ── */}
         {['almacen','gantt'].includes(moduloActivo) && (

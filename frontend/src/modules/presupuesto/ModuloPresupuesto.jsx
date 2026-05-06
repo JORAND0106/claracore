@@ -112,9 +112,12 @@ function cmpCapituloLabel(a, b) {
 function criterioVistaActivo(f) {
   if (!f) return false
   const e = f.eje || 'interv'
+  const hayItems =
+    (Array.isArray(f.items) && f.items.length > 0) ||
+    (f.item && String(f.item).trim())
   return !!(
     (f.cap && String(f.cap).trim()) ||
-    (f.item && String(f.item).trim()) ||
+    hayItems ||
     (f.idPol && String(f.idPol).trim()) ||
     (f.pkCriterio && String(f.pkCriterio).trim()) ||
     (f.texto && String(f.texto).trim()) ||
@@ -127,6 +130,20 @@ function criterioVistaActivo(f) {
     (e === 'interv' && f.revisado && String(f.revisado).trim()) ||
     (e === 'depur' && f.preInterv && String(f.preInterv).trim())
   )
+}
+
+/** Ítems activos en filtro obra: `items[]` multi o un solo `item` (legado; admite varios separados por coma). */
+function fObraItemsLista(f) {
+  if (!f) return []
+  if (Array.isArray(f.items) && f.items.length) {
+    return [...new Set(f.items.map((x) => String(x ?? '').trim()).filter(Boolean))]
+  }
+  const one = String(f.item ?? '').trim()
+  if (!one) return []
+  if (one.includes(',')) {
+    return [...new Set(one.split(',').map((s) => String(s).trim()).filter(Boolean))]
+  }
+  return [one]
 }
 
 // ─── MÓDULO PRESUPUESTO ───────────────────────────────────────────────────────
@@ -201,12 +218,14 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   useEffect(() => { registrosRef.current = registros }, [registros])
   /** Filtro tipo SICOE Obra (reemplaza drill por gráfico de barras) */
   const [fObra, setFObra] = useState({
-    cap: '', item: '', idPol: '', pkCriterio: '', texto: '', tramo: '', calzada: '', nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '',
+    cap: '', item: '', items: [], idPol: '', pkCriterio: '', texto: '', tramo: '', calzada: '', nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '',
   })
   const fObraRef = useRef(fObra)
   useEffect(() => { fObraRef.current = fObra }, [fObra])
   const [capExpandido, setCapExpandido] = useState(null)
   const [buscandoFiltroObra, setBuscandoFiltroObra] = useState(false)
+  /** Ancla de selección en panel ítems (Mayús+clic = rango desde este índice). */
+  const anchorIdxPanelRef = useRef(-1)
   // ── Agregar cantidad / Revisor tramos extras ─────────────────────────────
   const [comentariosTramo,   setComentariosTramo]   = useState({})
   const [modoSeleccionClon,  setModoSeleccionClon]  = useState(false)
@@ -316,8 +335,12 @@ useEffect(() => {
     const params = new URLSearchParams()
     const capDrill = drill.find(d => d.campo === 'capitulo')
     const itemDrill = drill.find(d => d.campo === 'item')
+    const itemsDrill = drill.find(d => d.campo === 'items')
     if (itemDrill) params.set('item', itemDrill.valor)
-    else if (capDrill) params.set('capitulo', capDrill.valor)
+    else if (capDrill) {
+      params.set('capitulo', capDrill.valor)
+      if (itemsDrill?.valor?.length === 1) params.set('item', String(itemsDrill.valor[0]))
+    }
     fetch(`${API}/sicoe-obra/${contratoId}/dashboard-pkid-colores?${params}`, {
       headers: { Authorization: `Bearer ${token}` }
     }).then(r => r.ok ? r.json() : {}).then(setPptoPkidColores).catch(() => {})
@@ -461,8 +484,12 @@ useEffect(() => {
     const p = armarFiltrosUbicacionSolo()
     const capD = drill.find(d => d.campo === 'capitulo')
     const itemD = drill.find(d => d.campo === 'item')
+    const itemsD = drill.find(d => d.campo === 'items')
     if (capD) p.set('capitulo', capD.valor)
-    if (itemD) p.set('item', itemD.valor)
+    if (itemsD && Array.isArray(itemsD.valor) && itemsD.valor.length > 1) {
+      for (const it of itemsD.valor) p.append('items', String(it))
+    } else if (itemD) p.set('item', itemD.valor)
+    else if (itemsD && Array.isArray(itemsD.valor) && itemsD.valor.length === 1) p.set('item', String(itemsD.valor[0]))
     if (verPapelera) p.set('papelera', 'true')
     const f = fObra
     if (f.tramo) p.set('tramo', f.tramo)
@@ -479,14 +506,18 @@ useEffect(() => {
     return p
   }, [armarFiltrosUbicacionSolo, drill, fObra, verPapelera])
 
-  const detalleConItem = !!drill.find(d => d.campo === 'item')
+  const detalleConItem = !!drill.find(d => d.campo === 'item' || d.campo === 'items')
   const cacheKeyPpto = useMemo(() => {
     const capD = drill.find(d => d.campo === 'capitulo')
     const itemD = drill.find(d => d.campo === 'item')
+    const itemsD = drill.find(d => d.campo === 'items')
     const f = fObra
     const obraKey = [f.tramo, f.calzada, f.eje, f.revisado, f.preInterv, f.idPol, f.pkCriterio, f.texto, f.nodoI, f.nodoF, f.absA, f.absB].join('\x1e')
+    const itemKey = itemsD?.valor?.length
+      ? [...itemsD.valor].map(String).sort().join('\x1f')
+      : (itemD?.valor ?? '')
     return [
-      capD?.valor, itemD?.valor, ubicacionTramo, ubicacionCalzada, filtroEstado,
+      capD?.valor, itemKey, ubicacionTramo, ubicacionCalzada, filtroEstado,
       busquedaTipo, busquedaV1, busquedaV2, verPapelera, obraKey,
     ].join('|')
   }, [drill, ubicacionTramo, ubicacionCalzada, filtroEstado, busquedaTipo, busquedaV1, busquedaV2, verPapelera, fObra])
@@ -686,8 +717,16 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (!contratoId || !detalleConItem) return
     const capD = drill.find(d => d.campo === 'capitulo')
     const itemD = drill.find(d => d.campo === 'item')
-    if (!capD?.valor || !itemD?.valor) return
-    const u = new URLSearchParams({ capitulo: capD.valor, item: itemD.valor })
+    const itemsD = drill.find(d => d.campo === 'items')
+    if (!capD?.valor) return
+    const u = new URLSearchParams({ capitulo: capD.valor })
+    if (itemsD?.valor?.length > 1) {
+      for (const it of itemsD.valor) u.append('items', String(it))
+    } else if (itemD?.valor) {
+      u.set('item', itemD.valor)
+    } else if (itemsD?.valor?.length === 1) {
+      u.set('item', String(itemsD.valor[0]))
+    } else return
     fetch(`${API}/presupuesto/${contratoId}/filtros?${u}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setOpcionesUbicacion({ tramos: d.tramos || [], calzadas: d.calzadas || [] }) })
@@ -726,14 +765,28 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     const capActual = drill.find(d => d.campo === 'capitulo')?.valor
     const itemActual = drill.find(d => d.campo === 'item')?.valor
+    const itemsMulti = drill.find(d => d.campo === 'items')?.valor
     if (capActual) {
-      delete _pptoCachePorCap.current[keyCacheFila(capActual, itemActual)]
-      if (itemActual) {
-        setRegistros(prev => prev.filter(r => r.capitulo !== capActual || r.item !== itemActual))
+      if (detalleConItem) {
+        delete _pptoCachePorCap.current[cacheKeyPpto]
+        const keep = new Set(
+          Array.isArray(itemsMulti) && itemsMulti.length
+            ? itemsMulti.map((x) => String(x))
+            : itemActual
+              ? [String(itemActual)]
+              : []
+        )
+        if (keep.size) {
+          setRegistros((prev) => prev.filter((r) => r.capitulo !== capActual || keep.has(String(r.item))))
+        } else {
+          setRegistros((prev) => prev.filter((r) => r.capitulo !== capActual))
+        }
+        await refreshRegistrosDetalle({ forzar: true, syncPreserveSize: false })
       } else {
-        setRegistros(prev => prev.filter(r => r.capitulo !== capActual))
+        delete _pptoCachePorCap.current[keyCacheFila(capActual, null)]
+        setRegistros((prev) => prev.filter((r) => r.capitulo !== capActual))
+        await cargarCapituloData(capActual, null)
       }
-      await cargarCapituloData(capActual, itemActual || null)
     }
     await cargarCapitulos()
   }
@@ -758,7 +811,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       }
       const capD = drill.find((d) => d.campo === 'capitulo')?.valor
       const itemD = drill.find((d) => d.campo === 'item')?.valor
-      if (capD && !itemD) {
+      const itemsDr = drill.find((d) => d.campo === 'items')?.valor
+      if (capD && !itemD && !(Array.isArray(itemsDr) && itemsDr.length)) {
         void cargarCapituloData(capD, null, { forzar: true, syncPreserveSize: true })
         return
       }
@@ -813,16 +867,22 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     cargaPptoInFlightRef.current = true
     try {
       syncFObraALegacy(f)
+      const itemsLista = fObraItemsLista(f)
       const d = []
       if (f.cap) d.push({ campo: 'capitulo', valor: f.cap })
-      if (f.item) d.push({ campo: 'item', valor: f.item })
+      if (itemsLista.length > 1) d.push({ campo: 'items', valor: itemsLista })
+      else if (itemsLista.length === 1) d.push({ campo: 'item', valor: itemsLista[0] })
       setDrill(d)
       if (f.cap) setCapActivo(f.cap)
 
       const p = new URLSearchParams()
       if (verPapelera) p.set('papelera', 'true')
       if (f.cap) p.set('capitulo', f.cap)
-      if (f.item) p.set('item', f.item)
+      if (itemsLista.length > 1) {
+        for (const it of itemsLista) p.append('items', it)
+      } else if (itemsLista.length === 1) {
+        p.set('item', itemsLista[0])
+      }
       if (f.tramo) p.set('tramo', f.tramo)
       if (f.calzada) p.set('calzada', f.calzada)
       if (f.nodoI) p.set('nodo_inicio', f.nodoI.trim())
@@ -841,9 +901,9 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       setPagina(1)
       _pptoCachePorCap.current = {}
       const capD = f.cap
-      const itemD = f.item
+      const itemKey = itemsLista.length > 1 ? itemsLista.join('\x1f') : (itemsLista[0] || '')
       if (capD) {
-        const key = [capD, itemD || '', f.tramo, f.calzada, f.eje, f.revisado, f.preInterv, f.idPol, f.pkCriterio, f.texto, f.nodoI, f.nodoF, f.absA, f.absB].join('|')
+        const key = [capD, itemKey, f.tramo, f.calzada, f.eje, f.revisado, f.preInterv, f.idPol, f.pkCriterio, f.texto, f.nodoI, f.nodoF, f.absA, f.absB].join('|')
         pptoCargaRef.current = { key, nextOffset: rows.length, hasMore: false, total }
         _pptoCachePorCap.current[key] = { data: rows, ts: Date.now(), total }
       }
@@ -859,7 +919,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }
 
   const fObraInicialVacio = () => ({
-    cap: '', item: '', idPol: '', pkCriterio: '', texto: '', tramo: '', calzada: '', nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '',
+    cap: '', item: '', items: [], idPol: '', pkCriterio: '', texto: '', tramo: '', calzada: '', nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '',
   })
 
   /** Quita búsqueda fina (PK, ID-POL, texto) y vuelve a cargar; mantiene cap/ítem y tramo/validación. */
@@ -872,7 +932,9 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     syncFObraALegacy(f2)
     const d = []
     if (f2.cap) d.push({ campo: 'capitulo', valor: f2.cap })
-    if (f2.item) d.push({ campo: 'item', valor: f2.item })
+    const itemsLista = fObraItemsLista(f2)
+    if (itemsLista.length > 1) d.push({ campo: 'items', valor: itemsLista })
+    else if (itemsLista.length === 1) d.push({ campo: 'item', valor: itemsLista[0] })
     setDrill(d)
     if (f2.cap) setCapActivo(f2.cap)
     skipDebounceFiltrosRef.current = true
@@ -910,7 +972,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       return
     }
     setCapExpandido(capitulo)
-    const next = { ...fObraRef.current, cap: capitulo, item: '' }
+    const next = { ...fObraRef.current, cap: capitulo, item: '', items: [] }
     setFObra(next)
     fObraRef.current = next
     setCapActivo(capitulo)
@@ -918,10 +980,50 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     await aplicarFiltroObraConF({ ...next, cap: capitulo, item: '' })
   }
 
-  function onPickItemFromPanel(itemNum) {
+  function onPickItemFromPanel(itemNum, ev) {
     const cap = (fObraRef.current.cap && fObraRef.current.cap.trim()) || capExpandido
     if (!cap) return
-    aplicarFiltroObraConF({ ...fObraRef.current, cap, item: itemNum })
+    const list = itemsResumen
+    const idx = list.findIndex((x) => String(x.item) === String(itemNum))
+    if (idx < 0) return
+    const orderMap = new Map(list.map((x, i) => [String(x.item), i]))
+    const sortItems = (arr) =>
+      [...new Set(arr.map((x) => String(x)))].sort((a, b) => (orderMap.get(a) ?? 0) - (orderMap.get(b) ?? 0))
+
+    const base = { ...fObraRef.current, cap }
+
+    if (ev?.shiftKey && anchorIdxPanelRef.current >= 0) {
+      const a = Math.min(anchorIdxPanelRef.current, idx)
+      const b = Math.max(anchorIdxPanelRef.current, idx)
+      const picked = list.slice(a, b + 1).map((x) => String(x.item))
+      anchorIdxPanelRef.current = idx
+      void aplicarFiltroObraConF({ ...base, item: '', items: picked })
+      return
+    }
+    if (ev?.ctrlKey || ev?.metaKey) {
+      const cur = fObraItemsLista(base)
+      const set = new Set(cur.map(String))
+      const k = String(itemNum)
+      if (set.has(k)) set.delete(k)
+      else set.add(k)
+      const arrRaw = [...set]
+      if (arrRaw.length === 0) {
+        anchorIdxPanelRef.current = idx
+        void aplicarFiltroObraConF({ ...base, item: '', items: [] })
+        return
+      }
+      const arr = sortItems(arrRaw)
+      if (arr.length === 1) {
+        anchorIdxPanelRef.current = idx
+        void aplicarFiltroObraConF({ ...base, item: arr[0], items: [] })
+        return
+      }
+      anchorIdxPanelRef.current = idx
+      void aplicarFiltroObraConF({ ...base, item: '', items: arr })
+      return
+    }
+    anchorIdxPanelRef.current = idx
+    void aplicarFiltroObraConF({ ...base, item: String(itemNum), items: [] })
   }
 
   async function abrirRevisorTramosObra() {
@@ -1041,12 +1143,17 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   async function refrescarDatosRevisorTramosModal() {
     const cap = modalModoCapitulo
     if (!String(cap || '').trim() || !contratoId) return
-    const itemDrill = drill.find((d) => d.campo === 'item')?.valor || null
+    const itemsD = drill.find((d) => d.campo === 'items')
+    const itemDrill =
+      drill.find((d) => d.campo === 'item')?.valor ||
+      (itemsD?.valor?.length === 1 ? String(itemsD.valor[0]) : null) ||
+      null
+    const itemCarga = itemsD?.valor?.length > 1 ? null : itemDrill
     // Suprimir polling para que no invalide el cargaId de esta recarga
     _lastWriteAtRef.current = Date.now()
     setRefrescandoRevisorTramos(true)
     try {
-      await cargarCapituloData(cap, itemDrill, { forzar: true, syncPreserveSize: false })
+      await cargarCapituloData(cap, itemCarga, { forzar: true, syncPreserveSize: false })
       const data = await fetchComentariosValidacionPorCapitulo(cap)
       setComentariosTramo((prev) => ({ ...prev, ...data }))
     } finally {
@@ -1099,11 +1206,18 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (p) s.add(p)
     }
     return [...s]
-  }, [fObra.cap, fObra.item, registros])
+  }, [fObra.cap, fObra.item, fObra.items, registros])
 
   const drillMatch = (r) => {
     if (!drill.length) return true
-    return drill.every(({ campo, valor }) => String(r[campo] ?? '') === String(valor ?? ''))
+    return drill.every(({ campo, valor }) => {
+      if (campo === 'items' && Array.isArray(valor)) {
+        if (!valor.length) return true
+        const s = new Set(valor.map((x) => String(x)))
+        return s.has(String(r.item ?? ''))
+      }
+      return String(r[campo] ?? '') === String(valor ?? '')
+    })
   }
 
   const registrosFiltrados = useMemo(() => {
@@ -1238,8 +1352,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   /** Título del panel de totales: ítem + descripción según filtro (panel lateral, grilla o listado de precios). */
   const etiquetaTituloVistaFiltrada = useMemo(() => {
-    const raw = String(fObra.item ?? '').trim()
-    if (!raw) return 'Sin ítem en criterio'
+    const prim = fObraItemsLista(fObra)
+    if (!prim.length) return 'Sin ítem en criterio'
+    if (prim.length > 1) return `${prim.length} ítems seleccionados`
+    const raw = prim[0]
     const normKey = (s) => String(s ?? '').trim().replace(/\.+$/, '')
     const nk = normKey(raw)
     const matchItem = (x) => {
@@ -1261,7 +1377,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (p) desc = String(p.descripcion ?? '').trim()
     }
     return desc ? `${itemLabel} · ${desc}` : itemLabel
-  }, [fObra.item, itemsResumen, registrosFiltrados, listadoPrecios])
+  }, [fObra.item, fObra.items, itemsResumen, registrosFiltrados, listadoPrecios])
 
   async function cargarItemsCapitulo(capitulo) {
     if (!contratoId) return
@@ -3166,14 +3282,15 @@ async function restaurar(id) {
         }
         return (
           <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.68)', zIndex:4100, display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
-            onClick={cerrar}
-            role="presentation"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sincro-sicoe-titulo"
           >
             <div
               style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:16, padding:26, width:500, maxWidth:'96vw', boxShadow:'0 24px 64px rgba(0,0,0,0.45)' }}
               onClick={e => e.stopPropagation()}
             >
-              <div style={{ fontSize:'var(--cc-label)', fontWeight:800, letterSpacing:0.6, color:t.primary, marginBottom:6 }}>AUDITORÍA SICOECAD — COLA CAD</div>
+              <div id="sincro-sicoe-titulo" style={{ fontSize:'var(--cc-label)', fontWeight:800, letterSpacing:0.6, color:t.primary, marginBottom:6 }}>AUDITORÍA SICOECAD — COLA CAD</div>
               <div style={{ fontSize:'var(--cc-lg)', fontWeight:800, color:t.text, marginBottom:10, lineHeight:1.35 }}>
                 <strong>ClaraCore</strong> está recibiendo{' '}
                 <strong style={{ color:t.primary }}>{nRec.toLocaleString('es-CO')}</strong> registro{nRec !== 1 ? 's' : ''} de presupuesto

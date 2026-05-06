@@ -895,12 +895,26 @@ def registrar_log(
             "duracion_ms":      duracion_ms,
             "alerta_generada":  alerta_generada if alerta_generada is not None else False,
         }
-        supabase.table("logs").insert(row).execute()
-    except Exception as e:
-        try:
-            _log_api.warning("registrar_log: insert falló (%s) accion=%s modulo=%s", e, accion, modulo)
-        except Exception:
-            pass
+        last_err = None
+        for _attempt in range(2):
+            try:
+                supabase.table("logs").insert(row).execute()
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+        if last_err is not None:
+            try:
+                _log_api.warning(
+                    "registrar_log: insert falló (%s) accion=%s modulo=%s",
+                    last_err,
+                    accion,
+                    modulo,
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def _track_login_failure_alert(email: str, ip: str):
@@ -1274,6 +1288,9 @@ def _usuario_vinculado_a_contrato(usuario_id: int, contrato_id: int) -> bool:
             pass
     uc = supabase.table("usuario_contratos").select("id").eq("usuario_id", uid).eq("contrato_id", cid).limit(1).execute().data
     return bool(uc)
+
+from modulos_experimentales_routes import router as _modulos_experimentales_router
+app.include_router(_modulos_experimentales_router)
 
 from informes import router as informes_router
 app.include_router(informes_router, prefix="/informes")
@@ -2625,6 +2642,12 @@ def listar_contratos():
     return supabase.table("contratos").select(_CONTRATOS_SELECT_LISTA).order("numero").execute().data
 
 
+@app.get("/admin/contratos-resumen")
+def admin_contratos_resumen(current_user=Depends(get_current_user)):
+    """Solo id y número para selects del panel admin (evita payload pesado de listar_contratos)."""
+    return supabase.table("contratos").select("id, numero, fase").order("numero").execute().data or []
+
+
 @app.get("/contratos/{contrato_id}")
 def obtener_contrato(contrato_id: int):
     """Una fila completa (incl. plano_geojson y columnas añadidas vía migraciones, sin listar nombres fijos)."""
@@ -3263,6 +3286,10 @@ def listar_funciones(current_user=Depends(get_current_user)):
     requeridas = [
         {"codigo": "DASHBOARD", "nombre": "Dashboard", "modulo": "Dashboard"},
         {"codigo": "INFCCD", "nombre": "Informes CCD", "modulo": "Informes"},
+        {"codigo": "SSTDOC", "nombre": "SST documental", "modulo": "SST"},
+        {"codigo": "ENSPIP", "nombre": "Ensayos PIP", "modulo": "Laboratorio"},
+        {"codigo": "NUVECC", "nombre": "Integración nube ClaraCore", "modulo": "Administración"},
+        {"codigo": "AUDSST", "nombre": "Auditor SST (IA)", "modulo": "SST"},
     ]
     for req in requeridas:
         nombre_funcion = req["nombre"]
@@ -3615,7 +3642,12 @@ def actualizar_usuario(usuario_id: int, body: UsuarioUpdate, current_user=Depend
 
 @app.post("/admin/verificar-inactividad")
 def verificar_inactividad(current_user=Depends(get_current_user)):
-    """Marca como pendiente a usuarios aprobados con >7 días sin iniciar sesión."""
+    """Marca como pendiente a usuarios aprobados con >7 días sin iniciar sesión (según último LOGIN en logs)."""
+    if not _cargo_puede_auditar_logs(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo Desarrollador o Administrador pueden ejecutar la verificación de inactividad.",
+        )
     from datetime import datetime, timedelta, timezone
     CARGOS_EXCLUIDOS = {'director', 'gerencia', 'supervisor externo', 'desarrollador', 'administrador'}
     ahora = datetime.now(timezone.utc)
@@ -3628,12 +3660,43 @@ def verificar_inactividad(current_user=Depends(get_current_user)):
     if not candidatos:
         return {"afectados": 0}
     cand_ids = [u["id"] for u in candidatos]
-    logs = supabase.table("logs").select("usuario_id, created_at").eq("accion", "LOGIN").in_("usuario_id", cand_ids).order("created_at", desc=True).execute().data
-    last_login = {}
-    for log in logs:
-        uid = log["usuario_id"]
-        if uid not in last_login:
-            last_login[uid] = log["created_at"]
+    last_login: Dict[int, str] = {}
+    page_size = 500
+    max_filas_por_bloque = 40000
+    # Evita URL/query gigantes y timeouts: bloques de usuarios.
+    id_bloque = 100
+    for bi in range(0, len(cand_ids), id_bloque):
+        sub_ids = cand_ids[bi : bi + id_bloque]
+        needed = set(sub_ids)
+        escaneadas = 0
+        while needed and escaneadas < max_filas_por_bloque:
+            start = escaneadas
+            end = escaneadas + page_size - 1
+            batch = (
+                supabase.table("logs")
+                .select("usuario_id, created_at")
+                .eq("accion", "LOGIN")
+                .in_("usuario_id", sub_ids)
+                .order("created_at", desc=True)
+                .range(start, end)
+                .execute()
+                .data
+                or []
+            )
+            if not batch:
+                break
+            for log in batch:
+                uid = log.get("usuario_id")
+                if uid is None:
+                    continue
+                if uid in needed and uid not in last_login:
+                    last_login[uid] = log.get("created_at")
+            needed = set(sub_ids) - set(last_login.keys())
+            if not needed:
+                break
+            escaneadas += len(batch)
+            if len(batch) < page_size:
+                break
     afectados = 0
     for u in candidatos:
         uid = u["id"]
@@ -4179,6 +4242,7 @@ def get_presupuesto(
     contrato_id: int,
     capitulo: Optional[str] = None,
     item: Optional[str] = None,
+    items: Optional[List[str]] = Query(None),
     tramo: Optional[str] = None,
     calzada: Optional[str] = None,
     nodo_inicio: Optional[str] = None,
@@ -4212,7 +4276,14 @@ def get_presupuesto(
             q = q.eq("dado_de_baja", False)
         if capitulo:
             q = q.eq("capitulo", capitulo)
-        if item:
+        ins = [str(x).strip() for x in (items or []) if str(x).strip()]
+        if len(ins) > 1:
+            if len(ins) > 200:
+                raise HTTPException(status_code=422, detail="Máximo 200 ítems en lista items")
+            q = q.in_("item", ins)
+        elif len(ins) == 1:
+            q = q.eq("item", ins[0])
+        elif item:
             q = q.eq("item", item)
         if tramo:
             q = q.eq("tramo", tramo)
@@ -4256,6 +4327,7 @@ def get_presupuesto_conteo(
     contrato_id: int,
     capitulo: Optional[str] = None,
     item: Optional[str] = None,
+    items: Optional[List[str]] = Query(None),
     tramo: Optional[str] = None,
     calzada: Optional[str] = None,
     nodo_inicio: Optional[str] = None,
@@ -4282,7 +4354,14 @@ def get_presupuesto_conteo(
         q = q.eq("dado_de_baja", False)
     if capitulo:
         q = q.eq("capitulo", capitulo)
-    if item:
+    ins = [str(x).strip() for x in (items or []) if str(x).strip()]
+    if len(ins) > 1:
+        if len(ins) > 200:
+            raise HTTPException(status_code=422, detail="Máximo 200 ítems en lista items")
+        q = q.in_("item", ins)
+    elif len(ins) == 1:
+        q = q.eq("item", ins[0])
+    elif item:
         q = q.eq("item", item)
     if tramo:
         q = q.eq("tramo", tramo)
@@ -4312,6 +4391,7 @@ def get_filtros_presupuesto(
     contrato_id: int,
     capitulo: Optional[str] = None,
     item: Optional[str] = None,
+    items: Optional[List[str]] = Query(None),
     tramo: Optional[str] = None,
     calzada: Optional[str] = None,
     current_user=Depends(get_current_user),
@@ -4320,7 +4400,14 @@ def get_filtros_presupuesto(
     q = supabase.table("presupuesto").select("capitulo, item, tramo, calzada").eq("contrato_id", contrato_id)
     if capitulo:
         q = q.eq("capitulo", capitulo)
-    if item:
+    ins = [str(x).strip() for x in (items or []) if str(x).strip()]
+    if len(ins) > 1:
+        if len(ins) > 200:
+            raise HTTPException(status_code=422, detail="Máximo 200 ítems en lista items")
+        q = q.in_("item", ins)
+    elif len(ins) == 1:
+        q = q.eq("item", ins[0])
+    elif item:
         q = q.eq("item", item)
     if tramo:
         q = q.eq("tramo", tramo)
@@ -4996,6 +5083,8 @@ def bulk_presupuesto(
             "insertados": insertados,
             "enviados": enviados,
             "ts": time.time(),
+            # Solo el usuario que ejecutó el POST /bulk ve el aviso en la web (JWT sub).
+            "user_sub": str(current_user.get("sub") or ""),
         }
     return {"insertados": insertados}
 
@@ -5006,15 +5095,24 @@ def presupuesto_sincro_sicoe_cad_pendiente(contrato_id: int, current_user=Depend
     e = _sicoe_cad_sincro_audit.get(contrato_id)
     if not e:
         return {"pendiente": None}
+    who = str(current_user.get("sub") or "")
+    stored = str(e.get("user_sub") or "")
+    # Entradas antiguas sin user_sub: no notificar a nadie (evita spam a toda la mesa).
+    if not stored or stored != who:
+        return {"pendiente": None}
     if time.time() - e["ts"] > 600:
         _sicoe_cad_sincro_audit.pop(contrato_id, None)
         return {"pendiente": None}
-    return {"pendiente": e}
+    vis = {k: v for k, v in e.items() if k != "user_sub"}
+    return {"pendiente": vis}
 
 
 @app.post("/presupuesto/{contrato_id}/sincro-sicoe-cad-auditoria/ack")
 def presupuesto_sincro_sicoe_cad_ack(contrato_id: int, current_user=Depends(get_current_user)):
-    _sicoe_cad_sincro_audit.pop(contrato_id, None)
+    e = _sicoe_cad_sincro_audit.get(contrato_id)
+    who = str(current_user.get("sub") or "")
+    if e and str(e.get("user_sub") or "") == who:
+        _sicoe_cad_sincro_audit.pop(contrato_id, None)
     return {"ok": True}
 
 @app.put("/presupuesto/{contrato_id}/bulk-recalcular")

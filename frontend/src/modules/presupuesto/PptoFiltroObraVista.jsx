@@ -33,6 +33,12 @@ const gridFila2 = {
   alignItems: 'end',
 }
 
+function itemFiltroSeleccionado(f, itItem) {
+  const k = String(itItem ?? '')
+  if (Array.isArray(f.items) && f.items.length) return f.items.some((x) => String(x) === k)
+  return String(f.item ?? '') === k
+}
+
 /**
  * Filtro tipo SICOE Obra + panel capítulo→ítem + mapa PK.
  * idPol / PK / texto: campos de servidor distintos (id_pol, pk_id, registro+descripción).
@@ -142,17 +148,17 @@ export default function PptoFiltroObraVista({
                         <button
                           type="button"
                           key={it.item}
-                          onClick={() => onPickItem(it.item)}
+                          onClick={(e) => onPickItem(it.item, e)}
                           title={
-                            (it.descripcion && String(it.descripcion).trim())
+                            `${(it.descripcion && String(it.descripcion).trim())
                               ? `${it.item} · ${String(it.descripcion).trim()}`
-                              : String(it.item ?? '')
+                              : String(it.item ?? '')}\nCtrl o ⌘: varios · Mayús: rango`
                           }
                           style={{
                             display: 'block',
                             width: '100%',
                             textAlign: 'left',
-                            background: f.item === it.item ? t.primary + '22' : 'transparent',
+                            background: itemFiltroSeleccionado(f, it.item) ? t.primary + '22' : 'transparent',
                             border: 'none',
                             borderRadius: 4,
                             padding: '4px 0',
@@ -287,7 +293,13 @@ export default function PptoFiltroObraVista({
               </div>
               <div style={{ gridColumn: 'span 2' }}>
                 <div style={lab(t)}>ÍTEM</div>
-                <input value={f.item} onChange={(e) => onF({ item: e.target.value })} placeholder="Ítem" style={{ ...inp(t), width: '100%' }} />
+                <input
+                  value={Array.isArray(f.items) && f.items.length ? f.items.join(', ') : f.item}
+                  onChange={(e) => onF({ item: e.target.value, items: [] })}
+                  placeholder="Ítem"
+                  title="Un ítem o varios separados por coma. Panel: Ctrl/⌘ múltiple, Mayús rango."
+                  style={{ ...inp(t), width: '100%' }}
+                />
               </div>
               <div style={{ gridColumn: 'span 2' }}>
                 <div style={lab(t)}>ID-POL</div>
