@@ -4,7 +4,7 @@
  * para que un F5 normal cargue el bundle nuevo tras un deploy;
  * el cache-first sobre el mismo CACHE_NAME dejaba la SPA “pegada” a JS viejo.
  */
-const CACHE_NAME = 'claracore-shell-v4'
+const CACHE_NAME = 'claracore-shell-v5'
 
 self.addEventListener('install', (event) => {
   self.skipWaiting()
@@ -60,7 +60,12 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  // Otros assets del mismo origen: cache-first con actualización en segundo plano cuando hay red
+  // Otros assets del mismo origen: cache-first solo para GET (Cache API no admite POST)
+  if (event.request.method !== 'GET') {
+    event.respondWith(fetch(event.request))
+    return
+  }
+
   event.respondWith(
     caches.match(event.request).then((cached) => {
       const netFetch = fetch(event.request)

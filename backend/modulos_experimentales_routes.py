@@ -9,13 +9,16 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from supabase import create_client
@@ -31,8 +34,194 @@ GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
 MICROSOFT_CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID", "")
 MICROSOFT_CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+# Por defecto Sonnet 4.6 (mejor razonamiento correlación/literal). Alternativa económica: ANTHROPIC_MODEL=claude-haiku-4-5
+# https://docs.anthropic.com/en/docs/about-claude/models/overview
+ANTHROPIC_MODEL = (os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6") or "claude-sonnet-4-6").strip()
+
+try:
+    AUDITOR_MAX_OUTPUT_TOKENS = max(2048, min(32000, int(os.getenv("AUDITOR_MAX_OUTPUT_TOKENS", "12288"))))
+except ValueError:
+    AUDITOR_MAX_OUTPUT_TOKENS = 12288
+try:
+    AUDITOR_MAX_PAGES_TOTAL = max(4, min(80, int(os.getenv("AUDITOR_MAX_PAGES_TOTAL", "28"))))
+except ValueError:
+    AUDITOR_MAX_PAGES_TOTAL = 28
+try:
+    AUDITOR_PAGES_PER_PDF = max(1, min(20, int(os.getenv("AUDITOR_PAGES_PER_PDF", "8"))))
+except ValueError:
+    AUDITOR_PAGES_PER_PDF = 8
+try:
+    AUDITOR_DPI = max(72, min(200, int(os.getenv("AUDITOR_DPI", "110"))))
+except ValueError:
+    AUDITOR_DPI = 110
+try:
+    AUDITOR_MAX_IMAGES_MSG = max(8, min(40, int(os.getenv("AUDITOR_MAX_IMAGES_MSG", "24"))))
+except ValueError:
+    AUDITOR_MAX_IMAGES_MSG = 24
+
+try:
+    AUDITOR_SPEND_CAP_USD = float(os.getenv("AUDITOR_SPEND_CAP_USD", "5") or 5)
+except ValueError:
+    AUDITOR_SPEND_CAP_USD = 5.0
+AUDITOR_SPEND_STATE_PATH = (os.getenv("AUDITOR_SPEND_STATE_PATH") or "").strip()
+AUDITOR_DEV_CLAVE = (os.getenv("AUDITOR_DEV_CLAVE") or "").strip()
+
+_FOAC_AUDITOR_KEYS = (
+    "numero, empresa, tipo_contrato, nombre, cedula, edad, sexo, localidad_residencia, cargo, "
+    "fecha_ingreso, fecha_retiro, arl, clase_riesgo_arl, fecha_afiliacion_arl, eps, afp, "
+    "fecha_examen_ingreso, fecha_examen_periodico, fecha_examen_egreso, concepto_medico"
+)
+
+AUDITOR_SYSTEM_PROMPT = (
+    "Eres auditor experto en SST Colombia. Comparas datos del colaborador (Excel/sistema) con PDFs del expediente.\n"
+    "Responde SOLO JSON válido UTF-8, sin markdown ni texto fuera del objeto.\n\n"
+    'En cada elemento de "hallazgos":\n'
+    '- "campo": EXACTAMENTE una de estas claves en minúsculas y snake_case: '
+    + _FOAC_AUDITOR_KEYS
+    + ".\n"
+    '- "estado": OK | DISCREPANCIA | NO ENCONTRADO.\n'
+    '- "valor_bd": texto del dato en sistema/Excel.\n'
+    '- "valor_pdf": texto o breve cita de lo visto en PDF (null si no aplica).\n'
+    '- "detalle": una frase que indique criterio LITERAL o CORRELACIÓN usado.\n\n'
+    "REGLAS:\n"
+    "A) LITERAL ESTRICTO: nombre, cedula, todas las fechas, cargo, concepto_medico, edad y sexo cuando consten; "
+    "cualquier diferencia factual → DISCREPANCIA.\n"
+    "B) CORRELACIÓN (no exijas igualdad carácter a carácter cuando baste evidencia en el PDF):\n"
+    "   - Encabezado/cabecera/membrete/pie del documento: si una palabra clave, sigla o nombre coincide con el dato del Excel "
+    "(EPS, ARL, contratista, tipo de contrato, etc.), valida con OK e indica en detalle que fue por encabezado o membrete.\n"
+    "   - arl, eps, afp, empresa, tipo_contrato: marca corta o coloquial en Excel vs razón social o texto extendido en PDF → OK.\n"
+    "   - clase_riesgo_arl: equivalencias I↔1, II↔2, III↔3, IV↔4 (romanos vs arábigos) y frases como «CLASE II», «Riesgo 2», "
+    '"Tipo III". Mismo nivel de riesgo → OK; en detalle menciona "equivalencia romano/árabe".\n'
+    "C) NO ENCONTRADO solo si no hay evidencia razonable en el PDF; no por diferencia puramente cosmética si el dato existe.\n"
+    "D) colaborador_identificado y cedula_identificada son texto legible (nombre y documento); nunca booleanos ni VERDADERO/FALSO.\n"
+    "E) Incluye un hallazgo por cada campo FOAC que puedas contrastar con el PDF (idealmente todos los que tengan valor en datos).\n\n"
+    "Esquema obligatorio:\n"
+    '{"colaborador_identificado":"","cedula_identificada":"","coincide_con_bd":true,"puntuacion":0,"resumen":"",'
+    '"documentos_encontrados":[],"documentos_faltantes":[],'
+    '"hallazgos":[{"campo":"nombre","estado":"OK","valor_bd":"","valor_pdf":null,"detalle":""}],'
+    '"alertas_criticas":[],"conclusion":""}'
+)
 
 router = APIRouter(tags=["experimentales-sst-ensayos"])
+
+_auditor_lock = threading.Lock()
+_auditor_spend_lock = threading.Lock()
+_auditor_jobs: Dict[str, Dict[str, Any]] = {}
+
+
+def _auditor_spend_file() -> Path:
+    if AUDITOR_SPEND_STATE_PATH:
+        return Path(AUDITOR_SPEND_STATE_PATH)
+    return Path(__file__).resolve().parent / ".auditor_spend_state.json"
+
+
+def _auditor_load_spend_state() -> Dict[str, Any]:
+    path = _auditor_spend_file()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {"spent_usd": 0.0}
+    except FileNotFoundError:
+        return {"spent_usd": 0.0}
+    except Exception:
+        return {"spent_usd": 0.0}
+
+
+def _auditor_write_spend_state(state: Dict[str, Any]) -> None:
+    path = _auditor_spend_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def _auditor_ensure_spend_allowance() -> None:
+    """Bloquea nuevas llamadas al modelo cuando el acumulado local alcanza el tope (USD)."""
+    if AUDITOR_SPEND_CAP_USD <= 0:
+        return
+    with _auditor_spend_lock:
+        st = _auditor_load_spend_state()
+        spent = float(st.get("spent_usd") or 0)
+        if spent >= AUDITOR_SPEND_CAP_USD:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "message": (
+                        "El uso acumulado del auditor IA alcanzó el límite configurado en el servidor. "
+                        "Un desarrollador debe autorizar continuar."
+                    ),
+                    "codigo": "AUDITOR_LIMITE_GASTO",
+                },
+            )
+
+
+def _auditor_record_spend_usd(amount: float) -> None:
+    if AUDITOR_SPEND_CAP_USD <= 0 or amount <= 0:
+        return
+    with _auditor_spend_lock:
+        st = _auditor_load_spend_state()
+        st["spent_usd"] = round(float(st.get("spent_usd") or 0) + float(amount), 8)
+        st["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _auditor_write_spend_state(st)
+
+
+def _auditor_es_desarrollador(user: dict) -> bool:
+    return _cargo_norm(user) == "desarrollador"
+
+
+_AUDITOR_META_COST_KEYS = frozenset({"tokens_usados", "costo_usd", "costo_cop_aprox"})
+
+
+def _auditor_redact_meta(meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not meta:
+        return {}
+    return {k: v for k, v in meta.items() if k not in _AUDITOR_META_COST_KEYS}
+
+
+def _auditor_redact_respuesta_individual(payload: Dict[str, Any], user: dict) -> Dict[str, Any]:
+    if _auditor_es_desarrollador(user):
+        return payload
+    out = dict(payload)
+    if "meta" in out and isinstance(out["meta"], dict):
+        out["meta"] = _auditor_redact_meta(out["meta"])
+    return out
+
+
+def _auditor_redact_lote(data: Dict[str, Any], user: dict) -> Dict[str, Any]:
+    if _auditor_es_desarrollador(user):
+        return data
+    out = {**data}
+    rl = out.get("resumen_lote")
+    if isinstance(rl, dict):
+        out["resumen_lote"] = {
+            k: v for k, v in rl.items() if k not in ("costo_usd_total", "costo_cop_total")
+        }
+    res = []
+    for r in out.get("resultados") or []:
+        if isinstance(r, dict):
+            res.append({k: v for k, v in r.items() if k != "costo_usd"})
+        else:
+            res.append(r)
+    out["resultados"] = res
+    return out
+
+
+def _auditor_redact_historial_api(data: Dict[str, Any], user: dict) -> Dict[str, Any]:
+    if _auditor_es_desarrollador(user):
+        return data
+
+    def row(r: dict) -> dict:
+        return {k: v for k, v in r.items() if k not in ("costo_usd", "tokens_usados")}
+
+    hist = [row(r) if isinstance(r, dict) else r for r in data.get("historial") or []]
+    tot = data.get("totales")
+    tot2: Dict[str, Any] = {}
+    if isinstance(tot, dict):
+        tot2 = {
+            k: v for k, v in tot.items() if k not in ("costo_usd_total", "costo_cop_total", "tokens_total")
+        }
+    return {**data, "historial": hist, "totales": tot2}
 
 # Mensaje si PostgREST no ve tablas SST (migración no aplicada o caché sin refrescar).
 _MSG_TABLAS_SST = (
@@ -47,6 +236,19 @@ def _rethrow_if_supabase_missing_table(exc: BaseException) -> None:
     low = s.lower()
     if "pgrst205" in low or ("could not find the table" in low and "sst_" in s):
         raise HTTPException(status_code=503, detail=_MSG_TABLAS_SST) from exc
+
+
+def _parse_filas_excel_json(raw: Optional[str]) -> List[dict]:
+    """Filas del FOAC enviadas en la petición (sin persistir en BD)."""
+    if not raw or not str(raw).strip():
+        raise HTTPException(status_code=422, detail="personal_excel_json vacío")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=422, detail="personal_excel_json no es JSON válido") from e
+    if not isinstance(data, list) or not data:
+        raise HTTPException(status_code=422, detail="La lista desde Excel está vacía")
+    return data
 
 
 def _uid(user: dict) -> int:
@@ -1084,7 +1286,302 @@ def ensayos_alertas(contrato_id: int, current_user=Depends(get_current_user)):
 
 
 def _calc_costo_anthropic(inp: int, out: int) -> float:
+    """Coste USD aprox. según tarifas publicadas (Messages API, sin vision extra)."""
+    m = ANTHROPIC_MODEL.lower()
+    if "haiku" in m:
+        return round((inp / 1_000_000.0) * 1.0 + (out / 1_000_000.0) * 5.0, 6)
+    if "opus" in m:
+        return round((inp / 1_000_000.0) * 5.0 + (out / 1_000_000.0) * 25.0, 6)
+    # Sonnet 4.x
     return round((inp / 1_000_000.0) * 3.0 + (out / 1_000_000.0) * 15.0, 6)
+
+
+def _reraise_anthropic_as_http(exc: BaseException) -> None:
+    """Traduce errores del SDK Anthropic a HTTPException legible (p. ej. saldo / facturación)."""
+    msg = str(exc)
+    low = msg.lower()
+    if (
+        "credit balance" in low
+        or "too low to access" in low
+        or "purchase credits" in low
+        or ("billing" in low and "upgrade" in low)
+    ):
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                "Anthropic: créditos o saldo insuficientes. En https://console.anthropic.com abre «Plans & Billing», "
+                "compra créditos o cambia de plan. Comprueba que ANTHROPIC_API_KEY en el backend sea de esa misma cuenta."
+            ),
+        ) from exc
+    if "not_found_error" in low and "model" in low:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f'Modelo Anthropic no disponible (configurado: "{ANTHROPIC_MODEL}"). '
+                "En backend/.env define ANTHROPIC_MODEL=claude-haiku-4-5 (por defecto en código) o claude-sonnet-4-6 y reinicia el servidor. "
+                "Referencia: https://docs.anthropic.com/en/docs/about-claude/models/overview"
+            ),
+        ) from exc
+    raise HTTPException(
+        status_code=502,
+        detail=f"Error al llamar a Claude (Anthropic). {msg[:1500]}",
+    ) from exc
+
+
+def _extract_balanced_json_object(text: str) -> Optional[str]:
+    """Primer objeto `{...}` balanceando llaves y respetando strings JSON (comillas dobles)."""
+    t = text.strip()
+    i0 = t.find("{")
+    if i0 < 0:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    i = i0
+    while i < len(t):
+        c = t[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            i += 1
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return t[i0 : i + 1]
+        i += 1
+    return None
+
+
+def _parse_claude_resultado(raw: str) -> dict:
+    """Parsea JSON devuelto por Claude (evita regex greedy y JSON truncado por max_tokens bajo)."""
+    cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw, flags=re.I).strip()
+    blob = _extract_balanced_json_object(cleaned)
+    if not blob:
+        raise ValueError("No se encontró un objeto JSON en la respuesta del modelo.")
+    try:
+        return json.loads(blob)
+    except json.JSONDecodeError as e:
+        fixed = re.sub(r",(\s*[\]}])", r"\1", blob)
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            hint = ""
+            if "Expecting" in str(e) and len(blob) > 4000:
+                hint = " La respuesta parece truncada; si persiste, aumenta AUDITOR_MAX_OUTPUT_TOKENS en el servidor."
+            raise ValueError(
+                f"JSON inválido: {e}.{hint} Fragmento (primeros 800 chars): {blob[:800]}…"
+            ) from e
+
+
+def _ingest_pdfs_for_audit(
+    pdf_blobs: List[bytes],
+    on_pdf: Optional[Any] = None,
+) -> List[Any]:
+    """Rasteriza PDFs con presupuesto global de páginas (menos tiempo y tokens)."""
+    imagenes_b64: List[Any] = []
+    budget = AUDITOR_MAX_PAGES_TOTAL
+    dpi = AUDITOR_DPI
+    per_cap = AUDITOR_PAGES_PER_PDF
+    n = len(pdf_blobs)
+    for idx, contenido in enumerate(pdf_blobs):
+        if budget <= 0:
+            break
+        if on_pdf:
+            on_pdf(idx + 1, n)
+        take = min(per_cap, budget)
+        try:
+            from pdf2image import convert_from_bytes
+
+            paginas = convert_from_bytes(contenido, dpi=dpi, fmt="jpeg")
+            for pagina in paginas[:take]:
+                buffer = BytesIO()
+                pagina.save(buffer, format="JPEG", quality=78)
+                imagenes_b64.append(base64.standard_b64encode(buffer.getvalue()).decode("utf-8"))
+                budget -= 1
+                if budget <= 0:
+                    break
+        except Exception:
+            try:
+                import pypdf
+
+                reader = pypdf.PdfReader(BytesIO(contenido))
+                texto_fallback = "\n".join((p.extract_text() or "") for p in reader.pages[: min(30, take)])
+                imagenes_b64.append({"tipo": "texto", "contenido": texto_fallback[:8000]})
+                budget = max(0, budget - 1)
+            except Exception as e2:
+                _log.warning("PDF parse: %s", e2)
+                imagenes_b64.append({"tipo": "texto", "contenido": ""})
+    return imagenes_b64
+
+
+def _resolver_colaborador_auditoria(
+    contrato_id: int,
+    origen_n: str,
+    cid_colab: int,
+    personal_excel_json: Optional[str],
+) -> tuple[dict, bool]:
+    """Devuelve (colaborador, persistir_en_historial)."""
+    if origen_n == "excel":
+        filas_xls = _parse_filas_excel_json(personal_excel_json)
+        if cid_colab < 0 or cid_colab >= len(filas_xls):
+            raise HTTPException(status_code=404, detail="Índice de colaborador fuera de rango en el Excel")
+        colaborador = dict(filas_xls[cid_colab])
+        colaborador["_fuente"] = "excel_sesion"
+        colaborador["_indice_fila"] = cid_colab
+        return colaborador, False
+    try:
+        if origen_n == "bd":
+            res = _sb.table("sst_personal").select("*").eq("id", cid_colab).eq("contrato_id", contrato_id).limit(1).execute().data
+        elif origen_n == "importado":
+            res = _sb.table("sst_personal_importado").select("*").eq("id", cid_colab).eq("contrato_id", contrato_id).limit(1).execute().data
+        else:
+            raise HTTPException(status_code=422, detail="origen debe ser bd, importado o excel")
+    except HTTPException:
+        raise
+    except Exception as e:
+        _rethrow_if_supabase_missing_table(e)
+        raise
+    if not res:
+        raise HTTPException(404, "Colaborador no encontrado")
+    return res[0], True
+
+
+def _auditor_job_patch(job_id: str, **kwargs: Any) -> None:
+    with _auditor_lock:
+        if job_id in _auditor_jobs:
+            _auditor_jobs[job_id].update(kwargs)
+
+
+def _auditor_jobs_prune() -> None:
+    cutoff = time.time() - 3600.0
+    with _auditor_lock:
+        dead = [k for k, v in _auditor_jobs.items() if float(v.get("ts", 0)) < cutoff]
+        for k in dead:
+            del _auditor_jobs[k]
+
+
+def _auditor_individual_worker(
+    job_id: str,
+    contrato_id: int,
+    user_dict: dict,
+    colaborador: dict,
+    origen_n: str,
+    persistir_auditoria: bool,
+    pdf_blobs: List[bytes],
+    viewer_dev: bool,
+) -> None:
+    import anthropic
+
+    def on_pdf(i: int, ntot: int) -> None:
+        pct = min(10 + int(55 * i / max(ntot, 1)), 65)
+        _auditor_job_patch(job_id, step=i, total_steps=ntot + 1, message=f"Leyendo PDF {i}/{ntot}…", pct=pct)
+
+    try:
+        _auditor_job_patch(job_id, status="running", message="Preparando PDFs…", pct=5)
+        imagenes_b64 = _ingest_pdfs_for_audit(pdf_blobs, on_pdf=on_pdf)
+        if not imagenes_b64:
+            raise ValueError("No se pudieron extraer páginas ni texto de los PDFs.")
+        datos_colaborador = json.dumps(colaborador, ensure_ascii=False, indent=2, default=str)
+        system_prompt = AUDITOR_SYSTEM_PROMPT
+        contenido_mensaje: List[dict] = [
+            {
+                "type": "text",
+                "text": f"DATOS SISTEMA:\n{datos_colaborador}\n\nAnaliza documentos ({len(pdf_blobs)} PDFs).",
+            }
+        ]
+        for img in imagenes_b64[:AUDITOR_MAX_IMAGES_MSG]:
+            if isinstance(img, dict) and img.get("tipo") == "texto":
+                contenido_mensaje.append({"type": "text", "text": f"[TEXTO PDF]:\n{img.get('contenido','')}"})
+            else:
+                contenido_mensaje.append(
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img}}
+                )
+        contenido_mensaje.append({"type": "text", "text": "Auditoría completa en JSON solicitado."})
+        _auditor_job_patch(job_id, message="Analizando con Claude (puede tardar varios minutos)…", pct=72)
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        try:
+            try:
+                _auditor_ensure_spend_allowance()
+            except HTTPException as he:
+                d = he.detail
+                msg = d.get("message", str(d)) if isinstance(d, dict) else str(d)
+                cod = d.get("codigo") if isinstance(d, dict) else None
+                _auditor_job_patch(job_id, status="error", error=msg, error_codigo=cod, pct=100)
+                return
+            respuesta = client.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=AUDITOR_MAX_OUTPUT_TOKENS,
+                system=system_prompt,
+                messages=[{"role": "user", "content": contenido_mensaje}],
+            )
+        except Exception as e:
+            _auditor_job_patch(job_id, status="error", error=str(e)[:1200], pct=100)
+            return
+        raw = respuesta.content[0].text
+        try:
+            resultado = _parse_claude_resultado(raw)
+        except ValueError as ve:
+            _auditor_job_patch(job_id, status="error", error=str(ve), pct=100)
+            return
+        hallazgos = resultado.get("hallazgos") or []
+        tokens_in = respuesta.usage.input_tokens
+        tokens_out = respuesta.usage.output_tokens
+        costo = _calc_costo_anthropic(tokens_in, tokens_out)
+        _auditor_record_spend_usd(costo)
+        uid = _uid(user_dict)
+        if persistir_auditoria:
+            try:
+                _sb.table("sst_auditorias").insert(
+                    {
+                        "contrato_id": contrato_id,
+                        "usuario_id": uid,
+                        "colaborador_nombre": colaborador.get("nombre"),
+                        "colaborador_cedula": str(colaborador.get("cedula") or ""),
+                        "origen": origen_n,
+                        "total_pdfs": len(pdf_blobs),
+                        "campos_ok": sum(1 for h in hallazgos if h.get("estado") == "OK"),
+                        "campos_discrepancia": sum(1 for h in hallazgos if h.get("estado") == "DISCREPANCIA"),
+                        "campos_no_encontrado": sum(1 for h in hallazgos if h.get("estado") == "NO ENCONTRADO"),
+                        "puntuacion": resultado.get("puntuacion") or 0,
+                        "tokens_usados": tokens_in + tokens_out,
+                        "costo_usd": costo,
+                    }
+                ).execute()
+            except Exception as e:
+                err = str(e)
+                if "pgrst205" in err.lower() or "could not find the table" in err.lower():
+                    pass
+                else:
+                    _auditor_job_patch(job_id, status="error", error=err[:1200], pct=100)
+                    return
+        meta_full = {
+            "pdfs_procesados": len(pdf_blobs),
+            "paginas_analizadas": len(imagenes_b64),
+            "tokens_usados": tokens_in + tokens_out,
+            "costo_usd": costo,
+            "costo_cop_aprox": round(costo * 4200, 0),
+            "fuente_personal": "excel_sesion" if origen_n == "excel" else "bd",
+            "persistido": persistir_auditoria,
+        }
+        payload = {
+            "resultado": resultado,
+            "meta": meta_full if viewer_dev else _auditor_redact_meta(meta_full),
+        }
+        _auditor_job_patch(job_id, status="listo", pct=100, message="Listo", result=payload)
+    except Exception as e:
+        _log.exception("auditor job %s", job_id)
+        _auditor_job_patch(job_id, status="error", error=str(e)[:1200], pct=100)
 
 
 @router.get("/sst/{contrato_id}/personal-auditoria")
@@ -1104,6 +1601,49 @@ def auditor_personal_fuente(contrato_id: int, current_user=Depends(get_current_u
 
 class ImportExcelBody(BaseModel):
     filas: List[dict]
+
+
+class AuditorDesbloquearBody(BaseModel):
+    clave: str = Field(default="")
+
+
+@router.post("/sst/auditor-desbloquear")
+def auditor_desbloquear(body: AuditorDesbloquearBody, current_user: dict = Depends(get_current_user)):
+    """Reinicia el acumulado local de gasto del auditor (requiere cargo Desarrollador y clave en servidor)."""
+    if not _auditor_es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede autorizar el uso del auditor IA.")
+    if not AUDITOR_DEV_CLAVE:
+        raise HTTPException(
+            status_code=503,
+            detail="AUDITOR_DEV_CLAVE no está definida en el servidor; configura la variable de entorno y reinicia.",
+        )
+    if (body.clave or "").strip() != AUDITOR_DEV_CLAVE:
+        raise HTTPException(status_code=403, detail="Clave de autorización incorrecta.")
+    with _auditor_spend_lock:
+        st = _auditor_load_spend_state()
+        st["spent_usd"] = 0.0
+        st["unlocked_at"] = datetime.now(timezone.utc).isoformat()
+        st["unlocked_by"] = _uid(current_user)
+        _auditor_write_spend_state(st)
+    return {"ok": True, "mensaje": "Acumulado de uso reiniciado; el auditor puede continuar."}
+
+
+@router.get("/sst/auditor-gasto-resumen")
+def auditor_gasto_resumen(current_user: dict = Depends(get_current_user)):
+    if not _auditor_es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo Desarrollador puede ver el resumen de gasto del auditor.")
+    with _auditor_spend_lock:
+        st = _auditor_load_spend_state()
+    cap = AUDITOR_SPEND_CAP_USD
+    spent = float(st.get("spent_usd") or 0)
+    return {
+        "acumulado_usd": spent,
+        "cap_usd": cap,
+        "restante_usd": max(0.0, round(cap - spent, 6)) if cap > 0 else None,
+        "bloqueado": cap > 0 and spent >= cap,
+        "ultima_actualizacion": st.get("updated_at"),
+        "ultimo_desbloqueo": st.get("unlocked_at"),
+    }
 
 
 @router.post("/sst/{contrato_id}/importar-excel")
@@ -1135,6 +1675,7 @@ async def auditor_ejecutar(
     pdfs: List[UploadFile] = File(...),
     origen: str = Form("bd"),
     colaborador_id: Optional[str] = Form(None),
+    personal_excel_json: Optional[str] = Form(None),
 ):
     _require_contract_access(current_user, contrato_id)
     _require_perm(current_user, "auditor sst (ia)", "ver")
@@ -1151,56 +1692,26 @@ async def auditor_ejecutar(
     except ImportError:
         raise HTTPException(500, "Instale anthropic en el backend")
 
+    origen_n = (origen or "bd").strip().lower()
+
     if cid_colab is None:
         raise HTTPException(status_code=422, detail="Indica colaborador_id en modo individual")
-    try:
-        if origen == "bd":
-            res = _sb.table("sst_personal").select("*").eq("id", cid_colab).eq("contrato_id", contrato_id).limit(1).execute().data
-        else:
-            res = _sb.table("sst_personal_importado").select("*").eq("id", cid_colab).eq("contrato_id", contrato_id).limit(1).execute().data
-    except Exception as e:
-        _rethrow_if_supabase_missing_table(e)
-        raise
-    if not res:
-        raise HTTPException(404, "Colaborador no encontrado")
-    colaborador = res[0]
+    colaborador, persistir_auditoria = _resolver_colaborador_auditoria(
+        contrato_id, origen_n, cid_colab, personal_excel_json
+    )
 
-    imagenes_b64: List[Any] = []
-    for pdf_file in pdfs:
-        contenido = await pdf_file.read()
-        try:
-            from pdf2image import convert_from_bytes
-
-            paginas = convert_from_bytes(contenido, dpi=120, fmt="jpeg")
-            for pagina in paginas[:20]:
-                buffer = BytesIO()
-                pagina.save(buffer, format="JPEG", quality=82)
-                imagenes_b64.append(base64.standard_b64encode(buffer.getvalue()).decode("utf-8"))
-        except Exception:
-            try:
-                import pypdf
-
-                reader = pypdf.PdfReader(BytesIO(contenido))
-                texto_fallback = "\n".join((p.extract_text() or "") for p in reader.pages[:30])
-                imagenes_b64.append({"tipo": "texto", "contenido": texto_fallback[:8000]})
-            except Exception as e2:
-                _log.warning("PDF parse: %s", e2)
-                imagenes_b64.append({"tipo": "texto", "contenido": ""})
+    pdf_bytes = [await p.read() for p in pdfs]
+    imagenes_b64 = _ingest_pdfs_for_audit(pdf_bytes)
 
     datos_colaborador = json.dumps(colaborador, ensure_ascii=False, indent=2, default=str)
-    system_prompt = """Eres auditor SST Colombia. Compara datos del colaborador con PDFs del expediente.
-Responde SOLO JSON válido sin markdown:
-{"colaborador_identificado":"","cedula_identificada":"","coincide_con_bd":true,"puntuacion":0,"resumen":"","documentos_encontrados":[],"documentos_faltantes":[],
-"hallazgos":[{"campo":"","estado":"OK|DISCREPANCIA|NO ENCONTRADO","valor_bd":"","valor_pdf":null,"detalle":""}],
-"alertas_criticas":[],"conclusion":""}"""
-
+    system_prompt = AUDITOR_SYSTEM_PROMPT
     contenido_mensaje: List[dict] = [
         {
             "type": "text",
-            "text": f"DATOS SISTEMA:\n{datos_colaborador}\n\nAnaliza documentos ({len(pdfs)} PDFs).",
+            "text": f"DATOS SISTEMA:\n{datos_colaborador}\n\nAnaliza documentos ({len(pdf_bytes)} PDFs).",
         }
     ]
-    for img in imagenes_b64[:20]:
+    for img in imagenes_b64[:AUDITOR_MAX_IMAGES_MSG]:
         if isinstance(img, dict) and img.get("tipo") == "texto":
             contenido_mensaje.append({"type": "text", "text": f"[TEXTO PDF]:\n{img.get('contenido','')}"})
         else:
@@ -1210,55 +1721,158 @@ Responde SOLO JSON válido sin markdown:
     contenido_mensaje.append({"type": "text", "text": "Auditoría completa en JSON solicitado."})
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    respuesta = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=3000,
-        system=system_prompt,
-        messages=[{"role": "user", "content": contenido_mensaje}],
-    )
+    _auditor_ensure_spend_allowance()
+    try:
+        respuesta = client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=AUDITOR_MAX_OUTPUT_TOKENS,
+            system=system_prompt,
+            messages=[{"role": "user", "content": contenido_mensaje}],
+        )
+    except Exception as e:
+        _reraise_anthropic_as_http(e)
     raw = respuesta.content[0].text
-    raw = re.sub(r"```json|```", "", raw).strip()
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if not match:
-        raise HTTPException(500, "Claude no devolvió JSON válido")
-    resultado = json.loads(match.group())
+    try:
+        resultado = _parse_claude_resultado(raw)
+    except ValueError as ve:
+        raise HTTPException(status_code=500, detail=str(ve)) from ve
     hallazgos = resultado.get("hallazgos") or []
 
     tokens_in = respuesta.usage.input_tokens
     tokens_out = respuesta.usage.output_tokens
     costo = _calc_costo_anthropic(tokens_in, tokens_out)
+    _auditor_record_spend_usd(costo)
     uid = _uid(current_user)
-    try:
-        _sb.table("sst_auditorias").insert(
-            {
-                "contrato_id": contrato_id,
-                "usuario_id": uid,
-                "colaborador_nombre": colaborador.get("nombre"),
-                "colaborador_cedula": str(colaborador.get("cedula") or ""),
-                "origen": origen,
-                "total_pdfs": len(pdfs),
-                "campos_ok": sum(1 for h in hallazgos if h.get("estado") == "OK"),
-                "campos_discrepancia": sum(1 for h in hallazgos if h.get("estado") == "DISCREPANCIA"),
-                "campos_no_encontrado": sum(1 for h in hallazgos if h.get("estado") == "NO ENCONTRADO"),
-                "puntuacion": resultado.get("puntuacion") or 0,
+    if persistir_auditoria:
+        try:
+            _sb.table("sst_auditorias").insert(
+                {
+                    "contrato_id": contrato_id,
+                    "usuario_id": uid,
+                    "colaborador_nombre": colaborador.get("nombre"),
+                    "colaborador_cedula": str(colaborador.get("cedula") or ""),
+                    "origen": origen_n,
+                    "total_pdfs": len(pdf_bytes),
+                    "campos_ok": sum(1 for h in hallazgos if h.get("estado") == "OK"),
+                    "campos_discrepancia": sum(1 for h in hallazgos if h.get("estado") == "DISCREPANCIA"),
+                    "campos_no_encontrado": sum(1 for h in hallazgos if h.get("estado") == "NO ENCONTRADO"),
+                    "puntuacion": resultado.get("puntuacion") or 0,
+                    "tokens_usados": tokens_in + tokens_out,
+                    "costo_usd": costo,
+                }
+            ).execute()
+        except Exception as e:
+            _rethrow_if_supabase_missing_table(e)
+            raise
+
+    return _auditor_redact_respuesta_individual(
+        {
+            "resultado": resultado,
+            "meta": {
+                "pdfs_procesados": len(pdf_bytes),
+                "paginas_analizadas": len(imagenes_b64),
                 "tokens_usados": tokens_in + tokens_out,
                 "costo_usd": costo,
-            }
-        ).execute()
-    except Exception as e:
-        _rethrow_if_supabase_missing_table(e)
-        raise
-
-    return {
-        "resultado": resultado,
-        "meta": {
-            "pdfs_procesados": len(pdfs),
-            "paginas_analizadas": len(imagenes_b64),
-            "tokens_usados": tokens_in + tokens_out,
-            "costo_usd": costo,
-            "costo_cop_aprox": round(costo * 4200, 0),
+                "costo_cop_aprox": round(costo * 4200, 0),
+                "fuente_personal": "excel_sesion" if origen_n == "excel" else "bd",
+                "persistido": persistir_auditoria,
+            },
         },
+        current_user,
+    )
+
+
+@router.post("/sst/{contrato_id}/auditar-individual-job")
+async def auditor_individual_job_iniciar(
+    contrato_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+    pdfs: List[UploadFile] = File(...),
+    origen: str = Form("bd"),
+    colaborador_id: Optional[str] = Form(None),
+    personal_excel_json: Optional[str] = Form(None),
+):
+    """Auditoría individual en segundo plano (varios PDFs + barra de progreso en el cliente)."""
+    _require_contract_access(current_user, contrato_id)
+    _require_perm(current_user, "auditor sst (ia)", "ver")
+    cid_colab: Optional[int] = None
+    if colaborador_id is not None and str(colaborador_id).strip() != "":
+        try:
+            cid_colab = int(str(colaborador_id).strip())
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="colaborador_id debe ser un número")
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(500, "ANTHROPIC_API_KEY no configurada")
+    if len(pdfs) > 25:
+        raise HTTPException(400, "Máximo 25 PDFs en un trabajo")
+    origen_n = (origen or "bd").strip().lower()
+    if cid_colab is None:
+        raise HTTPException(status_code=422, detail="Indica colaborador_id en modo individual")
+    colaborador, persistir_auditoria = _resolver_colaborador_auditoria(
+        contrato_id, origen_n, cid_colab, personal_excel_json
+    )
+    pdf_bytes = [await p.read() for p in pdfs]
+    _auditor_ensure_spend_allowance()
+    _auditor_jobs_prune()
+    job_id = str(uuid.uuid4())
+    uid = _uid(current_user)
+    viewer_dev = _auditor_es_desarrollador(current_user)
+    with _auditor_lock:
+        _auditor_jobs[job_id] = {
+            "job_id": job_id,
+            "contrato_id": contrato_id,
+            "usuario_id": uid,
+            "status": "queued",
+            "pct": 0,
+            "step": 0,
+            "total_steps": len(pdf_bytes) + 1,
+            "message": "En cola…",
+            "ts": time.time(),
+            "result": None,
+            "error": None,
+        }
+    user_copy = dict(current_user)
+    background_tasks.add_task(
+        _auditor_individual_worker,
+        job_id,
+        contrato_id,
+        user_copy,
+        colaborador,
+        origen_n,
+        persistir_auditoria,
+        pdf_bytes,
+        viewer_dev,
+    )
+    return {"job_id": job_id}
+
+
+@router.get("/sst/{contrato_id}/auditoria-job/{job_id}")
+def auditor_individual_job_estado(
+    contrato_id: int,
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    _require_perm(current_user, "auditor sst (ia)", "ver")
+    with _auditor_lock:
+        job = _auditor_jobs.get(job_id)
+    if not job or int(job.get("contrato_id") or 0) != int(contrato_id) or int(job.get("usuario_id") or -1) != int(_uid(current_user)):
+        raise HTTPException(status_code=404, detail="Trabajo no encontrado")
+    st = job.get("status")
+    out: Dict[str, Any] = {
+        "status": st,
+        "pct": int(job.get("pct") or 0),
+        "step": job.get("step"),
+        "total_steps": job.get("total_steps"),
+        "message": job.get("message"),
     }
+    if st == "listo":
+        out["result"] = job.get("result")
+    if st == "error":
+        out["error"] = job.get("error")
+        if job.get("error_codigo"):
+            out["error_codigo"] = job.get("error_codigo")
+    return out
 
 
 @router.get("/sst/{contrato_id}/auditorias-historial")
@@ -1284,19 +1898,38 @@ def auditor_historial(contrato_id: int, current_user=Depends(get_current_user)):
                 break
             off += 1000
     except Exception as e:
-        _rethrow_if_supabase_missing_table(e)
+        s = str(e).lower()
+        if "pgrst205" in s or ("could not find the table" in s and "sst_" in str(e)):
+            return {
+                "historial": [],
+                "totales": {
+                    "auditorias": 0,
+                    "costo_usd_total": 0.0,
+                    "costo_cop_total": 0.0,
+                    "tokens_total": 0,
+                },
+                "tablas_disponibles": False,
+                "mensaje": (
+                    "Sin tablas de auditoría en Supabase. Puedes seguir auditando con Excel; "
+                    "el historial de esta sesión y la exportación a Excel se manejan en el navegador."
+                ),
+            }
         raise
     total_costo = sum(float(r.get("costo_usd") or 0) for r in todos)
     total_tokens = sum(int(r.get("tokens_usados") or 0) for r in todos)
-    return {
-        "historial": todos,
-        "totales": {
-            "auditorias": len(todos),
-            "costo_usd_total": round(total_costo, 4),
-            "costo_cop_total": round(total_costo * 4200, 0),
-            "tokens_total": total_tokens,
+    return _auditor_redact_historial_api(
+        {
+            "historial": todos,
+            "totales": {
+                "auditorias": len(todos),
+                "costo_usd_total": round(total_costo, 4),
+                "costo_cop_total": round(total_costo * 4200, 0),
+                "tokens_total": total_tokens,
+            },
+            "tablas_disponibles": True,
         },
-    }
+        current_user,
+    )
 
 
 @router.post("/sst/{contrato_id}/auditar-lote")
@@ -1304,6 +1937,7 @@ async def auditor_lote(
     contrato_id: int,
     current_user: dict = Depends(get_current_user),
     pdfs: List[UploadFile] = File(...),
+    personal_excel_json: Optional[str] = Form(None),
 ):
     _require_contract_access(current_user, contrato_id)
     _require_perm(current_user, "auditor sst (ia)", "ver")
@@ -1316,49 +1950,56 @@ async def auditor_lote(
     except ImportError:
         raise HTTPException(500, "Instale anthropic en el backend")
 
-    try:
-        res_bd = _sb.table("sst_personal").select("*").eq("contrato_id", contrato_id).eq("activo", True).execute().data or []
-        res_imp = _sb.table("sst_personal_importado").select("*").eq("contrato_id", contrato_id).execute().data or []
-    except Exception as e:
-        _rethrow_if_supabase_missing_table(e)
-        raise
-    todo = res_bd + res_imp
+    usar_excel_directo = bool(personal_excel_json and str(personal_excel_json).strip())
+    if usar_excel_directo:
+        todo = _parse_filas_excel_json(personal_excel_json)
+        persistir_auditoria = False
+    else:
+        persistir_auditoria = True
+        try:
+            res_bd = _sb.table("sst_personal").select("*").eq("contrato_id", contrato_id).eq("activo", True).execute().data or []
+            res_imp = _sb.table("sst_personal_importado").select("*").eq("contrato_id", contrato_id).execute().data or []
+        except Exception as e:
+            _rethrow_if_supabase_missing_table(e)
+            raise
+        todo = res_bd + res_imp
     lista_nombres = "\n".join(
         f"- {p.get('nombre','?')} | CC {p.get('cedula','?')} | Cargo: {p.get('cargo','?')} | Empresa: {p.get('empresa_tipo') or p.get('empresa','?')}"
         for p in todo
     )
+    excel_snapshot = json.dumps(todo[:100], ensure_ascii=False, default=str)
+    if len(excel_snapshot) > 14000:
+        excel_snapshot = excel_snapshot[:14000] + "…"
+    if not lista_nombres.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="No hay lista de personal. Envía personal_excel_json con las filas del Excel o importa personal en la base de datos.",
+        )
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     resultados_lote = []
 
     for pdf_file in pdfs:
         contenido = await pdf_file.read()
         nombre_archivo = pdf_file.filename or "doc.pdf"
-        imagenes_b64: List[Any] = []
-        try:
-            from pdf2image import convert_from_bytes
-
-            paginas = convert_from_bytes(contenido, dpi=120, fmt="jpeg")
-            for pagina in paginas[:12]:
-                buffer = BytesIO()
-                pagina.save(buffer, format="JPEG", quality=80)
-                imagenes_b64.append(base64.standard_b64encode(buffer.getvalue()).decode("utf-8"))
-        except Exception:
-            try:
-                import pypdf
-
-                reader = pypdf.PdfReader(BytesIO(contenido))
-                texto = "\n".join((p.extract_text() or "") for p in reader.pages)
-                imagenes_b64 = [{"tipo": "texto", "contenido": texto[:8000]}]
-            except Exception:
-                imagenes_b64 = [{"tipo": "texto", "contenido": ""}]
+        imagenes_b64 = _ingest_pdfs_for_audit([contenido])
 
         contenido_msg: List[dict] = [
             {
                 "type": "text",
-                "text": f"Archivo: {nombre_archivo}\nPERSONAL:\n{lista_nombres}\nIdentifica colaborador, compara con lista, responde JSON igual que en auditoría individual.",
+                "text": (
+                    f"Archivo PDF: {nombre_archivo}\n\n"
+                    "LISTA DE PERSONAL (Excel/sistema). Identifica una sola persona del expediente que corresponda a una fila.\n"
+                    f"{lista_nombres}\n\n"
+                    "Luego rellena colaborador_identificado y cedula_identificada con texto real (nombre y documento). "
+                    "Usa los valores de valor_bd desde la entrada JSON de esa persona en DATOS_EXCEL_FILAS.\n"
+                    "Para ese colaborador, construye hallazgos: un objeto por cada campo FOAC del listado que puedas verificar en el PDF, "
+                    f"usando las claves snake_case indicadas en las instrucciones del sistema.\n\n"
+                    f"DATOS_EXCEL_FILAS (JSON):\n{excel_snapshot}\n\n"
+                    "Si hay discrepancia controlada entre Excel y PDF en datos literales (cédula, fechas, cargo, etc.), marca DISCREPANCIA."
+                ),
             }
         ]
-        for img in imagenes_b64:
+        for img in imagenes_b64[:AUDITOR_MAX_IMAGES_MSG]:
             if isinstance(img, dict):
                 contenido_msg.append({"type": "text", "text": f"[TEXTO]:\n{img.get('contenido','')}"})
             else:
@@ -1366,41 +2007,47 @@ async def auditor_lote(
                     {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": img}}
                 )
         contenido_msg.append({"type": "text", "text": "Solo JSON válido."})
-        resp = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=2500,
-            messages=[{"role": "user", "content": contenido_msg}],
-        )
+        _auditor_ensure_spend_allowance()
+        try:
+            resp = client.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=AUDITOR_MAX_OUTPUT_TOKENS,
+                system=AUDITOR_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": contenido_msg}],
+            )
+        except Exception as e:
+            _reraise_anthropic_as_http(e)
         raw = resp.content[0].text
-        raw = re.sub(r"```json|```", "", raw).strip()
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
         costo = _calc_costo_anthropic(resp.usage.input_tokens, resp.usage.output_tokens)
-        if not match:
-            resultados_lote.append({"archivo": nombre_archivo, "error": "Sin JSON", "costo_usd": costo})
+        _auditor_record_spend_usd(costo)
+        try:
+            resultado = _parse_claude_resultado(raw)
+        except ValueError as ve:
+            resultados_lote.append({"archivo": nombre_archivo, "error": str(ve)[:900]})
             continue
-        resultado = json.loads(match.group())
         hallazgos = resultado.get("hallazgos") or []
         uid = _uid(current_user)
-        try:
-            _sb.table("sst_auditorias").insert(
-                {
-                    "contrato_id": contrato_id,
-                    "usuario_id": uid,
-                    "colaborador_nombre": resultado.get("colaborador_identificado"),
-                    "colaborador_cedula": str(resultado.get("cedula_identificada") or ""),
-                    "origen": "lote",
-                    "total_pdfs": 1,
-                    "campos_ok": sum(1 for h in hallazgos if h.get("estado") == "OK"),
-                    "campos_discrepancia": sum(1 for h in hallazgos if h.get("estado") == "DISCREPANCIA"),
-                    "campos_no_encontrado": sum(1 for h in hallazgos if h.get("estado") == "NO ENCONTRADO"),
-                    "puntuacion": resultado.get("puntuacion") or 0,
-                    "tokens_usados": resp.usage.input_tokens + resp.usage.output_tokens,
-                    "costo_usd": costo,
-                }
-            ).execute()
-        except Exception as e:
-            _rethrow_if_supabase_missing_table(e)
-            raise
+        if persistir_auditoria:
+            try:
+                _sb.table("sst_auditorias").insert(
+                    {
+                        "contrato_id": contrato_id,
+                        "usuario_id": uid,
+                        "colaborador_nombre": resultado.get("colaborador_identificado"),
+                        "colaborador_cedula": str(resultado.get("cedula_identificada") or ""),
+                        "origen": "lote",
+                        "total_pdfs": 1,
+                        "campos_ok": sum(1 for h in hallazgos if h.get("estado") == "OK"),
+                        "campos_discrepancia": sum(1 for h in hallazgos if h.get("estado") == "DISCREPANCIA"),
+                        "campos_no_encontrado": sum(1 for h in hallazgos if h.get("estado") == "NO ENCONTRADO"),
+                        "puntuacion": resultado.get("puntuacion") or 0,
+                        "tokens_usados": resp.usage.input_tokens + resp.usage.output_tokens,
+                        "costo_usd": costo,
+                    }
+                ).execute()
+            except Exception as e:
+                _rethrow_if_supabase_missing_table(e)
+                raise
         resultados_lote.append({**resultado, "archivo": nombre_archivo, "costo_usd": costo})
 
     costo_total = sum(float(r.get("costo_usd") or 0) for r in resultados_lote)
@@ -1409,14 +2056,19 @@ async def auditor_lote(
         h = r.get("hallazgos") or []
         return sum(1 for x in h if x.get("estado") == "DISCREPANCIA")
 
-    return {
-        "resultados": resultados_lote,
-        "resumen_lote": {
-            "total_pdfs": len(pdfs),
-            "procesados": len(resultados_lote),
-            "con_discrepancias": sum(1 for r in resultados_lote if _n_disc(r) > 0),
-            "no_identificados": sum(1 for r in resultados_lote if r.get("coincide_con_bd") is False),
-            "costo_usd_total": round(costo_total, 4),
-            "costo_cop_total": round(costo_total * 4200, 0),
+    return _auditor_redact_lote(
+        {
+            "resultados": resultados_lote,
+            "resumen_lote": {
+                "total_pdfs": len(pdfs),
+                "procesados": len(resultados_lote),
+                "con_discrepancias": sum(1 for r in resultados_lote if _n_disc(r) > 0),
+                "no_identificados": sum(1 for r in resultados_lote if r.get("coincide_con_bd") is False),
+                "costo_usd_total": round(costo_total, 4),
+                "costo_cop_total": round(costo_total * 4200, 0),
+                "fuente_personal": "excel_sesion" if usar_excel_directo else "bd",
+                "persistido": persistir_auditoria,
+            },
         },
-    }
+        current_user,
+    )

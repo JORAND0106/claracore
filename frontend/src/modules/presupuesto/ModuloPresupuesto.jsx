@@ -272,6 +272,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   useEffect(() => {
     if (!contratoId || !token) return
     const poll = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
       try {
         const r = await fetch(`${API}/presupuesto/${contratoId}/sincro-sicoe-cad-auditoria`, {
           headers: { Authorization: `Bearer ${getToken()}` }
@@ -284,8 +285,15 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
       } catch { /* ignore */ }
     }
     poll()
-    const interval = setInterval(poll, 8000)
-    return () => clearInterval(interval)
+    const interval = setInterval(poll, 16000)
+    const onVis = () => {
+      if (document.visibilityState === 'visible') poll()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVis)
+    }
   }, [contratoId, token])
 
     // ── Constantes drill-down ──────────────────────────────────────────────────
@@ -795,8 +803,9 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (sincroSicoeModal) recargarCapActual(true)
   }, [sincroSicoeModal?.ts])
 
-  // Multisesión: refresco ~1s con pestaña activa. No encolar si ya hay carga o pantalla de carga (evita parpadeo).
+  // Multisesión: refresco con pestaña activa. Intervalos cortos disparan conteo + N× presupuesto?limit=1000 y saturan el API.
   useEffect(() => {
+    const PPTO_MULTI_POLL_MS = 22000
     if (!contratoId) return
     const tick = () => {
       if (document.visibilityState !== 'visible') return
@@ -825,7 +834,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     document.addEventListener('visibilitychange', onVis)
     window.addEventListener('focus', onVis)
-    const iv = setInterval(tick, 3000)
+    const iv = setInterval(tick, PPTO_MULTI_POLL_MS)
     return () => {
       document.removeEventListener('visibilitychange', onVis)
       window.removeEventListener('focus', onVis)

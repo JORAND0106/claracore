@@ -13189,7 +13189,7 @@ export default function App() {
   const apiHealthWarnedRef = useRef(false)
 
   useEffect(() => {
-    const timeoutMs = 28000
+    const timeoutMs = 50000
     const intervalMs = 90 * 1000
     const markOk = () => {
       apiHealthFailStreakRef.current = 0
@@ -13234,7 +13234,7 @@ export default function App() {
       try {
         const opt =
           typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
-            ? { signal: AbortSignal.timeout(28000) }
+            ? { signal: AbortSignal.timeout(50000) }
             : {}
         const r = await fetch(`${API}/mantenimiento`, opt)
         if (r.ok) {
@@ -13445,7 +13445,7 @@ if (contratos.length > 1) {
               try {
                 const opt =
                   typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
-                    ? { signal: AbortSignal.timeout(28000) }
+                    ? { signal: AbortSignal.timeout(50000) }
                     : {}
                 const r = await fetch(`${API}/healthz`, opt)
                 if (r.ok) {
@@ -13625,7 +13625,7 @@ if (contratos.length > 1) {
               try {
                 const opt =
                   typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
-                    ? { signal: AbortSignal.timeout(28000) }
+                    ? { signal: AbortSignal.timeout(50000) }
                     : {}
                 const r = await fetch(`${API}/healthz`, opt)
                 if (r.ok) {

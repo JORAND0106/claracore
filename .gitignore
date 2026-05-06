@@ -23,6 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 backend/.env
+backend/.auditor_spend_state.json
 App.jsx.backup
 
 frontend/.env

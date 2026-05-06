@@ -83,7 +83,7 @@ const S = {
     const tok = tFrom(m, t);
     return {
       width: "min(1320px, 98vw)",
-      height: "min(780px, 92vh)",
+      height: "min(900px, 96vh)",
       background: isDarkMode(m) ? "#0e1c24" : tok.bg,
       borderRadius: 12,
       display: "flex",
@@ -895,14 +895,15 @@ function SeccionPermisos({ call, cargos, theme }) {
       ) : funciones.length === 0 ? (
         <div style={S.empty}>No hay funciones registradas en el sistema.</div>
       ) : (
-        <div style={{ background: "#081318", borderRadius: 8, border: "1px solid rgba(0,175,197,0.1)", overflow: "hidden" }}>
-          <div style={{ display: "grid", gridTemplateColumns: `220px repeat(${ACCIONES.length}, 1fr) 80px`, background: "#06101a", borderBottom: "1px solid rgba(0,175,197,0.15)" }}>
+        <div style={{ background: "#081318", borderRadius: 8, border: "1px solid rgba(0,175,197,0.1)", overflow: "hidden", maxHeight: "min(72vh, 820px)", display: "flex", flexDirection: "column" }}>
+          <div style={{ display: "grid", gridTemplateColumns: `220px repeat(${ACCIONES.length}, 1fr) 80px`, background: "#06101a", borderBottom: "1px solid rgba(0,175,197,0.15)", flexShrink: 0 }}>
             <div style={{ ...S.th(theme), padding: "12px 16px" }}>Función</div>
             {ACCIONES.map(a => (
               <div key={a} style={{ ...S.th(theme), textAlign: "center", padding: "12px 4px", color: accionColor[a] }}>{a}</div>
             ))}
             <div style={{ ...S.th(theme), textAlign: "center" }}>Todo</div>
           </div>
+          <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
           {funciones.map((f, idx) => {
             const fila = permisos[f.id] || {};
             const todoActivo = ACCIONES.every(a => fila[a]);
@@ -927,6 +928,7 @@ function SeccionPermisos({ call, cargos, theme }) {
               </div>
             );
           })}
+          </div>
         </div>
       )}
     </div>
@@ -1435,10 +1437,10 @@ function SeccionLogs({ call, theme }) {
   const [filtSeveridad, setFiltSeveridad] = useState("")
   const [filtDesde,     setFiltDesde]     = useState("")
   const [filtHasta,     setFiltHasta]     = useState("")
-  /** Por defecto mostrar también LOGIN para comprobar que la auditoría graba; el filtro permite ocultarlos. */
-  const [filtOcultarLogin, setFiltOcultarLogin] = useState(false)
+  /** Por defecto activo: con muchos usuarios los LOGIN recientes ocupan toda la página y parece que no hay auditoría de obra/presupuesto. */
+  const [filtOcultarLogin, setFiltOcultarLogin] = useState(true)
   const [offset,        setOffset]        = useState(0)
-  const LIMIT = 50
+  const LIMIT = 100
 
   const MODULOS = ["AUTH","SICOE","PRESUPUESTO","COBRO","USUARIOS","CONTRATOS","PERMISOS","PRECIOS","SISTEMA","INFORMES","NOTIFICACIONES","ACTAS","SUBCONTRATISTAS"]
   const ACCIONES = ["LOGIN","LOGOUT","LOGIN_FAIL","APROBAR","RECHAZAR","EDITAR","RECALCULAR","VALIDAR","COMENTAR","CONSULTAR","ASIGNAR_ITEM","MOVER","IMPORTAR","CREAR","ELIMINAR","EXPORTAR","ERROR_SISTEMA","DEPLOY","BROADCAST"]
@@ -1490,7 +1492,7 @@ function SeccionLogs({ call, theme }) {
     if (filtSeveridad) params.set("severidad", filtSeveridad)
     if (filtDesde)   params.set("fecha_desde",filtDesde)
     if (filtHasta)   params.set("fecha_hasta",filtHasta)
-    if (filtOcultarLogin && !filtAccion) params.set("excluir_accion", "LOGIN")
+    if (filtOcultarLogin && !filtAccion) params.set("excluir_rutina_auth", "true")
     const data = await fetch(`${API}/logs?${params}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : []).catch(() => [])
     if (silent) {
@@ -1555,11 +1557,12 @@ function SeccionLogs({ call, theme }) {
           style={{ background: col.inputBg, border:`1px solid ${col.border}`, borderRadius:6, padding:"5px 10px", color: col.textTable, fontSize:12 }} />
         <input type="date" value={filtHasta} onChange={e => setFiltHasta(e.target.value)}
           style={{ background: col.inputBg, border:`1px solid ${col.border}`, borderRadius:6, padding:"5px 10px", color: col.textTable, fontSize:12 }} />
-        <label style={{ display:"inline-flex", alignItems:"center", gap:6, fontSize:12, color: col.textTable, cursor:"pointer", userSelect:"none" }}>
+        <label style={{ display:"inline-flex", alignItems:"center", gap:6, fontSize:12, color: col.textTable, cursor:"pointer", userSelect:"none" }}
+          title="Excluye LOGIN y LOGIN_FAIL en el servidor; así la primera página muestra validaciones y demás acciones de negocio.">
           <input type="checkbox" checked={filtOcultarLogin} onChange={e => setFiltOcultarLogin(e.target.checked)} />
-          Ocultar inicios de sesión
+          Ocultar rutina de autenticación
         </label>
-        <button onClick={() => { setFiltUsuario(""); setFiltModulo(""); setFiltAccion(""); setFiltCategoria(""); setFiltSeveridad(""); setFiltDesde(""); setFiltHasta(""); setFiltOcultarLogin(false) }}
+        <button onClick={() => { setFiltUsuario(""); setFiltModulo(""); setFiltAccion(""); setFiltCategoria(""); setFiltSeveridad(""); setFiltDesde(""); setFiltHasta(""); setFiltOcultarLogin(true) }}
           style={{ background:"#EF444422", border:"1px solid #EF444466", borderRadius:6, padding:"5px 12px", color:"#EF4444", fontSize:11, fontWeight:700, cursor:"pointer" }}>
           ✕ Limpiar
         </button>
@@ -1576,7 +1579,7 @@ function SeccionLogs({ call, theme }) {
           if (filtSeveridad) params.set("severidad", filtSeveridad)
           if (filtDesde)   params.set("fecha_desde", filtDesde)
           if (filtHasta)   params.set("fecha_hasta", filtHasta)
-          if (filtOcultarLogin && !filtAccion) params.set("excluir_accion", "LOGIN")
+          if (filtOcultarLogin && !filtAccion) params.set("excluir_rutina_auth", "true")
           try {
             const r = await fetch(`${API}/logs/export.csv?${params}`, { headers: { Authorization: `Bearer ${token}` } })
             if (!r.ok) return
@@ -1595,6 +1598,25 @@ function SeccionLogs({ call, theme }) {
         <span style={{ marginLeft:"auto", fontSize:12, color: col.textMuted, alignSelf:"center" }}>
           {logs.length} registros · click para ver historial
         </span>
+        <div style={{ width:"100%", fontSize:11, color: col.textMuted, lineHeight:1.45, opacity:0.95 }}>
+          Si solo ves filas AUTH/LOGIN, suele ser porque hay muchos accesos recientes. Deja activa la casilla de arriba o usa un atajo; validaciones de obra van en módulo <strong style={{ color: col.textTable }}>SICOE</strong>.
+          {" "}Si las fechas parecen viejas con un usuario concreto, prueba sin filtro de usuario o exporta CSV: a veces el mismo correo tiene más de una fila en «usuarios» y el <code style={{ fontSize:10 }}>usuario_id</code> del log no coincide con el del desplegable.
+        </div>
+        <div style={{ width:"100%", display:"flex", flexWrap:"wrap", gap:6, alignItems:"center" }}>
+          <span style={{ fontSize:11, color: col.textMuted, marginRight:4 }}>Atajos:</span>
+          <button type="button" onClick={() => { setFiltModulo("PRESUPUESTO"); setFiltAccion("VALIDAR"); setFiltOcultarLogin(true) }}
+            style={{ background: col.bgCard, border:`1px solid ${col.border}`, borderRadius:6, padding:"4px 10px", color: col.textTable, fontSize:11, cursor:"pointer" }}>
+            Presupuesto · VALIDAR
+          </button>
+          <button type="button" onClick={() => { setFiltModulo("SICOE"); setFiltAccion("VALIDAR"); setFiltOcultarLogin(true) }}
+            style={{ background: col.bgCard, border:`1px solid ${col.border}`, borderRadius:6, padding:"4px 10px", color: col.textTable, fontSize:11, cursor:"pointer" }}>
+            SICOE · VALIDAR
+          </button>
+          <button type="button" onClick={() => { setFiltModulo(""); setFiltAccion("VALIDAR"); setFiltOcultarLogin(true) }}
+            style={{ background: col.bgCard, border:`1px solid ${col.border}`, borderRadius:6, padding:"4px 10px", color: col.textTable, fontSize:11, cursor:"pointer" }}>
+            Solo VALIDAR (todos los módulos)
+          </button>
+        </div>
       </div>
 
       {/* Tabla */}

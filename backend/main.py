@@ -91,6 +91,9 @@ _log_api = logging.getLogger("uvicorn.error")
 # Seguimiento en memoria para alertas (login fallido, 500 repetidos)
 _login_fail_tracker: dict = {}
 _endpoint_500_tracker: dict = {}
+# Columnas de `logs` que PostgREST reporta como inexistentes (BD sin migración alter_logs_auditoria.sql).
+_logs_omit_columns: Set[str] = set()
+_logs_omit_lock = threading.Lock()
 
 # Versión del texto de políticas mostrada al usuario (auditoría junto a politicas_version en BD)
 POLITICAS_VERSION_DEFAULT = os.getenv("POLITICAS_VERSION", "1.0")
@@ -808,6 +811,57 @@ def supabase_execute(fn, retries=3, delay=0.5):
 # ─────────────────────────────────────────────
 # SISTEMA DE LOGS
 # ─────────────────────────────────────────────
+_LOGS_INSERT_MAX_STRIPS = 32
+
+
+def _logs_pgrst_unknown_column(err: Exception) -> Optional[str]:
+    """PGRST204: columna ausente en la caché de esquema de PostgREST (tabla logs sin ALTER)."""
+    text = str(err)
+    if "PGRST204" not in text and "schema cache" not in text.lower():
+        return None
+    m = re.search(r"find the '([^']+)' column", text, re.I)
+    if m:
+        return m.group(1)
+    m = re.search(r'find the "([^"]+)" column', text, re.I)
+    return m.group(1) if m else None
+
+
+def _logs_insert_row(row: Dict[str, Any]) -> bool:
+    """Inserta en logs; omite columnas desconocidas y las guarda en caché para no penalizar cada request."""
+    payload = dict(row)
+    with _logs_omit_lock:
+        frozen_omit = frozenset(_logs_omit_columns)
+    for c in frozen_omit:
+        payload.pop(c, None)
+    strips = 0
+    while strips <= _LOGS_INSERT_MAX_STRIPS:
+        try:
+            supabase.table("logs").insert(payload).execute()
+            return True
+        except Exception as e:
+            col = _logs_pgrst_unknown_column(e)
+            if col and col in payload:
+                with _logs_omit_lock:
+                    _logs_omit_columns.add(col)
+                payload.pop(col, None)
+                strips += 1
+                continue
+            try:
+                _log_api.warning(
+                    "registrar_log: insert falló (%s) (strips=%s)",
+                    e,
+                    strips,
+                )
+            except Exception:
+                pass
+            return False
+    try:
+        _log_api.warning("registrar_log: se alcanzó el máximo de columnas omitidas; revise esquema de logs")
+    except Exception:
+        pass
+    return False
+
+
 def registrar_log_sistema(
     severidad: str,
     endpoint: str,
@@ -841,7 +895,7 @@ def registrar_log_sistema(
             "duracion_ms":      duracion_ms,
             "alerta_generada":  alerta_generada,
         }
-        supabase.table("logs").insert(row).execute()
+        _logs_insert_row(row)
     except Exception:
         pass
 
@@ -869,10 +923,16 @@ def registrar_log(
 ):
     try:
         uid = usuario.get("sub") or usuario.get("id")
+        uid_int = None
+        if uid is not None and str(uid).strip() != "":
+            try:
+                uid_int = int(str(uid).strip())
+            except (ValueError, TypeError):
+                uid_int = None
         if severidad is None:
             severidad = _default_severidad(accion, modulo, resultado)
         row = {
-            "usuario_id":       int(uid) if uid else None,
+            "usuario_id":       uid_int,
             "usuario_nombre":   usuario.get("nombre") or usuario.get("email", ""),
             "cargo_nombre":     usuario.get("cargo_nombre") or "",
             "rol_nombre":       rol_nombre if rol_nombre is not None else usuario.get("rol_nombre"),
@@ -895,24 +955,8 @@ def registrar_log(
             "duracion_ms":      duracion_ms,
             "alerta_generada":  alerta_generada if alerta_generada is not None else False,
         }
-        last_err = None
-        for _attempt in range(2):
-            try:
-                supabase.table("logs").insert(row).execute()
-                last_err = None
-                break
-            except Exception as e:
-                last_err = e
-        if last_err is not None:
-            try:
-                _log_api.warning(
-                    "registrar_log: insert falló (%s) accion=%s modulo=%s",
-                    last_err,
-                    accion,
-                    modulo,
-                )
-            except Exception:
-                pass
+        if not _logs_insert_row(row):
+            pass
     except Exception:
         pass
 
@@ -4771,9 +4815,13 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
             "contrato_id": cid,
             "contrato_numero": cinfo,
         }
+        rev_prev = (prev_row.get("revisado") or "No Revisado").strip()
+        rev_new = (row_after.get("revisado") or "No Revisado").strip()
+        cambio_revisado = (not reabrir) and rev_prev != rev_new
+        accion_log = "VALIDAR" if cambio_revisado else "EDITAR"
         registrar_log(
             u_log,
-            "EDITAR",
+            accion_log,
             "PRESUPUESTO",
             "presupuesto",
             str(item_id),
@@ -5701,6 +5749,23 @@ def responder_comentario(comentario_id: int, body: RespuestaCreate, current_user
 # LOGS
 # ─────────────────────────────────────────────
 
+def _sort_logs_rows(rows: Optional[List[dict]]) -> List[dict]:
+    """Orden estable: más reciente primero (defensa si PostgREST devolviera filas fuera de orden)."""
+
+    if not rows:
+        return []
+
+    def _key(r: dict):
+        ts = r.get("created_at") or "1970-01-01T00:00:00+00:00"
+        try:
+            rid = int(r.get("id") or 0)
+        except (TypeError, ValueError):
+            rid = 0
+        return (ts, rid)
+
+    return sorted(rows, key=_key, reverse=True)
+
+
 def _logs_query_base(
     usuario_id: Optional[int] = None,
     modulo: Optional[str] = None,
@@ -5710,9 +5775,10 @@ def _logs_query_base(
     fecha_desde: Optional[str] = None,
     fecha_hasta: Optional[str] = None,
     excluir_accion: Optional[str] = None,
+    excluir_acciones: Optional[List[str]] = None,
     excluir_modulo: Optional[str] = None,
 ):
-    q = supabase.table("logs").select("*").order("created_at", desc=True)
+    q = supabase.table("logs").select("*")
     if usuario_id:
         q = q.eq("usuario_id", usuario_id)
     if modulo:
@@ -5721,6 +5787,8 @@ def _logs_query_base(
         q = q.neq("modulo", excluir_modulo)
     if accion:
         q = q.eq("accion", accion)
+    elif excluir_acciones:
+        q = q.not_.in_("accion", excluir_acciones)
     elif excluir_accion:
         q = q.neq("accion", excluir_accion)
     if categoria:
@@ -5731,7 +5799,7 @@ def _logs_query_base(
         q = q.gte("created_at", fecha_desde)
     if fecha_hasta:
         q = q.lte("created_at", fecha_hasta + "T23:59:59")
-    return q
+    return q.order("created_at", desc=True, nullsfirst=False).order("id", desc=True)
 
 
 @app.get("/logs")
@@ -5744,12 +5812,16 @@ def get_logs(
     fecha_desde:  Optional[str] = None,
     fecha_hasta:  Optional[str] = None,
     excluir_accion: Optional[str] = None,
+    excluir_rutina_auth: bool = Query(False, description="Excluye LOGIN y LOGIN_FAIL (los 50 más recientes suelen ser solo inicios de sesión)."),
     excluir_modulo: Optional[str] = None,
     limit:        int = 100,
     offset:       int = 0,
     current_user=Depends(require_logs_auditoria),
 ):
     """Consulta logs con filtros. Solo Desarrollador y Administrador."""
+    excluir_acciones = None
+    if excluir_rutina_auth and not accion:
+        excluir_acciones = ["LOGIN", "LOGIN_FAIL"]
     q = _logs_query_base(
         usuario_id=usuario_id,
         modulo=modulo,
@@ -5758,11 +5830,12 @@ def get_logs(
         severidad=severidad,
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
-        excluir_accion=excluir_accion,
+        excluir_accion=excluir_accion if not excluir_acciones else None,
+        excluir_acciones=excluir_acciones,
         excluir_modulo=excluir_modulo,
     )
     q = q.range(offset, offset + limit - 1)
-    return q.execute().data
+    return _sort_logs_rows(q.execute().data)
 
 
 @app.get("/logs/alertas")
@@ -5793,12 +5866,16 @@ def export_logs_csv(
     fecha_desde: Optional[str] = None,
     fecha_hasta: Optional[str] = None,
     excluir_accion: Optional[str] = None,
+    excluir_rutina_auth: bool = Query(False),
     excluir_modulo: Optional[str] = None,
     max_rows:    int = 5000,
     current_user=Depends(require_logs_auditoria),
 ):
     """Exportación CSV para interventoría / auditoría externa."""
     cap = min(max(max_rows, 1), 20000)
+    excluir_acciones = None
+    if excluir_rutina_auth and not accion:
+        excluir_acciones = ["LOGIN", "LOGIN_FAIL"]
     q = _logs_query_base(
         usuario_id=usuario_id,
         modulo=modulo,
@@ -5807,10 +5884,11 @@ def export_logs_csv(
         severidad=severidad,
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
-        excluir_accion=excluir_accion,
+        excluir_accion=excluir_accion if not excluir_acciones else None,
+        excluir_acciones=excluir_acciones,
         excluir_modulo=excluir_modulo,
     )
-    rows = q.limit(cap).execute().data or []
+    rows = _sort_logs_rows(q.limit(cap).execute().data or [])
     import json as _json
 
     def _cell(v):
