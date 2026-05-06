@@ -5501,7 +5501,12 @@ def highlight_registro(contrato_id: int, body: dict, current_user=Depends(get_cu
         "x_label":    row.get("x_label", 0),
         "y_label":    row.get("y_label", 0),
     }
-    usuario_id = current_user["id"] if isinstance(current_user, dict) else current_user.id
+    try:
+        usuario_id = int(current_user.get("sub") or current_user.get("id") or 0)
+    except (TypeError, ValueError):
+        usuario_id = 0
+    if usuario_id <= 0:
+        raise HTTPException(status_code=401, detail="Usuario no identificado")
     supabase.table("cad_queue").insert({
         "contrato_id":  contrato_id,
         "tipo":         "highlight_registro",
