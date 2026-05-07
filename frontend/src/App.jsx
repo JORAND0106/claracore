@@ -63,6 +63,14 @@ function installMapboxAttributionLinksOpenNewTab(map) {
 }
 
 const API = API_BASE
+
+/** Preserva negativos y cero en dimensiones/cantidad SICOE; '' o null → null. */
+function sicoeNumCampoOmitNull(v) {
+  if (v === '' || v == null) return null
+  const n = typeof v === 'number' ? v : parseFloat(String(v).replace(',', '.'))
+  return Number.isFinite(n) ? n : null
+}
+
 /**
  * Plano SICOE como en Presupuesto: sin puntos naranja (GPS reporte), sin offsets falsos;
  * posición solo desde maestro pk_ids (lat/lng). Añade más IDs vía
@@ -229,6 +237,21 @@ function _boundsFromFeatureCollection(fc) {
   }
   if (!any) return null
   return { minLng, maxLng, minLat, maxLat }
+}
+
+/** BBox de features cuyo pk_id en el plano coincide con el texto del maestro (ej. 141383). */
+function sicoeBoundsForPkInPlano(planoRaw, pkStr) {
+  const want = String(pkStr || '').trim().toLowerCase()
+  if (!want) return null
+  const fc = _normalizeContratoPlanoGeojson(planoRaw)
+  if (!fc?.features?.length) return null
+  const matched = fc.features.filter((f) => {
+    const id = _sicoeFeaturePkId(f).toLowerCase().replace(/\s+/g, '')
+    const w = want.replace(/\s+/g, '')
+    return id === w || id.endsWith(w) || w.endsWith(id)
+  })
+  if (!matched.length) return null
+  return _boundsFromFeatureCollection({ type: 'FeatureCollection', features: matched })
 }
 
 function _mapboxFitBoundsLngLat(map, bounds, opt = {}) {
@@ -790,7 +813,7 @@ function LandingPage({ t, activeTheme, themeMode, onTheme, onLogin, onRegistro, 
 
 // ─── MAPA PORTADA (localización en consulta/edición de reporte) ───────────────
 // Estilo outdoors: relieve y curvas de nivel; clic sigue actualizando coordenadas vía map.on('click').
-function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t }) {
+function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t, fallbackBounds = null, pkMapHint = null }) {
   const containerRef = useRef(null)
   const mapRef       = useRef(null)
   const markerRef    = useRef(null)
@@ -800,7 +823,7 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t }) {
   useEffect(() => {
     if (!containerRef.current) return
     mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
-    const hasCoords = lat != null && lat !== '' && !isNaN(parseFloat(lat))
+    const hasCoords = lat != null && lat !== '' && !isNaN(parseFloat(lat)) && lng != null && lng !== '' && !isNaN(parseFloat(lng))
     const cLat = hasCoords ? parseFloat(lat) : 4.71
     const cLng = hasCoords ? parseFloat(lng) : -74.07
     const map = new mapboxgl.Map({
@@ -839,17 +862,28 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t }) {
   useEffect(() => {
     if (!mapRef.current) return
     const la = parseFloat(lat), lo = parseFloat(lng)
-    if (isNaN(la) || isNaN(lo)) return
-    if (markerRef.current) {
-      markerRef.current.setLngLat([lo, la])
-    } else {
-      markerRef.current = new mapboxgl.Marker({ color: '#0077B6' })
-        .setLngLat([lo, la]).addTo(mapRef.current)
+    if (!isNaN(la) && !isNaN(lo)) {
+      if (markerRef.current) {
+        markerRef.current.setLngLat([lo, la])
+      } else {
+        markerRef.current = new mapboxgl.Marker({ color: '#0077B6' })
+          .setLngLat([lo, la]).addTo(mapRef.current)
+      }
+      mapRef.current.flyTo({ center: [lo, la], zoom: 15, duration: 800 })
     }
-    mapRef.current.flyTo({ center: [lo, la], zoom: 15, duration: 800 })
   }, [lat, lng])
 
-  const hasCoords = lat != null && lat !== '' && !isNaN(parseFloat(lat))
+  useEffect(() => {
+    if (!mapRef.current || !fallbackBounds) return
+    const la = parseFloat(lat), lo = parseFloat(lng)
+    if (!isNaN(la) && !isNaN(lo)) return
+    const map = mapRef.current
+    const fit = () => _mapboxFitBoundsLngLat(map, fallbackBounds, { padding: 56, maxZoom: 16, duration: 650 })
+    if (map.isStyleLoaded()) fit()
+    else map.once('load', fit)
+  }, [fallbackBounds, lat, lng])
+
+  const hasCoords = lat != null && lat !== '' && !isNaN(parseFloat(lat)) && lng != null && lng !== '' && !isNaN(parseFloat(lng))
   return (
     <div style={{ position:'relative', width:'100%', height:'100%', minHeight:'340px', borderRadius:'10px', overflow:'hidden', border:`1px solid ${t.border}` }}>
       <div ref={containerRef} style={{ width:'100%', height:'100%', minHeight:'340px' }} />
@@ -857,7 +891,9 @@ function MapaPortada({ lat, lng, modoEdicion, onCoordsChange, t }) {
         <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:`${t.bgCard}EE`, gap:'8px', pointerEvents:'none' }}>
           <span style={{ fontSize:'36px' }}>📍</span>
           <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'center', padding:'0 20px' }}>
-            {modoEdicion ? 'Haz clic en el mapa para fijar las coordenadas' : 'Sin coordenadas geográficas'}
+            {pkMapHint && fallbackBounds
+              ? `Vista del plano en la zona del PK ${pkMapHint}. ${modoEdicion ? 'Haz clic en el mapa para las coordenadas WGS84.' : 'Sin coordenadas GPS en la portada.'}`
+              : modoEdicion ? 'Haz clic en el mapa para fijar las coordenadas' : 'Sin coordenadas geográficas'}
           </span>
         </div>
       )}
@@ -886,6 +922,25 @@ function sicoeSerializarCapasValidacion(capas) {
     }
     return null
   }).filter(Boolean)
+}
+
+/**
+ * Panel «validación masiva»: solo cuando hay capas con estado explícito distinto de Aprobado
+ * (No revisado, Pendiente, Rechazado). Sin filtro de estado en capas → no mostrar.
+ */
+function sicoeCapasPermitenValidacionMasiva(capas) {
+  const ser = sicoeSerializarCapasValidacion(capas)
+  if (ser.length === 0) return false
+  const permitido = new Set(['No Revisado', 'Pendiente', 'Rechazado'])
+  for (const c of ser) {
+    let e = String(c?.estado || '').trim()
+    if (!e) return false
+    if (e === 'Aprobado') return false
+    const el = e.toLowerCase()
+    if (el === 'no revisado' || (el.includes('no') && el.includes('revis'))) e = 'No Revisado'
+    if (!permitido.has(e)) return false
+  }
+  return true
 }
 
 /** Todas las capas usan nivel 1–3 y comparten el mismo campo en `so_registros` (nivelX_estado). */
@@ -1560,10 +1615,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         body: JSON.stringify({
           reporte_id:      registro.reporte_id,
           numero_registro: registro.numero_registro,
-          longitud:        longitud !== '' ? parseFloat(longitud) : null,
-          ancho:           ancho    !== '' ? parseFloat(ancho)    : null,
-          espesor:         espesor  !== '' ? parseFloat(espesor)  : null,
-          cantidad:        cantidad !== '' ? parseFloat(cantidad) : null,
+          longitud:        sicoeNumCampoOmitNull(longitud),
+          ancho:           sicoeNumCampoOmitNull(ancho),
+          espesor:         sicoeNumCampoOmitNull(espesor),
+          cantidad:        sicoeNumCampoOmitNull(cantidad),
           cantidad_total:  cantTotal,
           ...( (itemSel?.item_numero || registro.item_numero) && vlrUnitario != null && !Number.isNaN(Number(vlrUnitario))
             ? { costo_directo: Math.round(cantTotal * Number(vlrUnitario)) }
@@ -2580,6 +2635,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [editCalzadaLocal, setEditCalzadaLocal]    = useState(repoProp.calzada || '')
   const [editInfraLocal, setEditInfraLocal]        = useState(repoProp.infraestructura || '')
   const [listaPkIds, setListaPkIds]               = useState([])
+  const [planoGeojsonPortada, setPlanoGeojsonPortada] = useState(null)
   const [seleccionados, setSeleccionados]         = useState([])
   const [seleccionadosValidacion, setSeleccionadosValidacion] = useState([])
   const [portadaResumenEstado, setPortadaResumenEstado]       = useState(null)
@@ -2649,9 +2705,26 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   const perm        = permisoReporteCantidades(usuario)
   const puedeEditar = perm?.editar
+  const puedeEditarCabecera = !!(perm?.editar || perm?.crear)
   const esDeveloper = (usuario?.cargo_nombre || '').toLowerCase() === 'desarrollador'
   const hdrs        = { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' }
   const nivelInfo   = determinarNivelValidacion(usuario)
+
+  useEffect(() => {
+    if (!contrato_id) return
+    fetch(`${API_URL}/contratos/${contrato_id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((c) => setPlanoGeojsonPortada(c?.plano_geojson ?? null))
+      .catch(() => setPlanoGeojsonPortada(null))
+  }, [contrato_id])
+
+  const pkTextoPlano = String(
+    reporte?.pk_id_valor || listaPkIds.find((p) => p.id === reporte?.pk_id_id)?.pk_id || '',
+  ).trim()
+  const portadaMapBounds = useMemo(
+    () => sicoeBoundsForPkInPlano(planoGeojsonPortada, pkTextoPlano),
+    [planoGeojsonPortada, pkTextoPlano],
+  )
 
   const subIdEnCarpeta   = usuario?.subcontratista_id ?? usuario?.sub_id ?? null
   const registrosVisibles = nivelInfo.esSubcontratista
@@ -3055,7 +3128,17 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.detail || `Error ${res.status}`)
-      setMsgMasivo(`✅ ${data.actualizados} actualizado(s), ${data.omitidos} omitido(s) por no cumplir el nivel anterior.`)
+      const parts = [`✅ ${data.actualizados} actualizado(s)`]
+      if (data.omitidos != null) parts.push(`${data.omitidos} omitido(s)`)
+      if (data.omitidos_topografia) parts.push(`${data.omitidos_topografia} sin topografía (N2)`)
+      if (data.excluidos_objeto_pago_sub) parts.push(`${data.excluidos_objeto_pago_sub} objeto pago sub`)
+      if (data.truncado_mas_de_500) parts.push(`tope ${data.tope_registros ?? 500}`)
+      let msg = parts.join(', ') + '.'
+      if (data.alerta_topografia) msg += ` ${data.alerta_topografia}`
+      if (data.alerta_objeto_sub) msg += ` ${data.alerta_objeto_sub}`
+      if (data.alerta_tope) msg += ` ${data.alerta_tope}`
+      setMsgMasivo(msg)
+      if (data.alerta_topografia || data.alerta_objeto_sub || data.alerta_tope) window.alert(msg)
       recargar()
     } catch (e) {
       // Revertir estado optimista si falló
@@ -3382,7 +3465,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   <div>
                     <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:t.primary, letterSpacing:'1px', textTransform:'uppercase' }}>📋 Identificación del Reporte</div>
                   </div>
-                  {puedeEditar && (
+                  {puedeEditarCabecera && (
                     <div style={{ display:'flex', gap:'8px' }}>
                       {modoEdicion ? (
                         <>
@@ -3512,9 +3595,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   <MapaPortada
                     lat={modoEdicion ? editLat : reporte.coord_lat}
                     lng={modoEdicion ? editLng : reporte.coord_lng}
-                    modoEdicion={modoEdicion}
+                    modoEdicion={modoEdicion && puedeEditarCabecera}
                     onCoordsChange={(la, lo) => { setEditLat(la); setEditLng(lo) }}
                     t={t}
+                    fallbackBounds={portadaMapBounds}
+                    pkMapHint={pkTextoPlano || null}
                   />
                 </div>
               </div>
@@ -4224,9 +4309,11 @@ const SICOE_PANEL_COLOR_NO_REVISADO = '#3B82F6'
 const SICOE_PANEL_COLOR_PENDIENTE = '#EAB308'
 
 function SicoePanelDataBarCell({ value, max, color, text, textColor, trackBg = 'rgba(148,163,184,0.06)' }) {
-  const v = Math.max(0, Number(value) || 0)
+  const raw = Number(value)
+  const v = Number.isFinite(raw) ? Math.abs(raw) : 0
   const m = Math.max(0, Number(max) || 0)
-  const pct = m > 0 ? Math.min(100, (v / m) * 100) : (v > 0 ? 100 : 0)
+  const denom = m > 0 ? m : (v > 0 ? v : 1)
+  const pct = Math.min(100, (v / denom) * 100)
   return (
     <div style={{ position:'relative', minWidth: 72, padding:'6px 16px', textAlign:'right' }}>
       <div
@@ -4314,6 +4401,9 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const [cargandoAnalisis, setCargandoAnalisis] = useState(false)
   const [panelExpandido, setPanelExpandido] = useState(false)
   const [busquedaRealizada, setBusquedaRealizada] = useState(false)
+  const [popupMasivoFiltro, setPopupMasivoFiltro] = useState(null)
+  const [ejecutandoMasivoFiltro, setEjecutandoMasivoFiltro] = useState(false)
+  const [msgMasivoFiltro, setMsgMasivoFiltro] = useState('')
   const [busquedaAmplia, setBusquedaAmplia] = useState(false)
   const [sugerenciasItem, setSugerenciasItem] = useState([])
   const [mostrarSugsItem, setMostrarSugsItem] = useState(false)
@@ -4324,6 +4414,12 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const [reporteEditando, setReporteEditando]         = useState(null)
   const [modalCarpeta, setModalCarpeta]               = useState(false)
   const [reporteSeleccionado, setReporteSeleccionado] = useState(null)
+  /** Antes de filtrar la grilla por PK desde el mapa: asignar inspector/subcontratista en bloque. */
+  const [modalPkAsignacionMapa, setModalPkAsignacionMapa] = useState(null)
+  const [pkMapaInspectorId, setPkMapaInspectorId] = useState('')
+  const [pkMapaSubcontratistaId, setPkMapaSubcontratistaId] = useState('')
+  const [pkMapaInspectoresOpts, setPkMapaInspectoresOpts] = useState([])
+  const [pkMapaGuardandoActores, setPkMapaGuardandoActores] = useState(false)
   /** Oferta de sincronizar al actualizar con teniendo red + modo manual sin conexión. */
   const [sicoeSyncOfferOpen, setSicoeSyncOfferOpen] = useState(false)
   const [sicoeSyncOfferBusy, setSicoeSyncOfferBusy] = useState(false)
@@ -4393,6 +4489,15 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   }, [contrato_id])
 
   useEffect(() => {
+    if (!modalPkAsignacionMapa?.pk_id_id || !contrato_id || efectivoOffline) return
+    const h = { Authorization: `Bearer ${getToken()}` }
+    fetch(`${API_URL}/sicoe-obra/${contrato_id}/inspectores`, { headers: h })
+      .then((r) => r.json())
+      .then((d) => setPkMapaInspectoresOpts(Array.isArray(d) ? d : []))
+      .catch(() => setPkMapaInspectoresOpts([]))
+  }, [modalPkAsignacionMapa?.pk_id_id, contrato_id, efectivoOffline])
+
+  useEffect(() => {
     if (!navReporteId) return
     const repRow = (reportes || []).find((x) => x.id === navReporteId)
     setReporteSeleccionado(
@@ -4425,6 +4530,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const puedeVer    = perm?.ver || nivelInfo.nivelValidacion != null || nivelInfo.nivelValidacionComentario != null
   const puedeCrear  = perm?.crear
   const puedeEditar = perm?.editar
+  const puedeAsignarActoresPorPk = !!(perm?.editar || perm?.crear)
   const puedeExportar = perm?.exportar
   const esSub       = nivelInfo.esSubcontratista
   // subcontratista_id del usuario para filtrar (puede venir como campo directo o en el objeto)
@@ -4816,18 +4922,17 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
 
   /** Misma petición que «Buscar»: panel dinámico + grilla al día sin borrar filtros. */
   const refrescarVistaSicoeObra = async () => {
-    const capasEfectivas = capasValidacion.length > 0 ? capasValidacion : capasInicialesValidacionFromUser(usuario)
-    const hayFiltros = Object.values(filtros).some(v => v !== '') || capasEfectivas.length > 0
+    const hayFiltros = Object.values(filtros).some((v) => v !== '') || capasValidacion.length > 0
     if (!hayFiltros && nivelInfo.puedeValidar && !nivelInfo.puedeEditar && nivelInfo.nivelValidacion) return
-    if (!tieneParametrosBusquedaSicoe(filtros, capasEfectivas)) return
+    if (!tieneParametrosBusquedaSicoe(filtros, capasValidacion)) return
     // Red disponible según el navegador pero el usuario sigue en «Trabajar sin conexión»
     if (hayRedNavegador && forceOffline) {
-      sicoeSyncOfferCapasRef.current = capasEfectivas
+      sicoeSyncOfferCapasRef.current = capasValidacion
       setSicoeSyncOfferBusy(false)
       setSicoeSyncOfferOpen(true)
       return
     }
-    await ejecutarRefrescoSicoe(capasEfectivas)
+    await ejecutarRefrescoSicoe(capasValidacion)
   }
 
   const fmtPesos = v => formatCOP(Number(v) || 0)
@@ -5056,6 +5161,129 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const itemsFiltroOpRef = useRef('and')
   itemsFiltroOpRef.current = itemsFiltroOp
 
+  const SICOE_MASIVO_MAX_UI = 500
+
+  const armarPayloadFiltrosRegistrosMasivo = () => {
+    const fNorm = { ...filtros }
+    if (nivelInfo.esInterventoria) fNorm.subcontratista_id = null
+    Object.keys(fNorm).forEach((k) => { if (fNorm[k] === '' || fNorm[k] === undefined) fNorm[k] = null })
+    const serEx = sicoeSerializarCapasValidacion(capasValidacion)
+    const capaFirst = capasValidacion?.[0] || null
+    const draftEx = String(fNorm.item ?? '').trim()
+    const seenEx = new Set()
+    const listEx = []
+    for (const x of itemsFiltroChips) {
+      const s = String(x || '').trim()
+      if (!s || seenEx.has(s)) continue
+      seenEx.add(s)
+      listEx.push(s)
+    }
+    if (draftEx && !seenEx.has(draftEx)) listEx.push(draftEx)
+    const itemMasivo =
+      listEx.length === 1 && itemsFiltroChips.length === 0 ? listEx[0] : null
+    const itemsFiltroMasivo =
+      listEx.length === 0 || (listEx.length === 1 && itemsFiltroChips.length === 0)
+        ? null
+        : JSON.stringify(listEx)
+    const itemsFiltroOpMasivo =
+      listEx.length > 1 ? (itemsFiltroOp === 'or' ? 'or' : 'and') : null
+    const oObs = sicoeFiltroObsRef.current?.trim()
+    const oNod = sicoeFiltroNodoRef.current?.trim()
+    return {
+      numero_reporte: fNorm.numero_reporte ?? null,
+      numero_registro: fNorm.numero_registro ?? null,
+      semana: fNorm.semana ?? null,
+      acta_rpo: fNorm.acta_rpo ?? null,
+      subcontratista_id: fNorm.subcontratista_id ?? null,
+      capitulo: fNorm.capitulo ?? null,
+      item: itemMasivo,
+      items_filtro: itemsFiltroMasivo,
+      items_filtro_op: itemsFiltroOpMasivo,
+      tramo: fNorm.tramo ?? null,
+      costado: fNorm.costado ?? null,
+      pk_id: fNorm.pk_id ?? null,
+      abs_inicio: fNorm.abs_inicio ?? null,
+      abs_final: fNorm.abs_final ?? null,
+      estado: fNorm.estado ?? null,
+      etiqueta_validacion: (fNorm.etiqueta_validacion && String(fNorm.etiqueta_validacion).trim()) || null,
+      cargo_id: capaFirst?.cargo_id ?? null,
+      estado_validacion: capaFirst?.estado ?? null,
+      validacion_capas: serEx.length > 0 ? JSON.stringify(serEx) : null,
+      validacion_capas_op:
+        serEx.length > 0 && capasValidacion.length > 1
+          ? (capasValidacionOp === 'or' ? 'or' : 'and')
+          : null,
+      q_observacion: oObs || null,
+      q_nodo: oNod || null,
+    }
+  }
+
+  const ejecutarMasivoFiltroApi = async (marcar_estado, comentarioData) => {
+    setPopupMasivoFiltro(null)
+    if (!contrato_id || !nivelInfo.nivelValidacion || nivelInfo.nivelValidacion < 2) return
+    setEjecutandoMasivoFiltro(true)
+    setMsgMasivoFiltro('')
+    try {
+      const base = armarPayloadFiltrosRegistrosMasivo()
+      const nivel = nivelInfo.nivelValidacion
+      const body = {
+        ...base,
+        nivel,
+        marcar_estado,
+      }
+      if (comentarioData) {
+        body.comentario_data = { ...comentarioData, rol_origen: nivelInfo.rolOrigen }
+      }
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/validar-nivel-masivo`, {
+        method: 'POST',
+        headers: hdrsJSON,
+        body: JSON.stringify(body),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const d = data?.detail
+        const msg =
+          typeof d === 'string'
+            ? d
+            : Array.isArray(d)
+              ? d.map((x) => x?.msg || JSON.stringify(x)).join(', ')
+              : d && typeof d === 'object'
+                ? JSON.stringify(d)
+                : `Error ${res.status}`
+        throw new Error(msg)
+      }
+      let msgOk = `Listo: ${data.actualizados ?? 0} registro(s) actualizado(s)`
+      const om = []
+      if (data.omitidos_precondicion) om.push(`${data.omitidos_precondicion} omitidos (no cumplen nivel previo u otras reglas)`)
+      if (data.omitidos_topografia) om.push(`${data.omitidos_topografia} sin topografía (N2)`)
+      if (data.excluidos_objeto_pago_sub) om.push(`${data.excluidos_objeto_pago_sub} objeto pago sub (revisión punto a punto)`)
+      if (om.length) msgOk += `. ${om.join('; ')}.`
+      if (data.alerta_topografia) msgOk += `\n\n${data.alerta_topografia}`
+      if (data.alerta_objeto_sub) msgOk += `\n\n${data.alerta_objeto_sub}`
+      if (data.alerta_tope) msgOk += `\n\n${data.alerta_tope}`
+      setMsgMasivoFiltro(msgOk)
+      if (data.alerta_topografia || data.alerta_objeto_sub || data.alerta_tope || data.omitidos_topografia || data.excluidos_objeto_pago_sub) {
+        window.alert(msgOk)
+      }
+      buscarReportes(filtros, 0, capasValidacion)
+      cargarAnalisis(filtros, capasValidacion)
+    } catch (e) {
+      setMsgMasivoFiltro(`Error: ${e?.message || String(e)}`)
+      window.alert(`Validación masiva: ${e?.message || String(e)}`)
+    } finally {
+      setEjecutandoMasivoFiltro(false)
+    }
+  }
+
+  const solicitarMasivoFiltro = (marcar_estado) => {
+    if (!busquedaRealizada || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) return
+    if (marcar_estado === 'Aprobado') {
+      void ejecutarMasivoFiltroApi('Aprobado', null)
+      return
+    }
+    setPopupMasivoFiltro({ marcar_estado })
+  }
+
   // Auto-buscar al montar: acta alineada a la matriz del dashboard + capas por rol (mismo universo de líneas con ítem).
   // En modo offline este efecto se omite: el auto-search de [efectivoOffline] ya maneja la carga desde caché.
   useEffect(() => {
@@ -5078,10 +5306,9 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   buscarReportesSicoeRef.current = buscarReportes
   cargarAnalisisSicoeRef.current = cargarAnalisis
   sicoeMapFiltroApplyPkRef.current = (pkIdInt) => {
-    const nf = { ...filtrosSicoeRef.current, pk_id: String(pkIdInt) }
-    setFiltros(nf)
-    buscarReportesSicoeRef.current?.(nf, 0, capasSicoeRef.current)
-    cargarAnalisisSicoeRef.current?.(nf, capasSicoeRef.current)
+    setModalPkAsignacionMapa({ pk_id_id: pkIdInt })
+    setPkMapaInspectorId('')
+    setPkMapaSubcontratistaId('')
   }
   sicoeMapaOpenReporteRef.current = async (rid) => {
     const rep = (reportes || []).find((x) => x.id === rid)
@@ -6516,16 +6743,49 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
               </button>
             )}
             <button type="button" onClick={() => {
-              const capasEfectivas = capasValidacion.length > 0 ? capasValidacion : defaultCapasValidacion
-              const hayFiltros = Object.values(filtros).some(v => v !== '') || capasEfectivas.length > 0
+              const hayFiltros = Object.values(filtros).some(v => v !== '') || capasValidacion.length > 0
               if (!hayFiltros && nivelInfo.puedeValidar && !nivelInfo.puedeEditar && nivelInfo.nivelValidacion) return
-              buscarReportes(filtros, 0, capasEfectivas); cargarAnalisis(filtros, capasEfectivas)
+              buscarReportes(filtros, 0, capasValidacion); cargarAnalisis(filtros, capasValidacion)
             }}
               style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'4px 14px', fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer' }}>
               Buscar
             </button>
           </div>
         </div>
+
+        {(nivelInfo.nivelValidacion === 2 || nivelInfo.nivelValidacion === 3) && nivelInfo.puedeValidar && busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, capasValidacion) && sicoeCapasPermitenValidacionMasiva(capasValidacion) && (
+          <div style={{ marginTop: '10px', padding: '10px 12px', background: '#1E293B', borderRadius: '8px', border: '1px solid rgba(148,163,184,0.2)' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+              <div style={{ flex: '1 1 180px', minWidth: 0 }}>
+                <div style={{ fontSize: 'var(--cc-caption)', fontWeight: '800', color: '#F1F5F9', marginBottom: '4px' }}>
+                  Validación masiva · Nivel {nivelInfo.nivelValidacion}
+                </div>
+                <div style={{ fontSize: 'var(--cc-caption)', color: '#94A3B8', lineHeight: 1.4 }}>
+                  Solo afecta filas que ya cumplen su filtro (como la grilla). Hasta {SICOE_MASIVO_MAX_UI} por clic.
+                  {nivelInfo.nivelValidacion === 2 && ' En N2, sin topografía en el reporte no se aprueba esa línea.'}
+                  {' '}Objeto de pago a subcontratista: excluido (revisión uno a uno).
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', flexShrink: 0 }}>
+                <button type="button" disabled={ejecutandoMasivoFiltro} onClick={() => solicitarMasivoFiltro('Aprobado')}
+                  style={{ background: '#16a34a', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px 12px', fontSize: 'var(--cc-caption)', fontWeight: '800', cursor: ejecutandoMasivoFiltro ? 'wait' : 'pointer', opacity: ejecutandoMasivoFiltro ? 0.7 : 1 }}>
+                  Aprobado
+                </button>
+                <button type="button" disabled={ejecutandoMasivoFiltro} onClick={() => solicitarMasivoFiltro('Pendiente')}
+                  style={{ background: '#ca8a04', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px 12px', fontSize: 'var(--cc-caption)', fontWeight: '800', cursor: ejecutandoMasivoFiltro ? 'wait' : 'pointer', opacity: ejecutandoMasivoFiltro ? 0.7 : 1 }}>
+                  Pendiente
+                </button>
+                <button type="button" disabled={ejecutandoMasivoFiltro} onClick={() => solicitarMasivoFiltro('Rechazado')}
+                  style={{ background: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px 12px', fontSize: 'var(--cc-caption)', fontWeight: '800', cursor: ejecutandoMasivoFiltro ? 'wait' : 'pointer', opacity: ejecutandoMasivoFiltro ? 0.7 : 1 }}>
+                  Rechazado
+                </button>
+              </div>
+            </div>
+            {msgMasivoFiltro && (
+              <div style={{ marginTop: '8px', fontSize: 'var(--cc-caption)', color: '#94A3B8', whiteSpace: 'pre-wrap' }}>{msgMasivoFiltro}</div>
+            )}
+          </div>
+        )}
 
         {sicoeFiltrosPanelOpen && (
         <>
@@ -7330,6 +7590,136 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         </div>
       )}
 
+      {modalPkAsignacionMapa?.pk_id_id != null && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9600,
+            background: 'rgba(0,0,0,0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px',
+          }}
+          onClick={() => { if (!pkMapaGuardandoActores) setModalPkAsignacionMapa(null) }}
+        >
+          <div
+            style={{
+              background: t.bgCard,
+              borderRadius: '14px',
+              padding: '24px',
+              maxWidth: '440px',
+              width: '100%',
+              border: `1px solid ${t.border}`,
+              boxShadow: '0 24px 80px rgba(0,0,0,0.5)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: '800', fontSize: 'var(--cc-md)', color: t.primary, marginBottom: '8px' }}>
+              Reportes por PK en el mapa
+            </div>
+            <p style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, margin: '0 0 16px', lineHeight: 1.45 }}>
+              PK <strong style={{ color: t.text }}>{sicoePkList.find((p) => p.id === modalPkAsignacionMapa.pk_id_id)?.pk_id ?? modalPkAsignacionMapa.pk_id_id}</strong>.
+              Opcional: asigne <strong>inspector</strong> y <strong>subcontratista</strong> a <strong>todos los reportes</strong> de este PK en el contrato; luego se aplica el filtro en la grilla.
+            </p>
+            <div style={{ marginBottom: '12px' }}>
+              <div style={{ fontSize: 'var(--cc-caption)', fontWeight: '700', color: t.textMuted, marginBottom: '4px' }}>Inspector</div>
+              <select
+                value={pkMapaInspectorId}
+                onChange={(e) => setPkMapaInspectorId(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: `1px solid ${t.border}`, background: t.bg, color: t.text }}
+              >
+                <option value="">— Sin asignar —</option>
+                {pkMapaInspectoresOpts.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {`${u.nombre || ''} ${u.apellidos || ''}`.trim() || u.email || `Usuario ${u.id}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: 'var(--cc-caption)', fontWeight: '700', color: t.textMuted, marginBottom: '4px' }}>Subcontratista</div>
+              <select
+                value={pkMapaSubcontratistaId}
+                onChange={(e) => setPkMapaSubcontratistaId(e.target.value)}
+                disabled={nivelInfo.esInterventoria}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', border: `1px solid ${t.border}`, background: t.bg, color: t.text, opacity: nivelInfo.esInterventoria ? 0.6 : 1 }}
+              >
+                <option value="">— Sin asignar —</option>
+                {filtroSubcList.map((s) => (
+                  <option key={s.id} value={s.id}>{s.nombre}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                disabled={pkMapaGuardandoActores}
+                onClick={() => setModalPkAsignacionMapa(null)}
+                style={{ padding: '8px 14px', borderRadius: '8px', border: `1px solid ${t.border}`, background: 'transparent', color: t.textMuted, cursor: 'pointer', fontWeight: '600' }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={pkMapaGuardandoActores}
+                onClick={() => {
+                  const pid = modalPkAsignacionMapa.pk_id_id
+                  setModalPkAsignacionMapa(null)
+                  const nf = { ...filtrosSicoeRef.current, pk_id: String(pid) }
+                  setFiltros(nf)
+                  buscarReportesSicoeRef.current?.(nf, 0, capasSicoeRef.current)
+                  cargarAnalisisSicoeRef.current?.(nf, capasSicoeRef.current)
+                }}
+                style={{ padding: '8px 14px', borderRadius: '8px', border: `1px solid ${t.border}`, background: t.bg, color: t.text, cursor: 'pointer', fontWeight: '700' }}
+              >
+                Solo filtrar
+              </button>
+              {puedeAsignarActoresPorPk && (
+                <button
+                  type="button"
+                  disabled={pkMapaGuardandoActores || (!pkMapaInspectorId && !pkMapaSubcontratistaId)}
+                  onClick={async () => {
+                    const pid = modalPkAsignacionMapa.pk_id_id
+                    setPkMapaGuardandoActores(true)
+                    try {
+                      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/asignar-actores-por-pk`, {
+                        method: 'POST',
+                        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          pk_id_id: pid,
+                          inspector_id: pkMapaInspectorId ? parseInt(pkMapaInspectorId, 10) : null,
+                          subcontratista_id: pkMapaSubcontratistaId ? parseInt(pkMapaSubcontratistaId, 10) : null,
+                        }),
+                      })
+                      const data = await res.json().catch(() => ({}))
+                      if (!res.ok) {
+                        throw new Error(typeof data?.detail === 'string' ? data.detail : `Error ${res.status}`)
+                      }
+                      window.alert(`Listo: ${data.actualizados ?? 0} reporte(s) actualizados en este PK.`)
+                    } catch (e) {
+                      window.alert(e?.message || String(e))
+                      setPkMapaGuardandoActores(false)
+                      return
+                    }
+                    setPkMapaGuardandoActores(false)
+                    setModalPkAsignacionMapa(null)
+                    const nf = { ...filtrosSicoeRef.current, pk_id: String(pid) }
+                    setFiltros(nf)
+                    buscarReportesSicoeRef.current?.(nf, 0, capasSicoeRef.current)
+                    cargarAnalisisSicoeRef.current?.(nf, capasSicoeRef.current)
+                  }}
+                  style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', background: t.primary, color: '#fff', cursor: 'pointer', fontWeight: '800' }}
+                >
+                  {pkMapaGuardandoActores ? 'Aplicando…' : 'Asignar y filtrar'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Carpeta Reporte ── */}
       {modalCarpeta && reporteSeleccionado && (
         <CarpetaReporte
@@ -7503,6 +7893,22 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
             </div>
           </div>
         </div>
+      )}
+
+      {popupMasivoFiltro && (nivelInfo.nivelValidacion === 2 || nivelInfo.nivelValidacion === 3) && nivelInfo.puedeValidar && (
+        <PopupComentarioValidacion
+          t={t}
+          usuario={usuario}
+          registro={{ id: 0, numero_registro: 'varios (filtro actual)' }}
+          contrato_id={contrato_id}
+          API_URL={API_URL}
+          hdrs={hdrsJSON}
+          estadoValidando={popupMasivoFiltro.marcar_estado}
+          nivelValidacion={nivelInfo.nivelValidacion}
+          obligatorio={popupMasivoFiltro.marcar_estado !== 'Aprobado'}
+          onConfirmar={(comentarioData) => ejecutarMasivoFiltroApi(popupMasivoFiltro.marcar_estado, comentarioData)}
+          onCancelar={() => setPopupMasivoFiltro(null)}
+        />
       )}
     </div>
   )
@@ -7704,8 +8110,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       }
       if (reporteInicial.registros?.length) setRegistros(reporteInicial.registros.map(r => ({
         nombre: r.nombre || '', descripcion: r.descripcion || '',
-        longitud: r.longitud || '', ancho: r.ancho || '',
-        espesor: r.espesor || '', cantidad: r.cantidad || '',
+        longitud: r.longitud !== undefined && r.longitud !== null ? String(r.longitud) : '',
+        ancho: r.ancho !== undefined && r.ancho !== null ? String(r.ancho) : '',
+        espesor: r.espesor !== undefined && r.espesor !== null ? String(r.espesor) : '',
+        cantidad: r.cantidad !== undefined && r.cantidad !== null ? String(r.cantidad) : '',
         cantidad_total: r.cantidad_total, unidad: r.unidad || '',
         observacion: r.descripcion || '',
         foto_url: r.foto_url, foto_numero: r.foto_numero, _fotoOk: !!r.foto_url,
@@ -7898,10 +8306,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   }
 
   const calcTotal = (reg) => {
-    const vals = [reg.longitud, reg.ancho, reg.espesor, reg.cantidad]
-      .map(v => parseFloat(v)).filter(v => !isNaN(v) && v !== 0)
-    if (vals.length === 0) return null
-    return vals.reduce((a, b) => a * b, 1)
+    const parts = [reg.longitud, reg.ancho, reg.espesor, reg.cantidad].map((v) => sicoeNumCampoOmitNull(v))
+    const fin = parts.filter((v) => v !== null)
+    if (fin.length === 0) return null
+    return fin.reduce((a, b) => a * b, 1)
   }
 
   const agregarRegistro = () => {
@@ -7941,10 +8349,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           const reg = registros[i]
           await crearRegistroLocal(contrato_id, localId, {
             nombre: reg.nombre, descripcion: reg.observacion,
-            longitud: parseFloat(reg.longitud) || null,
-            ancho: parseFloat(reg.ancho) || null,
-            espesor: parseFloat(reg.espesor) || null,
-            cantidad: parseFloat(reg.cantidad) || null,
+            longitud: sicoeNumCampoOmitNull(reg.longitud),
+            ancho: sicoeNumCampoOmitNull(reg.ancho),
+            espesor: sicoeNumCampoOmitNull(reg.espesor),
+            cantidad: sicoeNumCampoOmitNull(reg.cantidad),
             unidad: reg.unidad, observacion: reg.observacion,
             foto_url: reg.foto_url, foto_numero: reg.foto_numero,
             grafico_url: reg.grafico_url, grafico_numero: reg.grafico_numero,
@@ -7956,10 +8364,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           endpoint: `/sicoe-obra/${contrato_id}/reportes-offline`,
           body: { ...reporteData, registros: registros.map(r => ({
             nombre: r.nombre, descripcion: r.observacion,
-            longitud: parseFloat(r.longitud) || null,
-            ancho: parseFloat(r.ancho) || null,
-            espesor: parseFloat(r.espesor) || null,
-            cantidad: parseFloat(r.cantidad) || null,
+            longitud: sicoeNumCampoOmitNull(r.longitud),
+            ancho: sicoeNumCampoOmitNull(r.ancho),
+            espesor: sicoeNumCampoOmitNull(r.espesor),
+            cantidad: sicoeNumCampoOmitNull(r.cantidad),
             unidad: r.unidad, observacion: r.observacion,
             foto_url: r.foto_url, foto_numero: r.foto_numero,
             grafico_url: r.grafico_url, grafico_numero: r.grafico_numero,
@@ -8058,8 +8466,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       const payloadReg = {
         registros: registros.map((reg) => ({
           nombre: reg.nombre, descripcion: reg.observacion,
-          longitud: parseFloat(reg.longitud) || null, ancho: parseFloat(reg.ancho) || null,
-          espesor: parseFloat(reg.espesor) || null, cantidad: parseFloat(reg.cantidad) || null,
+          longitud: sicoeNumCampoOmitNull(reg.longitud), ancho: sicoeNumCampoOmitNull(reg.ancho),
+          espesor: sicoeNumCampoOmitNull(reg.espesor), cantidad: sicoeNumCampoOmitNull(reg.cantidad),
           cantidad_total: reg.cantidad_total,
           unidad: reg.unidad, observacion: reg.observacion,
           foto_url: reg.foto_url, foto_numero: reg.foto_numero, foto_descripcion: reg.foto_descripcion,
@@ -8807,13 +9215,13 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                 {[['longitud','Longitud'],['ancho','Ancho'],['espesor','Espesor'],['cantidad','Cantidad (x N)']].map(([campo, label]) => (
                   <div key={campo}>
                     <label style={{ fontSize:'var(--cc-label)', fontWeight:'600', color:t.textMuted, display:'block', marginBottom:'4px' }}>{label}</label>
-                    <input type='number' step='0.01' value={registros[modalRegistro][campo] || ''}
+                    <input type='number' step='any' value={registros[modalRegistro][campo] ?? ''}
                       onChange={e => {
                         const a=[...registros]
                         a[modalRegistro]={...a[modalRegistro], [campo]: e.target.value}
-                        const vals = ['longitud','ancho','espesor','cantidad']
-                          .map(c => parseFloat(a[modalRegistro][c])).filter(v => !isNaN(v) && v !== 0)
-                        a[modalRegistro].cantidad_total = vals.length ? vals.reduce((x,y)=>x*y,1) : null
+                        const parts = ['longitud','ancho','espesor','cantidad'].map((c) => sicoeNumCampoOmitNull(a[modalRegistro][c]))
+                        const fin = parts.filter((v) => v !== null)
+                        a[modalRegistro].cantidad_total = fin.length ? fin.reduce((x,y)=>x*y,1) : null
                         setRegistros(a)
                       }}
                       placeholder='0'
@@ -8894,8 +9302,13 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
             <div style={{ padding:'14px 20px', borderTop:`1px solid ${t.border}`, display:'flex', justifyContent:'flex-end' }}>
               <button onClick={() => {
                 const reg = registros[modalRegistro]
-                const dims = ['longitud','ancho','espesor','cantidad']
-                  .map(c => parseFloat(reg[c])).filter(v => !isNaN(v) && v > 0)
+                const dims = ['longitud', 'ancho', 'espesor', 'cantidad']
+                  .map((c) => {
+                    const x = reg[c]
+                    if (x === '' || x == null || x === undefined) return NaN
+                    return parseFloat(String(x).replace(',', '.'))
+                  })
+                  .filter((v) => Number.isFinite(v))
                 if (dims.length === 0) {
                   alert('Debe diligenciar al menos un campo de dimensiones (Longitud, Ancho, Espesor o Cantidad)')
                   return
@@ -10204,6 +10617,19 @@ function sortComparativoCapitulos(rows) {
   })
 }
 
+/** Icono: tabla/listado → obra (migrar presupuesto a SICOE Obra). */
+function IconMigrarPresupuestoSicoe({ size = 18, color = 'currentColor' }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden style={{ flexShrink: 0 }}>
+      <path d="M6 3H3v18h5" stroke={color} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M6 7h3M6 11h3M6 15h2.5" stroke={color} strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M12.5 12H19M16 9l3 3-3 3" stroke={color} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M17.5 5V3H21v4" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M18 21h-2.5v-6h5v6H18" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0, fontSize = 'normal', onFontSize, onOpenPerfil }) {
   const [moduloActivo, setModuloActivo] = useState('inicio')
@@ -10274,6 +10700,12 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [miniMapaColores, setMiniMapaColores] = useState({})
   const [popupPkid,      setPopupPkid]      = useState(null)  // {pkid, data, error?}
   const [popupLoading,   setPopupLoading]   = useState(false)
+  const [dashReportesDeltaLoad, setDashReportesDeltaLoad] = useState(false)
+  const [dashMigracionModal, setDashMigracionModal] = useState(null)
+  const [dashBibliotecaBalance, setDashBibliotecaBalance] = useState([])
+  const [dashBibliotecaLoad, setDashBibliotecaLoad] = useState(false)
+  const [dashBibliotecaError, setDashBibliotecaError] = useState(null)
+  const [dashMigracionCreatingSec, setDashMigracionCreatingSec] = useState(0)
   const [zoomingPkid,    setZoomingPkid]    = useState(false)
   const [dwgEnlazadoDash, setDwgEnlazadoDash] = useState(false)
   const miniMapaRef = useRef(null)
@@ -10622,7 +11054,261 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
       }
     } catch (_) {}
   }
-    useEffect(() => {
+
+  const puedeCrearReporteDash = !!(permisoReporteCantidades(usuario)?.crear)
+  const _nvMigracionDelta = determinarNivelValidacion(usuario)
+  const _cargoDevNorm = String(usuario?.cargo_nombre || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ')
+  const puedeConfirmarMigracionDelta = !!(
+    _cargoDevNorm === 'desarrollador' ||
+    (_nvMigracionDelta.puedeValidar && _nvMigracionDelta.nivelValidacion === 1)
+  )
+
+  function _dashItemsSeleParaMigracion() {
+    const cap = dashDrill[0]?.valor
+    if (!cap || !contratoIdDash) return null
+    let items = []
+    if (dashDrill.length >= 2 && dashDrill[1]?.valor) {
+      items = [dashDrill[1].valor]
+    } else if (Array.isArray(dashData) && dashData.length > 0) {
+      items = [...new Set(dashData.map((d) => d.item).filter(Boolean))]
+    } else {
+      return null
+    }
+    if (!items.length) return null
+    return { cap, items }
+  }
+
+  useEffect(() => {
+    if (!dashMigracionModal || dashMigracionModal.phase !== 'creating' || !dashReportesDeltaLoad) {
+      setDashMigracionCreatingSec(0)
+      return undefined
+    }
+    const t0 = Date.now()
+    const id = setInterval(() => {
+      setDashMigracionCreatingSec(Math.floor((Date.now() - t0) / 1000))
+    }, 400)
+    return () => clearInterval(id)
+  }, [dashMigracionModal?.phase, dashReportesDeltaLoad])
+
+  async function refrescarBibliotecaBalanceCantidades(cap) {
+    if (!contratoIdDash || !cap) {
+      setDashBibliotecaBalance([])
+      setDashBibliotecaError(null)
+      return
+    }
+    setDashBibliotecaLoad(true)
+    setDashBibliotecaError(null)
+    try {
+      const tok = getToken()
+      const pm = new URLSearchParams({ capitulo: String(cap) })
+      const res = await fetch(
+        `${API_URL}/sicoe-obra/${contratoIdDash}/reportes-biblioteca-balance-cantidades?${pm}`,
+        { headers: { Authorization: `Bearer ${tok}` } }
+      )
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const d = data?.detail
+        setDashBibliotecaError(typeof d === 'string' ? d : `No se pudo cargar la biblioteca (${res.status}).`)
+        setDashBibliotecaBalance([])
+        return
+      }
+      setDashBibliotecaBalance(Array.isArray(data.reportes) ? data.reportes : [])
+    } catch {
+      setDashBibliotecaError('Error de red al cargar la biblioteca.')
+      setDashBibliotecaBalance([])
+    } finally {
+      setDashBibliotecaLoad(false)
+    }
+  }
+
+  async function abrirReporteBibliotecaMigracion(reporteId) {
+    const rid = Number(reporteId)
+    if (!Number.isFinite(rid) || rid <= 0 || !contratoIdDash) {
+      window.alert('No se pudo abrir: falta identificador de reporte o contrato.')
+      return
+    }
+    try {
+      const tok = getToken()
+      const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/reportes/${rid}`, {
+        headers: { Authorization: `Bearer ${tok}` },
+      })
+      const rep = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const d = rep?.detail
+        window.alert(typeof d === 'string' ? d : `No se pudo abrir el reporte (${res.status}). ¿Tiene permiso «Reporte de Cantidades» (Ver)?`)
+        return
+      }
+      const repId = Number(rep?.id)
+      if (!Number.isFinite(repId) || repId <= 0) {
+        window.alert('El servidor no devolvió un id de reporte válido.')
+        return
+      }
+      // Cerrar el modal de migración: si no, z-index/capa puede dejar la carpeta detrás o capturar clics.
+      setDashMigracionModal(null)
+      setDashBibliotecaBalance([])
+      setDashBibliotecaError(null)
+      setDashCarpetaReporte(rep)
+    } catch (e) {
+      window.alert(e?.message || 'Error de red al abrir el reporte.')
+    }
+  }
+
+  async function abrirModalMigracionPresupuestoSicoe() {
+    const sel = _dashItemsSeleParaMigracion()
+    if (!sel) {
+      window.alert('Abra un capítulo con ítems cargados o entre al detalle de un ítem (tabla por PK).')
+      return
+    }
+    if (dashReportesDeltaLoad) return
+    setDashReportesDeltaLoad(true)
+    try {
+      const tok = getToken()
+      const pm = new URLSearchParams()
+      pm.set('capitulo', sel.cap)
+      sel.items.forEach((i) => pm.append('items', i))
+      pm.set('solo_delta_positivo', 'false')
+      const res = await fetch(
+        `${API_URL}/sicoe-obra/${contratoIdDash}/reportes-masivos-dashboard-delta/preview?${pm}`,
+        { headers: { Authorization: `Bearer ${tok}` } }
+      )
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        window.alert(typeof data?.detail === 'string' ? data.detail : `Error ${res.status}`)
+        return
+      }
+      setDashMigracionModal({ phase: 'preview', preview: data, cap: sel.cap, items: sel.items, log: [] })
+      await refrescarBibliotecaBalanceCantidades(sel.cap)
+    } catch (e) {
+      window.alert(e?.message || 'Error al cargar vista previa.')
+    } finally {
+      setDashReportesDeltaLoad(false)
+    }
+  }
+
+  async function ejecutarLoteMigracionDeltaDesdeModal() {
+    const m = dashMigracionModal
+    if (!m?.cap || !m?.items?.length || !contratoIdDash || dashReportesDeltaLoad) return
+    setDashReportesDeltaLoad(true)
+    setDashMigracionModal((prev) => (prev ? { ...prev, phase: 'creating', log: prev.log || [] } : prev))
+    try {
+      const tok = getToken()
+      const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/reportes-masivos-dashboard-delta`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capitulo: m.cap, items: m.items, solo_delta_positivo: false }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        window.alert(typeof data?.detail === 'string' ? data.detail : `Error ${res.status}`)
+        setDashMigracionModal((prev) => (prev ? { ...prev, phase: 'preview' } : prev))
+        return
+      }
+      const creados = data.creados || []
+      const adv = data.advertencias?.items_sin_listado_en_capitulo || []
+      if (adv.length) console.warn('[migración Δ] items sin listado:', adv)
+      const rs = data.resumen || {}
+      const logLine = `Listo: ${creados.length} reporte(s). Pendientes para otro clic: ${rs.restantes_tras_este_lote ?? '—'} PK (Δ).`
+      setDashMigracionModal((prev) =>
+        prev
+          ? {
+              ...prev,
+              phase: 'done',
+              lastCreateRes: data,
+              log: [
+                ...(prev.log || []).filter(
+                  (x) => x !== 'Creando reportes (lote)…' && x !== 'Creando reportes del lote…',
+                ),
+                logLine,
+              ],
+            }
+          : prev
+      )
+      await refrescarBibliotecaBalanceCantidades(m.cap)
+      dashTablaCache.current = {}
+      dashDrillCache.current = {}
+      const first = creados[0]
+      if (first?.id) {
+        const rdet = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/reportes/${first.id}`, {
+          headers: { Authorization: `Bearer ${tok}` },
+        })
+        if (rdet.ok) {
+          const rep = await rdet.json()
+          if (rep?.id) setDashCarpetaReporte(rep)
+        }
+      }
+    } catch (e) {
+      window.alert(e?.message || 'Error de red.')
+      setDashMigracionModal((prev) => (prev ? { ...prev, phase: 'preview' } : prev))
+    } finally {
+      setDashReportesDeltaLoad(false)
+    }
+  }
+
+  async function confirmarEnvioMigracionDeltaLotes() {
+    const m = dashMigracionModal
+    if (!m?.cap || !contratoIdDash || dashReportesDeltaLoad) return
+    if (!puedeConfirmarMigracionDelta) {
+      window.alert('Se requiere permiso de validación en Nivel 1 en «Reporte de cantidades» (equivalente al botón de validar N1), o usuario desarrollador.')
+      return
+    }
+    if (
+      !window.confirm(
+        '¿Pasar a «No Revisados» los reportes en Borrador de esta migración y aprobar validación Nivel 1 en todos sus registros (por lotes)? Quedan listos para aprobación masiva N2.'
+      )
+    )
+      return
+    setDashReportesDeltaLoad(true)
+    const tok = getToken()
+    let lote = 0
+    let total = 0
+    try {
+      while (lote < 500) {
+        lote += 1
+        const res = await fetch(
+          `${API_URL}/sicoe-obra/${contratoIdDash}/reportes-masivos-dashboard-delta/confirmar`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ capitulo: m.cap, limite: 45 }),
+          }
+        )
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          const errLine = `Error lote ${lote}: ${typeof data?.detail === 'string' ? data.detail : res.status}`
+          setDashMigracionModal((prev) =>
+            prev ? { ...prev, phase: 'done', log: [...(prev.log || []), errLine] } : prev
+          )
+          break
+        }
+        const n = data.actualizados || 0
+        total += n
+        const n1 = data.registros_n1_aprobados ?? 0
+        const line = `Confirmación lote ${lote}: ${n} reporte(s) → No Revisados; registros con N1 aprobado: ${n1}${data.hay_mas ? ' (continúa…)' : ' (fin)'}`
+        setDashMigracionModal((prev) =>
+          prev ? { ...prev, phase: 'confirming', log: [...(prev.log || []), line] } : prev
+        )
+        if (!data.hay_mas || n === 0) break
+      }
+      setDashMigracionModal((prev) =>
+        prev
+          ? { ...prev, phase: 'finished', log: [...(prev.log || []), `Total confirmados en esta sesión: ${total}.`] }
+          : prev
+      )
+    } catch (e) {
+      setDashMigracionModal((prev) =>
+        prev ? { ...prev, phase: 'done', log: [...(prev.log || []), e?.message || 'Error de red en confirmación.'] } : prev
+      )
+    } finally {
+      setDashReportesDeltaLoad(false)
+      void refrescarBibliotecaBalanceCantidades(m?.cap)
+    }
+  }
+  useEffect(() => {
     if (!contratoIdDash) return
     const tok = getToken()
     const params = new URLSearchParams()
@@ -11689,6 +12375,32 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         onMouseLeave={e=>{ e.currentTarget.style.background='transparent'; e.currentTarget.style.color='#1E8449' }}>
                         📊
                       </button>
+                      {puedeCrearReporteDash && dashDrill.length >= 1 && (dashDrill.length >= 2 || (!dashLoading && (dashData?.length > 0))) && (
+                        <button
+                          type="button"
+                          title="Migrar presupuesto a SICOE Obra"
+                          disabled={dashReportesDeltaLoad}
+                          onClick={() => { void abrirModalMigracionPresupuestoSicoe() }}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                            background: dashReportesDeltaLoad ? t.border : '#0f766e',
+                            color: '#fff',
+                            border: 'none',
+                            borderRadius: '8px',
+                            padding: '6px 12px',
+                            fontSize: 'var(--cc-sm)',
+                            fontWeight: '700',
+                            cursor: dashReportesDeltaLoad ? 'wait' : 'pointer',
+                            opacity: dashReportesDeltaLoad ? 0.85 : 1,
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          <IconMigrarPresupuestoSicoe size={18} color="#fff" />
+                          {dashReportesDeltaLoad ? '⏳ Trabajando…' : 'Migrar a SICOE Obra'}
+                        </button>
+                      )}
                       <button onClick={() => { setPopupCapitulo(false); setDashDrill([]) }}
                         style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'5px 14px', fontSize:'var(--cc-sm)', cursor:'pointer', color:t.textMuted }}>
                         ✕ Cerrar
@@ -12813,8 +13525,317 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             </div>
           </div>
         )}
+        {dashMigracionModal && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.55)',
+              zIndex: 9800,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px',
+            }}
+            onClick={() => {
+              if (!dashReportesDeltaLoad) {
+                setDashBibliotecaBalance([])
+                setDashBibliotecaError(null)
+                setDashMigracionModal(null)
+              }
+            }}
+          >
+            <div
+              style={{
+                background: t.bgCard,
+                borderRadius: '14px',
+                border: `1px solid ${t.border}`,
+                maxWidth: '580px',
+                width: '100%',
+                maxHeight: '86vh',
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column',
+                boxShadow: '0 20px 60px rgba(0,0,0,0.45)',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ padding: '14px 18px', borderBottom: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <IconMigrarPresupuestoSicoe size={22} color={t.primary} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: '800', fontSize: 'var(--cc-md)', color: t.primary }}>Migrar presupuesto a SICOE Obra</div>
+                  <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: '2px' }}>
+                    Δ presupuesto N3 aprobado − obra N3 aprobada · por PK · lotes de hasta {dashMigracionModal.preview?.limite_lote_max ?? 220} · incluye Δ negativos (descuentos) y positivos
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={dashReportesDeltaLoad}
+                  onClick={() => {
+                    setDashBibliotecaBalance([])
+                    setDashBibliotecaError(null)
+                    setDashMigracionModal(null)
+                  }}
+                  style={{ background: 'transparent', border: 'none', fontSize: 'var(--cc-lg)', cursor: dashReportesDeltaLoad ? 'default' : 'pointer', color: t.textMuted }}
+                >
+                  ✕
+                </button>
+              </div>
+              <div style={{ padding: '14px 18px', overflowY: 'auto', flex: 1, fontSize: 'var(--cc-sm)', color: t.text, lineHeight: 1.5 }}>
+                {dashMigracionModal.phase === 'preview' && dashMigracionModal.preview && (
+                  <>
+                    <p style={{ margin: '0 0 12px' }}>
+                      <strong>{dashMigracionModal.preview.este_lote_cantidad_pk ?? 0}</strong> PK con Δ distinta de cero (positiva o negativa) se incluyen en <strong>este lote</strong> (máx.{' '}
+                      {dashMigracionModal.preview.limite_lote_max ?? 220}), de{' '}
+                      <strong>{dashMigracionModal.preview.total_pk_maestro ?? '—'}</strong> PK en el maestro del contrato.
+                    </p>
+                    <ul style={{ margin: '0 0 12px', paddingLeft: '20px', color: t.textMuted, fontSize: 'var(--cc-caption)' }}>
+                      <li>
+                        PK con saldo Δ (ítems seleccionados): <strong>{dashMigracionModal.preview.pk_con_delta_total ?? '—'}</strong>
+                      </li>
+                      <li>
+                        Ya migrados antes (no se repiten): <strong>{dashMigracionModal.preview.pk_ya_migrados_con_delta ?? '—'}</strong>
+                      </li>
+                      <li>
+                        Pendientes tras este lote: <strong>{dashMigracionModal.preview.restantes_tras_este_lote ?? '—'}</strong> PK
+                      </li>
+                    </ul>
+                    <p style={{ margin: 0, fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                      Requiere acta RPO vigente. Cada carpeta queda en Borrador con descripción «Balance De cantidades para pk_id …». Use la biblioteca de abajo para abrir y completar datos; al confirmar el envío (validación N1) pasan a «No Revisados» con N1 aprobado en registros, listos para masivo N2.
+                    </p>
+                  </>
+                )}
+                {dashMigracionModal.phase === 'creating' && (
+                  <div style={{ margin: '12px 0 0' }}>
+                    <style>{`
+                      @keyframes ccMigracionIndet {
+                        0% { transform: translateX(-120%); }
+                        100% { transform: translateX(320%); }
+                      }
+                    `}</style>
+                    <div style={{ fontSize: 'var(--cc-sm)', fontWeight: '700', color: t.text, marginBottom: '8px' }}>
+                      Creando reportes en el servidor… <span style={{ color: t.textMuted, fontWeight: '600' }}>({dashMigracionCreatingSec}s)</span>
+                    </div>
+                    <div
+                      style={{
+                        height: 10,
+                        borderRadius: 5,
+                        background: t.border,
+                        overflow: 'hidden',
+                        border: `1px solid ${t.border}`,
+                      }}
+                    >
+                      <div
+                        style={{
+                          height: '100%',
+                          width: '42%',
+                          borderRadius: 5,
+                          background: 'linear-gradient(90deg, rgba(15,118,110,0.15), #0f766e, rgba(15,118,110,0.15))',
+                          animation: 'ccMigracionIndet 1.25s ease-in-out infinite',
+                        }}
+                      />
+                    </div>
+                    <p style={{ margin: '10px 0 0', fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.45 }}>
+                      No cierre esta ventana. Lotes grandes (200+ PK) pueden tardar un minuto o más según red y Supabase; la barra sigue en movimiento mientras el servidor trabaja.
+                    </p>
+                  </div>
+                )}
+                {(dashMigracionModal.phase === 'done' || dashMigracionModal.phase === 'confirming' || dashMigracionModal.phase === 'finished') &&
+                  dashMigracionModal.lastCreateRes && (
+                    <p style={{ margin: '0 0 10px' }}>
+                      Último lote: <strong>{(dashMigracionModal.lastCreateRes.creados || []).length}</strong> reporte(s). Resumen:{' '}
+                      {dashMigracionModal.lastCreateRes.resumen?.pk_procesados_este_lote ?? '—'} PK procesados; quedan{' '}
+                      <strong>{dashMigracionModal.lastCreateRes.resumen?.restantes_tras_este_lote ?? '—'}</strong> PK para otro clic en «Migrar».
+                    </p>
+                  )}
+                {(dashMigracionModal.phase === 'done' ||
+                  dashMigracionModal.phase === 'confirming' ||
+                  dashMigracionModal.phase === 'finished') && (
+                  <p style={{ margin: '12px 0 0', fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                    Si aún hay PK pendientes, cierre este cuadro y pulse de nuevo «Migrar a SICOE Obra»; los ya migrados no se repetirán.
+                  </p>
+                )}
+                {dashMigracionModal.cap && (
+                  <div style={{ marginTop: '14px' }}>
+                    <div style={{ fontWeight: '800', marginBottom: '6px', color: t.text }}>Biblioteca · balance de cantidades</div>
+                    <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                      Reportes de migración <strong>ya creados</strong> en este capítulo (Borrador o confirmados). No se rellenan solos al abrir este cuadro: debe pulsar <strong>Iniciar este lote</strong> para generar los borradores; al terminar, la tabla se actualiza aquí.
+                    </p>
+                    {dashBibliotecaError && (
+                      <p style={{ margin: '0 0 8px', fontSize: 'var(--cc-caption)', color: '#B91C1C' }}>
+                        {dashBibliotecaError}
+                      </p>
+                    )}
+                    {dashBibliotecaLoad ? (
+                      <p style={{ margin: 0, color: t.textMuted }}>Cargando listado…</p>
+                    ) : (dashBibliotecaBalance || []).length === 0 ? (
+                      <p style={{ margin: 0, fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                        Aún no hay filas porque no existe ningún reporte «Balance De cantidades…» en este capítulo, o todavía no ha pulsado <strong>Iniciar este lote</strong> en esta sesión.
+                      </p>
+                    ) : (
+                      <div
+                        style={{
+                          maxHeight: '220px',
+                          overflowY: 'auto',
+                          borderRadius: '8px',
+                          border: `1px solid ${t.border}`,
+                        }}
+                      >
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                          <thead>
+                            <tr style={{ background: t.bg }}>
+                              <th style={{ textAlign: 'left', padding: '8px 10px', borderBottom: `1px solid ${t.border}` }}>PK</th>
+                              <th style={{ textAlign: 'left', padding: '8px 10px', borderBottom: `1px solid ${t.border}` }}>Nº rep.</th>
+                              <th style={{ textAlign: 'left', padding: '8px 10px', borderBottom: `1px solid ${t.border}` }}>Estado</th>
+                              <th style={{ textAlign: 'right', padding: '8px 10px', borderBottom: `1px solid ${t.border}` }} />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(dashBibliotecaBalance || []).map((row) => (
+                              <tr key={row.id}>
+                                <td style={{ padding: '8px 10px', borderBottom: `1px solid ${t.border}`, color: t.text }}>{row.pk_id ?? '—'}</td>
+                                <td style={{ padding: '8px 10px', borderBottom: `1px solid ${t.border}`, color: t.textMuted }}>{row.numero_reporte ?? '—'}</td>
+                                <td style={{ padding: '8px 10px', borderBottom: `1px solid ${t.border}`, color: t.textMuted }}>{row.estado ?? '—'}</td>
+                                <td style={{ padding: '8px 10px', borderBottom: `1px solid ${t.border}`, textAlign: 'right' }}>
+                                  <button
+                                    type="button"
+                                    disabled={row.id == null || row.id === ''}
+                                    onClick={(ev) => {
+                                      ev.preventDefault()
+                                      ev.stopPropagation()
+                                      void abrirReporteBibliotecaMigracion(row.id)
+                                    }}
+                                    style={{
+                                      padding: '4px 10px',
+                                      borderRadius: '6px',
+                                      border: `1px solid ${t.border}`,
+                                      background: t.bgCard,
+                                      color: t.primary,
+                                      fontWeight: '700',
+                                      fontSize: '10px',
+                                      cursor: row.id ? 'pointer' : 'default',
+                                    }}
+                                  >
+                                    Abrir
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {(dashMigracionModal.log || []).length > 0 && (
+                  <div
+                    style={{
+                      marginTop: '12px',
+                      padding: '10px',
+                      borderRadius: '8px',
+                      background: t.bg,
+                      border: `1px solid ${t.border}`,
+                      maxHeight: '160px',
+                      overflowY: 'auto',
+                      fontFamily: 'ui-monospace, monospace',
+                      fontSize: '11px',
+                      color: t.textMuted,
+                    }}
+                  >
+                    {(dashMigracionModal.log || []).map((line, i) => (
+                      <div key={i}>{line}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div style={{ padding: '12px 18px', borderTop: `1px solid ${t.border}`, display: 'flex', flexWrap: 'wrap', gap: '8px', justifyContent: 'flex-end' }}>
+                {dashMigracionModal.phase === 'preview' && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={dashReportesDeltaLoad}
+                      onClick={() => {
+                        setDashBibliotecaBalance([])
+                        setDashBibliotecaError(null)
+                        setDashMigracionModal(null)
+                      }}
+                      style={{ padding: '8px 14px', borderRadius: '8px', border: `1px solid ${t.border}`, background: 'transparent', color: t.text, cursor: 'pointer' }}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      disabled={dashReportesDeltaLoad || !(dashMigracionModal.preview?.este_lote_cantidad_pk > 0)}
+                      onClick={() => { void ejecutarLoteMigracionDeltaDesdeModal() }}
+                      style={{
+                        padding: '8px 16px',
+                        borderRadius: '8px',
+                        border: 'none',
+                        background: '#0f766e',
+                        color: '#fff',
+                        fontWeight: '700',
+                        cursor: dashReportesDeltaLoad ? 'wait' : 'pointer',
+                        opacity: dashMigracionModal.preview?.este_lote_cantidad_pk > 0 ? 1 : 0.5,
+                      }}
+                    >
+                      Iniciar este lote
+                    </button>
+                  </>
+                )}
+                {dashMigracionModal.phase === 'done' && (
+                  <>
+                    {puedeConfirmarMigracionDelta && (
+                      <button
+                        type="button"
+                        disabled={dashReportesDeltaLoad}
+                        onClick={() => { void confirmarEnvioMigracionDeltaLotes() }}
+                        style={{
+                          padding: '8px 16px',
+                          borderRadius: '8px',
+                          border: 'none',
+                          background: t.primary,
+                          color: '#fff',
+                          fontWeight: '700',
+                          cursor: dashReportesDeltaLoad ? 'wait' : 'pointer',
+                        }}
+                      >
+                        Confirmar envío (No Revisados + N1 ✓)
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={dashReportesDeltaLoad}
+                      onClick={() => {
+                        setDashBibliotecaBalance([])
+                        setDashBibliotecaError(null)
+                        setDashMigracionModal(null)
+                      }}
+                      style={{ padding: '8px 14px', borderRadius: '8px', border: `1px solid ${t.border}`, background: 'transparent', color: t.text, cursor: 'pointer' }}
+                    >
+                      Cerrar
+                    </button>
+                  </>
+                )}
+                {(dashMigracionModal.phase === 'confirming' || dashMigracionModal.phase === 'finished') && (
+                  <button
+                    type="button"
+                    disabled={dashReportesDeltaLoad}
+                    onClick={() => {
+                      setDashBibliotecaBalance([])
+                      setDashBibliotecaError(null)
+                      setDashMigracionModal(null)
+                    }}
+                    style={{ padding: '8px 14px', borderRadius: '8px', border: `1px solid ${t.border}`, background: 'transparent', color: t.text, cursor: 'pointer' }}
+                  >
+                    {dashMigracionModal.phase === 'finished' ? 'Cerrar' : 'Seguir en segundo plano'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         {dashCarpetaReporte && (
-          <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.6)', zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center' }}>
+          <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.6)', zIndex:10050, display:'flex', alignItems:'center', justifyContent:'center' }}>
             <OfflineProvider contratoId={contratoIdDash} authToken={getToken()}>
               <CarpetaReporte
                 t={t} usuario={usuario} API_URL={API_URL} contrato_id={contratoIdDash}

@@ -141,11 +141,9 @@ DECLARE
   rsv    integer;
   inicio integer;
   fin_   integer;
-  i      integer;
-  res    integer[] := ARRAY[]::integer[];
 BEGIN
   IF p_n IS NULL OR p_n < 1 THEN
-    RETURN res;
+    RETURN ARRAY[]::integer[];
   END IF;
   IF p_n > 2000 THEN
     RAISE EXCEPTION 'p_n excede 2000';
@@ -168,10 +166,7 @@ BEGIN
   UPDATE public.sico_ultimo_numero_registro
   SET reservado_hasta = fin_
   WHERE contrato_id = p_contrato_id;
-  FOR i IN 0..(p_n - 1) LOOP
-    res := array_append(res, inicio + i);
-  END LOOP;
-  RETURN res;
+  RETURN ARRAY(SELECT generate_series(inicio, fin_));
 END;
 $$;
 

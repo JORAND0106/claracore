@@ -1157,6 +1157,43 @@ def _cargo_permiso_validar_reporte_cantidades_user_id(user_id: int) -> bool:
     return False
 
 
+def _cargo_permiso_editar_reporte_cantidades_user_id(user_id: int) -> bool:
+    """Matriz: función «reporte de cantidades» con acción editar (SICOE obra)."""
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    try:
+        urows = supabase.table("usuarios").select("cargo_id").eq("id", uid).limit(1).execute().data
+        u = urows[0] if urows else None
+        if not u or u.get("cargo_id") is None:
+            return False
+        cid = int(u["cargo_id"])
+    except (TypeError, ValueError, KeyError):
+        return False
+    try:
+        perms = supabase_execute(
+            lambda: supabase.table("permisos")
+            .select("funcion_id, editar")
+            .eq("cargo_id", cid)
+            .execute()
+            .data
+        ) or []
+        fids = [p["funcion_id"] for p in perms if p.get("editar")]
+        if not fids:
+            return False
+        funcs = supabase_execute(
+            lambda: supabase.table("funciones").select("id, nombre").in_("id", fids).execute().data
+        ) or []
+        want = "reporte de cantidades"
+        for f in funcs:
+            if (f.get("nombre") or "").strip().lower() == want:
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def _puede_editar_dimensiones_presupuesto(current_user) -> bool:
     return _es_desarrollador(current_user) or _cargo_permiso_editar_registros_presupuesto(current_user)
 
@@ -8037,6 +8074,365 @@ class ExportarRegistrosBody(BaseModel):
     etiqueta_validacion: Optional[str] = None
 
 
+# Mismo universo de filtros que ExportarRegistrosBody; validación masiva N2/N3 según grilla.
+SICOE_MASIVO_MAX_REGISTROS = 500
+
+
+class ValidarNivelMasivoFiltroBody(BaseModel):
+    nivel: int = Field(..., ge=2, le=3)
+    marcar_estado: str
+    comentario_data: Optional[dict] = None
+
+    numero_reporte: Optional[int] = None
+    numero_registro: Optional[int] = None
+    semana: Optional[int] = None
+    acta_rpo: Optional[int] = None
+    subcontratista_id: Optional[int] = None
+    capitulo: Optional[str] = None
+    item: Optional[str] = None
+    items_filtro: Optional[str] = None
+    items_filtro_op: Optional[str] = None
+    tramo: Optional[str] = None
+    costado: Optional[str] = None
+    pk_id: Optional[int] = None
+    abs_inicio: Optional[float] = None
+    abs_final: Optional[float] = None
+    estado: Optional[str] = None
+
+    cargo_id: Optional[int] = None
+    estado_validacion: Optional[str] = None
+    validacion_capas: Optional[str] = None
+    validacion_capas_op: Optional[str] = None
+
+    q_observacion: Optional[str] = None
+    q_nodo: Optional[str] = None
+    etiqueta_validacion: Optional[str] = None
+
+
+def _sicoe_masivo_filtro_to_export_body(b: ValidarNivelMasivoFiltroBody) -> ExportarRegistrosBody:
+    _dump = getattr(b, "model_dump", None)
+    if _dump:
+        d = _dump(exclude={"nivel", "marcar_estado", "comentario_data"})
+    else:
+        d = b.dict(exclude={"nivel", "marcar_estado", "comentario_data"})
+    return ExportarRegistrosBody(
+        campos=[
+            "id",
+            "reporte_id",
+            "nivel1_estado",
+            "nivel2_estado",
+            "nivel3_estado",
+            "nivel2_objeto_pago_sub",
+        ],
+        **d,
+    )
+
+
+def _sicoe_colectar_registros_masivo_desde_filtros(
+    contrato_id: int, body: ExportarRegistrosBody
+) -> Tuple[List[dict], Dict[str, Any]]:
+    """
+    Registros elegibles para validación masiva (misma semántica que exportar), excluyendo
+    flujo objeto de pago a subcontratista, con tope SICOE_MASIVO_MAX_REGISTROS.
+    """
+    consulta_directa_identificador = (
+        body.numero_reporte is not None or body.numero_registro is not None
+    )
+    acta_rpo_x = None if consulta_directa_identificador else body.acta_rpo
+    semana_x = None if consulta_directa_identificador else body.semana
+
+    semana_id_filtro = None
+    if semana_x is not None:
+        try:
+            sem_rows = supabase_execute(
+                lambda: supabase.table("so_semanas")
+                .select("id")
+                .eq("contrato_id", contrato_id)
+                .eq("numero_semana", semana_x)
+                .limit(1)
+                .execute()
+                .data
+            )
+            semana_id_filtro = sem_rows[0]["id"] if sem_rows else None
+        except Exception:
+            semana_id_filtro = None
+
+    acta_id_filtro = None
+    if acta_rpo_x is not None:
+        try:
+            acta_rows = supabase_execute(
+                lambda: supabase.table("actas")
+                .select("id")
+                .eq("contrato_id", contrato_id)
+                .eq("numero_rpo", acta_rpo_x)
+                .limit(1)
+                .execute()
+                .data
+            )
+            if acta_rows:
+                acta_id_filtro = acta_rows[0]["id"]
+            else:
+                acta_rows = supabase_execute(
+                    lambda: supabase.table("actas")
+                    .select("id")
+                    .eq("contrato_id", contrato_id)
+                    .eq("consecutivo", acta_rpo_x)
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+                acta_id_filtro = acta_rows[0]["id"] if acta_rows else None
+        except Exception:
+            acta_id_filtro = None
+
+    necesita_reporte_filter = any(
+        v is not None for v in [body.numero_reporte, body.pk_id, body.estado]
+    )
+
+    reporte_ids_base = None
+    if necesita_reporte_filter:
+        def _rep_ids():
+            q = supabase.table("so_reportes").select("id").eq("contrato_id", contrato_id)
+            if body.numero_reporte is not None:
+                q = q.eq("numero_reporte", body.numero_reporte)
+            if body.pk_id is not None:
+                q = q.eq("pk_id_id", body.pk_id)
+            if body.estado:
+                q = _so_reportes_q_por_estado(q, body.estado)
+            if body.subcontratista_id is not None:
+                q = q.eq("subcontratista_id", body.subcontratista_id)
+            if semana_x is not None and semana_id_filtro is not None:
+                q = q.eq("semana_id", semana_id_filtro)
+            if acta_rpo_x is not None and acta_id_filtro is not None:
+                q = q.eq("acta_rpo_id", acta_id_filtro)
+            return q.limit(50000).execute().data
+
+        rep_rows = supabase_execute(_rep_ids)
+        reporte_ids_base = [r["id"] for r in rep_rows if r.get("id")]
+        if not reporte_ids_base:
+            return [], {
+                "excluidos_objeto_pago_sub": 0,
+                "truncado": False,
+            }
+
+    if body.q_nodo is not None and str(body.q_nodo).strip():
+        ids_n = _sicoe_reporte_ids_coinciden_nodo(contrato_id, body.q_nodo, reporte_ids_base)
+        if ids_n is not None:
+            if not ids_n:
+                return [], {"excluidos_objeto_pago_sub": 0, "truncado": False}
+            if reporte_ids_base is not None:
+                reporte_ids_base = [x for x in reporte_ids_base if x in ids_n]
+            else:
+                reporte_ids_base = list(ids_n)
+            if not reporte_ids_base:
+                return [], {"excluidos_objeto_pago_sub": 0, "truncado": False}
+
+    reg_ids_export_etiqueta = None
+    if body.etiqueta_validacion:
+        ev_ex = _sicoe_parse_etiqueta_validacion_param(body.etiqueta_validacion)
+        reg_ids_export_etiqueta = _sicoe_fetch_registro_ids_etiqueta_validacion(contrato_id, ev_ex)
+        if not reg_ids_export_etiqueta:
+            return [], {"excluidos_objeto_pago_sub": 0, "truncado": False}
+
+    capas_exp_export = _parse_validacion_capas_param(
+        body.validacion_capas, body.cargo_id, body.estado_validacion
+    )
+    if consulta_directa_identificador:
+        capas_exp_export = []
+    _cap_op_ex = _parse_capas_validacion_op(body.validacion_capas_op)
+    _defer_capas_or_export = (
+        bool(capas_exp_export)
+        and len(capas_exp_export) > 1
+        and _cap_op_ex == "or"
+        and not _estado_filtro_omite_validacion_por_cargo(body.estado)
+    )
+
+    items_export_norm = _normalize_items_filtro_list(body.items_filtro, body.item)
+
+    def _aplicar_filtros_reg(q):
+        q = q.eq("contrato_id", contrato_id)
+        q = _so_reg_filtro_abs_solape(q, body.abs_inicio, body.abs_final)
+        if body.numero_registro is not None:
+            q = q.eq("numero_registro", body.numero_registro)
+        if semana_id_filtro is not None:
+            q = q.eq("semana_id", semana_id_filtro)
+        if acta_id_filtro is not None:
+            q = q.eq("acta_rpo_id", acta_id_filtro)
+        if body.subcontratista_id is not None:
+            q = q.eq("subcontratista_id", body.subcontratista_id)
+        if body.capitulo:
+            q = q.eq("capitulo", body.capitulo)
+        q = _apply_item_patterns_to_so_registros_q(q, items_export_norm, body.items_filtro_op)
+        if body.tramo:
+            q = q.eq("tramo", body.tramo)
+        if body.costado:
+            q = _so_reg_filtro_costado(q, body.costado)
+        if body.q_observacion is not None and str(body.q_observacion).strip():
+            q = q.ilike("observacion", f"%{str(body.q_observacion).strip()}%")
+        if acta_id_filtro is not None and not _estado_filtro_es_sin_asignar_item(body.estado):
+            q = _so_reg_item_asignado(q)
+        if _estado_filtro_es_sin_asignar_item(body.estado):
+            q = _so_reg_sin_item_asignado(q)
+
+        if not _estado_filtro_omite_validacion_por_cargo(body.estado):
+            if capas_exp_export and not _defer_capas_or_export:
+                q = _so_registros_q_y_capas_validacion(
+                    q,
+                    capas_exp_export,
+                    body.pk_id,
+                    body.tramo,
+                    body.costado,
+                    body.capitulo,
+                    body.subcontratista_id,
+                    None,
+                )
+
+        return q
+
+    campos_aux = [
+        "id",
+        "reporte_id",
+        "nivel1_estado",
+        "nivel2_estado",
+        "nivel3_estado",
+        "nivel2_objeto_pago_sub",
+        "item_numero",
+    ]
+    batch_size = 999
+    candidatos: List[dict] = []
+    excluidos_objeto_pago_sub = 0
+    truncado = False
+
+    def _ingest_batch(batch: List[dict]) -> bool:
+        nonlocal candidatos, excluidos_objeto_pago_sub, truncado
+        if not batch:
+            return False
+        if _estado_filtro_es_sin_asignar_item(body.estado):
+            batch = [
+                r for r in batch
+                if not (str(r.get("item_numero") or "").strip())
+            ]
+        if _defer_capas_or_export and capas_exp_export:
+            batch = _filtrar_registros_validacion_capas_sicoe(batch, capas_exp_export, None, "or")
+        for row in batch:
+            if row.get("nivel2_objeto_pago_sub"):
+                excluidos_objeto_pago_sub += 1
+                continue
+            candidatos.append(row)
+            if len(candidatos) > SICOE_MASIVO_MAX_REGISTROS:
+                truncado = True
+                return True
+        return False
+
+    def _fetch_by_reporte_id_list(id_list: List[int]):
+        if reg_ids_export_etiqueta is not None:
+            for rg_chunk in _sicoe_chunks_int(sorted(reg_ids_export_etiqueta), 200):
+                rc = list(rg_chunk)
+                off = 0
+                while True:
+                    o = off
+
+                    def _run_fetch():
+                        q = (
+                            supabase.table("so_registros")
+                            .select(",".join(campos_aux))
+                            .in_("reporte_id", id_list)
+                            .in_("id", rc)
+                        )
+                        q = _aplicar_filtros_reg(q)
+                        return q.range(o, o + batch_size).execute().data
+
+                    batch = supabase_execute(_run_fetch)
+                    if not batch:
+                        break
+                    if _ingest_batch(batch):
+                        return
+                    if len(batch) < batch_size + 1:
+                        break
+                    off += batch_size + 1
+            return
+
+        off = 0
+        base_q = (
+            supabase.table("so_registros")
+            .select(",".join(campos_aux))
+            .in_("reporte_id", id_list)
+        )
+        base_q = _aplicar_filtros_reg(base_q)
+        while True:
+            o = off
+
+            def _run_fetch_plain():
+                return base_q.range(o, o + batch_size).execute().data
+
+            batch = supabase_execute(_run_fetch_plain)
+            if not batch:
+                break
+            if _ingest_batch(batch):
+                break
+            if len(batch) < batch_size + 1:
+                break
+            off += batch_size + 1
+
+    if reporte_ids_base is None:
+        if reg_ids_export_etiqueta is not None:
+            for rg_chunk in _sicoe_chunks_int(sorted(reg_ids_export_etiqueta), 200):
+                rc = list(rg_chunk)
+                off = 0
+                while True:
+                    o = off
+
+                    def _run_fetch_full():
+                        q = supabase.table("so_registros").select(",".join(campos_aux)).in_("id", rc)
+                        q = _aplicar_filtros_reg(q)
+                        return q.range(o, o + batch_size).execute().data
+
+                    batch = supabase_execute(_run_fetch_full)
+                    if not batch:
+                        break
+                    if _ingest_batch(batch):
+                        break
+                    if len(batch) < batch_size + 1:
+                        break
+                    off += batch_size + 1
+                if truncado:
+                    break
+        else:
+            base_q = supabase.table("so_registros").select(",".join(campos_aux))
+            base_q = _aplicar_filtros_reg(base_q)
+            off = 0
+            while True:
+                o = off
+
+                def _run_fetch_all():
+                    return base_q.range(o, o + batch_size).execute().data
+
+                batch = supabase_execute(_run_fetch_all)
+                if not batch:
+                    break
+                if _ingest_batch(batch):
+                    break
+                if len(batch) < batch_size + 1:
+                    break
+                off += batch_size + 1
+    else:
+        _CHUNK = 200
+        for i in range(0, len(reporte_ids_base), _CHUNK):
+            chunk = reporte_ids_base[i:i + _CHUNK]
+            _fetch_by_reporte_id_list(chunk)
+            if truncado:
+                break
+
+    out = candidatos[:SICOE_MASIVO_MAX_REGISTROS]
+    stats = {
+        "excluidos_objeto_pago_sub": excluidos_objeto_pago_sub,
+        "truncado": truncado,
+    }
+    for r in out:
+        r.pop("item_numero", None)
+    return out, stats
+
+
 @app.get("/sicoe-obra/{contrato_id}/registros/campos")
 def listar_campos_registros_sicoe(
     contrato_id: int,
@@ -9583,6 +9979,1076 @@ def crear_reporte_obra(contrato_id: int, body: ReporteCreate, current_user=Depen
         pass
     return row
 
+
+def _sicoe_resolver_acta_semana_corte(
+    contrato_id: int, subcontratista_id: Optional[int]
+) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+    """Misma resolución que asignar ítem: acta RPO en período + semana activa + corte vigente del sub (si aplica)."""
+    today = date.today().isoformat()
+
+    def _acta():
+        return (
+            supabase.table("actas")
+            .select("id, numero_rpo")
+            .eq("contrato_id", contrato_id)
+            .eq("tipo_grupo", "RPO")
+            .lte("fecha_inicio", today)
+            .gte("fecha_fin", today)
+            .order("id", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    actas = supabase_execute(_acta)
+    acta_rpo_id = actas[0]["id"] if actas else None
+
+    corte_id = None
+    if subcontratista_id:
+        try:
+
+            def _corte():
+                return (
+                    supabase.table("subcontratista_cortes")
+                    .select("id, consecutivo")
+                    .eq("subcontratista_id", subcontratista_id)
+                    .lte("fecha_inicio", today)
+                    .gte("fecha_fin", today)
+                    .limit(1)
+                    .execute()
+                    .data
+                )
+
+            cortes = supabase_execute(_corte)
+            corte_id = cortes[0]["id"] if cortes else None
+        except Exception:
+            corte_id = None
+
+    semana_id = None
+    try:
+
+        def _sem():
+            return (
+                supabase.table("so_semanas")
+                .select("id, numero_semana")
+                .eq("contrato_id", contrato_id)
+                .eq("estado", "activa")
+                .lte("fecha_inicio", today)
+                .gte("fecha_fin", today)
+                .limit(1)
+                .execute()
+                .data
+            )
+
+        sems = supabase_execute(_sem)
+        semana_id = sems[0]["id"] if sems else None
+    except Exception:
+        semana_id = None
+
+    return acta_rpo_id, semana_id, corte_id
+
+
+def _coords_desde_fila_pk_maestro(pk_row: Optional[Dict[str, Any]]) -> Tuple[Optional[float], Optional[float]]:
+    if not pk_row:
+        return None, None
+    pares = (
+        ("centro_lat", "centro_lng"),
+        ("lat", "lng"),
+        ("coord_lat", "coord_lng"),
+    )
+    for a, b in pares:
+        try:
+            if pk_row.get(a) is not None and pk_row.get(b) is not None:
+                return float(pk_row[a]), float(pk_row[b])
+        except (TypeError, ValueError):
+            continue
+    return None, None
+
+
+def _listado_precios_index_por_item_norm(contrato_id: int, capitulo: str) -> Dict[str, Dict[str, Any]]:
+    cap_key = _dash_norm_capitulo_key_py(capitulo)
+    idx: Dict[str, Dict[str, Any]] = {}
+    off = 0
+    while True:
+
+        def _b(o=off):
+            return (
+                supabase.table("listado_precios")
+                .select("id, capitulo, competencia, item_numero, descripcion, unidad, precio_unitario")
+                .eq("contrato_id", contrato_id)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_b) or []
+        for r in batch:
+            if _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_key:
+                continue
+            ik = _dash_norm_item_key_py(r.get("item_numero"))
+            if ik and ik not in idx:
+                idx[ik] = r
+        if len(batch) < 1000:
+            break
+        off += 1000
+    return idx
+
+
+def _presupuesto_listado_fallback_por_item_pk(
+    contrato_id: int, capitulo: str
+) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """
+    Por (item_norm, pk_disp): primera fila presupuesto con vlr_unitario, mismo capítulo.
+    Sirve cuando el ítem no está en listado_precios pero sí en presupuesto (p. ej. líneas con Δ negativa).
+    """
+    cap_key = _dash_norm_capitulo_key_py(capitulo)
+    out: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    off = 0
+    while True:
+
+        def _b(o=off):
+            return (
+                supabase.table("presupuesto")
+                .select("capitulo, competencia, item, descripcion, und, vlr_unitario, pk_id")
+                .eq("contrato_id", contrato_id)
+                .eq("dado_de_baja", False)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_b) or []
+        for r in batch:
+            if _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_key:
+                continue
+            ik = _dash_norm_item_key_py(r.get("item"))
+            pk_disp = _dash_pk_disp_key_py(r.get("pk_id"))
+            if not ik or not pk_disp or pk_disp == "(sin pk)":
+                continue
+            key = (ik, pk_disp)
+            if key in out:
+                continue
+            try:
+                vu = float(r.get("vlr_unitario") or 0)
+            except (TypeError, ValueError):
+                continue
+            out[key] = {
+                "capitulo": r.get("capitulo"),
+                "competencia": r.get("competencia"),
+                "item_numero": r.get("item"),
+                "descripcion": r.get("descripcion"),
+                "unidad": r.get("und"),
+                "precio_unitario": vu,
+            }
+        if len(batch) < 1000:
+            break
+        off += 1000
+    return out
+
+
+def _pk_maestro_por_display(contrato_id: int, pk_disps: List[str]) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    seen = set()
+    chunk: List[str] = []
+    for raw in pk_disps:
+        k = _dash_pk_disp_key_py(raw)
+        if not k or k == "(sin pk)" or k in seen:
+            continue
+        seen.add(k)
+        chunk.append(k)
+    for i in range(0, len(chunk), 100):
+        part = chunk[i : i + 100]
+
+        def _q():
+            return (
+                supabase.table("pk_ids")
+                .select("id, pk_id, civ, tramo, infraestructura, calzada, abs_inicio, abs_final, ubicacion")
+                .eq("contrato_id", contrato_id)
+                .in_("pk_id", part)
+                .execute()
+                .data
+            )
+
+        rows = supabase_execute(_q) or []
+        for r in rows:
+            disp = _dash_pk_disp_key_py(r.get("pk_id"))
+            if disp and disp not in out:
+                out[disp] = r
+    return out
+
+
+# Tope p_n en public.siguiente_n_numeros_registro (debe alinearse con el SQL del proyecto).
+_REGISTRO_N_MAX_RPC = 2000
+
+
+def _sicoe_reservar_numeros_registro_total(contrato_id: int, total_n: int) -> List[int]:
+    """Reserva total_n consecutivos; varias RPC si total_n supera el tope de la función SQL."""
+    if total_n < 1:
+        return []
+    out: List[int] = []
+    rem = total_n
+    while rem > 0:
+        chunk = min(rem, _REGISTRO_N_MAX_RPC)
+        out.extend(_sicoe_reservar_numeros_registro(contrato_id, chunk))
+        rem -= chunk
+    if len(out) != total_n:
+        raise HTTPException(
+            status_code=500,
+            detail="Reserva de números de registro incompleta; reintente.",
+        )
+    return out
+
+
+def _sicoe_reservar_numeros_registro(contrato_id: int, nlines: int) -> List[int]:
+    def _parse_numero_registro_raw(raw) -> int:
+        if raw is None:
+            raise ValueError("RPC sin número de registro")
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            return int(raw)
+        if isinstance(raw, list) and len(raw) > 0:
+            return _parse_numero_registro_raw(raw[0])
+        if isinstance(raw, dict):
+            for k in ("numero", "siguiente_numero_registro", "siguiente", "id"):
+                if k in raw and raw[k] is not None:
+                    return int(raw[k])
+        return int(raw)
+
+    numeros: List[int] = []
+
+    def _try_rpc_bloque() -> bool:
+        nonlocal numeros
+
+        def _q():
+            return supabase.rpc(
+                "siguiente_n_numeros_registro", {"p_contrato_id": contrato_id, "p_n": nlines}
+            ).execute().data
+
+        try:
+            raw = supabase_execute(_q)
+        except Exception:
+            return False
+        if raw is None:
+            return False
+        if isinstance(raw, list):
+            if len(raw) != nlines:
+                return False
+            try:
+                numeros = [int(x) for x in raw]
+            except (TypeError, ValueError):
+                return False
+            return True
+        if isinstance(raw, dict):
+            for k in ("siguiente_n_numeros_registro", "data", "result"):
+                if k in raw and isinstance(raw[k], list):
+                    try:
+                        arr = [int(x) for x in raw[k]]
+                    except (TypeError, ValueError):
+                        return False
+                    if len(arr) != nlines:
+                        return False
+                    numeros = arr
+                    return True
+        return False
+
+    if not _try_rpc_bloque():
+        for _ in range(nlines):
+
+            def _n():
+                return supabase.rpc("siguiente_numero_registro", {"p_contrato_id": contrato_id}).execute().data
+
+            numeros.append(_parse_numero_registro_raw(supabase_execute(_n)))
+    if len(set(numeros)) != len(numeros):
+        raise HTTPException(
+            status_code=500,
+            detail="Números de registro duplicados al reservar; reintente.",
+        )
+    return numeros
+
+
+def _parse_numero_reporte_raw(raw) -> int:
+    if raw is None:
+        raise ValueError("RPC sin número de reporte")
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return int(raw)
+    if isinstance(raw, list) and len(raw) > 0:
+        return _parse_numero_reporte_raw(raw[0])
+    if isinstance(raw, dict):
+        for k in ("numero_reporte", "siguiente_numero_reporte", "numero", "siguiente"):
+            if k in raw and raw[k] is not None:
+                return int(raw[k])
+    return int(raw)
+
+
+def _sicoe_reservar_n_numeros_reporte(contrato_id: int, n: int) -> List[int]:
+    """N consecutivos vía RPC batch; si no existe la función en BD, cae en N llamadas a siguiente_numero_reporte."""
+    if n < 1:
+        return []
+
+    def _try_batch() -> Optional[List[int]]:
+
+        def _q():
+            return (
+                supabase.rpc(
+                    "siguiente_n_numeros_reporte", {"p_contrato_id": contrato_id, "p_n": n}
+                )
+                .execute()
+                .data
+            )
+
+        try:
+            raw = supabase_execute(_q)
+        except Exception:
+            return None
+        if raw is None:
+            return None
+        if isinstance(raw, list):
+            if len(raw) != n:
+                return None
+            try:
+                return [int(x) for x in raw]
+            except (TypeError, ValueError):
+                return None
+        if isinstance(raw, dict):
+            for k in ("siguiente_n_numeros_reporte", "data", "result"):
+                if k in raw and isinstance(raw[k], list):
+                    arr = raw[k]
+                    if len(arr) != n:
+                        return None
+                    try:
+                        return [int(x) for x in arr]
+                    except (TypeError, ValueError):
+                        return None
+        return None
+
+    got = _try_batch()
+    if got is not None:
+        if len(set(got)) != len(got):
+            raise HTTPException(status_code=500, detail="Números de reporte duplicados al reservar; reintente.")
+        return got
+    out: List[int] = []
+    for _ in range(n):
+
+        def _one():
+            return supabase.rpc("siguiente_numero_reporte", {"p_contrato_id": contrato_id}).execute().data
+
+        out.append(_parse_numero_reporte_raw(supabase_execute(_one)))
+    if len(set(out)) != len(out):
+        raise HTTPException(status_code=500, detail="Números de reporte duplicados al reservar; reintente.")
+    return out
+
+
+# Nombre obligatorio de reportes generados desde migración dashboard → SICOE (biblioteca / lotes).
+MIGR_BALANCE_CANTIDADES_DESC_PREFIX = "Balance De cantidades para pk_id "
+# Compatibilidad con reportes antiguos antes del cambio de convención de nombre.
+MIGR_DELTA_LEGACY_DESC_PREFIX = "Δ Dashboard ·"
+DASHBOARD_DELTA_REPORTES_MAX = 220
+
+
+def _descripcion_es_reporte_migracion_balance(desc: Optional[str]) -> bool:
+    d = (desc or "").strip()
+    return d.startswith(MIGR_BALANCE_CANTIDADES_DESC_PREFIX) or d.startswith(MIGR_DELTA_LEGACY_DESC_PREFIX)
+
+
+def _pk_disp_desde_descripcion_migracion(desc: Optional[str]) -> Optional[str]:
+    """Obtiene texto PK del maestro desde la descripción del reporte (nuevo o legado)."""
+    d = (desc or "").strip()
+    if d.startswith(MIGR_BALANCE_CANTIDADES_DESC_PREFIX):
+        rest = d[len(MIGR_BALANCE_CANTIDADES_DESC_PREFIX) :].strip()
+        for sep in (" ·", " |", "\n"):
+            if sep in rest:
+                rest = rest.split(sep)[0].strip()
+        return _dash_pk_disp_key_py(rest) if rest else None
+    if d.startswith(MIGR_DELTA_LEGACY_DESC_PREFIX):
+        try:
+            parts = d.split("·")
+            if len(parts) >= 2:
+                return _dash_pk_disp_key_py(parts[1].strip())
+        except Exception:
+            pass
+    return None
+
+
+def _n1_aprobar_todos_registros_de_reportes(
+    contrato_id: int, reporte_ids: List[int], autor_id: int
+) -> int:
+    """Marca Nivel 1 Aprobado en todos los registros de los reportes indicados (migración balance)."""
+    now = datetime.utcnow().isoformat()
+    nupd = 0
+    for rep_id in reporte_ids:
+        def _ids():
+            return (
+                supabase.table("so_registros")
+                .select("id")
+                .eq("contrato_id", contrato_id)
+                .eq("reporte_id", rep_id)
+                .execute()
+                .data
+            )
+
+        idrows = supabase_execute(_ids) or []
+        reg_ids = []
+        for row in idrows:
+            try:
+                reg_ids.append(int(row["id"]))
+            except (TypeError, ValueError, KeyError):
+                continue
+        for i in range(0, len(reg_ids), 90):
+            chunk = reg_ids[i : i + 90]
+            if not chunk:
+                continue
+
+            def _u():
+                return (
+                    supabase.table("so_registros")
+                    .update(
+                        {
+                            "nivel1_estado": "Aprobado",
+                            "nivel1_usuario_id": autor_id,
+                            "nivel1_fecha": now,
+                        }
+                    )
+                    .in_("id", chunk)
+                    .eq("contrato_id", contrato_id)
+                    .execute()
+                )
+
+            supabase_execute(_u)
+            nupd += len(chunk)
+    return nupd
+
+
+def _count_pk_ids_maestro_contrato(contrato_id: int) -> int:
+    n = 0
+    off = 0
+    while True:
+
+        def _b(o=off):
+            return (
+                supabase.table("pk_ids")
+                .select("id")
+                .eq("contrato_id", contrato_id)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_b) or []
+        n += len(batch)
+        if len(batch) < 1000:
+            break
+        off += 1000
+    return n
+
+
+def _pk_disp_migrados_dashboard_delta(contrato_id: int, capitulo: str) -> Set[str]:
+    """PK (texto maestro) que ya tienen reporte generado por esta migración (mismo capítulo normalizado)."""
+    cap_key = _dash_norm_capitulo_key_py(capitulo)
+    out: Set[str] = set()
+    off = 0
+    while True:
+
+        def _q(o=off):
+            return (
+                supabase.table("so_reportes")
+                .select("id, capitulo, descripcion_actividad, pk_id_id, pk_ids(pk_id)")
+                .eq("contrato_id", contrato_id)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_q) or []
+        for r in batch:
+            desc = r.get("descripcion_actividad")
+            if not _descripcion_es_reporte_migracion_balance(desc):
+                continue
+            if _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_key:
+                continue
+            from_desc = _pk_disp_desde_descripcion_migracion(desc)
+            if from_desc and from_desc != "(sin pk)":
+                out.add(from_desc)
+                continue
+            pj = r.get("pk_ids") if isinstance(r.get("pk_ids"), dict) else {}
+            disp = _dash_pk_disp_key_py((pj or {}).get("pk_id"))
+            if disp and disp != "(sin pk)":
+                out.add(disp)
+        if len(batch) < 1000:
+            break
+        off += 1000
+    return out
+
+
+def _dash_parse_float_num(v: Any) -> float:
+    """Parse numérico tolerante (JSON/RPC/comas) para deltas del dashboard."""
+    if v is None:
+        return 0.0
+    if isinstance(v, bool):
+        return float(int(v))
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip().replace(",", ".")
+    if not s:
+        return 0.0
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def _dash_pk_display_sort_key(disp: str) -> Tuple[int, Any]:
+    s = str(disp).strip()
+    try:
+        return (0, int(s))
+    except ValueError:
+        return (1, s)
+
+
+def _dashboard_delta_armar_pk_lines(
+    contrato_id: int,
+    capitulo: str,
+    items_ord: List[str],
+    listado_idx: Dict[str, Dict[str, Any]],
+    solo_delta_positivo: bool,
+) -> Tuple[Dict[str, List[Dict[str, Any]]], List[str]]:
+    pk_lines: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    warnings_item: List[str] = []
+    for it in items_ord:
+        it_key = _dash_norm_item_key_py(it)
+        if it_key not in listado_idx:
+            warnings_item.append(it)
+        tabla = _dashboard_pkid_tabla_obra_core(contrato_id, capitulo, it)
+        for row in tabla.get("rows") or []:
+            pk_disp = _dash_pk_disp_key_py(row.get("pk_id"))
+            dc = _dash_parse_float_num(row.get("delta_cant"))
+            if solo_delta_positivo and dc <= 1e-9:
+                continue
+            if not solo_delta_positivo and abs(dc) <= 1e-9:
+                continue
+            pk_lines[pk_disp].append(
+                {
+                    "item": it,
+                    "item_key": it_key,
+                    "delta_cant": round(dc, 4),
+                    "descripcion_item": tabla.get("descripcion_item") or "",
+                }
+            )
+    return pk_lines, warnings_item
+
+
+def _dashboard_delta_parse_items_ord(items_in: List[str]) -> List[str]:
+    items_ord: List[str] = []
+    seen_it: Set[str] = set()
+    for it in items_in:
+        kn = _dash_norm_item_key_py(str(it).strip())
+        if not kn or kn in seen_it:
+            continue
+        seen_it.add(kn)
+        items_ord.append(str(it).strip())
+    return items_ord
+
+
+class ReportesMasivosDeltaDashboardBody(BaseModel):
+    """Consolidar Δ (ppto N3 aprobado − obra N3 aprobada) por PK_ID: un reporte por PK con una línea por ítem."""
+
+    capitulo: str
+    items: List[str]
+    # False = incluir descuentos (Δ < 0) y excesos (Δ > 0); solo excluye Δ≈0
+    solo_delta_positivo: bool = False
+
+
+class ConfirmarDeltaDashboardBody(BaseModel):
+    capitulo: str
+    limite: int = 45
+
+
+def _hay_mas_reportes_borrador_delta(contrato_id: int, cap_key: str) -> bool:
+    """True si aún hay reportes Borrador de migración balance para el capítulo (normalizado)."""
+    off = 0
+    while True:
+
+        def _b(o=off):
+            return (
+                supabase.table("so_reportes")
+                .select("id, capitulo, descripcion_actividad")
+                .eq("contrato_id", contrato_id)
+                .eq("estado", "Borrador")
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_b) or []
+        for r in batch:
+            desc = r.get("descripcion_actividad")
+            if not _descripcion_es_reporte_migracion_balance(desc):
+                continue
+            if _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_key:
+                continue
+            return True
+        if len(batch) < 1000:
+            break
+        off += 1000
+    return False
+
+
+@app.get("/sicoe-obra/{contrato_id}/reportes-biblioteca-balance-cantidades")
+def biblioteca_reportes_balance_cantidades(
+    contrato_id: int,
+    capitulo: str = Query(...),
+    estado: Optional[str] = Query(
+        None,
+        description="Filtrar por estado de cabecera (ej. Borrador, No Revisados); vacío = todos",
+    ),
+    current_user=Depends(get_current_user),
+):
+    """Listado de reportes generados por migración balance (revisión uno a uno)."""
+    cap = (capitulo or "").strip()
+    if not cap:
+        raise HTTPException(status_code=422, detail="Indique capítulo.")
+    cap_key = _dash_norm_capitulo_key_py(cap)
+    est_f = (estado or "").strip() or None
+    out: List[Dict[str, Any]] = []
+    off = 0
+    while True:
+
+        def _b(o=off):
+            return (
+                supabase.table("so_reportes")
+                .select("id, numero_reporte, descripcion_actividad, estado, capitulo, pk_id_id, pk_ids(pk_id)")
+                .eq("contrato_id", contrato_id)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_b) or []
+        for r in batch:
+            if _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_key:
+                continue
+            if not _descripcion_es_reporte_migracion_balance(r.get("descripcion_actividad")):
+                continue
+            if est_f and (r.get("estado") or "").strip() != est_f:
+                continue
+            pj = r.get("pk_ids") if isinstance(r.get("pk_ids"), dict) else {}
+            pk_txt = _pk_disp_desde_descripcion_migracion(r.get("descripcion_actividad")) or _dash_pk_disp_key_py(
+                (pj or {}).get("pk_id")
+            )
+            out.append(
+                {
+                    "id": r.get("id"),
+                    "numero_reporte": r.get("numero_reporte"),
+                    "descripcion_actividad": r.get("descripcion_actividad"),
+                    "estado": r.get("estado"),
+                    "pk_id": pk_txt,
+                }
+            )
+        if len(batch) < 1000:
+            break
+        off += 1000
+    def _sort_key_bib(r: Dict[str, Any]):
+        nr = r.get("numero_reporte")
+        try:
+            n = int(nr) if nr is not None and str(nr).strip() != "" else 0
+        except (TypeError, ValueError):
+            n = 0
+        try:
+            rid = int(r.get("id") or 0)
+        except (TypeError, ValueError):
+            rid = 0
+        return (n, rid)
+
+    out.sort(key=_sort_key_bib)
+    return {"reportes": out, "total": len(out)}
+
+
+@app.get("/sicoe-obra/{contrato_id}/reportes-masivos-dashboard-delta/preview")
+def preview_reportes_masivos_dashboard_delta(
+    contrato_id: int,
+    capitulo: str = Query(...),
+    items: List[str] = Query([], description="Ítem del listado (repetir param items=)"),
+    solo_delta_positivo: bool = Query(
+        False,
+        description="Si true, solo PK con Δ cantidad > 0. Si false (recomendado), toda Δ distinta de cero (incluye negativos / descuentos).",
+    ),
+    current_user=Depends(get_current_user),
+):
+    """Vista previa: totales de PK en maestro, cuántos tienen Δ pendiente y cuántos caben en el siguiente lote (excl. ya migrados)."""
+    cap = (capitulo or "").strip()
+    if not cap:
+        raise HTTPException(status_code=422, detail="Indique capítulo.")
+    items_ord = _dashboard_delta_parse_items_ord(list(items or []))
+    if not items_ord:
+        raise HTTPException(status_code=422, detail="Indique al menos un ítem.")
+    listado_idx = _listado_precios_index_por_item_norm(contrato_id, cap)
+    pk_lines, warnings_item = _dashboard_delta_armar_pk_lines(
+        contrato_id, cap, items_ord, listado_idx, solo_delta_positivo
+    )
+    migrados = _pk_disp_migrados_dashboard_delta(contrato_id, cap)
+    todos_pk_delta = {k for k in pk_lines.keys() if k and k != "(sin pk)" and pk_lines[k]}
+    pendientes = sorted(
+        (t for t in todos_pk_delta if t not in migrados),
+        key=lambda x: _dash_pk_display_sort_key(str(x)),
+    )
+    ya_migrados_con_delta = sorted(
+        (t for t in todos_pk_delta if t in migrados),
+        key=lambda x: _dash_pk_display_sort_key(str(x)),
+    )
+    total_maestro = _count_pk_ids_maestro_contrato(contrato_id)
+    n_pend = len(pendientes)
+    n_lote = min(DASHBOARD_DELTA_REPORTES_MAX, n_pend)
+    n_resto = max(0, n_pend - n_lote)
+    return {
+        "capitulo": cap,
+        "total_pk_maestro": total_maestro,
+        "pk_con_delta_total": len(todos_pk_delta),
+        "pk_pendientes_migrar": n_pend,
+        "pk_ya_migrados_con_delta": len(ya_migrados_con_delta),
+        "este_lote_cantidad_pk": n_lote,
+        "restantes_tras_este_lote": n_resto,
+        "limite_lote_max": DASHBOARD_DELTA_REPORTES_MAX,
+        "advertencias": {"items_sin_listado_en_capitulo": warnings_item},
+    }
+
+
+@app.post("/sicoe-obra/{contrato_id}/reportes-masivos-dashboard-delta/confirmar")
+def confirmar_reportes_masivos_dashboard_delta(
+    contrato_id: int,
+    body: ConfirmarDeltaDashboardBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Pasa a «No Revisados» reportes en Borrador de migración balance (mismo capítulo) y aprueba
+    Nivel 1 en todos sus registros (habilita validación / flujo hacia Nivel 2).
+    Requiere permiso de validación en Nivel 1 (misma regla que validar-nivel1).
+    """
+    cap = (body.capitulo or "").strip()
+    if not cap:
+        raise HTTPException(status_code=422, detail="Indique capítulo.")
+    cap_key = _dash_norm_capitulo_key_py(cap)
+    limite = max(1, min(int(body.limite or 45), 80))
+    uid = int(current_user.get("sub") or current_user.get("id", 0))
+    _require_sicoe_puede_validar_nivel(current_user, uid, 1)
+
+    ids_pick: List[int] = []
+    off = 0
+    while len(ids_pick) < limite:
+        def _b(o=off):
+            return (
+                supabase.table("so_reportes")
+                .select("id, capitulo, estado, descripcion_actividad")
+                .eq("contrato_id", contrato_id)
+                .eq("estado", "Borrador")
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_b) or []
+        for r in batch:
+            if len(ids_pick) >= limite:
+                break
+            if _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_key:
+                continue
+            desc = r.get("descripcion_actividad")
+            if not _descripcion_es_reporte_migracion_balance(desc):
+                continue
+            try:
+                rid = int(r.get("id"))
+            except (TypeError, ValueError):
+                continue
+            ids_pick.append(rid)
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    if not ids_pick:
+        return {"actualizados": 0, "hay_mas": False, "ids": [], "registros_n1_aprobados": 0}
+
+    def _upd():
+        return (
+            supabase.table("so_reportes")
+            .update(
+                {
+                    "estado": "No Revisados",
+                    "modificado_por": uid,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+            )
+            .in_("id", ids_pick)
+            .eq("contrato_id", contrato_id)
+            .eq("estado", "Borrador")
+            .execute()
+        )
+
+    supabase_execute(_upd)
+    n1_n = _n1_aprobar_todos_registros_de_reportes(contrato_id, ids_pick, uid)
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "EDITAR",
+            "SICOE",
+            "reporte",
+            "dashboard_delta_confirmar_lote",
+            {
+                "n": len(ids_pick),
+                "capitulo": cap,
+                "registros_n1_aprobados": n1_n,
+                "ids_muestra": ids_pick[:20],
+            },
+        )
+    except Exception:
+        pass
+
+    hay_mas = _hay_mas_reportes_borrador_delta(contrato_id, cap_key)
+    return {
+        "actualizados": len(ids_pick),
+        "hay_mas": hay_mas,
+        "ids": ids_pick,
+        "registros_n1_aprobados": n1_n,
+    }
+
+
+@app.post("/sicoe-obra/{contrato_id}/reportes-masivos-dashboard-delta")
+def crear_reportes_masivos_dashboard_delta(
+    contrato_id: int,
+    body: ReportesMasivosDeltaDashboardBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Crea reportes SICOE en Borrador a partir del mismo criterio que la tabla PK del dashboard:
+    presupuesto validado N3 «Aprobado» vs. registros de obra con N3 «Aprobado».
+    Por cada PK con |Δ| de cantidad según `solo_delta_positivo` (por defecto se incluyen Δ negativos y positivos),
+    Excluye PK que ya tienen reporte «Balance De cantidades…» o legado «Δ Dashboard ·» (mismo capítulo). Como máximo DASHBOARD_DELTA_REPORTES_MAX PK por llamada.
+    Cabecera: descripción «Balance De cantidades para pk_id {PK}»; maestro pk_ids (abscisas, ubicación); creado_por = quien llama.
+    """
+    capitulo = (body.capitulo or "").strip()
+    if not capitulo:
+        raise HTTPException(status_code=422, detail="Indique capítulo.")
+    items_in = [str(x).strip() for x in (body.items or []) if str(x).strip()]
+    items_ord = _dashboard_delta_parse_items_ord(items_in)
+    if not items_ord:
+        raise HTTPException(status_code=422, detail="Indique al menos un ítem.")
+
+    acta_rpo_id, semana_id, corte_id = _sicoe_resolver_acta_semana_corte(contrato_id, None)
+    if not acta_rpo_id:
+        raise HTTPException(
+            status_code=422,
+            detail="No existe acta RPO vigente para hoy. Créela en administración antes de generar reportes.",
+        )
+
+    listado_idx = _listado_precios_index_por_item_norm(contrato_id, capitulo)
+    pk_lines, warnings_item = _dashboard_delta_armar_pk_lines(
+        contrato_id, capitulo, items_ord, listado_idx, body.solo_delta_positivo
+    )
+
+    omitidos: List[Dict[str, Any]] = []
+    creados: List[Dict[str, Any]] = []
+    uid = int(current_user.get("sub") or current_user.get("id", 0))
+
+    migrados = _pk_disp_migrados_dashboard_delta(contrato_id, capitulo)
+    candidatos_all = [
+        (pk, lines)
+        for pk, lines in sorted(pk_lines.items(), key=lambda x: _dash_pk_display_sort_key(str(x[0])))
+        if pk and pk != "(sin pk)" and lines
+    ]
+    listado_fb = _presupuesto_listado_fallback_por_item_pk(contrato_id, capitulo)
+    candidatos_pk = [(pk, lines) for pk, lines in candidatos_all if pk not in migrados][:DASHBOARD_DELTA_REPORTES_MAX]
+    omitidos_ya = [pk for pk, _ in candidatos_all if pk in migrados][:500]
+    n_pend_total = len([1 for pk, _ in candidatos_all if pk not in migrados])
+    restantes_tras = max(0, n_pend_total - len(candidatos_pk))
+    total_maestro = _count_pk_ids_maestro_contrato(contrato_id)
+
+    pk_m = _pk_maestro_por_display(contrato_id, [pk for pk, _ in candidatos_pk])
+
+    work_items: List[Dict[str, Any]] = []
+    for pk_disp, lines in candidatos_pk:
+        filas_insert: List[Dict[str, Any]] = []
+        for ln in lines:
+            lp = listado_idx.get(ln["item_key"]) or listado_fb.get((ln["item_key"], pk_disp))
+            if not lp:
+                continue
+            vlr = float(lp.get("precio_unitario") or 0)
+            dc = float(ln["delta_cant"])
+            cant_tot = round(dc, 2)
+            costo_dir = round(cant_tot * vlr, 0)
+            filas_insert.append(
+                {
+                    "capitulo": lp.get("capitulo"),
+                    "competencia": lp.get("competencia"),
+                    "item_numero": lp.get("item_numero"),
+                    "item_descripcion": lp.get("descripcion"),
+                    "unidad": lp.get("unidad"),
+                    "vlr_unitario": vlr,
+                    "longitud": dc,
+                    "cantidad_total": cant_tot,
+                    "costo_directo": costo_dir,
+                    "acta_rpo_id": acta_rpo_id,
+                    "semana_id": semana_id,
+                    "corte_id": corte_id,
+                    "nivel1_estado": "No Revisado",
+                    "nivel2_estado": "No Revisado",
+                    "nivel3_estado": "No Revisado",
+                    "nombre": str(lp.get("item_numero") or ln["item"] or "").strip() or None,
+                    "descripcion": (ln.get("descripcion_item") or lp.get("descripcion") or "")[:2000] or None,
+                }
+            )
+        if not filas_insert:
+            omitidos.append({"pk_id": pk_disp, "motivo": "sin líneas válidas (listado o Δ)"})
+            continue
+
+        pk_row = pk_m.get(pk_disp)
+        pk_id_id = int(pk_row["id"]) if pk_row and pk_row.get("id") is not None else None
+        lat_g, lng_g = _coords_desde_fila_pk_maestro(pk_row)
+
+        desc_act = f"{MIGR_BALANCE_CANTIDADES_DESC_PREFIX}{pk_disp}"[:500]
+        rep_payload: Dict[str, Any] = {
+            "contrato_id": contrato_id,
+            "descripcion_actividad": desc_act,
+            "capitulo": capitulo,
+            "estado": "Borrador",
+            "creado_por": uid,
+            "acta_rpo_id": acta_rpo_id,
+            "semana_id": semana_id,
+            "corte_id": corte_id,
+            "pk_id_id": pk_id_id,
+        }
+        if pk_row:
+            for fld in ("civ", "tramo", "infraestructura", "calzada", "ubicacion", "abs_inicio", "abs_final"):
+                if pk_row.get(fld) is not None:
+                    rep_payload[fld] = pk_row.get(fld)
+        if lat_g is not None and lng_g is not None:
+            rep_payload["coord_lat"] = lat_g
+            rep_payload["coord_lng"] = lng_g
+
+        work_items.append(
+            {
+                "pk_disp": pk_disp,
+                "lines": lines,
+                "filas_insert": filas_insert,
+                "rep_payload": rep_payload,
+            }
+        )
+
+    if work_items:
+        numeros_rep = _sicoe_reservar_n_numeros_reporte(contrato_id, len(work_items))
+        inserted_rows: List[Dict[str, Any]] = []
+        work_ok: List[Dict[str, Any]] = []
+        for w, numero_rep in zip(work_items, numeros_rep):
+            rp = dict(w["rep_payload"])
+            rp["numero_reporte"] = numero_rep
+
+            def _ins_one(payload=rp):
+                return supabase.table("so_reportes").insert(payload).execute().data
+
+            rep_rows = supabase_execute(_ins_one) or []
+            rep = rep_rows[0] if rep_rows else {}
+            rid_one = rep.get("id")
+            if not rid_one:
+                omitidos.append({"pk_id": w["pk_disp"], "motivo": "error insertando reporte"})
+                continue
+            inserted_rows.append(rep)
+            work_ok.append(w)
+
+        total_lines = sum(len(w["filas_insert"]) for w in work_ok)
+        nums_all = (
+            _sicoe_reservar_numeros_registro_total(contrato_id, total_lines)
+            if total_lines
+            else []
+        )
+        pos_nr = 0
+        flat_regs: List[Dict[str, Any]] = []
+        for w, rep in zip(work_ok, inserted_rows):
+            rid = rep.get("id")
+            if not rid:
+                continue
+            filas_insert = w["filas_insert"]
+            nlines = len(filas_insert)
+            nums_reg = nums_all[pos_nr : pos_nr + nlines]
+            pos_nr += nlines
+            rep_payload = w["rep_payload"]
+            for line, numero in zip(filas_insert, nums_reg):
+                d = dict(line)
+                d["reporte_id"] = rid
+                d["numero_registro"] = numero
+                d["contrato_id"] = contrato_id
+                d["creado_por_reg"] = uid
+                for campo in (
+                    "pk_id_id",
+                    "civ",
+                    "tramo",
+                    "infraestructura",
+                    "calzada",
+                    "ubicacion",
+                    "coord_lat",
+                    "coord_lng",
+                    "abs_inicio",
+                    "abs_final",
+                    "subcontratista_id",
+                    "inspector_id",
+                ):
+                    if rep_payload.get(campo) is not None:
+                        d[campo] = rep_payload[campo]
+                flat_regs.append(d)
+
+        _REG_BATCH = 200
+        for i in range(0, len(flat_regs), _REG_BATCH):
+
+            def _ins_reg_blk(fr=flat_regs[i : i + _REG_BATCH]):
+                return supabase.table("so_registros").insert(fr).execute().data
+
+            supabase_execute(_ins_reg_blk)
+
+        creados_ids: List[int] = []
+        for w, rep in zip(work_ok, inserted_rows):
+            rid = rep.get("id")
+            if rid:
+                creados_ids.append(int(rid))
+            creados.append(
+                {
+                    "id": rep.get("id"),
+                    "numero_reporte": rep.get("numero_reporte"),
+                    "pk_id": w["pk_disp"],
+                    "n_registros": len(w["filas_insert"]),
+                }
+            )
+
+        try:
+            u_log = _audit_user_contrato(current_user, contrato_id)
+            registrar_log(
+                u_log,
+                "CREAR",
+                "SICOE",
+                "reporte",
+                "dashboard_delta_masivo_lote",
+                {
+                    "origen": "dashboard_delta_masivo",
+                    "n_reportes": len(creados_ids),
+                    "n_registros": len(flat_regs),
+                    "ids_muestra": creados_ids[:30],
+                    "capitulo": capitulo,
+                },
+            )
+        except Exception:
+            pass
+
+    return {
+        "creados": creados,
+        "omitidos": omitidos,
+        "resumen": {
+            "total_pk_maestro": total_maestro,
+            "pk_procesados_este_lote": len(creados),
+            "pk_pendientes_totales_antes_lote": n_pend_total,
+            "restantes_tras_este_lote": restantes_tras,
+            "pk_omitidos_ya_migrados": len(omitidos_ya),
+            "limite_lote_max": DASHBOARD_DELTA_REPORTES_MAX,
+        },
+        "advertencias": {
+            "items_sin_listado_en_capitulo": warnings_item,
+        },
+    }
+
+
 class RegistroOfflineCreate(BaseModel):
     nombre: Optional[str] = None
     descripcion: Optional[str] = None
@@ -9851,6 +11317,13 @@ class RegistroLineaNuevoReporte(BaseModel):
     grafico_numero: Optional[int] = None
     grafico_descripcion: Optional[str] = None
 
+class AsignarActoresPorPkBody(BaseModel):
+    """Inspector y subcontratista en todas las cabeceras `so_reportes` con el mismo `pk_id_id`."""
+
+    pk_id_id: int
+    inspector_id: Optional[int] = None
+    subcontratista_id: Optional[int] = None
+
 class ReemplazarRegistrosNuevoReporteBody(BaseModel):
     registros: List[RegistroLineaNuevoReporte]
 
@@ -9886,6 +11359,57 @@ def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, c
     except Exception:
         pass
     return out
+
+@app.post("/sicoe-obra/{contrato_id}/reportes/asignar-actores-por-pk")
+def asignar_actores_por_pk(
+    contrato_id: int, body: AsignarActoresPorPkBody, current_user=Depends(get_current_user)
+):
+    uid = int(current_user.get("sub") or current_user.get("id", 0))
+    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_reporte_cantidades_user_id(uid):
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permiso de edición en «Reporte de cantidades» (matriz de accesos).",
+        )
+    try:
+        pk_id_id = int(body.pk_id_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="pk_id_id inválido")
+    patch = {
+        "inspector_id": body.inspector_id,
+        "subcontratista_id": body.subcontratista_id,
+        "modificado_por": uid,
+        "updated_at": "now()",
+    }
+
+    def _upd():
+        return (
+            supabase.table("so_reportes")
+            .update(patch)
+            .eq("contrato_id", contrato_id)
+            .eq("pk_id_id", pk_id_id)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_upd) or []
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        registrar_log(
+            u_log,
+            "EDITAR",
+            "SICOE",
+            "reporte",
+            "asignar_actores_por_pk",
+            {
+                "pk_id_id": pk_id_id,
+                "actualizados": len(rows),
+                "inspector_id": body.inspector_id,
+                "subcontratista_id": body.subcontratista_id,
+            },
+        )
+    except Exception:
+        pass
+    return {"ok": True, "actualizados": len(rows)}
 
 @app.patch("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/localizacion")
 def actualizar_localizacion_borrador(contrato_id: int, reporte_id: int, body: dict, current_user=Depends(get_current_user)):
@@ -11302,6 +12826,232 @@ def validar_nivel3(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
         except Exception:
             pass
         return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sicoe-obra/{contrato_id}/registros/validar-nivel-masivo")
+def validar_nivel_masivo_por_filtro(
+    contrato_id: int,
+    body_in: ValidarNivelMasivoFiltroBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Validación N2 o N3 en bloque sobre el mismo universo que la grilla / exportar (filtros + capas).
+    Tope: 500 registros por solicitud. Excluye líneas con objeto de pago a subcontratista (flujo validar-sub).
+    Con aprobación N2 y contrato que exige topografía: omite líneas sin puntos en el reporte y las reporta aparte.
+    """
+    EST_MASIVO = {"Aprobado", "Pendiente", "Rechazado"}
+    marcar = (body_in.marcar_estado or "").strip()
+    if marcar not in EST_MASIVO:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Estado masivo inválido. Acepta: {EST_MASIVO}",
+        )
+    if marcar in ("Pendiente", "Rechazado") and not body_in.comentario_data:
+        raise HTTPException(
+            status_code=422,
+            detail="Se requiere comentario_data cuando el estado masivo es Pendiente o Rechazado.",
+        )
+    nivel = int(body_in.nivel)
+    try:
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        _require_sicoe_puede_validar_nivel(current_user, autor_id, nivel)
+
+        exp_body = _sicoe_masivo_filtro_to_export_body(body_in)
+        candidatos, st_collect = _sicoe_colectar_registros_masivo_desde_filtros(contrato_id, exp_body)
+
+        actualizados = 0
+        omitidos_precondicion = 0
+        omitidos_topografia = 0
+
+        if nivel == 2:
+            exige_topo_n2 = marcar == "Aprobado" and _sicoe_exige_topografia_para_aprobar_nivel2(contrato_id)
+            rep_ids_topo = [
+                int(r["reporte_id"])
+                for r in candidatos
+                if r.get("reporte_id") is not None and exige_topo_n2
+            ]
+            topo_ok = _reportes_ids_con_topografia(contrato_id, rep_ids_topo) if exige_topo_n2 else set()
+
+            for row in candidatos:
+                rid = int(row["id"])
+                if _registro_nivel3_aprobado(row):
+                    omitidos_precondicion += 1
+                    continue
+                if (row.get("nivel1_estado") or "") != "Aprobado":
+                    omitidos_precondicion += 1
+                    continue
+                if exige_topo_n2:
+                    try:
+                        rpi = int(row["reporte_id"]) if row.get("reporte_id") is not None else None
+                    except (TypeError, ValueError):
+                        rpi = None
+                    if not rpi or rpi not in topo_ok:
+                        omitidos_topografia += 1
+                        continue
+
+                prev_audit = _so_registro_fetch_validacion_audit(contrato_id, rid) or {}
+                update = {
+                    "nivel2_estado": marcar,
+                    "nivel2_usuario_id": autor_id,
+                    "nivel2_fecha": datetime.utcnow().isoformat(),
+                }
+
+                def _upd(regid=rid, upd=update):
+                    return (
+                        supabase.table("so_registros")
+                        .update(upd)
+                        .eq("id", regid)
+                        .eq("contrato_id", contrato_id)
+                        .execute()
+                        .data
+                    )
+
+                supabase_execute(_upd)
+
+                if marcar == "Aprobado":
+                    try:
+                        _aplicar_acta_rpo_vigente_a_registro(contrato_id, rid, date.today())
+                    except Exception:
+                        pass
+
+                if body_in.comentario_data:
+                    _insertar_comentario(
+                        contrato_id,
+                        rid,
+                        autor_id,
+                        body_in.comentario_data,
+                        tipo_override="validacion",
+                        nivel_validacion_override="Nivel 2",
+                        audit_user=current_user,
+                    )
+                    _push_notif_validacion_sicoe_destinatarios(
+                        current_user,
+                        autor_id,
+                        contrato_id,
+                        rid,
+                        f"Validación Nivel 2 (masivo): {marcar}",
+                        body_in.comentario_data.get("mensaje", "") or "",
+                        body_in.comentario_data,
+                    )
+                try:
+                    u_log = _audit_user_contrato(current_user, contrato_id)
+                    after_audit = _so_registro_fetch_validacion_audit(contrato_id, rid) or {}
+                    registrar_log(
+                        u_log,
+                        "VALIDAR",
+                        "SICOE",
+                        "registro",
+                        str(rid),
+                        {"nivel": 2, "estado": marcar, "masivo": True, "masivo_filtro": True},
+                        valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
+                        valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
+                    )
+                except Exception:
+                    pass
+                actualizados += 1
+
+        elif nivel == 3:
+            for row in candidatos:
+                rid = int(row["id"])
+                if (row.get("nivel3_estado") or "") == "Aprobado" and marcar != "Aprobado":
+                    omitidos_precondicion += 1
+                    continue
+                if (row.get("nivel2_estado") or "") != "Aprobado":
+                    omitidos_precondicion += 1
+                    continue
+
+                prev_audit = _so_registro_fetch_validacion_audit(contrato_id, rid) or {}
+                update = {
+                    "nivel3_estado": marcar,
+                    "nivel3_usuario_id": autor_id,
+                    "nivel3_fecha": datetime.utcnow().isoformat(),
+                }
+                if marcar == "Aprobado":
+                    update["bloqueado"] = True
+
+                def _upd3(regid=rid, upd=update):
+                    return (
+                        supabase.table("so_registros")
+                        .update(upd)
+                        .eq("id", regid)
+                        .eq("contrato_id", contrato_id)
+                        .execute()
+                        .data
+                    )
+
+                supabase_execute(_upd3)
+
+                if marcar == "Aprobado":
+                    try:
+                        _aplicar_acta_rpo_vigente_a_registro(contrato_id, rid, date.today())
+                    except Exception:
+                        pass
+
+                if body_in.comentario_data:
+                    _insertar_comentario(
+                        contrato_id,
+                        rid,
+                        autor_id,
+                        body_in.comentario_data,
+                        tipo_override="validacion",
+                        nivel_validacion_override="Nivel 3",
+                        audit_user=current_user,
+                    )
+                    _push_notif_validacion_sicoe_destinatarios(
+                        current_user,
+                        autor_id,
+                        contrato_id,
+                        rid,
+                        f"Validación Nivel 3 (masivo): {marcar}",
+                        body_in.comentario_data.get("mensaje", "") or "",
+                        body_in.comentario_data,
+                    )
+                try:
+                    u_log = _audit_user_contrato(current_user, contrato_id)
+                    after_audit = _so_registro_fetch_validacion_audit(contrato_id, rid) or {}
+                    registrar_log(
+                        u_log,
+                        "VALIDAR",
+                        "SICOE",
+                        "registro",
+                        str(rid),
+                        {"nivel": 3, "estado": marcar, "masivo": True, "masivo_filtro": True},
+                        valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
+                        valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
+                    )
+                except Exception:
+                    pass
+                actualizados += 1
+
+        out = {
+            "ok": True,
+            "actualizados": actualizados,
+            "omitidos_precondicion": omitidos_precondicion,
+            "omitidos_topografia": omitidos_topografia,
+            "excluidos_objeto_pago_sub": st_collect.get("excluidos_objeto_pago_sub", 0),
+            "truncado_mas_de_500": bool(st_collect.get("truncado")),
+            "tope_registros": SICOE_MASIVO_MAX_REGISTROS,
+            "candidatos_en_lote": len(candidatos),
+        }
+        if out["omitidos_topografia"]:
+            out["alerta_topografia"] = (
+                f"{out['omitidos_topografia']} registro(s) no se aprobaron en N2 por falta de topografía en el reporte. "
+                "El resto del lote sí se procesó."
+            )
+        if out["truncado_mas_de_500"]:
+            out["alerta_tope"] = (
+                f"Se procesaron como máximo {SICOE_MASIVO_MAX_REGISTROS} registros. "
+                "Acote el filtro y repita si necesita cubrir más líneas."
+            )
+        if out["excluidos_objeto_pago_sub"]:
+            out["alerta_objeto_sub"] = (
+                f"{out['excluidos_objeto_pago_sub']} línea(s) con objeto de pago a subcontratista no entran en el masivo; revíselas una a una."
+            )
+        return out
     except HTTPException:
         raise
     except Exception as e:
@@ -13788,9 +15538,13 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
         _require_sicoe_puede_validar_nivel(current_user, autor_id, 2)
         actualizados = 0
-        omitidos = 0
+        omitidos_precondicion = 0
+        omitidos_topografia = 0
+        excluidos_objeto_pago_sub = 0
 
-        raw_ids = list(body.ids_registros or [])
+        ids_all = list(body.ids_registros or [])
+        truncado_mas_de_500 = len(ids_all) > SICOE_MASIVO_MAX_REGISTROS
+        raw_ids = ids_all[:SICOE_MASIVO_MAX_REGISTROS]
         id_list: List[int] = []
         for x in raw_ids:
             try:
@@ -13806,7 +15560,7 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
                 def _rb(c=chunk):
                     return (
                         supabase.table("so_registros")
-                        .select("id, nivel1_estado, reporte_id")
+                        .select("id, nivel1_estado, nivel3_estado, reporte_id, nivel2_objeto_pago_sub")
                         .eq("contrato_id", contrato_id)
                         .in_("id", c)
                         .execute()
@@ -13828,11 +15582,17 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
             try:
                 rid = int(reg_id)
             except (TypeError, ValueError):
-                omitidos += 1
+                omitidos_precondicion += 1
                 continue
             rinfo = reg_by_id.get(rid)
             if not rinfo or rinfo.get("nivel1_estado") != "Aprobado":
-                omitidos += 1
+                omitidos_precondicion += 1
+                continue
+            if rinfo.get("nivel2_objeto_pago_sub"):
+                excluidos_objeto_pago_sub += 1
+                continue
+            if _registro_nivel3_aprobado(rinfo):
+                omitidos_precondicion += 1
                 continue
             if exige_topo_n2:
                 rp = rinfo.get("reporte_id")
@@ -13841,7 +15601,7 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
                 except (TypeError, ValueError):
                     rpi = None
                 if not rpi or rpi not in topo_reportes:
-                    omitidos += 1
+                    omitidos_topografia += 1
                     continue
 
             prev_audit = _so_registro_fetch_validacion_audit(contrato_id, rid) or {}
@@ -13888,7 +15648,26 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
                 pass
             actualizados += 1
 
-        return {"actualizados": actualizados, "omitidos": omitidos}
+        omitidos = omitidos_precondicion + omitidos_topografia + excluidos_objeto_pago_sub
+        out = {
+            "actualizados": actualizados,
+            "omitidos": omitidos,
+            "omitidos_precondicion": omitidos_precondicion,
+            "omitidos_topografia": omitidos_topografia,
+            "excluidos_objeto_pago_sub": excluidos_objeto_pago_sub,
+            "truncado_mas_de_500": truncado_mas_de_500,
+        }
+        if omitidos_topografia:
+            out["alerta_topografia"] = (
+                f"{omitidos_topografia} registro(s) no se aprobaron en N2 por falta de topografía en el reporte correspondiente."
+            )
+        if excluidos_objeto_pago_sub:
+            out["alerta_objeto_sub"] = (
+                "Hay líneas con objeto de pago a subcontratista: no entran en el masivo de N2."
+            )
+        if truncado_mas_de_500:
+            out["alerta_tope"] = f"Se procesaron como máximo {SICOE_MASIVO_MAX_REGISTROS} registros por solicitud."
+        return out
     except HTTPException:
         raise
     except Exception as e:
@@ -13908,16 +15687,30 @@ def validar_masivo_nivel3(contrato_id: int, reporte_id: int, body: ValidarMasivo
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
         _require_sicoe_puede_validar_nivel(current_user, autor_id, 3)
         actualizados = 0
-        omitidos = 0
+        omitidos_precondicion = 0
+        excluidos_objeto_pago_sub = 0
 
-        for reg_id in body.ids_registros:
+        ids_all = list(body.ids_registros or [])
+        truncado_mas_de_500 = len(ids_all) > SICOE_MASIVO_MAX_REGISTROS
+
+        for reg_id in ids_all[:SICOE_MASIVO_MAX_REGISTROS]:
             def _get(rid=reg_id):
                 return supabase.table("so_registros")\
-                    .select("nivel2_estado").eq("id", rid)\
+                    .select("nivel2_estado, nivel3_estado, nivel2_objeto_pago_sub").eq("id", rid)\
                     .eq("contrato_id", contrato_id).limit(1).execute().data
             rows = supabase_execute(_get)
-            if not rows or rows[0].get("nivel2_estado") != "Aprobado":
-                omitidos += 1
+            if not rows:
+                omitidos_precondicion += 1
+                continue
+            row0 = rows[0]
+            if row0.get("nivel2_objeto_pago_sub"):
+                excluidos_objeto_pago_sub += 1
+                continue
+            if row0.get("nivel2_estado") != "Aprobado":
+                omitidos_precondicion += 1
+                continue
+            if row0.get("nivel3_estado") == "Aprobado" and body.estado != "Aprobado":
+                omitidos_precondicion += 1
                 continue
 
             prev_audit = _so_registro_fetch_validacion_audit(contrato_id, reg_id) or {}
@@ -13961,7 +15754,21 @@ def validar_masivo_nivel3(contrato_id: int, reporte_id: int, body: ValidarMasivo
                 pass
             actualizados += 1
 
-        return {"actualizados": actualizados, "omitidos": omitidos}
+        omitidos = omitidos_precondicion + excluidos_objeto_pago_sub
+        out = {
+            "actualizados": actualizados,
+            "omitidos": omitidos,
+            "omitidos_precondicion": omitidos_precondicion,
+            "excluidos_objeto_pago_sub": excluidos_objeto_pago_sub,
+            "truncado_mas_de_500": truncado_mas_de_500,
+        }
+        if excluidos_objeto_pago_sub:
+            out["alerta_objeto_sub"] = (
+                "Hay líneas con objeto de pago a subcontratista: no entran en el masivo de N3."
+            )
+        if truncado_mas_de_500:
+            out["alerta_tope"] = f"Se procesaron como máximo {SICOE_MASIVO_MAX_REGISTROS} registros por solicitud."
+        return out
     except HTTPException:
         raise
     except Exception as e:
