@@ -6010,35 +6010,39 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
 
   const setF = (k, v) => setFiltros(prev => ({ ...prev, [k]: v }))
 
-  const buscarItems = async (texto) => {
+  const buscarItemsDebounceRef = useRef(null)
+  const buscarItems = (texto) => {
+    if (buscarItemsDebounceRef.current) clearTimeout(buscarItemsDebounceRef.current)
     if (!texto || texto.length < 1) {
       buscarItemsReqIdRef.current += 1
       setSugerenciasItem([])
       setMostrarSugsItem(false)
       return
     }
-    const reqId = ++buscarItemsReqIdRef.current
-    try {
-      const params = new URLSearchParams({ q: texto })
-      if (filtros.capitulo)         params.append('capitulo', filtros.capitulo)
-      if (filtros.acta_rpo)         params.append('acta_rpo', filtros.acta_rpo)
-      if (filtros.semana)           params.append('semana', filtros.semana)
-      if (filtros.subcontratista_id && !nivelInfo.esInterventoria) {
-        params.append('subcontratista_id', filtros.subcontratista_id)
+    buscarItemsDebounceRef.current = setTimeout(async () => {
+      const reqId = ++buscarItemsReqIdRef.current
+      try {
+        const params = new URLSearchParams({ q: texto })
+        if (filtros.capitulo)         params.append('capitulo', filtros.capitulo)
+        if (filtros.acta_rpo)         params.append('acta_rpo', filtros.acta_rpo)
+        if (filtros.semana)           params.append('semana', filtros.semana)
+        if (filtros.subcontratista_id && !nivelInfo.esInterventoria) {
+          params.append('subcontratista_id', filtros.subcontratista_id)
+        }
+        const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/items?${params}`, {
+          headers: { Authorization: `Bearer ${getToken()}` }
+        })
+        const data = await res.json()
+        if (reqId !== buscarItemsReqIdRef.current) return
+        const list = Array.isArray(data) ? data : []
+        setSugerenciasItem(list)
+        setMostrarSugsItem(list.length > 0)
+      } catch(e) {
+        if (reqId !== buscarItemsReqIdRef.current) return
+        setSugerenciasItem([])
+        setMostrarSugsItem(false)
       }
-      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/filtros/items?${params}`, {
-        headers: { Authorization: `Bearer ${getToken()}` }
-      })
-      const data = await res.json()
-      if (reqId !== buscarItemsReqIdRef.current) return
-      const list = Array.isArray(data) ? data : []
-      setSugerenciasItem(list)
-      setMostrarSugsItem(list.length > 0)
-    } catch(e) {
-      if (reqId !== buscarItemsReqIdRef.current) return
-      setSugerenciasItem([])
-      setMostrarSugsItem(false)
-    }
+    }, 400)
   }
 
   const inpStyle = { background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: '7px', padding: '5px 9px', color: t.text, fontSize: 'var(--cc-sm)', outline: 'none' }
