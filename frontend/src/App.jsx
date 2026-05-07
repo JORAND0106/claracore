@@ -10778,7 +10778,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       }
     }
     recargar()
-    const iv = setInterval(recargar, 75000)
+    const iv = setInterval(recargar, 180000)
     return () => clearInterval(iv)
   }, [contratoIdDash])
 
@@ -14215,7 +14215,7 @@ export default function App() {
 
   useEffect(() => {
     const timeoutMs = 50000
-    const intervalMs = 90 * 1000
+    const intervalMs = 180 * 1000
     const markOk = () => {
       apiHealthFailStreakRef.current = 0
       apiHealthWarnedRef.current = false
@@ -14254,7 +14254,7 @@ export default function App() {
 
   useEffect(() => {
     // Con Azure en frío las respuestas pueden tardar minutos; sin cuerpo HTTP el navegador muestra "CORS" aunque el fallo sea timeout.
-    const pollMs = mantenimiento?.activo ? 10000 : 40000
+    const pollMs = mantenimiento?.activo ? 15000 : 90000
     const checkMant = async () => {
       try {
         const opt =
