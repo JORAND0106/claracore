@@ -693,8 +693,8 @@ export default function ModuloInformes({
           aprobo_usuario_id: null,
           estilo_pdf: estiloDefectoCcd(cod),
         })
-        setCfgFirmaCcd((prev) => {
-          const next = { ...prev }
+        setCfgFirmaCcd(() => {
+          const next = {}
           for (const row of b) {
             const cod = row?.codigo
             const cf = row?.config_firma

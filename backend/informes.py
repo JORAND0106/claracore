@@ -1652,7 +1652,12 @@ def _get_firma_cfg_para_documento(
     - Si existe snapshot inmutable → lo usa (prioridad absoluta).
     - Si no existe → usa la biblioteca actual (_get_ccd_firma_config).
     Así los documentos firmados conservan sus firmantes originales.
+
+    FO-IDU-EO-04-V2: no usa snapshot por acta. La memoria de cálculo sigue la biblioteca
+    mientras se ajustan firmantes; el registro de imagen por slot queda en ccd_firma_registro.
     """
+    if formato_codigo == CODIGO_FORMATO_IDU_FO_EO_04_V2:
+        return _get_ccd_firma_config(contrato_id, formato_codigo)
     snap: Optional[Dict[str, Any]] = None
     if corte_id is not None:
         snap = _snapshot_key_corte(contrato_id, formato_codigo, corte_id)
@@ -2011,11 +2016,12 @@ def ccd_registrar_firma_contexto(
                 f"Detalle: {e!s}"
             ),
         ) from e
-    # Snapshot inmutable: guardar config de firmantes al momento de la primera firma.
-    _guardar_snapshot_si_no_existe(
-        contrato_id, formato_codigo, fc,
-        contexto_tipo=contexto_tipo, contexto_id=contexto_id,
-    )
+    # Snapshot inmutable (no aplica a FO-IDU-EO-04-V2: siempre biblioteca viva).
+    if formato_codigo != CODIGO_FORMATO_IDU_FO_EO_04_V2:
+        _guardar_snapshot_si_no_existe(
+            contrato_id, formato_codigo, fc,
+            contexto_tipo=contexto_tipo, contexto_id=contexto_id,
+        )
     ref = ""
     if contexto_tipo == "semana":
         sm = _row("so_semanas", "numero_semana", id=contexto_id)
@@ -3972,8 +3978,12 @@ def _usuario_datos_firma_sello(uid: int) -> Dict[str, Any]:
 
 
 def _fetch_img_data_uri(url: str) -> str:
+    """Convierte una URL de imagen a data-URI. Acepta http(s) o data: (p. ej. logos guardados desde el admin)."""
+    u = (url or "").strip()
+    if u.startswith("data:"):
+        return _logo_url_pdf_safe(u)
     import requests
-    r = requests.get(url.strip(), timeout=25)
+    r = requests.get(u, timeout=25)
     r.raise_for_status()
     ct = (r.headers.get("content-type") or "image/png").split(";")[0].strip()
     if not ct.startswith("image/"):
@@ -4058,6 +4068,58 @@ def _ccd_firma_registro_contexto_get(
     except Exception as e:
         _log.debug("ccd_firma_registro: %s", e)
         return None
+
+
+def _fecha_hora_marca_bo_desde_created_at(created_at: Optional[object]) -> Tuple[str, str]:
+    """(fecha dd/mm/aaaa, hora HH:MM) en America/Bogota desde `ccd_firma_registro.created_at`."""
+    if created_at is None:
+        return "", ""
+    try:
+        tz_bo = ZoneInfo("America/Bogota")
+        if isinstance(created_at, datetime):
+            dt = created_at
+        elif isinstance(created_at, date):
+            dt = datetime.combine(created_at, datetime.min.time(), tzinfo=tz_bo)
+        else:
+            s = str(created_at).strip()
+            if not s:
+                return "", ""
+            if " " in s and "T" not in s.upper():
+                s = s.replace(" ", "T", 1)
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        dt_bo = dt.astimezone(tz_bo)
+        return dt_bo.strftime("%d/%m/%Y"), dt_bo.strftime("%H:%M")
+    except Exception as e:
+        _log.debug("marca fecha/hora firma: %s", e)
+        return "", ""
+
+
+def _ccd_usuario_nombre_completo_por_id(usuario_id: Optional[int]) -> str:
+    """Nombre y apellidos desde `usuarios.id` (firma registrada)."""
+    uid = _opt_usuario_id(usuario_id)
+    if not uid:
+        return ""
+    try:
+        rows = (
+            _sb.table("usuarios")
+            .select("nombre, apellidos")
+            .eq("id", int(uid))
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not rows:
+            return ""
+        r = rows[0]
+        return f"{r.get('nombre') or ''} {r.get('apellidos') or ''}".strip()
+    except Exception as e:
+        _log.debug("nombre usuario id=%s: %s", uid, e)
+        return ""
 
 
 def _firma_data_uri_para_slot_contexto(
@@ -6250,6 +6312,54 @@ def _fo_eo_04_firmas_data_uris(
     )
 
 
+def _fo_eo_04_marca_detalle_por_slot(
+    contrato_id: int,
+    formato_codigo: str,
+    acta_id: Optional[int],
+    slot: str,
+) -> Tuple[str, str, str]:
+    """Nombre del usuario que registró la firma + fecha y hora (Bogotá). Vacíos si no hay registro."""
+    if not acta_id:
+        return "", "", ""
+    reg = _ccd_firma_registro_contexto_get(
+        contrato_id, "acta_rpo", int(acta_id), formato_codigo, slot
+    )
+    if not reg:
+        return "", "", ""
+    nom = _ccd_usuario_nombre_completo_por_id(reg.get("usuario_id"))
+    mf, mh = _fecha_hora_marca_bo_desde_created_at(reg.get("created_at"))
+    return nom, mf, mh
+
+
+def _fo_eo_04_firmas_marcas_registro(
+    contrato_id: int,
+    formato_codigo: str,
+    acta_id: Optional[int],
+) -> Tuple[
+    Tuple[str, str, str],
+    Tuple[str, str, str],
+    Tuple[str, str, str],
+    Tuple[str, str, str],
+]:
+    """Cuatro ternas (nombre firmante, fecha, hora) por slot — solo si existe fila en ccd_firma_registro."""
+    if not acta_id:
+        return ("", "", ""), ("", "", ""), ("", "", ""), ("", "", "")
+    return (
+        _fo_eo_04_marca_detalle_por_slot(contrato_id, formato_codigo, acta_id, "elaboro"),
+        _fo_eo_04_marca_detalle_por_slot(contrato_id, formato_codigo, acta_id, "elaboro2"),
+        _fo_eo_04_marca_detalle_por_slot(contrato_id, formato_codigo, acta_id, "reviso"),
+        _fo_eo_04_marca_detalle_por_slot(contrato_id, formato_codigo, acta_id, "reviso2"),
+    )
+
+
+# FO-IDU-EO-04-V2: xhtml2pdf ignora a menudo overflow en <div>; misma técnica que CC-SUB-001 (_html_cc_sub_td_firma_columna).
+# Altura fija NO autosize (FO-IDU-EO-04-V2). +50% sobre 52/44 → 78px / 66px.
+_FO_EO04_FIRMA_BOX = "78px"
+_FO_EO04_FIRMA_IMG = "66px"
+_FO_EO04_MARCA_LBL_ELABORO = "Elaborado y firmado por:"
+_FO_EO04_MARCA_LBL_REVISO = "Revisado y Aprobado por:"
+
+
 def _html_fo_eo_04_firmas_4(
     navy: str,
     navy_hdr: str,
@@ -6266,6 +6376,18 @@ def _html_fo_eo_04_firmas_4(
     elaboro2_firma_data_uri: Optional[str] = None,
     reviso_firma_data_uri: Optional[str] = None,
     reviso2_firma_data_uri: Optional[str] = None,
+    elaboro_marca_fecha: str = "",
+    elaboro_marca_hora: str = "",
+    elaboro2_marca_fecha: str = "",
+    elaboro2_marca_hora: str = "",
+    reviso_marca_fecha: str = "",
+    reviso_marca_hora: str = "",
+    reviso2_marca_fecha: str = "",
+    reviso2_marca_hora: str = "",
+    elaboro_marca_usuario: str = "",
+    elaboro2_marca_usuario: str = "",
+    reviso_marca_usuario: str = "",
+    reviso2_marca_usuario: str = "",
 ) -> str:
     """Bloque de firmas: col izquierda = Elaboró (1 arriba, 2 abajo); col derecha = Revisó (1 arriba, 2 abajo)."""
     import html as _html_mod
@@ -6275,22 +6397,71 @@ def _html_fo_eo_04_firmas_4(
         cargo: str,
         borde_top: bool = False,
         firma_uri: Optional[str] = None,
+        marca_fecha: str = "",
+        marca_hora: str = "",
+        marca_usuario: str = "",
+        marca_es_elaboro: bool = True,
     ) -> str:
         nombre_h = _html_mod.escape(nombre) if nombre else "&nbsp;"
         cargo_h  = _html_mod.escape(cargo) if cargo else "&nbsp;"
         bt = f"border-top:1px solid {navy};" if borde_top else ""
+        bp = _FO_EO04_FIRMA_BOX
+        ip = _FO_EO04_FIRMA_IMG
         if firma_uri:
             src_h = _html_mod.escape(firma_uri, quote=True)
-            firma_inner = (
-                f'<img src="{src_h}" alt="" '
-                f'style="max-height:42px;max-width:92%;display:block;margin:0 auto;padding:2px 0;" />'
+            sig_td = (
+                f'<img src="{src_h}" alt="" style="display:block;margin:0 auto;max-width:100%;width:auto;'
+                f'height:{ip};max-height:{ip};border:0;padding:0;"/>'
             )
         else:
-            firma_inner = "&nbsp;"
+            sig_td = "&nbsp;"
+        fd_h = _html_mod.escape(marca_fecha.strip()) if (marca_fecha or "").strip() else ""
+        hr_h = _html_mod.escape(marca_hora.strip()) if (marca_hora or "").strip() else ""
+        usr_h = _html_mod.escape(marca_usuario.strip()) if (marca_usuario or "").strip() else ""
+        if fd_h and hr_h:
+            fh_line = f"{fd_h} &#8211; {hr_h}"
+        elif fd_h:
+            fh_line = fd_h
+        elif hr_h:
+            fh_line = hr_h
+        else:
+            fh_line = ""
+
+        tiene_marca = bool(usr_h or fh_line)
+        lbl = _FO_EO04_MARCA_LBL_ELABORO if marca_es_elaboro else _FO_EO04_MARCA_LBL_REVISO
+        if tiene_marca:
+            marca_block = (
+                f'<div style="font-size:6.5pt;font-weight:bold;color:{navy_hdr};'
+                f'line-height:1.15;margin-bottom:1px;text-align:center;">{_html_mod.escape(lbl)}</div>'
+                f'<div style="font-size:7.5pt;font-weight:bold;color:{navy};line-height:1.15;'
+                f'margin-bottom:1px;text-align:center;">{usr_h if usr_h else "&#8212;"}</div>'
+                f'<div style="font-size:7.5pt;color:#64748b;line-height:1.15;text-align:center;">'
+                f'{fh_line if fh_line else "&#8212;"}</div>'
+            )
+        else:
+            marca_block = (
+                '<div style="font-size:7pt;color:#cbd5e1;line-height:1.15;">&nbsp;</div>'
+                '<div style="font-size:7pt;color:#cbd5e1;">&nbsp;</div>'
+                '<div style="font-size:7pt;color:#cbd5e1;">&nbsp;</div>'
+            )
+        marca_cell_inner = marca_block
+        firma_row = f"""<table cellspacing="0" cellpadding="0" width="100%" style="border-collapse:collapse;table-layout:fixed;margin:0 0 5px 0;">
+<tr>
+<td style="width:76%;vertical-align:middle;padding:0;border:none;">
+<table cellspacing="0" cellpadding="0" width="100%" style="border-collapse:collapse;table-layout:fixed;">
+<tr><td style="height:{bp};max-height:{bp};min-height:{bp};overflow:hidden;vertical-align:middle;text-align:center;line-height:0;font-size:0;padding:0;border:none;border-bottom:1px solid {navy};">
+{sig_td}
+</td></tr>
+</table>
+</td>
+<td style="width:24%;min-height:{bp};vertical-align:top;text-align:center;border-bottom:1px solid {navy};padding:2px 3px;">
+{marca_cell_inner}
+</td>
+</tr>
+</table>"""
         return f"""<tr>
 <td style="vertical-align:top;{bt}padding:7px 10px;">
-  <div style="font-size:8pt;color:#64748b;margin-bottom:4px;">Firma Aux.</div>
-  <div style="min-height:30px;border-bottom:1px solid {navy};margin-bottom:5px;text-align:center;">{firma_inner}</div>
+  {firma_row}
   <div style="font-size:8.5pt;font-weight:bold;color:{navy};text-align:center;border-bottom:1px solid {navy};padding:2px 0;margin-bottom:2px;">{nombre_h}</div>
   <div style="font-size:8pt;color:#475569;text-align:center;">{cargo_h}</div>
 </td>
@@ -6304,6 +6475,13 @@ def _html_fo_eo_04_firmas_4(
         c2: str,
         uri1: Optional[str] = None,
         uri2: Optional[str] = None,
+        m1_f: str = "",
+        m1_h: str = "",
+        m1_u: str = "",
+        m2_f: str = "",
+        m2_h: str = "",
+        m2_u: str = "",
+        columna_es_elaboro: bool = True,
     ) -> str:
         return f"""<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
 <tr>
@@ -6311,8 +6489,8 @@ def _html_fo_eo_04_firmas_4(
            background-color:#dce8f0;color:{navy_hdr};
            border-bottom:1px solid {navy};">{titulo}</td>
 </tr>
-{_fila_firma(n1, c1, borde_top=False, firma_uri=uri1)}
-{_fila_firma(n2, c2, borde_top=True, firma_uri=uri2)}
+{_fila_firma(n1, c1, borde_top=False, firma_uri=uri1, marca_fecha=m1_f, marca_hora=m1_h, marca_usuario=m1_u, marca_es_elaboro=columna_es_elaboro)}
+{_fila_firma(n2, c2, borde_top=True, firma_uri=uri2, marca_fecha=m2_f, marca_hora=m2_h, marca_usuario=m2_u, marca_es_elaboro=columna_es_elaboro)}
 </table>"""
 
     elab_col  = _columna(
@@ -6323,6 +6501,13 @@ def _html_fo_eo_04_firmas_4(
         elaboro2_cargo,
         elaboro_firma_data_uri,
         elaboro2_firma_data_uri,
+        elaboro_marca_fecha,
+        elaboro_marca_hora,
+        elaboro_marca_usuario,
+        elaboro2_marca_fecha,
+        elaboro2_marca_hora,
+        elaboro2_marca_usuario,
+        columna_es_elaboro=True,
     )
     revis_col = _columna(
         "REVIS\u00d3",
@@ -6332,6 +6517,13 @@ def _html_fo_eo_04_firmas_4(
         reviso2_cargo,
         reviso_firma_data_uri,
         reviso2_firma_data_uri,
+        reviso_marca_fecha,
+        reviso_marca_hora,
+        reviso_marca_usuario,
+        reviso2_marca_fecha,
+        reviso2_marca_hora,
+        reviso2_marca_usuario,
+        columna_es_elaboro=False,
     )
 
     return f"""<table width="100%" cellspacing="0" cellpadding="0"
@@ -6375,6 +6567,19 @@ def _html_idu_fo_eo_04_v2_plantilla_vacia(
     elaboro2_firma_data_uri: Optional[str] = None,
     reviso_firma_data_uri: Optional[str] = None,
     reviso2_firma_data_uri: Optional[str] = None,
+    # Marcas fecha/hora (registro en ccd_firma_registro) a la derecha de cada firma
+    elaboro_marca_fecha: str = "",
+    elaboro_marca_hora: str = "",
+    elaboro2_marca_fecha: str = "",
+    elaboro2_marca_hora: str = "",
+    reviso_marca_fecha: str = "",
+    reviso_marca_hora: str = "",
+    reviso2_marca_fecha: str = "",
+    reviso2_marca_hora: str = "",
+    elaboro_marca_usuario: str = "",
+    elaboro2_marca_usuario: str = "",
+    reviso_marca_usuario: str = "",
+    reviso2_marca_usuario: str = "",
     # Datos específicos del ítem (vacíos = plantilla en blanco)
     item_numero: str = "",
     item_unidad: str = "",
@@ -6769,7 +6974,11 @@ body {{ margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:7pt;
 
 <!-- ═══ FIRMAS: ELABORÓ / REVISÓ (2 × 2) ═══ -->
 {_html_fo_eo_04_firmas_4(navy, navy_hdr, bd, elaboro_nombre, elaboro_cargo, elaboro2_nombre, elaboro2_cargo, reviso_nombre, reviso_cargo, reviso2_nombre, reviso2_cargo,
-    elaboro_firma_data_uri=elaboro_firma_data_uri, elaboro2_firma_data_uri=elaboro2_firma_data_uri, reviso_firma_data_uri=reviso_firma_data_uri, reviso2_firma_data_uri=reviso2_firma_data_uri)}
+    elaboro_firma_data_uri=elaboro_firma_data_uri, elaboro2_firma_data_uri=elaboro2_firma_data_uri, reviso_firma_data_uri=reviso_firma_data_uri, reviso2_firma_data_uri=reviso2_firma_data_uri,
+    elaboro_marca_fecha=elaboro_marca_fecha, elaboro_marca_hora=elaboro_marca_hora, elaboro2_marca_fecha=elaboro2_marca_fecha, elaboro2_marca_hora=elaboro2_marca_hora,
+    reviso_marca_fecha=reviso_marca_fecha, reviso_marca_hora=reviso_marca_hora, reviso2_marca_fecha=reviso2_marca_fecha, reviso2_marca_hora=reviso2_marca_hora,
+    elaboro_marca_usuario=elaboro_marca_usuario, elaboro2_marca_usuario=elaboro2_marca_usuario,
+    reviso_marca_usuario=reviso_marca_usuario, reviso2_marca_usuario=reviso2_marca_usuario)}
 
 <!-- ═══ DISTRIBUCIÓN ═══ -->
 <div style="font-size:5.5pt;text-align:center;margin-top:10px;padding:4px;color:#334155;">
@@ -6814,6 +7023,7 @@ def _build_fo_eo_04_pdf_bytes(
     contratista_nombre: str = ""
     interventoria_nombre: str = ""
     contrato_numero_raw: str = ""
+    contrato_row: Optional[Dict[str, Any]] = None
     try:
         contrato_row = _row(
             "contratos",
@@ -6887,11 +7097,26 @@ def _build_fo_eo_04_pdf_bytes(
     e_uri, e2_uri, r_uri, r2_uri = _fo_eo_04_firmas_data_uris(
         contrato_id, formato_codigo, acta_id, firma_cfg, current_user
     )
+    (em_u, em_f, em_h), (e2m_u, e2m_f, e2m_h), (rm_u, rm_f, rm_h), (r2m_u, r2m_f, r2m_h) = _fo_eo_04_firmas_marcas_registro(
+        contrato_id, formato_codigo, acta_id
+    )
     _base_kwargs.update(
         elaboro_firma_data_uri=e_uri,
         elaboro2_firma_data_uri=e2_uri,
         reviso_firma_data_uri=r_uri,
         reviso2_firma_data_uri=r2_uri,
+        elaboro_marca_usuario=em_u,
+        elaboro_marca_fecha=em_f,
+        elaboro_marca_hora=em_h,
+        elaboro2_marca_usuario=e2m_u,
+        elaboro2_marca_fecha=e2m_f,
+        elaboro2_marca_hora=e2m_h,
+        reviso_marca_usuario=rm_u,
+        reviso_marca_fecha=rm_f,
+        reviso_marca_hora=rm_h,
+        reviso2_marca_usuario=r2m_u,
+        reviso2_marca_fecha=r2m_f,
+        reviso2_marca_hora=r2m_h,
     )
 
     items_n3 = _fetch_items_n3_acta(acta_id, contrato_id) if acta_id else []
@@ -6944,9 +7169,18 @@ def _pdf_jobs_cleanup():
     """Elimina jobs con más de 30 minutos de antigüedad."""
     ahora = _time_mod.time()
     with _pdf_jobs_lock:
-        caducados = [k for k, v in _pdf_jobs.items() if ahora - v.get("created_at", 0) > 1800]
+        caducados: List[str] = []
+        for k, v in list(_pdf_jobs.items()):
+            ca = v.get("created_at", 0)
+            try:
+                ca_f = float(ca)
+            except (TypeError, ValueError):
+                caducados.append(k)
+                continue
+            if ahora - ca_f > 1800:
+                caducados.append(k)
         for k in caducados:
-            del _pdf_jobs[k]
+            _pdf_jobs.pop(k, None)
 
 
 def _build_fo_eo_04_pdf_bytes_prog(
@@ -6985,6 +7219,7 @@ def _build_fo_eo_04_pdf_bytes_prog(
     contratista_nombre: str = ""
     interventoria_nombre: str = ""
     contrato_numero_raw: str = ""
+    contrato_row: Optional[Dict[str, Any]] = None
     try:
         contrato_row = _row(
             "contratos",
@@ -7058,11 +7293,26 @@ def _build_fo_eo_04_pdf_bytes_prog(
     e_uri, e2_uri, r_uri, r2_uri = _fo_eo_04_firmas_data_uris(
         contrato_id, formato_codigo, acta_id, firma_cfg, current_user
     )
+    (em_u, em_f, em_h), (e2m_u, e2m_f, e2m_h), (rm_u, rm_f, rm_h), (r2m_u, r2m_f, r2m_h) = _fo_eo_04_firmas_marcas_registro(
+        contrato_id, formato_codigo, acta_id
+    )
     _base_kwargs.update(
         elaboro_firma_data_uri=e_uri,
         elaboro2_firma_data_uri=e2_uri,
         reviso_firma_data_uri=r_uri,
         reviso2_firma_data_uri=r2_uri,
+        elaboro_marca_usuario=em_u,
+        elaboro_marca_fecha=em_f,
+        elaboro_marca_hora=em_h,
+        elaboro2_marca_usuario=e2m_u,
+        elaboro2_marca_fecha=e2m_f,
+        elaboro2_marca_hora=e2m_h,
+        reviso_marca_usuario=rm_u,
+        reviso_marca_fecha=rm_f,
+        reviso_marca_hora=rm_h,
+        reviso2_marca_usuario=r2m_u,
+        reviso2_marca_fecha=r2m_f,
+        reviso2_marca_hora=r2m_h,
     )
 
     _prog(30, "Obteniendo ítems aprobados en Nivel 3…")
