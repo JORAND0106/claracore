@@ -1022,6 +1022,20 @@ function permisoReporteCantidades(usuario) {
   )
 }
 
+/** Alineado con backend `_es_desarrollador`: cargo o rol «desarrollador». */
+function esUsuarioDesarrollador(usuario) {
+  const norm = (txt) =>
+    String(txt || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, ' ')
+  const cargo = norm(usuario?.cargo_nombre || usuario?.cargo || '')
+  const rol = norm(usuario?.rol_nombre || usuario?.rol || '')
+  return cargo === 'desarrollador' || rol === 'desarrollador'
+}
+
 function capasInicialesValidacionFromUser(usuario) {
   const ni = determinarNivelValidacion(usuario)
   if (!ni.nivelValidacion || !ni.puedeValidar) return []
@@ -1044,9 +1058,9 @@ function determinarNivelValidacion(usuario) {
   const cargo   = norm(usuario?.cargo_nombre || usuario?.cargo || '')
   const permRpt = permisoReporteCantidades(usuario)
   const puedeEditar  = !!(permRpt?.editar)
-  const esDevCargo = norm(usuario?.cargo_nombre || '') === 'desarrollador'
+  const esDevUsuario = esUsuarioDesarrollador(usuario)
   const permisoValidarSicoe = !!(permRpt?.validar)
-  const puedeValidar = esDevCargo || permisoValidarSicoe
+  const puedeValidar = esDevUsuario || permisoValidarSicoe
 
   const esContratista   = rol === 'contratista' || rol === 'operativo contratista'
   const esInterventoria = rol === 'interventoria' || rol === 'operativo interventoria'
@@ -1091,17 +1105,27 @@ function determinarNivelValidacion(usuario) {
   const puedePrevalidarAntesInterv = rol === 'contratista' && puedeValidar &&
     (cargo.includes('residente de costos') || cargo.includes('residente de obra'))
 
-  /** Quién puede usar la reversión doble llave: N3 solo con validar; N2 si validar y/o editar en Reporte de cantidades. */
+  /** Quién puede usar la reversión doble llave (UI): N2 y N3 con validar y/o editar en Reporte de cantidades; rol/cargo SICOE N2/N3 aunque la matriz venga incompleta. */
   let nivelLlaveReversion = nivelValidacion
-  const matrizReporteCantidades = esDevCargo || permisoValidarSicoe || puedeEditar
-  if (!esSoloComentarista && matrizReporteCantidades && nivelLlaveReversion == null) {
+  const matrizReporteCantidades = esDevUsuario || permisoValidarSicoe || puedeEditar
+  const perfilLlaveReversionSicoe =
+    rol === 'contratista' ||
+    rol === 'interventoria' ||
+    (Number.isFinite(cargoIdNum) && (nivelDesdeCargoId === 2 || nivelDesdeCargoId === 3))
+  if (!esSoloComentarista && nivelLlaveReversion == null && (matrizReporteCantidades || perfilLlaveReversionSicoe || esDevUsuario)) {
     let inferred = null
-    if (rol === 'contratista') inferred = 2
+    if (rol === 'operativo contratista') inferred = 1
+    else if (rol === 'contratista') inferred = 2
     else if (rol === 'interventoria') inferred = 3
-    else if (rol === 'operativo contratista') inferred = 1
     else if (nivelDesdeCargoId != null) inferred = nivelDesdeCargoId
-    const permiteLlaveN2 = permisoValidarSicoe || puedeEditar || esDevCargo
-    const permiteLlaveN3 = permisoValidarSicoe || esDevCargo
+    const permiteLlaveN2 =
+      permisoValidarSicoe || puedeEditar || esDevUsuario || rol === 'contratista' || nivelDesdeCargoId === 2
+    const permiteLlaveN3 =
+      permisoValidarSicoe ||
+      puedeEditar ||
+      esDevUsuario ||
+      rol === 'interventoria' ||
+      nivelDesdeCargoId === 3
     if (inferred === 2 && permiteLlaveN2) nivelLlaveReversion = 2
     if (inferred === 3 && permiteLlaveN3) nivelLlaveReversion = 3
   }
@@ -1246,7 +1270,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
               {modoConversacion
                 ? `Registro #${registro?.numero_registro ?? '—'} · Nivel ${nivelValidacion}`
                 : estadoValidando === 'ReversionN3'
-                  ? `Doble llave N2 + Interventoría · Registro #${registro?.numero_registro ?? '—'}`
+                  ? `Doble autorización N2 + Interventoría · Registro #${registro?.numero_registro ?? '—'}`
                   : `Estado: ${estadoValidando} · Nivel ${nivelValidacion}`}
             </div>
           </div>
@@ -1444,6 +1468,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || graficoReporte?.grafico_url || null)
   const [mostrarPopupValidacion, setMostrarPopupValidacion] = useState(false)
   const [mostrarPopupReversionN3, setMostrarPopupReversionN3] = useState(false)
+  const [panelReversionExpandido, setPanelReversionExpandido] = useState(false)
   // Sincronizar con datos del servidor (p. ej. migración de foto_url en BD sin remontar el componente)
   useEffect(() => {
     const fromRep = reporte?.registros?.find((r) => r.id === registro.id)
@@ -1835,7 +1860,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       if (j.ejecutada) {
         setToastMsg('Reversión completada: N3 «No revisado», registro desbloqueado.')
       } else {
-        setToastMsg('Llave registrada. Falta la segunda llave (N2 + Interventoría).')
+        setToastMsg('Tu autorización quedó registrada. Falta la de la contraparte (N2 o Interventoría).')
       }
       setTimeout(() => setToastMsg(null), 4000)
       onItemAsignado()
@@ -1866,7 +1891,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const uidLlave = usuario?.id != null ? Number(usuario.id) : NaN
   const arm2Llave = registro.reversion_arm_n2_usuario_id != null ? Number(registro.reversion_arm_n2_usuario_id) : null
   const arm3Llave = registro.reversion_arm_n3_usuario_id != null ? Number(registro.reversion_arm_n3_usuario_id) : null
-  const nvLlave = nivelInfo.nivelLlaveReversion
+  let nvLlave = nivelInfo.nivelLlaveReversion
+  if (esUsuarioDesarrollador(usuario) && esNivel3Aprobado && !!registro.bloqueado) {
+    if (arm2Llave == null) nvLlave = 2
+    else if (arm3Llave == null) nvLlave = 3
+  }
   const muestraPanelDobleLlave = esNivel3Aprobado && !!registro.bloqueado && (nvLlave === 2 || nvLlave === 3)
   const miSlotLibre = nvLlave === 2 ? arm2Llave == null : nvLlave === 3 ? arm3Llave == null : false
   /** Otro usuario ya ocupó «tu» lado de la llave */
@@ -2026,70 +2055,151 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         <div style={{
           marginBottom:'14px',
           borderRadius:'12px',
-          padding:'14px 16px',
           border:'2px solid rgba(239,68,68,0.45)',
           background: 'linear-gradient(135deg, rgba(239,68,68,0.08) 0%, rgba(147,51,234,0.06) 100%)',
           boxShadow: '0 0 0 1px rgba(0,0,0,0.04)',
+          overflow:'hidden',
         }}>
-          <div style={{ fontSize:'var(--cc-sm)', fontWeight:'900', color:'#b91c1c', letterSpacing:'0.5px', marginBottom:'6px', display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap' }}>
-            <span aria-hidden="true">🎯</span>
-            Doble llave — reversión aprobación Interventoría (N3)
-          </div>
-          <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, lineHeight:1.45, marginBottom:'12px' }}>
-            Residente de costos (N2) e Interventoría (N3) deben registrar cada uno un comentario con destinatarios, igual que en Pendiente o Rechazado.
-            Solo cuando ambas llaves están activas se desbloquea el registro y el N3 vuelve a «No revisado».
-          </div>
-          <div style={{ display:'flex', flexWrap:'wrap', gap:'14px', alignItems:'center', marginBottom:'12px', fontSize:'var(--cc-label)', fontWeight:'700' }}>
-            <span style={{
-              padding:'6px 12px', borderRadius:'999px',
-              border:`2px solid ${arm2Llave ? '#16a34a' : `${t.border}`}`,
-              background: arm2Llave ? '#16a34a18' : t.bgCard,
-              color: arm2Llave ? '#15803d' : t.textMuted,
-              display:'flex', alignItems:'center', gap:'6px',
-            }}>
-              🔑 N2 {arm2Llave ? `✓ ${registro.reversion_arm_n2_nombre || `#${arm2Llave}`}` : '··· pendiente'}
-            </span>
-            <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'800' }}>+</span>
-            <span style={{
-              padding:'6px 12px', borderRadius:'999px',
-              border:`2px solid ${arm3Llave ? '#16a34a' : `${t.border}`}`,
-              background: arm3Llave ? '#16a34a18' : t.bgCard,
-              color: arm3Llave ? '#15803d' : t.textMuted,
-              display:'flex', alignItems:'center', gap:'6px',
-            }}>
-              🔑 N3 {arm3Llave ? `✓ ${registro.reversion_arm_n3_nombre || `#${arm3Llave}`}` : '··· pendiente'}
-            </span>
-          </div>
-          {llaveContrariaOcupadaPorOtro && (
-            <div style={{ fontSize:'var(--cc-label)', color:'#b45309', marginBottom:'10px', fontWeight:'600' }}>
-              Otro usuario de tu nivel ya activó la llave en este registro.
-            </div>
-          )}
-          {!miSlotLibre && !llaveContrariaOcupadaPorOtro && (
-            <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginBottom:'10px' }}>
-              Ya diste tu llave. Espera a que la contraparte complete la suya.
-            </div>
-          )}
           <button
             type="button"
-            disabled={!puedeTurnarLlaveMisil}
-            onClick={() => { setMostrarPopupValidacion(false); setMostrarPopupReversionN3(true) }}
-            title={!puedeTurnarLlaveMisil ? (llaveContrariaOcupadaPorOtro ? 'Tu nivel ya tiene llave de otro usuario' : !miSlotLibre ? 'Ya registraste tu llave' : '') : 'Formulario de comentarios (doble llave)'}
+            onClick={() => setPanelReversionExpandido((v) => !v)}
+            aria-expanded={panelReversionExpandido}
+            aria-controls={`panel-reversion-${registro.id}`}
+            id={`panel-reversion-trigger-${registro.id}`}
             style={{
-              padding:'10px 18px', borderRadius:'10px', fontSize:'var(--cc-sm)', fontWeight:'800',
-              cursor: puedeTurnarLlaveMisil ? 'pointer' : 'not-allowed',
-              opacity: puedeTurnarLlaveMisil ? 1 : 0.5,
-              background: puedeTurnarLlaveMisil
-                ? 'linear-gradient(90deg,#7c3aed,#dc2626)'
-                : t.bg,
-              color: puedeTurnarLlaveMisil ? '#fff' : t.textMuted,
-              border:`2px solid ${puedeTurnarLlaveMisil ? 'rgba(255,255,255,0.25)' : t.border}`,
-              boxShadow: puedeTurnarLlaveMisil ? '0 4px 14px rgba(124,58,237,0.35)' : 'none',
-              letterSpacing:'0.03em',
+              width:'100%',
+              display:'flex',
+              alignItems:'center',
+              justifyContent:'space-between',
+              gap:'12px',
+              padding:'12px 14px',
+              cursor:'pointer',
+              border:'none',
+              background:'transparent',
+              textAlign:'left',
+              boxSizing:'border-box',
             }}
           >
-            {puedeTurnarLlaveMisil ? '🔐 ACTIVAR MI LLAVE (comentario obligatorio)' : '⏸️ Llave no disponible'}
+            <span style={{ display:'flex', alignItems:'center', gap:'12px', minWidth:0 }}>
+              <span
+                aria-hidden
+                style={{
+                  flexShrink:0,
+                  width:'42px',
+                  height:'42px',
+                  borderRadius:'12px',
+                  display:'flex',
+                  alignItems:'center',
+                  justifyContent:'center',
+                  background:'linear-gradient(145deg, rgba(124,58,237,0.35), rgba(220,38,38,0.22))',
+                  border:'1px solid rgba(124,58,237,0.45)',
+                  fontSize:'1.35rem',
+                  lineHeight:1,
+                  boxShadow:'0 2px 10px rgba(124,58,237,0.25)',
+                }}
+              >
+                🔐
+              </span>
+              <span style={{ display:'flex', flexDirection:'column', gap:'2px', minWidth:0 }}>
+                <span style={{ fontSize:'var(--cc-sm)', fontWeight:'900', color:'#b91c1c', letterSpacing:'0.03em' }}>
+                  Reversión N3 · doble autorización
+                </span>
+                <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'600', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                  {puedeTurnarLlaveMisil
+                    ? 'Tu turno: expande y registra tu autorización'
+                    : arm2Llave != null && arm3Llave != null
+                      ? 'N2 y N3 registradas'
+                      : 'Pulsa para instrucciones y estado de autorizaciones'}
+                </span>
+              </span>
+            </span>
+            <span style={{ display:'flex', alignItems:'center', gap:'8px', flexShrink:0 }}>
+              <span style={{
+                padding:'4px 10px', borderRadius:'999px', fontSize:'var(--cc-caption)', fontWeight:'800',
+                border:`1px solid ${arm2Llave ? '#16a34a88' : t.border}`,
+                background: arm2Llave ? '#16a34a14' : `${t.bgCard}99`,
+                color: arm2Llave ? '#15803d' : t.textMuted,
+              }}>N2 {arm2Llave ? '✓' : '○'}</span>
+              <span style={{
+                padding:'4px 10px', borderRadius:'999px', fontSize:'var(--cc-caption)', fontWeight:'800',
+                border:`1px solid ${arm3Llave ? '#16a34a88' : t.border}`,
+                background: arm3Llave ? '#16a34a14' : `${t.bgCard}99`,
+                color: arm3Llave ? '#15803d' : t.textMuted,
+              }}>N3 {arm3Llave ? '✓' : '○'}</span>
+              <span style={{
+                fontSize:'12px', color:t.textMuted, fontWeight:'900', width:'22px', textAlign:'center',
+                transform: panelReversionExpandido ? 'rotate(0deg)' : 'rotate(-90deg)',
+                transition:'transform 0.2s ease',
+              }} aria-hidden>▼</span>
+            </span>
           </button>
+          {panelReversionExpandido && (
+            <div
+              id={`panel-reversion-${registro.id}`}
+              role="region"
+              aria-labelledby={`panel-reversion-trigger-${registro.id}`}
+              style={{
+                padding:'0 16px 16px',
+                borderTop:'1px solid rgba(239,68,68,0.2)',
+              }}
+            >
+              <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, lineHeight:1.45, marginBottom:'12px', paddingTop:'12px' }}>
+                Residente de costos (N2) e Interventoría (N3) deben registrar cada uno un comentario con destinatarios, igual que en Pendiente o Rechazado.
+                Solo cuando ambas autorizaciones estén registradas se desbloquea el registro y el N3 vuelve a «No revisado».
+              </div>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:'14px', alignItems:'center', marginBottom:'12px', fontSize:'var(--cc-label)', fontWeight:'700' }}>
+                <span style={{
+                  padding:'6px 12px', borderRadius:'999px',
+                  border:`2px solid ${arm2Llave ? '#16a34a' : `${t.border}`}`,
+                  background: arm2Llave ? '#16a34a18' : t.bgCard,
+                  color: arm2Llave ? '#15803d' : t.textMuted,
+                  display:'flex', alignItems:'center', gap:'6px',
+                }}>
+                  🔑 N2 {arm2Llave ? `✓ ${registro.reversion_arm_n2_nombre || `#${arm2Llave}`}` : '··· sin autorizar'}
+                </span>
+                <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'800' }}>+</span>
+                <span style={{
+                  padding:'6px 12px', borderRadius:'999px',
+                  border:`2px solid ${arm3Llave ? '#16a34a' : `${t.border}`}`,
+                  background: arm3Llave ? '#16a34a18' : t.bgCard,
+                  color: arm3Llave ? '#15803d' : t.textMuted,
+                  display:'flex', alignItems:'center', gap:'6px',
+                }}>
+                  🔑 N3 {arm3Llave ? `✓ ${registro.reversion_arm_n3_nombre || `#${arm3Llave}`}` : '··· sin autorizar'}
+                </span>
+              </div>
+              {llaveContrariaOcupadaPorOtro && (
+                <div style={{ fontSize:'var(--cc-label)', color:'#b45309', marginBottom:'10px', fontWeight:'600' }}>
+                  Otro usuario de tu nivel ya registró su autorización en este registro.
+                </div>
+              )}
+              {!miSlotLibre && !llaveContrariaOcupadaPorOtro && (
+                <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginBottom:'10px' }}>
+                  Ya registraste tu parte. Espera a que la contraparte complete la suya.
+                </div>
+              )}
+              <button
+                type="button"
+                disabled={!puedeTurnarLlaveMisil}
+                onClick={() => { setMostrarPopupValidacion(false); setMostrarPopupReversionN3(true) }}
+                title={!puedeTurnarLlaveMisil ? (llaveContrariaOcupadaPorOtro ? 'Tu nivel ya tiene autorización de otro usuario' : !miSlotLibre ? 'Ya registraste tu autorización' : '') : 'Formulario de comentarios (doble autorización)'}
+                style={{
+                  padding:'10px 18px', borderRadius:'10px', fontSize:'var(--cc-sm)', fontWeight:'800',
+                  cursor: puedeTurnarLlaveMisil ? 'pointer' : 'not-allowed',
+                  opacity: puedeTurnarLlaveMisil ? 1 : 0.5,
+                  background: puedeTurnarLlaveMisil
+                    ? 'linear-gradient(90deg,#7c3aed,#dc2626)'
+                    : t.bg,
+                  color: puedeTurnarLlaveMisil ? '#fff' : t.textMuted,
+                  border:`2px solid ${puedeTurnarLlaveMisil ? 'rgba(255,255,255,0.25)' : t.border}`,
+                  boxShadow: puedeTurnarLlaveMisil ? '0 4px 14px rgba(124,58,237,0.35)' : 'none',
+                  letterSpacing:'0.03em',
+                }}
+              >
+                {puedeTurnarLlaveMisil ? '🔐 REGISTRAR MI AUTORIZACIÓN (comentario obligatorio)' : '⏸️ Autorización no disponible'}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -2600,7 +2710,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           nivelValidacion={nivelInfo.nivelLlaveReversion ?? nivelInfo.nivelValidacion}
           obligatorio={true}
           zIndexOverlay={10600}
-          tituloModal="Doble llave — reversión aprobación N3"
+          tituloModal="Doble autorización — reversión aprobación N3"
           onConfirmar={confirmarReversionN3Doble}
           onCancelar={() => setMostrarPopupReversionN3(false)}
         />

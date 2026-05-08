@@ -1726,26 +1726,13 @@ def _require_sicoe_puede_validar_nivel(current_user, user_id: int, nivel: int) -
 
 def _require_llave_reversion_sicoe_nivel(current_user, user_id: int, nivel_arm: int) -> None:
     """
-    Doble llave reversión N3: Nivel 2 acepta matriz «validar» o «editar» en Reporte de cantidades;
-    Nivel 3 solo «validar» (Interventoría).
+    Doble llave reversión N3: debe coincidir el nivel SICOE obra del usuario (rol/cargo en BD) con la llave.
+    No se exige la matriz «Reporte de cantidades» para esta acción (evita falsos negativos si la matriz está incompleta).
     """
     if _es_desarrollador(current_user):
         return
-    matriz_ok = False
-    if nivel_arm == 2:
-        matriz_ok = (
-            _cargo_permiso_validar_reporte_cantidades_user_id(user_id)
-            or _cargo_permiso_editar_reporte_cantidades_user_id(user_id)
-        )
-    elif nivel_arm == 3:
-        matriz_ok = _cargo_permiso_validar_reporte_cantidades_user_id(user_id)
-    else:
+    if nivel_arm not in (2, 3):
         raise HTTPException(status_code=403, detail="Llave de reversión no reconocida.")
-    if not matriz_ok:
-        raise HTTPException(
-            status_code=403,
-            detail="No tiene el permiso requerido en «Reporte de cantidades» (matriz de accesos).",
-        )
     got = _sicoe_db_nivel_validacion_usuario(user_id)
     if got != nivel_arm:
         raise HTTPException(
@@ -15404,14 +15391,6 @@ def reversion_n3_doble_llave(
                 detail="Debe indicar al menos un destinatario (para quién va el mensaje).",
             )
 
-        nivel = _sicoe_db_nivel_validacion_usuario(autor_id)
-        if nivel not in (2, 3):
-            raise HTTPException(
-                status_code=403,
-                detail="Solo Residente de costos (Nivel 2) o Interventoría (Nivel 3) pueden activar esta llave.",
-            )
-        _require_llave_reversion_sicoe_nivel(current_user, autor_id, nivel)
-
         def _get():
             return (
                 supabase.table("so_registros")
@@ -15448,6 +15427,26 @@ def reversion_n3_doble_llave(
 
         arm2 = _nid(row.get("reversion_arm_n2_usuario_id"))
         arm3 = _nid(row.get("reversion_arm_n3_usuario_id"))
+
+        nivel_db = _sicoe_db_nivel_validacion_usuario(autor_id)
+        if _es_desarrollador(current_user):
+            if arm2 is None:
+                nivel = 2
+            elif arm3 is None:
+                nivel = 3
+            else:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Las dos llaves ya están registradas para este registro.",
+                )
+        else:
+            nivel = nivel_db
+            if nivel not in (2, 3):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Solo Residente de costos (Nivel 2) o Interventoría (Nivel 3) pueden activar esta llave.",
+                )
+        _require_llave_reversion_sicoe_nivel(current_user, autor_id, nivel)
 
         if nivel == 2:
             if arm2 is not None and arm2 != autor_id:

@@ -1789,6 +1789,63 @@ def _acta_pertenece_contrato(contrato_id: int, acta_id: int) -> bool:
     return bool(r and int(r.get("contrato_id") or 0) == int(contrato_id))
 
 
+def _resolver_acta_id_en_contrato(contrato_id: int, acta_ref: Optional[int]) -> Optional[int]:
+    """Resuelve una referencia de acta al id real dentro del contrato.
+
+    Acepta: id, numero_rpo o consecutivo. Devuelve id o None si no coincide.
+    """
+    if acta_ref is None:
+        return None
+    sref = str(acta_ref).strip()
+    if not sref:
+        return None
+    # 1) Intentar como id directo
+    try:
+        aid = int(sref)
+    except (TypeError, ValueError):
+        aid = None
+    if aid is not None:
+        r = _row("actas", "id, contrato_id", id=aid)
+        if r and int(r.get("contrato_id") or 0) == int(contrato_id):
+            return int(r.get("id"))
+    # 2) Intentar como numero_rpo (texto visible)
+    try:
+        rows = (
+            _sb.table("actas")
+            .select("id")
+            .eq("contrato_id", int(contrato_id))
+            .eq("numero_rpo", sref)
+            .order("id", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if rows and rows[0].get("id") is not None:
+            return int(rows[0]["id"])
+    except Exception:
+        pass
+    # 3) Intentar como consecutivo (numérico)
+    if aid is not None:
+        try:
+            rows = (
+                _sb.table("actas")
+                .select("id")
+                .eq("contrato_id", int(contrato_id))
+                .eq("consecutivo", aid)
+                .order("id", desc=True)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if rows and rows[0].get("id") is not None:
+                return int(rows[0]["id"])
+        except Exception:
+            pass
+    return None
+
+
 def _distinct_semana_ids_nivel3_rpc(contrato_id: int) -> Optional[set[int]]:
     """Una sola llamada Postgres (distinct). Requiere backend/sql/ccd_distinct_semanas_nivel3_rpc.sql."""
     try:
@@ -4032,6 +4089,7 @@ def _ccd_firma_registro_get(corte_id: int, formato_codigo: str, slot: str) -> Op
             .eq("corte_id", corte_id)
             .eq("formato_codigo", formato_codigo)
             .eq("slot", slot)
+            .order("created_at", desc=True)
             .limit(1)
             .execute()
             .data
@@ -4059,6 +4117,7 @@ def _ccd_firma_registro_contexto_get(
             .eq("contexto_id", contexto_id)
             .eq("formato_codigo", formato_codigo)
             .eq("slot", slot)
+            .order("created_at", desc=True)
             .limit(1)
             .execute()
             .data
@@ -4132,19 +4191,13 @@ def _firma_data_uri_para_slot_contexto(
     nombre_configurado: str,
     current_user: Optional[dict],
 ) -> Optional[str]:
-    """Firma registrada en ccd_firma_registro o imagen de perfil si el usuario coincide con el slot."""
+    """Firma del slot SOLO desde registro explícito (no autocompleta desde perfil)."""
     reg = _ccd_firma_registro_contexto_get(contrato_id, contexto_tipo, contexto_id, formato_codigo, slot)
     if reg and reg.get("firma_imagen_url"):
         try:
             return _fetch_img_data_uri(reg["firma_imagen_url"])
         except Exception as e:
             _log.warning("Firma registrada contexto slot %s: %s", slot, e)
-    cu = _opt_usuario_id(config_usuario_id)
-    sess = _uid_session(current_user)
-    if cu and sess and int(cu) == int(sess):
-        return _usuario_firma_img_data_uri_opcional(current_user)
-    if (not cu) and _nombre_coincide_firma_cfg(nombre_configurado, current_user):
-        return _usuario_firma_img_data_uri_opcional(current_user)
     return None
 
 
@@ -5994,28 +6047,31 @@ def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
         if not aprobados:
             return []
 
-        # 3. Agrupar por item_numero × semana_id
+        # 3. Agrupar por (item_numero, capitulo) × semana_id
+        #    En algunas entidades externas puede repetirse item_numero en capítulos distintos.
         items_sem: dict = defaultdict(lambda: defaultdict(float))
         items_meta: dict = {}
         items_foto: dict = {}
 
         for r in aprobados:
             num = (r.get("item_numero") or "").strip()
+            cap = (r.get("capitulo") or "").strip()
             if not num:
                 continue
+            key = (num, cap)
             sem_id = r.get("semana_id")
-            items_sem[num][sem_id] += float(r.get("cantidad_total") or 0)
-            if num not in items_meta:
-                items_meta[num] = {
+            items_sem[key][sem_id] += float(r.get("cantidad_total") or 0)
+            if key not in items_meta:
+                items_meta[key] = {
                     "item_numero": num,
                     "unidad": (r.get("unidad") or "").strip(),
-                    "capitulo": (r.get("capitulo") or "").strip(),
+                    "capitulo": cap,
                     "item_descripcion": (r.get("item_descripcion") or "").strip(),
                 }
-            if num not in items_foto:
-                items_foto[num] = {"foto_url": None, "foto_numero": None,
+            if key not in items_foto:
+                items_foto[key] = {"foto_url": None, "foto_numero": None,
                                    "grafico_url": None, "grafico_numero": None}
-            fi = items_foto[num]
+            fi = items_foto[key]
             if not fi["foto_url"] and str(r.get("foto_url") or "").strip():
                 fi["foto_url"] = r["foto_url"]
                 fi["foto_numero"] = r.get("foto_numero")
@@ -6067,10 +6123,11 @@ def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
 
         # 6. Construir lista final con semanas ordenadas por numero_semana
         result: list = []
-        for num, meta in items_meta.items():
+        for key, meta in items_meta.items():
+            num = meta.get("item_numero") or ""
             sem_entries: list = []
             total_acta = 0.0
-            for sem_id, cantidad in items_sem[num].items():
+            for sem_id, cantidad in items_sem[key].items():
                 info = sem_info.get(sem_id, {}) if sem_id else {}
                 sem_entries.append({
                     "numero_semana": info.get("numero_semana"),
@@ -6084,7 +6141,7 @@ def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
             meta["total_acta"] = total_acta
             meta["especificacion_tecnica"] = esp_map.get(num, "")
             # Fotos directamente de los registros N3-aprobados del acta
-            fi = items_foto.get(num, {})
+            fi = items_foto.get(key, {})
             meta["foto_url"]       = fi.get("foto_url")
             meta["foto_numero"]    = fi.get("foto_numero")
             meta["grafico_url"]    = fi.get("grafico_url")
@@ -6353,9 +6410,9 @@ def _fo_eo_04_firmas_marcas_registro(
 
 
 # FO-IDU-EO-04-V2: xhtml2pdf ignora a menudo overflow en <div>; misma técnica que CC-SUB-001 (_html_cc_sub_td_firma_columna).
-# Altura fija NO autosize (FO-IDU-EO-04-V2). +50% sobre 52/44 → 78px / 66px.
-_FO_EO04_FIRMA_BOX = "78px"
-_FO_EO04_FIRMA_IMG = "66px"
+# Altura fija NO autosize (FO-IDU-EO-04-V2). Ajuste adicional -10% para compactar a 1 página.
+_FO_EO04_FIRMA_BOX = "63px"
+_FO_EO04_FIRMA_IMG = "53px"
 _FO_EO04_MARCA_LBL_ELABORO = "Elaborado y firmado por:"
 _FO_EO04_MARCA_LBL_REVISO = "Revisado y Aprobado por:"
 
@@ -7014,6 +7071,9 @@ def _build_fo_eo_04_pdf_bytes(
         except Exception:
             return str(f)[:10]
 
+    # Normalizar referencia de acta para evitar cruces (id vs numero_rpo/consecutivo).
+    acta_id_norm = _resolver_acta_id_en_contrato(contrato_id, acta_id)
+
     # ── Datos del contrato ────────────────────────────────────────────────────
     logo_entidad: Optional[str] = None
     entidad: str = "IDU"
@@ -7048,9 +7108,9 @@ def _build_fo_eo_04_pdf_bytes(
     num_acta: str = ""
     fecha_desde: str = ""
     fecha_hasta: str = ""
-    if acta_id:
+    if acta_id_norm:
         try:
-            acta_row = _row("actas", "id, numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id)
+            acta_row = _row("actas", "id, numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id_norm)
             if acta_row:
                 num_acta    = str(acta_row.get("numero_rpo") or acta_row.get("consecutivo") or "")
                 fecha_desde = _fmt_fecha(acta_row.get("fecha_inicio"))
@@ -7066,8 +7126,8 @@ def _build_fo_eo_04_pdf_bytes(
     try:
         firma_cfg = _get_firma_cfg_para_documento(
             contrato_id, formato_codigo,
-            contexto_tipo="acta_rpo" if acta_id else None,
-            contexto_id=acta_id if acta_id else None,
+            contexto_tipo="acta_rpo" if acta_id_norm else None,
+            contexto_id=acta_id_norm if acta_id_norm else None,
         )
     except Exception:
         pass
@@ -7095,10 +7155,10 @@ def _build_fo_eo_04_pdf_bytes(
         reviso2_cargo=str(firma_cfg.get("reviso2_cargo") or "").strip(),
     )
     e_uri, e2_uri, r_uri, r2_uri = _fo_eo_04_firmas_data_uris(
-        contrato_id, formato_codigo, acta_id, firma_cfg, current_user
+        contrato_id, formato_codigo, acta_id_norm, firma_cfg, current_user
     )
     (em_u, em_f, em_h), (e2m_u, e2m_f, e2m_h), (rm_u, rm_f, rm_h), (r2m_u, r2m_f, r2m_h) = _fo_eo_04_firmas_marcas_registro(
-        contrato_id, formato_codigo, acta_id
+        contrato_id, formato_codigo, acta_id_norm
     )
     _base_kwargs.update(
         elaboro_firma_data_uri=e_uri,
@@ -7119,17 +7179,17 @@ def _build_fo_eo_04_pdf_bytes(
         reviso2_marca_hora=r2m_h,
     )
 
-    items_n3 = _fetch_items_n3_acta(acta_id, contrato_id) if acta_id else []
+    items_n3 = _fetch_items_n3_acta(acta_id_norm, contrato_id) if acta_id_norm else []
 
     if items_n3:
         # Totales de actas anteriores: 1 lote → O(1) queries en lugar de O(N ítems)
-        totales_batch = _fetch_totales_batch(contrato_id, acta_id, items_n3) if acta_id else {}
+        totales_batch = _fetch_totales_batch(contrato_id, acta_id_norm, items_n3) if acta_id_norm else {}
 
         pages = []
         for item in items_n3:
             item_num = (item.get("item_numero") or "").strip()
             item_cap = (item.get("capitulo") or "").strip()
-            t_anteriores = totales_batch.get((item_num, item_cap), 0.0) if acta_id else None
+            t_anteriores = totales_batch.get((item_num, item_cap), 0.0) if acta_id_norm else None
             pages.append(
                 _html_idu_fo_eo_04_v2_plantilla_vacia(
                     **_base_kwargs,
@@ -7196,6 +7256,9 @@ def _build_fo_eo_04_pdf_bytes_prog(
     Igual que _build_fo_eo_04_pdf_bytes pero reporta progreso a través de on_progress(dict).
     on_progress recibe: {"pct": int 0-100, "msg": str, "current_item": int|None, "total_items": int|None}
     """
+    # Normalizar referencia de acta para evitar cruces (id vs numero_rpo/consecutivo).
+    acta_id_norm = _resolver_acta_id_en_contrato(contrato_id, acta_id)
+
     def _prog(pct: int, msg: str, current_item: Optional[int] = None, total_items: Optional[int] = None):
         if on_progress:
             on_progress({"pct": pct, "msg": msg, "current_item": current_item, "total_items": total_items})
@@ -7244,9 +7307,9 @@ def _build_fo_eo_04_pdf_bytes_prog(
     num_acta: str = ""
     fecha_desde: str = ""
     fecha_hasta: str = ""
-    if acta_id:
+    if acta_id_norm:
         try:
-            acta_row = _row("actas", "id, numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id)
+            acta_row = _row("actas", "id, numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id_norm)
             if acta_row:
                 num_acta    = str(acta_row.get("numero_rpo") or acta_row.get("consecutivo") or "")
                 fecha_desde = _fmt_fecha(acta_row.get("fecha_inicio"))
@@ -7262,8 +7325,8 @@ def _build_fo_eo_04_pdf_bytes_prog(
     try:
         firma_cfg = _get_firma_cfg_para_documento(
             contrato_id, formato_codigo,
-            contexto_tipo="acta_rpo" if acta_id else None,
-            contexto_id=acta_id if acta_id else None,
+            contexto_tipo="acta_rpo" if acta_id_norm else None,
+            contexto_id=acta_id_norm if acta_id_norm else None,
         )
     except Exception:
         pass
@@ -7291,10 +7354,10 @@ def _build_fo_eo_04_pdf_bytes_prog(
         reviso2_cargo=str(firma_cfg.get("reviso2_cargo") or "").strip(),
     )
     e_uri, e2_uri, r_uri, r2_uri = _fo_eo_04_firmas_data_uris(
-        contrato_id, formato_codigo, acta_id, firma_cfg, current_user
+        contrato_id, formato_codigo, acta_id_norm, firma_cfg, current_user
     )
     (em_u, em_f, em_h), (e2m_u, e2m_f, e2m_h), (rm_u, rm_f, rm_h), (r2m_u, r2m_f, r2m_h) = _fo_eo_04_firmas_marcas_registro(
-        contrato_id, formato_codigo, acta_id
+        contrato_id, formato_codigo, acta_id_norm
     )
     _base_kwargs.update(
         elaboro_firma_data_uri=e_uri,
@@ -7316,13 +7379,13 @@ def _build_fo_eo_04_pdf_bytes_prog(
     )
 
     _prog(30, "Obteniendo ítems aprobados en Nivel 3…")
-    items_n3 = _fetch_items_n3_acta(acta_id, contrato_id) if acta_id else []
+    items_n3 = _fetch_items_n3_acta(acta_id_norm, contrato_id) if acta_id_norm else []
     n_items = len(items_n3)
 
     if items_n3:
         _prog(48, f"Calculando totales de actas anteriores ({n_items} ítem{'s' if n_items != 1 else ''})…",
               total_items=n_items)
-        totales_batch = _fetch_totales_batch(contrato_id, acta_id, items_n3) if acta_id else {}
+        totales_batch = _fetch_totales_batch(contrato_id, acta_id_norm, items_n3) if acta_id_norm else {}
 
         pages = []
         for i, item in enumerate(items_n3):
@@ -7332,7 +7395,7 @@ def _build_fo_eo_04_pdf_bytes_prog(
             pct_page = 55 + int(20 * (i + 1) / max(n_items, 1))
             _prog(pct_page, f"Página {i+1}/{n_items}: {desc_corta}",
                   current_item=i + 1, total_items=n_items)
-            t_anteriores = totales_batch.get((item_num, item_cap), 0.0) if acta_id else None
+            t_anteriores = totales_batch.get((item_num, item_cap), 0.0) if acta_id_norm else None
             pages.append(
                 _html_idu_fo_eo_04_v2_plantilla_vacia(
                     **_base_kwargs,
@@ -7379,6 +7442,8 @@ def ccd_pdf_job_iniciar(
     meta = FORMATOS_CCD[formato_codigo]
     if meta.get("plantilla_html") != "idu_memoria_fo_eo_04_v2":
         raise HTTPException(status_code=404, detail="Job de PDF no disponible para este formato")
+    if acta_id is not None and _resolver_acta_id_en_contrato(contrato_id, acta_id) is None:
+        raise HTTPException(status_code=404, detail="Acta no encontrada en este contrato")
 
     _pdf_jobs_cleanup()
     job_id = str(_uuid_mod.uuid4())
@@ -7491,6 +7556,8 @@ def ccd_preview_plantilla_vacia_pdf(
     meta = FORMATOS_CCD[formato_codigo]
     if meta.get("plantilla_html") != "idu_memoria_fo_eo_04_v2":
         raise HTTPException(status_code=404, detail="Vista previa vacía no disponible para este formato")
+    if acta_id is not None and _resolver_acta_id_en_contrato(contrato_id, acta_id) is None:
+        raise HTTPException(status_code=404, detail="Acta no encontrada en este contrato")
     cu_pdf = current_user if isinstance(current_user, dict) else dict(current_user)
     pdf_bytes, fname, _ = _build_fo_eo_04_pdf_bytes(
         contrato_id, formato_codigo, subsistema, acta_id, supervisor,
@@ -7519,6 +7586,8 @@ def ccd_preview_plantilla_vacia_con_sello(
     meta = FORMATOS_CCD[formato_codigo]
     if meta.get("plantilla_html") != "idu_memoria_fo_eo_04_v2":
         raise HTTPException(status_code=404, detail="Vista previa vacía no disponible para este formato")
+    if acta_id is not None and _resolver_acta_id_en_contrato(contrato_id, acta_id) is None:
+        raise HTTPException(status_code=404, detail="Acta no encontrada en este contrato")
     cu_pdf = current_user if isinstance(current_user, dict) else dict(current_user)
     pdf_bytes, fname, contrato_numero = _build_fo_eo_04_pdf_bytes(
         contrato_id, formato_codigo, subsistema, acta_id, supervisor,
