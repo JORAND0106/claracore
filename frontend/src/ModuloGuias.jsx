@@ -1,8 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from 'react'
-import { API_BASE } from './apiBase'
+import { API_BASE, API_FALLBACK } from './apiBase'
 
 const API = API_BASE
-const API_FALLBACK = 'https://claracore-backend.azurewebsites.net'
 
 const MODULOS_OPCIONES = [
   'Inicio',

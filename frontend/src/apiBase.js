@@ -1,6 +1,9 @@
 /** URL base del API FastAPI. En `npm run dev`, '' hace que fetch vaya al origen de Vite y el proxy reenvíe a :8000 (evita fallos de conexión/CORS). */
 const PROD_FALLBACK = 'https://claracore-backend.azurewebsites.net'
 
+/** Origen alternativo si falla la red contra `API_BASE` (p. ej. `fetchConFallback` en Informes). */
+export const API_FALLBACK = PROD_FALLBACK
+
 export const API_BASE = import.meta.env.DEV
   ? ''
   : (import.meta.env.VITE_API_URL || PROD_FALLBACK)

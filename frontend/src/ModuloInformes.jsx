@@ -1,5 +1,5 @@
 import { useState, useEffect, useId, useRef } from 'react'
-import { API_BASE as API } from './apiBase'
+import { API_BASE as API, API_FALLBACK } from './apiBase'
 import { formatCOP } from './utils/formatCOP'
 
 const FS = {

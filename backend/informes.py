@@ -6424,9 +6424,9 @@ def _fo_eo_04_firmas_marcas_registro(
 
 
 # FO-IDU-EO-04-V2: xhtml2pdf ignora a menudo overflow en <div>; misma técnica que CC-SUB-001 (_html_cc_sub_td_firma_columna).
-# Altura fija NO autosize (FO-IDU-EO-04-V2). Ajuste adicional -10% para compactar a 1 página.
-_FO_EO04_FIRMA_BOX = "63px"
-_FO_EO04_FIRMA_IMG = "53px"
+# Alturas fijas: caja firma + celda verificación alineada; reducción acumulada vs 63/53 + compactación tipográfica en marca.
+_FO_EO04_FIRMA_BOX = "45px"
+_FO_EO04_FIRMA_IMG = "38px"
 _FO_EO04_MARCA_LBL_ELABORO = "Elaborado y firmado por:"
 _FO_EO04_MARCA_LBL_REVISO = "Revisado y Aprobado por:"
 
@@ -6502,21 +6502,21 @@ def _html_fo_eo_04_firmas_4(
         lbl = _FO_EO04_MARCA_LBL_ELABORO if marca_es_elaboro else _FO_EO04_MARCA_LBL_REVISO
         if tiene_marca:
             marca_block = (
-                f'<div style="font-size:6.5pt;font-weight:bold;color:{navy_hdr};'
-                f'line-height:1.15;margin-bottom:1px;text-align:center;">{_html_mod.escape(lbl)}</div>'
-                f'<div style="font-size:7.5pt;font-weight:bold;color:{navy};line-height:1.15;'
-                f'margin-bottom:1px;text-align:center;">{usr_h if usr_h else "&#8212;"}</div>'
-                f'<div style="font-size:7.5pt;color:#64748b;line-height:1.15;text-align:center;">'
+                f'<div style="font-size:6pt;font-weight:bold;color:{navy_hdr};'
+                f'line-height:1.05;margin:0;padding:0;text-align:center;">{_html_mod.escape(lbl)}</div>'
+                f'<div style="font-size:6.5pt;font-weight:bold;color:{navy};line-height:1.05;'
+                f'margin:0;padding:0;text-align:center;">{usr_h if usr_h else "&#8212;"}</div>'
+                f'<div style="font-size:6.5pt;color:#64748b;line-height:1.05;text-align:center;margin:0;padding:0;">'
                 f'{fh_line if fh_line else "&#8212;"}</div>'
             )
         else:
             marca_block = (
-                '<div style="font-size:7pt;color:#cbd5e1;line-height:1.15;">&nbsp;</div>'
-                '<div style="font-size:7pt;color:#cbd5e1;">&nbsp;</div>'
-                '<div style="font-size:7pt;color:#cbd5e1;">&nbsp;</div>'
+                '<div style="font-size:6pt;color:#cbd5e1;line-height:1.05;margin:0;padding:0;">&nbsp;</div>'
+                '<div style="font-size:6pt;color:#cbd5e1;line-height:1.05;margin:0;padding:0;">&nbsp;</div>'
+                '<div style="font-size:6pt;color:#cbd5e1;line-height:1.05;margin:0;padding:0;">&nbsp;</div>'
             )
         marca_cell_inner = marca_block
-        firma_row = f"""<table cellspacing="0" cellpadding="0" width="100%" style="border-collapse:collapse;table-layout:fixed;margin:0 0 5px 0;">
+        firma_row = f"""<table cellspacing="0" cellpadding="0" width="100%" style="border-collapse:collapse;table-layout:fixed;margin:0 0 3px 0;">
 <tr>
 <td style="width:76%;vertical-align:middle;padding:0;border:none;">
 <table cellspacing="0" cellpadding="0" width="100%" style="border-collapse:collapse;table-layout:fixed;">
@@ -6525,16 +6525,16 @@ def _html_fo_eo_04_firmas_4(
 </td></tr>
 </table>
 </td>
-<td style="width:24%;min-height:{bp};vertical-align:top;text-align:center;border-bottom:1px solid {navy};padding:2px 3px;">
+<td style="width:24%;height:{bp};max-height:{bp};min-height:{bp};overflow:hidden;vertical-align:middle;text-align:center;border-bottom:1px solid {navy};padding:1px 2px;line-height:1;">
 {marca_cell_inner}
 </td>
 </tr>
 </table>"""
         return f"""<tr>
-<td style="vertical-align:top;{bt}padding:7px 10px;">
+<td style="vertical-align:top;{bt}padding:5px 8px;">
   {firma_row}
-  <div style="font-size:8.5pt;font-weight:bold;color:{navy};text-align:center;border-bottom:1px solid {navy};padding:2px 0;margin-bottom:2px;">{nombre_h}</div>
-  <div style="font-size:8pt;color:#475569;text-align:center;">{cargo_h}</div>
+  <div style="font-size:8.5pt;font-weight:bold;color:{navy};text-align:center;border-bottom:1px solid {navy};padding:1px 0;margin-bottom:1px;line-height:1.15;">{nombre_h}</div>
+  <div style="font-size:7.5pt;color:#475569;text-align:center;line-height:1.15;">{cargo_h}</div>
 </td>
 </tr>"""
 
@@ -6556,7 +6556,7 @@ def _html_fo_eo_04_firmas_4(
     ) -> str:
         return f"""<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
 <tr>
-<td style="font-weight:bold;text-align:center;font-size:8.5pt;padding:4px 6px;
+<td style="font-weight:bold;text-align:center;font-size:8.5pt;padding:3px 5px;
            background-color:#dce8f0;color:{navy_hdr};
            border-bottom:1px solid {navy};">{titulo}</td>
 </tr>
@@ -6598,7 +6598,7 @@ def _html_fo_eo_04_firmas_4(
     )
 
     return f"""<table width="100%" cellspacing="0" cellpadding="0"
-       style="border-collapse:collapse;margin-top:8px;{bd};">
+       style="border-collapse:collapse;margin-top:5px;{bd};">
 <tr>
 <td width="50%" style="vertical-align:top;{bd};padding:0;">
 {elab_col}
