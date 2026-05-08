@@ -208,6 +208,7 @@ def _so_registro_validacion_audit_snapshot(row: Optional[dict]) -> Optional[dict
         "nivel3_estado", "nivel3_usuario_id", "nivel3_fecha",
         "sub_estado", "sub_usuario_id", "sub_fecha",
         "bloqueado", "solicitud_reversion",
+        "reversion_arm_n2_usuario_id", "reversion_arm_n3_usuario_id",
     )
     return _json_for_log({k: row.get(k) for k in keys})
 
@@ -218,10 +219,77 @@ def _so_registro_fetch_validacion_audit(contrato_id: int, registro_id: int) -> O
             "nivel1_estado, nivel1_usuario_id, nivel1_fecha,"
             "nivel2_estado, nivel2_usuario_id, nivel2_fecha, nivel2_objeto_pago_sub,"
             "nivel3_estado, nivel3_usuario_id, nivel3_fecha,"
-            "sub_estado, sub_usuario_id, sub_fecha, bloqueado, solicitud_reversion"
+            "sub_estado, sub_usuario_id, sub_fecha, bloqueado, solicitud_reversion,"
+            "reversion_arm_n2_usuario_id, reversion_arm_n3_usuario_id"
         ).eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
     r = supabase_execute(_q)
     return r[0] if r else None
+
+
+def _enriquecer_registros_labels_reversion_doble_llave(registros: Optional[list]) -> None:
+    """Expone nombre legible para quien disparó cada llave (UI doble autorización reversión N3)."""
+    if not registros:
+        return
+    ids: List[int] = []
+    for reg in registros:
+        if not isinstance(reg, dict):
+            continue
+        for key in ("reversion_arm_n2_usuario_id", "reversion_arm_n3_usuario_id"):
+            v = reg.get(key)
+            if v is None:
+                continue
+            try:
+                ids.append(int(v))
+            except (TypeError, ValueError):
+                pass
+    uniq = list({i for i in ids})
+    if not uniq:
+        for reg in registros:
+            if isinstance(reg, dict):
+                reg["reversion_arm_n2_nombre"] = None
+                reg["reversion_arm_n3_nombre"] = None
+        return
+    nombres_por_id: Dict[int, str] = {}
+    try:
+        step = 200
+        for i in range(0, len(uniq), step):
+            batch = uniq[i : i + step]
+
+            def _lookup(b=batch):
+                return (
+                    supabase.table("usuarios")
+                    .select("id, nombre, apellidos")
+                    .in_("id", b)
+                    .execute()
+                    .data
+                )
+
+            rows = supabase_execute(_lookup) or []
+            for ur in rows:
+                uid = ur.get("id")
+                if uid is None:
+                    continue
+                lbl = f"{ur.get('nombre') or ''} {ur.get('apellidos') or ''}".strip()
+                if not lbl:
+                    lbl = f"Usuario #{uid}"
+                nombres_por_id[int(uid)] = lbl
+    except Exception:
+        pass
+    for reg in registros:
+        if not isinstance(reg, dict):
+            continue
+        for key_uid, key_nom in (
+            ("reversion_arm_n2_usuario_id", "reversion_arm_n2_nombre"),
+            ("reversion_arm_n3_usuario_id", "reversion_arm_n3_nombre"),
+        ):
+            v = reg.get(key_uid)
+            if v is None:
+                reg[key_nom] = None
+                continue
+            try:
+                reg[key_nom] = nombres_por_id.get(int(v))
+            except (TypeError, ValueError):
+                reg[key_nom] = None
 
 
 def _so_reporte_audit_snapshot(row: Optional[dict]) -> Optional[dict]:
@@ -9825,6 +9893,7 @@ def obtener_reporte(
             pass
     for reg in regs_raw:
         reg["num_comentarios"] = num_comentarios_map.get(reg["id"], 0)
+    _enriquecer_registros_labels_reversion_doble_llave(regs_raw)
     r["registros"] = regs_raw
     r["puntos"] = puntos_rows
     if aplicar_filtros_busqueda:
@@ -12407,6 +12476,9 @@ class SolicitarReversionBody(BaseModel):
 
 class AceptarReversionBody(BaseModel):
     aceptar: bool
+
+class ReversionDobleLlaveN3Body(BaseModel):
+    comentario_data: dict
 
 class ComentarioCreate(BaseModel):
     rol_origen: Optional[str] = None
@@ -15276,6 +15348,200 @@ def aceptar_reversion(contrato_id: int, registro_id: int, body: AceptarReversion
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/reversion-n3-doble-llave")
+def reversion_n3_doble_llave(
+    contrato_id: int,
+    registro_id: int,
+    body: ReversionDobleLlaveN3Body,
+    current_user=Depends(get_current_user),
+):
+    """
+    Revierte la aprobación N3 (Interventoría) solo tras acción coordinada de N2 y N3 (doble llave).
+    Cada llamada registra comentario con destinatarios; al completar ambas llaves se desbloquea y
+    nivel3 pasa a «No Revisado».
+    """
+    try:
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        cd = body.comentario_data or {}
+        mensaje_limpio = (cd.get("mensaje") or "").strip()
+        if not mensaje_limpio:
+            raise HTTPException(status_code=422, detail="El cuerpo del mensaje es obligatorio.")
+        dest_raw = cd.get("destinatarios") or []
+        n_dest = sum(1 for d in dest_raw if isinstance(d, dict) and d.get("id") is not None)
+        if n_dest < 1:
+            raise HTTPException(
+                status_code=422,
+                detail="Debe indicar al menos un destinatario (para quién va el mensaje).",
+            )
+
+        nivel = _sicoe_db_nivel_validacion_usuario(autor_id)
+        if nivel not in (2, 3):
+            raise HTTPException(
+                status_code=403,
+                detail="Solo Residente de costos (Nivel 2) o Interventoría (Nivel 3) pueden activar esta llave.",
+            )
+        _require_sicoe_puede_validar_nivel(current_user, autor_id, nivel)
+
+        def _get():
+            return (
+                supabase.table("so_registros")
+                .select(
+                    "nivel3_estado, bloqueado,"
+                    "reversion_arm_n2_usuario_id, reversion_arm_n3_usuario_id"
+                )
+                .eq("id", registro_id)
+                .eq("contrato_id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+
+        rows = supabase_execute(_get)
+        if not rows:
+            raise HTTPException(status_code=404, detail="Registro no encontrado.")
+        row = rows[0]
+        if row.get("nivel3_estado") != "Aprobado" or not row.get("bloqueado"):
+            raise HTTPException(
+                status_code=422,
+                detail="Solo aplica a registros aprobados por Interventoría (N3) y bloqueados.",
+            )
+
+        prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
+
+        def _nid(v):
+            if v is None:
+                return None
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+
+        arm2 = _nid(row.get("reversion_arm_n2_usuario_id"))
+        arm3 = _nid(row.get("reversion_arm_n3_usuario_id"))
+
+        if nivel == 2:
+            if arm2 is not None and arm2 != autor_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Otro usuario de Nivel 2 ya registró su llave para este registro.",
+                )
+            if arm2 is not None and arm2 == autor_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Ya registraste la llave de Nivel 2; falta la llave de Interventoría (N3).",
+                )
+        else:
+            if arm3 is not None and arm3 != autor_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Otro usuario de Interventoría ya registró su llave para este registro.",
+                )
+            if arm3 is not None and arm3 == autor_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Ya registraste la llave de Interventoría; falta la llave de Nivel 2.",
+                )
+
+        new2 = autor_id if nivel == 2 else arm2
+        new3 = autor_id if nivel == 3 else arm3
+        ejecutar = new2 is not None and new3 is not None
+        if ejecutar and new2 == new3:
+            raise HTTPException(
+                status_code=422,
+                detail="La reversión doble requiere dos personas distintas (Nivel 2 e Interventoría).",
+            )
+
+        cd_send = {**cd, "mensaje": mensaje_limpio}
+        tipo_c = "reversion_doble_llave_n2" if nivel == 2 else "reversion_doble_llave_n3"
+        _insertar_comentario(
+            contrato_id,
+            registro_id,
+            autor_id,
+            cd_send,
+            tipo_override=tipo_c,
+            nivel_validacion_override=f"Nivel {nivel}",
+            audit_user=current_user,
+        )
+        try:
+            _push_notif_validacion_sicoe_destinatarios(
+                current_user,
+                autor_id,
+                contrato_id,
+                registro_id,
+                f"Doble llave reversión N3 — Nivel {nivel}",
+                mensaje_limpio,
+                cd_send,
+            )
+        except Exception:
+            pass
+
+        if ejecutar:
+            update = {
+                "bloqueado": False,
+                "solicitud_reversion": False,
+                "nivel3_estado": "No Revisado",
+                "nivel3_usuario_id": None,
+                "nivel3_fecha": None,
+                "reversion_arm_n2_usuario_id": None,
+                "reversion_arm_n3_usuario_id": None,
+            }
+        else:
+            update = (
+                {"reversion_arm_n2_usuario_id": autor_id}
+                if nivel == 2
+                else {"reversion_arm_n3_usuario_id": autor_id}
+            )
+
+        def _upd():
+            return (
+                supabase.table("so_registros")
+                .update({**update, "updated_at": "now()"})
+                .eq("id", registro_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+
+        try:
+            supabase_execute(_upd)
+        except Exception as ex:
+            low = str(ex).lower()
+            if "reversion_arm" in low or "column" in low:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Falta ejecutar la migración SQL reversion_n3_doble_llave_so_registros.sql en la base de datos.",
+                ) from ex
+            raise
+
+        accion_log = (
+            "REVERSION_DOBLE_EJECUTADA"
+            if ejecutar
+            else ("REVERSION_LLAVE_N2" if nivel == 2 else "REVERSION_LLAVE_N3")
+        )
+        try:
+            u_log = _audit_user_contrato(current_user, contrato_id)
+            after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
+            registrar_log(
+                u_log,
+                accion_log,
+                "SICOE",
+                "registro",
+                str(registro_id),
+                {"nivel_llave": nivel, "ejecutada": ejecutar},
+                valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
+                valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
+                severidad="AUDIT",
+            )
+        except Exception:
+            pass
+
+        return {"ok": True, "ejecutada": ejecutar}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/sicoe-obra/{contrato_id}/registros/{registro_id}/comentarios")
 def crear_comentario(contrato_id: int, registro_id: int, body: ComentarioCreate,
                      current_user=Depends(get_current_user)):
@@ -15431,6 +15697,7 @@ def get_reporte_de_registro(
                 pass
         for reg in regs_raw:
             reg["num_comentarios"] = num_comentarios_map.get(reg["id"], 0)
+        _enriquecer_registros_labels_reversion_doble_llave(regs_raw)
         r["registros"] = regs_raw
         r["puntos"] = []
         return r

@@ -3984,8 +3984,10 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
               {editingActaId ? "Editar acta" : "Crear acta"}
             </div>
             <div style={{ fontSize: 11, color: col.textMuted, marginBottom: 14 }}>
-              {!editingActaId && (
+              {!editingActaId ? (
                 <>Consecutivo sugerido: <strong>{proximoCons}</strong>. Puedes ajustarlo si hace falta.</>
+              ) : (
+                <>Puedes corregir el consecutivo si hubo un error; evita duplicar el mismo número en otra acta del contrato.</>
               )}
             </div>
 
@@ -4028,7 +4030,6 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
                   min={1}
                   value={formActa.consecutivo}
                   onChange={(e) => setF("consecutivo", e.target.value)}
-                  disabled={!!editingActaId}
                 />
               </div>
               {actasTipos.length > 0 && (

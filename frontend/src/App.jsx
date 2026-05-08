@@ -1114,11 +1114,12 @@ const ETIQUETAS_VALIDACION = [
   '14. Relacionada con Balance de Obra',
 ]
 
-const COLOR_ESTADO = { Aprobado: '#16a34a', Pendiente: '#d97706', Rechazado: '#dc2626', 'No Objeto de Cobro': '#dc2626', Mensaje: '#10B981', Comentario: '#0077B6' }
+const COLOR_ESTADO = { Aprobado: '#16a34a', Pendiente: '#d97706', Rechazado: '#dc2626', 'No Objeto de Cobro': '#dc2626', Mensaje: '#10B981', Comentario: '#0077B6', ReversionN3: '#9333ea' }
 
 function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL, hdrs,
                                      estadoValidando, nivelValidacion, obligatorio,
                                      modoConversacion = false, zIndexOverlay = 2000,
+                                     tituloModal = null,
                                      onConfirmar, onCancelar }) {
   const [usuarios,      setUsuarios]      = useState([])
   const [destinatarios, setDestinatarios] = useState([])
@@ -1132,7 +1133,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
 
   const esObligatorio = modoConversacion
     ? !!obligatorio
-    : (obligatorio || estadoValidando === 'Pendiente' || estadoValidando === 'Rechazado' || estadoValidando === 'No Objeto de Cobro')
+    : (obligatorio || estadoValidando === 'Pendiente' || estadoValidando === 'Rechazado' || estadoValidando === 'No Objeto de Cobro' || estadoValidando === 'ReversionN3')
   const colorEstado   = COLOR_ESTADO[estadoValidando] || t.primary
   const usuariosFiltrados = (() => {
     const q = busquedaDest.trim().toLowerCase()
@@ -1222,12 +1223,14 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
           <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: colorEstado, flexShrink: 0 }} />
           <div>
             <div style={{ fontSize: 'var(--cc-sm)', fontWeight: '700', color: t.text }}>
-              {modoConversacion ? 'Nueva conversación' : 'Comentario de validación'}
+              {tituloModal || (modoConversacion ? 'Nueva conversación' : 'Comentario de validación')}
             </div>
             <div style={{ fontSize: 'var(--cc-label)', color: colorEstado, fontWeight: '600', marginTop: '2px' }}>
               {modoConversacion
                 ? `Registro #${registro?.numero_registro ?? '—'} · Nivel ${nivelValidacion}`
-                : `Estado: ${estadoValidando} · Nivel ${nivelValidacion}`}
+                : estadoValidando === 'ReversionN3'
+                  ? `Doble llave N2 + Interventoría · Registro #${registro?.numero_registro ?? '—'}`
+                  : `Estado: ${estadoValidando} · Nivel ${nivelValidacion}`}
             </div>
           </div>
           <button onClick={onCancelar} style={{ marginLeft: 'auto', background: 'none', border: 'none',
@@ -1423,6 +1426,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const graficoReporte = reporte.registros?.find(r => r.grafico_url) || null
   const [grafLocal,      setGrafLocal]      = useState(registro.grafico_url || graficoReporte?.grafico_url || null)
   const [mostrarPopupValidacion, setMostrarPopupValidacion] = useState(false)
+  const [mostrarPopupReversionN3, setMostrarPopupReversionN3] = useState(false)
   // Sincronizar con datos del servidor (p. ej. migración de foto_url en BD sin remontar el componente)
   useEffect(() => {
     const fromRep = reporte?.registros?.find((r) => r.id === registro.id)
@@ -1691,6 +1695,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       return
     }
     setEstadoValidando(estado)
+    setMostrarPopupReversionN3(false)
     setMostrarPopupValidacion(true)
   }
 
@@ -1785,6 +1790,43 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     }
   }
 
+  const confirmarReversionN3Doble = async (comentarioData) => {
+    setMostrarPopupReversionN3(false)
+    if (!comentarioData) return
+    try {
+      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/reversion-n3-doble-llave`, {
+        method: 'PUT',
+        headers: hdrs,
+        body: JSON.stringify({
+          comentario_data: {
+            ...comentarioData,
+            rol_origen: nivelInfo.rolOrigen,
+            tipo: 'reversion_doble_llave',
+          },
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        const detail = err?.detail
+        let msg = `Error ${res.status}`
+        if (typeof detail === 'string') msg = detail
+        else if (Array.isArray(detail)) msg = detail.map(x => x?.msg || JSON.stringify(x)).join(', ')
+        else if (detail && typeof detail === 'object') msg = JSON.stringify(detail)
+        throw new Error(msg)
+      }
+      const j = await res.json().catch(() => ({}))
+      if (j.ejecutada) {
+        setToastMsg('Reversión completada: N3 «No revisado», registro desbloqueado.')
+      } else {
+        setToastMsg('Llave registrada. Falta la segunda llave (N2 + Interventoría).')
+      }
+      setTimeout(() => setToastMsg(null), 4000)
+      onItemAsignado()
+    } catch (e) {
+      alert(e?.message || String(e))
+    }
+  }
+
   const actualizarObjetoPagoSub = async (valor) => {
     try {
       const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/validar-nivel2`, {
@@ -1801,26 +1843,18 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     }
   }
 
-  const solicitarReversion = async () => {
-    const motivo = prompt('Motivo de la solicitud de reversión:')
-    if (motivo === null) return
-    try {
-      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}/solicitar-reversion`, {
-        method: 'PUT', headers: hdrs,
-        body: JSON.stringify({ comentario_data: { mensaje: motivo, tipo: 'solicitud_reversion' } })
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || `Error ${res.status}`)
-      }
-      onItemAsignado()
-    } catch(e) {
-      alert(`Error al solicitar reversión: ${e.message}`)
-    }
-  }
-
   const C = { borde: t.border, label: t.textMuted }
   const fmtD = v => v != null ? formatCOP(v) : '—'
+
+  const uidLlave = usuario?.id != null ? Number(usuario.id) : NaN
+  const arm2Llave = registro.reversion_arm_n2_usuario_id != null ? Number(registro.reversion_arm_n2_usuario_id) : null
+  const arm3Llave = registro.reversion_arm_n3_usuario_id != null ? Number(registro.reversion_arm_n3_usuario_id) : null
+  const nvLlave = nivelInfo.nivelValidacion
+  const muestraPanelDobleLlave = esNivel3Aprobado && !!registro.bloqueado && nivelInfo.puedeValidar && (nvLlave === 2 || nvLlave === 3)
+  const miSlotLibre = nvLlave === 2 ? arm2Llave == null : nvLlave === 3 ? arm3Llave == null : false
+  /** Otro usuario ya ocupó «tu» lado de la llave */
+  const llaveContrariaOcupadaPorOtro = nvLlave === 2 ? (arm2Llave != null && arm2Llave !== uidLlave) : nvLlave === 3 ? (arm3Llave != null && arm3Llave !== uidLlave) : false
+  const puedeTurnarLlaveMisil = muestraPanelDobleLlave && miSlotLibre && !llaveContrariaOcupadaPorOtro
 
   const CampoRO = ({ label, valor, color }) => (
     <div>
@@ -1968,6 +2002,77 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       {esNivel3Aprobado && (
         <div style={{ marginBottom:'12px', background:'#0d948818', border:'1px solid #0d948855', borderRadius:'8px', padding:'8px 12px', fontSize:'var(--cc-sm)', color:t.text }}>
           Aprobado por Interventoría (Nivel 3): el registro está bloqueado; solo puede ajustarse el corte de subcontratista.
+        </div>
+      )}
+
+      {muestraPanelDobleLlave && (
+        <div style={{
+          marginBottom:'14px',
+          borderRadius:'12px',
+          padding:'14px 16px',
+          border:'2px solid rgba(239,68,68,0.45)',
+          background: 'linear-gradient(135deg, rgba(239,68,68,0.08) 0%, rgba(147,51,234,0.06) 100%)',
+          boxShadow: '0 0 0 1px rgba(0,0,0,0.04)',
+        }}>
+          <div style={{ fontSize:'var(--cc-sm)', fontWeight:'900', color:'#b91c1c', letterSpacing:'0.5px', marginBottom:'6px', display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap' }}>
+            <span aria-hidden="true">🎯</span>
+            Doble llave — reversión aprobación Interventoría (N3)
+          </div>
+          <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, lineHeight:1.45, marginBottom:'12px' }}>
+            Residente de costos (N2) e Interventoría (N3) deben registrar cada uno un comentario con destinatarios, igual que en Pendiente o Rechazado.
+            Solo cuando ambas llaves están activas se desbloquea el registro y el N3 vuelve a «No revisado».
+          </div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:'14px', alignItems:'center', marginBottom:'12px', fontSize:'var(--cc-label)', fontWeight:'700' }}>
+            <span style={{
+              padding:'6px 12px', borderRadius:'999px',
+              border:`2px solid ${arm2Llave ? '#16a34a' : `${t.border}`}`,
+              background: arm2Llave ? '#16a34a18' : t.bgCard,
+              color: arm2Llave ? '#15803d' : t.textMuted,
+              display:'flex', alignItems:'center', gap:'6px',
+            }}>
+              🔑 N2 {arm2Llave ? `✓ ${registro.reversion_arm_n2_nombre || `#${arm2Llave}`}` : '··· pendiente'}
+            </span>
+            <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'800' }}>+</span>
+            <span style={{
+              padding:'6px 12px', borderRadius:'999px',
+              border:`2px solid ${arm3Llave ? '#16a34a' : `${t.border}`}`,
+              background: arm3Llave ? '#16a34a18' : t.bgCard,
+              color: arm3Llave ? '#15803d' : t.textMuted,
+              display:'flex', alignItems:'center', gap:'6px',
+            }}>
+              🔑 N3 {arm3Llave ? `✓ ${registro.reversion_arm_n3_nombre || `#${arm3Llave}`}` : '··· pendiente'}
+            </span>
+          </div>
+          {llaveContrariaOcupadaPorOtro && (
+            <div style={{ fontSize:'var(--cc-label)', color:'#b45309', marginBottom:'10px', fontWeight:'600' }}>
+              Otro usuario de tu nivel ya activó la llave en este registro.
+            </div>
+          )}
+          {!miSlotLibre && !llaveContrariaOcupadaPorOtro && (
+            <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, marginBottom:'10px' }}>
+              Ya diste tu llave. Espera a que la contraparte complete la suya.
+            </div>
+          )}
+          <button
+            type="button"
+            disabled={!puedeTurnarLlaveMisil}
+            onClick={() => { setMostrarPopupValidacion(false); setMostrarPopupReversionN3(true) }}
+            title={!puedeTurnarLlaveMisil ? (llaveContrariaOcupadaPorOtro ? 'Tu nivel ya tiene llave de otro usuario' : !miSlotLibre ? 'Ya registraste tu llave' : '') : 'Formulario de comentarios (doble llave)'}
+            style={{
+              padding:'10px 18px', borderRadius:'10px', fontSize:'var(--cc-sm)', fontWeight:'800',
+              cursor: puedeTurnarLlaveMisil ? 'pointer' : 'not-allowed',
+              opacity: puedeTurnarLlaveMisil ? 1 : 0.5,
+              background: puedeTurnarLlaveMisil
+                ? 'linear-gradient(90deg,#7c3aed,#dc2626)'
+                : t.bg,
+              color: puedeTurnarLlaveMisil ? '#fff' : t.textMuted,
+              border:`2px solid ${puedeTurnarLlaveMisil ? 'rgba(255,255,255,0.25)' : t.border}`,
+              boxShadow: puedeTurnarLlaveMisil ? '0 4px 14px rgba(124,58,237,0.35)' : 'none',
+              letterSpacing:'0.03em',
+            }}
+          >
+            {puedeTurnarLlaveMisil ? '🔐 ACTIVAR MI LLAVE (comentario obligatorio)' : '⏸️ Llave no disponible'}
+          </button>
         </div>
       )}
 
@@ -2352,14 +2457,6 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   </button>
                 )
               })}
-              {nv === 3 && bloqueado && (
-                <button onClick={solicitarReversion}
-                  style={{ padding:'8px 16px', borderRadius:'8px', fontSize:'var(--cc-sm)', fontWeight:'700',
-                           cursor:'pointer', background:'#7c3aed15', color:'#7c3aed',
-                           border:'1.5px solid #7c3aed55' }}>
-                  ↩️ Solicitar Reversión
-                </button>
-              )}
             </div>
             {nv === 2 && (
               <div style={{ marginTop:'12px', display:'flex', alignItems:'center', gap:'8px' }}>
@@ -2388,7 +2485,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             Este cargo no valida estados. Solo puede registrar comentarios dirigidos.
           </div>
           <button
-            onClick={() => { setEstadoValidando('Comentario'); setMostrarPopupValidacion(true) }}
+            onClick={() => { setMostrarPopupReversionN3(false); setEstadoValidando('Comentario'); setMostrarPopupValidacion(true) }}
             style={{
               padding:'8px 16px', borderRadius:'8px', fontSize:'var(--cc-sm)', fontWeight:'700',
               cursor:'pointer', background:`${t.primary}22`, color:t.primary, border:`1.5px solid ${t.primary}66`,
@@ -2475,6 +2572,20 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           obligatorio={!nivelInfo.puedeValidar || estadoValidando !== 'Aprobado'}
           onConfirmar={confirmarValidacion}
           onCancelar={() => setMostrarPopupValidacion(false)}
+        />
+      )}
+
+      {mostrarPopupReversionN3 && (
+        <PopupComentarioValidacion
+          t={t} usuario={usuario} registro={registro}
+          contrato_id={contrato_id} API_URL={API} hdrs={hdrs}
+          estadoValidando="ReversionN3"
+          nivelValidacion={nivelInfo.nivelValidacion}
+          obligatorio={true}
+          zIndexOverlay={10600}
+          tituloModal="Doble llave — reversión aprobación N3"
+          onConfirmar={confirmarReversionN3Doble}
+          onCancelar={() => setMostrarPopupReversionN3(false)}
         />
       )}
 
