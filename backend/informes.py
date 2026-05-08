@@ -150,6 +150,18 @@ def _perm_informes_ccd(user: Any, necesita: Literal["ver", "editar", "validar", 
         f"Sin permiso para esta acción en Informes (se requiere permiso «{necesita}» en la función Informes CCD).",
     )
 
+
+def _perm_informes_ccd_ver_o_validar(user: Any) -> None:
+    """Estado de firmas registradas: «ver» o «validar» (quien firma suele tener solo validar en la matriz)."""
+    try:
+        _perm_informes_ccd(user, "ver")
+        return
+    except HTTPException as ex:
+        if ex.status_code != 403:
+            raise
+    _perm_informes_ccd(user, "validar")
+
+
 # ── Biblioteca CCD (gestión documental): metadatos por código de formato ─────
 # Más adelante el contrato podrá elegir qué códigos aplican; las plantillas siguen en código.
 FORMATOS_CCD: Dict[str, Dict[str, Any]] = {
@@ -2069,7 +2081,9 @@ def ccd_registrar_firma_contexto(
         raise HTTPException(
             status_code=503,
             detail=(
-                "No se pudo registrar la firma. Ejecuta en Supabase backend/sql/ccd_firma_registro_contexto.sql. "
+                "No se pudo registrar la firma. Si el error menciona check constraint en slot, ejecuta en Supabase "
+                "backend/sql/ccd_firma_registro_slot_elaboro2_reviso2.sql (slots elaboro2/reviso2 para FO-EO-04). "
+                "Si falta la tabla, ejecuta backend/sql/ccd_firma_registro_contexto.sql. "
                 f"Detalle: {e!s}"
             ),
         ) from e
@@ -2100,7 +2114,7 @@ def ccd_firmas_registradas_contexto(
     formato_codigo: str,
     current_user: dict = Depends(_get_user),
 ):
-    _perm_informes_ccd(current_user, "ver")
+    _perm_informes_ccd_ver_o_validar(current_user)
     if formato_codigo not in FORMATOS_CCD:
         raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
     if contexto_tipo not in ("semana", "acta_rpo"):

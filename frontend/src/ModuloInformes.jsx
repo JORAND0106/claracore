@@ -4938,11 +4938,14 @@ export default function ModuloInformes({
                     </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', justifyContent: 'flex-end' }}>
                   {actaIdFoEo04 && (() => {
-                    const fs = firmasCcd['FO-IDU-EO-04-V2']
-                    if (!fs) return null
+                    const raw = firmasCcd['FO-IDU-EO-04-V2']
+                    const fs =
+                      raw && typeof raw === 'object'
+                        ? raw
+                        : { elaboro: null, elaboro2: null, reviso: null, reviso2: null }
                     const badges = [
                       { key: 'elaboro',  label: 'E1', titulo: 'Elaboró 1' },
-                      { key: 'elaboro2', label: 'E2', titulo: 'Elaboró 2' },
+                      { key: 'elaboro2', label: 'ER2', titulo: 'Elaboró 2' },
                       { key: 'reviso',   label: 'R1', titulo: 'Revisó 1'  },
                       { key: 'reviso2',  label: 'R2', titulo: 'Revisó 2'  },
                     ]
@@ -4952,7 +4955,13 @@ export default function ModuloInformes({
                           <span
                             key={key}
                             style={chipFirmaEstado(!!fs[key])}
-                            title={fs[key] ? `${titulo}: firma registrada` : `${titulo}: pendiente`}
+                            title={
+                              fs[key]
+                                ? `${titulo}: firma registrada`
+                                : fs.tabla_disponible === false
+                                  ? `${titulo}: sin datos de firma (revisa SQL en servidor)`
+                                  : `${titulo}: pendiente`
+                            }
                           >
                             {label} {fs[key] ? '✓' : '·'}
                           </span>

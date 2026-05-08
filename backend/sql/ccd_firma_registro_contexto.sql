@@ -13,7 +13,7 @@ create table if not exists ccd_firma_registro (
   formato_codigo text not null,
   contexto_tipo text not null check (contexto_tipo in ('corte', 'semana', 'acta_rpo')),
   contexto_id bigint not null,
-  slot text not null check (slot in ('elaboro', 'reviso', 'aprobo')),
+  slot text not null check (slot in ('elaboro', 'elaboro2', 'reviso', 'reviso2', 'aprobo')),
   usuario_id bigint not null,
   firma_imagen_url text not null,
   created_at timestamptz not null default now(),
@@ -23,7 +23,7 @@ create table if not exists ccd_firma_registro (
 create index if not exists idx_ccd_firma_reg_ctx on ccd_firma_registro (contexto_tipo, contexto_id);
 create index if not exists idx_ccd_firma_reg_ctr on ccd_firma_registro (contrato_id);
 
-comment on table ccd_firma_registro is 'CCD: firma registrada por slot (Elaboró/Revisó/Aprobó) y contexto (corte, semana so_semanas, acta actas).';
+comment on table ccd_firma_registro is 'CCD: firma por slot (Elaboró 1/2, Revisó 1/2, Aprobó) y contexto (corte, semana, acta RPO). FO-EO-04 usa elaboro2 y reviso2.';
 
 grant all on table ccd_firma_registro to postgres, service_role;
 grant usage, select on sequence ccd_firma_registro_id_seq to service_role;
