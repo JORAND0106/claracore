@@ -1724,6 +1724,36 @@ def _require_sicoe_puede_validar_nivel(current_user, user_id: int, nivel: int) -
         )
 
 
+def _require_llave_reversion_sicoe_nivel(current_user, user_id: int, nivel_arm: int) -> None:
+    """
+    Doble llave reversión N3: Nivel 2 acepta matriz «validar» o «editar» en Reporte de cantidades;
+    Nivel 3 solo «validar» (Interventoría).
+    """
+    if _es_desarrollador(current_user):
+        return
+    matriz_ok = False
+    if nivel_arm == 2:
+        matriz_ok = (
+            _cargo_permiso_validar_reporte_cantidades_user_id(user_id)
+            or _cargo_permiso_editar_reporte_cantidades_user_id(user_id)
+        )
+    elif nivel_arm == 3:
+        matriz_ok = _cargo_permiso_validar_reporte_cantidades_user_id(user_id)
+    else:
+        raise HTTPException(status_code=403, detail="Llave de reversión no reconocida.")
+    if not matriz_ok:
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene el permiso requerido en «Reporte de cantidades» (matriz de accesos).",
+        )
+    got = _sicoe_db_nivel_validacion_usuario(user_id)
+    if got != nivel_arm:
+        raise HTTPException(
+            status_code=403,
+            detail="Tu rol no autoriza esta llave en SICOE obra.",
+        )
+
+
 def _estado_registro_eq_desde_filtro_ui(evp: str) -> str:
     """Alinea plural de la UI con el valor almacenado en so_registros."""
     p = (evp or "").strip()
@@ -15380,7 +15410,7 @@ def reversion_n3_doble_llave(
                 status_code=403,
                 detail="Solo Residente de costos (Nivel 2) o Interventoría (Nivel 3) pueden activar esta llave.",
             )
-        _require_sicoe_puede_validar_nivel(current_user, autor_id, nivel)
+        _require_llave_reversion_sicoe_nivel(current_user, autor_id, nivel)
 
         def _get():
             return (

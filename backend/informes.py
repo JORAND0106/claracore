@@ -6217,6 +6217,39 @@ def _render_items_n3_html(
     return "".join(parts)
 
 
+def _fo_eo_04_firmas_data_uris(
+    contrato_id: int,
+    formato_codigo: str,
+    acta_id: Optional[int],
+    firma_cfg: Dict[str, Any],
+    current_user: Optional[dict],
+) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+    """Imágenes de firma (ccd_firma_registro + acta_rpo) para los 4 slots del FO-EO-04."""
+    if not acta_id:
+        return None, None, None, None
+    ct, cid = "acta_rpo", int(acta_id)
+    fc = firma_cfg or {}
+
+    def _slot(slot: str, uid_key: str, nombre_key: str) -> Optional[str]:
+        return _firma_data_uri_para_slot_contexto(
+            contrato_id,
+            ct,
+            cid,
+            formato_codigo,
+            slot,
+            _opt_usuario_id(fc.get(uid_key)),
+            str(fc.get(nombre_key) or "").strip(),
+            current_user,
+        )
+
+    return (
+        _slot("elaboro", "elaboro_usuario_id", "elaboro_nombre"),
+        _slot("elaboro2", "elaboro2_usuario_id", "elaboro2_nombre"),
+        _slot("reviso", "reviso_usuario_id", "reviso_nombre"),
+        _slot("reviso2", "reviso2_usuario_id", "reviso2_nombre"),
+    )
+
+
 def _html_fo_eo_04_firmas_4(
     navy: str,
     navy_hdr: str,
@@ -6229,36 +6262,77 @@ def _html_fo_eo_04_firmas_4(
     reviso_cargo: str,
     reviso2_nombre: str,
     reviso2_cargo: str,
+    elaboro_firma_data_uri: Optional[str] = None,
+    elaboro2_firma_data_uri: Optional[str] = None,
+    reviso_firma_data_uri: Optional[str] = None,
+    reviso2_firma_data_uri: Optional[str] = None,
 ) -> str:
     """Bloque de firmas: col izquierda = Elaboró (1 arriba, 2 abajo); col derecha = Revisó (1 arriba, 2 abajo)."""
     import html as _html_mod
 
-    def _fila_firma(nombre: str, cargo: str, borde_top: bool = False) -> str:
+    def _fila_firma(
+        nombre: str,
+        cargo: str,
+        borde_top: bool = False,
+        firma_uri: Optional[str] = None,
+    ) -> str:
         nombre_h = _html_mod.escape(nombre) if nombre else "&nbsp;"
         cargo_h  = _html_mod.escape(cargo) if cargo else "&nbsp;"
         bt = f"border-top:1px solid {navy};" if borde_top else ""
+        if firma_uri:
+            src_h = _html_mod.escape(firma_uri, quote=True)
+            firma_inner = (
+                f'<img src="{src_h}" alt="" '
+                f'style="max-height:42px;max-width:92%;display:block;margin:0 auto;padding:2px 0;" />'
+            )
+        else:
+            firma_inner = "&nbsp;"
         return f"""<tr>
 <td style="vertical-align:top;{bt}padding:7px 10px;">
   <div style="font-size:8pt;color:#64748b;margin-bottom:4px;">Firma Aux.</div>
-  <div style="min-height:30px;border-bottom:1px solid {navy};margin-bottom:5px;">&nbsp;</div>
+  <div style="min-height:30px;border-bottom:1px solid {navy};margin-bottom:5px;text-align:center;">{firma_inner}</div>
   <div style="font-size:8.5pt;font-weight:bold;color:{navy};text-align:center;border-bottom:1px solid {navy};padding:2px 0;margin-bottom:2px;">{nombre_h}</div>
   <div style="font-size:8pt;color:#475569;text-align:center;">{cargo_h}</div>
 </td>
 </tr>"""
 
-    def _columna(titulo: str, n1: str, c1: str, n2: str, c2: str) -> str:
+    def _columna(
+        titulo: str,
+        n1: str,
+        c1: str,
+        n2: str,
+        c2: str,
+        uri1: Optional[str] = None,
+        uri2: Optional[str] = None,
+    ) -> str:
         return f"""<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
 <tr>
 <td style="font-weight:bold;text-align:center;font-size:8.5pt;padding:4px 6px;
            background-color:#dce8f0;color:{navy_hdr};
            border-bottom:1px solid {navy};">{titulo}</td>
 </tr>
-{_fila_firma(n1, c1, borde_top=False)}
-{_fila_firma(n2, c2, borde_top=True)}
+{_fila_firma(n1, c1, borde_top=False, firma_uri=uri1)}
+{_fila_firma(n2, c2, borde_top=True, firma_uri=uri2)}
 </table>"""
 
-    elab_col  = _columna("ELABOR\u00d3", elaboro_nombre, elaboro_cargo, elaboro2_nombre, elaboro2_cargo)
-    revis_col = _columna("REVIS\u00d3",  reviso_nombre,  reviso_cargo,  reviso2_nombre,  reviso2_cargo)
+    elab_col  = _columna(
+        "ELABOR\u00d3",
+        elaboro_nombre,
+        elaboro_cargo,
+        elaboro2_nombre,
+        elaboro2_cargo,
+        elaboro_firma_data_uri,
+        elaboro2_firma_data_uri,
+    )
+    revis_col = _columna(
+        "REVIS\u00d3",
+        reviso_nombre,
+        reviso_cargo,
+        reviso2_nombre,
+        reviso2_cargo,
+        reviso_firma_data_uri,
+        reviso2_firma_data_uri,
+    )
 
     return f"""<table width="100%" cellspacing="0" cellpadding="0"
        style="border-collapse:collapse;margin-top:8px;{bd};">
@@ -6296,6 +6370,11 @@ def _html_idu_fo_eo_04_v2_plantilla_vacia(
     reviso_cargo: str = "",
     reviso2_nombre: str = "",
     reviso2_cargo: str = "",
+    # Firmas registradas (ccd_firma_registro) o perfil — data URI para el PDF
+    elaboro_firma_data_uri: Optional[str] = None,
+    elaboro2_firma_data_uri: Optional[str] = None,
+    reviso_firma_data_uri: Optional[str] = None,
+    reviso2_firma_data_uri: Optional[str] = None,
     # Datos específicos del ítem (vacíos = plantilla en blanco)
     item_numero: str = "",
     item_unidad: str = "",
@@ -6689,7 +6768,8 @@ body {{ margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:7pt;
 </div>
 
 <!-- ═══ FIRMAS: ELABORÓ / REVISÓ (2 × 2) ═══ -->
-{_html_fo_eo_04_firmas_4(navy, navy_hdr, bd, elaboro_nombre, elaboro_cargo, elaboro2_nombre, elaboro2_cargo, reviso_nombre, reviso_cargo, reviso2_nombre, reviso2_cargo)}
+{_html_fo_eo_04_firmas_4(navy, navy_hdr, bd, elaboro_nombre, elaboro_cargo, elaboro2_nombre, elaboro2_cargo, reviso_nombre, reviso_cargo, reviso2_nombre, reviso2_cargo,
+    elaboro_firma_data_uri=elaboro_firma_data_uri, elaboro2_firma_data_uri=elaboro2_firma_data_uri, reviso_firma_data_uri=reviso_firma_data_uri, reviso2_firma_data_uri=reviso2_firma_data_uri)}
 
 <!-- ═══ DISTRIBUCIÓN ═══ -->
 <div style="font-size:5.5pt;text-align:center;margin-top:10px;padding:4px;color:#334155;">
@@ -6707,6 +6787,7 @@ def _build_fo_eo_04_pdf_bytes(
     subsistema: str,
     acta_id: Optional[int],
     supervisor: str,
+    current_user: Optional[dict] = None,
 ) -> tuple:
     """
     Genera los bytes del PDF FO-IDU-EO-04-V2.
@@ -6803,6 +6884,15 @@ def _build_fo_eo_04_pdf_bytes(
         reviso2_nombre=str(firma_cfg.get("reviso2_nombre") or "").strip(),
         reviso2_cargo=str(firma_cfg.get("reviso2_cargo") or "").strip(),
     )
+    e_uri, e2_uri, r_uri, r2_uri = _fo_eo_04_firmas_data_uris(
+        contrato_id, formato_codigo, acta_id, firma_cfg, current_user
+    )
+    _base_kwargs.update(
+        elaboro_firma_data_uri=e_uri,
+        elaboro2_firma_data_uri=e2_uri,
+        reviso_firma_data_uri=r_uri,
+        reviso2_firma_data_uri=r2_uri,
+    )
 
     items_n3 = _fetch_items_n3_acta(acta_id, contrato_id) if acta_id else []
 
@@ -6866,6 +6956,7 @@ def _build_fo_eo_04_pdf_bytes_prog(
     acta_id: Optional[int],
     supervisor: str,
     on_progress=None,
+    current_user: Optional[dict] = None,
 ) -> tuple:
     """
     Igual que _build_fo_eo_04_pdf_bytes pero reporta progreso a través de on_progress(dict).
@@ -6964,6 +7055,15 @@ def _build_fo_eo_04_pdf_bytes_prog(
         reviso2_nombre=str(firma_cfg.get("reviso2_nombre") or "").strip(),
         reviso2_cargo=str(firma_cfg.get("reviso2_cargo") or "").strip(),
     )
+    e_uri, e2_uri, r_uri, r2_uri = _fo_eo_04_firmas_data_uris(
+        contrato_id, formato_codigo, acta_id, firma_cfg, current_user
+    )
+    _base_kwargs.update(
+        elaboro_firma_data_uri=e_uri,
+        elaboro2_firma_data_uri=e2_uri,
+        reviso_firma_data_uri=r_uri,
+        reviso2_firma_data_uri=r2_uri,
+    )
 
     _prog(30, "Obteniendo ítems aprobados en Nivel 3…")
     items_n3 = _fetch_items_n3_acta(acta_id, contrato_id) if acta_id else []
@@ -7046,6 +7146,8 @@ def ccd_pdf_job_iniciar(
             "created_at": _time_mod.time(),
         }
 
+    cu_pdf = current_user if isinstance(current_user, dict) else dict(current_user)
+
     def _run():
         def on_progress(d: dict):
             with _pdf_jobs_lock:
@@ -7060,6 +7162,7 @@ def ccd_pdf_job_iniciar(
             pdf_bytes, fname, _ = _build_fo_eo_04_pdf_bytes_prog(
                 contrato_id, formato_codigo, subsistema, acta_id, supervisor,
                 on_progress=on_progress,
+                current_user=cu_pdf,
             )
             with _pdf_jobs_lock:
                 if job_id in _pdf_jobs:
@@ -7138,7 +7241,11 @@ def ccd_preview_plantilla_vacia_pdf(
     meta = FORMATOS_CCD[formato_codigo]
     if meta.get("plantilla_html") != "idu_memoria_fo_eo_04_v2":
         raise HTTPException(status_code=404, detail="Vista previa vacía no disponible para este formato")
-    pdf_bytes, fname, _ = _build_fo_eo_04_pdf_bytes(contrato_id, formato_codigo, subsistema, acta_id, supervisor)
+    cu_pdf = current_user if isinstance(current_user, dict) else dict(current_user)
+    pdf_bytes, fname, _ = _build_fo_eo_04_pdf_bytes(
+        contrato_id, formato_codigo, subsistema, acta_id, supervisor,
+        current_user=cu_pdf,
+    )
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -7162,8 +7269,10 @@ def ccd_preview_plantilla_vacia_con_sello(
     meta = FORMATOS_CCD[formato_codigo]
     if meta.get("plantilla_html") != "idu_memoria_fo_eo_04_v2":
         raise HTTPException(status_code=404, detail="Vista previa vacía no disponible para este formato")
+    cu_pdf = current_user if isinstance(current_user, dict) else dict(current_user)
     pdf_bytes, fname, contrato_numero = _build_fo_eo_04_pdf_bytes(
-        contrato_id, formato_codigo, subsistema, acta_id, supervisor
+        contrato_id, formato_codigo, subsistema, acta_id, supervisor,
+        current_user=cu_pdf,
     )
     return _attachment_pdf_con_pagina_sello_usuario(
         pdf_bytes,

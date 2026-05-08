@@ -1030,7 +1030,8 @@ function capasInicialesValidacionFromUser(usuario) {
   return [{ nivel: ni.nivelValidacion, estado: 'No Revisado' }]
 }
 
-// ─── HELPER: NIVEL DE VALIDACIÓN SICOE (permiso «validar» en Reporte de cantidades + rol/cargo; sin permiso → no valida) ─
+// ─── HELPER: NIVEL DE VALIDACIÓN SICOE (permiso «validar» en Reporte de cantidades + rol/cargo).
+// nivelLlaveReversion: además permite llave reversión N3 a Nivel 2 con «validar» y/o «editar» en esa función. ─
 function determinarNivelValidacion(usuario) {
   const norm = (txt) =>
     String(txt || '')
@@ -1090,9 +1091,25 @@ function determinarNivelValidacion(usuario) {
   const puedePrevalidarAntesInterv = rol === 'contratista' && puedeValidar &&
     (cargo.includes('residente de costos') || cargo.includes('residente de obra'))
 
+  /** Quién puede usar la reversión doble llave: N3 solo con validar; N2 si validar y/o editar en Reporte de cantidades. */
+  let nivelLlaveReversion = nivelValidacion
+  const matrizReporteCantidades = esDevCargo || permisoValidarSicoe || puedeEditar
+  if (!esSoloComentarista && matrizReporteCantidades && nivelLlaveReversion == null) {
+    let inferred = null
+    if (rol === 'contratista') inferred = 2
+    else if (rol === 'interventoria') inferred = 3
+    else if (rol === 'operativo contratista') inferred = 1
+    else if (nivelDesdeCargoId != null) inferred = nivelDesdeCargoId
+    const permiteLlaveN2 = permisoValidarSicoe || puedeEditar || esDevCargo
+    const permiteLlaveN3 = permisoValidarSicoe || esDevCargo
+    if (inferred === 2 && permiteLlaveN2) nivelLlaveReversion = 2
+    if (inferred === 3 && permiteLlaveN3) nivelLlaveReversion = 3
+  }
+
   return {
     nivelValidacion, nivelValidacionComentario, puedeEditar, puedeValidar, esApoyoTecnico, esSubcontratista, esSoloComentarista,
     verValoresEconomicos, rolOrigen, esInterventoria: esInterventoriaSicoe, puedePrevalidarAntesInterv,
+    nivelLlaveReversion,
   }
 }
 
@@ -1849,8 +1866,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const uidLlave = usuario?.id != null ? Number(usuario.id) : NaN
   const arm2Llave = registro.reversion_arm_n2_usuario_id != null ? Number(registro.reversion_arm_n2_usuario_id) : null
   const arm3Llave = registro.reversion_arm_n3_usuario_id != null ? Number(registro.reversion_arm_n3_usuario_id) : null
-  const nvLlave = nivelInfo.nivelValidacion
-  const muestraPanelDobleLlave = esNivel3Aprobado && !!registro.bloqueado && nivelInfo.puedeValidar && (nvLlave === 2 || nvLlave === 3)
+  const nvLlave = nivelInfo.nivelLlaveReversion
+  const muestraPanelDobleLlave = esNivel3Aprobado && !!registro.bloqueado && (nvLlave === 2 || nvLlave === 3)
   const miSlotLibre = nvLlave === 2 ? arm2Llave == null : nvLlave === 3 ? arm3Llave == null : false
   /** Otro usuario ya ocupó «tu» lado de la llave */
   const llaveContrariaOcupadaPorOtro = nvLlave === 2 ? (arm2Llave != null && arm2Llave !== uidLlave) : nvLlave === 3 ? (arm3Llave != null && arm3Llave !== uidLlave) : false
@@ -2580,7 +2597,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           t={t} usuario={usuario} registro={registro}
           contrato_id={contrato_id} API_URL={API} hdrs={hdrs}
           estadoValidando="ReversionN3"
-          nivelValidacion={nivelInfo.nivelValidacion}
+          nivelValidacion={nivelInfo.nivelLlaveReversion ?? nivelInfo.nivelValidacion}
           obligatorio={true}
           zIndexOverlay={10600}
           tituloModal="Doble llave — reversión aprobación N3"
