@@ -6984,6 +6984,140 @@ def _acta_rpo_periodos_se_solapan(fi_a: str, ff_a: str, fi_b: str, ff_b: str) ->
     return fi_a <= ff_b and ff_a >= fi_b
 
 
+def _mover_registros_residual_hacia_acta(contrato_id: int, source_acta_ids: List[int], hacia_acta_id: int) -> int:
+    """
+    Traslada so_registros sin aprobación N3 ('aprobado') desde los actas fuente hacia hacia_acta_id;
+    actualiza acta_rpo_id en so_reportes tocados.
+    """
+    sources = sorted({int(x) for x in source_acta_ids if x is not None and int(x) != int(hacia_acta_id)})
+    if not sources or not hacia_acta_id:
+        return 0
+    registros_movidos = 0
+    reportes_tocados: Set[int] = set()
+    off = 0
+    while True:
+        batch = supabase.table("so_registros").select("id, reporte_id, nivel3_estado")\
+            .eq("contrato_id", contrato_id).in_("acta_rpo_id", sources)\
+            .range(off, off + 199).execute().data or []
+        for reg in batch:
+            n3 = (reg.get("nivel3_estado") or "").strip().lower()
+            if n3 == "aprobado":
+                continue
+            rid = reg["id"]
+            supabase.table("so_registros").update({"acta_rpo_id": hacia_acta_id}).eq("id", rid).execute()
+            registros_movidos += 1
+            rp = reg.get("reporte_id")
+            if rp is not None:
+                reportes_tocados.add(int(rp))
+        if len(batch) < 200:
+            break
+        off += 200
+    for rep_id in reportes_tocados:
+        supabase.table("so_reportes").update({"acta_rpo_id": hacia_acta_id})\
+            .eq("id", rep_id).eq("contrato_id", contrato_id).execute()
+    return registros_movidos
+
+
+def _cerrar_acta_rpo_ejecutar(
+    contrato_id: int,
+    fc: date,
+    cerrar_id: int,
+    acta_row: dict,
+    current_user,
+    log_accion: str = "cerrar_rpo_anticipado",
+) -> dict:
+    """Cierra período RPO, crea mes siguiente y mueve residuales sin N3 aprobado. Usado por cierre manual y vencimiento."""
+    if (acta_row.get("tipo_grupo") or "").strip().upper() != "RPO":
+        raise HTTPException(status_code=400, detail="Solo aplica a actas con tipo_grupo RPO.")
+
+    fi_old = (acta_row.get("fecha_inicio") or "")[:10]
+    ff_old = (acta_row.get("fecha_fin") or "")[:10]
+    if not fi_old or not ff_old:
+        raise HTTPException(status_code=400, detail="El acta no tiene fecha_inicio / fecha_fin.")
+    try:
+        d_ini = date.fromisoformat(fi_old)
+        d_fin_prev = date.fromisoformat(ff_old)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Fechas del acta corruptas.")
+
+    if fc < d_ini:
+        raise HTTPException(status_code=422, detail="La fecha de cierre no puede ser anterior al inicio del acta.")
+    if fc > d_fin_prev:
+        raise HTTPException(status_code=422, detail="La fecha de cierre no puede ser posterior al fin vigente del acta.")
+    if fc > date.today():
+        raise HTTPException(status_code=422, detail="La fecha de cierre no puede ser futura.")
+
+    fi_n = _first_day_next_month(fc)
+    ff_n = _last_day_of_month(fi_n.year, fi_n.month)
+    fi_ns, ff_ns = fi_n.isoformat(), ff_n.isoformat()
+
+    existentes = supabase.table("actas").select("id, numero_rpo, fecha_inicio, fecha_fin, consecutivo")\
+        .eq("contrato_id", contrato_id).eq("tipo_grupo", "RPO").execute().data or []
+    for ex in existentes:
+        if ex.get("id") == cerrar_id:
+            continue
+        ei = (ex.get("fecha_inicio") or "")[:10]
+        ef = (ex.get("fecha_fin") or "")[:10]
+        if ei and ef and _acta_rpo_periodos_se_solapan(ei, ef, fi_ns, ff_ns):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Ya existe un Acta RPO que cubre el período {fi_ns} … {ff_ns} (id {ex.get('id')} / RPO {ex.get('numero_rpo')}).",
+            )
+
+    rpo_rows = [r for r in existentes if r.get("numero_rpo") is not None]
+    max_rpo = max((int(r["numero_rpo"]) for r in rpo_rows), default=0)
+    nuevo_numero_rpo = max_rpo + 1
+
+    cons_rows = supabase.table("actas").select("consecutivo").eq("contrato_id", contrato_id).execute().data or []
+    max_cons = max((r["consecutivo"] for r in cons_rows), default=0)
+    nuevo_cons = max_cons + 1
+
+    supabase.table("actas").update({"fecha_fin": fc.isoformat(), "updated_at": "now()"}).eq("id", cerrar_id).execute()
+
+    new_row = {
+        "contrato_id":      contrato_id,
+        "consecutivo":      nuevo_cons,
+        "tipo_grupo":       "RPO",
+        "numero_rpo":       nuevo_numero_rpo,
+        "fecha_inicio":     fi_ns,
+        "fecha_fin":        ff_ns,
+        "tipo_acta_id":     acta_row.get("tipo_acta_id"),
+        "asignado_a":       acta_row.get("asignado_a"),
+        "fecha_asignacion": acta_row.get("fecha_asignacion"),
+        "observacion":      acta_row.get("observacion"),
+    }
+    new_row = {k: v for k, v in new_row.items() if v is not None}
+    ins = supabase.table("actas").insert(new_row).execute()
+    creada = ins.data[0] if ins.data else {}
+    nueva_id = creada.get("id")
+
+    registros_movidos = 0
+    if nueva_id:
+        registros_movidos = _mover_registros_residual_hacia_acta(contrato_id, [cerrar_id], nueva_id)
+
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "ACTAS",
+        "acta",
+        str(cerrar_id),
+        {
+            "accion": log_accion,
+            "fecha_cierre": fc.isoformat(),
+            "nueva_acta_id": nueva_id,
+            "registros_movidos": registros_movidos,
+        },
+    )
+
+    return {
+        "ok": True,
+        "acta_cerrada": {"id": cerrar_id, "fecha_fin": fc.isoformat()},
+        "acta_creada": creada,
+        "periodo_siguiente": {"fecha_inicio": fi_ns, "fecha_fin": ff_ns},
+        "registros_movidos_residual": registros_movidos,
+    }
+
+
 @app.post("/actas/{contrato_id}/rpo/cerrar-y-siguiente")
 def cerrar_acta_rpo_y_crear_siguiente(
     contrato_id: int,
@@ -7015,120 +7149,107 @@ def cerrar_acta_rpo_y_crear_siguiente(
         acta_row = rows[0]
         cerrar_id = acta_row["id"]
 
-    if (acta_row.get("tipo_grupo") or "").strip().upper() != "RPO":
-        raise HTTPException(status_code=400, detail="Solo aplica a actas con tipo_grupo RPO.")
+    return _cerrar_acta_rpo_ejecutar(contrato_id, fc, cerrar_id, acta_row, current_user, "cerrar_rpo_anticipado")
 
-    fi_old = (acta_row.get("fecha_inicio") or "")[:10]
-    ff_old = (acta_row.get("fecha_fin") or "")[:10]
-    if not fi_old or not ff_old:
-        raise HTTPException(status_code=400, detail="El acta no tiene fecha_inicio / fecha_fin.")
-    try:
-        d_ini = date.fromisoformat(fi_old)
-        d_fin_prev = date.fromisoformat(ff_old)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Fechas del acta corruptas.")
 
-    if fc < d_ini:
-        raise HTTPException(status_code=422, detail="La fecha de cierre no puede ser anterior al inicio del acta.")
-    if fc > d_fin_prev:
-        raise HTTPException(status_code=422, detail="La fecha de cierre no puede ser posterior al fin vigente del acta.")
-    if fc > date.today():
-        raise HTTPException(status_code=422, detail="La fecha de cierre no puede ser futura.")
+def sincronizar_actas_rpo_por_vencimiento(contrato_id: int, current_user) -> dict:
+    """
+    1) Si no hay acta RPO vigente para hoy pero existe un acta cuyo período ya terminó: crea el siguiente mes
+       (igual que cerrar en fecha_fin) o, si ese período ya existe, solo mueve residuales al acta que lo cubre.
+    2) Con acta vigente: mueve registros sin N3 aprobado desde todos los actas con fecha_fin < hoy hacia el acta vigente.
+    """
+    today = date.today()
+    today_s = today.isoformat()
+    moved_total = 0
+    cerrado_por_vencimiento = False
+    acta_creada_auto = None
 
-    # Mes completo siguiente al mes de fecha_cierre (ej.: cierre 29-ene → 1–28/29 feb)
-    fi_n = _first_day_next_month(fc)
-    ff_n = _last_day_of_month(fi_n.year, fi_n.month)
-    fi_ns, ff_ns = fi_n.isoformat(), ff_n.isoformat()
+    vig = _acta_rpo_vigente_row(contrato_id)
 
-    existentes = supabase.table("actas").select("id, numero_rpo, fecha_inicio, fecha_fin, consecutivo")\
-        .eq("contrato_id", contrato_id).eq("tipo_grupo", "RPO").execute().data or []
-    for ex in existentes:
-        if ex.get("id") == cerrar_id:
-            continue
-        ei = (ex.get("fecha_inicio") or "")[:10]
-        ef = (ex.get("fecha_fin") or "")[:10]
-        if ei and ef and _acta_rpo_periodos_se_solapan(ei, ef, fi_ns, ff_ns):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Ya existe un Acta RPO que cubre el período {fi_ns} … {ff_ns} (id {ex.get('id')} / RPO {ex.get('numero_rpo')}).",
-            )
+    if not vig:
+        rows = supabase.table("actas").select("*")\
+            .eq("contrato_id", contrato_id).eq("tipo_grupo", "RPO")\
+            .lt("fecha_fin", today_s)\
+            .order("fecha_fin", desc=True).limit(1).execute().data or []
+        if rows:
+            L = rows[0]
+            lid = int(L["id"])
+            ff_L = (L.get("fecha_fin") or "")[:10]
+            try:
+                fc = date.fromisoformat(ff_L)
+            except ValueError:
+                fc = None
+            if fc is not None and fc <= today:
+                fi_n = _first_day_next_month(fc)
+                ff_n = _last_day_of_month(fi_n.year, fi_n.month)
+                fi_ns, ff_ns = fi_n.isoformat(), ff_n.isoformat()
+                existentes = supabase.table("actas").select("id, numero_rpo, fecha_inicio, fecha_fin")\
+                    .eq("contrato_id", contrato_id).eq("tipo_grupo", "RPO").execute().data or []
+                overlap_id = None
+                for ex in existentes:
+                    if int(ex.get("id") or 0) == lid:
+                        continue
+                    ei = (ex.get("fecha_inicio") or "")[:10]
+                    ef = (ex.get("fecha_fin") or "")[:10]
+                    if ei and ef and _acta_rpo_periodos_se_solapan(ei, ef, fi_ns, ff_ns):
+                        overlap_id = int(ex["id"])
+                        break
+                if overlap_id:
+                    moved_total += _mover_registros_residual_hacia_acta(contrato_id, [lid], overlap_id)
+                else:
+                    try:
+                        r = _cerrar_acta_rpo_ejecutar(
+                            contrato_id, fc, lid, L, current_user,
+                            log_accion="cerrar_rpo_vencimiento_calendario",
+                        )
+                        cerrado_por_vencimiento = True
+                        acta_creada_auto = r.get("acta_creada")
+                        moved_total += int(r.get("registros_movidos_residual") or 0)
+                    except HTTPException as e:
+                        if e.status_code != 409:
+                            raise
+                        overlap_id = None
+                        for ex in existentes:
+                            if int(ex.get("id") or 0) == lid:
+                                continue
+                            ei = (ex.get("fecha_inicio") or "")[:10]
+                            ef = (ex.get("fecha_fin") or "")[:10]
+                            if ei and ef and _acta_rpo_periodos_se_solapan(ei, ef, fi_ns, ff_ns):
+                                overlap_id = int(ex["id"])
+                                break
+                        if overlap_id:
+                            moved_total += _mover_registros_residual_hacia_acta(contrato_id, [lid], overlap_id)
 
-    rpo_rows = [r for r in existentes if r.get("numero_rpo") is not None]
-    max_rpo = max((int(r["numero_rpo"]) for r in rpo_rows), default=0)
-    nuevo_numero_rpo = max_rpo + 1
+        vig = _acta_rpo_vigente_row(contrato_id)
 
-    cons_rows = supabase.table("actas").select("consecutivo").eq("contrato_id", contrato_id).execute().data or []
-    max_cons = max((r["consecutivo"] for r in cons_rows), default=0)
-    nuevo_cons = max_cons + 1
-
-    # 1) Acortar período del acta actual
-    supabase.table("actas").update({"fecha_fin": fc.isoformat(), "updated_at": "now()"}).eq("id", cerrar_id).execute()
-
-    new_row = {
-        "contrato_id":      contrato_id,
-        "consecutivo":      nuevo_cons,
-        "tipo_grupo":       "RPO",
-        "numero_rpo":       nuevo_numero_rpo,
-        "fecha_inicio":     fi_ns,
-        "fecha_fin":        ff_ns,
-        "tipo_acta_id":     acta_row.get("tipo_acta_id"),
-        "asignado_a":       acta_row.get("asignado_a"),
-        "fecha_asignacion": acta_row.get("fecha_asignacion"),
-        "observacion":      acta_row.get("observacion"),
-    }
-    new_row = {k: v for k, v in new_row.items() if v is not None}
-    ins = supabase.table("actas").insert(new_row).execute()
-    creada = ins.data[0] if ins.data else {}
-    nueva_id = creada.get("id")
-
-    registros_movidos = 0
-    reportes_tocados = set()
-
-    if nueva_id:
-        off = 0
-        while True:
-            batch = supabase.table("so_registros").select("id, reporte_id, nivel3_estado")\
-                .eq("contrato_id", contrato_id).eq("acta_rpo_id", cerrar_id)\
-                .range(off, off + 199).execute().data or []
-            for reg in batch:
-                n3 = (reg.get("nivel3_estado") or "").strip().lower()
-                if n3 == "aprobado":
-                    continue
-                rid = reg["id"]
-                supabase.table("so_registros").update({"acta_rpo_id": nueva_id}).eq("id", rid).execute()
-                registros_movidos += 1
-                rp = reg.get("reporte_id")
-                if rp is not None:
-                    reportes_tocados.add(int(rp))
-            if len(batch) < 200:
-                break
-            off += 200
-
-        for rep_id in reportes_tocados:
-            supabase.table("so_reportes").update({"acta_rpo_id": nueva_id})\
-                .eq("id", rep_id).eq("contrato_id", contrato_id).execute()
-
-    registrar_log(
-        current_user,
-        "EDITAR",
-        "ACTAS",
-        "acta",
-        str(cerrar_id),
-        {
-            "accion": "cerrar_rpo_anticipado",
-            "fecha_cierre": fc.isoformat(),
-            "nueva_acta_id": nueva_id,
-            "registros_movidos": registros_movidos,
-        },
-    )
-
-    return {
+    out: Dict[str, Any] = {
         "ok": True,
-        "acta_cerrada": {"id": cerrar_id, "fecha_fin": fc.isoformat()},
-        "acta_creada": creada,
-        "periodo_siguiente": {"fecha_inicio": fi_ns, "fecha_fin": ff_ns},
-        "registros_movidos_residual": registros_movidos,
+        "vigente_id": vig["id"] if vig else None,
+        "registros_movidos": moved_total,
+        "cerrado_automatico_vencimiento": cerrado_por_vencimiento,
+        "acta_creada_automatica": acta_creada_auto,
     }
+
+    if not vig:
+        out["sin_acta_vigente"] = True
+        return out
+
+    vig_id = int(vig["id"])
+    past_rows = supabase.table("actas").select("id")\
+        .eq("contrato_id", contrato_id).eq("tipo_grupo", "RPO")\
+        .lt("fecha_fin", today_s).execute().data or []
+    past_ids = [int(r["id"]) for r in past_rows if int(r["id"]) != vig_id]
+    if past_ids:
+        moved_total += _mover_registros_residual_hacia_acta(contrato_id, past_ids, vig_id)
+
+    out["registros_movidos"] = moved_total
+    return out
+
+
+@app.post("/actas/{contrato_id}/rpo/sincronizar-vencimiento")
+def actas_rpo_sincronizar_vencimiento(contrato_id: int, current_user=Depends(get_current_user)):
+    """Alinea residuales por vencimiento de período (y crea acta siguiente si faltaba). Invocable desde panel admin."""
+    return sincronizar_actas_rpo_por_vencimiento(contrato_id, current_user)
 
 
 @app.get("/actas/{acta_id}/financiero")

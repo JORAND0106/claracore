@@ -3490,6 +3490,11 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
     if (!contratoId) return;
     setLoading(true);
     try {
+      try {
+        await call("POST", `/actas/${contratoId}/rpo/sincronizar-vencimiento`);
+      } catch (_) {
+        /* alinear residuales por vencimiento de período: si falla, igual cargamos la lista */
+      }
       const rows = await call("GET", `/actas/${contratoId}/lista`);
       setActasTodas(Array.isArray(rows) ? rows : []);
     } catch (e) {
@@ -3762,6 +3767,7 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
             <strong>Crear / editar acta:</strong> formulario completo con componentes (ambiental, social, PMT), ajustes (ICCP, ICOCIV, IPC), enlaces y asignación.
             {" "}<strong>Costo directo</strong> (columna): mismo criterio que el <strong>dashboard de validación</strong> (N1, N2 y N3 aprobado en cascada) en SICOE Obra para ese acta RPO, sin tocar el formulario de acta.
             {" "}<strong>Cerrar acta</strong> (solo RPO en período): acorta el período, crea el mes siguiente y traslada residuales sin N3.
+            {" "}Al cargar esta vista se ejecuta una sincronización por <strong>vencimiento de fechas</strong> (misma lógica de residuales si el período ya pasó sin cierre manual).
           </div>
         </div>
         {contratoId && (
