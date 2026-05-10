@@ -5155,13 +5155,14 @@ export default function ModuloInformes({
               const curr = job.currentItem
               const tot  = job.totalItems
               // Etiqueta de fase estable (no cambia con cada ítem)
+              const totN = typeof tot === 'number' ? tot : 0
               const fase = pct < 30
                 ? 'Consultando información del acta…'
                 : pct < 55
                 ? 'Calculando cantidades…'
                 : pct < 76
-                ? `Generando memorias${tot ? ` (${curr || '…'} de ${tot})` : '…'}`
-                : 'Creando archivo PDF…'
+                ? `Generando ítem${tot ? ` (${curr || '…'} de ${tot})` : '…'}`
+                : `Se han creado ${totN} de ${totN} ítems\n\nEste proceso puede tardar según la cantidad de ítems. Por favor no cierre esta ventana.`
               return (
                 <div style={{
                   flex: 1,
@@ -5204,7 +5205,7 @@ export default function ModuloInformes({
                       fontSize: f.sub + 'px',
                       color: '#64748b',
                     }}>
-                      <span>{fase}</span>
+                      <span style={pct >= 76 ? { whiteSpace: 'pre-line' } : undefined}>{fase}</span>
                       <span style={{ fontWeight: '600', color: '#1e293b' }}>{pct}%</span>
                     </div>
                   </div>

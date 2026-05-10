@@ -32,7 +32,8 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 import ModuloPresupuesto from './modules/presupuesto/ModuloPresupuesto'
 import EmojiPicker from './EmojiPicker'
 import ExcelJS from 'exceljs'
-import { API_BASE, logApiFailure } from './apiBase'
+import { API_BASE, logApiFailure, SUPABASE_ANON_KEY, SUPABASE_URL } from './apiBase'
+import { supabase } from './supabaseClient'
 import { applyClaraTypography, getDashTypoUI } from './typographyScale'
 import { formatCOP, formatCOPShort } from './utils/formatCOP'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
@@ -6248,6 +6249,8 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
 
   const setF = (k, v) => setFiltros(prev => ({ ...prev, [k]: v }))
 
+  /** Debounce del input «Ítem» (sugerencias vía `/sicoe-obra/.../filtros/items`): solo red después de dejar de escribir. */
+  const SICOE_FILTROS_ITEMS_DEBOUNCE_MS = 400
   const buscarItemsDebounceRef = useRef(null)
   const buscarItems = (texto) => {
     if (buscarItemsDebounceRef.current) clearTimeout(buscarItemsDebounceRef.current)
@@ -6280,7 +6283,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         setSugerenciasItem([])
         setMostrarSugsItem(false)
       }
-    }, 400)
+    }, SICOE_FILTROS_ITEMS_DEBOUNCE_MS)
   }
 
   const inpStyle = { background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: '7px', padding: '5px 9px', color: t.text, fontSize: 'var(--cc-sm)', outline: 'none' }
@@ -11017,7 +11020,22 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     }
     recargar()
     const iv = setInterval(recargar, 180000)
-    return () => clearInterval(iv)
+
+    let rtChannel = null
+    if (SUPABASE_URL && SUPABASE_ANON_KEY) {
+      const cid = String(contratoIdDash)
+      const filt = `contrato_id=eq.${cid}`
+      rtChannel = supabase
+        .channel(`dashboard-so-${cid}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'so_registros', filter: filt }, () => { recargar() })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'so_reportes', filter: filt }, () => { recargar() })
+        .subscribe()
+    }
+
+    return () => {
+      clearInterval(iv)
+      if (rtChannel) void supabase.removeChannel(rtChannel)
+    }
   }, [contratoIdDash])
 
   useLayoutEffect(() => {

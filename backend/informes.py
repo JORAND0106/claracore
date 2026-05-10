@@ -9,7 +9,7 @@ import math
 import os as _os
 import re
 from datetime import datetime, date
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -6427,6 +6427,8 @@ def _fo_eo_04_firmas_marcas_registro(
 # Alturas fijas: caja firma + celda verificación alineada; reducción acumulada vs 63/53 + compactación tipográfica en marca.
 _FO_EO04_FIRMA_BOX = "45px"
 _FO_EO04_FIRMA_IMG = "38px"
+# Descarga paralela de foto + gráfico por ítem (alineado con informe gerencia matriz).
+_FO_EO04_ITEM_IMG_WORKERS = 8
 _FO_EO04_MARCA_LBL_ELABORO = "Elaborado y firmado por:"
 _FO_EO04_MARCA_LBL_REVISO = "Revisado y Aprobado por:"
 
@@ -7061,6 +7063,38 @@ Vista previa ClaraCore &middot; sin datos de obra &middot; {CODIGO_FORMATO_IDU_F
 </body></html>"""
 
 
+def _fo_eo_04_prefetch_item_imgs_data_uri(
+    items_n3: list,
+) -> List[Tuple[Optional[str], Optional[str]]]:
+    """Para cada ítem, obtiene data URI de foto y gráfico en paralelo (orden = items_n3)."""
+    n = len(items_n3)
+    if not n:
+        return []
+    out_foto: List[Optional[str]] = [None] * n
+    out_graf: List[Optional[str]] = [None] * n
+    futures: dict = {}
+    with ThreadPoolExecutor(max_workers=_FO_EO04_ITEM_IMG_WORKERS) as pool:
+        for i, item in enumerate(items_n3):
+            fu = (item.get("foto_url") or "").strip()
+            if fu:
+                futures[pool.submit(_fetch_img_data_uri, fu)] = (i, "foto", fu)
+            gu = (item.get("grafico_url") or "").strip()
+            if gu:
+                futures[pool.submit(_fetch_img_data_uri, gu)] = (i, "grafico", gu)
+        for fut in as_completed(futures):
+            i, kind, orig_url = futures[fut]
+            try:
+                uri = fut.result()
+            except Exception as exc:
+                _log.warning("fo_eo_04 prefetch %s item_idx=%s: %s", kind, i, exc)
+                uri = orig_url
+            if kind == "foto":
+                out_foto[i] = uri
+            else:
+                out_graf[i] = uri
+    return list(zip(out_foto, out_graf))
+
+
 def _build_fo_eo_04_pdf_bytes(
     contrato_id: int,
     formato_codigo: str,
@@ -7198,12 +7232,14 @@ def _build_fo_eo_04_pdf_bytes(
     if items_n3:
         # Totales de actas anteriores: 1 lote → O(1) queries en lugar de O(N ítems)
         totales_batch = _fetch_totales_batch(contrato_id, acta_id_norm, items_n3) if acta_id_norm else {}
+        img_pairs = _fo_eo_04_prefetch_item_imgs_data_uri(items_n3)
 
         pages = []
-        for item in items_n3:
+        for idx, item in enumerate(items_n3):
             item_num = (item.get("item_numero") or "").strip()
             item_cap = (item.get("capitulo") or "").strip()
             t_anteriores = totales_batch.get((item_num, item_cap), 0.0) if acta_id_norm else None
+            foto_uri, graf_uri = img_pairs[idx]
             pages.append(
                 _html_idu_fo_eo_04_v2_plantilla_vacia(
                     **_base_kwargs,
@@ -7214,9 +7250,9 @@ def _build_fo_eo_04_pdf_bytes(
                     item_descripcion=item.get("item_descripcion") or "",
                     semanas_item=item.get("semanas") or [],
                     total_actas_anteriores=t_anteriores,
-                    foto_url=item.get("foto_url"),
+                    foto_url=foto_uri,
                     foto_numero=item.get("foto_numero"),
-                    grafico_url=item.get("grafico_url"),
+                    grafico_url=graf_uri,
                     grafico_numero=item.get("grafico_numero"),
                 )
             )
@@ -7401,6 +7437,10 @@ def _build_fo_eo_04_pdf_bytes_prog(
               total_items=n_items)
         totales_batch = _fetch_totales_batch(contrato_id, acta_id_norm, items_n3) if acta_id_norm else {}
 
+        _prog(52, f"Descargando fotos y gráficos ({n_items} ítem{'s' if n_items != 1 else ''})…",
+              total_items=n_items)
+        img_pairs = _fo_eo_04_prefetch_item_imgs_data_uri(items_n3)
+
         pages = []
         for i, item in enumerate(items_n3):
             item_num = (item.get("item_numero") or "").strip()
@@ -7410,6 +7450,7 @@ def _build_fo_eo_04_pdf_bytes_prog(
             _prog(pct_page, f"Página {i+1}/{n_items}: {desc_corta}",
                   current_item=i + 1, total_items=n_items)
             t_anteriores = totales_batch.get((item_num, item_cap), 0.0) if acta_id_norm else None
+            foto_uri, graf_uri = img_pairs[i]
             pages.append(
                 _html_idu_fo_eo_04_v2_plantilla_vacia(
                     **_base_kwargs,
@@ -7420,9 +7461,9 @@ def _build_fo_eo_04_pdf_bytes_prog(
                     item_descripcion=item.get("item_descripcion") or "",
                     semanas_item=item.get("semanas") or [],
                     total_actas_anteriores=t_anteriores,
-                    foto_url=item.get("foto_url"),
+                    foto_url=foto_uri,
                     foto_numero=item.get("foto_numero"),
-                    grafico_url=item.get("grafico_url"),
+                    grafico_url=graf_uri,
                     grafico_numero=item.get("grafico_numero"),
                 )
             )
