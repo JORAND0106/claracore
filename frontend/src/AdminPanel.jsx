@@ -302,7 +302,8 @@ function _sleep(ms) {
 
 function useApi(token, opts = {}) {
   const { maxRetries = 5, timeoutMs = 55000 } = opts;
-  const call = useCallback(async (method, path, body = null) => {
+  /** body puede ser null; reqOpts opcional: { timeoutMs, maxRetries } por petición (p. ej. cierre de acta RPO que puede tardar minutos). */
+  const call = useCallback(async (method, path, body = null, reqOpts = null) => {
     const url = `${API}${path}`;
     const optsFetch = {
       method,
@@ -312,8 +313,9 @@ function useApi(token, opts = {}) {
       },
     };
     if (body) optsFetch.body = JSON.stringify(body);
-    const intentos = maxRetries;
-    const timeoutPorIntentoMs = timeoutMs;
+    const intentos = reqOpts?.maxRetries ?? maxRetries;
+    const timeoutPorIntentoMs =
+      reqOpts && typeof reqOpts.timeoutMs === "number" ? reqOpts.timeoutMs : timeoutMs;
     let res;
     for (let i = 0; i < intentos; i++) {
       const intentoOpts = {};
@@ -3469,6 +3471,8 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
     err: null,
     load: false,
   });
+  /** Evita que un sync en background pise la lista tras cambiar de contrato o un cargar nuevo. */
+  const actasCargaGenRef = useRef(0);
 
   const setF = (field, val) => setFormActa((p) => ({ ...p, [field]: val }));
 
@@ -3488,20 +3492,38 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
 
   const cargar = useCallback(async () => {
     if (!contratoId) return;
+    const gen = ++actasCargaGenRef.current;
+    const cid = contratoId;
     setLoading(true);
     try {
-      try {
-        await call("POST", `/actas/${contratoId}/rpo/sincronizar-vencimiento`);
-      } catch (_) {
-        /* alinear residuales por vencimiento de período: si falla, igual cargamos la lista */
-      }
       const rows = await call("GET", `/actas/${contratoId}/lista`);
-      setActasTodas(Array.isArray(rows) ? rows : []);
+      if (actasCargaGenRef.current === gen) {
+        setActasTodas(Array.isArray(rows) ? rows : []);
+      }
     } catch (e) {
-      setMsg({ type: "error", text: e.message });
+      if (actasCargaGenRef.current === gen) {
+        setMsg({ type: "error", text: e.message });
+      }
     } finally {
-      setLoading(false);
+      if (actasCargaGenRef.current === gen) {
+        setLoading(false);
+      }
     }
+    // Sincronización por vencimiento en segundo plano (no bloquea la tabla ni el spinner)
+    void (async () => {
+      try {
+        await call("POST", `/actas/${cid}/rpo/sincronizar-vencimiento`, null, {
+          timeoutMs: 180_000,
+          maxRetries: 1,
+        });
+        if (actasCargaGenRef.current !== gen) return;
+        const rows2 = await call("GET", `/actas/${cid}/lista`);
+        if (actasCargaGenRef.current !== gen) return;
+        if (Array.isArray(rows2)) setActasTodas(rows2);
+      } catch (_) {
+        /* best-effort; la lista ya se mostró con el primer GET */
+      }
+    })();
   }, [call, contratoId]);
 
   useEffect(() => {
@@ -3717,27 +3739,43 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
     if (!modalCerrar || !contratoId) return;
     if (!window.confirm(
       `¿Cerrar el Acta RPO #${modalCerrar.numero_rpo} el ${fechaCierre}?\n\n` +
-      `Se acortará el período, se creará automáticamente el siguiente mes completo y los registros sin aprobación de Interventoría pasarán al nuevo acta.`,
+      `Se acortará el período. Los registros sin aprobación de Interventoría pasarán al acta siguiente ` +
+      `(si ya existe desde el día después del cierre, se usa ese acta; si no, se crea desde ese día hasta fin de mes).`,
     )) return;
     setCerrando(true);
     try {
-      const res = await call("POST", `/actas/${contratoId}/rpo/cerrar-y-siguiente`, {
-        fecha_cierre: fechaCierre,
-        acta_id: modalCerrar.id,
-      });
+      const res = await call(
+        "POST",
+        `/actas/${contratoId}/rpo/cerrar-y-siguiente`,
+        {
+          fecha_cierre: fechaCierre,
+          acta_id: modalCerrar.id,
+        },
+        { timeoutMs: 600_000, maxRetries: 1 },
+      );
       const creada = res.acta_creada || {};
       const per = res.periodo_siguiente || {};
       const n = res.registros_movidos_residual ?? 0;
+      const reu = !!res.reutilizo_acta_existente;
       setMsg({
         type: "success",
         text:
-          `Período cerrado. Nuevo Acta RPO #${creada.numero_rpo ?? "—"} (${per.fecha_inicio ?? ""} → ${per.fecha_fin ?? ""}). ` +
+          (reu
+            ? `Período cerrado. Acta siguiente ya existía — RPO #${creada.numero_rpo ?? "—"} (${per.fecha_inicio ?? ""} → ${per.fecha_fin ?? ""}). `
+            : `Período cerrado. Acta RPO #${creada.numero_rpo ?? "—"} (${per.fecha_inicio ?? ""} → ${per.fecha_fin ?? ""}). `) +
           `${n} registro(s) residual(es) reasignado(s).`,
       });
       setModalCerrar(null);
       cargar();
     } catch (e) {
-      setMsg({ type: "error", text: e.message });
+      const raw = e?.message || String(e);
+      const isTimeout = /timed out|timeout|abort/i.test(raw);
+      setMsg({
+        type: "error",
+        text: isTimeout
+          ? `Tiempo de espera agotado mientras el servidor procesaba el cierre (suele pasar con muchos registros o Azure arrancando). Espera 1–2 minutos y recarga la lista de actas; si el cierre quedó aplicado, verás fechas actualizadas. Detalle: ${raw}`
+          : raw,
+      });
     } finally {
       setCerrando(false);
     }
@@ -3766,8 +3804,8 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
             <div style={{ fontSize: "var(--cc-sm)", color: col.textMuted, marginTop: 4, lineHeight: 1.4 }}>
             <strong>Crear / editar acta:</strong> formulario completo con componentes (ambiental, social, PMT), ajustes (ICCP, ICOCIV, IPC), enlaces y asignación.
             {" "}<strong>Costo directo</strong> (columna): mismo criterio que el <strong>dashboard de validación</strong> (N1, N2 y N3 aprobado en cascada) en SICOE Obra para ese acta RPO, sin tocar el formulario de acta.
-            {" "}<strong>Cerrar acta</strong> (solo RPO en período): acorta el período, crea el mes siguiente y traslada residuales sin N3.
-            {" "}Al cargar esta vista se ejecuta una sincronización por <strong>vencimiento de fechas</strong> (misma lógica de residuales si el período ya pasó sin cierre manual).
+            {" "}<strong>Cerrar acta</strong> (solo RPO en período): acorta fechas; residuales sin N3 van al acta siguiente (existente o nuevo desde día después del cierre hasta fin de mes).
+            {" "}Al cargar, la lista aparece al instante y en segundo plano se ejecuta la sincronización por <strong>vencimiento de fechas</strong> (residuales si el período ya pasó sin cierre manual).
           </div>
         </div>
         {contratoId && (

@@ -6964,15 +6964,9 @@ def actualizar_acta(acta_id: int, body: ActaCreate, current_user=Depends(get_cur
 
 
 class CerrarActaRpoBody(BaseModel):
-    """Cierra un acta RPO en fecha_cierre (≤ fin de mes original), crea el siguiente mes completo y traslada cantidades residuales (sin N3 aprobado)."""
+    """Cierra un acta RPO en fecha_cierre; traslada residuales sin N3 al acta siguiente (existente si ya está creado, o nuevo período desde cierre+1 hasta fin de mes)."""
     fecha_cierre: str
     acta_id: Optional[int] = None
-
-
-def _first_day_next_month(d: date) -> date:
-    if d.month == 12:
-        return date(d.year + 1, 1, 1)
-    return date(d.year, d.month + 1, 1)
 
 
 def _last_day_of_month(y: int, m: int) -> date:
@@ -6982,6 +6976,33 @@ def _last_day_of_month(y: int, m: int) -> date:
 def _acta_rpo_periodos_se_solapan(fi_a: str, ff_a: str, fi_b: str, ff_b: str) -> bool:
     """[fi_a,ff_a] y [fi_b,ff_b] se solapan (inclusive)."""
     return fi_a <= ff_b and ff_a >= fi_b
+
+
+def _periodo_siguiente_tras_cierre(fc: date) -> Tuple[date, date]:
+    """Período nuevo si no hay acta previo: desde (día de cierre + 1) hasta fin de ese mes calendario."""
+    fi_n = fc + timedelta(days=1)
+    ff_n = _last_day_of_month(fi_n.year, fi_n.month)
+    return fi_n, ff_n
+
+
+def _buscar_acta_rpo_siguiente_existente(contrato_id: int, cerrar_id: int, fc: date) -> Optional[dict]:
+    """
+    Acta RPO ya creado cuya fecha_inicio >= día siguiente al cierre (el más próximo por fecha_inicio).
+    Si existe, el cierre solo acorta el acta actual y traslada residuales aquí — sin insertar otro acta.
+    """
+    umbral = (fc + timedelta(days=1)).isoformat()
+    rows = supabase.table("actas").select("*").eq("contrato_id", contrato_id).eq("tipo_grupo", "RPO").execute().data or []
+    candidatos = []
+    for r in rows:
+        if int(r.get("id") or 0) == int(cerrar_id):
+            continue
+        fi = (r.get("fecha_inicio") or "")[:10]
+        if fi and fi >= umbral:
+            candidatos.append(r)
+    if not candidatos:
+        return None
+    candidatos.sort(key=lambda x: (x.get("fecha_inicio") or "")[:10])
+    return candidatos[0]
 
 
 def _mover_registros_residual_hacia_acta(contrato_id: int, source_acta_ids: List[int], hacia_acta_id: int) -> int:
@@ -7026,7 +7047,11 @@ def _cerrar_acta_rpo_ejecutar(
     current_user,
     log_accion: str = "cerrar_rpo_anticipado",
 ) -> dict:
-    """Cierra período RPO, crea mes siguiente y mueve residuales sin N3 aprobado. Usado por cierre manual y vencimiento."""
+    """
+    Cierra acta RPO (acorta fecha_fin), traslada residuales sin N3 aprobado al acta siguiente.
+    Si ya existe un acta con inicio >= día después del cierre, reutiliza ese registro (no inserta duplicado).
+    Si no, crea período [cierre+1, fin de mes]; si ese tramo solapa otro acta existente, reutiliza ese acta.
+    """
     if (acta_row.get("tipo_grupo") or "").strip().upper() != "RPO":
         raise HTTPException(status_code=400, detail="Solo aplica a actas con tipo_grupo RPO.")
 
@@ -7047,49 +7072,63 @@ def _cerrar_acta_rpo_ejecutar(
     if fc > date.today():
         raise HTTPException(status_code=422, detail="La fecha de cierre no puede ser futura.")
 
-    fi_n = _first_day_next_month(fc)
-    ff_n = _last_day_of_month(fi_n.year, fi_n.month)
+    existentes = supabase.table("actas").select(
+        "id, numero_rpo, fecha_inicio, fecha_fin, consecutivo, tipo_acta_id, asignado_a, fecha_asignacion, observacion"
+    ).eq("contrato_id", contrato_id).eq("tipo_grupo", "RPO").execute().data or []
+
+    siguiente_existente = _buscar_acta_rpo_siguiente_existente(contrato_id, cerrar_id, fc)
+    fi_n, ff_n = _periodo_siguiente_tras_cierre(fc)
     fi_ns, ff_ns = fi_n.isoformat(), ff_n.isoformat()
-
-    existentes = supabase.table("actas").select("id, numero_rpo, fecha_inicio, fecha_fin, consecutivo")\
-        .eq("contrato_id", contrato_id).eq("tipo_grupo", "RPO").execute().data or []
-    for ex in existentes:
-        if ex.get("id") == cerrar_id:
-            continue
-        ei = (ex.get("fecha_inicio") or "")[:10]
-        ef = (ex.get("fecha_fin") or "")[:10]
-        if ei and ef and _acta_rpo_periodos_se_solapan(ei, ef, fi_ns, ff_ns):
-            raise HTTPException(
-                status_code=409,
-                detail=f"Ya existe un Acta RPO que cubre el período {fi_ns} … {ff_ns} (id {ex.get('id')} / RPO {ex.get('numero_rpo')}).",
-            )
-
-    rpo_rows = [r for r in existentes if r.get("numero_rpo") is not None]
-    max_rpo = max((int(r["numero_rpo"]) for r in rpo_rows), default=0)
-    nuevo_numero_rpo = max_rpo + 1
-
-    cons_rows = supabase.table("actas").select("consecutivo").eq("contrato_id", contrato_id).execute().data or []
-    max_cons = max((r["consecutivo"] for r in cons_rows), default=0)
-    nuevo_cons = max_cons + 1
 
     supabase.table("actas").update({"fecha_fin": fc.isoformat(), "updated_at": "now()"}).eq("id", cerrar_id).execute()
 
-    new_row = {
-        "contrato_id":      contrato_id,
-        "consecutivo":      nuevo_cons,
-        "tipo_grupo":       "RPO",
-        "numero_rpo":       nuevo_numero_rpo,
-        "fecha_inicio":     fi_ns,
-        "fecha_fin":        ff_ns,
-        "tipo_acta_id":     acta_row.get("tipo_acta_id"),
-        "asignado_a":       acta_row.get("asignado_a"),
-        "fecha_asignacion": acta_row.get("fecha_asignacion"),
-        "observacion":      acta_row.get("observacion"),
-    }
-    new_row = {k: v for k, v in new_row.items() if v is not None}
-    ins = supabase.table("actas").insert(new_row).execute()
-    creada = ins.data[0] if ins.data else {}
-    nueva_id = creada.get("id")
+    nueva_id = None
+    creada: Dict[str, Any] = {}
+    reutilizo = False
+
+    if siguiente_existente:
+        nueva_id = int(siguiente_existente["id"])
+        creada = siguiente_existente
+        reutilizo = True
+    else:
+        overlap_row = None
+        for ex in existentes:
+            if int(ex.get("id") or 0) == int(cerrar_id):
+                continue
+            ei = (ex.get("fecha_inicio") or "")[:10]
+            ef = (ex.get("fecha_fin") or "")[:10]
+            if ei and ef and _acta_rpo_periodos_se_solapan(ei, ef, fi_ns, ff_ns):
+                overlap_row = ex
+                break
+        if overlap_row:
+            nueva_id = int(overlap_row["id"])
+            creada = overlap_row
+            reutilizo = True
+        else:
+            rpo_rows = [r for r in existentes if r.get("numero_rpo") is not None]
+            max_rpo = max((int(r["numero_rpo"]) for r in rpo_rows), default=0)
+            nuevo_numero_rpo = max_rpo + 1
+
+            cons_rows = supabase.table("actas").select("consecutivo").eq("contrato_id", contrato_id).execute().data or []
+            max_cons = max((r["consecutivo"] for r in cons_rows), default=0)
+            nuevo_cons = max_cons + 1
+
+            new_row = {
+                "contrato_id":      contrato_id,
+                "consecutivo":      nuevo_cons,
+                "tipo_grupo":       "RPO",
+                "numero_rpo":       nuevo_numero_rpo,
+                "fecha_inicio":     fi_ns,
+                "fecha_fin":        ff_ns,
+                "tipo_acta_id":     acta_row.get("tipo_acta_id"),
+                "asignado_a":       acta_row.get("asignado_a"),
+                "fecha_asignacion": acta_row.get("fecha_asignacion"),
+                "observacion":      acta_row.get("observacion"),
+            }
+            new_row = {k: v for k, v in new_row.items() if v is not None}
+            ins = supabase.table("actas").insert(new_row).execute()
+            creada = ins.data[0] if ins.data else {}
+            nueva_id = creada.get("id")
 
     registros_movidos = 0
     if nueva_id:
@@ -7106,15 +7145,20 @@ def _cerrar_acta_rpo_ejecutar(
             "fecha_cierre": fc.isoformat(),
             "nueva_acta_id": nueva_id,
             "registros_movidos": registros_movidos,
+            "reutilizo_acta_existente": reutilizo,
         },
     )
+
+    peri_fi = (creada.get("fecha_inicio") or fi_ns)[:10] if creada else fi_ns
+    peri_ff = (creada.get("fecha_fin") or ff_ns)[:10] if creada else ff_ns
 
     return {
         "ok": True,
         "acta_cerrada": {"id": cerrar_id, "fecha_fin": fc.isoformat()},
         "acta_creada": creada,
-        "periodo_siguiente": {"fecha_inicio": fi_ns, "fecha_fin": ff_ns},
+        "periodo_siguiente": {"fecha_inicio": peri_fi, "fecha_fin": peri_ff},
         "registros_movidos_residual": registros_movidos,
+        "reutilizo_acta_existente": reutilizo,
     }
 
 
@@ -7154,8 +7198,8 @@ def cerrar_acta_rpo_y_crear_siguiente(
 
 def sincronizar_actas_rpo_por_vencimiento(contrato_id: int, current_user) -> dict:
     """
-    1) Si no hay acta RPO vigente para hoy pero existe un acta cuyo período ya terminó: crea el siguiente mes
-       (igual que cerrar en fecha_fin) o, si ese período ya existe, solo mueve residuales al acta que lo cubre.
+    1) Si no hay acta RPO vigente para hoy pero existe un acta cuyo período ya terminó: aplica la misma lógica que cerrar
+       (período siguiente = día después del fin hasta fin de mes; reutiliza acta si ya existe).
     2) Con acta vigente: mueve registros sin N3 aprobado desde todos los actas con fecha_fin < hoy hacia el acta vigente.
     """
     today = date.today()
@@ -7180,8 +7224,7 @@ def sincronizar_actas_rpo_por_vencimiento(contrato_id: int, current_user) -> dic
             except ValueError:
                 fc = None
             if fc is not None and fc <= today:
-                fi_n = _first_day_next_month(fc)
-                ff_n = _last_day_of_month(fi_n.year, fi_n.month)
+                fi_n, ff_n = _periodo_siguiente_tras_cierre(fc)
                 fi_ns, ff_ns = fi_n.isoformat(), ff_n.isoformat()
                 existentes = supabase.table("actas").select("id, numero_rpo, fecha_inicio, fecha_fin")\
                     .eq("contrato_id", contrato_id).eq("tipo_grupo", "RPO").execute().data or []
