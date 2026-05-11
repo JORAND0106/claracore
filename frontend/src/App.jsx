@@ -13684,180 +13684,321 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         )}
 
         {/* ── MÓDULO PRESUPUESTO ── */}
-        {dashDetallePpto && (
-          <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.6)', zIndex:10000, display:'flex', alignItems:'center', justifyContent:'center' }}
-            onClick={() => setDashDetallePpto(null)}>
-            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'16px', padding:'24px', width:'min(580px, 96vw)', maxWidth:'96vw', maxHeight:'92vh', overflowY:'auto', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}
-              onClick={e => e.stopPropagation()}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'16px', gap:'12px' }}>
-                <div>
-                  <div style={{ fontSize:'var(--cc-lg)', fontWeight:'700', color:t.primary }}>📋 {dashDetallePpto.id_pol || '—'}</div>
-                  <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginTop:'6px', display:'flex', flexWrap:'wrap', gap:'8px' }}>
-                    <span style={{ background:'#0077B618', color:'#0369a1', borderRadius:'6px', padding:'2px 8px', fontWeight:'700' }}>
-                      Interventoría (N3): {dashDetallePpto.revisado || 'No Revisado'}
-                    </span>
-                    <span style={{ background:'#64748b18', color:'#475569', borderRadius:'6px', padding:'2px 8px', fontWeight:'700' }}>
-                      Depuración: {(dashDetallePpto.pre_interv_estado == null || dashDetallePpto.pre_interv_estado === '') ? '— (legado)' : dashDetallePpto.pre_interv_estado}
-                    </span>
-                    {dashDetallePpto.sellado && (
-                      <span style={{ background:'#0f766e22', color:'#0f766e', borderRadius:'6px', padding:'2px 8px', fontWeight:'700' }}>Sellado ✓</span>
-                    )}
-                  </div>
+        {dashDetallePpto && (() => {
+          const r = dashDetallePpto
+          const depTxt = (r.pre_interv_estado == null || r.pre_interv_estado === '') ? '— (legado)' : r.pre_interv_estado
+          const tipoTxt = r.tipo ?? r.tipo_ejecucion ?? r.tipo_entidad ?? ''
+          const fmtN = (x) => (x != null && x !== '' && Number.isFinite(Number(x)) ? String(x) : (x != null && x !== '' ? String(x) : null))
+          const fmtCant = r.cant_total != null ? Number(r.cant_total).toFixed(2) : null
+          const fmtCalcEn = (iso) => {
+            if (!iso) return '—'
+            const d = new Date(iso)
+            if (Number.isNaN(d.getTime())) return String(iso)
+            return d.toLocaleString('es-CO', { dateStyle: 'short', timeStyle: 'short' })
+          }
+          const cell = { background: t.bg, borderRadius: '8px', padding: '10px 12px', border: `1px solid ${t.border}` }
+          const lbl = { fontSize: 'var(--cc-caption)', fontWeight: '700', color: t.textMuted, marginBottom: '4px', letterSpacing: '0.4px' }
+          const val = { fontSize: 'var(--cc-sm)', color: t.text, fontWeight: '600', wordBreak: 'break-word' }
+          const F = ({ label, children, flex = 1 }) => (
+            <div style={{ flex, minWidth: 0, ...cell }}>
+              <div style={lbl}>{label}</div>
+              <div style={val}>{children != null && children !== '' ? children : '—'}</div>
+            </div>
+          )
+          const Row = ({ children }) => <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', width: '100%' }}>{children}</div>
+          const BigF = ({ label, children }) => (
+            <div style={{ width: '100%', ...cell }}>
+              <div style={lbl}>{label}</div>
+              <div style={{ ...val, lineHeight: 1.45, whiteSpace: 'pre-wrap', fontWeight: '500' }}>{children != null && children !== '' ? children : '—'}</div>
+            </div>
+          )
+          const bloqueDimensiones = (
+            <div style={{ border: `1px solid ${t.border}`, borderRadius: '10px', padding: '12px', background: t.bgCard, minWidth: 0 }}>
+              <div style={{ fontSize: 'var(--cc-caption)', fontWeight: '700', color: '#F59E0B', marginBottom: '8px', letterSpacing: '0.5px' }}>📐 Editar dimensiones</div>
+              <div style={{ fontSize: 'var(--cc-caption)', fontWeight: '700', color: t.textMuted, marginBottom: '8px' }}>Dimensiones (long. · ancho · espesor)</div>
+              {puedeEditarDimensionesPresupuesto && !r.sellado ? (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                  {[
+                    ['area_long_nod', 'Longitud'],
+                    ['ancho', 'Ancho'],
+                    ['espesor', 'Espesor'],
+                  ].map(([key, lbl]) => (
+                    <label key={key} style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: '600' }}>
+                      {lbl}
+                      <input
+                        type="number"
+                        step="any"
+                        value={r[key] ?? ''}
+                        onChange={(e) => setDashDetallePpto((d) => ({ ...d, [key]: e.target.value }))}
+                        style={{ width: '100%', boxSizing: 'border-box', background: t.inputBg, border: `1px solid ${t.inputBorder}`, borderRadius: '8px', padding: '8px 10px', color: t.text, fontSize: 'var(--cc-sm)' }}
+                      />
+                    </label>
+                  ))}
                 </div>
-                <div style={{ display:'flex', gap:'8px', alignItems:'center', flexShrink:0 }}>
-                  {tienePermisoPresupuesto && (
-                    <button type="button" onClick={() => {
-                      const id = dashDetallePpto.id
-                      setDashDetallePpto(null)
-                      setPopupPkid(null)
-                      setAnalisisMapaPopup(null)
-                      setModuloActivo('presupuesto')
-                      if (id) setNavRegistroId(id)
-                    }} style={{ background:t.bg, border:`1px solid ${t.border}`, borderRadius:'8px', padding:'6px 12px', color:t.text, fontSize:'var(--cc-caption)', fontWeight:'700', cursor:'pointer' }}>
-                      Ir a Presupuesto
-                    </button>
-                  )}
-                  <button type="button" onClick={() => {
-                    const r = dashDetallePpto
-                    const esTablet = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-                    if (!esTablet && r.x_label && r.y_label) {
-                      window.location.href = `claralink://zoom?x=${r.x_label}&y=${r.y_label}&radio=20&handle=${r.ent_handle||''}`
-                    } else if (dwgEnlazadoDash && popupPkid?.pkid) {
-                      enviarZoomPkid(popupPkid.pkid)
-                    }
-                  }} style={{ background:t.primary, border:'none', borderRadius:'8px', padding:'6px 14px', color:'#fff', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer' }}>
-                    🎯 Ver en AutoCAD
-                  </button>
-                  <button type="button" onClick={() => setDashDetallePpto(null)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
+              ) : (
+                <div style={{ fontSize: 'var(--cc-sm)', color: t.text, display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span>
+                    <strong style={{ color: t.textMuted }}>Long.:</strong> {r.area_long_nod ?? '—'}
+                  </span>
+                  <span>
+                    <strong style={{ color: t.textMuted }}>Ancho:</strong> {r.ancho ?? '—'}
+                  </span>
+                  <span>
+                    <strong style={{ color: t.textMuted }}>Esp.:</strong> {r.espesor ?? '—'}
+                  </span>
+                  {r.sellado && <span style={{ color: t.textMuted }}>No editable — sellado.</span>}
+                  {!puedeEditarDimensionesPresupuesto && !r.sellado && <span style={{ color: t.textMuted }}>Sin permiso de edición de dimensiones.</span>}
                 </div>
-              </div>
-              <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
-                {[
-                  ['Nodo Inicio', dashDetallePpto.no_inicio],
-                  ['Nodo Final',  dashDetallePpto.no_final],
-                  ['Und', dashDetallePpto.und],
-                  ['Cantidad',    dashDetallePpto.cant_total != null ? Number(dashDetallePpto.cant_total).toFixed(2) : null],
-                  ['Costo Directo', formatCOP(dashDetallePpto.costo_directo || 0)],
-                  ['Vlr. unitario', dashDetallePpto.vlr_unitario != null ? formatCOP(dashDetallePpto.vlr_unitario) : null],
-                  ['Ítem', dashDetallePpto.item],
-                  ['Descripción', dashDetallePpto.descripcion],
-                ].map(([label, val]) => (val != null && val !== '') ? (
-                  <div key={label} style={{ display:'flex', justifyContent:'space-between', gap:'12px', borderBottom:`1px solid ${t.border}`, paddingBottom:'8px' }}>
-                    <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted, fontWeight:'600' }}>{label}</span>
-                    <span style={{ fontSize:'var(--cc-sm)', color:t.text, textAlign:'right', wordBreak:'break-word' }}>{val}</span>
-                  </div>
-                ) : null)}
-
-                <div style={{ borderTop:`1px solid ${t.border}`, paddingTop:'12px', marginTop:'4px' }}>
-                  <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, marginBottom:'8px' }}>Dimensiones (long. · ancho · espesor)</div>
-                  {puedeEditarDimensionesPresupuesto && !dashDetallePpto.sellado ? (
-                    <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px' }}>
-                      {[
-                        ['area_long_nod','Longitud'],
-                        ['ancho','Ancho'],
-                        ['espesor','Espesor'],
-                      ].map(([key, lbl]) => (
-                        <label key={key} style={{ display:'flex', flexDirection:'column', gap:'4px', fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'600' }}>
-                          {lbl}
-                          <input
-                            type="number"
-                            step="any"
-                            value={dashDetallePpto[key] ?? ''}
-                            onChange={e => setDashDetallePpto(d => ({ ...d, [key]: e.target.value }))}
-                            style={{ width:'100%', boxSizing:'border-box', background:t.inputBg, border:`1px solid ${t.inputBorder}`, borderRadius:'8px', padding:'8px 10px', color:t.text, fontSize:'var(--cc-sm)' }}
-                          />
-                        </label>
-                      ))}
-                    </div>
-                  ) : (
-                    <div style={{ fontSize:'var(--cc-sm)', color:t.text, display:'flex', gap:'16px', flexWrap:'wrap', alignItems:'center' }}>
-                      <span><strong style={{ color:t.textMuted }}>Long.:</strong> {dashDetallePpto.area_long_nod ?? '—'}</span>
-                      <span><strong style={{ color:t.textMuted }}>Ancho:</strong> {dashDetallePpto.ancho ?? '—'}</span>
-                      <span><strong style={{ color:t.textMuted }}>Esp.:</strong> {dashDetallePpto.espesor ?? '—'}</span>
-                      {dashDetallePpto.sellado && <span style={{ color:t.textMuted }}>No editable — sellado.</span>}
-                      {!puedeEditarDimensionesPresupuesto && !dashDetallePpto.sellado && (
-                        <span style={{ color:t.textMuted }}>Sin permiso de edición de dimensiones.</span>
-                      )}
-                    </div>
-                  )}
-                  {puedeEditarDimensionesPresupuesto && !dashDetallePpto.sellado && (
-                    <button
-                      type="button"
-                      disabled={dashDetallePptoSaving}
-                      onClick={async () => {
-                        if (!dashDetallePpto?.id) return
-                        setDashDetallePptoSaving(true)
+              )}
+              {puedeEditarDimensionesPresupuesto && !r.sellado && (
+                <button
+                  type="button"
+                  disabled={dashDetallePptoSaving}
+                  onClick={async () => {
+                    if (!r?.id) return
+                    setDashDetallePptoSaving(true)
+                    try {
+                      const tok = getToken()
+                      const id = r.id
+                      const parseDim = (x) => {
+                        const n = parseFloat(String(x ?? '').replace(',', '.'))
+                        return Number.isFinite(n) ? n : NaN
+                      }
+                      const al = parseDim(r.area_long_nod)
+                      const an = parseDim(r.ancho)
+                      const es = parseDim(r.espesor)
+                      if (![al, an, es].every(Number.isFinite)) {
+                        window.alert('Indique valores numéricos válidos en longitud, ancho y espesor.')
+                        setDashDetallePptoSaving(false)
+                        return
+                      }
+                      const body = { area_long_nod: al, ancho: an, espesor: es }
+                      const tryPut = async (payload) =>
+                        fetch(`${API_URL}/presupuesto/item/${id}`, {
+                          method: 'PUT',
+                          headers: { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json' },
+                          body: JSON.stringify(payload),
+                        })
+                      let res = await tryPut(body)
+                      if (res.status === 400) {
+                        let detail = ''
                         try {
-                          const tok = getToken()
-                          const id = dashDetallePpto.id
-                          const parseDim = (x) => {
-                            const n = parseFloat(String(x ?? '').replace(',', '.'))
-                            return Number.isFinite(n) ? n : NaN
-                          }
-                          const al = parseDim(dashDetallePpto.area_long_nod)
-                          const an = parseDim(dashDetallePpto.ancho)
-                          const es = parseDim(dashDetallePpto.espesor)
-                          if (![al, an, es].every(Number.isFinite)) {
-                            window.alert('Indique valores numéricos válidos en longitud, ancho y espesor.')
-                            setDashDetallePptoSaving(false)
-                            return
-                          }
-                          const body = { area_long_nod: al, ancho: an, espesor: es }
-                          const tryPut = async (payload) => fetch(`${API_URL}/presupuesto/item/${id}`, {
-                            method: 'PUT',
-                            headers: { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json' },
-                            body: JSON.stringify(payload),
-                          })
-                          let res = await tryPut(body)
-                          if (res.status === 400) {
-                            let detail = ''
-                            try {
-                              const j = await res.json()
-                              detail = typeof j?.detail === 'string' ? j.detail : ''
-                            } catch (_) {}
-                            if (detail.toLowerCase().includes('motivo')) {
-                              const m = window.prompt(`${detail}\n\nMotivo (mín. 15 caracteres):`)
-                              if (m && m.length >= 15) res = await tryPut({ ...body, motivo_edicion_con_estado_interv: m })
-                            } else if (detail) {
-                              window.alert(detail)
-                              setDashDetallePptoSaving(false)
-                              return
-                            }
-                          }
-                          if (res.ok) {
-                            const row = await res.json()
-                            if (row?.id) setDashDetallePpto(row)
-                          } else {
-                            let msg = `No se guardó (${res.status})`
-                            try {
-                              const j = await res.json()
-                              if (typeof j?.detail === 'string') msg = j.detail
-                            } catch (_) {}
-                            window.alert(msg)
-                          }
-                        } catch (e) {
-                          window.alert(e?.message || 'Error de red al guardar.')
-                        } finally {
+                          const j = await res.json()
+                          detail = typeof j?.detail === 'string' ? j.detail : ''
+                        } catch (_) {}
+                        if (detail.toLowerCase().includes('motivo')) {
+                          const m = window.prompt(`${detail}\n\nMotivo (mín. 15 caracteres):`)
+                          if (m && m.length >= 15) res = await tryPut({ ...body, motivo_edicion_con_estado_interv: m })
+                        } else if (detail) {
+                          window.alert(detail)
                           setDashDetallePptoSaving(false)
+                          return
                         }
-                      }}
-                      style={{ marginTop:'12px', background:t.primary, border:'none', borderRadius:'8px', padding:'8px 18px', color:'#fff', fontWeight:'700', fontSize:'var(--cc-sm)', cursor:'pointer', opacity: dashDetallePptoSaving ? 0.7 : 1 }}
-                    >
-                      {dashDetallePptoSaving ? 'Guardando…' : 'Guardar dimensiones'}
-                    </button>
-                  )}
-                </div>
-
-                {(dashDetallePpto.validado_por || dashDetallePpto.pre_interv_por) && (
-                  <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginTop:'6px' }}>
-                    {dashDetallePpto.validado_por && <div>Validado por: {dashDetallePpto.validado_por}</div>}
-                    {dashDetallePpto.pre_interv_por && <div>Depuración por: {dashDetallePpto.pre_interv_por}</div>}
-                  </div>
-                )}
+                      }
+                      if (res.ok) {
+                        const row = await res.json()
+                        if (row?.id) setDashDetallePpto(row)
+                      } else {
+                        let msg = `No se guardó (${res.status})`
+                        try {
+                          const j = await res.json()
+                          if (typeof j?.detail === 'string') msg = j.detail
+                        } catch (_) {}
+                        window.alert(msg)
+                      }
+                    } catch (e) {
+                      window.alert(e?.message || 'Error de red al guardar.')
+                    } finally {
+                      setDashDetallePptoSaving(false)
+                    }
+                  }}
+                  style={{
+                    marginTop: '12px',
+                    background: t.primary,
+                    border: 'none',
+                    borderRadius: '8px',
+                    padding: '8px 18px',
+                    color: '#fff',
+                    fontWeight: '700',
+                    fontSize: 'var(--cc-sm)',
+                    cursor: 'pointer',
+                    opacity: dashDetallePptoSaving ? 0.7 : 1,
+                  }}
+                >
+                  {dashDetallePptoSaving ? 'Guardando…' : 'Guardar dimensiones'}
+                </button>
+              )}
+            </div>
+          )
+          const bloqueCapItem = (
+            <div style={{ border: `1px solid ${t.border}`, borderRadius: '10px', padding: '12px', background: t.bgCard, minWidth: 0 }}>
+              <div style={{ fontSize: 'var(--cc-caption)', fontWeight: '700', color: t.primary, marginBottom: '8px', letterSpacing: '0.5px' }}>📂 Cambiar capítulo / ítem</div>
+              <Row>
+                <F label="Capítulo" flex={1}>
+                  {r.capitulo}
+                </F>
+                <F label="Ítem" flex={1}>
+                  {r.item}
+                </F>
+              </Row>
+              <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: '10px', lineHeight: 1.45 }}>
+                La edición de capítulo e ítem se realiza en el módulo Presupuesto (botón «Ir a Presupuesto» arriba).
               </div>
             </div>
-          </div>
-        )}
+          )
+          return (
+            <div
+              style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '12px' }}
+              onClick={() => setDashDetallePpto(null)}
+            >
+              <div
+                style={{
+                  background: t.bgCard,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: '16px',
+                  padding: '22px 24px',
+                  width: 'min(1040px, 100%)',
+                  maxWidth: '100%',
+                  maxHeight: 'min(80vh, 700px)',
+                  overflowY: 'auto',
+                  boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', gap: '12px' }}>
+                  <div>
+                    <div style={{ fontSize: 'var(--cc-lg)', fontWeight: '700', color: t.primary }}>📋 {r.id_pol || '—'}</div>
+                    <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: '6px', display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                      <span style={{ background: '#0077B618', color: '#0369a1', borderRadius: '6px', padding: '2px 8px', fontWeight: '700' }}>
+                        Interventoría (N3): {r.revisado || 'No Revisado'}
+                      </span>
+                      <span style={{ background: '#64748b18', color: '#475569', borderRadius: '6px', padding: '2px 8px', fontWeight: '700' }}>Depuración: {depTxt}</span>
+                      {r.sellado && <span style={{ background: '#0f766e22', color: '#0f766e', borderRadius: '6px', padding: '2px 8px', fontWeight: '700' }}>Sellado ✓</span>}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
+                    {tienePermisoPresupuesto && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const id = r.id
+                          setDashDetallePpto(null)
+                          setPopupPkid(null)
+                          setAnalisisMapaPopup(null)
+                          setModuloActivo('presupuesto')
+                          if (id) setNavRegistroId(id)
+                        }}
+                        style={{ background: t.bg, border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 12px', color: t.text, fontSize: 'var(--cc-caption)', fontWeight: '700', cursor: 'pointer' }}
+                      >
+                        Ir a Presupuesto
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const esTablet = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+                        if (!esTablet && r.x_label && r.y_label) {
+                          window.location.href = `claralink://zoom?x=${r.x_label}&y=${r.y_label}&radio=20&handle=${r.ent_handle || ''}`
+                        } else if (dwgEnlazadoDash && popupPkid?.pkid) {
+                          enviarZoomPkid(popupPkid.pkid)
+                        }
+                      }}
+                      style={{ background: t.primary, border: 'none', borderRadius: '8px', padding: '6px 14px', color: '#fff', fontSize: 'var(--cc-sm)', fontWeight: '700', cursor: 'pointer' }}
+                    >
+                      🎯 Ver en AutoCAD
+                    </button>
+                    <button type="button" onClick={() => setDashDetallePpto(null)} style={{ background: 'transparent', border: 'none', fontSize: 'var(--cc-lg)', cursor: 'pointer', color: t.textMuted }}>
+                      ✕
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', alignItems: 'start' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', minWidth: 0 }}>
+                    <Row>
+                      <F label="ID_POL">{r.id_pol}</F>
+                      <F label="Capítulo">{r.capitulo}</F>
+                      <F label="Ítem" flex={0.85}>
+                        {r.item}
+                      </F>
+                    </Row>
+                    <BigF label="Descripción">{r.descripcion}</BigF>
+                    <Row>
+                      <F label="Unidad" flex={0.55}>
+                        {r.und}
+                      </F>
+                      <F label="Revisado">{r.revisado || 'No Revisado'}</F>
+                      <F label="Tipo">{tipoTxt}</F>
+                    </Row>
+                    <div style={{ width: '100%', ...cell }}>
+                      <div style={lbl}>Depuración</div>
+                      <div style={val}>{depTxt}</div>
+                    </div>
+                    <Row>
+                      <F label="Nodo Inicio">{r.no_inicio}</F>
+                      <F label="Nodo Final">{r.no_final}</F>
+                    </Row>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', minWidth: 0 }}>
+                    <Row>
+                      <F label="Abs. Inicio">{fmtN(r.abs_inicio)}</F>
+                      <F label="Abs. Final">{fmtN(r.abs_final)}</F>
+                    </Row>
+                    <Row>
+                      <F label="Área/Long">{fmtN(r.area_long_nod)}</F>
+                      <F label="Ancho">{fmtN(r.ancho)}</F>
+                      <F label="Espesor">{fmtN(r.espesor)}</F>
+                      <F label="Cant. Total">{fmtCant}</F>
+                    </Row>
+                    <Row>
+                      <F label="Vlr. Unitario">{r.vlr_unitario != null ? formatCOP(r.vlr_unitario) : null}</F>
+                      <F label="Costo Directo">{formatCOP(r.costo_directo || 0)}</F>
+                    </Row>
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', width: '100%' }}>
+                      <div style={{ flex: '1.1', minWidth: '140px', ...cell }} title={r.calculo_por || ''}>
+                        <div style={lbl}>Cálculo (usuario)</div>
+                        <div style={{ ...val, fontWeight: '500', lineHeight: 1.35, whiteSpace: 'pre-wrap' }}>{r.calculo_por ?? '—'}</div>
+                      </div>
+                      <div style={{ flex: '1', minWidth: '140px', ...cell }}>
+                        <div style={lbl}>Cálculo (fecha y hora)</div>
+                        <div style={{ ...val, fontWeight: '500' }}>{fmtCalcEn(r.calculo_en)}</div>
+                      </div>
+                    </div>
+                    <Row>
+                      <F label="Tramo">{r.tramo}</F>
+                      <F label="Calzada">{r.calzada}</F>
+                      <F label="PK" flex={0.75}>
+                        {r.pk_id}
+                      </F>
+                    </Row>
+                  </div>
+                </div>
+
+                {(r.validado_por || r.pre_interv_por) && (
+                  <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: '12px', paddingTop: '10px', borderTop: `1px solid ${t.border}` }}>
+                    {r.validado_por && <div>Validado por: {r.validado_por}</div>}
+                    {r.pre_interv_por && <div>Depuración por: {r.pre_interv_por}</div>}
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: '16px',
+                    marginTop: '14px',
+                    paddingTop: '14px',
+                    borderTop: `1px solid ${t.border}`,
+                    alignItems: 'stretch',
+                  }}
+                >
+                  {bloqueDimensiones}
+                  {bloqueCapItem}
+                </div>
+              </div>
+            </div>
+          )
+        })()}
         {dashMigracionModal && (
           <div
             style={{
