@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useMemo, Fragment } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, Fragment } from 'react'
 import { OfflineProvider, useOffline } from './offline/OfflineContext'
 import { OfflineBanner, PrepareOfflineBtn, ConflictModal, ForceOfflineToggle } from './offline/OfflineUI'
 import {
@@ -10998,6 +10998,45 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   useEffect(() => { dashDrillRef.current = dashDrill }, [dashDrill])
   useEffect(() => { popupCapituloRef.current = popupCapitulo }, [popupCapitulo])
 
+  const cargarMatrizValidacionDashboard = useCallback((signal) => {
+    if (!contratoIdDash) {
+      setMatrizValidacionLoad(false)
+      return
+    }
+    setMatrizValidacionLoad(true)
+    const pm = new URLSearchParams()
+    if (actaFiltroMatriz === 'all') {
+      pm.set('todo_contrato', '1')
+    } else if (actaFiltroMatriz !== 'vigente' && actaFiltroMatriz != null && actaFiltroMatriz !== '') {
+      const na = parseInt(String(actaFiltroMatriz), 10)
+      if (!Number.isNaN(na)) pm.set('acta_rpo', String(na))
+    }
+    const url = `${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-matriz-validacion?${pm}`
+    const fetchOpts = {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    }
+    if (signal) fetchOpts.signal = signal
+    fetch(url, fetchOpts)
+      .then(async r => {
+        if (!r.ok) {
+          const errTxt = await r.text().catch(() => '')
+          console.warn('[dashboard-matriz-validacion]', r.status, errTxt?.slice(0, 200))
+          return
+        }
+        const j = await r.json().catch(() => null)
+        if (j && typeof j === 'object') setMatrizValidacion(j)
+      })
+      .catch(err => {
+        if (err?.name === 'AbortError') return
+        console.warn(err)
+        setMatrizValidacion(null)
+      })
+      .finally(() => {
+        if (signal?.aborted) return
+        setMatrizValidacionLoad(false)
+      })
+  }, [contratoIdDash, actaFiltroMatriz])
+
   useEffect(() => {
     if (!contratoIdDash) return
     const recargar = () => {
@@ -11027,8 +11066,14 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       const filt = `contrato_id=eq.${cid}`
       rtChannel = supabase
         .channel(`dashboard-so-${cid}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'so_registros', filter: filt }, () => { recargar() })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'so_reportes', filter: filt }, () => { recargar() })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'so_registros', filter: filt }, () => {
+          recargar()
+          cargarMatrizValidacionDashboard()
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'so_reportes', filter: filt }, () => {
+          recargar()
+          cargarMatrizValidacionDashboard()
+        })
         .subscribe((status) => {
           console.log('Realtime status:', status)
         })
@@ -11038,7 +11083,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       clearInterval(iv)
       if (rtChannel) void supabase.removeChannel(rtChannel)
     }
-  }, [contratoIdDash])
+  }, [contratoIdDash, cargarMatrizValidacionDashboard])
 
   useLayoutEffect(() => {
     setActaFiltroMatriz('vigente')
@@ -11050,38 +11095,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       return
     }
     const ac = new AbortController()
-    setMatrizValidacionLoad(true)
-    const pm = new URLSearchParams()
-    if (actaFiltroMatriz === 'all') {
-      pm.set('todo_contrato', '1')
-    } else if (actaFiltroMatriz !== 'vigente' && actaFiltroMatriz != null && actaFiltroMatriz !== '') {
-      const na = parseInt(String(actaFiltroMatriz), 10)
-      if (!Number.isNaN(na)) pm.set('acta_rpo', String(na))
-    }
-    const url = `${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-matriz-validacion?${pm}`
-    fetch(url, {
-      headers: { Authorization: `Bearer ${getToken()}` },
-      signal: ac.signal,
-    })
-      .then(async r => {
-        if (!r.ok) {
-          const errTxt = await r.text().catch(() => '')
-          console.warn('[dashboard-matriz-validacion]', r.status, errTxt?.slice(0, 200))
-          return
-        }
-        const j = await r.json().catch(() => null)
-        if (j && typeof j === 'object') setMatrizValidacion(j)
-      })
-      .catch(err => {
-        if (err?.name === 'AbortError') return
-        console.warn(err)
-        setMatrizValidacion(null)
-      })
-      .finally(() => {
-        if (!ac.signal.aborted) setMatrizValidacionLoad(false)
-      })
+    cargarMatrizValidacionDashboard(ac.signal)
     return () => ac.abort()
-  }, [contratoIdDash, actaFiltroMatriz])
+  }, [contratoIdDash, actaFiltroMatriz, cargarMatrizValidacionDashboard])
 
   function mapDrillCapituloItems(payload) {
     if (!payload || payload.campo !== 'item' || !Array.isArray(payload.items)) return null
