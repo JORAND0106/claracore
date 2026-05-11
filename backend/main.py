@@ -1267,6 +1267,23 @@ def _puede_editar_dimensiones_presupuesto(current_user) -> bool:
     return _es_desarrollador(current_user) or _cargo_permiso_editar_registros_presupuesto(current_user)
 
 
+# Contrato donde editores con «editar registros presupuesto» pueden editar nodos y área/long como Desarrollador (regla puntual).
+_PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG = 2
+
+
+def _ppto_puede_editar_nodos_y_area_long_como_dev(contrato_id: Optional[int], current_user) -> bool:
+    """Desarrollador siempre; en contrato configurado, también matriz editar presupuesto."""
+    if _es_desarrollador(current_user):
+        return True
+    try:
+        cid = int(contrato_id) if contrato_id is not None else -1
+    except (TypeError, ValueError):
+        return False
+    if cid != _PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG:
+        return False
+    return _cargo_permiso_editar_registros_presupuesto(current_user)
+
+
 def _caller_rol_id(current_user) -> Optional[int]:
     """rol_id del usuario autenticado (tabla usuarios → tabla roles)."""
     try:
@@ -4743,10 +4760,11 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
     motivo_interv = str(_mi).strip() if _mi is not None else ""
     prev_row = supabase.table("presupuesto").select("*").eq("id", item_id).limit(1).execute().data
     prev_row = prev_row[0] if prev_row else {}
-    if ("no_inicio" in data or "no_final" in data) and not _es_desarrollador(current_user):
+    _cid_row = prev_row.get("contrato_id")
+    if ("no_inicio" in data or "no_final" in data) and not _ppto_puede_editar_nodos_y_area_long_como_dev(_cid_row, current_user):
         raise HTTPException(
             status_code=403,
-            detail="Solo el cargo Desarrollador puede modificar los nodos (No.Ini / No.Fin) en presupuesto.",
+            detail="Solo Desarrollador o (contrato autorizado con permiso «editar registros presupuesto») pueden modificar los nodos (No.Ini / No.Fin).",
         )
     reabrir = False
     if prev_row.get("sellado"):
@@ -5103,10 +5121,10 @@ def restaurar_presupuesto(item_id: int, current_user=Depends(get_current_user)):
 @app.post("/presupuesto/{contrato_id}/agregar-cantidad")
 def agregar_cantidad(contrato_id: int, body: AgregarCantidadBody, current_user=Depends(get_current_user)):
     """Inserta una nueva cantidad clonando la posición de un registro existente."""
-    if not _es_desarrollador(current_user):
+    if not _ppto_puede_editar_nodos_y_area_long_como_dev(contrato_id, current_user):
         raise HTTPException(
             status_code=403,
-            detail="Solo el cargo Desarrollador puede agregar cantidades (dimensiones) en presupuesto.",
+            detail="Solo Desarrollador o (en el contrato autorizado) usuarios con permiso «editar registros presupuesto» pueden agregar cantidades en presupuesto.",
         )
     area  = float(body.area_long_nod or 0)
     ancho = float(body.ancho or 0)
@@ -5483,12 +5501,12 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
     if not body.ids:
         raise HTTPException(status_code=400, detail="No hay registros seleccionados")
     _reject_if_presupuesto_sellado(supabase, body.ids)
-    # Solo area_long_nod está restringido al Desarrollador (viene del plano CAD)
+    # Área/long/nodo: Desarrollador o contrato autorizado con matriz editar presupuesto
     has_area_change = any(d.area_long_nod is not None for d in (body.dims or []))
-    if has_area_change and not _es_desarrollador(current_user):
+    if has_area_change and not _ppto_puede_editar_nodos_y_area_long_como_dev(contrato_id, current_user):
         raise HTTPException(
             status_code=403,
-            detail="Solo el cargo Desarrollador puede modificar el campo Área/Long/Nodo (viene del plano CAD).",
+            detail="No tiene permiso para modificar Área/Long/Nodo en recálculo masivo (requiere Desarrollador o permiso en contrato autorizado).",
         )
     dims_map = {d.id: d for d in (body.dims or [])}
     # Traer también handles, layers e id_pol para cad_queue y reconstrucción de id_pol

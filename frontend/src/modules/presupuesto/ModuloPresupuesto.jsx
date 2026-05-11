@@ -16,6 +16,42 @@ function getToken() {
   return localStorage.getItem("cc_token") || sessionStorage.getItem("cc_token")
 }
 
+/**
+ * Dimensiones / precios tecleados con coma decimal (es-CO).
+ * `parseFloat('1,55')` → 1; `parseFloat('-0,82')` → -0 y con `|| 0` se pierde el signo.
+ */
+function parseDimInputEs(v) {
+  if (v === '' || v == null) return NaN
+  const s = String(v).trim().replace(/\s/g, '').replace(',', '.')
+  const n = parseFloat(s)
+  return Number.isFinite(n) ? n : NaN
+}
+
+/** Componente estable (no dentro del render) para no perder el foco al teclear en el modal «Agregar cantidad». */
+function AgregarCantidadDimInput({ label, value, onChange, t }) {
+  return (
+    <div style={{ flex: 1 }}>
+      <div style={{ fontSize: 'var(--cc-caption)', fontWeight: '700', color: t.textMuted, letterSpacing: '0.5px', marginBottom: '3px' }}>{label}</div>
+      <input
+        type="text"
+        inputMode="decimal"
+        autoComplete="off"
+        value={value}
+        onChange={onChange}
+        style={{
+          width: '100%',
+          background: t.inputBg,
+          border: `1.5px solid ${t.border}`,
+          borderRadius: '7px',
+          padding: '7px 10px',
+          color: t.text,
+          fontSize: 'var(--cc-sm)',
+        }}
+      />
+    </div>
+  )
+}
+
 /** Evento y puente global: SicoeCAD / WebView2 puede `dispatchEvent` o `window.__CLARACORE_PRESUPUESTO_SICOECAD_IMPORT__(detail)`. */
 export const CLARACORE_PRESUPUESTO_SICOECAD_IMPORT_EVENT = 'claracore:presupuesto-sicoe-cad-import'
 
@@ -205,7 +241,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [modalDetallePptoEditable, setModalDetallePptoEditable] = useState(false)
   /** Trazabilidad por fila: entidad `presupuesto` en API /logs/entidad/presupuesto/{id} */
   const [trazabilidadPresupuesto, setTrazabilidadPresupuesto] = useState(null)
-  const [popupDims, setPopupDims] = useState({ ancho: '', espesor: '', area_long_nod: '' })
+  const [popupDims, setPopupDims] = useState({ ancho: '', espesor: '', area_long_nod: '', no_inicio: '', no_final: '' })
   const [popupCap,  setPopupCap]  = useState('')
   const [popupItem, setPopupItem] = useState('')
   const [popupItemBusq, setPopupItemBusq] = useState('')
@@ -387,9 +423,14 @@ useEffect(() => {
   }, [contratoId])
 
   const esDeveloper  = usuario?.cargo_nombre?.toLowerCase() === 'desarrollador'
-  /** Solo Desarrollador: editar No.Ini / No.Fin en la grilla (backend también lo exige). */
-  const puedeEditarNodosGrilla = esDeveloper
   const _permPpto    = (usuario?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === 'editar registros presupuesto')
+  /** Contrato 2: editores con matriz «editar» pueden tratar No.Ini / No.Fin y área/long como Desarrollador (backend alineado). */
+  const PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG = 2
+  const puedeEditarNodosYAreaLongComoDev =
+    esDeveloper ||
+    (Number(contratoId) === PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG && !!(_permPpto?.editar))
+  /** Editar No.Ini / No.Fin en grilla (y payload de nodos en «Aplicar cambios»). */
+  const puedeEditarNodosGrilla = puedeEditarNodosYAreaLongComoDev
   /** Desarrollador o permiso «editar registros presupuesto» con acción editar: dimensiones y recálculo. */
   const puedeEditarDimensiones = esDeveloper || (_permPpto?.editar ?? false)
   const puedeEditar  = esDeveloper || (_permPpto?.editar   ?? false)
@@ -444,7 +485,13 @@ useEffect(() => {
     if (!registro) return
     setModalDetallePpto(registro)
     setModalDetallePptoEditable(puedeEditarFilaPptoNoSelladoOReabrir(registro))
-    setPopupDims({ ancho: registro.ancho ?? '', espesor: registro.espesor ?? '', area_long_nod: registro.area_long_nod ?? '' })
+    setPopupDims({
+      ancho: registro.ancho ?? '',
+      espesor: registro.espesor ?? '',
+      area_long_nod: registro.area_long_nod ?? '',
+      no_inicio: registro.no_inicio ?? '',
+      no_final: registro.no_final ?? '',
+    })
     setPopupCap(registro.capitulo || '')
     setPopupItem(registro.item || '')
     setPopupItemBusq(registro.item ? `${registro.item} · ${registro.descripcion || ''}` : '')
@@ -1627,8 +1674,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const ids = [...seleccionados]
     // Solo area_long_nod está restringido al Desarrollador; ancho/espesor los puede editar cualquier editor
     const tieneAreaLong = ids.some(id => editDims[id]?.area_long_nod != null)
-    if (tieneAreaLong && !puedeEditarDimensiones) {
-      alert('Solo el cargo Desarrollador puede modificar el campo Área/Long (viene del plano CAD).')
+    if (tieneAreaLong && !puedeEditarNodosYAreaLongComoDev) {
+      alert('El campo Área/Long/Nodo en recálculo masivo solo está habilitado para Desarrollador o para editores del contrato autorizado en presupuesto.')
       return
     }
     const tieneCambioMedidas = ids.some(id => {
@@ -1636,7 +1683,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (!d) return false
       return (d.area_long_nod != null && d.area_long_nod !== '') || (d.ancho != null && d.ancho !== '') || (d.espesor != null && d.espesor !== '')
     })
-    const tieneCambioNodos = esDeveloper && ids.some(id => {
+    const tieneCambioNodos = puedeEditarNodosYAreaLongComoDev && ids.some(id => {
       const d = editDims[id]
       return d && ('no_inicio' in d || 'no_final' in d)
     })
@@ -1706,8 +1753,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         id,
         ancho: d.ancho !== '' && d.ancho != null ? parseFloat(d.ancho) : null,
         espesor: d.espesor !== '' && d.espesor != null ? parseFloat(d.espesor) : null,
-        // area_long_nod solo si el usuario es Desarrollador
-        area_long_nod: puedeEditarDimensiones && d.area_long_nod !== '' && d.area_long_nod != null ? parseFloat(d.area_long_nod) : null,
+        area_long_nod:
+          puedeEditarNodosYAreaLongComoDev && d.area_long_nod !== '' && d.area_long_nod != null ? parseFloat(d.area_long_nod) : null,
       }
     })
     const body = { ids, dims: dims.length > 0 ? dims : null }
@@ -2635,13 +2682,19 @@ async function restaurar(id) {
                                 </div>
                                 <div style={{ width:'80px', flexShrink:0, fontSize:'var(--cc-sm)', color:t.text, fontWeight:'600' }}>{r.item}</div>
                                 <div style={{ flex:3, fontSize:'var(--cc-sm)', color:t.textMuted, lineHeight: 1.4 }}>{r.descripcion}</div>
-                                {/* Dims — solo Desarrollador; inputs anchos y tipografía = escala global */}
+                                {/* Dims — área/long: Dev o contrato autorizado; ancho/esp: editores presupuesto */}
                                 <div style={{ minWidth:'200px', flexShrink:0, fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'right', whiteSpace:'nowrap' }}>
                                   {puedeEditarDimensiones && !esSellado(r) && editDims[r.id] !== undefined ? (
                                     <div style={{ display:'flex', flexDirection:'column', gap:'4px', alignItems:'flex-end' }} onClick={e => e.stopPropagation()}>
-                                      <input type="number" placeholder="a/l/n" value={editDims[r.id].area_long_nod ?? ''}
-                                        onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], area_long_nod: e.target.value } }))}
-                                        style={tramoDimInput} />
+                                      {puedeEditarNodosYAreaLongComoDev ? (
+                                        <input type="number" placeholder="a/l/n" value={editDims[r.id].area_long_nod ?? ''}
+                                          onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], area_long_nod: e.target.value } }))}
+                                          style={tramoDimInput} />
+                                      ) : (
+                                        <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, opacity:0.95 }} title="Área/long solo Desarrollador o editor en contrato autorizado">
+                                          a/l/n: {r.area_long_nod ?? '—'}
+                                        </span>
+                                      )}
                                       <input type="number" placeholder="ancho" value={editDims[r.id].ancho ?? ''}
                                         onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], ancho: e.target.value } }))}
                                         style={tramoDimInput} />
@@ -2821,20 +2874,20 @@ async function restaurar(id) {
           p.item_numero?.toLowerCase().includes(nuevaCant.itemBusq.toLowerCase()) ||
           p.descripcion?.toLowerCase().includes(nuevaCant.itemBusq.toLowerCase())
         ).slice(0, 20)
-        const _area  = parseFloat(nuevaCant.area_long_nod) || 0
-        const _ancho = parseFloat(nuevaCant.ancho)         || 0
-        const _esp   = parseFloat(nuevaCant.espesor)       || 0
-        const _vlr   = parseFloat(nuevaCant.itemSel?.precio_unitario) || 0
-        const _cant  = (_ancho || _esp) ? _area * _ancho * _esp : _area
-        const _costo = Math.round(_cant * _vlr)
-        const puedeGuardar = nuevaCant.itemSel && _area > 0
-        const InpLabel = ({label, val, onChange, type='number'}) => (
-          <div style={{ flex:1 }}>
-            <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px', marginBottom:'3px' }}>{label}</div>
-            <input type={type} value={val} onChange={onChange}
-              style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'7px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)' }} />
-          </div>
-        )
+        const _area  = parseDimInputEs(nuevaCant.area_long_nod)
+        const _ancho = parseDimInputEs(nuevaCant.ancho)
+        const _esp   = parseDimInputEs(nuevaCant.espesor)
+        const _vlrRaw = nuevaCant.itemSel?.precio_unitario
+        const _vlr =
+          typeof _vlrRaw === 'number' && Number.isFinite(_vlrRaw)
+            ? _vlrRaw
+            : parseDimInputEs(_vlrRaw) || 0
+        const _cant = Number.isFinite(_area) && Number.isFinite(_ancho) && Number.isFinite(_esp)
+          ? ((_ancho || _esp) ? _area * _ancho * _esp : _area)
+          : NaN
+        const _costo = Number.isFinite(_cant) && Number.isFinite(_vlr) ? Math.round(_cant * _vlr) : NaN
+        const dimsOk = Number.isFinite(_area) && Number.isFinite(_ancho) && Number.isFinite(_esp)
+        const puedeGuardar = nuevaCant.itemSel && dimsOk && _area > 0
         return (
           <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.75)', zIndex:4000, display:'flex', alignItems:'center', justifyContent:'center' }}
             onClick={() => { setModalAgregarCant(false) }}>
@@ -2883,15 +2936,15 @@ async function restaurar(id) {
                 )}
               </div>
 
-              {/* Dims */}
+              {/* Dims — inputs en componente de módulo estable para no perder foco en cada tecla */}
               <div style={{ display:'flex', gap:'8px', marginBottom:'12px' }}>
-                <InpLabel label="LONGITUD / ÁREA" val={nuevaCant.area_long_nod} onChange={e => setNuevaCant(p => ({ ...p, area_long_nod: e.target.value }))} />
-                <InpLabel label="ANCHO" val={nuevaCant.ancho} onChange={e => setNuevaCant(p => ({ ...p, ancho: e.target.value }))} />
-                <InpLabel label="ESPESOR" val={nuevaCant.espesor} onChange={e => setNuevaCant(p => ({ ...p, espesor: e.target.value }))} />
+                <AgregarCantidadDimInput label="LONGITUD / ÁREA" value={nuevaCant.area_long_nod} onChange={(e) => setNuevaCant((p) => ({ ...p, area_long_nod: e.target.value }))} t={t} />
+                <AgregarCantidadDimInput label="ANCHO" value={nuevaCant.ancho} onChange={(e) => setNuevaCant((p) => ({ ...p, ancho: e.target.value }))} t={t} />
+                <AgregarCantidadDimInput label="ESPESOR" value={nuevaCant.espesor} onChange={(e) => setNuevaCant((p) => ({ ...p, espesor: e.target.value }))} t={t} />
               </div>
 
               {/* Totales calculados */}
-              {_area > 0 && nuevaCant.itemSel && (
+              {nuevaCant.itemSel && dimsOk && _area > 0 && Number.isFinite(_cant) && (
                 <div style={{ display:'flex', gap:'8px', marginBottom:'16px' }}>
                   <div style={{ flex:1, background:t.bg, borderRadius:'8px', padding:'8px 12px' }}>
                     <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>CANT. CALCULADA</div>
@@ -2899,7 +2952,7 @@ async function restaurar(id) {
                   </div>
                   <div style={{ flex:1, background:t.bg, borderRadius:'8px', padding:'8px 12px' }}>
                     <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>COSTO DIRECTO</div>
-                    <div style={{ fontSize:'var(--cc-md)', fontWeight:'800', color:t.primary, marginTop:'2px' }}>${_costo.toLocaleString('es-CO')}</div>
+                    <div style={{ fontSize:'var(--cc-md)', fontWeight:'800', color:t.primary, marginTop:'2px' }}>${Number.isFinite(_costo) ? _costo.toLocaleString('es-CO') : '—'}</div>
                   </div>
                 </div>
               )}
@@ -2910,14 +2963,21 @@ async function restaurar(id) {
                   setGuardandoNuevaCant(true)
                   try {
                     const p = nuevaCant.itemSel
+                    const areaN = parseDimInputEs(nuevaCant.area_long_nod)
+                    const anchoN = parseDimInputEs(nuevaCant.ancho)
+                    const espN = parseDimInputEs(nuevaCant.espesor)
+                    const vlrP =
+                      typeof p.precio_unitario === 'number' && Number.isFinite(p.precio_unitario)
+                        ? p.precio_unitario
+                        : parseDimInputEs(p.precio_unitario) || 0
                     const body = {
                       item:          p.item_numero,
                       descripcion:   p.descripcion,
                       und:           p.und || p.unidad,
-                      vlr_unitario:  p.precio_unitario,
-                      area_long_nod: _area || null,
-                      ancho:         _ancho || null,
-                      espesor:       _esp || null,
+                      vlr_unitario:  vlrP,
+                      area_long_nod: Number.isFinite(areaN) ? areaN : null,
+                      ancho:         Number.isFinite(anchoN) ? anchoN : null,
+                      espesor:       Number.isFinite(espN) ? espN : null,
                       capitulo:      clonBase.capitulo,
                       competencia:   clonBase.competencia,
                       calzada:       clonBase.calzada,
@@ -2946,7 +3006,15 @@ async function restaurar(id) {
                       setClonBase(null)
                       setNuevaCant({ itemBusq:'', itemSel:null, area_long_nod:'', ancho:'', espesor:'' })
                     } else {
-                      alert('Error al agregar cantidad')
+                      let msg = `No se pudo agregar la cantidad (${res.status}).`
+                      try {
+                        const j = await res.json()
+                        if (typeof j?.detail === 'string') msg = j.detail
+                        else if (Array.isArray(j?.detail)) {
+                          msg = j.detail.map((e) => (e.msg ? `${e.loc?.join('.')}: ${e.msg}` : JSON.stringify(e))).join('\n')
+                        }
+                      } catch (_) {}
+                      alert(msg)
                     }
                   } finally {
                     setGuardandoNuevaCant(false)
@@ -2962,9 +3030,9 @@ async function restaurar(id) {
 
       {/* Modal detalle registro presupuesto */}
       {modalDetallePpto && (
-        <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.65)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center' }}
+        <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.65)',zIndex:3000,display:'flex',alignItems:'center',justifyContent:'center',padding:'12px' }}
           onClick={() => { setModalDetallePpto(null); setModalDetallePptoEditable(false) }}>
-          <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'14px',padding:'20px',width:'520px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.4)' }}
+          <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'14px',padding:'20px',width:'min(1040px, 100%)',maxWidth:'100%',maxHeight:'min(80vh, 700px)',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.4)' }}
             onClick={e => e.stopPropagation()}>
             <div style={{ display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'14px', gap:'10px', flexWrap:'wrap' }}>
               <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap', flex: 1, minWidth: 0 }}>
@@ -3000,7 +3068,7 @@ async function restaurar(id) {
               const F = ({label, val, flex=1}) => (
                 <div style={{ flex, minWidth:0 }}>
                   <div style={{ fontSize:'var(--cc-caption)',fontWeight:'700',color:t.textMuted,letterSpacing:'0.6px' }}>{label}</div>
-                  <div style={{ fontSize:'var(--cc-sm)',color:t.text,fontWeight:'500',marginTop:'1px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{val ?? '—'}</div>
+                  <div style={{ fontSize:'var(--cc-sm)',color:t.text,fontWeight:'500',marginTop:'1px',wordBreak:'break-word',overflowWrap:'anywhere' }}>{val ?? '—'}</div>
                 </div>
               )
               const Row = ({children}) => (
@@ -3020,94 +3088,139 @@ async function restaurar(id) {
               }
               return (
                 <>
-                  <Row><F label="ID_POL" val={r.id_pol||r.pk_id}/><F label="CAPÍTULO" val={r.capitulo}/><F label="ÍTEM" val={r.item} flex={0.5}/></Row>
-                  <BigF label="DESCRIPCIÓN" val={r.descripcion}/>
-                  <Row><F label="UNIDAD" val={r.und} flex={0.5}/><F label="REVISADO" val={r.revisado||'No Revisado'}/><F label="TIPO" val={r.tipo}/></Row>
-                  {mostrarColumnaDepuracion && (
-                    <Row>
-                      <F label="DEPURACIÓN (COSTOS / OBRA)" val={r.pre_interv_estado == null || r.pre_interv_estado === '' ? '— (legado)' : r.pre_interv_estado} flex={1}/>
-                      {r.pre_interv_por && <F label="POR" val={r.pre_interv_por} flex={1}/>}
-                    </Row>
-                  )}
                   {esSellado(r) && !puedeReabrirTrasAprob && (
-                    <div style={{ background:'rgba(22,101,52,0.12)', border:`1px solid rgba(22,101,52,0.35)`, borderRadius:'8px', padding:'10px 12px', marginBottom:'8px', fontSize:'var(--cc-sm)', color:'#166534', fontWeight:'600' }}>
+                    <div style={{ background:'rgba(22,101,52,0.12)', border:`1px solid rgba(22,101,52,0.35)`, borderRadius:'8px', padding:'10px 12px', marginBottom:'12px', fontSize:'var(--cc-sm)', color:'#166534', fontWeight:'600' }}>
                       🔒 Registro sellado — aprobado por Interventoría. No admite cambios de cantidades ni de estado.
                     </div>
                   )}
                   {esSellado(r) && puedeReabrirTrasAprob && (
-                    <div style={{ background:'rgba(14,165,233,0.12)', border:`1px solid rgba(14,165,233,0.4)`, borderRadius:'8px', padding:'10px 12px', marginBottom:'8px', fontSize:'var(--cc-sm)', color:'#0369A1', fontWeight:'600' }}>
+                    <div style={{ background:'rgba(14,165,233,0.12)', border:`1px solid rgba(14,165,233,0.4)`, borderRadius:'8px', padding:'10px 12px', marginBottom:'12px', fontSize:'var(--cc-sm)', color:'#0369A1', fontWeight:'600' }}>
                       🔓 Como contratista puede editar capítulo/ítem y datos permitidos: al guardar se pedirá un motivo obligatorio, se anulará el sellado y el estado de Interventoría volverá a «No Revisado» para volver a validar.
                     </div>
                   )}
-                  <Row><F label="NODO INICIO" val={r.no_inicio}/><F label="NODO FINAL" val={r.no_final}/></Row>
-                  <Row><F label="ABS. INICIO" val={r.abs_inicio}/><F label="ABS. FINAL" val={r.abs_final}/></Row>
-                  <Row>
-                    <F label="ÁREA/LONG" val={fmtN(r.area_long_nod)} flex={0.6}/>
-                    <F label="ANCHO" val={fmtN(r.ancho)} flex={0.6}/>
-                    <F label="ESPESOR" val={fmtN(r.espesor)} flex={0.6}/>
-                    <F label="CANT. TOTAL" val={fmtN(r.cant_total)} flex={0.6}/>
-                  </Row>
-                  {nivelInfo.verValoresEconomicos && (
-                  <Row>
-                    <F label="VLR. UNITARIO" val={fmt(r.vlr_unitario)}/>
-                    <F label="COSTO DIRECTO" val={fmt(r.costo_directo)}/>
-                  </Row>
-                  )}
-                  <div style={{ display:'flex', gap:'12px', marginBottom:'5px' }}>
-                    <div style={{ flex:1.1, minWidth:0, background:t.bg, borderRadius:'6px', padding:'7px 10px' }} title={r.calculo_por || ''}>
-                      <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.6px' }}>CÁLCULO (usuario)</div>
-                      <div style={{ fontSize:'var(--cc-sm)', color:t.text, fontWeight:'500', marginTop:'1px', lineHeight:1.35, whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{r.calculo_por ?? '—'}</div>
+                  <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'start' }}>
+                    <div style={{ display:'flex', flexDirection:'column', gap:'5px', minWidth:0 }}>
+                      <Row><F label="ID_POL" val={r.id_pol||r.pk_id}/><F label="CAPÍTULO" val={r.capitulo}/><F label="ÍTEM" val={r.item} flex={0.5}/></Row>
+                      <BigF label="DESCRIPCIÓN" val={r.descripcion}/>
+                      <Row><F label="UNIDAD" val={r.und} flex={0.5}/><F label="REVISADO" val={r.revisado||'No Revisado'}/><F label="TIPO" val={r.tipo}/></Row>
+                      {mostrarColumnaDepuracion && (
+                        <Row>
+                          <F label="DEPURACIÓN (COSTOS / OBRA)" val={r.pre_interv_estado == null || r.pre_interv_estado === '' ? '— (legado)' : r.pre_interv_estado} flex={1}/>
+                          {r.pre_interv_por && <F label="POR" val={r.pre_interv_por} flex={1}/>}
+                        </Row>
+                      )}
+                      <Row><F label="NODO INICIO" val={r.no_inicio}/><F label="NODO FINAL" val={r.no_final}/></Row>
                     </div>
-                    <div style={{ flex:1, minWidth:0, background:t.bg, borderRadius:'6px', padding:'7px 10px' }}>
-                      <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.6px' }}>CÁLCULO (fecha y hora)</div>
-                      <div style={{ fontSize:'var(--cc-sm)', color:t.text, fontWeight:'500', marginTop:'1px' }}>{fmtFechaHoraRecalculo(r.calculo_en)}</div>
+                    <div style={{ display:'flex', flexDirection:'column', gap:'5px', minWidth:0 }}>
+                      <Row><F label="ABS. INICIO" val={r.abs_inicio}/><F label="ABS. FINAL" val={r.abs_final}/></Row>
+                      <Row>
+                        <F label="ÁREA/LONG" val={fmtN(r.area_long_nod)} flex={0.6}/>
+                        <F label="ANCHO" val={fmtN(r.ancho)} flex={0.6}/>
+                        <F label="ESPESOR" val={fmtN(r.espesor)} flex={0.6}/>
+                        <F label="CANT. TOTAL" val={fmtN(r.cant_total)} flex={0.6}/>
+                      </Row>
+                      {nivelInfo.verValoresEconomicos && (
+                        <Row>
+                          <F label="VLR. UNITARIO" val={fmt(r.vlr_unitario)}/>
+                          <F label="COSTO DIRECTO" val={fmt(r.costo_directo)}/>
+                        </Row>
+                      )}
+                      <div style={{ display:'flex', gap:'12px', marginBottom:'5px', flexWrap:'wrap' }}>
+                        <div style={{ flex:'1 1 140px', minWidth:0, background:t.bg, borderRadius:'6px', padding:'7px 10px' }} title={r.calculo_por || ''}>
+                          <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.6px' }}>CÁLCULO (usuario)</div>
+                          <div style={{ fontSize:'var(--cc-sm)', color:t.text, fontWeight:'500', marginTop:'1px', lineHeight:1.35, whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{r.calculo_por ?? '—'}</div>
+                        </div>
+                        <div style={{ flex:'1 1 140px', minWidth:0, background:t.bg, borderRadius:'6px', padding:'7px 10px' }}>
+                          <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.6px' }}>CÁLCULO (fecha y hora)</div>
+                          <div style={{ fontSize:'var(--cc-sm)', color:t.text, fontWeight:'500', marginTop:'1px' }}>{fmtFechaHoraRecalculo(r.calculo_en)}</div>
+                        </div>
+                      </div>
+                      <Row><F label="TRAMO" val={r.tramo}/><F label="CALZADA" val={r.calzada}/><F label="PK" val={r.pk_id} flex={0.5}/></Row>
                     </div>
                   </div>
-                  <Row><F label="TRAMO" val={r.tramo}/><F label="CALZADA" val={r.calzada}/><F label="PK" val={r.pk_id} flex={0.5}/></Row>
                   {/* Acciones desde buzón */}
                   {modalDetallePptoEditable && (puedeEditar || puedeEliminar) && (!esSellado(r) || puedeReabrirTrasAprob) && (
-                    <div style={{ borderTop:`1px solid ${t.border}`, marginTop:'12px', paddingTop:'12px' }}>
-
+                    <div style={{ borderTop:`1px solid ${t.border}`, marginTop:'14px', paddingTop:'14px' }}>
+                      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'stretch' }}>
                       {/* ── Editar dimensiones (solo Desarrollador) — no aplica a sellado (reabre solo contratista, sin dims) ── */}
                       {puedeEditarDimensiones && !esSellado(r) && (
-                        <div style={{ background:t.bg, borderRadius:'8px', padding:'10px 12px', marginBottom:'10px' }}>
+                        <div style={{ background:t.bg, borderRadius:'8px', padding:'10px 12px', minWidth:0 }}>
                           <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:'#F59E0B', letterSpacing:'0.5px', marginBottom:'8px' }}>📐 EDITAR DIMENSIONES</div>
-                          <div style={{ display:'flex', gap:'10px', marginBottom:'8px', flexWrap:'wrap' }}>
-                            <div style={{ flex:1, minWidth:'100px' }}>
-                              <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700', marginBottom:'3px' }}>ÁREA / LONG / NOD</div>
-                              <input type="number" value={popupDims.area_long_nod}
-                                onChange={e => setPopupDims(d => ({...d, area_long_nod: e.target.value}))}
-                                style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
-                            </div>
-                            <div style={{ flex:1, minWidth:'100px' }}>
-                              <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700', marginBottom:'3px' }}>ANCHO</div>
-                              <input type="number" value={popupDims.ancho}
+                          <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginBottom:'10px', lineHeight:1.45 }}>
+                            Ajuste <strong>ancho</strong> y <strong>espesor</strong>; al guardar se <strong>recalculan cantidad total y costo directo</strong> con el valor unitario del registro.
+                            {puedeEditarNodosYAreaLongComoDev && (
+                              <span>
+                                {' '}
+                                También puede editar <strong>área/long/nod</strong> y los <strong>nodos inicio / final</strong> (Desarrollador o editor en contrato autorizado).
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom: puedeEditarNodosYAreaLongComoDev ? '10px' : '8px' }}>
+                            <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
+                              <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>ANCHO</span>
+                              <input type="number" step="any" value={popupDims.ancho}
                                 onChange={e => setPopupDims(d => ({...d, ancho: e.target.value}))}
                                 style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
-                            </div>
-                            <div style={{ flex:1, minWidth:'100px' }}>
-                              <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700', marginBottom:'3px' }}>ESPESOR</div>
-                              <input type="number" value={popupDims.espesor}
+                            </label>
+                            <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
+                              <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>ESPESOR</span>
+                              <input type="number" step="any" value={popupDims.espesor}
                                 onChange={e => setPopupDims(d => ({...d, espesor: e.target.value}))}
                                 style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
-                            </div>
+                            </label>
                           </div>
+                          {puedeEditarNodosYAreaLongComoDev && (
+                            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px', marginBottom:'8px' }}>
+                              <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
+                                <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>ÁREA / LONG / NOD</span>
+                                <input type="number" step="any" value={popupDims.area_long_nod}
+                                  onChange={e => setPopupDims(d => ({...d, area_long_nod: e.target.value}))}
+                                  style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
+                              </label>
+                              <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
+                                <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>NODO INICIO</span>
+                                <input type="text" value={popupDims.no_inicio}
+                                  onChange={e => setPopupDims(d => ({...d, no_inicio: e.target.value}))}
+                                  style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
+                              </label>
+                              <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
+                                <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>NODO FINAL</span>
+                                <input type="text" value={popupDims.no_final}
+                                  onChange={e => setPopupDims(d => ({...d, no_final: e.target.value}))}
+                                  style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
+                              </label>
+                            </div>
+                          )}
                           <button disabled={popupGuardando} onClick={async () => {
                             setPopupMsg('')
-                            const pArea = popupDims.area_long_nod === '' ? NaN : parseFloat(popupDims.area_long_nod)
-                            const pAncho = popupDims.ancho === '' ? NaN : parseFloat(popupDims.ancho)
-                            const pEsp = popupDims.espesor === '' ? NaN : parseFloat(popupDims.espesor)
-                            const area = Number.isFinite(pArea) ? pArea : 0
-                            const ancho = Number.isFinite(pAncho) ? pAncho : 0
-                            const esp   = Number.isFinite(pEsp) ? pEsp : 0
-                            const cant  = (ancho > 0 || esp > 0) ? Math.round(area * ancho * esp * 100) / 100 : Math.round(area * 100) / 100
+                            const parseDim = (x) => {
+                              const n = parseFloat(String(x ?? '').replace(',', '.'))
+                              return Number.isFinite(n) ? n : NaN
+                            }
+                            const pAncho = parseDim(popupDims.ancho)
+                            const pEsp = parseDim(popupDims.espesor)
+                            const pArea = puedeEditarNodosYAreaLongComoDev ? parseDim(popupDims.area_long_nod) : parseDim(r.area_long_nod)
+                            if (![pArea, pAncho, pEsp].every(Number.isFinite)) {
+                              window.alert('Indique valores numéricos válidos en área/longitud, ancho y espesor.')
+                              return
+                            }
+                            const area = pArea
+                            const ancho = pAncho
+                            const esp = pEsp
+                            const cant = (ancho > 0 || esp > 0) ? Math.round(area * ancho * esp * 100) / 100 : Math.round(area * 100) / 100
                             const costo = Math.round(cant * (r.vlr_unitario || 0))
-                            const body  = {
-                              area_long_nod: Number.isFinite(pArea) ? pArea : null,
-                              ancho: Number.isFinite(pAncho) ? pAncho : null,
-                              espesor: Number.isFinite(pEsp) ? pEsp : null,
+                            const body = {
+                              area_long_nod: area,
+                              ancho,
+                              espesor: esp,
                               cant_total: cant,
-                              costo_directo: costo
+                              costo_directo: costo,
+                              ...(puedeEditarNodosYAreaLongComoDev
+                                ? {
+                                    no_inicio: String(popupDims.no_inicio ?? '').trim() || null,
+                                    no_final: String(popupDims.no_final ?? '').trim() || null,
+                                  }
+                                : {}),
                             }
                             // Actualización optimista inmediata
                             const optimisticRow = { ...r, ...body }
@@ -3144,7 +3257,7 @@ async function restaurar(id) {
 
                       {/* ── Cambiar capítulo / ítem ── */}
                       {puedeEditar && (
-                        <div style={{ background:t.bg, borderRadius:'8px', padding:'10px 12px', marginBottom:'10px' }}>
+                        <div style={{ background:t.bg, borderRadius:'8px', padding:'10px 12px', minWidth:0 }}>
                           <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:'#0077B6', letterSpacing:'0.5px', marginBottom:'8px' }}>🔄 CAMBIAR CAPÍTULO / ÍTEM</div>
                           <div style={{ marginBottom:'8px' }}>
                             <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700', marginBottom:'3px' }}>CAPÍTULO</div>
@@ -3229,6 +3342,7 @@ async function restaurar(id) {
                           </button>
                         </div>
                       )}
+                      </div>
 
                       {/* ── Dar de baja — no disponible en registros sellados (reabrir antes con el flujo contratista) ── */}
                       {puedeEliminar && !esSellado(r) && (
@@ -4078,8 +4192,8 @@ async function restaurar(id) {
                 <th style={thStyle}>Ítem</th>
                 <th style={thStyle}>Descripción</th>
                 <th style={thStyle}>Und</th>
-                <th style={thStyle} title={puedeEditarNodosGrilla ? 'Solo Desarrollador: edite con la fila seleccionada y Aplicar cambios' : undefined}>No.Ini</th>
-                <th style={thStyle} title={puedeEditarNodosGrilla ? 'Solo Desarrollador: edite con la fila seleccionada y Aplicar cambios' : undefined}>No.Fin</th>
+                <th style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Ini</th>
+                <th style={thStyle} title={puedeEditarNodosGrilla ? 'Edite con la fila seleccionada y Aplicar cambios (Desarrollador o editor en contrato autorizado)' : undefined}>No.Fin</th>
                 <th style={thStyle}>Área/Long</th>
                 <th style={thStyle}>Ancho</th>
                 <th style={thStyle}>Espesor</th>
@@ -4145,7 +4259,7 @@ async function restaurar(id) {
                         : (r.no_final || '-')}
                     </td>
                     <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
-                      {puedeEditarDimensiones && seleccionados.has(r.id) && !esSellado(r)
+                      {puedeEditarNodosYAreaLongComoDev && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.area_long_nod ?? (r.area_long_nod ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], area_long_nod: v } })) }}
                             style={{ width:'72px',background:'transparent',border:'none',borderBottom:`1.5px solid #F59E0B`,outline:'none',padding:'2px 2px',color:t.text,fontSize:'var(--cc-sm)',textAlign:'right' }} />
