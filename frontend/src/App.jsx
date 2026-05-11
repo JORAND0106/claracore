@@ -11029,7 +11029,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         .channel(`dashboard-so-${cid}`)
         .on('postgres_changes', { event: '*', schema: 'public', table: 'so_registros', filter: filt }, () => { recargar() })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'so_reportes', filter: filt }, () => { recargar() })
-        .subscribe()
+        .subscribe((status) => {
+          console.log('Realtime status:', status)
+        })
     }
 
     return () => {
