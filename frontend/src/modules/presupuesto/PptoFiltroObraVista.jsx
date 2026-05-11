@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import PptoFiltroMapaPk from './PptoFiltroMapaPk'
 import { formatCOPShort } from '../../utils/formatCOP'
 
@@ -74,6 +74,8 @@ export default function PptoFiltroObraVista({
   /** null = maestro completo; array (vacío o no) = solo esos PK (alineado con grilla con cap/ítem) */
   pkIdsDeGrilla,
 }) {
+  const [panelFiltrosColapsado, setPanelFiltrosColapsado] = useState(false)
+
   const onPk = useCallback(
     (pkVal) => {
       const v = String(pkVal || '').trim()
@@ -90,11 +92,55 @@ export default function PptoFiltroObraVista({
   )
   const hayCap = !!(f.cap && String(f.cap).trim())
 
+  const btnColapsarEstilo = {
+    background: 'transparent',
+    border: 'none',
+    color: '#94a3b8',
+    fontSize: '11px',
+    fontWeight: 500,
+    cursor: 'pointer',
+    padding: '4px 8px',
+  }
+
   return (
     <div
-      className="cc-ppo-filtro-obra"
-      style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 10, alignItems: 'flex-start', fontSize: 'var(--cc-body)' }}
+      style={{
+        position: 'sticky',
+        top: 0,
+        zIndex: 25,
+        marginBottom: 10,
+        background: t.bgCard,
+        borderRadius: 8,
+        boxShadow: t.shadow,
+        border: `1px solid ${t.border}`,
+      }}
     >
+      {panelFiltrosColapsado ? (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            minHeight: 32,
+            padding: '4px 10px',
+            boxSizing: 'border-box',
+          }}
+        >
+          <button type="button" onClick={() => setPanelFiltrosColapsado(false)} style={btnColapsarEstilo}>
+            ▼ Mostrar filtros
+          </button>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '4px 8px 2px' }}>
+            <button type="button" onClick={() => setPanelFiltrosColapsado(true)} style={btnColapsarEstilo}>
+              ▲ Ocultar filtros
+            </button>
+          </div>
+          <div
+            className="cc-ppo-filtro-obra"
+            style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 0, alignItems: 'flex-start', fontSize: 'var(--cc-body)' }}
+          >
       <div
         style={{
           width: 248,
@@ -241,14 +287,14 @@ export default function PptoFiltroObraVista({
                   title="Recarga capítulos y datos del filtro actual"
                   style={{
                     background: 'transparent',
-                    border: `1px solid ${t.border}`,
+                    border: 'none',
                     borderRadius: 6,
-                    padding: '5px 10px',
-                    color: t.textMuted,
-                    fontSize: 'var(--cc-caption)',
-                    fontWeight: 600,
+                    padding: '3px 8px',
+                    color: '#94a3b8',
+                    fontSize: '11px',
+                    fontWeight: 500,
                     cursor: actualizarDisabled ? 'wait' : 'pointer',
-                    opacity: actualizarDisabled ? 0.65 : 1,
+                    opacity: actualizarDisabled ? 0.5 : 0.92,
                   }}
                 >
                   🔄 Actualizar
@@ -393,6 +439,9 @@ export default function PptoFiltroObraVista({
         </div>
         <PptoFiltroMapaPk t={t} token={token} contratoId={contratoId} onPkPick={onPk} pkIdsDeGrilla={pkIdsDeGrilla} />
       </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }

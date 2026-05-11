@@ -1439,7 +1439,7 @@ def _resolver_colaborador_auditoria(
         colaborador = dict(filas_xls[cid_colab])
         colaborador["_fuente"] = "excel_sesion"
         colaborador["_indice_fila"] = cid_colab
-        return colaborador, False
+        return colaborador, True
     try:
         if origen_n == "bd":
             res = _sb.table("sst_personal").select("*").eq("id", cid_colab).eq("contrato_id", contrato_id).limit(1).execute().data
@@ -1469,6 +1469,78 @@ def _auditor_jobs_prune() -> None:
         dead = [k for k, v in _auditor_jobs.items() if float(v.get("ts", 0)) < cutoff]
         for k in dead:
             del _auditor_jobs[k]
+
+
+def _cedula_norm_audit_key(s: Optional[str]) -> str:
+    t = "".join(c for c in str(s or "") if c.isdigit())
+    return t or str(s or "").strip()
+
+
+def _synthetic_resultado_from_audit_row(r: dict) -> dict:
+    """Fila histórica sin resultado_json: respuesta mínima para la UI."""
+    return {
+        "colaborador_identificado": r.get("colaborador_nombre") or "—",
+        "cedula_identificada": str(r.get("colaborador_cedula") or ""),
+        "puntuacion": r.get("puntuacion"),
+        "resumen": (
+            "Esta auditoría se guardó sin el detalle JSON completo. "
+            "Ejecute de nuevo el análisis para ver el checklist por campo."
+        ),
+        "hallazgos": [],
+        "alertas_criticas": [],
+        "conclusion": "",
+        "_legacy_sin_detalle_json": True,
+    }
+
+
+def _auditor_try_insert_auditoria(
+    contrato_id: int,
+    uid: int,
+    colaborador: dict,
+    origen_n: str,
+    num_pdfs: int,
+    resultado: dict,
+    hallazgos: list,
+    tokens_in: int,
+    tokens_out: int,
+    costo: float,
+) -> bool:
+    """
+    Inserta en sst_auditorias incluyendo resultado_json.
+    True si insertó; False si tabla/columna ausente (PostgREST); relanza otros errores.
+    """
+    row_base: Dict[str, Any] = {
+        "contrato_id": contrato_id,
+        "usuario_id": uid,
+        "colaborador_nombre": colaborador.get("nombre"),
+        "colaborador_cedula": str(colaborador.get("cedula") or ""),
+        "origen": origen_n,
+        "total_pdfs": num_pdfs,
+        "campos_ok": sum(1 for h in hallazgos if h.get("estado") == "OK"),
+        "campos_discrepancia": sum(1 for h in hallazgos if h.get("estado") == "DISCREPANCIA"),
+        "campos_no_encontrado": sum(1 for h in hallazgos if h.get("estado") == "NO ENCONTRADO"),
+        "puntuacion": resultado.get("puntuacion") or 0,
+        "tokens_usados": tokens_in + tokens_out,
+        "costo_usd": costo,
+    }
+    try:
+        _sb.table("sst_auditorias").insert({**row_base, "resultado_json": resultado}).execute()
+        return True
+    except Exception as e:
+        err = str(e).lower()
+        if "pgrst205" in err or "could not find the table" in err:
+            return False
+        if "resultado_json" in err or ("column" in err and "does not exist" in err):
+            _log.warning("sst_auditorias.resultado_json ausente; ejecute backend/sql/alter_sst_auditorias_resultado_json.sql — insertando sin JSON.")
+            try:
+                _sb.table("sst_auditorias").insert(row_base).execute()
+                return True
+            except Exception as e2:
+                err2 = str(e2).lower()
+                if "pgrst205" in err2 or "could not find the table" in err2:
+                    return False
+                raise
+        raise
 
 
 def _auditor_individual_worker(
@@ -1540,31 +1612,23 @@ def _auditor_individual_worker(
         costo = _calc_costo_anthropic(tokens_in, tokens_out)
         _auditor_record_spend_usd(costo)
         uid = _uid(user_dict)
-        if persistir_auditoria:
-            try:
-                _sb.table("sst_auditorias").insert(
-                    {
-                        "contrato_id": contrato_id,
-                        "usuario_id": uid,
-                        "colaborador_nombre": colaborador.get("nombre"),
-                        "colaborador_cedula": str(colaborador.get("cedula") or ""),
-                        "origen": origen_n,
-                        "total_pdfs": len(pdf_blobs),
-                        "campos_ok": sum(1 for h in hallazgos if h.get("estado") == "OK"),
-                        "campos_discrepancia": sum(1 for h in hallazgos if h.get("estado") == "DISCREPANCIA"),
-                        "campos_no_encontrado": sum(1 for h in hallazgos if h.get("estado") == "NO ENCONTRADO"),
-                        "puntuacion": resultado.get("puntuacion") or 0,
-                        "tokens_usados": tokens_in + tokens_out,
-                        "costo_usd": costo,
-                    }
-                ).execute()
-            except Exception as e:
-                err = str(e)
-                if "pgrst205" in err.lower() or "could not find the table" in err.lower():
-                    pass
-                else:
-                    _auditor_job_patch(job_id, status="error", error=err[:1200], pct=100)
-                    return
+        persist_ok = False
+        try:
+            persist_ok = _auditor_try_insert_auditoria(
+                contrato_id,
+                uid,
+                colaborador,
+                origen_n,
+                len(pdf_blobs),
+                resultado,
+                hallazgos,
+                tokens_in,
+                tokens_out,
+                costo,
+            )
+        except Exception as e:
+            _auditor_job_patch(job_id, status="error", error=str(e)[:1200], pct=100)
+            return
         meta_full = {
             "pdfs_procesados": len(pdf_blobs),
             "paginas_analizadas": len(imagenes_b64),
@@ -1572,7 +1636,7 @@ def _auditor_individual_worker(
             "costo_usd": costo,
             "costo_cop_aprox": round(costo * 4200, 0),
             "fuente_personal": "excel_sesion" if origen_n == "excel" else "bd",
-            "persistido": persistir_auditoria,
+            "persistido": persist_ok,
         }
         payload = {
             "resultado": resultado,
@@ -1743,27 +1807,18 @@ async def auditor_ejecutar(
     costo = _calc_costo_anthropic(tokens_in, tokens_out)
     _auditor_record_spend_usd(costo)
     uid = _uid(current_user)
-    if persistir_auditoria:
-        try:
-            _sb.table("sst_auditorias").insert(
-                {
-                    "contrato_id": contrato_id,
-                    "usuario_id": uid,
-                    "colaborador_nombre": colaborador.get("nombre"),
-                    "colaborador_cedula": str(colaborador.get("cedula") or ""),
-                    "origen": origen_n,
-                    "total_pdfs": len(pdf_bytes),
-                    "campos_ok": sum(1 for h in hallazgos if h.get("estado") == "OK"),
-                    "campos_discrepancia": sum(1 for h in hallazgos if h.get("estado") == "DISCREPANCIA"),
-                    "campos_no_encontrado": sum(1 for h in hallazgos if h.get("estado") == "NO ENCONTRADO"),
-                    "puntuacion": resultado.get("puntuacion") or 0,
-                    "tokens_usados": tokens_in + tokens_out,
-                    "costo_usd": costo,
-                }
-            ).execute()
-        except Exception as e:
-            _rethrow_if_supabase_missing_table(e)
-            raise
+    persist_ok = _auditor_try_insert_auditoria(
+        contrato_id,
+        uid,
+        colaborador,
+        origen_n,
+        len(pdf_bytes),
+        resultado,
+        hallazgos,
+        tokens_in,
+        tokens_out,
+        costo,
+    )
 
     return _auditor_redact_respuesta_individual(
         {
@@ -1775,7 +1830,7 @@ async def auditor_ejecutar(
                 "costo_usd": costo,
                 "costo_cop_aprox": round(costo * 4200, 0),
                 "fuente_personal": "excel_sesion" if origen_n == "excel" else "bd",
-                "persistido": persistir_auditoria,
+                "persistido": persist_ok,
             },
         },
         current_user,
@@ -1932,6 +1987,65 @@ def auditor_historial(contrato_id: int, current_user=Depends(get_current_user)):
     )
 
 
+@router.get("/sst/{contrato_id}/auditorias-por-cedula")
+def auditorias_por_cedula(contrato_id: int, current_user=Depends(get_current_user)):
+    """Última auditoría por cédula (para prellenar la grilla). Incluye `resultado` desde resultado_json."""
+    _require_contract_access(current_user, contrato_id)
+    _require_perm(current_user, "auditor sst (ia)", "ver")
+    todos: List[dict] = []
+    off = 0
+    try:
+        while True:
+            chunk = (
+                _sb.table("sst_auditorias")
+                .select("*")
+                .eq("contrato_id", contrato_id)
+                .order("created_at", desc=True)
+                .range(off, off + 999)
+                .execute()
+                .data
+                or []
+            )
+            todos.extend(chunk)
+            if len(chunk) < 1000:
+                break
+            off += 1000
+    except Exception as e:
+        s = str(e).lower()
+        if "pgrst205" in s or ("could not find the table" in s and "sst_" in str(e)):
+            return {
+                "por_cedula": {},
+                "tablas_disponibles": False,
+                "mensaje": (
+                    "Sin tablas de auditoría en Supabase. Ejecute backend/sql/modulos_sst_ensayos_nube_auditor.sql "
+                    "y backend/sql/alter_sst_auditorias_resultado_json.sql si aplica."
+                ),
+            }
+        raise
+    por: Dict[str, Dict[str, Any]] = {}
+    for r in todos:
+        ck = _cedula_norm_audit_key(str(r.get("colaborador_cedula") or ""))
+        if not ck or ck in por:
+            continue
+        rj = r.get("resultado_json")
+        if isinstance(rj, str):
+            try:
+                rj = json.loads(rj)
+            except Exception:
+                rj = None
+        res_obj = rj if isinstance(rj, dict) else _synthetic_resultado_from_audit_row(r)
+        por[ck] = {
+            "id": r.get("id"),
+            "created_at": r.get("created_at"),
+            "puntuacion": r.get("puntuacion"),
+            "colaborador_nombre": r.get("colaborador_nombre"),
+            "colaborador_cedula": r.get("colaborador_cedula"),
+            "origen": r.get("origen"),
+            "resultado": res_obj,
+        }
+    return {"por_cedula": por, "tablas_disponibles": True}
+
+
 @router.post("/sst/{contrato_id}/auditar-lote")
 async def auditor_lote(
     contrato_id: int,
@@ -1953,9 +2067,7 @@ async def auditor_lote(
     usar_excel_directo = bool(personal_excel_json and str(personal_excel_json).strip())
     if usar_excel_directo:
         todo = _parse_filas_excel_json(personal_excel_json)
-        persistir_auditoria = False
     else:
-        persistir_auditoria = True
         try:
             res_bd = _sb.table("sst_personal").select("*").eq("contrato_id", contrato_id).eq("activo", True).execute().data or []
             res_imp = _sb.table("sst_personal_importado").select("*").eq("contrato_id", contrato_id).execute().data or []
@@ -1977,6 +2089,7 @@ async def auditor_lote(
         )
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     resultados_lote = []
+    any_persist = False
 
     for pdf_file in pdfs:
         contenido = await pdf_file.read()
@@ -2027,27 +2140,22 @@ async def auditor_lote(
             continue
         hallazgos = resultado.get("hallazgos") or []
         uid = _uid(current_user)
-        if persistir_auditoria:
-            try:
-                _sb.table("sst_auditorias").insert(
-                    {
-                        "contrato_id": contrato_id,
-                        "usuario_id": uid,
-                        "colaborador_nombre": resultado.get("colaborador_identificado"),
-                        "colaborador_cedula": str(resultado.get("cedula_identificada") or ""),
-                        "origen": "lote",
-                        "total_pdfs": 1,
-                        "campos_ok": sum(1 for h in hallazgos if h.get("estado") == "OK"),
-                        "campos_discrepancia": sum(1 for h in hallazgos if h.get("estado") == "DISCREPANCIA"),
-                        "campos_no_encontrado": sum(1 for h in hallazgos if h.get("estado") == "NO ENCONTRADO"),
-                        "puntuacion": resultado.get("puntuacion") or 0,
-                        "tokens_usados": resp.usage.input_tokens + resp.usage.output_tokens,
-                        "costo_usd": costo,
-                    }
-                ).execute()
-            except Exception as e:
-                _rethrow_if_supabase_missing_table(e)
-                raise
+        if _auditor_try_insert_auditoria(
+            contrato_id,
+            uid,
+            {
+                "nombre": resultado.get("colaborador_identificado"),
+                "cedula": resultado.get("cedula_identificada"),
+            },
+            "lote",
+            1,
+            resultado,
+            hallazgos,
+            resp.usage.input_tokens,
+            resp.usage.output_tokens,
+            costo,
+        ):
+            any_persist = True
         resultados_lote.append({**resultado, "archivo": nombre_archivo, "costo_usd": costo})
 
     costo_total = sum(float(r.get("costo_usd") or 0) for r in resultados_lote)
@@ -2067,7 +2175,7 @@ async def auditor_lote(
                 "costo_usd_total": round(costo_total, 4),
                 "costo_cop_total": round(costo_total * 4200, 0),
                 "fuente_personal": "excel_sesion" if usar_excel_directo else "bd",
-                "persistido": persistir_auditoria,
+                "persistido": any_persist,
             },
         },
         current_user,

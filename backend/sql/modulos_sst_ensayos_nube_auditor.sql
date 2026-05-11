@@ -169,8 +169,11 @@ CREATE TABLE IF NOT EXISTS public.sst_auditorias (
     puntuacion INTEGER,
     tokens_usados INTEGER,
     costo_usd NUMERIC(12, 6),
+    resultado_json jsonb,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE public.sst_auditorias ADD COLUMN IF NOT EXISTS resultado_json jsonb;
 
 CREATE TABLE IF NOT EXISTS public.sst_personal_importado (
     id SERIAL PRIMARY KEY,

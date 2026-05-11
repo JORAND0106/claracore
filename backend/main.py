@@ -22,6 +22,7 @@ import uuid
 import threading
 import calendar
 import re
+import difflib
 import json
 import math
 from concurrent.futures import ThreadPoolExecutor
@@ -5257,6 +5258,198 @@ def bulk_presupuesto(
             "user_sub": str(current_user.get("sub") or ""),
         }
     return {"insertados": insertados}
+
+
+def _text_similarity_best(needle: Optional[str], choices: List[str]) -> Tuple[Optional[str], float]:
+    """Devuelve la cadena de `choices` más parecida a `needle` (SequenceMatcher), o (None, 0)."""
+    if not choices:
+        return None, 0.0
+    n = (needle or "").strip().lower()
+    if not n:
+        return choices[0], 0.0
+    best: Optional[str] = None
+    best_r = -1.0
+    for c in choices:
+        s = (c or "").strip()
+        if not s:
+            continue
+        r = difflib.SequenceMatcher(None, n, s.lower()).ratio()
+        if r > best_r:
+            best_r, best = r, c
+    return best, best_r
+
+
+def _float_eq_presupuesto_import(a: float, b: float) -> bool:
+    return math.isclose(float(a), float(b), rel_tol=0.0, abs_tol=1e-4)
+
+
+def _fetch_listado_precios_validacion(contrato_id: int) -> List[dict]:
+    all_rows: List[dict] = []
+    offset = 0
+    while True:
+        batch = (
+            supabase.table("listado_precios")
+            .select("id, capitulo, competencia, item_numero, descripcion, unidad, precio_unitario")
+            .eq("contrato_id", contrato_id)
+            .order("item_numero")
+            .range(offset, offset + 999)
+            .execute()
+            .data
+            or []
+        )
+        all_rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        offset += 1000
+    return all_rows
+
+
+@app.post("/presupuesto/{contrato_id}/bulk-validar")
+def bulk_presupuesto_validar_listado(
+    contrato_id: int,
+    items: List[PresupuestoRow],
+    current_user=Depends(get_current_user),
+):
+    """
+    Valida un payload igual a POST /presupuesto/.../bulk contra listado_precios del contrato
+    (cruce item ↔ item_numero por capítulo normalizado). No inserta filas.
+    """
+    _require_contract_access(current_user, contrato_id)
+    listado_rows = _fetch_listado_precios_validacion(contrato_id)
+    cap_norm_to_display: Dict[str, str] = {}
+    for r in listado_rows:
+        ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
+        if ck not in cap_norm_to_display:
+            cap_norm_to_display[ck] = (r.get("capitulo") or "")
+    caps_display_unique = list(cap_norm_to_display.values())
+
+    by_cap_item: Dict[Tuple[str, str], dict] = {}
+    for r in listado_rows:
+        ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
+        ik = _dash_norm_item_key_py(r.get("item_numero"))
+        if not ik:
+            continue
+        key = (ck, ik)
+        if key not in by_cap_item:
+            by_cap_item[key] = r
+
+    discrepancias: List[dict] = []
+
+    for fila_index, prow in enumerate(items):
+        cap_rec = prow.capitulo
+        item_rec = prow.item
+        cap_k = _dash_norm_capitulo_key_py(cap_rec)
+        item_k = _dash_norm_item_key_py(item_rec)
+
+        LP: Optional[dict] = by_cap_item.get((cap_k, item_k))
+        cap_sug_fuzzy = ""
+        item_sug_fuzzy = ""
+
+        if LP is None:
+            rows_cap = [r for r in listado_rows if _dash_norm_capitulo_key_py(r.get("capitulo")) == cap_k]
+            if rows_cap:
+                cap_sug_fuzzy = rows_cap[0].get("capitulo") or ""
+                for r in rows_cap:
+                    if _dash_norm_item_key_py(r.get("item_numero")) == item_k:
+                        LP = r
+                        break
+                if LP is None:
+                    cands_it = sorted(
+                        {str(r.get("item_numero") or "").strip() for r in rows_cap if str(r.get("item_numero") or "").strip()}
+                    )
+                    sug_it, _ = _text_similarity_best(item_rec or "", list(cands_it))
+                    item_sug_fuzzy = sug_it or ""
+                    if sug_it:
+                        for r in rows_cap:
+                            if _dash_norm_item_key_py(r.get("item_numero")) == _dash_norm_item_key_py(sug_it):
+                                LP = r
+                                break
+            else:
+                best_cap, _ = _text_similarity_best(cap_rec or "", caps_display_unique)
+                cap_sug_fuzzy = best_cap or ""
+                cap_k2 = _dash_norm_capitulo_key_py(cap_sug_fuzzy)
+                rows_sug = [r for r in listado_rows if _dash_norm_capitulo_key_py(r.get("capitulo")) == cap_k2]
+                if rows_sug:
+                    for r in rows_sug:
+                        if _dash_norm_item_key_py(r.get("item_numero")) == item_k:
+                            LP = r
+                            item_sug_fuzzy = r.get("item_numero") or ""
+                            break
+                    if LP is None:
+                        cands_it = sorted(
+                            {
+                                str(r.get("item_numero") or "").strip()
+                                for r in rows_sug
+                                if str(r.get("item_numero") or "").strip()
+                            }
+                        )
+                        sug_it, _ = _text_similarity_best(item_rec or "", list(cands_it))
+                        item_sug_fuzzy = sug_it or ""
+                        if sug_it:
+                            for r in rows_sug:
+                                if _dash_norm_item_key_py(r.get("item_numero")) == _dash_norm_item_key_py(sug_it):
+                                    LP = r
+                                    break
+
+        if LP is not None:
+            capitulo_sugerido = LP.get("capitulo") or ""
+            item_sugerido = LP.get("item_numero") or ""
+            descripcion_correcta = (LP.get("descripcion") or "").strip()
+            unidad_correcta = (LP.get("unidad") or "").strip()
+            try:
+                vlr_unitario_correcto = float(LP.get("precio_unitario") or 0)
+            except (TypeError, ValueError):
+                vlr_unitario_correcto = 0.0
+        else:
+            capitulo_sugerido = cap_sug_fuzzy or ""
+            item_sugerido = item_sug_fuzzy or ""
+            descripcion_correcta = ""
+            unidad_correcta = ""
+            vlr_unitario_correcto = 0.0
+
+        try:
+            vlr_unitario_recibido = float(prow.vlr_unitario) if prow.vlr_unitario is not None else 0.0
+        except (TypeError, ValueError):
+            vlr_unitario_recibido = 0.0
+
+        requiere_recalculo = False
+        if LP is not None and not _float_eq_presupuesto_import(vlr_unitario_recibido, vlr_unitario_correcto):
+            requiere_recalculo = True
+
+        if LP is None:
+            tiene_fila = True
+        else:
+            cap_ok = _dash_norm_capitulo_key_py(cap_rec) == _dash_norm_capitulo_key_py(LP.get("capitulo"))
+            item_ok = _dash_norm_item_key_py(item_rec) == _dash_norm_item_key_py(LP.get("item_numero"))
+            desc_ok = (prow.descripcion or "").strip() == (LP.get("descripcion") or "").strip()
+            und_ok = (prow.und or "").strip() == (LP.get("unidad") or "").strip()
+            vlr_ok = _float_eq_presupuesto_import(vlr_unitario_recibido, vlr_unitario_correcto)
+            tiene_fila = not (cap_ok and item_ok and desc_ok and und_ok and vlr_ok)
+
+        if not tiene_fila:
+            continue
+
+        discrepancias.append(
+            {
+                "fila_index": fila_index,
+                "capitulo_recibido": cap_rec or "",
+                "capitulo_sugerido": capitulo_sugerido,
+                "item_recibido": item_rec or "",
+                "item_sugerido": item_sugerido,
+                "descripcion_recibida": (prow.descripcion or "").strip(),
+                "descripcion_correcta": descripcion_correcta,
+                "unidad_recibida": (prow.und or "").strip(),
+                "unidad_correcta": unidad_correcta,
+                "vlr_unitario_recibido": vlr_unitario_recibido,
+                "vlr_unitario_correcto": float(vlr_unitario_correcto),
+                "requiere_recalculo": requiere_recalculo,
+            }
+        )
+
+    return {
+        "tiene_discrepancias": len(discrepancias) > 0,
+        "discrepancias": discrepancias,
+    }
 
 
 @app.get("/presupuesto/{contrato_id}/sincro-sicoe-cad-auditoria")

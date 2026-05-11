@@ -5,7 +5,8 @@ import mapboxgl from "mapbox-gl"
 import "mapbox-gl/dist/mapbox-gl.css"
 import * as XLSX from "xlsx"
 import ExcelJS from "exceljs"
-import { API_BASE } from '../../apiBase'
+import { API_BASE, SUPABASE_ANON_KEY, SUPABASE_URL } from '../../apiBase'
+import { supabase } from '../../supabaseClient'
 import { formatCOP, formatCOPShort } from '../../utils/formatCOP'
 import EmojiPicker from '../../EmojiPicker'
 import PptoFiltroObraVista from './PptoFiltroObraVista'
@@ -13,6 +14,25 @@ import PptoFiltroObraVista from './PptoFiltroObraVista'
 /** Tipografía alineada con Pequeña / Mediana / Grande (`applyClaraTypography` en `typographyScale.js`) */
 function getToken() {
   return localStorage.getItem("cc_token") || sessionStorage.getItem("cc_token")
+}
+
+/** Evento y puente global: SicoeCAD / WebView2 puede `dispatchEvent` o `window.__CLARACORE_PRESUPUESTO_SICOECAD_IMPORT__(detail)`. */
+export const CLARACORE_PRESUPUESTO_SICOECAD_IMPORT_EVENT = 'claracore:presupuesto-sicoe-cad-import'
+
+function aplicarCorreccionesDiscrepanciasSicoeCad(items, discrepancias) {
+  const out = items.map((row) => ({ ...row }))
+  for (const d of discrepancias || []) {
+    const i = d.fila_index
+    if (typeof i !== 'number' || i < 0 || i >= out.length) continue
+    const r = { ...out[i] }
+    if (d.capitulo_sugerido !== undefined && d.capitulo_sugerido !== null) r.capitulo = d.capitulo_sugerido
+    if (d.item_sugerido !== undefined && d.item_sugerido !== null) r.item = d.item_sugerido
+    if (d.descripcion_correcta !== undefined && d.descripcion_correcta !== null) r.descripcion = d.descripcion_correcta
+    if (d.unidad_correcta !== undefined && d.unidad_correcta !== null) r.und = d.unidad_correcta
+    if (d.vlr_unitario_correcto !== undefined && d.vlr_unitario_correcto !== null) r.vlr_unitario = d.vlr_unitario_correcto
+    out[i] = r
+  }
+  return out
 }
 
 /** Visibilidad y niveles de validación presupuesto (depuración / interventoría): permisos de «editar registros presupuesto», no Reporte de cantidades. */
@@ -177,8 +197,10 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [itemDropOpen, setItemDropOpen] = useState(false)
   const [itemNavIdx, setItemNavIdx] = useState(-1)
   const itemDropRef = useRef(null)
-  const [pagina, setPagina] = useState(1)
+  /** Cuántas filas de `registrosOrdenados` mostrar en la grilla (scroll infinito por bloques de 50). */
+  const [visibleRegistrosCount, setVisibleRegistrosCount] = useState(50)
   const POR_PAGINA = 50
+  const pptoTablaScrollRef = useRef(null)
   const [modalDetallePpto, setModalDetallePpto] = useState(null)
   const [modalDetallePptoEditable, setModalDetallePptoEditable] = useState(false)
   /** Trazabilidad por fila: entidad `presupuesto` en API /logs/entidad/presupuesto/{id} */
@@ -205,6 +227,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [ubicacionCalzada, setUbicacionCalzada] = useState('')
   const [opcionesUbicacion, setOpcionesUbicacion] = useState({ tramos: [], calzadas: [] })
   const debounceFetchPptoRef = useRef(null)
+  const recargarCapActualRef = useRef(null)
   /** Fase C: total con los mismos filtros que el listado (GET /conteo) */
   const [conteoFiltro, setConteoFiltro] = useState(null)
   const conteoFiltroRef = useRef(null)
@@ -243,6 +266,9 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [modalResumenValidacion, setModalResumenValidacion] = useState(false)
   /** SicoeCAD → API → ClaraCore (source=sicoe_cad), no el import CSV del navegador */
   const [sincroSicoeModal, setSincroSicoeModal] = useState(null) // { insertados, enviados?, ts }
+  /** Discrepancias listado_precios antes de POST /bulk (mismo payload que SicoeCAD). */
+  const [sicoeCadListadoModal, setSicoeCadListadoModal] = useState(null) // { discrepancias, itemsSnapshot, mode, sicoeEnviados }
+  const [sicoeCadImportBusy, setSicoeCadImportBusy] = useState(false)
   const [hiloLoading,         setHiloLoading]         = useState(false)
   /** Texto de respuesta por comentario raíz (evita un solo input compartido entre varias tarjetas). */
   const [respuestaHiloPorId,  setRespuestaHiloPorId]  = useState({})
@@ -535,8 +561,10 @@ useEffect(() => {
   /**
    * Carga el listado completo: 1 request de conteo + N páginas con concurrencia limitada (max 3).
    * Limitar a 3 simultáneos evita saturar el pool de conexiones de Supabase.
+   * @param {URLSearchParams} pQuery mismos params que el listado
+   * @param {(rows: object[]) => void} [onBatch] Tras cada tanda de hasta 3 peticiones en paralelo, filas acumuladas hasta el momento (misma orden que al finalizar).
    */
-  async function fetchPresupuestoPaginasCompletas(pQuery) {
+  async function fetchPresupuestoPaginasCompletas(pQuery, onBatch) {
     const h = { Authorization: `Bearer ${token}` }
     const qC = new URLSearchParams(pQuery.toString()).toString()
     const resC = await fetch(`${API}/presupuesto/${contratoId}/conteo${qC ? `?${qC}` : ''}`, { headers: h })
@@ -567,6 +595,9 @@ useEffect(() => {
       const batch = offsets.slice(i, i + CONCURRENCY)
       const batchPages = await Promise.all(batch.map(fetchPage))
       allRows.push(...batchPages.flat())
+      if (typeof onBatch === 'function') {
+        onBatch(allRows.slice())
+      }
     }
     return { rows: allRows, total: totalN }
   }
@@ -579,7 +610,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (!forzar && cached && cached.papelera === esPapelera &&
         (Date.now() - cached.ts) < PPTO_CACHE_TTL) {
       setRegistros(cached.data)
-      setPagina(1)
+      setVisibleRegistrosCount(50)
       return
     }
     setLoading(true)
@@ -593,7 +624,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       setRegistros(data)
     }
     setLoading(false)
-    setPagina(1)
+    setVisibleRegistrosCount(50)
   }
 
   // ── Carga lazy por capítulo ────────────────────────────────────────────────
@@ -648,7 +679,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       setLoading(true)
     }
     try {
-      const { rows, total } = await fetchPresupuestoPaginasCompletas(p)
+      const { rows, total } = await fetchPresupuestoPaginasCompletas(p, (partial) => {
+        if (cargaId !== cargaPptoIdRef.current) return
+        setRegistros(partial)
+      })
       if (cargaId !== cargaPptoIdRef.current) return
       setConteoFiltro(total)
       setRegistros(rows)
@@ -696,7 +730,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     try {
       const p0 = armarQueryPresupuestoServer()
-      const { rows, total } = await fetchPresupuestoPaginasCompletas(p0)
+      const { rows, total } = await fetchPresupuestoPaginasCompletas(p0, (partial) => {
+        if (cargaId !== cargaPptoIdRef.current) return
+        setRegistros(partial)
+      })
       if (cargaId !== cargaPptoIdRef.current) return
       setConteoFiltro(total)
       setRegistros(rows)
@@ -798,10 +835,141 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     await cargarCapitulos()
   }
+  recargarCapActualRef.current = recargarCapActual
+
+  const ejecutarBulkPresupuestoSicoeCadDirecto = useCallback(async (items, { mode = 'append', sicoeEnviados } = {}) => {
+    const tok = getToken()
+    if (!tok || !contratoId) throw new Error('Sin sesión o contrato.')
+    const modeQ = encodeURIComponent(mode || 'append')
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${tok}`,
+    }
+    if (sicoeEnviados != null && Number.isFinite(Number(sicoeEnviados))) {
+      headers['X-SicoeCAD-Enviados'] = String(Math.floor(Number(sicoeEnviados)))
+    }
+    const res = await fetch(`${API}/presupuesto/${contratoId}/bulk?mode=${modeQ}&source=sicoe_cad`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(items),
+    })
+    if (!res.ok) {
+      let msg = `Error ${res.status}`
+      try {
+        const err = await res.json()
+        if (err.detail) msg = typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail)
+      } catch { /* ignore */ }
+      throw new Error(msg)
+    }
+    return res.json()
+  }, [API, contratoId])
+
+  const solicitarImportPresupuestoSicoeCadConValidacion = useCallback(async ({ items, mode = 'append', sicoeEnviados } = {}) => {
+    const tok = getToken()
+    if (!tok || !contratoId) {
+      alert('Sin sesión o contrato.')
+      return
+    }
+    if (!Array.isArray(items) || items.length === 0) return
+    setSicoeCadImportBusy(true)
+    try {
+      const valRes = await fetch(`${API}/presupuesto/${contratoId}/bulk-validar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+        body: JSON.stringify(items),
+      })
+      if (!valRes.ok) {
+        let msg = `La validación falló (${valRes.status}).`
+        try {
+          const err = await valRes.json()
+          if (err.detail) msg = typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail)
+        } catch { /* ignore */ }
+        alert(msg)
+        return
+      }
+      const valJson = await valRes.json()
+      if (!valJson.tiene_discrepancias) {
+        await ejecutarBulkPresupuestoSicoeCadDirecto(items, { mode, sicoeEnviados })
+        await recargarCapActualRef.current?.(true)
+      } else {
+        setSicoeCadListadoModal({
+          discrepancias: Array.isArray(valJson.discrepancias) ? valJson.discrepancias : [],
+          itemsSnapshot: JSON.parse(JSON.stringify(items)),
+          mode,
+          sicoeEnviados,
+        })
+      }
+    } catch (e) {
+      alert(e?.message || 'No se pudo completar la importación.')
+    } finally {
+      setSicoeCadImportBusy(false)
+    }
+  }, [API, contratoId, ejecutarBulkPresupuestoSicoeCadDirecto])
+
+  useEffect(() => {
+    if (!contratoId) return undefined
+    const bridge = (detail) => {
+      window.dispatchEvent(new CustomEvent(CLARACORE_PRESUPUESTO_SICOECAD_IMPORT_EVENT, { detail: detail || {} }))
+    }
+    const onCustom = (ev) => {
+      const d = ev.detail || {}
+      if (d.contratoId != null && Number(d.contratoId) !== Number(contratoId)) return
+      if (!Array.isArray(d.items) || d.items.length === 0) return
+      void solicitarImportPresupuestoSicoeCadConValidacion({
+        items: d.items,
+        mode: d.mode || 'append',
+        sicoeEnviados: d.sicoeEnviados,
+      })
+    }
+    const onMsg = (event) => {
+      const d = event.data
+      if (!d || d.type !== 'claracore-presupuesto-sicoe-cad-import') return
+      if (event.origin && event.origin !== 'null' && event.origin !== window.location.origin) return
+      if (d.contratoId != null && Number(d.contratoId) !== Number(contratoId)) return
+      if (!Array.isArray(d.items) || d.items.length === 0) return
+      void solicitarImportPresupuestoSicoeCadConValidacion({
+        items: d.items,
+        mode: d.mode || 'append',
+        sicoeEnviados: d.sicoeEnviados,
+      })
+    }
+    window.addEventListener(CLARACORE_PRESUPUESTO_SICOECAD_IMPORT_EVENT, onCustom)
+    window.addEventListener('message', onMsg)
+    window.__CLARACORE_PRESUPUESTO_SICOECAD_IMPORT__ = bridge
+    return () => {
+      window.removeEventListener(CLARACORE_PRESUPUESTO_SICOECAD_IMPORT_EVENT, onCustom)
+      window.removeEventListener('message', onMsg)
+      if (window.__CLARACORE_PRESUPUESTO_SICOECAD_IMPORT__ === bridge) {
+        try {
+          delete window.__CLARACORE_PRESUPUESTO_SICOECAD_IMPORT__
+        } catch { /* ignore */ }
+      }
+    }
+  }, [contratoId, solicitarImportPresupuestoSicoeCadConValidacion])
 
   useEffect(() => {
     if (sincroSicoeModal) recargarCapActual(true)
   }, [sincroSicoeModal?.ts])
+
+  useEffect(() => {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contratoId) return
+    const cid = String(contratoId)
+    const filt = `contrato_id=eq.${cid}`
+    const onChange = () => {
+      void recargarCapActualRef.current?.(false)
+    }
+    const channel = supabase
+      .channel(`presupuesto-${cid}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'presupuesto', filter: filt },
+        onChange,
+      )
+      .subscribe()
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [contratoId])
 
   // Multisesión: refresco con pestaña activa. Intervalos cortos disparan conteo + N× presupuesto?limit=1000 y saturan el API.
   useEffect(() => {
@@ -903,11 +1071,14 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (f.idPol && String(f.idPol).trim()) p.set('id_pol', f.idPol.trim())
       if (f.pkCriterio && String(f.pkCriterio).trim()) p.set('pk_criterio', f.pkCriterio.trim())
       if (f.texto && String(f.texto).trim()) p.set('texto', f.texto.trim())
-      const { rows, total } = await fetchPresupuestoPaginasCompletas(p)
+      const { rows, total } = await fetchPresupuestoPaginasCompletas(p, (partial) => {
+        if (cargaId !== cargaPptoIdRef.current) return
+        setRegistros(partial)
+      })
       if (cargaId !== cargaPptoIdRef.current) return
       setConteoFiltro(total)
       setRegistros(rows)
-      setPagina(1)
+      setVisibleRegistrosCount(50)
       _pptoCachePorCap.current = {}
       const capD = f.cap
       const itemKey = itemsLista.length > 1 ? itemsLista.join('\x1f') : (itemsLista[0] || '')
@@ -958,7 +1129,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setDrill([])
     setUbicacionTramo(''); setUbicacionCalzada(''); setFiltroEstado(''); setBusquedaTipo(''); setBusquedaV1(''); setBusquedaV2(''); setConteoFiltro(null)
     setRegistros([]); setCapExpandido(null); setItemsResumen([]); setCapActivo(null); setPkidsSeleccionados([])
-    setPagina(1)
+    setVisibleRegistrosCount(50)
     setSeleccionados(new Set())
     setItemBusqueda(''); setItemNavIdx(-1)
     setOpcionesUbicacion({ tramos: [], calzadas: [] })
@@ -1321,7 +1492,6 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     return registrosFiltrados.reduce((s, r) => s + (r.costo_directo ?? 0), 0)
   }, [registrosFiltrados, drill, primerNivel, capitulosResumen])
 
-  const totalPaginas = Math.ceil(registrosFiltrados.length / POR_PAGINA)
   const registrosOrdenados = useMemo(() =>
     [...registrosFiltrados].sort((a, b) => {
       const va = String(a.id_pol || a.pk_id || '')
@@ -1329,13 +1499,31 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       return vb.localeCompare(va, 'es', { numeric: true })
     })
   , [registrosFiltrados])
-  const registrosPagina = useMemo(() =>
-    registrosOrdenados.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA)
-  , [registrosOrdenados, pagina])
+  const registrosPagina = useMemo(() => {
+    const n = registrosOrdenados.length
+    const take = Math.min(visibleRegistrosCount, n)
+    return registrosOrdenados.slice(0, take)
+  }, [registrosOrdenados, visibleRegistrosCount])
   const idsPaginaNoSellados = useMemo(
     () => registrosPagina.filter(r => !esSellado(r)).map(r => r.id),
     [registrosPagina]
   )
+
+  const hayMasRegistrosVista = visibleRegistrosCount < registrosOrdenados.length
+
+  const handleCargarMasRegistrosVista = () => {
+    const el = pptoTablaScrollRef.current
+    const prevH = el?.scrollHeight ?? 0
+    const prevT = el?.scrollTop ?? 0
+    setVisibleRegistrosCount((c) => Math.min(c + POR_PAGINA, registrosOrdenados.length))
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const wrap = pptoTablaScrollRef.current
+        if (!wrap) return
+        wrap.scrollTop = prevT + (wrap.scrollHeight - prevH)
+      })
+    })
+  }
 
   /** Resumen de validación alineado con la grilla visible (registros filtrados). */
   const resumenValidacionVista = useMemo(() => {
@@ -1748,11 +1936,13 @@ async function ejecutarBulkEstadoDirecto(estado) {
       setSeleccionados(prev => { const n = new Set(prev); idsNoSellados.forEach(i => n.add(i)); return n })
     }
   }
-  useEffect(() => setPagina(1), [registrosFiltrados.length])
+  useEffect(() => {
+    setVisibleRegistrosCount(Math.min(50, registrosFiltrados.length))
+  }, [registrosFiltrados.length])
   useEffect(() => {
     const ids = registrosPagina?.map(r => r.id)
     if (ids?.length) cargarComentariosResumen(ids)
-  }, [pagina, registrosFiltrados.length])
+  }, [visibleRegistrosCount, registrosFiltrados.length])
 
   // Comentarios de validación del capítulo al elegir tramo (una petición, sin lista de miles de IDs)
   useEffect(() => {
@@ -2054,15 +2244,15 @@ async function restaurar(id) {
                     onClick={() => { void refrescarDatosRevisorTramosModal() }}
                     title="Vuelve a cargar los registros del capítulo desde el servidor (mantiene tramo y pestaña)"
                     style={{
-                      background:'rgba(148,163,184,0.15)',
-                      border:`1px solid ${t.border}`,
-                      color:t.text,
-                      borderRadius:'8px',
-                      padding:'5px 12px',
-                      fontSize:'var(--cc-sm)',
-                      fontWeight:'700',
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#94a3b8',
+                      borderRadius: '6px',
+                      padding: '3px 8px',
+                      fontSize: '11px',
+                      fontWeight: 500,
                       cursor: refrescandoRevisorTramos ? 'wait' : 'pointer',
-                      opacity: refrescandoRevisorTramos ? 0.7 : 1,
+                      opacity: refrescandoRevisorTramos ? 0.55 : 0.92,
                     }}
                   >
                     {refrescandoRevisorTramos ? '…' : '⟳ Actualizar'}
@@ -3342,6 +3532,163 @@ async function restaurar(id) {
         )
       })()}
 
+      {/* ── SicoeCAD: discrepancias con listado_precios antes de POST /bulk ── */}
+      {sicoeCadListadoModal && (() => {
+        const m = sicoeCadListadoModal
+        const totalItems = m.itemsSnapshot?.length ?? 0
+        const disc = m.discrepancias || []
+        const nDisc = disc.length
+        const th = {
+          padding: '10px 8px',
+          textAlign: 'left',
+          fontSize: 'var(--cc-caption)',
+          fontWeight: 700,
+          color: t.textMuted,
+          borderBottom: `1.5px solid ${t.border}`,
+          background: t.bg,
+          position: 'sticky',
+          top: 0,
+          zIndex: 1,
+        }
+        const tdBase = {
+          padding: '8px',
+          fontSize: 'var(--cc-sm)',
+          color: t.text,
+          verticalAlign: 'top',
+          borderBottom: `1px solid ${t.border}`,
+          lineHeight: 1.45,
+        }
+        const cerrar = () => { if (!sicoeCadImportBusy) setSicoeCadListadoModal(null) }
+        const confirmarCorregido = async () => {
+          if (sicoeCadImportBusy) return
+          setSicoeCadImportBusy(true)
+          try {
+            const fixed = aplicarCorreccionesDiscrepanciasSicoeCad(m.itemsSnapshot, m.discrepancias)
+            await ejecutarBulkPresupuestoSicoeCadDirecto(fixed, { mode: m.mode, sicoeEnviados: m.sicoeEnviados })
+            setSicoeCadListadoModal(null)
+            await recargarCapActualRef.current?.(true)
+          } catch (e) {
+            alert(e?.message || 'No se pudo importar con los valores corregidos.')
+          } finally {
+            setSicoeCadImportBusy(false)
+          }
+        }
+        return (
+          <div
+            style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.68)', zIndex: 4150, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sicoe-listado-discrep-titulo"
+          >
+            <div
+              style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 16, padding: 26, width: 960, maxWidth: '96vw', maxHeight: '92vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.45)' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, marginBottom: 12 }}>
+                <span style={{ fontSize: 'var(--cc-h2)', lineHeight: 1 }} aria-hidden>⚠️</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div id="sicoe-listado-discrep-titulo" style={{ fontSize: 'var(--cc-md)', fontWeight: 800, color: t.text, lineHeight: 1.3 }}>
+                    Se encontraron discrepancias con el listado de precios
+                  </div>
+                  <div style={{ fontSize: 'var(--cc-label)', color: t.textMuted, marginTop: 8 }}>
+                    Se encontraron <strong style={{ color: t.text }}>{nDisc.toLocaleString('es-CO')}</strong> discrepancia{nDisc !== 1 ? 's' : ''} en{' '}
+                    <strong style={{ color: t.text }}>{totalItems.toLocaleString('es-CO')}</strong> ítem{totalItems !== 1 ? 's' : ''} importado{totalItems !== 1 ? 's' : ''}.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={cerrar}
+                  disabled={sicoeCadImportBusy}
+                  style={{ background: 'transparent', border: 'none', fontSize: 'var(--cc-lg)', cursor: sicoeCadImportBusy ? 'wait' : 'pointer', color: t.textMuted, flexShrink: 0 }}
+                  aria-label="Cerrar"
+                >
+                  ✕
+                </button>
+              </div>
+              <div style={{ flex: 1, minHeight: 0, overflow: 'auto', marginBottom: 16, border: `1px solid ${t.border}`, borderRadius: 10, background: t.bg }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Ítem recibido → Ítem sugerido</th>
+                      <th style={th}>Capítulo</th>
+                      <th style={th}>Descripción correcta</th>
+                      <th style={th}>Unidad correcta</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Valor unitario recibido → Valor correcto</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {disc.map((d, idx) => {
+                      const recalc = !!d.requiere_recalculo
+                      const rowBg = recalc ? 'rgba(254, 226, 226, 0.65)' : 'transparent'
+                      const vlrStyle = recalc ? { color: '#B91C1C', fontWeight: 800 } : { color: t.text }
+                      const capTxt =
+                        d.capitulo_recibido === d.capitulo_sugerido || !d.capitulo_sugerido
+                          ? (d.capitulo_recibido || '—')
+                          : `${d.capitulo_recibido || '—'} → ${d.capitulo_sugerido || '—'}`
+                      return (
+                        <tr key={`${d.fila_index}-${idx}`} style={{ background: rowBg }}>
+                          <td style={tdBase}>
+                            <span style={{ fontWeight: 600 }}>{d.item_recibido || '—'}</span>
+                            {d.item_sugerido != null && d.item_sugerido !== '' && d.item_recibido !== d.item_sugerido && (
+                              <span style={{ color: t.textMuted }}>
+                                {' '}
+                                → <span style={{ color: t.primary, fontWeight: 700 }}>{d.item_sugerido}</span>
+                              </span>
+                            )}
+                          </td>
+                          <td style={tdBase}>{capTxt}</td>
+                          <td style={{ ...tdBase, maxWidth: 220 }}>{d.descripcion_correcta != null && d.descripcion_correcta !== '' ? d.descripcion_correcta : '—'}</td>
+                          <td style={tdBase}>{d.unidad_correcta != null && d.unidad_correcta !== '' ? d.unidad_correcta : '—'}</td>
+                          <td style={{ ...tdBase, textAlign: 'right', whiteSpace: 'nowrap', ...vlrStyle }}>
+                            {fmtN(d.vlr_unitario_recibido)} → {fmtN(d.vlr_unitario_correcto)}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexShrink: 0 }}>
+                <button
+                  type="button"
+                  onClick={cerrar}
+                  disabled={sicoeCadImportBusy}
+                  style={{
+                    background: 'transparent',
+                    border: `1px solid ${t.border}`,
+                    borderRadius: 8,
+                    padding: '9px 18px',
+                    fontSize: 'var(--cc-label)',
+                    color: t.textMuted,
+                    cursor: sicoeCadImportBusy ? 'wait' : 'pointer',
+                  }}
+                >
+                  Cancelar importación
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void confirmarCorregido()}
+                  disabled={sicoeCadImportBusy}
+                  style={{
+                    background: sicoeCadImportBusy ? '#94a3b8' : t.primary,
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 8,
+                    padding: '9px 22px',
+                    fontSize: 'var(--cc-label)',
+                    fontWeight: 700,
+                    cursor: sicoeCadImportBusy ? 'wait' : 'pointer',
+                    opacity: sicoeCadImportBusy ? 0.85 : 1,
+                  }}
+                >
+                  {sicoeCadImportBusy ? 'Importando…' : 'Importar con valores correctos'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
       {!verPapelera && (
         <PptoFiltroObraVista
           t={t}
@@ -3371,15 +3718,6 @@ async function restaurar(id) {
                   ? `${capitulosResumen.length} capítulos`
                   : `${conteoFiltro != null ? conteoFiltro.toLocaleString('es-CO') : registros.length} en contrato · ${registrosFiltrados.length} filtrados (vista)`} · {seleccionados.size} seleccionados
               </span>
-              {totalPaginas > 1 && (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                  <button type="button" onClick={() => setPagina(p => Math.max(1, p - 1))} disabled={pagina === 1}
-                    style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '4px', padding: '2px 8px', cursor: pagina === 1 ? 'default' : 'pointer', color: pagina === 1 ? t.textMuted : t.text }}>‹</button>
-                  <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>Pág. {pagina} / {totalPaginas}</span>
-                  <button type="button" onClick={() => setPagina(p => Math.min(totalPaginas, p + 1))} disabled={pagina === totalPaginas}
-                    style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '4px', padding: '2px 8px', cursor: pagina === totalPaginas ? 'default' : 'pointer', color: pagina === totalPaginas ? t.textMuted : t.text }}>›</button>
-                </span>
-              )}
             </>
           )}
           onActualizar={() => recargarCapActual(drill.length === 0)}
@@ -3729,7 +4067,7 @@ async function restaurar(id) {
       </div>
       {/* ── Tabla ── */}
       {(drill.length > 0 || busquedaTipo || filtroEstado || pkidsSeleccionados.length > 0 || !!ubicacionTramo || !!ubicacionCalzada || criterioVistaActivo(fObra)) && registrosFiltrados.length > 0 && (
-        <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',boxShadow:t.shadow }}>
+        <div ref={pptoTablaScrollRef} style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'12px',overflow:'auto',boxShadow:t.shadow }}>
           <table style={{ width:'100%',borderCollapse:'collapse',fontSize:'var(--cc-sm)' }}>
             <thead style={{ background:t.bg }}>
               <tr>
@@ -3989,6 +4327,26 @@ async function restaurar(id) {
               })}
             </tbody>
           </table>
+          {hayMasRegistrosVista && (
+            <div style={{ padding: '12px 16px', textAlign: 'center', borderTop: `1px solid ${t.border}` }}>
+              <button
+                type="button"
+                onClick={handleCargarMasRegistrosVista}
+                style={{
+                  background: 'transparent',
+                  border: `1px solid ${t.border}`,
+                  borderRadius: '8px',
+                  padding: '8px 18px',
+                  fontSize: 'var(--cc-sm)',
+                  fontWeight: 600,
+                  color: t.textMuted,
+                  cursor: 'pointer',
+                }}
+              >
+                Cargar 50 registros más
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

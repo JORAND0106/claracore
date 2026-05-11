@@ -3519,7 +3519,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               disabled={recargando}
               onClick={() => { void recargar() }}
               title="Vuelve a cargar desde el servidor. Si abriste el reporte con filtros de búsqueda, se mantienen y solo se actualizan las líneas que cumplen esos criterios."
-              style={{ background:'rgba(255,255,255,0.22)', border:'1px solid rgba(255,255,255,0.35)', color:'#fff', borderRadius:'8px', padding:'6px 12px', fontSize:'var(--cc-sm)', fontWeight:'800', cursor: recargando ? 'wait' : 'pointer', whiteSpace:'nowrap', opacity: recargando ? 0.7 : 1 }}
+              style={{ background: 'transparent', border: 'none', color: 'rgba(226,232,240,0.55)', borderRadius: '6px', padding: '3px 8px', fontSize: '11px', fontWeight: 500, cursor: recargando ? 'wait' : 'pointer', whiteSpace:'nowrap', opacity: recargando ? 0.5 : 0.95 }}
             >{recargando ? '⏳ Cargando...' : '⟳ Actualizar'}</button>
             <button onClick={onClose} style={{ background:'rgba(255,255,255,0.2)', border:'none', color:'#fff', borderRadius:'50%', width:'34px', height:'34px', fontSize:'var(--cc-lg)', cursor:'pointer', fontWeight:'900', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
           </div>
@@ -7007,15 +7007,15 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
               disabled={cargando || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)}
               title="Vuelve a cargar grilla y panel desde el servidor sin cambiar los filtros actuales"
               style={{
-                background:'transparent',
-                border:`1px solid ${t.border}`,
-                color:t.textMuted,
-                borderRadius:'6px',
-                padding:'4px 12px',
-                fontSize:'var(--cc-label)',
-                fontWeight:'700',
+                background: 'transparent',
+                border: 'none',
+                color: '#94a3b8',
+                borderRadius: '6px',
+                padding: '3px 8px',
+                fontSize: '11px',
+                fontWeight: 500,
                 cursor:(cargando || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) ? 'wait' : 'pointer',
-                opacity:(cargando || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) ? 0.55 : 1,
+                opacity:(cargando || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) ? 0.5 : 0.92,
                 whiteSpace:'nowrap',
               }}
             >
