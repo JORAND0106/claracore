@@ -4997,6 +4997,9 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     return qs ? `${base}?${qs}` : base
   }
 
+  const urlReporteDetalleRef = useRef(urlReporteDetalle)
+  urlReporteDetalleRef.current = urlReporteDetalle
+
   const buscarReportes = async (nuevosFiltros, nuevoOffset = 0, capas = [], capasOpParam) => {
     const capasOpEff = capasOpParam ?? capasValidacionOpRef.current
     if (!tieneParametrosBusquedaSicoe(nuevosFiltros, capas)) {
@@ -5400,6 +5403,13 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   const itemsFiltroOpRef = useRef('and')
   itemsFiltroOpRef.current = itemsFiltroOp
 
+  /** Reporte cuya carpeta está abierta o navegación profunda: refrescar detalle tras Realtime. */
+  const sicoeRealtimeReporteDetalleIdRef = useRef(null)
+  sicoeRealtimeReporteDetalleIdRef.current =
+    navReporteId || (modalCarpeta && reporteSeleccionado?.id)
+      ? (navReporteId || reporteSeleccionado?.id)
+      : null
+
   const SICOE_MASIVO_MAX_UI = 500
 
   const armarPayloadFiltrosRegistrosMasivo = () => {
@@ -5544,6 +5554,51 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
 
   buscarReportesSicoeRef.current = buscarReportes
   cargarAnalisisSicoeRef.current = cargarAnalisis
+
+  useEffect(() => {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contrato_id) return
+    const cid = String(contrato_id)
+    const filt = `contrato_id=eq.${cid}`
+    const onDbChange = () => {
+      const f = filtrosSicoeRef.current
+      const cap = capasSicoeRef.current
+      void Promise.all([
+        buscarReportesSicoeRef.current?.(f, 0, cap),
+        cargarAnalisisSicoeRef.current?.(f, cap),
+      ]).catch(() => {})
+      const rid = sicoeRealtimeReporteDetalleIdRef.current
+      if (!rid) return
+      const u = urlReporteDetalleRef.current?.(rid) ?? `${API_URL}/sicoe-obra/${cid}/reportes/${rid}`
+      fetch(u, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      })
+        .then((r) => r.json())
+        .then((data) => {
+          if (!data?.id) return
+          setReporteSeleccionado((prev) =>
+            prev?.id === rid ? { ...prev, ...data, _cargandoDetalle: false } : prev,
+          )
+        })
+        .catch(() => {})
+    }
+    const channel = supabase
+      .channel(`sicoe-obra-${cid}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'so_registros', filter: filt },
+        onDbChange,
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'so_reportes', filter: filt },
+        onDbChange,
+      )
+      .subscribe()
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [contrato_id])
+
   sicoeMapFiltroApplyPkRef.current = (pkIdInt) => {
     setModalPkAsignacionMapa({ pk_id_id: pkIdInt })
     setPkMapaInspectorId('')
