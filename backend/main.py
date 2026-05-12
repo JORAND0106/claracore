@@ -1263,6 +1263,56 @@ def _cargo_permiso_editar_reporte_cantidades_user_id(user_id: int) -> bool:
     return False
 
 
+def _cargo_permiso_eliminar_reporte_cantidades_user_id(user_id: int) -> bool:
+    """Matriz: función «reporte de cantidades» con acción eliminar (SICOE obra)."""
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    try:
+        urows = supabase.table("usuarios").select("cargo_id").eq("id", uid).limit(1).execute().data
+        u = urows[0] if urows else None
+        if not u or u.get("cargo_id") is None:
+            return False
+        cid = int(u["cargo_id"])
+    except (TypeError, ValueError, KeyError):
+        return False
+    try:
+        perms = supabase_execute(
+            lambda: supabase.table("permisos")
+            .select("funcion_id, eliminar")
+            .eq("cargo_id", cid)
+            .execute()
+            .data
+        ) or []
+        fids = [p["funcion_id"] for p in perms if p.get("eliminar")]
+        if not fids:
+            return False
+        funcs = supabase_execute(
+            lambda: supabase.table("funciones").select("id, nombre").in_("id", fids).execute().data
+        ) or []
+        want = "reporte de cantidades"
+        for f in funcs:
+            if (f.get("nombre") or "").strip().lower() == want:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _cargo_permiso_eliminar_reporte_cantidades(current_user) -> bool:
+    try:
+        uid = int(current_user.get("sub"))
+    except (TypeError, ValueError):
+        return False
+    return _cargo_permiso_eliminar_reporte_cantidades_user_id(uid)
+
+
+def _puede_eliminar_reporte_cantidades(current_user) -> bool:
+    """Desarrollador o matriz «Reporte de cantidades» → eliminar."""
+    return _es_desarrollador(current_user) or _cargo_permiso_eliminar_reporte_cantidades(current_user)
+
+
 def _puede_editar_dimensiones_presupuesto(current_user) -> bool:
     return _es_desarrollador(current_user) or _cargo_permiso_editar_registros_presupuesto(current_user)
 
@@ -10405,6 +10455,11 @@ def obtener_reporte(
 
 @app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}")
 def eliminar_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
+    if not _puede_eliminar_reporte_cantidades(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permiso para eliminar reportes de cantidades (matriz de accesos: «Reporte de Cantidades» → eliminar, o cargo Desarrollador).",
+        )
     def _del():
         return supabase.table("so_reportes").delete()\
             .eq("id", reporte_id).eq("contrato_id", contrato_id)\
@@ -12064,6 +12119,11 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
 
 @app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/registros")
 def eliminar_registros_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
+    if not _puede_eliminar_reporte_cantidades(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permiso para eliminar registros del reporte (matriz de accesos: «Reporte de Cantidades» → eliminar, o cargo Desarrollador).",
+        )
     def _list():
         return supabase.table("so_registros").select("id").eq("reporte_id", reporte_id).eq("contrato_id", contrato_id).execute().data
 
@@ -12223,9 +12283,12 @@ def reemplazar_registros_nuevo_reporte(
 
 @app.delete("/sicoe-obra/{contrato_id}/registros/{registro_id}/dev")
 def dev_eliminar_registro(contrato_id: int, registro_id: int, current_user=Depends(get_current_user)):
-    """Solo Desarrollador: elimina un registro y sus comentarios (uso de soporte/desarrollo)."""
-    if not _es_desarrollador(current_user):
-        raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede usar esta acción.")
+    """Elimina un registro y sus comentarios (Desarrollador o permiso «eliminar» en Reporte de cantidades)."""
+    if not _puede_eliminar_reporte_cantidades(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permiso para eliminar registros (matriz de accesos: «Reporte de Cantidades» → eliminar, o cargo Desarrollador).",
+        )
 
     def _get():
         return supabase.table("so_registros").select("*").eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
@@ -12263,9 +12326,12 @@ def dev_eliminar_registro(contrato_id: int, registro_id: int, current_user=Depen
 
 @app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/dev")
 def dev_eliminar_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
-    """Solo Desarrollador: elimina reporte, registros, comentarios y puntos topográficos (uso de soporte/desarrollo)."""
-    if not _es_desarrollador(current_user):
-        raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede usar esta acción.")
+    """Elimina reporte, registros, comentarios y puntos topográficos (Desarrollador o permiso eliminar en Reporte de cantidades)."""
+    if not _puede_eliminar_reporte_cantidades(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permiso para eliminar el reporte completo (matriz de accesos: «Reporte de Cantidades» → eliminar, o cargo Desarrollador).",
+        )
 
     def _get_rep():
         return supabase.table("so_reportes").select("*").eq("id", reporte_id).eq("contrato_id", contrato_id).limit(1).execute().data
@@ -12372,6 +12438,14 @@ class PuntosCreate(BaseModel):
 
 @app.delete("/sicoe-obra/{contrato_id}/reportes/{reporte_id}/puntos-topograficos")
 def eliminar_puntos_reporte(contrato_id: int, reporte_id: int, current_user=Depends(get_current_user)):
+    uid = int(current_user.get("sub") or current_user.get("id", 0))
+    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_reporte_cantidades_user_id(
+        uid
+    ) and not _cargo_permiso_eliminar_reporte_cantidades_user_id(uid):
+        raise HTTPException(
+            status_code=403,
+            detail="No tiene permiso para modificar o vaciar la topografía del reporte.",
+        )
     def _del():
         return supabase.table("so_puntos_topograficos").delete()\
             .eq("reporte_id", reporte_id).eq("contrato_id", contrato_id).execute().data

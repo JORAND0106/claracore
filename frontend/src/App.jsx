@@ -1431,7 +1431,7 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
 // ─── HOJA REGISTRO ────────────────────────────────────────────────────────────
 function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, seleccionado, onToggleSeleccion, onItemAsignado, hdrs, actasList = [],
   mostrarSeleccionValidacion = false, seleccionadoValidacion = false, onToggleSeleccionValidacion,
-  esDeveloper = false, onDevEliminarRegistro = null, devEliminando = false, onOptimisticValidacion = null }) {
+  esDeveloper = false, puedeEliminarRegistroReporte = false, onDevEliminarRegistro = null, devEliminando = false, onOptimisticValidacion = null }) {
   const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
   const isOnline = !efectivoOffline
   const [competencia,    setCompetencia]    = useState(registro.competencia    || '')
@@ -1963,14 +1963,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
           </div>
           <div style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'var(--cc-label)', color:t.textMuted }}>
             {(() => { try { const ts=registro.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()}
-            {esDeveloper && typeof onDevEliminarRegistro === 'function' && (
+            {puedeEliminarRegistroReporte && typeof onDevEliminarRegistro === 'function' && (
               <button type="button" disabled={devEliminando} onClick={() => onDevEliminarRegistro(registro.id)}
-                title="Solo desarrollador: elimina este registro en base de datos"
+                title="Eliminar este registro de la base de datos (requiere permiso «Reporte de Cantidades» → eliminar, o Desarrollador)"
                 style={{
                   background:'transparent', border:'1px solid #F87171', color:'#F87171', borderRadius:'6px',
                   padding:'2px 8px', fontSize:'var(--cc-caption)', fontWeight:'700', cursor: devEliminando ? 'not-allowed' : 'pointer', opacity: devEliminando ? 0.5 : 1,
                 }}>
-                🗑️ Dev
+                🗑️ Eliminar registro
               </button>
             )}
           </div>
@@ -2946,6 +2946,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const puedeEditar = perm?.editar
   const puedeEditarCabecera = !!(perm?.editar || perm?.crear)
   const esDeveloper = (usuario?.cargo_nombre || '').toLowerCase() === 'desarrollador'
+  const puedeEliminarReporteCantidades = esUsuarioDesarrollador(usuario) || !!(perm?.eliminar)
   const hdrs        = { Authorization: `Bearer ${getToken()}`, 'Content-Type': 'application/json' }
   const nivelInfo   = determinarNivelValidacion(usuario)
 
@@ -3102,7 +3103,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const devEliminarRegistro = async (registroId) => {
     const reg = registros.find(r => r.id === registroId)
     const num = reg?.numero_registro ?? registroId
-    if (!window.confirm(`[DEV] ¿Eliminar permanentemente el registro #${num}? Esta acción no se puede deshacer.`)) return
+    if (!window.confirm(`¿Eliminar permanentemente el registro #${num}? Esta acción no se puede deshacer.`)) return
     setDevEliminando(true)
     try {
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/${registroId}/dev`, { method: 'DELETE', headers: hdrs })
@@ -3119,7 +3120,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   }
 
   const devEliminarReporteCompleto = async () => {
-    if (!window.confirm(`[DEV] ¿Eliminar permanentemente el reporte #${reporte.numero_reporte} y TODOS sus registros, puntos topográficos y comentarios? No se puede deshacer.`)) return
+    if (!window.confirm(`¿Eliminar permanentemente el reporte #${reporte.numero_reporte} y TODOS sus registros, puntos topográficos y comentarios? No se puede deshacer.`)) return
     setDevEliminando(true)
     try {
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${reporte.id}/dev`, { method: 'DELETE', headers: hdrs })
@@ -3503,15 +3504,15 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             </div>
           </div>
           <div style={{ display:'flex', alignItems:'center', gap:'8px', flexShrink:0 }}>
-            {esDeveloper && (
+            {puedeEliminarReporteCantidades && (
               <button type="button" disabled={devEliminando} onClick={devEliminarReporteCompleto}
-                title="Solo cargo Desarrollador: borra el reporte completo en base de datos"
+                title="Elimina el reporte completo en base de datos (requiere permiso «Reporte de Cantidades» → eliminar, o Desarrollador)"
                 style={{
                   background:'#B91C1C', color:'#fff', border:'none', borderRadius:'8px', padding:'6px 12px',
                   fontSize:'var(--cc-label)', fontWeight:'700', cursor: devEliminando ? 'not-allowed' : 'pointer', opacity: devEliminando ? 0.65 : 1,
                   whiteSpace:'nowrap',
                 }}>
-                🗑️ Dev: borrar reporte
+                🗑️ Eliminar reporte
               </button>
             )}
             <button
@@ -4166,6 +4167,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           onOptimisticValidacion={aplicarOptimisticValidacion}
                           hdrs={hdrs}
                           esDeveloper={esDeveloper}
+                          puedeEliminarRegistroReporte={puedeEliminarReporteCantidades}
                           onDevEliminarRegistro={devEliminarRegistro}
                           devEliminando={devEliminando}
                         />
@@ -4314,6 +4316,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           onOptimisticValidacion={aplicarOptimisticValidacion}
                           hdrs={hdrs}
                           esDeveloper={esDeveloper}
+                          puedeEliminarRegistroReporte={puedeEliminarReporteCantidades}
                           onDevEliminarRegistro={devEliminarRegistro}
                           devEliminando={devEliminando}
                         />
@@ -8318,6 +8321,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   const hdrs = { Authorization: `Bearer ${getToken()}` }
   const modoEdicion = !!reporteInicial
+  const puedeEliminarBorradorReporte = esUsuarioDesarrollador(usuario) || !!(permisoReporteCantidades(usuario)?.eliminar)
 
   const tienePlanoMapa = useMemo(() => {
     const g = planoGeojsonContrato
@@ -9457,17 +9461,27 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <button onClick={async () => {
             if (borradorId) {
-              if (window.confirm('¿Deseas eliminar este borrador?')) {
-                await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${borradorId}`, {
-                  method:'DELETE', headers: hdrs
-                })
-              } else return
+              if (puedeEliminarBorradorReporte) {
+                if (window.confirm('¿Deseas eliminar este borrador?')) {
+                  const del = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/reportes/${borradorId}`, {
+                    method:'DELETE', headers: hdrs
+                  })
+                  if (!del.ok) {
+                    const err = await del.json().catch(() => ({}))
+                    const d = err?.detail
+                    window.alert(typeof d === 'string' ? d : `No se pudo eliminar (${del.status}).`)
+                    return
+                  }
+                } else return
+              }
             }
             onClose()
           }} style={{
             background:'transparent', border:`1px solid ${t.border}`, color:t.textMuted,
             borderRadius:'8px', padding:'8px 20px', cursor:'pointer', fontSize:'var(--cc-sm)'
-          }}>🗑️ Cancelar / Eliminar borrador</button>
+          }} title={borradorId && !puedeEliminarBorradorReporte ? 'Cierra el asistente; el borrador permanece (sin permiso de eliminación).' : undefined}>
+            {borradorId && puedeEliminarBorradorReporte ? '🗑️ Cancelar / Eliminar borrador' : 'Cancelar'}
+          </button>
           <div style={{ display:'flex', gap:'8px' }}>
             {tabActivo < 3 && (
               <button onClick={() => {
