@@ -231,6 +231,10 @@ export async function calcularAnalisisOffline(contratoId, filtros = {}, capas = 
     regs = regs.filter(r => String(r.numero_registro) === String(filtros.numero_registro))
   }
 
+  if (actaIdFiltro != null && actaIdFiltro > 0) {
+    regs = regs.filter(r => Number(r.acta_rpo_id) === actaIdFiltro)
+  }
+
   // Aplicar filtros de registros (capas de validación + campos)
   regs = aplicarCapasFiltro(regs, capasEff, capasOpEff)
   console.log('[calcularAnalisisOffline] registros tras capas:', regs.length)
@@ -414,6 +418,10 @@ export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0
             : est === filtros.estado_registro
         })
       }
+    }
+
+    if (actaIdFiltro != null && actaIdFiltro > 0) {
+      regs = regs.filter(r => Number(r.acta_rpo_id) === actaIdFiltro)
     }
 
     reporteIdsDesdeRegistros = new Set(regs.map(r => String(r.reporte_id)))

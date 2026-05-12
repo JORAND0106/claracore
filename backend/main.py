@@ -2196,6 +2196,16 @@ def _sicoe_reporte_ids_abs_solapa_registros(
     return out
 
 
+def _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q):
+    """
+    Alineado con dashboard «PENDIENTES: ITEM PENDIENTE»: línea con ítem asignado,
+    nivel1_estado Aprobado y sub_estado pendiente (costo en columna residente de la matriz).
+    """
+    q = _so_reg_item_asignado(q)
+    q = q.eq("nivel1_estado", "Aprobado")
+    return q.in_("sub_estado", ["Pendiente", "pendiente", "PENDIENTE"])
+
+
 def _sicoe_so_registros_q_linea_filtros_busqueda(
     q,
     *,
@@ -2217,6 +2227,7 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     require_item: bool = False,
     capas_v: Optional[List[dict]] = None,
     estado: Optional[str] = None,
+    pendiente_item: bool = False,
     registro_id_in: Optional[List[int]] = None,
 ):
     """AND sobre columnas de so_registros; misma semántica que /reportes/buscar y /analisis."""
@@ -2256,6 +2267,8 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
         q = _so_reg_item_asignado(q)
     elif _estado_filtro_es_sin_asignar_item(estado):
         q = _so_reg_sin_item_asignado(q)
+    if pendiente_item:
+        q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q)
     if registro_id_in is not None:
         if len(registro_id_in) == 0:
             q = q.eq("id", -1)
@@ -2301,6 +2314,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
     estado: Optional[str] = None,
     registro_ids_etiqueta: Optional[Set[int]] = None,
     capas_v_op: Optional[str] = None,
+    pendiente_item: bool = False,
 ) -> set:
     """
     reporte_id tales que existe al menos una fila en so_registros que cumple todos
@@ -2347,6 +2361,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                 capas_v_op="and",
                 estado=estado,
                 registro_ids_etiqueta=registro_ids_etiqueta,
+                pendiente_item=pendiente_item,
             )
         return merged
 
@@ -2383,6 +2398,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                             require_item=True,
                             capas_v=(capas_v if capas_ok else None),
                             estado=estado,
+                            pendiente_item=pendiente_item,
                             registro_id_in=c,
                         )
                         return q.limit(5000).execute().data
@@ -2415,6 +2431,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                         require_item=(acta_rpo_id is not None),
                         capas_v=(capas_v if capas_ok else None),
                         estado=estado,
+                        pendiente_item=pendiente_item,
                         registro_id_in=c,
                     )
                     return q.limit(5000).execute().data
@@ -2453,6 +2470,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     require_item=True,
                     capas_v=(capas_v if capas_ok else None),
                     estado=estado,
+                    pendiente_item=pendiente_item,
                 )
                 return q.limit(5000).execute().data
 
@@ -2486,6 +2504,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     require_item=(acta_rpo_id is not None),
                     capas_v=(capas_v if capas_ok else None),
                     estado=estado,
+                    pendiente_item=pendiente_item,
                 )
                 return q.range(o, o + page - 1).execute().data
 
@@ -8188,6 +8207,7 @@ def buscar_reportes_obra(
     q_observacion: Optional[str] = None,
     q_nodo: Optional[str] = None,
     etiqueta_validacion: Optional[str] = None,
+    pendiente_item: bool = Query(False),
     offset: int = 0,
     limit: int = 50,
     current_user=Depends(get_current_user)
@@ -8276,6 +8296,15 @@ def buscar_reportes_obra(
         else None
     )
 
+    acta_id_para_lineas = acta_id_filtro
+    if (
+        pendiente_item
+        and not consulta_directa_identificador
+        and acta_id_para_lineas is None
+        and semana_id_filtro is None
+    ):
+        acta_id_para_lineas = _acta_rpo_id_matriz_dashboard_default(contrato_id)
+
     unified_line = any([
         numero_registro is not None,
         abs_inicio is not None or abs_final is not None,
@@ -8286,6 +8315,7 @@ def buscar_reportes_obra(
         semana_id_filtro is not None,
         acta_id_filtro is not None,
         bool(etiqueta_f),
+        pendiente_item,
     ])
 
     if unified_line:
@@ -8303,11 +8333,12 @@ def buscar_reportes_obra(
             pk_id=pk_id,
             q_observacion=q_obs_trim or None,
             semana_id=semana_id_filtro,
-            acta_rpo_id=acta_id_filtro,
+            acta_rpo_id=acta_id_para_lineas,
             capas_v=(capas_v if capas_aplican_a_lineas else None),
             capas_v_op=validacion_capas_op,
             estado=estado,
             registro_ids_etiqueta=registro_ids_etiqueta,
+            pendiente_item=pendiente_item,
         )
         if not ids_unif:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
@@ -8426,8 +8457,8 @@ def buscar_reportes_obra(
                 # Mantener coherencia con el universo filtrado de grilla/panel
                 if semana_id_filtro is not None:
                     q = q.eq("semana_id", semana_id_filtro)
-                if acta_id_filtro is not None:
-                    q = q.eq("acta_rpo_id", acta_id_filtro)
+                if acta_id_para_lineas is not None:
+                    q = q.eq("acta_rpo_id", acta_id_para_lineas)
                 if capitulo:
                     q = q.eq("capitulo", capitulo)
                 if subcontratista_id is not None:
@@ -8442,7 +8473,7 @@ def buscar_reportes_obra(
                 if q_observacion is not None and str(q_observacion).strip():
                     q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
                 q = _so_reg_filtro_abs_solape(q, abs_inicio, abs_final)
-                if acta_id_filtro is not None and not _estado_filtro_es_sin_asignar_item(estado):
+                if acta_id_para_lineas is not None and not _estado_filtro_es_sin_asignar_item(estado):
                     q = _so_reg_item_asignado(q)
 
                 if capas_v and not _estado_filtro_omite_validacion_por_cargo(estado):
@@ -8453,6 +8484,8 @@ def buscar_reportes_obra(
 
                 if _estado_filtro_es_sin_asignar_item(estado):
                     q = _so_reg_sin_item_asignado(q)
+                if pendiente_item:
+                    q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q)
                 return q
 
             reg_estados = []
@@ -8582,6 +8615,7 @@ class ExportarRegistrosBody(BaseModel):
     q_observacion: Optional[str] = None
     q_nodo: Optional[str] = None
     etiqueta_validacion: Optional[str] = None
+    pendiente_item: bool = False
 
 
 # Mismo universo de filtros que ExportarRegistrosBody; validación masiva N2/N3 según grilla.
@@ -8617,6 +8651,7 @@ class ValidarNivelMasivoFiltroBody(BaseModel):
     q_observacion: Optional[str] = None
     q_nodo: Optional[str] = None
     etiqueta_validacion: Optional[str] = None
+    pendiente_item: bool = False
 
 
 def _sicoe_masivo_filtro_to_export_body(b: ValidarNivelMasivoFiltroBody) -> ExportarRegistrosBody:
@@ -8694,6 +8729,14 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
                 acta_id_filtro = acta_rows[0]["id"] if acta_rows else None
         except Exception:
             acta_id_filtro = None
+
+    if (
+        body.pendiente_item
+        and not consulta_directa_identificador
+        and acta_id_filtro is None
+        and semana_id_filtro is None
+    ):
+        acta_id_filtro = _acta_rpo_id_matriz_dashboard_default(contrato_id)
 
     necesita_reporte_filter = any(
         v is not None for v in [body.numero_reporte, body.pk_id, body.estado]
@@ -8783,6 +8826,9 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
             q = _so_reg_item_asignado(q)
         if _estado_filtro_es_sin_asignar_item(body.estado):
             q = _so_reg_sin_item_asignado(q)
+
+        if body.pendiente_item:
+            q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q)
 
         if not _estado_filtro_omite_validacion_por_cargo(body.estado):
             if capas_exp_export and not _defer_capas_or_export:
@@ -9038,6 +9084,14 @@ def exportar_registros_sicoe(
         except Exception:
             acta_id_filtro = None
 
+    if (
+        body.pendiente_item
+        and not consulta_directa_identificador
+        and acta_id_filtro is None
+        and semana_id_filtro is None
+    ):
+        acta_id_filtro = _acta_rpo_id_matriz_dashboard_default(contrato_id)
+
     # 2) Filtros que viven en so_reportes (necesitan restricción por reporte_id)
     # abs_inicio/abs_final se aplican por solape en líneas (paso aparte, como buscar/analisis)
     necesita_reporte_filter = any(
@@ -9127,6 +9181,9 @@ def exportar_registros_sicoe(
             q = _so_reg_item_asignado(q)
         if _estado_filtro_es_sin_asignar_item(body.estado):
             q = _so_reg_sin_item_asignado(q)
+
+        if body.pendiente_item:
+            q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q)
 
         # Validación: capas en AND en SQL, salvo OR con varias capas (filtro en memoria al final)
         if not _estado_filtro_omite_validacion_por_cargo(body.estado):
@@ -9446,6 +9503,7 @@ def analisis_registros_obra(
     q_observacion: Optional[str] = None,
     q_nodo: Optional[str] = None,
     etiqueta_validacion: Optional[str] = None,
+    pendiente_item: bool = Query(False),
     current_user=Depends(get_current_user)
 ):
     """Agregados del panel dinámico: cada query param activo es un filtro AND sobre el universo de registros."""
@@ -9454,6 +9512,7 @@ def analisis_registros_obra(
               "total_aprobados":0,"total_pendientes":0,"total_rechazados":0}
 
     items_ana = _normalize_items_filtro_list(items_filtro, item)
+    _pendiente_acta_matriz = False
 
     consulta_directa_identificador = (
         numero_reporte is not None or numero_registro is not None
@@ -9504,6 +9563,17 @@ def analisis_registros_obra(
 
     if semana is not None and semana_id is None:
         return _empty
+
+    if (
+        pendiente_item
+        and not consulta_directa_identificador
+        and acta_id is None
+        and semana_id is None
+    ):
+        aid_m = _acta_rpo_id_matriz_dashboard_default(contrato_id)
+        if aid_m is not None:
+            acta_id = aid_m
+            _pendiente_acta_matriz = True
 
     # ── 3. Campo de validación (KPI panel: primera capa; filtro SQL: todas con AND) ─
     capas_ana = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
@@ -9637,6 +9707,8 @@ def analisis_registros_obra(
                 )
             if _estado_filtro_es_sin_asignar_item(estado):
                 q = _so_reg_sin_item_asignado(q)
+            if pendiente_item:
+                q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q)
             return q
 
         if reg_ids_etiqueta_ana is not None:
@@ -9881,6 +9953,12 @@ def analisis_registros_obra(
                 evx = (capx.get("estado") or "").strip()
                 cap_lbl = _sicoe_capa_etiqueta_panel(capx)
                 partes.append(f"Val. {cap_lbl}: {evx}")
+        if pendiente_item:
+            partes.append(
+                "Ítem pendiente (acta vigente, mismo criterio que la matriz)"
+                if _pendiente_acta_matriz
+                else "Ítem pendiente (matriz)"
+            )
         encabezado = " · ".join(partes) if partes else "Todos los registros"
 
     tc  = round(sum(g["costo_directo"]   for g in grupos_list), 0)
@@ -10180,6 +10258,7 @@ def obtener_reporte(
     q_observacion: Optional[str] = Query(None),
     q_nodo: Optional[str] = Query(None),
     etiqueta_validacion: Optional[str] = Query(None),
+    pendiente_item: bool = Query(False),
     current_user=Depends(get_current_user),
 ):
     items_detalle_norm = _normalize_items_filtro_list(items_filtro, item)
@@ -10242,6 +10321,12 @@ def obtener_reporte(
             except Exception:
                 return []
 
+        acta_id_lineas = acta_id_filtro
+        if pendiente_item and acta_rpo is None and semana is None:
+            aid_inj = _acta_rpo_id_matriz_dashboard_default(contrato_id)
+            if aid_inj is not None:
+                acta_id_lineas = aid_inj
+
         if reg_tag_detalle is not None and not reg_tag_detalle:
             return []
 
@@ -10266,13 +10351,14 @@ def obtener_reporte(
                     pk_id=pk_id,
                     q_observacion=q_observacion,
                     semana_id=semana_id_filtro,
-                    acta_rpo_id=acta_id_filtro,
+                    acta_rpo_id=acta_id_lineas,
                     capas_v=(
                         None
                         if _defer_capas_or_detalle
                         else (capas_v if capas_aplican_a_lineas else None)
                     ),
                     estado=estado,
+                    pendiente_item=pendiente_item,
                 )
                 return q.order("id").range(o, o + page - 1).execute().data
 
@@ -11704,12 +11790,48 @@ def crear_plantilla(contrato_id: int, body: PlantillaCreate, current_user=Depend
         supabase_execute(_items)
     return plantilla[0]
 
+
+def _sicoe_normalizar_numero_rpc(raw: Any, etiqueta: str = "consecutivo") -> int:
+    """
+    PostgREST / supabase-py a veces devuelve el resultado del RPC como int, [int],
+    {'numero': n}, etc. Unifica para /next-registro, /next-foto y /next-grafico.
+    """
+    if raw is None:
+        raise HTTPException(status_code=503, detail=f"No se obtuvo {etiqueta} desde la base de datos")
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return int(raw)
+    if isinstance(raw, list):
+        if len(raw) == 0:
+            raise HTTPException(status_code=503, detail=f"Lista vacía en RPC ({etiqueta})")
+        return _sicoe_normalizar_numero_rpc(raw[0], etiqueta)
+    if isinstance(raw, dict):
+        for k in (
+            "numero",
+            "siguiente_numero_foto",
+            "siguiente_numero_grafico",
+            "siguiente_numero_registro",
+            "siguiente_n_numeros_registro",
+            "siguiente",
+            "id",
+        ):
+            if k in raw and raw[k] is not None:
+                return _sicoe_normalizar_numero_rpc(raw[k], etiqueta)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Formato inesperado del RPC ({etiqueta}): objeto sin claves conocidas",
+        )
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=503, detail=f"No se pudo interpretar el consecutivo ({etiqueta})")
+
+
 @app.post("/sicoe-obra/{contrato_id}/next-registro")
 def next_numero_registro(contrato_id: int, current_user=Depends(get_current_user)):
     def _q():
         return supabase.rpc("siguiente_numero_registro", {"p_contrato_id": contrato_id}).execute().data
-    numero = supabase_execute(_q)
-    return {"numero": numero}
+    raw = supabase_execute(_q)
+    return {"numero": _sicoe_normalizar_numero_rpc(raw, "número de registro")}
 
 @app.post("/sicoe-obra/{contrato_id}/upload-foto")
 async def upload_foto(contrato_id: int, file: UploadFile = File(...), numero: int = Form(...), descripcion: str = Form(""), current_user=Depends(get_current_user)):
@@ -11763,13 +11885,15 @@ def galeria_imagenes(contrato_id: int, tipo: str = "foto", desde: str = None, ha
 def next_numero_foto(contrato_id: int, current_user=Depends(get_current_user)):
     def _q():
         return supabase.rpc("siguiente_numero_foto", {"p_contrato_id": contrato_id}).execute().data
-    return {"numero": supabase_execute(_q)}
+    raw = supabase_execute(_q)
+    return {"numero": _sicoe_normalizar_numero_rpc(raw, "número de foto")}
 
 @app.post("/sicoe-obra/{contrato_id}/next-grafico")
 def next_numero_grafico(contrato_id: int, current_user=Depends(get_current_user)):
     def _q():
         return supabase.rpc("siguiente_numero_grafico", {"p_contrato_id": contrato_id}).execute().data
-    return {"numero": supabase_execute(_q)}
+    raw = supabase_execute(_q)
+    return {"numero": _sicoe_normalizar_numero_rpc(raw, "número de gráfico")}
 
 class RegistroCreate(BaseModel):
     reporte_id: int
@@ -12501,6 +12625,52 @@ def _acta_rpo_vigente_row(contrato_id: int):
     row = {k: v for k, v in row.items() if k != "usuarios"}
     row["asignado_nombre"] = an or None
     return row
+
+
+def _sicoe_parse_matriz_vigente_bundle_raw(raw):
+    """Normaliza retorno de dashboard_matriz_validacion_vigente_bundle (misma regla que dashboard_matriz_validacion_obra)."""
+    if raw is None:
+        return {}
+    if isinstance(raw, list) and len(raw) > 0:
+        return raw[0] if isinstance(raw[0], dict) else {}
+    if isinstance(raw, dict) and "obra_ejecutada_directo_sin_aiu" in raw:
+        return raw
+    if isinstance(raw, dict):
+        k = next(iter(raw.keys()), None)
+        return raw[k] if k and isinstance(raw.get(k), dict) else raw
+    return {}
+
+
+def _acta_rpo_id_matriz_dashboard_default(contrato_id: int) -> Optional[int]:
+    """
+    Acta por defecto del GET dashboard-matriz-validacion (sin acta_rpo, todo_contrato=false):
+    bundle vigente o acta RPO cuyo período contiene hoy.
+    Usado para alinear el filtro pendiente_item con la fila PENDIENTES: ITEM PENDIENTE.
+    """
+    try:
+        def _bundle():
+            return supabase.rpc(
+                "dashboard_matriz_validacion_vigente_bundle",
+                {"p_contrato_id": contrato_id},
+            ).execute().data
+        pay = _sicoe_parse_matriz_vigente_bundle_raw(supabase_execute(_bundle))
+        vm = pay.get("_vigente") if isinstance(pay, dict) else None
+        if isinstance(vm, dict) and "obra_ejecutada_directo_sin_aiu" in pay:
+            aid = vm.get("acta_id")
+            if aid is not None:
+                try:
+                    return int(aid)
+                except (TypeError, ValueError):
+                    pass
+    except Exception:
+        pass
+    vig = _acta_rpo_vigente_row(contrato_id)
+    if vig and vig.get("id") is not None:
+        try:
+            return int(vig["id"])
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 def _parse_iso_to_date(val) -> Optional[date]:

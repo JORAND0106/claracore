@@ -297,6 +297,49 @@ function regTieneFotoNumeroEnBd (reg) {
   return reg && reg.foto_numero != null && reg.foto_numero !== ''
 }
 
+/** /next-foto, /next-grafico, /next-registro: `numero` puede ser número, [n] u objeto anidado (PostgREST). */
+function sicoeNumeroDesdeNextApi(j) {
+  const walk = (x) => {
+    if (x == null) return null
+    if (typeof x === 'number' && Number.isFinite(x)) return Math.trunc(x)
+    if (typeof x === 'string' && String(x).trim() !== '') {
+      const n = parseInt(String(x).trim(), 10)
+      return Number.isFinite(n) ? n : null
+    }
+    if (Array.isArray(x) && x.length) return walk(x[0])
+    if (typeof x === 'object' && x.numero != null) return walk(x.numero)
+    return null
+  }
+  if (!j || typeof j !== 'object') return null
+  for (const k of ['numero', 'siguiente_numero_foto', 'siguiente_numero_grafico', 'siguiente_numero_registro']) {
+    if (j[k] != null) return walk(j[k])
+  }
+  return null
+}
+
+async function sicoeFetchJsonOThrow(res) {
+  const txt = await res.text()
+  let j = {}
+  try {
+    j = txt ? JSON.parse(txt) : {}
+  } catch {
+    j = {}
+  }
+  if (!res.ok) {
+    const d = j?.detail
+    const msg =
+      typeof d === 'string'
+        ? d
+        : Array.isArray(d)
+          ? d.map((x) => x?.msg || JSON.stringify(x)).join(', ')
+          : d && typeof d === 'object'
+            ? JSON.stringify(d)
+            : txt || `HTTP ${res.status}`
+    throw new Error(msg)
+  }
+  return j
+}
+
 const themes = {
   light: {
     bg: '#F0F9FF', bgCard: '#FFFFFF', border: '#BAE6FD', text: '#0F2942',
@@ -1557,15 +1600,23 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const subirFoto = async (file) => {
     setUploadingFoto(true)
     try {
-      const numRes = await fetch(`${API}/sicoe-obra/${contrato_id}/next-foto`, { method:'POST', headers: hdrs }).then(r => r.json())
-      const fd = new FormData(); fd.append('file', file); fd.append('numero', numRes.numero); fd.append('descripcion', '')
-      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-foto`, { method:'POST', headers:{ Authorization: hdrs.Authorization }, body: fd }).then(r => r.json())
-      await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
-        method:'PUT', headers: hdrs,
-        body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, foto_url: res.url, foto_numero: res.numero })
-      })
+      const resNum = await fetch(`${API}/sicoe-obra/${contrato_id}/next-foto`, { method:'POST', headers: hdrs })
+      const numRes = await sicoeFetchJsonOThrow(resNum)
+      const numero = sicoeNumeroDesdeNextApi(numRes)
+      if (numero == null) throw new Error('No se obtuvo el consecutivo de foto')
+      const fd = new FormData(); fd.append('file', file); fd.append('numero', String(numero)); fd.append('descripcion', '')
+      const up = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-foto`, { method:'POST', headers:{ Authorization: hdrs.Authorization }, body: fd })
+      const res = await sicoeFetchJsonOThrow(up)
+      const rid = registro?.id
+      if (rid != null && String(rid).length && !String(rid).startsWith('local_')) {
+        const put = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${rid}`, {
+          method:'PUT', headers: hdrs,
+          body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, foto_url: res.url, foto_numero: res.numero ?? numero })
+        })
+        await sicoeFetchJsonOThrow(put)
+      }
       setFotoLocal(res.url)
-    } catch(e) { alert('Error subiendo foto') }
+    } catch(e) { alert('Error subiendo foto: ' + (e?.message || String(e))) }
     setUploadingFoto(false)
   }
 
@@ -1573,15 +1624,23 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const subirGrafico = async (file) => {
     setUploadingGraf(true)
     try {
-      const numRes = await fetch(`${API}/sicoe-obra/${contrato_id}/next-grafico`, { method:'POST', headers: hdrs }).then(r => r.json())
-      const fd = new FormData(); fd.append('file', file); fd.append('numero', numRes.numero); fd.append('descripcion', '')
-      const res = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers:{ Authorization: hdrs.Authorization }, body: fd }).then(r => r.json())
-      await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
-        method:'PUT', headers: hdrs,
-        body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, grafico_url: res.url, grafico_numero: res.numero })
-      })
+      const resNum = await fetch(`${API}/sicoe-obra/${contrato_id}/next-grafico`, { method:'POST', headers: hdrs })
+      const numRes = await sicoeFetchJsonOThrow(resNum)
+      const numero = sicoeNumeroDesdeNextApi(numRes)
+      if (numero == null) throw new Error('No se obtuvo el consecutivo de gráfico')
+      const fd = new FormData(); fd.append('file', file); fd.append('numero', String(numero)); fd.append('descripcion', '')
+      const up = await fetch(`${API}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers:{ Authorization: hdrs.Authorization }, body: fd })
+      const res = await sicoeFetchJsonOThrow(up)
+      const rid = registro?.id
+      if (rid != null && String(rid).length && !String(rid).startsWith('local_')) {
+        const put = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${rid}`, {
+          method:'PUT', headers: hdrs,
+          body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, grafico_url: res.url, grafico_numero: res.numero ?? numero })
+        })
+        await sicoeFetchJsonOThrow(put)
+      }
       setGrafLocal(res.url)
-    } catch(e) { alert('Error subiendo gráfico') }
+    } catch(e) { alert('Error subiendo gráfico: ' + (e?.message || String(e))) }
     setUploadingGraf(false)
   }
 
@@ -2535,12 +2594,16 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 tipo="foto" fechaDesde="" fechaHasta=""
                 onSelect={async (url, numero) => {
                   try {
-                    await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
-                      method:'PUT', headers: hdrs,
-                      body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, foto_url: url, foto_numero: numero })
-                    })
+                    const rid = registro?.id
+                    if (rid != null && String(rid).length && !String(rid).startsWith('local_')) {
+                      const put = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${rid}`, {
+                        method:'PUT', headers: hdrs,
+                        body: JSON.stringify({ reporte_id: registro.reporte_id, numero_registro: registro.numero_registro, foto_url: url, foto_numero: numero })
+                      })
+                      await sicoeFetchJsonOThrow(put)
+                    }
                     setFotoLocal(url)
-                  } catch(e) { alert('Error asignando foto de galería') }
+                  } catch(e) { alert('Error asignando foto de galería: ' + (e?.message || String(e))) }
                   setModalGaleriaHoja(false)
                 }}
               />
@@ -4786,13 +4849,17 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   /** Sin filtros de grilla ni capa de validación → no se consulta el backend (grilla vacía). */
   const tieneParametrosBusquedaSicoe = (f, capas) => {
     const ef = { ...f }
+    delete ef.pendiente_item
     if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
     if (nivelInfo.esInterventoria) delete ef.subcontratista_id
     const tieneCapa =
       capas.length > 0 &&
       sicoeSerializarCapasValidacion(capas).length > 0
     // Cualquier campo de la barra (incl. solo abscisa) cuenta: AND entre columnas al pulsar Buscar
-    const tieneGrid = Object.values(ef).some(v => v !== '' && v != null)
+    const tieneGrid = Object.entries(ef).some(([_, v]) => {
+      if (v === '' || v == null || v === false) return false
+      return true
+    })
       || (itemsFiltroChips && itemsFiltroChips.some((x) => String(x || '').trim()))
     return tieneCapa || tieneGrid
   }
@@ -4963,10 +5030,14 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
   /** Mismos query params que la grilla (para detalle / export coherente). */
   const sicoeAppendParamsBusquedaActivos = (params, efBase = null) => {
     const ef = { ...(efBase || filtros) }
+    delete ef.pendiente_item
     if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
     if (nivelInfo.esInterventoria) delete ef.subcontratista_id
     delete ef.item
-    Object.entries(ef).forEach(([k, v]) => { if (v !== '' && v != null) params.append(k, v) })
+    Object.entries(ef).forEach(([k, v]) => {
+      if (v === '' || v == null || v === false) return
+      params.append(k, v)
+    })
     sicoeAppendItemsFiltroToSearchParams(params, filtros, itemsFiltroChipsRef.current, itemsFiltroOpRef.current)
     if (capasValidacion.length > 0) {
       const ser = sicoeSerializarCapasValidacion(capasValidacion)
@@ -5048,7 +5119,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
     const seq = ++sicoeBusquedaSeqRef.current
     setCargando(true)
     const esBusquedaAmplia = capas.length > 0 &&
-      Object.values(nuevosFiltros).every(v => v === '' || v == null)
+      Object.values(nuevosFiltros).every(v => v === '' || v == null || v === false)
     if (esBusquedaAmplia) setBusquedaAmplia(true)
     else setBusquedaAmplia(false)
     try {
@@ -5057,7 +5128,11 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       if (esSub && subIdUsuario && !ef.subcontratista_id) ef.subcontratista_id = subIdUsuario
       if (nivelInfo.esInterventoria) delete ef.subcontratista_id
       delete ef.item
-      Object.entries(ef).forEach(([k, v]) => { if (v !== '' && v != null) params.append(k, v) })
+      delete ef.pendiente_item
+      Object.entries(ef).forEach(([k, v]) => {
+        if (v === '' || v == null || v === false) return
+        params.append(k, v)
+      })
       sicoeAppendItemsFiltroToSearchParams(params, nuevosFiltros, itemsFiltroChipsRef.current, itemsFiltroOpRef.current)
       if (capas.length > 0) {
         const ser = sicoeSerializarCapasValidacion(capas)
@@ -5283,7 +5358,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
       const camposAnalisis = ['acta_rpo','semana','subcontratista_id','capitulo','tramo','costado','abs_inicio','abs_final','estado','numero_reporte','numero_registro','pk_id','etiqueta_validacion']
       camposAnalisis.forEach(k => {
         const v = ef[k]
-        if (v === '' || v == null) return
+        if (v === '' || v == null || v === false) return
         if (k === 'abs_inicio' || k === 'abs_final') {
           const n = Number(v)
           if (Number.isFinite(n)) params.append(k, String(n))
@@ -5467,6 +5542,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
           : null,
       q_observacion: oObs || null,
       q_nodo: oNod || null,
+      pendiente_item: false,
     }
   }
 
@@ -6196,6 +6272,7 @@ function ModuloSicoeObra({ t, usuario, token, s, navReporteId = null, navRegistr
         validacion_capas_op: serEx.length > 0 && capasValidacion.length > 1 ? (capasValidacionOp === 'or' ? 'or' : 'and') : null,
         q_observacion: (sicoeFiltroObsRef.current && String(sicoeFiltroObsRef.current).trim()) || null,
         q_nodo: (sicoeFiltroNodoRef.current && String(sicoeFiltroNodoRef.current).trim()) || null,
+        pendiente_item: false,
         campos: camposRequest,
       }
       const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/exportar`, {
@@ -8413,13 +8490,15 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           }).catch(() => {})
       }
       if (reporteInicial.registros?.length) setRegistros(reporteInicial.registros.map(r => ({
+        id: r.id != null ? r.id : null,
+        numero_registro: r.numero_registro != null ? r.numero_registro : null,
         nombre: r.nombre || '', descripcion: r.descripcion || '',
         longitud: r.longitud !== undefined && r.longitud !== null ? String(r.longitud) : '',
         ancho: r.ancho !== undefined && r.ancho !== null ? String(r.ancho) : '',
         espesor: r.espesor !== undefined && r.espesor !== null ? String(r.espesor) : '',
         cantidad: r.cantidad !== undefined && r.cantidad !== null ? String(r.cantidad) : '',
         cantidad_total: r.cantidad_total, unidad: r.unidad || '',
-        observacion: r.descripcion || '',
+        observacion: (r.observacion != null && String(r.observacion).trim() !== '') ? r.observacion : (r.descripcion || ''),
         foto_url: r.foto_url, foto_numero: r.foto_numero, _fotoOk: !!r.foto_url,
         grafico_url: r.grafico_url, grafico_numero: r.grafico_numero, _grafOk: !!r.grafico_url
       })))
@@ -9369,14 +9448,18 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   const file = e.target.files[0]; if (!file) return
                   const fd = new FormData(); fd.append('file', file)
                   try {
-                    const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-grafico`, { method:'POST', headers: hdrs }).then(x=>x.json())
-                    fd.append('numero', numR.numero)
-                    fd.append('descripcion', `Grafico-Reporte-${numR.numero}`)
+                    const resN = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-grafico`, { method:'POST', headers: hdrs })
+                    const numR = await sicoeFetchJsonOThrow(resN)
+                    const numero = sicoeNumeroDesdeNextApi(numR)
+                    if (numero == null) throw new Error('No se obtuvo el consecutivo de gráfico')
+                    fd.append('numero', String(numero))
+                    fd.append('descripcion', `Grafico-Reporte-${numero}`)
                     const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-grafico`, { method:'POST', headers: hdrs, body: fd })
-                    const data = await r.json()
+                    const data = await sicoeFetchJsonOThrow(r)
                     setReporteGraficoUrl(data.url)
-                    setReporteGraficoNumero(numR.numero)
-                  } catch(e) { alert('Error subiendo gráfico') }
+                    setReporteGraficoNumero(data.numero ?? numero)
+                  } catch(err) { alert('Error subiendo gráfico: ' + (err?.message || String(err))) }
+                  e.target.value = ''
                 }} style={{ width:'100%', fontSize:'var(--cc-sm)' }} />
                 {reporteGraficoUrl && <div style={{ color:'#10B981', fontSize:'var(--cc-sm)', marginTop:'4px' }}>✅ Gráfico #{String(reporteGraficoNumero).padStart(4,'0')} cargado</div>}
               </div>
@@ -9596,13 +9679,18 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
                   const file = e.target.files[0]; if (!file) return
                   const fd = new FormData(); fd.append('file', file)
                   try {
-                    const numR = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-foto`, { method:'POST', headers: hdrs }).then(x=>x.json())
-                    fd.append('numero', numR.numero)
-                    fd.append('descripcion', registros[modalRegistro].observacion || `Foto-${numR.numero}`)
+                    const resN = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/next-foto`, { method:'POST', headers: hdrs })
+                    const numR = await sicoeFetchJsonOThrow(resN)
+                    const numero = sicoeNumeroDesdeNextApi(numR)
+                    if (numero == null) throw new Error('No se obtuvo el consecutivo de foto')
+                    fd.append('numero', String(numero))
+                    fd.append('descripcion', registros[modalRegistro].observacion || `Foto-${numero}`)
                     const r = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/upload-foto`, { method:'POST', headers: hdrs, body: fd })
-                    const data = await r.json()
-                    const a=[...registros]; a[modalRegistro]={...a[modalRegistro], foto_url: data.url, foto_numero: numR.numero, _fotoOk: true}; setRegistros(a)
-                  } catch(e) { alert('Error subiendo foto') }
+                    const data = await sicoeFetchJsonOThrow(r)
+                    const nFoto = data.numero ?? numero
+                    const a=[...registros]; a[modalRegistro]={...a[modalRegistro], foto_url: data.url, foto_numero: nFoto, _fotoOk: true}; setRegistros(a)
+                  } catch(err) { alert('Error subiendo foto: ' + (err?.message || String(err))) }
+                  e.target.value = ''
                 }} style={{ width:'100%', fontSize:'var(--cc-sm)' }} />
                 {!registros[modalRegistro]._fotoOk && (
                   <div style={{ color:'#F59E0B', fontSize:'var(--cc-label)', marginTop:'4px' }}>⚠️ La foto es obligatoria para guardar el registro</div>
