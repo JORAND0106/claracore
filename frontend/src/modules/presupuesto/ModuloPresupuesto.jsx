@@ -5,8 +5,7 @@ import mapboxgl from "mapbox-gl"
 import "mapbox-gl/dist/mapbox-gl.css"
 import * as XLSX from "xlsx"
 import ExcelJS from "exceljs"
-import { API_BASE, SUPABASE_ANON_KEY, SUPABASE_URL } from '../../apiBase'
-import { supabase } from '../../supabaseClient'
+import { API_BASE } from '../../apiBase'
 import { formatCOP, formatCOPShort } from '../../utils/formatCOP'
 import EmojiPicker from '../../EmojiPicker'
 import PptoFiltroObraVista from './PptoFiltroObraVista'
@@ -263,7 +262,6 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [ubicacionCalzada, setUbicacionCalzada] = useState('')
   const [opcionesUbicacion, setOpcionesUbicacion] = useState({ tramos: [], calzadas: [] })
   const debounceFetchPptoRef = useRef(null)
-  const presupuestoRealtimeDebounceRef = useRef(null)
   const recargarCapActualRef = useRef(null)
   /** Fase C: total con los mismos filtros que el listado (GET /conteo) */
   const [conteoFiltro, setConteoFiltro] = useState(null)
@@ -306,8 +304,6 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   /** Discrepancias listado_precios antes de POST /bulk (mismo payload que SicoeCAD). */
   const [sicoeCadListadoModal, setSicoeCadListadoModal] = useState(null) // { discrepancias, itemsSnapshot, mode, sicoeEnviados }
   const [sicoeCadImportBusy, setSicoeCadImportBusy] = useState(false)
-  const sicoeCadImportBusyRef = useRef(false)
-  useEffect(() => { sicoeCadImportBusyRef.current = sicoeCadImportBusy }, [sicoeCadImportBusy])
   const [hiloLoading,         setHiloLoading]         = useState(false)
   /** Texto de respuesta por comentario raíz (evita un solo input compartido entre varias tarjetas). */
   const [respuestaHiloPorId,  setRespuestaHiloPorId]  = useState({})
@@ -1000,39 +996,6 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   useEffect(() => {
     if (sincroSicoeModal) recargarCapActual(true)
   }, [sincroSicoeModal?.ts])
-
-  useEffect(() => {
-    if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contratoId) return
-    const cid = String(contratoId)
-    const filt = `contrato_id=eq.${cid}`
-    const DEBOUNCE_MS = 5000
-    const onChange = () => {
-      if (presupuestoRealtimeDebounceRef.current) {
-        clearTimeout(presupuestoRealtimeDebounceRef.current)
-        presupuestoRealtimeDebounceRef.current = null
-      }
-      presupuestoRealtimeDebounceRef.current = setTimeout(() => {
-        presupuestoRealtimeDebounceRef.current = null
-        if (sicoeCadImportBusyRef.current) return
-        void recargarCapActualRef.current?.(false)
-      }, DEBOUNCE_MS)
-    }
-    const channel = supabase
-      .channel(`presupuesto-${cid}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'presupuesto', filter: filt },
-        onChange,
-      )
-      .subscribe()
-    return () => {
-      if (presupuestoRealtimeDebounceRef.current) {
-        clearTimeout(presupuestoRealtimeDebounceRef.current)
-        presupuestoRealtimeDebounceRef.current = null
-      }
-      void supabase.removeChannel(channel)
-    }
-  }, [contratoId])
 
   // Multisesión: refresco con pestaña activa. Intervalos cortos disparan conteo + N× presupuesto?limit=1000 y saturan el API.
   useEffect(() => {
