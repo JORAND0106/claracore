@@ -1129,12 +1129,11 @@ function sicoeNivelPrevioAprobado(registro, nivelNum) {
 
 /** True si el nivel máximo activo del contrato está aprobado en `registro`. */
 function sicoeRegistroSelladoMaxActivo(registro, nivelesContrato) {
-  const na = nivelesContrato?.niveles_activos
-  const sorted = Array.isArray(na) && na.length ? [...na].sort((a, b) => a - b) : [1, 2, 3]
-  const mx = sorted[sorted.length - 1] ?? 3
-  const c = sicoeCampoEstadoNivel(mx)
-  if (!c) return false
-  return (registro?.[c] || 'No Revisado') === 'Aprobado'
+  const campo =
+    nivelesContrato?.campo_nivel_maximo ||
+    sicoeCampoEstadoNivel(Math.max(...(nivelesContrato?.niveles_activos || [1, 2, 3])))
+  if (!campo) return false
+  return (registro?.[campo] || 'No Revisado') === 'Aprobado'
 }
 
 function sicoeEncabezadosPorNivelDesdeApi(nivelesContrato) {
@@ -11429,6 +11428,7 @@ function IconMigrarPresupuestoSicoe({ size = 18, color = 'currentColor' }) {
 function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0, fontSize = 'normal', onFontSize, onOpenPerfil }) {
   const [moduloActivo, setModuloActivo] = useState('inicio')
   const [dashCarpetaReporte, setDashCarpetaReporte] = useState(null)
+  const [nivelesDashContrato, setNivelesDashContrato] = useState(() => SICOE_NIVELES_CONTRATO_DEFAULT())
   const [dashRegistroNumero, setDashRegistroNumero] = useState(null)
   const [dashDetallePpto, setDashDetallePpto] = useState(null)
   const [dashDetallePptoSaving, setDashDetallePptoSaving] = useState(false)
@@ -11507,6 +11507,43 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const API_URL = API_BASE
   const contratoIdDash = usuario?.contrato_id
   const du = useMemo(() => getDashTypoUI(fontSize), [fontSize])
+
+  useEffect(() => {
+    if (!contratoIdDash) {
+      setNivelesDashContrato(SICOE_NIVELES_CONTRATO_DEFAULT())
+      return
+    }
+    const ac = new AbortController()
+    fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/niveles-validacion`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+      signal: ac.signal,
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (!j || typeof j !== 'object') {
+          setNivelesDashContrato({ ...SICOE_NIVELES_CONTRATO_DEFAULT(), contrato_id: contratoIdDash })
+          return
+        }
+        const na = Array.isArray(j.niveles_activos) && j.niveles_activos.length ? j.niveles_activos : [1, 2, 3]
+        const nivList =
+          Array.isArray(j.niveles) && j.niveles.length
+            ? j.niveles
+            : na.map((nivel) => ({
+                nivel,
+                campo: sicoeCampoEstadoNivel(nivel),
+                encabezado: SICOE_NIVEL_ENCABEZADO_FALLBACK[nivel] || `Nivel ${nivel}`,
+              }))
+        setNivelesDashContrato({
+          contrato_id: j.contrato_id ?? contratoIdDash,
+          niveles_activos: na,
+          nivel_maximo: j.nivel_maximo ?? Math.max(...na),
+          campo_nivel_maximo: j.campo_nivel_maximo || sicoeCampoEstadoNivel(Math.max(...na)) || 'nivel3_estado',
+          niveles: nivList,
+        })
+      })
+      .catch(() => setNivelesDashContrato({ ...SICOE_NIVELES_CONTRATO_DEFAULT(), contrato_id: contratoIdDash }))
+    return () => ac.abort()
+  }, [contratoIdDash])
 
   useEffect(() => {
     const id = dashDetallePpto?.id
@@ -14810,6 +14847,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 t={t} usuario={usuario} API_URL={API_URL} contrato_id={contratoIdDash}
                 reporte={dashCarpetaReporte}
                 actasList={[]}
+                nivelesContrato={nivelesDashContrato}
                 onClose={() => { setDashCarpetaReporte(null); setDashRegistroNumero(null) }}
                 onActualizar={() => { setDashCarpetaReporte(null); setDashRegistroNumero(null) }}
               />
