@@ -6132,12 +6132,13 @@ def highlight_registro(contrato_id: int, body: dict, current_user=Depends(get_cu
         usuario_id = 0
     if usuario_id <= 0:
         raise HTTPException(status_code=401, detail="Usuario no identificado")
+    # Misma forma que zoom_pkid / cambiar_layer: cad_queue no expone usuario_id ni procesado;
+    # el estado de la fila va en columna "estado" (pendiente → procesado vía /cad-queue/.../procesado).
     supabase.table("cad_queue").insert({
-        "contrato_id":  contrato_id,
-        "tipo":         "highlight_registro",
-        "payload":      payload,
-        "usuario_id":   usuario_id,
-        "procesado":    False,
+        "contrato_id": contrato_id,
+        "tipo":        "highlight_registro",
+        "estado":      "pendiente",
+        "payload":     {**payload, "usuario_id": usuario_id},
     }).execute()
     return {"ok": True}
 
@@ -14663,11 +14664,12 @@ def _dashboard_pkid_colores_liquidacion(
 @app.get("/sicoe-obra/{contrato_id}/dashboard-resumen")
 def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_user)):
     try:
+        campo_max = _get_nivel_maximo_contrato(contrato_id)
         try:
             def _rpc():
                 return supabase.rpc(
                     "dashboard_resumen_sicoe_agg",
-                    {"p_contrato_id": contrato_id},
+                    {"p_contrato_id": contrato_id, "p_campo_nivel_max": campo_max},
                 ).execute().data
 
             hit = _parse_rpc_dashboard_resumen_raw(supabase_execute(_rpc))
@@ -15321,13 +15323,18 @@ def dashboard_drill_obra(
     current_user=Depends(get_current_user)
 ):
     try:
+        campo_max = _get_nivel_maximo_contrato(contrato_id)
         if capitulo:
             try:
                 def _rpc_items():
                     return (
                         supabase.rpc(
                             "dashboard_drill_items_agg",
-                            {"p_contrato_id": contrato_id, "p_capitulo": capitulo},
+                            {
+                                "p_contrato_id": contrato_id,
+                                "p_capitulo": capitulo,
+                                "p_campo_nivel_max": campo_max,
+                            },
                         )
                         .execute()
                         .data
@@ -15351,7 +15358,10 @@ def dashboard_drill_obra(
             raise HTTPException(status_code=422, detail="Indica capitulo junto con item.")
         try:
             def _rpc_caps():
-                return supabase.rpc("dashboard_drill_capitulos_agg", {"p_contrato_id": contrato_id}).execute().data
+                return supabase.rpc(
+                    "dashboard_drill_capitulos_agg",
+                    {"p_contrato_id": contrato_id, "p_campo_nivel_max": campo_max},
+                ).execute().data
 
             caps = _parse_rpc_jsonb_value(supabase_execute(_rpc_caps))
             if isinstance(caps, list):
@@ -15369,6 +15379,8 @@ def dashboard_drill_obra(
 def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], item: Optional[str]) -> Dict[str, Any]:
     """Por PK_ID: presupuesto por revisado; SICOE N3 aprobado; obra en cola (N1+N2 aprob., N3 no aprob.) partida en no revisado / pendiente / rechazado. cant_sicoe_no_revisado = solo bucket no revisado (no incluye pend. ni rech.). Δ = ppto aprobado N3 − obra N3 aprobada."""
     try:
+        campo_max = _get_nivel_maximo_contrato(contrato_id)
+
         def _rpc_pk():
             return (
                 supabase.rpc(
@@ -15377,6 +15389,7 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
                         "p_contrato_id": contrato_id,
                         "p_capitulo": capitulo or "",
                         "p_item": item or "",
+                        "p_campo_nivel_max": campo_max,
                     },
                 )
                 .execute()
@@ -16050,7 +16063,8 @@ def dashboard_pkid_colores_obra(
     """
     Compat: el front aún llama GET /presupuesto/{id}/pkid-colores.
     Reemplaza /cobro/{contrato_id}/pkid-colores-drill para el mini-mapa semáforo del Dashboard.
-    Retorna misma forma: {pk_id: {cobrado, presupuesto, pct, sobrecosto}}
+    Retorna misma forma: {pk_id: {cobrado, presupuesto, pct, sobrecosto}}.
+    Modo obra: Σ SICOE solo si el estado del nivel máximo del contrato es Aprobado (_get_nivel_maximo_contrato), no fijo a nivel3.
     """
     try:
         liq = str(liquidacion or "").strip().lower() in ("1", "true", "yes", "on")
@@ -16078,25 +16092,26 @@ def dashboard_pkid_colores_obra(
             off += 1000
 
         sicoe_ap_agg = {}
-        off = 0
-        while True:
-            def _regs(o=off, cm=campo_mx_pk):
-                q = supabase.table("so_registros").select("pk_id_id, pk_ids(pk_id), costo_directo").eq("contrato_id", contrato_id).eq(cm, "Aprobado")
-                if capitulo:
-                    q = q.eq("capitulo", capitulo)
-                if item:
-                    q = q.ilike("item_numero", f"%{item}%")
-                return q.range(o, o + 999).execute().data
 
-            batch = supabase_execute(_regs) or []
-            for r in batch:
-                pk_join = r.get("pk_ids") or {}
-                k = str(pk_join.get("pk_id") or r.get("pk_id_id") or "").strip()
-                if k:
-                    sicoe_ap_agg[k] = sicoe_ap_agg.get(k, 0) + float(r.get("costo_directo") or 0)
-            if len(batch) < 1000:
-                break
-            off += 1000
+        def _all_sicoe_aprobados():
+            q = (
+                supabase.table("so_registros")
+                .select("pk_id_id, costo_directo, pk_ids(pk_id)")
+                .eq("contrato_id", contrato_id)
+                .eq(campo_mx_pk, "Aprobado")
+                .not_.is_("pk_id_id", "null")
+            )
+            if capitulo:
+                q = q.eq("capitulo", capitulo)
+            if item:
+                q = q.ilike("item_numero", f"%{item}%")
+            return q.range(0, 99999).execute().data
+
+        for r in supabase_execute(_all_sicoe_aprobados) or []:
+            pk_join = r.get("pk_ids") or {}
+            k = str(pk_join.get("pk_id") or r.get("pk_id_id") or "").strip()
+            if k:
+                sicoe_ap_agg[k] = sicoe_ap_agg.get(k, 0) + float(r.get("costo_directo") or 0)
 
         result = {}
         for pk in set(list(ppto_agg.keys()) + list(sicoe_ap_agg.keys())):

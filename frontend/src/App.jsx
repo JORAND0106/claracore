@@ -11498,6 +11498,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [actasListaMatriz, setActasListaMatriz] = useState([])
   const dashDrillCache = useRef({})   // caché ítems: { '${contrato}|${cap}': { data, ts } }
   const dashTablaCache = useRef({})   // caché tabla: { '${contrato}|cap|item': { data, ts } }
+  /** GET /sicoe-obra/.../dashboard-pkid-colores — evita ráfagas contra Supabase (vía API). */
+  const pkidColoresCache = useRef({ data: null, timestamp: 0, contratoId: null, filterKey: '' })
   const dashDrillFetchSeqRef = useRef(0) // evita race: respuestas viejas no sobrescriben drill
   const CACHE_TTL = 5 * 60 * 1000    // 5 minutos en ms
   const [popupCapitulo, setPopupCapitulo] = useState(false)
@@ -11519,6 +11521,46 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const API_URL = API_BASE
   const contratoIdDash = usuario?.contrato_id
   const du = useMemo(() => getDashTypoUI(fontSize), [fontSize])
+
+  const PKID_COLORES_TTL_MS = 300000
+
+  const fetchDashboardPkidColoresCached = useCallback(
+    async (contratoId, params, setColores, opts = {}) => {
+      if (!contratoId) return
+      const filterKey =
+        params && typeof params.toString === 'function' ? String(params.toString()) : ''
+      const ahora = Date.now()
+      const cache = pkidColoresCache.current
+      if (
+        !opts.force &&
+        cache.data != null &&
+        cache.contratoId === contratoId &&
+        cache.filterKey === filterKey &&
+        ahora - cache.timestamp < PKID_COLORES_TTL_MS
+      ) {
+        setColores(cache.data)
+        return
+      }
+      const tok = getToken()
+      try {
+        const res = await fetch(
+          `${API_URL}/sicoe-obra/${contratoId}/dashboard-pkid-colores?${filterKey}`,
+          { headers: { Authorization: `Bearer ${tok}` } },
+        )
+        const data = res.ok ? await res.json().catch(() => ({})) : {}
+        pkidColoresCache.current = {
+          data,
+          timestamp: Date.now(),
+          contratoId,
+          filterKey,
+        }
+        setColores(data)
+      } catch {
+        setColores({})
+      }
+    },
+    [API_URL],
+  )
 
   useEffect(() => {
     if (!contratoIdDash) {
@@ -11651,13 +11693,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       if (dashDrillRef.current[0]) params2.set('capitulo', dashDrillRef.current[0].valor)
       if (dashDrillRef.current[1]) params2.set('item', dashDrillRef.current[1].valor)
       if (!popupCapituloRef.current) {
-        fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-colores?${params2}`, {
-          headers: { Authorization: `Bearer ${tok}` }
-        }).then(r => r.ok ? r.json() : {}).then(setMiniMapaColores).catch(() => {})
+        void fetchDashboardPkidColoresCached(contratoIdDash, params2, setMiniMapaColores)
       }
     }
     recargar()
-    const iv = setInterval(recargar, 180000)
+    const iv = setInterval(recargar, 300000)
 
     /* Supabase Realtime (Dashboard): canal desactivado; recargar() sigue en intervalo 3 min.
     let rtChannel = null
@@ -11684,7 +11724,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       clearInterval(iv)
       /* if (rtChannel) void supabase.removeChannel(rtChannel) */
     }
-  }, [contratoIdDash, cargarMatrizValidacionDashboard])
+  }, [contratoIdDash, cargarMatrizValidacionDashboard, fetchDashboardPkidColoresCached])
 
   useLayoutEffect(() => {
     setActaFiltroMatriz('vigente')
@@ -12189,14 +12229,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   }
   useEffect(() => {
     if (!contratoIdDash) return
-    const tok = getToken()
     const params = new URLSearchParams()
     if (dashDrill[0]) params.set('capitulo', dashDrill[0].valor)
     if (dashDrill[1]) params.set('item', dashDrill[1].valor)
-    fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-colores?${params}`, {
-      headers: { Authorization: `Bearer ${tok}` }
-    }).then(r => r.ok ? r.json() : {}).then(setMiniMapaColores).catch(() => {})
-  }, [contratoIdDash, dashDrill])
+    void fetchDashboardPkidColoresCached(contratoIdDash, params, setMiniMapaColores)
+  }, [contratoIdDash, dashDrill, fetchDashboardPkidColoresCached])
 
   async function cargarAnalisis(nivel) {
     if (!contratoIdDash) return
@@ -12227,14 +12264,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
   useEffect(() => {
     if (!contratoIdDash || !analisisSeleccion) { setAnalisisMapaColores({}); return }
-    const tok = getToken()
     const params = new URLSearchParams()
     if (analisisSeleccion.capitulo) params.set('capitulo', analisisSeleccion.capitulo)
     if (analisisSeleccion.item)     params.set('item', analisisSeleccion.item)
-    fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-colores?${params}`, {
-      headers: { Authorization: `Bearer ${tok}` }
-    }).then(r => r.ok ? r.json() : {}).then(setAnalisisMapaColores).catch(() => {})
-  }, [contratoIdDash, analisisSeleccion])
+    void fetchDashboardPkidColoresCached(contratoIdDash, params, setAnalisisMapaColores)
+  }, [contratoIdDash, analisisSeleccion, fetchDashboardPkidColoresCached])
 
   async function abrirAnalisisMapaPopup(pkid) {
     if (!analisisSeleccion) return
@@ -12301,15 +12335,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
   useEffect(() => {
     if (!contratoIdDash || !liqSeleccion) { setLiqMapaColores({}); return }
-    const tok = getToken()
     const params = new URLSearchParams()
     if (liqSeleccion.capitulo) params.set('capitulo', liqSeleccion.capitulo)
     if (liqSeleccion.item)     params.set('item', liqSeleccion.item)
     params.set('liquidacion', '1')
-    fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-colores?${params}`, {
-      headers: { Authorization: `Bearer ${tok}` }
-    }).then(r => r.ok ? r.json() : {}).then(setLiqMapaColores).catch(() => {})
-  }, [contratoIdDash, liqSeleccion])
+    void fetchDashboardPkidColoresCached(contratoIdDash, params, setLiqMapaColores)
+  }, [contratoIdDash, liqSeleccion, fetchDashboardPkidColoresCached])
 
   async function abrirLiqMapaPopup(pkid) {
     if (!liqSeleccion) return
