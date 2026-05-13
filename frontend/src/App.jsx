@@ -13196,7 +13196,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         >
                           En cada fila, las tres cifras van <strong>de izquierda a derecha</strong>:{' '}
                           <strong>N{nMaxMat}</strong>, {rolNMaxCorto}; <strong>N2</strong>, residente de obra; <strong>N1</strong>, inspector de obra.
-                          {' '}Solo el importe de la <strong>izquierda</strong> (cierre de validación de su contrato) puede no coincidir todavía con SICOE: el agregado en base de datos del panel sigue usando <strong>N3</strong> para esa columna hasta que se actualice en el servidor.
                         </div>
                       )}
                       {renderTabla('Obra ejecutada directo sin AIU', matrizValidacion?.obra_ejecutada_directo_sin_aiu)}
