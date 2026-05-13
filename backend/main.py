@@ -12838,10 +12838,12 @@ def _acta_rpo_id_matriz_dashboard_default(contrato_id: int) -> Optional[int]:
     Usado para alinear el filtro pendiente_item con la fila PENDIENTES: ITEM PENDIENTE.
     """
     try:
+        campo_max = _get_nivel_maximo_contrato(contrato_id)
+
         def _bundle():
             return supabase.rpc(
                 "dashboard_matriz_validacion_vigente_bundle",
-                {"p_contrato_id": contrato_id},
+                {"p_contrato_id": contrato_id, "p_campo_nivel_max": campo_max},
             ).execute().data
         pay = _sicoe_parse_matriz_vigente_bundle_raw(supabase_execute(_bundle))
         vm = pay.get("_vigente") if isinstance(pay, dict) else None
@@ -15110,6 +15112,7 @@ def dashboard_matriz_validacion_obra(
         acta_rpo_resp: Optional[int] = None
         vig = None
         payload: dict = {}
+        campo_max = _get_nivel_maximo_contrato(contrato_id)
 
         def _parse_rpc_matrix_raw(raw):
             if raw is None:
@@ -15146,7 +15149,7 @@ def dashboard_matriz_validacion_obra(
                 def _bundle():
                     return supabase.rpc(
                         "dashboard_matriz_validacion_vigente_bundle",
-                        {"p_contrato_id": contrato_id},
+                        {"p_contrato_id": contrato_id, "p_campo_nivel_max": campo_max},
                     ).execute().data
                 pay = _parse_rpc_matrix_raw(supabase_execute(_bundle))
                 vm = pay.get("_vigente") if isinstance(pay, dict) else None
@@ -15199,7 +15202,7 @@ def dashboard_matriz_validacion_obra(
                 def _rpc():
                     return supabase.rpc(
                         "dashboard_matriz_validacion_agg",
-                        {"p_contrato_id": contrato_id, "p_acta_id": acta_id_filtro},
+                        {"p_contrato_id": contrato_id, "p_acta_id": acta_id_filtro, "p_campo_nivel_max": campo_max},
                     ).execute().data
                 payload = _parse_rpc_matrix_raw(supabase_execute(_rpc))
             except Exception:

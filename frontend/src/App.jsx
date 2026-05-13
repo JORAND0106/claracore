@@ -1166,6 +1166,16 @@ const SICOE_NIVELES_CONTRATO_DEFAULT = () => ({
   })),
 })
 
+/** Título de columna matriz «Validación por rol» (Dashboard) desde GET niveles-validacion. */
+function dashMatrizThDesdeNiveles(nivelesContrato, nivelNum) {
+  const n = Number(nivelNum)
+  if (!Number.isFinite(n) || n < 1) return `Nivel ${nivelNum}`
+  const row = (nivelesContrato?.niveles || []).find((x) => Number(x?.nivel) === n)
+  const base = (row?.encabezado && String(row.encabezado).trim()) || SICOE_NIVEL_ENCABEZADO_FALLBACK[n] || `Nivel ${n}`
+  if (new RegExp(`\\(N${n}\\)`, 'i').test(base) || new RegExp(`\\bN${n}\\b`).test(base)) return base
+  return `${base} (N${n})`
+}
+
 /**
  * Inferencia por nombre de rol (normalizado), si rol_id no está en ROL_ID_NIVEL_MAP.
  * null = solo comentarios / sin nivel de validación de estado.
@@ -13004,8 +13014,23 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 <div style={{ marginBottom:'12px' }}>
                   <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>Validación por rol · SICOE Obra</div>
                   <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'4px' }}>
-                    Por defecto se usa el acta RPO cuyo período incluye hoy. Columnas: Interventoría (N3) · Residente (N2) · Inspector (N1).
-                    Los importes en N2 solo cuentan si N1 = Aprobado; los de N3 solo si N1 y N2 = Aprobado. «Pendiente ítem» (sub_estado) no suma en el inspector.
+                    {(() => {
+                      const naMat = Array.isArray(nivelesDashContrato?.niveles_activos) && nivelesDashContrato.niveles_activos.length
+                        ? [...nivelesDashContrato.niveles_activos].sort((a, b) => a - b)
+                        : [1, 2, 3]
+                      const nMaxMat = Number.isFinite(Number(nivelesDashContrato?.nivel_maximo))
+                        ? Number(nivelesDashContrato.nivel_maximo)
+                        : naMat[naMat.length - 1] ?? 3
+                      const thInt = dashMatrizThDesdeNiveles(nivelesDashContrato, nMaxMat)
+                      const thRes = dashMatrizThDesdeNiveles(nivelesDashContrato, 2)
+                      const thIns = dashMatrizThDesdeNiveles(nivelesDashContrato, 1)
+                      return (
+                        <>
+                          Por defecto se usa el acta RPO cuyo período incluye hoy. Columnas: {thInt} · {thRes} · {thIns}.
+                          Los importes en la columna del nivel 2 solo cuentan si el nivel 1 = Aprobado; los de la columna del nivel máximo solo si nivel 1 y 2 = Aprobado. «Pendiente ítem» (sub_estado) no suma en el inspector.
+                        </>
+                      )
+                    })()}
                   </div>
                   <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'10px' }}>
                     <span style={{ fontSize:`${du.sub}px`, color:t.textMuted }}>Acta RPO:</span>
@@ -13069,6 +13094,17 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 {(() => {
                   /* Filas pastel: en tema oscuro t.text es claro → ilegible; usar texto oscuro sobre fondo claro */
                   const textOnPastel = themeIsDarkChrome(activeTheme) ? '#0f172a' : t.text
+                  const naMat = Array.isArray(nivelesDashContrato?.niveles_activos) && nivelesDashContrato.niveles_activos.length
+                    ? [...nivelesDashContrato.niveles_activos].sort((a, b) => a - b)
+                    : [1, 2, 3]
+                  const nMaxMat = Number.isFinite(Number(nivelesDashContrato?.nivel_maximo))
+                    ? Number(nivelesDashContrato.nivel_maximo)
+                    : naMat[naMat.length - 1] ?? 3
+                  const thInterMatriz = dashMatrizThDesdeNiveles(nivelesDashContrato, nMaxMat)
+                  const thResidenteMatriz = dashMatrizThDesdeNiveles(nivelesDashContrato, 2)
+                  const thInspectorMatriz = dashMatrizThDesdeNiveles(nivelesDashContrato, 1)
+                  const campoMaxMatriz = String(nivelesDashContrato?.campo_nivel_maximo || 'nivel3_estado').trim() || 'nivel3_estado'
+                  const matrizAgregadoSqlUsaN3 = campoMaxMatriz === 'nivel3_estado'
                   const filas = [
                     { key: 'aprobado', label: 'APROBADO', bg: '#DCFCE7', dark: false },
                     { key: 'pendiente', label: 'PENDIENTES', bg: '#FEF9C3', dark: false },
@@ -13105,9 +13141,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                             <thead>
                               <tr>
                                 <th style={{ textAlign:'left', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>Estado</th>
-                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>Interventoría (N3)</th>
-                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>Residente (N2)</th>
-                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>Inspector (N1)</th>
+                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>{thInterMatriz}</th>
+                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>{thResidenteMatriz}</th>
+                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>{thInspectorMatriz}</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -13135,6 +13171,23 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   }
                   return (
                     <>
+                      {!matrizAgregadoSqlUsaN3 && (
+                        <div
+                          role="note"
+                          style={{
+                            marginBottom: '12px',
+                            padding: '8px 10px',
+                            borderRadius: '8px',
+                            fontSize: `${du.sub}px`,
+                            color: '#92400e',
+                            background: 'rgba(251, 191, 36, 0.18)',
+                            border: '1px solid rgba(217, 119, 6, 0.45)',
+                            lineHeight: 1.35,
+                          }}
+                        >
+                          El agregado en base de datos de esta matriz sigue clasificando la última columna con <strong>nivel3_estado</strong>; su contrato usa cierre en <strong>{campoMaxMatriz}</strong> (N{nMaxMat}). Los importes de esa columna pueden no coincidir con el cierre real hasta que el panel se actualice en el servidor; con el modo alternativo (fallback) del API los totales sí usan el nivel máximo del contrato.
+                        </div>
+                      )}
                       {renderTabla('Obra ejecutada directo sin AIU', matrizValidacion?.obra_ejecutada_directo_sin_aiu)}
                       {renderTabla('Ensayos y sondeos directo sin IVA', matrizValidacion?.ensayos_sondeos_directo_sin_iva)}
                     </>
