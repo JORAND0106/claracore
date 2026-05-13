@@ -5782,6 +5782,7 @@ function ModuloSicoeObra({
     [nivelesContrato],
   )
 
+  // Filtrar por nivel es operación de VISTA — solo niveles activos en el contrato actual.
   const nivelesDisponiblesEnFiltro = useMemo(() => {
     const na = nivelesContrato?.niveles_activos
     return Array.isArray(na) && na.length ? [...na].sort((a, b) => a - b) : [1, 2, 3]
@@ -5795,14 +5796,15 @@ function ModuloSicoeObra({
   const [capasValidacion, setCapasValidacion] = useState(() =>
     capasInicialesValidacionFromUser(usuario, SICOE_NIVELES_CONTRATO_DEFAULT()),
   )
+
+  const sicoeEstiloChipCapa = (estado) => {
     const e = String(estado || '').trim()
     if (e === 'Pendiente') return { background: 'rgba(234,179,8,0.14)', border: '1px solid rgba(234,179,8,0.45)', color: '#ca8a04' }
     if (e === 'Rechazado') return { background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.35)', color: '#dc2626' }
     if (e === 'Aprobado') return { background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.35)', color: '#16a34a' }
     return { background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.35)', color: '#2563eb' }
   }
-  // Filtrar por nivel es operación de VISTA — solo niveles activos en el contrato actual.
-  const sicoeEstiloChipCapa = (estado) => {
+
   const [capasValidacionOp, setCapasValidacionOp] = useState('and')
   const [sicoeModalCombCapas, setSicoeModalCombCapas] = useState(null)
   const [capaTemp, setCapaTemp] = useState({ nivel: '', estado: '' })
