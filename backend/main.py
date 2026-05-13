@@ -611,6 +611,10 @@ class UsuarioContratoCreate(BaseModel):
     usuario_id: int
     contrato_id: int
 
+class NivelesValidacionContratoPutBody(BaseModel):
+    niveles_activos: List[int]
+
+
 class ContratoUpdate(BaseModel):
     numero: Optional[str] = None
     objeto: Optional[str] = None
@@ -2044,6 +2048,26 @@ def _parse_validacion_capas_param(
     return out
 
 
+def _get_prereq_nivel_activo(campo_nivel: str, contrato_id: int) -> Optional[tuple]:
+    """
+    Devuelve el prerrequisito real según niveles activos del contrato.
+    Si el nivel anterior inmediato no está activo, busca el anterior activo.
+    """
+    niveles_activos = _get_niveles_activos_contrato(contrato_id)
+    num_map = {v: k for k, v in NIVEL_VALIDACION_NUM_A_CAMPO.items()}
+    nivel_num = num_map.get(campo_nivel)
+    if nivel_num is None:
+        return None
+    anteriores = sorted([n for n in niveles_activos if n < nivel_num], reverse=True)
+    if not anteriores:
+        return None
+    nivel_previo = anteriores[0]
+    campo_previo = NIVEL_VALIDACION_NUM_A_CAMPO.get(nivel_previo)
+    if not campo_previo:
+        return None
+    return (campo_previo, "Aprobado")
+
+
 def _so_registros_q_y_capas_validacion(
     q,
     capas: List[dict],
@@ -2053,6 +2077,7 @@ def _so_registros_q_y_capas_validacion(
     cap_v,
     sub_v,
     item_v,
+    contrato_id: Optional[int] = None,
 ):
     """AND en la misma fila de so_registros: todas las capas (cargo+estado) a la vez."""
     for capa in capas:
@@ -2062,7 +2087,13 @@ def _so_registros_q_y_capas_validacion(
         evp = (capa.get("estado") or "").strip()
         if not evp:
             continue
-        prereq = CARGO_NIVEL_PRERREQUISITO.get(fld)
+        if contrato_id is not None:
+            try:
+                prereq = _get_prereq_nivel_activo(fld, int(contrato_id))
+            except (TypeError, ValueError):
+                prereq = None
+        else:
+            prereq = CARGO_NIVEL_PRERREQUISITO.get(fld)
         if prereq:
             q = q.eq(prereq[0], prereq[1])
         if evp in ("No Revisado", "No Revisados"):
@@ -2416,6 +2447,7 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     estado: Optional[str] = None,
     pendiente_item: bool = False,
     registro_id_in: Optional[List[int]] = None,
+    contrato_id: Optional[int] = None,
 ):
     """AND sobre columnas de so_registros; misma semántica que /reportes/buscar y /analisis."""
     items_eff = list(items) if items else []
@@ -2446,7 +2478,7 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
         q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
     if capas_v:
         q = _so_registros_q_y_capas_validacion(
-            q, capas_v, pk_id, tramo, costado, capitulo, subcontratista_id, None
+            q, capas_v, pk_id, tramo, costado, capitulo, subcontratista_id, None, contrato_id
         )
     # require_item: alinea con la vista del dashboard (solo registros con ítem asignado)
     # Solo se aplica si el estado no es "sin_asignar_item" (filtro inverso explícito)
@@ -2587,6 +2619,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                             estado=estado,
                             pendiente_item=pendiente_item,
                             registro_id_in=c,
+                            contrato_id=contrato_id,
                         )
                         return q.limit(5000).execute().data
 
@@ -2620,6 +2653,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                         estado=estado,
                         pendiente_item=pendiente_item,
                         registro_id_in=c,
+                        contrato_id=contrato_id,
                     )
                     return q.limit(5000).execute().data
 
@@ -2658,6 +2692,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     capas_v=(capas_v if capas_ok else None),
                     estado=estado,
                     pendiente_item=pendiente_item,
+                    contrato_id=contrato_id,
                 )
                 return q.limit(5000).execute().data
 
@@ -2692,6 +2727,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     capas_v=(capas_v if capas_ok else None),
                     estado=estado,
                     pendiente_item=pendiente_item,
+                    contrato_id=contrato_id,
                 )
                 return q.range(o, o + page - 1).execute().data
 
@@ -8668,7 +8704,7 @@ def buscar_reportes_obra(
                 if capas_v and not _estado_filtro_omite_validacion_por_cargo(estado):
                     if not _defer_capas_or_grilla:
                         q = _so_registros_q_y_capas_validacion(
-                            q, capas_v, pk_id, tramo, costado, capitulo, subcontratista_id, None
+                            q, capas_v, pk_id, tramo, costado, capitulo, subcontratista_id, None, contrato_id
                         )
 
                 if _estado_filtro_es_sin_asignar_item(estado):
@@ -9034,6 +9070,7 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
                     body.capitulo,
                     body.subcontratista_id,
                     None,
+                    contrato_id,
                 )
 
         return q
@@ -9393,6 +9430,7 @@ def exportar_registros_sicoe(
                     body.capitulo,
                     body.subcontratista_id,
                     None,
+                    contrato_id,
                 )
 
         return q
@@ -9899,7 +9937,7 @@ def analisis_registros_obra(
                 q = _so_reg_item_asignado(q)
             if _capas_sql and not _estado_filtro_omite_validacion_por_cargo(estado):
                 q = _so_registros_q_y_capas_validacion(
-                    q, _capas_sql, pk_id, tramo, costado, _cap_l, _sub_l, None
+                    q, _capas_sql, pk_id, tramo, costado, _cap_l, _sub_l, None, contrato_id
                 )
             if _estado_filtro_es_sin_asignar_item(estado):
                 q = _so_reg_sin_item_asignado(q)
@@ -10552,6 +10590,7 @@ def obtener_reporte(
                     ),
                     estado=estado,
                     pendiente_item=pendiente_item,
+                    contrato_id=contrato_id,
                 )
                 return q.order("id").range(o, o + page - 1).execute().data
 
@@ -13625,6 +13664,43 @@ def sicoe_obra_niveles_validacion(contrato_id: int, current_user=Depends(get_cur
         "campo_nivel_maximo": campo_mx,
         "niveles": niveles,
     }
+
+
+@app.put("/sicoe-obra/{contrato_id}/niveles-validacion")
+def sicoe_obra_put_niveles_validacion(
+    contrato_id: int,
+    body: NivelesValidacionContratoPutBody,
+    current_user=Depends(get_current_user),
+):
+    """Upsert en `contrato_niveles_validacion`. Solo desarrollador o administrador."""
+    _, cargo = _caller_contract_scope(current_user)
+    if (cargo or "").strip().lower() not in ("desarrollador", "administrador"):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo desarrollador o administrador pueden configurar niveles de validación.",
+        )
+    raw = body.niveles_activos or []
+    if not isinstance(raw, list) or len(raw) < 2:
+        raise HTTPException(status_code=422, detail="Debe indicar al menos 2 niveles activos.")
+    norm: List[int] = []
+    for x in raw:
+        try:
+            xi = int(x)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="niveles_activos debe ser una lista de enteros entre 1 y 6.")
+        if xi < 1 or xi > 6:
+            raise HTTPException(status_code=422, detail="Cada nivel debe estar entre 1 y 6.")
+        if xi not in norm:
+            norm.append(xi)
+    norm.sort()
+    ex = supabase.table("contratos").select("id").eq("id", contrato_id).limit(1).execute()
+    if not ex.data:
+        raise HTTPException(status_code=404, detail="Contrato no encontrado")
+    supabase.table("contrato_niveles_validacion").upsert(
+        {"contrato_id": contrato_id, "niveles_activos": norm},
+        on_conflict="contrato_id",
+    ).execute()
+    return {"ok": True, "contrato_id": contrato_id, "niveles_activos": norm}
 
 
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/validar-nivel1")

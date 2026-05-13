@@ -1834,6 +1834,16 @@ function SeccionResets({ call, theme }) {
 }
 
 // ─── SECCIÓN 5: Contratos ──────────────────────────────────────────────────
+/** Etiquetas de niveles SICOE (panel admin → configuración por contrato). */
+const SICOE_NIVELES_VALIDACION_ADMIN_LABELS = {
+  1: "Nivel 1 — Inspector de Obra (Operativo Contratista)",
+  2: "Nivel 2 — Residente de Obra (Contratista)",
+  3: "Nivel 3 — Director de Obra (Contratista Gerencial)",
+  4: "Nivel 4 — Residente de Interventoría (Interventoría)",
+  5: "Nivel 5 — Director de Interventoría (Interventoría Gerencial)",
+  6: "Nivel 6 — Supervisor Entidad (Supervisor Externo)",
+};
+
 function SeccionContratos({ call, contratos, recargarContratos, perms = { crear: false, editar: false } }) {
   const ENTIDADES = ["IDU", "ICCU", "ENEL", "EAB", "OTRA"];
   const FORM_VACIO = {
@@ -1852,6 +1862,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const planoFileInputRef = useRef(null);
+  const [nivelesActivosEdit, setNivelesActivosEdit] = useState([1, 2, 3]);
 
   /** Límites y centro en una pasada (sin arrays enormes). Math.min(...array) falla con muchos vértices (>~65k args). */
   function boundsDesdeGeojson(geojson) {
@@ -2042,6 +2053,18 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     } catch {
       d = c;
     }
+    try {
+      const nv = await call("GET", `/sicoe-obra/${c.id}/niveles-validacion`);
+      const na = Array.isArray(nv?.niveles_activos) && nv.niveles_activos.length
+        ? [...nv.niveles_activos]
+            .map((x) => parseInt(x, 10))
+            .filter((x) => Number.isFinite(x) && x >= 1 && x <= 6)
+            .sort((a, b) => a - b)
+        : [1, 2, 3];
+      setNivelesActivosEdit(na);
+    } catch {
+      setNivelesActivosEdit([1, 2, 3]);
+    }
     if (!d || typeof d !== "object") d = c;
     llenarFormDesdeContrato(d);
     setMsg(null);
@@ -2050,6 +2073,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
   function cancelarEdicion() {
     setEditandoId(null);
     setForm(FORM_VACIO);
+    setNivelesActivosEdit([1, 2, 3]);
     setPlanoArchivoLabel(null);
     if (planoFileInputRef.current) planoFileInputRef.current.value = "";
     setMsg(null);
@@ -2078,6 +2102,16 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     if (!form.numero || !form.contratista) { setMsg({ type: 'error', text: 'Número y contratista son obligatorios' }); return; }
     if (!form.entidad) { setMsg({ type: 'error', text: 'La entidad es obligatoria' }); return; }
     if (form.entidad === "OTRA" && !form.entidad_otra?.trim()) { setMsg({ type: 'error', text: 'Debes indicar cuál es la otra entidad' }); return; }
+    if (editandoId) {
+      const naSel = (nivelesActivosEdit || [])
+        .map((x) => parseInt(x, 10))
+        .filter((x) => Number.isFinite(x) && x >= 1 && x <= 6);
+      const naUniq = [...new Set(naSel)].sort((a, b) => a - b);
+      if (naUniq.length < 2) {
+        setMsg({ type: 'error', text: 'Debe seleccionar al menos 2 niveles de validación.' });
+        return;
+      }
+    }
     setSaving(true); setMsg(null);
     try {
       const costos_adicionales_lista = (form.costos_adicionales_lista || [])
@@ -2099,6 +2133,12 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
       delete payload.costos_adicionales;
       if (editandoId) {
         await call("PUT", `/contratos/${editandoId}`, payload);
+        const naPut = [...new Set(
+          (nivelesActivosEdit || [])
+            .map((x) => parseInt(x, 10))
+            .filter((x) => Number.isFinite(x) && x >= 1 && x <= 6),
+        )].sort((a, b) => a - b);
+        await call("PUT", `/sicoe-obra/${editandoId}/niveles-validacion`, { niveles_activos: naPut });
         setMsg({ type: 'success', text: 'Contrato actualizado correctamente' });
         try {
           const fresh = await call("GET", `/contratos/${editandoId}`);
@@ -2463,6 +2503,55 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
             );
           })}
           <button type="button" onClick={() => setForm(f => ({ ...f, costos_adicionales_lista: [...(f.costos_adicionales_lista || []), { concepto_contractual: '', valor_mensual: '', tiempo_meses: '' }] }))} style={{ background: 'rgba(0,175,197,0.2)', border: '1px solid rgba(0,175,197,0.4)', color: '#00afc5', borderRadius: 8, padding: '8px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer', marginBottom: 12 }}>+ Agregar costo adicional</button>
+          {editandoId && (
+            <div style={{ marginTop: 8, marginBottom: 16, paddingTop: 16, borderTop: '1px solid rgba(30,58,95,0.5)' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#00afc5', marginBottom: 8 }}>Niveles de Validación SICOE</div>
+              <div style={{ fontSize: 11, color: '#4a7a87', lineHeight: 1.45, marginBottom: 12 }}>
+                Selecciona los niveles que estarán activos para este contrato. El registro se sella al aprobar el nivel más alto seleccionado.
+              </div>
+              {[1, 2, 3, 4, 5, 6].map((n) => (
+                <label
+                  key={n}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 10,
+                    cursor: 'pointer',
+                    background: '#0a1628',
+                    border: '1.5px solid #1E3A5F',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    marginBottom: 10,
+                    color: '#E0F2FE',
+                    fontSize: 13,
+                    lineHeight: 1.35,
+                    boxSizing: 'border-box',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={nivelesActivosEdit.includes(n)}
+                    onChange={() => {
+                      setNivelesActivosEdit((prev) => {
+                        const p = Array.isArray(prev) ? prev : [];
+                        if (p.includes(n)) return [...p.filter((x) => x !== n)].sort((a, b) => a - b);
+                        return [...p, n].sort((a, b) => a - b);
+                      });
+                    }}
+                    style={{
+                      width: 16,
+                      height: 16,
+                      marginTop: 2,
+                      accentColor: '#00afc5',
+                      flexShrink: 0,
+                      cursor: 'pointer',
+                    }}
+                  />
+                  <span>{SICOE_NIVELES_VALIDACION_ADMIN_LABELS[n]}</span>
+                </label>
+              ))}
+            </div>
+          )}
           <label style={lbl}>LOGO CONTRATISTA</label>
           <label style={{ display: 'block', background: '#0a1628', border: '2px dashed #1E3A5F', borderRadius: 8, padding: 12, textAlign: 'center', cursor: 'pointer', color: '#4a7a87', fontSize: 12, marginBottom: 12 }}>
             {form.logo_contratista ? '✅ Logo cargado' : '📂 Cargar logo contratista'}
