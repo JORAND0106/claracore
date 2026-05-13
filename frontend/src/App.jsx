@@ -5994,6 +5994,7 @@ function ModuloSicoeObra({
       typeof refrescarMatrizValidacionDashboard === 'function' ? refrescarMatrizValidacionDashboard : null
   }, [refrescarMatrizValidacionDashboard])
 
+  /* Supabase Realtime (SICOE Obra): canal desactivado; el refresco sigue por polling / acciones del usuario.
   useEffect(() => {
     if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contrato_id) return
     const cid = String(contrato_id)
@@ -6070,6 +6071,7 @@ function ModuloSicoeObra({
       void supabase.removeChannel(channel)
     }
   }, [contrato_id])
+  */
 
   sicoeMapFiltroApplyPkRef.current = (pkIdInt) => {
     setModalPkAsignacionMapa({ pk_id_id: pkIdInt })
@@ -11657,6 +11659,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     recargar()
     const iv = setInterval(recargar, 180000)
 
+    /* Supabase Realtime (Dashboard): canal desactivado; recargar() sigue en intervalo 3 min.
     let rtChannel = null
     if (SUPABASE_URL && SUPABASE_ANON_KEY) {
       const cid = String(contratoIdDash)
@@ -11675,10 +11678,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           console.log('Realtime status:', status)
         })
     }
+    */
 
     return () => {
       clearInterval(iv)
-      if (rtChannel) void supabase.removeChannel(rtChannel)
+      /* if (rtChannel) void supabase.removeChannel(rtChannel) */
     }
   }, [contratoIdDash, cargarMatrizValidacionDashboard])
 
