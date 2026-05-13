@@ -25,6 +25,7 @@ import re
 import difflib
 import json
 import math
+from urllib.parse import unquote
 from concurrent.futures import ThreadPoolExecutor
 
 # ── Sesiones DWG activas (en memoria) ─────────────────────────────────────────
@@ -14309,6 +14310,11 @@ def _parse_rpc_jsonb_value(raw):
         row = raw[0]
         if isinstance(row, dict):
             for v in row.values():
+                if isinstance(v, str) and (v.startswith("[") or v.startswith("{")):
+                    try:
+                        v = json.loads(v)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
                 return v
     if isinstance(raw, dict):
         return raw
@@ -15325,6 +15331,10 @@ def dashboard_drill_obra(
     current_user=Depends(get_current_user)
 ):
     try:
+        if capitulo is not None:
+            capitulo = unquote(str(capitulo)).strip() or None
+        if item is not None:
+            item = unquote(str(item)).strip() or None
         campo_max = _get_nivel_maximo_contrato(contrato_id)
         if capitulo:
             try:

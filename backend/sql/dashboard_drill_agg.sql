@@ -154,34 +154,38 @@ all_caps AS (
   UNION
   SELECT s.cap FROM ppto_split s
 )
+-- Sub-SELECT: si all_caps está vacío, jsonb_agg sobre 0 filas devuelve NULL en una fila → COALESCE → '[]'.
+-- Sin este envoltorio, FROM vacío hace que la función no devuelva fila y PostgREST recibe NULL (ítems no cargan).
 SELECT COALESCE(
-  jsonb_agg(
-    jsonb_build_object(
-      'nombre', c.cap,
-      'descripcion', '',
-      'presupuesto', round(COALESCE(pt.pres, 0), 2),
-      'cobrado', round(COALESCE(ob.ap_c, 0), 2),
-      'presupuesto_aprobado_n3', round(COALESCE(ps.pap, 0), 2),
-      'presupuesto_no_revisado_n3', round(COALESCE(ps.pnr, 0), 2),
-      'sicoe_no_revisado_n3', round(COALESCE(ob.nr_c, 0), 2),
-      'delta', round(COALESCE(pt.pres, 0) - COALESCE(ob.ap_c, 0), 2),
-      'pct',
-      CASE
-        WHEN COALESCE(pt.pres, 0) > 0 THEN round(COALESCE(ob.ap_c, 0) / pt.pres * 100, 1)
-        ELSE 0
-      END,
-      'cant_ppto', 0,
-      'cant_sicoe_aprobado', round(COALESCE(ob.ap_q, 0), 3),
-      'cant_sicoe_no_revisado', round(COALESCE(ob.nr_q, 0), 3)
+  (
+    SELECT jsonb_agg(
+      jsonb_build_object(
+        'nombre', c.cap,
+        'descripcion', '',
+        'presupuesto', round(COALESCE(pt.pres, 0), 2),
+        'cobrado', round(COALESCE(ob.ap_c, 0), 2),
+        'presupuesto_aprobado_n3', round(COALESCE(ps.pap, 0), 2),
+        'presupuesto_no_revisado_n3', round(COALESCE(ps.pnr, 0), 2),
+        'sicoe_no_revisado_n3', round(COALESCE(ob.nr_c, 0), 2),
+        'delta', round(COALESCE(pt.pres, 0) - COALESCE(ob.ap_c, 0), 2),
+        'pct',
+        CASE
+          WHEN COALESCE(pt.pres, 0) > 0 THEN round(COALESCE(ob.ap_c, 0) / pt.pres * 100, 1)
+          ELSE 0
+        END,
+        'cant_ppto', 0,
+        'cant_sicoe_aprobado', round(COALESCE(ob.ap_q, 0), 3),
+        'cant_sicoe_no_revisado', round(COALESCE(ob.nr_q, 0), 3)
+      )
+      ORDER BY c.cap
     )
-    ORDER BY c.cap
+    FROM all_caps c
+    LEFT JOIN obra ob ON ob.cap = c.cap
+    LEFT JOIN ppto_tot pt ON pt.cap = c.cap
+    LEFT JOIN ppto_split ps ON ps.cap = c.cap
   ),
   '[]'::jsonb
-)
-FROM all_caps c
-LEFT JOIN obra ob ON ob.cap = c.cap
-LEFT JOIN ppto_tot pt ON pt.cap = c.cap
-LEFT JOIN ppto_split ps ON ps.cap = c.cap;
+);
 $f$;
 
 -- Ítems dentro de un capítulo (nivel 1 → lista de barras).
@@ -252,33 +256,35 @@ all_items AS (
   SELECT it FROM obra WHERE it IS NOT NULL
 )
 SELECT COALESCE(
-  jsonb_agg(
-    jsonb_build_object(
-      'item', ai.it,
-      'nombre', ai.it,
-      'descripcion', COALESCE(pt.descripcion, ''),
-      'presupuesto', round(COALESCE(pt.p_cost, 0), 2),
-      'cobrado', round(COALESCE(ob.ap_c, 0), 2),
-      'presupuesto_aprobado_n3', round(COALESCE(pt.pap, 0), 2),
-      'presupuesto_no_revisado_n3', round(COALESCE(pt.pnr, 0), 2),
-      'sicoe_no_revisado_n3', round(COALESCE(ob.nr_c, 0), 2),
-      'delta', round(COALESCE(pt.p_cost, 0) - COALESCE(ob.ap_c, 0), 2),
-      'pct',
-      CASE
-        WHEN COALESCE(pt.p_cost, 0) > 0 THEN round(COALESCE(ob.ap_c, 0) / pt.p_cost * 100, 1)
-        ELSE 0
-      END,
-      'cant_ppto', round(COALESCE(pt.p_cant, 0), 3),
-      'cant_sicoe_aprobado', round(COALESCE(ob.ap_q, 0), 3),
-      'cant_sicoe_no_revisado', round(COALESCE(ob.nr_q, 0), 3)
+  (
+    SELECT jsonb_agg(
+      jsonb_build_object(
+        'item', ai.it,
+        'nombre', ai.it,
+        'descripcion', COALESCE(pt.descripcion, ''),
+        'presupuesto', round(COALESCE(pt.p_cost, 0), 2),
+        'cobrado', round(COALESCE(ob.ap_c, 0), 2),
+        'presupuesto_aprobado_n3', round(COALESCE(pt.pap, 0), 2),
+        'presupuesto_no_revisado_n3', round(COALESCE(pt.pnr, 0), 2),
+        'sicoe_no_revisado_n3', round(COALESCE(ob.nr_c, 0), 2),
+        'delta', round(COALESCE(pt.p_cost, 0) - COALESCE(ob.ap_c, 0), 2),
+        'pct',
+        CASE
+          WHEN COALESCE(pt.p_cost, 0) > 0 THEN round(COALESCE(ob.ap_c, 0) / pt.p_cost * 100, 1)
+          ELSE 0
+        END,
+        'cant_ppto', round(COALESCE(pt.p_cant, 0), 3),
+        'cant_sicoe_aprobado', round(COALESCE(ob.ap_q, 0), 3),
+        'cant_sicoe_no_revisado', round(COALESCE(ob.nr_q, 0), 3)
+      )
+      ORDER BY ai.it
     )
-    ORDER BY ai.it
+    FROM all_items ai
+    LEFT JOIN ppto pt ON pt.it = ai.it
+    LEFT JOIN obra ob ON ob.it = ai.it
   ),
   '[]'::jsonb
-)
-FROM all_items ai
-LEFT JOIN ppto pt ON pt.it = ai.it
-LEFT JOIN obra ob ON ob.it = ai.it;
+);
 $f$;
 
 -- Tabla PK_ID para un capítulo + ítem (nivel 2 drill). Usa la misma clave de ítem normalizada.
