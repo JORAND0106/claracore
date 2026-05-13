@@ -13105,6 +13105,15 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   const thInspectorMatriz = dashMatrizThDesdeNiveles(nivelesDashContrato, 1)
                   const campoMaxMatriz = String(nivelesDashContrato?.campo_nivel_maximo || 'nivel3_estado').trim() || 'nivel3_estado'
                   const matrizAgregadoSqlUsaN3 = campoMaxMatriz === 'nivel3_estado'
+                  const encMaxRow = (nivelesDashContrato?.niveles || []).find((x) => Number(x?.nivel) === nMaxMat)
+                  const encMaxStr = String(encMaxRow?.encabezado || '').trim()
+                  const rolNMaxCorto = encMaxStr.includes('·')
+                    ? encMaxStr.split('·').pop().trim()
+                    : (() => {
+                        const fb = SICOE_NIVEL_ENCABEZADO_FALLBACK[nMaxMat]
+                        if (fb && fb.includes('·')) return fb.split('·').pop().trim()
+                        return fb || `nivel ${nMaxMat}`
+                      })()
                   const filas = [
                     { key: 'aprobado', label: 'APROBADO', bg: '#DCFCE7', dark: false },
                     { key: 'pendiente', label: 'PENDIENTES', bg: '#FEF9C3', dark: false },
@@ -13185,7 +13194,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                             lineHeight: 1.35,
                           }}
                         >
-                          El agregado en base de datos de esta matriz sigue clasificando la última columna con <strong>nivel3_estado</strong>; su contrato usa cierre en <strong>{campoMaxMatriz}</strong> (N{nMaxMat}). Los importes de esa columna pueden no coincidir con el cierre real hasta que el panel se actualice en el servidor; con el modo alternativo (fallback) del API los totales sí usan el nivel máximo del contrato.
+                          En cada fila, las tres cifras van <strong>de izquierda a derecha</strong>:{' '}
+                          <strong>N{nMaxMat}</strong>, {rolNMaxCorto}; <strong>N2</strong>, residente de obra; <strong>N1</strong>, inspector de obra.
+                          {' '}Solo el importe de la <strong>izquierda</strong> (cierre de validación de su contrato) puede no coincidir todavía con SICOE: el agregado en base de datos del panel sigue usando <strong>N3</strong> para esa columna hasta que se actualice en el servidor.
                         </div>
                       )}
                       {renderTabla('Obra ejecutada directo sin AIU', matrizValidacion?.obra_ejecutada_directo_sin_aiu)}
