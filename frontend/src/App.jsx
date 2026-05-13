@@ -11408,6 +11408,14 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   )
 }
 
+/** Misma lógica que backend `_dash_norm_capitulo_key_py` / SQL `_dash_norm_capitulo_key` (obra vs presupuesto). */
+function dashNormCapituloKey(s) {
+  if (s == null || String(s).trim() === '') return 'Sin capítulo'
+  let t = String(s).trim().replace(/\s+/g, ' ')
+  t = t.replace(/^(\d+\.)\s+/, '$1')
+  return t
+}
+
 /** Ordena filas comparativo por prefijo numérico del capítulo (1, 2, … 10, 11), no alfabético. */
 function sortComparativoCapitulos(rows) {
   if (!Array.isArray(rows)) return []
@@ -11742,6 +11750,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
 
   function mapDrillCapituloItems(payload) {
     if (!payload) return null
+    if (payload.detail != null && payload.items == null) return null
     let rows = null
     if (Array.isArray(payload)) rows = payload
     else if (Array.isArray(payload.items)) rows = payload.items
@@ -11770,7 +11779,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     }
     const tok = getToken()
     const params = new URLSearchParams()
-    drill.forEach(d => params.set(d.campo, d.valor))
+    drill.forEach((d) => {
+      if (d?.campo && d.valor != null && String(d.valor).trim() !== '') {
+        params.set(d.campo, String(d.valor).trim())
+      }
+    })
 
     // ── Nivel 2: tabla pkid-tabla ──
     if (drill.length >= 2) {
@@ -11845,6 +11858,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           setDashData([])
         }
       } else {
+        let errSnippet = ''
+        try {
+          errSnippet = (await res.text()).slice(0, 500)
+        } catch (_) {}
+        logApiFailure(`dashboard-drill HTTP ${res.status}`, errSnippet)
         setDashData([])
       }
     } finally {
@@ -11857,7 +11875,11 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     const seqAtStart = dashDrillFetchSeqRef.current
     const tok = getToken()
     const params = new URLSearchParams()
-    drill.forEach(d => params.set(d.campo, d.valor))
+    drill.forEach((d) => {
+      if (d?.campo && d.valor != null && String(d.valor).trim() !== '') {
+        params.set(d.campo, String(d.valor).trim())
+      }
+    })
     if (drill.length >= 2) {
       const cacheKey = `${contratoIdDash}|${drill[0]?.valor}|${drill[1]?.valor}`
       fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
@@ -12987,7 +13009,16 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                           const rawCap = cap.capitulo || ''
                           const nomCap = rawCap.length > maxChars ? `${rawCap.slice(0, maxChars)}…` : rawCap
                           const tipId = `tip-vs-h-${i}`
-                          const openCap = () => { setDashDrill([{ campo: 'capitulo', valor: cap.capitulo }]); setPopupCapitulo(true) }
+                          const openCap = () => {
+                            const raw = cap.capitulo ?? cap.nombre
+                            const ck = dashNormCapituloKey(raw)
+                            if (!ck || ck === 'Sin capítulo') return
+                            if (contratoIdDash) {
+                              delete dashDrillCache.current[`${contratoIdDash}|${ck}`]
+                            }
+                            setDashDrill([{ campo: 'capitulo', valor: ck }])
+                            setPopupCapitulo(true)
+                          }
                           return (
                             <g key={`${rawCap}-${i}`}>
                               <text x={TEXT_START - 4} y={rowY + ROW_INNER / 2} textAnchor="end" dominantBaseline="middle" fontSize={du.chartLabel} fill={t.primary} fontWeight="700" style={{ userSelect: 'none' }}>{i + 1}</text>

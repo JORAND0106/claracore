@@ -14309,12 +14309,21 @@ def _parse_rpc_jsonb_value(raw):
     if isinstance(raw, list) and len(raw) > 0:
         row = raw[0]
         if isinstance(row, dict):
+            # No devolver el primer .values() ciegamente: a veces viene null y el payload es otra clave.
             for v in row.values():
-                if isinstance(v, str) and (v.startswith("[") or v.startswith("{")):
+                if isinstance(v, list):
+                    return v
+            for v in row.values():
+                if v is None:
+                    continue
+                if isinstance(v, str) and v.strip() and (v.strip()[0] in "[{"):
                     try:
-                        v = json.loads(v)
+                        parsed = json.loads(v)
                     except (json.JSONDecodeError, TypeError):
-                        pass
+                        continue
+                    if isinstance(parsed, list):
+                        return parsed
+                    return parsed
                 return v
     if isinstance(raw, dict):
         return raw
