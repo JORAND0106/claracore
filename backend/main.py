@@ -193,7 +193,8 @@ def _so_registro_audit_snapshot(row: Optional[dict]) -> Optional[dict]:
         "id", "reporte_id", "contrato_id", "numero_registro", "capitulo", "competencia",
         "item_numero", "item_descripcion", "unidad", "vlr_unitario", "longitud", "ancho", "espesor",
         "cantidad", "cantidad_total", "costo_directo", "observacion", "corte_id",
-        "nivel1_estado", "nivel2_estado", "nivel3_estado", "sub_estado", "bloqueado",
+        "nivel1_estado", "nivel2_estado", "nivel3_estado", "nivel4_estado", "nivel5_estado", "nivel6_estado",
+        "sub_estado", "bloqueado",
         "foto_url", "foto_numero", "grafico_url", "acta_rpo_id", "semana_id", "nivel2_objeto_pago_sub",
     )
     return _json_for_log({k: row.get(k) for k in keys})
@@ -207,6 +208,9 @@ def _so_registro_validacion_audit_snapshot(row: Optional[dict]) -> Optional[dict
         "nivel1_estado", "nivel1_usuario_id", "nivel1_fecha",
         "nivel2_estado", "nivel2_usuario_id", "nivel2_fecha", "nivel2_objeto_pago_sub",
         "nivel3_estado", "nivel3_usuario_id", "nivel3_fecha",
+        "nivel4_estado", "nivel4_usuario_id", "nivel4_fecha",
+        "nivel5_estado", "nivel5_usuario_id", "nivel5_fecha",
+        "nivel6_estado", "nivel6_usuario_id", "nivel6_fecha",
         "sub_estado", "sub_usuario_id", "sub_fecha",
         "bloqueado", "solicitud_reversion",
         "reversion_arm_n2_usuario_id", "reversion_arm_n3_usuario_id",
@@ -220,6 +224,9 @@ def _so_registro_fetch_validacion_audit(contrato_id: int, registro_id: int) -> O
             "nivel1_estado, nivel1_usuario_id, nivel1_fecha,"
             "nivel2_estado, nivel2_usuario_id, nivel2_fecha, nivel2_objeto_pago_sub,"
             "nivel3_estado, nivel3_usuario_id, nivel3_fecha,"
+            "nivel4_estado, nivel4_usuario_id, nivel4_fecha,"
+            "nivel5_estado, nivel5_usuario_id, nivel5_fecha,"
+            "nivel6_estado, nivel6_usuario_id, nivel6_fecha,"
             "sub_estado, sub_usuario_id, sub_fecha, bloqueado, solicitud_reversion,"
             "reversion_arm_n2_usuario_id, reversion_arm_n3_usuario_id"
         ).eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
@@ -1558,33 +1565,154 @@ def informes_vista_json_memoria(
 
 # ── Mapa de cargo_id → campo de validación en so_registros ───────────────────
 CARGO_ID_NIVEL_MAP = {
-    54: 'nivel1_estado',   # Inspector de Obra
-    44: 'nivel2_estado',   # Residente de Obra
-    45: 'nivel2_estado',   # Cargo migrado Bubble (nivel 2)
-    51: 'nivel2_estado',   # Cargo migrado Bubble (nivel 2)
-    56: 'nivel2_estado',   # Director de Obra
-    50: 'nivel3_estado',   # Residente de Interventoría
-    58: 'nivel3_estado',   # Director de Interventoría
+    54: "nivel1_estado",  # Inspector de Obra
+    44: "nivel2_estado",  # Residente de Obra
+    45: "nivel2_estado",  # Cargo migrado Bubble (nivel 2)
+    51: "nivel2_estado",  # Cargo migrado Bubble (nivel 2)
+    56: "nivel2_estado",  # Director de Obra (cadena contratista N2)
+    10: "nivel3_estado",  # Director de Obra (validación N3)
+    50: "nivel4_estado",  # Residente de Interventoría
+    58: "nivel5_estado",  # Director de Interventoría
+    9: "nivel5_estado",  # Director de Interventoría (id alterno)
+}
+
+# Nivel SICOE obra por rol_id (tabla roles). Prioridad sobre cargo_id; ver `_sicoe_db_nivel_validacion_usuario`.
+ROL_ID_NIVEL_MAP = {
+    5: 1,  # Operativo Contratista
+    3: 2,  # Contratista
+    7: 3,  # Contratista Gerencial
+    2: 4,  # Interventoría
+    8: 5,  # Interventoría Gerencial
+    4: 6,  # Supervisor Externo
+    6: None,  # Operativo Interventoría — solo comenta
+    1: 0,  # Desarrollador — acceso total (cualquier nivel de validación / llaves)
 }
 
 CARGO_NIVEL_PRERREQUISITO = {
-    'nivel2_estado': ('nivel1_estado', 'Aprobado'),
-    'nivel3_estado': ('nivel2_estado', 'Aprobado'),
+    "nivel2_estado": ("nivel1_estado", "Aprobado"),
+    "nivel3_estado": ("nivel2_estado", "Aprobado"),
+    "nivel4_estado": ("nivel3_estado", "Aprobado"),
+    "nivel5_estado": ("nivel4_estado", "Aprobado"),
+    "nivel6_estado": ("nivel5_estado", "Aprobado"),
 }
 
-# Filtros Sicoe y capas JSON pueden usar { "nivel": 1|2|3, "estado": "..." } en lugar de cargo_id.
+# Filtros Sicoe y capas JSON: { "nivel": 1..6, "estado": "..." } o cargo_id.
 NIVEL_VALIDACION_NUM_A_CAMPO = {
     1: "nivel1_estado",
     2: "nivel2_estado",
     3: "nivel3_estado",
+    4: "nivel4_estado",
+    5: "nivel5_estado",
+    6: "nivel6_estado",
 }
 
 # Misma semántica que el filtro UI (rol + nivel), no cargo_id.
 NIVEL_VALIDACION_ENCABEZADO = {
     1: "Nivel 1 · Operativo contratista",
     2: "Nivel 2 · Contratista",
-    3: "Nivel 3 · Interventoría",
+    3: "Nivel 3 · Director de obra",
+    4: "Nivel 4 · Residente de interventoría",
+    5: "Nivel 5 · Director de interventoría",
+    6: "Nivel 6 · Supervisor entidad",
 }
+
+SICOE_SELECT_NIVELES_ESTADO = ",".join(f"nivel{i}_estado" for i in range(1, 7))
+
+
+def _get_niveles_activos_contrato(contrato_id: int) -> List[int]:
+    """Lee `contrato_niveles_validacion.niveles_activos`; sin fila o error → [1, 2, 3]."""
+    try:
+        cid = int(contrato_id)
+    except (TypeError, ValueError):
+        return [1, 2, 3]
+    try:
+        res = (
+            supabase.table("contrato_niveles_validacion")
+            .select("niveles_activos")
+            .eq("contrato_id", cid)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if res and res[0] is not None:
+            raw = res[0].get("niveles_activos")
+            if isinstance(raw, str) and raw.strip():
+                try:
+                    raw = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    raw = None
+            if isinstance(raw, list) and raw:
+                out: List[int] = []
+                for x in raw:
+                    try:
+                        n = int(x)
+                        if 1 <= n <= 6:
+                            out.append(n)
+                    except (TypeError, ValueError):
+                        continue
+                out = sorted(set(out))
+                if out:
+                    return out
+    except Exception:
+        pass
+    return [1, 2, 3]
+
+
+def _get_nivel_numero_maximo_contrato(contrato_id: int) -> int:
+    ns = _get_niveles_activos_contrato(contrato_id)
+    return max(ns) if ns else 3
+
+
+def _get_nivel_maximo_contrato(contrato_id: int) -> str:
+    """Campo `nivelN_estado` del nivel más alto activo (p. ej. [1,2,4] → nivel4_estado)."""
+    mx = _get_nivel_numero_maximo_contrato(contrato_id)
+    mx = min(6, max(1, mx))
+    return f"nivel{mx}_estado"
+
+
+def _sicoe_campo_usuario_fecha_desde_estado(campo_estado: str) -> tuple:
+    base = (campo_estado or "").replace("_estado", "")
+    return f"{base}_usuario_id", f"{base}_fecha"
+
+
+def _matriz_estado_nivel_final_row(row: Optional[dict], contrato_id: int):
+    if not row:
+        return None
+    fld = _get_nivel_maximo_contrato(contrato_id)
+    return row.get(fld)
+
+
+def _matriz_validacion_norm_estado_nivel_final(row: Optional[dict], contrato_id: int) -> str:
+    return _matriz_validacion_norm_estado(_matriz_estado_nivel_final_row(row, contrato_id))
+
+
+def _registro_nivel_max_aprobado(row: Optional[Dict[str, Any]], contrato_id: int) -> bool:
+    if not row:
+        return False
+    try:
+        cid = int(contrato_id)
+    except (TypeError, ValueError):
+        cid = 0
+    campo = _get_nivel_maximo_contrato(cid) if cid else "nivel3_estado"
+    return (row.get(campo) or "").strip() == "Aprobado"
+
+
+def _registro_nivel3_aprobado(row: Optional[Dict[str, Any]]) -> bool:
+    """Compatibilidad: delega en el nivel máximo activo del contrato cuando la fila trae `contrato_id`."""
+    if not row:
+        return False
+    cid = row.get("contrato_id")
+    if cid is not None:
+        try:
+            return _registro_nivel_max_aprobado(row, int(cid))
+        except (TypeError, ValueError):
+            pass
+    return (row.get("nivel3_estado") or "").strip() == "Aprobado"
+
+
+def _sicoe_aplicar_bloqueado_si_nivel_es_maximo(contrato_id: int, nivel: int, update: dict, estado: str) -> None:
+    if estado == "Aprobado" and nivel == _get_nivel_numero_maximo_contrato(contrato_id):
+        update["bloqueado"] = True
 
 # Mismo catálogo que el desplegable de validación en frontend (ETIQUETAS_VALIDACION).
 SICOE_ETIQUETAS_VALIDACION = (
@@ -1669,7 +1797,14 @@ def _capa_campo_validacion(capa: dict) -> Optional[str]:
     if not isinstance(capa, dict):
         return None
     campo = capa.get("campo")
-    if campo in ("nivel1_estado", "nivel2_estado", "nivel3_estado"):
+    if campo in (
+        "nivel1_estado",
+        "nivel2_estado",
+        "nivel3_estado",
+        "nivel4_estado",
+        "nivel5_estado",
+        "nivel6_estado",
+    ):
         return str(campo)
     nv = capa.get("nivel")
     if nv is not None and str(nv).strip() != "":
@@ -1719,6 +1854,12 @@ def _sicoe_capa_etiqueta_panel(capx: dict) -> str:
         return NIVEL_VALIDACION_ENCABEZADO[2]
     if fld == "nivel3_estado":
         return NIVEL_VALIDACION_ENCABEZADO[3]
+    if fld == "nivel4_estado":
+        return NIVEL_VALIDACION_ENCABEZADO[4]
+    if fld == "nivel5_estado":
+        return NIVEL_VALIDACION_ENCABEZADO[5]
+    if fld == "nivel6_estado":
+        return NIVEL_VALIDACION_ENCABEZADO[6]
     return "Validación"
 
 
@@ -1729,11 +1870,20 @@ def _sicoe_nivel_num_desde_campo(campo: Optional[str]) -> Optional[int]:
         return 2
     if campo == "nivel3_estado":
         return 3
+    if campo == "nivel4_estado":
+        return 4
+    if campo == "nivel5_estado":
+        return 5
+    if campo == "nivel6_estado":
+        return 6
     return None
 
 
 def _sicoe_db_nivel_validacion_usuario(user_id: int) -> Optional[int]:
-    """Nivel 1–3 según rol y, si aplica, cargo_id (mismo criterio que CARGO_ID_NIVEL_MAP / panel de acceso)."""
+    """
+    Nivel de validación SICOE obra: 1–6, 0 = acceso total (rol Desarrollador en mapa), None = sin validar.
+    Prioriza rol_id (ROL_ID_NIVEL_MAP); si no aplica, nombre de rol; último recurso CARGO_ID_NIVEL_MAP.
+    """
     try:
         uid = int(user_id)
     except (TypeError, ValueError):
@@ -1745,6 +1895,16 @@ def _sicoe_db_nivel_validacion_usuario(user_id: int) -> Optional[int]:
         u = urows[0]
     except Exception:
         return None
+
+    rid_int = None
+    if u.get("rol_id") is not None:
+        try:
+            rid_int = int(u["rol_id"])
+        except (TypeError, ValueError):
+            rid_int = None
+    if rid_int is not None and rid_int in ROL_ID_NIVEL_MAP:
+        return ROL_ID_NIVEL_MAP[rid_int]
+
     rn = ""
     if u.get("rol_id"):
         try:
@@ -1753,26 +1913,43 @@ def _sicoe_db_nivel_validacion_usuario(user_id: int) -> Optional[int]:
                 rn = _sicoe_norm_txt(rrows[0].get("nombre"))
         except Exception:
             pass
-    if rn == "operativo contratista":
-        return 1
-    if rn == "contratista":
-        return 2
-    if rn == "interventoria":
-        return 3
-    # Perfil solo lectura / comentarios en interventoría: no validar por cargo aunque el mapa tenga N3
-    if rn == "operativo interventoria":
-        return None
+
     try:
         cid = int(u.get("cargo_id")) if u.get("cargo_id") is not None else None
     except (TypeError, ValueError):
         cid = None
+
+    # Fallback por nombre de rol (legado o rol_id no listado en ROL_ID_NIVEL_MAP)
+    if rn == "operativo interventoria" or ("operativo" in rn and "intervent" in rn):
+        return None
+    if rn == "operativo contratista" or ("operativo" in rn and "contrat" in rn and "intervent" not in rn):
+        return 1
+    if "gerencial" in rn and "contrat" in rn and "intervent" not in rn:
+        return 3
+    if "gerencial" in rn and "intervent" in rn:
+        return 5
+    if "supervisor" in rn and ("externo" in rn or "entidad" in rn):
+        return 6
+    if rn == "contratista" or (
+        "contrat" in rn
+        and "intervent" not in rn
+        and "gerencial" not in rn
+        and "operativo" not in rn
+        and "supervisor" not in rn
+    ):
+        return 2
+    if "intervent" in rn:
+        if cid in (9, 58):
+            return 5
+        if cid == 50:
+            return 4
+        return 4
+
     if cid is not None:
         n_cargo = _sicoe_nivel_num_desde_campo(CARGO_ID_NIVEL_MAP.get(cid))
         if n_cargo is not None:
             return n_cargo
-    # Rol con nombre extendido p. ej. «Residente de Interventoría» como nombre de rol en BD
-    if rn and "interventoria" in rn:
-        return 3
+
     return None
 
 
@@ -1785,6 +1962,8 @@ def _require_sicoe_puede_validar_nivel(current_user, user_id: int, nivel: int) -
             detail="No tiene permiso de validación en «Reporte de cantidades» (matriz de accesos).",
         )
     got = _sicoe_db_nivel_validacion_usuario(user_id)
+    if got == 0:
+        return
     if got != nivel:
         raise HTTPException(
             status_code=403,
@@ -1799,9 +1978,11 @@ def _require_llave_reversion_sicoe_nivel(current_user, user_id: int, nivel_arm: 
     """
     if _es_desarrollador(current_user):
         return
-    if nivel_arm not in (2, 3):
+    if nivel_arm not in (2, 3, 4, 5, 6):
         raise HTTPException(status_code=403, detail="Llave de reversión no reconocida.")
     got = _sicoe_db_nivel_validacion_usuario(user_id)
+    if got == 0:
+        return
     if got != nivel_arm:
         raise HTTPException(
             status_code=403,
@@ -1918,7 +2099,13 @@ def _validacion_cualquier_nivel2_o_3(capas: List[dict]) -> bool:
 
 # Nivel 2/3: no listar cantidades en reportes borrador / sin ítem asignado a nivel reporte,
 # ni registros sin item_numero (cola de validación solo sobre cantidades listas).
-NIVEL_FIELD_VALIDACION_AVANZADA = ('nivel2_estado', 'nivel3_estado')
+NIVEL_FIELD_VALIDACION_AVANZADA = (
+    "nivel2_estado",
+    "nivel3_estado",
+    "nivel4_estado",
+    "nivel5_estado",
+    "nivel6_estado",
+)
 ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA = ('Borrador', 'Sin Asignar Ítem')
 
 
@@ -4320,7 +4507,7 @@ def get_precio_stats(item_id: int, current_user=Depends(get_current_user)):
         def _q_obra(o=off_cb):
             q = (
                 supabase.table("so_registros")
-                .select("capitulo, competencia, item_numero, cantidad_total, costo_directo, nivel3_estado")
+                .select(f"capitulo, competencia, item_numero, cantidad_total, costo_directo, {SICOE_SELECT_NIVELES_ESTADO}")
                 .eq("contrato_id", contrato_id)
                 .range(o, o + 999)
             )
@@ -4328,7 +4515,7 @@ def get_precio_stats(item_id: int, current_user=Depends(get_current_user)):
 
         batch = supabase_execute(_q_obra) or []
         for r in batch:
-            if _matriz_validacion_norm_estado(r.get("nivel3_estado")) != "Aprobado":
+            if _matriz_validacion_norm_estado_nivel_final(r, contrato_id) != "Aprobado":
                 continue
             if cap_k and _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_k:
                 continue
@@ -7297,12 +7484,11 @@ def _mover_registros_residual_hacia_acta(contrato_id: int, source_acta_ids: List
     reportes_tocados: Set[int] = set()
     off = 0
     while True:
-        batch = supabase.table("so_registros").select("id, reporte_id, nivel3_estado")\
+        batch = supabase.table("so_registros").select(f"id, reporte_id, {SICOE_SELECT_NIVELES_ESTADO},contrato_id")\
             .eq("contrato_id", contrato_id).in_("acta_rpo_id", sources)\
             .range(off, off + 199).execute().data or []
         for reg in batch:
-            n3 = (reg.get("nivel3_estado") or "").strip().lower()
-            if n3 == "aprobado":
+            if _registro_nivel_max_aprobado(reg, contrato_id):
                 continue
             rid = reg["id"]
             supabase.table("so_registros").update({"acta_rpo_id": hacia_acta_id}).eq("id", rid).execute()
@@ -7911,6 +8097,9 @@ def registros_bulk_offline(
         "nivel1_estado, nivel1_usuario_id, nivel1_fecha, "
         "nivel2_estado, nivel2_usuario_id, nivel2_fecha, "
         "nivel3_estado, nivel3_usuario_id, nivel3_fecha, "
+        "nivel4_estado, nivel4_usuario_id, nivel4_fecha, "
+        "nivel5_estado, nivel5_usuario_id, nivel5_fecha, "
+        "nivel6_estado, nivel6_usuario_id, nivel6_fecha, "
         "subcontratista_id, numero_corte_subcontratista, "
         "foto_url, foto_numero, foto_descripcion, "
         "grafico_url, grafico_numero, grafico_descripcion, "
@@ -8446,7 +8635,7 @@ def buscar_reportes_obra(
 
             def _reg_estados_q_base(reg_id_filter: Optional[List[int]] = None):
                 q = supabase.table("so_registros")\
-                    .select("reporte_id, costo_directo, nivel1_estado, nivel2_estado, nivel3_estado, sub_estado, semana_id, acta_rpo_id, item_numero, capitulo, subcontratista_id, tramo, margen")\
+                    .select("reporte_id, costo_directo, " + SICOE_SELECT_NIVELES_ESTADO + ", sub_estado, semana_id, acta_rpo_id, item_numero, capitulo, subcontratista_id, tramo, margen")\
                     .in_("reporte_id", _rb_l)
                 if reg_id_filter is not None:
                     q = q.in_("id", reg_id_filter)
@@ -8531,7 +8720,8 @@ def buscar_reportes_obra(
                 if rid in cargo_map:
                     cargo_map[rid]["n1"].append(reg.get("nivel1_estado") or "No Revisado")
                     cargo_map[rid]["n2"].append(reg.get("nivel2_estado") or "No Revisado")
-                    cargo_map[rid]["n3"].append(reg.get("nivel3_estado") or "No Revisado")
+                    cmx = _get_nivel_maximo_contrato(contrato_id)
+                    cargo_map[rid]["n3"].append(reg.get(cmx) or "No Revisado")
                     cargo_map[rid]["sub"].append(reg.get("sub_estado") or "No Revisado")
                     cargo_map[rid]["count"] += 1
                     costo_map[rid] = costo_map.get(rid, 0.0) + float(reg.get("costo_directo") or 0)
@@ -8667,6 +8857,9 @@ def _sicoe_masivo_filtro_to_export_body(b: ValidarNivelMasivoFiltroBody) -> Expo
             "nivel1_estado",
             "nivel2_estado",
             "nivel3_estado",
+            "nivel4_estado",
+            "nivel5_estado",
+            "nivel6_estado",
             "nivel2_objeto_pago_sub",
         ],
         **d,
@@ -8851,6 +9044,9 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
         "nivel1_estado",
         "nivel2_estado",
         "nivel3_estado",
+        "nivel4_estado",
+        "nivel5_estado",
+        "nivel6_estado",
         "nivel2_objeto_pago_sub",
         "item_numero",
     ]
@@ -9673,7 +9869,7 @@ def analisis_registros_obra(
 
         def _build_regs_q(reg_id_filter: Optional[List[int]] = None):
             q = supabase.table("so_registros")\
-                .select("reporte_id, costo_directo, cantidad_total, item_numero, item_descripcion, unidad, acta_rpo_id, nivel1_estado, nivel2_estado, nivel3_estado, capitulo, subcontratista_id")\
+                .select("reporte_id, costo_directo, cantidad_total, item_numero, item_descripcion, unidad, acta_rpo_id, " + SICOE_SELECT_NIVELES_ESTADO + ", capitulo, subcontratista_id")\
                 .eq("contrato_id", contrato_id)
             q = _so_reg_filtro_abs_solape(q, _abs_ai, _abs_af)
             if _nr is not None:
@@ -9763,11 +9959,8 @@ def analisis_registros_obra(
             if estado == "Rechazado": return "Rechazado"
             return "No Revisado"
         # Sin filtro: estado global del registro
-        niveles = [
-            reg.get("nivel1_estado") or "",
-            reg.get("nivel2_estado") or "",
-            reg.get("nivel3_estado") or "",
-        ]
+        niveles_act = _get_niveles_activos_contrato(contrato_id)
+        niveles = [reg.get(NIVEL_VALIDACION_NUM_A_CAMPO[i]) or "" for i in niveles_act]
         if "Rechazado" in niveles: return "Rechazado"
         if "Pendiente" in niveles: return "Pendiente"
         activos = [n for n in niveles if n]
@@ -11491,6 +11684,9 @@ def crear_reportes_masivos_dashboard_delta(
                     "nivel1_estado": "No Revisado",
                     "nivel2_estado": "No Revisado",
                     "nivel3_estado": "No Revisado",
+                    "nivel4_estado": "No Revisado",
+                    "nivel5_estado": "No Revisado",
+                    "nivel6_estado": "No Revisado",
                     "nombre": str(lp.get("item_numero") or ln["item"] or "").strip() or None,
                     "descripcion": (ln.get("descripcion_item") or lp.get("descripcion") or "")[:2000] or None,
                 }
@@ -12092,12 +12288,6 @@ def actualizar_localizacion_borrador(contrato_id: int, reporte_id: int, body: di
         pass
     return out
 
-def _registro_nivel3_aprobado(row: Optional[Dict[str, Any]]) -> bool:
-    """Tras aprobación Nivel 3 (Interventoría), no se editan datos de obra salvo corte de subcontratista."""
-    if not row:
-        return False
-    return (row.get("nivel3_estado") or "").strip() == "Aprobado"
-
 
 def _sicoe_exige_topografia_para_aprobar_nivel2(contrato_id: int) -> bool:
     """Contrato 2 no aplica la regla de puntos topográficos para aprobar N2; el resto sí."""
@@ -12194,12 +12384,12 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         if otros:
             raise HTTPException(
                 status_code=400,
-                detail="Registro aprobado por Interventoría (Nivel 3): solo puede modificarse el corte de subcontratista y la foto/gráfico del registro.",
+                detail="Registro aprobado en el último nivel de validación: solo puede modificarse el corte de subcontratista y la foto/gráfico del registro.",
             )
         if data.get("reporte_id") is not None and int(data["reporte_id"]) != int(prev_row["reporte_id"]):
-            raise HTTPException(status_code=400, detail="No puede modificarse el reporte del registro aprobado por Nivel 3.")
+            raise HTTPException(status_code=400, detail="No puede modificarse el reporte del registro aprobado en el último nivel de validación.")
         if data.get("numero_registro") is not None and int(data["numero_registro"]) != int(prev_row["numero_registro"]):
-            raise HTTPException(status_code=400, detail="No puede modificarse el número de registro aprobado por Nivel 3.")
+            raise HTTPException(status_code=400, detail="No puede modificarse el número de registro aprobado en el último nivel de validación.")
         data = {k: v for k, v in data.items() if k in _CAMPOS_N3_PERMITIDOS - {"reporte_id", "numero_registro"}}
         if not data:
             return prev_row
@@ -12790,7 +12980,7 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
 
         def _reg():
             return supabase.table("so_registros")\
-                .select("cantidad_total, reporte_id, nivel3_estado")\
+                .select(f"cantidad_total, reporte_id, contrato_id, {SICOE_SELECT_NIVELES_ESTADO}")\
                 .eq("id", registro_id).single().execute().data
         registro = supabase_execute(_reg)
         if not registro:
@@ -12798,7 +12988,7 @@ def asignar_item_registro(contrato_id: int, registro_id: int, body: AsignarItemB
         if _registro_nivel3_aprobado(registro):
             raise HTTPException(
                 status_code=400,
-                detail="El registro está aprobado por Nivel 3 (Interventoría): no puede reasignarse el ítem.",
+                detail="El registro está aprobado en el último nivel de validación: no puede reasignarse el ítem.",
             )
 
         cant_total = float(registro.get("cantidad_total") or 0)
@@ -12954,7 +13144,7 @@ def mover_registro(contrato_id: int, registro_id: int, nuevo_reporte_id: int, cu
         # 2. Leer el registro para obtener el reporte_id origen
         def _reg():
             return supabase.table("so_registros")\
-                .select("reporte_id, nivel3_estado").eq("id", registro_id)\
+                .select(f"reporte_id, contrato_id, {SICOE_SELECT_NIVELES_ESTADO}").eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).limit(1).execute().data
         reg_rows = supabase_execute(_reg)
         if not reg_rows:
@@ -12962,7 +13152,7 @@ def mover_registro(contrato_id: int, registro_id: int, nuevo_reporte_id: int, cu
         if _registro_nivel3_aprobado(reg_rows[0]):
             raise HTTPException(
                 status_code=400,
-                detail="El registro está aprobado por Nivel 3 (Interventoría): no puede moverse a otro reporte.",
+                detail="El registro está aprobado en el último nivel de validación: no puede moverse a otro reporte.",
             )
         reporte_origen_id = reg_rows[0]["reporte_id"]
 
@@ -13283,6 +13473,158 @@ def _insertar_comentario(contrato_id: int, registro_id: int, autor_id: int,
             pass
     return ins_row
 
+
+def _put_validar_nivel_sicoe_alto(
+    contrato_id: int,
+    registro_id: int,
+    body: ValidarNivel3Body,
+    nivel: int,
+    current_user,
+):
+    """Lógica compartida de PUT validar-nivel3 … nivel6 (bloqueado solo al aprobar el nivel máximo activo del contrato)."""
+    if nivel not in (3, 4, 5, 6):
+        raise HTTPException(status_code=500, detail="Nivel interno inválido.")
+    activos = _get_niveles_activos_contrato(contrato_id)
+    if nivel not in activos:
+        raise HTTPException(
+            status_code=422,
+            detail=f"El contrato no tiene activo el nivel {nivel} de validación.",
+        )
+    ESTADOS = {"Aprobado", "Pendiente", "Rechazado"}
+    if body.estado not in ESTADOS:
+        raise HTTPException(status_code=422, detail=f"Estado inválido. Acepta: {ESTADOS}")
+    if body.estado in ("Pendiente", "Rechazado") and not body.comentario_data:
+        raise HTTPException(
+            status_code=422,
+            detail="Se requiere comentario_data cuando el estado es Pendiente o Rechazado.",
+        )
+    try:
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        _require_sicoe_puede_validar_nivel(current_user, autor_id, nivel)
+        campo = NIVEL_VALIDACION_NUM_A_CAMPO.get(nivel)
+        if not campo:
+            raise HTTPException(status_code=500, detail="Mapa de nivel inconsistente.")
+        prereq = CARGO_NIVEL_PRERREQUISITO.get(campo)
+        if not prereq:
+            raise HTTPException(status_code=500, detail="Sin prerrequisito para este nivel.")
+        prev_f, prev_ok = prereq
+
+        def _get():
+            return (
+                supabase.table("so_registros")
+                .select(f"{prev_f},{campo}")
+                .eq("id", registro_id)
+                .eq("contrato_id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+
+        rows = supabase_execute(_get)
+        if not rows:
+            raise HTTPException(status_code=404, detail="Registro no encontrado.")
+        r0 = rows[0]
+        if (r0.get(campo) or "") == "Aprobado" and body.estado != "Aprobado":
+            raise HTTPException(
+                status_code=400,
+                detail=f"El registro ya está aprobado en Nivel {nivel}. Use el flujo de reversión para modificar la validación.",
+            )
+        if r0.get(prev_f) != prev_ok:
+            raise HTTPException(
+                status_code=422,
+                detail=f"El registro debe estar {prev_ok} en el nivel previo antes de validar en Nivel {nivel}.",
+            )
+
+        prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
+        u_key, f_key = _sicoe_campo_usuario_fecha_desde_estado(campo)
+        update = {
+            campo: body.estado,
+            u_key: autor_id,
+            f_key: datetime.utcnow().isoformat(),
+        }
+        _sicoe_aplicar_bloqueado_si_nivel_es_maximo(contrato_id, nivel, update, body.estado)
+
+        def _upd():
+            return (
+                supabase.table("so_registros")
+                .update(update)
+                .eq("id", registro_id)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+
+        supabase_execute(_upd)
+        if body.estado == "Aprobado":
+            try:
+                _aplicar_acta_rpo_vigente_a_registro(contrato_id, registro_id, date.today())
+            except Exception:
+                pass
+        if body.comentario_data:
+            _insertar_comentario(
+                contrato_id,
+                registro_id,
+                autor_id,
+                body.comentario_data,
+                tipo_override="validacion",
+                nivel_validacion_override=f"Nivel {nivel}",
+                audit_user=current_user,
+            )
+            _push_notif_validacion_sicoe_destinatarios(
+                current_user,
+                autor_id,
+                contrato_id,
+                registro_id,
+                f"Validación Nivel {nivel}: {body.estado}",
+                body.comentario_data.get("mensaje", "") or "",
+                body.comentario_data,
+            )
+        try:
+            u_log = _audit_user_contrato(current_user, contrato_id)
+            after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
+            registrar_log(
+                u_log,
+                "VALIDAR",
+                "SICOE",
+                "registro",
+                str(registro_id),
+                {"nivel": nivel, "estado": body.estado},
+                valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
+                valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
+            )
+        except Exception:
+            pass
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sicoe-obra/{contrato_id}/niveles-validacion")
+def sicoe_obra_niveles_validacion(contrato_id: int, current_user=Depends(get_current_user)):
+    """Niveles de validación activos del contrato (tabla `contrato_niveles_validacion`; defecto [1,2,3])."""
+    _ = current_user
+    ma = _get_niveles_activos_contrato(contrato_id)
+    mx = _get_nivel_numero_maximo_contrato(contrato_id)
+    campo_mx = _get_nivel_maximo_contrato(contrato_id)
+    niveles = [
+        {
+            "nivel": n,
+            "campo": NIVEL_VALIDACION_NUM_A_CAMPO[n],
+            "encabezado": NIVEL_VALIDACION_ENCABEZADO.get(n) or f"Nivel {n}",
+        }
+        for n in ma
+    ]
+    return {
+        "contrato_id": contrato_id,
+        "niveles_activos": ma,
+        "nivel_maximo": mx,
+        "campo_nivel_maximo": campo_mx,
+        "niveles": niveles,
+    }
+
+
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/validar-nivel1")
 def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
                    current_user=Depends(get_current_user)):
@@ -13296,15 +13638,16 @@ def validar_nivel1(contrato_id: int, registro_id: int, body: ValidarNivel1Body,
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
         _require_sicoe_puede_validar_nivel(current_user, autor_id, 1)
         def _get_n3():
-            return supabase.table("so_registros").select("nivel3_estado, reporte_id")\
-                .eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
+            return supabase.table("so_registros").select(
+                f"contrato_id,{SICOE_SELECT_NIVELES_ESTADO},reporte_id"
+            ).eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
         n3rows = supabase_execute(_get_n3)
         if not n3rows:
             raise HTTPException(status_code=404, detail="Registro no encontrado.")
-        if _registro_nivel3_aprobado(n3rows[0]):
+        if _registro_nivel_max_aprobado(n3rows[0], contrato_id):
             raise HTTPException(
                 status_code=400,
-                detail="El registro está aprobado por Nivel 3 (Interventoría) y no puede modificarse por esta vía.",
+                detail="El registro está aprobado en el último nivel de validación del contrato y no puede modificarse por esta vía.",
             )
         prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
         update = {
@@ -13376,15 +13719,15 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
         # Verificar nivel1
         def _get():
             return supabase.table("so_registros")\
-                .select("nivel1_estado, nivel3_estado, reporte_id").eq("id", registro_id)\
+                .select(f"contrato_id,{SICOE_SELECT_NIVELES_ESTADO},reporte_id").eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).limit(1).execute().data
         rows = supabase_execute(_get)
         if not rows:
             raise HTTPException(status_code=404, detail="Registro no encontrado.")
-        if _registro_nivel3_aprobado(rows[0]):
+        if _registro_nivel_max_aprobado(rows[0], contrato_id):
             raise HTTPException(
                 status_code=400,
-                detail="El registro está aprobado por Nivel 3 (Interventoría) y no puede modificarse por esta vía.",
+                detail="El registro está aprobado en el último nivel de validación del contrato y no puede modificarse por esta vía.",
             )
         if rows[0].get("nivel1_estado") != "Aprobado":
             raise HTTPException(status_code=422,
@@ -13463,81 +13806,25 @@ def validar_nivel2(contrato_id: int, registro_id: int, body: ValidarNivel2Body,
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/validar-nivel3")
 def validar_nivel3(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
                    current_user=Depends(get_current_user)):
-    ESTADOS = {"Aprobado", "Pendiente", "Rechazado"}
-    if body.estado not in ESTADOS:
-        raise HTTPException(status_code=422, detail=f"Estado inválido. Acepta: {ESTADOS}")
-    if body.estado in ("Pendiente", "Rechazado") and not body.comentario_data:
-        raise HTTPException(status_code=422,
-            detail="Se requiere comentario_data cuando el estado es Pendiente o Rechazado.")
-    try:
-        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
-        _require_sicoe_puede_validar_nivel(current_user, autor_id, 3)
-        # Verificar nivel2
-        def _get():
-            return supabase.table("so_registros")\
-                .select("nivel2_estado, nivel3_estado").eq("id", registro_id)\
-                .eq("contrato_id", contrato_id).limit(1).execute().data
-        rows = supabase_execute(_get)
-        if not rows:
-            raise HTTPException(status_code=404, detail="Registro no encontrado.")
-        if rows[0].get("nivel3_estado") == "Aprobado" and body.estado != "Aprobado":
-            raise HTTPException(
-                status_code=400,
-                detail="El registro ya está aprobado por Nivel 3. Use el flujo de reversión para modificar la validación.",
-            )
-        if rows[0].get("nivel2_estado") != "Aprobado":
-            raise HTTPException(status_code=422,
-                detail="El registro debe estar aprobado por Nivel 2 primero.")
+    return _put_validar_nivel_sicoe_alto(contrato_id, registro_id, body, 3, current_user)
 
-        prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
-        update = {
-            "nivel3_estado":     body.estado,
-            "nivel3_usuario_id": autor_id,
-            "nivel3_fecha":      datetime.utcnow().isoformat(),
-        }
-        if body.estado == "Aprobado":
-            update["bloqueado"] = True
 
-        def _upd():
-            return supabase.table("so_registros")\
-                .update(update).eq("id", registro_id)\
-                .eq("contrato_id", contrato_id).execute().data
-        supabase_execute(_upd)
-        # Acta RPO definitiva: al aprobar Interventoría (N3), alinear a acta vigente a la fecha de aprobación
-        if body.estado == "Aprobado":
-            try:
-                _aplicar_acta_rpo_vigente_a_registro(contrato_id, registro_id, date.today())
-            except Exception:
-                pass
-        if body.comentario_data:
-            _insertar_comentario(contrato_id, registro_id, autor_id, body.comentario_data,
-                                 tipo_override="validacion", nivel_validacion_override="Nivel 3",
-                                 audit_user=current_user)
-            _push_notif_validacion_sicoe_destinatarios(
-                current_user,
-                autor_id,
-                contrato_id,
-                registro_id,
-                f"Validación Nivel 3: {body.estado}",
-                body.comentario_data.get("mensaje", "") or "",
-                body.comentario_data,
-            )
-        try:
-            u_log = _audit_user_contrato(current_user, contrato_id)
-            after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
-            registrar_log(
-                u_log, "VALIDAR", "SICOE", "registro", str(registro_id),
-                {"nivel": 3, "estado": body.estado},
-                valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
-                valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
-            )
-        except Exception:
-            pass
-        return {"ok": True}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/validar-nivel4")
+def validar_nivel4(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
+                   current_user=Depends(get_current_user)):
+    return _put_validar_nivel_sicoe_alto(contrato_id, registro_id, body, 4, current_user)
+
+
+@app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/validar-nivel5")
+def validar_nivel5(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
+                   current_user=Depends(get_current_user)):
+    return _put_validar_nivel_sicoe_alto(contrato_id, registro_id, body, 5, current_user)
+
+
+@app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/validar-nivel6")
+def validar_nivel6(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
+                   current_user=Depends(get_current_user)):
+    return _put_validar_nivel_sicoe_alto(contrato_id, registro_id, body, 6, current_user)
 
 
 @app.post("/sicoe-obra/{contrato_id}/registros/validar-nivel-masivo")
@@ -13586,7 +13873,7 @@ def validar_nivel_masivo_por_filtro(
 
             for row in candidatos:
                 rid = int(row["id"])
-                if _registro_nivel3_aprobado(row):
+                if _registro_nivel_max_aprobado(row, contrato_id):
                     omitidos_precondicion += 1
                     continue
                 if (row.get("nivel1_estado") or "") != "Aprobado":
@@ -13678,8 +13965,7 @@ def validar_nivel_masivo_por_filtro(
                     "nivel3_usuario_id": autor_id,
                     "nivel3_fecha": datetime.utcnow().isoformat(),
                 }
-                if marcar == "Aprobado":
-                    update["bloqueado"] = True
+                _sicoe_aplicar_bloqueado_si_nivel_es_maximo(contrato_id, 3, update, marcar)
 
                 def _upd3(regid=rid, upd=update):
                     return (
@@ -13735,6 +14021,90 @@ def validar_nivel_masivo_por_filtro(
                     pass
                 actualizados += 1
 
+        elif nivel in (4, 5, 6):
+            activos_m = _get_niveles_activos_contrato(contrato_id)
+            if nivel not in activos_m:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"El contrato no tiene activo el nivel {nivel} de validación.",
+                )
+            prev_field = NIVEL_VALIDACION_NUM_A_CAMPO[nivel - 1]
+            campo = NIVEL_VALIDACION_NUM_A_CAMPO[nivel]
+            u_key, f_key = _sicoe_campo_usuario_fecha_desde_estado(campo)
+            for row in candidatos:
+                rid = int(row["id"])
+                if (row.get(campo) or "") == "Aprobado" and marcar != "Aprobado":
+                    omitidos_precondicion += 1
+                    continue
+                if (row.get(prev_field) or "") != "Aprobado":
+                    omitidos_precondicion += 1
+                    continue
+
+                prev_audit = _so_registro_fetch_validacion_audit(contrato_id, rid) or {}
+                update = {
+                    campo: marcar,
+                    u_key: autor_id,
+                    f_key: datetime.utcnow().isoformat(),
+                }
+                _sicoe_aplicar_bloqueado_si_nivel_es_maximo(contrato_id, nivel, update, marcar)
+
+                def _upd_hi(regid=rid, upd=update):
+                    return (
+                        supabase.table("so_registros")
+                        .update(upd)
+                        .eq("id", regid)
+                        .eq("contrato_id", contrato_id)
+                        .execute()
+                        .data
+                    )
+
+                supabase_execute(_upd_hi)
+
+                if marcar == "Aprobado":
+                    try:
+                        _aplicar_acta_rpo_vigente_a_registro(contrato_id, rid, date.today())
+                    except Exception:
+                        pass
+
+                if body_in.comentario_data:
+                    _insertar_comentario(
+                        contrato_id,
+                        rid,
+                        autor_id,
+                        body_in.comentario_data,
+                        tipo_override="validacion",
+                        nivel_validacion_override=f"Nivel {nivel}",
+                        audit_user=current_user,
+                    )
+                    _push_notif_validacion_sicoe_destinatarios(
+                        current_user,
+                        autor_id,
+                        contrato_id,
+                        rid,
+                        f"Validación Nivel {nivel} (masivo): {marcar}",
+                        body_in.comentario_data.get("mensaje", "") or "",
+                        body_in.comentario_data,
+                    )
+                try:
+                    u_log = _audit_user_contrato(current_user, contrato_id)
+                    after_audit = _so_registro_fetch_validacion_audit(contrato_id, rid) or {}
+                    registrar_log(
+                        u_log,
+                        "VALIDAR",
+                        "SICOE",
+                        "registro",
+                        str(rid),
+                        {"nivel": nivel, "estado": marcar, "masivo": True, "masivo_filtro": True},
+                        valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
+                        valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
+                    )
+                except Exception:
+                    pass
+                actualizados += 1
+
+        else:
+            raise HTTPException(status_code=422, detail=f"Nivel masivo no soportado: {nivel}")
+
         out = {
             "ok": True,
             "actualizados": actualizados,
@@ -13783,7 +14153,7 @@ def validar_sub(contrato_id: int, registro_id: int, body: ValidarSubBody,
         # Verificar nivel2_objeto_pago_sub
         def _get():
             return supabase.table("so_registros")\
-                .select("nivel2_objeto_pago_sub, nivel3_estado").eq("id", registro_id)\
+                .select(f"nivel2_objeto_pago_sub, contrato_id, {SICOE_SELECT_NIVELES_ESTADO}").eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).limit(1).execute().data
         rows = supabase_execute(_get)
         if not rows:
@@ -13791,7 +14161,7 @@ def validar_sub(contrato_id: int, registro_id: int, body: ValidarSubBody,
         if _registro_nivel3_aprobado(rows[0]):
             raise HTTPException(
                 status_code=400,
-                detail="El registro está aprobado por Nivel 3 (Interventoría) y no puede modificarse por esta vía.",
+                detail="El registro está aprobado en el último nivel de validación y no puede modificarse por esta vía.",
             )
         if not rows[0].get("nivel2_objeto_pago_sub"):
             raise HTTPException(status_code=422,
@@ -13971,7 +14341,7 @@ def _liquidacion_analisis_items(contrato_id: int, nivel: str, current_user) -> L
         def _q_reg(o=off):
             return (
                 supabase.table("so_registros")
-                .select("capitulo, item_numero, cantidad_total, costo_directo, nivel3_estado")
+                .select("capitulo, item_numero, cantidad_total, costo_directo, " + SICOE_SELECT_NIVELES_ESTADO)
                 .eq("contrato_id", contrato_id)
                 .range(o, o + 999)
                 .execute()
@@ -13980,7 +14350,7 @@ def _liquidacion_analisis_items(contrato_id: int, nivel: str, current_user) -> L
 
         batch = supabase_execute(_q_reg) or []
         for r in batch:
-            if _matriz_validacion_norm_estado(r.get("nivel3_estado")) != "Aprobado":
+            if _matriz_validacion_norm_estado_nivel_final(r, contrato_id) != "Aprobado":
                 continue
             ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
             ik = _dash_norm_item_key_py(r.get("item_numero"))
@@ -14146,7 +14516,7 @@ def _dashboard_pkid_colores_liquidacion(
         def _qs(o=off):
             return (
                 supabase.table("so_registros")
-                .select("capitulo, item_numero, costo_directo, nivel3_estado, pk_id_id, pk_ids(pk_id)")
+                .select("capitulo, item_numero, costo_directo, " + SICOE_SELECT_NIVELES_ESTADO + ", pk_id_id, pk_ids(pk_id)")
                 .eq("contrato_id", contrato_id)
                 .range(o, o + 999)
                 .execute()
@@ -14155,7 +14525,7 @@ def _dashboard_pkid_colores_liquidacion(
 
         batch = supabase_execute(_qs) or []
         for r in batch:
-            if _matriz_validacion_norm_estado(r.get("nivel3_estado")) != "Aprobado":
+            if _matriz_validacion_norm_estado_nivel_final(r, contrato_id) != "Aprobado":
                 continue
             ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
             ik = _dash_norm_item_key_py(r.get("item_numero"))
@@ -14244,11 +14614,11 @@ def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_us
         while True:
             def _batch(o=off):
                 return supabase.table("so_registros").select(
-                    "capitulo, costo_directo, acta_rpo_id, nivel3_estado"
+                    f"capitulo, costo_directo, acta_rpo_id, {SICOE_SELECT_NIVELES_ESTADO}"
                 ).eq("contrato_id", contrato_id).range(o, o + 999).execute().data
             batch = supabase_execute(_batch) or []
             for reg in batch:
-                if _matriz_validacion_norm_estado(reg.get("nivel3_estado")) != "Aprobado":
+                if _matriz_validacion_norm_estado_nivel_final(reg, contrato_id) != "Aprobado":
                     continue
                 cd = float(reg.get("costo_directo") or 0)
                 total_cobrado += cd
@@ -14344,11 +14714,13 @@ def _so_reg_cola_n1_n2_aprobados(reg: dict) -> bool:
     )
 
 
-def _so_reg_en_cola_interventoria(reg: dict) -> bool:
-    """Línea lista para revisión N3: ítem asignado y N1+N2 aprobados."""
+def _so_reg_en_cola_interventoria(reg: dict, contrato_id: int) -> bool:
+    """Línea en cola del último nivel activo: ítem asignado, N1+N2 aprobados y nivel final «No Revisado»."""
     if not (reg.get("item_numero") or "").strip():
         return False
-    return _so_reg_cola_n1_n2_aprobados(reg)
+    if not _so_reg_cola_n1_n2_aprobados(reg):
+        return False
+    return _matriz_validacion_norm_estado_nivel_final(reg, contrato_id) == "No Revisado"
 
 
 def _dashboard_resumen_scan_caps(contrato_id: int) -> Dict[str, Any]:
@@ -14367,7 +14739,7 @@ def _dashboard_resumen_scan_caps(contrato_id: int) -> Dict[str, Any]:
                 supabase.table("so_registros")
                 .select(
                     "capitulo, costo_directo, cantidad_total, item_numero, "
-                    "nivel1_estado, nivel2_estado, nivel3_estado"
+                    f"{SICOE_SELECT_NIVELES_ESTADO}"
                 )
                 .eq("contrato_id", contrato_id)
                 .range(o, o + 999)
@@ -14382,11 +14754,11 @@ def _dashboard_resumen_scan_caps(contrato_id: int) -> Dict[str, Any]:
             cap = _dash_norm_cap(reg.get("capitulo"))
             cd = float(reg.get("costo_directo") or 0)
             cq = float(reg.get("cantidad_total") or 0)
-            n3 = _matriz_validacion_norm_estado(reg.get("nivel3_estado"))
-            if n3 == "Aprobado":
+            nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
+            if nfin == "Aprobado":
                 sicoe_ap_c[cap] += cd
                 sicoe_ap_q[cap] += cq
-            elif _so_reg_en_cola_interventoria(reg) and n3 == "No Revisado":
+            elif _so_reg_en_cola_interventoria(reg, contrato_id) and nfin == "No Revisado":
                 sicoe_nr_c[cap] += cd
                 sicoe_nr_q[cap] += cq
         if len(batch) < 1000:
@@ -14483,7 +14855,7 @@ def _drill_agg_by_item(contrato_id: int, capitulo: str, item_filtro: Optional[st
                 supabase.table("so_registros")
                 .select(
                     "item_numero, costo_directo, cantidad_total, "
-                    "nivel1_estado, nivel2_estado, nivel3_estado"
+                    f"{SICOE_SELECT_NIVELES_ESTADO}"
                 )
                 .eq("contrato_id", contrato_id)
                 .eq("capitulo", capitulo)
@@ -14499,11 +14871,11 @@ def _drill_agg_by_item(contrato_id: int, capitulo: str, item_filtro: Optional[st
                 continue
             cd = float(reg.get("costo_directo") or 0)
             cq = float(reg.get("cantidad_total") or 0)
-            n3 = _matriz_validacion_norm_estado(reg.get("nivel3_estado"))
-            if n3 == "Aprobado":
+            nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
+            if nfin == "Aprobado":
                 ap_c[it] += cd
                 ap_q[it] += cq
-            elif _so_reg_en_cola_interventoria(reg) and n3 == "No Revisado":
+            elif _so_reg_en_cola_interventoria(reg, contrato_id) and nfin == "No Revisado":
                 nr_c[it] += cd
                 nr_q[it] += cq
         if len(batch) < 1000:
@@ -14622,7 +14994,7 @@ def _dashboard_matriz_validacion_fallback(
     while True:
         def _batch(o=off):
             q = supabase.table("so_registros").select(
-                "costo_directo,nivel1_estado,nivel2_estado,nivel3_estado,sub_estado,"
+                f"costo_directo,{SICOE_SELECT_NIVELES_ESTADO},sub_estado,"
                 "capitulo,acta_rpo_id,item_numero"
             ).eq("contrato_id", contrato_id)
             if acta_id_filtro is not None:
@@ -14636,7 +15008,7 @@ def _dashboard_matriz_validacion_fallback(
             cd = float(reg.get("costo_directo") or 0)
             n1 = _matriz_validacion_norm_estado(reg.get("nivel1_estado"))
             n2 = _matriz_validacion_norm_estado(reg.get("nivel2_estado"))
-            n3 = _matriz_validacion_norm_estado(reg.get("nivel3_estado"))
+            nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
             sub_n = _matriz_validacion_norm_estado(reg.get("sub_estado"))
             sub_raw = str(reg.get("sub_estado") or "").strip().lower()
             bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
@@ -14659,7 +15031,7 @@ def _dashboard_matriz_validacion_fallback(
                 acc(n2, "residente")
             # N3 (interventoría): solo si N1 y N2 aprobaron; sobre ese subconjunto, estados nivel 3.
             if n1 == "Aprobado" and n2 == "Aprobado":
-                acc(n3, "interventoria")
+                acc(nfin, "interventoria")
 
             # Pendiente por ítem (sub_estado): no forma parte del bucket Pendiente del inspector; solo con N1 aprobado.
             if (sub_raw == "pendiente" or sub_n == "Pendiente") and n1 == "Aprobado":
@@ -14680,7 +15052,7 @@ def _dashboard_matriz_validacion_fallback(
         while True:
             def _bo(o=off):
                 q = supabase.table("so_registros").select(
-                    "costo_directo,nivel1_estado,nivel2_estado,nivel3_estado,capitulo,acta_rpo_id,item_numero"
+                    f"costo_directo,{SICOE_SELECT_NIVELES_ESTADO},capitulo,acta_rpo_id,item_numero"
                 ).eq("contrato_id", contrato_id)
                 return q.range(o, o + 999).execute().data
 
@@ -14694,10 +15066,10 @@ def _dashboard_matriz_validacion_fallback(
                 cd = float(reg.get("costo_directo") or 0)
                 n1 = _matriz_validacion_norm_estado(reg.get("nivel1_estado"))
                 n2 = _matriz_validacion_norm_estado(reg.get("nivel2_estado"))
-                n3 = _matriz_validacion_norm_estado(reg.get("nivel3_estado"))
+                nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
                 bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
                 Ox = ens_m if bloque == "ensayos" else obra_m
-                if n1 == "Aprobado" and n2 == "Aprobado" and n3 == "Pendiente":
+                if n1 == "Aprobado" and n2 == "Aprobado" and nfin == "Pendiente":
                     Ox["otras_actas"]["interventoria"] += cd
                 if n1 == "Aprobado" and n2 == "Pendiente":
                     Ox["otras_actas"]["residente"] += cd
@@ -14944,8 +15316,7 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
     while True:
         def _regs(o=off):
             q = supabase.table("so_registros").select(
-                "pk_id_id, pk_ids(pk_id), costo_directo, cantidad_total, item_numero, "
-                "nivel1_estado, nivel2_estado, nivel3_estado"
+                f"pk_id_id, pk_ids(pk_id), costo_directo, cantidad_total, item_numero, {SICOE_SELECT_NIVELES_ESTADO}"
             ).eq("contrato_id", contrato_id)
             if capitulo:
                 q = q.eq("capitulo", capitulo)
@@ -15024,17 +15395,17 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
         pk = _dash_pk_disp_key_py(pk_raw) if pk_raw is not None and str(pk_raw).strip() != "" else _dash_pk_disp_key_py(r.get("pk_id_id"))
         cd = float(r.get("costo_directo") or 0)
         cq = float(r.get("cantidad_total") or 0)
-        n3 = _matriz_validacion_norm_estado(r.get("nivel3_estado"))
-        if n3 == "Aprobado":
+        nfin = _matriz_validacion_norm_estado_nivel_final(r, contrato_id)
+        if nfin == "Aprobado":
             if pk not in agg_sicoe_ap:
                 agg_sicoe_ap[pk] = _empty_m()
             agg_sicoe_ap[pk]["cant"] += cq
             agg_sicoe_ap[pk]["costo"] += cd
             continue
         if _so_reg_cola_n1_n2_aprobados(r):
-            if n3 == "Pendiente":
+            if nfin == "Pendiente":
                 tgt = agg_sicoe_pe
-            elif n3 == "Rechazado":
+            elif nfin == "Rechazado":
                 tgt = agg_sicoe_rej
             else:
                 tgt = agg_sicoe_nr
@@ -15189,6 +15560,8 @@ def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Option
     al_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
     _side = Side(style="thin", color="FFB4B4B4")
     border_tbl = Border(left=_side, right=_side, top=_side, bottom=_side)
+
+    campo_max_estado_obra = _get_nivel_maximo_contrato(contrato_id)
 
     def _style_header_row(ws, row_idx: int, ncols: int):
         for c in range(1, ncols + 1):
@@ -15486,13 +15859,13 @@ def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Option
             off = 0
             while True:
 
-                def _ob():
+                def _ob(cm=campo_max_estado_obra):
                     return (
                         supabase.table("so_registros")
                         .select("*")
                         .eq("contrato_id", contrato_id)
                         .eq("capitulo", capitulo)
-                        .eq("nivel3_estado", "Aprobado")
+                        .eq(cm, "Aprobado")
                         .in_("item_numero", chunk_items)
                         .range(off, off + 999)
                         .execute()
@@ -15604,6 +15977,7 @@ def dashboard_pkid_colores_obra(
         liq = str(liquidacion or "").strip().lower() in ("1", "true", "yes", "on")
         if liq:
             return _dashboard_pkid_colores_liquidacion(contrato_id, capitulo, item)
+        campo_mx_pk = _get_nivel_maximo_contrato(contrato_id)
         ppto_agg = {}
         off = 0
         while True:
@@ -15627,8 +16001,8 @@ def dashboard_pkid_colores_obra(
         sicoe_ap_agg = {}
         off = 0
         while True:
-            def _regs(o=off):
-                q = supabase.table("so_registros").select("pk_id_id, pk_ids(pk_id), costo_directo").eq("contrato_id", contrato_id).eq("nivel3_estado", "Aprobado")
+            def _regs(o=off, cm=campo_mx_pk):
+                q = supabase.table("so_registros").select("pk_id_id, pk_ids(pk_id), costo_directo").eq("contrato_id", contrato_id).eq(cm, "Aprobado")
                 if capitulo:
                     q = q.eq("capitulo", capitulo)
                 if item:
@@ -15738,7 +16112,7 @@ def dashboard_pkid_detalle_obra(
             q_s = supabase.table("so_registros").select(
                 "id, numero_registro, tramo, nodo_ini, nodo_fin, cantidad_total, costo_directo, "
                 "item_descripcion, item_numero, acta_rpo_id, calzada, reporte_id, observacion, "
-                "nivel1_estado, nivel2_estado, nivel3_estado"
+                f"{SICOE_SELECT_NIVELES_ESTADO}"
             ).eq("contrato_id", contrato_id)
             if pkid_id_val:
                 q_s = q_s.eq("pk_id_id", pkid_id_val)
@@ -15775,14 +16149,13 @@ def dashboard_pkid_detalle_obra(
                 "acta": acta_map.get(r.get("acta_rpo_id")),
                 "calzada": r.get("calzada") or "",
                 "observacion": (r.get("observacion") or "").strip(),
-                "nivel3_estado": _matriz_validacion_norm_estado(r.get("nivel3_estado")),
+                "nivel3_estado": _matriz_validacion_norm_estado_nivel_final(r, contrato_id),
             }
 
         sicoe_aprobado = []
         for r in sicoe_rows:
             fr = _fmt_sicoe(r)
-            n3 = _matriz_validacion_norm_estado(r.get("nivel3_estado"))
-            if n3 == "Aprobado":
+            if _matriz_validacion_norm_estado_nivel_final(r, contrato_id) == "Aprobado":
                 sicoe_aprobado.append(fr)
 
         ppto_aprobado = []
@@ -15879,15 +16252,15 @@ def solicitar_reversion(contrato_id: int, registro_id: int, body: SolicitarRever
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
         def _get():
             return supabase.table("so_registros")\
-                .select("nivel3_estado, bloqueado").eq("id", registro_id)\
+                .select(f"{SICOE_SELECT_NIVELES_ESTADO},bloqueado,contrato_id").eq("id", registro_id)\
                 .eq("contrato_id", contrato_id).limit(1).execute().data
         rows = supabase_execute(_get)
         if not rows:
             raise HTTPException(status_code=404, detail="Registro no encontrado.")
         reg = rows[0]
-        if reg.get("nivel3_estado") != "Aprobado" or not reg.get("bloqueado"):
+        if not _registro_nivel_max_aprobado(reg, contrato_id) or not reg.get("bloqueado"):
             raise HTTPException(status_code=422,
-                detail="El registro debe estar en nivel3 Aprobado y bloqueado para solicitar reversión.")
+                detail="El registro debe estar aprobado en el último nivel de validación y bloqueado para solicitar reversión.")
 
         prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
         def _upd():
@@ -15937,12 +16310,14 @@ def aceptar_reversion(contrato_id: int, registro_id: int, body: AceptarReversion
         prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
 
         if body.aceptar:
+            campo_mx = _get_nivel_maximo_contrato(contrato_id)
+            u_k, f_k = _sicoe_campo_usuario_fecha_desde_estado(campo_mx)
             update = {
-                "bloqueado":          False,
+                "bloqueado": False,
                 "solicitud_reversion": False,
-                "nivel3_estado":      "No Revisado",
-                "nivel3_usuario_id":  None,
-                "nivel3_fecha":       None,
+                campo_mx: "No Revisado",
+                u_k: None,
+                f_k: None,
             }
         else:
             update = {"solicitud_reversion": False}
@@ -16014,7 +16389,7 @@ def reversion_n3_doble_llave(
             return (
                 supabase.table("so_registros")
                 .select(
-                    "nivel3_estado, bloqueado,"
+                    f"{SICOE_SELECT_NIVELES_ESTADO},bloqueado,contrato_id,"
                     "reversion_arm_n2_usuario_id, reversion_arm_n3_usuario_id"
                 )
                 .eq("id", registro_id)
@@ -16028,10 +16403,10 @@ def reversion_n3_doble_llave(
         if not rows:
             raise HTTPException(status_code=404, detail="Registro no encontrado.")
         row = rows[0]
-        if row.get("nivel3_estado") != "Aprobado" or not row.get("bloqueado"):
+        if not _registro_nivel_max_aprobado(row, contrato_id) or not row.get("bloqueado"):
             raise HTTPException(
                 status_code=422,
-                detail="Solo aplica a registros aprobados por Interventoría (N3) y bloqueados.",
+                detail="Solo aplica a registros aprobados en el último nivel de validación y bloqueados.",
             )
 
         prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
@@ -16048,7 +16423,7 @@ def reversion_n3_doble_llave(
         arm3 = _nid(row.get("reversion_arm_n3_usuario_id"))
 
         nivel_db = _sicoe_db_nivel_validacion_usuario(autor_id)
-        if _es_desarrollador(current_user):
+        if _es_desarrollador(current_user) or nivel_db == 0:
             if arm2 is None:
                 nivel = 2
             elif arm3 is None:
@@ -16060,10 +16435,10 @@ def reversion_n3_doble_llave(
                 )
         else:
             nivel = nivel_db
-            if nivel not in (2, 3):
+            if nivel not in (2, 3, 4, 5, 6):
                 raise HTTPException(
                     status_code=403,
-                    detail="Solo Residente de costos (Nivel 2) o Interventoría (Nivel 3) pueden activar esta llave.",
+                    detail="Solo Residente de costos (Nivel 2) o perfiles de interventoría con permiso de validación pueden activar esta llave.",
                 )
         _require_llave_reversion_sicoe_nivel(current_user, autor_id, nivel)
 
@@ -16091,7 +16466,7 @@ def reversion_n3_doble_llave(
                 )
 
         new2 = autor_id if nivel == 2 else arm2
-        new3 = autor_id if nivel == 3 else arm3
+        new3 = autor_id if nivel in (3, 4, 5, 6) else arm3
         ejecutar = new2 is not None and new3 is not None
         if ejecutar and new2 == new3:
             raise HTTPException(
@@ -16124,12 +16499,14 @@ def reversion_n3_doble_llave(
             pass
 
         if ejecutar:
+            campo_mx = _get_nivel_maximo_contrato(contrato_id)
+            u_k, f_k = _sicoe_campo_usuario_fecha_desde_estado(campo_mx)
             update = {
                 "bloqueado": False,
                 "solicitud_reversion": False,
-                "nivel3_estado": "No Revisado",
-                "nivel3_usuario_id": None,
-                "nivel3_fecha": None,
+                campo_mx: "No Revisado",
+                u_k: None,
+                f_k: None,
                 "reversion_arm_n2_usuario_id": None,
                 "reversion_arm_n3_usuario_id": None,
             }
@@ -16475,7 +16852,7 @@ def validar_masivo_nivel2(contrato_id: int, reporte_id: int, body: ValidarMasivo
                 def _rb(c=chunk):
                     return (
                         supabase.table("so_registros")
-                        .select("id, nivel1_estado, nivel3_estado, reporte_id, nivel2_objeto_pago_sub")
+                        .select(f"id, nivel1_estado, contrato_id, {SICOE_SELECT_NIVELES_ESTADO}, reporte_id, nivel2_objeto_pago_sub")
                         .eq("contrato_id", contrato_id)
                         .in_("id", c)
                         .execute()
@@ -16635,8 +17012,7 @@ def validar_masivo_nivel3(contrato_id: int, reporte_id: int, body: ValidarMasivo
                 "nivel3_usuario_id": autor_id,
                 "nivel3_fecha":      datetime.utcnow().isoformat(),
             }
-            if body.estado == "Aprobado":
-                update["bloqueado"] = True
+            _sicoe_aplicar_bloqueado_si_nivel_es_maximo(contrato_id, 3, update, body.estado)
 
             def _upd(rid=reg_id, upd=update):
                 return supabase.table("so_registros")\
@@ -16712,15 +17088,21 @@ def reconciliar_acta_rpo_historico(
         while True:
             def _batch(o=off):
                 return supabase.table("so_registros").select(
-                    "id, reporte_id, acta_rpo_id, nivel2_estado, nivel3_estado, nivel2_fecha, nivel3_fecha"
+                    f"id, reporte_id, acta_rpo_id, {SICOE_SELECT_NIVELES_ESTADO},"
+                    "nivel2_fecha, nivel3_fecha, nivel4_fecha, nivel5_fecha, nivel6_fecha"
                 ).eq("contrato_id", contrato_id).range(o, o + 499).execute().data
 
             rows = supabase_execute(_batch) or []
             for row in rows:
                 revisados += 1
                 ref_raw = None
-                if _matriz_validacion_norm_estado(row.get("nivel3_estado")) == "Aprobado":
-                    ref_raw = row.get("nivel3_fecha") or row.get("nivel2_fecha")
+                if _matriz_validacion_norm_estado_nivel_final(row, contrato_id) == "Aprobado":
+                    mxn = _get_nivel_numero_maximo_contrato(contrato_id)
+                    ref_raw = (
+                        row.get(f"nivel{mxn}_fecha")
+                        or row.get("nivel3_fecha")
+                        or row.get("nivel2_fecha")
+                    )
                 elif _matriz_validacion_norm_estado(row.get("nivel2_estado")) == "Aprobado":
                     ref_raw = row.get("nivel2_fecha")
                 else:

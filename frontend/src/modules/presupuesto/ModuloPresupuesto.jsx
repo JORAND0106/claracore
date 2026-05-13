@@ -5,7 +5,8 @@ import mapboxgl from "mapbox-gl"
 import "mapbox-gl/dist/mapbox-gl.css"
 import * as XLSX from "xlsx"
 import ExcelJS from "exceljs"
-import { API_BASE } from '../../apiBase'
+import { API_BASE, SUPABASE_ANON_KEY, SUPABASE_URL } from '../../apiBase'
+import { supabase } from '../../supabaseClient'
 import { formatCOP, formatCOPShort } from '../../utils/formatCOP'
 import EmojiPicker from '../../EmojiPicker'
 import PptoFiltroObraVista from './PptoFiltroObraVista'
@@ -996,6 +997,45 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   useEffect(() => {
     if (sincroSicoeModal) recargarCapActual(true)
   }, [sincroSicoeModal?.ts])
+
+  /** Realtime presupuesto: solo refresca resumen liviano (GET /resumen); el listado sigue con polling 22s. */
+  useEffect(() => {
+    if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contratoId) return
+    const cid = String(contratoId)
+    const filt = `contrato_id=eq.${cid}`
+    const aplicarResumen = (d) => {
+      if (!d || typeof d !== 'object') return
+      const rows = d.por_capitulo
+      if (!Array.isArray(rows)) return
+      const list = rows.map((r) => ({
+        capitulo: r.capitulo,
+        costo_total: Number(r.costo) || 0,
+        total_registros: Number(r.registros) || 0,
+      }))
+      setCapitulosResumen([...list].sort(cmpCapituloLabel))
+    }
+    const onChange = () => {
+      const tok = getToken()
+      if (!tok) return
+      fetch(`${API}/presupuesto/${contratoId}/resumen`, { headers: { Authorization: `Bearer ${tok}` } })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (d) aplicarResumen(d)
+        })
+        .catch(() => {})
+    }
+    const channel = supabase
+      .channel(`presupuesto-${cid}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'presupuesto', filter: filt },
+        onChange,
+      )
+      .subscribe()
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [contratoId])
 
   // Multisesión: refresco con pestaña activa. Intervalos cortos disparan conteo + N× presupuesto?limit=1000 y saturan el API.
   useEffect(() => {
