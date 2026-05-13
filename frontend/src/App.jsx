@@ -11741,8 +11741,12 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   }, [contratoIdDash, actaFiltroMatriz, cargarMatrizValidacionDashboard])
 
   function mapDrillCapituloItems(payload) {
-    if (!payload || payload.campo !== 'item' || !Array.isArray(payload.items)) return null
-    return payload.items.map(r => ({
+    if (!payload) return null
+    let rows = null
+    if (Array.isArray(payload)) rows = payload
+    else if (Array.isArray(payload.items)) rows = payload.items
+    if (!Array.isArray(rows)) return null
+    return rows.map(r => ({
       item: r.item || r.nombre, descripcion: r.descripcion || '',
       presupuesto: r.presupuesto || 0, cobrado: r.cobrado || 0,
       presupuesto_aprobado_n3: r.presupuesto_aprobado_n3 ?? 0,
@@ -11815,7 +11819,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         .then(data => {
           if (fetchSeq !== dashDrillFetchSeqRef.current) return
           const lista = mapDrillCapituloItems(data)
-          if (!lista) return
+          if (!Array.isArray(lista)) return
           dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
           setDashData(lista)
         })
@@ -11823,17 +11827,29 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       return
     }
     setDashLoading(true)
-    const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
-    if (fetchSeq !== dashDrillFetchSeqRef.current) { setDashLoading(false); return }
-    if (res.ok) {
-      const data = await res.json()
-      const lista = mapDrillCapituloItems(data)
-      if (lista) {
-        dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
-        setDashData(lista)
+    try {
+      const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+      if (fetchSeq !== dashDrillFetchSeqRef.current) return
+      if (res.ok) {
+        let data = null
+        try {
+          data = await res.json()
+        } catch {
+          data = null
+        }
+        const lista = mapDrillCapituloItems(data)
+        if (Array.isArray(lista)) {
+          dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
+          setDashData(lista)
+        } else {
+          setDashData([])
+        }
+      } else {
+        setDashData([])
       }
+    } finally {
+      if (fetchSeq === dashDrillFetchSeqRef.current) setDashLoading(false)
     }
-    setDashLoading(false)
   }
 
   async function refrescarDashDrillSilencioso(drill) {
@@ -11858,7 +11874,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         .then(data => {
           if (seqAtStart !== dashDrillFetchSeqRef.current) return
           const lista = mapDrillCapituloItems(data)
-          if (!lista) return
+          if (!Array.isArray(lista)) return
           dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
         })
         .catch(() => {})

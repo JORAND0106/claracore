@@ -1,6 +1,12 @@
 -- Dashboard drill: agregación en BD (reemplaza bucles Python en /dashboard-drill y /dashboard-pkid-tabla).
 -- Requiere public._norm_estado_matriz (ver dashboard_matriz_validacion.sql).
 -- Ejecutar en Supabase SQL Editor tras revisar nombres de vista / columnas.
+--
+-- Quitar firmas antiguas (solo p_contrato_id / sin nivel máximo); si no, coexisten sobrecargas
+-- y PostgREST puede seguir llamando la versión equivocada.
+DROP FUNCTION IF EXISTS public.dashboard_drill_capitulos_agg(bigint);
+DROP FUNCTION IF EXISTS public.dashboard_drill_items_agg(bigint, text);
+DROP FUNCTION IF EXISTS public.dashboard_pkid_tabla_agg(bigint, text, text);
 
 CREATE OR REPLACE FUNCTION public._dash_norm_item_key(txt text)
 RETURNS text
@@ -41,8 +47,33 @@ AS $$
   END;
 $$;
 
+-- Estado normalizado del nivel final del contrato (p_campo = 'nivel3_estado' … 'nivel6_estado').
+CREATE OR REPLACE FUNCTION public._dash_matriz_nivel_max_estado(
+  p_campo text,
+  n1 text, n2 text, n3 text, n4 text, n5 text, n6 text
+)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT public._norm_estado_matriz(
+    CASE lower(btrim(COALESCE(p_campo, 'nivel3_estado')))
+      WHEN 'nivel1_estado' THEN n1
+      WHEN 'nivel2_estado' THEN n2
+      WHEN 'nivel3_estado' THEN n3
+      WHEN 'nivel4_estado' THEN n4
+      WHEN 'nivel5_estado' THEN n5
+      WHEN 'nivel6_estado' THEN n6
+      ELSE n3
+    END
+  );
+$$;
+
 -- Listado por capítulo (nivel 1 drill).
-CREATE OR REPLACE FUNCTION public.dashboard_drill_capitulos_agg(p_contrato_id bigint)
+CREATE OR REPLACE FUNCTION public.dashboard_drill_capitulos_agg(
+  p_contrato_id bigint,
+  p_campo_nivel_max text DEFAULT 'nivel3_estado'
+)
 RETURNS jsonb
 LANGUAGE sql
 STABLE
@@ -50,10 +81,19 @@ AS $f$
 WITH
 regs AS (
   SELECT
-    public._dash_norm_capitulo(r.capitulo) AS cap,
+    public._dash_norm_capitulo_key(
+      CASE
+        WHEN r.capitulo IS NULL OR btrim(r.capitulo::text) = '' THEN 'Sin capítulo'
+        ELSE r.capitulo::text
+      END
+    ) AS cap,
     r.costo_directo::numeric AS cd,
     r.cantidad_total::numeric AS cq,
-    public._norm_estado_matriz(r.nivel3_estado) AS n3,
+    public._dash_matriz_nivel_max_estado(
+      p_campo_nivel_max,
+      r.nivel1_estado, r.nivel2_estado, r.nivel3_estado,
+      r.nivel4_estado, r.nivel5_estado, r.nivel6_estado
+    ) AS nmax,
     public._norm_estado_matriz(r.nivel1_estado) AS n1,
     public._norm_estado_matriz(r.nivel2_estado) AS n2,
     COALESCE(public._dash_norm_item_key(r.item_numero), '') <> '' AS has_item
@@ -63,26 +103,38 @@ regs AS (
 obra AS (
   SELECT
     cap,
-    SUM(cd) FILTER (WHERE n3 = 'Aprobado') AS ap_c,
-    SUM(cq) FILTER (WHERE n3 = 'Aprobado') AS ap_q,
+    SUM(cd) FILTER (WHERE nmax = 'Aprobado') AS ap_c,
+    SUM(cq) FILTER (WHERE nmax = 'Aprobado') AS ap_q,
     SUM(cd) FILTER (
-      WHERE has_item AND n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'No Revisado'
+      WHERE has_item AND n1 = 'Aprobado' AND n2 = 'Aprobado' AND nmax = 'No Revisado'
     ) AS nr_c,
     SUM(cq) FILTER (
-      WHERE has_item AND n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'No Revisado'
+      WHERE has_item AND n1 = 'Aprobado' AND n2 = 'Aprobado' AND nmax = 'No Revisado'
     ) AS nr_q
   FROM regs
   GROUP BY cap
 ),
 ppto_tot AS (
-  SELECT public._dash_norm_capitulo(v.capitulo) AS cap, SUM(COALESCE(v.presupuesto, 0)::numeric) AS pres
+  SELECT
+    public._dash_norm_capitulo_key(
+      CASE
+        WHEN v.capitulo IS NULL OR btrim(v.capitulo::text) = '' THEN 'Sin capítulo'
+        ELSE v.capitulo::text
+      END
+    ) AS cap,
+    SUM(COALESCE(v.presupuesto, 0)::numeric) AS pres
   FROM public.vista_ppto_por_capitulo v
   WHERE v.contrato_id = p_contrato_id
   GROUP BY 1
 ),
 ppto_split AS (
   SELECT
-    public._dash_norm_capitulo(p.capitulo) AS cap,
+    public._dash_norm_capitulo_key(
+      CASE
+        WHEN p.capitulo IS NULL OR btrim(p.capitulo::text) = '' THEN 'Sin capítulo'
+        ELSE p.capitulo::text
+      END
+    ) AS cap,
     SUM(
       CASE WHEN public._norm_estado_matriz(p.revisado) = 'Aprobado' THEN COALESCE(p.costo_directo, 0)::numeric ELSE 0 END
     ) AS pap,
@@ -133,7 +185,11 @@ LEFT JOIN ppto_split ps ON ps.cap = c.cap;
 $f$;
 
 -- Ítems dentro de un capítulo (nivel 1 → lista de barras).
-CREATE OR REPLACE FUNCTION public.dashboard_drill_items_agg(p_contrato_id bigint, p_capitulo text)
+CREATE OR REPLACE FUNCTION public.dashboard_drill_items_agg(
+  p_contrato_id bigint,
+  p_capitulo text,
+  p_campo_nivel_max text DEFAULT 'nivel3_estado'
+)
 RETURNS jsonb
 LANGUAGE sql
 STABLE
@@ -164,7 +220,11 @@ regs AS (
     public._dash_norm_item_key(r.item_numero) AS it,
     r.costo_directo::numeric AS cd,
     r.cantidad_total::numeric AS cq,
-    public._norm_estado_matriz(r.nivel3_estado) AS n3,
+    public._dash_matriz_nivel_max_estado(
+      p_campo_nivel_max,
+      r.nivel1_estado, r.nivel2_estado, r.nivel3_estado,
+      r.nivel4_estado, r.nivel5_estado, r.nivel6_estado
+    ) AS nmax,
     public._norm_estado_matriz(r.nivel1_estado) AS n1,
     public._norm_estado_matriz(r.nivel2_estado) AS n2
   FROM public.so_registros r, cm
@@ -174,13 +234,13 @@ regs AS (
 obra AS (
   SELECT
     it,
-    SUM(cd) FILTER (WHERE it IS NOT NULL AND n3 = 'Aprobado') AS ap_c,
-    SUM(cq) FILTER (WHERE it IS NOT NULL AND n3 = 'Aprobado') AS ap_q,
+    SUM(cd) FILTER (WHERE it IS NOT NULL AND nmax = 'Aprobado') AS ap_c,
+    SUM(cq) FILTER (WHERE it IS NOT NULL AND nmax = 'Aprobado') AS ap_q,
     SUM(cd) FILTER (
-      WHERE it IS NOT NULL AND n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'No Revisado'
+      WHERE it IS NOT NULL AND n1 = 'Aprobado' AND n2 = 'Aprobado' AND nmax = 'No Revisado'
     ) AS nr_c,
     SUM(cq) FILTER (
-      WHERE it IS NOT NULL AND n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 = 'No Revisado'
+      WHERE it IS NOT NULL AND n1 = 'Aprobado' AND n2 = 'Aprobado' AND nmax = 'No Revisado'
     ) AS nr_q
   FROM regs
   WHERE it IS NOT NULL
@@ -225,7 +285,8 @@ $f$;
 CREATE OR REPLACE FUNCTION public.dashboard_pkid_tabla_agg(
   p_contrato_id bigint,
   p_capitulo text,
-  p_item text
+  p_item text,
+  p_campo_nivel_max text DEFAULT 'nivel3_estado'
 )
 RETURNS jsonb
 LANGUAGE sql
@@ -291,7 +352,11 @@ regs AS (
     COALESCE(NULLIF(btrim(pk.pk_id::text), ''), '(sin pk)') AS pk_disp,
     r.costo_directo::numeric AS cd,
     r.cantidad_total::numeric AS cq,
-    public._norm_estado_matriz(r.nivel3_estado) AS n3,
+    public._dash_matriz_nivel_max_estado(
+      p_campo_nivel_max,
+      r.nivel1_estado, r.nivel2_estado, r.nivel3_estado,
+      r.nivel4_estado, r.nivel5_estado, r.nivel6_estado
+    ) AS nmax,
     public._norm_estado_matriz(r.nivel1_estado) AS n1,
     public._norm_estado_matriz(r.nivel2_estado) AS n2
   FROM public.so_registros r
@@ -306,23 +371,23 @@ regs AS (
 cola AS (
   SELECT
     *,
-    (n1 = 'Aprobado' AND n2 = 'Aprobado' AND n3 IS DISTINCT FROM 'Aprobado') AS in_cola
+    (n1 = 'Aprobado' AND n2 = 'Aprobado' AND nmax IS DISTINCT FROM 'Aprobado') AS in_cola
   FROM regs
 ),
 obra_pk AS (
   SELECT
     pk_disp,
-    SUM(cd) FILTER (WHERE n3 = 'Aprobado') AS ap_c,
-    SUM(cq) FILTER (WHERE n3 = 'Aprobado') AS ap_q,
-    SUM(cd) FILTER (WHERE in_cola AND n3 = 'Pendiente') AS pe_c,
-    SUM(cq) FILTER (WHERE in_cola AND n3 = 'Pendiente') AS pe_q,
-    SUM(cd) FILTER (WHERE in_cola AND n3 = 'Rechazado') AS rej_c,
-    SUM(cq) FILTER (WHERE in_cola AND n3 = 'Rechazado') AS rej_q,
+    SUM(cd) FILTER (WHERE nmax = 'Aprobado') AS ap_c,
+    SUM(cq) FILTER (WHERE nmax = 'Aprobado') AS ap_q,
+    SUM(cd) FILTER (WHERE in_cola AND nmax = 'Pendiente') AS pe_c,
+    SUM(cq) FILTER (WHERE in_cola AND nmax = 'Pendiente') AS pe_q,
+    SUM(cd) FILTER (WHERE in_cola AND nmax = 'Rechazado') AS rej_c,
+    SUM(cq) FILTER (WHERE in_cola AND nmax = 'Rechazado') AS rej_q,
     SUM(cd) FILTER (
-      WHERE in_cola AND n3 IS DISTINCT FROM 'Pendiente' AND n3 IS DISTINCT FROM 'Rechazado'
+      WHERE in_cola AND nmax IS DISTINCT FROM 'Pendiente' AND nmax IS DISTINCT FROM 'Rechazado'
     ) AS nr_c,
     SUM(cq) FILTER (
-      WHERE in_cola AND n3 IS DISTINCT FROM 'Pendiente' AND n3 IS DISTINCT FROM 'Rechazado'
+      WHERE in_cola AND nmax IS DISTINCT FROM 'Pendiente' AND nmax IS DISTINCT FROM 'Rechazado'
     ) AS nr_q
   FROM cola
   GROUP BY pk_disp
@@ -402,16 +467,17 @@ SELECT jsonb_build_object(
 );
 $f$;
 
-COMMENT ON FUNCTION public.dashboard_drill_capitulos_agg(bigint) IS
-  'Dashboard drill nivel capítulos: una pasada en BD.';
-COMMENT ON FUNCTION public.dashboard_drill_items_agg(bigint, text) IS
-  'Dashboard drill ítems por capítulo: una pasada en BD.';
-COMMENT ON FUNCTION public.dashboard_pkid_tabla_agg(bigint, text, text) IS
-  'Tabla PK_ID: cola obra = N1+N2 aprobados y N3 no aprobado. cant_sicoe_no_revisado = solo tramos N3 «no revisado» u otros (no pendiente ni rechazado); pendiente/rechazado en sus columnas.';
+COMMENT ON FUNCTION public.dashboard_drill_capitulos_agg(bigint, text) IS
+  'Dashboard drill nivel capítulos: una pasada en BD. p_campo_nivel_max = columna estado del último nivel activo del contrato.';
+COMMENT ON FUNCTION public.dashboard_drill_items_agg(bigint, text, text) IS
+  'Dashboard drill ítems por capítulo: una pasada en BD. Obra aprobada / cola según nivel máximo.';
+COMMENT ON FUNCTION public.dashboard_pkid_tabla_agg(bigint, text, text, text) IS
+  'Tabla PK_ID: cola obra = N1+N2 aprobados y nivel máximo no aprobado. cant_sicoe_no_revisado = tramos no pendiente ni rechazado; pendiente/rechazado en sus columnas.';
 
 GRANT EXECUTE ON FUNCTION public._dash_norm_item_key(text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._dash_norm_capitulo(text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._dash_norm_capitulo_key(text) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.dashboard_drill_capitulos_agg(bigint) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.dashboard_drill_items_agg(bigint, text) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.dashboard_pkid_tabla_agg(bigint, text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._dash_matriz_nivel_max_estado(text, text, text, text, text, text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.dashboard_drill_capitulos_agg(bigint, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.dashboard_drill_items_agg(bigint, text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.dashboard_pkid_tabla_agg(bigint, text, text, text) TO authenticated, service_role;

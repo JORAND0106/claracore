@@ -14915,7 +14915,7 @@ def _dashboard_resumen_merge_extras(contrato_id: int, hit: dict) -> dict:
 
 
 def _drill_agg_by_item(contrato_id: int, capitulo: str, item_filtro: Optional[str] = None) -> List[dict]:
-    """Ítems de un capítulo: presupuesto ClaraCore (revisado), SICOE N3 ap / no rev."""
+    """Ítems de un capítulo: presupuesto ClaraCore (revisado), obra aprobada al nivel máximo del contrato / cola interventoría."""
     ppto_by: Dict[str, List[dict]] = {}
     rows_p = _ppto_rows_capitulo(contrato_id, capitulo)
     for r in rows_p:
@@ -14929,16 +14929,16 @@ def _drill_agg_by_item(contrato_id: int, capitulo: str, item_filtro: Optional[st
     nr_c = defaultdict(float)
     nr_q = defaultdict(float)
     off = 0
+    cap_key = _dash_norm_capitulo_key_py(capitulo)
     while True:
         def _sr(o=off):
             return (
                 supabase.table("so_registros")
                 .select(
-                    "item_numero, costo_directo, cantidad_total, "
+                    "item_numero, costo_directo, cantidad_total, capitulo, "
                     f"{SICOE_SELECT_NIVELES_ESTADO}"
                 )
                 .eq("contrato_id", contrato_id)
-                .eq("capitulo", capitulo)
                 .range(o, o + 999)
                 .execute()
                 .data
@@ -14946,6 +14946,8 @@ def _drill_agg_by_item(contrato_id: int, capitulo: str, item_filtro: Optional[st
 
         batch = supabase_execute(_sr) or []
         for reg in batch:
+            if _dash_norm_capitulo_key_py(reg.get("capitulo")) != cap_key:
+                continue
             it = _dash_norm_item_key_py(reg.get("item_numero"))
             if not it:
                 continue
@@ -15352,8 +15354,11 @@ def dashboard_drill_obra(
                     return {"campo": "item", "items": items}
             except Exception:
                 pass
-            result = _drill_agg_by_item(contrato_id, capitulo, item)
-            return {"campo": "item", "items": result}
+            try:
+                result = _drill_agg_by_item(contrato_id, capitulo, item)
+            except Exception:
+                result = []
+            return {"campo": "item", "items": result if isinstance(result, list) else []}
         if item:
             raise HTTPException(status_code=422, detail="Indica capitulo junto con item.")
         try:
@@ -15405,17 +15410,18 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
     registros = []
     off = 0
     it_norm = _dash_norm_item_key_py(item) if item else ""
+    cap_key = _dash_norm_capitulo_key_py(capitulo) if capitulo else None
     while True:
         def _regs(o=off):
             q = supabase.table("so_registros").select(
-                f"pk_id_id, pk_ids(pk_id), costo_directo, cantidad_total, item_numero, {SICOE_SELECT_NIVELES_ESTADO}"
+                f"pk_id_id, capitulo, pk_ids(pk_id), costo_directo, cantidad_total, item_numero, {SICOE_SELECT_NIVELES_ESTADO}"
             ).eq("contrato_id", contrato_id)
-            if capitulo:
-                q = q.eq("capitulo", capitulo)
             return q.range(o, o + 999).execute().data
 
         batch = supabase_execute(_regs)
         for reg in batch or []:
+            if cap_key and _dash_norm_capitulo_key_py(reg.get("capitulo")) != cap_key:
+                continue
             if it_norm and _dash_norm_item_key_py(reg.get("item_numero")) != it_norm:
                 continue
             registros.append(reg)
@@ -15591,6 +15597,7 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
 
 
 def _ppto_rows_capitulo(contrato_id: int, capitulo: str) -> List[dict]:
+    cap_key = _dash_norm_capitulo_key_py(capitulo)
     rows = []
     off = 0
     while True:
@@ -15599,7 +15606,6 @@ def _ppto_rows_capitulo(contrato_id: int, capitulo: str) -> List[dict]:
                 supabase.table("presupuesto")
                 .select("item, descripcion, capitulo, cant_total, costo_directo, revisado, pk_id")
                 .eq("contrato_id", contrato_id)
-                .eq("capitulo", capitulo)
                 .eq("dado_de_baja", False)
                 .range(o, o + 999)
                 .execute()
@@ -15607,7 +15613,10 @@ def _ppto_rows_capitulo(contrato_id: int, capitulo: str) -> List[dict]:
             )
 
         batch = supabase_execute(_b) or []
-        rows.extend(batch)
+        for row in batch:
+            if _dash_norm_capitulo_key_py(row.get("capitulo")) != cap_key:
+                continue
+            rows.append(row)
         if len(batch) < 1000:
             break
         off += 1000

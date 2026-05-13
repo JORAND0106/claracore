@@ -1,10 +1,16 @@
 -- Dashboard SICOE — resumen en una sola consulta (sin tabla cobro).
--- Incluye: SICOE N3 aprobado, SICOE N3 no revisado (cola interventoría), presupuesto total
--- y presupuesto ClaraCore partido por columna revisado (= validación tipo N3 en polígonos).
--- Requiere public._norm_estado_matriz (ver dashboard_matriz_validacion.sql).
--- Ejecutar en Supabase SQL Editor para reemplazar dashboard_resumen_sicoe_agg.
+-- Obra: aprobado y «cola» según el nivel máximo activo del contrato (p_campo_nivel_max).
+-- Presupuesto: columna revisado (validación en polígonos); los campos JSON *aprobado_n3* son etiqueta histórica.
+-- Requiere public._norm_estado_matriz (ver dashboard_matriz_validacion.sql) y, en la misma BD,
+--   public._dash_norm_capitulo_key + public._dash_matriz_nivel_max_estado (ver dashboard_drill_agg.sql).
+-- Ejecutar primero dashboard_drill_agg.sql si aún no existen esas funciones.
 
-CREATE OR REPLACE FUNCTION public.dashboard_resumen_sicoe_agg(p_contrato_id bigint)
+DROP FUNCTION IF EXISTS public.dashboard_resumen_sicoe_agg(bigint);
+
+CREATE OR REPLACE FUNCTION public.dashboard_resumen_sicoe_agg(
+  p_contrato_id bigint,
+  p_campo_nivel_max text DEFAULT 'nivel3_estado'
+)
 RETURNS jsonb
 LANGUAGE sql
 STABLE
@@ -12,21 +18,27 @@ AS $f$
 WITH
 regs AS (
   SELECT
-    CASE
-      WHEN r.capitulo IS NULL OR r.capitulo = '' THEN 'Sin capítulo'
-      ELSE r.capitulo
-    END AS cap,
+    public._dash_norm_capitulo_key(
+      CASE
+        WHEN r.capitulo IS NULL OR btrim(r.capitulo::text) = '' THEN 'Sin capítulo'
+        ELSE r.capitulo::text
+      END
+    ) AS cap,
     r.costo_directo::numeric AS cd,
     r.acta_rpo_id AS aid,
-    public._norm_estado_matriz(r.nivel3_estado) AS n3,
+    public._dash_matriz_nivel_max_estado(
+      p_campo_nivel_max,
+      r.nivel1_estado, r.nivel2_estado, r.nivel3_estado,
+      r.nivel4_estado, r.nivel5_estado, r.nivel6_estado
+    ) AS nmax,
     public._norm_estado_matriz(r.nivel1_estado) AS n1,
     public._norm_estado_matriz(r.nivel2_estado) AS n2,
-    COALESCE(TRIM(r.item_numero), '') <> '' AS has_item
+    COALESCE(TRIM(r.item_numero::text), '') <> '' AS has_item
   FROM public.so_registros r
   WHERE r.contrato_id = p_contrato_id
 ),
 aprob AS (
-  SELECT cap, cd, aid FROM regs WHERE n3 = 'Aprobado'
+  SELECT cap, cd, aid FROM regs WHERE nmax = 'Aprobado'
 ),
 tot_cob AS (
   SELECT COALESCE(SUM(cd), 0)::numeric AS t FROM aprob
@@ -34,14 +46,13 @@ tot_cob AS (
 obra_caps AS (
   SELECT cap, SUM(cd) AS cob FROM aprob GROUP BY cap
 ),
--- SICOE en cola interventoría (N1+N2 aprobados) con N3 = No Revisado
 obra_nr_caps AS (
   SELECT cap, SUM(cd) AS cob_nr
   FROM regs
   WHERE has_item
     AND n1 = 'Aprobado'
     AND n2 = 'Aprobado'
-    AND n3 = 'No Revisado'
+    AND nmax = 'No Revisado'
   GROUP BY cap
 ),
 tot_nr AS (
@@ -49,10 +60,12 @@ tot_nr AS (
 ),
 ppto_rows AS (
   SELECT
-    CASE
-      WHEN v.capitulo IS NULL OR v.capitulo = '' THEN 'Sin capítulo'
-      ELSE v.capitulo
-    END AS cap,
+    public._dash_norm_capitulo_key(
+      CASE
+        WHEN v.capitulo IS NULL OR btrim(v.capitulo::text) = '' THEN 'Sin capítulo'
+        ELSE v.capitulo::text
+      END
+    ) AS cap,
     SUM(COALESCE(v.presupuesto, 0)::numeric) AS pres
   FROM public.vista_ppto_por_capitulo v
   WHERE v.contrato_id = p_contrato_id
@@ -61,13 +74,14 @@ ppto_rows AS (
 ppto_tot AS (
   SELECT COALESCE(SUM(pres), 0)::numeric AS t FROM ppto_rows
 ),
--- Presupuesto ClaraCore: costo por capítulo según revisado (Aprobado vs resto)
 ppto_estado AS (
   SELECT
-    CASE
-      WHEN p.capitulo IS NULL OR TRIM(p.capitulo) = '' THEN 'Sin capítulo'
-      ELSE TRIM(p.capitulo)
-    END AS cap,
+    public._dash_norm_capitulo_key(
+      CASE
+        WHEN p.capitulo IS NULL OR btrim(p.capitulo::text) = '' THEN 'Sin capítulo'
+        ELSE p.capitulo::text
+      END
+    ) AS cap,
     public._norm_estado_matriz(p.revisado) AS rv,
     SUM(COALESCE(p.costo_directo, 0)::numeric) AS costo
   FROM public.presupuesto p
@@ -164,8 +178,8 @@ SELECT jsonb_build_object(
 );
 $f$;
 
-COMMENT ON FUNCTION public.dashboard_resumen_sicoe_agg(bigint) IS
-  'Dashboard resumen v2: SICOE N3 aprobado/no rev., presupuesto por revisado (N3 polígonos), sin cobro; todo agregado en BD.';
+COMMENT ON FUNCTION public.dashboard_resumen_sicoe_agg(bigint, text) IS
+  'Dashboard resumen v2: obra según nivel máximo del contrato; presupuesto por revisado; capítulos unificados por _dash_norm_capitulo_key.';
 
-GRANT EXECUTE ON FUNCTION public.dashboard_resumen_sicoe_agg(bigint) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.dashboard_resumen_sicoe_agg(bigint) TO service_role;
+GRANT EXECUTE ON FUNCTION public.dashboard_resumen_sicoe_agg(bigint, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.dashboard_resumen_sicoe_agg(bigint, text) TO service_role;
