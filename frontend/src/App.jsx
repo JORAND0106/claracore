@@ -1654,11 +1654,36 @@ function PopupComentarioValidacion({ t, usuario, registro, contrato_id, API_URL,
   )
 }
 
+/** Key estable para remontar la hoja cuando el servidor devuelve dimensiones/costo nuevos (evita estado local viejo). */
+function sicoeHojaRegistroSyncKey(reg) {
+  if (!reg || reg.id == null) return '0'
+  const foto = String(reg.foto_url || '').trim() ? 'u1' : 'u0'
+  return [
+    reg.id,
+    foto,
+    reg.longitud,
+    reg.ancho,
+    reg.espesor,
+    reg.cantidad,
+    reg.cantidad_total,
+    reg.costo_directo,
+    reg.vlr_unitario,
+    reg.item_numero,
+    reg.observacion,
+    reg.competencia,
+    reg.capitulo,
+  ]
+    .map((x) => (x == null ? '' : String(x)))
+    .join('|')
+}
+
 // ─── HOJA REGISTRO ────────────────────────────────────────────────────────────
 function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, puedeEditar, seleccionado, onToggleSeleccion, onItemAsignado, hdrs, actasList = [],
   mostrarSeleccionValidacion = false, seleccionadoValidacion = false, onToggleSeleccionValidacion,
   esDeveloper = false, puedeEliminarRegistroReporte = false, onDevEliminarRegistro = null, devEliminando = false, onOptimisticValidacion = null,
   nivelesContrato = SICOE_NIVELES_CONTRATO_DEFAULT(),
+  /** Tras guardar dimensiones/costo: vuelve a cargar la grilla de reportes (costo_directo_validación) sin cerrar la carpeta. */
+  onRefrescarListadoSicoe = null,
 }) {
   const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
   const isOnline = !efectivoOffline
@@ -1943,18 +1968,26 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 
   const guardarCambios = async () => {
     const idItem = itemListadoId
+    const longN = sicoeNumCampoOmitNull(longitud)
+    const anchoN = sicoeNumCampoOmitNull(ancho)
+    const espeN = sicoeNumCampoOmitNull(espesor)
+    const cantN = sicoeNumCampoOmitNull(cantidad)
+    if (longN == null && anchoN == null && espeN == null && cantN == null) {
+      alert('Debe conservar al menos un valor en Longitud, Ancho, Espesor o Cantidad (puede borrar los demás).')
+      return
+    }
     setGuardando(true)
     try {
-      // 1. Guardar dimensiones + observacion
+      // 1. Guardar dimensiones + observacion (null en JSON = borrar en BD; el backend ya no filtra esos null)
       const dimRes = await fetch(`${API}/sicoe-obra/${contrato_id}/registros/${registro.id}`, {
         method: 'PUT', headers: hdrs,
         body: JSON.stringify({
           reporte_id:      registro.reporte_id,
           numero_registro: registro.numero_registro,
-          longitud:        sicoeNumCampoOmitNull(longitud),
-          ancho:           sicoeNumCampoOmitNull(ancho),
-          espesor:         sicoeNumCampoOmitNull(espesor),
-          cantidad:        sicoeNumCampoOmitNull(cantidad),
+          longitud:        longN,
+          ancho:           anchoN,
+          espesor:         espeN,
+          cantidad:        cantN,
           cantidad_total:  cantTotal,
           ...( (itemSel?.item_numero || registro.item_numero) && vlrUnitario != null && !Number.isNaN(Number(vlrUnitario))
             ? { costo_directo: Math.round(cantTotal * Number(vlrUnitario)) }
@@ -1984,7 +2017,15 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       }
 
       setToastMsg(itemSel ? `Ítem ${itemSel.item_numero} asignado correctamente` : 'Cambios guardados')
-      setTimeout(() => { setToastMsg(null); onItemAsignado() }, 200)
+      try {
+        await new Promise((r) => setTimeout(r, 200))
+        setToastMsg(null)
+        const p = onItemAsignado?.()
+        if (p != null && typeof p.then === 'function') await p
+        if (typeof onRefrescarListadoSicoe === 'function') onRefrescarListadoSicoe()
+      } catch {
+        /* recargar ya mostró error si aplica */
+      }
     } catch(e) {
       alert(`No se pudieron guardar los cambios: ${e.message}`)
     }
@@ -2010,7 +2051,14 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         throw new Error(typeof detail === 'string' ? detail : `Error ${res.status}`)
       }
       setToastMsg('Corte actualizado')
-      setTimeout(() => { setToastMsg(null); onItemAsignado() }, 200)
+      try {
+        await new Promise((r) => setTimeout(r, 200))
+        setToastMsg(null)
+        const p = onItemAsignado?.()
+        if (p != null && typeof p.then === 'function') await p
+      } catch {
+        /* noop */
+      }
     } catch (e) {
       alert(e?.message || String(e))
     }
@@ -3062,7 +3110,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 }
 
 // ─── CARPETA REPORTE ──────────────────────────────────────────────────────────
-function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [], capasFiltroValidacion = null, capasFiltroValidacionOp = 'and', urlReporteDetalle: urlReporteDetalleFn, nivelesContrato = SICOE_NIVELES_CONTRATO_DEFAULT() }) {
+function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [], capasFiltroValidacion = null, capasFiltroValidacionOp = 'and', urlReporteDetalle: urlReporteDetalleFn, nivelesContrato = SICOE_NIVELES_CONTRATO_DEFAULT(), onRefrescarListadoSicoe = null }) {
   const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
   const isOnline = !efectivoOffline
   const capasF = capasFiltroValidacion && capasFiltroValidacion.length > 0 ? capasFiltroValidacion : null
@@ -4556,7 +4604,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     {expandido && (
                       <div style={{ border:`1px solid ${t.primary+'66'}`, borderTop:'none', borderRadius:'0 0 10px 10px', overflow:'hidden' }}>
                         <HojaRegistro
-                          key={`${reg.id}-${reg.foto_url ? 'u1' : 'u0'}`} t={t} usuario={usuario} API_URL={API_URL}
+                          key={sicoeHojaRegistroSyncKey(reg)} t={t} usuario={usuario} API_URL={API_URL}
                           contrato_id={contrato_id} reporte={reporte} registro={reg}
                           puedeEditar={puedeEditar} actasList={actasList}
                           nivelesContrato={nivelesContrato}
@@ -4566,6 +4614,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           seleccionadoValidacion={seleccionadosValidacion.includes(reg.id)}
                           onToggleSeleccionValidacion={() => toggleSeleccionValidacion(reg.id)}
                           onItemAsignado={recargar}
+                          onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                           onOptimisticValidacion={aplicarOptimisticValidacion}
                           hdrs={hdrs}
                           esDeveloper={esDeveloper}
@@ -4709,7 +4758,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                     {expandido && (
                       <div style={{ border:`1px solid ${t.primary+'66'}`, borderTop:'none', borderRadius:'0 0 10px 10px', overflow:'hidden' }}>
                         <HojaRegistro
-                          key={`${reg.id}-${reg.foto_url ? 'u1' : 'u0'}`} t={t} usuario={usuario} API_URL={API_URL}
+                          key={sicoeHojaRegistroSyncKey(reg)} t={t} usuario={usuario} API_URL={API_URL}
                           contrato_id={contrato_id} reporte={reporte} registro={reg}
                           puedeEditar={puedeEditar} actasList={actasList}
                           nivelesContrato={nivelesContrato}
@@ -4719,6 +4768,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           seleccionadoValidacion={seleccionadosValidacion.includes(reg.id)}
                           onToggleSeleccionValidacion={() => toggleSeleccionValidacion(reg.id)}
                           onItemAsignado={recargar}
+                          onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                           onOptimisticValidacion={aplicarOptimisticValidacion}
                           hdrs={hdrs}
                           esDeveloper={esDeveloper}
@@ -5098,6 +5148,8 @@ function ModuloSicoeObra({
   const [panelExpandido, setPanelExpandido] = useState(false)
   const [busquedaRealizada, setBusquedaRealizada] = useState(false)
   const [popupMasivoFiltro, setPopupMasivoFiltro] = useState(null)
+  /** Vista previa + selección antes de validar masivo (mismo universo que el API). */
+  const [modalMasivoFiltroConfirm, setModalMasivoFiltroConfirm] = useState(null)
   const [ejecutandoMasivoFiltro, setEjecutandoMasivoFiltro] = useState(false)
   const [msgMasivoFiltro, setMsgMasivoFiltro] = useState('')
   const [busquedaAmplia, setBusquedaAmplia] = useState(false)
@@ -5938,8 +5990,9 @@ function ModuloSicoeObra({
     }
   }
 
-  const ejecutarMasivoFiltroApi = async (marcar_estado, comentarioData) => {
+  const ejecutarMasivoFiltroApi = async (marcar_estado, comentarioData, registroIds = null) => {
     setPopupMasivoFiltro(null)
+    setModalMasivoFiltroConfirm(null)
     if (
       !contrato_id ||
       nivelInfo.nivelValidacion == null ||
@@ -5957,6 +6010,9 @@ function ModuloSicoeObra({
         ...base,
         nivel,
         marcar_estado,
+      }
+      if (Array.isArray(registroIds) && registroIds.length > 0) {
+        body.registro_ids = registroIds
       }
       if (comentarioData) {
         body.comentario_data = { ...comentarioData, rol_origen: nivelInfo.rolOrigen }
@@ -6004,11 +6060,72 @@ function ModuloSicoeObra({
 
   const solicitarMasivoFiltro = (marcar_estado) => {
     if (!busquedaRealizada || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) return
-    if (marcar_estado === 'Aprobado') {
-      void ejecutarMasivoFiltroApi('Aprobado', null)
+    if (
+      !contrato_id ||
+      nivelInfo.nivelValidacion == null ||
+      nivelInfo.nivelValidacion < 2 ||
+      nivelInfo.nivelValidacion > 6
+    )
       return
-    }
-    setPopupMasivoFiltro({ marcar_estado })
+    setModalMasivoFiltroConfirm({
+      marcar_estado,
+      cargando: true,
+      error: '',
+      filas: [],
+      selectedIds: [],
+      truncado: false,
+      excluidosObjetoPagoSub: 0,
+    })
+    const base = armarPayloadFiltrosRegistrosMasivo()
+    const nivel = nivelInfo.nivelValidacion
+    void fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/validar-nivel-masivo-preview`, {
+      method: 'POST',
+      headers: hdrsJSON,
+      body: JSON.stringify({ ...base, nivel, marcar_estado }),
+    })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          const d = data?.detail
+          const msg =
+            typeof d === 'string'
+              ? d
+              : Array.isArray(d)
+                ? d.map((x) => x?.msg || JSON.stringify(x)).join(', ')
+                : d && typeof d === 'object'
+                  ? JSON.stringify(d)
+                  : `Error ${res.status}`
+          throw new Error(msg)
+        }
+        const filas = Array.isArray(data.registros) ? data.registros : []
+        const ids = filas.map((f) => f.id)
+        setModalMasivoFiltroConfirm((prev) =>
+          prev && prev.marcar_estado === marcar_estado
+            ? {
+                ...prev,
+                cargando: false,
+                error: '',
+                filas,
+                selectedIds: ids.slice(),
+                truncado: !!data.truncado_mas_de_500,
+                excluidosObjetoPagoSub: data.excluidos_objeto_pago_sub ?? 0,
+              }
+            : prev
+        )
+      })
+      .catch((e) => {
+        setModalMasivoFiltroConfirm((prev) =>
+          prev && prev.marcar_estado === marcar_estado
+            ? {
+                ...prev,
+                cargando: false,
+                error: e?.message || String(e),
+                filas: [],
+                selectedIds: [],
+              }
+            : prev
+        )
+      })
   }
 
   // Auto-buscar al montar: acta alineada a la matriz del dashboard + capas por rol (mismo universo de líneas con ítem).
@@ -8564,6 +8681,10 @@ function ModuloSicoeObra({
           urlReporteDetalle={urlReporteDetalle}
           onClose={() => { setModalCarpeta(false); setReporteSeleccionado(null) }}
           onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); buscarReportes(filtros, 0, capasValidacion) }}
+          onRefrescarListadoSicoe={() => {
+            void buscarReportes(filtros, 0, capasValidacion)
+            void cargarAnalisis(filtros, capasValidacion)
+          }}
         />
       )}
 
@@ -8729,6 +8850,291 @@ function ModuloSicoeObra({
         </div>
       )}
 
+      {modalMasivoFiltroConfirm &&
+        nivelInfo.nivelValidacion >= 2 &&
+        nivelInfo.nivelValidacion <= 6 &&
+        nivelInfo.puedeValidar &&
+        (() => {
+          const m = modalMasivoFiltroConfirm
+          const filas = m.filas || []
+          const sel = new Set(m.selectedIds || [])
+          const fmtCd = (v) => {
+            if (v == null) return '—'
+            try {
+              return new Intl.NumberFormat('es-CO', {
+                style: 'currency',
+                currency: 'COP',
+                maximumFractionDigits: 0,
+              }).format(v)
+            } catch {
+              return String(v)
+            }
+          }
+          const fmtQty = (v) => {
+            try {
+              return new Intl.NumberFormat('es-CO', { maximumFractionDigits: 4 }).format(Number(v) || 0)
+            } catch {
+              return String(v ?? '')
+            }
+          }
+          const allOn = filas.length > 0 && sel.size === filas.length
+          const toggleAll = () => {
+            if (filas.length === 0) return
+            if (allOn) setModalMasivoFiltroConfirm((x) => x && { ...x, selectedIds: [] })
+            else setModalMasivoFiltroConfirm((x) => x && { ...x, selectedIds: filas.map((f) => f.id) })
+          }
+          const toggleOne = (id) => {
+            setModalMasivoFiltroConfirm((x) => {
+              if (!x) return x
+              const cur = new Set(x.selectedIds || [])
+              if (cur.has(id)) cur.delete(id)
+              else cur.add(id)
+              return { ...x, selectedIds: Array.from(cur) }
+            })
+          }
+          const cerrar = () => {
+            if (ejecutandoMasivoFiltro) return
+            setModalMasivoFiltroConfirm(null)
+          }
+          const confirmarPaso1 = () => {
+            const chosen = [...(m.selectedIds || [])]
+            if (!chosen.length) {
+              window.alert('Seleccione al menos un registro para validar.')
+              return
+            }
+            setModalMasivoFiltroConfirm(null)
+            if (m.marcar_estado === 'Aprobado') {
+              void ejecutarMasivoFiltroApi('Aprobado', null, chosen)
+            } else {
+              setPopupMasivoFiltro({ marcar_estado: m.marcar_estado, registro_ids: chosen })
+            }
+          }
+          const nv = nivelInfo.nivelValidacion
+          const colEst = COLOR_ESTADO[m.marcar_estado] || t.primary
+          const itemDesc = (row) => {
+            const it = String(row.item || '').trim()
+            const d = String(row.item_descripcion || '').trim()
+            if (it && d) return `${it} | ${d}`
+            if (it) return it
+            return d || '—'
+          }
+          return (
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 10500,
+                background: 'rgba(0,0,0,0.6)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '12px',
+              }}
+              onClick={cerrar}
+            >
+              <div
+                style={{
+                  background: t.bgCard,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: '16px',
+                  width: 'min(920px, 98vw)',
+                  maxHeight: '90vh',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  boxShadow: '0 24px 80px rgba(0,0,0,0.45)',
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div
+                  style={{
+                    padding: '18px 22px 14px',
+                    borderBottom: `1px solid ${t.border}`,
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '12px',
+                    flexShrink: 0,
+                  }}
+                >
+                  <div
+                    style={{
+                      width: '12px',
+                      height: '12px',
+                      borderRadius: '50%',
+                      background: colEst,
+                      flexShrink: 0,
+                      marginTop: '4px',
+                    }}
+                  />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 'var(--cc-md)', fontWeight: '800', color: t.text }}>
+                      Confirmar validación masiva
+                    </div>
+                    <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: '6px', lineHeight: 1.45 }}>
+                      Nivel {nv} · estado <span style={{ color: colEst, fontWeight: '800' }}>{m.marcar_estado}</span>
+                      {m.cargando
+                        ? ' · cargando vista previa…'
+                        : filas.length
+                          ? ` · ${sel.size} de ${filas.length} registro(s) seleccionado(s) para enviar`
+                          : ' · sin registros en el filtro actual'}
+                    </div>
+                    {m.truncado && !m.cargando && (
+                      <div style={{ marginTop: '8px', fontSize: 'var(--cc-sm)', color: '#f59e0b', fontWeight: '700' }}>
+                        Solo se muestran los primeros {SICOE_MASIVO_MAX_UI} del lote; acote el filtro si necesita ver más.
+                      </div>
+                    )}
+                    {(m.excluidosObjetoPagoSub ?? 0) > 0 && !m.cargando && (
+                      <div style={{ marginTop: '6px', fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                        {m.excluidosObjetoPagoSub} línea(s) con objeto de pago a subcontratista quedaron fuera del masivo.
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={cerrar}
+                    disabled={ejecutandoMasivoFiltro}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      fontSize: 'var(--cc-lg)',
+                      cursor: ejecutandoMasivoFiltro ? 'not-allowed' : 'pointer',
+                      color: t.textMuted,
+                      lineHeight: 1,
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div style={{ padding: '12px 22px', flexShrink: 0 }}>
+                  {m.error ? (
+                    <div style={{ color: '#f87171', fontSize: 'var(--cc-sm)', fontWeight: '600' }}>{m.error}</div>
+                  ) : m.cargando ? (
+                    <div style={{ textAlign: 'center', padding: '28px', color: t.textMuted }}>Cargando vista previa…</div>
+                  ) : filas.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '24px', color: t.textMuted }}>
+                      No hay registros elegibles con el filtro actual.
+                    </div>
+                  ) : (
+                    <div style={{ overflow: 'auto', maxHeight: 'min(52vh, 480px)', border: `1px solid ${t.border}`, borderRadius: '12px' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
+                        <thead>
+                          <tr style={{ background: '#0F1923', position: 'sticky', top: 0, zIndex: 1 }}>
+                            <th style={{ width: 44, padding: '10px 8px', textAlign: 'center', borderBottom: `1px solid ${t.border}` }}>
+                              <input
+                                type="checkbox"
+                                checked={allOn}
+                                ref={(el) => {
+                                  if (el) el.indeterminate = sel.size > 0 && sel.size < filas.length
+                                }}
+                                onChange={toggleAll}
+                                title="Seleccionar o quitar todos"
+                              />
+                            </th>
+                            <th style={{ padding: '10px 8px', textAlign: 'left', borderBottom: `1px solid ${t.border}`, color: t.textMuted }}>
+                              Registro
+                            </th>
+                            <th style={{ padding: '10px 8px', textAlign: 'left', borderBottom: `1px solid ${t.border}`, color: t.textMuted }}>
+                              Ítem | descripción
+                            </th>
+                            <th style={{ padding: '10px 8px', textAlign: 'right', borderBottom: `1px solid ${t.border}`, color: t.textMuted }}>
+                              Cantidad
+                            </th>
+                            <th style={{ padding: '10px 8px', textAlign: 'right', borderBottom: `1px solid ${t.border}`, color: t.textMuted }}>
+                              Costo directo
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filas.map((row) => {
+                            const on = sel.has(row.id)
+                            return (
+                              <tr key={row.id} style={{ borderBottom: `1px solid ${t.border}` }}>
+                                <td style={{ padding: '8px', textAlign: 'center', verticalAlign: 'top' }}>
+                                  <input type="checkbox" checked={on} onChange={() => toggleOne(row.id)} />
+                                </td>
+                                <td style={{ padding: '8px', verticalAlign: 'top', fontWeight: '700', whiteSpace: 'nowrap' }}>
+                                  #{row.numero_registro ?? row.id}
+                                </td>
+                                <td style={{ padding: '8px', verticalAlign: 'top', color: t.text, wordBreak: 'break-word' }}>
+                                  {itemDesc(row)}
+                                </td>
+                                <td style={{ padding: '8px', verticalAlign: 'top', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                  {fmtQty(row.cantidad_total)}
+                                </td>
+                                <td style={{ padding: '8px', verticalAlign: 'top', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                                  {fmtCd(row.costo_directo)}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+
+                <div
+                  style={{
+                    padding: '14px 20px',
+                    borderTop: `1px solid ${t.border}`,
+                    background: '#0F1923',
+                    display: 'flex',
+                    justifyContent: 'flex-end',
+                    gap: '10px',
+                    flexShrink: 0,
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={cerrar}
+                    disabled={ejecutandoMasivoFiltro}
+                    style={{
+                      background: t.bgCard,
+                      border: `1px solid ${t.border}`,
+                      borderRadius: '10px',
+                      padding: '10px 16px',
+                      color: t.textMuted,
+                      cursor: ejecutandoMasivoFiltro ? 'not-allowed' : 'pointer',
+                      fontWeight: '800',
+                    }}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={confirmarPaso1}
+                    disabled={
+                      ejecutandoMasivoFiltro ||
+                      m.cargando ||
+                      !!m.error ||
+                      filas.length === 0 ||
+                      sel.size === 0
+                    }
+                    style={{
+                      background: t.primary,
+                      border: 'none',
+                      borderRadius: '10px',
+                      padding: '10px 16px',
+                      color: '#fff',
+                      cursor:
+                        ejecutandoMasivoFiltro || m.cargando || !!m.error || filas.length === 0 || sel.size === 0
+                          ? 'not-allowed'
+                          : 'pointer',
+                      opacity:
+                        ejecutandoMasivoFiltro || m.cargando || !!m.error || filas.length === 0 || sel.size === 0
+                          ? 0.55
+                          : 1,
+                      fontWeight: '900',
+                    }}
+                  >
+                    {m.marcar_estado === 'Aprobado' ? 'Confirmar y validar' : 'Continuar (comentario)'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
       {popupMasivoFiltro &&
         nivelInfo.nivelValidacion >= 2 &&
         nivelInfo.nivelValidacion <= 6 &&
@@ -8736,14 +9142,28 @@ function ModuloSicoeObra({
         <PopupComentarioValidacion
           t={t}
           usuario={usuario}
-          registro={{ id: 0, numero_registro: 'varios (filtro actual)' }}
+          registro={{
+            id: 0,
+            numero_registro:
+              Array.isArray(popupMasivoFiltro.registro_ids) && popupMasivoFiltro.registro_ids.length
+                ? `varios (${popupMasivoFiltro.registro_ids.length} seleccionados)`
+                : 'varios (filtro actual)',
+          }}
           contrato_id={contrato_id}
           API_URL={API_URL}
           hdrs={hdrsJSON}
           estadoValidando={popupMasivoFiltro.marcar_estado}
           nivelValidacion={nivelInfo.nivelValidacion}
           obligatorio={popupMasivoFiltro.marcar_estado !== 'Aprobado'}
-          onConfirmar={(comentarioData) => ejecutarMasivoFiltroApi(popupMasivoFiltro.marcar_estado, comentarioData)}
+          zIndexOverlay={10600}
+          tituloModal="Comentario · validación masiva"
+          onConfirmar={(comentarioData) =>
+            ejecutarMasivoFiltroApi(
+              popupMasivoFiltro.marcar_estado,
+              comentarioData,
+              popupMasivoFiltro.registro_ids
+            )
+          }
           onCancelar={() => setPopupMasivoFiltro(null)}
         />
       )}

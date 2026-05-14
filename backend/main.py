@@ -8901,14 +8901,15 @@ class ValidarNivelMasivoFiltroBody(BaseModel):
     q_nodo: Optional[str] = None
     etiqueta_validacion: Optional[str] = None
     pendiente_item: bool = False
+    registro_ids: Optional[List[int]] = None
 
 
 def _sicoe_masivo_filtro_to_export_body(b: ValidarNivelMasivoFiltroBody) -> ExportarRegistrosBody:
     _dump = getattr(b, "model_dump", None)
     if _dump:
-        d = _dump(exclude={"nivel", "marcar_estado", "comentario_data"})
+        d = _dump(exclude={"nivel", "marcar_estado", "comentario_data", "registro_ids"})
     else:
-        d = b.dict(exclude={"nivel", "marcar_estado", "comentario_data"})
+        d = b.dict(exclude={"nivel", "marcar_estado", "comentario_data", "registro_ids"})
     return ExportarRegistrosBody(
         campos=[
             "id",
@@ -9101,6 +9102,7 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
     campos_aux = [
         "id",
         "reporte_id",
+        "numero_registro",
         "nivel1_estado",
         "nivel2_estado",
         "nivel3_estado",
@@ -9109,6 +9111,9 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
         "nivel6_estado",
         "nivel2_objeto_pago_sub",
         "item_numero",
+        "item_descripcion",
+        "cantidad_total",
+        "costo_directo",
     ]
     batch_size = 999
     candidatos: List[dict] = []
@@ -9240,8 +9245,6 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
         "excluidos_objeto_pago_sub": excluidos_objeto_pago_sub,
         "truncado": truncado,
     }
-    for r in out:
-        r.pop("item_numero", None)
     return out, stats
 
 
@@ -12424,17 +12427,36 @@ def _reportes_ids_con_topografia(contrato_id: int, reporte_ids: List[int]) -> se
     return out
 
 
+def _pydantic_dump_exclude_unset(model: BaseModel) -> dict:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(exclude_unset=True)
+    return model.dict(exclude_unset=True)
+
+
+# Dimensiones SICOE: el cliente envía `null` para borrar un campo; no filtrar esos None o la BD nunca se actualiza.
+_REGPUT_DIM_NULLABLE = frozenset({"longitud", "ancho", "espesor", "cantidad"})
+
+
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}")
 def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate, current_user=Depends(get_current_user)):
-    data = {k: v for k, v in body.dict().items() if v is not None}
-
     def _prev():
+        # `*` evita PGRST por columnas que difieren en esquema (p. ej. abscisa_* vs abs_* en líneas).
+        # contrato_id se fija después para _registro_nivel3_aprobado → nivel máximo activo del contrato.
         return supabase.table("so_registros").select("*").eq("id", registro_id).eq("contrato_id", contrato_id).limit(1).execute().data
 
     prev_rows = supabase_execute(_prev)
     prev_row = prev_rows[0] if prev_rows else None
     if not prev_row:
         raise HTTPException(status_code=404, detail="Registro no encontrado")
+    prev_row["contrato_id"] = int(contrato_id)
+
+    raw = _pydantic_dump_exclude_unset(body)
+    data: dict = {}
+    for k, v in raw.items():
+        if v is not None:
+            data[k] = v
+        elif k in _REGPUT_DIM_NULLABLE or k == "observacion":
+            data[k] = None
 
     if _registro_nivel3_aprobado(prev_row):
         # Campos siempre editables aunque el registro esté aprobado en N3
@@ -12457,8 +12479,18 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         if not data:
             return prev_row
 
+    if data.keys() & _REGPUT_DIM_NULLABLE:
+        def _dim_merged(k: str):
+            return data[k] if k in data else prev_row.get(k)
+
+        if all(_dim_merged(k) is None for k in ("longitud", "ancho", "espesor", "cantidad")):
+            raise HTTPException(
+                status_code=400,
+                detail="Debe conservar al menos un valor en Longitud, Ancho, Espesor o Cantidad (puede borrar los demás).",
+            )
+
     for dk in ("longitud", "ancho", "espesor", "cantidad"):
-        if dk in data:
+        if dk in data and data[dk] is not None:
             data[dk] = round(float(data[dk]), 2)
     if "cantidad_total" in data:
         data["cantidad_total"] = round(float(data["cantidad_total"]), 2)
@@ -12467,9 +12499,11 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
         if data.get("vlr_unitario") is not None
         else float(prev_row.get("vlr_unitario") or 0)
     )
-    if "cantidad_total" in data and (str(prev_row.get("item_numero") or "").strip()):
-        data["costo_directo"] = round(float(data["cantidad_total"]) * vlr_merged, 0)
-    elif "costo_directo" in data:
+    # Costo: alinear siempre cantidad_total × VLR cuando hay VLR (>0), aunque item_numero venga vacío en BD
+    # (el cliente puede mostrar ítem desde listado sin persistir aún; antes solo se recalculaba con ítem en fila).
+    if "cantidad_total" in data and vlr_merged and float(vlr_merged) > 0:
+        data["costo_directo"] = round(float(data["cantidad_total"]) * float(vlr_merged), 0)
+    elif "costo_directo" in data and data["costo_directo"] is not None:
         data["costo_directo"] = round(float(data["costo_directo"]), 0)
 
     def _upd():
@@ -13931,6 +13965,61 @@ def validar_nivel6(contrato_id: int, registro_id: int, body: ValidarNivel3Body,
     return _put_validar_nivel_sicoe_alto(contrato_id, registro_id, body, 6, current_user)
 
 
+@app.post("/sicoe-obra/{contrato_id}/registros/validar-nivel-masivo-preview")
+def validar_nivel_masivo_preview(
+    contrato_id: int,
+    body_in: ValidarNivelMasivoFiltroBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Vista previa del mismo universo que la validación masiva (filtros + capas, tope 500),
+    con resumen ejecutivo por fila para confirmación en UI.
+    """
+    try:
+        nivel = int(body_in.nivel)
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        _require_sicoe_puede_validar_nivel(current_user, autor_id, nivel)
+
+        exp_body = _sicoe_masivo_filtro_to_export_body(body_in)
+        candidatos, st_collect = _sicoe_colectar_registros_masivo_desde_filtros(contrato_id, exp_body)
+        ocultar_cd = _sicoe_ocultar_costo_directo_reportes(current_user)
+        registros = []
+        for r in candidatos:
+            desc = r.get("item_descripcion")
+            if desc is not None and not isinstance(desc, str):
+                desc = str(desc)
+            if isinstance(desc, str) and len(desc) > 240:
+                desc = desc[:237] + "..."
+            item_num = r.get("item_numero")
+            item_str = str(item_num).strip() if item_num is not None else ""
+            rec = {
+                "id": int(r["id"]),
+                "numero_registro": r.get("numero_registro"),
+                "item": item_str,
+                "item_descripcion": (desc or "").strip(),
+                "cantidad_total": float(r.get("cantidad_total") or 0),
+            }
+            if ocultar_cd:
+                rec["costo_directo"] = None
+            else:
+                rec["costo_directo"] = float(r.get("costo_directo") or 0)
+            registros.append(rec)
+
+        return {
+            "ok": True,
+            "nivel": nivel,
+            "registros": registros,
+            "total_en_lote": len(registros),
+            "excluidos_objeto_pago_sub": st_collect.get("excluidos_objeto_pago_sub", 0),
+            "truncado_mas_de_500": bool(st_collect.get("truncado")),
+            "tope_registros": SICOE_MASIVO_MAX_REGISTROS,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/sicoe-obra/{contrato_id}/registros/validar-nivel-masivo")
 def validar_nivel_masivo_por_filtro(
     contrato_id: int,
@@ -13962,6 +14051,25 @@ def validar_nivel_masivo_por_filtro(
 
         exp_body = _sicoe_masivo_filtro_to_export_body(body_in)
         candidatos, st_collect = _sicoe_colectar_registros_masivo_desde_filtros(contrato_id, exp_body)
+
+        if body_in.registro_ids is not None:
+            if len(body_in.registro_ids) == 0:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Debe incluir al menos un id en registro_ids u omitir el campo para procesar todo el lote filtrado.",
+                )
+            if len(body_in.registro_ids) > SICOE_MASIVO_MAX_REGISTROS:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"No puede enviar más de {SICOE_MASIVO_MAX_REGISTROS} registro_ids por solicitud.",
+                )
+            want = {int(x) for x in body_in.registro_ids}
+            candidatos = [r for r in candidatos if int(r["id"]) in want]
+            if not candidatos:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Ningún registro de la selección coincide con el lote del filtro actual.",
+                )
 
         actualizados = 0
         omitidos_precondicion = 0
