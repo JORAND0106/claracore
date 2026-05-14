@@ -5940,7 +5940,14 @@ function ModuloSicoeObra({
 
   const ejecutarMasivoFiltroApi = async (marcar_estado, comentarioData) => {
     setPopupMasivoFiltro(null)
-    if (!contrato_id || nivelInfo.nivelValidacion == null || nivelInfo.nivelValidacion < 2 || nivelInfo.nivelValidacion === 0) return
+    if (
+      !contrato_id ||
+      nivelInfo.nivelValidacion == null ||
+      nivelInfo.nivelValidacion < 2 ||
+      nivelInfo.nivelValidacion > 6 ||
+      nivelInfo.nivelValidacion === 0
+    )
+      return
     setEjecutandoMasivoFiltro(true)
     setMsgMasivoFiltro('')
     try {
@@ -7574,7 +7581,12 @@ function ModuloSicoeObra({
           </div>
         </div>
 
-        {(nivelInfo.nivelValidacion === 2 || nivelInfo.nivelValidacion === 3) && nivelInfo.puedeValidar && busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, capasValidacion) && sicoeCapasPermitenValidacionMasiva(capasValidacion) && (
+        {nivelInfo.nivelValidacion >= 2 &&
+          nivelInfo.nivelValidacion <= 6 &&
+          nivelInfo.puedeValidar &&
+          busquedaRealizada &&
+          tieneParametrosBusquedaSicoe(filtros, capasValidacion) &&
+          sicoeCapasPermitenValidacionMasiva(capasValidacion) && (
           <div style={{ marginTop: '10px', padding: '10px 12px', background: '#1E293B', borderRadius: '8px', border: '1px solid rgba(148,163,184,0.2)' }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
               <div style={{ flex: '1 1 180px', minWidth: 0 }}>
@@ -8717,7 +8729,10 @@ function ModuloSicoeObra({
         </div>
       )}
 
-      {popupMasivoFiltro && (nivelInfo.nivelValidacion === 2 || nivelInfo.nivelValidacion === 3) && nivelInfo.puedeValidar && (
+      {popupMasivoFiltro &&
+        nivelInfo.nivelValidacion >= 2 &&
+        nivelInfo.nivelValidacion <= 6 &&
+        nivelInfo.puedeValidar && (
         <PopupComentarioValidacion
           t={t}
           usuario={usuario}

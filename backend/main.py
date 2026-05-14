@@ -8867,12 +8867,12 @@ class ExportarRegistrosBody(BaseModel):
     pendiente_item: bool = False
 
 
-# Mismo universo de filtros que ExportarRegistrosBody; validación masiva N2/N3 según grilla.
+# Mismo universo de filtros que ExportarRegistrosBody; validación masiva N2–N6 según grilla.
 SICOE_MASIVO_MAX_REGISTROS = 500
 
 
 class ValidarNivelMasivoFiltroBody(BaseModel):
-    nivel: int = Field(..., ge=2, le=3)
+    nivel: int = Field(..., ge=2, le=6)
     marcar_estado: str
     comentario_data: Optional[dict] = None
 
@@ -13938,9 +13938,10 @@ def validar_nivel_masivo_por_filtro(
     current_user=Depends(get_current_user),
 ):
     """
-    Validación N2 o N3 en bloque sobre el mismo universo que la grilla / exportar (filtros + capas).
+    Validación N2–N6 en bloque sobre el mismo universo que la grilla / exportar (filtros + capas).
     Tope: 500 registros por solicitud. Excluye líneas con objeto de pago a subcontratista (flujo validar-sub).
     Con aprobación N2 y contrato que exige topografía: omite líneas sin puntos en el reporte y las reporta aparte.
+    N4–N6: prerrequisito según niveles activos del contrato (`_get_prereq_nivel_activo`), no siempre nivel n−1.
     """
     EST_MASIVO = {"Aprobado", "Pendiente", "Rechazado"}
     marcar = (body_in.marcar_estado or "").strip()
@@ -14132,15 +14133,18 @@ def validar_nivel_masivo_por_filtro(
                     status_code=422,
                     detail=f"El contrato no tiene activo el nivel {nivel} de validación.",
                 )
-            prev_field = NIVEL_VALIDACION_NUM_A_CAMPO[nivel - 1]
             campo = NIVEL_VALIDACION_NUM_A_CAMPO[nivel]
+            prereq_m = _get_prereq_nivel_activo(campo, contrato_id) or CARGO_NIVEL_PRERREQUISITO.get(campo)
+            if not prereq_m:
+                raise HTTPException(status_code=500, detail="Sin prerrequisito para nivel masivo.")
+            prev_field, prev_ok = prereq_m
             u_key, f_key = _sicoe_campo_usuario_fecha_desde_estado(campo)
             for row in candidatos:
                 rid = int(row["id"])
                 if (row.get(campo) or "") == "Aprobado" and marcar != "Aprobado":
                     omitidos_precondicion += 1
                     continue
-                if (row.get(prev_field) or "") != "Aprobado":
+                if (row.get(prev_field) or "") != prev_ok:
                     omitidos_precondicion += 1
                     continue
 
