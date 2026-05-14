@@ -13569,7 +13569,9 @@ def _put_validar_nivel_sicoe_alto(
         campo = NIVEL_VALIDACION_NUM_A_CAMPO.get(nivel)
         if not campo:
             raise HTTPException(status_code=500, detail="Mapa de nivel inconsistente.")
-        prereq = CARGO_NIVEL_PRERREQUISITO.get(campo)
+        # Misma regla que filtros / `_so_registros_q_y_capas_validacion`: nivel previo *activo* en el contrato
+        # (p. ej. [1,2,4] → validar N4 exige N2 aprobado, no N3).
+        prereq = _get_prereq_nivel_activo(campo, contrato_id) or CARGO_NIVEL_PRERREQUISITO.get(campo)
         if not prereq:
             raise HTTPException(status_code=500, detail="Sin prerrequisito para este nivel.")
         prev_f, prev_ok = prereq

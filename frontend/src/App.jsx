@@ -1116,13 +1116,30 @@ function sicoeCampoEstadoNivel(n) {
   return `nivel${n}_estado`
 }
 
-function sicoePrereqCampoParaNivel(n) {
-  if (n <= 1) return null
-  return sicoeCampoEstadoNivel(n - 1)
+/** Lista ordenada 1..6; igual que backend `_get_niveles_activos_contrato` vía API. */
+function sicoeNivelesActivosNormalizados(nivelesActivosRaw) {
+  const na = nivelesActivosRaw
+  if (!Array.isArray(na) || na.length === 0) return [1, 2, 3]
+  const out = []
+  for (const x of na) {
+    const n = typeof x === 'number' ? x : parseInt(String(x).trim(), 10)
+    if (Number.isFinite(n) && n >= 1 && n <= 6) out.push(n)
+  }
+  const s = [...new Set(out)].sort((a, b) => a - b)
+  return s.length ? s : [1, 2, 3]
 }
 
-function sicoeNivelPrevioAprobado(registro, nivelNum) {
-  const prev = sicoePrereqCampoParaNivel(nivelNum)
+/** Igual que backend `_get_prereq_nivel_activo`: último nivel activo estrictamente menor que `nivelNum`. */
+function sicoePrereqCampoParaNivelActivos(nivelNum, nivelesActivosRaw) {
+  if (!Number.isFinite(nivelNum) || nivelNum <= 1) return null
+  const na = sicoeNivelesActivosNormalizados(nivelesActivosRaw)
+  const anteriores = na.filter((n) => n < nivelNum).sort((a, b) => b - a)
+  if (!anteriores.length) return null
+  return sicoeCampoEstadoNivel(anteriores[0])
+}
+
+function sicoeNivelPrevioAprobado(registro, nivelNum, nivelesActivosRaw) {
+  const prev = sicoePrereqCampoParaNivelActivos(nivelNum, nivelesActivosRaw)
   if (!prev) return true
   return (registro?.[prev] || 'No Revisado') === 'Aprobado'
 }
@@ -1717,18 +1734,19 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     }),
     [nivelesContrato],
   )
-  const nivelesActivosArr = useMemo(() => {
-    const na = nivelesContrato?.niveles_activos
-    return Array.isArray(na) && na.length ? [...na].sort((a, b) => a - b) : [1, 2, 3]
-  }, [nivelesContrato])
+  const nivelesActivosArr = useMemo(
+    () => sicoeNivelesActivosNormalizados(nivelesContrato?.niveles_activos),
+    [nivelesContrato],
+  )
   const esDevOAccesoTotal = esUsuarioDesarrollador(usuario) || nivelInfo.nivelValidacion === 0
   const nivelesValidablesReg = useMemo(() => {
     if (!nivelInfo.puedeValidar) return []
-    if (esDevOAccesoTotal) return nivelesActivosArr.filter((n) => sicoeNivelPrevioAprobado(registro, n))
+    const naRaw = nivelesContrato?.niveles_activos
+    if (esDevOAccesoTotal) return nivelesActivosArr.filter((n) => sicoeNivelPrevioAprobado(registro, n, naRaw))
     const nv = nivelInfo.nivelValidacion
     if (nv == null || nv === 0) return []
     if (!nivelesActivosArr.includes(nv)) return []
-    return sicoeNivelPrevioAprobado(registro, nv) ? [nv] : []
+    return sicoeNivelPrevioAprobado(registro, nv, naRaw) ? [nv] : []
   }, [
     registro.id,
     registro.nivel1_estado,
@@ -1741,6 +1759,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     nivelInfo.puedeValidar,
     nivelInfo.nivelValidacion,
     esDevOAccesoTotal,
+    nivelesContrato,
   ])
   const esNivel3Aprobado = registro?.nivel3_estado === 'Aprobado'
   const regSelladoMax = sicoeRegistroSelladoMaxActivo(registro, nivelesContrato)
@@ -3365,6 +3384,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const nvMasivo = nivelInfo.nivelValidacion
   const puedeMasivaNivel =
     nvMasivo != null && nvMasivo !== 0 && nvMasivo >= 2 && nvMasivo <= 6 && nivelInfo.puedeValidar
+  const campoValidacionMasivo =
+    nvMasivo != null && nvMasivo >= 2 && nvMasivo <= 6 ? CAMPO_POR_NIVEL[nvMasivo] : null
+  const prereqCampoMasivoNv = campoValidacionMasivo ? prereqCampoActivos(campoValidacionMasivo) : null
+  const regCumplePrereqMasivoNivel = (reg) =>
+    !prereqCampoMasivoNv ||
+    String(reg?.[prereqCampoMasivoNv] ?? '')
+      .trim()
+      .toLowerCase() === 'aprobado'
   const registroParaPopupMasivo = (() => {
     if (popupMasivo?.idsOverride?.length) {
       const id0 = popupMasivo.idsOverride[0]
@@ -3377,11 +3404,10 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     if (!portadaResumenEstado || !puedeMasivaNivel) return []
     const nv = nvMasivo
     if (nv < 2 || nv > 6) return []
-    const prevCampo = CAMPO_POR_NIVEL[nv - 1]
     return registrosPortadaResumenFiltrados.filter((r) => {
       if (reporteExcluidoValidacionAvanzada) return false
       if (!String(r.item_numero || '').trim()) return false
-      return (r[prevCampo] || 'No Revisado') === 'Aprobado'
+      return regCumplePrereqMasivoNivel(r)
     }).map((r) => r.id)
   })()
 
@@ -3790,12 +3816,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   const renderBarraValidacionMasiva = (regsTab) => {
     if (!puedeMasivaNivel) return null
-    const prevCampo = nvMasivo >= 2 && nvMasivo <= 6 ? CAMPO_POR_NIVEL[nvMasivo - 1] : null
-    const idsElegibles = prevCampo
-      ? regsTab
-          .filter((r) => (r[prevCampo] || 'No Revisado') === 'Aprobado')
-          .map((r) => r.id)
-      : []
+    const idsElegibles = regsTab.filter((r) => regCumplePrereqMasivoNivel(r)).map((r) => r.id)
     if (idsElegibles.length === 0) return null
 
     const todosSelVal = idsElegibles.length > 0 && idsElegibles.every(id => seleccionadosValidacion.includes(id))
@@ -4419,7 +4440,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   puedeMasivaNivel &&
                   nvMasivo >= 2 &&
                   nvMasivo <= 6 &&
-                  (reg[CAMPO_POR_NIVEL[nvMasivo - 1]] || 'No Revisado') === 'Aprobado'
+                  regCumplePrereqMasivoNivel(reg)
                 const fechaReg = (() => { try { const ts=reg.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()
                 const colorNivel = st => st === 'Aprobado' ? '#10B981' : st === 'Pendiente' ? '#F59E0B' : st === 'Rechazado' ? '#EF4444' : st === 'No Objeto de Cobro' ? '#374151' : '#3B82F6'
                 const nivelesInfo = [
@@ -4570,7 +4591,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   puedeMasivaNivel &&
                   nvMasivo >= 2 &&
                   nvMasivo <= 6 &&
-                  (reg[CAMPO_POR_NIVEL[nvMasivo - 1]] || 'No Revisado') === 'Aprobado'
+                  regCumplePrereqMasivoNivel(reg)
                 const fechaReg = (() => { try { const ts=reg.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()
                 const colorNivel = st => st === 'Aprobado' ? '#10B981' : st === 'Pendiente' ? '#F59E0B' : st === 'Rechazado' ? '#EF4444' : st === 'No Objeto de Cobro' ? '#374151' : '#3B82F6'
                 const nivelesInfo = [
