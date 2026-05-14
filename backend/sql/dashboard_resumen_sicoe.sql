@@ -6,10 +6,12 @@
 -- Ejecutar primero dashboard_drill_agg.sql si aún no existen esas funciones.
 
 DROP FUNCTION IF EXISTS public.dashboard_resumen_sicoe_agg(bigint);
+DROP FUNCTION IF EXISTS public.dashboard_resumen_sicoe_agg(bigint, text);
 
 CREATE OR REPLACE FUNCTION public.dashboard_resumen_sicoe_agg(
   p_contrato_id bigint,
-  p_campo_nivel_max text DEFAULT 'nivel3_estado'
+  p_campo_nivel_max text DEFAULT 'nivel3_estado',
+  p_niveles_activos bigint[] DEFAULT ARRAY[1, 2, 3]::bigint[]
 )
 RETURNS jsonb
 LANGUAGE sql
@@ -33,6 +35,10 @@ regs AS (
     ) AS nmax,
     public._norm_estado_matriz(r.nivel1_estado) AS n1,
     public._norm_estado_matriz(r.nivel2_estado) AS n2,
+    public._norm_estado_matriz(r.nivel3_estado) AS n3,
+    public._norm_estado_matriz(r.nivel4_estado) AS n4,
+    public._norm_estado_matriz(r.nivel5_estado) AS n5,
+    public._norm_estado_matriz(r.nivel6_estado) AS n6,
     COALESCE(TRIM(r.item_numero::text), '') <> '' AS has_item
   FROM public.so_registros r
   WHERE r.contrato_id = p_contrato_id
@@ -50,8 +56,11 @@ obra_nr_caps AS (
   SELECT cap, SUM(cd) AS cob_nr
   FROM regs
   WHERE has_item
-    AND n1 = 'Aprobado'
-    AND n2 = 'Aprobado'
+    AND public._dash_prereqs_activos_aprobados_norm(
+      p_niveles_activos,
+      public._dash_nivel_num_desde_campo(p_campo_nivel_max),
+      n1, n2, n3, n4, n5, n6
+    )
     AND nmax = 'No Revisado'
   GROUP BY cap
 ),
@@ -178,8 +187,8 @@ SELECT jsonb_build_object(
 );
 $f$;
 
-COMMENT ON FUNCTION public.dashboard_resumen_sicoe_agg(bigint, text) IS
-  'Dashboard resumen v2: obra según nivel máximo del contrato; presupuesto por revisado; capítulos unificados por _dash_norm_capitulo_key.';
+COMMENT ON FUNCTION public.dashboard_resumen_sicoe_agg(bigint, text, bigint[]) IS
+  'Dashboard resumen v2: obra según nivel máximo y prerequisitos de niveles activos; presupuesto por revisado.';
 
-GRANT EXECUTE ON FUNCTION public.dashboard_resumen_sicoe_agg(bigint, text) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.dashboard_resumen_sicoe_agg(bigint, text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.dashboard_resumen_sicoe_agg(bigint, text, bigint[]) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.dashboard_resumen_sicoe_agg(bigint, text, bigint[]) TO service_role;

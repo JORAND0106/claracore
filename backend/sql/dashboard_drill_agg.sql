@@ -5,8 +5,11 @@
 -- Quitar firmas antiguas (solo p_contrato_id / sin nivel máximo); si no, coexisten sobrecargas
 -- y PostgREST puede seguir llamando la versión equivocada.
 DROP FUNCTION IF EXISTS public.dashboard_drill_capitulos_agg(bigint);
+DROP FUNCTION IF EXISTS public.dashboard_drill_capitulos_agg(bigint, text);
 DROP FUNCTION IF EXISTS public.dashboard_drill_items_agg(bigint, text);
+DROP FUNCTION IF EXISTS public.dashboard_drill_items_agg(bigint, text, text);
 DROP FUNCTION IF EXISTS public.dashboard_pkid_tabla_agg(bigint, text, text);
+DROP FUNCTION IF EXISTS public.dashboard_pkid_tabla_agg(bigint, text, text, text);
 
 CREATE OR REPLACE FUNCTION public._dash_norm_item_key(txt text)
 RETURNS text
@@ -69,10 +72,56 @@ AS $$
   );
 $$;
 
+-- Número de nivel 1..6 a partir del nombre de columna estado (p. ej. nivel4_estado → 4).
+CREATE OR REPLACE FUNCTION public._dash_nivel_num_desde_campo(p_campo text)
+RETURNS smallint
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT CASE lower(btrim(COALESCE(p_campo, 'nivel3_estado')))
+    WHEN 'nivel1_estado' THEN 1::smallint
+    WHEN 'nivel2_estado' THEN 2::smallint
+    WHEN 'nivel3_estado' THEN 3::smallint
+    WHEN 'nivel4_estado' THEN 4::smallint
+    WHEN 'nivel5_estado' THEN 5::smallint
+    WHEN 'nivel6_estado' THEN 6::smallint
+    ELSE 3::smallint
+  END;
+$$;
+
+-- Todos los niveles listados en p_niveles_activos y estrictamente menores a p_max_n deben estar «Aprobado»
+-- (estados n1..n6 ya normalizados con _norm_estado_matriz). Ej. activos {1,2,4}, max 4 → exige N1 y N2.
+CREATE OR REPLACE FUNCTION public._dash_prereqs_activos_aprobados_norm(
+  p_niveles_activos bigint[],
+  p_max_n smallint,
+  n1 text, n2 text, n3 text, n4 text, n5 text, n6 text
+) RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+AS $$
+  SELECT COALESCE(
+    bool_and(
+      CASE u.lvl::smallint
+        WHEN 1::smallint THEN n1 = 'Aprobado'
+        WHEN 2::smallint THEN n2 = 'Aprobado'
+        WHEN 3::smallint THEN n3 = 'Aprobado'
+        WHEN 4::smallint THEN n4 = 'Aprobado'
+        WHEN 5::smallint THEN n5 = 'Aprobado'
+        WHEN 6::smallint THEN n6 = 'Aprobado'
+        ELSE true
+      END
+    ),
+    true
+  )
+  FROM unnest(COALESCE(p_niveles_activos, ARRAY[1, 2, 3]::bigint[])) AS u(lvl)
+  WHERE u.lvl IS NOT NULL AND u.lvl::smallint < p_max_n;
+$$;
+
 -- Listado por capítulo (nivel 1 drill).
 CREATE OR REPLACE FUNCTION public.dashboard_drill_capitulos_agg(
   p_contrato_id bigint,
-  p_campo_nivel_max text DEFAULT 'nivel3_estado'
+  p_campo_nivel_max text DEFAULT 'nivel3_estado',
+  p_niveles_activos bigint[] DEFAULT ARRAY[1, 2, 3]::bigint[]
 )
 RETURNS jsonb
 LANGUAGE sql
@@ -96,6 +145,10 @@ regs AS (
     ) AS nmax,
     public._norm_estado_matriz(r.nivel1_estado) AS n1,
     public._norm_estado_matriz(r.nivel2_estado) AS n2,
+    public._norm_estado_matriz(r.nivel3_estado) AS n3,
+    public._norm_estado_matriz(r.nivel4_estado) AS n4,
+    public._norm_estado_matriz(r.nivel5_estado) AS n5,
+    public._norm_estado_matriz(r.nivel6_estado) AS n6,
     COALESCE(public._dash_norm_item_key(r.item_numero), '') <> '' AS has_item
   FROM public.so_registros r
   WHERE r.contrato_id = p_contrato_id
@@ -106,10 +159,22 @@ obra AS (
     SUM(cd) FILTER (WHERE nmax = 'Aprobado') AS ap_c,
     SUM(cq) FILTER (WHERE nmax = 'Aprobado') AS ap_q,
     SUM(cd) FILTER (
-      WHERE has_item AND n1 = 'Aprobado' AND n2 = 'Aprobado' AND nmax = 'No Revisado'
+      WHERE has_item
+        AND public._dash_prereqs_activos_aprobados_norm(
+          p_niveles_activos,
+          public._dash_nivel_num_desde_campo(p_campo_nivel_max),
+          n1, n2, n3, n4, n5, n6
+        )
+        AND nmax = 'No Revisado'
     ) AS nr_c,
     SUM(cq) FILTER (
-      WHERE has_item AND n1 = 'Aprobado' AND n2 = 'Aprobado' AND nmax = 'No Revisado'
+      WHERE has_item
+        AND public._dash_prereqs_activos_aprobados_norm(
+          p_niveles_activos,
+          public._dash_nivel_num_desde_campo(p_campo_nivel_max),
+          n1, n2, n3, n4, n5, n6
+        )
+        AND nmax = 'No Revisado'
     ) AS nr_q
   FROM regs
   GROUP BY cap
@@ -192,7 +257,8 @@ $f$;
 CREATE OR REPLACE FUNCTION public.dashboard_drill_items_agg(
   p_contrato_id bigint,
   p_capitulo text,
-  p_campo_nivel_max text DEFAULT 'nivel3_estado'
+  p_campo_nivel_max text DEFAULT 'nivel3_estado',
+  p_niveles_activos bigint[] DEFAULT ARRAY[1, 2, 3]::bigint[]
 )
 RETURNS jsonb
 LANGUAGE sql
@@ -230,7 +296,11 @@ regs AS (
       r.nivel4_estado, r.nivel5_estado, r.nivel6_estado
     ) AS nmax,
     public._norm_estado_matriz(r.nivel1_estado) AS n1,
-    public._norm_estado_matriz(r.nivel2_estado) AS n2
+    public._norm_estado_matriz(r.nivel2_estado) AS n2,
+    public._norm_estado_matriz(r.nivel3_estado) AS n3,
+    public._norm_estado_matriz(r.nivel4_estado) AS n4,
+    public._norm_estado_matriz(r.nivel5_estado) AS n5,
+    public._norm_estado_matriz(r.nivel6_estado) AS n6
   FROM public.so_registros r, cm
   WHERE r.contrato_id = p_contrato_id
     AND public._dash_norm_capitulo_key(r.capitulo) = cm.cap
@@ -241,10 +311,22 @@ obra AS (
     SUM(cd) FILTER (WHERE it IS NOT NULL AND nmax = 'Aprobado') AS ap_c,
     SUM(cq) FILTER (WHERE it IS NOT NULL AND nmax = 'Aprobado') AS ap_q,
     SUM(cd) FILTER (
-      WHERE it IS NOT NULL AND n1 = 'Aprobado' AND n2 = 'Aprobado' AND nmax = 'No Revisado'
+      WHERE it IS NOT NULL
+        AND public._dash_prereqs_activos_aprobados_norm(
+          p_niveles_activos,
+          public._dash_nivel_num_desde_campo(p_campo_nivel_max),
+          n1, n2, n3, n4, n5, n6
+        )
+        AND nmax = 'No Revisado'
     ) AS nr_c,
     SUM(cq) FILTER (
-      WHERE it IS NOT NULL AND n1 = 'Aprobado' AND n2 = 'Aprobado' AND nmax = 'No Revisado'
+      WHERE it IS NOT NULL
+        AND public._dash_prereqs_activos_aprobados_norm(
+          p_niveles_activos,
+          public._dash_nivel_num_desde_campo(p_campo_nivel_max),
+          n1, n2, n3, n4, n5, n6
+        )
+        AND nmax = 'No Revisado'
     ) AS nr_q
   FROM regs
   WHERE it IS NOT NULL
@@ -292,7 +374,8 @@ CREATE OR REPLACE FUNCTION public.dashboard_pkid_tabla_agg(
   p_contrato_id bigint,
   p_capitulo text,
   p_item text,
-  p_campo_nivel_max text DEFAULT 'nivel3_estado'
+  p_campo_nivel_max text DEFAULT 'nivel3_estado',
+  p_niveles_activos bigint[] DEFAULT ARRAY[1, 2, 3]::bigint[]
 )
 RETURNS jsonb
 LANGUAGE sql
@@ -364,7 +447,11 @@ regs AS (
       r.nivel4_estado, r.nivel5_estado, r.nivel6_estado
     ) AS nmax,
     public._norm_estado_matriz(r.nivel1_estado) AS n1,
-    public._norm_estado_matriz(r.nivel2_estado) AS n2
+    public._norm_estado_matriz(r.nivel2_estado) AS n2,
+    public._norm_estado_matriz(r.nivel3_estado) AS n3,
+    public._norm_estado_matriz(r.nivel4_estado) AS n4,
+    public._norm_estado_matriz(r.nivel5_estado) AS n5,
+    public._norm_estado_matriz(r.nivel6_estado) AS n6
   FROM public.so_registros r
   LEFT JOIN public.pk_ids pk ON pk.id = r.pk_id_id AND pk.contrato_id = r.contrato_id, cm
   WHERE r.contrato_id = p_contrato_id
@@ -377,7 +464,14 @@ regs AS (
 cola AS (
   SELECT
     *,
-    (n1 = 'Aprobado' AND n2 = 'Aprobado' AND nmax IS DISTINCT FROM 'Aprobado') AS in_cola
+    (
+      public._dash_prereqs_activos_aprobados_norm(
+        p_niveles_activos,
+        public._dash_nivel_num_desde_campo(p_campo_nivel_max),
+        n1, n2, n3, n4, n5, n6
+      )
+      AND nmax IS DISTINCT FROM 'Aprobado'
+    ) AS in_cola
   FROM regs
 ),
 obra_pk AS (
@@ -473,17 +567,19 @@ SELECT jsonb_build_object(
 );
 $f$;
 
-COMMENT ON FUNCTION public.dashboard_drill_capitulos_agg(bigint, text) IS
-  'Dashboard drill nivel capítulos: una pasada en BD. p_campo_nivel_max = columna estado del último nivel activo del contrato.';
-COMMENT ON FUNCTION public.dashboard_drill_items_agg(bigint, text, text) IS
-  'Dashboard drill ítems por capítulo: una pasada en BD. Obra aprobada / cola según nivel máximo.';
-COMMENT ON FUNCTION public.dashboard_pkid_tabla_agg(bigint, text, text, text) IS
-  'Tabla PK_ID: cola obra = N1+N2 aprobados y nivel máximo no aprobado. cant_sicoe_no_revisado = tramos no pendiente ni rechazado; pendiente/rechazado en sus columnas.';
+COMMENT ON FUNCTION public.dashboard_drill_capitulos_agg(bigint, text, bigint[]) IS
+  'Dashboard drill nivel capítulos: obra aprobada/cola según nivel máximo y prerequisitos de niveles activos inferiores.';
+COMMENT ON FUNCTION public.dashboard_drill_items_agg(bigint, text, text, bigint[]) IS
+  'Dashboard drill ítems por capítulo: obra aprobada / cola según nivel máximo y niveles_activos.';
+COMMENT ON FUNCTION public.dashboard_pkid_tabla_agg(bigint, text, text, text, bigint[]) IS
+  'Tabla PK_ID: cola obra = prerequisitos activos aprobados y nivel máximo no aprobado; pendiente/rechazado en columnas propias.';
 
 GRANT EXECUTE ON FUNCTION public._dash_norm_item_key(text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._dash_norm_capitulo(text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._dash_norm_capitulo_key(text) TO authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._dash_matriz_nivel_max_estado(text, text, text, text, text, text, text) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.dashboard_drill_capitulos_agg(bigint, text) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.dashboard_drill_items_agg(bigint, text, text) TO authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.dashboard_pkid_tabla_agg(bigint, text, text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._dash_nivel_num_desde_campo(text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._dash_prereqs_activos_aprobados_norm(bigint[], smallint, text, text, text, text, text, text) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.dashboard_drill_capitulos_agg(bigint, text, bigint[]) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.dashboard_drill_items_agg(bigint, text, text, bigint[]) TO authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.dashboard_pkid_tabla_agg(bigint, text, text, text, bigint[]) TO authenticated, service_role;

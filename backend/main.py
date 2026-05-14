@@ -1427,7 +1427,12 @@ def create_token(data: dict):
     payload.update({"exp": datetime.utcnow() + timedelta(minutes=EXPIRE_MINUTES)})
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+    if credentials is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Falta el token. Envía el encabezado Authorization: Bearer <tu_token>.",
+        )
     try:
         payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
@@ -5147,6 +5152,22 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
     if toco_dimensiones:
         data["calculo_por"] = _calculo_usuario_label(current_user)
         data["calculo_en"] = datetime.now(timezone.utc).isoformat()
+    # Cambio de capítulo/ítem: alinear vlr_unitario y costo con listado_precios.precio_unitario (misma cap. normalizada).
+    if not toco_dimensiones:
+        _item_mut = "item" in data and not _ppto_val_eq(data.get("item"), prev_row.get("item"))
+        _cap_mut = "capitulo" in data and not _ppto_val_eq(data.get("capitulo"), prev_row.get("capitulo"))
+        _cid_lp = prev_row.get("contrato_id")
+        if (_item_mut or _cap_mut) and _cid_lp:
+            cap_eff = str(data.get("capitulo") if "capitulo" in data else prev_row.get("capitulo") or "").strip()
+            it_eff = str(data.get("item") if "item" in data else prev_row.get("item") or "").strip()
+            if cap_eff and it_eff:
+                try:
+                    idx_lp = _listado_precios_index_por_item_norm(int(_cid_lp), cap_eff)
+                    lp_row = idx_lp.get(_dash_norm_item_key_py(it_eff))
+                    if lp_row is not None and lp_row.get("precio_unitario") is not None:
+                        data["vlr_unitario"] = float(lp_row.get("precio_unitario") or 0)
+                except Exception:
+                    pass
     if not toco_dimensiones and "vlr_unitario" in data:
         cant0 = float(prev_row.get("cant_total") or 0)
         vlr0 = float(data.get("vlr_unitario") or 0)
@@ -10585,6 +10606,7 @@ def obtener_reporte(
                     q_observacion=q_observacion,
                     semana_id=semana_id_filtro,
                     acta_rpo_id=acta_id_lineas,
+                    require_item=(acta_id_lineas is not None),
                     capas_v=(
                         None
                         if _defer_capas_or_detalle
@@ -14681,10 +14703,16 @@ def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_us
     try:
         campo_max = _get_nivel_maximo_contrato(contrato_id)
         try:
+            na = _get_niveles_activos_contrato(contrato_id)
+
             def _rpc():
                 return supabase.rpc(
                     "dashboard_resumen_sicoe_agg",
-                    {"p_contrato_id": contrato_id, "p_campo_nivel_max": campo_max},
+                    {
+                        "p_contrato_id": contrato_id,
+                        "p_campo_nivel_max": campo_max,
+                        "p_niveles_activos": na,
+                    },
                 ).execute().data
 
             hit = _parse_rpc_dashboard_resumen_raw(supabase_execute(_rpc))
@@ -14809,11 +14837,36 @@ def _so_reg_cola_n1_n2_aprobados(reg: dict) -> bool:
     )
 
 
+def _so_reg_prereqs_activos_aprobados_antes_max(reg: dict, contrato_id: int) -> bool:
+    """Todos los niveles activos estrictamente menores al máximo activo deben estar «Aprobado» (p. ej. [1,2,4] → N1 y N2; N3 inactivo no exige)."""
+    activos = _get_niveles_activos_contrato(contrato_id)
+    if not activos:
+        activos = [1, 2, 3]
+    try:
+        max_n = max(int(x) for x in activos)
+    except (TypeError, ValueError):
+        max_n = 3
+    max_n = min(6, max(1, max_n))
+    for n in activos:
+        try:
+            ni = int(n)
+        except (TypeError, ValueError):
+            continue
+        if ni >= max_n:
+            continue
+        campo = NIVEL_VALIDACION_NUM_A_CAMPO.get(ni)
+        if not campo:
+            continue
+        if _matriz_validacion_norm_estado(reg.get(campo)) != "Aprobado":
+            return False
+    return True
+
+
 def _so_reg_en_cola_interventoria(reg: dict, contrato_id: int) -> bool:
-    """Línea en cola del último nivel activo: ítem asignado, N1+N2 aprobados y nivel final «No Revisado»."""
+    """Línea en cola del último nivel activo: ítem asignado, prerequisitos de niveles activos inferiores y nivel final «No Revisado»."""
     if not (reg.get("item_numero") or "").strip():
         return False
-    if not _so_reg_cola_n1_n2_aprobados(reg):
+    if not _so_reg_prereqs_activos_aprobados_antes_max(reg, contrato_id):
         return False
     return _matriz_validacion_norm_estado_nivel_final(reg, contrato_id) == "No Revisado"
 
@@ -15339,12 +15392,16 @@ def dashboard_drill_obra(
     item: Optional[str] = None,
     current_user=Depends(get_current_user)
 ):
+    # Si falla después, el front espera { campo, items }; evita 500 sin CORS en Azure.
+    drill_items_shape = False
     try:
         if capitulo is not None:
             capitulo = unquote(str(capitulo)).strip() or None
         if item is not None:
             item = unquote(str(item)).strip() or None
+        drill_items_shape = bool(capitulo)
         campo_max = _get_nivel_maximo_contrato(contrato_id)
+        niveles_activos = _get_niveles_activos_contrato(contrato_id)
         if capitulo:
             try:
                 def _rpc_items():
@@ -15355,13 +15412,29 @@ def dashboard_drill_obra(
                                 "p_contrato_id": contrato_id,
                                 "p_capitulo": capitulo,
                                 "p_campo_nivel_max": campo_max,
+                                "p_niveles_activos": niveles_activos,
                             },
                         )
                         .execute()
                         .data
                     )
 
-                items = _parse_rpc_jsonb_value(supabase_execute(_rpc_items))
+                raw_items = supabase_execute(_rpc_items)
+                # El RPC dashboard_drill_items_agg devuelve jsonb → PostgREST lo envuelve
+                # como [{"dashboard_drill_items_agg": [...]}] O directamente como lista.
+                if isinstance(raw_items, list) and len(raw_items) > 0:
+                    first = raw_items[0]
+                    if isinstance(first, dict) and len(first) == 1:
+                        # Patrón PostgREST wrapper: [{"nombre_rpc": [...]}]
+                        inner = list(first.values())[0]
+                        items = inner if isinstance(inner, list) else _parse_rpc_jsonb_value(raw_items)
+                    elif isinstance(first, dict) and "item" in first:
+                        # Ya es la lista de ítems directamente
+                        items = raw_items
+                    else:
+                        items = _parse_rpc_jsonb_value(raw_items)
+                else:
+                    items = _parse_rpc_jsonb_value(raw_items)
                 if isinstance(items, list):
                     if item:
                         itn = _dash_norm_item_key_py(str(item).strip())
@@ -15371,20 +15444,28 @@ def dashboard_drill_obra(
                             if isinstance(row, dict) and _dash_norm_item_key_py(row.get("item")) == itn
                         ]
                     return {"campo": "item", "items": items}
-            except Exception:
-                pass
-            try:
-                result = _drill_agg_by_item(contrato_id, capitulo, item)
-            except Exception:
-                result = []
-            return {"campo": "item", "items": result if isinstance(result, list) else []}
+                print(
+                    "RPC dashboard_drill_items_agg: respuesta no parseable como lista; devolviendo vacío.",
+                    flush=True,
+                )
+                return {"campo": "item", "items": []}
+            except Exception as rpc_err:
+                print(
+                    f"RPC dashboard_drill_items_agg FALLÓ: {type(rpc_err).__name__}: {rpc_err}",
+                    flush=True,
+                )
+                return {"campo": "item", "items": []}
         if item:
             raise HTTPException(status_code=422, detail="Indica capitulo junto con item.")
         try:
             def _rpc_caps():
                 return supabase.rpc(
                     "dashboard_drill_capitulos_agg",
-                    {"p_contrato_id": contrato_id, "p_campo_nivel_max": campo_max},
+                    {
+                        "p_contrato_id": contrato_id,
+                        "p_campo_nivel_max": campo_max,
+                        "p_niveles_activos": niveles_activos,
+                    },
                 ).execute().data
 
             caps = _parse_rpc_jsonb_value(supabase_execute(_rpc_caps))
@@ -15397,13 +15478,18 @@ def dashboard_drill_obra(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"ERROR dashboard_drill_obra: {type(e).__name__}: {e}", flush=True)
+        print(traceback.format_exc(), flush=True)
+        if drill_items_shape:
+            return {"campo": "item", "items": []}
+        return {"campo": "capitulo", "items": []}
 
 
 def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], item: Optional[str]) -> Dict[str, Any]:
-    """Por PK_ID: presupuesto por revisado; SICOE N3 aprobado; obra en cola (N1+N2 aprob., N3 no aprob.) partida en no revisado / pendiente / rechazado. cant_sicoe_no_revisado = solo bucket no revisado (no incluye pend. ni rech.). Δ = ppto aprobado N3 − obra N3 aprobada."""
+    """Por PK_ID: presupuesto por revisado; obra aprobada al nivel máximo activo; cola = prerequisitos de niveles activos inferiores cumplidos y nivel final no aprobado."""
     try:
         campo_max = _get_nivel_maximo_contrato(contrato_id)
+        na = _get_niveles_activos_contrato(contrato_id)
 
         def _rpc_pk():
             return (
@@ -15414,6 +15500,7 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
                         "p_capitulo": capitulo or "",
                         "p_item": item or "",
                         "p_campo_nivel_max": campo_max,
+                        "p_niveles_activos": na,
                     },
                 )
                 .execute()
@@ -15519,7 +15606,7 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
             agg_sicoe_ap[pk]["cant"] += cq
             agg_sicoe_ap[pk]["costo"] += cd
             continue
-        if _so_reg_cola_n1_n2_aprobados(r):
+        if _so_reg_prereqs_activos_aprobados_antes_max(r, contrato_id):
             if nfin == "Pendiente":
                 tgt = agg_sicoe_pe
             elif nfin == "Rechazado":

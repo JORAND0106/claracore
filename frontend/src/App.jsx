@@ -3048,7 +3048,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const isOnline = !efectivoOffline
   const capasF = capasFiltroValidacion && capasFiltroValidacion.length > 0 ? capasFiltroValidacion : null
   const capasOpNorm = (capasFiltroValidacionOp || 'and') === 'or' ? 'or' : 'and'
-  const capasFiltroKey = JSON.stringify(capasFiltroValidacion || [])
   const [reporte, setReporte]                     = useState(repoProp)
   const [registros, setRegistros]                 = useState(repoProp.registros || [])
 
@@ -3064,14 +3063,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     58: 'nivel5_estado',
     9: 'nivel5_estado',
   }
-  const CARGO_NIVEL_PREREQ = {
-    nivel2_estado: 'nivel1_estado',
-    nivel3_estado: 'nivel2_estado',
-    nivel4_estado: 'nivel3_estado',
-    nivel5_estado: 'nivel4_estado',
-    nivel6_estado: 'nivel5_estado',
-  }
-
   const CAMPO_POR_NIVEL = {
     1: 'nivel1_estado',
     2: 'nivel2_estado',
@@ -3081,15 +3072,70 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     6: 'nivel6_estado',
   }
 
+  const CAMPO_NIVEL_ORD = {
+    nivel1_estado: 1,
+    nivel2_estado: 2,
+    nivel3_estado: 3,
+    nivel4_estado: 4,
+    nivel5_estado: 5,
+    nivel6_estado: 6,
+  }
+  const NIVEL_NUM_A_CAMPO = {
+    1: 'nivel1_estado',
+    2: 'nivel2_estado',
+    3: 'nivel3_estado',
+    4: 'nivel4_estado',
+    5: 'nivel5_estado',
+    6: 'nivel6_estado',
+  }
+
+  const nivelesActivosContrato = useMemo(() => {
+    const na = nivelesContrato?.niveles_activos
+    if (!Array.isArray(na) || na.length === 0) return [1, 2, 3]
+    const out = []
+    for (const x of na) {
+      const n = typeof x === 'number' ? x : parseInt(String(x).trim(), 10)
+      if (Number.isFinite(n) && n >= 1 && n <= 6) out.push(n)
+    }
+    const s = [...new Set(out)].sort((a, b) => a - b)
+    return s.length ? s : [1, 2, 3]
+  }, [nivelesContrato])
+
+  /** Igual que backend `_get_prereq_nivel_activo`: nivel activo inmediatamente inferior (p. ej. [1,2,4] → N4 exige N2). */
+  const prereqCampoActivos = (campoNivelStr) => {
+    const nivelNum = CAMPO_NIVEL_ORD[campoNivelStr]
+    if (nivelNum == null) return null
+    const anteriores = nivelesActivosContrato.filter((n) => n < nivelNum).sort((a, b) => b - a)
+    if (!anteriores.length) return null
+    return NIVEL_NUM_A_CAMPO[anteriores[0]] || null
+  }
+
+  const estadoRegistroAprobadoEn = (reg, campo) =>
+    String(reg?.[campo] ?? '')
+      .trim()
+      .toLowerCase() === 'aprobado'
+
   const campoDeCapa = (capa) => (CAMPO_POR_NIVEL[capa.nivel] ?? CARGO_NIVEL_CAMPO[capa.cargo_id] ?? null)
+
+  /** Alineado con backend / grilla: plural UI → valor en so_registros. */
+  const normalizarEstadoFiltroCapa = (est) => {
+    const s = String(est || '').trim()
+    if (!s) return ''
+    const sl = s.toLowerCase()
+    if (sl === 'no revisados' || sl === 'no revisado') return 'No Revisado'
+    if (sl === 'pendientes' || sl === 'pendiente') return 'Pendiente'
+    if (sl === 'aprobados' || sl === 'aprobado') return 'Aprobado'
+    if (sl === 'rechazados' || sl === 'rechazado') return 'Rechazado'
+    return s
+  }
 
   const registroCumpleCapaExacta = (reg, capa) => {
     const fld = campoDeCapa(capa)
     if (!fld) return true
-    const estadoFiltroActivo = capa.estado
+    const estadoFiltroActivo = normalizarEstadoFiltroCapa(capa.estado)
     if (!estadoFiltroActivo) return true
-    const prereqCampo = CARGO_NIVEL_PREREQ[fld]
-    if (prereqCampo && reg[prereqCampo] !== 'Aprobado') return false
+    const prereqCampo = prereqCampoActivos(fld)
+    if (prereqCampo && !estadoRegistroAprobadoEn(reg, prereqCampo)) return false
     const estadoActual = reg[fld] || 'No Revisado'
     if (estadoFiltroActivo === 'No Revisado') {
       return estadoActual === 'No Revisado' || estadoActual === null
@@ -3127,46 +3173,23 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
    *  si no el registro nuevo desaparece al recargar (dominio N2/N3 solo incluye filas con ítem). */
   const esRegistroSinItemAsignado = (r) => !String(r?.item_numero || '').trim()
 
-  // Estado: mostrar solo pendientes o todos
-  const [soloMisPendientes, setSoloMisPendientes] = useState(!!capasF)
-  // Mantiene visibles los registros ya cargados al entrar a la carpeta,
-  // aunque cambien de estado durante esta misma sesión de validación.
-  const [registrosAnclados, setRegistrosAnclados] = useState(new Set())
-
   const cumplePrereqsVerTodos = (reg) => {
     if (!capasF) return true
     const ok = (capa) => {
       const f = campoDeCapa(capa)
       if (!f) return true
-      const pc = CARGO_NIVEL_PREREQ[f]
-      return !pc || reg[pc] === 'Aprobado'
+      const pc = prereqCampoActivos(f)
+      return !pc || estadoRegistroAprobadoEn(reg, pc)
     }
     if (capasOpNorm === 'or') return capasF.some(ok)
     return capasF.every(ok)
   }
 
-  useEffect(() => {
-    setRegistrosAnclados(new Set())
-  }, [capasFiltroKey, capasFiltroValidacionOp])
-
-  useEffect(() => {
-    if (!capasF || !soloMisPendientes) return
-    setRegistrosAnclados(prev => {
-      const next = new Set(prev)
-      registrosDominioValidacion.filter(registroCumpleFiltro).forEach(r => next.add(r.id))
-      return next
-    })
-  }, [registrosDominioValidacion, capasFiltroKey, capasFiltroValidacionOp, soloMisPendientes])
-
+  /** Con capas de grilla: ítems sin asignar + líneas con ítem que ya cumplen prerrequisitos del nivel (pueden verse/validar).
+   *  No exigir coincidencia exacta con el estado del chip aquí: si no, desaparecen pestañas de ítems ya trabajados. */
   const registrosMostrados = !capasF
     ? registros
-    : soloMisPendientes
-      ? registros.filter(r =>
-          esRegistroSinItemAsignado(r)
-          || registroCumpleFiltro(r)
-          || registrosAnclados.has(r.id),
-        )
-      : registros.filter(r => esRegistroSinItemAsignado(r) || cumplePrereqsVerTodos(r))
+    : registros.filter((r) => esRegistroSinItemAsignado(r) || cumplePrereqsVerTodos(r))
 
   // Conteo de pendientes para mostrar en el badge del toggle
   const cantPendientes = registrosDominioValidacion.filter(registroCumpleFiltro).length
@@ -3899,8 +3922,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 return capasF.some((capa) => {
                   const fld = campoDeCapa(capa)
                   if (!fld) return false
-                  const pc = CARGO_NIVEL_PREREQ[fld]
-                  if (pc && r[pc] !== 'Aprobado') return false
+                  const pc = prereqCampoActivos(fld)
+                  if (pc && !estadoRegistroAprobadoEn(r, pc)) return false
                   return r[fld] === 'No Revisado' || r[fld] == null
                 })
               })
@@ -5404,18 +5427,12 @@ function ModuloSicoeObra({
     if (oNod) params.append('q_nodo', oNod)
   }
 
-  /** Detalle del reporte: si hay búsqueda activa, solo líneas que cumplen los mismos filtros AND que la grilla/panel. */
+  /** Detalle del reporte: siempre todas las líneas (`GET …/reportes/{id}` sin `aplicar_filtros_busqueda`).
+   *  La grilla solo exige que exista al menos una línea que cumpla los filtros; volver a aplicar el mismo
+   *  AND en el detalle dejaba el modal con 0 registros y el resumen por nivel en ceros. El foco por
+   *  capa de validación (p. ej. Nivel 4) sigue en CarpetaReporte (`registrosMostrados` por prerrequisitos del nivel). */
   const urlReporteDetalle = (repId) => {
-    const base = `${API_URL}/sicoe-obra/${contrato_id}/reportes/${repId}`
-    if (!busquedaRealizada || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) return base
-    const params = new URLSearchParams()
-    params.set('aplicar_filtros_busqueda', '1')
-    const fe = { ...filtros }
-    // En edición, "Sin Asignar Ítem" no debe recortar líneas al asignar ítem (evita que desaparezcan del popup).
-    if (puedeEditar && String(fe.estado || '').trim() === 'Sin Asignar Ítem') fe.estado = ''
-    sicoeAppendParamsBusquedaActivos(params, fe)
-    const qs = params.toString()
-    return qs ? `${base}?${qs}` : base
+    return `${API_URL}/sicoe-obra/${contrato_id}/reportes/${repId}`
   }
 
   const urlReporteDetalleRef = useRef(urlReporteDetalle)

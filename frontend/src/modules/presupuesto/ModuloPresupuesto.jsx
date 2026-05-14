@@ -27,6 +27,15 @@ function parseDimInputEs(v) {
   return Number.isFinite(n) ? n : NaN
 }
 
+/** Precio unitario desde fila `listado_precios` (PostgREST suele exponer `precio_unitario`). */
+function precioVlrDesdeListado(p) {
+  if (!p || typeof p !== 'object') return null
+  const raw = p.precio_unitario ?? p.valor_unitario ?? p.vlr_unitario
+  if (raw === '' || raw == null) return null
+  const n = typeof raw === 'number' ? raw : parseFloat(String(raw).replace(/\s/g, '').replace(',', '.'))
+  return Number.isFinite(n) ? n : null
+}
+
 /** Componente estable (no dentro del render) para no perder el foco al teclear en el modal «Agregar cantidad». */
 function AgregarCantidadDimInput({ label, value, onChange, t }) {
   return (
@@ -1961,6 +1970,28 @@ async function ejecutarBulkEstadoDirecto(estado) {
       if (!allowDim && ['area_long_nod', 'ancho', 'espesor'].includes(k)) return
       body[k] = ['vlr_unitario', 'cant_total'].includes(k) ? parseFloat(v) : v
     })
+    const capB = body.capitulo != null ? String(body.capitulo).trim() : null
+    const itB = body.item != null ? String(body.item).trim() : null
+    const capEff = capB ?? String(reg.capitulo ?? '').trim()
+    const itEff = itB ?? String(reg.item ?? '').trim()
+    const itemMut = itB != null && itB !== String(reg.item ?? '').trim()
+    const capMut = capB != null && capB !== String(reg.capitulo ?? '').trim()
+    if ((itemMut || capMut) && capEff && itEff && Array.isArray(listadoPrecios) && listadoPrecios.length) {
+      const precio =
+        listadoPrecios.find(
+          (p) =>
+            String(p.item_numero ?? '').trim() === itEff &&
+            (!capMut || String(p.capitulo ?? '').trim() === capEff),
+        ) || listadoPrecios.find((p) => String(p.item_numero ?? '').trim() === itEff)
+      const pv = precioVlrDesdeListado(precio)
+      if (pv != null) {
+        body.vlr_unitario = pv
+        if (!allowDim) {
+          const cant0 = parseFloat(String(reg.cant_total ?? '').replace(',', '.')) || 0
+          body.costo_directo = Math.round(cant0 * pv)
+        }
+      }
+    }
     if (motivoReap) body.motivo_edicion_tras_sellado = motivoReap
     if (!(await adjuntarMotivoSiEdicionContratistaConInterv(reg, body))) return
     const res = await fetch(`${API}/presupuesto/item/${id}`, {
@@ -3319,7 +3350,9 @@ async function restaurar(id) {
                               if (motivoReap.length < 15) { alert('El motivo de reapertura debe tener al menos 15 caracteres (visible para Interventoría).'); return }
                             }
                             const precio = listadoPrecios.find(p => p.item_numero === popupItem)
-                            const vlr    = precio?.valor_unitario || precio?.vlr_unitario || r.vlr_unitario || 0
+                            const vlr =
+                              precioVlrDesdeListado(precio) ??
+                              (Number(r.vlr_unitario) || 0)
                             const cant   = r.cant_total || 0
                             const body   = {
                               ...(popupCap  && { capitulo: popupCap }),
