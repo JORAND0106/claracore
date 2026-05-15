@@ -8894,9 +8894,13 @@ def buscar_reportes_obra(
     # para garantizar que todos los IDs se filtren correctamente.
     _IDS_CHUNK_SIZE = 200
 
-    def _build_q(ids_chunk=None):
-        q = supabase.table("so_reportes").select("*, subcontratistas(razon_social)")\
-            .eq("contrato_id", contrato_id)
+    def _build_q(ids_chunk=None, lite: bool = False):
+        cols = (
+            "id, numero_reporte"
+            if lite
+            else "*, subcontratistas(razon_social)"
+        )
+        q = supabase.table("so_reportes").select(cols).eq("contrato_id", contrato_id)
         if numero_reporte is not None:
             q = q.eq("numero_reporte", numero_reporte)
         # subcontratista / tramo / costado: ya restringidos vía so_registros (has_reg_f)
@@ -8924,27 +8928,57 @@ def buscar_reportes_obra(
             q = q.in_("id", ids_chunk)
         return q
 
-    # Chunking completo para garantizar todos los IDs
-    all_rows = []
-    if reporte_ids_from_reg is not None:
-        seen_ids = set()
-        for i in range(0, len(reporte_ids_from_reg), 200):
-            _chunk = reporte_ids_from_reg[i:i + 200]
-            def _qc(c=_chunk):
-                return _build_q(c).limit(1000).execute().data
-            for row in supabase_execute(_qc):
-                if row["id"] not in seen_ids:
-                    seen_ids.add(row["id"])
-                    all_rows.append(row)
-    else:
-        def _qall():
-            return _build_q(None).limit(5000).execute().data
-        all_rows = supabase_execute(_qall)
+    # ── Cabeceras: sin precargar miles de reportes (*) para ordenar/paginar en Python.
+    #    - Sin universo por línea: orden + range en BD (solo la página solicitada).
+    #    - Con reporte_ids_from_reg: sólo id+numero_reporte para ordenar todo el universo filtrado;
+    #      luego select * + join sólo para offset..offset+limit de esos IDs (~50 filas típ.).
+    rows: List[Dict[str, Any]] = []
+    hay_mas = False
 
-    all_rows.sort(key=lambda r: (r.get("numero_reporte") or 0), reverse=True)
-    rows = all_rows[offset:offset + limit + 1]
-    hay_mas = len(rows) > limit
-    rows = rows[:limit]
+    if reporte_ids_from_reg is not None:
+        id_num: Dict[int, int] = {}
+        seen_rid = set()
+        for i in range(0, len(reporte_ids_from_reg), _IDS_CHUNK_SIZE):
+            _chunk = reporte_ids_from_reg[i : i + _IDS_CHUNK_SIZE]
+
+            def _qc_ids(c=_chunk):
+                return _build_q(c, lite=True).execute().data
+
+            for row in supabase_execute(_qc_ids) or []:
+                rid_one = row.get("id")
+                if rid_one is None or rid_one in seen_rid:
+                    continue
+                seen_rid.add(rid_one)
+                try:
+                    n = int(row.get("numero_reporte") or 0)
+                except (TypeError, ValueError):
+                    n = 0
+                id_num[int(rid_one)] = n
+        sorted_ids = sorted(id_num.keys(), key=lambda rr: id_num[rr], reverse=True)
+        page_slice = sorted_ids[offset : offset + limit + 1]
+        hay_mas = len(page_slice) > limit
+        page_ids_ordered = page_slice[:limit]
+        rows = []
+        for j in range(0, len(page_ids_ordered), _IDS_CHUNK_SIZE):
+            chk = page_ids_ordered[j : j + _IDS_CHUNK_SIZE]
+
+            def _qfull_ids(c=chk):
+                return _build_q(c).execute().data
+
+            batch = supabase_execute(_qfull_ids) or []
+            by_id = {r["id"]: r for r in batch}
+            for rid_one in chk:
+                if rid_one in by_id:
+                    rows.append(by_id[rid_one])
+    else:
+        q_page = _build_q(None).order("numero_reporte", desc=True)
+
+        def _qrange_pg():
+            return q_page.range(offset, offset + limit).execute().data
+
+        pg = supabase_execute(_qrange_pg) or []
+        hay_mas = len(pg) > limit
+        rows = pg[:limit]
 
     # Batch-resolve semana_numero y acta_rpo
     semana_ids = list({r["semana_id"] for r in rows if r.get("semana_id")})
@@ -9055,6 +9089,7 @@ def buscar_reportes_obra(
                 ]
             if _defer_capas_or_grilla:
                 reg_estados = _filtrar_registros_validacion_capas_sicoe(reg_estados, capas_v, None, "or")
+            cmx_aggr = _get_nivel_maximo_contrato(contrato_id)
             cargo_map = {r["id"]: {"n1": [], "n2": [], "n3": [], "sub": [], "count": 0} for r in rows}
             costo_map = {}
             for reg in reg_estados:
@@ -9062,8 +9097,7 @@ def buscar_reportes_obra(
                 if rid in cargo_map:
                     cargo_map[rid]["n1"].append(reg.get("nivel1_estado") or "No Revisado")
                     cargo_map[rid]["n2"].append(reg.get("nivel2_estado") or "No Revisado")
-                    cmx = _get_nivel_maximo_contrato(contrato_id)
-                    cargo_map[rid]["n3"].append(reg.get(cmx) or "No Revisado")
+                    cargo_map[rid]["n3"].append(reg.get(cmx_aggr) or "No Revisado")
                     cargo_map[rid]["sub"].append(reg.get("sub_estado") or "No Revisado")
                     cargo_map[rid]["count"] += 1
                     costo_map[rid] = costo_map.get(rid, 0.0) + float(reg.get("costo_directo") or 0)
