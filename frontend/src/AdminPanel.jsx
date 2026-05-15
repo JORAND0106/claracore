@@ -9,6 +9,68 @@ import ModuloNube from "./ModuloNube";
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
 
+/**
+ * Fechas de logs / API (Postgres, ISO). Si el string no trae huso (Z u offset),
+ * se asume UTC — evita que el navegador lo interprete como hora local y desalinee Bogotá.
+ * Salida siempre en zona Colombia.
+ */
+function formatFechaLogBogota(iso) {
+  if (iso == null || iso === "") return "—"
+  try {
+    let s = String(iso).trim().replace(" ", "T")
+    const hasZone = /Z$/i.test(s) || /[+-]\d{2}:\d{2}$/.test(s) || /[+-]\d{4}$/.test(s)
+    if (!hasZone && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) {
+      s = `${s}Z`
+    }
+    const d = new Date(s)
+    if (Number.isNaN(d.getTime())) return String(iso)
+    return d.toLocaleString("es-CO", {
+      dateStyle: "short",
+      timeStyle: "short",
+      hour12: true,
+      timeZone: "America/Bogota",
+    })
+  } catch {
+    return String(iso)
+  }
+}
+
+/** JSON para pegar en Cursor/soporte sin capturas de pantalla. */
+function truncParaPortapapeles(val, max = 2000) {
+  if (val == null) return null
+  const s = typeof val === "string" ? val : JSON.stringify(val)
+  return s.length <= max ? s : `${s.slice(0, max)}…(truncado)`
+}
+
+function buildPortapapelesDiagnostico(data) {
+  const clone = JSON.parse(JSON.stringify(data || {}))
+  const acortaDetalle = (rows) => {
+    if (!Array.isArray(rows)) return rows
+    return rows.map((r) => {
+      const o = { ...r }
+      if (o.detalle != null) o.detalle = truncParaPortapapeles(o.detalle, 2500)
+      return o
+    })
+  }
+  if (clone.errores_sistema) clone.errores_sistema = acortaDetalle(clone.errores_sistema)
+  if (clone.alertas) clone.alertas = acortaDetalle(clone.alertas)
+  const payload = {
+    _tipo: "claracore_diagnostico_plataforma",
+    _version: 2,
+    _pegar: "Copiar este bloque completo en el chat de soporte o en Cursor para diagnóstico.",
+    exportado_en_cliente_utc: new Date().toISOString(),
+    cliente: typeof window !== "undefined"
+      ? {
+          origin: window.location.origin,
+          path: window.location.pathname,
+          userAgent: typeof navigator !== "undefined" ? navigator.userAgent : null,
+        }
+      : {},
+    diagnostico: clone,
+  }
+  return JSON.stringify(payload, null, 2)
+}
+
 const ACCIONES = ["ver", "crear", "editar", "eliminar", "validar", "exportar"];
 
 /** Icono sugerido según tipo de novedad (módulo Inicio) */
@@ -1522,7 +1584,7 @@ function SeccionLogs({ call, theme }) {
     setHistLoading(false)
   }
 
-  const fmtFecha = iso => { try { const utc = iso.endsWith("Z") ? iso : iso + "Z"; return new Date(utc).toLocaleString("es-CO", { dateStyle:"short", timeStyle:"short", timeZone:"America/Bogota" }) } catch { return iso } }
+  const fmtFecha = (iso) => formatFechaLogBogota(iso)
   const tdS = { padding:"8px 10px", fontSize:12, borderBottom:`1px solid ${col.border}`, color: col.textTable }
   const thS = { padding:"8px 10px", fontSize:11, fontWeight:700, color: col.textMuted, borderBottom:`1px solid ${col.border}`, textAlign:"left", whiteSpace:"nowrap" }
 
@@ -1769,6 +1831,416 @@ function SeccionLogs({ call, theme }) {
             </div>
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Diagnóstico plataforma (solo Desarrollador) ─────────────────────────────
+function SeccionDiagnosticoPlataforma({ call, theme }) {
+  const col = C(theme)
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState(null)
+  const [copiaBanner, setCopiaBanner] = useState(null)
+
+  /** Relativo al umbral del middleware (sin guardar nada en BD). */
+  const severidadLentitud = (duracionMs, umbralMs) => {
+    const u = Number(umbralMs)
+    const m = Number(duracionMs)
+    const um = Number.isFinite(u) && u > 0 ? u : 8000
+    if (!Number.isFinite(m) || m < 0) return { label: "—", bg: "#64748B", fg: "#fff" }
+    const ratio = m / um
+    if (ratio < 3) return { label: "Moderado", bg: "#CA8A04", fg: "#fff" }
+    if (ratio < 15) return { label: "Grave", bg: "#EA580C", fg: "#fff" }
+    return { label: "Crítico", bg: "#991B1B", fg: "#fff" }
+  }
+
+  const pillSeveridad = (label, bg, fg) => (
+    <span
+      style={{
+        display: "inline-block",
+        fontSize: 10,
+        fontWeight: 800,
+        letterSpacing: "0.04em",
+        textTransform: "uppercase",
+        padding: "3px 8px",
+        borderRadius: 6,
+        background: bg,
+        color: fg,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </span>
+  )
+
+  const cargar = useCallback(async () => {
+    setLoading(true)
+    setErr(null)
+    setCopiaBanner(null)
+    try {
+      const j = await call("GET", "/admin/diagnostico-plataforma")
+      setData(j)
+    } catch (e) {
+      setErr(e?.message || String(e))
+      setData(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [call])
+
+  useEffect(() => {
+    void cargar()
+  }, [cargar])
+
+  const copiarDiagnosticoPortapapeles = useCallback(async () => {
+    if (!data) {
+      setCopiaBanner({ variant: "warn", text: "Primero cargue el diagnóstico (Actualizar)." })
+      window.setTimeout(() => setCopiaBanner(null), 6000)
+      return
+    }
+    const txt = buildPortapapelesDiagnostico(data)
+    try {
+      await navigator.clipboard.writeText(txt)
+      setCopiaBanner({ variant: "ok", text: "Listo: JSON copiado. Pégalo en Cursor o en el chat de soporte." })
+    } catch {
+      setCopiaBanner({
+        variant: "err",
+        text: "No se pudo usar el portapapeles. Use HTTPS o conceda permiso de portapapeles al sitio.",
+      })
+    }
+    window.setTimeout(() => setCopiaBanner(null), 7000)
+  }, [data])
+
+  const card = (bg) => ({
+    background: bg || col.bgCard,
+    border: `1px solid ${col.borderColor}`,
+    borderRadius: 10,
+    padding: "14px 16px",
+    marginBottom: 14,
+  })
+  const th = { textAlign: "left", fontSize: 10, color: col.textMuted, textTransform: "uppercase", padding: "6px 8px", borderBottom: `1px solid ${col.borderColor}` }
+  const td = { fontSize: 12, padding: "8px", borderBottom: `1px solid ${col.borderColor}88`, color: col.textTable, verticalAlign: "top" }
+
+  return (
+    <div style={{ padding: "8px 4px 24px", maxWidth: 1100, position: "relative" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+          <div style={{ fontWeight: 800, fontSize: "var(--cc-h3)", color: col.textPrimary, marginBottom: 4 }}>
+            Diagnóstico plataforma
+          </div>
+          <div style={{ fontSize: 12, color: col.textMuted, lineHeight: 1.4 }}>
+            Use <strong>Copiar JSON</strong> (arriba a la derecha) y péguelo en el chat: incluye rutas lentas, errores,
+            alertas y contexto del navegador, sin capturas.
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={() => void cargar()}
+            disabled={loading}
+            style={{
+              background: col.textPrimary,
+              color: "#fff",
+              border: "none",
+              borderRadius: 8,
+              padding: "8px 14px",
+              fontWeight: 700,
+              cursor: loading ? "wait" : "pointer",
+              opacity: loading ? 0.75 : 1,
+            }}
+          >
+            {loading ? "Actualizando…" : "↻ Actualizar"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void copiarDiagnosticoPortapapeles()}
+            disabled={loading || !data}
+            title="Copia JSON completo para pegar en Cursor o soporte (equivalente a copiar bloque de código)."
+            aria-label="Copiar diagnóstico JSON al portapapeles"
+            style={{
+              background: col.bgInput,
+              color: col.textPrimary,
+              border: `2px solid ${col.borderColor}`,
+              borderRadius: 8,
+              padding: "8px 12px",
+              fontWeight: 700,
+              cursor: loading || !data ? "not-allowed" : "pointer",
+              opacity: loading || !data ? 0.55 : 1,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <span aria-hidden>⎘</span>
+            Copiar JSON
+          </button>
+        </div>
+      </div>
+      {data?.generated_at && (
+        <div style={{ fontSize: 12, color: col.textMuted, marginBottom: 14 }}>
+          Generado: {formatFechaLogBogota(data.generated_at)} · hora Colombia (Bogotá)
+        </div>
+      )}
+      {copiaBanner && (
+        <div
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            borderRadius: 8,
+            padding: "10px 14px",
+            marginBottom: 14,
+            ...(copiaBanner.variant === "ok"
+              ? { color: "#166534", background: "#DCFCE7", border: "1px solid #86EFAC" }
+              : copiaBanner.variant === "warn"
+                ? { color: "#92400E", background: "#FEF3C7", border: "1px solid #FCD34D" }
+                : { color: "#991B1B", background: "#FEE2E2", border: "1px solid #FCA5A5" }),
+          }}
+        >
+          {copiaBanner.text}
+        </div>
+      )}
+      {err && (
+        <div style={{ ...card("#FEF2F2"), color: "#B91C1C", marginBottom: 16 }}>{err}</div>
+      )}
+      {loading && !data && !err && (
+        <div style={{ textAlign: "center", padding: 32, color: col.textMuted }}>Cargando diagnóstico…</div>
+      )}
+      {data && (
+        <>
+          <div style={{ ...card(), borderLeft: `4px solid ${data.supabase?.ok ? "#16A34A" : "#DC2626"}` }}>
+            <div style={{ fontWeight: 800, color: col.textPrimary, marginBottom: 8 }}>Estado rápido</div>
+            <div style={{ fontSize: 13, color: col.textTable, lineHeight: 1.5 }}>
+              <strong>API (worker):</strong> {data.api_worker?.ok ? "✓ Responde" : "✗"} — {data.api_worker?.nota || ""}
+              <br />
+              <strong>Supabase (ping):</strong>{" "}
+              {data.supabase?.ok ? `✓ ~${data.supabase.latency_ms ?? "—"} ms` : "✗ Falló"}
+              {!data.supabase?.ok && data.supabase?.error && (
+                <span style={{ color: "#B91C1C" }}> — {String(data.supabase.error).slice(0, 200)}</span>
+              )}
+              <br />
+              <strong>Umbral respuesta lenta:</strong> {data.umbral_respuesta_lenta_ms ?? "—"} ms (middleware)
+              <br />
+              {data.version_deploy && (
+                <>
+                  <strong>Versión despliegue:</strong> <code style={{ fontSize: 11 }}>{data.version_deploy}</code>
+                </>
+              )}
+            </div>
+          </div>
+
+          {data.resumen && (
+            <div style={{ ...card(), borderLeft: "4px solid #6366F1" }}>
+              <div style={{ fontWeight: 800, color: col.textPrimary, marginBottom: 8 }}>
+                Resumen para lentitud / SICOE
+              </div>
+              <div style={{ fontSize: 13, color: col.textTable, lineHeight: 1.55 }}>
+                <strong>Muestras:</strong>{" "}
+                {data.resumen.n_respuestas_lentas_listadas ?? 0} lentos (últ.{" "}
+                {data.resumen.ventana_respuestas_lentas_h ?? 48} h) ·{" "}
+                {data.resumen.n_errores_sistema_listados ?? 0} errores · {data.resumen.n_alertas_listadas ?? 0}{" "}
+                alertas
+                <br />
+                <strong>Peor duración (lentos listados):</strong>{" "}
+                {data.resumen.peor_duracion_ms_respuestas_lentas != null
+                  ? `${data.resumen.peor_duracion_ms_respuestas_lentas} ms`
+                  : "—"}
+                <br />
+                <strong>IDs contrato en rutas /sicoe-obra/…</strong> (lentos + errores):{" "}
+                {Array.isArray(data.resumen.sicoe_contrato_ids_en_endpoints) &&
+                data.resumen.sicoe_contrato_ids_en_endpoints.length
+                  ? data.resumen.sicoe_contrato_ids_en_endpoints.join(", ")
+                  : "—"}
+              </div>
+              {Array.isArray(data.resumen.rutas_mas_repetidas_en_lentas) &&
+                data.resumen.rutas_mas_repetidas_en_lentas.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: col.textMuted, marginBottom: 6 }}>
+                      Rutas más repetidas en lentos (top {data.resumen.rutas_mas_repetidas_en_lentas.length})
+                    </div>
+                    <ol
+                      style={{
+                        margin: 0,
+                        paddingLeft: 18,
+                        fontSize: 12,
+                        fontFamily: "ui-monospace, monospace",
+                        color: col.textTable,
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      {data.resumen.rutas_mas_repetidas_en_lentas.map((row, i) => (
+                        <li key={i}>
+                          ({row.veces}×) {row.ruta}
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+            </div>
+          )}
+
+          <div style={card()}>
+            <div style={{ fontWeight: 800, color: col.textPrimary, marginBottom: 6 }}>Auditoría por módulo (24 h)</div>
+            <div style={{ fontSize: 11, color: col.textMuted, marginBottom: 10 }}>{data.auditoria_por_modulo_nota}</div>
+            {(!data.auditoria_por_modulo || data.auditoria_por_modulo.length === 0) ? (
+              <div style={{ color: col.textMuted, fontSize: 13 }}>Sin datos en la muestra.</div>
+            ) : (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                {data.auditoria_por_modulo.map((m) => (
+                  <div
+                    key={m.modulo}
+                    style={{
+                      background: col.bgInput,
+                      border: `1px solid ${col.borderColor}`,
+                      borderRadius: 8,
+                      padding: "8px 12px",
+                      minWidth: 120,
+                    }}
+                  >
+                    <div style={{ fontSize: 11, color: col.textMuted }}>{m.modulo}</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: col.textPrimary }}>{m.eventos}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={card()}>
+            <div style={{ fontWeight: 800, color: col.textPrimary, marginBottom: 8 }}>Respuestas lentas recientes (48 h)</div>
+            <div style={{ fontSize: 11, color: col.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
+              Severidad calculada solo en pantalla respecto al umbral ({data.umbral_respuesta_lenta_ms ?? 8000} ms):{" "}
+              <strong>Moderado</strong> &lt; 3× · <strong>Grave</strong> 3–15× · <strong>Crítico</strong> &gt; 15×.
+            </div>
+            {data.respuestas_lentas?.length ? (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Severidad</th>
+                      <th style={th}>Cuándo</th>
+                      <th style={th}>Endpoint</th>
+                      <th style={{ ...th, textAlign: "right" }}>Ms</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.respuestas_lentas.map((r) => {
+                      const sev = severidadLentitud(r.duracion_ms, data.umbral_respuesta_lenta_ms)
+                      return (
+                        <tr key={r.id}>
+                          <td style={td}>{pillSeveridad(sev.label, sev.bg, sev.fg)}</td>
+                          <td style={td}>{formatFechaLogBogota(r.created_at)}</td>
+                          <td style={{ ...td, fontFamily: "monospace", fontSize: 11 }}>{r.metodo_http || ""} {r.endpoint || "—"}</td>
+                          <td style={{ ...td, textAlign: "right", fontWeight: 700 }}>{r.duracion_ms ?? "—"}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ color: col.textMuted, fontSize: 13 }}>No hay registros de lentitud en la muestra.</div>
+            )}
+          </div>
+
+          <div style={card()}>
+            <div style={{ fontWeight: 800, color: col.textPrimary, marginBottom: 8 }}>Errores de sistema (48 h)</div>
+            {data.errores_sistema?.length ? (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Severidad</th>
+                      <th style={th}>Cuándo</th>
+                      <th style={th}>Endpoint / módulo</th>
+                      <th style={th}>Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.errores_sistema.map((r) => {
+                      const s = String(r.severidad || "ERROR").toUpperCase()
+                      const sev =
+                        s === "ERROR"
+                          ? { label: "Error", bg: "#991B1B", fg: "#fff" }
+                          : s === "WARNING"
+                            ? { label: "Advertencia", bg: "#CA8A04", fg: "#fff" }
+                            : { label: s || "—", bg: "#475569", fg: "#fff" }
+                      return (
+                        <tr key={r.id}>
+                          <td style={td}>{pillSeveridad(sev.label, sev.bg, sev.fg)}</td>
+                          <td style={td}>{formatFechaLogBogota(r.created_at)}</td>
+                          <td style={{ ...td, fontSize: 11 }}>
+                            <div style={{ fontFamily: "monospace" }}>{r.endpoint || "—"}</div>
+                            <div style={{ color: col.textMuted }}>{r.modulo || ""}</div>
+                          </td>
+                          <td style={td}>{r.accion || "—"}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ color: col.textMuted, fontSize: 13 }}>Sin errores de sistema recientes en la muestra.</div>
+            )}
+          </div>
+
+          <div style={card()}>
+            <div style={{ fontWeight: 800, color: col.textPrimary, marginBottom: 8 }}>Alertas marcadas</div>
+            {data.alertas?.length ? (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Tipo</th>
+                      <th style={th}>Cuándo</th>
+                      <th style={th}>Módulo / acción</th>
+                      <th style={th}>Usuario</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.alertas.map((r) => {
+                      const s = String(r.severidad || "").toUpperCase()
+                      const sev =
+                        s === "ERROR"
+                          ? { label: "Alerta", bg: "#B91C1C", fg: "#fff" }
+                          : { label: "Alerta", bg: "#7C3AED", fg: "#fff" }
+                      return (
+                        <tr key={r.id}>
+                          <td style={td}>{pillSeveridad(sev.label, sev.bg, sev.fg)}</td>
+                          <td style={td}>{formatFechaLogBogota(r.created_at)}</td>
+                          <td style={td}>
+                            {r.modulo || "—"} · <strong>{r.accion || "—"}</strong>
+                          </td>
+                          <td style={td}>{r.usuario_nombre || "—"}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div style={{ color: col.textMuted, fontSize: 13 }}>Sin alertas recientes.</div>
+            )}
+          </div>
+
+          <p style={{ fontSize: 12, color: col.textMuted, lineHeight: 1.45, marginTop: 8 }}>
+            Las fechas de las tablas y «Generado» se muestran en <strong>hora Colombia</strong> (zona{" "}
+            <code style={{ fontSize: 11 }}>America/Bogota</code>). Si el registro en base venía sin huso, se interpreta como{" "}
+            <strong>UTC</strong> antes de convertir — coherente con cómo suele guardar Postgres.
+            <br />
+            Para profundidad use también «Logs del Sistema» o el monitor del proveedor (Azure, etc.).
+          </p>
+        </>
       )}
     </div>
   )
@@ -5414,6 +5886,7 @@ const ADMIN_PANEL_TABS = [
   { id: "nube",         label: "Integración nube", soloAdmin: false },
   { id: "inicio",    label: "Página de inicio", soloAdmin: true },
   { id: "logs",      label: "📋 Logs del Sistema", soloAdmin: true },
+  { id: "diagnostico", label: "📊 Diagnóstico plataforma", soloDeveloper: true },
 ];
 
 export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp }) {
@@ -5428,6 +5901,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
   const TABS = useMemo(() => {
     return ADMIN_PANEL_TABS.filter((tabItem) => {
       if (isDeveloper) return true;
+      if (tabItem.soloDeveloper) return false;
       const funciones = TAB_FUNCIONES[tabItem.id] || [];
       /* Administrador: mismo acceso que siempre a pestañas clásicas; «Integración nube» exige permiso en matriz. */
       if (isAdmin && tabItem.id !== "nube") return true;
@@ -5474,6 +5948,10 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
     nube:       { title: "Integración nube", sub: "Google Drive u OneDrive: carpetas ClaraCore para SST y ensayos" },
     inicio:    { title: "Página de inicio",       sub: "Novedades, textos e imagen de contexto en el módulo Inicio" },
     logs:      { title: "Logs del Sistema",       sub: "Auditoría completa de acciones en la plataforma" },
+    diagnostico: {
+      title: "Diagnóstico plataforma",
+      sub: "Resumen técnico: salud de API/BD, lentitudes, errores de sistema y uso por módulo (solo Desarrollador).",
+    },
   };
 
   const cargarCargos = useCallback(async () => {
@@ -5583,6 +6061,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
               />
             )}
               {tab === "logs"      && <SeccionLogs      call={call} theme={activeTheme} />}
+              {tab === "diagnostico" && <SeccionDiagnosticoPlataforma call={call} theme={activeTheme} />}
           </div>
         </div>
       </div>

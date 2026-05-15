@@ -2,7 +2,7 @@
  * ClaraCore Service Worker — refuerzo de disponibilidad offline.
  * Importante: index.html y el documento de navegación usan red-primero
  * para que un F5 normal cargue el bundle nuevo tras un deploy;
- * el cache-first sobre el mismo CACHE_NAME dejaba la SPA “pegada” a JS viejo.
+ * el cache-first sobre el mismo CACHE_NAME dejaba la SPA “pegado” a JS viejo.
  */
 const CACHE_NAME = 'claracore-shell-v5'
 

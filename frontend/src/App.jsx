@@ -30,6 +30,7 @@ import TrazabilidadRegistroModal from './TrazabilidadRegistroModal'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import ModuloPresupuesto from './modules/presupuesto/ModuloPresupuesto'
+import ModuloProgramacionObra from './ModuloProgramacionObra'
 import EmojiPicker from './EmojiPicker'
 import ExcelJS from 'exceljs'
 import { API_BASE, logApiFailure, SUPABASE_ANON_KEY, SUPABASE_URL } from './apiBase'
@@ -3141,7 +3142,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
 }
 
 // ─── CARPETA REPORTE ──────────────────────────────────────────────────────────
-function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [], capasFiltroValidacion = null, capasFiltroValidacionOp = 'and', urlReporteDetalle: urlReporteDetalleFn, nivelesContrato = SICOE_NIVELES_CONTRATO_DEFAULT(), onRefrescarListadoSicoe = null }) {
+function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, onClose, onActualizar, actasList = [], capasFiltroValidacion = null, capasFiltroValidacionOp = 'and', urlReporteDetalle: urlReporteDetalleFn, urlReporteDetalleFiltrado: urlReporteDetalleFiltradoFn = null, nivelesContrato = SICOE_NIVELES_CONTRATO_DEFAULT(), onRefrescarListadoSicoe = null }) {
   const { efectivoOffline, isOfflineReady, enqueueMutation } = useOffline()
   const isOnline = !efectivoOffline
   const capasF = capasFiltroValidacion && capasFiltroValidacion.length > 0 ? capasFiltroValidacion : null
@@ -3290,9 +3291,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     ? registros
     : registros.filter((r) => esRegistroSinItemAsignado(r) || cumplePrereqsVerTodos(r))
 
-  // Conteo de pendientes para mostrar en el badge del toggle
-  const cantPendientes = registrosDominioValidacion.filter(registroCumpleFiltro).length
-
   const [tabActiva, setTabActiva]                 = useState('portada')
   const [guardandoEnlace, setGuardandoEnlace]     = useState(false)
   const [enlaces, setEnlaces]                      = useState(() => parseEnlacesSoporteReporte(repoProp.enlace_soporte))
@@ -3305,7 +3303,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const [listaPkIds, setListaPkIds]               = useState([])
   const [planoGeojsonPortada, setPlanoGeojsonPortada] = useState(null)
   const [seleccionados, setSeleccionados]         = useState([])
-  const [seleccionadosValidacion, setSeleccionadosValidacion] = useState([])
   const [portadaResumenEstado, setPortadaResumenEstado]       = useState(null)
   const [registroExpandido, setRegistroExpandido] = useState(null)
 
@@ -3430,7 +3427,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
   const regsSinAsignar = registrosVisibles.filter(r => !r.item_numero)
 
   useEffect(() => {
-    setSeleccionadosValidacion([])
     setMsgMasivo('')
   }, [tabActiva])
 
@@ -3500,7 +3496,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       const id0 = popupMasivo.idsOverride[0]
       return registrosVisibles.find(r => r.id === id0) || registros.find(r => r.id === id0) || {}
     }
-    return registrosVisibles.find(r => r.id === seleccionadosValidacion[0]) || registros[0] || {}
+    return {}
   })()
 
   const idsPortadaResumenMasivoElegibles = (() => {
@@ -3523,13 +3519,25 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setRecargando(true)
     try {
       const build = urlReporteDetalleFn || ((id) => `${API_URL}/sicoe-obra/${contrato_id}/reportes/${id}`)
-      const url = build(reporte.id)
-      const res  = await fetch(url, { headers: hdrs })
-      const data = await res.json()
+      const urlS = build(reporte.id)
+      const uf = typeof urlReporteDetalleFiltradoFn === 'function' ? urlReporteDetalleFiltradoFn(reporte.id) : null
+      // Un solo GET cuando hay URL filtrada: antes se hacían dos (simple con TODOS los registros + filtrado), duplicando tiempo y payload.
+      const urlPrimaria = uf && uf !== urlS ? uf : urlS
+      let res = await fetch(urlPrimaria, { headers: hdrs })
+      let data = await res.json().catch(() => ({}))
+      if (seq !== recargarSeqRef.current) return null
+      if ((!res.ok || !data?.id) && urlPrimaria !== urlS) {
+        if (seq !== recargarSeqRef.current) return null
+        res = await fetch(urlS, { headers: hdrs })
+        data = await res.json().catch(() => ({}))
+      }
       // Descartar si llegó una recarga más reciente mientras esperábamos
       if (seq !== recargarSeqRef.current) return null
-      setReporte(data)
-      setRegistros((data.registros || []).map((row) => ({ ...row })))
+      if (!res.ok || !data?.id) return null
+      const finalData = { ...data }
+      if (seq !== recargarSeqRef.current) return null
+      setReporte(finalData)
+      setRegistros((finalData.registros || []).map((row) => ({ ...row })))
       if (Object.prototype.hasOwnProperty.call(data, 'enlace_soporte')) {
         setEnlaces(parseEnlacesSoporteReporte(data.enlace_soporte))
       }
@@ -3784,10 +3792,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     setSeleccionados(prev => prev.includes(rid) ? prev.filter(x => x !== rid) : [...prev, rid])
   }
 
-  const toggleSeleccionValidacion = (rid) => {
-    setSeleccionadosValidacion(prev => prev.includes(rid) ? prev.filter(x => x !== rid) : [...prev, rid])
-  }
-
   const ejecutarMasivoSeleccion = async (estado, comentarioData, idsOverride = null) => {
     const nv = elevCapCarpeta ? nivelMasivoDevAdmin : nivelInfo.nivelValidacion
     if (nv == null || nv === 0) return
@@ -3800,9 +3804,9 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       )
       return
     }
-    const ids = idsOverride != null ? [...idsOverride] : [...seleccionadosValidacion]
+    const ids = idsOverride != null ? [...idsOverride] : []
     if (ids.length === 0) {
-      alert(idsOverride != null ? 'No hay registros elegibles para validar en esta lista (revisa ítem asignado y nivel previo aprobado).' : 'Selecciona al menos un registro en este ítem.')
+      alert('No hay registros elegibles para validar en esta lista (revisa ítem asignado y nivel previo aprobado).')
       return
     }
     setPopupMasivo(null)
@@ -3817,8 +3821,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     if (campoNivel) {
       setRegistros(prev => prev.map(r => ids.includes(r.id) ? { ...r, [campoNivel]: estado } : r))
     }
-    if (idsOverride == null) setSeleccionadosValidacion([])
-    else setPortadaResumenEstado(null)
+    if (idsOverride != null) setPortadaResumenEstado(null)
 
     const usarEndpointMasivoReporte = nv === 1 || nv === 2 || nv === 3
     const sufijo =
@@ -3924,68 +3927,191 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
     </div>
   )
 
-  const renderBarraValidacionMasiva = (regsTab) => {
-    if (!puedeMasivaNivel) return null
-    const idsElegibles = regsTab.filter((r) => regCumplePrereqMasivoNivel(r)).map((r) => r.id)
-    if (idsElegibles.length === 0) return null
+  const fmtPesosResumenItemTab = (v) => {
+    if (v == null || v === '') return '—'
+    try {
+      return new Intl.NumberFormat('es-CO', {
+        style: 'currency',
+        currency: 'COP',
+        maximumFractionDigits: 0,
+      }).format(Number(v) || 0)
+    } catch {
+      return String(v)
+    }
+  }
+  const fmtCantResumenItemTab = (v) => {
+    try {
+      return new Intl.NumberFormat('es-CO', { maximumFractionDigits: 4 }).format(Number(v) || 0)
+    } catch {
+      return String(v ?? '—')
+    }
+  }
 
-    const todosSelVal = idsElegibles.length > 0 && idsElegibles.every(id => seleccionadosValidacion.includes(id))
-    const BTNS_MASIVOS = [
-      { estado:'Aprobado',  icon:'✅', color:'#16a34a' },
-      { estado:'Pendiente', icon:'🟡', color:'#d97706' },
-      { estado:'Rechazado', icon:'🔴', color:'#dc2626' },
-    ]
-    const tituloNv = encPorNivelHoja[nvMasivo] || `Nivel ${nvMasivo}`
+  /** Una fila compacta: datos del ítem + totales de cantidad y costo directo en las líneas de esta pestaña. */
+  const renderResumenEconomicoLineaItem = (regsTab, claveItem) => {
+    if (!regsTab || regsTab.length === 0) return null
+    const sumCant = regsTab.reduce((acc, r) => acc + (Number(r.cantidad_total) || 0), 0)
+    const sumCd = regsTab.reduce((acc, r) => acc + (Number(r.costo_directo) || 0), 0)
+    const ref = regsTab.find((r) => String(r.item_numero || '').trim()) || regsTab[0]
+    const sinAsignar = claveItem === 'sin_asignar'
+    const itemCode = sinAsignar ? '—' : String(ref.item_numero || claveItem || '—').trim() || '—'
+    const desc = sinAsignar
+      ? 'Registros sin ítem de presupuesto asignado'
+      : String(ref.item_descripcion || '').trim() || '—'
+    const und = sinAsignar ? '—' : String(ref.unidad || '').trim() || '—'
+    const vlr = sinAsignar ? null : ref.vlr_unitario
+    const verEco = nivelInfo.verValoresEconomicos
+    const gridStyle = {
+      display: 'grid',
+      gridTemplateColumns: verEco
+        ? 'minmax(3.2rem,0.42fr) minmax(5rem,1.25fr) minmax(2rem,0.18fr) minmax(4rem,0.38fr) minmax(3.5rem,0.32fr) minmax(4rem,0.38fr)'
+        : 'minmax(3.2rem,0.42fr) minmax(5rem,1.45fr) minmax(2rem,0.22fr) minmax(3.5rem,0.4fr)',
+      gap: 'var(--cc-space-2)',
+      alignItems: 'center',
+      background: t.bgCard,
+      border: `1px solid ${t.border}`,
+      borderRadius: 8,
+      padding: 'var(--cc-space-2) var(--cc-space-3)',
+      marginBottom: 'var(--cc-space-2)',
+    }
+    const th = {
+      fontSize: 'var(--cc-caption)',
+      fontWeight: 700,
+      color: t.textMuted,
+      textTransform: 'uppercase',
+      letterSpacing: '0.04em',
+      lineHeight: 1.2,
+    }
+    const td = {
+      fontSize: 'var(--cc-sm)',
+      fontWeight: 600,
+      color: t.text,
+      minWidth: 0,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    }
 
     return (
-      <div style={{ background:t.bgCard, borderRadius:'10px', padding:'14px', border:`1px solid ${t.border}`, marginBottom:'12px' }}>
-        {elevCapCarpeta && nivelesOpcMasivoN1a3.length > 1 && (
-          <div style={{ marginBottom:'10px', display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap' }}>
-            <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.textMuted }}>Nivel masivo (contratista, máx. N3):</span>
-            <select
-              value={nivelMasivoDevAdmin}
-              onChange={(e) => setNivelMasivoDevAdmin(parseInt(e.target.value, 10))}
-              style={{ padding:'6px 10px', borderRadius:'8px', border:`1px solid ${t.border}`, fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text, background:t.bg }}
-            >
-              {nivelesOpcMasivoN1a3.map((nn) => (
-                <option key={nn} value={nn}>
-                  N{nn} — {encPorNivelHoja[nn] || `Nivel ${nn}`}
-                </option>
-              ))}
-            </select>
+      <div style={gridStyle} role="group" aria-label="Resumen del ítem en este reporte">
+        <div style={th}>Ítem</div>
+        <div style={th}>Descripción</div>
+        <div style={th}>Und.</div>
+        {verEco && <div style={{ ...th, textAlign: 'right' }}>Vlr. unit.</div>}
+        <div style={{ ...th, textAlign: 'right' }}>Cantidad (reporte)</div>
+        {verEco && <div style={{ ...th, textAlign: 'right' }}>Costo dir.</div>}
+
+        <div style={td} title={String(itemCode)}>
+          {itemCode}
+        </div>
+        <div style={{ ...td, whiteSpace: 'normal', lineHeight: 1.3 }} title={desc}>
+          {desc}
+        </div>
+        <div style={td} title={und}>
+          {und}
+        </div>
+        {verEco && (
+          <div style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+            {vlr != null && vlr !== '' ? fmtPesosResumenItemTab(vlr) : '—'}
           </div>
         )}
-        <div style={{ fontSize:'var(--cc-label)', fontWeight:'800', color:'#0d9488', letterSpacing:'1px', textTransform:'uppercase', marginBottom:'10px' }}>
-          ⚡ Validación masiva · {tituloNv} · {seleccionadosValidacion.length} seleccionado(s)
+        <div style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtCantResumenItemTab(sumCant)}</div>
+        {verEco && (
+          <div style={{ ...td, textAlign: 'right', color: t.primary, fontVariantNumeric: 'tabular-nums' }}>
+            {fmtPesosResumenItemTab(sumCd)}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  /** Totales de cantidad y costo directo de todo el reporte (vista portada), estilo compacto y paleta del tema. */
+  const renderResumenPortadaTotalesReporte = () => {
+    const regs = registrosVisibles
+    if (!regs.length) {
+      return (
+        <div
+          style={{
+            background: t.bgCard,
+            borderRadius: 10,
+            border: `1px solid ${t.border}`,
+            padding: 'var(--cc-space-3) var(--cc-space-4)',
+            borderLeft: `3px solid ${t.primary}`,
+            fontSize: 'var(--cc-sm)',
+            color: t.textMuted,
+          }}
+        >
+          Aún no hay líneas en este reporte.
         </div>
-        <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap', marginBottom:'10px' }}>
-          <input type="checkbox" id={`sel-todos-val-${String(tabActiva)}`}
-            checked={todosSelVal}
-            onChange={() => {
-              if (todosSelVal) setSeleccionadosValidacion(prev => prev.filter(id => !idsElegibles.includes(id)))
-              else setSeleccionadosValidacion(prev => [...new Set([...prev, ...idsElegibles])])
-            }}
-            style={{ width:'16px', height:'16px', accentColor:'#0d9488', cursor:'pointer' }} />
-          <label htmlFor={`sel-todos-val-${String(tabActiva)}`} style={{ fontSize:'var(--cc-sm)', fontWeight:'600', color:t.text, cursor:'pointer' }}>
-            Seleccionar todos los elegibles en esta vista ({idsElegibles.length})
-          </label>
+      )
+    }
+    const conItem = regs.filter((r) => String(r.item_numero || '').trim()).length
+    const sinItem = regs.length - conItem
+    const sumCant = regs.reduce((acc, r) => acc + (Number(r.cantidad_total) || 0), 0)
+    const sumCd = regs.reduce((acc, r) => acc + (Number(r.costo_directo) || 0), 0)
+    const verEco = nivelInfo.verValoresEconomicos
+    const sep = {
+      width: 1,
+      height: 14,
+      background: t.border,
+      flexShrink: 0,
+      alignSelf: 'center',
+      opacity: 0.9,
+    }
+    const lab = (txt) => (
+      <span
+        style={{
+          fontSize: 'var(--cc-caption)',
+          fontWeight: 600,
+          color: t.textMuted,
+          textTransform: 'uppercase',
+          letterSpacing: '0.04em',
+        }}
+      >
+        {txt}
+      </span>
+    )
+
+    return (
+      <div
+        style={{
+          background: t.bgCard,
+          borderRadius: 10,
+          border: `1px solid ${t.border}`,
+          padding: 'var(--cc-space-3) var(--cc-space-4)',
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 'var(--cc-space-2) var(--cc-space-4)',
+          borderLeft: `3px solid ${t.primary}`,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+          {lab('Líneas')}
+          <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.text }}>{regs.length}</span>
         </div>
-        <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
-          {BTNS_MASIVOS.map(({ estado, icon, color }) => (
-            <button key={estado} type="button"
-              disabled={ejecutandoMasivo}
-              onClick={() => {
-                if (estado === 'Aprobado') ejecutarMasivoSeleccion(estado, null)
-                else setPopupMasivo({ estado })
-              }}
-              style={{ padding:'8px 16px', borderRadius:'8px', fontSize:'var(--cc-sm)', fontWeight:'700',
-                       cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
-                       opacity: ejecutandoMasivo ? 0.6 : 1,
-                       background:`${color}18`, color, border:`1.5px solid ${color}55` }}>
-              {icon} {estado}
-            </button>
-          ))}
+        <div style={sep} aria-hidden />
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+          {lab('Con ítem')}
+          <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.text }}>{conItem}</span>
+          <span style={{ color: t.textMuted, fontSize: 'var(--cc-caption)', padding: '0 2px' }}>·</span>
+          {lab('Sin ítem')}
+          <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.text }}>{sinItem}</span>
         </div>
+        <div style={sep} aria-hidden />
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+          {lab('Cantidad acumulada')}
+          <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.text }}>{fmtCantResumenItemTab(sumCant)}</span>
+        </div>
+        {verEco && (
+          <>
+            <div style={sep} aria-hidden />
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+              {lab('Costo directo acumulado')}
+              <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.primary }}>{fmtPesosResumenItemTab(sumCd)}</span>
+            </div>
+          </>
+        )}
       </div>
     )
   }
@@ -4118,7 +4244,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
           {/* ── TAB PORTADA ── */}
           {tabActiva === 'portada' && (
-            <div style={{ display:'flex', flexDirection:'column', gap:'20px' }}>
+            <div style={{ display:'flex', flexDirection:'column', gap:'16px' }}>
 
               {/* PANEL — Resumen por estado (N1/N2/N3 según rol) */}
               {campoEstadoResumen && (
@@ -4134,7 +4260,6 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                       { key:'No Revisado', label:'No revisado' },
                     ].map(({ key, label }) => {
                       const cnt = conteoPortadaResumen[key] ?? 0
-                      const COLOR_CNT = { 'No Revisado':'#3B82F6', 'Aprobado':'#10B981', 'Pendiente':'#F59E0B', 'Rechazado':'#EF4444' }
                       const activo = portadaResumenEstado === key
                       const puedeClic = cnt > 0
                       return (
@@ -4142,11 +4267,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           disabled={!puedeClic}
                           onClick={() => setPortadaResumenEstado(activo ? null : key)}
                           style={{
-                            display:'flex', alignItems:'center', gap:'6px', background: activo ? `${COLOR_CNT[key]}22` : t.bg,
-                            border:`1px solid ${activo ? COLOR_CNT[key] : t.border}`, borderRadius:'20px', padding:'6px 14px',
+                            display:'flex', alignItems:'center', gap:'6px', background: activo ? `${t.primary}14` : t.bg,
+                            border:`1px solid ${activo ? t.primary : t.border}`, borderRadius:'20px', padding:'6px 14px',
                             cursor: puedeClic ? 'pointer' : 'default', opacity: puedeClic ? 1 : 0.55,
                           }}>
-                          <span style={{ width:'8px', height:'8px', borderRadius:'50%', background: COLOR_CNT[key], flexShrink:0 }} />
+                          <span style={{ width:'8px', height:'8px', borderRadius:'50%', background: activo ? t.primary : t.border, flexShrink:0 }} />
                           <span style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:t.text }}>{cnt}</span>
                           <span style={{ fontSize:'var(--cc-label)', color:t.textMuted }}>{label}</span>
                         </button>
@@ -4162,24 +4287,24 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                         <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap' }}>
                           {puedeMasivaNivel && portadaResumenEstado !== 'Aprobado' && idsPortadaResumenMasivoElegibles.length > 0 && (
                             <>
-                              <span style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:'#0d9488' }}>Masivo N{nivelInfo.nivelValidacion}:</span>
+                              <span style={{ fontSize: 'var(--cc-caption)', fontWeight: 700, color: t.textMuted }}>Masivo N{nvMasivo}:</span>
                               <button type="button" disabled={ejecutandoMasivo}
                                 onClick={() => ejecutarMasivoSeleccion('Aprobado', null, idsPortadaResumenMasivoElegibles)}
                                 style={{ padding:'5px 12px', borderRadius:'8px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
-                                  opacity: ejecutandoMasivo ? 0.6 : 1, background:'#16a34a18', color:'#16a34a', border:'1.5px solid #16a34a55' }}>
-                                ✅ Todos aprobados ({idsPortadaResumenMasivoElegibles.length})
+                                  opacity: ejecutandoMasivo ? 0.6 : 1, background: t.bg, color: t.text, border:`1px solid ${t.border}` }}>
+                                Aprobar todos ({idsPortadaResumenMasivoElegibles.length})
                               </button>
                               <button type="button" disabled={ejecutandoMasivo}
                                 onClick={() => setPopupMasivo({ estado: 'Pendiente', idsOverride: idsPortadaResumenMasivoElegibles })}
                                 style={{ padding:'5px 12px', borderRadius:'8px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
-                                  opacity: ejecutandoMasivo ? 0.6 : 1, background:'#d9770618', color:'#d97706', border:'1.5px solid #d9770655' }}>
-                                🟡 Todos pendiente
+                                  opacity: ejecutandoMasivo ? 0.6 : 1, background: t.bg, color: t.text, border:`1px solid ${t.border}` }}>
+                                Pendiente todos
                               </button>
                               <button type="button" disabled={ejecutandoMasivo}
                                 onClick={() => setPopupMasivo({ estado: 'Rechazado', idsOverride: idsPortadaResumenMasivoElegibles })}
                                 style={{ padding:'5px 12px', borderRadius:'8px', fontSize:'var(--cc-label)', fontWeight:'700', cursor: ejecutandoMasivo ? 'not-allowed' : 'pointer',
-                                  opacity: ejecutandoMasivo ? 0.6 : 1, background:'#dc262618', color:'#dc2626', border:'1.5px solid #dc262655' }}>
-                                🔴 Todos rechazados
+                                  opacity: ejecutandoMasivo ? 0.6 : 1, background: t.bg, color: t.text, border:`1px solid ${t.border}` }}>
+                                Rechazar todos
                               </button>
                             </>
                           )}
@@ -4222,6 +4347,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   )}
                 </div>
               )}
+
+              {renderResumenPortadaTotalesReporte()}
 
               {/* GRUPO 2 — Identificación del Reporte */}
               <div style={{ background:t.bgCard, borderRadius:'10px', padding:'16px', border:`1px solid ${t.border}` }}>
@@ -4555,14 +4682,13 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           {/* ── TAB SIN ASIGNAR ÍTEM ── */}
           {tabActiva === 'sin_asignar' && (
             <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
-              {renderBarraValidacionMasiva(regsSinAsignar)}
+              {renderResumenEconomicoLineaItem(regsSinAsignar, 'sin_asignar')}
               {regsSinAsignar.length === 0 ? (
                 <div style={{ textAlign:'center', padding:'40px', color:t.textMuted }}>
                   ✅ Todos los registros tienen ítem asignado
                 </div>
               ) : regsSinAsignar.map(reg => {
                 const expandido = registroExpandido != null && String(registroExpandido) === String(reg.id)
-                const puedeMarcarVal = puedeMasivaNivel && regCumplePrereqMasivoNivel(reg)
                 const fechaReg = (() => { try { const ts=reg.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()
                 const colorNivel = st => st === 'Aprobado' ? '#10B981' : st === 'Pendiente' ? '#F59E0B' : st === 'Rechazado' ? '#EF4444' : st === 'No Objeto de Cobro' ? '#374151' : '#3B82F6'
                 const nivelesInfo = [
@@ -4578,15 +4704,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   <div key={reg.id} id={`registro-${reg.id}`}>
                     <div
                       onClick={() => setRegistroExpandido(expandido ? null : reg.id)}
-                      style={{ display:'flex', alignItems:'center', gap:'10px', background:'#D9770626', border:`1px solid ${expandido ? '#D97706' : '#D9770644'}`, borderLeft:'3px solid #D97706', borderRadius: expandido ? '10px 10px 0 0' : '10px', padding:'10px 16px', cursor:'pointer', transition:'border 0.15s' }}
+                      style={{ display:'flex', alignItems:'center', gap:'8px', background:'#D9770626', border:`1px solid ${expandido ? '#D97706' : '#D9770644'}`, borderLeft:'3px solid #D97706', borderRadius: expandido ? '10px 10px 0 0' : '10px', padding:'8px 12px', cursor:'pointer', transition:'border 0.15s' }}
                     >
-                      {puedeMarcarVal && (
-                        <input type="checkbox" checked={seleccionadosValidacion.includes(reg.id)}
-                          title="Seleccionar para validación masiva"
-                          onClick={e => e.stopPropagation()}
-                          onChange={() => toggleSeleccionValidacion(reg.id)}
-                          style={{ width:'15px', height:'15px', accentColor:'#0d9488', flexShrink:0 }} />
-                      )}
                       {puedeEditar && (
                         <input type="checkbox" checked={seleccionados.includes(reg.id)}
                           onClick={e => e.stopPropagation()}
@@ -4684,9 +4803,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           nivelesContrato={nivelesContrato}
                           seleccionado={seleccionados.includes(reg.id)}
                           onToggleSeleccion={() => toggleSeleccion(reg.id)}
-                          mostrarSeleccionValidacion={puedeMarcarVal}
-                          seleccionadoValidacion={seleccionadosValidacion.includes(reg.id)}
-                          onToggleSeleccionValidacion={() => toggleSeleccionValidacion(reg.id)}
+                          mostrarSeleccionValidacion={false}
                           onItemAsignado={recargar}
                           onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                           onOptimisticValidacion={aplicarOptimisticValidacion}
@@ -4707,10 +4824,12 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
           {/* ── TABS POR ÍTEM ── */}
           {itemsAsignados.map(itemNum => tabActiva === itemNum && (
             <div key={itemNum} style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
-              {renderBarraValidacionMasiva(registrosVisibles.filter(r => r.item_numero === itemNum))}
+              {renderResumenEconomicoLineaItem(
+                registrosVisibles.filter((r) => r.item_numero === itemNum),
+                itemNum,
+              )}
               {registrosVisibles.filter(r => r.item_numero === itemNum).map(reg => {
                 const expandido = registroExpandido != null && String(registroExpandido) === String(reg.id)
-                const puedeMarcarVal = puedeMasivaNivel && regCumplePrereqMasivoNivel(reg)
                 const fechaReg = (() => { try { const ts=reg.created_at; if (!ts) return ''; const n=/Z$|[+-]\d{2}:\d{2}$/.test(ts)?ts:ts+'Z'; const d=new Date(n); return isNaN(d)?'':d.toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) } catch{return ''} })()
                 const colorNivel = st => st === 'Aprobado' ? '#10B981' : st === 'Pendiente' ? '#F59E0B' : st === 'Rechazado' ? '#EF4444' : st === 'No Objeto de Cobro' ? '#374151' : '#3B82F6'
                 const nivelesInfo = [
@@ -4726,15 +4845,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                   <div key={reg.id} id={`registro-${reg.id}`}>
                     <div
                       onClick={() => setRegistroExpandido(expandido ? null : reg.id)}
-                      style={{ display:'flex', alignItems:'center', gap:'10px', background:'#D9770626', border:`1px solid ${expandido ? '#D97706' : '#D9770644'}`, borderLeft:'3px solid #D97706', borderRadius: expandido ? '10px 10px 0 0' : '10px', padding:'10px 16px', cursor:'pointer', transition:'border 0.15s' }}
+                      style={{ display:'flex', alignItems:'center', gap:'8px', background:'#D9770626', border:`1px solid ${expandido ? '#D97706' : '#D9770644'}`, borderLeft:'3px solid #D97706', borderRadius: expandido ? '10px 10px 0 0' : '10px', padding:'8px 12px', cursor:'pointer', transition:'border 0.15s' }}
                     >
-                      {puedeMarcarVal && (
-                        <input type="checkbox" checked={seleccionadosValidacion.includes(reg.id)}
-                          title="Seleccionar para validación masiva"
-                          onClick={e => e.stopPropagation()}
-                          onChange={() => toggleSeleccionValidacion(reg.id)}
-                          style={{ width:'15px', height:'15px', accentColor:'#0d9488', flexShrink:0 }} />
-                      )}
                       {puedeEditar && (
                         <input type="checkbox" checked={seleccionados.includes(reg.id)}
                           onClick={e => e.stopPropagation()}
@@ -4834,9 +4946,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                           nivelesContrato={nivelesContrato}
                           seleccionado={seleccionados.includes(reg.id)}
                           onToggleSeleccion={() => toggleSeleccion(reg.id)}
-                          mostrarSeleccionValidacion={puedeMarcarVal}
-                          seleccionadoValidacion={seleccionadosValidacion.includes(reg.id)}
-                          onToggleSeleccionValidacion={() => toggleSeleccionValidacion(reg.id)}
+                          mostrarSeleccionValidacion={false}
                           onItemAsignado={recargar}
                           onRefrescarListadoSicoe={onRefrescarListadoSicoe}
                           onOptimisticValidacion={aplicarOptimisticValidacion}
@@ -5218,6 +5328,16 @@ function ModuloSicoeObra({
   const [cargandoAnalisis, setCargandoAnalisis] = useState(false)
   const [panelExpandido, setPanelExpandido] = useState(false)
   const [busquedaRealizada, setBusquedaRealizada] = useState(false)
+  /** Los resultados actuales corresponden a la última pulsación de «Buscar»; al cambiar criterios se invalidan. */
+  const sicoeMarcarFiltrosPendientesBuscar = () => {
+    setBusquedaRealizada(false)
+    setReportes([])
+    setHayMas(false)
+    setOffsetActual(0)
+    setAnalisis(null)
+    setCargandoAnalisis(false)
+    setPanelExpandido(false)
+  }
   const [popupMasivoFiltro, setPopupMasivoFiltro] = useState(null)
   /** Vista previa + selección antes de validar masivo (mismo universo que el API). */
   const [modalMasivoFiltroConfirm, setModalMasivoFiltroConfirm] = useState(null)
@@ -5254,14 +5374,13 @@ function ModuloSicoeObra({
   const isOfflineReadyRef = useRef(isOfflineReady)
   efectivoOfflineRef.current = efectivoOffline
   isOfflineReadyRef.current = isOfflineReady
-  /** Refinamiento en servidor tras una búsqueda base (observación / nodo inicio o final). */
+  /** Observación / nodo (se envían al backend con «Buscar»). */
   const [sicoeFiltroObs, setSicoeFiltroObs] = useState('')
   const [sicoeFiltroNodo, setSicoeFiltroNodo] = useState('')
   const sicoeFiltroObsRef = useRef('')
   const sicoeFiltroNodoRef = useRef('')
   useEffect(() => { sicoeFiltroObsRef.current = sicoeFiltroObs }, [sicoeFiltroObs])
   useEffect(() => { sicoeFiltroNodoRef.current = sicoeFiltroNodo }, [sicoeFiltroNodo])
-  const hadSicoeRefineRef = useRef(false)
 
   /** Panel de filtros SICOE (todo el bloque) colapsable. */
   const [sicoeFiltrosPanelOpen, setSicoeFiltrosPanelOpen] = useState(true)
@@ -5384,7 +5503,8 @@ function ModuloSicoeObra({
     setFiltros((f) => (f.subcontratista_id ? { ...f, subcontratista_id: '' } : f))
   }, [nivelInfo.esInterventoria])
 
-  /** Sin filtros de grilla ni capa de validación → no se consulta el backend (grilla vacía). */
+  /** Sin filtros de grilla ni capa de validación → no se consulta el backend (grilla vacía).
+   *  Usa refs de chips y refinamiento (obs/nodo) para no desincronizarse con debounce / cierres viejos. */
   const tieneParametrosBusquedaSicoe = (f, capas) => {
     const ef = { ...f }
     delete ef.pendiente_item
@@ -5393,13 +5513,16 @@ function ModuloSicoeObra({
     const tieneCapa =
       capas.length > 0 &&
       sicoeSerializarCapasValidacion(capas).length > 0
-    // Cualquier campo de la barra (incl. solo abscisa) cuenta: AND entre columnas al pulsar Buscar
     const tieneGrid = Object.entries(ef).some(([_, v]) => {
       if (v === '' || v == null || v === false) return false
       return true
     })
-      || (itemsFiltroChips && itemsFiltroChips.some((x) => String(x || '').trim()))
-    return tieneCapa || tieneGrid
+    const chips = itemsFiltroChipsRef.current || []
+    const tieneChips = Array.isArray(chips) && chips.some((x) => String(x || '').trim())
+    const tieneRefinar =
+      !!(sicoeFiltroObsRef.current && String(sicoeFiltroObsRef.current).trim()) ||
+      !!(sicoeFiltroNodoRef.current && String(sicoeFiltroNodoRef.current).trim())
+    return tieneCapa || tieneGrid || tieneChips || tieneRefinar
   }
 
   const [semanaVigente,     setSemanaVigente]     = useState(null)
@@ -5531,17 +5654,6 @@ function ModuloSicoeObra({
     sicoeActaAutoOnceRef.current = false
   }, [contrato_id])
 
-  // Auto-buscar desde caché cuando se activa el modo offline manual
-  // Llama tanto a la grilla como al panel dinámico
-  useEffect(() => {
-    if (efectivoOffline && isOfflineReady && tieneParametrosBusquedaSicoe(filtros, capasValidacion)) {
-      const capas = capasValidacion.length > 0 ? capasValidacion : capasInicialesValidacionFromUser(usuario, nivelesContrato, contrato_id)
-      buscarReportes(filtros, 0, capas)
-      cargarAnalisis(filtros, capas)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [efectivoOffline])
-
   useEffect(() => {
     if (!contrato_id) {
       setSicoeMatrizSync({ actaRpo: '', filtro: '' })
@@ -5595,16 +5707,23 @@ function ModuloSicoeObra({
     if (oNod) params.append('q_nodo', oNod)
   }
 
-  /** Detalle del reporte: siempre todas las líneas (`GET …/reportes/{id}` sin `aplicar_filtros_busqueda`).
-   *  La grilla solo exige que exista al menos una línea que cumpla los filtros; volver a aplicar el mismo
-   *  AND en el detalle dejaba el modal con 0 registros y el resumen por nivel en ceros. El foco por
-   *  capa de validación (p. ej. Nivel 4) sigue en CarpetaReporte (`registrosMostrados` por prerrequisitos del nivel). */
-  const urlReporteDetalle = (repId) => {
-    return `${API_URL}/sicoe-obra/${contrato_id}/reportes/${repId}`
+  /** Siempre el GET canónico del reporte (carga fiable). */
+  const urlReporteDetalleSimple = (repId) =>
+    `${API_URL}/sicoe-obra/${contrato_id}/reportes/${repId}`
+
+  /** Segundo GET opcional: mismos criterios que la grilla; null si no aplica. */
+  const urlReporteDetalleFiltradoSiAplica = (repId) => {
+    if (!busquedaRealizada || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) return null
+    const params = new URLSearchParams()
+    params.set('aplicar_filtros_busqueda', 'true')
+    sicoeAppendParamsBusquedaActivos(params)
+    const qs = params.toString()
+    if (!qs) return null
+    return `${urlReporteDetalleSimple(repId)}?${qs}`
   }
 
-  const urlReporteDetalleRef = useRef(urlReporteDetalle)
-  urlReporteDetalleRef.current = urlReporteDetalle
+  const urlReporteDetalleRef = useRef(urlReporteDetalleSimple)
+  urlReporteDetalleRef.current = urlReporteDetalleSimple
 
   const buscarReportes = async (nuevosFiltros, nuevoOffset = 0, capas = [], capasOpParam) => {
     const capasOpEff = capasOpParam ?? capasValidacionOpRef.current
@@ -5742,10 +5861,9 @@ function ModuloSicoeObra({
   }
 
   const ejecutarRefrescoSicoe = async (capasEfectivas) => {
-    await Promise.all([
-      buscarReportes(filtros, 0, capasEfectivas),
-      cargarAnalisis(filtros, capasEfectivas),
-    ]).catch(() => {})
+    try {
+      await ejecutarBusquedaSicoeCompleta(filtros, capasEfectivas)
+    } catch { /* ignore */ }
   }
 
   const sicoeCerrarSyncOfferContinuarLocal = async () => {
@@ -5856,7 +5974,10 @@ function ModuloSicoeObra({
     const capasOpEff = capasOpParam ?? capasValidacionOpRef.current
     const seq = ++sicoeAnalisisSeqRef.current
     if (!tieneParametrosBusquedaSicoe(nuevosFiltros, capas)) {
-      if (seq === sicoeAnalisisSeqRef.current) setAnalisis(null)
+      if (seq === sicoeAnalisisSeqRef.current) {
+        setAnalisis(null)
+        setCargandoAnalisis(false)
+      }
       return
     }
     setCargandoAnalisis(true)
@@ -5931,6 +6052,18 @@ function ModuloSicoeObra({
     } finally {
       if (seq === sicoeAnalisisSeqRef.current) setCargandoAnalisis(false)
     }
+  }
+
+  /**
+   * Grilla + panel en paralelo: antes iban en serie (T_buscar + T_analisis), hasta varios minutos sin feedback útil.
+   * Mismo criterio de filtros en ambas peticiones; el tiempo total tiende a max(T_buscar, T_analisis).
+   * Doble carga simultánea en API: aceptable frente a esperar el doble en cola.
+   */
+  const ejecutarBusquedaSicoeCompleta = async (f, capas, capasOpParam) => {
+    await Promise.all([
+      buscarReportes(f, 0, capas, capasOpParam),
+      cargarAnalisis(f, capas, capasOpParam),
+    ])
   }
 
   const actualizarFiltrosDisponibles = async (filtrosActivos) => {
@@ -6162,8 +6295,7 @@ function ModuloSicoeObra({
       if (data.alerta_topografia || data.alerta_objeto_sub || data.alerta_tope || data.omitidos_topografia || data.excluidos_objeto_pago_sub) {
         window.alert(msgOk)
       }
-      buscarReportes(filtros, 0, capasValidacion)
-      cargarAnalisis(filtros, capasValidacion)
+      await ejecutarBusquedaSicoeCompleta(filtros, capasValidacion)
     } catch (e) {
       setMsgMasivoFiltro(`Error: ${e?.message || String(e)}`)
       window.alert(`Validación masiva: ${e?.message || String(e)}`)
@@ -6256,23 +6388,15 @@ function ModuloSicoeObra({
       ? nvMasivoPanelGrilla >= 1 && nvMasivoPanelGrilla <= 3
       : nvMasivoPanelGrilla >= 2 && nvMasivoPanelGrilla <= 6)
 
-  // Auto-buscar al montar: acta alineada a la matriz del dashboard + capas por rol (mismo universo de líneas con ítem).
-  // En modo offline este efecto se omite: el auto-search de [efectivoOffline] ya maneja la carga desde caché.
+  // Al montar / cambiar contrato: alinear acta RPO con la matriz del dashboard (sin disparar búsqueda; el usuario pulsa Buscar).
   useEffect(() => {
     if (!contrato_id || sicoeMatrizSync === null) return
-    if (efectivoOfflineRef.current) return   // offline: no interferir con la carga desde caché
-    const capasIniciales = capasInicialesValidacionFromUser(usuario, nivelesContrato, contrato_id)
-    if (capasIniciales.length === 0) return
     const ar = sicoeMatrizSync.actaRpo
     const base = { ...filtrosSicoeRef.current }
-    let fMerged = base
     if (ar && !sicoeActaAutoOnceRef.current && !String(base.acta_rpo || '').trim()) {
-      fMerged = { ...base, acta_rpo: ar }
       sicoeActaAutoOnceRef.current = true
-      setFiltros(fMerged)
+      setFiltros({ ...base, acta_rpo: ar })
     }
-    buscarReportes(fMerged, 0, capasIniciales)
-    cargarAnalisis(fMerged, capasIniciales)
   }, [contrato_id, sicoeMatrizSync, usuario?.id, usuario?.rol_id, usuario?.cargo_id, usuario?.contrato_id, usuario?.permisos])
 
   buscarReportesSicoeRef.current = buscarReportes
@@ -6377,37 +6501,52 @@ function ModuloSicoeObra({
     )
     setModalCarpeta(true)
     try {
-      const u = urlReporteDetalle(rid)
-      const r = await fetch(u, { headers: { Authorization: `Bearer ${getToken()}` } })
-      const data = await r.json()
-      if (data?.id) {
+      const urlS = urlReporteDetalleSimple(rid)
+      const r = await fetch(urlS, { headers: { Authorization: `Bearer ${getToken()}` } })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok || !data?.id) {
+        setReporteSeleccionado((prev) =>
+          prev && prev.id === rid ? { ...prev, _cargandoDetalle: false, registros: [], puntos: [] } : prev,
+        )
+        return
+      }
+      let merged = { ...data }
+      const uf = urlReporteDetalleFiltradoSiAplica(rid)
+      if (uf && uf !== urlS) {
+        try {
+          const rf = await fetch(uf, { headers: { Authorization: `Bearer ${getToken()}` } })
+          const df = await rf.json().catch(() => ({}))
+          if (rf.ok && df?.id && Array.isArray(df.registros)) {
+            const regF = String(filtrosSicoeRef.current?.numero_registro ?? '').trim()
+            const regMatch = regF ? sicoeBuscarRegistroPorNumeroFiltro(df.registros, regF) : null
+            merged = {
+              ...data,
+              registros: df.registros,
+              puntos: Array.isArray(df.puntos) ? df.puntos : data.puntos,
+              registros_vista_filtrada: df.registros_vista_filtrada,
+              ...(regMatch ? { _autoRegistro: regMatch.id } : {}),
+            }
+          } else {
+            const regF = String(filtrosSicoeRef.current?.numero_registro ?? '').trim()
+            const regMatch = regF ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regF) : null
+            merged = { ...data, ...(regMatch ? { _autoRegistro: regMatch.id } : {}) }
+          }
+        } catch {
+          const regF = String(filtrosSicoeRef.current?.numero_registro ?? '').trim()
+          const regMatch = regF ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regF) : null
+          merged = { ...data, ...(regMatch ? { _autoRegistro: regMatch.id } : {}) }
+        }
+      } else {
         const regF = String(filtrosSicoeRef.current?.numero_registro ?? '').trim()
         const regMatch = regF ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regF) : null
-        setReporteSeleccionado({
-          ...data,
-          _cargandoDetalle: false,
-          ...(regMatch ? { _autoRegistro: regMatch.id } : {}),
-        })
+        merged = { ...data, ...(regMatch ? { _autoRegistro: regMatch.id } : {}) }
       }
+      setReporteSeleccionado({
+        ...merged,
+        _cargandoDetalle: false,
+      })
     } catch { /* ignore */ }
   }
-
-  useEffect(() => {
-    if (!contrato_id) return
-    if (!tieneParametrosBusquedaSicoe(filtrosSicoeRef.current, capasSicoeRef.current)) return
-    const hasR = !!(sicoeFiltroObs?.trim() || sicoeFiltroNodo?.trim())
-    if (!hasR) {
-      if (!hadSicoeRefineRef.current) return
-      hadSicoeRefineRef.current = false
-    } else {
-      hadSicoeRefineRef.current = true
-    }
-    const t = setTimeout(() => {
-      buscarReportes(filtrosSicoeRef.current, 0, capasSicoeRef.current)
-      cargarAnalisis(filtrosSicoeRef.current, capasSicoeRef.current)
-    }, 400)
-    return () => clearTimeout(t)
-  }, [sicoeFiltroObs, sicoeFiltroNodo, contrato_id])
 
   /** Vuelve un nivel en el panel (ítem → capítulo → vista general) sin limpiar el resto de filtros. */
   const volverPanelAnterior = async () => {
@@ -6431,9 +6570,8 @@ function ModuloSicoeObra({
     } else {
       return
     }
+    sicoeMarcarFiltrosPendientesBuscar()
     setFiltros(nf)
-    await buscarReportes(nf, 0, capasValidacion)
-    await cargarAnalisis(nf, capasValidacion)
   }
   const puedeVolverPanel = !!(
     String(filtros.item || '').trim() ||
@@ -6764,7 +6902,6 @@ function ModuloSicoeObra({
   ])
 
   const limpiarFiltros = () => {
-    hadSicoeRefineRef.current = false
     setSicoeMapaFiltroAbierto(false)
     setSicoeFiltroObs('')
     setSicoeFiltroNodo('')
@@ -7075,7 +7212,10 @@ function ModuloSicoeObra({
     setExportSeleccionCampos(prev => prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c])
   }
 
-  const setF = (k, v) => setFiltros(prev => ({ ...prev, [k]: v }))
+  const setF = (k, v) => {
+    sicoeMarcarFiltrosPendientesBuscar()
+    setFiltros((prev) => ({ ...prev, [k]: v }))
+  }
 
   /** Debounce del input «Ítem» (sugerencias vía `/sicoe-obra/.../filtros/items`): solo red después de dejar de escribir. */
   const SICOE_FILTROS_ITEMS_DEBOUNCE_MS = 400
@@ -7116,7 +7256,7 @@ function ModuloSicoeObra({
 
   const inpStyle = { background: t.inputBg, border: `1px solid ${t.border}`, borderRadius: '7px', padding: '5px 9px', color: t.text, fontSize: 'var(--cc-sm)', outline: 'none' }
   const selStyle = { ...inpStyle, cursor: 'pointer' }
-  const sicoePuedeRefinar = busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, capasValidacion)
+  const sicoePuedeRefinar = true
   const sicoeAvisoCapasYImposibleMismoNivel = useMemo(() => {
     if (capasValidacion.length < 2 || capasValidacionOp !== 'and') return ''
     if (!sicoeCapasMismoCampoValidacionNiveles(capasValidacion)) return ''
@@ -7320,10 +7460,7 @@ function ModuloSicoeObra({
                       capasValidacionOpRef.current = 'or'
                       setCapaTemp({ nivel: '', estado: '' })
                       setSicoeModalCombCapas(null)
-                      if (busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, nextCapas)) {
-                        buscarReportes(filtros, 0, nextCapas, 'or')
-                        cargarAnalisis(filtros, nextCapas, 'or')
-                      }
+                      sicoeMarcarFiltrosPendientesBuscar()
                     }}
                     style={{ flex: '1 1 160px', background: t.primary, border: 'none', borderRadius: '10px', padding: '12px 16px', color: '#fff', fontWeight: '800', cursor: 'pointer' }}
                   >O — cualquiera (recomendado)</button>
@@ -7337,10 +7474,7 @@ function ModuloSicoeObra({
                       capasValidacionOpRef.current = 'and'
                       setCapaTemp({ nivel: '', estado: '' })
                       setSicoeModalCombCapas(null)
-                      if (busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, nextCapas)) {
-                        buscarReportes(filtros, 0, nextCapas, 'and')
-                        cargarAnalisis(filtros, nextCapas, 'and')
-                      }
+                      sicoeMarcarFiltrosPendientesBuscar()
                     }}
                     style={{ flex: '1 1 140px', background: t.bg, border: `2px solid ${t.border}`, borderRadius: '10px', padding: '12px 16px', color: t.textMuted, fontWeight: '800', cursor: 'pointer' }}
                   >Y — todas</button>
@@ -7357,10 +7491,7 @@ function ModuloSicoeObra({
                       capasValidacionOpRef.current = 'and'
                       setCapaTemp({ nivel: '', estado: '' })
                       setSicoeModalCombCapas(null)
-                      if (busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, nextCapas)) {
-                        buscarReportes(filtros, 0, nextCapas, 'and')
-                        cargarAnalisis(filtros, nextCapas, 'and')
-                      }
+                      sicoeMarcarFiltrosPendientesBuscar()
                     }}
                     style={{ flex: '1 1 140px', background: t.bg, border: `2px solid ${t.primary}`, borderRadius: '10px', padding: '12px 16px', color: t.primary, fontWeight: '800', cursor: 'pointer' }}
                   >Y — todas</button>
@@ -7374,10 +7505,7 @@ function ModuloSicoeObra({
                       capasValidacionOpRef.current = 'or'
                       setCapaTemp({ nivel: '', estado: '' })
                       setSicoeModalCombCapas(null)
-                      if (busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, nextCapas)) {
-                        buscarReportes(filtros, 0, nextCapas, 'or')
-                        cargarAnalisis(filtros, nextCapas, 'or')
-                      }
+                      sicoeMarcarFiltrosPendientesBuscar()
                     }}
                     style={{ flex: '1 1 160px', background: t.primary, border: 'none', borderRadius: '10px', padding: '12px 16px', color: '#fff', fontWeight: '800', cursor: 'pointer' }}
                   >O — cualquiera</button>
@@ -7506,9 +7634,8 @@ function ModuloSicoeObra({
                           setItemsFiltroOp('and')
                           itemsFiltroOpRef.current = 'and'
                           const newF = { ...filtros, item: g.label }
+                          sicoeMarcarFiltrosPendientesBuscar()
                           setFiltros(newF)
-                          buscarReportes(newF, 0, capasValidacion)
-                          cargarAnalisis(newF, capasValidacion)
                         }}
                         style={{ borderBottom:`1px solid ${t.border}22`, cursor:'pointer' }}
                         onMouseEnter={e => { e.currentTarget.style.background = t.bg + '88' }}
@@ -7693,9 +7820,8 @@ function ModuloSicoeObra({
                         setItemsFiltroOp('and')
                         itemsFiltroOpRef.current = 'and'
                         const newF = { ...filtros, capitulo: g.label, item: '' }
+                        sicoeMarcarFiltrosPendientesBuscar()
                         setFiltros(newF)
-                        buscarReportes(newF, 0, capasValidacion)
-                        cargarAnalisis(newF, capasValidacion)
                       }} style={{ borderBottom:`1px solid ${t.border}22`, cursor:'pointer' }}
                       onMouseEnter={e => e.currentTarget.style.background = t.bg + '88'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
@@ -7818,7 +7944,7 @@ function ModuloSicoeObra({
             <button type="button" onClick={() => {
               const hayFiltros = Object.values(filtros).some(v => v !== '') || capasValidacion.length > 0
               if (!hayFiltros && nivelInfo.puedeValidar && !nivelInfo.puedeEditar && nivelInfo.nivelValidacion) return
-              buscarReportes(filtros, 0, capasValidacion); cargarAnalisis(filtros, capasValidacion)
+              void ejecutarBusquedaSicoeCompleta(filtros, capasValidacion)
             }}
               style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'6px', padding:'4px 14px', fontSize:'var(--cc-label)', fontWeight:'700', cursor:'pointer' }}>
               Buscar
@@ -7940,10 +8066,9 @@ function ModuloSicoeObra({
                   <select value={filtros.subcontratista_id} onChange={e => {
                     const v = e.target.value
                     const nf = { ...filtros, subcontratista_id: v }
+                    sicoeMarcarFiltrosPendientesBuscar()
                     setFiltros(nf)
                     actualizarFiltrosDisponibles(nf)
-                    buscarReportes(nf, 0, capasValidacion)
-                    cargarAnalisis(nf, capasValidacion)
                   }} style={{ ...selStyle, width: '100%', padding: '4px 6px', fontSize: 'var(--cc-label)', boxSizing: 'border-box' }}>
                     <option value="">—</option>
                     {filtroSubcList.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
@@ -7955,9 +8080,8 @@ function ModuloSicoeObra({
                   <div style={filtroLbl}>Estado rep.</div>
                   <select value={filtros.estado} onChange={e => {
                     const nf = { ...filtros, estado: e.target.value }
+                    sicoeMarcarFiltrosPendientesBuscar()
                     setFiltros(nf)
-                    buscarReportes(nf, 0, capasValidacion)
-                    cargarAnalisis(nf, capasValidacion)
                   }} style={{ ...selStyle, width: '100%', padding: '4px 6px', fontSize: 'var(--cc-label)', boxSizing: 'border-box' }}>
                     <option value="">—</option>
                     {(puedeEditar
@@ -7972,10 +8096,9 @@ function ModuloSicoeObra({
                 <select value={filtros.capitulo} onChange={e => {
                   const v = e.target.value
                   const nf = { ...filtros, capitulo: v }
+                  sicoeMarcarFiltrosPendientesBuscar()
                   setFiltros(nf)
                   actualizarFiltrosDisponibles(nf)
-                  buscarReportes(nf, 0, capasValidacion)
-                  cargarAnalisis(nf, capasValidacion)
                 }} style={{ ...selStyle, width: '100%', padding: '4px 6px', fontSize: 'var(--cc-label)', boxSizing: 'border-box' }}>
                   <option value="">Capítulo…</option>
                   {filtroCapList.map(c => <option key={c} value={c}>{c}</option>)}
@@ -8011,15 +8134,12 @@ function ModuloSicoeObra({
                         setF('item', '')
                         return
                       }
+                      sicoeMarcarFiltrosPendientesBuscar()
                       const nextChips = [...itemsFiltroChips, d]
                       setItemsFiltroChips(nextChips)
                       itemsFiltroChipsRef.current = nextChips
                       const nf = { ...filtros, item: '' }
                       setFiltros(nf)
-                      if (busquedaRealizada && tieneParametrosBusquedaSicoe(nf, capasValidacion)) {
-                        buscarReportes(nf, 0, capasValidacion)
-                        cargarAnalisis(nf, capasValidacion)
-                      }
                     }}
                     style={{
                       flexShrink: 0,
@@ -8060,13 +8180,10 @@ function ModuloSicoeObra({
                           type="button"
                           title="Quitar"
                           onClick={() => {
+                            sicoeMarcarFiltrosPendientesBuscar()
                             const nextChips = itemsFiltroChips.filter((x) => x !== it)
                             setItemsFiltroChips(nextChips)
                             itemsFiltroChipsRef.current = nextChips
-                            if (busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, capasValidacion)) {
-                              buscarReportes(filtros, 0, capasValidacion)
-                              cargarAnalisis(filtros, capasValidacion)
-                            }
                           }}
                           style={{
                             background: 'transparent',
@@ -8093,12 +8210,9 @@ function ModuloSicoeObra({
                       type="button"
                       onClick={() => {
                         if (itemsFiltroOp === 'and') return
+                        sicoeMarcarFiltrosPendientesBuscar()
                         setItemsFiltroOp('and')
                         itemsFiltroOpRef.current = 'and'
-                        if (busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, capasValidacion)) {
-                          buscarReportes(filtros, 0, capasValidacion)
-                          cargarAnalisis(filtros, capasValidacion)
-                        }
                       }}
                       style={{
                         fontSize: 'var(--cc-caption)', fontWeight: '800', padding: '2px 8px', borderRadius: '6px', cursor: 'pointer',
@@ -8113,12 +8227,9 @@ function ModuloSicoeObra({
                       type="button"
                       onClick={() => {
                         if (itemsFiltroOp === 'or') return
+                        sicoeMarcarFiltrosPendientesBuscar()
                         setItemsFiltroOp('or')
                         itemsFiltroOpRef.current = 'or'
-                        if (busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, capasValidacion)) {
-                          buscarReportes(filtros, 0, capasValidacion)
-                          cargarAnalisis(filtros, capasValidacion)
-                        }
                       }}
                       style={{
                         fontSize: 'var(--cc-caption)', fontWeight: '800', padding: '2px 8px', borderRadius: '6px', cursor: 'pointer',
@@ -8142,19 +8253,17 @@ function ModuloSicoeObra({
                           const d = String(s.item_numero || '').trim()
                           if (!d) return
                           if (itemsFiltroChips.some((x) => x === d)) {
+                            sicoeMarcarFiltrosPendientesBuscar()
                             const nf = { ...filtros, item: '' }
                             setFiltros(nf)
                             return
                           }
+                          sicoeMarcarFiltrosPendientesBuscar()
                           const nextChips = [...itemsFiltroChips, d]
                           setItemsFiltroChips(nextChips)
                           itemsFiltroChipsRef.current = nextChips
                           const nf = { ...filtros, item: '' }
                           setFiltros(nf)
-                          if (busquedaRealizada && tieneParametrosBusquedaSicoe(nf, capasValidacion)) {
-                            buscarReportes(nf, 0, capasValidacion)
-                            cargarAnalisis(nf, capasValidacion)
-                          }
                         }}
                         style={{ padding: '7px 12px', cursor: 'pointer', fontSize: 'var(--cc-sm)', borderBottom: `1px solid ${t.border}22`, display: 'flex', gap: '8px', alignItems: 'baseline' }}>
                         <span style={{ color: t.primary, fontWeight: '700', whiteSpace: 'nowrap' }}>{s.item_numero}</span>
@@ -8232,6 +8341,7 @@ function ModuloSicoeObra({
                     if (capasValidacion.length >= 1) {
                       setSicoeModalCombCapas({ pending: nueva })
                     } else {
+                      sicoeMarcarFiltrosPendientesBuscar()
                       setCapasValidacion((p) => [...p, nueva])
                       setCapaTemp({ nivel: '', estado: '' })
                     }
@@ -8251,12 +8361,9 @@ function ModuloSicoeObra({
                     <button type="button"
                       onClick={() => {
                         if (capasValidacionOp === 'and') return
+                        sicoeMarcarFiltrosPendientesBuscar()
                         setCapasValidacionOp('and')
                         capasValidacionOpRef.current = 'and'
-                        if (busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, capasValidacion)) {
-                          buscarReportes(filtros, 0, capasValidacion, 'and')
-                          cargarAnalisis(filtros, capasValidacion, 'and')
-                        }
                       }}
                       style={{
                         fontSize: 'var(--cc-caption)', fontWeight: '800', padding: '2px 8px', borderRadius: '6px', cursor: 'pointer', border: `1px solid ${capasValidacionOp === 'and' ? t.primary : t.border}`,
@@ -8267,12 +8374,9 @@ function ModuloSicoeObra({
                     <button type="button"
                       onClick={() => {
                         if (capasValidacionOp === 'or') return
+                        sicoeMarcarFiltrosPendientesBuscar()
                         setCapasValidacionOp('or')
                         capasValidacionOpRef.current = 'or'
-                        if (busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, capasValidacion)) {
-                          buscarReportes(filtros, 0, capasValidacion, 'or')
-                          cargarAnalisis(filtros, capasValidacion, 'or')
-                        }
                       }}
                       style={{
                         fontSize: 'var(--cc-caption)', fontWeight: '800', padding: '2px 8px', borderRadius: '6px', cursor: 'pointer', border: `1px solid ${capasValidacionOp === 'or' ? t.primary : t.border}`,
@@ -8289,27 +8393,21 @@ function ModuloSicoeObra({
                     {(c.nivel != null ? (encabezadoPorNivelFiltro[c.nivel] || `Nivel ${c.nivel}`) : c.cargo_nombre)}: {c.estado}
                     <span role="button" tabIndex={0}
                       onClick={() => {
+                        sicoeMarcarFiltrosPendientesBuscar()
                         const n = capasValidacion.filter((_, j) => j !== i)
                         const opEff = n.length <= 1 ? 'and' : capasValidacionOp
                         setCapasValidacion(n)
                         if (n.length <= 1) setCapasValidacionOp('and')
                         capasValidacionOpRef.current = opEff
-                        if (busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, n)) {
-                          buscarReportes(filtros, 0, n, opEff)
-                          cargarAnalisis(filtros, n, opEff)
-                        }
                       }}
                       onKeyDown={(e) => {
                         if (e.key !== 'Enter') return
+                        sicoeMarcarFiltrosPendientesBuscar()
                         const n = capasValidacion.filter((_, j) => j !== i)
                         const opEff = n.length <= 1 ? 'and' : capasValidacionOp
                         setCapasValidacion(n)
                         if (n.length <= 1) setCapasValidacionOp('and')
                         capasValidacionOpRef.current = opEff
-                        if (busquedaRealizada && tieneParametrosBusquedaSicoe(filtros, n)) {
-                          buscarReportes(filtros, 0, n, opEff)
-                          cargarAnalisis(filtros, n, opEff)
-                        }
                       }}
                       style={{ cursor: 'pointer', color: '#ef4444', fontWeight: '700' }}>×</span>
                   </span>
@@ -8320,7 +8418,10 @@ function ModuloSicoeObra({
                 <input
                   placeholder="Texto…"
                   value={sicoeFiltroObs}
-                  onChange={e => setSicoeFiltroObs(e.target.value)}
+                  onChange={(e) => {
+                    sicoeMarcarFiltrosPendientesBuscar()
+                    setSicoeFiltroObs(e.target.value)
+                  }}
                   style={{ ...inpStyle, width: '100%', boxSizing: 'border-box', padding: '4px 8px', fontSize: 'var(--cc-label)' }}
                 />
               </div>
@@ -8329,7 +8430,10 @@ function ModuloSicoeObra({
                 <input
                   placeholder="Texto…"
                   value={sicoeFiltroNodo}
-                  onChange={e => setSicoeFiltroNodo(e.target.value)}
+                  onChange={(e) => {
+                    sicoeMarcarFiltrosPendientesBuscar()
+                    setSicoeFiltroNodo(e.target.value)
+                  }}
                   style={{ ...inpStyle, width: '100%', boxSizing: 'border-box', padding: '4px 8px', fontSize: 'var(--cc-label)' }}
                 />
               </div>
@@ -8343,9 +8447,7 @@ function ModuloSicoeObra({
               </div>
             ) : null}
             <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: '6px', lineHeight: 1.35 }}>
-              {sicoePuedeRefinar
-                ? 'Refinar: panel y grilla se actualizan al escribir (~0,4 s). Añade capas «Nivel de validación + Estado» y ＋; con varias capas elige Y (todas) u O (cualquiera).'
-                : 'Refinar: activo tras buscar con criterios. Validación: elige nivel activo del contrato y estado, luego ＋. La segunda capa abre el panel para combinar con Y u O.'}
+              La grilla y el panel de análisis se actualizan solo al pulsar <strong>Buscar</strong> (o <strong>Actualizar</strong> / «Cargar más» con la búsqueda vigente). Validación: elige nivel activo del contrato y estado, luego ＋; con varias capas elige Y (todas) u O (cualquiera). Observación y nodo se envían con la misma búsqueda.
             </div>
           </div>
 
@@ -8379,9 +8481,8 @@ function ModuloSicoeObra({
                   type="button"
                   onClick={() => {
                     const nf = { ...filtros, pk_id: '' }
+                    sicoeMarcarFiltrosPendientesBuscar()
                     setFiltros(nf)
-                    buscarReportes(nf, 0, capasValidacion)
-                    cargarAnalisis(nf, capasValidacion)
                   }}
                   style={{ fontSize: 'var(--cc-caption)', color: '#ef4444', background: 'transparent', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontWeight: '700', padding: 0 }}
                 >
@@ -8444,9 +8545,8 @@ function ModuloSicoeObra({
               {filtros.pk_id ? (
                 <button type="button" onClick={() => {
                   const nf = { ...filtros, pk_id: '' }
+                  sicoeMarcarFiltrosPendientesBuscar()
                   setFiltros(nf)
-                  buscarReportes(nf, 0, capasValidacion)
-                  cargarAnalisis(nf, capasValidacion)
                 }} style={{ marginTop:'8px', fontSize:'var(--cc-label)', color:'#ef4444', background:'transparent', border:'none', cursor:'pointer', textDecoration:'underline' }}>
                   Quitar filtro de ubicación PK
                 </button>
@@ -8477,9 +8577,15 @@ function ModuloSicoeObra({
           <div>ABCISA</div>
           <div>NODO</div>
           <div>DESCRIPCIÓN</div>
-          {nivelInfo.verValoresEconomicos && <div style={{ textAlign:'right' }}>COSTO DIRECTO</div>}
+          {nivelInfo.verValoresEconomicos && (
+            <div style={{ textAlign:'right' }} title="Suma de costo directo en líneas que cumplen el filtro de búsqueda actual; al abrir la carpeta se usa la misma vista si la búsqueda sigue vigente.">
+              COSTO DIRECTO
+            </div>
+          )}
           <div>CAPÍTULO</div>
-          <div style={{ textAlign:'right' }}>REGS.</div>
+          <div style={{ textAlign:'right' }} title="Líneas que cumplen el filtro de búsqueda actual; al abrir la carpeta coinciden con el resumen si la búsqueda sigue vigente.">
+            REGS.
+          </div>
         </div>
 
         {/* Filas */}
@@ -8537,16 +8643,61 @@ function ModuloSicoeObra({
                         ...(regMatch ? { _autoRegistro: regMatch.id } : {}),
                       })
                     } else {
-                      const r = await fetch(urlReporteDetalle(rep.id), { headers: { Authorization: `Bearer ${getToken()}` } })
-                      const data = await r.json()
-                      if (data?.id) {
-                        const regMatch = regNumBusqueda
-                          ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
-                          : null
+                      const urlS = urlReporteDetalleSimple(rep.id)
+                      const r = await fetch(urlS, { headers: { Authorization: `Bearer ${getToken()}` } })
+                      const data = await r.json().catch(() => ({}))
+                      if (!r.ok || !data?.id) {
+                        setReporteSeleccionado((prev) =>
+                          prev && prev.id === rep.id ? { ...prev, _cargandoDetalle: false, registros: [], puntos: [] } : prev,
+                        )
+                      } else {
+                        let merged = { ...data }
+                        const uf = urlReporteDetalleFiltradoSiAplica(rep.id)
+                        if (uf && uf !== urlS) {
+                          try {
+                            const rf = await fetch(uf, { headers: { Authorization: `Bearer ${getToken()}` } })
+                            const df = await rf.json().catch(() => ({}))
+                            if (rf.ok && df?.id && Array.isArray(df.registros)) {
+                              const regMatchF = regNumBusqueda
+                                ? sicoeBuscarRegistroPorNumeroFiltro(df.registros, regNumBusqueda)
+                                : null
+                              merged = {
+                                ...data,
+                                registros: df.registros,
+                                puntos: Array.isArray(df.puntos) ? df.puntos : data.puntos,
+                                registros_vista_filtrada: df.registros_vista_filtrada,
+                                ...(regMatchF ? { _autoRegistro: regMatchF.id } : {}),
+                              }
+                            } else {
+                              const regMatch0 = regNumBusqueda
+                                ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
+                                : null
+                              merged = {
+                                ...data,
+                                ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
+                              }
+                            }
+                          } catch {
+                            const regMatch0 = regNumBusqueda
+                              ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
+                              : null
+                            merged = {
+                              ...data,
+                              ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
+                            }
+                          }
+                        } else {
+                          const regMatch0 = regNumBusqueda
+                            ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
+                            : null
+                          merged = {
+                            ...data,
+                            ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
+                          }
+                        }
                         setReporteSeleccionado({
-                          ...data,
+                          ...merged,
                           _cargandoDetalle: false,
-                          ...(regMatch ? { _autoRegistro: regMatch.id } : {}),
                         })
                       }
                     }
@@ -8607,7 +8758,7 @@ function ModuloSicoeObra({
         ))}
 
         {/* Footer: cargar más / spinner / fin */}
-        {reportes.length > 0 && (
+        {busquedaRealizada && reportes.length > 0 && (
           <div style={{ padding:'12px 16px', textAlign:'center', borderTop:`1px solid ${t.border}` }}>
             {cargando ? (
               <span style={{ fontSize:'var(--cc-sm)', color:t.textMuted }}>Cargando...</span>
@@ -8768,9 +8919,8 @@ function ModuloSicoeObra({
                   const pid = modalPkAsignacionMapa.pk_id_id
                   setModalPkAsignacionMapa(null)
                   const nf = { ...filtrosSicoeRef.current, pk_id: String(pid) }
+                  sicoeMarcarFiltrosPendientesBuscar()
                   setFiltros(nf)
-                  buscarReportesSicoeRef.current?.(nf, 0, capasSicoeRef.current)
-                  cargarAnalisisSicoeRef.current?.(nf, capasSicoeRef.current)
                 }}
                 style={{ padding: '8px 14px', borderRadius: '8px', border: `1px solid ${t.border}`, background: t.bg, color: t.text, cursor: 'pointer', fontWeight: '700' }}
               >
@@ -8806,9 +8956,8 @@ function ModuloSicoeObra({
                     setPkMapaGuardandoActores(false)
                     setModalPkAsignacionMapa(null)
                     const nf = { ...filtrosSicoeRef.current, pk_id: String(pid) }
+                    sicoeMarcarFiltrosPendientesBuscar()
                     setFiltros(nf)
-                    buscarReportesSicoeRef.current?.(nf, 0, capasSicoeRef.current)
-                    cargarAnalisisSicoeRef.current?.(nf, capasSicoeRef.current)
                   }}
                   style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', background: t.primary, color: '#fff', cursor: 'pointer', fontWeight: '800' }}
                 >
@@ -8828,12 +8977,12 @@ function ModuloSicoeObra({
           nivelesContrato={nivelesContrato}
           capasFiltroValidacion={capasValidacion.length > 0 ? capasValidacion : null}
           capasFiltroValidacionOp={capasValidacion.length > 1 ? capasValidacionOp : 'and'}
-          urlReporteDetalle={urlReporteDetalle}
+          urlReporteDetalle={urlReporteDetalleSimple}
+          urlReporteDetalleFiltrado={urlReporteDetalleFiltradoSiAplica}
           onClose={() => { setModalCarpeta(false); setReporteSeleccionado(null) }}
           onActualizar={() => { setModalCarpeta(false); setReporteSeleccionado(null); buscarReportes(filtros, 0, capasValidacion) }}
           onRefrescarListadoSicoe={() => {
-            void buscarReportes(filtros, 0, capasValidacion)
-            void cargarAnalisis(filtros, capasValidacion)
+            void ejecutarBusquedaSicoeCompleta(filtros, capasValidacion)
           }}
         />
       )}
@@ -12170,7 +12319,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashDetallePpto, setDashDetallePpto] = useState(null)
   const [dashDetallePptoSaving, setDashDetallePptoSaving] = useState(false)
   const [menuAbierto, setMenuAbierto] = useState(false)
-  const [tabInferior, setTabInferior] = useState('gantt')
+  const [tabInferior, setTabInferior] = useState('programacion')
   const [analisis, setAnalisis] = useState('financiero')
   const [dashTab, setDashTab] = useState('resumen')
   const [analisisNivel, setAnalisisNivel] = useState('capitulo')
@@ -13221,6 +13370,15 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const tieneModuloSst = _permisoVerFuncion('sst documental')
   const tieneModuloEnsayos = _permisoVerFuncion('ensayos pip')
   const tieneModuloAuditorSst = _permisoVerFuncion('auditor sst (ia)')
+  const tienePermisoProgramacionObra = _permisoVerFuncion('programación de obra')
+  const _progPermiso = (flag) =>
+    esDeveloper ||
+    (usuario?.permisos || []).some(
+      (p) => (p.funcion_nombre || '').toLowerCase() === 'programación de obra' && p[flag],
+    )
+  const puedeEditarProgramacionObra = _progPermiso('editar')
+  const puedeCrearProgramacionObra = _progPermiso('crear')
+  const puedeValidarProgramacionObra = _progPermiso('validar')
 
   const s = {
     app: { fontFamily: "'Segoe UI', sans-serif", background: t.bg, minHeight: '100vh', color: t.text, fontSize: 'var(--cc-body)' },
@@ -13409,7 +13567,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             ['sicoe_obra',   '🏗️', 'SICOE Obra',    tienePermisoSicoeObra],
             ['informes',     '📄', 'Informes',       tienePermisoInformesCcd],
             ['almacen',      '🏪', 'Almacén',        true],
-            ['gantt',        '📅', 'Gantt',           true],
+            ['programacion', '📅', 'Programación',   tienePermisoProgramacionObra],
             ['semaforo',     '🗺️', 'Plano Semáforo', true],
             ['guias',        '📖', 'Guías',          true],
             ['sst',          '🦺', 'SST',            tieneModuloSst],
@@ -15765,10 +15923,30 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
         {moduloActivo === 'auditor_sst' && tieneModuloAuditorSst && <ModuloAuditorSST t={t} usuario={usuario} />}
 
+        {moduloActivo === 'programacion' && (
+          tienePermisoProgramacionObra ? (
+            <ModuloProgramacionObra
+              t={t}
+              usuario={usuario}
+              token={getToken()}
+              puedeEditar={puedeEditarProgramacionObra}
+              puedeCrear={puedeCrearProgramacionObra}
+              puedeValidar={puedeValidarProgramacionObra}
+            />
+          ) : (
+            <div style={{ ...s.card, maxWidth: '560px', margin: '0 auto', textAlign: 'center', padding: '32px 24px' }}>
+              <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: t.text, marginBottom: '10px' }}>Programación de obra</div>
+              <div style={{ fontSize: 'var(--cc-body)', color: t.textMuted, lineHeight: 1.5 }}>
+                Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «Programación de obra» (acción Ver).
+              </div>
+            </div>
+          )
+        )}
+
         {/* ── Módulos próximamente ── */}
-        {['almacen','gantt'].includes(moduloActivo) && (
+        {moduloActivo === 'almacen' && (
           <div style={{ textAlign:'center', padding:'80px 20px', color:t.textMuted, fontSize:'var(--cc-md)' }}>
-            {moduloActivo === 'almacen' ? '🏪' : '📅'} Módulo próximamente
+            🏪 Módulo próximamente
           </div>
         )}
         {moduloActivo === 'semaforo' && (

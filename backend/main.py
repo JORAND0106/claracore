@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from typing import List, Optional, Any, Dict, Set, Tuple
-from collections import defaultdict
+from collections import Counter, defaultdict
 from supabase import create_client, ClientOptions
 import httpx
 from passlib.context import CryptContext
@@ -99,6 +99,37 @@ _logs_omit_lock = threading.Lock()
 
 # Versión del texto de políticas mostrada al usuario (auditoría junto a politicas_version en BD)
 POLITICAS_VERSION_DEFAULT = os.getenv("POLITICAS_VERSION", "1.0")
+
+# Columnas que no existen en `so_registros` en algunas BD (evita error PostgREST al exportar con checklist antiguo).
+_SICOE_SO_REGISTROS_SELECT_DENYLIST = frozenset({"id_pol"})
+
+
+def _sicoe_campos_registro_sin_fantasmas(campos: List[str]) -> List[str]:
+    if not campos:
+        return campos
+    return [c for c in campos if c and str(c) not in _SICOE_SO_REGISTROS_SELECT_DENYLIST]
+
+
+def _so_reportes_normalizar_payload_cabecera(data: Dict[str, Any]) -> None:
+    """
+    Ajustes in-place antes de insert/update en `so_reportes`:
+    - Abscisas invertidas → intercambio (misma intención del usuario, suele satisfacer CHECK de orden).
+    - `margen` sin espacios sobrantes (evita valores tipo 'Otro: ' vs catálogo).
+    """
+    m = data.get("margen")
+    if isinstance(m, str):
+        data["margen"] = m.strip() or None
+    a = data.get("abs_inicio")
+    b = data.get("abs_final")
+    if a is None or b is None:
+        return
+    try:
+        fa, fb = float(a), float(b)
+    except (TypeError, ValueError):
+        return
+    if fa > fb:
+        data["abs_inicio"], data["abs_final"] = fb, fa
+
 
 # Cache en memoria: evita 1 consulta a Supabase por cada request autenticado (reduce carga y latencia).
 # Invalidación al aceptar políticas. TTL por defecto 120 s (ajustable con POLITICAS_CACHE_TTL_SECONDS).
@@ -1494,6 +1525,27 @@ def require_logs_auditoria(current_user=Depends(get_current_user)):
     return current_user
 
 
+def require_solo_desarrollador(current_user=Depends(get_current_user)):
+    """Panel técnico / diagnóstico: solo cargo Desarrollador (no Administrador)."""
+    if not _es_desarrollador(current_user):
+        raise HTTPException(status_code=403, detail="Solo el cargo Desarrollador puede acceder a este recurso")
+    return current_user
+
+
+def _log_detalle_dict(row: dict) -> dict:
+    d = row.get("detalle")
+    if d is None:
+        return {}
+    if isinstance(d, dict):
+        return d
+    if isinstance(d, str):
+        try:
+            return json.loads(d) if str(d).strip() else {}
+        except Exception:
+            return {}
+    return {}
+
+
 def _query_inicio_novedades_accesibles(contrato_id_usuario: Optional[int]):
     """Novedades globales (contrato_id NULL) + las del contrato del usuario, si aplica."""
     q = supabase.table("inicio_novedades").select("*").order("created_at", desc=True)
@@ -1562,6 +1614,9 @@ app.include_router(_modulos_experimentales_router)
 
 from informes import router as informes_router
 app.include_router(informes_router, prefix="/informes")
+
+from prog_obra_routes import router as prog_obra_router
+app.include_router(prog_obra_router)
 
 # Vista previa JSON (CC-SUB-001 / CC-SUB-002): registrado aquí porque en algunos equipos el router
 # importado desde informes.py no exponía estas rutas en OpenAPI (Not Found en el cliente).
@@ -3836,6 +3891,7 @@ def listar_funciones(current_user=Depends(get_current_user)):
         {"codigo": "ENSPIP", "nombre": "Ensayos PIP", "modulo": "Laboratorio"},
         {"codigo": "NUVECC", "nombre": "Integración nube ClaraCore", "modulo": "Administración"},
         {"codigo": "AUDSST", "nombre": "Auditor SST (IA)", "modulo": "SST"},
+        {"codigo": "PROGOB", "nombre": "Programación de obra", "modulo": "Programación"},
     ]
     for req in requeridas:
         nombre_funcion = req["nombre"]
@@ -6571,6 +6627,169 @@ def get_logs_alertas(
         .data
     )
     return rows
+
+
+@app.get("/admin/diagnostico-plataforma")
+def admin_diagnostico_plataforma(current_user=Depends(require_solo_desarrollador)):
+    """
+    Resumen liviano para diagnóstico preliminar desde ClaraCore (solo Desarrollador).
+    Lecturas acotadas a `logs` y un ping mínimo a Supabase; no sustituye APM externo.
+    """
+    ahora = datetime.now(timezone.utc)
+    desde_48h = (ahora - timedelta(hours=48)).isoformat()
+    desde_24h = (ahora - timedelta(hours=24)).isoformat()
+    out: Dict[str, Any] = {
+        "generated_at": ahora.isoformat(),
+        "umbral_respuesta_lenta_ms": _SLOW_REQUEST_MS,
+        "api_worker": {
+            "ok": True,
+            "nota": "Misma idea que GET /healthz: el proceso responde sin garantizar carga útil de negocio.",
+        },
+        "version_deploy": (os.getenv("CLARACORE_GIT_SHA") or os.getenv("GIT_SHA") or "").strip() or None,
+    }
+
+    t0 = time.perf_counter()
+    sup_ok = True
+    sup_err: Optional[str] = None
+    try:
+        supabase.table("cargos").select("id").limit(1).execute()
+    except Exception as e:
+        sup_ok = False
+        sup_err = str(e)[:800]
+    out["supabase"] = {
+        "ok": sup_ok,
+        "latency_ms": int((time.perf_counter() - t0) * 1000),
+        "error": sup_err,
+    }
+
+    lentos: List[dict] = []
+    try:
+        raw_slow = (
+            supabase.table("logs")
+            .select("id,created_at,endpoint,metodo_http,duracion_ms,detalle,accion,severidad")
+            .eq("categoria", "sistema")
+            .gte("created_at", desde_48h)
+            .order("created_at", desc=True)
+            .limit(150)
+            .execute()
+            .data
+            or []
+        )
+        for r in raw_slow:
+            dd = _log_detalle_dict(r)
+            dms = r.get("duracion_ms")
+            try:
+                dms_i = int(dms) if dms is not None else 0
+            except (TypeError, ValueError):
+                dms_i = 0
+            if dd.get("tipo") == "respuesta_lenta" or dms_i >= _SLOW_REQUEST_MS:
+                lentos.append(
+                    {
+                        "id": r.get("id"),
+                        "created_at": r.get("created_at"),
+                        "endpoint": r.get("endpoint"),
+                        "metodo_http": r.get("metodo_http"),
+                        "duracion_ms": r.get("duracion_ms"),
+                    }
+                )
+            if len(lentos) >= 25:
+                break
+    except Exception as e:
+        out["respuestas_lentas_error"] = str(e)[:500]
+    out["respuestas_lentas"] = lentos
+
+    errores: List[dict] = []
+    try:
+        errores = (
+            supabase.table("logs")
+            .select("id,created_at,endpoint,accion,modulo,detalle,severidad,usuario_nombre")
+            .eq("categoria", "sistema")
+            .eq("severidad", "ERROR")
+            .gte("created_at", desde_48h)
+            .order("created_at", desc=True)
+            .limit(25)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:
+        out["errores_sistema_error"] = str(e)[:500]
+    out["errores_sistema"] = errores
+
+    alertas: List[dict] = []
+    try:
+        alertas = (
+            supabase.table("logs")
+            .select("id,created_at,accion,modulo,detalle,severidad,usuario_nombre,alerta_generada")
+            .eq("alerta_generada", True)
+            .order("created_at", desc=True)
+            .limit(20)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:
+        out["alertas_error"] = str(e)[:500]
+    out["alertas"] = alertas
+
+    auditoria_modulos: List[dict] = []
+    try:
+        rows_m = (
+            supabase.table("logs")
+            .select("modulo")
+            .eq("categoria", "auditoria")
+            .gte("created_at", desde_24h)
+            .limit(1200)
+            .execute()
+            .data
+            or []
+        )
+        cnt = Counter((x.get("modulo") or "—") for x in rows_m)
+        auditoria_modulos = [{"modulo": k, "eventos": v} for k, v in cnt.most_common(12)]
+    except Exception as e:
+        out["auditoria_por_modulo_error"] = str(e)[:500]
+    out["auditoria_por_modulo"] = auditoria_modulos
+    out["auditoria_por_modulo_nota"] = (
+        "Conteo parcial: hasta 1200 filas de auditoría en las últimas 24 h; si hay más tráfico, los totales reales son mayores."
+    )
+
+    _ep_sicoe = re.compile(r"/sicoe-obra/(\d+)")
+    contratos_en_rutas: Set[int] = set()
+    for r in lentos + errores:
+        ep = str(r.get("endpoint") or "")
+        m = _ep_sicoe.search(ep)
+        if m:
+            try:
+                contratos_en_rutas.add(int(m.group(1)))
+            except (TypeError, ValueError):
+                pass
+    c_rutas_lentas = Counter()
+    peor_ms = 0
+    for r in lentos:
+        k = f"{(r.get('metodo_http') or 'GET').strip()} {str(r.get('endpoint') or '').strip()}".strip()
+        if k:
+            c_rutas_lentas[k] += 1
+        try:
+            v = int(r.get("duracion_ms") or 0)
+        except (TypeError, ValueError):
+            v = 0
+        if v > peor_ms:
+            peor_ms = v
+    out["resumen"] = {
+        "ventana_respuestas_lentas_h": 48,
+        "ventana_errores_sistema_h": 48,
+        "ventana_auditoria_modulos_h": 24,
+        "n_respuestas_lentas_listadas": len(lentos),
+        "n_errores_sistema_listados": len(errores),
+        "n_alertas_listadas": len(alertas),
+        "peor_duracion_ms_respuestas_lentas": peor_ms if lentos else None,
+        "sicoe_contrato_ids_en_endpoints": sorted(contratos_en_rutas),
+        "rutas_mas_repetidas_en_lentas": [
+            {"ruta": k, "veces": v} for k, v in c_rutas_lentas.most_common(12)
+        ],
+    }
+
+    return out
 
 
 @app.get("/logs/export.csv")
@@ -9354,7 +9573,9 @@ def exportar_registros_sicoe(
     if not campos:
         # Permitir exportar solo virtuales; internamente se consulta llaves mínimas.
         campos = []
-    campos_aux = list(dict.fromkeys(campos + ["reporte_id", "acta_rpo_id", "semana_id"]))
+    campos_aux = _sicoe_campos_registro_sin_fantasmas(
+        list(dict.fromkeys(campos + ["reporte_id", "acta_rpo_id", "semana_id"]))
+    )
 
     consulta_directa_identificador = (
         body.numero_reporte is not None or body.numero_registro is not None
@@ -10078,6 +10299,9 @@ def analisis_registros_obra(
                 pass
 
     # ── 7. Agrupar según modo ─────────────────────────────────────────────────
+    # Una sola lectura de niveles activos (antes: una query Supabase por cada registro → extremadamente lento).
+    _niveles_act_ana = _get_niveles_activos_contrato(contrato_id)
+
     def _estado_efectivo(reg):
         # Si hay filtro de validación activo, usar solo el estado del nivel (primera capa) para KPI
         if _val_campo_l:
@@ -10087,8 +10311,7 @@ def analisis_registros_obra(
             if estado == "Rechazado": return "Rechazado"
             return "No Revisado"
         # Sin filtro: estado global del registro
-        niveles_act = _get_niveles_activos_contrato(contrato_id)
-        niveles = [reg.get(NIVEL_VALIDACION_NUM_A_CAMPO[i]) or "" for i in niveles_act]
+        niveles = [reg.get(NIVEL_VALIDACION_NUM_A_CAMPO[i]) or "" for i in _niveles_act_ana]
         if "Rechazado" in niveles: return "Rechazado"
         if "Pendiente" in niveles: return "Pendiente"
         activos = [n for n in niveles if n]
@@ -10558,6 +10781,7 @@ def obtener_reporte(
     contrato_id: int,
     reporte_id: int,
     aplicar_filtros_busqueda: bool = Query(False),
+    numero_reporte: Optional[int] = Query(None),
     numero_registro: Optional[int] = None,
     semana: Optional[int] = None,
     acta_rpo: Optional[int] = None,
@@ -10584,6 +10808,14 @@ def obtener_reporte(
 ):
     items_detalle_norm = _normalize_items_filtro_list(items_filtro, item)
     capas_v = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
+    # Misma semántica que GET …/reportes/buscar: por N° reporte o N° registro no se cruzan capas/semana/acta.
+    consulta_directa_identificador = (
+        numero_reporte is not None or numero_registro is not None
+    )
+    if consulta_directa_identificador and aplicar_filtros_busqueda:
+        capas_v = []
+        semana = None
+        acta_rpo = None
     capas_aplican_a_lineas = bool(capas_v) and not _estado_filtro_omite_validacion_por_cargo(estado)
     _cap_op_det = _parse_capas_validacion_op(validacion_capas_op)
     _defer_capas_or_detalle = (
@@ -10882,6 +11114,7 @@ def crear_reporte_obra(contrato_id: int, body: ReporteCreate, current_user=Depen
         return supabase.rpc("siguiente_numero_reporte", {"p_contrato_id": contrato_id}).execute().data
     numero = supabase_execute(_num)
     data = body.dict()
+    _so_reportes_normalizar_payload_cabecera(data)
     data["contrato_id"] = contrato_id
     data["numero_reporte"] = numero
     data["estado"] = "Borrador"
@@ -11865,6 +12098,7 @@ def crear_reportes_masivos_dashboard_delta(
         for w, numero_rep in zip(work_items, numeros_rep):
             rp = dict(w["rep_payload"])
             rp["numero_reporte"] = numero_rep
+            _so_reportes_normalizar_payload_cabecera(rp)
 
             def _ins_one(payload=rp):
                 return supabase.table("so_reportes").insert(payload).execute().data
@@ -12034,6 +12268,7 @@ def crear_reporte_offline(
         "nodo_fin": body.nodo_fin,
         "creado_por": usuario_id,
     }
+    _so_reportes_normalizar_payload_cabecera(reporte_data)
 
     def _ins_reporte():
         return supabase.table("so_reportes").insert(reporte_data).execute().data
@@ -12300,6 +12535,7 @@ def actualizar_reporte(contrato_id: int, reporte_id: int, body: ReporteCreate, c
     prev_rows = supabase_execute(_prev_rep)
     prev_rep = prev_rows[0] if prev_rows else {}
     data = body.dict()
+    _so_reportes_normalizar_payload_cabecera(data)
     # Se persisten localización y PK en so_reportes (antes se descartaban y solo existía PATCH en Borrador;
     # un reintento tras guardar cabecera dejaba estado≠Borrador y el PATCH devolvía 400).
     data.pop("updated_at", None)
@@ -12556,6 +12792,8 @@ def actualizar_registro(contrato_id: int, registro_id: int, body: RegistroCreate
     for dk in ("longitud", "ancho", "espesor", "cantidad"):
         if dk in data and data[dk] is not None:
             data[dk] = round(float(data[dk]), 2)
+    # `id_pol` existe en presupuesto, no en `so_registros`; un cliente antiguo no debe romper el UPDATE.
+    data.pop("id_pol", None)
     if "cantidad_total" in data:
         data["cantidad_total"] = round(float(data["cantidad_total"]), 2)
     vlr_merged = (
@@ -12868,6 +13106,7 @@ def crear_registro(contrato_id: int, body: RegistroCreate, current_user=Depends(
     data = body.dict()
     data["contrato_id"] = contrato_id
     data["creado_por_reg"] = int(current_user.get("sub") or current_user.get("id", 0))
+    data.pop("id_pol", None)
     try:
         def _rep():
             return supabase.table("so_reportes").select(
@@ -14639,7 +14878,8 @@ def _dash_pk_disp_key_py(v: Any) -> str:
 
 
 # ── Liquidación contrato: recalc (= polígonos presupuesto) vs «cobro» (= SICOE N3 aprobado en so_registros) ──
-PRESUPUESTO_TIPO_POLIGONO = "Presupuesto de Obra"
+from presupuesto_constants import PRESUPUESTO_TIPO_POLIGONO
+
 LIQ_SUPERCOBRO_COP = 20_000_000.0
 
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 
 /**
  * Muestra el historial de auditoría de una entidad (GET /logs/entidad/...).
+ * Tipografía y densidad alineadas con la escala global (--cc-*, --cc-space-*).
  */
 export default function TrazabilidadRegistroModal({
   apiBase,
@@ -59,6 +60,78 @@ export default function TrazabilidadRegistroModal({
     return typeof d === 'object' ? d : {}
   }
 
+  const sx = {
+    shell: {
+      background: t.bgCard,
+      border: `1px solid ${t.border}`,
+      borderRadius: 12,
+      padding: 'var(--cc-space-4) var(--cc-space-5)',
+      width: 720,
+      maxWidth: '96vw',
+      maxHeight: '85vh',
+      display: 'flex',
+      flexDirection: 'column',
+      boxShadow: t.shadow || '0 20px 60px rgba(0,0,0,0.35)',
+    },
+    title: {
+      fontSize: 'var(--cc-title)',
+      fontWeight: 800,
+      color: t.text,
+      lineHeight: 1.25,
+    },
+    subtitle: {
+      fontSize: 'var(--cc-sm)',
+      color: t.textMuted,
+      marginTop: 'var(--cc-space-1)',
+      lineHeight: 1.35,
+    },
+    closeBtn: {
+      background: 'transparent',
+      border: 'none',
+      fontSize: 'var(--cc-lg)',
+      cursor: 'pointer',
+      color: t.textMuted,
+      lineHeight: 1,
+      padding: 'var(--cc-space-1)',
+    },
+    card: {
+      background: t.bg || t.inputBg,
+      border: `1px solid ${t.border}`,
+      borderRadius: 8,
+      padding: 'var(--cc-space-2) var(--cc-space-3)',
+      fontSize: 'var(--cc-sm)',
+      lineHeight: 1.35,
+    },
+    accion: { fontWeight: 800, color: t.primary, letterSpacing: '0.02em' },
+    fecha: { color: t.textMuted, fontSize: 'var(--cc-caption)' },
+    meta: { color: t.textMuted, fontSize: 'var(--cc-caption)', marginTop: 2 },
+    detRow: { display: 'flex', gap: 'var(--cc-space-2)', marginBottom: 1, alignItems: 'baseline' },
+    detKey: { color: t.textMuted, minWidth: '7.5rem', flexShrink: 0, fontSize: 'var(--cc-caption)' },
+    detVal: { color: t.text, fontSize: 'var(--cc-caption)', wordBreak: 'break-word' },
+    diffLabel: {
+      fontSize: 'var(--cc-caption)',
+      fontWeight: 700,
+      color: t.textMuted,
+      marginBottom: 'var(--cc-space-1)',
+      textTransform: 'uppercase',
+      letterSpacing: '0.04em',
+    },
+    pre: {
+      margin: 0,
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+      fontSize: 'var(--cc-caption)',
+      fontFamily: 'ui-monospace, Consolas, "Cascadia Code", monospace',
+      lineHeight: 1.32,
+      color: t.text,
+      maxHeight: 'min(26vh, 11em)',
+      overflow: 'auto',
+      background: t.inputBg,
+      padding: 'var(--cc-space-2)',
+      borderRadius: 6,
+    },
+  }
+
   return (
     <div
       style={{
@@ -75,116 +148,106 @@ export default function TrazabilidadRegistroModal({
       }}
       onClick={onClose}
     >
-      <div
-        style={{
-          background: t.bgCard,
-          border: `1px solid ${t.border}`,
-          borderRadius: 14,
-          padding: '22px 24px',
-          width: 720,
-          maxWidth: '96vw',
-          maxHeight: '85vh',
-          display: 'flex',
-          flexDirection: 'column',
-          boxShadow: t.shadow || '0 20px 60px rgba(0,0,0,0.35)',
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-          <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: t.text }}>📜 Trazabilidad</div>
-            <div style={{ fontSize: 12, color: t.textMuted, marginTop: 4 }}>{titulo}</div>
+      <div style={sx.shell} onClick={(e) => e.stopPropagation()}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            marginBottom: 'var(--cc-space-3)',
+            gap: 'var(--cc-space-3)',
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div style={sx.title}>📜 Trazabilidad</div>
+            <div style={sx.subtitle}>{titulo}</div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            style={{ background: 'transparent', border: 'none', fontSize: 18, cursor: 'pointer', color: t.textMuted }}
-          >
+          <button type="button" onClick={onClose} style={sx.closeBtn} aria-label="Cerrar">
             ✕
           </button>
         </div>
 
         {loading ? (
-          <div style={{ textAlign: 'center', padding: 32, color: t.textMuted }}>Cargando historial…</div>
+          <div
+            style={{
+              textAlign: 'center',
+              padding: 'var(--cc-space-5)',
+              color: t.textMuted,
+              fontSize: 'var(--cc-sm)',
+            }}
+          >
+            Cargando historial…
+          </div>
         ) : rows.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: 28, color: t.textMuted, fontSize: 13 }}>
+          <div
+            style={{
+              textAlign: 'center',
+              padding: 'var(--cc-space-5)',
+              color: t.textMuted,
+              fontSize: 'var(--cc-sm)',
+            }}
+          >
             Aún no hay eventos de auditoría para este registro.
           </div>
         ) : (
-          <div style={{ overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div
+            style={{
+              overflowY: 'auto',
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 'var(--cc-space-2)',
+            }}
+          >
             {rows.map((h) => {
               const det = parseDet(h.detalle)
               const va = h.valor_anterior
               const vn = h.valor_nuevo
               return (
-                <div
-                  key={h.id}
-                  style={{
-                    background: t.bg || t.inputBg,
-                    border: `1px solid ${t.border}`,
-                    borderRadius: 10,
-                    padding: '10px 12px',
-                    fontSize: 12,
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontWeight: 700, color: t.primary }}>{h.accion}</span>
-                    <span style={{ color: t.textMuted, fontSize: 11 }}>{fmtFecha(h.created_at)}</span>
+                <div key={h.id} style={sx.card}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 'var(--cc-space-2)',
+                      flexWrap: 'wrap',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <span style={sx.accion}>{h.accion}</span>
+                    <span style={sx.fecha}>{fmtFecha(h.created_at)}</span>
                   </div>
-                  <div style={{ color: t.textMuted, fontSize: 11, marginTop: 4 }}>
+                  <div style={sx.meta}>
                     {h.usuario_nombre || '—'} · {h.modulo}
                     {h.severidad ? ` · ${h.severidad}` : ''}
                   </div>
                   {Object.keys(det).length > 0 && (
-                    <div style={{ marginTop: 8, fontSize: 11, color: t.text }}>
+                    <div style={{ marginTop: 'var(--cc-space-2)', color: t.text }}>
                       {Object.entries(det).map(([k, v]) => (
-                        <div key={k} style={{ display: 'flex', gap: 6, marginBottom: 2 }}>
-                          <span style={{ color: t.textMuted, minWidth: 100 }}>{k}:</span>
-                          <span>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                        <div key={k} style={sx.detRow}>
+                          <span style={sx.detKey}>{k}:</span>
+                          <span style={sx.detVal}>{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
                         </div>
                       ))}
                     </div>
                   )}
                   {(va != null && (typeof va === 'object' ? Object.keys(va).length : true)) ||
                   (vn != null && (typeof vn === 'object' ? Object.keys(vn).length : true)) ? (
-                    <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                      <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: t.textMuted, marginBottom: 4 }}>Valor anterior</div>
-                        <pre
-                          style={{
-                            margin: 0,
-                            whiteSpace: 'pre-wrap',
-                            wordBreak: 'break-word',
-                            fontSize: 10,
-                            color: t.text,
-                            maxHeight: 160,
-                            overflow: 'auto',
-                            background: t.inputBg,
-                            padding: 8,
-                            borderRadius: 6,
-                          }}
-                        >
-                          {typeof va === 'string' ? va : JSON.stringify(va, null, 2)}
-                        </pre>
+                    <div
+                      style={{
+                        marginTop: 'var(--cc-space-3)',
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 1fr',
+                        gap: 'var(--cc-space-2)',
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div style={sx.diffLabel}>Valor anterior</div>
+                        <pre style={sx.pre}>{typeof va === 'string' ? va : JSON.stringify(va, null, 2)}</pre>
                       </div>
-                      <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: t.textMuted, marginBottom: 4 }}>Valor nuevo</div>
-                        <pre
-                          style={{
-                            margin: 0,
-                            whiteSpace: 'pre-wrap',
-                            wordBreak: 'break-word',
-                            fontSize: 10,
-                            color: t.text,
-                            maxHeight: 160,
-                            overflow: 'auto',
-                            background: t.inputBg,
-                            padding: 8,
-                            borderRadius: 6,
-                          }}
-                        >
-                          {typeof vn === 'string' ? vn : JSON.stringify(vn, null, 2)}
-                        </pre>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={sx.diffLabel}>Valor nuevo</div>
+                        <pre style={sx.pre}>{typeof vn === 'string' ? vn : JSON.stringify(vn, null, 2)}</pre>
                       </div>
                     </div>
                   ) : null}
