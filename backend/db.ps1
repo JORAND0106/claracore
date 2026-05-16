@@ -17,10 +17,35 @@ try {
     Write-Host "No se pudo activar mantenimiento (backend offline?). Continuando..." -ForegroundColor DarkYellow
 }
 
-Write-Host "Deployando backend..." -ForegroundColor Cyan
-Compress-Archive -Path * -DestinationPath ../deploy.zip -Force
-az webapp deploy --name claracore-backend --resource-group andres_jaimes82_rg_5760 --src-path ../deploy.zip --type zip
-Remove-Item ../deploy.zip -Force
+Write-Host "Preparando paquete (sin __pycache__, venv ni .env local)..." -ForegroundColor Cyan
+$zipPath = Join-Path $PSScriptRoot "..\deploy.zip"
+$staging = Join-Path $env:TEMP ("claracore-backend-deploy-" + [Guid]::NewGuid().ToString("N"))
+if (Test-Path $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+if (Test-Path $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+New-Item -ItemType Directory -Path $staging | Out-Null
+# Robocopy: 0-7 = OK (ver https://learn.microsoft.com/en-us/troubleshoot/windows-server/backup-and-storage/return-codes-used-robocopy-task)
+robocopy $PSScriptRoot $staging /MIR /XD __pycache__ .venv venv .git .pytest_cache .azure /XF *.pyc .env deploy.zip /NFL /NDL /NJH /NJS | Out-Null
+if ($LASTEXITCODE -ge 8) {
+    Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "ERROR: robocopy fallo al preparar staging (codigo $LASTEXITCODE)." -ForegroundColor Red
+    exit 1
+}
+Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zipPath -Force
+Remove-Item -LiteralPath $staging -Recurse -Force
+
+Write-Host "Subiendo a Azure (asincrono: evita 504 Gateway Timeout del deploy largo)..." -ForegroundColor Cyan
+# --async true: el CLI termina al subir el ZIP; Kudu extrae en segundo plano (el modo sync a menudo corta con 504).
+# --track-status false: no esperar arranque del sitio en Linux (reduce tiempo de espera del comando).
+az webapp deploy --name claracore-backend --resource-group andres_jaimes82_rg_5760 --src-path $zipPath --type zip --async true --track-status false
+if ($LASTEXITCODE -ne 0) {
+    Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+    Write-Host "ERROR: az webapp deploy fallo (codigo $LASTEXITCODE)." -ForegroundColor Red
+    exit 1
+}
+Remove-Item -LiteralPath $zipPath -Force
+
+Write-Host "Esperando ~90 s para que Kudu termine de extraer y reiniciar (deploy asincrono)..." -ForegroundColor DarkYellow
+Start-Sleep -Seconds 90
 
 Write-Host "Desactivando modo mantenimiento..." -ForegroundColor Yellow
 try {

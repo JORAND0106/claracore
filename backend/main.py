@@ -386,7 +386,13 @@ async def unhandled_exception_to_json(request: Request, exc: Exception):
 _SUPABASE_URL = os.getenv("SUPABASE_URL")
 _SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 # PostgREST puede tardar bajo carga; el default de httpx (~5s) provoca ReadTimeout en /auth/refresh y otras rutas.
-_SUPABASE_HTTP_TIMEOUT = httpx.Timeout(connect=20.0, read=120.0, write=90.0, pool=30.0)
+# Updates con `plano_geojson` muy grande (decenas de MB) necesitan write/read largos hacia PostgREST.
+_SUPABASE_HTTP_TIMEOUT = httpx.Timeout(
+    connect=float(os.getenv("SUPABASE_HTTP_CONNECT_TIMEOUT", "20")),
+    read=float(os.getenv("SUPABASE_HTTP_READ_TIMEOUT", "180")),
+    write=float(os.getenv("SUPABASE_HTTP_WRITE_TIMEOUT", "600")),
+    pool=float(os.getenv("SUPABASE_HTTP_POOL_TIMEOUT", "30")),
+)
 
 def get_supabase():
     return create_client(

@@ -2316,6 +2316,9 @@ const SICOE_NIVELES_VALIDACION_ADMIN_LABELS = {
   6: "Nivel 6 — Supervisor Entidad (Supervisor Externo)",
 };
 
+/** GET/PUT/POST de contrato con `plano_geojson` grande (decenas de MB): el timeout por defecto del panel (~48 s) corta con "signal timed out" antes de terminar. */
+const CONTRATO_API_PLANO_TIMEOUT = { timeoutMs: 30 * 60 * 1000, maxRetries: 1 };
+
 function SeccionContratos({ call, contratos, recargarContratos, perms = { crear: false, editar: false } }) {
   const ENTIDADES = ["IDU", "ICCU", "ENEL", "EAB", "OTRA"];
   const FORM_VACIO = {
@@ -2520,7 +2523,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     setEditandoId(c.id);
     let d = c;
     try {
-      const detalle = await call("GET", `/contratos/${c.id}`);
+      const detalle = await call("GET", `/contratos/${c.id}`, null, CONTRATO_API_PLANO_TIMEOUT);
       d = { ...c, ...(detalle && typeof detalle === "object" ? detalle : {}) };
     } catch {
       d = c;
@@ -2604,7 +2607,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
       };
       delete payload.costos_adicionales;
       if (editandoId) {
-        await call("PUT", `/contratos/${editandoId}`, payload);
+        await call("PUT", `/contratos/${editandoId}`, payload, CONTRATO_API_PLANO_TIMEOUT);
         const naPut = [...new Set(
           (nivelesActivosEdit || [])
             .map((x) => parseInt(x, 10))
@@ -2613,7 +2616,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
         await call("PUT", `/sicoe-obra/${editandoId}/niveles-validacion`, { niveles_activos: naPut });
         setMsg({ type: 'success', text: 'Contrato actualizado correctamente' });
         try {
-          const fresh = await call("GET", `/contratos/${editandoId}`);
+          const fresh = await call("GET", `/contratos/${editandoId}`, null, CONTRATO_API_PLANO_TIMEOUT);
           llenarFormDesdeContrato(fresh);
         } catch {
           llenarFormDesdeContrato({
@@ -2629,7 +2632,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
         }
         /* Sigue en modo edición: no vaciar el formulario (era la causa de “no guarda”). */
       } else {
-        await call("POST", "/contratos", payload);
+        await call("POST", "/contratos", payload, CONTRATO_API_PLANO_TIMEOUT);
         setMsg({ type: 'success', text: 'Contrato creado correctamente' });
         setForm(FORM_VACIO);
         setEditandoId(null);
