@@ -58,7 +58,7 @@ def frase_dia_espanol() -> Dict[str, Any]:
         elige_cita_autor,
     )
 
-    estrategia = random.choice(["biblia", "autor", "general"])
+    estrategia = random.choice(["biblia", "autor", "autor", "biblia", "autor"])
     if estrategia == "biblia":
         f = _esbiblia_random_verse()
         if f and f.get("frase"):

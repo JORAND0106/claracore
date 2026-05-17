@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { API_BASE } from '../../apiBase'
+import { getContratoPlanoGeojson } from '../../contratoPlanoGeojsonCache'
 
 /** [lng, lat] WGS84 si el maestro trae coordenadas; si no, null. */
 function pickLngLat(row) {
@@ -101,7 +102,11 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
     ;(async () => {
       const [rPk, rCt] = await Promise.all([
         fetch(`${API}/sicoe-obra/${contratoId}/pk-ids`, { headers: hdrs }).then((x) => (x.ok ? x.json() : [])),
-        fetch(`${API}/contratos/${contratoId}`, { headers: hdrs }).then((x) => (x.ok ? x.json() : null)),
+        getContratoPlanoGeojson(API_BASE, contratoId, tok).then((d) =>
+          d && typeof d === 'object'
+            ? { plano_geojson: d.plano_geojson, centro_lat: d.centro_lat, centro_lng: d.centro_lng }
+            : null,
+        ),
       ])
       if (cancelled) return
       const pkList = Array.isArray(rPk) ? rPk : []

@@ -4,7 +4,9 @@ import mapboxgl from "mapbox-gl";
 import { API_BASE } from "./apiBase";
 import { formatCOP } from "./utils/formatCOP";
 import { sanitizePlanoFeatureCollection } from "./geoPlanoSanitize";
+import { clearContratoPlanoGeojsonCache } from "./contratoPlanoGeojsonCache";
 import ModuloNube from "./ModuloNube";
+import CompetenciaSelect from "./components/CompetenciaSelect";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -848,22 +850,27 @@ function SeccionCargos({ call, cargos, recargarCargos, theme }) {
 }
 
 // ─── SECCIÓN 3: Control de accesos ─────────────────────────────────────────
-function SeccionPermisos({ call, cargos, theme }) {
+function SeccionPermisos({ call, cargos, contratos, user, theme }) {
   const [cargoId, setCargoId] = useState("");
+  const [contratoPermId, setContratoPermId] = useState(() => {
+    const c = user?.contrato_id;
+    return c != null && c !== "" ? String(c) : "";
+  });
   const [funciones, setFunciones] = useState([]);
   const [permisos, setPermisos] = useState({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
   const col = C(theme);
+  const isDev = user?.cargo_nombre?.toLowerCase() === "desarrollador";
 
   const cargarPermisos = useCallback(async (id) => {
-    if (!id) return;
+    if (!id || !contratoPermId) return;
     setLoading(true);
     try {
       const [fns, perms] = await Promise.all([
         call("GET", "/funciones").catch(() => []),
-        call("GET", `/admin/permisos/${id}`).catch(() => []),
+        call("GET", `/admin/permisos/${id}?contrato_id=${contratoPermId}`).catch(() => []),
       ]);
       setFunciones(fns);
       const mapa = {};
@@ -884,9 +891,18 @@ function SeccionPermisos({ call, cargos, theme }) {
     } finally {
       setLoading(false);
     }
-  }, [call]);
+  }, [call, contratoPermId]);
 
-  useEffect(() => { cargarPermisos(cargoId); }, [cargoId, cargarPermisos]);
+  useEffect(() => { cargarPermisos(cargoId); }, [cargoId, contratoPermId, cargarPermisos]);
+
+  useEffect(() => {
+    if (contratoPermId || !contratos?.length) return;
+    if (isDev || contratos.length === 1) {
+      setContratoPermId(String(contratos[0].id));
+    } else if (user?.contrato_id) {
+      setContratoPermId(String(user.contrato_id));
+    }
+  }, [contratos, isDev, user?.contrato_id, contratoPermId]);
 
   const togglePermiso = (funcion_id, accion) => {
     setPermisos(p => ({ ...p, [funcion_id]: { ...p[funcion_id], [accion]: !p[funcion_id][accion] } }));
@@ -899,12 +915,16 @@ function SeccionPermisos({ call, cargos, theme }) {
   };
 
   const guardar = async () => {
-    if (!cargoId) return;
+    if (!cargoId || !contratoPermId) {
+      setMsg({ type: "error", text: "Selecciona contrato y cargo antes de guardar." });
+      return;
+    }
     setSaving(true);
     try {
       const payload = funciones.map(f => ({
         cargo_id: parseInt(cargoId),
         funcion_id: f.id,
+        contrato_id: parseInt(contratoPermId, 10),
         ...Object.fromEntries(ACCIONES.map(a => [a, permisos[f.id]?.[a] ?? false])),
       }));
       await call("POST", "/admin/permisos", payload);
@@ -931,13 +951,22 @@ function SeccionPermisos({ call, cargos, theme }) {
           <span onClick={() => setMsg(null)} style={{ float: "right", cursor: "pointer", opacity: 0.6 }}>✕</span>
         </div>
       )}
-      <div style={{ ...S.card, display: "flex", alignItems: "center", gap: 16, marginBottom: 20 }}>
+      <div style={{ ...S.card, display: "flex", alignItems: "center", gap: 16, marginBottom: 20, flexWrap: "wrap" }}>
+        {(isDev || (contratos && contratos.length > 1)) && (
+          <>
+            <div style={{ color: col.textSecondary, fontSize: 13, whiteSpace: "nowrap" }}>Contrato:</div>
+            <select style={{ ...S.select, flex: 1, maxWidth: 220 }} value={contratoPermId} onChange={e => setContratoPermId(e.target.value)}>
+              <option value="">-- Contrato --</option>
+              {(contratos || []).map(c => <option key={c.id} value={c.id}>{c.numero || c.id}</option>)}
+            </select>
+          </>
+        )}
         <div style={{ color: col.textSecondary, fontSize: 13, whiteSpace: "nowrap" }}>Cargo a configurar:</div>
         <select style={{ ...S.select, flex: 1, maxWidth: 280 }} value={cargoId} onChange={e => setCargoId(e.target.value)}>
           <option value="">-- Selecciona un cargo --</option>
           {cargos.filter(c => c.nombre.toLowerCase() !== "desarrollador").map(c => <option key={c.id} value={c.id}>{c.nombre}</option>)}
         </select>
-        {cargoId && (
+        {cargoId && contratoPermId && (
           <button style={S.btn("primary", true)} onClick={guardar} disabled={saving}>
             {saving ? "Guardando..." : "💾 Guardar cambios"}
           </button>
@@ -2523,7 +2552,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
     setEditandoId(c.id);
     let d = c;
     try {
-      const detalle = await call("GET", `/contratos/${c.id}`, null, CONTRATO_API_PLANO_TIMEOUT);
+      const detalle = await call("GET", `/contratos/${c.id}?include_plano=1`, null, CONTRATO_API_PLANO_TIMEOUT);
       d = { ...c, ...(detalle && typeof detalle === "object" ? detalle : {}) };
     } catch {
       d = c;
@@ -2608,6 +2637,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
       delete payload.costos_adicionales;
       if (editandoId) {
         await call("PUT", `/contratos/${editandoId}`, payload, CONTRATO_API_PLANO_TIMEOUT);
+        clearContratoPlanoGeojsonCache(editandoId);
         const naPut = [...new Set(
           (nivelesActivosEdit || [])
             .map((x) => parseInt(x, 10))
@@ -2616,7 +2646,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
         await call("PUT", `/sicoe-obra/${editandoId}/niveles-validacion`, { niveles_activos: naPut });
         setMsg({ type: 'success', text: 'Contrato actualizado correctamente' });
         try {
-          const fresh = await call("GET", `/contratos/${editandoId}`, null, CONTRATO_API_PLANO_TIMEOUT);
+          const fresh = await call("GET", `/contratos/${editandoId}?include_plano=1`, null, CONTRATO_API_PLANO_TIMEOUT);
           llenarFormDesdeContrato(fresh);
         } catch {
           llenarFormDesdeContrato({
@@ -3109,6 +3139,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
                         if (!window.confirm(`¿Eliminar contrato ${c.numero}? Esta acción no se puede deshacer.`)) return;
                         try {
                           await call("DELETE", `/contratos/${c.id}`);
+                          clearContratoPlanoGeojsonCache(c.id);
                           recargarContratos();
                         } catch (e) { setMsg({ type: 'error', text: e.message }); }
                       }}
@@ -3162,7 +3193,6 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
   const tTok   = tFrom(theme);
 
   const UNIDADES    = ["CM","GL","HORA","KG","KM-CARRIL","LT","M","M2","M3","M3-KM","ML","TON","TRAMO","UN","UN/ME","UND"];
-  const COMPETENCIAS = ["EAB","ENEL-CODENSA","ETB","Gas Natural","IDU","MOVISTAR"];
 
   const fmt     = (v) => v != null ? `$${Math.round(Number(v)).toLocaleString("es-CO")}` : "—";
   const cmpNatural = (a, b) => {
@@ -3556,10 +3586,14 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
                   </div>
                   <div>
                     <div style={labelStyle}>Competencia</div>
-                    <select style={{...selectStyle,opacity:perms?.editar?1:0.55}} value={popup.competencia||""} disabled={!perms?.editar} onChange={e=>setPopupField("competencia",e.target.value)}>
-                      <option value="">-- Selecciona --</option>
-                      {COMPETENCIAS.map(c=><option key={c} value={c}>{c}</option>)}
-                    </select>
+                    <CompetenciaSelect
+                      contratoId={contratoId}
+                      call={call}
+                      value={popup.competencia || ""}
+                      disabled={!perms?.editar}
+                      onChange={v => setPopupField("competencia", v)}
+                      style={{ ...selectStyle, opacity: perms?.editar ? 1 : 0.55, width: "100%" }}
+                    />
                   </div>
                 </div>
 
@@ -3779,10 +3813,13 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
                 </div>
                 <div>
                   <div style={labelStyle}>Competencia</div>
-                  <select style={selectStyle} value={crearForm.competencia} onChange={e=>setCF("competencia",e.target.value)}>
-                    <option value="">-- Selecciona --</option>
-                    {COMPETENCIAS.map(c=><option key={c} value={c}>{c}</option>)}
-                  </select>
+                  <CompetenciaSelect
+                    contratoId={contratoId}
+                    call={call}
+                    value={crearForm.competencia}
+                    onChange={v => setCF("competencia", v)}
+                    style={selectStyle}
+                  />
                 </div>
               </div>
 
@@ -4153,9 +4190,7 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
     const c = parseInt(String(formActa.consecutivo || "").trim(), 10);
     if (!Number.isFinite(c) || c < 1) throw new Error("Consecutivo inválido.");
     const rawTg = String(formActa.tipo_grupo || "administrativa");
-    const tipoGrupoNorm = rawTg.toUpperCase() === "RPO"
-      ? "RPO"
-      : (rawTg.toLowerCase() === "cobro" ? "cobro" : "administrativa");
+    const tipoGrupoNorm = rawTg.toUpperCase() === "RPO" ? "RPO" : "administrativa";
     const tg = tipoGrupoNorm.toLowerCase();
     const payload = { consecutivo: c, tipo_grupo: tipoGrupoNorm };
     if (formActa.tipo_acta_id) payload.tipo_acta_id = parseInt(formActa.tipo_acta_id, 10);
@@ -4171,11 +4206,6 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
       payload.numero_rpo = nr;
       payload.fecha_inicio = formActa.fecha_inicio;
       payload.fecha_fin = formActa.fecha_fin;
-    } else if (tipoGrupoNorm === "cobro") {
-      if (formActa.fecha_inicio) payload.fecha_inicio = formActa.fecha_inicio;
-      if (formActa.fecha_fin) payload.fecha_fin = formActa.fecha_fin;
-      const nr2 = parseInt(String(formActa.numero_rpo || "").trim(), 10);
-      if (nr2 && !Number.isNaN(nr2)) payload.numero_rpo = nr2;
     }
     // administrativa: sin RPO, período ni montos (solo catálogo + general)
     const numKeys = [
@@ -4217,7 +4247,7 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
     if (!contratoId || !nuevoTipoNom.trim()) return;
     setCreandoTipo(true);
     try {
-      await call("POST", `/actas-tipos/${contratoId}`, { nombre: nuevoTipoNom.trim(), es_cobro: nuevoTipoCobro });
+      await call("POST", `/actas-tipos/${contratoId}`, { nombre: nuevoTipoNom.trim(), es_cobro: false });
       setModalNuevoTipo(false);
       setNuevoTipoNom("");
       setNuevoTipoCobro(false);
@@ -4265,7 +4295,6 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
     if (filtroTipo === "todos") return true;
     const g = String(a.tipo_grupo || "").toLowerCase();
     if (filtroTipo === "rpo") return g === "rpo";
-    if (filtroTipo === "cobro") return g === "cobro";
     if (filtroTipo === "admin") return g === "administrativa";
     return true;
   });
@@ -4415,7 +4444,6 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
               <option value="todos">Todos</option>
               <option value="rpo">RPO</option>
               <option value="admin">Administrativa</option>
-              <option value="cobro">Cobro</option>
             </select>
           </div>
           {actasFiltradas.length === 0 ? (
@@ -4605,7 +4633,6 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
                 {[
                   ["RPO", "RPO (período SICOE)"],
                   ["administrativa", "Administrativa"],
-                  ["cobro", "Cobro"],
                 ].map(([val, lab]) => {
                   const raw = String(formActa.tipo_grupo || "");
                   const sel = val === "RPO"
@@ -4831,10 +4858,6 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
               <div style={labelStyle}>Nombre *</div>
               <input style={inputStyle} value={nuevoTipoNom} onChange={(e) => setNuevoTipoNom(e.target.value)} placeholder="Ej. Modificación contractual" />
             </div>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: col.textMuted, marginBottom: 16, cursor: "pointer" }}>
-              <input type="checkbox" checked={nuevoTipoCobro} onChange={(e) => setNuevoTipoCobro(e.target.checked)} />
-              Marcar como tipo de cobro
-            </label>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
               <button type="button" style={S.btn("ghost")} disabled={creandoTipo} onClick={() => setModalNuevoTipo(false)}>Cancelar</button>
               <button type="button" style={S.btn("primary")} disabled={creandoTipo || !nuevoTipoNom.trim()} onClick={crearTipoCatalogo}>
@@ -6033,7 +6056,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
           <div style={S.scrollArea(activeTheme, t)}>
             {tab === "usuarios"  && <SeccionUsuarios  call={call} cargos={cargos} theme={activeTheme} userId={user?.id} />}
             {tab === "cargos"    && <SeccionCargos    call={call} cargos={cargos} recargarCargos={cargarCargos} theme={activeTheme} />}
-            {tab === "permisos"  && <SeccionPermisos  call={call} cargos={cargos} theme={activeTheme} />}
+            {tab === "permisos"  && <SeccionPermisos  call={call} cargos={cargos} contratos={contratosVisibles} user={user} theme={activeTheme} />}
             {tab === "contratos" && <SeccionContratos call={call} contratos={contratosVisibles} recargarContratos={cargarContratos}
             perms={isDeveloper ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true } :
               (() => {

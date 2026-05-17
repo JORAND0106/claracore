@@ -34,6 +34,8 @@ import ModuloProgramacionObra from './ModuloProgramacionObra'
 import EmojiPicker from './EmojiPicker'
 import ExcelJS from 'exceljs'
 import { API_BASE, logApiFailure, SUPABASE_ANON_KEY, SUPABASE_URL } from './apiBase'
+import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache'
+import CompetenciaSelect from './components/CompetenciaSelect'
 import { supabase } from './supabaseClient'
 import { applyClaraTypography, getDashTypoUI } from './typographyScale'
 import { formatCOP, formatCOPShort } from './utils/formatCOP'
@@ -1394,6 +1396,21 @@ function determinarNivelValidacion(usuario, sicoeContratoId = null) {
   }
 }
 
+/** Filtro subcontratista: contratista / operativo / gerencial; desarrollador y admin ven todo. */
+function puedeVerFiltroSubcontratista(usuario) {
+  const cargo = String(usuario?.cargo_nombre || '').toLowerCase().trim()
+  if (cargo === 'desarrollador' || cargo === 'administrador') return true
+  const rol = String(usuario?.rol_nombre || '').toLowerCase().trim()
+  if (rol === 'contratista' || rol === 'operativo contratista') return true
+  if (rol.includes('contratista') && rol.includes('gerencial')) return true
+  if (cargo.includes('contratista gerencial')) return true
+  return false
+}
+
+function labelSubcontratistaOpt(s) {
+  return s?.nombre || s?.razon_social || `Sub #${s?.id ?? ''}`
+}
+
 // ─── POPUP COMENTARIO VALIDACIÓN ─────────────────────────────────────────────
 const ETIQUETAS_VALIDACION = [
   '01. Ensayos de Laboratorio',
@@ -1733,6 +1750,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [asignando,      setAsignando]      = useState(false)
   const [buscando,       setBuscando]       = useState(false)
   const [competencias,   setCompetencias]   = useState([])
+  const [competenciasApi, setCompetenciasApi] = useState([])
   const [itemListadoId,  setItemListadoId]  = useState(null)
   const [capituloHoja,   setCapituloHoja]   = useState(registro.capitulo || reporte.capitulo || '')
   const [listaCapitulos, setListaCapitulos] = useState([])
@@ -1848,39 +1866,56 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     })
   }, [registro.id, nivelesValidablesReg.join(',')])
 
-  // Paso 1: cargar capítulos al montar desde el listado completo (fuente confiable)
-  // Si ya hay capítulo preseleccionado, también carga sus ítems de inmediato
+  const apiCallSicoe = useCallback(async (method, path, body) => {
+    const res = await fetch(`${API}${path}`, {
+      method,
+      headers: body ? { ...hdrs, 'Content-Type': 'application/json' } : hdrs,
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    if (!res.ok) {
+      let detail = res.statusText
+      try { const j = await res.json(); detail = j.detail || j.message || detail } catch { /* ignore */ }
+      throw new Error(detail)
+    }
+    return res.json()
+  }, [API, hdrs])
+
+  // Capítulos + catálogo de competencias al cambiar contrato
   useEffect(() => {
+    if (!contrato_id) return
     const sortCaps = caps => [...caps].sort((a, b) => {
       const na = parseInt(a.match(/^(\d+)/)?.[1] || '9999')
       const nb = parseInt(b.match(/^(\d+)/)?.[1] || '9999')
       return na - nb
     })
-    fetch(`${API}/listado-precios/${contrato_id}`, { headers: hdrs })
-      .then(r => r.json())
+    const loadCaps = fetch(`${API}/listado-precios/${contrato_id}`, { headers: hdrs })
+      .then(r => (r.ok ? r.json() : []))
       .then(d => {
         if (!Array.isArray(d)) return
         const caps = [...new Set(d.map(i => i.capitulo).filter(Boolean))]
         setListaCapitulos(sortCaps(caps))
       })
-      .catch(() => {})
+      .catch(() =>
+        fetch(`${API}/sicoe-obra/${contrato_id}/capitulos`, { headers: hdrs })
+          .then(r => (r.ok ? r.json() : []))
+          .then(d => { if (Array.isArray(d)) setListaCapitulos(sortCaps(d.map(c => c.capitulo || c).filter(Boolean))) })
+          .catch(() => {})
+      )
+    const loadComp = fetch(`${API}/contratos/${contrato_id}/competencias`, { headers: hdrs })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => setCompetenciasApi(Array.isArray(d?.competencias) ? d.competencias : []))
+      .catch(() => setCompetenciasApi([]))
+    void Promise.all([loadCaps, loadComp])
+  }, [contrato_id, hdrs, API])
 
-    if (capituloHoja) {
-      fetch(`${API}/sicoe-obra/${contrato_id}/listado-precios-busqueda?capitulo=${encodeURIComponent(capituloHoja)}&q=`, { headers: hdrs })
-        .then(r => r.json())
-        .then(d => { if (Array.isArray(d)) setTodosLosItems(d) })
-        .catch(() => {})
-    }
-  }, [])
-
-  // Paso 2: cuando el usuario cambia de capítulo, cargar los ítems de ese capítulo
+  // Ítems del capítulo seleccionado
   useEffect(() => {
-    if (!capituloHoja) { setTodosLosItems([]); setCompetencias([]); setItemsLista([]); return }
+    if (!contrato_id || !capituloHoja) { setTodosLosItems([]); setItemsLista([]); return }
     fetch(`${API}/sicoe-obra/${contrato_id}/listado-precios-busqueda?capitulo=${encodeURIComponent(capituloHoja)}&q=`, { headers: hdrs })
       .then(r => r.json())
       .then(d => { if (Array.isArray(d)) setTodosLosItems(d) })
-      .catch(() => {})
-  }, [capituloHoja])
+      .catch(() => setTodosLosItems([]))
+  }, [capituloHoja, contrato_id, hdrs, API])
 
   // Subir foto
   const subirFoto = async (file) => {
@@ -1949,15 +1984,18 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   /** Contrato 2 no exige topografía para aprobar N2; el resto sí (alineado con backend). */
   const exigeTopoAprobarN2 = Number(contrato_id) !== 2
 
-  // Derivar competencias y lista de ítems cuando cambian los ítems del capítulo o la competencia seleccionada
+  // Derivar competencias (catálogo + ítems del capítulo) y lista filtrada
   useEffect(() => {
-    if (!todosLosItems.length) return
-    const comps = [...new Set(todosLosItems.map(i => i.competencia).filter(Boolean))].sort()
+    const comps = [...new Set([
+      ...competenciasApi,
+      ...todosLosItems.map(i => i.competencia).filter(Boolean),
+    ])].sort((a, b) => a.localeCompare(b, 'es'))
     setCompetencias(comps)
+    if (!todosLosItems.length) { setItemsLista([]); setMostrarLista(false); return }
     const porComp = competencia ? todosLosItems.filter(i => i.competencia === competencia) : todosLosItems
     setItemsLista(porComp.slice(0, 50))
     setMostrarLista(false)
-  }, [competencia, todosLosItems])
+  }, [competencia, todosLosItems, competenciasApi])
 
   // Filtrar ítems por texto client-side
   useEffect(() => {
@@ -1972,10 +2010,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   }, [itemBusqueda, todosLosItems, competencia])
 
   useEffect(() => {
-    if (!editandoSub || listaSubs.length > 0) return
+    if (!contrato_id || listaSubs.length > 0) return
+    if (!editableCampos && !editandoSub) return
     fetch(`${API}/sicoe-obra/${contrato_id}/subcontratistas-activos`, { headers: hdrs })
       .then(r => r.json()).then(d => setListaSubs(Array.isArray(d) ? d : [])).catch(() => {})
-  }, [editandoSub])
+  }, [contrato_id, editableCampos, editandoSub, listaSubs.length, hdrs, API])
 
 
   const seleccionarItem = (item) => {
@@ -2382,7 +2421,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 <select value={subcontratistaSel} onChange={e => setSubcontratistaSel(e.target.value)}
                   style={{ background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'3px 8px', color:t.text, fontSize:'var(--cc-label)' }}>
                   <option value="">— Sin subcontratista —</option>
-                  {listaSubs.map(s => <option key={s.id} value={s.id}>{s.razon_social}</option>)}
+                  {listaSubs.map(s => <option key={s.id} value={s.id}>{labelSubcontratistaOpt(s)}</option>)}
                 </select>
                 <button onClick={async () => {
                   try {
@@ -2592,13 +2631,16 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
             {/* Competencia */}
             <div>
               <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:C.label, letterSpacing:'0.7px', textTransform:'uppercase', marginBottom:'2px' }}>Competencia</div>
-              <select value={competencia} onChange={e => { setCompetencia(e.target.value); setItemSel(null); setItemBusqueda('') }}
+              <CompetenciaSelect
+                contratoId={contrato_id}
+                call={apiCallSicoe}
+                value={competencia}
+                onChange={v => { setCompetencia(v); setItemSel(null); setItemBusqueda('') }}
                 disabled={!editableCampos}
-                onKeyDown={e => e.stopPropagation()}
-                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', opacity: editableCampos ? 1 : 0.65 }}>
-                <option value="">— Todas —</option>
-                {competencias.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
+                placeholder="— Todas —"
+                allowEmpty
+                style={{ width:'100%', background:t.bg, border:`1px solid ${t.primary}55`, borderRadius:'6px', padding:'7px 10px', color:t.text, fontSize:'var(--cc-sm)', opacity: editableCampos ? 1 : 0.65, boxSizing:'border-box' }}
+              />
             </div>
             {/* Búsqueda de ítem */}
             <div style={{ position:'relative' }}>
@@ -3402,9 +3444,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
 
   useEffect(() => {
     if (!contrato_id) return
-    fetch(`${API_URL}/contratos/${contrato_id}`, { headers: { Authorization: `Bearer ${getToken()}` } })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((c) => setPlanoGeojsonPortada(c?.plano_geojson ?? null))
+    getContratoPlanoGeojson(API_URL, contrato_id, getToken())
+      .then((d) => setPlanoGeojsonPortada(d?.plano_geojson ?? null))
       .catch(() => setPlanoGeojsonPortada(null))
   }, [contrato_id])
 
@@ -4121,8 +4162,8 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       <div style={{ width:'100%', maxWidth:'1100px', background:C.carpetaFondo, borderRadius:'16px', border:`2px solid ${C.carpetaHeader}`, boxShadow:'0 24px 80px rgba(0,0,0,0.6)', minHeight:'80vh', display:'flex', flexDirection:'column' }}>
 
         {/* ─ Header tipo carpeta ─ */}
-        <div style={{ background:`linear-gradient(135deg, ${t.primary}, ${t.primary}BB)`, borderRadius:'14px 14px 0 0', padding:'16px 24px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-          <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+        <div style={{ background:`linear-gradient(135deg, ${t.primary}, ${t.primary}BB)`, borderRadius:'14px 14px 0 0', padding:'16px 24px', display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:'16px' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'12px', flex:'1 1 auto', minWidth:0 }}>
             <span style={{ fontSize:'28px' }}>📁</span>
             <div>
               {reporte._cargandoDetalle && (
@@ -4134,7 +4175,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 {reporte.descripcion_actividad || `Reporte #${reporte.numero_reporte}`}
               </div>
               <div style={{ fontSize:'var(--cc-sm)', color:'#ffffff99', fontWeight:'600' }}>
-                Reporte #{reporte.numero_reporte} · {reporte.capitulo} · {reporte.subcontratista_nombre || '—'}
+                {reporte.capitulo} · {reporte.subcontratista_nombre || '—'}
               </div>
               {!!reporte.registros_vista_filtrada && (
                 <div style={{ fontSize:'var(--cc-label)', color:'#D9F99D', marginTop:'6px', fontWeight:'600' }}>
@@ -4153,7 +4194,11 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               })()}
             </div>
           </div>
-          <div style={{ display:'flex', alignItems:'center', gap:'8px', flexShrink:0 }}>
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:'10px', flexShrink:0 }}>
+            <div style={{ fontSize:'clamp(28px, 4.2vw, 44px)', fontWeight:900, color:'#fff', lineHeight:1, letterSpacing:'-0.02em', textShadow:'0 2px 12px rgba(0,0,0,0.25)' }}>
+              #{reporte.numero_reporte}
+            </div>
+            <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap', justifyContent:'flex-end' }}>
             {puedeEliminarReporteCantidades && (
               <button type="button" disabled={devEliminando} onClick={devEliminarReporteCompleto}
                 title="Elimina el reporte completo en base de datos (requiere permiso «Reporte de Cantidades» → eliminar, o Desarrollador)"
@@ -4173,6 +4218,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
               style={{ background: 'transparent', border: 'none', color: 'rgba(226,232,240,0.55)', borderRadius: '6px', padding: '3px 8px', fontSize: '11px', fontWeight: 500, cursor: recargando ? 'wait' : 'pointer', whiteSpace:'nowrap', opacity: recargando ? 0.5 : 0.95 }}
             >{recargando ? '⏳ Cargando...' : '⟳ Actualizar'}</button>
             <button onClick={onClose} style={{ background:'rgba(255,255,255,0.2)', border:'none', color:'#fff', borderRadius:'50%', width:'34px', height:'34px', fontSize:'var(--cc-lg)', cursor:'pointer', fontWeight:'900', display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
+            </div>
           </div>
         </div>
 
@@ -4204,13 +4250,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
             })
           ].map(tab => (
             <button key={tab.key} onClick={() => setTabActiva(tab.key)} style={{
-              background:    tabActiva === tab.key ? C.tabActivo : 'transparent',
-              color:         tabActiva === tab.key ? '#fff' : t.textMuted,
-              border:        `1px solid ${tabActiva === tab.key ? C.tabActivo : C.borde}`,
-              borderBottom:  tabActiva === tab.key ? `1px solid ${C.tabActivo}` : '1px solid transparent',
+              background:    tabActiva === tab.key ? '#E8F6F8' : '#2A3F52',
+              color:         tabActiva === tab.key ? '#0F5C66' : '#E2E8F0',
+              border:        `1px solid ${tabActiva === tab.key ? '#7DD3E8' : '#475569'}`,
+              borderBottom:  tabActiva === tab.key ? '1px solid #E8F6F8' : '1px solid #2A3F52',
               borderRadius:  '8px 8px 0 0', padding:'8px 16px', fontSize:'var(--cc-sm)',
-              fontWeight:    tabActiva === tab.key ? '700' : '400',
-              cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.15s'
+              fontWeight:    tabActiva === tab.key ? '700' : '500',
+              cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.15s',
+              boxShadow: tabActiva === tab.key ? '0 -2px 8px rgba(0,0,0,0.12)' : 'none',
             }}>{tab.label}</button>
           ))}
 
@@ -5407,18 +5454,17 @@ function ModuloSicoeObra({
       .then(r => r.json())
       .then(d => setSicoePkList(Array.isArray(d) ? d : []))
       .catch(() => setSicoePkList([]))
-    fetch(`${API_URL}/contratos/${contrato_id}`, { headers: hdrs })
-      .then(r => (r.ok ? r.json() : null))
-      .then(c => {
-        if (!c || typeof c !== 'object') {
+    getContratoPlanoGeojson(API_URL, contrato_id, getToken())
+      .then((d) => {
+        if (!d || typeof d !== 'object') {
           setSicoePlanoGeojson(null)
           setSicoeContratoCentro(null)
           return
         }
-        setSicoePlanoGeojson(c.plano_geojson || null)
+        setSicoePlanoGeojson(d.plano_geojson || null)
         setSicoeContratoCentro(
-          c.centro_lat != null && c.centro_lng != null
-            ? { lat: c.centro_lat, lng: c.centro_lng }
+          d.centro_lat != null && d.centro_lng != null
+            ? { lat: d.centro_lat, lng: d.centro_lng }
             : null,
         )
       })
@@ -8060,7 +8106,7 @@ function ModuloSicoeObra({
                   </div>
                 )}
               </div>
-              {!nivelInfo.esInterventoria && (
+              {puedeVerFiltroSubcontratista(usuario) && !nivelInfo.esInterventoria && (
                 <div style={sicoeFGrow}>
                   <div style={filtroLbl}>Subcontratista</div>
                   <select value={filtros.subcontratista_id} onChange={e => {
@@ -9684,11 +9730,10 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   useEffect(() => {
     if (!contrato_id) return
-    fetch(`${API_URL}/contratos/${contrato_id}`, { headers: hdrs })
-      .then(r => (r.ok ? r.json() : null))
-      .then(c => setPlanoGeojsonContrato(c && typeof c === 'object' ? (c.plano_geojson || null) : null))
+    getContratoPlanoGeojson(API_URL, contrato_id, token)
+      .then((d) => setPlanoGeojsonContrato(d?.plano_geojson ?? null))
       .catch(() => setPlanoGeojsonContrato(null))
-  }, [contrato_id])
+  }, [contrato_id, token, API_URL])
 
   useEffect(() => {
     // ── Número de reporte ────────────────────────────────────────────────────
@@ -11230,17 +11275,10 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
           logApiFailure(`plano-semaforo pkid-colores contrato=${contratoId}`, e)
           return {}
         }),
-      fetch(`${API}/contratos/${contratoId}`, { headers: hdrs })
-        .then(async r => {
-          if (!r.ok) {
-            logApiFailure(`plano-semaforo contratos/${contratoId}`, new Error(`HTTP ${r.status}`))
-            return null
-          }
-          const c = await r.json().catch(() => null)
-          return c?.plano_geojson ?? null
-        })
+      getContratoPlanoGeojson(API, contratoId, token)
+        .then((d) => d?.plano_geojson ?? null)
         .catch((e) => {
-          logApiFailure(`plano-semaforo contratos/${contratoId}`, e)
+          logApiFailure(`plano-semaforo contratos/${contratoId}/plano-geojson`, e)
           return null
         }),
     ])
@@ -11551,11 +11589,10 @@ function MiniMapaSemaforo({ t, colores, contratoId, token, height = 220, onPkidC
     }
     let cancelled = false
     setPlanoBase(undefined)
-    fetch(`${API_BASE}/contratos/${contratoId}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => (r.ok ? r.json() : null))
-      .then(c => {
+    getContratoPlanoGeojson(API_BASE, contratoId, token)
+      .then((d) => {
         if (cancelled) return
-        setPlanoBase(_normalizeContratoPlanoGeojson(c?.plano_geojson ?? null))
+        setPlanoBase(_normalizeContratoPlanoGeojson(d?.plano_geojson ?? null))
       })
       .catch(() => { if (!cancelled) setPlanoBase(_normalizeContratoPlanoGeojson(null)) })
     return () => { cancelled = true }
@@ -11860,13 +11897,15 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   const h = { Authorization: `Bearer ${token}` }
 
   const cargarCount = async () => {
+    if (contratoCtx == null || contratoCtx === '') { setNoLeidas(0); return }
     const r = await fetch(`${API}/notificaciones/no-leidas-count${qContrato}`, { headers: h }).catch(() => null)
     if (r?.ok) { const d = await r.json(); setNoLeidas(d.count || 0) }
   }
 
   const cargarRecibidos = async () => {
+    if (contratoCtx == null || contratoCtx === '') { setRecibidos([]); return }
     const p = new URLSearchParams()
-    if (contratoCtx != null && contratoCtx !== '') p.set('contrato_id', String(contratoCtx))
+    p.set('contrato_id', String(contratoCtx))
     if (filtroRecibidos === 'no_leidas') p.set('solo_no_leidas', 'true')
     p.set('limit', '100')
     const q = p.toString()
@@ -11875,6 +11914,7 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
   }
 
   const cargarEnviados = async () => {
+    if (contratoCtx == null || contratoCtx === '') { setEnviados([]); return }
     const r = await fetch(`${API}/notificaciones/enviadas${qContrato}`, { headers: h }).catch(() => null)
     if (r?.ok) setEnviados(await r.json())
   }
@@ -11996,16 +12036,16 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
     const noLeida = esRecibido && !n.leido
     return (
       <div onClick={() => abrirHilo(n)}
-        style={{ padding:'10px 14px', borderRadius:'8px', cursor:'pointer', marginBottom:'6px',
+        style={{ padding:'10px 14px', borderRadius:'8px', cursor: 'pointer', marginBottom:'6px',
           background: noLeida ? t.primary+'11' : t.bg,
           border: `1px solid ${noLeida ? t.primary+'44' : t.border}`,
           transition:'background 0.15s' }}
-        onMouseEnter={e => e.currentTarget.style.background = t.primary+'18'}
-        onMouseLeave={e => e.currentTarget.style.background = noLeida ? t.primary+'11' : t.bg}>
+        onMouseEnter={e => { e.currentTarget.style.background = t.primary+'18' }}
+        onMouseLeave={e => { e.currentTarget.style.background = noLeida ? t.primary+'11' : t.bg }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'4px' }}>
-          <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'6px', minWidth:0, flex:1 }}>
             {noLeida && <div style={{ width:'8px', height:'8px', borderRadius:'50%', background:t.primary, flexShrink:0 }}/>}
-            <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'220px' }}>{n.asunto}</span>
+            <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{n.asunto}</span>
           </div>
           <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, flexShrink:0, marginLeft:'8px' }}>{fmtFecha(n.created_at)}</span>
         </div>
@@ -12047,7 +12087,9 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
         <div style={{ position:'fixed', top:0, right:0, bottom:0, width:'400px', background:t.bgCard, borderLeft:`1px solid ${t.border}`, zIndex:9998, display:'flex', flexDirection:'column', boxShadow:'-4px 0 24px rgba(0,0,0,0.2)' }}>
           {/* Header del buzón */}
           <div style={{ padding:'16px 20px', borderBottom:`1px solid ${t.border}`, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-            <div style={{ fontSize:'var(--cc-md)', fontWeight:'700', color:t.text }}>🔔 Notificaciones</div>
+            <div>
+              <div style={{ fontSize:'var(--cc-md)', fontWeight:'700', color:t.text }}>🔔 Notificaciones</div>
+            </div>
             <div style={{ display:'flex', gap:'8px' }}>
               <button onClick={() => setMostrarNuevo(true)} style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'5px 12px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer' }}>
                 ✉️ Nuevo
@@ -12311,7 +12353,7 @@ function IconMigrarPresupuestoSicoe({ size = 18, color = 'currentColor' }) {
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, topOffset = 0, fontSize = 'normal', onFontSize, onOpenPerfil }) {
+function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, onLogout, onCambiarContrato, topOffset = 0, fontSize = 'normal', onFontSize, onOpenPerfil }) {
   const [moduloActivo, setModuloActivo] = useState('inicio')
   const [dashCarpetaReporte, setDashCarpetaReporte] = useState(null)
   const [nivelesDashContrato, setNivelesDashContrato] = useState(() => SICOE_NIVELES_CONTRATO_DEFAULT())
@@ -12833,6 +12875,50 @@ async function enviarZoomPkid(pkid) {
 
 const [navRegistroId, setNavRegistroId] = useState(null)
 const [navRegistroNumero, setNavRegistroNumero] = useState(null)
+  const prevContratoDashRef = useRef(contratoIdDash)
+
+  useEffect(() => {
+    if (!contratoIdDash) return
+    const prev = prevContratoDashRef.current
+    if (prev != null && String(prev) !== String(contratoIdDash)) {
+      setKpiPpto(null)
+      setKpiCobro(null)
+      setDashData(null)
+      setDashDrill([])
+      setDashTabla(null)
+      setDashLoading(false)
+      setDashTablaLoad(false)
+      setDashDrillPag(0)
+      setMatrizValidacion(null)
+      setMatrizValidacionLoad(true)
+      setActasListaMatriz([])
+      setAnalisisData(null)
+      setAnalisisSeleccion(null)
+      setAnalisisMapaColores({})
+      setAnalisisMapaPopup(null)
+      setLiqData(null)
+      setLiqSeleccion(null)
+      setLiqMapaColores({})
+      setLiqMapaPopup(null)
+      setMiniMapaColores({})
+      setPopupPkid(null)
+      setDashCarpetaReporte(null)
+      setDashRegistroNumero(null)
+      setDashDetallePpto(null)
+      setDashBibliotecaBalance([])
+      setDashBibliotecaError(null)
+      setDashMigracionModal(null)
+      setDwgEnlazadoDash(false)
+      setNavRegistroId(null)
+      setNavRegistroNumero(null)
+      setNotifNavegar(null)
+      pkidColoresCache.current = { data: null, timestamp: 0, contratoId: null, filterKey: '' }
+      dashDrillCache.current = {}
+      dashTablaCache.current = {}
+      dashDrillFetchSeqRef.current += 1
+    }
+    prevContratoDashRef.current = contratoIdDash
+  }, [contratoIdDash])
 
   async function handleNavegar(notif) {
     if (!notif?.modulo) return
@@ -13521,7 +13607,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 )}
               </span>
             </button>
-            <BuzonNotificaciones t={t} usuario={usuario} token={getToken()} onNavegar={handleNavegar} />
+            <BuzonNotificaciones key={`buzon-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} token={getToken()} onNavegar={handleNavegar} />
             {canAdmin && (
               <button onClick={() => setShowAdmin(true)} style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: '8px', padding: '6px 14px', color: t.primary, fontSize: 'var(--cc-sm)', cursor: 'pointer', fontWeight: '600' }}>
                 ⚙ Admin
@@ -13598,11 +13684,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             <select
               value={usuario.contrato_id || ''}
               onChange={async (e) => {
-                const cid = parseInt(e.target.value)
+                const cid = parseInt(e.target.value, 10)
                 const contrato = usuario._contratos.find(c => c.id === cid)
                 if (!contrato) return
-                const u = { ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero, logo_contratista: contrato.logo_contratista ?? null, logo_interventoria: contrato.logo_interventoria ?? null, contrato_fase: contrato.fase ?? 'PRESUPUESTO' }
-                setUsuario(u)
+                if (onCambiarContrato) await onCambiarContrato(contrato)
+                else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
               }}
               style={{ fontSize: 'var(--cc-sm)', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none' }}
             >
@@ -13624,7 +13710,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
 
         {moduloActivo === 'inicio' && (
-          <ModuloInicio t={t} usuario={usuario} fontSize={fontSize} puedePublicarNovedades={puedePublicarNovedadesInicio} token={getToken()} />
+          <ModuloInicio key={`inicio-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} fontSize={fontSize} puedePublicarNovedades={puedePublicarNovedadesInicio} token={getToken()} />
         )}
         {moduloActivo === 'dashboard' && (() => {
           const fmtD = n => n != null ? formatCOP(n) : '—'
@@ -15874,12 +15960,14 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             </OfflineProvider>
           </div>
         )}
-        {moduloActivo === 'presupuesto' && <ModuloPresupuesto t={t} usuario={usuario} token={getToken()} s={s} navRegistroId={navRegistroId} onNavRegistroConsumed={() => setNavRegistroId(null)} />}
-
+        {moduloActivo === 'presupuesto' && (
+          <ModuloPresupuesto key={`ppto-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} token={getToken()} s={s} navRegistroId={navRegistroId} onNavRegistroConsumed={() => setNavRegistroId(null)} />
+        )}
 
         {moduloActivo === 'sicoe_obra' && (
-          <OfflineProvider contratoId={usuario?.contrato_id} authToken={getToken()}>
+          <OfflineProvider key={`offline-${usuario?.contrato_id ?? 'x'}`} contratoId={usuario?.contrato_id} authToken={getToken()}>
             <ModuloSicoeObra
+              key={`sicoe-${usuario?.contrato_id ?? 'x'}`}
               t={t}
               usuario={usuario}
               token={getToken()}
@@ -15894,6 +15982,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         {moduloActivo === 'informes' && (
           tienePermisoInformesCcd ? (
             <ModuloInformes
+              key={`informes-${usuario?.contrato_id ?? 'x'}`}
               t={t}
               usuario={usuario}
               token={getToken()}
@@ -15926,6 +16015,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         {moduloActivo === 'programacion' && (
           tienePermisoProgramacionObra ? (
             <ModuloProgramacionObra
+              key={`prog-${usuario?.contrato_id ?? 'x'}`}
               t={t}
               usuario={usuario}
               token={getToken()}
@@ -15950,7 +16040,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           </div>
         )}
         {moduloActivo === 'semaforo' && (
-          <ModuloPlanoSemaforo t={t} usuario={usuario} token={getToken()} />
+          <ModuloPlanoSemaforo key={`semaforo-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} token={getToken()} />
         )}
 
         </div>{/* fin contenido principal */}
@@ -16388,23 +16478,42 @@ if (contratos.length > 1) {
     }
   }
 
-  async function handleSeleccionarContrato(contratoId) {
-    const contrato = pendingContratos.find(c => c.id === parseInt(contratoId))
-    const u = { ...pendingUser, contrato_id: contrato.id, contrato_numero: contrato.numero, logo_contratista: contrato.logo_contratista ?? null, logo_interventoria: contrato.logo_interventoria ?? null, contrato_fase: contrato.fase ?? 'PRESUPUESTO' }
-    delete u._token
-    // Guardar contrato principal en BD
+  async function cambiarContratoActivo(contrato, baseUser = null) {
+    const prev = baseUser ?? usuario
+    if (!prev || !contrato?.id) return null
+    const u = {
+      ...prev,
+      contrato_id: contrato.id,
+      contrato_numero: contrato.numero,
+      logo_contratista: contrato.logo_contratista ?? null,
+      logo_interventoria: contrato.logo_interventoria ?? null,
+      contrato_fase: contrato.fase ?? 'PRESUPUESTO',
+    }
     try {
-      const token = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
-      await fetch(`${API}/admin/usuarios/${u.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ contrato_id: contrato.id })
-      })
+      const token = getToken()
+      if (token) {
+        await fetch(`${API}/admin/usuarios/${u.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ contrato_id: contrato.id }),
+        })
+      }
     } catch { /* silencioso */ }
     const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
     storage.setItem('cc_usuario', JSON.stringify(u))
-    setUsuario(u); setModal(null)
-    setPendingUser(null); setPendingContratos([])
+    setUsuario(u)
+    return u
+  }
+
+  async function handleSeleccionarContrato(contratoId) {
+    const contrato = pendingContratos.find(c => c.id === parseInt(contratoId, 10))
+    if (!contrato || !pendingUser) return
+    const u = { ...pendingUser }
+    delete u._token
+    await cambiarContratoActivo(contrato, u)
+    setModal(null)
+    setPendingUser(null)
+    setPendingContratos([])
   }
 
   async function handleLogout() {
@@ -16672,6 +16781,7 @@ if (contratos.length > 1) {
       )}
       <Dashboard t={t} activeTheme={activeTheme} themeMode={themeMode}
         onTheme={handleTheme} usuario={usuario} setUsuario={setUsuario} onLogout={handleLogout}
+        onCambiarContrato={cambiarContratoActivo}
         topOffset={totalTopOffset}
         fontSize={fontSize} onFontSize={cambiarFuente}
         onOpenPerfil={() => setPerfilModalAbierto(true)}

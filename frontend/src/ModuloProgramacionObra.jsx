@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { API_BASE } from './apiBase'
+import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
@@ -509,8 +510,8 @@ export default function ModuloProgramacionObra({
     setPlano(undefined)
     setErr('')
     Promise.all([
-      fetch(`${API}/contratos/${cid}`, { headers: { Authorization: `Bearer ${token}` } }).then((r) =>
-        r.ok ? r.json() : null,
+      getContratoPlanoGeojson(API, cid, token).then((d) =>
+        d && typeof d === 'object' ? { plano_geojson: d.plano_geojson } : null,
       ),
       fetch(`${API}/prog-obra/${cid}/mapa`, { headers: { Authorization: `Bearer ${token}` } }).then((r) =>
         r.ok ? r.json() : null,

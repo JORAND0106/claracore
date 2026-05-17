@@ -1,8 +1,10 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { API_BASE } from './apiBase'
 import { getClaraTypeScaleInline } from './typographyScale'
-import { FRASES_OFFLINE_INICIO } from './data/frasesOfflineInicio.js'
-const API_ANTHROPIC = `${API_BASE}/frase-del-dia`
+import { eligeFraseInicio, fraseInicioEsValida } from './data/frasesInicioCuradas.js'
+
+const API_FRASE = `${API_BASE}/frase-del-dia`
+const SLIDER_INTERVAL_MS = 5000
 
 function buildfs(fontSize) {
   const s = getClaraTypeScaleInline(fontSize)
@@ -376,112 +378,73 @@ function StatCard({ icono, valor, label, color, t, fs, delay = 0 }) {
   )
 }
 
-// ─── Frase del día ────────────────────────────────────────────────────────────
+// ─── Frase del día (autores y Biblia) ─────────────────────────────────────────
 function FraseDelDia({ t, fs, usuario }) {
-  const storageKey = `claracore_frase_${usuario?.id || 'guest'}`
-  const FRASES_FALLBACK = [
-    { frase: 'El avance de hoy construye el resultado de mañana.', autor: 'ClaraCore', tipo: 'motivadora' },
-    { frase: 'La disciplina diaria convierte grandes obras en realidad.', autor: 'ClaraCore', tipo: 'reflexiva' },
-    { frase: 'La calidad no se improvisa: se decide en cada detalle.', autor: 'ClaraCore', tipo: 'reflexiva' },
-    { frase: 'Mantente firme: cada paso bien hecho cuenta.', autor: 'ClaraCore', tipo: 'motivadora' },
-    { frase: 'La constancia convierte lo difícil en posible.', autor: 'ClaraCore', tipo: 'motivadora' },
-    { frase: 'Donde otros ven obstáculos, un equipo firme ve oportunidades de mejora.', autor: 'ClaraCore', tipo: 'reflexiva' },
-    { frase: 'La excelencia no es un acto, es un hábito diario.', autor: 'ClaraCore', tipo: 'motivadora' },
-    { frase: 'Tu trabajo de hoy es la confianza de muchos mañana.', autor: 'ClaraCore', tipo: 'reflexiva' },
-    { frase: 'No te rindas: la obra más sólida se levanta bloque a bloque.', autor: 'ClaraCore', tipo: 'motivadora' },
-    { frase: 'Hazlo bien, aunque nadie mire; eso también construye carácter.', autor: 'ClaraCore', tipo: 'reflexiva' },
-    { frase: 'Todo tiene su tiempo, y todo lo que se quiere debajo del cielo tiene su hora.', autor: 'Eclesiastés 3:1', tipo: 'bíblica' },
-    { frase: 'Todo lo puedo en Cristo que me fortalece.', autor: 'Filipenses 4:13', tipo: 'bíblica' },
-    { frase: 'Porque yo sé los planes que tengo para ustedes, planes de bienestar y no de calamidad.', autor: 'Jeremías 29:11', tipo: 'bíblica' },
-    { frase: 'Encomienda al Señor tus obras, y tus pensamientos serán afirmados.', autor: 'Proverbios 16:3', tipo: 'bíblica' },
-    { frase: 'Esfuérzate y sé valiente; no temas ni desmayes.', autor: 'Josué 1:9', tipo: 'bíblica' },
-    { frase: 'Los que esperan en el Señor tendrán nuevas fuerzas; levantarán alas como las águilas.', autor: 'Isaías 40:31', tipo: 'bíblica' },
-    { frase: 'Fiel es Dios, que no dejará que sean probados más de lo que pueden resistir.', autor: '1 Corintios 10:13', tipo: 'bíblica' },
-    { frase: 'El corazón del hombre piensa su camino, mas el Señor endereza sus pasos.', autor: 'Proverbios 16:9', tipo: 'bíblica' },
-    ...FRASES_OFFLINE_INICIO,
-  ]
-  const fallbackLocal = (fraseActual = null) => {
-    const pool = FRASES_FALLBACK.filter(f => !fraseActual || f.frase !== fraseActual.frase)
-    const source = pool.length > 0 ? pool : FRASES_FALLBACK
-    const idx = Math.floor(Math.random() * source.length)
-    return source[idx]
-  }
-  const [estado, setEstado]   = useState('idle')
-  const [frase, setFrase]     = useState(null)
+  const storageKey = `claracore_frase_v2_${usuario?.id || 'guest'}`
+  const [estado, setEstado] = useState('visible')
+  const [frase, setFrase] = useState(() => eligeFraseInicio())
   const [visible, setVisible] = useState(false)
+
+  const aplicarFrase = useCallback((parsed) => {
+    if (!fraseInicioEsValida(parsed)) return
+    setFrase(parsed)
+    setEstado('visible')
+    setVisible(false)
+    setTimeout(() => setVisible(true), 80)
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({ fecha: hoyISO(), frase: parsed }))
+    } catch { /* ignore */ }
+  }, [storageKey])
 
   useEffect(() => {
     try {
       const guardado = JSON.parse(localStorage.getItem(storageKey) || 'null')
-      // Si ya tiene la frase de hoy en cache, mostrarla directamente
-      if (guardado?.frase && guardado?.fecha === hoyISO()) {
-        setFrase(guardado.frase)
-        setEstado('visible')
-        setTimeout(() => setVisible(true), 200)
+      if (guardado?.frase?.frase && guardado?.fecha === hoyISO() && fraseInicioEsValida(guardado.frase)) {
+        aplicarFrase(guardado.frase)
         return
       }
-    } catch {}
-    // Generar frase automáticamente para todos (sin preguntar)
-    setTimeout(() => generarFrase(), 400)
-  }, [])
+    } catch { /* ignore */ }
+    aplicarFrase(eligeFraseInicio())
+  }, [storageKey, aplicarFrase])
 
   const generarFrase = async () => {
     setEstado('cargando')
-    const hora  = new Date().getHours()
-    const turno = hora < 12 ? 'mañana' : hora < 18 ? 'tarde' : 'noche'
-    const dia   = new Date().toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })
+    setVisible(false)
     try {
-      const token = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
-      const res = await fetch(API_ANTHROPIC, {
+      const tok = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token')
+      const res = await fetch(API_FRASE, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          ...(tok ? { Authorization: `Bearer ${tok}` } : {}),
         },
-        body: JSON.stringify({ nombre: usuario?.nombre || '', turno, dia })
+        body: JSON.stringify({}),
       })
-      if (!res.ok) throw new Error(`frase-del-dia status ${res.status}`)
-      const data = await res.json()
-      const parsedApi =
-        (data && typeof data === 'object' && data.frase) ? data : null
-      const parsed = parsedApi || fallbackLocal(frase)
-      setFrase(parsed)
-      setEstado('visible')
-      setTimeout(() => setVisible(true), 100)
-      localStorage.setItem(storageKey, JSON.stringify({ aceptado: true, fecha: hoyISO(), frase: parsed }))
-    } catch {
-      const parsed = fallbackLocal(frase)
-      setFrase(parsed)
-      setEstado('visible')
-      setTimeout(() => setVisible(true), 100)
-      localStorage.setItem(storageKey, JSON.stringify({ aceptado: true, fecha: hoyISO(), frase: parsed }))
-    }
+      if (res.ok) {
+        const data = await res.json()
+        if (fraseInicioEsValida(data)) {
+          aplicarFrase(data)
+          return
+        }
+      }
+    } catch { /* local */ }
+    aplicarFrase(eligeFraseInicio(frase?.frase))
   }
-
-  const aceptar  = () => generarFrase()
 
   const TIPO_COLOR = { reflexiva: '#8B5CF6', motivadora: '#10B981', 'bíblica': '#F59E0B' }
   const TIPO_ICONO = { reflexiva: '💡', motivadora: '🚀', 'bíblica': '📖' }
   const TIPO_TEXTO = { reflexiva: 'Reflexión del día', motivadora: 'Frase motivadora', 'bíblica': 'Versículo del día' }
 
-  if (estado === 'idle') return null
-
   return (
     <div style={{
       background: t.bgCard, border: `1px solid ${t.border}`,
-      borderRadius: '12px', padding: '16px 20px', marginBottom: '20px',
+      borderRadius: '12px', padding: '16px 20px',
     }}>
       {estado === 'cargando' && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
           <div style={{ fontSize: '20px', display: 'inline-block', animation: 'spin 1.2s linear infinite' }}>⏳</div>
-          <div style={{ fontSize: fs.base, color: t.textMuted }}>Generando tu frase del día...</div>
-        </div>
-      )}
-
-      {estado === 'error' && (
-        <div style={{ fontSize: fs.base, color: t.textMuted }}>
-          No se pudo generar la frase. <span onClick={generarFrase} style={{ color: t.primary, cursor: 'pointer', fontWeight: '700' }}>Reintentar</span>
+          <div style={{ fontSize: fs.base, color: t.textMuted }}>Cargando frase…</div>
         </div>
       )}
 
@@ -499,19 +462,183 @@ function FraseDelDia({ t, fs, usuario }) {
                 {TIPO_TEXTO[frase.tipo] || 'Frase del día'}
               </div>
               <div style={{
-                fontSize: fs.titulo, fontWeight: '300', color: t.text,
-                lineHeight: 1.5, fontStyle: 'italic', marginBottom: '8px',
+                fontSize: fs.card, fontWeight: '400', color: t.text,
+                lineHeight: 1.55, fontStyle: 'italic', marginBottom: '8px',
               }}>
-                "{frase.frase}"
+                «{frase.frase}»
               </div>
-              <div style={{ fontSize: fs.autor, color: t.textMuted }}>— {frase.autor}</div>
+              <div style={{ fontSize: fs.autor, color: t.textMuted, fontWeight: '600' }}>— {frase.autor}</div>
             </div>
           </div>
           <div style={{ marginTop: '10px', textAlign: 'right' }}>
-            <button onClick={generarFrase} style={{
+            <button type="button" onClick={generarFrase} style={{
               background: 'transparent', border: 'none',
-              fontSize: fs.autor, color: t.textMuted, cursor: 'pointer', opacity: 0.6,
-            }}>🔄 Generar otra</button>
+              fontSize: fs.autor, color: t.primary, cursor: 'pointer', fontWeight: '600',
+            }}>🔄 Otra frase</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Slider fotos SICOE (acta RPO vigente) ────────────────────────────────────
+function SliderFotosActaVigente({ t, fs, contratoId, token }) {
+  const [acta, setActa] = useState(null)
+  const [fotos, setFotos] = useState([])
+  const [cargando, setCargando] = useState(true)
+  const [errorApi, setErrorApi] = useState(false)
+  const [sinActaPeriodo, setSinActaPeriodo] = useState(false)
+  const [indice, setIndice] = useState(0)
+  const [fade, setFade] = useState(true)
+  const timerRef = useRef(null)
+
+  useEffect(() => {
+    if (!contratoId) {
+      setActa(null)
+      setFotos([])
+      setCargando(false)
+      setErrorApi(false)
+      setSinActaPeriodo(false)
+      return
+    }
+    let cancelled = false
+    setCargando(true)
+    setIndice(0)
+    setErrorApi(false)
+    setSinActaPeriodo(false)
+    const h = token ? { Authorization: `Bearer ${token}` } : {}
+    fetch(`${API_BASE}/inicio/${contratoId}/fotos-acta-vigente`, { headers: h })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((data) => {
+        if (cancelled) return
+        setActa(data.acta || null)
+        setFotos(Array.isArray(data.fotos) ? data.fotos : [])
+        setSinActaPeriodo(!!data.sin_acta_en_periodo && !data.acta)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setActa(null)
+          setFotos([])
+          setErrorApi(true)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCargando(false)
+      })
+    return () => { cancelled = true }
+  }, [contratoId, token])
+
+  useEffect(() => {
+    if (fotos.length < 2) return undefined
+    timerRef.current = setInterval(() => {
+      setFade(false)
+      setTimeout(() => {
+        setIndice((i) => (i + 1) % fotos.length)
+        setFade(true)
+      }, 280)
+    }, SLIDER_INTERVAL_MS)
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current)
+    }
+  }, [fotos.length])
+
+  const actual = fotos[indice]
+
+  return (
+    <div style={{
+      background: t.bgCard,
+      border: `1px solid ${t.border}`,
+      borderRadius: '12px',
+      overflow: 'hidden',
+      display: 'flex',
+      flexDirection: 'column',
+      minHeight: 'min(520px, 72vh)',
+      boxShadow: '0 1px 8px rgba(0,0,0,0.06)',
+    }}>
+      <div style={{
+        padding: '12px 16px',
+        borderBottom: `1px solid ${t.border}`,
+        background: `${t.primary}0c`,
+      }}>
+        <div style={{ fontSize: fs.badge, fontWeight: '800', letterSpacing: '0.5px', textTransform: 'uppercase', color: t.primary }}>
+          📷 Obra en campo · SICOE
+        </div>
+        <div style={{ fontSize: fs.autor, color: t.textMuted, marginTop: '4px', lineHeight: 1.4 }}>
+          {cargando
+            ? 'Cargando fotos del acta vigente…'
+            : errorApi
+              ? 'Sin conexión al servidor (inicie el backend en el puerto 8000)'
+              : acta
+                ? `Acta RPO #${acta.numero_rpo ?? acta.id}${acta.fecha_inicio ? ` · ${String(acta.fecha_inicio).slice(0, 10)} → ${String(acta.fecha_fin || '').slice(0, 10)}` : ''}`
+                : sinActaPeriodo
+                  ? 'Hoy no hay acta RPO en período; el sistema la asignará cuando corresponda'
+                  : 'Buscando acta del contrato…'}
+        </div>
+      </div>
+
+      <div style={{ flex: 1, position: 'relative', background: '#0f172a', minHeight: 'min(400px, 52vh)' }}>
+        {cargando && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', fontSize: fs.sm }}>
+            ⏳
+          </div>
+        )}
+        {!cargando && !actual && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', textAlign: 'center', color: '#94a3b8', fontSize: fs.sm, lineHeight: 1.5 }}>
+            {errorApi
+              ? 'El frontend no puede hablar con el API (ECONNREFUSED :8000). En otra terminal ejecute: uvicorn main:app --reload --port 8000 desde la carpeta backend.'
+              : acta
+                ? 'Aún no hay fotos en registros de este acta. Se mostrarán aquí al subirlas en SICOE Obra.'
+                : sinActaPeriodo
+                  ? 'No hay acta RPO en período para la fecha de hoy. Cuando exista una acta vigente, el carrusel se llenará automáticamente.'
+                  : 'No se pudo resolver el acta del contrato.'}
+          </div>
+        )}
+        {actual && (
+          <>
+            <img
+              key={`${actual.url}-${indice}`}
+              src={actual.url}
+              alt={actual.observacion || 'Foto de obra'}
+              style={{
+                width: '100%',
+                height: '100%',
+                minHeight: 'min(400px, 52vh)',
+                maxHeight: 'min(56vh, 520px)',
+                objectFit: 'cover',
+                display: 'block',
+                opacity: fade ? 1 : 0,
+                transition: 'opacity 0.35s ease',
+              }}
+            />
+            {fotos.length > 1 && (
+              <div style={{
+                position: 'absolute', top: '10px', right: '10px',
+                background: 'rgba(15,23,42,0.75)', color: '#fff',
+                fontSize: fs.autor, fontWeight: '700', borderRadius: '20px', padding: '4px 10px',
+              }}>
+                {indice + 1} / {fotos.length}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {actual && (
+        <div style={{ padding: '12px 16px', borderTop: `1px solid ${t.border}`, background: t.bg }}>
+          <div style={{ fontSize: fs.autor, fontWeight: '700', color: t.primary, marginBottom: '6px', lineHeight: 1.35 }}>
+            📍 {actual.ubicacion || 'Ubicación no indicada'}
+            {actual.numero_registro != null && (
+              <span style={{ color: t.textMuted, fontWeight: '500' }}> · Reg. #{actual.numero_registro}</span>
+            )}
+          </div>
+          <div style={{ fontSize: fs.sm, color: t.text, lineHeight: 1.5 }}>
+            {actual.observacion
+              ? actual.observacion
+              : <span style={{ color: t.textMuted, fontStyle: 'italic' }}>Sin observación en el registro.</span>}
           </div>
         </div>
       )}
@@ -558,8 +685,9 @@ export default function ModuloInicio({ t, usuario, fontSize = 'normal', puedePub
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [usuario?.contrato_id])
 
+  const contratoId = usuario?.contrato_id
   const hora   = new Date().getHours()
   const saludo = hora < 12 ? 'Buenos días' : hora < 18 ? 'Buenas tardes' : 'Buenas noches'
 
@@ -604,22 +732,29 @@ export default function ModuloInicio({ t, usuario, fontSize = 'normal', puedePub
         </div>
       </div>
 
-      {/* ── Frase del día (ancho completo) ── */}
-      <div style={{ marginBottom: '20px' }}>
-        <FraseDelDia t={t} fs={fs} usuario={usuario} />
-      </div>
-
-      {/* ── Buzón de novedades (ancho de la sección, debajo de indicadores) ── */}
-      <div style={{ marginBottom: '20px' }}>
-        <BandejaNovedadesInicio
-          novedades={novedades}
-          setNovedades={setNovedades}
-          t={t}
-          fs={fs}
-          novedadesCargando={novedadesCargando}
-          token={token}
-          puedePublicarNovedades={puedePublicarNovedades}
-        />
+      {/* ── Frase + novedades (izq) · Carrusel fotos SICOE acta vigente (der) ── */}
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '20px',
+        alignItems: 'stretch',
+        marginBottom: '20px',
+      }}>
+        <div style={{ flex: '1 1 360px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <FraseDelDia t={t} fs={fs} usuario={usuario} />
+          <BandejaNovedadesInicio
+            novedades={novedades}
+            setNovedades={setNovedades}
+            t={t}
+            fs={fs}
+            novedadesCargando={novedadesCargando}
+            token={token}
+            puedePublicarNovedades={puedePublicarNovedades}
+          />
+        </div>
+        <div style={{ flex: '1 1 360px', minWidth: 0 }}>
+          <SliderFotosActaVigente t={t} fs={fs} contratoId={contratoId} token={token} />
+        </div>
       </div>
 
       {/* ── Footer ── */}

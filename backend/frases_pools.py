@@ -155,20 +155,34 @@ def elige_cita_autor(semilla: Optional[int] = None) -> Dict[str, Any]:
     return random.choice(_POOL_CITAS_AUTORES)
 
 
+def _pool_trascendente() -> List[Dict[str, Any]]:
+    """Citas de autores y versículos fijos; excluye textos genéricos de marca."""
+    out: List[Dict[str, Any]] = []
+    for item in _POOL + _POOL_CITAS_AUTORES:
+        autor = (item.get("autor") or "").strip().lower()
+        if autor == "claracore":
+            continue
+        if item.get("tipo") == "bíblica" or autor not in ("aforismo", "refrán", "dicho de obra"):
+            out.append(item)
+        elif " (" in (item.get("autor") or "") or any(
+            x in autor for x in ("einstein", "gandhi", "cervantes", "mandela", "churchill", "roosevelt", "jobs", "rvr", "biblia", "jesús", "machado", "unamuno", "mistral", "hemingway", "ford", "drucker", "rousseau", "nietzsche", "buda", "rohn", "disney", "elliot", "ward", "lao-tse", "saint-exupéry")
+        ):
+            out.append(item)
+    return out if out else list(_POOL_CITAS_AUTORES)
+
+
 def elige_cualquiera_espanol(semilla: Optional[int] = None) -> Dict[str, Any]:
-    """Aforismos de obra, citas de autores, o cita fija: todo en español."""
-    n = _POOL
-    a = _POOL_CITAS_AUTORES
-    toda = n + a
+    toda = _pool_trascendente()
     if semilla is not None:
         return random.Random(semilla).choice(toda)
     return random.choice(toda)
 
 
 def elige_aleatoria(semilla: Optional[int] = None) -> Dict[str, Any]:
+    toda = _pool_trascendente()
     if semilla is not None:
-        return random.Random(semilla).choice(_POOL)
-    return random.choice(_POOL)
+        return random.Random(semilla).choice(toda)
+    return random.choice(toda)
 
 
 def pool_len() -> int:

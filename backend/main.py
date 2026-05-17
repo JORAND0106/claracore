@@ -636,6 +636,11 @@ class PermisoUpdate(BaseModel):
     eliminar: bool = False
     validar: bool = False
     exportar: bool = False
+    contrato_id: Optional[int] = None
+
+
+class CompetenciaContratoCreate(BaseModel):
+    nombre: str
 
 class UsuarioUpdate(BaseModel):
     cargo_id: Optional[int] = None
@@ -1593,9 +1598,155 @@ def _caller_contract_scope(current_user):
 
 def _require_contract_access(current_user, contrato_id: int):
     """Bloquea acceso si intenta consultar un contrato distinto al propio."""
+    if _es_desarrollador(current_user):
+        return
     caller_contrato, _ = _caller_contract_scope(current_user)
     if caller_contrato and int(caller_contrato) != int(contrato_id):
         raise HTTPException(status_code=403, detail="No tienes acceso a información de otro contrato")
+
+
+COMPETENCIAS_BASE = ["EAB", "ENEL-CODENSA", "ETB", "Gas Natural", "ICCU", "IDU", "MOVISTAR"]
+
+
+def _comentario_sicoe_visible_para_usuario(c: dict, uid: int, es_privilegiado: bool) -> bool:
+    """Misma regla que listar_comentarios: destinatarios explícitos o autor."""
+    if es_privilegiado:
+        return True
+    destinatarios = c.get("destinatarios") or []
+    ids_dest = set()
+    for d in destinatarios:
+        if isinstance(d, dict) and d.get("id") is not None:
+            try:
+                ids_dest.add(int(d["id"]))
+            except (TypeError, ValueError):
+                continue
+    if not ids_dest:
+        return True
+    if uid in ids_dest:
+        return True
+    try:
+        return int(c.get("autor_id") or 0) == uid
+    except (TypeError, ValueError):
+        return False
+
+
+def _enriquecer_num_comentarios_visibles(regs_raw: List[dict], current_user) -> None:
+    """Alinea num_comentarios con lo que el usuario puede ver (evita contador 2 / modal vacío)."""
+    reg_ids = [reg["id"] for reg in regs_raw if reg.get("id")]
+    if not reg_ids:
+        return
+    try:
+        uid = int(current_user.get("sub") or current_user.get("id") or 0)
+    except (TypeError, ValueError):
+        uid = 0
+    es_priv = _es_desarrollador(current_user) or _es_admin_o_desarrollador(current_user)
+    num_map = {rid: 0 for rid in reg_ids}
+    try:
+        rows = (
+            supabase.table("so_registro_comentarios")
+            .select("id, registro_id, autor_id, destinatarios, padre_id")
+            .in_("registro_id", reg_ids)
+            .execute()
+            .data
+            or []
+        )
+        by_reg = {}
+        for row in rows:
+            rid = row.get("registro_id")
+            if rid is not None:
+                by_reg.setdefault(rid, []).append(row)
+        for rid, coms in by_reg.items():
+            by_id = {c.get("id"): c for c in coms}
+            for c in coms:
+                dest = c.get("destinatarios") or []
+                if (not dest) and c.get("padre_id") and by_id.get(c.get("padre_id")):
+                    dest = by_id[c.get("padre_id")].get("destinatarios") or []
+                    c = {**c, "destinatarios": dest}
+                if _comentario_sicoe_visible_para_usuario(c, uid, es_priv):
+                    num_map[rid] = num_map.get(rid, 0) + 1
+    except Exception:
+        pass
+    for reg in regs_raw:
+        reg["num_comentarios"] = num_map.get(reg.get("id"), 0)
+
+
+def _competencias_para_contrato(contrato_id: int) -> List[str]:
+    names = set(COMPETENCIAS_BASE)
+    try:
+        rows = (
+            supabase.table("competencias_contrato")
+            .select("nombre")
+            .eq("contrato_id", contrato_id)
+            .execute()
+            .data
+            or []
+        )
+        for r in rows:
+            n = (r.get("nombre") or "").strip()
+            if n:
+                names.add(n)
+    except Exception:
+        pass
+    try:
+        offset = 0
+        while True:
+            batch = (
+                supabase.table("listado_precios")
+                .select("competencia")
+                .eq("contrato_id", contrato_id)
+                .range(offset, offset + 999)
+                .execute()
+                .data
+                or []
+            )
+            for r in batch:
+                n = (r.get("competencia") or "").strip()
+                if n:
+                    names.add(n)
+            if len(batch) < 1000:
+                break
+            offset += 1000
+    except Exception:
+        pass
+    return sorted(names, key=lambda x: x.upper())
+
+
+def _permisos_rows_para_cargo(cargo_id: int, contrato_id: Optional[int] = None) -> List[dict]:
+    """Matriz por cargo; si hay filas con contrato_id, solo esas (no mezclar contratos)."""
+    try:
+        if contrato_id is not None:
+            scoped = (
+                supabase.table("permisos")
+                .select("*")
+                .eq("cargo_id", cargo_id)
+                .eq("contrato_id", int(contrato_id))
+                .execute()
+                .data
+                or []
+            )
+            if scoped:
+                return scoped
+        legacy = (
+            supabase.table("permisos")
+            .select("*")
+            .eq("cargo_id", cargo_id)
+            .is_("contrato_id", "null")
+            .execute()
+            .data
+            or []
+        )
+        if legacy:
+            return legacy
+    except Exception:
+        pass
+    return (
+        supabase.table("permisos")
+        .select("*")
+        .eq("cargo_id", cargo_id)
+        .execute()
+        .data
+        or []
+    )
 
 
 def _usuario_vinculado_a_contrato(usuario_id: int, contrato_id: int) -> bool:
@@ -3240,7 +3391,13 @@ _CONTRATOS_SELECT_LISTA = (
     "id, numero, objeto, contratista, nit, interventoria, entidad, entidad_otra, logo_entidad, "
     "centro_lat, centro_lng, logo_contratista, logo_interventoria, fase, costos_adicionales"
 )
-# Al editar, traemos * para no romper si faltan columnas nuevas en un entorno; el listado queda aligerado.
+# Detalle sin plano_geojson (decenas de MB): el plano se pide con GET .../plano-geojson o ?include_plano=1.
+_CONTRATOS_SELECT_DETALLE_SIN_PLANO = (
+    _CONTRATOS_SELECT_LISTA
+    + ",aiu,iva,valor_componente_ambiental,valor_componente_social,valor_componente_pmt,"
+    "costo_directo_contrato,costos_adicionales_lista,sicoe_consecutivos_desde_uno"
+)
+# Al editar con include_plano=1, traemos * para no romper si faltan columnas nuevas en un entorno.
 _CONTRATOS_SELECT_DETALLE = "*"
 
 
@@ -3255,10 +3412,34 @@ def admin_contratos_resumen(current_user=Depends(get_current_user)):
     return supabase.table("contratos").select("id, numero, fase").order("numero").execute().data or []
 
 
+@app.get("/contratos/{contrato_id}/plano-geojson")
+def obtener_contrato_plano_geojson(contrato_id: int):
+    """Solo plano + centro. Usar desde el cliente con caché para no repetir descargas de JSON enormes."""
+    r = (
+        supabase.table("contratos")
+        .select("plano_geojson, centro_lat, centro_lng")
+        .eq("id", contrato_id)
+        .limit(1)
+        .execute()
+    )
+    if not r.data:
+        raise HTTPException(status_code=404, detail="Contrato no encontrado")
+    row = r.data[0]
+    return {
+        "plano_geojson": row.get("plano_geojson"),
+        "centro_lat": row.get("centro_lat"),
+        "centro_lng": row.get("centro_lng"),
+    }
+
+
 @app.get("/contratos/{contrato_id}")
-def obtener_contrato(contrato_id: int):
-    """Una fila completa (incl. plano_geojson y columnas añadidas vía migraciones, sin listar nombres fijos)."""
-    r = supabase.table("contratos").select(_CONTRATOS_SELECT_DETALLE).eq("id", contrato_id).limit(1).execute()
+def obtener_contrato(contrato_id: int, include_plano: bool = Query(False)):
+    """
+    Por defecto **no** incluye `plano_geojson` (payload muy pesado). El mapa y módulos afines deben usar
+    `GET /contratos/{id}/plano-geojson` (con caché en cliente) o `?include_plano=1` (p. ej. panel Admin al editar).
+    """
+    sel = _CONTRATOS_SELECT_DETALLE if include_plano else _CONTRATOS_SELECT_DETALLE_SIN_PLANO
+    r = supabase.table("contratos").select(sel).eq("id", contrato_id).limit(1).execute()
     row = r.data[0] if r.data else None
     if not row:
         raise HTTPException(status_code=404, detail="Contrato no encontrado")
@@ -3348,7 +3529,10 @@ def login(request: Request, body: LoginRequest):
     # Cargar permisos del cargo para control de acceso en el panel
     permisos = []
     if usuario.get("cargo_id"):
-        permisos_raw = supabase.table("permisos").select("*").eq("cargo_id", usuario["cargo_id"]).execute().data
+        permisos_raw = _permisos_rows_para_cargo(
+            int(usuario["cargo_id"]),
+            int(usuario["contrato_id"]) if usuario.get("contrato_id") is not None else None,
+        )
         funciones_rows = supabase.table("funciones").select("id, nombre").execute().data
         funciones_map = {f["id"]: f["nombre"] for f in funciones_rows}
         permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
@@ -4124,8 +4308,43 @@ def eliminar_cargo(cargo_id: int, current_user=Depends(get_current_user)):
     return {"mensaje": "Cargo eliminado"}
 
 @app.get("/admin/permisos/{cargo_id}")
-def obtener_permisos(cargo_id: int, current_user=Depends(get_current_user)):
-    return supabase.table("permisos").select("*").eq("cargo_id", cargo_id).execute().data
+def obtener_permisos(
+    cargo_id: int,
+    contrato_id: Optional[int] = None,
+    current_user=Depends(get_current_user),
+):
+    cid = contrato_id
+    if cid is None:
+        caller_cid, _ = _caller_contract_scope(current_user)
+        if caller_cid is not None:
+            cid = int(caller_cid)
+    return _permisos_rows_para_cargo(cargo_id, cid)
+
+
+@app.get("/contratos/{contrato_id}/competencias")
+def listar_competencias_contrato(contrato_id: int, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    return {"competencias": _competencias_para_contrato(contrato_id)}
+
+
+@app.post("/contratos/{contrato_id}/competencias")
+def crear_competencia_contrato(
+    contrato_id: int,
+    body: CompetenciaContratoCreate,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    nombre = (body.nombre or "").strip()
+    if not nombre:
+        raise HTTPException(status_code=400, detail="Nombre de entidad requerido")
+    try:
+        supabase.table("competencias_contrato").upsert(
+            {"contrato_id": contrato_id, "nombre": nombre},
+            on_conflict="contrato_id,nombre",
+        ).execute()
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=f"No se pudo guardar la entidad: {ex}")
+    return {"competencias": _competencias_para_contrato(contrato_id)}
 
 @app.get("/admin/todos-usuarios")
 def todos_usuarios(current_user=Depends(get_current_user)):
@@ -4333,7 +4552,10 @@ def get_usuario_contratos(usuario_id: int, current_user=Depends(get_current_user
     ids = [r["contrato_id"] for r in result.data]
     if not ids:
         return []
-    contratos = supabase.table("contratos").select("id, numero, contratista, interventoria, entidad, entidad_otra, logo_entidad, plano_geojson, centro_lat, centro_lng, logo_contratista, logo_interventoria, fase").in_("id", ids).execute()
+    contratos = supabase.table("contratos").select(
+        "id, numero, contratista, interventoria, entidad, entidad_otra, logo_entidad, "
+        "centro_lat, centro_lng, logo_contratista, logo_interventoria, fase"
+    ).in_("id", ids).execute()
     return contratos.data
 
 @app.post("/admin/usuario-contratos")
@@ -4516,25 +4738,76 @@ def guardar_permisos(permisos: List[PermisoUpdate], current_user=Depends(get_cur
             })
         return out
 
+    contrato_matriz = permisos[0].contrato_id if permisos else None
+    if contrato_matriz is None:
+        caller_cid, _ = _caller_contract_scope(current_user)
+        contrato_matriz = caller_cid
+
     antes_por_cargo = {}
     for cid in cargo_ids:
         antes_por_cargo[cid] = _norm_perm_rows(
-            supabase.table("permisos").select("*").eq("cargo_id", cid).execute().data or []
+            _permisos_rows_para_cargo(cid, int(contrato_matriz) if contrato_matriz is not None else None)
         )
 
+    cid_matriz = int(contrato_matriz) if contrato_matriz is not None else None
+
     for permiso in permisos:
-        existe = supabase.table("permisos").select("id") \
-            .eq("cargo_id", permiso.cargo_id).eq("funcion_id", permiso.funcion_id).execute()
         data = permiso.dict()
-        if existe.data:
-            supabase.table("permisos").update(data) \
-                .eq("cargo_id", permiso.cargo_id).eq("funcion_id", permiso.funcion_id).execute()
+        if cid_matriz is not None:
+            data["contrato_id"] = cid_matriz
+
+        row_id = None
+        if cid_matriz is not None:
+            scoped = (
+                supabase.table("permisos")
+                .select("id")
+                .eq("cargo_id", permiso.cargo_id)
+                .eq("funcion_id", permiso.funcion_id)
+                .eq("contrato_id", cid_matriz)
+                .limit(1)
+                .execute()
+                .data
+            )
+            if scoped:
+                row_id = scoped[0]["id"]
+
+        if row_id is None:
+            legacy = (
+                supabase.table("permisos")
+                .select("id, contrato_id")
+                .eq("cargo_id", permiso.cargo_id)
+                .eq("funcion_id", permiso.funcion_id)
+                .is_("contrato_id", "null")
+                .limit(1)
+                .execute()
+                .data
+            )
+            if legacy:
+                row_id = legacy[0]["id"]
+
+        if row_id is None:
+            any_row = (
+                supabase.table("permisos")
+                .select("id, contrato_id")
+                .eq("cargo_id", permiso.cargo_id)
+                .eq("funcion_id", permiso.funcion_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+            if any_row:
+                row_id = any_row[0]["id"]
+                if cid_matriz is not None and any_row[0].get("contrato_id") not in (None, cid_matriz):
+                    row_id = None
+
+        if row_id is not None:
+            supabase.table("permisos").update(data).eq("id", row_id).execute()
         else:
             supabase.table("permisos").insert(data).execute()
 
     for cid in cargo_ids:
         despues = _norm_perm_rows(
-            supabase.table("permisos").select("*").eq("cargo_id", cid).execute().data or []
+            _permisos_rows_para_cargo(cid, int(contrato_matriz) if contrato_matriz is not None else None)
         )
         if despues == antes_por_cargo.get(cid, []):
             continue
@@ -7032,6 +7305,127 @@ def inicio_novedades_listado(current_user=Depends(get_current_user)):
     return _inicio_novedades_rows_con_lectura(uid, ciu)
 
 
+def _inicio_ubicacion_desde_reporte(rep: dict, reg: dict) -> str:
+    """Texto corto de localización para pie de foto en Inicio."""
+    partes = []
+    nr = rep.get("numero_reporte")
+    if nr is not None:
+        partes.append(f"Reporte #{nr}")
+    cap = (rep.get("capitulo") or reg.get("capitulo") or "").strip()
+    if cap:
+        partes.append(f"Cap. {cap}")
+    tramo = (rep.get("tramo") or "").strip()
+    if tramo:
+        partes.append(f"Tramo {tramo}")
+    ni = (rep.get("nodo_ini") or reg.get("no_inicio") or "").strip()
+    nf = (rep.get("nodo_fin") or reg.get("no_final") or "").strip()
+    if ni or nf:
+        partes.append(f"Nodo {ni or '—'} → {nf or '—'}")
+    ai = rep.get("abs_inicio")
+    af = rep.get("abs_final")
+    if ai is not None or af is not None:
+        partes.append(f"ABS {ai if ai is not None else '—'} – {af if af is not None else '—'}")
+    return " · ".join(partes) if partes else "Obra en campo"
+
+
+@app.get("/inicio/{contrato_id}/fotos-acta-vigente")
+def inicio_fotos_acta_vigente(
+    contrato_id: int,
+    limit: int = Query(48, ge=1, le=120),
+    current_user=Depends(get_current_user),
+):
+    """
+    Fotos de registros SICOE del acta RPO vigente (para slider en página de inicio).
+    Incluye ubicación del reporte y observación del registro.
+    """
+    _require_contract_access(current_user, contrato_id)
+    acta = _acta_rpo_para_inicio(contrato_id)
+    if not acta:
+        return {"acta": None, "fotos": [], "sin_acta_en_periodo": True}
+    acta_id = int(acta["id"])
+
+    def _q_reportes_acta():
+        return (
+            supabase.table("so_reportes")
+            .select("id")
+            .eq("contrato_id", contrato_id)
+            .eq("acta_rpo_id", acta_id)
+            .execute()
+            .data
+        )
+
+    reporte_ids_acta = [int(r["id"]) for r in (supabase_execute(_q_reportes_acta) or []) if r.get("id") is not None]
+
+    def _q_regs():
+        q = (
+            supabase.table("so_registros")
+            .select(
+                "id, numero_registro, foto_url, foto_numero, observacion, reporte_id, "
+                "no_inicio, no_final, abs_inicio, abs_final, capitulo, created_at, acta_rpo_id"
+            )
+            .eq("contrato_id", contrato_id)
+            .order("created_at", desc=True)
+            .limit(limit * 3)
+        )
+        if reporte_ids_acta:
+            ids_csv = ",".join(str(x) for x in reporte_ids_acta[:200])
+            q = q.or_(f"acta_rpo_id.eq.{acta_id},reporte_id.in.({ids_csv})")
+        else:
+            q = q.eq("acta_rpo_id", acta_id)
+        return q.execute().data
+
+    rows = supabase_execute(_q_regs) or []
+    rows = [r for r in rows if (r.get("foto_url") or "").strip()][:limit]
+    reporte_ids = list({int(r["reporte_id"]) for r in rows if r.get("reporte_id") is not None})
+    reportes_map: dict = {}
+    for i in range(0, len(reporte_ids), 200):
+        chunk = reporte_ids[i : i + 200]
+        if not chunk:
+            continue
+
+        def _q_rep(cid=chunk):
+            return (
+                supabase.table("so_reportes")
+                .select(
+                    "id, numero_reporte, descripcion_actividad, capitulo, tramo, "
+                    "nodo_ini, nodo_fin, abs_inicio, abs_final"
+                )
+                .in_("id", cid)
+                .execute()
+                .data
+            )
+
+        for rep in supabase_execute(_q_rep) or []:
+            reportes_map[int(rep["id"])] = rep
+
+    fotos = []
+    for r in rows:
+        rep = reportes_map.get(int(r.get("reporte_id") or 0)) or {}
+        obs = (r.get("observacion") or "").strip()
+        if not obs:
+            obs = (rep.get("descripcion_actividad") or "").strip()
+        ubicacion = _inicio_ubicacion_desde_reporte(rep, r)
+        fotos.append(
+            {
+                "url": r["foto_url"],
+                "numero_registro": r.get("numero_registro"),
+                "foto_numero": r.get("foto_numero"),
+                "ubicacion": ubicacion,
+                "observacion": obs,
+                "registro_id": r.get("id"),
+            }
+        )
+
+    acta_out = {
+        "id": acta_id,
+        "numero_rpo": acta.get("numero_rpo"),
+        "fecha_inicio": acta.get("fecha_inicio"),
+        "fecha_fin": acta.get("fecha_fin"),
+        "asignado_nombre": acta.get("asignado_nombre"),
+    }
+    return {"acta": acta_out, "fotos": fotos}
+
+
 @app.post("/inicio/novedades/{novedad_id}/leida")
 def inicio_novedad_marcar_leida(
     novedad_id: int,
@@ -7365,14 +7759,24 @@ def _resolver_contrato_notificacion(
 
 
 def _filtro_query_notif_contrato_o_nulo(q, contrato_id: Optional[int]):
-    """Incluye filas con contrato_id NULL (mensajes legados / remitentes sin contrato principal en usuarios)."""
+    """Solo notificaciones del contrato activo (sin mezclar legacy contrato_id NULL ni otros contratos)."""
     if contrato_id is None:
         return q
     try:
         cid = int(contrato_id)
     except (TypeError, ValueError):
         return q
-    return q.or_(f"contrato_id.eq.{cid},contrato_id.is.null")
+    return q.eq("contrato_id", cid)
+
+
+def _filtro_notif_visible_buzon_recibidas(q):
+    """Excluye mensajes que el destinatario ocultó de su buzón."""
+    return q.or_("oculto_destinatario.eq.false,oculto_destinatario.is.null")
+
+
+def _filtro_notif_visible_buzon_enviadas(q):
+    """Excluye mensajes que el remitente ocultó de su bandeja de enviados."""
+    return q.or_("oculto_remitente.eq.false,oculto_remitente.is.null")
 
 
 def _push_notif_validacion_sicoe_destinatarios(
@@ -7514,6 +7918,7 @@ def get_notificaciones_recibidas(
         .eq("destinatario_id", uid) \
         .order("created_at", desc=True)
     q = _filtro_query_notif_contrato_o_nulo(q, contrato_id)
+    q = _filtro_notif_visible_buzon_recibidas(q)
     if solo_no_leidas:
         q = q.eq("leido", False)
     q = q.range(offset, offset + limit - 1)
@@ -7532,6 +7937,7 @@ def get_notificaciones_enviadas(
         .eq("remitente_id", uid) \
         .order("created_at", desc=True)
     q = _filtro_query_notif_contrato_o_nulo(q, contrato_id)
+    q = _filtro_notif_visible_buzon_enviadas(q)
     return q.range(offset, offset + limit - 1).execute().data
 
 @app.get("/notificaciones/no-leidas-count")
@@ -7547,6 +7953,7 @@ def get_no_leidas_count(
             .eq("leido", False) \
             .is_("padre_id", "null")
         q = _filtro_query_notif_contrato_o_nulo(q, contrato_id)
+        q = _filtro_notif_visible_buzon_recibidas(q)
         result = q.execute()
         return {"count": result.count or 0}
     except Exception:
@@ -7575,6 +7982,7 @@ def marcar_leida(notif_id: int, current_user=Depends(get_current_user)):
     supabase.table("notificaciones").update({"leido": True, "leido_at": "now()"}) \
         .eq("id", notif_id).eq("destinatario_id", uid).execute()
     return {"ok": True}
+
 
 @app.get("/notificaciones/usuarios-destinatarios")
 def get_usuarios_destinatarios(
@@ -11000,22 +11408,7 @@ def obtener_reporte(
     else:
         r["pk_id_valor"] = None
     # Si aplicar_filtros_busqueda=true, registros coinciden con la misma semántica AND que la grilla/panel.
-    reg_ids = [reg["id"] for reg in regs_raw if reg.get("id")]
-    num_comentarios_map = {}
-    if reg_ids:
-        try:
-            def _cnt():
-                return supabase.table("so_registro_comentarios")\
-                    .select("registro_id")\
-                    .in_("registro_id", reg_ids).execute().data
-            cnt_rows = supabase_execute(_cnt)
-            for row in cnt_rows:
-                rid = row["registro_id"]
-                num_comentarios_map[rid] = num_comentarios_map.get(rid, 0) + 1
-        except Exception:
-            pass
-    for reg in regs_raw:
-        reg["num_comentarios"] = num_comentarios_map.get(reg["id"], 0)
+    _enriquecer_num_comentarios_visibles(regs_raw, current_user)
     _enriquecer_registros_labels_reversion_doble_llave(regs_raw)
     r["registros"] = regs_raw
     r["puntos"] = puntos_rows
@@ -13225,11 +13618,23 @@ def crear_puntos(contrato_id: int, body: PuntosCreate, current_user=Depends(get_
     return supabase_execute(_ins)
 
 # ─── SICOE OBRA: Verificar acta RPO vigente ──────────────────────────────────
+def _acta_row_normalize(row):
+    if not row:
+        return None
+    u = row.get("usuarios") or {}
+    if isinstance(u, list) and len(u) > 0:
+        u = u[0]
+    if not isinstance(u, dict):
+        u = {}
+    an = f"{u.get('nombre', '')} {u.get('apellidos', '')}".strip()
+    row = {k: v for k, v in row.items() if k != "usuarios"}
+    row["asignado_nombre"] = an or None
+    return row
+
+
 def _acta_rpo_vigente_row(contrato_id: int):
     """
-    Acta RPO en período: hoy ∈ [fecha_inicio, fecha_fin]. Actas futuras (aún sin vigencia) no compiten.
-    Si dos períodos solapan en un día (p. ej. cierre 30/04 y el siguiente 01/05), gana el de fecha_inicio
-    más reciente; empate → numero_rpo desc, luego id desc — alineado con transición natural al vencer el mes.
+    Acta RPO en período: hoy ∈ [fecha_inicio, fecha_fin].
     """
     from datetime import date
     today = date.today().isoformat()
@@ -13249,17 +13654,33 @@ def _acta_rpo_vigente_row(contrato_id: int):
 
     actas = supabase_execute(_q)
     row = actas[0] if actas else None
-    if not row:
-        return None
-    u = row.get("usuarios") or {}
-    if isinstance(u, list) and len(u) > 0:
-        u = u[0]
-    if not isinstance(u, dict):
-        u = {}
-    an = f"{u.get('nombre', '')} {u.get('apellidos', '')}".strip()
-    row = {k: v for k, v in row.items() if k != "usuarios"}
-    row["asignado_nombre"] = an or None
-    return row
+    return _acta_row_normalize(row)
+
+
+def _acta_rpo_para_inicio(contrato_id: int):
+    """
+    Acta que usa el carrusel de Inicio: vigente por fecha; si no hay, la RPO más reciente ya iniciada.
+    """
+    row = _acta_rpo_vigente_row(contrato_id)
+    if row:
+        return row
+    from datetime import date
+    today = date.today().isoformat()
+
+    def _q_reciente():
+        return supabase.table("actas")\
+            .select("id, numero_rpo, fecha_inicio, fecha_fin, usuarios(nombre, apellidos)")\
+            .eq("contrato_id", contrato_id)\
+            .eq("tipo_grupo", "RPO")\
+            .lte("fecha_inicio", today)\
+            .order("fecha_inicio", desc=True)\
+            .order("numero_rpo", desc=True)\
+            .order("id", desc=True)\
+            .limit(1)\
+            .execute().data
+
+    actas = supabase_execute(_q_reciente)
+    return _acta_row_normalize(actas[0] if actas else None)
 
 
 def _sicoe_parse_matriz_vigente_bundle_raw(raw):
@@ -17451,20 +17872,7 @@ def get_reporte_de_registro(
             regs_raw = _filtrar_registros_validacion_capas_sicoe(
                 regs_raw, _capas_gr, r, validacion_capas_op or "and"
             )
-        reg_ids = [reg["id"] for reg in regs_raw if reg.get("id")]
-        num_comentarios_map = {}
-        if reg_ids:
-            try:
-                def _cnt():
-                    return supabase.table("so_registro_comentarios")\
-                        .select("registro_id").in_("registro_id", reg_ids).execute().data
-                for row in supabase_execute(_cnt):
-                    rid = row["registro_id"]
-                    num_comentarios_map[rid] = num_comentarios_map.get(rid, 0) + 1
-            except Exception:
-                pass
-        for reg in regs_raw:
-            reg["num_comentarios"] = num_comentarios_map.get(reg["id"], 0)
+        _enriquecer_num_comentarios_visibles(regs_raw, current_user)
         _enriquecer_registros_labels_reversion_doble_llave(regs_raw)
         r["registros"] = regs_raw
         r["puntos"] = []
@@ -17515,25 +17923,27 @@ def listar_comentarios(contrato_id: int, registro_id: int, rol_solicitante: str,
         # - Sin destinatarios: visible para todos.
         # - Con destinatarios: visible solo para ids explícitos.
         uid = int(current_user.get("sub") or current_user.get("id", 0))
+        es_priv = _es_desarrollador(current_user) or _es_admin_o_desarrollador(current_user)
         by_id = {c.get("id"): c for c in comentarios}
         filtrados = []
         for c in comentarios:
             destinatarios = c.get("destinatarios") or []
-            # Si es respuesta sin destinatarios, heredar destinatarios del padre.
             if (not destinatarios) and c.get("padre_id") and by_id.get(c.get("padre_id")):
                 destinatarios = by_id[c.get("padre_id")].get("destinatarios") or []
-            ids_dest = set()
-            for d in destinatarios:
-                if isinstance(d, dict):
-                    try:
-                        did = int(d.get("id"))
-                        ids_dest.add(did)
-                    except Exception:
-                        continue
-            visible = (not ids_dest) or (uid in ids_dest) or (int(c.get("autor_id") or 0) == uid)
-
-            if visible:
+            c_vis = {**c, "destinatarios": destinatarios}
+            if _comentario_sicoe_visible_para_usuario(c_vis, uid, es_priv):
                 filtrados.append(c)
+
+        if not es_priv:
+            fil_ids = {c.get("id") for c in filtrados}
+            padres_faltantes = []
+            for c in filtrados:
+                pid = c.get("padre_id")
+                if pid and pid not in fil_ids and by_id.get(pid):
+                    padres_faltantes.append(by_id[pid])
+                    fil_ids.add(pid)
+            if padres_faltantes:
+                filtrados = padres_faltantes + filtrados
 
         # Raíces: sin padre o padre no está en el conjunto visible (p. ej. filtrado o
         # migrado sin padre en BD); no perder "huérfanos" en la respuesta.
