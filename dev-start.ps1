@@ -35,9 +35,34 @@ Start-Process -FilePath "powershell" -WorkingDirectory $frontendDir -ArgumentLis
     "npm run dev -- --host 127.0.0.1 --port 5173"
 ) | Out-Null
 
+Write-Host "Esperando arranque (5 s)..." -ForegroundColor DarkGray
+Start-Sleep -Seconds 5
+
+$apiOk = $false
+$feOk = $false
+try {
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8000/healthz" -UseBasicParsing -TimeoutSec 6
+    $apiOk = ($r.StatusCode -eq 200)
+} catch { }
+try {
+    $r2 = Invoke-WebRequest -Uri "http://127.0.0.1:5173/" -UseBasicParsing -TimeoutSec 6
+    $feOk = ($r2.StatusCode -ge 200 -and $r2.StatusCode -lt 500)
+} catch { }
+
 Write-Host ""
-Write-Host "Entorno levantado." -ForegroundColor Green
-Write-Host "Frontend local: http://127.0.0.1:5173" -ForegroundColor Green
-Write-Host "Backend local:  http://127.0.0.1:8000" -ForegroundColor Green
+if ($apiOk -and $feOk) {
+    Write-Host "Entorno LOCAL listo." -ForegroundColor Green
+} elseif (-not $apiOk) {
+    Write-Host "ATENCION: el backend NO responde en :8000." -ForegroundColor Red
+    Write-Host "  Revise la ventana PowerShell del backend (errores de Python/.env)." -ForegroundColor Yellow
+} elseif (-not $feOk) {
+    Write-Host "ATENCION: Vite NO responde en :5173." -ForegroundColor Red
+    Write-Host "  Revise la ventana PowerShell del frontend." -ForegroundColor Yellow
+}
+Write-Host "Frontend: http://127.0.0.1:5173" -ForegroundColor Green
+Write-Host "Backend:  http://127.0.0.1:8000/docs" -ForegroundColor Green
 Write-Host ""
-Write-Host "Regla de seguridad: NO ejecutar .\db.ps1 ni .\df.ps1 durante pruebas." -ForegroundColor Yellow
+Write-Host "Comprobar estado: .\dev-status.ps1" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "db.ps1 y df.ps1 = DESPLIEGUE A AZURE (no inician local)." -ForegroundColor Yellow
+Write-Host "Para probar en tu PC solo use dev-start + esas dos ventanas abiertas." -ForegroundColor Yellow

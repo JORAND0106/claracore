@@ -7317,65 +7317,20 @@ def _inicio_ubicacion_desde_reporte(rep: dict, reg: dict) -> str:
     tramo = (rep.get("tramo") or "").strip()
     if tramo:
         partes.append(f"Tramo {tramo}")
-    ni = (rep.get("nodo_ini") or reg.get("no_inicio") or "").strip()
-    nf = (rep.get("nodo_fin") or reg.get("no_final") or "").strip()
+    ni = (rep.get("nodo_ini") or "").strip()
+    nf = (rep.get("nodo_fin") or "").strip()
     if ni or nf:
         partes.append(f"Nodo {ni or '—'} → {nf or '—'}")
-    ai = rep.get("abs_inicio")
-    af = rep.get("abs_final")
+    ai = rep.get("abs_inicio") if rep.get("abs_inicio") is not None else reg.get("abs_inicio")
+    af = rep.get("abs_final") if rep.get("abs_final") is not None else reg.get("abs_final")
     if ai is not None or af is not None:
         partes.append(f"ABS {ai if ai is not None else '—'} – {af if af is not None else '—'}")
     return " · ".join(partes) if partes else "Obra en campo"
 
 
-@app.get("/inicio/{contrato_id}/fotos-acta-vigente")
-def inicio_fotos_acta_vigente(
-    contrato_id: int,
-    limit: int = Query(48, ge=1, le=120),
-    current_user=Depends(get_current_user),
-):
-    """
-    Fotos de registros SICOE del acta RPO vigente (para slider en página de inicio).
-    Incluye ubicación del reporte y observación del registro.
-    """
-    _require_contract_access(current_user, contrato_id)
-    acta = _acta_rpo_para_inicio(contrato_id)
-    if not acta:
-        return {"acta": None, "fotos": [], "sin_acta_en_periodo": True}
-    acta_id = int(acta["id"])
-
-    def _q_reportes_acta():
-        return (
-            supabase.table("so_reportes")
-            .select("id")
-            .eq("contrato_id", contrato_id)
-            .eq("acta_rpo_id", acta_id)
-            .execute()
-            .data
-        )
-
-    reporte_ids_acta = [int(r["id"]) for r in (supabase_execute(_q_reportes_acta) or []) if r.get("id") is not None]
-
-    def _q_regs():
-        q = (
-            supabase.table("so_registros")
-            .select(
-                "id, numero_registro, foto_url, foto_numero, observacion, reporte_id, "
-                "no_inicio, no_final, abs_inicio, abs_final, capitulo, created_at, acta_rpo_id"
-            )
-            .eq("contrato_id", contrato_id)
-            .order("created_at", desc=True)
-            .limit(limit * 3)
-        )
-        if reporte_ids_acta:
-            ids_csv = ",".join(str(x) for x in reporte_ids_acta[:200])
-            q = q.or_(f"acta_rpo_id.eq.{acta_id},reporte_id.in.({ids_csv})")
-        else:
-            q = q.eq("acta_rpo_id", acta_id)
-        return q.execute().data
-
-    rows = supabase_execute(_q_regs) or []
-    rows = [r for r in rows if (r.get("foto_url") or "").strip()][:limit]
+def _inicio_fotos_desde_registros_rows(rows: list, limit: int) -> List[dict]:
+    """Arma lista del carrusel: URLs Cloudinary ya guardadas en so_registros.foto_url."""
+    rows = [r for r in (rows or []) if (r.get("foto_url") or "").strip()][:limit]
     reporte_ids = list({int(r["reporte_id"]) for r in rows if r.get("reporte_id") is not None})
     reportes_map: dict = {}
     for i in range(0, len(reporte_ids), 200):
@@ -7407,7 +7362,7 @@ def inicio_fotos_acta_vigente(
         ubicacion = _inicio_ubicacion_desde_reporte(rep, r)
         fotos.append(
             {
-                "url": r["foto_url"],
+                "url": (r.get("foto_url") or "").strip(),
                 "numero_registro": r.get("numero_registro"),
                 "foto_numero": r.get("foto_numero"),
                 "ubicacion": ubicacion,
@@ -7415,6 +7370,97 @@ def inicio_fotos_acta_vigente(
                 "registro_id": r.get("id"),
             }
         )
+    return fotos
+
+
+_INICIO_REGS_FOTO_SELECT = (
+    "id, numero_registro, foto_url, foto_numero, observacion, reporte_id, "
+    "abs_inicio, abs_final, capitulo, created_at, acta_rpo_id"
+)
+
+
+def _inicio_q_registros_recientes_contrato(contrato_id: int, fetch_limit: int):
+    return (
+        supabase.table("so_registros")
+        .select(_INICIO_REGS_FOTO_SELECT)
+        .eq("contrato_id", contrato_id)
+        .order("created_at", desc=True)
+        .limit(fetch_limit)
+        .execute()
+        .data
+    )
+
+
+@app.get("/inicio/{contrato_id}/fotos-acta-vigente")
+def inicio_fotos_acta_vigente(
+    contrato_id: int,
+    limit: int = Query(48, ge=1, le=120),
+    current_user=Depends(get_current_user),
+):
+    """
+    Fotos de registros SICOE del acta RPO vigente (para slider en página de inicio).
+    Las imágenes viven en Cloudinary; aquí se devuelven las URLs guardadas en so_registros.foto_url.
+    Si el acta no tiene registros enlazados, se usan las últimas fotos del contrato.
+    """
+    _require_contract_access(current_user, contrato_id)
+    acta = _acta_rpo_para_inicio(contrato_id)
+    fuente = "acta_vigente"
+
+    if not acta:
+
+        def _q_sin_acta():
+            return _inicio_q_registros_recientes_contrato(contrato_id, limit * 8)
+
+        fotos = _inicio_fotos_desde_registros_rows(supabase_execute(_q_sin_acta), limit)
+        if fotos:
+            return {
+                "acta": None,
+                "fotos": fotos,
+                "sin_acta_en_periodo": True,
+                "fuente": "contrato_recientes",
+            }
+        return {"acta": None, "fotos": [], "sin_acta_en_periodo": True, "fuente": "ninguna"}
+
+    acta_id = int(acta["id"])
+
+    def _q_reportes_acta():
+        return (
+            supabase.table("so_reportes")
+            .select("id")
+            .eq("contrato_id", contrato_id)
+            .eq("acta_rpo_id", acta_id)
+            .execute()
+            .data
+        )
+
+    reporte_ids_acta = [int(r["id"]) for r in (supabase_execute(_q_reportes_acta) or []) if r.get("id") is not None]
+
+    def _q_regs_acta():
+        q = (
+            supabase.table("so_registros")
+            .select(_INICIO_REGS_FOTO_SELECT)
+            .eq("contrato_id", contrato_id)
+            .order("created_at", desc=True)
+            .limit(limit * 8)
+        )
+        if reporte_ids_acta:
+            ids_csv = ",".join(str(x) for x in reporte_ids_acta[:200])
+            q = q.or_(f"acta_rpo_id.eq.{acta_id},reporte_id.in.({ids_csv})")
+        else:
+            q = q.eq("acta_rpo_id", acta_id)
+        return q.execute().data
+
+    rows = supabase_execute(_q_regs_acta) or []
+    fotos = _inicio_fotos_desde_registros_rows(rows, limit)
+
+    if not fotos:
+
+        def _q_fallback():
+            return _inicio_q_registros_recientes_contrato(contrato_id, limit * 8)
+
+        fotos = _inicio_fotos_desde_registros_rows(supabase_execute(_q_fallback), limit)
+        if fotos:
+            fuente = "contrato_recientes"
 
     acta_out = {
         "id": acta_id,
@@ -7423,7 +7469,7 @@ def inicio_fotos_acta_vigente(
         "fecha_fin": acta.get("fecha_fin"),
         "asignado_nombre": acta.get("asignado_nombre"),
     }
-    return {"acta": acta_out, "fotos": fotos}
+    return {"acta": acta_out, "fotos": fotos, "fuente": fuente}
 
 
 @app.post("/inicio/novedades/{novedad_id}/leida")

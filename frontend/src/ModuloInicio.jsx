@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { API_BASE } from './apiBase'
+import { API_BASE, logApiFailure } from './apiBase'
 import { getClaraTypeScaleInline } from './typographyScale'
 import { eligeFraseInicio, fraseInicioEsValida } from './data/frasesInicioCuradas.js'
 
@@ -488,7 +488,9 @@ function SliderFotosActaVigente({ t, fs, contratoId, token }) {
   const [fotos, setFotos] = useState([])
   const [cargando, setCargando] = useState(true)
   const [errorApi, setErrorApi] = useState(false)
+  const [errorHttp, setErrorHttp] = useState(null)
   const [sinActaPeriodo, setSinActaPeriodo] = useState(false)
+  const [fuenteFotos, setFuenteFotos] = useState('acta_vigente')
   const [indice, setIndice] = useState(0)
   const [fade, setFade] = useState(true)
   const timerRef = useRef(null)
@@ -499,31 +501,49 @@ function SliderFotosActaVigente({ t, fs, contratoId, token }) {
       setFotos([])
       setCargando(false)
       setErrorApi(false)
+      setErrorHttp(null)
       setSinActaPeriodo(false)
+      setFuenteFotos('acta_vigente')
       return
     }
     let cancelled = false
     setCargando(true)
     setIndice(0)
     setErrorApi(false)
+    setErrorHttp(null)
     setSinActaPeriodo(false)
+    setFuenteFotos('acta_vigente')
     const h = token ? { Authorization: `Bearer ${token}` } : {}
     fetch(`${API_BASE}/inicio/${contratoId}/fotos-acta-vigente`, { headers: h })
       .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        if (r.status === 401) {
+          if (!cancelled) {
+            setErrorHttp(401)
+            setActa(null)
+            setFotos([])
+          }
+          return null
+        }
+        if (!r.ok) {
+          if (!cancelled) setErrorHttp(r.status)
+          throw new Error(`HTTP ${r.status}`)
+        }
         return r.json()
       })
       .then((data) => {
-        if (cancelled) return
+        if (cancelled || !data) return
         setActa(data.acta || null)
         setFotos(Array.isArray(data.fotos) ? data.fotos : [])
         setSinActaPeriodo(!!data.sin_acta_en_periodo && !data.acta)
+        setFuenteFotos(data.fuente || 'acta_vigente')
       })
-      .catch(() => {
+      .catch((err) => {
         if (!cancelled) {
           setActa(null)
           setFotos([])
-          setErrorApi(true)
+          const msg = String(err?.message || err || '')
+          if (!/^HTTP \d+/.test(msg)) setErrorApi(true)
+          logApiFailure(`inicio fotos contrato=${contratoId}`, err)
         }
       })
       .finally(() => {
@@ -570,13 +590,17 @@ function SliderFotosActaVigente({ t, fs, contratoId, token }) {
         <div style={{ fontSize: fs.autor, color: t.textMuted, marginTop: '4px', lineHeight: 1.4 }}>
           {cargando
             ? 'Cargando fotos del acta vigente…'
-            : errorApi
-              ? 'Sin conexión al servidor (inicie el backend en el puerto 8000)'
-              : acta
-                ? `Acta RPO #${acta.numero_rpo ?? acta.id}${acta.fecha_inicio ? ` · ${String(acta.fecha_inicio).slice(0, 10)} → ${String(acta.fecha_fin || '').slice(0, 10)}` : ''}`
-                : sinActaPeriodo
-                  ? 'Hoy no hay acta RPO en período; el sistema la asignará cuando corresponda'
-                  : 'Buscando acta del contrato…'}
+            : errorHttp === 401
+              ? 'Sesión expirada — vuelva a iniciar sesión'
+              : errorHttp
+                ? `Error del servidor (${errorHttp})`
+                : errorApi
+                  ? 'Sin conexión al API local (puerto 8000). Ejecute .\\dev-start.ps1'
+                  : acta
+                    ? `Acta RPO #${acta.numero_rpo ?? acta.id}${acta.fecha_inicio ? ` · ${String(acta.fecha_inicio).slice(0, 10)} → ${String(acta.fecha_fin || '').slice(0, 10)}` : ''}${fuenteFotos === 'contrato_recientes' ? ' · últimas fotos del contrato' : ''}`
+                    : sinActaPeriodo
+                      ? (fotos.length ? 'Últimas fotos del contrato (sin acta en período)' : 'Hoy no hay acta RPO en período')
+                      : 'Buscando acta del contrato…'}
         </div>
       </div>
 
@@ -588,13 +612,17 @@ function SliderFotosActaVigente({ t, fs, contratoId, token }) {
         )}
         {!cargando && !actual && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', textAlign: 'center', color: '#94a3b8', fontSize: fs.sm, lineHeight: 1.5 }}>
-            {errorApi
-              ? 'El frontend no puede hablar con el API (ECONNREFUSED :8000). En otra terminal ejecute: uvicorn main:app --reload --port 8000 desde la carpeta backend.'
-              : acta
-                ? 'Aún no hay fotos en registros de este acta. Se mostrarán aquí al subirlas en SICOE Obra.'
-                : sinActaPeriodo
-                  ? 'No hay acta RPO en período para la fecha de hoy. Cuando exista una acta vigente, el carrusel se llenará automáticamente.'
-                  : 'No se pudo resolver el acta del contrato.'}
+            {errorHttp === 401
+              ? 'Cierre sesión e ingrese de nuevo para cargar el carrusel.'
+              : errorHttp
+                ? `El API respondió con error ${errorHttp}. Revise la ventana del backend (puerto 8000).`
+                : errorApi
+                  ? 'No hay backend en :8000. En la raíz del proyecto: .\\dev-start.ps1 (no use db.ps1 ni df.ps1 para probar en su PC).'
+                  : acta
+                    ? 'No hay registros SICOE con foto_url en este acta. Las imágenes están en Cloudinary pero el carrusel lee la URL guardada en cada registro al subir la foto en SICOE Obra.'
+                    : sinActaPeriodo
+                      ? 'No hay acta RPO vigente ni fotos recientes con URL en la base de datos de este contrato.'
+                      : 'No se pudo resolver el acta del contrato.'}
           </div>
         )}
         {actual && (
