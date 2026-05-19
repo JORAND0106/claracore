@@ -8697,52 +8697,12 @@ function ModuloSicoeObra({
                           prev && prev.id === rep.id ? { ...prev, _cargandoDetalle: false, registros: [], puntos: [] } : prev,
                         )
                       } else {
-                        let merged = { ...data }
-                        const uf = urlReporteDetalleFiltradoSiAplica(rep.id)
-                        if (uf && uf !== urlS) {
-                          try {
-                            const rf = await fetch(uf, { headers: { Authorization: `Bearer ${getToken()}` } })
-                            const df = await rf.json().catch(() => ({}))
-                            if (rf.ok && df?.id && Array.isArray(df.registros) && df.registros.length > 0) {
-                              const regMatchF = regNumBusqueda
-                                ? sicoeBuscarRegistroPorNumeroFiltro(df.registros, regNumBusqueda)
-                                : null
-                              merged = {
-                                ...data,
-                                registros: df.registros,
-                                puntos: Array.isArray(df.puntos) ? df.puntos : data.puntos,
-                                registros_vista_filtrada: df.registros_vista_filtrada,
-                                ...(regMatchF ? { _autoRegistro: regMatchF.id } : {}),
-                              }
-                            } else {
-                              const regMatch0 = regNumBusqueda
-                                ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
-                                : null
-                              merged = {
-                                ...data,
-                                ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
-                              }
-                            }
-                          } catch {
-                            const regMatch0 = regNumBusqueda
-                              ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
-                              : null
-                            merged = {
-                              ...data,
-                              ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
-                            }
-                          }
-                        } else {
-                          const regMatch0 = regNumBusqueda
-                            ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
-                            : null
-                          merged = {
-                            ...data,
-                            ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
-                          }
-                        }
+                        const regMatch0 = regNumBusqueda
+                          ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
+                          : null
                         setReporteSeleccionado({
-                          ...merged,
+                          ...data,
+                          ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
                           _cargandoDetalle: false,
                         })
                       }
