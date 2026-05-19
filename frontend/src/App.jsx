@@ -3567,7 +3567,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       let res = await fetch(urlPrimaria, { headers: hdrs })
       let data = await res.json().catch(() => ({}))
       if (seq !== recargarSeqRef.current) return null
-      if ((!res.ok || !data?.id || (Array.isArray(data.registros) && data.registros.length === 0)) && urlPrimaria !== urlS) {
+      if ((!res.ok || !data?.id) && urlPrimaria !== urlS) {
         if (seq !== recargarSeqRef.current) return null
         res = await fetch(urlS, { headers: hdrs })
         data = await res.json().catch(() => ({}))
@@ -8697,12 +8697,52 @@ function ModuloSicoeObra({
                           prev && prev.id === rep.id ? { ...prev, _cargandoDetalle: false, registros: [], puntos: [] } : prev,
                         )
                       } else {
-                        const regMatch0 = regNumBusqueda
-                          ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
-                          : null
+                        let merged = { ...data }
+                        const uf = urlReporteDetalleFiltradoSiAplica(rep.id)
+                        if (uf && uf !== urlS) {
+                          try {
+                            const rf = await fetch(uf, { headers: { Authorization: `Bearer ${getToken()}` } })
+                            const df = await rf.json().catch(() => ({}))
+                            if (rf.ok && df?.id && Array.isArray(df.registros)) {
+                              const regMatchF = regNumBusqueda
+                                ? sicoeBuscarRegistroPorNumeroFiltro(df.registros, regNumBusqueda)
+                                : null
+                              merged = {
+                                ...data,
+                                registros: df.registros,
+                                puntos: Array.isArray(df.puntos) ? df.puntos : data.puntos,
+                                registros_vista_filtrada: df.registros_vista_filtrada,
+                                ...(regMatchF ? { _autoRegistro: regMatchF.id } : {}),
+                              }
+                            } else {
+                              const regMatch0 = regNumBusqueda
+                                ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
+                                : null
+                              merged = {
+                                ...data,
+                                ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
+                              }
+                            }
+                          } catch {
+                            const regMatch0 = regNumBusqueda
+                              ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
+                              : null
+                            merged = {
+                              ...data,
+                              ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
+                            }
+                          }
+                        } else {
+                          const regMatch0 = regNumBusqueda
+                            ? sicoeBuscarRegistroPorNumeroFiltro(data.registros || [], regNumBusqueda)
+                            : null
+                          merged = {
+                            ...data,
+                            ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
+                          }
+                        }
                         setReporteSeleccionado({
-                          ...data,
-                          ...(regMatch0 ? { _autoRegistro: regMatch0.id } : {}),
+                          ...merged,
                           _cargandoDetalle: false,
                         })
                       }
