@@ -1,9 +1,10 @@
 -- Agregación en base de datos para el panel admin «Actas» (costo RPO alineado a la matriz de validación).
--- Evita leer y paginar miles de filas de so_registros en Python.
--- Ejecutar en Supabase SQL Editor (o psql) una vez.
---
--- Requisitos: existan public._norm_estado_matriz (dashboard_matriz_validacion.sql) y so_registros con
--- item_numero, costo_directo, cantidad_total, vlr_unitario, capitulo, nivel1/2/3_estado, acta_rpo_id, contrato_id.
+-- Requiere: public._norm_estado_matriz, _dash_matriz_nivel_max_estado, _dash_prereqs_activos_aprobados_norm
+--   (dashboard_drill_agg.sql) y so_registros con nivel1..nivel6_estado.
+-- Ejecutar en Supabase SQL Editor tras actualizar dashboard_drill_agg.sql.
+
+DROP FUNCTION IF EXISTS public.rpo_panel_actas_resumen(bigint, bigint[]);
+DROP FUNCTION IF EXISTS public.rpo_panel_acta_por_capitulo_bloque(bigint, bigint);
 
 -- Línea de costo: mismas reglas que backend/ccd_conciliacion._linea_costo_registro
 CREATE OR REPLACE FUNCTION public.rpo_panel_linea_cd(
@@ -24,7 +25,6 @@ AS $f$
   )::numeric;
 $f$;
 
--- Bloque obra / ensayos: misma lógica que _bloque_capitulo_matriz y dashboard SQL
 CREATE OR REPLACE FUNCTION public.rpo_panel_bloque_capitulo(p_capitulo text)
 RETURNS text
 LANGUAGE sql
@@ -40,15 +40,12 @@ AS $f$
   END;
 $f$;
 
-COMMENT ON FUNCTION public.rpo_panel_linea_cd(numeric, numeric, numeric) IS
-  'Costo por línea SICOE (so_registros) alineado a ccd_conciliacion._linea_costo_registro.';
-COMMENT ON FUNCTION public.rpo_panel_bloque_capitulo(text) IS
-  'Obra vs ensayos/sondeos (matriz de validación).';
-
--- Suma y conteo por acta (varios acta_rpo_id a la vez; una fila por acta con movimiento)
+-- Suma y conteo por acta: último nivel activo aprobado + prerequisitos (misma regla que dashboard drill)
 CREATE OR REPLACE FUNCTION public.rpo_panel_actas_resumen(
-  p_contrato_id bigint,
-  p_acta_ids    bigint[]
+  p_contrato_id       bigint,
+  p_acta_ids          bigint[],
+  p_campo_nivel_max   text DEFAULT 'nivel3_estado',
+  p_niveles_activos   bigint[] DEFAULT ARRAY[1, 2, 3]::bigint[]
 ) RETURNS TABLE(acta_rpo_id bigint, total_cd numeric, n_reg bigint)
 LANGUAGE sql
 STABLE
@@ -56,29 +53,46 @@ AS $f$
   WITH base AS (
     SELECT
       r.acta_rpo_id AS aid,
-      public.rpo_panel_linea_cd(r.costo_directo, r.cantidad_total, r.vlr_unitario) AS ln
+      public.rpo_panel_linea_cd(r.costo_directo, r.cantidad_total, r.vlr_unitario) AS ln,
+      public._norm_estado_matriz(r.nivel1_estado) AS n1,
+      public._norm_estado_matriz(r.nivel2_estado) AS n2,
+      public._norm_estado_matriz(r.nivel3_estado) AS n3,
+      public._norm_estado_matriz(r.nivel4_estado) AS n4,
+      public._norm_estado_matriz(r.nivel5_estado) AS n5,
+      public._norm_estado_matriz(r.nivel6_estado) AS n6
     FROM public.so_registros r
     WHERE r.contrato_id = p_contrato_id
       AND r.acta_rpo_id IS NOT NULL
       AND r.acta_rpo_id = ANY (p_acta_ids)
       AND btrim(COALESCE(r.item_numero, '')) <> ''
-      AND public._norm_estado_matriz(r.nivel1_estado) = 'Aprobado'
-      AND public._norm_estado_matriz(r.nivel2_estado) = 'Aprobado'
-      AND public._norm_estado_matriz(r.nivel3_estado) = 'Aprobado'
+  ),
+  aprob AS (
+    SELECT b.aid, b.ln
+    FROM base b
+    WHERE public._dash_prereqs_activos_aprobados_norm(
+            p_niveles_activos,
+            public._dash_nivel_num_desde_campo(p_campo_nivel_max),
+            b.n1, b.n2, b.n3, b.n4, b.n5, b.n6
+          )
+      AND public._dash_matriz_nivel_max_estado(
+            p_campo_nivel_max,
+            b.n1, b.n2, b.n3, b.n4, b.n5, b.n6
+          ) = 'Aprobado'
   )
   SELECT
-    b.aid,
-    sum(b.ln)::numeric    AS total_cd,
+    a.aid,
+    sum(a.ln)::numeric    AS total_cd,
     (count(*))::bigint   AS n_reg
-  FROM base b
-  GROUP BY b.aid
-  ORDER BY b.aid;
+  FROM aprob a
+  GROUP BY a.aid
+  ORDER BY a.aid;
 $f$;
 
--- Agregado por capítulo y bloque para un solo acta (decenas/centenas de filas de resultado, no miles de SICOE)
 CREATE OR REPLACE FUNCTION public.rpo_panel_acta_por_capitulo_bloque(
-  p_contrato_id bigint,
-  p_acta_id     bigint
+  p_contrato_id       bigint,
+  p_acta_id           bigint,
+  p_campo_nivel_max   text DEFAULT 'nivel3_estado',
+  p_niveles_activos   bigint[] DEFAULT ARRAY[1, 2, 3]::bigint[]
 ) RETURNS TABLE(
   capitulo text,
   bloque   text,
@@ -90,42 +104,53 @@ STABLE
 AS $f$
   WITH base AS (
     SELECT
-      COALESCE(
-        nullif(btrim(COALESCE(r.capitulo, '')), ''),
-        'Sin capítulo'
-      ) AS ccap,
+      COALESCE(nullif(btrim(COALESCE(r.capitulo, '')), ''), 'Sin capítulo') AS ccap,
       public.rpo_panel_bloque_capitulo(r.capitulo) AS bloq,
-      public.rpo_panel_linea_cd(r.costo_directo, r.cantidad_total, r.vlr_unitario) AS ln
+      public.rpo_panel_linea_cd(r.costo_directo, r.cantidad_total, r.vlr_unitario) AS ln,
+      public._norm_estado_matriz(r.nivel1_estado) AS n1,
+      public._norm_estado_matriz(r.nivel2_estado) AS n2,
+      public._norm_estado_matriz(r.nivel3_estado) AS n3,
+      public._norm_estado_matriz(r.nivel4_estado) AS n4,
+      public._norm_estado_matriz(r.nivel5_estado) AS n5,
+      public._norm_estado_matriz(r.nivel6_estado) AS n6
     FROM public.so_registros r
     WHERE r.contrato_id = p_contrato_id
       AND r.acta_rpo_id = p_acta_id
       AND btrim(COALESCE(r.item_numero, '')) <> ''
-      AND public._norm_estado_matriz(r.nivel1_estado) = 'Aprobado'
-      AND public._norm_estado_matriz(r.nivel2_estado) = 'Aprobado'
-      AND public._norm_estado_matriz(r.nivel3_estado) = 'Aprobado'
+  ),
+  aprob AS (
+    SELECT b.ccap, b.bloq, b.ln
+    FROM base b
+    WHERE public._dash_prereqs_activos_aprobados_norm(
+            p_niveles_activos,
+            public._dash_nivel_num_desde_campo(p_campo_nivel_max),
+            b.n1, b.n2, b.n3, b.n4, b.n5, b.n6
+          )
+      AND public._dash_matriz_nivel_max_estado(
+            p_campo_nivel_max,
+            b.n1, b.n2, b.n3, b.n4, b.n5, b.n6
+          ) = 'Aprobado'
   )
   SELECT
     b.ccap  AS capitulo,
     b.bloq  AS bloque,
     sum(b.ln)::numeric  AS sum_cd,
     (count(*))::bigint  AS n_reg
-  FROM base b
+  FROM aprob b
   GROUP BY b.ccap, b.bloq
   ORDER BY b.bloq, b.ccap;
 $f$;
 
-COMMENT ON FUNCTION public.rpo_panel_actas_resumen(bigint, bigint[]) IS
-  'Resumen de costo cascade N1·N2·N3 aprob. por acta (panel actas, grilla).';
-COMMENT ON FUNCTION public.rpo_panel_acta_por_capitulo_bloque(bigint, bigint) IS
-  'Suma por capítulo y bloque obra/ensayos para un acta (popup desglose).';
+COMMENT ON FUNCTION public.rpo_panel_actas_resumen(bigint, bigint[], text, bigint[]) IS
+  'Resumen costo por acta: último nivel activo aprobado + prerequisitos (panel Actas).';
+COMMENT ON FUNCTION public.rpo_panel_acta_por_capitulo_bloque(bigint, bigint, text, bigint[]) IS
+  'Desglose por capítulo/bloque para un acta (popup RPO).';
 
 GRANT EXECUTE ON FUNCTION public.rpo_panel_linea_cd(numeric, numeric, numeric) TO service_role, authenticated, anon;
 GRANT EXECUTE ON FUNCTION public.rpo_panel_bloque_capitulo(text) TO service_role, authenticated, anon;
-GRANT EXECUTE ON FUNCTION public.rpo_panel_actas_resumen(bigint, bigint[]) TO service_role, authenticated, anon;
-GRANT EXECUTE ON FUNCTION public.rpo_panel_acta_por_capitulo_bloque(bigint, bigint) TO service_role, authenticated, anon;
+GRANT EXECUTE ON FUNCTION public.rpo_panel_actas_resumen(bigint, bigint[], text, bigint[]) TO service_role, authenticated, anon;
+GRANT EXECUTE ON FUNCTION public.rpo_panel_acta_por_capitulo_bloque(bigint, bigint, text, bigint[]) TO service_role, authenticated, anon;
 
--- Opcional: acelera el filtro típico del panel (idempotente).
 CREATE INDEX IF NOT EXISTS idx_so_registros_rpo_panel_cascade
   ON public.so_registros (contrato_id, acta_rpo_id)
   WHERE btrim(COALESCE(item_numero, '')) <> '';
-

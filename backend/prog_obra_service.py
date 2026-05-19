@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException
 
 from presupuesto_constants import PRESUPUESTO_TIPO_POLIGONO
-from prog_obra_calendar import CalendarioNoHabilesCache, add_dias_habiles
+from prog_obra_calendar import CalendarioNoHabilesCache, add_dias_habiles, count_dias_habiles_entre
 
 _FUNC_LOG = "Programación obra"
 
@@ -101,18 +101,21 @@ def _ppto_items_por_pk(sb, contrato_id: int, pk_id: str) -> Tuple[int, List[Tupl
 
 
 def _count_items_con_fecha(sb, version_id: str, pk_id: str) -> int:
+    pk = (pk_id or "").strip()
     rows = (
         sb.table("prog_actividades")
-        .select("capitulo,item")
+        .select("capitulo,item,fecha_inicio")
         .eq("version_id", version_id)
-        .eq("pk_id", pk_id)
+        .eq("pk_id", pk)
+        .not_.is_("fecha_inicio", "null")
         .execute()
         .data
         or []
     )
     seen = set()
     for r in rows:
-        if r.get("fecha_inicio") is None:
+        fi = r.get("fecha_inicio")
+        if fi is None or str(fi).strip() == "":
             continue
         cap = (r.get("capitulo") or "").strip()
         it = (r.get("item") or "").strip()
@@ -132,14 +135,19 @@ def _compute_estado_pk(items_total: int, items_con_fecha: int) -> str:
 
 
 def upsert_prog_pk_estado(sb, version_id: str, contrato_id: int, pk_id: str) -> None:
-    items_total, _ = _ppto_items_por_pk(sb, contrato_id, pk_id)
-    items_cf = _count_items_con_fecha(sb, version_id, pk_id)
+    pk = (pk_id or "").strip()
+    items_total, _ = _ppto_items_por_pk(sb, contrato_id, pk)
+    items_cf = _count_items_con_fecha(sb, version_id, pk)
     estado = _compute_estado_pk(items_total, items_cf)
+    print(
+        f"UPSERT_PK_ESTADO: pk={pk} items_con_fecha={items_cf} items_total={items_total} estado={estado}",
+        flush=True,
+    )
     existing = (
         sb.table("prog_pk_estado")
         .select("id")
         .eq("version_id", version_id)
-        .eq("pk_id", pk_id)
+        .eq("pk_id", pk)
         .limit(1)
         .execute()
         .data
@@ -147,7 +155,7 @@ def upsert_prog_pk_estado(sb, version_id: str, contrato_id: int, pk_id: str) -> 
     payload = {
         "version_id": version_id,
         "contrato_id": contrato_id,
-        "pk_id": pk_id,
+        "pk_id": pk,
         "estado_programacion": estado,
         "items_total": items_total,
         "items_con_fecha": min(items_cf, items_total) if items_total > 0 else 0,
@@ -213,6 +221,88 @@ def fetch_mapa_rows_rpc(sb, contrato_id: int) -> List[dict]:
         return res.data or []
     except Exception:
         return []
+
+
+def _ppto_distinct_item_counts_by_pk(sb, contrato_id: int) -> Dict[str, int]:
+    """Una sola consulta a presupuesto: cuenta ítems distintos (capítulo+ítem) por PK."""
+    rows = (
+        sb.table("presupuesto")
+        .select("pk_id,capitulo,item")
+        .eq("contrato_id", contrato_id)
+        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+        .eq("dado_de_baja", False)
+        .execute()
+        .data
+        or []
+    )
+    seen: Dict[str, set] = {}
+    for r in rows:
+        pk = str(r.get("pk_id") or "").strip()
+        cap = (r.get("capitulo") or "").strip()
+        it = (r.get("item") or "").strip()
+        if not pk or not cap or not it:
+            continue
+        if pk not in seen:
+            seen[pk] = set()
+        seen[pk].add((cap, it))
+    return {pk: len(s) for pk, s in seen.items()}
+
+
+def fetch_mapa_rows_for_version(sb, contrato_id: int, version_id: str) -> List[dict]:
+    """Estados de PK para una versión concreta (p. ej. borrador en edición)."""
+    pk_rows = (
+        sb.table("pk_ids")
+        .select("pk_id")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    est_rows = (
+        sb.table("prog_pk_estado")
+        .select("pk_id,estado_programacion,items_total,items_con_fecha,porcentaje_programado")
+        .eq("contrato_id", contrato_id)
+        .eq("version_id", version_id)
+        .execute()
+        .data
+        or []
+    )
+    est_map = {str(r.get("pk_id") or "").strip(): r for r in est_rows}
+    ppto_counts = _ppto_distinct_item_counts_by_pk(sb, contrato_id)
+    out: List[dict] = []
+    seen = set()
+    for pr in pk_rows:
+        pk = str(pr.get("pk_id") or "").strip()
+        if not pk or pk in seen:
+            continue
+        seen.add(pk)
+        e = est_map.get(pk)
+        if e:
+            out.append(
+                {
+                    "pk_id": pk,
+                    "estado_programacion": e.get("estado_programacion"),
+                    "items_total": int(e.get("items_total") or 0),
+                    "items_con_fecha": int(e.get("items_con_fecha") or 0),
+                    "porcentaje_programado": e.get("porcentaje_programado"),
+                }
+            )
+            continue
+        items_total = int(ppto_counts.get(pk, 0))
+        if items_total <= 0:
+            estado = "sin_cantidad"
+        else:
+            estado = "sin_iniciar"
+        out.append(
+            {
+                "pk_id": pk,
+                "estado_programacion": estado,
+                "items_total": items_total,
+                "items_con_fecha": 0,
+                "porcentaje_programado": 0 if items_total > 0 else None,
+            }
+        )
+    return out
 
 
 def fetch_borrador_activo(sb, contrato_id: int) -> Optional[dict]:
@@ -526,7 +616,192 @@ def aplicar_herencia_capitulo(
             sb.table("prog_actividades").insert(payload).execute()
         n += 1
     upsert_prog_pk_estado(sb, version_id, contrato_id, pk_id)
+    sync_capitulo_desde_items(sb, version_id, contrato_id, pk_id, capitulo, cache, usuario_id)
     return n
+
+
+def _parse_date_field(val) -> Optional[date]:
+    if val is None:
+        return None
+    if isinstance(val, date):
+        return val
+    if isinstance(val, str) and len(val) >= 10:
+        y, m, d = val[:10].split("-")
+        return date(int(y), int(m), int(d))
+    return None
+
+
+def sync_capitulo_desde_items(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    pk_id: str,
+    capitulo: str,
+    cache: CalendarioNoHabilesCache,
+    usuario_id: Optional[int] = None,
+) -> None:
+    """Deriva fecha_inicio_sugerida y duracion_dias_habiles del capítulo desde ítems programados."""
+    rows = (
+        sb.table("prog_actividades")
+        .select("fecha_inicio,fecha_fin_calculada")
+        .eq("version_id", version_id)
+        .eq("pk_id", pk_id.strip())
+        .eq("capitulo", capitulo.strip())
+        .not_.is_("fecha_inicio", "null")
+        .execute()
+        .data
+        or []
+    )
+    min_fi: Optional[date] = None
+    max_ff: Optional[date] = None
+    for r in rows:
+        fi = _parse_date_field(r.get("fecha_inicio"))
+        ff = _parse_date_field(r.get("fecha_fin_calculada"))
+        if fi and (min_fi is None or fi < min_fi):
+            min_fi = fi
+        if ff and (max_ff is None or ff > max_ff):
+            max_ff = ff
+        elif fi and not ff:
+            if min_fi is None or fi < min_fi:
+                min_fi = fi
+    if not min_fi or not max_ff:
+        return
+    dias = count_dias_habiles_entre(contrato_id, min_fi, max_ff, cache)
+    if dias <= 0:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "version_id": version_id,
+        "contrato_id": contrato_id,
+        "pk_id": pk_id.strip(),
+        "capitulo": capitulo.strip(),
+        "fecha_inicio_sugerida": min_fi.isoformat(),
+        "duracion_dias_habiles": dias,
+        "aplica_herencia": False,
+        "actualizado_en": now,
+    }
+    ex = (
+        sb.table("prog_actividades_capitulo")
+        .select("id")
+        .eq("version_id", version_id)
+        .eq("pk_id", pk_id.strip())
+        .eq("capitulo", capitulo.strip())
+        .limit(1)
+        .execute()
+        .data
+    )
+    if ex:
+        sup = {k: v for k, v in payload.items() if k != "creado_por"}
+        sb.table("prog_actividades_capitulo").update(sup).eq("id", ex[0]["id"]).execute()
+    elif usuario_id is not None:
+        payload["creado_por"] = usuario_id
+        sb.table("prog_actividades_capitulo").insert(payload).execute()
+
+
+def batch_upsert_actividades(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    pk_id: str,
+    items: List[dict],
+    usuario_id: int,
+    cache: CalendarioNoHabilesCache,
+) -> List[dict]:
+    """Persiste actividades en lote (upsert) y devuelve resultados con fecha_fin_calculada."""
+    assert_version_borrador(sb, version_id)
+    pk = pk_id.strip()
+    now = datetime.now(timezone.utc).isoformat()
+    existing_rows = (
+        sb.table("prog_actividades")
+        .select("id,capitulo,item,segmento")
+        .eq("version_id", version_id)
+        .eq("pk_id", pk)
+        .execute()
+        .data
+        or []
+    )
+    ex_map = {
+        (str(r.get("capitulo") or "").strip(), str(r.get("item") or "").strip(), int(r.get("segmento") or 1)): r["id"]
+        for r in existing_rows
+    }
+    payloads: List[dict] = []
+    meta: List[dict] = []
+    capitulos_touched: set = set()
+    for raw in items:
+        cap = str(raw.get("capitulo") or "").strip()
+        it = str(raw.get("item") or "").strip()
+        seg = int(raw.get("segmento") or 1)
+        fi = raw.get("fecha_inicio")
+        if isinstance(fi, str):
+            fi_d = _parse_date_field(fi)
+        elif isinstance(fi, date):
+            fi_d = fi
+        else:
+            fi_d = None
+        du = raw.get("duracion_dias_habiles")
+        du_i = int(du) if du is not None and int(du) > 0 else None
+        fin = add_dias_habiles(contrato_id, fi_d, du_i, cache) if fi_d and du_i else None
+        row = {
+            "version_id": version_id,
+            "contrato_id": contrato_id,
+            "pk_id": pk,
+            "capitulo": cap,
+            "item": it,
+            "segmento": seg,
+            "fecha_inicio": fi_d.isoformat() if fi_d else None,
+            "duracion_dias_habiles": du_i,
+            "fecha_fin_calculada": fin.isoformat() if fin else None,
+            "cantidad_programada": float(raw.get("cantidad_programada") or 0),
+            "unidad": (str(raw.get("unidad") or "?"))[:20],
+            "costo_unitario": float(raw.get("costo_unitario") or 0),
+            "tipo_distribucion": str(raw.get("tipo_distribucion") or "lineal"),
+            "heredado_de_capitulo": bool(raw.get("heredado_de_capitulo")),
+            "override_manual": bool(raw.get("override_manual")),
+            "actualizado_en": now,
+        }
+        key = (cap, it, seg)
+        if key not in ex_map:
+            row["creado_por"] = usuario_id
+        payloads.append(row)
+        meta.append({"capitulo": cap, "item": it, "segmento": seg, "fecha_fin_calculada": fin.isoformat() if fin else None})
+        if cap:
+            capitulos_touched.add(cap)
+    if not payloads:
+        return []
+    sb.table("prog_actividades").upsert(
+        payloads, on_conflict="version_id,pk_id,capitulo,item,segmento"
+    ).execute()
+    upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
+    for cap in capitulos_touched:
+        sync_capitulo_desde_items(sb, version_id, contrato_id, pk, cap, cache, usuario_id)
+  # fetch ids for response
+    refreshed = (
+        sb.table("prog_actividades")
+        .select("id,capitulo,item,segmento,fecha_fin_calculada")
+        .eq("version_id", version_id)
+        .eq("pk_id", pk)
+        .execute()
+        .data
+        or []
+    )
+    ref_map = {
+        (str(r.get("capitulo") or "").strip(), str(r.get("item") or "").strip(), int(r.get("segmento") or 1)): r
+        for r in refreshed
+    }
+    out: List[dict] = []
+    for m in meta:
+        k = (m["capitulo"], m["item"], m["segmento"])
+        r = ref_map.get(k, {})
+        out.append(
+            {
+                "capitulo": m["capitulo"],
+                "item": m["item"],
+                "segmento": m["segmento"],
+                "id": r.get("id"),
+                "fecha_fin_calculada": r.get("fecha_fin_calculada") or m.get("fecha_fin_calculada"),
+            }
+        )
+    return out
 
 
 def recalc_fin_actividad(sb, contrato_id: int, act_id: str, cache: CalendarioNoHabilesCache) -> Optional[str]:

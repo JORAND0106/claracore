@@ -1779,6 +1779,7 @@ app.include_router(prog_obra_router)
 # importado desde informes.py no exponía estas rutas en OpenAPI (Not Found en el cliente).
 from informes import _perm_informes_ccd, _respuesta_json_corte, _respuesta_json_memoria
 from ccd_conciliacion import (
+    matriz_params_contrato,
     rpo_conciliacion_por_contrato,
     rpo_conciliacion_un_acta_rpc,
     rpo_resumen_actas_rpc,
@@ -8162,9 +8163,22 @@ def listar_actas(contrato_id: int, current_user=Depends(get_current_user)):
     ]
     rpo_costo = {}
     if rpo_ids:
-        rpo_costo = rpo_resumen_actas_rpc(supabase, contrato_id, rpo_ids)
+        _campo_mx, _niv_act = matriz_params_contrato(supabase, contrato_id)
+        rpo_costo = rpo_resumen_actas_rpc(
+            supabase,
+            contrato_id,
+            rpo_ids,
+            campo_nivel_max=_campo_mx,
+            niveles_activos=_niv_act,
+        )
         if rpo_costo is None:
-            rpo_costo = rpo_conciliacion_por_contrato(supabase, contrato_id, rpo_ids)
+            rpo_costo = rpo_conciliacion_por_contrato(
+                supabase,
+                contrato_id,
+                rpo_ids,
+                campo_nivel_max=_campo_mx,
+                niveles_activos=_niv_act,
+            )
     result = []
     for r in (rows or []):
         tipo = r.get("actas_tipos") or {}
@@ -8594,9 +8608,22 @@ def acta_rpo_costo_conciliacion(acta_id: int, current_user=Depends(get_current_u
     if not acta or (acta.get("tipo_grupo") or "").strip().upper() != "RPO":
         raise HTTPException(status_code=400, detail="Solo aplica a actas con tipo RPO.")
     contrato_id = int(acta["contrato_id"])
-    block = rpo_conciliacion_un_acta_rpc(supabase, contrato_id, int(acta_id))
+    _campo_mx, _niv_act = matriz_params_contrato(supabase, contrato_id)
+    block = rpo_conciliacion_un_acta_rpc(
+        supabase,
+        contrato_id,
+        int(acta_id),
+        campo_nivel_max=_campo_mx,
+        niveles_activos=_niv_act,
+    )
     if block is None:
-        m = rpo_conciliacion_por_contrato(supabase, contrato_id, [int(acta_id)])
+        m = rpo_conciliacion_por_contrato(
+            supabase,
+            contrato_id,
+            [int(acta_id)],
+            campo_nivel_max=_campo_mx,
+            niveles_activos=_niv_act,
+        )
         block = m.get(
             int(acta_id),
             {
@@ -8617,9 +8644,10 @@ def acta_rpo_costo_conciliacion(acta_id: int, current_user=Depends(get_current_u
             "fecha_fin": (acta.get("fecha_fin") or "")[:10],
         },
         "criterio": (
-            "Alineado con el dashboard de validación: solo líneas SICOE con N1, N2 y N3 en «Aprobado» (cascada) "
-            "e ítem asignado. Sin filtro de «bloqueado» (diferente a formatos CCD con sello de bloqueo). "
-            "Bloque «obra / ensayos–sondeos» = misma regla de capítulos que dashboard_matriz_validacion (14, 15, ENSAYO, SONDEO)."
+            f"Alineado con el dashboard de validación: ítem asignado, prerequisitos de niveles activos "
+            f"inferiores a «Aprobado» y {_campo_mx} en «Aprobado» (último nivel activo del contrato: "
+            f"{sorted(_niv_act)}). Sin filtro de «bloqueado». "
+            "Bloque obra / ensayos = misma regla de capítulos que dashboard_matriz_validacion."
         ),
         "costo_directo_total": block.get("costo_directo_total", 0.0),
         "registros_n3_aprobado": block.get("registros_n3_aprobado", 0),

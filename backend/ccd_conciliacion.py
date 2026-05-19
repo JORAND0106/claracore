@@ -85,6 +85,87 @@ def _nivel_norm_matriz(v: Any) -> str:
     return s
 
 
+def _niveles_activos_contrato_sb(sb, contrato_id: int) -> List[int]:
+    """Lee contrato_niveles_validacion; sin fila → [1, 2, 3]."""
+    try:
+        cid = int(contrato_id)
+    except (TypeError, ValueError):
+        return [1, 2, 3]
+    try:
+        res = (
+            sb.table("contrato_niveles_validacion")
+            .select("niveles_activos")
+            .eq("contrato_id", cid)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if res and res[0] is not None:
+            raw = res[0].get("niveles_activos")
+            if isinstance(raw, list) and raw:
+                out: List[int] = []
+                for x in raw:
+                    try:
+                        n = int(x)
+                        if 1 <= n <= 6:
+                            out.append(n)
+                    except (TypeError, ValueError):
+                        continue
+                out = sorted(set(out))
+                if out:
+                    return out
+    except Exception as e:
+        _log.warning("niveles_activos contrato %s: %s", contrato_id, e)
+    return [1, 2, 3]
+
+
+def _campo_nivel_maximo_matriz(niveles_activos: List[int]) -> str:
+    try:
+        mx = max(int(x) for x in (niveles_activos or [3]))
+    except (TypeError, ValueError):
+        mx = 3
+    mx = min(6, max(1, mx))
+    return f"nivel{mx}_estado"
+
+
+def _registro_aprobado_matriz_panel(
+    reg: Dict[str, Any],
+    niveles_activos: List[int],
+    campo_nivel_max: str,
+) -> bool:
+    """
+    Misma regla que dashboard_matriz / panel drill: ítem asignado, prerequisitos de niveles
+    activos inferiores en «Aprobado» y nivel máximo activo en «Aprobado» (sellado).
+    """
+    if not (str(reg.get("item_numero") or "").strip()):
+        return False
+    activos = niveles_activos or [1, 2, 3]
+    try:
+        max_n = max(int(x) for x in activos)
+    except (TypeError, ValueError):
+        max_n = 3
+    max_n = min(6, max(1, max_n))
+    for n in activos:
+        try:
+            ni = int(n)
+        except (TypeError, ValueError):
+            continue
+        if ni >= max_n:
+            continue
+        campo = f"nivel{ni}_estado"
+        if _nivel_norm_matriz(reg.get(campo)) != "Aprobado":
+            return False
+    if _nivel_norm_matriz(reg.get(campo_nivel_max)) != "Aprobado":
+        return False
+    return True
+
+
+def matriz_params_contrato(sb, contrato_id: int) -> Tuple[str, List[int]]:
+    """(campo nivel máximo, niveles activos) para RPC panel actas y fallback Python."""
+    niveles = _niveles_activos_contrato_sb(sb, contrato_id)
+    return _campo_nivel_maximo_matriz(niveles), niveles
+
+
 def _bloque_capitulo_matriz(capitulo: Optional[str]) -> str:
     """
     Misma lógica que /sicoe-obra/.../dashboard-matriz-validación:
@@ -303,22 +384,27 @@ def _estados_aprob_sql() -> List[str]:
 
 
 def _fetch_cascade_interventoria_actas_rpo(
-    sb, contrato_id: int, acta_rpo_ids: List[int]
+    sb,
+    contrato_id: int,
+    acta_rpo_ids: List[int],
+    *,
+    campo_nivel_max: Optional[str] = None,
+    niveles_activos: Optional[List[int]] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Misma lógica que `dashboard-matriz-validacion` (N1, N2 y N3 aprobado en cascada), con
-    `item_numero` no vacío. No usa `bloqueado` (el panel admin debe alinearse con el dashboard, no
-    con el cierre a bloqueo de formatos CCD).
+    Líneas SICOE con ítem y último nivel activo del contrato en «Aprobado» (misma regla que
+    dashboard de validación). No filtra por `bloqueado` (formatos CCD).
     """
     if not acta_rpo_ids:
         return []
-    aprob = _estados_aprob_sql()
+    if campo_nivel_max is None or niveles_activos is None:
+        campo_nivel_max, niveles_activos = matriz_params_contrato(sb, contrato_id)
     out: List[Dict[str, Any]] = []
     chunk = 100
-    # item_descripcion / unidad: informes PDF CC-MES (mismos totales que lista de actas).
     sel = (
         "acta_rpo_id, capitulo, cantidad_total, vlr_unitario, costo_directo, "
-        "nivel1_estado, nivel2_estado, nivel3_estado, item_numero, item_descripcion, unidad"
+        "nivel1_estado, nivel2_estado, nivel3_estado, nivel4_estado, nivel5_estado, nivel6_estado, "
+        "item_numero, item_descripcion, unidad"
     )
     for i in range(0, len(acta_rpo_ids), chunk):
         part = acta_rpo_ids[i : i + chunk]
@@ -330,21 +416,11 @@ def _fetch_cascade_interventoria_actas_rpo(
                 .in_("acta_rpo_id", part)
                 .not_.is_("item_numero", "null")
                 .neq("item_numero", "")
-                .in_("nivel1_estado", aprob)
-                .in_("nivel2_estado", aprob)
-                .in_("nivel3_estado", aprob)
             )
         )
         for r in raw or []:
-            if not (str(r.get("item_numero") or "").strip()):
-                continue
-            if (
-                _nivel_norm_matriz(r.get("nivel1_estado")) != "Aprobado"
-                or _nivel_norm_matriz(r.get("nivel2_estado")) != "Aprobado"
-                or _nivel_norm_matriz(r.get("nivel3_estado")) != "Aprobado"
-            ):
-                continue
-            out.append(r)
+            if _registro_aprobado_matriz_panel(r, niveles_activos, campo_nivel_max):
+                out.append(r)
     return out
 
 
@@ -514,12 +590,16 @@ def _filas_por_capitulo_desde_map(
 
 
 def rpo_conciliacion_por_contrato(
-    sb, contrato_id: int, rpo_acta_ids: List[int]
+    sb,
+    contrato_id: int,
+    rpo_acta_ids: List[int],
+    *,
+    campo_nivel_max: Optional[str] = None,
+    niveles_activos: Optional[List[int]] = None,
 ) -> Dict[int, Dict[str, Any]]:
     """
-    Alineado con /sicoe-obra/.../dashboard-matriz-validación: N1, N2 y N3 aprobado en cascada,
-    ítems con item_numero, sin filtro de bloqueado. Desglose por capítulo; separación
-    «obra / ensayos» (14·15, ENSAYO, SONDEO) como en la matriz.
+    Alineado con dashboard de validación: último nivel activo aprobado + prerequisitos,
+    ítems con item_numero, sin filtro de bloqueado.
     """
     ids_unic: List[int] = []
     for x in rpo_acta_ids or []:
@@ -533,7 +613,15 @@ def rpo_conciliacion_por_contrato(
             ids_unic.append(n)
     if not ids_unic:
         return {}
-    flat = _fetch_cascade_interventoria_actas_rpo(sb, contrato_id, ids_unic)
+    if campo_nivel_max is None or niveles_activos is None:
+        campo_nivel_max, niveles_activos = matriz_params_contrato(sb, contrato_id)
+    flat = _fetch_cascade_interventoria_actas_rpo(
+        sb,
+        contrato_id,
+        ids_unic,
+        campo_nivel_max=campo_nivel_max,
+        niveles_activos=niveles_activos,
+    )
     by_acta: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
     for r in flat:
         aid = r.get("acta_rpo_id")
@@ -611,12 +699,16 @@ def _bloqueo_rpo_vacio() -> Dict[str, Any]:
 
 
 def rpo_resumen_actas_rpc(
-    sb, contrato_id: int, rpo_acta_ids: List[int]
+    sb,
+    contrato_id: int,
+    rpo_acta_ids: List[int],
+    *,
+    campo_nivel_max: Optional[str] = None,
+    niveles_activos: Optional[List[int]] = None,
 ) -> Optional[Dict[int, Dict[str, Any]]]:
     """
     Suma y conteo por acta vía RPC `rpo_panel_actas_resumen` (SQL en rpo_panel_admin_agg.sql).
-    Misma lógica que rpo_conciliacion_por_contrato pero sin traer so_registros a Python.
-    None = el RPC no está disponible o error; en ese caso conviene rpo_conciliacion_por_contrato.
+    None = RPC no disponible; usar rpo_conciliacion_por_contrato.
     """
     ids: List[int] = []
     for x in rpo_acta_ids or []:
@@ -630,6 +722,8 @@ def rpo_resumen_actas_rpc(
             ids.append(n)
     if not ids:
         return {}
+    if campo_nivel_max is None or niveles_activos is None:
+        campo_nivel_max, niveles_activos = matriz_params_contrato(sb, contrato_id)
     try:
         res = (
             sb.rpc(
@@ -637,6 +731,8 @@ def rpo_resumen_actas_rpc(
                 {
                     "p_contrato_id": contrato_id,
                     "p_acta_ids": ids,
+                    "p_campo_nivel_max": campo_nivel_max,
+                    "p_niveles_activos": niveles_activos,
                 },
             ).execute()
         )
@@ -663,13 +759,19 @@ def rpo_resumen_actas_rpc(
 
 
 def rpo_conciliacion_un_acta_rpc(
-    sb, contrato_id: int, acta_id: int
+    sb,
+    contrato_id: int,
+    acta_id: int,
+    *,
+    campo_nivel_max: Optional[str] = None,
+    niveles_activos: Optional[List[int]] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Desglose (por capítulo + secciones obra/ensayos) vía RPC `rpo_panel_acta_por_capitulo_bloque`.
-    Misma estructura que rpo_conciliacion_por_contrato[acta_id].
     None = RPC no disponible; usar rpo_conciliacion_por_contrato.
     """
+    if campo_nivel_max is None or niveles_activos is None:
+        campo_nivel_max, niveles_activos = matriz_params_contrato(sb, contrato_id)
     try:
         res = (
             sb.rpc(
@@ -677,6 +779,8 @@ def rpo_conciliacion_un_acta_rpc(
                 {
                     "p_contrato_id": contrato_id,
                     "p_acta_id": int(acta_id),
+                    "p_campo_nivel_max": campo_nivel_max,
+                    "p_niveles_activos": niveles_activos,
                 },
             ).execute()
         )

@@ -2,12 +2,16 @@
  * Programación de obra — mapa (Mapbox) + panel lateral 420px.
  * Colores según prog_pk_estado de la versión vigente sellada; borrador en meta.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { API_BASE } from './apiBase'
 import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
+import ProgObraProgramacionModal from './ProgObraProgramacionModal'
+import { fmtCOP, fmtCant, fmtDateHuman, fmtDateIso } from './progObraFormat'
+import { aggregatePptoItemKeysByPk, buildProgValidationPreCheck } from './progObraValidation'
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
 /** Plano físico del contrato: norte a la izquierda; el usuario puede rotar después. */
@@ -152,6 +156,30 @@ function colorForEstado(estado) {
   }
 }
 
+function buildEnrichedPlano(planoFc, metaMap) {
+  if (!planoFc?.features) return { type: 'FeatureCollection', features: [] }
+  return {
+    ...planoFc,
+    features: (planoFc.features || []).map((f) => {
+      const pkid = featurePkId(f)
+      const row = metaMap[pkid] || {}
+      const est = row.estado_programacion || 'sin_iniciar'
+      const c = colorForEstado(est)
+      return {
+        ...f,
+        properties: {
+          ...f.properties,
+          pk_id: pkid,
+          prog_estado: est,
+          prog_fill: c.fill,
+          prog_line: c.line,
+          prog_op: c.op,
+        },
+      }
+    }),
+  }
+}
+
 /** Leyenda estados programación (alineada con prog_pk_estado / colorForEstado). */
 const MAPA_LEYENDA_ESTADOS = [
   { key: 'sin_cantidad', label: 'Sin cantidad', desc: 'PK sin ítems activos en presupuesto', fill: '#94a3b8', op: 0.08 },
@@ -159,6 +187,71 @@ const MAPA_LEYENDA_ESTADOS = [
   { key: 'en_progreso', label: 'En progreso', desc: 'Algunos ítems con fecha', fill: '#EF9F27', op: 0.6 },
   { key: 'completa', label: 'Completa', desc: 'Todos los ítems con fecha', fill: '#1D9E75', op: 0.7 },
 ]
+
+function progBarVisual(pct, estado) {
+  const e = estado || 'sin_iniciar'
+  if (e === 'sin_cantidad' || pct == null || !Number.isFinite(Number(pct))) {
+    return { blocks: '──────────', fill: '#d1d5db' }
+  }
+  const p = Math.max(0, Math.min(100, Number(pct)))
+  const filled = Math.round(p / 10)
+  const fill = e === 'completa' ? '#1D9E75' : e === 'en_progreso' ? '#F59E0B' : '#888780'
+  return { blocks: `${'█'.repeat(filled)}${'░'.repeat(10 - filled)}`, fill }
+}
+
+function ProgPkListado({ rows, selPk, t, onSelectPk }) {
+  const sorted = [...(rows || [])].sort((a, b) =>
+    String(a.pk_id || '').localeCompare(String(b.pk_id || ''), undefined, { numeric: true }),
+  )
+  if (sorted.length === 0) return null
+
+  return (
+    <div style={{ marginTop: 4 }}>
+      <div style={{ fontWeight: 600, fontSize: 'var(--cc-caption)', color: t.text, marginBottom: 6 }}>
+        Lista de PKs del proyecto
+      </div>
+      <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 8, maxHeight: 240, overflowY: 'auto' }}>
+        {sorted.map((r) => {
+          const pk = String(r.pk_id || '').trim()
+          if (!pk) return null
+          const est = r.estado_programacion || 'sin_iniciar'
+          const pctNum = est === 'sin_cantidad' ? null : Number(r.porcentaje_programado)
+          const { blocks, fill } = progBarVisual(pctNum, est)
+          const pctLabel = pctNum != null && Number.isFinite(pctNum) ? `${Math.round(pctNum)}%` : '—'
+          const selected = pk === selPk
+          return (
+            <button
+              key={pk}
+              type="button"
+              onClick={() => onSelectPk(pk)}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '72px 1fr 36px 88px',
+                gap: 6,
+                alignItems: 'center',
+                width: '100%',
+                padding: '6px 8px',
+                marginBottom: 4,
+                border: `1px solid ${selected ? t.primary : t.border}`,
+                borderRadius: 6,
+                background: selected ? `${t.primary}18` : t.bg,
+                cursor: 'pointer',
+                textAlign: 'left',
+                fontSize: 'var(--cc-caption)',
+                color: t.text,
+              }}
+            >
+              <span style={{ fontWeight: selected ? 700 : 600, color: selected ? t.primary : t.text }}>PK {pk}</span>
+              <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 10, color: fill, letterSpacing: -0.5 }}>{blocks}</span>
+              <span style={{ textAlign: 'right', fontWeight: 600 }}>{pctLabel}</span>
+              <span style={{ color: t.textMuted, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis' }}>{est}</span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
 
 async function parseApiError(res) {
   try {
@@ -222,13 +315,18 @@ function removeProgLayersIfAny(map) {
 }
 
 /** Tras `load` o `style.load`: terreno solo en satélite; fuente/capas/eventos de polígonos. */
-function applyProgMapAfterStyle(map, basemapMode, enriched, setSelPk) {
+function applyProgMapAfterStyle(map, basemapMode, enriched, onPkClick) {
   if (!map || !enriched) return
   if (basemapMode === 'satellite') {
     clearMapTerrain(map)
     ensureMapTerrain(map)
   } else {
     clearMapTerrain(map)
+  }
+  const existingSource = map.getSource('prog-pol')
+  if (existingSource && typeof existingSource.setData === 'function' && map.getLayer('prog-fill')) {
+    existingSource.setData(enriched)
+    return
   }
   removeProgLayersIfAny(map)
   map.addSource('prog-pol', { type: 'geojson', data: enriched })
@@ -264,7 +362,7 @@ function applyProgMapAfterStyle(map, basemapMode, enriched, setSelPk) {
   const onClick = (e) => {
     const f = e.features && e.features[0]
     const pkid = featurePkId(f)
-    if (pkid) setSelPk(pkid)
+    if (pkid) onPkClick(pkid)
   }
   const onEnter = () => {
     map.getCanvas().style.cursor = 'pointer'
@@ -414,10 +512,151 @@ function createBasemapStyleControl({ getMode, t, onSelect }) {
   }
 }
 
-function fmtDateIso(s) {
-  if (s == null || s === '') return ''
-  if (typeof s === 'string') return s.slice(0, 10)
-  return String(s)
+const PROG_Z_OVERLAY = 200000
+
+function ProgOverlay({ children, onBackdropClick }) {
+  if (typeof document === 'undefined') return null
+  return createPortal(
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: PROG_Z_OVERLAY,
+        background: 'rgba(0,0,0,0.5)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+      }}
+      onClick={onBackdropClick}
+    >
+      {children}
+    </div>,
+    document.body,
+  )
+}
+
+function ProgPkEditorModal({
+  open,
+  onClose,
+  t,
+  selPk,
+  rowSel,
+  loadAct,
+  loadPpto,
+  editable,
+  panelBusy,
+  puedeEnviar,
+  onEnviarValidacion,
+  children,
+}) {
+  if (!open || typeof document === 'undefined') return null
+  return createPortal(
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: PROG_Z_OVERLAY,
+        background: 'rgba(0,0,0,0.55)',
+        display: 'flex',
+        flexDirection: 'column',
+        padding: '2vh 2vw',
+        boxSizing: 'border-box',
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          background: t.bgCard,
+          border: `1px solid ${t.border}`,
+          borderRadius: 12,
+          boxShadow: '0 12px 48px rgba(0,0,0,0.25)',
+          overflow: 'hidden',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            padding: '12px 16px',
+            borderBottom: `1px solid ${t.border}`,
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 'var(--cc-title)', color: t.primary }}>PK {selPk}</div>
+            {rowSel && (
+              <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 2 }}>
+                {rowSel.estado_programacion} · {rowSel.items_con_fecha ?? 0}/{rowSel.items_total ?? 0} ítems programados
+              </div>
+            )}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            {loadAct && <span style={{ fontSize: 11, color: t.textMuted }}>Sincronizando…</span>}
+            {loadPpto && <span style={{ fontSize: 11, color: t.textMuted }}>Cargando ítems…</span>}
+            {puedeEnviar && (
+              <button
+                type="button"
+                disabled={panelBusy}
+                onClick={onEnviarValidacion}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  borderRadius: 8,
+                  border: `1px solid ${t.primary}`,
+                  background: t.primary,
+                  color: '#fff',
+                  cursor: panelBusy ? 'not-allowed' : 'pointer',
+                  opacity: panelBusy ? 0.55 : 1,
+                }}
+              >
+                Enviar a validación
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                padding: '6px 12px',
+                fontSize: 12,
+                fontWeight: 600,
+                borderRadius: 8,
+                border: `1px solid ${t.border}`,
+                background: t.bg,
+                color: t.text,
+                cursor: 'pointer',
+              }}
+            >
+              Cerrar
+            </button>
+          </div>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 16px 16px' }}>{children}</div>
+        {!editable && (
+          <div
+            style={{
+              padding: '8px 16px',
+              borderTop: `1px solid ${t.border}`,
+              fontSize: 11,
+              color: t.textMuted,
+              background: t.bg,
+            }}
+          >
+            Solo lectura: seleccione una versión en borrador con permiso de edición.
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
+  )
 }
 
 function useDebounced(value, ms) {
@@ -444,6 +683,7 @@ export default function ModuloProgramacionObra({
   const mapInst = useRef(null)
   const mapBaseModeRef = useRef('plano')
   const enrichedGeojsonRef = useRef(null)
+  const mapRefreshDebounceRef = useRef(null)
   const [plano, setPlano] = useState(undefined)
   const [mapaResp, setMapaResp] = useState(null)
   const [versiones, setVersiones] = useState([])
@@ -452,16 +692,21 @@ export default function ModuloProgramacionObra({
   const [toast, setToast] = useState(null)
   const [workingVersionId, setWorkingVersionId] = useState(null)
   const [presupuestoRows, setPresupuestoRows] = useState([])
+  const [presupuestoContratoAll, setPresupuestoContratoAll] = useState([])
   const [loadPpto, setLoadPpto] = useState(false)
+  const [validacionPreCheck, setValidacionPreCheck] = useState(null)
   const [actData, setActData] = useState({ capitulos: [], actividades: [] })
   const [loadAct, setLoadAct] = useState(false)
-  const [expandedCaps, setExpandedCaps] = useState(() => new Set())
   const [panelBusy, setPanelBusy] = useState(false)
+  const [rowSaveStatus, setRowSaveStatus] = useState({})
   const [validaciones, setValidaciones] = useState([])
   const [loadVal, setLoadVal] = useState(false)
   const [showCrearVersion, setShowCrearVersion] = useState(false)
   const [crearMotivo, setCrearMotivo] = useState('')
   const [validarModal, setValidarModal] = useState(null)
+  const [progModalOpen, setProgModalOpen] = useState(false)
+  const [modalPkTabs, setModalPkTabs] = useState([])
+  const [activeModalPk, setActiveModalPk] = useState(null)
   /** 'plano' = callejero claro/oscuro; 'topo' = outdoors; 'satellite' = satélite + relieve 3D. */
   const [mapBaseMode, setMapBaseMode] = useState('plano')
   mapBaseModeRef.current = mapBaseMode
@@ -498,6 +743,13 @@ export default function ModuloProgramacionObra({
     },
     [cid, token, API],
   )
+
+  const scheduleMapRefresh = useCallback(() => {
+    if (mapRefreshDebounceRef.current) clearTimeout(mapRefreshDebounceRef.current)
+    mapRefreshDebounceRef.current = setTimeout(() => {
+      refreshMapaYVersiones()
+    }, 2000)
+  }, [refreshMapaYVersiones])
 
   useEffect(() => {
     if (!cid || !token) {
@@ -546,11 +798,62 @@ export default function ModuloProgramacionObra({
     () => versiones.some((v) => (v.estado || '') === 'sellada'),
     [versiones],
   )
+  const sinVersiones = versiones.length === 0
+  const baselineEnCurso = useMemo(
+    () =>
+      versiones.some(
+        (v) =>
+          (v.tipo || '') === 'baseline' && !['archivada', 'rechazada'].includes(String(v.estado || '')),
+      ),
+    [versiones],
+  )
+  const puedeCrearNuevaVersion = puedeCrear && (sinVersiones || tieneSellada)
+
+  const versionIdForWork = useMemo(() => {
+    if (workingVersionId) return workingVersionId
+    if (borradorMeta?.id) return String(borradorMeta.id)
+    const vb = versiones.find((v) => (v.estado || '') === 'borrador')
+    return vb?.id != null ? String(vb.id) : null
+  }, [workingVersionId, borradorMeta?.id, versiones])
 
   const workingVersion = useMemo(
-    () => versiones.find((v) => String(v.id) === String(workingVersionId)) || null,
-    [versiones, workingVersionId],
+    () => versiones.find((v) => String(v.id) === String(versionIdForWork)) || null,
+    [versiones, versionIdForWork],
   )
+
+  const pkForData = progModalOpen && activeModalPk ? activeModalPk : selPk
+
+  const openProgramacionModal = useCallback(
+    (pkid) => {
+      if (!pkid) return
+      if (!workingVersionId) {
+        const vb = versiones.find((v) => (v.estado || '') === 'borrador')
+        if (vb?.id) setWorkingVersionId(String(vb.id))
+        else if (borradorMeta?.id) setWorkingVersionId(String(borradorMeta.id))
+      }
+      setSelPk(pkid)
+      setModalPkTabs((prev) => (prev.includes(pkid) ? prev : [...prev, pkid]))
+      setActiveModalPk(pkid)
+      setProgModalOpen(true)
+    },
+    [workingVersionId, versiones, borradorMeta?.id],
+  )
+
+  const onMapPkClick = useCallback(
+    (pkid) => {
+      if (!pkid) return
+      setSelPk(pkid)
+      if (progModalOpen) {
+        setModalPkTabs((prev) => (prev.includes(pkid) ? prev : [...prev, pkid]))
+        setActiveModalPk(pkid)
+      } else {
+        openProgramacionModal(pkid)
+      }
+    },
+    [progModalOpen, openProgramacionModal],
+  )
+  const onMapPkClickRef = useRef(onMapPkClick)
+  onMapPkClickRef.current = onMapPkClick
 
   const pkMeta = useCallback(() => {
     const rows = mapaResp?.pk
@@ -603,31 +906,10 @@ export default function ModuloProgramacionObra({
       'top-right',
     )
 
-    const metaMap = pkMeta()
-    const enriched = {
-      ...plano,
-      features: (plano.features || []).map((f) => {
-        const pkid = featurePkId(f)
-        const row = metaMap[pkid] || {}
-        const est = row.estado_programacion || 'sin_iniciar'
-        const c = colorForEstado(est)
-        return {
-          ...f,
-          properties: {
-            ...f.properties,
-            pk_id: pkid,
-            prog_estado: est,
-            prog_fill: c.fill,
-            prog_line: c.line,
-            prog_op: c.op,
-          },
-        }
-      }),
-    }
-    enrichedGeojsonRef.current = enriched
-
     map.on('load', () => {
-      applyProgMapAfterStyle(map, mapBaseModeRef.current, enriched, setSelPk)
+      const enriched = buildEnrichedPlano(plano, pkMeta())
+      enrichedGeojsonRef.current = enriched
+      applyProgMapAfterStyle(map, mapBaseModeRef.current, enriched, (pk) => onMapPkClickRef.current(pk))
       const lab = map.getContainer().querySelector('[data-prog-basemap-btn]')
       if (lab) lab.textContent = basemapLabel(mapBaseModeRef.current)
       const b = boundsLngLatFromFeatureCollection(enriched)
@@ -660,7 +942,18 @@ export default function ModuloProgramacionObra({
       }
       if (mapInst.current === map) mapInst.current = null
     }
-  }, [cid, plano, mapaResp, t.bg, pkMeta])
+  }, [cid, plano, t.bg])
+
+  useEffect(() => {
+    const map = mapInst.current
+    if (!map || !MAPBOX_TOKEN || !plano?.features?.length || !mapaResp) return
+    const enriched = buildEnrichedPlano(plano, pkMeta())
+    enrichedGeojsonRef.current = enriched
+    const apply = () =>
+      applyProgMapAfterStyle(map, mapBaseModeRef.current, enriched, (pk) => onMapPkClickRef.current(pk))
+    if (map.isStyleLoaded()) apply()
+    else map.once('load', apply)
+  }, [mapaResp, pkMeta, plano])
 
   useEffect(() => {
     const map = mapInst.current
@@ -673,21 +966,21 @@ export default function ModuloProgramacionObra({
     map.setStyle(url)
     const modeAtSwitch = mapBaseMode
     map.once('style.load', () => {
-      applyProgMapAfterStyle(map, modeAtSwitch, enrichedGeojsonRef.current, setSelPk)
+      applyProgMapAfterStyle(map, modeAtSwitch, enrichedGeojsonRef.current, (pk) => onMapPkClickRef.current(pk))
       const lab = map.getContainer().querySelector('[data-prog-basemap-btn]')
       if (lab) lab.textContent = basemapLabel(modeAtSwitch)
     })
   }, [mapBaseMode, t.bg])
 
   const pptoPorPk = useMemo(() => {
-    if (!selPk) return []
+    if (!pkForData) return []
     return presupuestoRows.filter(
       (r) =>
-        String(r.pk_id || '').trim() === selPk &&
+        String(r.pk_id || '').trim() === pkForData &&
         String(r.tipo_ejecucion || '').trim() === PRESUPUESTO_TIPO_POLIGONO &&
         r.dado_de_baja !== true,
     )
-  }, [presupuestoRows, selPk])
+  }, [presupuestoRows, pkForData])
 
   const capitulosOrdenados = useMemo(() => {
     const caps = new Map()
@@ -700,19 +993,7 @@ export default function ModuloProgramacionObra({
     return [...caps.keys()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
   }, [pptoPorPk])
 
-  const capKeyOrden = useMemo(() => capitulosOrdenados.join('|'), [capitulosOrdenados])
-
-  useEffect(() => {
-    if (!selPk) {
-      setExpandedCaps(new Set())
-      return
-    }
-    if (capitulosOrdenados.length === 0) {
-      setExpandedCaps(new Set())
-      return
-    }
-    setExpandedCaps(new Set([capitulosOrdenados[0]]))
-  }, [selPk, capKeyOrden, capitulosOrdenados])
+  const itemRowKey = (cap, item) => `${cap}\u0000${item}`
 
   const itemsPorCapitulo = useCallback(
     (cap) => {
@@ -722,17 +1003,27 @@ export default function ModuloProgramacionObra({
         const it = String(r.item || '').trim()
         if (!it) continue
         const key = `${cap}\u0000${it}`
+        const cd = Number(r.costo_directo)
+        const cant = Number(r.cant_total) || 0
+        const vlr = Number(r.vlr_unitario) || 0
+        const lineCd = Number.isFinite(cd) && cd > 0 ? cd : cant * vlr
         if (!m.has(key)) {
           m.set(key, {
             capitulo: cap,
             item: it,
-            cant_total: Number(r.cant_total) || 0,
+            descripcion: String(r.descripcion || r.registro || '').trim(),
+            cant_total: cant,
             und: String(r.und || '').slice(0, 20),
-            vlr_unitario: Number(r.vlr_unitario) || 0,
+            vlr_unitario: vlr,
+            costo_directo: lineCd,
           })
         } else {
           const cur = m.get(key)
-          cur.cant_total += Number(r.cant_total) || 0
+          cur.cant_total += cant
+          cur.costo_directo += lineCd
+          if (!cur.descripcion && (r.descripcion || r.registro)) {
+            cur.descripcion = String(r.descripcion || r.registro || '').trim()
+          }
         }
       }
       return [...m.values()].sort((a, b) => a.item.localeCompare(b.item, undefined, { numeric: true }))
@@ -751,6 +1042,24 @@ export default function ModuloProgramacionObra({
     return m
   }, [actData.actividades])
 
+  const ganttRows = useMemo(() => {
+    const out = []
+    for (const cap of capitulosOrdenados) {
+      for (const it of itemsPorCapitulo(cap)) {
+        const act = actMap[actividadKey(cap, it.item, 1)]
+        out.push({
+          capitulo: cap,
+          item: it.item,
+          label: it.item,
+          fecha_inicio: act?.fecha_inicio,
+          fecha_fin: act?.fecha_fin_calculada,
+          duracion: act?.duracion_dias_habiles,
+        })
+      }
+    }
+    return out
+  }, [capitulosOrdenados, itemsPorCapitulo, actMap])
+
   const capProgMap = useMemo(() => {
     const m = {}
     for (const c of actData.capitulos || []) {
@@ -761,14 +1070,14 @@ export default function ModuloProgramacionObra({
   }, [actData.capitulos])
 
   useEffect(() => {
-    if (!cid || !token || !selPk) {
+    if (!cid || !token || !pkForData) {
       setPresupuestoRows([])
       return
     }
     let cancel = false
     setLoadPpto(true)
     const q = new URLSearchParams()
-    q.set('pk_criterio', selPk)
+    q.set('pk_criterio', pkForData)
     q.set('limit', '3000')
     fetch(`${API}/presupuesto/${cid}?${q}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => (r.ok ? r.json() : []))
@@ -784,16 +1093,16 @@ export default function ModuloProgramacionObra({
     return () => {
       cancel = true
     }
-  }, [cid, token, selPk, API])
+  }, [cid, token, pkForData, API])
 
   useEffect(() => {
-    if (!cid || !token || !selPk || !workingVersionId) {
+    if (!cid || !token || !pkForData || !versionIdForWork) {
       setActData({ capitulos: [], actividades: [] })
       return
     }
     let cancel = false
     setLoadAct(true)
-    const q = new URLSearchParams({ version_id: String(workingVersionId), pk_id: selPk })
+    const q = new URLSearchParams({ version_id: String(versionIdForWork), pk_id: pkForData })
     fetch(`${API}/prog-obra/${cid}/actividades?${q}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => (r.ok ? r.json() : { capitulos: [], actividades: [] }))
       .then((d) => {
@@ -808,7 +1117,7 @@ export default function ModuloProgramacionObra({
     return () => {
       cancel = true
     }
-  }, [cid, token, selPk, workingVersionId, API])
+  }, [cid, token, pkForData, versionIdForWork, API])
 
   useEffect(() => {
     if (!cid || !token || !workingVersionId) {
@@ -840,8 +1149,51 @@ export default function ModuloProgramacionObra({
     }
   }, [cid, token, workingVersionId, workingVersion?.estado, API])
 
-  const rowSel = selPk ? pkMeta()[selPk] : null
+  const rowSel = useMemo(() => {
+    if (!selPk) return null
+    const key = String(selPk).trim()
+    const m = pkMeta()
+    if (m[key]) return m[key]
+    const lower = key.toLowerCase()
+    return Object.values(m).find((r) => String(r.pk_id || '').trim().toLowerCase() === lower) || null
+  }, [selPk, mapaResp, pkMeta])
   const esBorradorEditable = workingVersion && (workingVersion.estado || '') === 'borrador'
+
+  const borradorProgResumen = useMemo(() => {
+    if (!borradorMeta || !esBorradorEditable) return null
+    const rows = mapaResp?.pk || []
+    let sum = 0
+    let n = 0
+    for (const r of rows) {
+      if ((r.estado_programacion || '') === 'sin_cantidad') continue
+      const p = Number(r.porcentaje_programado)
+      if (Number.isFinite(p)) {
+        sum += p
+        n += 1
+      }
+    }
+    return { pct: n > 0 ? sum / n : 0 }
+  }, [mapaResp, borradorMeta, esBorradorEditable])
+
+  const selectPkAndZoom = useCallback(
+    (pkid) => {
+      if (!pkid) return
+      setSelPk(pkid)
+      const map = mapInst.current
+      const fc = plano
+      if (!map || !fc?.features?.length) return
+      const feat = fc.features.find((f) => featurePkId(f) === pkid)
+      if (!feat?.geometry) return
+      const b = boundsLngLatFromFeatureCollection({ type: 'FeatureCollection', features: [feat] })
+      if (!b) return
+      try {
+        map.fitBounds(b, { padding: 80, maxZoom: 17, duration: 900 })
+      } catch {
+        /* ignore */
+      }
+    },
+    [plano],
+  )
   const esEnValidacion = workingVersion && (workingVersion.estado || '') === 'en_validacion'
   const esSellada = workingVersion && (workingVersion.estado || '') === 'sellada'
 
@@ -874,7 +1226,7 @@ export default function ModuloProgramacionObra({
 
   const handleCrearVersion = async () => {
     if (!puedeCrear || !cid) return
-    const tipo = tieneSellada ? 'reprogramacion' : 'baseline'
+    const tipo = sinVersiones || !baselineEnCurso ? 'baseline' : 'reprogramacion'
     if (tipo === 'reprogramacion' && !crearMotivo.trim()) {
       showToast('Indique el motivo de la reprogramación.', 'err')
       return
@@ -904,10 +1256,189 @@ export default function ModuloProgramacionObra({
     }
   }
 
-  const handleEnviarValidacion = async () => {
-    if (!puedeEditar || !cid || !workingVersionId) return
-    if (!window.confirm('¿Enviar esta versión a la cadena de validación? No podrá editar el cronograma hasta un rechazo.'))
+  const handleClickNuevaVersion = async () => {
+    if (!puedeCrear || !cid) {
+      showToast('No tiene permiso para crear versiones de programación.', 'err')
       return
+    }
+    if (!token) {
+      showToast('Sesión no válida. Vuelva a iniciar sesión.', 'err')
+      return
+    }
+    if (sinVersiones) {
+      await handleCrearVersion()
+      return
+    }
+    if (!tieneSellada) {
+      showToast(
+        'Ya existe una versión en curso (borrador o en validación). Debe sellarla antes de crear una reprogramación.',
+        'err',
+      )
+      return
+    }
+    setCrearMotivo('')
+    setShowCrearVersion(true)
+  }
+
+  useEffect(() => {
+    if (!cid || !token) {
+      setPresupuestoContratoAll([])
+      return
+    }
+    let cancel = false
+    const q = new URLSearchParams({ limit: '20000' })
+    fetch(`${API}/presupuesto/${cid}?${q}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows) => {
+        if (!cancel) setPresupuestoContratoAll(Array.isArray(rows) ? rows : [])
+      })
+      .catch(() => {
+        if (!cancel) setPresupuestoContratoAll([])
+      })
+    return () => {
+      cancel = true
+    }
+  }, [cid, token, API])
+
+  const fetchActividadesByPk = useCallback(
+    async (pkid) => {
+      const q = new URLSearchParams({ version_id: String(workingVersionId), pk_id: pkid })
+      const d = await fetch(`${API}/prog-obra/${cid}/actividades?${q}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((r) => (r.ok ? r.json() : { actividades: [] }))
+      return Array.isArray(d?.actividades) ? d.actividades : []
+    },
+    [cid, token, API, workingVersionId],
+  )
+
+  const reloadActividadesPk = useCallback(
+    async (pkidOverride) => {
+      const pkid = (pkidOverride || pkForData || '').trim()
+      if (!cid || !token || !pkid || !versionIdForWork) return
+      const q = new URLSearchParams({ version_id: String(versionIdForWork), pk_id: pkid })
+      const d = await fetch(`${API}/prog-obra/${cid}/actividades?${q}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then((r) => (r.ok ? r.json() : { capitulos: [], actividades: [] }))
+      setActData(d && typeof d === 'object' ? d : { capitulos: [], actividades: [] })
+    },
+    [cid, token, pkForData, versionIdForWork, API],
+  )
+
+  const handleGuardarBatch = useCallback(
+    async (items, pkId) => {
+      const vid = versionIdForWork
+      if (!puedeEditar || !cid || !vid || !pkId) return { ok: false, saved: 0, errors: items?.length || 0 }
+      const actividades = (items || []).map((row) => {
+        const def = row.itemDef || {}
+        return {
+          capitulo: row.capitulo || def.capitulo,
+          item: row.item || def.item,
+          segmento: 1,
+          fecha_inicio: row.fecha_inicio,
+          duracion_dias_habiles: parseInt(String(row.duracion), 10),
+          cantidad_programada: Number(def.cant_total),
+          unidad: def.und || '?',
+          costo_unitario: Number(def.vlr_unitario) || 0,
+          tipo_distribucion: 'lineal',
+          override_manual: !!row.override_manual,
+          heredado_de_capitulo: !!row.heredado_de_capitulo,
+        }
+      })
+      try {
+        const res = await fetch(`${API}/prog-obra/${cid}/versiones/${vid}/actividades-batch`, {
+          method: 'POST',
+          headers: hdrs,
+          body: JSON.stringify({ pk_id: pkId, actividades }),
+        })
+        if (!res.ok) throw new Error(await parseApiError(res))
+        const syncRes = await fetch(`${API}/prog-obra/${cid}/versiones/${vid}/sincronizar-estados-pk`, {
+          method: 'POST',
+          headers: hdrs,
+        })
+        if (!syncRes.ok) throw new Error(await parseApiError(syncRes))
+        return { ok: true, saved: actividades.length, errors: 0, pkId: String(pkId || '').trim() }
+      } catch (e) {
+        showToast(e?.message || 'Error al guardar actividades', 'err')
+        return { ok: false, saved: 0, errors: actividades.length }
+      }
+    },
+    [puedeEditar, cid, versionIdForWork, hdrs, API, showToast],
+  )
+
+  const handleProgSaveSuccess = useCallback(
+    async () => {
+      // 1. Cerrar modal
+      setProgModalOpen(false)
+      setModalPkTabs([])
+      setActiveModalPk(null)
+      // 2. Esperar que React termine
+      await new Promise((r) => setTimeout(r, 150))
+      // 3. Llamar /mapa una sola vez
+      const res = await fetch(`${API}/prog-obra/${cid}/mapa`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const data = await res.json()
+      // 4. Actualizar estado
+      setMapaResp(data)
+      // 5. Forzar setData directo en Mapbox
+      const map = mapInst.current
+      if (map && map.getSource('prog-pol')) {
+        const metaMap = {}
+        for (const r of data?.pk || []) {
+          const id = String(r.pk_id || '').trim()
+          if (id) metaMap[id] = r
+        }
+        const enriched = buildEnrichedPlano(plano, metaMap)
+        map.getSource('prog-pol').setData(enriched)
+      } else {
+        console.log('mapInst null o fuente no existe:', map, map?.getSource('prog-pol'))
+      }
+    },
+    [cid, token, API, plano],
+  )
+
+  const buildValidacionResumen = useCallback(async () => {
+    const pptoByPk = aggregatePptoItemKeysByPk(presupuestoContratoAll)
+    const pkList = [...pptoByPk.keys()]
+    const actividadesByPk = new Map()
+    await Promise.all(
+      pkList.map(async (pk) => {
+        const acts = await fetchActividadesByPk(pk)
+        actividadesByPk.set(pk, acts)
+      }),
+    )
+    return buildProgValidationPreCheck(pptoByPk, actividadesByPk)
+  }, [presupuestoContratoAll, fetchActividadesByPk])
+
+  const handleIniciarEnviarValidacion = async () => {
+    if (!puedeEditar || !cid || !workingVersionId) return
+    setPanelBusy(true)
+    try {
+      const resumen = await buildValidacionResumen()
+      setValidacionPreCheck(resumen)
+    } catch (e) {
+      showToast(e?.message || 'No se pudo preparar el resumen de validación', 'err')
+    } finally {
+      setPanelBusy(false)
+    }
+  }
+
+  /** Tras guardar ítems en el modal: sincronizar prog_pk_estado y refrescar mapa. */
+  const handleGuardarCambiosModal = useCallback(async () => {
+    if (!cid || !versionIdForWork || !token) {
+      throw new Error('Seleccione versión de trabajo e inicie sesión.')
+    }
+    const res = await fetch(`${API}/prog-obra/${cid}/versiones/${versionIdForWork}/sincronizar-estados-pk`, {
+      method: 'POST',
+      headers: hdrs,
+    })
+    if (!res.ok) throw new Error(await parseApiError(res))
+    await reloadActividadesPk()
+    await refreshMapaYVersiones()
+  }, [cid, versionIdForWork, token, hdrs, API, refreshMapaYVersiones, reloadActividadesPk])
+
+  const handleConfirmEnviarValidacion = async () => {
+    if (!puedeEditar || !cid || !workingVersionId) return
     setPanelBusy(true)
     try {
       const res = await fetch(`${API}/prog-obra/${cid}/versiones/${workingVersionId}/enviar-validacion`, {
@@ -915,6 +1446,7 @@ export default function ModuloProgramacionObra({
         headers: hdrs,
       })
       if (!res.ok) throw new Error(await parseApiError(res))
+      setValidacionPreCheck(null)
       await refreshMapaYVersiones()
       showToast('Versión enviada a validación.')
     } catch (e) {
@@ -925,7 +1457,7 @@ export default function ModuloProgramacionObra({
   }
 
   const handleGuardarCapitulo = async (capitulo, fechaIso, durInt) => {
-    if (!puedeEditar || !cid || !workingVersionId || !selPk) return
+    if (!puedeEditar || !cid || !workingVersionId || !pkForData) return
     setPanelBusy(true)
     try {
       const res = await fetch(`${API}/prog-obra/${cid}/capitulo`, {
@@ -933,14 +1465,14 @@ export default function ModuloProgramacionObra({
         headers: hdrs,
         body: JSON.stringify({
           version_id: workingVersionId,
-          pk_id: selPk,
+          pk_id: pkForData,
           capitulo,
           fecha_inicio_sugerida: fechaIso || null,
           duracion_dias_habiles: durInt != null && durInt !== '' ? parseInt(String(durInt), 10) : null,
         }),
       })
       if (!res.ok) throw new Error(await parseApiError(res))
-      const q = new URLSearchParams({ version_id: String(workingVersionId), pk_id: selPk })
+      const q = new URLSearchParams({ version_id: String(workingVersionId), pk_id: pkForData })
       const d = await fetch(`${API}/prog-obra/${cid}/actividades?${q}`, { headers: { Authorization: `Bearer ${token}` } }).then(
         (r) => (r.ok ? r.json() : { capitulos: [], actividades: [] }),
       )
@@ -954,16 +1486,16 @@ export default function ModuloProgramacionObra({
   }
 
   const handleHerencia = async (capitulo) => {
-    if (!puedeEditar || !cid || !workingVersionId || !selPk) return
+    if (!puedeEditar || !cid || !workingVersionId || !pkForData) return
     setPanelBusy(true)
     try {
       const res = await fetch(`${API}/prog-obra/${cid}/herencia`, {
         method: 'POST',
         headers: hdrs,
-        body: JSON.stringify({ version_id: workingVersionId, pk_id: selPk, capitulo }),
+        body: JSON.stringify({ version_id: workingVersionId, pk_id: pkForData, capitulo }),
       })
       if (!res.ok) throw new Error(await parseApiError(res))
-      const q = new URLSearchParams({ version_id: String(workingVersionId), pk_id: selPk })
+      const q = new URLSearchParams({ version_id: String(workingVersionId), pk_id: pkForData })
       const d = await fetch(`${API}/prog-obra/${cid}/actividades?${q}`, { headers: { Authorization: `Bearer ${token}` } }).then(
         (r) => (r.ok ? r.json() : { capitulos: [], actividades: [] }),
       )
@@ -977,18 +1509,20 @@ export default function ModuloProgramacionObra({
     }
   }
 
-  const handleGuardarItem = async (itemDef, form) => {
-    if (!puedeEditar || !cid || !workingVersionId || !selPk) return
+  const handleGuardarItem = async (itemDef, form, rowKey, options = {}) => {
+    const { deferReload = false } = options
+    if (!puedeEditar || !cid || !versionIdForWork || !pkForData) return false
     const cant = Number(itemDef.cant_total)
     if (!(cant > 0)) {
       showToast('Este ítem no tiene cantidad en presupuesto; no se programa.', 'err')
-      return
+      return false
     }
-    setPanelBusy(true)
+    const rk = rowKey || itemRowKey(itemDef.capitulo, itemDef.item)
+    setRowSaveStatus((s) => ({ ...s, [rk]: 'saving' }))
     try {
       const body = {
-        version_id: workingVersionId,
-        pk_id: selPk,
+        version_id: versionIdForWork,
+        pk_id: pkForData,
         capitulo: itemDef.capitulo,
         item: itemDef.item,
         segmento: 1,
@@ -1007,17 +1541,17 @@ export default function ModuloProgramacionObra({
         body: JSON.stringify(body),
       })
       if (!res.ok) throw new Error(await parseApiError(res))
-      const q = new URLSearchParams({ version_id: String(workingVersionId), pk_id: selPk })
-      const d = await fetch(`${API}/prog-obra/${cid}/actividades?${q}`, { headers: { Authorization: `Bearer ${token}` } }).then(
-        (r) => (r.ok ? r.json() : { capitulos: [], actividades: [] }),
-      )
-      setActData(d)
-      await refreshMapaYVersiones()
-      showToast(`Ítem ${itemDef.capitulo} / ${itemDef.item} guardado.`)
+      if (!deferReload) {
+        await reloadActividadesPk()
+        scheduleMapRefresh()
+      }
+      setRowSaveStatus((s) => ({ ...s, [rk]: 'saved' }))
+      setTimeout(() => setRowSaveStatus((s) => ({ ...s, [rk]: 'idle' })), 2000)
+      return true
     } catch (e) {
+      setRowSaveStatus((s) => ({ ...s, [rk]: 'error' }))
       showToast(e?.message || 'Error al guardar actividad', 'err')
-    } finally {
-      setPanelBusy(false)
+      return false
     }
   }
 
@@ -1096,7 +1630,7 @@ export default function ModuloProgramacionObra({
   }
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 140px)', minHeight: 480, gap: 0, position: 'relative' }}>
+    <div style={{ display: 'flex', height: 'calc(100vh - 140px)', minHeight: 480, gap: 0, position: 'relative', fontSize: 'var(--cc-sm)' }}>
       {toast && (
         <div
           style={{
@@ -1118,19 +1652,7 @@ export default function ModuloProgramacionObra({
         </div>
       )}
       {validarModal && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 10000,
-            background: 'rgba(0,0,0,0.45)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 16,
-          }}
-          onClick={() => !panelBusy && setValidarModal(null)}
-        >
+        <ProgOverlay onBackdropClick={() => !panelBusy && setValidarModal(null)}>
           <div
             style={{
               width: '100%',
@@ -1173,22 +1695,10 @@ export default function ModuloProgramacionObra({
               </button>
             </div>
           </div>
-        </div>
+        </ProgOverlay>
       )}
       {showCrearVersion && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 10000,
-            background: 'rgba(0,0,0,0.45)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 16,
-          }}
-          onClick={() => !panelBusy && setShowCrearVersion(false)}
-        >
+        <ProgOverlay onBackdropClick={() => !panelBusy && setShowCrearVersion(false)}>
           <div
             style={{
               width: '100%',
@@ -1201,33 +1711,156 @@ export default function ModuloProgramacionObra({
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ fontWeight: 700, marginBottom: 8, color: t.primary }}>Nueva versión de programación</div>
+            <div style={{ fontWeight: 700, marginBottom: 8, color: t.primary }}>Nueva reprogramación</div>
             <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 12 }}>
-              {tieneSellada
-                ? 'Se creará una reprogramación. Indique el motivo (obligatorio).'
-                : 'Se creará la versión baseline inicial del contrato.'}
+              Nueva versión tras la programación sellada. Indique el motivo (obligatorio).
             </div>
-            {tieneSellada && (
-              <>
-                <label style={{ display: 'block', fontSize: 11, color: t.textMuted, marginBottom: 4 }}>Motivo *</label>
-                <textarea
-                  value={crearMotivo}
-                  onChange={(e) => setCrearMotivo(e.target.value)}
-                  rows={3}
-                  style={{ ...inputStyle, resize: 'vertical', marginBottom: 12 }}
-                />
-              </>
-            )}
+            <label style={{ display: 'block', fontSize: 11, color: t.textMuted, marginBottom: 4 }}>Motivo *</label>
+            <textarea
+              value={crearMotivo}
+              onChange={(e) => setCrearMotivo(e.target.value)}
+              rows={3}
+              style={{ ...inputStyle, resize: 'vertical', marginBottom: 12 }}
+            />
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button type="button" style={btnStyle(false, panelBusy)} disabled={panelBusy} onClick={() => setShowCrearVersion(false)}>
                 Cancelar
               </button>
               <button type="button" style={btnStyle(true, panelBusy)} disabled={panelBusy} onClick={handleCrearVersion}>
-                Crear
+                Crear reprogramación
               </button>
             </div>
           </div>
-        </div>
+        </ProgOverlay>
+      )}
+
+      <ProgObraProgramacionModal
+        open={progModalOpen && modalPkTabs.length > 0}
+        onClose={() => {
+          setProgModalOpen(false)
+          setModalPkTabs([])
+          setActiveModalPk(null)
+        }}
+        t={t}
+        workingVersion={workingVersion}
+        pkTabs={modalPkTabs}
+        activePk={activeModalPk || modalPkTabs[0]}
+        onSelectPk={setActiveModalPk}
+        onRemovePk={(pk) => {
+          setModalPkTabs((tabs) => {
+            const next = tabs.filter((x) => x !== pk)
+            if (activeModalPk === pk) setActiveModalPk(next[0] || null)
+            if (next.length === 0) setProgModalOpen(false)
+            return next
+          })
+        }}
+        capitulosOrdenados={capitulosOrdenados}
+        itemsPorCapitulo={itemsPorCapitulo}
+        capProgMap={capProgMap}
+        actMap={actMap}
+        actividadKey={actividadKey}
+        itemRowKey={itemRowKey}
+        editable={!!(versionIdForWork && esBorradorEditable && puedeEditar)}
+        rowSaveStatus={rowSaveStatus}
+        onHerencia={handleHerencia}
+        onGuardarCap={handleGuardarCapitulo}
+        onGuardarItem={handleGuardarItem}
+        onGuardarBatch={handleGuardarBatch}
+        loadAct={loadAct}
+        loadPpto={loadPpto}
+        cid={cid}
+        token={token}
+        API={API}
+        panelBusy={panelBusy}
+        onGuardarCambios={handleGuardarCambiosModal}
+        onSaveSuccess={handleProgSaveSuccess}
+        showToast={showToast}
+      />
+
+      {validacionPreCheck && (
+        <ProgOverlay onBackdropClick={() => !panelBusy && setValidacionPreCheck(null)}>
+          <div
+            style={{
+              background: t.bgCard,
+              borderRadius: 12,
+              border: `1px solid ${t.border}`,
+              padding: 20,
+              maxWidth: 520,
+              width: '100%',
+              maxHeight: '85vh',
+              overflow: 'auto',
+              boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: 700, fontSize: 'var(--cc-md)', color: t.primary, marginBottom: 12 }}>
+              Enviar programación a validación
+            </div>
+            <p style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, margin: '0 0 12px', lineHeight: 1.45 }}>
+              Revise el resumen antes de confirmar. No podrá editar el cronograma hasta un rechazo.
+            </p>
+
+            {validacionPreCheck.pksSinProgramar.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', color: '#b45309', marginBottom: 4 }}>
+                  PKs sin programar ({validacionPreCheck.pksSinProgramar.length})
+                </div>
+                <div style={{ fontSize: 'var(--cc-caption)', color: t.text }}>
+                  {validacionPreCheck.pksSinProgramar.join(', ')}
+                </div>
+              </div>
+            )}
+
+            {validacionPreCheck.pksItemsSinFecha.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontWeight: 700, fontSize: 'var(--cc-sm)', color: '#b45309', marginBottom: 4 }}>
+                  PKs con ítems sin fecha ({validacionPreCheck.pksItemsSinFecha.length})
+                </div>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--cc-caption)', color: t.text }}>
+                  {validacionPreCheck.pksItemsSinFecha.map((x) => (
+                    <li key={x.pk}>
+                      PK {x.pk}: faltan {x.missing} de {x.total} ítems
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div style={{ marginBottom: 12, fontSize: 'var(--cc-sm)', color: t.text }}>
+              <strong>Ítems sin fecha en total:</strong> {validacionPreCheck.totalItemsSinFecha}
+            </div>
+
+            <div
+              style={{
+                marginBottom: 16,
+                padding: 10,
+                borderRadius: 8,
+                background: t.bg,
+                border: `1px solid ${t.border}`,
+                fontSize: 'var(--cc-sm)',
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: 6, color: t.text }}>Ruta crítica del contrato</div>
+              <div style={{ color: t.textMuted }}>
+                Inicio más temprano:{' '}
+                <strong style={{ color: t.text }}>{validacionPreCheck.rutaCritica.inicio || '—'}</strong>
+              </div>
+              <div style={{ color: t.textMuted, marginTop: 4 }}>
+                Fin más tardío:{' '}
+                <strong style={{ color: t.text }}>{validacionPreCheck.rutaCritica.fin || '—'}</strong>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button type="button" style={btnStyle(false, panelBusy)} disabled={panelBusy} onClick={() => setValidacionPreCheck(null)}>
+                Cancelar
+              </button>
+              <button type="button" style={btnStyle(true, panelBusy)} disabled={panelBusy} onClick={() => void handleConfirmEnviarValidacion()}>
+                Confirmar envío
+              </button>
+            </div>
+          </div>
+        </ProgOverlay>
       )}
 
       <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
@@ -1264,7 +1897,7 @@ export default function ModuloProgramacionObra({
               fontWeight: 600,
             }}
           >
-            Borrador nº{borradorMeta.numero_version} — el mapa refleja la versión sellada vigente
+            Borrador nº{borradorMeta.numero_version} — el mapa refleja el avance de este borrador
           </div>
         )}
         {!MAPBOX_TOKEN && <div style={{ padding: 24, color: t.textMuted }}>Falta VITE_MAPBOX_TOKEN para el mapa.</div>}
@@ -1334,30 +1967,35 @@ export default function ModuloProgramacionObra({
           flexShrink: 0,
           borderLeft: `1px solid ${t.border}`,
           background: t.bgCard,
-          padding: 16,
+          padding: '10px 12px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
           overflowY: 'auto',
           fontSize: 'var(--cc-sm)',
         }}
       >
-        <div style={{ fontWeight: 700, color: t.primary, marginBottom: 12, fontSize: 'var(--cc-md)' }}>Programación de obra</div>
+        <div style={{ fontWeight: 700, color: t.primary, fontSize: 'var(--cc-md)', lineHeight: 1.2 }}>Programación de obra</div>
 
-        <div style={{ color: t.textMuted, marginBottom: 8, lineHeight: 1.5 }}>
-          Contrato <strong style={{ color: t.text }}>{cid}</strong> · Vigente sellada:{' '}
-          <strong style={{ color: t.text }}>
-            {meta.version_vigente_numero != null ? `nº ${meta.version_vigente_numero}` : '—'}
-          </strong>
+        <div style={{ color: t.textMuted, fontSize: 10, lineHeight: 1.35 }}>
+          Contrato <strong style={{ color: t.text }}>{cid}</strong>
+          {meta.version_vigente_numero != null && (
+            <>
+              {' '}
+              · Vigente nº <strong style={{ color: t.text }}>{meta.version_vigente_numero}</strong>
+            </>
+          )}
         </div>
 
-        <div style={{ marginBottom: 14, padding: 10, borderRadius: 10, border: `1px solid ${t.border}`, background: t.bg }}>
-          <div style={{ fontWeight: 600, color: t.text, marginBottom: 8 }}>Versión de trabajo</div>
-          <div style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.45, marginBottom: 8 }}>
-            El borrador se guarda en el servidor: puede programar solo algunos PKs, cerrar sesión y continuar en otro momento; la
-            misma versión seguirá disponible aquí.
+        <div style={{ padding: 8, borderRadius: 8, border: `1px solid ${t.border}`, background: t.bg }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 600, color: t.text, fontSize: 11 }}>Versión</span>
+            {workingVersion && badgeEstado(workingVersion.estado)}
           </div>
           <select
             value={workingVersionId || ''}
             onChange={(e) => setWorkingVersionId(e.target.value || null)}
-            style={{ ...inputStyle, marginBottom: 8 }}
+            style={{ ...inputStyle, marginBottom: 6, padding: '4px 6px', fontSize: 11 }}
           >
             <option value="">— Seleccione —</option>
             {versiones.map((v) => (
@@ -1367,32 +2005,51 @@ export default function ModuloProgramacionObra({
             ))}
           </select>
           {puedeCrear && (
-            <button type="button" style={{ ...btnStyle(true), width: '100%' }} disabled={panelBusy} onClick={() => setShowCrearVersion(true)}>
-              + Nueva versión
-            </button>
-          )}
-          {workingVersion && (
-            <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span style={{ color: t.textMuted }}>Estado:</span>
-              {badgeEstado(workingVersion.estado)}
-            </div>
-          )}
-          {(puedeEditar || puedeValidar) && workingVersion && esBorradorEditable && (
             <button
               type="button"
-              title="PROGOB: permiso Editar o Validar (el servidor exige al menos uno de los dos)."
-              style={{ ...btnStyle(true), width: '100%', marginTop: 10 }}
+              style={{ ...btnStyle(true), width: '100%', padding: '4px 8px', fontSize: 11 }}
               disabled={panelBusy}
-              onClick={handleEnviarValidacion}
+              onClick={() => void handleClickNuevaVersion()}
             >
-              Enviar a validación
+              {sinVersiones ? 'Crear programación inicial' : '+ Nueva versión'}
             </button>
+          )}
+          {borradorProgResumen != null && (
+            <div
+              style={{
+                fontSize: 'var(--cc-caption)',
+                color: t.primary,
+                fontWeight: 600,
+                lineHeight: 1.35,
+                marginTop: 6,
+                padding: '6px 8px',
+                borderRadius: 6,
+                background: `${t.primary}14`,
+              }}
+            >
+              Borrador en progreso — {borradorProgResumen.pct.toFixed(0)}% programado
+            </div>
           )}
         </div>
 
+        {esBorradorEditable && puedeEditar && workingVersionId && (
+          <button
+            type="button"
+            style={{ ...btnStyle(true), width: '100%', padding: '8px 10px', fontSize: 'var(--cc-sm)', marginBottom: 8 }}
+            disabled={panelBusy}
+            onClick={() => void handleIniciarEnviarValidacion()}
+          >
+            Enviar a validación
+          </button>
+        )}
+
         {(esEnValidacion || esSellada) && (
-          <div style={{ marginBottom: 14, padding: 10, borderRadius: 10, border: `1px solid ${t.border}` }}>
-            <div style={{ fontWeight: 600, color: t.text, marginBottom: 8 }}>Flujo de aprobación</div>
+          <details
+            open={!selPk}
+            style={{ padding: 8, borderRadius: 8, border: `1px solid ${t.border}`, background: t.bg }}
+          >
+            <summary style={{ fontWeight: 600, color: t.text, cursor: 'pointer', fontSize: 11 }}>Flujo de aprobación</summary>
+            <div style={{ marginTop: 8 }}>
             {loadVal && <div style={{ color: t.textMuted }}>Cargando…</div>}
             {!loadVal && validaciones.length === 0 && (
               <div style={{ color: t.textMuted, fontSize: 11 }}>Sin filas de validación (versión no enviada o datos no disponibles).</div>
@@ -1435,77 +2092,63 @@ export default function ModuloProgramacionObra({
                 Solo el nivel pendiente correspondiente a su rol puede validarse; el servidor rechaza si no corresponde.
               </div>
             )}
-          </div>
+            </div>
+          </details>
         )}
 
-        <hr style={{ border: 0, borderTop: `1px solid ${t.border}`, margin: '14px 0' }} />
-
-        <div style={{ fontWeight: 600, color: t.text, marginBottom: 8 }}>Polígono (PK)</div>
         {selPk ? (
-          <div>
-            <div style={{ color: t.primary, fontWeight: 700, marginBottom: 8 }}>{selPk}</div>
-            {rowSel ? (
-              <div style={{ color: t.textMuted, lineHeight: 1.5, marginBottom: 12 }}>
-                <div>
-                  Estado (vigente): <strong style={{ color: t.text }}>{rowSel.estado_programacion}</strong>
+          <>
+            <div>
+              <div style={{ color: t.primary, fontWeight: 700, fontSize: 'var(--cc-md)', lineHeight: 1.2 }}>PK {selPk}</div>
+              {rowSel && (
+                <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 4, lineHeight: 1.4 }}>
+                  <div>
+                    Estado: <strong style={{ color: t.text }}>{rowSel.estado_programacion || '—'}</strong>
+                  </div>
+                  <div style={{ marginTop: 2 }}>
+                    Programado:{' '}
+                    <strong style={{ color: t.text }}>
+                      {rowSel.porcentaje_programado != null
+                        ? `${Number(rowSel.porcentaje_programado).toFixed(1)}%`
+                        : '—'}
+                    </strong>
+                    {rowSel.items_total != null && (
+                      <span style={{ marginLeft: 6 }}>
+                        ({rowSel.items_con_fecha ?? 0}/{rowSel.items_total} ítems)
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <div>
-                  Ítems: {rowSel.items_con_fecha ?? 0} / {rowSel.items_total ?? 0}
-                </div>
-                {rowSel.porcentaje_programado != null && <div>Programado: {rowSel.porcentaje_programado}%</div>}
-              </div>
-            ) : (
-              <div style={{ color: t.textMuted, marginBottom: 12 }}>Sin fila de estado para este PK en la versión vigente.</div>
-            )}
+              )}
+            </div>
 
-            {!workingVersionId && (
-              <div style={{ color: t.textMuted, fontSize: 11 }}>Seleccione una versión de trabajo para editar capítulos e ítems.</div>
-            )}
-
+            {!workingVersionId && <div style={{ color: t.textMuted, fontSize: 11 }}>Seleccione versión de trabajo.</div>}
             {workingVersionId && !esBorradorEditable && (
-              <div style={{ color: t.textMuted, fontSize: 11, marginBottom: 8 }}>
-                Solo se edita en <strong>borrador</strong>. Esta versión está {workingVersion?.estado || '—'}.
+              <div style={{ color: t.textMuted, fontSize: 11 }}>
+                Solo lectura — <strong>{workingVersion?.estado}</strong>.
               </div>
             )}
-
-            {loadPpto && <div style={{ color: t.textMuted }}>Cargando presupuesto del PK…</div>}
-            {!loadPpto && pptoPorPk.length === 0 && (
-              <div style={{ color: t.textMuted }}>No hay líneas «{PRESUPUESTO_TIPO_POLIGONO}» activas para este PK.</div>
+            {loadPpto && <div style={{ color: t.textMuted, fontSize: 11 }}>Cargando presupuesto…</div>}
+            {!loadPpto && pptoPorPk.length === 0 && workingVersionId && (
+              <div style={{ color: t.textMuted, fontSize: 11 }}>Sin ítems activos en este PK.</div>
             )}
 
-            {workingVersionId && esBorradorEditable && puedeEditar && capitulosOrdenados.map((cap) => (
-              <CapituloBlock
-                key={cap}
-                cap={cap}
-                t={t}
-                expanded={expandedCaps.has(cap)}
-                onToggle={() =>
-                  setExpandedCaps((prev) => {
-                    const n = new Set(prev)
-                    if (n.has(cap)) n.delete(cap)
-                    else n.add(cap)
-                    return n
-                  })
-                }
-                capRow={capProgMap[cap]}
-                items={itemsPorCapitulo(cap)}
-                actMap={actMap}
-                actividadKey={actividadKey}
-                cid={cid}
-                token={token}
-                API={API}
-                panelBusy={panelBusy}
-                onGuardarCap={(fecha, dur) => handleGuardarCapitulo(cap, fecha, dur)}
-                onHerencia={() => handleHerencia(cap)}
-                onGuardarItem={handleGuardarItem}
-                btnStyle={btnStyle}
-                inputStyle={inputStyle}
-              />
-            ))}
-          </div>
+            {workingVersionId && (
+              <button
+                type="button"
+                style={{ ...btnStyle(true), width: '100%', padding: '8px 10px', fontSize: 'var(--cc-sm)' }}
+                disabled={!selPk || loadPpto}
+                onClick={() => openProgramacionModal(selPk)}
+              >
+                Abrir programación
+              </button>
+            )}
+          </>
         ) : (
-          <div style={{ color: t.textMuted }}>Haz clic en un polígono del plano.</div>
+          <div style={{ color: t.textMuted, fontSize: 11 }}>Haz clic en un polígono del plano.</div>
         )}
+
+        <ProgPkListado rows={mapaResp?.pk} selPk={selPk} t={t} onSelectPk={selectPkAndZoom} />
 
         {loadAct && selPk && workingVersionId && (
           <div style={{ color: t.textMuted, marginTop: 8 }}>Sincronizando actividades…</div>
@@ -1515,199 +2158,491 @@ export default function ModuloProgramacionObra({
   )
 }
 
-function CapituloBlock({
-  cap,
+function progTableUi(variant) {
+  const modal = variant === 'modal'
+  return {
+    cell: {
+      padding: modal ? 'var(--cc-space-3) var(--cc-space-4)' : '2px 4px',
+      fontSize: modal ? 'var(--cc-sm)' : 'var(--cc-caption)',
+      lineHeight: 1.35,
+      verticalAlign: 'middle',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: modal ? 'normal' : 'nowrap',
+    },
+    input: {
+      width: '100%',
+      boxSizing: 'border-box',
+      padding: modal ? 'var(--cc-space-2) var(--cc-space-3)' : '2px 3px',
+      fontSize: 'var(--cc-input)',
+      border: '1px solid transparent',
+      borderRadius: 4,
+      background: 'transparent',
+    },
+    rowH: modal ? 48 : 40,
+    descMax: modal ? 320 : 88,
+    itemMax: modal ? 88 : 52,
+    dateW: modal ? 148 : 108,
+    daysW: modal ? 64 : 44,
+    finW: modal ? 200 : 88,
+    tableFont: modal ? 'var(--cc-sm)' : 'var(--cc-caption)',
+    headers: modal
+      ? ['Ítem', 'Descripción', 'Und', 'Cantidad', 'Costo directo', 'Fecha inicio', 'Días hábiles', 'Fecha fin', '']
+      : ['Ítem', 'Descripción', 'Und', 'Cant.', 'CD', 'F.inicio', 'Días', 'Fin', ''],
+  }
+}
+
+function ProgCapituloHeaderRow({ cap, cr, t, editable, onHerencia, onGuardarCap, ui }) {
+  const u = ui || progTableUi('panel')
+  const ex = cr || {}
+  const [fechaCap, setFechaCap] = useState(() => fmtDateIso(ex.fecha_inicio_sugerida))
+  const [durCap, setDurCap] = useState(ex.duracion_dias_habiles != null ? String(ex.duracion_dias_habiles) : '')
+  const dirtyRef = useRef(false)
+
+  useEffect(() => {
+    if (dirtyRef.current) return
+    setFechaCap(fmtDateIso(ex.fecha_inicio_sugerida))
+    setDurCap(ex.duracion_dias_habiles != null ? String(ex.duracion_dias_habiles) : '')
+  }, [ex.fecha_inicio_sugerida, ex.duracion_dias_habiles, cap])
+
+  const saveCap = () => {
+    if (!editable || !dirtyRef.current) return
+    onGuardarCap(cap, fechaCap || null, durCap)
+    dirtyRef.current = false
+  }
+
+  const inputBorder = { borderColor: t.border, background: t.bg }
+
+  return (
+    <tr style={{ background: `${t.primary}14`, borderTop: `1px solid ${t.border}` }}>
+      <td colSpan={9} style={{ ...u.cell, padding: '6px 10px', whiteSpace: 'normal' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 700, color: t.primary, flex: '1 1 80px' }}>{cap}</span>
+          {editable && (
+            <>
+              <input
+                type="date"
+                value={fechaCap}
+                onChange={(e) => {
+                  dirtyRef.current = true
+                  setFechaCap(e.target.value)
+                }}
+                onBlur={saveCap}
+                title="Fecha inicio capítulo"
+                style={{ ...u.input, ...inputBorder, width: u.dateW, flexShrink: 0 }}
+              />
+              <input
+                type="number"
+                min={1}
+                value={durCap}
+                placeholder="Días"
+                onChange={(e) => {
+                  dirtyRef.current = true
+                  setDurCap(e.target.value)
+                }}
+                onBlur={saveCap}
+                title="Días hábiles capítulo"
+                style={{ ...u.input, ...inputBorder, width: u.daysW, flexShrink: 0, textAlign: 'right' }}
+              />
+              <button
+                type="button"
+                onClick={() => onHerencia(cap)}
+                style={{
+                  padding: '2px 8px',
+                  fontSize: 9,
+                  fontWeight: 700,
+                  borderRadius: 4,
+                  border: `1px solid ${t.primary}`,
+                  background: t.bgCard,
+                  color: t.primary,
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+                title="Aplicar fecha del capítulo a ítems sin fecha"
+              >
+                Aplicar herencia
+              </button>
+            </>
+          )}
+          {!editable && ex.fecha_inicio_sugerida && (
+            <span style={{ fontSize: 9, color: t.textMuted }}>
+              {fmtDateIso(ex.fecha_inicio_sugerida)} · {ex.duracion_dias_habiles ?? '—'} d
+            </span>
+          )}
+        </div>
+      </td>
+    </tr>
+  )
+}
+
+function ProgPkItemsTable({
+  variant = 'panel',
   t,
-  expanded,
-  onToggle,
-  capRow,
-  items,
+  capitulos,
+  itemsPorCapitulo,
+  capProgMap,
   actMap,
   actividadKey,
+  itemRowKey,
   cid,
   token,
   API,
-  panelBusy,
-  onGuardarCap,
+  editable,
+  rowSaveStatus,
   onHerencia,
+  onGuardarCap,
   onGuardarItem,
-  btnStyle,
-  inputStyle,
 }) {
-  const cr = capRow || {}
-  const [fecha, setFecha] = useState(() => fmtDateIso(cr.fecha_inicio_sugerida))
-  const [dur, setDur] = useState(cr.duracion_dias_habiles != null ? String(cr.duracion_dias_habiles) : '')
-
-  useEffect(() => {
-    setFecha(fmtDateIso(cr.fecha_inicio_sugerida))
-    setDur(cr.duracion_dias_habiles != null ? String(cr.duracion_dias_habiles) : '')
-  }, [cr.fecha_inicio_sugerida, cr.duracion_dias_habiles, cap])
-
+  const u = progTableUi(variant)
   return (
-    <div style={{ marginBottom: 12, border: `1px solid ${t.border}`, borderRadius: 10, overflow: 'hidden' }}>
-      <button
-        type="button"
-        onClick={onToggle}
+    <div style={{ overflowX: 'auto' }}>
+      <table
         style={{
-          width: '100%',
-          textAlign: 'left',
-          padding: '10px 12px',
-          border: 'none',
-          background: t.bg,
-          color: t.text,
-          fontWeight: 700,
-          cursor: 'pointer',
-          fontSize: 'var(--cc-sm)',
+          width: 'max-content',
+          minWidth: variant === 'modal' ? 1050 : '100%',
+          borderCollapse: 'collapse',
+          fontSize: u.tableFont,
         }}
       >
-        {expanded ? '▼' : '▶'} {cap}
-      </button>
-      {expanded && (
-        <div style={{ padding: 12, borderTop: `1px solid ${t.border}` }}>
-          <div style={{ fontWeight: 600, color: t.primary, marginBottom: 8 }}>Capítulo</div>
-          <label style={{ display: 'block', fontSize: 11, color: t.textMuted, marginBottom: 2 }}>Fecha inicio sugerida</label>
-          <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} style={{ ...inputStyle, marginBottom: 8 }} />
-          <label style={{ display: 'block', fontSize: 11, color: t.textMuted, marginBottom: 2 }}>Duración (días hábiles)</label>
-          <input
-            type="number"
-            min={1}
-            value={dur}
-            onChange={(e) => setDur(e.target.value)}
-            style={{ ...inputStyle, marginBottom: 8 }}
-          />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <button type="button" style={btnStyle(true, panelBusy)} disabled={panelBusy} onClick={() => onGuardarCap(fecha || null, dur)}>
-              Guardar capítulo
-            </button>
-            <button type="button" style={btnStyle(false, panelBusy)} disabled={panelBusy} onClick={onHerencia}>
-              Aplicar herencia a ítems sin fecha
-            </button>
-          </div>
-
-          <div style={{ fontWeight: 600, color: t.text, margin: '14px 0 8px' }}>Ítems</div>
-          {items.map((it) => (
-            <ItemRowForm
-              key={`${it.capitulo}-${it.item}`}
-              itemDef={it}
-              act={actMap[actividadKey(it.capitulo, it.item, 1)]}
-              cid={cid}
-              token={token}
-              API={API}
-              panelBusy={panelBusy}
-              onGuardar={(form) => onGuardarItem(it, form)}
-              btnStyle={btnStyle}
-              inputStyle={inputStyle}
-              t={t}
-            />
-          ))}
-        </div>
-      )}
+        <thead>
+          <tr style={{ background: t.bg, borderBottom: `2px solid ${t.border}` }}>
+            {u.headers.map((h) => (
+              <th
+                key={h}
+                style={{
+                  ...u.cell,
+                  fontWeight: 700,
+                  color: t.textMuted,
+                  textAlign:
+                    h === 'Cant.' || h === 'Cantidad' || h === 'CD' || h === 'Costo directo' || h === 'Días' || h === 'Días hábiles'
+                      ? 'right'
+                      : 'left',
+                  position: 'sticky',
+                  top: 0,
+                  background: t.bg,
+                  zIndex: 1,
+                }}
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {capitulos.map((cap) => {
+            const cr = capProgMap[cap] || {}
+            const items = itemsPorCapitulo(cap)
+            return (
+              <Fragment key={cap}>
+                <ProgCapituloHeaderRow
+                  cap={cap}
+                  cr={cr}
+                  t={t}
+                  editable={editable}
+                  onHerencia={onHerencia}
+                  onGuardarCap={onGuardarCap}
+                  ui={u}
+                />
+                {items.map((it) => (
+                  <ProgItemTableRow
+                    key={itemRowKey(cap, it.item)}
+                    itemDef={it}
+                    act={actMap[actividadKey(cap, it.item, 1)]}
+                    rk={itemRowKey(cap, it.item)}
+                    cid={cid}
+                    token={token}
+                    API={API}
+                    t={t}
+                    editable={editable}
+                    saveStatus={rowSaveStatus[itemRowKey(cap, it.item)] || 'idle'}
+                    onGuardarItem={onGuardarItem}
+                    ui={u}
+                  />
+                ))}
+              </Fragment>
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }
 
-function ItemRowForm({ itemDef, act, cid, token, API, panelBusy, onGuardar, btnStyle, inputStyle, t }) {
+function ProgItemTableRow({ itemDef, act, rk, cid, token, API, t, editable, saveStatus, onGuardarItem, ui }) {
+  const u = ui || progTableUi('panel')
   const ex = act || {}
   const [fechaIni, setFechaIni] = useState(() => fmtDateIso(ex.fecha_inicio))
   const [duracion, setDuracion] = useState(ex.duracion_dias_habiles != null ? String(ex.duracion_dias_habiles) : '')
-  const [overrideManual, setOverrideManual] = useState(!!ex.override_manual)
   const debDur = useDebounced(duracion, 320)
   const debFecha = useDebounced(fechaIni, 320)
   const [finCalc, setFinCalc] = useState(() => fmtDateIso(ex.fecha_fin_calculada))
+  const dirtyRef = useRef(false)
+  const actSyncKey = `${fmtDateIso(ex.fecha_inicio)}|${ex.duracion_dias_habiles ?? ''}|${fmtDateIso(ex.fecha_fin_calculada)}`
 
   useEffect(() => {
+    if (dirtyRef.current) return
     setFechaIni(fmtDateIso(ex.fecha_inicio))
     setDuracion(ex.duracion_dias_habiles != null ? String(ex.duracion_dias_habiles) : '')
-    setOverrideManual(!!ex.override_manual)
     setFinCalc(fmtDateIso(ex.fecha_fin_calculada))
-  }, [ex.fecha_inicio, ex.duracion_dias_habiles, ex.fecha_fin_calculada, ex.override_manual, itemDef.item])
+  }, [actSyncKey, itemDef.capitulo, itemDef.item])
 
   useEffect(() => {
     const d = parseInt(String(debDur), 10)
     if (!debFecha || !d || d < 1 || !cid || !token) {
-      setFinCalc('')
+      if (!dirtyRef.current) setFinCalc(fmtDateIso(ex.fecha_fin_calculada))
       return
     }
     let cancel = false
-    const q = new URLSearchParams({
-      fecha_inicio: debFecha,
-      duracion_dias_habiles: String(d),
-    })
+    const q = new URLSearchParams({ fecha_inicio: debFecha, duracion_dias_habiles: String(d) })
     fetch(`${API}/prog-obra/${cid}/calcular-fin?${q}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
-        if (!cancel) setFinCalc(j?.fecha_fin_calculada ? String(j.fecha_fin_calculada).slice(0, 10) : '')
+        if (!cancel) setFinCalc(j?.fecha_fin_calculada ? fmtDateIso(j.fecha_fin_calculada) : '')
       })
       .catch(() => {
-        if (!cancel) setFinCalc('')
+        if (!cancel && !dirtyRef.current) setFinCalc(fmtDateIso(ex.fecha_fin_calculada))
       })
     return () => {
       cancel = true
     }
-  }, [debFecha, debDur, cid, token, API])
+  }, [debFecha, debDur, cid, token, API, ex.fecha_fin_calculada])
 
-  const heredado = !!ex.heredado_de_capitulo
-  const ov = overrideManual
+  const trySave = useCallback(async () => {
+    if (!editable || saveStatus === 'saving') return false
+    const d = parseInt(String(duracion), 10)
+    if (!fechaIni || !(d > 0)) return false
+    const ok = await onGuardarItem(
+      itemDef,
+      {
+        fecha_inicio: fechaIni,
+        duracion: String(d),
+        override_manual: true,
+        heredado_de_capitulo: false,
+      },
+      rk,
+    )
+    if (ok) dirtyRef.current = false
+    return ok
+  }, [editable, saveStatus, onGuardarItem, itemDef, fechaIni, duracion, rk])
+
+  useEffect(() => {
+    if (!editable || !dirtyRef.current) return undefined
+    const d = parseInt(String(debDur), 10)
+    if (!debFecha || !(d > 0)) return undefined
+    const timer = setTimeout(() => {
+      trySave()
+    }, 700)
+    return () => clearTimeout(timer)
+  }, [debFecha, debDur, editable, trySave])
+
+  const onBlurField = () => {
+    if (dirtyRef.current) trySave()
+  }
+
+  const saveIcon =
+    saveStatus === 'saving' ? (
+      <span style={{ color: t.textMuted }} title="Guardando">…</span>
+    ) : saveStatus === 'saved' ? (
+      <span style={{ color: '#1D9E75', fontWeight: 700 }} title="Guardado">✓</span>
+    ) : saveStatus === 'error' ? (
+      <span style={{ color: '#b91c1c', fontWeight: 700 }} title="Error">!</span>
+    ) : ex.heredado_de_capitulo ? (
+      <span style={{ fontSize: 9, color: '#1e40af' }} title="Heredado">H</span>
+    ) : null
+
+  const inputBorder = { borderColor: t.border, background: t.bg }
 
   return (
-    <div
-      style={{
-        marginBottom: 10,
-        padding: 10,
-        borderRadius: 8,
-        border: `1px solid ${t.border}`,
-        background: t.bg,
-      }}
-    >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
-        <div style={{ fontWeight: 600, color: t.text }}>{itemDef.item}</div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, justifyContent: 'flex-end' }}>
-          {heredado && (
-            <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: '#dbeafe', color: '#1e40af' }}>
-              Heredado
-            </span>
-          )}
-          {ov && (
-            <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: '#fef3c7', color: '#92400e' }}>
-              Override manual
-            </span>
-          )}
+    <tr style={{ borderBottom: `1px solid ${t.border}`, height: u.rowH, maxHeight: u.rowH }}>
+      <td style={{ ...u.cell, fontWeight: 600, color: t.text, maxWidth: u.itemMax }} title={itemDef.item}>
+        {itemDef.item}
+      </td>
+      <td style={{ ...u.cell, maxWidth: u.descMax, color: t.textMuted }} title={itemDef.descripcion}>
+        {itemDef.descripcion || '—'}
+      </td>
+      <td style={{ ...u.cell, maxWidth: 40 }}>{itemDef.und || '—'}</td>
+      <td style={{ ...u.cell, textAlign: 'right', maxWidth: 72 }}>{fmtCant(itemDef.cant_total)}</td>
+      <td style={{ ...u.cell, textAlign: 'right', maxWidth: 120, whiteSpace: 'nowrap' }} title={String(itemDef.costo_directo ?? '')}>
+        {fmtCOP(itemDef.costo_directo)}
+      </td>
+      <td style={{ ...u.cell, maxWidth: u.dateW }}>
+        {editable ? (
+          <input
+            type="date"
+            value={fechaIni}
+            onChange={(e) => {
+              dirtyRef.current = true
+              setFechaIni(e.target.value)
+            }}
+            onBlur={onBlurField}
+            style={{ ...u.input, ...inputBorder }}
+          />
+        ) : (
+          fmtDateIso(ex.fecha_inicio) || '—'
+        )}
+      </td>
+      <td style={{ ...u.cell, maxWidth: u.daysW }}>
+        {editable ? (
+          <input
+            type="number"
+            min={1}
+            value={duracion}
+            onChange={(e) => {
+              dirtyRef.current = true
+              setDuracion(e.target.value)
+            }}
+            onBlur={onBlurField}
+            style={{ ...u.input, ...inputBorder, textAlign: 'right' }}
+          />
+        ) : (
+          ex.duracion_dias_habiles ?? '—'
+        )}
+      </td>
+      <td style={{ ...u.cell, maxWidth: u.finW, color: t.textMuted, whiteSpace: 'nowrap' }}>
+        {fmtDateHuman(finCalc || ex.fecha_fin_calculada)}
+      </td>
+      <td style={{ ...u.cell, width: 22, textAlign: 'center' }}>{saveIcon}</td>
+    </tr>
+  )
+}
+
+function parseIsoDate(s) {
+  if (!s) return null
+  const x = String(s).slice(0, 10)
+  const [y, m, d] = x.split('-').map(Number)
+  if (!y || !m || !d) return null
+  return new Date(y, m - 1, d)
+}
+
+function ProgPkGantt({ rows, t, large = false }) {
+  const scheduled = rows.filter((r) => parseIsoDate(r.fecha_inicio) && parseIsoDate(r.fecha_fin))
+  if (scheduled.length === 0) {
+    return (
+      <div
+        style={{
+          padding: '12px 8px',
+          borderRadius: 8,
+          border: `1px dashed ${t.border}`,
+          color: t.textMuted,
+          fontSize: 'var(--cc-sm)',
+          textAlign: 'center',
+        }}
+      >
+        Asigna fechas para ver el Gantt
+      </div>
+    )
+  }
+
+  let minT = Infinity
+  let maxT = -Infinity
+  for (const r of scheduled) {
+    const a = parseIsoDate(r.fecha_inicio).getTime()
+    const b = parseIsoDate(r.fecha_fin).getTime()
+    if (a < minT) minT = a
+    if (b > maxT) maxT = b
+  }
+  const span = Math.max(maxT - minT, 86400000)
+  const spanDays = span / 86400000
+  const tickCount = spanDays <= 14 ? 7 : spanDays <= 60 ? 6 : 5
+  const labelFmt = (ts) => {
+    const d = new Date(ts)
+    if (spanDays <= 60) {
+      return d.toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric', month: 'short' })
+    }
+    return d.toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: '2-digit' })
+  }
+
+  const tickLabels = []
+  for (let i = 0; i <= tickCount; i++) {
+    tickLabels.push(minT + (span * i) / tickCount)
+  }
+
+  const rowH = large ? 26 : 22
+  const labelW = large ? 120 : 72
+  const chartH = rows.length * rowH + 28
+
+  return (
+    <div style={{ borderRadius: 8, border: `1px solid ${t.border}`, background: t.bg, overflow: 'hidden' }}>
+      <div style={{ padding: '6px 8px', fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.primary, borderBottom: `1px solid ${t.border}` }}>
+        Cronograma del PK
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <div style={{ minWidth: Math.max(520, (tickCount + 1) * 88), padding: '6px 4px 8px' }}>
+          <div
+            style={{
+              marginLeft: labelW,
+              display: 'flex',
+              justifyContent: 'space-between',
+              gap: 6,
+              fontSize: 'var(--cc-caption)',
+              color: t.textMuted,
+              marginBottom: 4,
+            }}
+          >
+            {tickLabels.map((ts) => (
+              <span key={ts} style={{ whiteSpace: 'nowrap' }}>
+                {labelFmt(ts)}
+              </span>
+            ))}
+          </div>
+          {rows.map((r) => {
+            const fi = parseIsoDate(r.fecha_inicio)
+            const ff = parseIsoDate(r.fecha_fin)
+            const has = fi && ff
+            const left = has ? ((fi.getTime() - minT) / span) * 100 : 0
+            const width = has ? Math.max(((ff.getTime() - fi.getTime()) / span) * 100, 1.5) : 0
+            return (
+              <div key={`${r.capitulo}-${r.item}`} style={{ display: 'flex', alignItems: 'center', height: rowH }}>
+                <div
+                  style={{
+                    width: labelW,
+                    flexShrink: 0,
+                    fontSize: 'var(--cc-caption)',
+                    color: t.textMuted,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    paddingRight: 4,
+                  }}
+                  title={`${r.capitulo} · ${r.item}`}
+                >
+                  {r.label}
+                </div>
+                <div style={{ flex: 1, height: 14, background: `${t.border}55`, borderRadius: 3, position: 'relative' }}>
+                  {has ? (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        left: `${left}%`,
+                        width: `${width}%`,
+                        top: 2,
+                        bottom: 2,
+                        borderRadius: 2,
+                        background: '#1D9E75',
+                        opacity: 0.85,
+                      }}
+                      title={`${fmtDateIso(r.fecha_inicio)} → ${fmtDateIso(r.fecha_fin)}`}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        left: 0,
+                        right: 0,
+                        top: 5,
+                        height: 4,
+                        background: '#888780',
+                        opacity: 0.35,
+                        borderRadius: 2,
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
+            )
+          })}
         </div>
       </div>
-      <div style={{ fontSize: 11, color: t.textMuted, marginBottom: 6 }}>
-        Cant. {itemDef.cant_total} {itemDef.und || ''} · V/U {itemDef.vlr_unitario}
-      </div>
-      <label style={{ display: 'block', fontSize: 10, color: t.textMuted }}>Fecha inicio</label>
-      <input type="date" value={fechaIni} onChange={(e) => setFechaIni(e.target.value)} style={{ ...inputStyle, marginBottom: 6 }} />
-      <label style={{ display: 'block', fontSize: 10, color: t.textMuted }}>Duración (días hábiles)</label>
-      <input
-        type="number"
-        min={1}
-        value={duracion}
-        onChange={(e) => setDuracion(e.target.value)}
-        style={{ ...inputStyle, marginBottom: 6 }}
-      />
-      <label style={{ display: 'block', fontSize: 10, color: t.textMuted }}>Fecha fin (calculada)</label>
-      <input type="text" readOnly value={finCalc || '—'} style={{ ...inputStyle, marginBottom: 8, opacity: 0.9 }} />
-      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: t.text, marginBottom: 6 }}>
-        <input type="checkbox" checked={overrideManual} onChange={(e) => setOverrideManual(e.target.checked)} />
-        Override manual (prioriza este cronograma sobre la herencia del capítulo)
-      </label>
-      <button
-        type="button"
-        style={{ ...btnStyle(true, panelBusy), width: '100%' }}
-        disabled={panelBusy}
-        onClick={() =>
-          onGuardar({
-            fecha_inicio: fechaIni || null,
-            duracion: duracion,
-            override_manual: overrideManual,
-            heredado_de_capitulo: !!ex.heredado_de_capitulo && !overrideManual,
-          })
-        }
-      >
-        Guardar ítem
-      </button>
     </div>
   )
 }

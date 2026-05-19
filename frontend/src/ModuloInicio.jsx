@@ -4,7 +4,7 @@ import { getClaraTypeScaleInline } from './typographyScale'
 import { eligeFraseInicio, fraseInicioEsValida } from './data/frasesInicioCuradas.js'
 
 const API_FRASE = `${API_BASE}/frase-del-dia`
-const SLIDER_INTERVAL_MS = 5000
+const SLIDER_INTERVAL_MS = 10000
 
 function buildfs(fontSize) {
   const s = getClaraTypeScaleInline(fontSize)

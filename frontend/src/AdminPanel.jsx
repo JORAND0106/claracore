@@ -4396,7 +4396,7 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
           <div style={{ fontSize: "var(--cc-md)", fontWeight: 700, color: col.textPrimary }}>📋 Actas del contrato</div>
             <div style={{ fontSize: "var(--cc-sm)", color: col.textMuted, marginTop: 4, lineHeight: 1.4 }}>
             <strong>Crear / editar acta:</strong> formulario completo con componentes (ambiental, social, PMT), ajustes (ICCP, ICOCIV, IPC), enlaces y asignación.
-            {" "}<strong>Costo directo</strong> (columna): mismo criterio que el <strong>dashboard de validación</strong> (N1, N2 y N3 aprobado en cascada) en SICOE Obra para ese acta RPO, sin tocar el formulario de acta.
+            {" "}<strong>Costo (validación)</strong>: suma SICOE con ítem asignado y <strong>último nivel activo del contrato en «Aprobado»</strong> (misma regla que el dashboard de validación / valores sellados), no solo N1–N3.
             {" "}<strong>Cerrar acta</strong> (solo RPO en período): acorta fechas; residuales sin N3 van al acta siguiente (existente o nuevo desde día después del cierre hasta fin de mes).
             {" "}Al cargar, la lista aparece al instante y en segundo plano se ejecuta la sincronización por <strong>vencimiento de fechas</strong> (residuales si el período ya pasó sin cierre manual).
           </div>

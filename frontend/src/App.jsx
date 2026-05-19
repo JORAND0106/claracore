@@ -12401,6 +12401,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashDrill,    setDashDrill]    = useState([])
   const [dashData,     setDashData]     = useState(null)
   const [dashLoading,  setDashLoading]  = useState(false)
+  const [dashDrillError, setDashDrillError] = useState(null)
   const [dashTabla,    setDashTabla]    = useState(null)
   const [dashTablaLoad,setDashTablaLoad]= useState(false)
   const [dashDrillPag, setDashDrillPag] = useState(0)
@@ -12660,8 +12661,23 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     if (!payload) return null
     if (payload.detail != null && payload.items == null) return null
     let rows = null
-    if (Array.isArray(payload)) rows = payload
-    else if (Array.isArray(payload.items)) rows = payload.items
+    if (Array.isArray(payload)) {
+      const first = payload[0]
+      if (
+        payload.length === 1 &&
+        first &&
+        typeof first === 'object' &&
+        !('item' in first) &&
+        !('nombre' in first)
+      ) {
+        const inner = Object.values(first)[0]
+        rows = Array.isArray(inner) ? inner : payload
+      } else {
+        rows = payload
+      }
+    } else if (Array.isArray(payload.items)) {
+      rows = payload.items
+    }
     if (!Array.isArray(rows)) return null
     return rows.map(r => ({
       item: r.item || r.nombre, descripcion: r.descripcion || '',
@@ -12683,6 +12699,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       setDashTabla(null)
       setDashLoading(false)
       setDashTablaLoad(false)
+      setDashDrillError(null)
       return
     }
     const tok = getToken()
@@ -12695,6 +12712,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
 
     // ── Nivel 2: tabla pkid-tabla ──
     if (drill.length >= 2) {
+      setDashLoading(false)
+      setDashDrillError(null)
       const fetchSeq = ++dashDrillFetchSeqRef.current
       const cacheKey = `${contratoIdDash}|${drill[0]?.valor}|${drill[1]?.valor}`
       const cached = dashTablaCache.current[cacheKey]
@@ -12732,12 +12751,34 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     const cacheKey = `${contratoIdDash}|${drill[0]?.valor || '__todos__'}`
     const cached = dashDrillCache.current[cacheKey]
     const ahora = Date.now()
-    if (cached && (ahora - cached.ts) < CACHE_TTL) {
+    const drillUrl = `${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill?${params}`
+    const fetchDrillJson = async (signal) => {
+      const res = await fetch(drillUrl, {
+        headers: { Authorization: `Bearer ${tok}` },
+        signal,
+      })
+      if (!res.ok) {
+        let errSnippet = ''
+        try {
+          errSnippet = (await res.text()).slice(0, 500)
+        } catch (_) {}
+        logApiFailure(`dashboard-drill HTTP ${res.status}`, errSnippet)
+        throw new Error(res.status === 401 ? 'Sesión expirada. Vuelva a iniciar sesión.' : `Error del servidor (${res.status})`)
+      }
+      try {
+        return await res.json()
+      } catch {
+        throw new Error('Respuesta inválida del servidor')
+      }
+    }
+    if (cached && (ahora - cached.ts) < CACHE_TTL && Array.isArray(cached.data)) {
       setDashData(cached.data)
       setDashLoading(false)
-      fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
-        .then(r => r.ok ? r.json() : null)
-        .then(data => {
+      setDashDrillError(null)
+      const ac = new AbortController()
+      const t = setTimeout(() => ac.abort(), 120000)
+      fetchDrillJson(ac.signal)
+        .then((data) => {
           if (fetchSeq !== dashDrillFetchSeqRef.current) return
           const lista = mapDrillCapituloItems(data)
           if (!Array.isArray(lista)) return
@@ -12745,35 +12786,37 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           setDashData(lista)
         })
         .catch(() => {})
+        .finally(() => clearTimeout(t))
       return
     }
     setDashLoading(true)
+    setDashDrillError(null)
+    setDashData(null)
+    const ac = new AbortController()
+    const timeoutId = setTimeout(() => ac.abort(), 120000)
     try {
-      const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
+      const data = await fetchDrillJson(ac.signal)
       if (fetchSeq !== dashDrillFetchSeqRef.current) return
-      if (res.ok) {
-        let data = null
-        try {
-          data = await res.json()
-        } catch {
-          data = null
-        }
-        const lista = mapDrillCapituloItems(data)
-        if (Array.isArray(lista)) {
-          dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
-          setDashData(lista)
-        } else {
-          setDashData([])
-        }
+      const lista = mapDrillCapituloItems(data)
+      if (Array.isArray(lista)) {
+        dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
+        setDashData(lista)
+        setDashDrillError(null)
       } else {
-        let errSnippet = ''
-        try {
-          errSnippet = (await res.text()).slice(0, 500)
-        } catch (_) {}
-        logApiFailure(`dashboard-drill HTTP ${res.status}`, errSnippet)
         setDashData([])
+        setDashDrillError('No se pudieron interpretar los ítems del capítulo.')
       }
+    } catch (err) {
+      if (fetchSeq !== dashDrillFetchSeqRef.current) return
+      if (err?.name === 'AbortError') {
+        setDashDrillError('La consulta tardó demasiado. Intente de nuevo.')
+      } else {
+        setDashDrillError(err?.message || 'Error de conexión al cargar ítems.')
+        logApiFailure('dashboard-drill', err)
+      }
+      setDashData([])
     } finally {
+      clearTimeout(timeoutId)
       if (fetchSeq === dashDrillFetchSeqRef.current) setDashLoading(false)
     }
   }
@@ -13977,6 +14020,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                             if (contratoIdDash) {
                               delete dashDrillCache.current[`${contratoIdDash}|${ck}`]
                             }
+                            setDashDrillPag(0)
+                            setDashData(null)
+                            setDashDrillError(null)
+                            setDashLoading(true)
                             setDashDrill([{ campo: 'capitulo', valor: ck }])
                             setPopupCapitulo(true)
                           }
@@ -14254,7 +14301,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             {/* ══════════════ POPUP CAPÍTULO ══════════════ */}
             {popupCapitulo && dashDrill.length > 0 && (
               <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'rgba(0,0,0,0.65)', zIndex:1200, display:'flex', alignItems:'center', justifyContent:'center' }}
-                onClick={() => { setPopupCapitulo(false); setDashDrill([]) }}>
+                onClick={() => { setPopupCapitulo(false); setDashDrill([]); setDashLoading(false); setDashDrillError(null) }}>
                 <div style={{ background:t.bgCard, borderRadius:'16px', width:'88vw', maxWidth:'1160px', height:'90vh', overflow:'hidden', display:'flex', flexDirection:'column', boxShadow:'0 24px 80px rgba(0,0,0,0.55)', border:`1px solid ${t.border}` }}
                   onClick={e => e.stopPropagation()}>
 
@@ -14372,7 +14419,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                           {dashReportesDeltaLoad ? '⏳ Trabajando…' : 'Migrar a SICOE Obra'}
                         </button>
                       )}
-                      <button onClick={() => { setPopupCapitulo(false); setDashDrill([]) }}
+                      <button onClick={() => { setPopupCapitulo(false); setDashDrill([]); setDashLoading(false); setDashDrillError(null) }}
                         style={{ background:'transparent', border:`1px solid ${t.border}`, borderRadius:'8px', padding:'5px 14px', fontSize:'var(--cc-sm)', cursor:'pointer', color:t.textMuted }}>
                         ✕ Cerrar
                       </button>
@@ -14398,6 +14445,16 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       {dashDrill.length === 1 && (
                         dashLoading ? (
                           <div style={{ textAlign:'center', padding:'20px', color:t.textMuted, fontSize:'var(--cc-sm)' }}>⏳ Cargando ítems...</div>
+                        ) : dashDrillError ? (
+                          <div style={{ textAlign:'center', padding:'20px', color:'#dc2626', fontSize:'var(--cc-sm)', lineHeight:1.5 }}>
+                            {dashDrillError}
+                            <div style={{ marginTop:'10px' }}>
+                              <button type="button" onClick={() => cargarDashDrill(dashDrill)}
+                                style={{ background:t.primary, color:'#fff', border:'none', borderRadius:'8px', padding:'6px 14px', fontSize:'var(--cc-sm)', cursor:'pointer', fontWeight:600 }}>
+                                Reintentar
+                              </button>
+                            </div>
+                          </div>
                         ) : dashData?.length > 0 ? (() => {
                           const POR_PAG = 15
                           const totalPags = Math.ceil(dashData.length / POR_PAG)

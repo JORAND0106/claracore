@@ -9,7 +9,9 @@ export const API_BASE = import.meta.env.DEV
   : (import.meta.env.VITE_API_URL || PROD_FALLBACK)
 
 export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
-export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
+/** Anon key: nombre canónico VITE_SUPABASE_ANON_KEY; VITE_SUPABASE_KEY se acepta por compatibilidad. */
+export const SUPABASE_ANON_KEY =
+  import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_KEY
 
 /** Más detalle en consola: variable de entorno o `localStorage.setItem('claracore_debug_api','1')` + recargar. */
 export function apiDebugVerbose() {

@@ -92,6 +92,24 @@ def siguiente_dia_habil(d: date, contrato_id: int, cache: CalendarioNoHabilesCac
     return d
 
 
+def count_dias_habiles_entre(
+    contrato_id: int,
+    fecha_inicio: date,
+    fecha_fin: date,
+    cache: CalendarioNoHabilesCache,
+) -> int:
+    """Cuenta días hábiles inclusive entre fecha_inicio y fecha_fin."""
+    if fecha_inicio is None or fecha_fin is None or fecha_fin < fecha_inicio:
+        return 0
+    n = 0
+    d = fecha_inicio
+    while d <= fecha_fin:
+        if es_dia_habil(d, contrato_id, cache):
+            n += 1
+        d += timedelta(days=1)
+    return n
+
+
 def add_dias_habiles(
     contrato_id: int,
     fecha_inicio: date,
