@@ -3567,7 +3567,7 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
       let res = await fetch(urlPrimaria, { headers: hdrs })
       let data = await res.json().catch(() => ({}))
       if (seq !== recargarSeqRef.current) return null
-      if ((!res.ok || !data?.id) && urlPrimaria !== urlS) {
+      if ((!res.ok || !data?.id || (Array.isArray(data.registros) && data.registros.length === 0)) && urlPrimaria !== urlS) {
         if (seq !== recargarSeqRef.current) return null
         res = await fetch(urlS, { headers: hdrs })
         data = await res.json().catch(() => ({}))
@@ -8703,7 +8703,7 @@ function ModuloSicoeObra({
                           try {
                             const rf = await fetch(uf, { headers: { Authorization: `Bearer ${getToken()}` } })
                             const df = await rf.json().catch(() => ({}))
-                            if (rf.ok && df?.id && Array.isArray(df.registros)) {
+                            if (rf.ok && df?.id && Array.isArray(df.registros) && df.registros.length > 0) {
                               const regMatchF = regNumBusqueda
                                 ? sicoeBuscarRegistroPorNumeroFiltro(df.registros, regNumBusqueda)
                                 : null
