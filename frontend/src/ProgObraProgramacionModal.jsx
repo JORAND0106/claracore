@@ -5,6 +5,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { createPortal } from 'react-dom'
 import { flushSync } from 'react-dom'
 import { RefreshCw } from 'lucide-react'
+import ProgObraDependencias from './ProgObraDependencias'
 import {
   addCalendarDays,
   eachCalendarDay,
@@ -167,7 +168,7 @@ function buildGanttSnap(capitulo, items, actMap, actividadKey, timelineDays, row
   return { days, rows, diasHab, from, to, summaryStart, summaryEnd }
 }
 
-function ProgChapterGanttExcel({ snap, noHabilesSet, t }) {
+function ProgChapterGanttExcel({ snap, noHabilesSet, t, cpmCapitulo }) {
   if (!snap?.days?.length) return null
 
   const { days, rows, diasHab } = snap
@@ -303,7 +304,7 @@ function ProgChapterGanttExcel({ snap, noHabilesSet, t }) {
           <GanttBarRow
             label={`Σ ${diasHab} días-hábiles programados`}
             labelTitle="Rango del capítulo (fecha mínima de inicio a fecha máxima de fin). Los ítems pueden ejecutarse en paralelo."
-            labelStyle={{ fontWeight: 700, color: t.primary }}
+            labelStyle={{ fontWeight: 700, color: cpmCapitulo?.es_ruta_critica ? '#ef4444' : t.primary }}
             rowHeight={GANTT_ROW_CAP}
             days={days}
             fromT={fromT}
@@ -313,6 +314,9 @@ function ProgChapterGanttExcel({ snap, noHabilesSet, t }) {
             isSummary
             diasHab={diasHab}
             t={t}
+            esCritico={!!cpmCapitulo?.es_ruta_critica}
+            holguraDias={cpmCapitulo?.holgura_total ?? 0}
+            holguraEnd={cpmCapitulo?.fecha_fin_tardia ?? null}
           />
 
           {rows.map((r) => (
@@ -335,7 +339,7 @@ function ProgChapterGanttExcel({ snap, noHabilesSet, t }) {
   )
 }
 
-function GanttBarRow({ label, labelTitle, labelStyle, rowHeight, days, fromT, dayPx, barStart, barEnd, isSummary, duracion, diasHab, t }) {
+function GanttBarRow({ label, labelTitle, labelStyle, rowHeight, days, fromT, dayPx, barStart, barEnd, isSummary, duracion, diasHab, t, esCritico, holguraDias, holguraEnd }) {
   let left = 0
   let width = 0
   const fi = parseIsoDate(barStart)
@@ -347,6 +351,18 @@ function GanttBarRow({ label, labelTitle, labelStyle, rowHeight, days, fromT, da
     width = Math.max((endIdx - startIdx + 1) * dayPx, dayPx)
   }
 
+  let holguraLeft = 0
+  let holguraWidth = 0
+  if (holguraEnd && ff && !esCritico) {
+    const fh = parseIsoDate(holguraEnd)
+    if (fh && fh > ff) {
+      const endIdx = Math.min(days.length - 1, Math.round((ff.getTime() - fromT) / 86400000))
+      const hEndIdx = Math.min(days.length - 1, Math.round((fh.getTime() - fromT) / 86400000))
+      holguraLeft = (endIdx + 1) * dayPx
+      holguraWidth = Math.max((hEndIdx - endIdx) * dayPx, 0)
+    }
+  }
+
   const tooltip = ganttBarTooltip({
     isSummary,
     label,
@@ -355,6 +371,11 @@ function GanttBarRow({ label, labelTitle, labelStyle, rowHeight, days, fromT, da
     duracion,
     diasHab,
   })
+  const criticalTooltip = esCritico
+    ? 'Ruta crítica — Holgura: 0 días'
+    : holguraDias > 0
+    ? `Holgura: ${holguraDias} día${holguraDias !== 1 ? 's' : ''} hábiles`
+    : null
 
   return (
     <div style={{ display: 'flex', height: rowHeight, borderBottom: `1px solid ${t.border}44`, alignItems: 'stretch' }}>
@@ -392,6 +413,25 @@ function GanttBarRow({ label, labelTitle, labelStyle, rowHeight, days, fromT, da
             }}
           />
         ))}
+        {holguraWidth > 0 && (
+          <div
+            style={{
+              position: 'absolute',
+              left: holguraLeft,
+              width: holguraWidth,
+              height: GANTT_BAR_H,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              borderRadius: '0 4px 4px 0',
+              background: 'rgba(156,163,175,0.35)',
+              border: '1px dashed #9ca3af',
+              boxSizing: 'border-box',
+              zIndex: 1,
+              cursor: 'default',
+            }}
+            title={criticalTooltip || undefined}
+          />
+        )}
         {width > 0 && (
           <div
             style={{
@@ -402,12 +442,13 @@ function GanttBarRow({ label, labelTitle, labelStyle, rowHeight, days, fromT, da
               top: '50%',
               transform: 'translateY(-50%)',
               borderRadius: 4,
-              background: isSummary ? GANTT_CAP_BAR : GANTT_TEAL,
+              background: isSummary ? (esCritico ? '#fee2e2' : GANTT_CAP_BAR) : GANTT_TEAL,
+              border: esCritico ? '2px solid #ef4444' : 'none',
               boxSizing: 'border-box',
               zIndex: 2,
               cursor: 'default',
             }}
-            title={tooltip}
+            title={criticalTooltip || tooltip}
           />
         )}
       </div>
@@ -458,11 +499,12 @@ function ProgItemRow({
       getValues: () => ({
         fecha_inicio: fechaIni,
         duracion: duracion,
+        fecha_fin: finCalc,
       }),
       setFin: (iso) => setFinCalc(fmtDateIso(iso)),
     })
     return () => unregisterRowDraft?.(rk)
-  }, [rk, fechaIni, duracion, registerRowDraft, unregisterRowDraft])
+  }, [rk, fechaIni, duracion, finCalc, registerRowDraft, unregisterRowDraft])
 
   useEffect(() => {
     const d = parseInt(String(debDur), 10)
@@ -607,6 +649,7 @@ function ProgCapituloSection({
   unregisterRowDraft,
   finOverrides,
   refreshGanttBusy,
+  cpmCapitulo,
 }) {
   const pal = capColor(capIdx)
   const [fechaCap, setFechaCap] = useState(() => fmtDateIso(capCr?.fecha_inicio_sugerida))
@@ -725,7 +768,7 @@ function ProgCapituloSection({
           <td colSpan={9} style={{ padding: '0 8px 12px', background: t.bg, width: 1 }}>
             {ganttSnap ? (
               <div style={{ display: 'inline-block', verticalAlign: 'top' }}>
-                <ProgChapterGanttExcel snap={ganttSnap} noHabilesSet={noHabilesSet} t={t} />
+                <ProgChapterGanttExcel snap={ganttSnap} noHabilesSet={noHabilesSet} t={t} cpmCapitulo={cpmCapitulo} />
               </div>
             ) : (
               <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, padding: '8px 4px' }}>
@@ -769,6 +812,8 @@ export default function ProgObraProgramacionModal({
   onGuardarCambios,
   onSaveSuccess,
   showToast,
+  allPkIds,
+  onCpmUpdated,
 }) {
   const [collapsedCaps, setCollapsedCaps] = useState({})
   const [ganttSnaps, setGanttSnaps] = useState({})
@@ -778,6 +823,8 @@ export default function ProgObraProgramacionModal({
   const [localSaving, setLocalSaving] = useState(false)
   const [rowDrafts, setRowDrafts] = useState({})
   const rowDraftRef = useRef({})
+  const [activeContentTab, setActiveContentTab] = useState('programacion')
+  const [cpmResultados, setCpmResultados] = useState([])
 
   const registerRowDraft = useCallback((rk, api) => {
     rowDraftRef.current[rk] = api
@@ -812,58 +859,89 @@ export default function ProgObraProgramacionModal({
       .catch(() => setNoHabilesSet(new Set()))
   }, [open, cid, token, API])
 
+  useEffect(() => {
+    if (!open || !workingVersion?.id) { setCpmResultados([]); return }
+    fetch(`${API}/prog-obra/${cid}/versiones/${workingVersion.id}/cpm-resultados`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : { resultados: [] }))
+      .then((d) => {
+        const resultados = d.resultados || []
+        setCpmResultados(resultados)
+        onCpmUpdated?.(resultados)
+      })
+      .catch(() => setCpmResultados([]))
+  }, [open, workingVersion?.id, cid, token, API])
+
   const toggleCap = (cap) => {
     const k = `${activePk}\u0000${cap}`
     setCollapsedCaps((s) => ({ ...s, [k]: !s[k] }))
   }
 
-  const refreshGantt = async (cap) => {
+  const cpmByCapKey = useMemo(() => {
+    const m = {}
+    for (const r of cpmResultados) {
+      m[`${r.pk_id}\u0000${r.capitulo}`] = r
+    }
+    return m
+  }, [cpmResultados])
+
+  // Cuando fecha_fin_calculada no está en actMap (datos viejos o sin RPC),
+  // la recalcula localmente usando días hábiles y noHabilesSet.
+  const calcFinLocal = useCallback((fi, dur) => {
+    if (!fi || !(dur > 0)) return null
+    let d = parseIsoDate(fi)
+    if (!d) return null
+    let count = 0
+    let safety = 0
+    while (count < dur && safety < 1000) {
+      d = addCalendarDays(d, 1)
+      safety++
+      if (!isWeekendDate(d) && !noHabilesSet.has(isoFromDate(d))) count++
+    }
+    return isoFromDate(d)
+  }, [noHabilesSet])
+
+  // Recálculo puro en memoria — cero fetch.
+  // Lee fecha_fin desde getValues() de cada fila (ya actualizado por el useEffect de calcular-fin)
+  // o desde actMap (guardado en BD) o como fallback local.
+  const refreshGantt = useCallback((cap) => {
     const items = itemsPorCapitulo(cap)
     const rowOverrides = {}
-    const finPatch = {}
 
     for (const it of items) {
       const rk = itemRowKey(cap, it.item)
       const draft = rowDraftRef.current[rk]?.getValues?.()
       const act = actMap[actividadKey(cap, it.item, 1)]
-      const fi = fmtDateIso(draft?.fecha_inicio ?? act?.fecha_inicio)
-      const durRaw = draft?.duracion != null && draft.duracion !== '' ? draft.duracion : act?.duracion_dias_habiles
-      const dur = parseInt(String(durRaw), 10)
 
-      if (!fi || !(dur > 0)) continue
+      // Si el draft existe (fila montada), usar SOLO los valores del draft.
+      // Nunca caer en actMap — si el usuario limpió la fecha, la barra debe desaparecer.
+      const fi = draft != null
+        ? fmtDateIso(draft.fecha_inicio || '')
+        : fmtDateIso(act?.fecha_inicio)
+      const durRaw = draft != null
+        ? (draft.duracion != null && draft.duracion !== '' ? draft.duracion : null)
+        : act?.duracion_dias_habiles
+      const dur = durRaw != null ? parseInt(String(durRaw), 10) : NaN
 
-      let ff = fmtDateIso(act?.fecha_fin_calculada)
-      try {
-        const q = new URLSearchParams({ fecha_inicio: fi, duracion_dias_habiles: String(dur) })
-        const res = await fetch(`${API}/prog-obra/${cid}/calcular-fin?${q}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        })
-        if (res.ok) {
-          const j = await res.json()
-          ff = fmtDateIso(j?.fecha_fin_calculada)
-        }
-      } catch {
-        /* mantener ff previo */
+      if (!fi || !(dur > 0)) {
+        // Registrar explícitamente como vacío para que buildGanttSnap no use actMap
+        rowOverrides[it.item] = { fecha_inicio: '', fecha_fin: '', duracion: 0 }
+        continue
       }
-
-      if (ff) {
-        rowOverrides[it.item] = { fecha_inicio: fi, fecha_fin: ff, duracion: dur }
-        finPatch[rk] = ff
-        rowDraftRef.current[rk]?.setFin?.(ff)
-      }
+      const ff = fmtDateIso(draft?.fecha_fin ?? act?.fecha_fin_calculada) || calcFinLocal(fi, dur)
+      rowOverrides[it.item] = { fecha_inicio: fi, fecha_fin: ff || '', duracion: dur }
     }
 
-    if (Object.keys(finPatch).length > 0) {
-      setFinOverrides((s) => ({ ...s, ...finPatch }))
-    }
-
-    const getDraft = (c, it) => {
-      const rk = itemRowKey(c, it.item)
-      const draft = rowDraftRef.current[rk]?.getValues?.()
-      return {
-        fecha_inicio: draft?.fecha_inicio,
-        fecha_fin: finPatch[rk] || finOverrides[rk],
-      }
+    const getDraft = (c, itemCode) => {
+      const rk = itemRowKey(c, itemCode)
+      const d = rowDraftRef.current[rk]?.getValues?.()
+      const act = actMap[actividadKey(c, itemCode, 1)]
+      const fi = d != null ? fmtDateIso(d.fecha_inicio || '') : fmtDateIso(act?.fecha_inicio)
+      const dur = d != null
+        ? parseInt(String(d.duracion != null && d.duracion !== '' ? d.duracion : null), 10)
+        : parseInt(String(act?.duracion_dias_habiles), 10)
+      if (!fi || !(dur > 0)) return { fecha_inicio: null, fecha_fin: null }
+      const ff = fmtDateIso(d?.fecha_fin ?? act?.fecha_fin_calculada) || calcFinLocal(fi, dur)
+      return { fecha_inicio: fi, fecha_fin: ff }
     }
     const timelineDays = computePkTimelineDays(capitulosOrdenados, itemsPorCapitulo, actMap, actividadKey, getDraft)
     const snap = buildGanttSnap(cap, items, actMap, actividadKey, timelineDays, rowOverrides, noHabilesSet)
@@ -873,11 +951,10 @@ export default function ProgObraProgramacionModal({
     }
     const k = `${activePk}\u0000${cap}`
     setGanttSnaps((prev) => ({ ...prev, [k]: snap }))
-  }
+  }, [capitulosOrdenados, itemsPorCapitulo, actMap, actividadKey, itemRowKey, noHabilesSet, showToast, activePk, calcFinLocal])
 
   const handleRefreshGanttClick = (cap) => {
-    setGanttRefreshCap(cap)
-    refreshGantt(cap).finally(() => setGanttRefreshCap(null))
+    refreshGantt(cap)
   }
 
   const collectDraftItems = useCallback(() => {
@@ -889,19 +966,21 @@ export default function ProgObraProgramacionModal({
         const live = rowDraftRef.current[rk]?.getValues?.()
         const stored = rowDrafts[rk]
         const act = actMap[actividadKey(cap, it.item, 1)]
-        const fecha = fmtDateIso(live?.fecha_inicio ?? stored?.fecha_inicio ?? act?.fecha_inicio)
+
+        // Valor actual del campo fecha (live tiene precedencia)
+        const liveFecha = live != null ? (live.fecha_inicio ?? '') : null
+        const fecha = fmtDateIso(liveFecha !== null ? liveFecha : (stored?.fecha_inicio ?? act?.fecha_inicio))
         const durRaw = live?.duracion ?? stored?.duracion ?? act?.duracion_dias_habiles
         const dur = parseInt(String(durRaw), 10)
+
         if (!fecha || !(dur > 0)) {
+          // Enviar con null para que la RPC limpie cualquier fecha vieja en BD y
+          // recalcule correctamente items_con_fecha y estado_programacion.
+          itemsAGuardar.push({ itemDef: it, rk, fecha_inicio: null, duracion: null })
           skipped += 1
           continue
         }
-        itemsAGuardar.push({
-          itemDef: it,
-          rk,
-          fecha_inicio: fecha,
-          duracion: dur,
-        })
+        itemsAGuardar.push({ itemDef: it, rk, fecha_inicio: fecha, duracion: dur })
       }
     }
     return { itemsAGuardar, skipped }
@@ -1095,7 +1174,49 @@ export default function ProgObraProgramacionModal({
           <span style={{ color: t.textMuted, fontSize: 'var(--cc-caption)', padding: '0 8px' }}>+ Agregar PK (clic en el mapa)</span>
         </div>
 
+        {/* Content tabs: Programación | Dependencias */}
+        <div style={{ display: 'flex', gap: 0, padding: '0 16px', borderBottom: `1px solid ${t.border}`, flexShrink: 0, background: t.bg }}>
+          {['programacion', 'dependencias'].map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => setActiveContentTab(tab)}
+              style={{
+                padding: '8px 16px',
+                fontSize: 'var(--cc-sm)',
+                fontWeight: activeContentTab === tab ? 700 : 400,
+                color: activeContentTab === tab ? t.primary : t.textMuted,
+                background: 'transparent',
+                border: 'none',
+                borderBottom: activeContentTab === tab ? `2px solid ${t.primary}` : '2px solid transparent',
+                cursor: 'pointer',
+                marginBottom: -1,
+              }}
+            >
+              {tab === 'programacion' ? 'Programación' : 'Dependencias'}
+            </button>
+          ))}
+        </div>
+
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 16px' }}>
+          {activeContentTab === 'dependencias' ? (
+            <ProgObraDependencias
+              cid={cid}
+              token={token}
+              API={API}
+              t={t}
+              versionId={workingVersion?.id}
+              activePk={activePk}
+              allPkIds={allPkIds}
+              capitulosOrigen={capitulosOrdenados}
+              editable={editable}
+              onCpmCalculated={(resultados) => {
+                setCpmResultados(resultados)
+                onCpmUpdated?.(resultados)
+              }}
+            />
+          ) : (
+            <>
           {(loadPpto || loadAct) && <div style={{ color: t.textMuted, marginBottom: 8 }}>Cargando datos del PK…</div>}
           {!loadPpto && capitulosOrdenados.length === 0 && (
             <div style={{ color: t.textMuted }}>Sin ítems de presupuesto para este PK.</div>
@@ -1161,12 +1282,15 @@ export default function ProgObraProgramacionModal({
                         unregisterRowDraft={unregisterRowDraft}
                         finOverrides={finOverrides}
                         refreshGanttBusy={ganttRefreshCap === cap}
+                        cpmCapitulo={cpmByCapKey[`${activePk}\u0000${cap}`]}
                       />
                     )
                   })}
                 </tbody>
               </table>
             </div>
+          )}
+            </>
           )}
         </div>
 

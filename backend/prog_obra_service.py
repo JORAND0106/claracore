@@ -136,37 +136,21 @@ def _compute_estado_pk(items_total: int, items_con_fecha: int) -> str:
 
 def upsert_prog_pk_estado(sb, version_id: str, contrato_id: int, pk_id: str) -> None:
     pk = (pk_id or "").strip()
-    items_total, _ = _ppto_items_por_pk(sb, contrato_id, pk)
-    items_cf = _count_items_con_fecha(sb, version_id, pk)
+    items_total, _ = _ppto_items_por_pk(sb, contrato_id, pk)   # query 1
+    items_cf = _count_items_con_fecha(sb, version_id, pk)       # query 2
     estado = _compute_estado_pk(items_total, items_cf)
-    print(
-        f"UPSERT_PK_ESTADO: pk={pk} items_con_fecha={items_cf} items_total={items_total} estado={estado}",
-        flush=True,
-    )
-    existing = (
-        sb.table("prog_pk_estado")
-        .select("id")
-        .eq("version_id", version_id)
-        .eq("pk_id", pk)
-        .limit(1)
-        .execute()
-        .data
-    )
-    payload = {
-        "version_id": version_id,
-        "contrato_id": contrato_id,
-        "pk_id": pk,
-        "estado_programacion": estado,
-        "items_total": items_total,
-        "items_con_fecha": min(items_cf, items_total) if items_total > 0 else 0,
-        "actualizado_en": datetime.now(timezone.utc).isoformat(),
-    }
-    if existing:
-        sb.table("prog_pk_estado").update(payload).eq("id", existing[0]["id"]).execute()
-    else:
-        uid_row = sb.table("prog_pk_estado").insert(payload).execute().data
-        if not uid_row:
-            sb.table("prog_pk_estado").upsert(payload, on_conflict="version_id,pk_id").execute()
+    sb.table("prog_pk_estado").upsert(                          # query 3 (antes: 4)
+        {
+            "version_id": version_id,
+            "contrato_id": contrato_id,
+            "pk_id": pk,
+            "estado_programacion": estado,
+            "items_total": items_total,
+            "items_con_fecha": min(items_cf, items_total) if items_total > 0 else 0,
+            "actualizado_en": datetime.now(timezone.utc).isoformat(),
+        },
+        on_conflict="version_id,pk_id",
+    ).execute()
 
 
 def ensure_prog_pk_estado_all(sb, version_id: str, contrato_id: int) -> None:
@@ -698,6 +682,83 @@ def sync_capitulo_desde_items(
         sb.table("prog_actividades_capitulo").insert(payload).execute()
 
 
+def _sync_capitulos_bulk(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    pk_id: str,
+    capitulos: set,
+    cache: CalendarioNoHabilesCache,
+    usuario_id: int,
+) -> None:
+    """Sincroniza prog_actividades_capitulo para N capítulos en 2 queries (antes era 3×N)."""
+    if not capitulos:
+        return
+    pk = pk_id.strip()
+    cap_list = list(capitulos)
+
+    # Query 1: leer todos los ítems con fecha de todos los capítulos de una vez
+    rows = (
+        sb.table("prog_actividades")
+        .select("capitulo,fecha_inicio,fecha_fin_calculada")
+        .eq("version_id", version_id)
+        .eq("pk_id", pk)
+        .in_("capitulo", cap_list)
+        .not_.is_("fecha_inicio", "null")
+        .execute()
+        .data
+        or []
+    )
+
+    # Calcular min(fecha_inicio) y max(fecha_fin) por capítulo, en memoria
+    cap_dates: Dict[str, Dict] = {}
+    for r in rows:
+        cap = str(r.get("capitulo") or "").strip()
+        fi = _parse_date_field(r.get("fecha_inicio"))
+        ff = _parse_date_field(r.get("fecha_fin_calculada"))
+        if not fi:
+            continue
+        if cap not in cap_dates:
+            cap_dates[cap] = {"min_fi": fi, "max_ff": ff}
+        else:
+            d = cap_dates[cap]
+            if fi < d["min_fi"]:
+                d["min_fi"] = fi
+            if ff and (d["max_ff"] is None or ff > d["max_ff"]):
+                d["max_ff"] = ff
+
+    now = datetime.now(timezone.utc).isoformat()
+    payloads = []
+    for cap in cap_list:
+        d = cap_dates.get(cap)
+        if not d or not d["min_fi"] or not d["max_ff"]:
+            continue
+        dias = count_dias_habiles_entre(contrato_id, d["min_fi"], d["max_ff"], cache)
+        if dias <= 0:
+            continue
+        payloads.append(
+            {
+                "version_id": version_id,
+                "contrato_id": contrato_id,
+                "pk_id": pk,
+                "capitulo": cap,
+                "fecha_inicio_sugerida": d["min_fi"].isoformat(),
+                "duracion_dias_habiles": dias,
+                "aplica_herencia": False,
+                "creado_por": usuario_id,
+                "actualizado_en": now,
+            }
+        )
+
+    if not payloads:
+        return
+
+    # Query 2: upsert masivo — sin loop, sin select previo
+    sb.table("prog_actividades_capitulo").upsert(
+        payloads, on_conflict="version_id,pk_id,capitulo"
+    ).execute()
+
+
 def batch_upsert_actividades(
     sb,
     version_id: str,
@@ -713,7 +774,7 @@ def batch_upsert_actividades(
     now = datetime.now(timezone.utc).isoformat()
     existing_rows = (
         sb.table("prog_actividades")
-        .select("id,capitulo,item,segmento")
+        .select("id,capitulo,item,segmento,creado_por")
         .eq("version_id", version_id)
         .eq("pk_id", pk)
         .execute()
@@ -721,7 +782,7 @@ def batch_upsert_actividades(
         or []
     )
     ex_map = {
-        (str(r.get("capitulo") or "").strip(), str(r.get("item") or "").strip(), int(r.get("segmento") or 1)): r["id"]
+        (str(r.get("capitulo") or "").strip(), str(r.get("item") or "").strip(), int(r.get("segmento") or 1)): r
         for r in existing_rows
     }
     payloads: List[dict] = []
@@ -760,8 +821,8 @@ def batch_upsert_actividades(
             "actualizado_en": now,
         }
         key = (cap, it, seg)
-        if key not in ex_map:
-            row["creado_por"] = usuario_id
+        existing = ex_map.get(key)
+        row["creado_por"] = (existing.get("creado_por") or usuario_id) if existing else usuario_id
         payloads.append(row)
         meta.append({"capitulo": cap, "item": it, "segmento": seg, "fecha_fin_calculada": fin.isoformat() if fin else None})
         if cap:
@@ -772,8 +833,7 @@ def batch_upsert_actividades(
         payloads, on_conflict="version_id,pk_id,capitulo,item,segmento"
     ).execute()
     upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
-    for cap in capitulos_touched:
-        sync_capitulo_desde_items(sb, version_id, contrato_id, pk, cap, cache, usuario_id)
+    _sync_capitulos_bulk(sb, version_id, contrato_id, pk, capitulos_touched, cache, usuario_id)
   # fetch ids for response
     refreshed = (
         sb.table("prog_actividades")
@@ -855,3 +915,210 @@ def seed_festivos_colombia_globales(sb, y0: int, y1: int) -> int:
             ).execute()
             n += 1
     return n
+
+
+# -----------------------------------------------------------------------------
+# FASE 2 � CPM: Dependencias + C�lculo
+# -----------------------------------------------------------------------------
+
+from prog_obra_cpm import (
+    DependenciaCPM,
+    NodoCPM,
+    ResultadoCPM,
+    calcular_cpm,
+    nodos_afectados_por,
+)
+
+
+def listar_dependencias(sb, version_id: str) -> list:
+    return (
+        sb.table("prog_dependencias")
+        .select("*")
+        .eq("version_id", version_id)
+        .order("creado_en")
+        .execute()
+        .data
+        or []
+    )
+
+
+def crear_dependencia(
+    sb, version_id, contrato_id, pk_id_origen, capitulo_origen,
+    pk_id_destino, capitulo_destino, tipo, lag_dias, usuario_id,
+) -> dict:
+    existing = listar_dependencias(sb, version_id)
+    import networkx as nx
+    G = nx.DiGraph()
+    for d in existing:
+        G.add_edge((d["pk_id_origen"], d["capitulo_origen"]), (d["pk_id_destino"], d["capitulo_destino"]))
+    G.add_edge((pk_id_origen, capitulo_origen), (pk_id_destino, capitulo_destino))
+    if not nx.is_directed_acyclic_graph(G):
+        cycles = list(nx.simple_cycles(G))
+        cycle_str = " -> ".join(f"{pk}/{cap}" for pk, cap in cycles[0])
+        raise BusinessRuleError(f"La dependencia crea un ciclo: {cycle_str}")
+    row = (
+        sb.table("prog_dependencias")
+        .insert({
+            "version_id": version_id,
+            "contrato_id": contrato_id,
+            "pk_id_origen": pk_id_origen,
+            "capitulo_origen": capitulo_origen,
+            "pk_id_destino": pk_id_destino,
+            "capitulo_destino": capitulo_destino,
+            "tipo": tipo,
+            "lag_dias": lag_dias,
+            "creado_por": usuario_id,
+        })
+        .execute()
+        .data
+    )
+    sb.table("prog_versiones").update({"cpm_dirty": True}).eq("id", version_id).execute()
+    return (row or [{}])[0]
+
+
+def eliminar_dependencia(sb, dep_id: str, version_id: str) -> None:
+    sb.table("prog_dependencias").delete().eq("id", dep_id).execute()
+    sb.table("prog_versiones").update({"cpm_dirty": True}).eq("id", version_id).execute()
+
+
+def _parse_date_cpm(v):
+    if v is None:
+        return None
+    from datetime import date as _date
+    if isinstance(v, _date):
+        return v
+    try:
+        p = str(v)[:10].split("-")
+        return _date(int(p[0]), int(p[1]), int(p[2]))
+    except Exception:
+        return None
+
+
+def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
+    raw_caps = (
+        sb.rpc("prog_get_capitulos_con_fechas", {"p_version_id": version_id})
+        .execute()
+        .data
+        or []
+    )
+    nodos = []
+    for r in raw_caps:
+        fi = _parse_date_cpm(r.get("fecha_inicio"))
+        ff = _parse_date_cpm(r.get("fecha_fin"))
+        dur = int(r.get("duracion_dias_hab") or 1)
+        if fi and ff:
+            nodos.append(NodoCPM(
+                pk_id=str(r["pk_id"]).strip(),
+                capitulo=str(r["capitulo"]).strip(),
+                duracion=max(1, dur),
+                fecha_inicio_base=fi,
+                fecha_fin_base=ff,
+            ))
+
+    if not nodos:
+        return ResultadoCPM(ok=True)
+
+    dependencias = [
+        DependenciaCPM(
+            pk_id_origen=d["pk_id_origen"],
+            capitulo_origen=d["capitulo_origen"],
+            pk_id_destino=d["pk_id_destino"],
+            capitulo_destino=d["capitulo_destino"],
+            tipo=d["tipo"],
+            lag_dias=int(d.get("lag_dias") or 0),
+        )
+        for d in listar_dependencias(sb, version_id)
+    ]
+
+    resultado = calcular_cpm(nodos, dependencias, contrato_id, cache)
+    if not resultado.ok:
+        return resultado
+
+    payload = [
+        {
+            "pk_id": n.pk_id,
+            "capitulo": n.capitulo,
+            "fecha_inicio_temprana": n.fecha_inicio_temprana.isoformat() if n.fecha_inicio_temprana else None,
+            "fecha_fin_temprana": n.fecha_fin_temprana.isoformat() if n.fecha_fin_temprana else None,
+            "fecha_inicio_tardia": n.fecha_inicio_tardia.isoformat() if n.fecha_inicio_tardia else None,
+            "fecha_fin_tardia": n.fecha_fin_tardia.isoformat() if n.fecha_fin_tardia else None,
+            "holgura_total": n.holgura_total,
+            "holgura_libre": n.holgura_libre,
+            "es_ruta_critica": n.es_ruta_critica,
+        }
+        for n in resultado.nodos
+    ]
+    sb.rpc("prog_upsert_cpm_resultados", {
+        "p_version_id": version_id,
+        "p_contrato_id": contrato_id,
+        "p_resultados": payload,
+    }).execute()
+
+    for n in resultado.nodos:
+        if not n.fecha_inicio_temprana or n.fecha_inicio_temprana == n.fecha_inicio_base:
+            continue
+        sb.table("prog_actividades_capitulo").update({
+            "fecha_inicio_sugerida": n.fecha_inicio_temprana.isoformat(),
+            "duracion_dias_habiles": n.duracion,
+        }).eq("version_id", version_id).eq("pk_id", n.pk_id).eq("capitulo", n.capitulo).execute()
+        _recalc_items_heredados_cpm(sb, version_id, n.pk_id, n.capitulo, n.fecha_inicio_temprana, contrato_id, cache)
+
+    changed = [n.key for n in resultado.nodos if n.fecha_inicio_temprana != n.fecha_inicio_base]
+    resultado.nodos_afectados_cascada = nodos_afectados_por(changed, dependencias)
+    return resultado
+
+
+def _recalc_items_heredados_cpm(sb, version_id, pk_id, capitulo, nueva_fi, contrato_id, cache):
+    from prog_obra_calendar import add_dias_habiles as _add_dh
+    items = (
+        sb.table("prog_actividades")
+        .select("id,duracion_dias_habiles")
+        .eq("version_id", version_id)
+        .eq("pk_id", pk_id)
+        .eq("capitulo", capitulo)
+        .eq("heredado_de_capitulo", True)
+        .eq("override_manual", False)
+        .execute()
+        .data
+        or []
+    )
+    if not items:
+        return
+    updates = []
+    for it in items:
+        dur = it.get("duracion_dias_habiles")
+        if not dur or int(dur) <= 0:
+            continue
+        ff = _add_dh(contrato_id, nueva_fi, int(dur), cache)
+        updates.append({
+            "id": it["id"],
+            "fecha_inicio": nueva_fi.isoformat(),
+            "fecha_fin_calculada": ff.isoformat() if ff else None,
+        })
+    if updates:
+        sb.table("prog_actividades").upsert(updates, on_conflict="id").execute()
+
+
+def obtener_cpm_resultados(sb, version_id: str) -> list:
+    return (
+        sb.table("prog_cpm_resultados")
+        .select("*")
+        .eq("version_id", version_id)
+        .order("pk_id,capitulo")
+        .execute()
+        .data
+        or []
+    )
+
+
+def obtener_ruta_critica(sb, version_id: str) -> list:
+    return (
+        sb.table("prog_cpm_resultados")
+        .select("*")
+        .eq("version_id", version_id)
+        .eq("es_ruta_critica", True)
+        .order("fecha_inicio_temprana")
+        .execute()
+        .data
+        or []
+    )

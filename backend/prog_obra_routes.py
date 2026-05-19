@@ -1,5 +1,5 @@
 """
-Rutas HTTP Programación de obra — montadas en main con prefijo `/prog-obra`.
+Rutas HTTP Programación de obra ? montadas en main con prefijo `/prog-obra`.
 """
 from __future__ import annotations
 
@@ -26,11 +26,17 @@ from prog_obra_service import (
     recalc_fin_actividad,
     seed_festivos_colombia_globales,
     submit_to_validation,
-    batch_upsert_actividades,
     ensure_prog_pk_estado_all,
     sync_capitulo_desde_items,
     upsert_prog_pk_estado,
     validate_segment_quantities,
+    # Fase 2 ? CPM
+    listar_dependencias,
+    crear_dependencia,
+    eliminar_dependencia,
+    ejecutar_cpm_version,
+    obtener_cpm_resultados,
+    obtener_ruta_critica,
 )
 
 from main import (
@@ -172,12 +178,23 @@ def prog_mapa(contrato_id: int, current_user=Depends(get_current_user)):
     require_permiso_programacion_obra(current_user, "ver")
     _require_contract_access(current_user, contrato_id)
     t0 = time.perf_counter()
-    borrador = fetch_borrador_activo(supabase, contrato_id)
+    borrador = fetch_borrador_activo(supabase, contrato_id)       # 1 query
+    vid, num = fetch_vigente_meta(supabase, contrato_id)           # 2 queries
+    # Siempre usar el RPC ? 1 sola query independientemente de borrador o vigente.
+    # prog_mapa_pk_estados acepta p_version_id opcional (ver SQL en Supabase).
+    rpc_params: dict = {"p_contrato_id": contrato_id}
     if borrador and borrador.get("id"):
-        rows = fetch_mapa_rows_for_version(supabase, contrato_id, str(borrador["id"]))
-    else:
-        rows = fetch_mapa_rows_rpc(supabase, contrato_id)
-    vid, num = fetch_vigente_meta(supabase, contrato_id)
+        rpc_params["p_version_id"] = str(borrador["id"])
+    try:
+        rpc_res = supabase.rpc("prog_mapa_pk_estados", rpc_params).execute()
+        rows = rpc_res.data or []
+    except Exception:
+        # Fallback si la RPC aún no acepta p_version_id (deploy pendiente del SQL)
+        _logger.warning("prog_mapa_pk_estados fallback: %s", _tb.format_exc()[-400:])
+        if borrador and borrador.get("id"):
+            rows = fetch_mapa_rows_for_version(supabase, contrato_id, str(borrador["id"]))
+        else:
+            rows = fetch_mapa_rows_rpc(supabase, contrato_id)
     ms = round((time.perf_counter() - t0) * 1000, 2)
     return {
         "pk": rows,
@@ -340,7 +357,7 @@ def prog_validar(contrato_id: int, version_id: str, body: ValidarBody, current_u
                         "modulo": "programacion_obra",
                         "entidad_tipo": "prog_version",
                         "entidad_id": str(version_id),
-                        "asunto": "Programación de obra — rechazo en validación",
+                        "asunto": "Programación de obra ? rechazo en validación",
                         "mensaje": (body.observacion or "")[:4000],
                         "leido": False,
                     }
@@ -433,61 +450,62 @@ def prog_actividades_batch(
     body: ActividadesBatchBody,
     current_user=Depends(get_current_user),
 ):
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    v = assert_version_borrador(supabase, version_id)
+    if int(v.get("contrato_id") or 0) != int(contrato_id):
+        raise HTTPException(status_code=404, detail="Versión no pertenece al contrato")
+
+    uid = _uid(current_user)
+    cache = _cache(contrato_id)
+
+    # Calcular fecha_fin en Python (1 carga de calendario, luego todo en memoria)
+    actividades = []
+    for it in body.actividades:
+        if it.tipo_distribucion not in ("lineal", "manual"):
+            raise HTTPException(status_code=400, detail="tipo_distribucion inválido")
+        fi_d = it.fecha_inicio if isinstance(it.fecha_inicio, date) else None
+        du_i = int(it.duracion_dias_habiles) if it.duracion_dias_habiles and int(it.duracion_dias_habiles) > 0 else None
+        fin = add_dias_habiles(contrato_id, fi_d, du_i, cache) if fi_d and du_i else None
+        actividades.append({
+            "capitulo": it.capitulo.strip(),
+            "item": it.item.strip(),
+            "segmento": int(it.segmento),
+            "fecha_inicio": fi_d.isoformat() if fi_d else None,
+            "duracion_dias_habiles": du_i,
+            "fecha_fin_calculada": fin.isoformat() if fin else None,
+            "cantidad_programada": float(it.cantidad_programada),
+            "unidad": (it.unidad or "?")[:20],
+            "costo_unitario": float(it.costo_unitario),
+            "tipo_distribucion": it.tipo_distribucion,
+            "override_manual": bool(it.override_manual),
+            "heredado_de_capitulo": bool(it.heredado_de_capitulo),
+        })
+
     try:
-        require_permiso_programacion_obra(current_user, "editar")
-        _require_contract_access(current_user, contrato_id)
-        v = assert_version_borrador(supabase, version_id)
-        if int(v.get("contrato_id") or 0) != int(contrato_id):
-            raise HTTPException(status_code=404, detail="Versión no pertenece al contrato")
-        cache = _cache(contrato_id)
-        items_raw = []
-        for it in body.actividades:
-            if it.tipo_distribucion not in ("lineal", "manual"):
-                raise HTTPException(status_code=400, detail="tipo_distribucion inválido")
-            items_raw.append(
-                {
-                    "capitulo": it.capitulo.strip(),
-                    "item": it.item.strip(),
-                    "segmento": int(it.segmento),
-                    "fecha_inicio": it.fecha_inicio,
-                    "duracion_dias_habiles": it.duracion_dias_habiles,
-                    "cantidad_programada": float(it.cantidad_programada),
-                    "unidad": it.unidad,
-                    "costo_unitario": float(it.costo_unitario),
-                    "tipo_distribucion": it.tipo_distribucion,
-                    "override_manual": it.override_manual,
-                    "heredado_de_capitulo": it.heredado_de_capitulo,
-                }
-            )
-        try:
-            results = batch_upsert_actividades(
-                supabase,
-                version_id,
-                contrato_id,
-                body.pk_id.strip(),
-                items_raw,
-                _uid(current_user),
-                cache,
-            )
-        except BusinessRuleError as e:
-            raise HTTPException(status_code=400, detail=e.message)
-        _log_prog(
-            current_user,
-            "PROG_ACTIVIDADES_BATCH",
-            "prog_version",
-            version_id,
-            {"pk_id": body.pk_id, "count": len(results)},
-        )
-        return {"ok": True, "actividades": results}
-    except HTTPException:
-        raise
-    except Exception as _e:
+        res = supabase.rpc(
+            "prog_batch_upsert_actividades",
+            {
+                "p_version_id": version_id,
+                "p_contrato_id": contrato_id,
+                "p_pk_id": body.pk_id.strip(),
+                "p_usuario_id": uid,
+                "p_actividades": actividades,
+            },
+        ).execute()
+    except Exception:
         _trace = _tb.format_exc()
-        _logger.error("ERROR BATCH actividades-batch: %s", _trace)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error en batch: {str(_e)} | {_trace[-600:]}",
-        )
+        _logger.error("ERROR RPC prog_batch_upsert_actividades: %s", _trace)
+        raise HTTPException(status_code=500, detail=f"Error en batch RPC: {_trace[-600:]}")
+
+    _log_prog(
+        current_user,
+        "PROG_ACTIVIDADES_BATCH",
+        "prog_version",
+        version_id,
+        {"pk_id": body.pk_id, "count": len(actividades)},
+    )
+    return res.data or {"ok": True, "actividades": []}
 
 
 @router.post("/{contrato_id}/actividad")
@@ -642,3 +660,158 @@ def prog_recalc_fin(contrato_id: int, actividad_id: str, current_user=Depends(ge
     fin = recalc_fin_actividad(supabase, contrato_id, actividad_id, _cache(contrato_id))
     upsert_prog_pk_estado(supabase, str(row[0]["version_id"]), contrato_id, str(row[0]["pk_id"]))
     return {"fecha_fin_calculada": fin}
+
+
+# -----------------------------------------------------------------------------
+# FASE 2 ? Endpoints CPM
+# -----------------------------------------------------------------------------
+
+class DependenciaBody(BaseModel):
+    pk_id_origen: str
+    capitulo_origen: str
+    pk_id_destino: str
+    capitulo_destino: str
+    tipo: str = Field(..., pattern="^(FS|SS|FF|SF)$")
+    lag_dias: int = Field(default=0, ge=0)
+
+
+@router.get("/{contrato_id}/versiones/{version_id}/capitulos-pk")
+def prog_capitulos_pk(
+    contrato_id: int,
+    version_id: str,
+    pk_id: str = Query(...),
+    current_user=Depends(get_current_user),
+):
+    """Retorna capítulos con fechas de un PK específico (para selector de destino en dependencias)."""
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    rows = (
+        supabase.table("prog_actividades_capitulo")
+        .select("capitulo,fecha_inicio_sugerida,duracion_dias_habiles")
+        .eq("version_id", version_id)
+        .eq("pk_id", pk_id.strip())
+        .order("capitulo")
+        .execute()
+        .data
+        or []
+    )
+    return {"capitulos": [r["capitulo"] for r in rows]}
+
+
+@router.get("/{contrato_id}/versiones/{version_id}/dependencias")
+def prog_listar_dependencias(
+    contrato_id: int,
+    version_id: str,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    return listar_dependencias(supabase, version_id)
+
+
+@router.post("/{contrato_id}/versiones/{version_id}/dependencias")
+def prog_crear_dependencia(
+    contrato_id: int,
+    version_id: str,
+    body: DependenciaBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    v = assert_version_borrador(supabase, version_id)
+    if int(v.get("contrato_id") or 0) != int(contrato_id):
+        raise HTTPException(status_code=404, detail="Version no pertenece al contrato")
+    try:
+        dep = crear_dependencia(
+            supabase, version_id, contrato_id,
+            body.pk_id_origen.strip(), body.capitulo_origen.strip(),
+            body.pk_id_destino.strip(), body.capitulo_destino.strip(),
+            body.tipo, body.lag_dias,
+            _uid(current_user),
+        )
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    _log_prog(current_user, "PROG_DEPENDENCIA_CREADA", "prog_version", version_id,
+              {"origen": f"{body.pk_id_origen}/{body.capitulo_origen}",
+               "destino": f"{body.pk_id_destino}/{body.capitulo_destino}",
+               "tipo": body.tipo, "lag": body.lag_dias})
+    return dep
+
+
+@router.delete("/{contrato_id}/versiones/{version_id}/dependencias/{dep_id}")
+def prog_eliminar_dependencia(
+    contrato_id: int,
+    version_id: str,
+    dep_id: str,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    assert_version_borrador(supabase, version_id)
+    eliminar_dependencia(supabase, dep_id, version_id)
+    _log_prog(current_user, "PROG_DEPENDENCIA_ELIMINADA", "prog_version", version_id, {"dep_id": dep_id})
+    return {"ok": True}
+
+
+@router.post("/{contrato_id}/versiones/{version_id}/calcular-cpm")
+def prog_calcular_cpm(
+    contrato_id: int,
+    version_id: str,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    assert_version_borrador(supabase, version_id)
+    import time as _time
+    t0 = _time.perf_counter()
+    try:
+        resultado = ejecutar_cpm_version(
+            supabase, version_id, contrato_id, _cache(contrato_id)
+        )
+    except Exception as _e:
+        _trace = _tb.format_exc()
+        _logger.error("ERROR CPM calcular-cpm: %s", _trace)
+        raise HTTPException(status_code=500, detail=f"Error CPM: {str(_e)} | {_trace[-500:]}")
+
+    ms = round((_time.perf_counter() - t0) * 1000, 1)
+    if not resultado.ok:
+        raise HTTPException(status_code=400, detail=resultado.error or "Error CPM")
+
+    _log_prog(current_user, "PROG_CPM_CALCULADO", "prog_version", version_id,
+              {"nodos": len(resultado.nodos), "criticos": len(resultado.ruta_critica), "ms": ms})
+    return {
+        "ok": True,
+        "nodos_calculados": len(resultado.nodos),
+        "ruta_critica": [{"pk_id": pk, "capitulo": cap} for pk, cap in resultado.ruta_critica],
+        "cascada_afectados": [{"pk_id": pk, "capitulo": cap} for pk, cap in resultado.nodos_afectados_cascada],
+        "tiempo_ms": ms,
+    }
+
+
+@router.get("/{contrato_id}/versiones/{version_id}/cpm-resultados")
+def prog_get_cpm_resultados(
+    contrato_id: int,
+    version_id: str,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    rows = obtener_cpm_resultados(supabase, version_id)
+    # Incluir flag cpm_dirty desde prog_versiones
+    ver = supabase.table("prog_versiones").select("cpm_dirty,cpm_calculado_en").eq("id", version_id).limit(1).execute().data or [{}]
+    return {
+        "cpm_dirty": ver[0].get("cpm_dirty", True),
+        "cpm_calculado_en": ver[0].get("cpm_calculado_en"),
+        "resultados": rows,
+    }
+
+
+@router.get("/{contrato_id}/versiones/{version_id}/ruta-critica")
+def prog_get_ruta_critica(
+    contrato_id: int,
+    version_id: str,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    return obtener_ruta_critica(supabase, version_id)

@@ -156,7 +156,7 @@ function colorForEstado(estado) {
   }
 }
 
-function buildEnrichedPlano(planoFc, metaMap) {
+function buildEnrichedPlano(planoFc, metaMap, criticalPkIds = new Set()) {
   if (!planoFc?.features) return { type: 'FeatureCollection', features: [] }
   return {
     ...planoFc,
@@ -174,6 +174,7 @@ function buildEnrichedPlano(planoFc, metaMap) {
           prog_fill: c.fill,
           prog_line: c.line,
           prog_op: c.op,
+          prog_critico: criticalPkIds.has(pkid) ? 1 : 0,
         },
       }
     }),
@@ -302,6 +303,7 @@ const PROG_MAP_HANDLERS = Symbol('progMapHandlers')
 
 function removeProgLayersIfAny(map) {
   try {
+    if (map.getLayer('prog-critico-line')) map.removeLayer('prog-critico-line')
     if (map.getLayer('prog-line')) map.removeLayer('prog-line')
     if (map.getLayer('prog-fill')) map.removeLayer('prog-fill')
   } catch {
@@ -346,6 +348,17 @@ function applyProgMapAfterStyle(map, basemapMode, enriched, onPkClick) {
     paint: {
       'line-color': ['coalesce', ['get', 'prog_line'], '#888780'],
       'line-width': 2,
+      'line-opacity': 0.9,
+    },
+  })
+  map.addLayer({
+    id: 'prog-critico-line',
+    type: 'line',
+    source: 'prog-pol',
+    filter: ['==', ['get', 'prog_critico'], 1],
+    paint: {
+      'line-color': '#ef4444',
+      'line-width': 4,
       'line-opacity': 0.9,
     },
   })
@@ -707,6 +720,32 @@ export default function ModuloProgramacionObra({
   const [progModalOpen, setProgModalOpen] = useState(false)
   const [modalPkTabs, setModalPkTabs] = useState([])
   const [activeModalPk, setActiveModalPk] = useState(null)
+  const [criticalPkIds, setCriticalPkIds] = useState(new Set())
+  const criticalPulseRef = useRef(null)
+
+  const handleCpmUpdated = useCallback((resultados) => {
+    const ids = new Set()
+    for (const r of resultados || []) {
+      if (r.es_ruta_critica) ids.add(String(r.pk_id || '').trim())
+    }
+    setCriticalPkIds(ids)
+  }, [])
+
+  useEffect(() => {
+    if (criticalPulseRef.current) { clearInterval(criticalPulseRef.current); criticalPulseRef.current = null }
+    const map = mapInst.current
+    if (!map || criticalPkIds.size === 0) return
+    let opHigh = true
+    const tick = () => {
+      try {
+        if (!map.getLayer('prog-critico-line')) return
+        map.setPaintProperty('prog-critico-line', 'line-opacity', opHigh ? 0.9 : 0.25)
+        opHigh = !opHigh
+      } catch { /* ignore */ }
+    }
+    criticalPulseRef.current = setInterval(tick, 700)
+    return () => { if (criticalPulseRef.current) { clearInterval(criticalPulseRef.current); criticalPulseRef.current = null } }
+  }, [criticalPkIds])
   /** 'plano' = callejero claro/oscuro; 'topo' = outdoors; 'satellite' = satélite + relieve 3D. */
   const [mapBaseMode, setMapBaseMode] = useState('plano')
   mapBaseModeRef.current = mapBaseMode
@@ -947,13 +986,13 @@ export default function ModuloProgramacionObra({
   useEffect(() => {
     const map = mapInst.current
     if (!map || !MAPBOX_TOKEN || !plano?.features?.length || !mapaResp) return
-    const enriched = buildEnrichedPlano(plano, pkMeta())
+    const enriched = buildEnrichedPlano(plano, pkMeta(), criticalPkIds)
     enrichedGeojsonRef.current = enriched
     const apply = () =>
       applyProgMapAfterStyle(map, mapBaseModeRef.current, enriched, (pk) => onMapPkClickRef.current(pk))
     if (map.isStyleLoaded()) apply()
     else map.once('load', apply)
-  }, [mapaResp, pkMeta, plano])
+  }, [mapaResp, pkMeta, plano, criticalPkIds])
 
   useEffect(() => {
     const map = mapInst.current
@@ -1330,12 +1369,13 @@ export default function ModuloProgramacionObra({
       if (!puedeEditar || !cid || !vid || !pkId) return { ok: false, saved: 0, errors: items?.length || 0 }
       const actividades = (items || []).map((row) => {
         const def = row.itemDef || {}
+        const durInt = row.duracion != null ? parseInt(String(row.duracion), 10) : null
         return {
           capitulo: row.capitulo || def.capitulo,
           item: row.item || def.item,
           segmento: 1,
-          fecha_inicio: row.fecha_inicio,
-          duracion_dias_habiles: parseInt(String(row.duracion), 10),
+          fecha_inicio: row.fecha_inicio ?? null,
+          duracion_dias_habiles: Number.isFinite(durInt) ? durInt : null,
           cantidad_programada: Number(def.cant_total),
           unidad: def.und || '?',
           costo_unitario: Number(def.vlr_unitario) || 0,
@@ -1351,11 +1391,45 @@ export default function ModuloProgramacionObra({
           body: JSON.stringify({ pk_id: pkId, actividades }),
         })
         if (!res.ok) throw new Error(await parseApiError(res))
-        const syncRes = await fetch(`${API}/prog-obra/${cid}/versiones/${vid}/sincronizar-estados-pk`, {
-          method: 'POST',
-          headers: hdrs,
+        const batchData = await res.json()
+
+        // Actualizar actData localmente con la respuesta de la RPC — cero queries adicionales.
+        // La RPC devuelve actividades con id + fecha_fin_calculada; los items enviados
+        // tienen fecha_inicio + duracion. Los combinamos en actData sin fetch adicional.
+        const rpcActMap = {}
+        for (const a of batchData?.actividades || []) {
+          rpcActMap[`${a.capitulo}\u0000${a.item}\u0000${String(a.segmento ?? 1)}`] = a
+        }
+        setActData((prev) => {
+          const prevActs = prev?.actividades || []
+          const sentKeys = new Set(
+            actividades.map((a) => `${a.capitulo}\u0000${a.item}\u00001`),
+          )
+          // Mantener actividades no tocadas en este batch; reemplazar las enviadas
+          const untouched = prevActs.filter(
+            (a) => !sentKeys.has(`${a.capitulo}\u0000${a.item}\u0000${String(a.segmento ?? 1)}`),
+          )
+          const updated = actividades.map((a) => {
+            const rpc = rpcActMap[`${a.capitulo}\u0000${a.item}\u00001`] || {}
+            return {
+              // Preservar campos existentes de la actividad anterior si los hay
+              ...(prevActs.find(
+                (p) => p.capitulo === a.capitulo && p.item === a.item && (p.segmento ?? 1) === 1,
+              ) || {}),
+              capitulo: a.capitulo,
+              item: a.item,
+              segmento: 1,
+              fecha_inicio: a.fecha_inicio ?? null,
+              duracion_dias_habiles: a.duracion_dias_habiles ?? null,
+              fecha_fin_calculada: rpc.fecha_fin_calculada ?? null,
+              override_manual: a.override_manual,
+              heredado_de_capitulo: a.heredado_de_capitulo,
+              ...(rpc.id ? { id: rpc.id } : {}),
+            }
+          })
+          return { capitulos: prev?.capitulos || [], actividades: [...untouched, ...updated] }
         })
-        if (!syncRes.ok) throw new Error(await parseApiError(syncRes))
+
         return { ok: true, saved: actividades.length, errors: 0, pkId: String(pkId || '').trim() }
       } catch (e) {
         showToast(e?.message || 'Error al guardar actividades', 'err')
@@ -1388,13 +1462,13 @@ export default function ModuloProgramacionObra({
           const id = String(r.pk_id || '').trim()
           if (id) metaMap[id] = r
         }
-        const enriched = buildEnrichedPlano(plano, metaMap)
+        const enriched = buildEnrichedPlano(plano, metaMap, criticalPkIds)
         map.getSource('prog-pol').setData(enriched)
       } else {
         console.log('mapInst null o fuente no existe:', map, map?.getSource('prog-pol'))
       }
     },
-    [cid, token, API, plano],
+    [cid, token, API, plano, criticalPkIds],
   )
 
   const buildValidacionResumen = useCallback(async () => {
@@ -1775,6 +1849,8 @@ export default function ModuloProgramacionObra({
         onGuardarCambios={handleGuardarCambiosModal}
         onSaveSuccess={handleProgSaveSuccess}
         showToast={showToast}
+        allPkIds={(mapaResp?.pk || []).map((r) => String(r.pk_id || '').trim()).filter(Boolean)}
+        onCpmUpdated={handleCpmUpdated}
       />
 
       {validacionPreCheck && (
