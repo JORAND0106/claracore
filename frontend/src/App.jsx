@@ -40,6 +40,8 @@ import { supabase } from './supabaseClient'
 import { applyClaraTypography, getDashTypoUI } from './typographyScale'
 import { formatCOP, formatCOPShort } from './utils/formatCOP'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
+import { ModuloProvider, useModulo } from './context/ModuloContext'
+import AVI from './components/AVI/AVI'
 
 const _VITE_MAPBOX = import.meta.env.VITE_MAPBOX_TOKEN
 if (_VITE_MAPBOX) mapboxgl.accessToken = _VITE_MAPBOX
@@ -12391,6 +12393,14 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [liqMapaPopupLoad, setLiqMapaPopupLoad] = useState(false)
   const [showModalContrato, setShowModalContrato] = useState(false)
   const [showAdmin, setShowAdmin] = useState(false)
+
+  // ── Clara (AVI): publica módulo activo al context ───────────────────────────
+  const { setModuloActivo: _setCtxModulo } = useModulo()
+  useEffect(() => {
+    if (showAdmin) { _setCtxModulo('admin'); return }
+    _setCtxModulo(moduloActivo === 'dashboard' ? 'cobro' : moduloActivo)
+  }, [moduloActivo, showAdmin])
+
   const [nuevoContrato, setNuevoContrato] = useState({ numero: '', objeto: '', contratista: '', nit: '' })
   const [csvData, setCsvData] = useState(null)
   const [csvNombre, setCsvNombre] = useState('')
@@ -16634,6 +16644,7 @@ if (contratos.length > 1) {
       </div>
     )
     return (
+    <ModuloProvider>
     <>
     <TestModeBadge />
     {mantenimiento?.activo && (
@@ -16843,7 +16854,9 @@ if (contratos.length > 1) {
         fontSize={fontSize} onFontSize={cambiarFuente}
         onOpenPerfil={() => setPerfilModalAbierto(true)}
       />
+      <AVI usuario={usuario} />
     </>
+    </ModuloProvider>
     )
   }
 

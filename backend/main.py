@@ -1797,6 +1797,9 @@ app.include_router(informes_router, prefix="/informes")
 from prog_obra_routes import router as prog_obra_router
 app.include_router(prog_obra_router)
 
+from avi_routes import router as avi_router
+app.include_router(avi_router)
+
 # Vista previa JSON (CC-SUB-001 / CC-SUB-002): registrado aquí porque en algunos equipos el router
 # importado desde informes.py no exponía estas rutas en OpenAPI (Not Found en el cliente).
 from informes import _perm_informes_ccd, _respuesta_json_corte, _respuesta_json_memoria

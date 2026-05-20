@@ -57,7 +57,7 @@ BEGIN
         COALESCE(NULLIF(trim(a->>'tipo_distribucion'), ''), 'lineal'),
         COALESCE((a->>'heredado_de_capitulo')::boolean, false),
         COALESCE((a->>'override_manual')::boolean, false),
-        NULLIF(a->>'agrupador_id', '')::bigint,
+        NULLIF((a->>'agrupador_id'), '')::bigint,
         NULLIF(trim(a->>'codigo_wbs'), ''),
         p_usuario_id,
         v_now

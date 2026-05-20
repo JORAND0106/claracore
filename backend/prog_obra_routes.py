@@ -16,7 +16,6 @@ from prog_obra_service import (
     BusinessRuleError,
     aplicar_herencia_capitulo,
     assert_version_borrador,
-    batch_upsert_actividades,
     create_version,
     fetch_borrador_activo,
     fetch_estructura_programacion_pk,
@@ -486,7 +485,7 @@ def prog_actividades_batch(
 
     # Calcular fecha_fin en Python (1 carga de calendario, luego todo en memoria)
     actividades = []
-    use_agrupadores = False
+    has_agrupadores = False
     for it in body.actividades:
         if it.tipo_distribucion not in ("lineal", "manual"):
             raise HTTPException(status_code=400, detail="tipo_distribucion inválido")
@@ -494,7 +493,7 @@ def prog_actividades_batch(
         du_i = int(it.duracion_dias_habiles) if it.duracion_dias_habiles and int(it.duracion_dias_habiles) > 0 else None
         fin = add_dias_habiles(contrato_id, fi_d, du_i, cache) if fi_d and du_i else None
         if it.agrupador_id:
-            use_agrupadores = True
+            has_agrupadores = True
         row = {
             "capitulo": it.capitulo.strip(),
             "item": it.item.strip(),
@@ -515,10 +514,25 @@ def prog_actividades_batch(
             row["codigo_wbs"] = it.codigo_wbs.strip()[:50]
         actividades.append(row)
 
-    if use_agrupadores:
-        results = batch_upsert_actividades(
-            supabase, version_id, contrato_id, body.pk_id.strip(), actividades, uid, cache,
-        )
+    pk_id = body.pk_id.strip()
+    try:
+        res = supabase.rpc(
+            "prog_batch_upsert_actividades",
+            {
+                "p_version_id": version_id,
+                "p_contrato_id": contrato_id,
+                "p_pk_id": pk_id,
+                "p_usuario_id": uid,
+                "p_actividades": actividades,
+            },
+        ).execute()
+    except Exception:
+        _trace = _tb.format_exc()
+        _logger.error("ERROR RPC prog_batch_upsert_actividades: %s", _trace)
+        raise HTTPException(status_code=500, detail=f"Error en batch RPC: {_trace[-600:]}")
+
+    propagaciones = 0
+    if has_agrupadores:
         seen_ag = set()
         for it in body.actividades:
             fi_d = it.fecha_inicio if isinstance(it.fecha_inicio, date) else None
@@ -534,7 +548,7 @@ def prog_actividades_batch(
                 supabase,
                 version_id,
                 contrato_id,
-                body.pk_id.strip(),
+                pk_id,
                 it.capitulo.strip(),
                 int(it.agrupador_id),
                 (it.codigo_wbs or it.item or "").strip(),
@@ -544,47 +558,30 @@ def prog_actividades_batch(
                 uid,
                 cache,
             )
-        elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
-        if elapsed_ms > 5000:
-            _logger.warning(
-                "actividades-batch lento (fallback upsert): %sms count=%d propagaciones=%d",
-                elapsed_ms, len(actividades), len(seen_ag),
-            )
-        _log_prog(
-            current_user,
-            "PROG_ACTIVIDADES_BATCH",
-            "prog_version",
-            version_id,
-            {"pk_id": body.pk_id, "count": len(actividades), "agrupadores": True, "ms": elapsed_ms, "rpc": False},
-        )
-        return {"ok": True, "actividades": results, "ms": elapsed_ms, "rpc": False}
-
-    try:
-        res = supabase.rpc(
-            "prog_batch_upsert_actividades",
-            {
-                "p_version_id": version_id,
-                "p_contrato_id": contrato_id,
-                "p_pk_id": body.pk_id.strip(),
-                "p_usuario_id": uid,
-                "p_actividades": actividades,
-            },
-        ).execute()
-    except Exception:
-        _trace = _tb.format_exc()
-        _logger.error("ERROR RPC prog_batch_upsert_actividades: %s", _trace)
-        raise HTTPException(status_code=500, detail=f"Error en batch RPC: {_trace[-600:]}")
+            propagaciones += 1
+        # Tras heredar fechas a ítems hijo, recalcular prog_pk_estado (color del polígono)
+        upsert_prog_pk_estado(supabase, version_id, contrato_id, pk_id)
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
     if elapsed_ms > 5000:
-        _logger.warning("actividades-batch lento (RPC): %sms count=%d", elapsed_ms, len(actividades))
+        _logger.warning(
+            "actividades-batch lento (RPC): %sms count=%d propagaciones=%d",
+            elapsed_ms, len(actividades), propagaciones,
+        )
 
     _log_prog(
         current_user,
         "PROG_ACTIVIDADES_BATCH",
         "prog_version",
         version_id,
-        {"pk_id": body.pk_id, "count": len(actividades), "ms": elapsed_ms, "rpc": True},
+        {
+            "pk_id": body.pk_id,
+            "count": len(actividades),
+            "agrupadores": has_agrupadores,
+            "propagaciones": propagaciones,
+            "ms": elapsed_ms,
+            "rpc": True,
+        },
     )
     payload = res.data or {"ok": True, "actividades": []}
     if isinstance(payload, dict):
