@@ -9,6 +9,7 @@ import math
 import os as _os
 import re
 from datetime import datetime, date
+import pytz
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Literal, Optional, Tuple
@@ -8066,7 +8067,7 @@ body.mem002-doc .mem002-firmas-wrap .ccd-firma-cargo {
 
 def _fmt_informe_fecha_generacion() -> str:
     """Ej.: 15 Abr 26, 02:04 pm (alineado a la maqueta)."""
-    n = datetime.now()
+    n = datetime.now(pytz.timezone("America/Bogota"))
     meses = ("Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic")
     h12 = n.strftime("%I").lstrip("0") or "12"
     mi = n.strftime("%M")
@@ -8076,7 +8077,7 @@ def _fmt_informe_fecha_generacion() -> str:
 
 def _sello_verificado_por(usuario_nombre: str) -> str:
     nom = (usuario_nombre or "—").strip().upper()
-    n = datetime.now()
+    n = datetime.now(pytz.timezone("America/Bogota"))
     return f"Verificado y aprobado por: {nom} {n.strftime('%Y.%m.%d')} - {n.strftime('%H:%M:%S')}"
 
 
@@ -9637,7 +9638,7 @@ def _html_cc_conciliacion_informe_v1(
 
 
 def _html_corte_sub(contrato, sub, corte, items, total_costo, usuario_nombre, usuario_cargo):
-    now = datetime.now().strftime("%d %b %y, %I:%M %p")
+    now = datetime.now(pytz.timezone("America/Bogota")).strftime("%d %b %y, %I:%M %p")
     # Sin logo en PDF: evita descargas y <img> (xhtml2pdf es frágil con imágenes/data URI largas).
     logo_td = "<span style='font-size:7pt;color:#6b7280'>LOGO CONTRATISTA</span>"
 

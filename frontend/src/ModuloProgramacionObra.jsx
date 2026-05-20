@@ -10,6 +10,7 @@ import { API_BASE } from './apiBase'
 import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
 import ProgObraProgramacionModal from './ProgObraProgramacionModal'
+import ProgObraDependenciasGlobales from './ProgObraDependenciasGlobales'
 import { fmtCOP, fmtCant, fmtDateHuman, fmtDateIso } from './progObraFormat'
 import { aggregatePptoItemKeysByPk, buildProgValidationPreCheck } from './progObraValidation'
 
@@ -705,6 +706,8 @@ export default function ModuloProgramacionObra({
   const [toast, setToast] = useState(null)
   const [workingVersionId, setWorkingVersionId] = useState(null)
   const [presupuestoRows, setPresupuestoRows] = useState([])
+  const [progEstructura, setProgEstructura] = useState({ capitulos: [] })
+  const [loadEstructura, setLoadEstructura] = useState(false)
   const [presupuestoContratoAll, setPresupuestoContratoAll] = useState([])
   const [loadPpto, setLoadPpto] = useState(false)
   const [validacionPreCheck, setValidacionPreCheck] = useState(null)
@@ -1022,6 +1025,10 @@ export default function ModuloProgramacionObra({
   }, [presupuestoRows, pkForData])
 
   const capitulosOrdenados = useMemo(() => {
+    const fromEstructura = (progEstructura.capitulos || []).map((c) => c.capitulo).filter(Boolean)
+    if (fromEstructura.length) {
+      return [...fromEstructura].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    }
     const caps = new Map()
     for (const r of pptoPorPk) {
       const c = String(r.capitulo || '').trim()
@@ -1030,7 +1037,27 @@ export default function ModuloProgramacionObra({
       caps.get(c).push(r)
     }
     return [...caps.keys()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-  }, [pptoPorPk])
+  }, [progEstructura.capitulos, pptoPorPk])
+
+  const estructuraPorCapitulo = useMemo(() => {
+    const m = {}
+    for (const c of progEstructura.capitulos || []) {
+      const cap = String(c.capitulo || '').trim()
+      if (cap) m[cap] = c
+    }
+    return m
+  }, [progEstructura.capitulos])
+
+  const agrupadorActItem = useCallback((ag) => {
+    const wbs = String(ag?.codigo_wbs || '').trim()
+    if (wbs) return wbs
+    return `AG${ag?.agrupador_id ?? ''}`
+  }, [])
+
+  const agrupadorRowKey = useCallback(
+    (cap, ag) => `${cap}\u0000ag:${agrupadorActItem(ag)}`,
+    [agrupadorActItem],
+  )
 
   const itemRowKey = (cap, item) => `${cap}\u0000${item}`
 
@@ -1081,24 +1108,6 @@ export default function ModuloProgramacionObra({
     return m
   }, [actData.actividades])
 
-  const ganttRows = useMemo(() => {
-    const out = []
-    for (const cap of capitulosOrdenados) {
-      for (const it of itemsPorCapitulo(cap)) {
-        const act = actMap[actividadKey(cap, it.item, 1)]
-        out.push({
-          capitulo: cap,
-          item: it.item,
-          label: it.item,
-          fecha_inicio: act?.fecha_inicio,
-          fecha_fin: act?.fecha_fin_calculada,
-          duracion: act?.duracion_dias_habiles,
-        })
-      }
-    }
-    return out
-  }, [capitulosOrdenados, itemsPorCapitulo, actMap])
-
   const capProgMap = useMemo(() => {
     const m = {}
     for (const c of actData.capitulos || []) {
@@ -1128,6 +1137,30 @@ export default function ModuloProgramacionObra({
       })
       .finally(() => {
         if (!cancel) setLoadPpto(false)
+      })
+    return () => {
+      cancel = true
+    }
+  }, [cid, token, pkForData, API])
+
+  useEffect(() => {
+    if (!cid || !token || !pkForData) {
+      setProgEstructura({ capitulos: [] })
+      return
+    }
+    let cancel = false
+    setLoadEstructura(true)
+    const q = new URLSearchParams({ pk_id: pkForData })
+    fetch(`${API}/prog-obra/${cid}/programacion-estructura?${q}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => (r.ok ? r.json() : { capitulos: [] }))
+      .then((d) => {
+        if (!cancel) setProgEstructura(d && typeof d === 'object' ? d : { capitulos: [] })
+      })
+      .catch(() => {
+        if (!cancel) setProgEstructura({ capitulos: [] })
+      })
+      .finally(() => {
+        if (!cancel) setLoadEstructura(false)
       })
     return () => {
       cancel = true
@@ -1382,6 +1415,9 @@ export default function ModuloProgramacionObra({
           tipo_distribucion: 'lineal',
           override_manual: !!row.override_manual,
           heredado_de_capitulo: !!row.heredado_de_capitulo,
+          ...(def.es_agrupador && def.agrupador_id
+            ? { agrupador_id: def.agrupador_id, codigo_wbs: def.codigo_wbs || def.item }
+            : {}),
         }
       })
       try {
@@ -1390,8 +1426,16 @@ export default function ModuloProgramacionObra({
           headers: hdrs,
           body: JSON.stringify({ pk_id: pkId, actividades }),
         })
-        if (!res.ok) throw new Error(await parseApiError(res))
+        if (!res.ok) {
+          const errText = await parseApiError(res)
+          console.error('[ProgObra] actividades-batch HTTP', res.status, errText)
+          throw new Error(errText)
+        }
         const batchData = await res.json()
+        if (batchData?.ms > 5000) {
+          console.warn('[ProgObra] batch lento:', batchData.ms, 'ms rpc=', batchData.rpc)
+          showToast(`Guardado en ${Math.round(batchData.ms)} ms${batchData.rpc === false ? ' (modo upsert, no RPC)' : ''}`, 'info')
+        }
 
         // Actualizar actData localmente con la respuesta de la RPC — cero queries adicionales.
         // La RPC devuelve actividades con id + fecha_fin_calculada; los items enviados
@@ -1430,45 +1474,38 @@ export default function ModuloProgramacionObra({
           return { capitulos: prev?.capitulos || [], actividades: [...untouched, ...updated] }
         })
 
+        await reloadActividadesPk(pkId)
+        await refreshMapaYVersiones()
+
         return { ok: true, saved: actividades.length, errors: 0, pkId: String(pkId || '').trim() }
       } catch (e) {
+        console.error('[ProgObra] handleGuardarBatch:', e)
         showToast(e?.message || 'Error al guardar actividades', 'err')
         return { ok: false, saved: 0, errors: actividades.length }
       }
     },
-    [puedeEditar, cid, versionIdForWork, hdrs, API, showToast],
+    [puedeEditar, cid, versionIdForWork, hdrs, API, showToast, reloadActividadesPk, refreshMapaYVersiones],
   )
 
   const handleProgSaveSuccess = useCallback(
-    async () => {
-      // 1. Cerrar modal
-      setProgModalOpen(false)
-      setModalPkTabs([])
-      setActiveModalPk(null)
-      // 2. Esperar que React termine
-      await new Promise((r) => setTimeout(r, 150))
-      // 3. Llamar /mapa una sola vez
-      const res = await fetch(`${API}/prog-obra/${cid}/mapa`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      const data = await res.json()
-      // 4. Actualizar estado
-      setMapaResp(data)
-      // 5. Forzar setData directo en Mapbox
+    async (pkId) => {
+      await reloadActividadesPk(pkId)
+      const m = await refreshMapaYVersiones()
       const map = mapInst.current
-      if (map && map.getSource('prog-pol')) {
+      if (map && map.getSource('prog-pol') && m) {
         const metaMap = {}
-        for (const r of data?.pk || []) {
+        for (const r of m?.pk || []) {
           const id = String(r.pk_id || '').trim()
           if (id) metaMap[id] = r
         }
         const enriched = buildEnrichedPlano(plano, metaMap, criticalPkIds)
         map.getSource('prog-pol').setData(enriched)
-      } else {
-        console.log('mapInst null o fuente no existe:', map, map?.getSource('prog-pol'))
       }
+      setProgModalOpen(false)
+      setModalPkTabs([])
+      setActiveModalPk(null)
     },
-    [cid, token, API, plano, criticalPkIds],
+    [refreshMapaYVersiones, reloadActividadesPk, plano, criticalPkIds],
   )
 
   const buildValidacionResumen = useCallback(async () => {
@@ -1608,6 +1645,9 @@ export default function ModuloProgramacionObra({
         tipo_distribucion: 'lineal',
         override_manual: !!form.override_manual,
         heredado_de_capitulo: !!form.heredado_de_capitulo,
+        ...(itemDef.es_agrupador && itemDef.agrupador_id
+          ? { agrupador_id: itemDef.agrupador_id, codigo_wbs: itemDef.codigo_wbs || itemDef.item }
+          : {}),
       }
       const res = await fetch(`${API}/prog-obra/${cid}/actividad`, {
         method: 'POST',
@@ -1829,6 +1869,9 @@ export default function ModuloProgramacionObra({
           })
         }}
         capitulosOrdenados={capitulosOrdenados}
+        estructuraPorCapitulo={estructuraPorCapitulo}
+        agrupadorActItem={agrupadorActItem}
+        agrupadorRowKey={agrupadorRowKey}
         itemsPorCapitulo={itemsPorCapitulo}
         capProgMap={capProgMap}
         actMap={actMap}
@@ -1841,7 +1884,7 @@ export default function ModuloProgramacionObra({
         onGuardarItem={handleGuardarItem}
         onGuardarBatch={handleGuardarBatch}
         loadAct={loadAct}
-        loadPpto={loadPpto}
+        loadPpto={loadPpto || loadEstructura}
         cid={cid}
         token={token}
         API={API}
@@ -2117,6 +2160,27 @@ export default function ModuloProgramacionObra({
           >
             Enviar a validación
           </button>
+        )}
+
+        {workingVersionId && (
+          <details
+            style={{ padding: 8, borderRadius: 8, border: `1px solid ${t.border}`, background: t.bg }}
+          >
+            <summary style={{ fontWeight: 600, color: t.text, cursor: 'pointer', fontSize: 11 }}>
+              Dependencias globales (CPM)
+            </summary>
+            <div style={{ marginTop: 10 }}>
+              <ProgObraDependenciasGlobales
+                cid={cid}
+                token={token}
+                API={API}
+                t={t}
+                versionId={workingVersionId}
+                editable={!!(esBorradorEditable && puedeEditar)}
+                showToast={showToast}
+              />
+            </div>
+          </details>
         )}
 
         {(esEnValidacion || esSellada) && (
@@ -2579,146 +2643,5 @@ function ProgItemTableRow({ itemDef, act, rk, cid, token, API, t, editable, save
       </td>
       <td style={{ ...u.cell, width: 22, textAlign: 'center' }}>{saveIcon}</td>
     </tr>
-  )
-}
-
-function parseIsoDate(s) {
-  if (!s) return null
-  const x = String(s).slice(0, 10)
-  const [y, m, d] = x.split('-').map(Number)
-  if (!y || !m || !d) return null
-  return new Date(y, m - 1, d)
-}
-
-function ProgPkGantt({ rows, t, large = false }) {
-  const scheduled = rows.filter((r) => parseIsoDate(r.fecha_inicio) && parseIsoDate(r.fecha_fin))
-  if (scheduled.length === 0) {
-    return (
-      <div
-        style={{
-          padding: '12px 8px',
-          borderRadius: 8,
-          border: `1px dashed ${t.border}`,
-          color: t.textMuted,
-          fontSize: 'var(--cc-sm)',
-          textAlign: 'center',
-        }}
-      >
-        Asigna fechas para ver el Gantt
-      </div>
-    )
-  }
-
-  let minT = Infinity
-  let maxT = -Infinity
-  for (const r of scheduled) {
-    const a = parseIsoDate(r.fecha_inicio).getTime()
-    const b = parseIsoDate(r.fecha_fin).getTime()
-    if (a < minT) minT = a
-    if (b > maxT) maxT = b
-  }
-  const span = Math.max(maxT - minT, 86400000)
-  const spanDays = span / 86400000
-  const tickCount = spanDays <= 14 ? 7 : spanDays <= 60 ? 6 : 5
-  const labelFmt = (ts) => {
-    const d = new Date(ts)
-    if (spanDays <= 60) {
-      return d.toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric', month: 'short' })
-    }
-    return d.toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: '2-digit' })
-  }
-
-  const tickLabels = []
-  for (let i = 0; i <= tickCount; i++) {
-    tickLabels.push(minT + (span * i) / tickCount)
-  }
-
-  const rowH = large ? 26 : 22
-  const labelW = large ? 120 : 72
-  const chartH = rows.length * rowH + 28
-
-  return (
-    <div style={{ borderRadius: 8, border: `1px solid ${t.border}`, background: t.bg, overflow: 'hidden' }}>
-      <div style={{ padding: '6px 8px', fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.primary, borderBottom: `1px solid ${t.border}` }}>
-        Cronograma del PK
-      </div>
-      <div style={{ overflowX: 'auto' }}>
-        <div style={{ minWidth: Math.max(520, (tickCount + 1) * 88), padding: '6px 4px 8px' }}>
-          <div
-            style={{
-              marginLeft: labelW,
-              display: 'flex',
-              justifyContent: 'space-between',
-              gap: 6,
-              fontSize: 'var(--cc-caption)',
-              color: t.textMuted,
-              marginBottom: 4,
-            }}
-          >
-            {tickLabels.map((ts) => (
-              <span key={ts} style={{ whiteSpace: 'nowrap' }}>
-                {labelFmt(ts)}
-              </span>
-            ))}
-          </div>
-          {rows.map((r) => {
-            const fi = parseIsoDate(r.fecha_inicio)
-            const ff = parseIsoDate(r.fecha_fin)
-            const has = fi && ff
-            const left = has ? ((fi.getTime() - minT) / span) * 100 : 0
-            const width = has ? Math.max(((ff.getTime() - fi.getTime()) / span) * 100, 1.5) : 0
-            return (
-              <div key={`${r.capitulo}-${r.item}`} style={{ display: 'flex', alignItems: 'center', height: rowH }}>
-                <div
-                  style={{
-                    width: labelW,
-                    flexShrink: 0,
-                    fontSize: 'var(--cc-caption)',
-                    color: t.textMuted,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    paddingRight: 4,
-                  }}
-                  title={`${r.capitulo} · ${r.item}`}
-                >
-                  {r.label}
-                </div>
-                <div style={{ flex: 1, height: 14, background: `${t.border}55`, borderRadius: 3, position: 'relative' }}>
-                  {has ? (
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: `${left}%`,
-                        width: `${width}%`,
-                        top: 2,
-                        bottom: 2,
-                        borderRadius: 2,
-                        background: '#1D9E75',
-                        opacity: 0.85,
-                      }}
-                      title={`${fmtDateIso(r.fecha_inicio)} → ${fmtDateIso(r.fecha_fin)}`}
-                    />
-                  ) : (
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: 0,
-                        right: 0,
-                        top: 5,
-                        height: 4,
-                        background: '#888780',
-                        opacity: 0.35,
-                        borderRadius: 2,
-                      }}
-                    />
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    </div>
   )
 }

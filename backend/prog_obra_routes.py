@@ -16,13 +16,16 @@ from prog_obra_service import (
     BusinessRuleError,
     aplicar_herencia_capitulo,
     assert_version_borrador,
+    batch_upsert_actividades,
     create_version,
     fetch_borrador_activo,
+    fetch_estructura_programacion_pk,
     fetch_mapa_rows_for_version,
     fetch_mapa_rows_rpc,
     fetch_vigente_meta,
     make_prog_calendar_loader,
     process_validation_decision,
+    propagar_fechas_agrupador_a_hijos,
     recalc_fin_actividad,
     seed_festivos_colombia_globales,
     submit_to_validation,
@@ -34,6 +37,9 @@ from prog_obra_service import (
     listar_dependencias,
     crear_dependencia,
     eliminar_dependencia,
+    listar_dependencias_globales,
+    crear_dependencia_global,
+    eliminar_dependencia_global,
     ejecutar_cpm_version,
     obtener_cpm_resultados,
     obtener_ruta_critica,
@@ -114,6 +120,8 @@ class ActividadUpsertBody(BaseModel):
     tipo_distribucion: str = "lineal"
     override_manual: bool = False
     heredado_de_capitulo: bool = False
+    agrupador_id: Optional[int] = None
+    codigo_wbs: Optional[str] = None
 
 
 class ValidarBody(BaseModel):
@@ -140,6 +148,8 @@ class ActividadBatchItemBody(BaseModel):
     tipo_distribucion: str = "lineal"
     override_manual: bool = False
     heredado_de_capitulo: bool = False
+    agrupador_id: Optional[int] = None
+    codigo_wbs: Optional[str] = None
 
 
 class ActividadesBatchBody(BaseModel):
@@ -171,6 +181,20 @@ def prog_validar_segmentos(contrato_id: int, body: ValidarSegmentosBody, current
     except BusinessRuleError as e:
         raise HTTPException(status_code=400, detail=e.message)
     return {"ok": True}
+
+
+@router.get("/{contrato_id}/programacion-estructura")
+def prog_programacion_estructura(
+    contrato_id: int,
+    pk_id: str = Query(...),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    pk = pk_id.strip()
+    if not pk:
+        raise HTTPException(status_code=400, detail="pk_id requerido")
+    return fetch_estructura_programacion_pk(supabase, contrato_id, pk)
 
 
 @router.get("/{contrato_id}/mapa")
@@ -458,16 +482,20 @@ def prog_actividades_batch(
 
     uid = _uid(current_user)
     cache = _cache(contrato_id)
+    t0 = time.perf_counter()
 
     # Calcular fecha_fin en Python (1 carga de calendario, luego todo en memoria)
     actividades = []
+    use_agrupadores = False
     for it in body.actividades:
         if it.tipo_distribucion not in ("lineal", "manual"):
             raise HTTPException(status_code=400, detail="tipo_distribucion inválido")
         fi_d = it.fecha_inicio if isinstance(it.fecha_inicio, date) else None
         du_i = int(it.duracion_dias_habiles) if it.duracion_dias_habiles and int(it.duracion_dias_habiles) > 0 else None
         fin = add_dias_habiles(contrato_id, fi_d, du_i, cache) if fi_d and du_i else None
-        actividades.append({
+        if it.agrupador_id:
+            use_agrupadores = True
+        row = {
             "capitulo": it.capitulo.strip(),
             "item": it.item.strip(),
             "segmento": int(it.segmento),
@@ -480,7 +508,56 @@ def prog_actividades_batch(
             "tipo_distribucion": it.tipo_distribucion,
             "override_manual": bool(it.override_manual),
             "heredado_de_capitulo": bool(it.heredado_de_capitulo),
-        })
+        }
+        if it.agrupador_id is not None:
+            row["agrupador_id"] = int(it.agrupador_id)
+        if it.codigo_wbs:
+            row["codigo_wbs"] = it.codigo_wbs.strip()[:50]
+        actividades.append(row)
+
+    if use_agrupadores:
+        results = batch_upsert_actividades(
+            supabase, version_id, contrato_id, body.pk_id.strip(), actividades, uid, cache,
+        )
+        seen_ag = set()
+        for it in body.actividades:
+            fi_d = it.fecha_inicio if isinstance(it.fecha_inicio, date) else None
+            du_i = int(it.duracion_dias_habiles) if it.duracion_dias_habiles and int(it.duracion_dias_habiles) > 0 else None
+            if not (it.agrupador_id and fi_d and du_i):
+                continue
+            ag_key = (it.capitulo.strip(), int(it.agrupador_id))
+            if ag_key in seen_ag:
+                continue
+            seen_ag.add(ag_key)
+            fin_d = add_dias_habiles(contrato_id, fi_d, du_i, cache)
+            propagar_fechas_agrupador_a_hijos(
+                supabase,
+                version_id,
+                contrato_id,
+                body.pk_id.strip(),
+                it.capitulo.strip(),
+                int(it.agrupador_id),
+                (it.codigo_wbs or it.item or "").strip(),
+                fi_d,
+                du_i,
+                fin_d,
+                uid,
+                cache,
+            )
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+        if elapsed_ms > 5000:
+            _logger.warning(
+                "actividades-batch lento (fallback upsert): %sms count=%d propagaciones=%d",
+                elapsed_ms, len(actividades), len(seen_ag),
+            )
+        _log_prog(
+            current_user,
+            "PROG_ACTIVIDADES_BATCH",
+            "prog_version",
+            version_id,
+            {"pk_id": body.pk_id, "count": len(actividades), "agrupadores": True, "ms": elapsed_ms, "rpc": False},
+        )
+        return {"ok": True, "actividades": results, "ms": elapsed_ms, "rpc": False}
 
     try:
         res = supabase.rpc(
@@ -498,14 +575,22 @@ def prog_actividades_batch(
         _logger.error("ERROR RPC prog_batch_upsert_actividades: %s", _trace)
         raise HTTPException(status_code=500, detail=f"Error en batch RPC: {_trace[-600:]}")
 
+    elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+    if elapsed_ms > 5000:
+        _logger.warning("actividades-batch lento (RPC): %sms count=%d", elapsed_ms, len(actividades))
+
     _log_prog(
         current_user,
         "PROG_ACTIVIDADES_BATCH",
         "prog_version",
         version_id,
-        {"pk_id": body.pk_id, "count": len(actividades)},
+        {"pk_id": body.pk_id, "count": len(actividades), "ms": elapsed_ms, "rpc": True},
     )
-    return res.data or {"ok": True, "actividades": []}
+    payload = res.data or {"ok": True, "actividades": []}
+    if isinstance(payload, dict):
+        payload["ms"] = elapsed_ms
+        payload["rpc"] = True
+    return payload
 
 
 @router.post("/{contrato_id}/actividad")
@@ -542,6 +627,10 @@ def prog_upsert_actividad(contrato_id: int, body: ActividadUpsertBody, current_u
         "creado_por": _uid(current_user),
         "actualizado_en": now,
     }
+    if body.agrupador_id is not None:
+        payload["agrupador_id"] = int(body.agrupador_id)
+    if body.codigo_wbs:
+        payload["codigo_wbs"] = body.codigo_wbs.strip()[:50]
     ex = (
         supabase.table("prog_actividades")
         .select("id")
@@ -562,7 +651,22 @@ def prog_upsert_actividad(contrato_id: int, body: ActividadUpsertBody, current_u
         ins = supabase.table("prog_actividades").insert(payload).execute().data
         aid = ins[0]["id"] if ins else None
     upsert_prog_pk_estado(supabase, body.version_id, contrato_id, body.pk_id.strip())
-    if body.fecha_inicio and body.duracion_dias_habiles:
+    if body.agrupador_id and body.fecha_inicio and body.duracion_dias_habiles:
+        propagar_fechas_agrupador_a_hijos(
+            supabase,
+            body.version_id,
+            contrato_id,
+            body.pk_id.strip(),
+            body.capitulo.strip(),
+            int(body.agrupador_id),
+            (body.codigo_wbs or body.item or "").strip(),
+            body.fecha_inicio,
+            int(body.duracion_dias_habiles),
+            fin,
+            _uid(current_user),
+            cache,
+        )
+    elif body.fecha_inicio and body.duracion_dias_habiles:
         sync_capitulo_desde_items(
             supabase,
             body.version_id,
@@ -672,7 +776,16 @@ class DependenciaBody(BaseModel):
     pk_id_destino: str
     capitulo_destino: str
     tipo: str = Field(..., pattern="^(FS|SS|FF|SF)$")
-    lag_dias: int = Field(default=0, ge=0)
+    lag_dias: int = Field(default=0)
+    agrupador_id_origen: Optional[str] = None
+    agrupador_id_destino: Optional[str] = None
+
+
+class DependenciaGlobalBody(BaseModel):
+    capitulo_origen: str
+    capitulo_destino: str
+    tipo: str = Field(..., pattern="^(FS|SS|FF|SF)$")
+    lag_dias: int = Field(default=0)
 
 
 @router.get("/{contrato_id}/versiones/{version_id}/capitulos-pk")
@@ -728,6 +841,8 @@ def prog_crear_dependencia(
             body.pk_id_destino.strip(), body.capitulo_destino.strip(),
             body.tipo, body.lag_dias,
             _uid(current_user),
+            agrupador_id_origen=body.agrupador_id_origen,
+            agrupador_id_destino=body.agrupador_id_destino,
         )
     except BusinessRuleError as e:
         raise HTTPException(status_code=400, detail=e.message)
@@ -750,6 +865,59 @@ def prog_eliminar_dependencia(
     assert_version_borrador(supabase, version_id)
     eliminar_dependencia(supabase, dep_id, version_id)
     _log_prog(current_user, "PROG_DEPENDENCIA_ELIMINADA", "prog_version", version_id, {"dep_id": dep_id})
+    return {"ok": True}
+
+
+@router.get("/{contrato_id}/versiones/{version_id}/dependencias-globales")
+def prog_listar_dependencias_globales(
+    contrato_id: int,
+    version_id: str,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    return listar_dependencias_globales(supabase, version_id)
+
+
+@router.post("/{contrato_id}/versiones/{version_id}/dependencias-globales")
+def prog_crear_dependencia_global(
+    contrato_id: int,
+    version_id: str,
+    body: DependenciaGlobalBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    v = assert_version_borrador(supabase, version_id)
+    if int(v.get("contrato_id") or 0) != int(contrato_id):
+        raise HTTPException(status_code=404, detail="Version no pertenece al contrato")
+    try:
+        dep = crear_dependencia_global(
+            supabase, version_id, contrato_id,
+            body.capitulo_origen.strip(), body.capitulo_destino.strip(),
+            body.tipo, body.lag_dias,
+            _uid(current_user),
+        )
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    _log_prog(current_user, "PROG_DEP_GLOBAL_CREADA", "prog_version", version_id,
+              {"origen": body.capitulo_origen, "destino": body.capitulo_destino,
+               "tipo": body.tipo, "lag": body.lag_dias})
+    return dep
+
+
+@router.delete("/{contrato_id}/versiones/{version_id}/dependencias-globales/{dep_id}")
+def prog_eliminar_dependencia_global(
+    contrato_id: int,
+    version_id: str,
+    dep_id: str,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    assert_version_borrador(supabase, version_id)
+    eliminar_dependencia_global(supabase, dep_id, version_id)
+    _log_prog(current_user, "PROG_DEP_GLOBAL_ELIMINADA", "prog_version", version_id, {"dep_id": dep_id})
     return {"ok": True}
 
 

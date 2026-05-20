@@ -37,7 +37,7 @@ from prog_obra_calendar import (
 
 _log = logging.getLogger(__name__)
 
-NodeKey = Tuple[str, str]  # (pk_id, capitulo)
+NodeKey = Tuple[str, str, str]  # (pk_id, capitulo, agrupador_id or "")
 _INF = 10 ** 9
 
 
@@ -52,6 +52,7 @@ class NodoCPM:
     duracion: int          # días hábiles del capítulo
     fecha_inicio_base: date
     fecha_fin_base: date
+    agrupador_id: str = ""   # vacío = nodo capítulo completo
     # Resultados — se rellenan por calcular_cpm()
     fecha_inicio_temprana: Optional[date] = None
     fecha_fin_temprana: Optional[date] = None
@@ -63,7 +64,7 @@ class NodoCPM:
 
     @property
     def key(self) -> NodeKey:
-        return (self.pk_id, self.capitulo)
+        return (self.pk_id, self.capitulo, self.agrupador_id or "")
 
 
 @dataclass
@@ -74,14 +75,16 @@ class DependenciaCPM:
     capitulo_destino: str
     tipo: str    # FS | SS | FF | SF
     lag_dias: int = 0
+    agrupador_id_origen: str = ""
+    agrupador_id_destino: str = ""
 
     @property
     def origen(self) -> NodeKey:
-        return (self.pk_id_origen, self.capitulo_origen)
+        return (self.pk_id_origen, self.capitulo_origen, self.agrupador_id_origen or "")
 
     @property
     def destino(self) -> NodeKey:
-        return (self.pk_id_destino, self.capitulo_destino)
+        return (self.pk_id_destino, self.capitulo_destino, self.agrupador_id_destino or "")
 
 
 @dataclass

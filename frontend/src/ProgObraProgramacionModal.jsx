@@ -30,6 +30,463 @@ const GANTT_TEAL_DARK = '#157a5c'
 const GANTT_CAP_BAR = 'rgba(59, 130, 246, 0.3)'
 const GANTT_RANGE_PAD_DAYS = 7
 const STICKY_W = { item: 88, desc: 280 }
+const ROW_H = { cap: 44, agrupador: 44, hijo: 32, sinAg: 32, item: 44 }
+const PANEL_LEFT = '45%'
+const PANEL_RIGHT = '55%'
+const GANTT_LABEL_W = 160
+const GANTT_TIMELINE_H = 54
+const TABLE_HEAD_H = GANTT_TIMELINE_H
+
+function defaultTimelineDays() {
+  const from = addCalendarDays(new Date(), -GANTT_RANGE_PAD_DAYS)
+  const to = addCalendarDays(new Date(), 120)
+  return eachCalendarDay(from, to)
+}
+
+/** Fechas efectivas de una fila (borrador en memoria > actMap > fin local). */
+function resolveRowSchedule({
+  cap,
+  itemKey,
+  rk,
+  actMap,
+  actividadKey,
+  rowDraftRef,
+  finOverrides,
+  calcFinLocal,
+}) {
+  const draft = rowDraftRef.current?.[rk]?.getValues?.()
+  const act = actMap[actividadKey(cap, itemKey, 1)]
+  const fi = fmtDateIso(draft != null ? (draft.fecha_inicio || '') : act?.fecha_inicio)
+  const durRaw = draft != null
+    ? (draft.duracion != null && draft.duracion !== '' ? draft.duracion : null)
+    : act?.duracion_dias_habiles
+  const dur = durRaw != null ? parseInt(String(durRaw), 10) : NaN
+  if (!fi || !(dur > 0)) return { fi: null, ff: null, dur: 0 }
+  const ff = fmtDateIso(draft?.fecha_fin ?? finOverrides?.[rk] ?? act?.fecha_fin_calculada) || calcFinLocal?.(fi, dur)
+  return { fi, ff: ff || null, dur }
+}
+
+/** Consolidado del capítulo: min inicio, max fin, días hábiles reales entre ambas. */
+function computeCapConsolidado({
+  cap,
+  estructuraCap,
+  items,
+  agrupadorActItem,
+  agrupadorRowKey,
+  itemRowKey,
+  actMap,
+  actividadKey,
+  rowDraftRef,
+  finOverrides,
+  calcFinLocal,
+  noHabilesSet,
+}) {
+  const agrupadores = estructuraCap?.agrupadores || []
+  const iter = agrupadores.length
+    ? agrupadores.map((ag) => ({
+      itemKey: agrupadorActItem(ag),
+      rk: agrupadorRowKey(cap, ag),
+    }))
+    : items.map((it) => ({ itemKey: it.item, rk: itemRowKey(cap, it.item) }))
+  let minFi = null
+  let maxFf = null
+  let cantTotal = 0
+  let costoTotal = 0
+  for (const { itemKey, rk } of iter) {
+    const { fi, ff } = resolveRowSchedule({
+      cap, itemKey, rk, actMap, actividadKey, rowDraftRef, finOverrides, calcFinLocal,
+    })
+    if (fi && (!minFi || fi < minFi)) minFi = fi
+    if (ff && (!maxFf || ff > maxFf)) maxFf = ff
+  }
+  if (agrupadores.length) {
+    for (const ag of agrupadores) {
+      cantTotal += Number(ag.cant_total) || 0
+      costoTotal += Number(ag.costo_directo) || 0
+    }
+  } else {
+    for (const it of items) {
+      cantTotal += Number(it.cant_total) || 0
+      costoTotal += Number(it.costo_directo) || 0
+    }
+  }
+  const diasHab = minFi && maxFf ? countDiasHabilesEnRango(minFi, maxFf, noHabilesSet) : null
+  return {
+    fecha_inicio: minFi,
+    fecha_fin: maxFf,
+    dias_habiles: diasHab,
+    cant_total: cantTotal,
+    costo_directo: costoTotal,
+  }
+}
+
+/** Filas alineadas tabla ↔ Gantt + timeline del PK. */
+function buildPkGanttLayout({
+  capitulosOrdenados,
+  activePk,
+  collapsedCaps,
+  expandedAgs,
+  estructuraPorCapitulo,
+  itemsPorCapitulo,
+  actMap,
+  actividadKey,
+  agrupadorActItem,
+  agrupadorRowKey,
+  itemRowKey,
+  rowDraftRef,
+  finOverrides,
+  calcFinLocal,
+  noHabilesSet,
+}) {
+  const syncRows = []
+  const getDraft = (c, itemCode) => {
+    const eCap = estructuraPorCapitulo?.[c]
+    const agMatch = (eCap?.agrupadores || []).find((ag) => agrupadorActItem(ag) === itemCode)
+    const rk = agMatch ? agrupadorRowKey(c, agMatch) : itemRowKey(c, itemCode)
+    return resolveRowSchedule({
+      cap: c,
+      itemKey: itemCode,
+      rk,
+      actMap,
+      actividadKey,
+      rowDraftRef,
+      finOverrides,
+      calcFinLocal,
+    })
+  }
+
+  for (let capIdx = 0; capIdx < capitulosOrdenados.length; capIdx++) {
+    const cap = capitulosOrdenados[capIdx]
+    const capKey = `${activePk}\u0000${cap}`
+    const collapsed = !!collapsedCaps[capKey]
+    const estructuraCap = estructuraPorCapitulo?.[cap]
+    const items = itemsPorCapitulo(cap)
+    const agrupadores = estructuraCap?.agrupadores || []
+    const sinAgrupador = estructuraCap?.sin_agrupador || []
+    const useWbs = agrupadores.length > 0 || sinAgrupador.length > 0
+    const capResumen = computeCapConsolidado({
+      cap,
+      estructuraCap,
+      items,
+      agrupadorActItem,
+      agrupadorRowKey,
+      itemRowKey,
+      actMap,
+      actividadKey,
+      rowDraftRef,
+      finOverrides,
+      calcFinLocal,
+      noHabilesSet,
+    })
+
+    syncRows.push({
+      key: `cap-${cap}`,
+      kind: 'cap',
+      cap,
+      capIdx,
+      height: ROW_H.cap,
+      label: `Σ Capítulo ${cap}`,
+      barStart: capResumen.fecha_inicio,
+      barEnd: capResumen.fecha_fin,
+      diasHab: capResumen.dias_habiles ?? 0,
+      isSummary: true,
+    })
+
+    if (collapsed) continue
+
+    if (useWbs) {
+      for (const ag of agrupadores) {
+        const actItem = agrupadorActItem(ag)
+        const rk = agrupadorRowKey(cap, ag)
+        const sched = resolveRowSchedule({
+          cap, itemKey: actItem, rk, actMap, actividadKey, rowDraftRef, finOverrides, calcFinLocal,
+        })
+        const label = `${ag.codigo_wbs || actItem}${ag.agrupador_nombre ? ` · ${ag.agrupador_nombre}` : ''}`
+        syncRows.push({
+          key: `ag-${ag.agrupador_id}`,
+          kind: 'ag',
+          cap,
+          height: ROW_H.agrupador,
+          label: ag.codigo_wbs || actItem,
+          labelTitle: label,
+          barStart: sched.fi,
+          barEnd: sched.ff,
+          duracion: sched.dur,
+          isSummary: false,
+        })
+        const agExpKey = `${activePk}\u0000${cap}\u0000${ag.agrupador_id}`
+        if (expandedAgs[agExpKey]) {
+          for (const hijo of ag.items || []) {
+            syncRows.push({
+              key: `hijo-${cap}-${hijo.item}`,
+              kind: 'spacer',
+              cap,
+              height: ROW_H.hijo,
+              label: '',
+              barStart: null,
+              barEnd: null,
+            })
+          }
+        }
+      }
+      if (sinAgrupador.length > 0) {
+        syncRows.push({
+          key: `sin-ag-${cap}`,
+          kind: 'spacer',
+          cap,
+          height: ROW_H.sinAg,
+          label: '',
+          barStart: null,
+          barEnd: null,
+        })
+      }
+    } else {
+      for (const it of items) {
+        const rk = itemRowKey(cap, it.item)
+        const sched = resolveRowSchedule({
+          cap, itemKey: it.item, rk, actMap, actividadKey, rowDraftRef, finOverrides, calcFinLocal,
+        })
+        syncRows.push({
+          key: `item-${cap}-${it.item}`,
+          kind: 'item',
+          cap,
+          height: ROW_H.item,
+          label: it.item,
+          labelTitle: it.descripcion || it.item,
+          barStart: sched.fi,
+          barEnd: sched.ff,
+          duracion: sched.dur,
+          isSummary: false,
+        })
+      }
+    }
+  }
+
+  let timelineDays = computePkTimelineDays(
+    capitulosOrdenados,
+    itemsPorCapitulo,
+    actMap,
+    actividadKey,
+    (c, itemCode) => {
+      const s = getDraft(c, itemCode)
+      return { fecha_inicio: s.fi, fecha_fin: s.ff }
+    },
+    estructuraPorCapitulo,
+    agrupadorActItem,
+  )
+  if (!timelineDays.length) timelineDays = defaultTimelineDays()
+
+  return {
+    timelineDays,
+    syncRows,
+    fromT: timelineDays[0].getTime(),
+  }
+}
+
+function ProgPkGanttPanel({ model, noHabilesSet, t, cpmByCapKey, activePk, bodyScrollRef, onBodyScroll, onRefresh }) {
+  if (!model?.timelineDays?.length) return null
+  const { timelineDays, syncRows, fromT } = model
+  const dayPx = GANTT_DAY_PX
+  const gridW = timelineDays.length * dayPx
+  const labelW = GANTT_LABEL_W
+  const monthRowH = 28
+  const dayRowH = 26
+  const timelineH = monthRowH + dayRowH
+  const bodyH = syncRows.reduce((s, r) => s + r.height, 0)
+  const contentW = labelW + gridW
+
+  const monthSpans = useMemo(() => {
+    const spans = []
+    let i = 0
+    while (i < timelineDays.length) {
+      const d = timelineDays[i]
+      const m = d.getMonth()
+      const y = d.getFullYear()
+      let j = i + 1
+      while (j < timelineDays.length && timelineDays[j].getMonth() === m && timelineDays[j].getFullYear() === y) j++
+      spans.push({ label: monthYearLabel(d), start: i, count: j - i })
+      i = j
+    }
+    return spans
+  }, [timelineDays])
+
+  const dayNonHabil = (d) => {
+    const iso = isoFromDate(d)
+    return isWeekendDate(d) || noHabilesSet.has(iso)
+  }
+
+  const timelineHeader = (
+    <div style={{ display: 'flex', width: contentW, minWidth: contentW }}>
+      <div
+        style={{
+          width: labelW,
+          flexShrink: 0,
+          height: timelineH,
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: 'flex-end',
+          padding: '2px 4px',
+          boxSizing: 'border-box',
+          borderRight: `1px solid ${t.border}`,
+          background: t.bgCard,
+        }}
+      >
+        {onRefresh ? <GanttRefreshButton onClick={onRefresh} /> : null}
+      </div>
+      <div style={{ position: 'relative', width: gridW, minWidth: gridW, flexShrink: 0 }}>
+        {timelineDays.map((d, i) =>
+          dayNonHabil(d) ? (
+            <div
+              key={`nh-h-${isoFromDate(d)}`}
+              style={{
+                position: 'absolute',
+                left: i * dayPx,
+                width: dayPx,
+                top: 0,
+                height: timelineH,
+                background: GANTT_NON_HABIL_BG,
+                pointerEvents: 'none',
+                zIndex: 0,
+              }}
+            />
+          ) : null,
+        )}
+        <div style={{ position: 'relative', zIndex: 1 }}>
+          <div style={{ display: 'flex', height: monthRowH, borderBottom: `1px solid ${t.border}`, background: t.bgCard }}>
+            {monthSpans.map((ms, idx) => (
+              <div
+                key={`${ms.label}-${ms.start}`}
+                style={{
+                  width: ms.count * dayPx,
+                  minWidth: ms.count * dayPx,
+                  flexShrink: 0,
+                  boxSizing: 'border-box',
+                  overflow: 'hidden',
+                  whiteSpace: 'nowrap',
+                  textOverflow: 'ellipsis',
+                  textAlign: 'center',
+                  fontSize: 'var(--cc-caption)',
+                  fontWeight: 700,
+                  color: t.text,
+                  padding: '6px 4px',
+                  borderLeft: idx > 0 ? `1px solid ${t.border}` : 'none',
+                }}
+                title={ms.label}
+              >
+                {ms.label}
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', height: dayRowH, borderBottom: `1px solid ${t.border}`, background: t.bg }}>
+            {timelineDays.map((d) => (
+              <div
+                key={`d-${isoFromDate(d)}`}
+                style={{
+                  width: dayPx,
+                  minWidth: dayPx,
+                  flexShrink: 0,
+                  fontSize: 11,
+                  textAlign: 'center',
+                  color: t.textMuted,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderLeft: `1px solid ${t.border}33`,
+                }}
+                title={d.toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })}
+              >
+                {d.getDate()}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+
+  return (
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        background: t.bg,
+        overflow: 'hidden',
+        position: 'relative',
+        isolation: 'isolate',
+      }}
+    >
+      <div
+        ref={bodyScrollRef}
+        onScroll={onBodyScroll}
+        style={{ flex: 1, minHeight: 0, overflow: 'auto' }}
+      >
+        <div style={{ width: contentW, minWidth: '100%', position: 'relative', minHeight: bodyH + timelineH }}>
+          <div
+            style={{
+              position: 'sticky',
+              top: 0,
+              zIndex: 2,
+              background: t.bgCard,
+              borderBottom: `1px solid ${t.border}`,
+            }}
+          >
+            {timelineHeader}
+          </div>
+          {timelineDays.map((d, i) =>
+            dayNonHabil(d) ? (
+              <div
+                key={`nh-b-${isoFromDate(d)}`}
+                style={{
+                  position: 'absolute',
+                  left: labelW + i * dayPx,
+                  width: dayPx,
+                  top: timelineH,
+                  height: bodyH,
+                  background: GANTT_NON_HABIL_BG,
+                  pointerEvents: 'none',
+                  zIndex: 0,
+                }}
+              />
+            ) : null,
+          )}
+          {syncRows.map((row) => {
+            const cpmCap = row.kind === 'cap' ? cpmByCapKey?.[`${activePk}\u0000${row.cap}`] : null
+            if (row.kind === 'spacer') {
+              return <div key={row.key} style={{ height: row.height, borderBottom: `1px solid ${t.border}22` }} />
+            }
+            return (
+              <GanttBarRow
+                key={row.key}
+                label={row.label}
+                labelTitle={row.labelTitle || row.label}
+                labelStyle={{
+                  fontWeight: row.isSummary ? 700 : 500,
+                  color: row.isSummary ? (cpmCap?.es_ruta_critica ? '#ef4444' : t.primary) : t.textMuted,
+                  width: labelW,
+                }}
+                rowHeight={row.height}
+                days={timelineDays}
+                fromT={fromT}
+                dayPx={dayPx}
+                barStart={row.barStart}
+                barEnd={row.barEnd}
+                isSummary={row.isSummary}
+                duracion={row.duracion}
+                diasHab={row.diasHab}
+                t={t}
+                esCritico={!!cpmCap?.es_ruta_critica}
+                holguraDias={cpmCap?.holgura_total ?? 0}
+                holguraEnd={cpmCap?.fecha_fin_tardia ?? null}
+              />
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function monthYearLabel(d) {
   const month = d.toLocaleDateString('es-CO', { month: 'long' })
@@ -99,31 +556,17 @@ function capColor(idx) {
   return CAP_PALETTE[idx % CAP_PALETTE.length]
 }
 
-/** Rango del capítulo: min fecha inicio, max fecha fin entre ítems con programación. */
-function computeCapituloResumenGantt(capitulo, items, actMap, actividadKey, rowOverrides, noHabilesSet) {
-  let minFi = null
-  let maxFf = null
-  for (const it of items) {
-    const ov = rowOverrides[it.item]
-    const act = actMap[actividadKey(capitulo, it.item, 1)]
-    const fi = parseIsoDate(fmtDateIso(ov?.fecha_inicio ?? act?.fecha_inicio))
-    const ff = parseIsoDate(fmtDateIso(ov?.fecha_fin ?? act?.fecha_fin_calculada))
-    if (fi && (!minFi || fi < minFi)) minFi = fi
-    if (ff && (!maxFf || ff > maxFf)) maxFf = ff
-  }
-  if (!minFi || !maxFf) return { summaryStart: null, summaryEnd: null, diasHab: 0 }
-  const summaryStart = isoFromDate(minFi)
-  const summaryEnd = isoFromDate(maxFf)
-  const diasHab = countDiasHabilesEnRango(summaryStart, summaryEnd, noHabilesSet)
-  return { summaryStart, summaryEnd, diasHab }
-}
-
 /** Rango de días del PK: min/max de fechas de ítems ± margen. */
-function computePkTimelineDays(capitulosOrdenados, itemsPorCapitulo, actMap, actividadKey, getDraftValues) {
+function computePkTimelineDays(capitulosOrdenados, itemsPorCapitulo, actMap, actividadKey, getDraftValues, estructuraPorCapitulo, agrupadorActItem) {
   let minD = null
   let maxD = null
   for (const cap of capitulosOrdenados) {
-    for (const it of itemsPorCapitulo(cap)) {
+    const eCap = estructuraPorCapitulo?.[cap]
+    const agrupadores = eCap?.agrupadores || []
+    const iter = agrupadores.length
+      ? agrupadores.map((ag) => ({ item: agrupadorActItem(ag) }))
+      : itemsPorCapitulo(cap)
+    for (const it of iter) {
       const act = actMap[actividadKey(cap, it.item, 1)]
       const draft = getDraftValues?.(cap, it.item)
       const fi = parseIsoDate(fmtDateIso(draft?.fecha_inicio ?? act?.fecha_inicio))
@@ -138,208 +581,35 @@ function computePkTimelineDays(capitulosOrdenados, itemsPorCapitulo, actMap, act
   return eachCalendarDay(from, to)
 }
 
-function buildGanttSnap(capitulo, items, actMap, actividadKey, timelineDays, rowOverrides = {}, noHabilesSet = new Set()) {
-  if (!timelineDays?.length) return null
-
-  const rows = []
-  for (const it of items) {
-    const ov = rowOverrides[it.item]
-    const act = actMap[actividadKey(capitulo, it.item, 1)]
-    const fi = fmtDateIso(ov?.fecha_inicio ?? act?.fecha_inicio)
-    const ff = fmtDateIso(ov?.fecha_fin ?? act?.fecha_fin_calculada)
-    if (!fi || !ff) continue
-    const dur = Number(ov?.duracion ?? act?.duracion_dias_habiles) || 0
-    rows.push({ item: it.item, fecha_inicio: fi, fecha_fin: ff, duracion: dur })
-  }
-  if (rows.length === 0) return null
-
-  const { summaryStart, summaryEnd, diasHab } = computeCapituloResumenGantt(
-    capitulo,
-    items,
-    actMap,
-    actividadKey,
-    rowOverrides,
-    noHabilesSet,
-  )
-  const days = timelineDays
-  const from = days[0]
-  const to = days[days.length - 1]
-
-  return { days, rows, diasHab, from, to, summaryStart, summaryEnd }
-}
-
-function ProgChapterGanttExcel({ snap, noHabilesSet, t, cpmCapitulo }) {
-  if (!snap?.days?.length) return null
-
-  const { days, rows, diasHab } = snap
-  const fromT = days[0].getTime()
-  const span = days.length
-  const dayPx = GANTT_DAY_PX
-  const labelW = STICKY_W.item + STICKY_W.desc
-  const gridW = span * dayPx
-  const monthRowH = 28
-  const dayRowH = 26
-  const bodyH = GANTT_ROW_CAP + rows.length * GANTT_ROW_ITEM
-  const timelineH = monthRowH + dayRowH + bodyH
-
-  const monthSpans = useMemo(() => {
-    const spans = []
-    let i = 0
-    while (i < days.length) {
-      const d = days[i]
-      const m = d.getMonth()
-      const y = d.getFullYear()
-      let j = i + 1
-      while (j < days.length && days[j].getMonth() === m && days[j].getFullYear() === y) j++
-      spans.push({
-        label: monthYearLabel(d),
-        start: i,
-        count: j - i,
-      })
-      i = j
-    }
-    return spans
-  }, [days])
-
-  const dayNonHabil = (d) => {
-    const iso = isoFromDate(d)
-    return isWeekendDate(d) || noHabilesSet.has(iso)
-  }
-
-  const summaryStart = snap.summaryStart
-  const summaryEnd = snap.summaryEnd
-
+function GanttRowLabel({ label, labelTitle, labelStyle, rowHeight, t }) {
   return (
     <div
       style={{
-        marginTop: 10,
-        border: `1px solid ${t.border}`,
-        borderRadius: 8,
-        overflow: 'hidden',
-        background: t.bg,
-        display: 'inline-block',
-        width: labelW + gridW,
+        width: labelStyle?.width ?? GANTT_LABEL_W,
+        flexShrink: 0,
+        height: rowHeight,
         boxSizing: 'border-box',
+        display: 'flex',
+        alignItems: 'center',
+        paddingLeft: 8,
+        paddingRight: 4,
+        fontSize: 'var(--cc-caption)',
+        color: t.textMuted,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        borderRight: `1px solid ${t.border}44`,
+        background: t.bgCard,
+        ...labelStyle,
       }}
+      title={labelTitle || undefined}
     >
-      <div style={{ overflowX: 'auto', width: labelW + gridW }}>
-        <div style={{ width: labelW + gridW, flexShrink: 0 }}>
-          <div style={{ display: 'flex', width: labelW + gridW }}>
-            <div style={{ width: labelW, flexShrink: 0, background: t.bgCard, borderBottom: `1px solid ${t.border}` }}>
-              <div style={{ height: monthRowH }} />
-              <div style={{ height: dayRowH, borderTop: `1px solid ${t.border}44` }} />
-            </div>
-            <div style={{ position: 'relative', width: gridW, minWidth: gridW, maxWidth: gridW, flexShrink: 0 }}>
-              {days.map((d, i) =>
-                dayNonHabil(d) ? (
-                  <div
-                    key={`nh-${isoFromDate(d)}`}
-                    style={{
-                      position: 'absolute',
-                      left: i * dayPx,
-                      width: dayPx,
-                      top: 0,
-                      height: timelineH,
-                      background: GANTT_NON_HABIL_BG,
-                      pointerEvents: 'none',
-                      zIndex: 0,
-                    }}
-                  />
-                ) : null,
-              )}
-              <div style={{ position: 'relative', zIndex: 1 }}>
-                <div style={{ display: 'flex', height: monthRowH, borderBottom: `1px solid ${t.border}`, background: t.bgCard }}>
-                  {monthSpans.map((ms, idx) => (
-                    <div
-                      key={`${ms.label}-${ms.start}`}
-                      style={{
-                        width: ms.count * dayPx,
-                        minWidth: ms.count * dayPx,
-                        flexShrink: 0,
-                        boxSizing: 'border-box',
-                        overflow: 'hidden',
-                        whiteSpace: 'nowrap',
-                        textOverflow: 'ellipsis',
-                        textAlign: 'center',
-                        fontSize: 'var(--cc-caption)',
-                        fontWeight: 700,
-                        color: t.text,
-                        padding: '6px 4px',
-                        borderLeft: idx > 0 ? `1px solid ${t.border}` : 'none',
-                        lineHeight: 1.2,
-                      }}
-                      title={ms.label}
-                    >
-                      {ms.label}
-                    </div>
-                  ))}
-                </div>
-                <div style={{ display: 'flex', height: dayRowH, borderBottom: `1px solid ${t.border}`, background: t.bg }}>
-                  {days.map((d) => (
-                    <div
-                      key={isoFromDate(d)}
-                      style={{
-                        width: dayPx,
-                        minWidth: dayPx,
-                        flexShrink: 0,
-                        boxSizing: 'border-box',
-                        fontSize: 11,
-                        textAlign: 'center',
-                        color: t.textMuted,
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        borderLeft: `1px solid ${t.border}33`,
-                      }}
-                      title={d.toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' })}
-                    >
-                      {d.getDate()}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <GanttBarRow
-            label={`Σ ${diasHab} días-hábiles programados`}
-            labelTitle="Rango del capítulo (fecha mínima de inicio a fecha máxima de fin). Los ítems pueden ejecutarse en paralelo."
-            labelStyle={{ fontWeight: 700, color: cpmCapitulo?.es_ruta_critica ? '#ef4444' : t.primary }}
-            rowHeight={GANTT_ROW_CAP}
-            days={days}
-            fromT={fromT}
-            dayPx={dayPx}
-            barStart={summaryStart}
-            barEnd={summaryEnd}
-            isSummary
-            diasHab={diasHab}
-            t={t}
-            esCritico={!!cpmCapitulo?.es_ruta_critica}
-            holguraDias={cpmCapitulo?.holgura_total ?? 0}
-            holguraEnd={cpmCapitulo?.fecha_fin_tardia ?? null}
-          />
-
-          {rows.map((r) => (
-            <GanttBarRow
-              key={r.item}
-              label={r.item}
-              rowHeight={GANTT_ROW_ITEM}
-              days={days}
-              fromT={fromT}
-              dayPx={dayPx}
-              barStart={r.fecha_inicio}
-              barEnd={r.fecha_fin}
-              duracion={r.duracion}
-              t={t}
-            />
-          ))}
-        </div>
-      </div>
+      {label}
     </div>
   )
 }
 
-function GanttBarRow({ label, labelTitle, labelStyle, rowHeight, days, fromT, dayPx, barStart, barEnd, isSummary, duracion, diasHab, t, esCritico, holguraDias, holguraEnd }) {
+function GanttBarGrid({ rowHeight, days, fromT, dayPx, barStart, barEnd, isSummary, label, duracion, diasHab, t, esCritico, holguraDias, holguraEnd }) {
   let left = 0
   let width = 0
   const fi = parseIsoDate(barStart)
@@ -363,14 +633,7 @@ function GanttBarRow({ label, labelTitle, labelStyle, rowHeight, days, fromT, da
     }
   }
 
-  const tooltip = ganttBarTooltip({
-    isSummary,
-    label,
-    barStart,
-    barEnd,
-    duracion,
-    diasHab,
-  })
+  const tooltip = ganttBarTooltip({ isSummary, label, barStart, barEnd, duracion, diasHab })
   const criticalTooltip = esCritico
     ? 'Ruta crítica — Holgura: 0 días'
     : holguraDias > 0
@@ -378,83 +641,81 @@ function GanttBarRow({ label, labelTitle, labelStyle, rowHeight, days, fromT, da
     : null
 
   return (
-    <div style={{ display: 'flex', height: rowHeight, borderBottom: `1px solid ${t.border}44`, alignItems: 'stretch' }}>
-      <div
-        style={{
-          width: STICKY_W.item + STICKY_W.desc,
-          flexShrink: 0,
-          display: 'flex',
-          alignItems: 'center',
-          paddingLeft: 8,
-          fontSize: 'var(--cc-caption)',
-          color: t.textMuted,
-          ...labelStyle,
-          position: 'sticky',
-          left: 0,
-          background: t.bgCard,
-          zIndex: 2,
-        }}
-        title={labelTitle || undefined}
-      >
-        {label}
-      </div>
-      <div style={{ position: 'relative', width: days.length * dayPx, minWidth: days.length * dayPx, maxWidth: days.length * dayPx, flexShrink: 0 }}>
-        {days.map((d, i) => (
-          <div
-            key={i}
-            style={{
-              position: 'absolute',
-              left: i * dayPx,
-              width: dayPx,
-              top: 0,
-              bottom: 0,
-              borderLeft: `1px solid ${t.border}22`,
-              pointerEvents: 'none',
-            }}
-          />
-        ))}
-        {holguraWidth > 0 && (
-          <div
-            style={{
-              position: 'absolute',
-              left: holguraLeft,
-              width: holguraWidth,
-              height: GANTT_BAR_H,
-              top: '50%',
-              transform: 'translateY(-50%)',
-              borderRadius: '0 4px 4px 0',
-              background: 'rgba(156,163,175,0.35)',
-              border: '1px dashed #9ca3af',
-              boxSizing: 'border-box',
-              zIndex: 1,
-              cursor: 'default',
-            }}
-            title={criticalTooltip || undefined}
-          />
-        )}
-        {width > 0 && (
-          <div
-            style={{
-              position: 'absolute',
-              left,
-              width,
-              height: GANTT_BAR_H,
-              top: '50%',
-              transform: 'translateY(-50%)',
-              borderRadius: 4,
-              background: isSummary ? (esCritico ? '#fee2e2' : GANTT_CAP_BAR) : GANTT_TEAL,
-              border: esCritico ? '2px solid #ef4444' : 'none',
-              boxSizing: 'border-box',
-              zIndex: 2,
-              cursor: 'default',
-            }}
-            title={criticalTooltip || tooltip}
-          />
-        )}
-      </div>
+    <div
+      style={{
+        position: 'relative',
+        width: days.length * dayPx,
+        minWidth: days.length * dayPx,
+        height: rowHeight,
+        borderBottom: `1px solid ${t.border}44`,
+        flexShrink: 0,
+      }}
+    >
+      {days.map((d, i) => (
+        <div
+          key={i}
+          style={{
+            position: 'absolute',
+            left: i * dayPx,
+            width: dayPx,
+            top: 0,
+            bottom: 0,
+            borderLeft: `1px solid ${t.border}22`,
+            pointerEvents: 'none',
+          }}
+        />
+      ))}
+      {holguraWidth > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            left: holguraLeft,
+            width: holguraWidth,
+            height: GANTT_BAR_H,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            borderRadius: '0 4px 4px 0',
+            background: 'rgba(156,163,175,0.35)',
+            border: '1px dashed #9ca3af',
+            boxSizing: 'border-box',
+            zIndex: 1,
+          }}
+          title={criticalTooltip || undefined}
+        />
+      )}
+      {width > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            left,
+            width,
+            height: GANTT_BAR_H,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            borderRadius: 4,
+            background: isSummary ? (esCritico ? '#fee2e2' : GANTT_CAP_BAR) : GANTT_TEAL,
+            border: esCritico ? '2px solid #ef4444' : 'none',
+            boxSizing: 'border-box',
+            zIndex: 2,
+          }}
+          title={criticalTooltip || tooltip}
+        />
+      )}
     </div>
   )
 }
+
+function GanttBarRow(props) {
+  const { label, labelTitle, labelStyle, rowHeight, t } = props
+  return (
+    <div style={{ display: 'flex', height: rowHeight, borderBottom: `1px solid ${t.border}44`, alignItems: 'stretch' }}>
+      <GanttRowLabel label={label} labelTitle={labelTitle} labelStyle={labelStyle} rowHeight={rowHeight} t={t} />
+      <GanttBarGrid {...props} />
+    </div>
+  )
+}
+
+const TEAL_BADGE = '#1D9E75'
 
 function ProgItemRow({
   itemDef,
@@ -471,8 +732,16 @@ function ProgItemRow({
   registerRowDraft,
   unregisterRowDraft,
   finOverride,
+  rowKind = 'item',
+  parentAct = null,
+  agExpanded = false,
+  onToggleAgExpand = null,
 }) {
   const ex = act || {}
+  const inherited = rowKind === 'hijo'
+  const readOnly = rowKind === 'hijo' || rowKind === 'sin_agrupador'
+  const effectiveEditable = editable && !readOnly
+  const parentDates = parentAct || {}
   const [fechaIni, setFechaIni] = useState(() => fmtDateIso(ex.fecha_inicio))
   const [duracion, setDuracion] = useState(ex.duracion_dias_habiles != null ? String(ex.duracion_dias_habiles) : '')
   const debDur = useDebounced(duracion, 320)
@@ -495,16 +764,17 @@ function ProgItemRow({
 
   useEffect(() => {
     if (!registerRowDraft) return undefined
-    registerRowDraft(rk, {
+    const api = {
       getValues: () => ({
         fecha_inicio: fechaIni,
         duracion: duracion,
         fecha_fin: finCalc,
       }),
       setFin: (iso) => setFinCalc(fmtDateIso(iso)),
-    })
+    }
+    registerRowDraft(rk, api)
     return () => unregisterRowDraft?.(rk)
-  }, [rk, fechaIni, duracion, finCalc, registerRowDraft, unregisterRowDraft])
+  }, [rk, fechaIni, duracion, finCalc, registerRowDraft, unregisterRowDraft, rowKind])
 
   useEffect(() => {
     const d = parseInt(String(debDur), 10)
@@ -528,16 +798,16 @@ function ProgItemRow({
   }, [debFecha, debDur, cid, token, API, ex.fecha_fin_calculada])
 
   const trySave = useCallback(async () => {
-    if (!editable || saveStatus === 'saving') return false
+    if (!effectiveEditable || saveStatus === 'saving') return false
     const d = parseInt(String(duracion), 10)
     if (!fechaIni || !(d > 0)) return false
     const ok = await onGuardarItem(itemDef, { fecha_inicio: fechaIni, duracion: String(d), override_manual: true, heredado_de_capitulo: false }, rk)
     if (ok) dirtyRef.current = false
     return ok
-  }, [editable, saveStatus, onGuardarItem, itemDef, fechaIni, duracion, rk])
+  }, [effectiveEditable, saveStatus, onGuardarItem, itemDef, fechaIni, duracion, rk])
 
   useEffect(() => {
-    if (!editable || !dirtyRef.current) return undefined
+    if (!effectiveEditable || !dirtyRef.current) return undefined
     const d = parseInt(String(debDur), 10)
     if (!debFecha || !(d > 0)) return undefined
     const timer = setTimeout(() => trySave(), 700)
@@ -548,43 +818,158 @@ function ProgItemRow({
     if (dirtyRef.current) trySave()
   }
 
+  const inheritedBadge = (
+    <span
+      style={{
+        display: 'inline-block',
+        fontSize: 10,
+        fontWeight: 700,
+        color: '#fff',
+        background: TEAL_BADGE,
+        borderRadius: 3,
+        padding: '1px 5px',
+        lineHeight: 1.3,
+      }}
+      title="Heredado del agrupador"
+    >
+      H
+    </span>
+  )
+
   const saveIcon =
     saveStatus === 'saving' ? (
       <span style={{ color: t.textMuted }}>…</span>
     ) : saveStatus === 'saved' ? (
-      <span style={{ color: '#1D9E75', fontWeight: 700 }}>✓</span>
+      <span style={{ color: TEAL_BADGE, fontWeight: 700 }}>✓</span>
     ) : saveStatus === 'error' ? (
       <span style={{ color: '#b91c1c', fontWeight: 700 }}>!</span>
-    ) : ex.heredado_de_capitulo ? (
-      <span style={{ fontSize: 'var(--cc-caption)', color: '#1e40af' }} title="Heredado">
-        H
-      </span>
+    ) : inherited ? (
+      inheritedBadge
     ) : null
 
+  const displayIni = readOnly
+    ? (fmtDateIso(ex.fecha_inicio) || fmtDateIso(parentDates.fecha_inicio) || '—')
+    : fechaIni
+  const displayDur = readOnly
+    ? (ex.duracion_dias_habiles ?? parentDates.duracion_dias_habiles ?? '—')
+    : duracion
+  const displayFin = readOnly
+    ? (fmtDateHuman(finCalc || ex.fecha_fin_calculada || parentDates.fecha_fin_calculada) || '—')
+    : fmtDateHuman(finCalc || ex.fecha_fin_calculada)
+
+  const agrupadorLabel = `${itemDef.codigo_wbs ? `${itemDef.codigo_wbs} · ` : ''}${itemDef.agrupador_nombre || itemDef.descripcion || itemDef.item}`
+
+  const isHijo = rowKind === 'hijo'
+  const hijoBg = 'rgba(243, 244, 246, 0.85)'
+  const rowH = isHijo ? ROW_H.hijo : rowKind === 'agrupador' ? ROW_H.agrupador : ROW_H.item
   const cell = {
     padding: '0 8px',
-    fontSize: 'var(--cc-sm)',
+    fontSize: isHijo ? 'var(--cc-caption)' : 'var(--cc-sm)',
     lineHeight: 1.35,
     verticalAlign: 'middle',
-    height: 44,
-    maxHeight: 44,
+    height: rowH,
+    maxHeight: rowH,
+    boxSizing: 'border-box',
     overflow: 'hidden',
   }
-  const sticky = { position: 'sticky', background: stickyBg, zIndex: 1 }
+  const sticky = { position: 'sticky', background: isHijo ? hijoBg : stickyBg, zIndex: 1 }
+
+  if (rowKind === 'agrupador') {
+    return (
+      <tr style={{ borderBottom: `1px solid ${t.border}` }}>
+        <td
+          colSpan={2}
+          style={{
+            ...cell,
+            ...sticky,
+            left: 0,
+            minWidth: STICKY_W.item + STICKY_W.desc,
+            maxWidth: STICKY_W.item + STICKY_W.desc,
+            fontWeight: 700,
+            color: t.text,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleAgExpand?.()
+              }}
+              aria-expanded={agExpanded}
+              style={{
+                border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
+                fontSize: 'var(--cc-sm)',
+                color: t.textMuted,
+                padding: '0 2px',
+                lineHeight: 1,
+                flexShrink: 0,
+              }}
+            >
+              {agExpanded ? '▼' : '▶'}
+            </button>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={agrupadorLabel}>
+              {agrupadorLabel}
+            </span>
+          </div>
+        </td>
+        <td style={{ ...cell, minWidth: 48 }}>{itemDef.und || '—'}</td>
+        <td style={{ ...cell, textAlign: 'right', minWidth: 72 }}>{fmtCant(itemDef.cant_total)}</td>
+        <td style={{ ...cell, textAlign: 'right', minWidth: 110, whiteSpace: 'nowrap' }}>{fmtCOP(itemDef.costo_directo)}</td>
+        <td style={{ ...cell, minWidth: 148 }}>
+          {effectiveEditable ? (
+            <input
+              type="date"
+              value={fechaIni}
+              onChange={(e) => {
+                dirtyRef.current = true
+                setFechaIni(e.target.value)
+              }}
+              onBlur={onBlurField}
+              style={{ width: '100%', fontSize: 'var(--cc-input)', padding: '4px 6px', boxSizing: 'border-box', border: `1px solid ${t.border}`, borderRadius: 4, background: t.bg }}
+            />
+          ) : (
+            displayIni
+          )}
+        </td>
+        <td style={{ ...cell, minWidth: 64 }}>
+          {effectiveEditable ? (
+            <input
+              type="number"
+              min={1}
+              value={duracion}
+              onChange={(e) => {
+                dirtyRef.current = true
+                setDuracion(e.target.value)
+              }}
+              onBlur={onBlurField}
+              style={{ width: '100%', fontSize: 'var(--cc-input)', padding: '4px 6px', boxSizing: 'border-box', border: `1px solid ${t.border}`, borderRadius: 4, background: t.bg, textAlign: 'right' }}
+            />
+          ) : (
+            displayDur
+          )}
+        </td>
+        <td style={{ ...cell, minWidth: 200, color: t.textMuted, whiteSpace: 'nowrap' }}>{displayFin}</td>
+        <td style={{ ...cell, width: 28, textAlign: 'center' }}>{saveIcon}</td>
+      </tr>
+    )
+  }
 
   return (
-    <tr style={{ borderBottom: `1px solid ${t.border}` }}>
-      <td style={{ ...cell, ...sticky, left: 0, fontWeight: 600, minWidth: STICKY_W.item, maxWidth: STICKY_W.item }} title={itemDef.item}>
+    <tr style={{ borderBottom: `1px solid ${t.border}`, background: isHijo ? hijoBg : undefined }}>
+      <td style={{ ...cell, ...sticky, left: 0, fontWeight: isHijo ? 500 : 600, minWidth: STICKY_W.item, maxWidth: STICKY_W.item, paddingLeft: isHijo ? 36 : 8 }} title={itemDef.item}>
         {itemDef.item}
       </td>
-      <td style={{ ...cell, ...sticky, left: STICKY_W.item, minWidth: STICKY_W.desc, maxWidth: STICKY_W.desc, color: t.textMuted }} title={itemDef.descripcion}>
+      <td style={{ ...cell, ...sticky, left: STICKY_W.item, minWidth: STICKY_W.desc, maxWidth: STICKY_W.desc, color: isHijo ? t.textMuted : t.textMuted, paddingLeft: isHijo ? 12 : 8 }} title={itemDef.descripcion}>
         {itemDef.descripcion || '—'}
       </td>
       <td style={{ ...cell, minWidth: 48 }}>{itemDef.und || '—'}</td>
       <td style={{ ...cell, textAlign: 'right', minWidth: 72 }}>{fmtCant(itemDef.cant_total)}</td>
       <td style={{ ...cell, textAlign: 'right', minWidth: 110, whiteSpace: 'nowrap' }}>{fmtCOP(itemDef.costo_directo)}</td>
       <td style={{ ...cell, minWidth: 148 }}>
-        {editable ? (
+        {effectiveEditable ? (
           <input
             type="date"
             value={fechaIni}
@@ -596,11 +981,11 @@ function ProgItemRow({
             style={{ width: '100%', fontSize: 'var(--cc-input)', padding: '4px 6px', boxSizing: 'border-box', border: `1px solid ${t.border}`, borderRadius: 4, background: t.bg }}
           />
         ) : (
-          fmtDateIso(ex.fecha_inicio) || '—'
+          displayIni
         )}
       </td>
       <td style={{ ...cell, minWidth: 64 }}>
-        {editable ? (
+        {effectiveEditable ? (
           <input
             type="number"
             min={1}
@@ -613,10 +998,10 @@ function ProgItemRow({
             style={{ width: '100%', fontSize: 'var(--cc-input)', padding: '4px 6px', boxSizing: 'border-box', border: `1px solid ${t.border}`, borderRadius: 4, background: t.bg, textAlign: 'right' }}
           />
         ) : (
-          ex.duracion_dias_habiles ?? '—'
+          displayDur
         )}
       </td>
-      <td style={{ ...cell, minWidth: 200, color: t.textMuted, whiteSpace: 'nowrap' }}>{fmtDateHuman(finCalc || ex.fecha_fin_calculada)}</td>
+      <td style={{ ...cell, minWidth: 200, color: t.textMuted, whiteSpace: 'nowrap' }}>{displayFin}</td>
       <td style={{ ...cell, width: 28, textAlign: 'center' }}>{saveIcon}</td>
     </tr>
   )
@@ -625,54 +1010,69 @@ function ProgItemRow({
 function ProgCapituloSection({
   cap,
   capIdx,
+  estructuraCap,
   items,
   actMap,
   actividadKey,
   itemRowKey,
+  agrupadorActItem,
+  agrupadorRowKey,
   collapsed,
   onToggleCollapse,
-  onRefreshGantt,
-  ganttSnap,
-  hasAnyDates,
+  capResumen,
   editable,
   t,
   cid,
   token,
   API,
   rowSaveStatus,
-  onHerencia,
-  onGuardarCap,
   onGuardarItem,
-  capCr,
-  noHabilesSet,
   registerRowDraft,
   unregisterRowDraft,
   finOverrides,
-  refreshGanttBusy,
-  cpmCapitulo,
+  isAgExpanded,
+  onToggleAgExpand,
 }) {
   const pal = capColor(capIdx)
-  const [fechaCap, setFechaCap] = useState(() => fmtDateIso(capCr?.fecha_inicio_sugerida))
-  const [durCap, setDurCap] = useState(capCr?.duracion_dias_habiles != null ? String(capCr.duracion_dias_habiles) : '')
-  const dirtyCap = useRef(false)
+  const useWbs = Boolean(estructuraCap?.agrupadores?.length || estructuraCap?.sin_agrupador?.length)
+  const agrupadores = estructuraCap?.agrupadores || []
+  const sinAgrupador = estructuraCap?.sin_agrupador || []
 
-  useEffect(() => {
-    if (dirtyCap.current) return
-    setFechaCap(fmtDateIso(capCr?.fecha_inicio_sugerida))
-    setDurCap(capCr?.duracion_dias_habiles != null ? String(capCr.duracion_dias_habiles) : '')
-  }, [capCr?.fecha_inicio_sugerida, capCr?.duracion_dias_habiles, cap])
+  const buildAgItemDef = (ag) => {
+    const actItem = agrupadorActItem(ag)
+    const cant = Number(ag.cant_total) || 0
+    const costo = Number(ag.costo_directo) || 0
+    return {
+      es_agrupador: true,
+      agrupador_id: ag.agrupador_id,
+      codigo_wbs: ag.codigo_wbs,
+      agrupador_nombre: ag.agrupador_nombre,
+      capitulo: cap,
+      item: actItem,
+      descripcion: ag.agrupador_nombre,
+      cant_total: cant > 0 ? cant : 1,
+      und: ag.items?.[0]?.und || '?',
+      vlr_unitario: cant > 0 ? costo / cant : costo,
+      costo_directo: costo,
+    }
+  }
 
-  const saveCap = async () => {
-    if (!editable || !dirtyCap.current) return
-    await onGuardarCap(cap, fechaCap || null, durCap)
-    dirtyCap.current = false
+  const capCell = {
+    padding: '0 8px',
+    fontSize: 'var(--cc-sm)',
+    lineHeight: 1.35,
+    verticalAlign: 'middle',
+    height: ROW_H.cap,
+    maxHeight: ROW_H.cap,
+    boxSizing: 'border-box',
+    overflow: 'hidden',
   }
 
   return (
     <>
       <tr style={{ background: pal.bg, borderTop: `2px solid ${pal.border}` }}>
-        <td colSpan={9} style={{ padding: '8px 10px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <td colSpan={2} style={{ ...capCell, fontWeight: 700, color: t.text }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
             <button
               type="button"
               onClick={onToggleCollapse}
@@ -685,65 +1085,93 @@ function ProgCapituloSection({
                 color: pal.accent,
                 padding: '0 4px',
                 lineHeight: 1,
+                flexShrink: 0,
               }}
             >
               {collapsed ? '▸' : '▾'}
             </button>
-            <span style={{ fontWeight: 700, color: t.text, fontSize: 'var(--cc-sm)' }}>{cap}</span>
-            {hasAnyDates && <GanttRefreshButton onClick={onRefreshGantt} />}
-            {editable && (
-              <>
-                <input
-                  type="date"
-                  value={fechaCap}
-                  onChange={(e) => {
-                    dirtyCap.current = true
-                    setFechaCap(e.target.value)
-                  }}
-                  onBlur={saveCap}
-                  title="Fecha inicio capítulo"
-                  style={{ width: 132, fontSize: 'var(--cc-input)', padding: '4px 6px', border: `1px solid ${t.border}`, borderRadius: 4 }}
-                />
-                <input
-                  type="number"
-                  min={1}
-                  value={durCap}
-                  placeholder="Días"
-                  onChange={(e) => {
-                    dirtyCap.current = true
-                    setDurCap(e.target.value)
-                  }}
-                  onBlur={saveCap}
-                  style={{ width: 52, fontSize: 'var(--cc-input)', padding: '4px 6px', border: `1px solid ${t.border}`, borderRadius: 4, textAlign: 'right' }}
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    void (async () => {
-                      if (dirtyCap.current) await saveCap()
-                      onHerencia(cap)
-                    })()
-                  }}
-                  style={{
-                    marginLeft: 'auto',
-                    padding: '4px 12px',
-                    fontSize: 'var(--cc-caption)',
-                    fontWeight: 700,
-                    borderRadius: 6,
-                    border: `1px solid ${pal.accent}`,
-                    background: t.bgCard,
-                    color: pal.accent,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Aplicar herencia
-                </button>
-              </>
-            )}
+            <span
+              style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={`Capítulo ${cap}`}
+            >
+              Capítulo {cap}
+            </span>
           </div>
         </td>
+        <td style={{ ...capCell, color: t.textMuted }}>—</td>
+        <td style={{ ...capCell, textAlign: 'right' }} title={String(capResumen?.cant_total ?? '')}>
+          {capResumen?.cant_total > 0 ? fmtCant(capResumen.cant_total) : '—'}
+        </td>
+        <td style={{ ...capCell, textAlign: 'right', whiteSpace: 'nowrap' }} title={String(capResumen?.costo_directo ?? '')}>
+          {capResumen?.costo_directo > 0 ? fmtCOP(capResumen.costo_directo) : '—'}
+        </td>
+        <td style={{ ...capCell, color: t.textMuted }} title={capResumen?.fecha_inicio || ''}>
+          {capResumen?.fecha_inicio || '—'}
+        </td>
+        <td style={{ ...capCell, textAlign: 'right', color: t.textMuted }} title="Días hábiles entre inicio y fin del capítulo">
+          {capResumen?.dias_habiles ?? '—'}
+        </td>
+        <td style={{ ...capCell, color: t.textMuted, whiteSpace: 'nowrap' }} title={capResumen?.fecha_fin || ''}>
+          {capResumen?.fecha_fin ? fmtDateHuman(capResumen.fecha_fin) : '—'}
+        </td>
+        <td style={{ ...capCell, width: 28 }} />
       </tr>
-      {!collapsed &&
+      {!collapsed && useWbs && agrupadores.map((ag) => {
+        const agDef = buildAgItemDef(ag)
+        const actItem = agrupadorActItem(ag)
+        const rk = agrupadorRowKey(cap, ag)
+        const agAct = actMap[actividadKey(cap, actItem, 1)]
+        const expanded = isAgExpanded(ag.agrupador_id)
+        return (
+          <Fragment key={`ag-${ag.agrupador_id}`}>
+            <ProgItemRow
+              itemDef={agDef}
+              act={agAct}
+              rk={rk}
+              cid={cid}
+              token={token}
+              API={API}
+              t={t}
+              editable={editable}
+              saveStatus={rowSaveStatus[rk] || 'idle'}
+              onGuardarItem={onGuardarItem}
+              stickyBg={t.bgCard}
+              registerRowDraft={registerRowDraft}
+              unregisterRowDraft={unregisterRowDraft}
+              finOverride={finOverrides[rk]}
+              rowKind="agrupador"
+              agExpanded={expanded}
+              onToggleAgExpand={() => onToggleAgExpand(ag.agrupador_id)}
+            />
+            {expanded && (ag.items || []).map((hijo) => (
+              <ProgItemRow
+                key={itemRowKey(cap, hijo.item)}
+                itemDef={{ ...hijo, capitulo: cap }}
+                act={actMap[actividadKey(cap, hijo.item, 1)]}
+                rk={itemRowKey(cap, hijo.item)}
+                cid={cid}
+                token={token}
+                API={API}
+                t={t}
+                editable={false}
+                saveStatus="idle"
+                onGuardarItem={onGuardarItem}
+                stickyBg={t.bgCard}
+                rowKind="hijo"
+                parentAct={agAct}
+              />
+            ))}
+          </Fragment>
+        )
+      })}
+      {!collapsed && useWbs && sinAgrupador.length > 0 && (
+        <tr style={{ background: 'rgba(245,158,11,0.06)' }}>
+          <td colSpan={9} style={{ padding: '6px 12px', fontSize: 'var(--cc-sm)', fontWeight: 600, color: '#b45309' }}>
+            ⚠ Ítems sin agrupador ({sinAgrupador.length})
+          </td>
+        </tr>
+      )}
+      {!collapsed && !useWbs &&
         items.map((it) => (
           <ProgItemRow
             key={itemRowKey(cap, it.item)}
@@ -763,21 +1191,6 @@ function ProgCapituloSection({
             finOverride={finOverrides[itemRowKey(cap, it.item)]}
           />
         ))}
-      {hasAnyDates && (
-        <tr>
-          <td colSpan={9} style={{ padding: '0 8px 12px', background: t.bg, width: 1 }}>
-            {ganttSnap ? (
-              <div style={{ display: 'inline-block', verticalAlign: 'top' }}>
-                <ProgChapterGanttExcel snap={ganttSnap} noHabilesSet={noHabilesSet} t={t} cpmCapitulo={cpmCapitulo} />
-              </div>
-            ) : (
-              <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, padding: '8px 4px' }}>
-                {refreshGanttBusy ? 'Actualizando diagrama…' : 'Pulse el ícono de actualizar junto al capítulo para generar el Gantt.'}
-              </div>
-            )}
-          </td>
-        </tr>
-      )}
     </>
   )
 }
@@ -792,6 +1205,9 @@ export default function ProgObraProgramacionModal({
   onSelectPk,
   onRemovePk,
   capitulosOrdenados,
+  estructuraPorCapitulo = {},
+  agrupadorActItem = (ag) => String(ag?.codigo_wbs || `AG${ag?.agrupador_id ?? ''}`).trim(),
+  agrupadorRowKey = (cap, ag) => `${cap}\u0000ag:${String(ag?.codigo_wbs || `AG${ag?.agrupador_id ?? ''}`).trim()}`,
   itemsPorCapitulo,
   capProgMap,
   actMap,
@@ -816,13 +1232,15 @@ export default function ProgObraProgramacionModal({
   onCpmUpdated,
 }) {
   const [collapsedCaps, setCollapsedCaps] = useState({})
-  const [ganttSnaps, setGanttSnaps] = useState({})
+  const [expandedAgs, setExpandedAgs] = useState({})
   const [noHabilesSet, setNoHabilesSet] = useState(new Set())
   const [finOverrides, setFinOverrides] = useState({})
-  const [ganttRefreshCap, setGanttRefreshCap] = useState(null)
   const [localSaving, setLocalSaving] = useState(false)
   const [rowDrafts, setRowDrafts] = useState({})
   const rowDraftRef = useRef({})
+  const leftScrollRef = useRef(null)
+  const rightBodyScrollRef = useRef(null)
+  const scrollSyncLock = useRef(false)
   const [activeContentTab, setActiveContentTab] = useState('programacion')
   const [cpmResultados, setCpmResultados] = useState([])
 
@@ -876,6 +1294,16 @@ export default function ProgObraProgramacionModal({
     setCollapsedCaps((s) => ({ ...s, [k]: !s[k] }))
   }
 
+  const agExpandKey = (cap, agId) => `${activePk}\u0000${cap}\u0000${agId}`
+  const isAgExpanded = useCallback(
+    (cap, agId) => !!expandedAgs[agExpandKey(cap, agId)],
+    [expandedAgs, activePk],
+  )
+  const toggleAgExpand = (cap, agId) => {
+    const k = agExpandKey(cap, agId)
+    setExpandedAgs((s) => ({ ...s, [k]: !s[k] }))
+  }
+
   const cpmByCapKey = useMemo(() => {
     const m = {}
     for (const r of cpmResultados) {
@@ -900,98 +1328,201 @@ export default function ProgObraProgramacionModal({
     return isoFromDate(d)
   }, [noHabilesSet])
 
-  // Recálculo puro en memoria — cero fetch.
-  // Lee fecha_fin desde getValues() de cada fila (ya actualizado por el useEffect de calcular-fin)
-  // o desde actMap (guardado en BD) o como fallback local.
-  const refreshGantt = useCallback((cap) => {
-    const items = itemsPorCapitulo(cap)
-    const rowOverrides = {}
+  const capResumenes = useMemo(() => {
+    const m = {}
+    for (const cap of capitulosOrdenados) {
+      m[cap] = computeCapConsolidado({
+        cap,
+        estructuraCap: estructuraPorCapitulo?.[cap],
+        items: itemsPorCapitulo(cap),
+        agrupadorActItem,
+        agrupadorRowKey,
+        itemRowKey,
+        actMap,
+        actividadKey,
+        rowDraftRef,
+        finOverrides,
+        calcFinLocal,
+        noHabilesSet,
+      })
+    }
+    return m
+  }, [
+    capitulosOrdenados,
+    estructuraPorCapitulo,
+    itemsPorCapitulo,
+    agrupadorActItem,
+    agrupadorRowKey,
+    itemRowKey,
+    actMap,
+    actividadKey,
+    finOverrides,
+    calcFinLocal,
+    noHabilesSet,
+    rowDrafts,
+  ])
 
-    for (const it of items) {
-      const rk = itemRowKey(cap, it.item)
-      const draft = rowDraftRef.current[rk]?.getValues?.()
-      const act = actMap[actividadKey(cap, it.item, 1)]
+  const pkGanttModel = useMemo(
+    () => buildPkGanttLayout({
+      capitulosOrdenados,
+      activePk,
+      collapsedCaps,
+      expandedAgs,
+      estructuraPorCapitulo,
+      itemsPorCapitulo,
+      actMap,
+      actividadKey,
+      agrupadorActItem,
+      agrupadorRowKey,
+      itemRowKey,
+      rowDraftRef,
+      finOverrides,
+      calcFinLocal,
+      noHabilesSet,
+    }),
+    [
+      capitulosOrdenados,
+      activePk,
+      collapsedCaps,
+      expandedAgs,
+      estructuraPorCapitulo,
+      itemsPorCapitulo,
+      actMap,
+      actividadKey,
+      agrupadorActItem,
+      agrupadorRowKey,
+      itemRowKey,
+      finOverrides,
+      calcFinLocal,
+      noHabilesSet,
+      rowDrafts,
+    ],
+  )
 
-      // Si el draft existe (fila montada), usar SOLO los valores del draft.
-      // Nunca caer en actMap — si el usuario limpió la fecha, la barra debe desaparecer.
-      const fi = draft != null
-        ? fmtDateIso(draft.fecha_inicio || '')
-        : fmtDateIso(act?.fecha_inicio)
-      const durRaw = draft != null
-        ? (draft.duracion != null && draft.duracion !== '' ? draft.duracion : null)
-        : act?.duracion_dias_habiles
-      const dur = durRaw != null ? parseInt(String(durRaw), 10) : NaN
+  const handleLeftScroll = useCallback(() => {
+    if (scrollSyncLock.current) return
+    scrollSyncLock.current = true
+    const top = leftScrollRef.current?.scrollTop ?? 0
+    if (rightBodyScrollRef.current) rightBodyScrollRef.current.scrollTop = top
+    requestAnimationFrame(() => { scrollSyncLock.current = false })
+  }, [])
 
-      if (!fi || !(dur > 0)) {
-        // Registrar explícitamente como vacío para que buildGanttSnap no use actMap
-        rowOverrides[it.item] = { fecha_inicio: '', fecha_fin: '', duracion: 0 }
-        continue
+  const handleRightBodyScroll = useCallback(() => {
+    if (scrollSyncLock.current) return
+    scrollSyncLock.current = true
+    const top = rightBodyScrollRef.current?.scrollTop ?? 0
+    if (leftScrollRef.current) leftScrollRef.current.scrollTop = top
+    requestAnimationFrame(() => { scrollSyncLock.current = false })
+  }, [])
+
+  const refreshPkGantt = useCallback(() => {
+    const next = { ...finOverrides }
+    for (const cap of capitulosOrdenados) {
+      const eCap = estructuraPorCapitulo?.[cap]
+      const agrupadores = eCap?.agrupadores || []
+      const iter = agrupadores.length
+        ? agrupadores.map((ag) => ({
+          rk: agrupadorRowKey(cap, ag),
+          itemKey: agrupadorActItem(ag),
+        }))
+        : itemsPorCapitulo(cap).map((it) => ({
+          rk: itemRowKey(cap, it.item),
+          itemKey: it.item,
+        }))
+      for (const { rk, itemKey } of iter) {
+        const draft = rowDraftRef.current[rk]?.getValues?.()
+        const act = actMap[actividadKey(cap, itemKey, 1)]
+        const fi = fmtDateIso(draft?.fecha_inicio ?? act?.fecha_inicio)
+        const durRaw = draft?.duracion != null && draft.duracion !== '' ? draft.duracion : act?.duracion_dias_habiles
+        const dur = durRaw != null ? parseInt(String(durRaw), 10) : NaN
+        if (!fi || !(dur > 0)) continue
+        const ff = fmtDateIso(draft?.fecha_fin ?? act?.fecha_fin_calculada) || calcFinLocal(fi, dur)
+        if (ff) next[rk] = ff
       }
-      const ff = fmtDateIso(draft?.fecha_fin ?? act?.fecha_fin_calculada) || calcFinLocal(fi, dur)
-      rowOverrides[it.item] = { fecha_inicio: fi, fecha_fin: ff || '', duracion: dur }
     }
-
-    const getDraft = (c, itemCode) => {
-      const rk = itemRowKey(c, itemCode)
-      const d = rowDraftRef.current[rk]?.getValues?.()
-      const act = actMap[actividadKey(c, itemCode, 1)]
-      const fi = d != null ? fmtDateIso(d.fecha_inicio || '') : fmtDateIso(act?.fecha_inicio)
-      const dur = d != null
-        ? parseInt(String(d.duracion != null && d.duracion !== '' ? d.duracion : null), 10)
-        : parseInt(String(act?.duracion_dias_habiles), 10)
-      if (!fi || !(dur > 0)) return { fecha_inicio: null, fecha_fin: null }
-      const ff = fmtDateIso(d?.fecha_fin ?? act?.fecha_fin_calculada) || calcFinLocal(fi, dur)
-      return { fecha_inicio: fi, fecha_fin: ff }
-    }
-    const timelineDays = computePkTimelineDays(capitulosOrdenados, itemsPorCapitulo, actMap, actividadKey, getDraft)
-    const snap = buildGanttSnap(cap, items, actMap, actividadKey, timelineDays, rowOverrides, noHabilesSet)
-    if (!snap) {
-      showToast?.('Asigne fechas a al menos un ítem del capítulo para generar el Gantt.', 'err')
-      return
-    }
-    const k = `${activePk}\u0000${cap}`
-    setGanttSnaps((prev) => ({ ...prev, [k]: snap }))
-  }, [capitulosOrdenados, itemsPorCapitulo, actMap, actividadKey, itemRowKey, noHabilesSet, showToast, activePk, calcFinLocal])
-
-  const handleRefreshGanttClick = (cap) => {
-    refreshGantt(cap)
-  }
+    setFinOverrides(next)
+  }, [
+    finOverrides,
+    capitulosOrdenados,
+    estructuraPorCapitulo,
+    agrupadorRowKey,
+    agrupadorActItem,
+    itemsPorCapitulo,
+    itemRowKey,
+    actMap,
+    actividadKey,
+    calcFinLocal,
+  ])
 
   const collectDraftItems = useCallback(() => {
     const itemsAGuardar = []
     let skipped = 0
     for (const cap of capitulosOrdenados) {
-      for (const it of itemsPorCapitulo(cap)) {
-        const rk = itemRowKey(cap, it.item)
-        const live = rowDraftRef.current[rk]?.getValues?.()
-        const stored = rowDrafts[rk]
-        const act = actMap[actividadKey(cap, it.item, 1)]
-
-        // Valor actual del campo fecha (live tiene precedencia)
+      const eCap = estructuraPorCapitulo?.[cap]
+      const agrupadores = eCap?.agrupadores || []
+      const iter = agrupadores.length
+        ? agrupadores.map((ag) => {
+          const actItem = agrupadorActItem(ag)
+          const cant = Number(ag.cant_total) || 0
+          const costo = Number(ag.costo_directo) || 0
+          return {
+            rk: agrupadorRowKey(cap, ag),
+            itemDef: {
+              es_agrupador: true,
+              agrupador_id: ag.agrupador_id,
+              codigo_wbs: ag.codigo_wbs,
+              capitulo: cap,
+              item: actItem,
+              cant_total: cant > 0 ? cant : 1,
+              und: ag.items?.[0]?.und || '?',
+              vlr_unitario: cant > 0 ? costo / cant : costo,
+            },
+            actItem,
+          }
+        })
+        : itemsPorCapitulo(cap).map((it) => ({
+          rk: itemRowKey(cap, it.item),
+          itemDef: it,
+          actItem: it.item,
+        }))
+      for (const row of iter) {
+        const live = rowDraftRef.current[row.rk]?.getValues?.()
+        const stored = rowDrafts[row.rk]
+        const act = actMap[actividadKey(cap, row.actItem, 1)]
         const liveFecha = live != null ? (live.fecha_inicio ?? '') : null
         const fecha = fmtDateIso(liveFecha !== null ? liveFecha : (stored?.fecha_inicio ?? act?.fecha_inicio))
         const durRaw = live?.duracion ?? stored?.duracion ?? act?.duracion_dias_habiles
         const dur = parseInt(String(durRaw), 10)
-
         if (!fecha || !(dur > 0)) {
-          // Enviar con null para que la RPC limpie cualquier fecha vieja en BD y
-          // recalcule correctamente items_con_fecha y estado_programacion.
-          itemsAGuardar.push({ itemDef: it, rk, fecha_inicio: null, duracion: null })
+          itemsAGuardar.push({ itemDef: row.itemDef, rk: row.rk, fecha_inicio: null, duracion: null })
           skipped += 1
           continue
         }
-        itemsAGuardar.push({ itemDef: it, rk, fecha_inicio: fecha, duracion: dur })
+        itemsAGuardar.push({ itemDef: row.itemDef, rk: row.rk, fecha_inicio: fecha, duracion: dur })
       }
     }
     return { itemsAGuardar, skipped }
-  }, [capitulosOrdenados, itemsPorCapitulo, actMap, actividadKey, itemRowKey, rowDrafts])
+  }, [capitulosOrdenados, estructuraPorCapitulo, agrupadorActItem, agrupadorRowKey, itemsPorCapitulo, actMap, actividadKey, itemRowKey, rowDrafts])
 
   const flushAllDrafts = useCallback(async () => {
     if (!editable) return { saved: 0, errors: 0, skipped: 0 }
     const { itemsAGuardar, skipped } = collectDraftItems()
-    if (itemsAGuardar.length === 0) return { saved: 0, errors: 0, skipped }
+    const validRows = itemsAGuardar.filter((row) => row.fecha_inicio && row.duracion > 0)
+    console.debug('[ProgObra] flushAllDrafts', {
+      filasTotal: itemsAGuardar.length,
+      filasValidas: validRows.length,
+      omitidas: skipped,
+      draftsRegistrados: Object.keys(rowDraftRef.current).length,
+      activePk,
+    })
+    if (validRows.length === 0) {
+      if (itemsAGuardar.length === 0) {
+        console.warn('[ProgObra] flushAllDrafts: sin filas agrupador/ítem — revise estructura WBS')
+      }
+      return { saved: 0, errors: 0, skipped: skipped || itemsAGuardar.length }
+    }
     if (onGuardarBatch) {
-      const batchPayload = itemsAGuardar.map((row) => ({
+      const batchPayload = validRows.map((row) => ({
         capitulo: row.itemDef.capitulo,
         item: row.itemDef.item,
         fecha_inicio: row.fecha_inicio,
@@ -1001,6 +1532,7 @@ export default function ProgObraProgramacionModal({
         itemDef: row.itemDef,
         rk: row.rk,
       }))
+      console.debug('[ProgObra] POST actividades-batch', { count: batchPayload.length, pk: activePk })
       const batchResult = await onGuardarBatch(batchPayload, activePk)
       if (!batchResult?.ok) return { saved: 0, errors: batchResult?.errors || batchPayload.length, skipped }
       return { saved: batchResult.saved, errors: 0, skipped, batchOk: true, pkId: batchResult.pkId }
@@ -1048,6 +1580,7 @@ export default function ProgObraProgramacionModal({
         })
       })
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+      await new Promise((r) => setTimeout(r, 80))
       const { saved, errors, skipped, batchOk, pkId } = await flushAllDrafts()
       if (saved === 0 && skipped > 0) {
         throw new Error('Ningún ítem tiene fecha y días hábiles válidos. Revise la tabla.')
@@ -1072,17 +1605,6 @@ export default function ProgObraProgramacionModal({
       setLocalSaving(false)
     }
   }
-
-  const capHasDates = useCallback(
-    (cap) => {
-      for (const it of itemsPorCapitulo(cap)) {
-        const act = actMap[actividadKey(cap, it.item, 1)]
-        if (fmtDateIso(act?.fecha_inicio)) return true
-      }
-      return false
-    },
-    [itemsPorCapitulo, actMap, actividadKey],
-  )
 
   if (!open || typeof document === 'undefined') return null
 
@@ -1198,96 +1720,147 @@ export default function ProgObraProgramacionModal({
           ))}
         </div>
 
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 16px' }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           {activeContentTab === 'dependencias' ? (
-            <ProgObraDependencias
-              cid={cid}
-              token={token}
-              API={API}
-              t={t}
-              versionId={workingVersion?.id}
-              activePk={activePk}
-              allPkIds={allPkIds}
-              capitulosOrigen={capitulosOrdenados}
-              editable={editable}
-              onCpmCalculated={(resultados) => {
-                setCpmResultados(resultados)
-                onCpmUpdated?.(resultados)
-              }}
-            />
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 16px' }}>
+              <ProgObraDependencias
+                cid={cid}
+                token={token}
+                API={API}
+                t={t}
+                versionId={workingVersion?.id}
+                activePk={activePk}
+                allPkIds={allPkIds}
+                capitulosOrigen={capitulosOrdenados}
+                estructuraPorCapitulo={estructuraPorCapitulo}
+                editable={editable}
+                showToast={showToast}
+                onCpmCalculated={(resultados) => {
+                  setCpmResultados(resultados)
+                  onCpmUpdated?.(resultados)
+                }}
+              />
+            </div>
           ) : (
             <>
-          {(loadPpto || loadAct) && <div style={{ color: t.textMuted, marginBottom: 8 }}>Cargando datos del PK…</div>}
+          {(loadPpto || loadAct) && (
+            <div style={{ color: t.textMuted, padding: '8px 16px', flexShrink: 0 }}>Cargando datos del PK…</div>
+          )}
           {!loadPpto && capitulosOrdenados.length === 0 && (
-            <div style={{ color: t.textMuted }}>Sin ítems de presupuesto para este PK.</div>
+            <div style={{ color: t.textMuted, padding: '8px 16px' }}>Sin ítems de presupuesto para este PK.</div>
           )}
           {capitulosOrdenados.length > 0 && (
-            <div style={{ overflowX: 'auto', width: '100%' }}>
-              <table style={{ borderCollapse: 'collapse', width: 'max-content', minWidth: '100%' }}>
-                <thead>
-                  <tr style={{ background: t.bg, borderBottom: `2px solid ${t.border}` }}>
-                    {['Ítem', 'Descripción', 'Und', 'Cantidad', 'Costo Directo', 'Fecha inicio', 'Días hábiles', 'Fecha fin', ''].map((h, i) => (
-                      <th
-                        key={h}
-                        style={{
-                          padding: '8px 10px',
-                          fontSize: 'var(--cc-caption)',
-                          fontWeight: 700,
-                          color: t.textMuted,
-                          textAlign: i >= 3 && i <= 4 ? 'right' : 'left',
-                          position: i < 2 ? 'sticky' : 'static',
-                          left: i === 0 ? 0 : i === 1 ? STICKY_W.item : undefined,
-                          background: t.bg,
-                          zIndex: i < 2 ? 3 : 1,
-                          minWidth: i === 0 ? STICKY_W.item : i === 1 ? STICKY_W.desc : undefined,
-                        }}
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {capitulosOrdenados.map((cap, capIdx) => {
-                    const capKey = `${activePk}\u0000${cap}`
-                    const items = itemsPorCapitulo(cap)
-                    const collapsed = !!collapsedCaps[capKey]
-                    const hasDates = capHasDates(cap)
-                    return (
-                      <ProgCapituloSection
-                        key={cap}
-                        cap={cap}
-                        capIdx={capIdx}
-                        items={items}
-                        actMap={actMap}
-                        actividadKey={actividadKey}
-                        itemRowKey={itemRowKey}
-                        collapsed={collapsed}
-                        onToggleCollapse={() => toggleCap(cap)}
-                        onRefreshGantt={() => handleRefreshGanttClick(cap)}
-                        ganttSnap={ganttSnaps[capKey]}
-                        hasAnyDates={hasDates}
-                        editable={editable}
-                        t={t}
-                        cid={cid}
-                        token={token}
-                        API={API}
-                        rowSaveStatus={rowSaveStatus}
-                        onHerencia={onHerencia}
-                        onGuardarCap={onGuardarCap}
-                        onGuardarItem={onGuardarItem}
-                        capCr={capProgMap[cap]}
-                        noHabilesSet={noHabilesSet}
-                        registerRowDraft={registerRowDraft}
-                        unregisterRowDraft={unregisterRowDraft}
-                        finOverrides={finOverrides}
-                        refreshGanttBusy={ganttRefreshCap === cap}
-                        cpmCapitulo={cpmByCapKey[`${activePk}\u0000${cap}`]}
-                      />
-                    )
-                  })}
-                </tbody>
-              </table>
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'flex-start', overflow: 'hidden' }}>
+              <div
+                style={{
+                  width: PANEL_LEFT,
+                  flexShrink: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  minHeight: 0,
+                  alignSelf: 'stretch',
+                  borderRight: `1px solid ${t.border}`,
+                  overflow: 'hidden',
+                  position: 'relative',
+                  zIndex: 1,
+                }}
+              >
+                <div style={{ flexShrink: 0, overflow: 'hidden', padding: '0 8px', background: t.bg, height: TABLE_HEAD_H, boxSizing: 'border-box' }}>
+                  <table style={{ borderCollapse: 'collapse', width: 'max-content', minWidth: '100%', height: TABLE_HEAD_H }}>
+                    <thead>
+                      <tr style={{ background: t.bg, borderBottom: `2px solid ${t.border}`, height: TABLE_HEAD_H }}>
+                        {['Ítem', 'Descripción', 'Und', 'Cantidad', 'Costo Directo', 'Fecha inicio', 'Días hábiles', 'Fecha fin', ''].map((h, i) => (
+                          <th
+                            key={h}
+                            style={{
+                              padding: '0 10px',
+                              height: TABLE_HEAD_H,
+                              boxSizing: 'border-box',
+                              fontSize: 'var(--cc-caption)',
+                              fontWeight: 700,
+                              color: t.textMuted,
+                              textAlign: i >= 3 && i <= 4 ? 'right' : 'left',
+                              verticalAlign: 'middle',
+                              minWidth: i === 0 ? STICKY_W.item : i === 1 ? STICKY_W.desc : undefined,
+                            }}
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                  </table>
+                </div>
+                <div
+                  ref={leftScrollRef}
+                  onScroll={handleLeftScroll}
+                  style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '0 8px 8px' }}
+                >
+                  <table style={{ borderCollapse: 'collapse', width: 'max-content', minWidth: '100%' }}>
+                    <tbody>
+                    {capitulosOrdenados.map((cap, capIdx) => {
+                      const capKey = `${activePk}\u0000${cap}`
+                      const items = itemsPorCapitulo(cap)
+                      const collapsed = !!collapsedCaps[capKey]
+                      return (
+                        <ProgCapituloSection
+                          key={cap}
+                          cap={cap}
+                          capIdx={capIdx}
+                          estructuraCap={estructuraPorCapitulo?.[cap]}
+                          items={items}
+                          actMap={actMap}
+                          actividadKey={actividadKey}
+                          itemRowKey={itemRowKey}
+                          agrupadorActItem={agrupadorActItem}
+                          agrupadorRowKey={agrupadorRowKey}
+                          collapsed={collapsed}
+                          onToggleCollapse={() => toggleCap(cap)}
+                          capResumen={capResumenes[cap]}
+                          editable={editable}
+                          t={t}
+                          cid={cid}
+                          token={token}
+                          API={API}
+                          rowSaveStatus={rowSaveStatus}
+                          onGuardarItem={onGuardarItem}
+                          registerRowDraft={registerRowDraft}
+                          unregisterRowDraft={unregisterRowDraft}
+                          finOverrides={finOverrides}
+                          isAgExpanded={(agId) => isAgExpanded(cap, agId)}
+                          onToggleAgExpand={(agId) => toggleAgExpand(cap, agId)}
+                        />
+                      )
+                    })}
+                  </tbody>
+                </table>
+                </div>
+              </div>
+              <div
+                style={{
+                  width: PANEL_RIGHT,
+                  flex: 1,
+                  minWidth: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  minHeight: 0,
+                  alignSelf: 'stretch',
+                  overflow: 'hidden',
+                  position: 'relative',
+                  isolation: 'isolate',
+                }}
+              >
+                <ProgPkGanttPanel
+                  model={pkGanttModel}
+                  noHabilesSet={noHabilesSet}
+                  t={t}
+                  activePk={activePk}
+                  cpmByCapKey={cpmByCapKey}
+                  bodyScrollRef={rightBodyScrollRef}
+                  onBodyScroll={handleRightBodyScroll}
+                  onRefresh={refreshPkGantt}
+                />
+              </div>
             </div>
           )}
             </>

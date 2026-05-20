@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef, useMemo, startTransition } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, startTransition, Fragment } from "react";
+import { createPortal } from "react-dom";
 import * as XLSX from "xlsx";
 import mapboxgl from "mapbox-gl";
 import { API_BASE } from "./apiBase";
@@ -7,6 +8,7 @@ import { sanitizePlanoFeatureCollection } from "./geoPlanoSanitize";
 import { clearContratoPlanoGeojsonCache } from "./contratoPlanoGeojsonCache";
 import ModuloNube from "./ModuloNube";
 import CompetenciaSelect from "./components/CompetenciaSelect";
+import { RefreshCw } from "lucide-react";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -143,10 +145,10 @@ const S = {
     fontSize: "var(--cc-body)",
     lineHeight: 1.35,
   },
-  panel: (m, t) => {
+  panel: (m, t, wide = false) => {
     const tok = tFrom(m, t);
     return {
-      width: "min(1320px, 98vw)",
+      width: wide ? "min(1716px, 98vw)" : "min(1320px, 98vw)",
       height: "min(900px, 96vh)",
       background: isDarkMode(m) ? "#0e1c24" : tok.bg,
       borderRadius: 12,
@@ -3162,10 +3164,101 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
 
 
 
+const MODAL_AGRUPADOR_ANCHO_CREAR = 1196; // 920px + 30%
+
+/** Fila del modal agrupador: tooltip con descripción completa si el texto está truncado. */
+function FilaTooltipDescripcionTruncada({ descripcion, rowStyle, theme, children }) {
+  const rowRef = useRef(null);
+  const descRef = useRef(null);
+  const timerRef = useRef(null);
+  const [tip, setTip] = useState(null);
+  const tok = tFrom(theme);
+
+  const limpiarTimer = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => limpiarTimer(), [limpiarTimer]);
+
+  const estaTruncada = useCallback(() => {
+    const el = descRef.current;
+    return el ? el.scrollWidth > el.clientWidth + 1 : false;
+  }, []);
+
+  const mostrarTooltip = useCallback(() => {
+    const txt = (descripcion || "").trim();
+    if (!txt || !estaTruncada() || !rowRef.current) return;
+    const rect = rowRef.current.getBoundingClientRect();
+    const gap = 6;
+    const espacioAbajo = window.innerHeight - rect.bottom;
+    const espacioArriba = rect.top;
+    const abajo = espacioAbajo >= 72 || espacioAbajo >= espacioArriba;
+    setTip({
+      text: txt,
+      left: Math.min(Math.max(rect.left + rect.width / 2, 120), window.innerWidth - 120),
+      top: abajo ? rect.bottom + gap : rect.top - gap,
+      abajo,
+    });
+  }, [descripcion, estaTruncada]);
+
+  const onMouseEnter = () => {
+    limpiarTimer();
+    timerRef.current = setTimeout(mostrarTooltip, 300);
+  };
+
+  const onMouseLeave = () => {
+    limpiarTimer();
+    setTip(null);
+  };
+
+  const tipEl = tip ? (
+    <div
+      role="tooltip"
+      style={{
+        position: "fixed",
+        left: tip.left,
+        top: tip.top,
+        transform: tip.abajo ? "translate(-50%, 0)" : "translate(-50%, -100%)",
+        maxWidth: Math.min(440, window.innerWidth - 24),
+        padding: "8px 10px",
+        borderRadius: 8,
+        fontSize: "var(--cc-caption)",
+        lineHeight: 1.45,
+        zIndex: 10050,
+        pointerEvents: "none",
+        background: isDarkMode(theme) ? "#0b1920" : tok.bgCard,
+        color: tok.text,
+        border: `1px solid ${tok.border}`,
+        boxShadow: isDarkMode(theme) ? "0 8px 28px rgba(0,0,0,0.55)" : "0 8px 24px rgba(0,0,0,0.18)",
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word",
+      }}
+    >
+      {tip.text}
+    </div>
+  ) : null;
+
+  return (
+    <>
+      <div ref={rowRef} style={rowStyle} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}>
+        {typeof children === "function" ? children(descRef) : children}
+      </div>
+      {tipEl && createPortal(tipEl, document.body)}
+    </>
+  );
+}
+
+
 // ─── SECCIÓN 6: Listado de Precios ────────────────────────────────────────
-function SeccionListadoPrecios({ call, user, perms, theme }) {
+function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calculadas", modoVista = "lista", onModoVistaChange }) {
   const contratoId = user?.contrato_id;
   const [items,            setItems]            = useState([]);
+  const [agrupadores,      setAgrupadores]      = useState([]);
+  const [cantidades,       setCantidades]       = useState([]);
+  const [sinAgruparCount,  setSinAgruparCount]  = useState(0);
   const [loading,          setLoading]          = useState(false);
   const [msg,              setMsg]              = useState(null);
   const [popup,            setPopup]            = useState(null);
@@ -3174,8 +3267,17 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
   const [saving,           setSaving]           = useState(false);
   const [recalculando,     setRecalculando]     = useState(false);
   const [showCrear,        setShowCrear]        = useState(false);
-  const [crearForm,        setCrearForm]        = useState({ capitulo:"",item_numero:"",descripcion:"",unidad:"",competencia:"",tipo_precio:"",precio_unitario:"",especificacion_tecnica:"",acta_fijacion:"",acta_modificatoria:"",observaciones:"",tipo_calculo:"" });
+  const [crearForm,        setCrearForm]        = useState({ capitulo:"",item_numero:"",descripcion:"",unidad:"",competencia:"",tipo_precio:"",precio_unitario:"",especificacion_tecnica:"",acta_fijacion:"",acta_modificatoria:"",observaciones:"",tipo_calculo:"",agrupador_id:"" });
   const [creating,         setCreating]         = useState(false);
+  const [showAgrupador,    setShowAgrupador]    = useState(null);
+  const [agrupadorForm,    setAgrupadorForm]    = useState({ capitulo:"", nombre:"" });
+  const [agrupadorItemsSel,setAgrupadorItemsSel]= useState([]);
+  const [agrupadorBusqueda,setAgrupadorBusqueda]= useState("");
+  const [agrupadorSaving,  setAgrupadorSaving]  = useState(false);
+  const [eliminarAgConfirm, setEliminarAgConfirm] = useState(null);
+  const [eliminandoAg,      setEliminandoAg]      = useState(false);
+  const [agDropdown,        setAgDropdown]        = useState(null);
+  const [reasignandoAg,     setReasignandoAg]     = useState(false);
   const [uModoCustomC,     setUModoCustomC]     = useState(false);
   const [uModoCustomP,     setUModoCustomP]     = useState(false);
   const [uCustomC,         setUCustomC]         = useState("");
@@ -3190,6 +3292,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
 
   const col    = C(theme);
   const tdStyle = S.td(theme);
+  const itemRowTd = { ...tdStyle, fontSize: "var(--cc-caption)" };
   const tTok   = tFrom(theme);
 
   const UNIDADES    = ["CM","GL","HORA","KG","KM-CARRIL","LT","M","M2","M3","M3-KM","ML","TON","TRAMO","UN","UN/ME","UND"];
@@ -3201,12 +3304,14 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
     if (na !== nb) return na - nb;
     return (a||"").localeCompare(b||"", "es");
   };
+  const cmpItemNumero = (a, b) =>
+    (a || "").localeCompare(b || "", "es", { numeric: true, sensitivity: "base" });
   const itemsOrdenados = [...items].sort((a, b) => {
     const cc = cmpNatural(a.capitulo, b.capitulo);
     if (cc !== 0) return cc;
     const ck = (a.competencia||"").localeCompare(b.competencia||"", "es");
     if (ck !== 0) return ck;
-    return cmpNatural(a.item_numero, b.item_numero);
+    return cmpItemNumero(a.item_numero, b.item_numero);
   });
   const itemsFiltrados = itemsOrdenados.filter(i => {
     if (filtroTexto    && !((i.descripcion||"")+" "+(i.item_numero||"")).toLowerCase().includes(filtroTexto.toLowerCase())) return false;
@@ -3214,19 +3319,479 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
     if (filtroEstado   && (i.estado_precio||"Pendiente") !== filtroEstado) return false;
     return true;
   });
-  const capitulosUnicos = [...new Set(items.map(i => i.capitulo).filter(Boolean))].sort(cmpNatural);
+  const capitulosUnicos = [...new Set([
+    ...items.map(i => i.capitulo),
+    ...agrupadores.map(a => a.capitulo),
+  ].filter(Boolean))].sort(cmpNatural);
   const fmtCant = (v) => v != null ? Number(v).toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—";
 
+  const cantidadesById = useMemo(() => {
+    const m = {};
+    for (const c of cantidades) m[c.item_id] = c;
+    return m;
+  }, [cantidades]);
+
+  const esModoAprobadas = modoCantidad === "aprobadas";
+  const esVistaWbs = modoVista === "wbs";
+  const numColsTabla = esModoAprobadas ? 10 : 9;
+
+  const cantidadItem = (item) => {
+    const c = cantidadesById[item.id];
+    if (!c) return 0;
+    return esModoAprobadas ? (c.cant_aprobada ?? 0) : (c.cant_calculada ?? 0);
+  };
+  const valorTotalItem = (item) => {
+    const c = cantidadesById[item.id];
+    if (!c) return 0;
+    return esModoAprobadas ? (c.valor_aprobado ?? 0) : (c.valor_calculado ?? 0);
+  };
+  const deltaCantItem = (item) => cantidadesById[item.id]?.delta_cantidad ?? 0;
+
+  const sumHijos = (hijos, fn) => hijos.reduce((s, i) => s + (Number(fn(i)) || 0), 0);
+
+  const headersTabla = useMemo(() => {
+    const base = ["Capítulo / Agrupador", "Competencia", "Ítem", "Descripción", "Unidad", "Valor Unitario"];
+    const extra = esModoAprobadas
+      ? ["Cantidad", "Valor Total", "Delta"]
+      : ["Cantidad", "Valor Total"];
+    return [...base, ...extra, "Estado / WBS"];
+  }, [esModoAprobadas]);
+
+  const CeldaCantidad = ({ item }) => (
+    <td style={{ ...itemRowTd, textAlign: "right", color: col.textSecondary }}>
+      {fmtCant(cantidadItem(item))}
+    </td>
+  );
+  const CeldaValorTotal = ({ item }) => (
+    <td style={{ ...itemRowTd, textAlign: "right", color: "#22c55e", fontWeight: 600 }}>
+      {fmt(valorTotalItem(item))}
+    </td>
+  );
+  const CeldaDelta = ({ item }) => {
+    const d = deltaCantItem(item);
+    const color = d > 0 ? "#f59e0b" : d < 0 ? "#3b82f6" : col.textMuted;
+    return (
+      <td style={{ ...itemRowTd, textAlign: "right", color, fontWeight: d !== 0 ? 600 : 400 }}>
+        {d === 0 ? "—" : fmtCant(d)}
+      </td>
+    );
+  };
+
+  const agrupadoresPorCapitulo = useMemo(() => {
+    const map = {};
+    for (const ag of agrupadores) {
+      const cap = ag.capitulo || "";
+      if (!map[cap]) map[cap] = [];
+      map[cap].push(ag);
+    }
+    Object.values(map).forEach(list =>
+      list.sort((a, b) => (a.orden ?? 0) - (b.orden ?? 0) || cmpNatural(a.nombre, b.nombre))
+    );
+    return map;
+  }, [agrupadores]);
+
+  const agrupadorById = useMemo(() => {
+    const m = {};
+    for (const ag of agrupadores) {
+      m[ag.id] = ag;
+      const n = Number(ag.id);
+      if (!Number.isNaN(n)) m[n] = ag;
+    }
+    return m;
+  }, [agrupadores]);
+
+  const treeCapitulos = useMemo(() => {
+    const caps = new Set([
+      ...itemsFiltrados.map(i => i.capitulo || ""),
+      ...agrupadores.map(a => a.capitulo || ""),
+    ]);
+    return [...caps].filter(Boolean).sort(cmpNatural);
+  }, [itemsFiltrados, agrupadores]);
+
+  const capitulosVistaLista = useMemo(() =>
+    [...new Set(itemsFiltrados.map(i => i.capitulo || "").filter(Boolean))].sort(cmpNatural),
+  [itemsFiltrados]);
+
+  const abrirAgrupadorModal = (mode, data = null) => {
+    if (mode === "edit" && data) {
+      const assignedIds = items
+        .filter(i => i.agrupador_id != null && String(i.agrupador_id) === String(data.id))
+        .map(i => i.id);
+      setAgrupadorForm({
+        capitulo: data.capitulo || "",
+        nombre: data.nombre || "",
+      });
+      setAgrupadorItemsSel(assignedIds);
+      setAgrupadorBusqueda("");
+      setShowAgrupador({ mode: "edit", id: data.id, codigo_wbs: data.codigo_wbs || "" });
+    } else {
+      setAgrupadorForm({
+        capitulo: data?.capitulo || filtroCapitulo || capitulosUnicos[0] || "",
+        nombre: "",
+      });
+      setAgrupadorItemsSel([]);
+      setAgrupadorBusqueda("");
+      setShowAgrupador({ mode: "create" });
+    }
+  };
+
+  const itemsById = useMemo(() => {
+    const m = {};
+    for (const it of items) {
+      m[it.id] = it;
+      m[String(it.id)] = it;
+    }
+    return m;
+  }, [items]);
+
+  const itemsSeleccionadosAgrupador = useMemo(() =>
+    agrupadorItemsSel
+      .map(id => itemsById[id] || itemsById[String(id)])
+      .filter(Boolean)
+      .sort((a, b) => cmpItemNumero(a.item_numero, b.item_numero)),
+  [agrupadorItemsSel, itemsById]);
+
+  const totalSeleccionadosAgrupador = useMemo(() =>
+    itemsSeleccionadosAgrupador.reduce((s, i) => s + (Number(i.precio_unitario) || 0), 0),
+  [itemsSeleccionadosAgrupador]);
+
+  const capituloDesdeSeleccion = useMemo(() => {
+    const caps = [...new Set(itemsSeleccionadosAgrupador.map(i => (i.capitulo || "").trim()).filter(Boolean))];
+    return caps.length === 1 ? caps[0] : caps.length > 1 ? "__mixto__" : "";
+  }, [itemsSeleccionadosAgrupador]);
+
+  const busquedaAgrupadorActiva = Boolean(agrupadorBusqueda.trim());
+
+  const listaPanelIzquierdo = useMemo(() => {
+    const q = agrupadorBusqueda.trim().toLowerCase();
+    if (q) {
+      return items
+        .filter(i => {
+          const haystack = `${i.item_numero || ""} ${i.descripcion || ""} ${i.capitulo || ""}`.toLowerCase();
+          return haystack.includes(q);
+        })
+        .sort((a, b) => {
+          const cc = cmpNatural(a.capitulo, b.capitulo);
+          if (cc !== 0) return cc;
+          return cmpItemNumero(a.item_numero, b.item_numero);
+        });
+    }
+    const cap = agrupadorForm.capitulo || "";
+    if (!cap) return [];
+    return items
+      .filter(i => (i.capitulo || "") === cap)
+      .sort((a, b) => cmpItemNumero(a.item_numero, b.item_numero));
+  }, [items, agrupadorBusqueda, agrupadorForm.capitulo]);
+
+  const agrupadorItemsSelSet = useMemo(
+    () => new Set(agrupadorItemsSel.map(id => String(id))),
+    [agrupadorItemsSel],
+  );
+
+  const intentarAgregarItemAgrupador = (item) => {
+    if (!item || agrupadorItemsSelSet.has(String(item.id))) return;
+    const ag = item.agrupador_id ? agrupadorById[item.agrupador_id] : null;
+    const editAgId = showAgrupador?.mode === "edit" ? showAgrupador.id : null;
+    if (ag && String(ag.id) !== String(editAgId)) {
+      const etiqueta = ag.codigo_wbs ? `[${ag.codigo_wbs}] ${ag.nombre}` : ag.nombre;
+      if (!window.confirm(`Este ítem pertenece a ${etiqueta}. ¿Reasignar?`)) return;
+    }
+    setAgrupadorItemsSel(prev => [...prev, item.id]);
+  };
+
+  const quitarItemAgrupador = (itemId) => {
+    setAgrupadorItemsSel(prev => prev.filter(id => String(id) !== String(itemId)));
+  };
+
+  const puedeCrearAgrupador = Boolean(
+    agrupadorForm.nombre?.trim() &&
+    agrupadorItemsSel.length > 0 &&
+    capituloDesdeSeleccion &&
+    capituloDesdeSeleccion !== "__mixto__"
+  );
+
+  const puedeGuardarAgrupadorEdit = Boolean(
+    agrupadorForm.nombre?.trim() &&
+    agrupadorItemsSel.length > 0
+  );
+
+  const cerrarAgrupadorModal = () => {
+    setShowAgrupador(null);
+    setAgrupadorItemsSel([]);
+    setAgrupadorForm({ capitulo: "", nombre: "" });
+    setAgrupadorBusqueda("");
+    setAgrupadorSaving(false);
+  };
+
+  const guardarAgrupador = async () => {
+    if (agrupadorSaving) return;
+    if (showAgrupador?.mode === "edit") {
+      if (!puedeGuardarAgrupadorEdit) {
+        setMsg({ type: "error", text: "Indique nombre y al menos un ítem asignado." });
+        return;
+      }
+      setAgrupadorSaving(true);
+      try {
+        const agId = showAgrupador.id;
+        const res = await call("PUT", `/listado-precios/agrupadores/${agId}`, {
+          capitulo: agrupadorForm.capitulo,
+          nombre: agrupadorForm.nombre.trim(),
+          item_ids: agrupadorItemsSel,
+        });
+        setMsg({
+          type: "success",
+          text: `✅ Agrupador "${agrupadorForm.nombre.trim()}" actualizado con ${res.items_asignados ?? agrupadorItemsSel.length} ítem(s).`,
+        });
+        const idsSel = new Set(agrupadorItemsSel.map(id => String(id)));
+        const sumaPrecios = items
+          .filter(i => idsSel.has(String(i.id)))
+          .reduce((s, i) => s + (Number(i.precio_unitario) || 0), 0);
+        const prevIds = new Set(
+          items.filter(i => String(i.agrupador_id) === String(agId)).map(i => String(i.id)),
+        );
+        let sinDelta = 0;
+        for (const id of prevIds) {
+          if (!idsSel.has(id)) sinDelta += 1;
+        }
+        for (const id of idsSel) {
+          if (!prevIds.has(id)) {
+            const it = items.find(i => String(i.id) === id);
+            if (it && !it.agrupador_id) sinDelta -= 1;
+          }
+        }
+        setAgrupadores(prev => prev.map(a => (
+          String(a.id) === String(agId)
+            ? {
+              ...a,
+              nombre: agrupadorForm.nombre.trim(),
+              items_total: res.items_asignados ?? idsSel.size,
+              precio_unitario_suma_hijos: sumaPrecios,
+            }
+            : a
+        )));
+        setItems(prev => prev.map(i => {
+          const sid = String(i.id);
+          if (idsSel.has(sid)) return { ...i, agrupador_id: agId };
+          if (String(i.agrupador_id) === String(agId)) return { ...i, agrupador_id: null };
+          return i;
+        }));
+        if (sinDelta !== 0) setSinAgruparCount(prev => Math.max(0, prev + sinDelta));
+        cerrarAgrupadorModal();
+        await cargar({ silent: true });
+        recargarRespaldo();
+      } catch (e) {
+        setMsg({ type: "error", text: e.message });
+      } finally {
+        setAgrupadorSaving(false);
+      }
+      return;
+    }
+    if (!puedeCrearAgrupador) return;
+    if (capituloDesdeSeleccion === "__mixto__") {
+      setMsg({ type: "error", text: "Todos los ítems seleccionados deben pertenecer al mismo capítulo." });
+      return;
+    }
+    setAgrupadorSaving(true);
+    try {
+      const res = await call("POST", `/listado-precios/${contratoId}/agrupadores`, {
+        capitulo: capituloDesdeSeleccion,
+        nombre: agrupadorForm.nombre.trim(),
+        item_ids: agrupadorItemsSel,
+      });
+      setMsg({
+        type: "success",
+        text: `✅ Agrupador "${agrupadorForm.nombre.trim()}" creado como ${res.codigo_wbs || "WBS"} con ${res.items_asignados ?? agrupadorItemsSel.length} ítem(s).`,
+      });
+      const agId = res.id;
+      const idsSel = new Set(agrupadorItemsSel.map(id => String(id)));
+      const sumaPrecios = items
+        .filter(i => idsSel.has(String(i.id)))
+        .reduce((s, i) => s + (Number(i.precio_unitario) || 0), 0);
+      if (agId) {
+        const agIdStr = String(agId);
+        setAgrupadores(prev => {
+          const nuevo = {
+            ...res,
+            capitulo: capituloDesdeSeleccion,
+            nombre: agrupadorForm.nombre.trim(),
+            items_total: res.items_asignados ?? idsSel.size,
+            precio_unitario_suma_hijos: sumaPrecios,
+          };
+          return prev.some(a => String(a.id) === agIdStr)
+            ? prev.map(a => (String(a.id) === agIdStr ? { ...a, ...nuevo } : a))
+            : [...prev, nuevo];
+        });
+        setItems(prev => prev.map(i => (idsSel.has(String(i.id)) ? { ...i, agrupador_id: agId } : i)));
+        setSinAgruparCount(prev => Math.max(0, prev - idsSel.size));
+      }
+      onModoVistaChange?.("wbs");
+      cerrarAgrupadorModal();
+      await cargar({ silent: true });
+      recargarRespaldo();
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    } finally {
+      setAgrupadorSaving(false);
+    }
+  };
+
+  const agrupadoresDelCapitulo = (cap) => agrupadoresPorCapitulo[cap] || [];
+
+  const normAgId = (v) => (v == null || v === "" ? null : Number(v));
+
+  const itemsDeAgrupador = (agId) => itemsFiltrados.filter(i => normAgId(i.agrupador_id) === normAgId(agId))
+    .sort((a, b) => {
+      const ck = (a.competencia || "").localeCompare(b.competencia || "", "es");
+      if (ck !== 0) return ck;
+      return cmpItemNumero(a.item_numero, b.item_numero);
+    });
+
+  const itemsSinAgruparCap = (cap) => itemsFiltrados.filter(i => {
+    if ((i.capitulo || "") !== cap) return false;
+    const agId = normAgId(i.agrupador_id);
+    if (!agId) return true;
+    const ag = agrupadorById[agId] || agrupadorById[i.agrupador_id];
+    return !ag || (ag.capitulo || "") !== cap;
+  })
+    .sort((a, b) => {
+      const ck = (a.competencia || "").localeCompare(b.competencia || "", "es");
+      if (ck !== 0) return ck;
+      return cmpItemNumero(a.item_numero, b.item_numero);
+    });
+
+  const hayContenidoCapitulo = (cap) => {
+    const ags = agrupadoresDelCapitulo(cap);
+    if (ags.some(ag => itemsDeAgrupador(ag.id).length > 0)) return true;
+    if (itemsSinAgruparCap(cap).length > 0) return true;
+    if (!filtroTexto && !filtroEstado && ags.length > 0) return true;
+    return false;
+  };
+
+  const recargarRespaldoTimerRef = useRef(null);
+
   // ── Carga ──────────────────────────────────────────────────────────────────
-  const cargar = useCallback(async () => {
-    if (!contratoId) return;
-    setLoading(true);
-    try { setItems(await call("GET", `/listado-precios/${contratoId}`)); }
-    catch (e) { setMsg({ type:"error", text:e.message }); }
-    finally { setLoading(false); }
-  }, [contratoId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cargar = useCallback(async (opts = {}) => {
+    const silent = opts?.silent === true;
+    if (!contratoId) return false;
+    if (!silent) setLoading(true);
+    try {
+      const [itemsData, agrData, sinData, cantData] = await Promise.all([
+        call("GET", `/listado-precios/${contratoId}`),
+        call("GET", `/listado-precios/${contratoId}/agrupadores`).catch(() => null),
+        call("GET", `/listado-precios/${contratoId}/sin-agrupar`).catch(() => ({ count: 0 })),
+        call("GET", `/listado-precios/${contratoId}/cantidades`).catch(() => []),
+      ]);
+      setItems(itemsData || []);
+      if (agrData !== null) setAgrupadores(agrData || []);
+      setSinAgruparCount(sinData?.count ?? 0);
+      setCantidades(cantData || []);
+      return true;
+    }
+    catch (e) { setMsg({ type:"error", text:e.message }); return false; }
+    finally { if (!silent) setLoading(false); }
+  }, [contratoId, call]);
+
+  const recargarRespaldo = useCallback(() => {
+    if (recargarRespaldoTimerRef.current) clearTimeout(recargarRespaldoTimerRef.current);
+    recargarRespaldoTimerRef.current = setTimeout(() => {
+      recargarRespaldoTimerRef.current = null;
+      void cargar({ silent: true });
+    }, 500);
+  }, [cargar]);
+
+  const actualizarListado = useCallback(async () => {
+    const ok = await cargar({ silent: false });
+    if (ok) setMsg({ type: "success", text: "Listado actualizado" });
+  }, [cargar]);
+
+  useEffect(() => () => {
+    if (recargarRespaldoTimerRef.current) clearTimeout(recargarRespaldoTimerRef.current);
+  }, []);
 
   useEffect(() => { cargar(); }, [cargar]);
+
+  useEffect(() => {
+    if (!agDropdown) return;
+    const cerrar = (e) => {
+      if (e.key === "Escape") setAgDropdown(null);
+    };
+    window.addEventListener("keydown", cerrar);
+    return () => window.removeEventListener("keydown", cerrar);
+  }, [agDropdown]);
+
+  const contarHijosAg = (agId) =>
+    items.filter(i => normAgId(i.agrupador_id) === normAgId(agId)).length;
+
+  const solicitarEliminarAgrupador = (ag) => setEliminarAgConfirm(ag);
+
+  const confirmarEliminarAgrupador = async () => {
+    if (!eliminarAgConfirm || eliminandoAg) return;
+    setEliminandoAg(true);
+    try {
+      const res = await call("DELETE", `/listado-precios/agrupadores/${eliminarAgConfirm.id}`);
+      const n = res?.items_desasignados ?? contarHijosAg(eliminarAgConfirm.id);
+      setMsg({
+        type: "success",
+        text: `✅ Agrupador "${eliminarAgConfirm.nombre}" eliminado.${n ? ` ${n} ítem(s) quedaron sin agrupador.` : ""}`,
+      });
+      setEliminarAgConfirm(null);
+      await cargar({ silent: true });
+      recargarRespaldo();
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    } finally {
+      setEliminandoAg(false);
+    }
+  };
+
+  const agrupadoresOpcionesItem = (item) => {
+    const cap = (item.capitulo || "").trim();
+    const lista = cap
+      ? (agrupadoresPorCapitulo[cap] || [])
+      : [...agrupadores].sort((a, b) => cmpNatural(a.capitulo, b.capitulo) || (a.orden ?? 0) - (b.orden ?? 0));
+    return lista;
+  };
+
+  const abrirDropdownAgrupador = (item, e) => {
+    e.stopPropagation();
+    if (!perms?.editar || reasignandoAg) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ancho = 280;
+    setAgDropdown({
+      item,
+      top: rect.bottom + 4,
+      left: Math.min(Math.max(rect.right - ancho, 8), window.innerWidth - ancho - 8),
+    });
+  };
+
+  const reasignarItemAgrupador = async (item, nuevoAgId) => {
+    if (reasignandoAg) return;
+    if (normAgId(item.agrupador_id) === normAgId(nuevoAgId)) {
+      setAgDropdown(null);
+      return;
+    }
+    setReasignandoAg(true);
+    try {
+      await call("PUT", `/listado-precios/item/${item.id}/agrupador`, {
+        agrupador_id: nuevoAgId ?? null,
+      });
+      const ag = nuevoAgId ? agrupadorById[nuevoAgId] : null;
+      const etiqueta = ag
+        ? (ag.codigo_wbs ? `${ag.codigo_wbs} · ${ag.nombre}` : ag.nombre)
+        : "Sin agrupador";
+      setMsg({ type: "success", text: `✅ Ítem ${item.item_numero || ""} → ${etiqueta}`.trim() });
+      setAgDropdown(null);
+      setItems(prev => prev.map(i => (
+        i.id === item.id ? { ...i, agrupador_id: nuevoAgId ?? null } : i
+      )));
+      await cargar({ silent: true });
+      recargarRespaldo();
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+    } finally {
+      setReasignandoAg(false);
+    }
+  };
 
   // ── Popup detalle ──────────────────────────────────────────────────────────
   const abrirDetalle = async (item) => {
@@ -3253,13 +3818,17 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
     if (!popup) return;
     setSaving(true);
     try {
-      await call("PUT", `/listado-precios/item/${popup.id}`, popup);
+      const payload = { ...popup };
+      if (payload.agrupador_id === "" || payload.agrupador_id === undefined) payload.agrupador_id = null;
+      await call("PUT", `/listado-precios/item/${popup.id}`, payload);
       setMsg({ type:"success", text:"✅ Precio actualizado correctamente." });
-      const [updated, freshStats] = await Promise.all([
+      const [updated, freshStats, freshCant] = await Promise.all([
         call("GET", `/listado-precios/${contratoId}`),
         call("GET", `/listado-precios/item/${popup.id}/stats`).catch(() => null),
+        call("GET", `/listado-precios/${contratoId}/cantidades`).catch(() => []),
       ]);
       setItems(updated || []);
+      if (freshCant?.length) setCantidades(freshCant);
       const fresh = (updated || []).find(i => i.id === popup.id);
       if (fresh) setPopup({ ...fresh });
       if (freshStats) setStats(freshStats);
@@ -3281,9 +3850,9 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
   // ── Plantilla CSV ──────────────────────────────────────────────────────────
   const descargarPlantilla = () => {
     const filas = [
-      "capitulo,competencia,item_numero,descripcion,unidad,precio_unitario,tipo_precio,especificacion_tecnica,acta_fijacion,acta_modificatoria,observaciones,tipo_calculo",
-      "1.PRELIMINARES,IDU,1.01,REPLANTEO GENERAL,M2,601,Precio Contractual,Descripción técnica del ítem,,,AIU",
-      "2.EXCAVACIONES,IDU,2.01,EXCAVACION MECANICA,M3,4819,Precio No Previsto,Descripción técnica,15,3,Ítem adicional aprobado,IVA",
+      "capitulo,competencia,item_numero,descripcion,unidad,precio_unitario,tipo_precio,especificacion_tecnica,acta_fijacion,acta_modificatoria,observaciones,tipo_calculo,agrupador_nombre,codigo_wbs",
+      "1.PRELIMINARES,IDU,1.01,REPLANTEO GENERAL,M2,601,Precio Contractual,Descripción técnica del ítem,,,AIU,,",
+      "2.EXCAVACIONES,IDU,2.01,EXCAVACION MECANICA,M3,4819,Precio No Previsto,Descripción técnica,15,3,Ítem adicional aprobado,IVA,Capas Granulares,2.A",
     ].join("\n");
     const blob = new Blob(["\uFEFF" + filas], { type:"text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -3312,7 +3881,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
           vals.push(cur.trim());
           return vals.map(v=>v.replace(/^"|"$/g,"").trim());
         };
-        const CAMPOS={"capitulo":"capitulo","capítulo":"capitulo","competencia":"competencia","item_numero":"item_numero","ítem":"item_numero","item":"item_numero","nro":"item_numero","descripcion":"descripcion","descripción":"descripcion","unidad":"unidad","und":"unidad","precio_unitario":"precio_unitario","precio unitario":"precio_unitario","precio":"precio_unitario","valor":"precio_unitario","valorunitario":"precio_unitario","valor unitario":"precio_unitario","tipo_precio":"tipo_precio","tipo de precio":"tipo_precio","tipoprecio":"tipo_precio","especificacion_tecnica":"especificacion_tecnica","especificación técnica":"especificacion_tecnica","especificacion tecnica":"especificacion_tecnica","acta_fijacion":"acta_fijacion","acta de fijación":"acta_fijacion","acta fijacion":"acta_fijacion","acta_modificatoria":"acta_modificatoria","acta modificatoria":"acta_modificatoria","observaciones":"observaciones","estado_precio":"estado_precio"};
+        const CAMPOS={"capitulo":"capitulo","capítulo":"capitulo","competencia":"competencia","item_numero":"item_numero","ítem":"item_numero","item":"item_numero","nro":"item_numero","descripcion":"descripcion","descripción":"descripcion","unidad":"unidad","und":"unidad","precio_unitario":"precio_unitario","precio unitario":"precio_unitario","precio":"precio_unitario","valor":"precio_unitario","valorunitario":"precio_unitario","valor unitario":"precio_unitario","tipo_precio":"tipo_precio","tipo de precio":"tipo_precio","tipoprecio":"tipo_precio","especificacion_tecnica":"especificacion_tecnica","especificación técnica":"especificacion_tecnica","especificacion tecnica":"especificacion_tecnica","acta_fijacion":"acta_fijacion","acta de fijación":"acta_fijacion","acta fijacion":"acta_fijacion","acta_modificatoria":"acta_modificatoria","acta modificatoria":"acta_modificatoria","observaciones":"observaciones","estado_precio":"estado_precio","agrupador":"agrupador_nombre","agrupador_nombre":"agrupador_nombre","nombre agrupador":"agrupador_nombre","codigo_wbs":"agrupador_codigo_wbs","código wbs":"agrupador_codigo_wbs","codigo wbs":"agrupador_codigo_wbs","wbs":"agrupador_codigo_wbs"};
         const rawHeaders=parseRow(lines[0]).map(h=>h.toLowerCase());
         const headers=rawHeaders.map(h=>CAMPOS[h]||h);
         const parsed=lines.slice(1).map(line=>{
@@ -3334,6 +3903,8 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
     if (!items.length) return;
     const data = itemsOrdenados.map(i => ({
       "Capítulo":               i.capitulo                || "",
+      "Agrupador":              agrupadorById[i.agrupador_id]?.nombre || "",
+      "Código WBS":             agrupadorById[i.agrupador_id]?.codigo_wbs || "",
       "Competencia":            i.competencia             || "",
       "Ítem":                   i.item_numero             || "",
       "Descripción":            i.descripcion             || "",
@@ -3348,7 +3919,7 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
       "Tipo de Cálculo":        i.tipo_calculo            || "",
     }));
     const ws = XLSX.utils.json_to_sheet(data);
-    ws["!cols"] = [{wch:24},{wch:16},{wch:10},{wch:48},{wch:10},{wch:16},{wch:12},{wch:20},{wch:42},{wch:16},{wch:18},{wch:30},{wch:14}];
+    ws["!cols"] = [{wch:24},{wch:22},{wch:12},{wch:16},{wch:10},{wch:48},{wch:10},{wch:16},{wch:12},{wch:20},{wch:42},{wch:16},{wch:18},{wch:30},{wch:14}];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Listado de Precios");
     XLSX.writeFile(wb, `listado_precios_${contratoId}.xlsx`);
@@ -3373,11 +3944,13 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
     setCreating(true);
     try {
       await call("POST", `/listado-precios/${contratoId}/item`, {
-        ...crearForm, precio_unitario: parseFloat(crearForm.precio_unitario) || 0,
+        ...crearForm,
+        precio_unitario: parseFloat(crearForm.precio_unitario) || 0,
+        agrupador_id: crearForm.agrupador_id ? parseInt(crearForm.agrupador_id, 10) : null,
       });
       setMsg({ type:"success", text:"✅ Precio creado correctamente." });
       setShowCrear(false);
-      setCrearForm({ capitulo:"",item_numero:"",descripcion:"",unidad:"",competencia:"",tipo_precio:"",precio_unitario:"",especificacion_tecnica:"",acta_fijacion:"",acta_modificatoria:"",observaciones:"" });
+      setCrearForm({ capitulo:"",item_numero:"",descripcion:"",unidad:"",competencia:"",tipo_precio:"",precio_unitario:"",especificacion_tecnica:"",acta_fijacion:"",acta_modificatoria:"",observaciones:"",tipo_calculo:"",agrupador_id:"" });
       setUModoCustomC(false); setUCustomC("");
       cargar();
     } catch(e){ setMsg({ type:"error", text:e.message }); }
@@ -3409,6 +3982,92 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
   const secTitle     = { fontSize: "var(--cc-caption)", color: tTok.primary, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", marginBottom: 10 };
   const divider      = { borderTop: isDarkMode(theme) ? "1px solid rgba(0,175,197,0.1)" : `1px solid ${tTok.border}`, paddingTop: 12, marginBottom: 12 };
 
+  const agTypo = {
+    modalTitle: { fontSize: "var(--cc-title)", fontWeight: 700, color: col.textPrimary, fontFamily: "'Rajdhani',sans-serif" },
+    modalSub: { fontSize: "var(--cc-caption)", color: col.textSecondary, marginTop: 2 },
+    panelTitle: { fontSize: "var(--cc-sm)", fontWeight: 700, color: tTok.primary, marginBottom: 8 },
+    itemNum: { fontSize: "var(--cc-sm)", fontWeight: 700, color: col.textSecondary },
+    itemDesc: { fontSize: "var(--cc-sm)", color: col.textTable, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+    itemUnit: { fontSize: "var(--cc-caption)", color: col.textMuted, textAlign: "center" },
+    itemPrice: { fontSize: "var(--cc-sm)", color: "#22c55e", fontWeight: 600, textAlign: "right" },
+    badge: {
+      fontSize: "var(--cc-caption)", fontWeight: 700, whiteSpace: "nowrap",
+      padding: "2px 8px", borderRadius: 999, color: tTok.primary,
+      background: isDarkMode(theme) ? "rgba(0,175,197,0.15)" : "rgba(0,175,197,0.1)",
+      border: `1px solid ${isDarkMode(theme) ? "rgba(0,175,197,0.3)" : "rgba(0,175,197,0.25)"}`,
+    },
+    empty: { fontSize: "var(--cc-sm)", color: col.textMuted },
+    meta: { fontSize: "var(--cc-caption)", color: col.textMuted },
+    totalLabel: { fontSize: "var(--cc-sm)", fontWeight: 700, color: col.textPrimary },
+    totalValue: { fontSize: "var(--cc-md)", fontWeight: 700, color: "#22c55e" },
+    check: { color: "#22c55e", fontWeight: 700, fontSize: "var(--cc-md)", textAlign: "center" },
+    warnBox: { fontSize: "var(--cc-sm)", color: "#ef4444" },
+  };
+
+  const WbsChip = ({ agrupadorId, onClick, clickable }) => {
+    const ag = agrupadorById[agrupadorId] || agrupadorById[normAgId(agrupadorId)];
+    if (!ag?.codigo_wbs) return null;
+    const baseStyle = {
+      display: "inline-block",
+      ...agTypo.badge,
+      cursor: clickable ? "pointer" : "default",
+      border: clickable
+        ? `1px solid ${isDarkMode(theme) ? "rgba(0,175,197,0.45)" : "rgba(0,119,182,0.35)"}`
+        : agTypo.badge.border,
+    };
+    if (clickable) {
+      return (
+        <button
+          type="button"
+          title={`${ag.nombre} — clic para reasignar`}
+          onClick={onClick}
+          style={{ ...baseStyle, background: "inherit", font: "inherit", padding: agTypo.badge.padding }}
+        >
+          [{ag.codigo_wbs}]
+        </button>
+      );
+    }
+    return (
+      <span title={ag.nombre} style={baseStyle}>
+        [{ag.codigo_wbs}]
+      </span>
+    );
+  };
+
+  const CeldaEstadoItem = ({ item }) => {
+    const puedeReasignar = Boolean(perms?.editar);
+    return (
+      <td style={itemRowTd} onClick={e => agDropdown?.item?.id === item.id && e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6, flexWrap: "wrap" }}>
+          <span style={S.badge(item.estado_precio === "Aprobado" ? "aprobado" : "pendiente")}>
+            {item.estado_precio || "Pendiente"}
+          </span>
+          {normAgId(item.agrupador_id) ? (
+            <WbsChip
+              agrupadorId={item.agrupador_id}
+              clickable={puedeReasignar}
+              onClick={puedeReasignar ? (e) => abrirDropdownAgrupador(item, e) : undefined}
+            />
+          ) : puedeReasignar ? (
+            <button
+              type="button"
+              title="Sin agrupador — clic para asignar"
+              onClick={(e) => abrirDropdownAgrupador(item, e)}
+              style={{
+                border: "none", background: "transparent", padding: 0, cursor: "pointer",
+                color: "#f59e0b", fontSize: "var(--cc-caption)", lineHeight: 1,
+              }}
+            >
+              ⚠
+            </button>
+          ) : (
+            <span title="Sin agrupador" style={{ color: "#f59e0b", fontSize: "var(--cc-caption)", lineHeight: 1 }}>⚠</span>
+          )}
+        </div>
+      </td>
+    );
+  };
+
   const UnidadSelector = ({ value, onChange, modoCustom, setModoCustom, uCustom, setUCustom }) => (
     <div>
       {!modoCustom ? (
@@ -3437,6 +4096,29 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
 
   if (!contratoId) return <div style={S.empty}>No hay contrato activo en tu sesión.</div>;
 
+  const filaItemPrecio = (item, { paddingLeft = 20, hoverBg = "rgba(0,175,197,0.05)" } = {}) => (
+    <tr
+      key={item.id}
+      onClick={() => abrirDetalle(item)}
+      style={{ cursor: "pointer", transition: "background 0.15s" }}
+      onMouseEnter={e => { e.currentTarget.style.background = hoverBg; }}
+      onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+    >
+      <td style={{ ...itemRowTd, paddingLeft, color: col.textMuted }}>{item.capitulo || "—"}</td>
+      <td style={{ ...itemRowTd, color: col.textMuted }}>{item.competencia || "—"}</td>
+      <td style={{ ...itemRowTd, color: col.textSecondary, fontWeight: 600 }}>{item.item_numero || "—"}</td>
+      <td style={{ ...itemRowTd, color: col.textTable }}>{item.descripcion}</td>
+      <td style={{ ...itemRowTd, color: col.textSecondary }}>{item.unidad || "—"}</td>
+      <td style={{ ...itemRowTd, color: "#22c55e", fontWeight: 600, textAlign: "right" }}>
+        {item.precio_unitario ? `$${Math.round(item.precio_unitario).toLocaleString("es-CO")}` : "—"}
+      </td>
+      <CeldaCantidad item={item} />
+      <CeldaValorTotal item={item} />
+      {esModoAprobadas && <CeldaDelta item={item} />}
+      <CeldaEstadoItem item={item} />
+    </tr>
+  );
+
   return (
     <div>
       {msg && (
@@ -3448,7 +4130,25 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
 
       {/* ── Barra de acciones ── */}
       <div style={{ display:"flex",gap:10,marginBottom:20,flexWrap:"wrap",alignItems:"center" }}>
+        <button
+          type="button"
+          style={{
+            ...S.btn("ghost", true),
+            padding: "6px 8px",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+          onClick={() => void actualizarListado()}
+          disabled={loading}
+          title="Actualizar listado"
+        >
+          <RefreshCw size={16} color="#00afc5" strokeWidth={2.25} />
+        </button>
         {perms?.crear && <button style={S.btn("primary",true)} onClick={() => setShowCrear(true)}>+ Crear Precio</button>}
+        {perms?.crear && esVistaWbs && (
+          <button style={S.btn("ghost",true)} onClick={() => abrirAgrupadorModal("create")}>+ Crear Agrupador</button>
+        )}
         {perms?.crear && (
           <label style={{ ...S.btn("ghost",true),cursor:"pointer",display:"inline-flex",alignItems:"center",gap:4 }}>
             ⬆ Importar CSV
@@ -3459,8 +4159,15 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
           <button style={S.btn("ghost",true)} onClick={exportarXLSX}>⬇ Exportar XLSX</button>
         )}
         <button style={S.btn("ghost",true)} onClick={descargarPlantilla} title="Descarga un CSV de ejemplo con todos los campos">📋 Plantilla</button>
+        {sinAgruparCount > 0 && (
+          <span style={{ fontSize:12,color:"#f59e0b",fontWeight:600,display:"inline-flex",alignItems:"center",gap:4 }}>
+            ⚠ {sinAgruparCount.toLocaleString("es-CO")} ítem{sinAgruparCount !== 1 ? "s" : ""} sin agrupar
+          </span>
+        )}
         {items.length > 0 && (
-          <span style={{ marginLeft:"auto",fontSize:12,color:col.textMuted }}>{items.length.toLocaleString("es-CO")} precios</span>
+          <span style={{ marginLeft:"auto",fontSize:12,color:col.textMuted }}>
+            {items.length.toLocaleString("es-CO")} precios · {agrupadores.length.toLocaleString("es-CO")} agrupadores
+          </span>
         )}
       </div>
 
@@ -3504,31 +4211,108 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
           <table style={S.table}>
             <thead>
               <tr>
-                {["Capítulo","Competencia","Ítem","Descripción","Unidad","Valor Unitario","Estado"].map((h,i) => (
+                {headersTabla.map((h, i) => (
                   <th key={i} style={S.th(theme)}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {itemsFiltrados.map(item => (
-                <tr key={item.id} onClick={() => abrirDetalle(item)} style={{ cursor:"pointer",transition:"background 0.15s" }}
-                  onMouseEnter={e => e.currentTarget.style.background="rgba(0,175,197,0.05)"}
-                  onMouseLeave={e => e.currentTarget.style.background="transparent"}>
-                  <td style={{ ...tdStyle,color:col.textMuted,fontSize:12,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{item.capitulo||"—"}</td>
-                  <td style={{ ...tdStyle,color:col.textMuted,fontSize:12 }}>{item.competencia||"—"}</td>
-                  <td style={{ ...tdStyle,color:col.textSecondary,fontWeight:600,fontSize:12 }}>{item.item_numero||"—"}</td>
-                  <td style={{ ...tdStyle,color:col.textTable }}>{item.descripcion}</td>
-                  <td style={{ ...tdStyle,color:col.textSecondary,fontSize:12 }}>{item.unidad||"—"}</td>
-                  <td style={{ ...tdStyle,color:"#22c55e",fontWeight:600,fontSize:12,textAlign:"right" }}>
-                    {item.precio_unitario ? `$${Math.round(item.precio_unitario).toLocaleString("es-CO")}` : "—"}
-                  </td>
-                  <td style={tdStyle}>
-                    <span style={S.badge(item.estado_precio==="Aprobado"?"aprobado":"pendiente")}>
-                      {item.estado_precio||"Pendiente"}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+              {esVistaWbs ? (
+                treeCapitulos.filter(hayContenidoCapitulo).map(cap => (
+                  <Fragment key={`cap-block-${cap}`}>
+                    <tr key={`cap-${cap}`} style={{ background: isDarkMode(theme) ? "rgba(0,175,197,0.08)" : "rgba(0,175,197,0.06)" }}>
+                      <td colSpan={numColsTabla} style={{ ...tdStyle, fontWeight:700, color: tTok.primary, fontSize:13, padding:"10px 12px" }}>
+                        📁 {cap}
+                        {perms?.crear && (
+                          <button style={{ ...S.btn("ghost",true), marginLeft:10, fontSize:11, padding:"2px 8px" }}
+                            onClick={(e) => { e.stopPropagation(); abrirAgrupadorModal("create", { capitulo: cap }); }}>
+                            + Agrupador
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    {agrupadoresDelCapitulo(cap).map(ag => {
+                      const hijos = itemsDeAgrupador(ag.id);
+                      if (hijos.length === 0 && (filtroTexto || filtroEstado)) return null;
+                      return (
+                        <Fragment key={`ag-block-${ag.id}`}>
+                          <tr key={`ag-${ag.id}`} style={{ background: isDarkMode(theme) ? "rgba(0,175,197,0.04)" : "rgba(0,175,197,0.03)" }}>
+                            <td style={{ ...tdStyle, paddingLeft:28, fontWeight:600, color: col.textPrimary }}>
+                              <span style={{ color: tTok.primary }}>└──</span> {ag.codigo_wbs ? `${ag.codigo_wbs} · ` : ""}{ag.nombre}
+                              <span style={{ fontSize:11, color:col.textMuted, marginLeft:8 }}>({hijos.length} ítem{hijos.length !== 1 ? "s" : ""})</span>
+                              {perms?.editar && (
+                                <button
+                                  type="button"
+                                  style={{ ...S.btn("ghost", true), marginLeft: 8, fontSize: 10, padding: "1px 6px" }}
+                                  title="Editar agrupador"
+                                  onClick={(e) => { e.stopPropagation(); abrirAgrupadorModal("edit", ag); }}
+                                >
+                                  ✎
+                                </button>
+                              )}
+                              {perms?.eliminar && (
+                                <button
+                                  type="button"
+                                  style={{ ...S.btn("ghost", true), marginLeft: 4, fontSize: 11, padding: "1px 6px", color: "#ef4444" }}
+                                  title="Eliminar agrupador"
+                                  onClick={(e) => { e.stopPropagation(); solicitarEliminarAgrupador(ag); }}
+                                >
+                                  🗑
+                                </button>
+                              )}
+                            </td>
+                            <td style={tdStyle} colSpan={4} />
+                            <td style={{ ...tdStyle, color:"#22c55e", fontWeight:700, fontSize:12, textAlign:"right" }}>
+                              {fmt(ag.precio_unitario_suma_hijos)}
+                            </td>
+                            <td style={{ ...tdStyle, fontSize:12, textAlign:"right", color:col.textSecondary, fontWeight:600 }}>
+                              {fmtCant(sumHijos(hijos, cantidadItem))}
+                            </td>
+                            <td style={{ ...tdStyle, fontSize:12, textAlign:"right", color:"#22c55e", fontWeight:700 }}>
+                              {fmt(sumHijos(hijos, valorTotalItem))}
+                            </td>
+                            {esModoAprobadas && (
+                              <td style={{ ...tdStyle, fontSize:12, textAlign:"right", color: sumHijos(hijos, deltaCantItem) !== 0 ? "#f59e0b" : col.textMuted, fontWeight:600 }}>
+                                {sumHijos(hijos, deltaCantItem) === 0 ? "—" : fmtCant(sumHijos(hijos, deltaCantItem))}
+                              </td>
+                            )}
+                            <td style={tdStyle}><span style={{ fontSize:11, color:col.textMuted }}>Σ hijos</span></td>
+                          </tr>
+                          {hijos.map(item => filaItemPrecio(item, { paddingLeft: 48 }))}
+                        </Fragment>
+                      );
+                    })}
+                    {itemsSinAgruparCap(cap).length > 0 && (
+                      <Fragment key={`sin-block-${cap}`}>
+                        <tr key={`sin-${cap}`} style={{ background: isDarkMode(theme) ? "rgba(245,158,11,0.06)" : "rgba(245,158,11,0.08)" }}>
+                          <td colSpan={numColsTabla} style={{ ...tdStyle, paddingLeft:28, fontSize:12, color:"#f59e0b", fontWeight:600 }}>
+                            ⚠ Sin agrupador ({itemsSinAgruparCap(cap).length})
+                          </td>
+                        </tr>
+                        {itemsSinAgruparCap(cap).map(item => filaItemPrecio(item, {
+                          paddingLeft: 48,
+                          hoverBg: "rgba(245,158,11,0.06)",
+                        }))}
+                      </Fragment>
+                    )}
+                  </Fragment>
+                ))
+              ) : (
+                capitulosVistaLista.map(cap => {
+                  const capsItems = itemsFiltrados.filter(i => (i.capitulo || "") === cap);
+                  if (capsItems.length === 0) return null;
+                  return (
+                    <Fragment key={`lista-cap-${cap}`}>
+                      <tr style={{ background: isDarkMode(theme) ? "rgba(0,175,197,0.08)" : "rgba(0,175,197,0.06)" }}>
+                        <td colSpan={numColsTabla} style={{ ...tdStyle, fontWeight:700, color: tTok.primary, fontSize:13, padding:"10px 12px" }}>
+                          📁 {cap}
+                        </td>
+                      </tr>
+                      {capsItems.map(item => filaItemPrecio(item, { paddingLeft: 28 }))}
+                    </Fragment>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>
@@ -3595,6 +4379,30 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
                       style={{ ...selectStyle, opacity: perms?.editar ? 1 : 0.55, width: "100%" }}
                     />
                   </div>
+                </div>
+
+                <div style={{marginBottom:10}}>
+                  <div style={labelStyle}>Agrupador WBS</div>
+                  {perms?.editar ? (
+                    <select style={selectStyle} value={popup.agrupador_id || ""}
+                      onChange={e => setPopupField("agrupador_id", e.target.value ? parseInt(e.target.value, 10) : null)}>
+                      <option value="">— Sin agrupador —</option>
+                      {(agrupadoresPorCapitulo[popup.capitulo || ""] || []).map(ag => (
+                        <option key={ag.id} value={ag.id}>
+                          {ag.codigo_wbs ? `${ag.codigo_wbs} · ` : ""}{ag.nombre}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input style={{...inputStyle,opacity:0.55}} value={
+                      agrupadorById[popup.agrupador_id]?.nombre
+                        ? `${agrupadorById[popup.agrupador_id]?.codigo_wbs ? agrupadorById[popup.agrupador_id].codigo_wbs + " · " : ""}${agrupadorById[popup.agrupador_id].nombre}`
+                        : "Sin agrupador"
+                    } disabled />
+                  )}
+                  {!popup.agrupador_id && (
+                    <div style={{ fontSize:11, color:"#f59e0b", marginTop:4 }}>⚠ Este ítem no tiene agrupador asignado</div>
+                  )}
                 </div>
 
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
@@ -3823,6 +4631,19 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
                 </div>
               </div>
 
+              <div style={{ marginBottom:14 }}>
+                <div style={labelStyle}>Agrupador WBS</div>
+                <select style={selectStyle} value={crearForm.agrupador_id || ""}
+                  onChange={e => setCF("agrupador_id", e.target.value)}>
+                  <option value="">— Sin agrupador —</option>
+                  {(agrupadoresPorCapitulo[crearForm.capitulo || ""] || []).map(ag => (
+                    <option key={ag.id} value={ag.id}>
+                      {ag.codigo_wbs ? `${ag.codigo_wbs} · ` : ""}{ag.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14 }}>
                 <div>
                   <div style={labelStyle}>Ítem *</div>
@@ -3897,6 +4718,358 @@ function SeccionListadoPrecios({ call, user, perms, theme }) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ══════════════ MODAL AGRUPADOR ══════════════ */}
+      {showAgrupador && (
+        <div style={overlayStyle} onClick={e => e.target===e.currentTarget && cerrarAgrupadorModal()}>
+          <div style={modalStyle(MODAL_AGRUPADOR_ANCHO_CREAR)} onClick={e => e.stopPropagation()}>
+            <form onSubmit={(e) => e.preventDefault()}>
+            <div style={modalHead}>
+              <div>
+                <div style={agTypo.modalTitle}>
+                  {showAgrupador.mode === "edit" ? "Editar Agrupador" : "Crear Agrupador"}
+                </div>
+                <div style={agTypo.modalSub}>
+                  {showAgrupador.mode === "create"
+                    ? "El código WBS se asigna automáticamente (A, B, C…) y el valor es la suma de los ítems seleccionados"
+                    : "Modifique el nombre y los ítems asignados. El código WBS no se puede cambiar."}
+                </div>
+              </div>
+              <button type="button" style={S.closeBtn(theme)} onClick={cerrarAgrupadorModal}>✕</button>
+            </div>
+            <div style={modalScroll}>
+              {showAgrupador.mode === "edit" && showAgrupador.codigo_wbs && (
+                <div style={{ marginBottom:14 }}>
+                  <div style={labelStyle}>Código WBS</div>
+                  <input
+                    style={{ ...inputStyle, opacity:0.55, fontWeight:600 }}
+                    value={showAgrupador.codigo_wbs}
+                    disabled
+                  />
+                </div>
+              )}
+              <div style={{ marginBottom:16 }}>
+                <div style={labelStyle}>Nombre del agrupador *</div>
+                <input style={inputStyle} value={agrupadorForm.nombre}
+                  onChange={e => setAgrupadorForm(p => ({ ...p, nombre: e.target.value }))}
+                  placeholder="Ej: Capas Granulares"
+                  autoFocus={showAgrupador.mode === "create"} />
+              </div>
+
+              {showAgrupador.mode === "create" && capituloDesdeSeleccion === "__mixto__" && (
+                <div style={{
+                  ...agTypo.warnBox, marginBottom:12,
+                  padding:"10px 12px", borderRadius:8,
+                  background:"rgba(239,68,68,0.08)", border:"1px solid rgba(239,68,68,0.2)",
+                }}>
+                  Todos los ítems seleccionados deben pertenecer al mismo capítulo.
+                </div>
+              )}
+
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, minHeight:380 }}>
+                {/* ── Panel izquierdo: ítems del capítulo / búsqueda ── */}
+                <div style={{
+                  border:`1px solid ${tTok.border}`, borderRadius:10,
+                  display:"flex", flexDirection:"column", overflow:"hidden",
+                  background: isDarkMode(theme) ? "rgba(0,0,0,0.15)" : "rgba(248,250,252,0.6)",
+                }}>
+                  <div style={{
+                    padding:"10px 12px", borderBottom:`1px solid ${tTok.border}`,
+                    background: modalHeadBg, flexShrink:0,
+                  }}>
+                    <div style={agTypo.panelTitle}>
+                      {busquedaAgrupadorActiva ? "Resultados de búsqueda" : "Ítems del capítulo"}
+                    </div>
+                    {showAgrupador.mode === "create" && !busquedaAgrupadorActiva && (
+                      <select
+                        style={{ ...selectStyle, marginBottom:8 }}
+                        value={agrupadorForm.capitulo}
+                        onChange={e => setAgrupadorForm(p => ({ ...p, capitulo: e.target.value }))}
+                      >
+                        <option value="">-- Capítulo --</option>
+                        {capitulosUnicos.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    )}
+                    {showAgrupador.mode === "edit" && !busquedaAgrupadorActiva && agrupadorForm.capitulo && (
+                      <div style={{ ...agTypo.meta, marginBottom:8 }}>
+                        Capítulo {agrupadorForm.capitulo}
+                      </div>
+                    )}
+                    <input
+                      style={{ ...inputStyle, padding:"7px 10px" }}
+                      value={agrupadorBusqueda}
+                      onChange={e => setAgrupadorBusqueda(e.target.value)}
+                      placeholder="Buscar... 🔍"
+                    />
+                  </div>
+                  <div style={{ flex:1, overflowY:"auto", maxHeight:320, fontSize:"var(--cc-sm)" }}>
+                    {!busquedaAgrupadorActiva && !agrupadorForm.capitulo ? (
+                      <div style={{ ...agTypo.empty, padding:16 }}>
+                        {showAgrupador.mode === "edit"
+                          ? "Este agrupador no tiene capítulo definido."
+                          : "Seleccione un capítulo para ver sus ítems."}
+                      </div>
+                    ) : listaPanelIzquierdo.length === 0 ? (
+                      <div style={{ ...agTypo.empty, padding:16 }}>
+                        {busquedaAgrupadorActiva
+                          ? `No se encontraron ítems para "${agrupadorBusqueda.trim()}".`
+                          : "No hay ítems en este capítulo."}
+                      </div>
+                    ) : (
+                      listaPanelIzquierdo.map((item, idx) => {
+                        const seleccionado = agrupadorItemsSelSet.has(String(item.id));
+                        const ag = item.agrupador_id ? agrupadorById[item.agrupador_id] : null;
+                        const editAgId = showAgrupador.mode === "edit" ? showAgrupador.id : null;
+                        const otroAgrupador = Boolean(ag) && !seleccionado && String(ag.id) !== String(editAgId);
+                        return (
+                          <FilaTooltipDescripcionTruncada
+                            key={item.id}
+                            descripcion={item.descripcion}
+                            theme={theme}
+                            rowStyle={{
+                              display:"grid",
+                              gridTemplateColumns:"28px 64px 1fr 44px 88px auto",
+                              gap:8,
+                              alignItems:"center",
+                              padding:"8px 10px",
+                              borderBottom: idx < listaPanelIzquierdo.length - 1 ? `1px solid ${tTok.border}` : "none",
+                              opacity: otroAgrupador ? 0.55 : 1,
+                              background: seleccionado
+                                ? (isDarkMode(theme) ? "rgba(34,197,94,0.1)" : "rgba(34,197,94,0.08)")
+                                : otroAgrupador
+                                  ? (isDarkMode(theme) ? "rgba(100,116,139,0.06)" : "rgba(148,163,184,0.06)")
+                                  : "transparent",
+                            }}
+                          >
+                            {(descRef) => (
+                              <>
+                                {seleccionado ? (
+                                  <span style={agTypo.check} title="Asignado">✓</span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    style={{ ...S.btn("ghost", true), padding:"1px 6px", color:tTok.primary, fontWeight:700 }}
+                                    onClick={(e) => { e.stopPropagation(); intentarAgregarItemAgrupador(item); }}
+                                    title="Agregar al agrupador"
+                                  >+</button>
+                                )}
+                                <span style={agTypo.itemNum}>{item.item_numero || "—"}</span>
+                                <span ref={descRef} style={agTypo.itemDesc}>{item.descripcion || "—"}</span>
+                                <span style={agTypo.itemUnit}>{item.unidad || "—"}</span>
+                                <span style={agTypo.itemPrice}>
+                                  {item.precio_unitario ? `$${Math.round(item.precio_unitario).toLocaleString("es-CO")}` : "—"}
+                                </span>
+                                {otroAgrupador ? (
+                                  <span title={ag.nombre} style={agTypo.badge}>
+                                    {ag.codigo_wbs || ag.nombre}
+                                  </span>
+                                ) : busquedaAgrupadorActiva && item.capitulo ? (
+                                  <span style={{ ...agTypo.meta, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", maxWidth:72 }}>
+                                    {(item.capitulo || "").split(".")[0] || item.capitulo}
+                                  </span>
+                                ) : (
+                                  <span />
+                                )}
+                              </>
+                            )}
+                          </FilaTooltipDescripcionTruncada>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+
+                {/* ── Panel derecho: asignados + total ── */}
+                <div style={{
+                  border:`1px solid ${tTok.border}`, borderRadius:10,
+                  display:"flex", flexDirection:"column", overflow:"hidden",
+                  background: isDarkMode(theme) ? "rgba(0,175,197,0.04)" : "rgba(0,175,197,0.03)",
+                }}>
+                  <div style={{
+                    padding:"10px 12px", borderBottom:`1px solid ${tTok.border}`,
+                    background: modalHeadBg, ...agTypo.panelTitle, marginBottom:0,
+                  }}>
+                    {showAgrupador.mode === "edit"
+                      ? `Asignados (${itemsSeleccionadosAgrupador.length})`
+                      : `Seleccionados (${itemsSeleccionadosAgrupador.length})`}
+                  </div>
+                  <div style={{ flex:1, overflowY:"auto", maxHeight:280, fontSize:"var(--cc-sm)" }}>
+                    {itemsSeleccionadosAgrupador.length === 0 ? (
+                      <div style={{ ...agTypo.empty, padding:16, textAlign:"center" }}>
+                        Agregue ítems con el botón + del panel izquierdo.
+                      </div>
+                    ) : (
+                      itemsSeleccionadosAgrupador.map((item, idx) => (
+                        <FilaTooltipDescripcionTruncada
+                          key={item.id}
+                          descripcion={item.descripcion}
+                          theme={theme}
+                          rowStyle={{
+                            display:"grid",
+                            gridTemplateColumns:"64px 1fr 44px 88px 28px",
+                            gap:8,
+                            alignItems:"center",
+                            padding:"8px 10px",
+                            borderBottom: idx < itemsSeleccionadosAgrupador.length - 1 ? `1px solid ${tTok.border}` : "none",
+                          }}
+                        >
+                          {(descRef) => (
+                            <>
+                              <span style={agTypo.itemNum}>{item.item_numero || "—"}</span>
+                              <span ref={descRef} style={agTypo.itemDesc}>{item.descripcion || "—"}</span>
+                              <span style={agTypo.itemUnit}>{item.unidad || "—"}</span>
+                              <span style={agTypo.itemPrice}>
+                                {item.precio_unitario ? `$${Math.round(item.precio_unitario).toLocaleString("es-CO")}` : "—"}
+                              </span>
+                              <button
+                                type="button"
+                                style={{ ...S.btn("ghost", true), padding:"1px 5px", color:"#ef4444" }}
+                                onClick={(e) => { e.stopPropagation(); quitarItemAgrupador(item.id); }}
+                                title="Quitar ítem"
+                              >✕</button>
+                            </>
+                          )}
+                        </FilaTooltipDescripcionTruncada>
+                      ))
+                    )}
+                  </div>
+                  <div style={{
+                    borderTop:`1px solid ${tTok.border}`,
+                    padding:"10px 12px",
+                    background: modalHeadBg,
+                    flexShrink:0,
+                  }}>
+                    <div style={{ borderTop:`1px dashed ${tTok.border}`, marginBottom:8 }} />
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                      <span style={agTypo.totalLabel}>Total agrupador:</span>
+                      <span style={agTypo.totalValue}>
+                        {fmt(totalSeleccionadosAgrupador)}
+                      </span>
+                    </div>
+                    {showAgrupador.mode === "create" && capituloDesdeSeleccion && capituloDesdeSeleccion !== "__mixto__" && (
+                      <div style={{ ...agTypo.meta, marginTop:6 }}>
+                        Capítulo: {capituloDesdeSeleccion}
+                      </div>
+                    )}
+                    {showAgrupador.mode === "edit" && agrupadorForm.capitulo && (
+                      <div style={{ ...agTypo.meta, marginTop:6 }}>
+                        Capítulo: {agrupadorForm.capitulo}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div style={modalFoot}>
+              <button type="button" style={S.btn("ghost")} onClick={cerrarAgrupadorModal}>Cancelar</button>
+              <button
+                type="button"
+                style={S.btn("primary")}
+                onClick={guardarAgrupador}
+                disabled={agrupadorSaving || (showAgrupador.mode === "create" ? !puedeCrearAgrupador : !puedeGuardarAgrupadorEdit)}
+              >
+                {agrupadorSaving ? "Guardando..." : showAgrupador.mode === "edit" ? "💾 Guardar" : "✓ Crear"}
+              </button>
+            </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Confirmación eliminar agrupador ── */}
+      {eliminarAgConfirm && (
+        <div style={overlayStyle} onClick={e => e.target === e.currentTarget && !eliminandoAg && setEliminarAgConfirm(null)}>
+          <div style={{ ...modalStyle(480), padding: 0 }} onClick={e => e.stopPropagation()}>
+            <div style={modalHead}>
+              <div style={agTypo.modalTitle}>Eliminar agrupador</div>
+              <button type="button" style={S.closeBtn(theme)} onClick={() => !eliminandoAg && setEliminarAgConfirm(null)} disabled={eliminandoAg}>✕</button>
+            </div>
+            <div style={{ ...modalScroll, padding: "16px 20px" }}>
+              <p style={{ fontSize: "var(--cc-sm)", color: col.textPrimary, lineHeight: 1.55, margin: 0 }}>
+                ¿Eliminar el agrupador <strong>{eliminarAgConfirm.nombre}</strong>?
+                {" "}Los{" "}
+                <strong>{contarHijosAg(eliminarAgConfirm.id).toLocaleString("es-CO")}</strong>
+                {" "}ítem{contarHijosAg(eliminarAgConfirm.id) !== 1 ? "s" : ""} asignados quedarán sin agrupador y mostrarán alerta ⚠️.
+                {" "}Esta acción no elimina los ítems del listado de precios.
+              </p>
+            </div>
+            <div style={modalFoot}>
+              <button type="button" style={S.btn("ghost")} onClick={() => setEliminarAgConfirm(null)} disabled={eliminandoAg}>Cancelar</button>
+              <button type="button" style={S.btn("danger")} onClick={confirmarEliminarAgrupador} disabled={eliminandoAg}>
+                {eliminandoAg ? "Eliminando..." : "🗑 Eliminar agrupador"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Dropdown reasignar agrupador (WBS) ── */}
+      {agDropdown && createPortal(
+        <>
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 10040 }}
+            onClick={() => !reasignandoAg && setAgDropdown(null)}
+          />
+          <div
+            style={{
+              position: "fixed",
+              top: agDropdown.top,
+              left: agDropdown.left,
+              width: 280,
+              zIndex: 10041,
+              borderRadius: 10,
+              overflow: "hidden",
+              background: isDarkMode(theme) ? "#0b1920" : tTok.bgCard,
+              border: `1px solid ${tTok.border}`,
+              boxShadow: isDarkMode(theme) ? "0 12px 40px rgba(0,0,0,0.55)" : "0 12px 32px rgba(0,0,0,0.15)",
+            }}
+            onClick={e => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              disabled={reasignandoAg}
+              onClick={() => reasignarItemAgrupador(agDropdown.item, null)}
+              style={{
+                display: "block", width: "100%", textAlign: "left", border: "none", cursor: "pointer",
+                padding: "10px 12px", fontSize: "var(--cc-sm)", color: col.textPrimary,
+                background: !normAgId(agDropdown.item.agrupador_id)
+                  ? (isDarkMode(theme) ? "rgba(0,175,197,0.12)" : "rgba(0,119,182,0.1)")
+                  : "transparent",
+              }}
+            >
+              Sin agrupador ⚠️
+            </button>
+            <div style={{ borderTop: `1px solid ${tTok.border}`, margin: "0 8px" }} />
+            {agrupadoresOpcionesItem(agDropdown.item).length === 0 ? (
+              <div style={{ ...agTypo.empty, padding: "12px" }}>No hay agrupadores en este capítulo.</div>
+            ) : (
+              agrupadoresOpcionesItem(agDropdown.item).map(ag => {
+                const activo = normAgId(agDropdown.item.agrupador_id) === normAgId(ag.id);
+                const etiqueta = `${ag.codigo_wbs ? `${ag.codigo_wbs} · ` : ""}${ag.nombre}`;
+                return (
+                  <button
+                    key={ag.id}
+                    type="button"
+                    disabled={reasignandoAg}
+                    onClick={() => reasignarItemAgrupador(agDropdown.item, ag.id)}
+                    style={{
+                      display: "block", width: "100%", textAlign: "left", border: "none", cursor: "pointer",
+                      padding: "10px 12px", fontSize: "var(--cc-sm)", color: col.textPrimary,
+                      background: activo
+                        ? (isDarkMode(theme) ? "rgba(0,175,197,0.12)" : "rgba(0,119,182,0.1)")
+                        : "transparent",
+                      fontWeight: activo ? 600 : 400,
+                    }}
+                  >
+                    {etiqueta}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </>,
+        document.body
       )}
     </div>
   );
@@ -5946,6 +7119,32 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
   }, [user?.permisos, user?.cargo_nombre, isDeveloper, isAdmin]);
 
   const [tab, setTab] = useState(() => ADMIN_PANEL_TABS[0]?.id || "usuarios");
+  const [modoCantidadPrecios, setModoCantidadPrecios] = useState(() => {
+    try {
+      const v = sessionStorage.getItem("cc_listado_precios_modo_cantidad");
+      return v === "aprobadas" ? "aprobadas" : "calculadas";
+    } catch {
+      return "calculadas";
+    }
+  });
+  const [modoVistaPrecios, setModoVistaPrecios] = useState(() => {
+    try {
+      const v = sessionStorage.getItem("cc_listado_precios_modo_vista");
+      return v === "wbs" ? "wbs" : "lista";
+    } catch {
+      return "lista";
+    }
+  });
+
+  const setModoCantidadPreciosPersist = (modo) => {
+    setModoCantidadPrecios(modo);
+    try { sessionStorage.setItem("cc_listado_precios_modo_cantidad", modo); } catch {}
+  };
+
+  const setModoVistaPreciosPersist = (modo) => {
+    setModoVistaPrecios(modo);
+    try { sessionStorage.setItem("cc_listado_precios_modo_vista", modo); } catch {}
+  };
 
   useEffect(() => {
     if (TABS.length && !TABS.some((x) => x.id === tab)) {
@@ -6015,7 +7214,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
 
   return (
     <div style={S.overlay} onClick={e => e.target === e.currentTarget && onClose()}>
-      <div style={S.panel(activeTheme, t)} onClick={e => e.stopPropagation()}>
+      <div style={S.panel(activeTheme, t, tab === "precios")} onClick={e => e.stopPropagation()}>
 
         {/* SIDEBAR */}
         <div style={S.sidebar(activeTheme, t)}>
@@ -6050,7 +7249,67 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
               <div style={S.contentTitle(activeTheme, t)}>{TITULOS[tab]?.title}</div>
               <div style={S.contentSub(activeTheme, t)}>{TITULOS[tab]?.sub}</div>
             </div>
-            <button style={S.closeBtn(activeTheme, t)} onClick={onClose} title="Cerrar" type="button">✕</button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+              {tab === "precios" && (
+                <>
+                  <div style={{
+                    display: "inline-flex", borderRadius: 8, overflow: "hidden",
+                    border: `1px solid ${t.border}`, background: isDarkMode(activeTheme) ? "rgba(0,175,197,0.06)" : "rgba(0,119,182,0.06)",
+                  }}>
+                    {[
+                      { id: "lista", label: "📋 Lista de precios" },
+                      { id: "wbs", label: "🗂 Programación WBS" },
+                    ].map(opt => {
+                      const active = modoVistaPrecios === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setModoVistaPreciosPersist(opt.id)}
+                          style={{
+                            border: "none", cursor: "pointer", padding: "6px 12px",
+                            fontSize: "var(--cc-sm)", fontWeight: active ? 700 : 500,
+                            background: active ? (isDarkMode(activeTheme) ? "rgba(0,175,197,0.22)" : "rgba(0,119,182,0.14)") : "transparent",
+                            color: active ? t.primary : t.textMuted,
+                            transition: "all 0.15s", whiteSpace: "nowrap",
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div style={{
+                    display: "inline-flex", borderRadius: 8, overflow: "hidden",
+                    border: `1px solid ${t.border}`, background: isDarkMode(activeTheme) ? "rgba(0,175,197,0.06)" : "rgba(0,119,182,0.06)",
+                  }}>
+                    {[
+                      { id: "calculadas", label: "Calculadas" },
+                      { id: "aprobadas", label: "Aprobadas" },
+                    ].map(opt => {
+                      const active = modoCantidadPrecios === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setModoCantidadPreciosPersist(opt.id)}
+                          style={{
+                            border: "none", cursor: "pointer", padding: "6px 14px",
+                            fontSize: "var(--cc-sm)", fontWeight: active ? 700 : 500,
+                            background: active ? (isDarkMode(activeTheme) ? "rgba(0,175,197,0.22)" : "rgba(0,119,182,0.14)") : "transparent",
+                            color: active ? t.primary : t.textMuted,
+                            transition: "all 0.15s",
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+              <button style={S.closeBtn(activeTheme, t)} onClick={onClose} title="Cerrar" type="button">✕</button>
+            </div>
           </div>
 
           <div style={S.scrollArea(activeTheme, t)}>
@@ -6071,7 +7330,7 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
               })()
             }
           />}
-            {tab === "precios"          && <SeccionListadoPrecios call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true, validar: true } : precioPerms} theme={activeTheme} />}
+            {tab === "precios"          && <SeccionListadoPrecios call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, exportar: true, validar: true } : precioPerms} theme={activeTheme} modoCantidad={modoCantidadPrecios} modoVista={modoVistaPrecios} onModoVistaChange={setModoVistaPreciosPersist} />}
             {tab === "subcontratistas"  && <SeccionSubcontratistas call={call} user={user} perms={isDeveloper || isAdmin ? { ver: true, crear: true, editar: true, eliminar: true, validar: true, exportar: true } : subPerms} theme={activeTheme} />}
             {tab === "actas"            && <SeccionActasRpo call={call} user={user} contratos={contratosVisibles} theme={activeTheme} />}
             {tab === "nube"             && <ModuloNube usuario={user} t={t} contratos={contratosVisibles} />}

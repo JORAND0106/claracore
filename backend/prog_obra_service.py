@@ -1,5 +1,5 @@
 """
-Lógica de negocio Programación de obra (Fase 1).
+Logica de negocio Programacion de obra (Fase 1).
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from presupuesto_constants import PRESUPUESTO_TIPO_POLIGONO
 from prog_obra_calendar import CalendarioNoHabilesCache, add_dias_habiles, count_dias_habiles_entre
 
-_FUNC_LOG = "Programación obra"
+_FUNC_LOG = "Programacion obra"
 
 
 class BusinessRuleError(Exception):
@@ -66,7 +66,7 @@ def _niveles_prog_desde_contrato(sb, contrato_id: int) -> List[int]:
 def _ppto_items_por_pk(sb, contrato_id: int, pk_id: str) -> Tuple[int, List[Tuple[str, str, Decimal, str, Decimal]]]:
     """
     Devuelve (n_items_distintos, filas (capitulo, item, cant_total, und, vlr_unitario)) agregando
-    filas de presupuesto (PRESUPUESTO_TIPO_POLIGONO) por capítulo+ítem.
+    filas de presupuesto (PRESUPUESTO_TIPO_POLIGONO) por capitulo+item.
     """
     rows = (
         sb.table("presupuesto")
@@ -100,8 +100,229 @@ def _ppto_items_por_pk(sb, contrato_id: int, pk_id: str) -> Tuple[int, List[Tupl
     return len(items), items
 
 
-def _count_items_con_fecha(sb, version_id: str, pk_id: str) -> int:
+def _listado_agrupador_por_item(sb, contrato_id: int) -> Tuple[Dict[Tuple[str, str], Optional[int]], Dict[Tuple[str, str], str]]:
+    """Mapa (capitulo, item_numero) -> agrupador_id y descripcion desde listado_precios."""
+    rows = (
+        sb.table("listado_precios")
+        .select("capitulo,item_numero,agrupador_id,descripcion")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    ag_map: Dict[Tuple[str, str], Optional[int]] = {}
+    desc_map: Dict[Tuple[str, str], str] = {}
+    for r in rows:
+        cap = (r.get("capitulo") or "").strip()
+        it = (r.get("item_numero") or "").strip()
+        if not cap or not it:
+            continue
+        key = (cap, it)
+        ag_map[key] = r.get("agrupador_id")
+        if r.get("descripcion"):
+            desc_map[key] = str(r["descripcion"]).strip()
+    return ag_map, desc_map
+
+
+def fetch_estructura_programacion_pk(sb, contrato_id: int, pk_id: str) -> dict:
+    """
+    items de presupuesto del PK agrupados por capitulo y agrupador WBS.
+    JOIN logico con listado_precios -> listado_precios_agrupadores.
+    """
     pk = (pk_id or "").strip()
+    ppto_rows = (
+        sb.table("presupuesto")
+        .select("capitulo, item, cant_total, und, vlr_unitario, costo_directo, descripcion")
+        .eq("contrato_id", contrato_id)
+        .eq("pk_id", pk)
+        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+        .eq("dado_de_baja", False)
+        .execute()
+        .data
+        or []
+    )
+    item_agg: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for r in ppto_rows:
+        cap = (r.get("capitulo") or "").strip()
+        it = (r.get("item") or "").strip()
+        if not cap or not it:
+            continue
+        key = (cap, it)
+        ct = Decimal(str(r.get("cant_total") or 0))
+        cd = Decimal(str(r.get("costo_directo") or 0))
+        vlr = Decimal(str(r.get("vlr_unitario") or 0))
+        line_cd = cd if cd > 0 else ct * vlr
+        desc = (r.get("descripcion") or "").strip()
+        if key not in item_agg:
+            item_agg[key] = {
+                "cant": Decimal(0),
+                "costo": Decimal(0),
+                "und": (r.get("und") or "")[:20],
+                "vlr": vlr,
+                "descripcion": desc,
+            }
+        cur = item_agg[key]
+        cur["cant"] += ct
+        cur["costo"] += line_cd
+        if not cur["descripcion"] and desc:
+            cur["descripcion"] = desc
+
+    ag_by_item, desc_lp = _listado_agrupador_por_item(sb, contrato_id)
+    agr_rows = (
+        sb.table("listado_precios_agrupadores")
+        .select("id,capitulo,codigo_wbs,nombre,orden")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    agr_meta: Dict[int, dict] = {}
+    for a in agr_rows:
+        aid = a.get("id")
+        if aid is not None:
+            agr_meta[int(aid)] = a
+
+    cap_map: Dict[str, Dict[str, Any]] = {}
+    for (cap, it), v in sorted(item_agg.items(), key=lambda x: (x[0][0], x[0][1])):
+        if cap not in cap_map:
+            cap_map[cap] = {"agrupadores": {}, "sin_agrupador": []}
+        ag_id = ag_by_item.get((cap, it))
+        item_obj = {
+            "item": it,
+            "descripcion": v["descripcion"] or desc_lp.get((cap, it), ""),
+            "cant_total": float(v["cant"]),
+            "und": v["und"] or "?",
+            "vlr_unitario": float(v["vlr"]),
+            "costo_directo": float(v["costo"]),
+        }
+        if ag_id is not None and int(ag_id) in agr_meta:
+            ag_id_int = int(ag_id)
+            ag_bucket = cap_map[cap]["agrupadores"]
+            if ag_id_int not in ag_bucket:
+                meta = agr_meta[ag_id_int]
+                ag_bucket[ag_id_int] = {
+                    "agrupador_id": ag_id_int,
+                    "agrupador_nombre": (meta.get("nombre") or "").strip(),
+                    "codigo_wbs": (meta.get("codigo_wbs") or "").strip(),
+                    "orden": int(meta.get("orden") or 0),
+                    "items": [],
+                    "cant_total": 0.0,
+                    "costo_directo": 0.0,
+                }
+            ag = ag_bucket[ag_id_int]
+            ag["items"].append(item_obj)
+            ag["cant_total"] += item_obj["cant_total"]
+            ag["costo_directo"] += item_obj["costo_directo"]
+        else:
+            cap_map[cap]["sin_agrupador"].append(item_obj)
+
+    capitulos: List[dict] = []
+    for cap in sorted(cap_map.keys()):
+        block = cap_map[cap]
+        agrupadores = sorted(
+            block["agrupadores"].values(),
+            key=lambda a: (a.get("orden") or 0, a.get("codigo_wbs") or "", a.get("agrupador_nombre") or ""),
+        )
+        for ag in agrupadores:
+            ag["items"].sort(key=lambda x: x.get("item") or "")
+        sin = sorted(block["sin_agrupador"], key=lambda x: x.get("item") or "")
+        capitulos.append({
+            "capitulo": cap,
+            "agrupadores": agrupadores,
+            "sin_agrupador": sin,
+        })
+    return {"capitulos": capitulos}
+
+
+def propagar_fechas_agrupador_a_hijos(
+    sb,
+    version_id: str,
+    contrato_id: int,
+    pk_id: str,
+    capitulo: str,
+    agrupador_id: int,
+    codigo_wbs: str,
+    fecha_inicio: date,
+    duracion_dias_habiles: int,
+    fecha_fin_calculada: Optional[date],
+    usuario_id: int,
+    cache: CalendarioNoHabilesCache,
+) -> int:
+    """Replica fechas del agrupador a items hijos con heredado_de_capitulo=TRUE."""
+    cap = capitulo.strip()
+    pk = pk_id.strip()
+    ag_items = {
+        (r.get("item_numero") or "").strip()
+        for r in (
+            sb.table("listado_precios")
+            .select("item_numero")
+            .eq("contrato_id", contrato_id)
+            .eq("capitulo", cap)
+            .eq("agrupador_id", agrupador_id)
+            .execute()
+            .data
+            or []
+        )
+        if (r.get("item_numero") or "").strip()
+    }
+    if not ag_items:
+        return 0
+    _, ppto_items = _ppto_items_por_pk(sb, contrato_id, pk)
+    fin_iso = fecha_fin_calculada.isoformat() if fecha_fin_calculada else None
+    fi_iso = fecha_inicio.isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    n = 0
+    for p_cap, it, cant, und, vlr in ppto_items:
+        if p_cap != cap or it not in ag_items:
+            continue
+        existing = (
+            sb.table("prog_actividades")
+            .select("id,fecha_inicio,override_manual")
+            .eq("version_id", version_id)
+            .eq("pk_id", pk)
+            .eq("capitulo", cap)
+            .eq("item", it)
+            .eq("segmento", 1)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if existing and existing[0].get("override_manual"):
+            continue
+        payload = {
+            "version_id": version_id,
+            "contrato_id": contrato_id,
+            "pk_id": pk,
+            "capitulo": cap,
+            "item": it,
+            "segmento": 1,
+            "fecha_inicio": fi_iso,
+            "duracion_dias_habiles": int(duracion_dias_habiles),
+            "fecha_fin_calculada": fin_iso,
+            "cantidad_programada": float(cant),
+            "unidad": und or "?",
+            "costo_unitario": float(vlr),
+            "tipo_distribucion": "lineal",
+            "heredado_de_capitulo": True,
+            "override_manual": False,
+            "agrupador_id": agrupador_id,
+            "codigo_wbs": codigo_wbs or None,
+            "actualizado_en": now,
+        }
+        if existing:
+            payload.pop("creado_por", None)
+            sb.table("prog_actividades").update(payload).eq("id", existing[0]["id"]).execute()
+        else:
+            payload["creado_por"] = usuario_id
+            sb.table("prog_actividades").insert(payload).execute()
+        n += 1
+    return n
+
+
+def _count_items_con_fecha(sb, version_id: str, pk_id: str, contrato_id: int) -> int:
+    pk = (pk_id or "").strip()
+    _, ppto_items = _ppto_items_por_pk(sb, contrato_id, pk)
+    ppto_keys = {(cap, it) for cap, it, _, _, _ in ppto_items}
     rows = (
         sb.table("prog_actividades")
         .select("capitulo,item,fecha_inicio")
@@ -119,8 +340,9 @@ def _count_items_con_fecha(sb, version_id: str, pk_id: str) -> int:
             continue
         cap = (r.get("capitulo") or "").strip()
         it = (r.get("item") or "").strip()
-        if cap and it:
-            seen.add((cap, it))
+        key = (cap, it)
+        if cap and it and key in ppto_keys:
+            seen.add(key)
     return len(seen)
 
 
@@ -137,7 +359,7 @@ def _compute_estado_pk(items_total: int, items_con_fecha: int) -> str:
 def upsert_prog_pk_estado(sb, version_id: str, contrato_id: int, pk_id: str) -> None:
     pk = (pk_id or "").strip()
     items_total, _ = _ppto_items_por_pk(sb, contrato_id, pk)   # query 1
-    items_cf = _count_items_con_fecha(sb, version_id, pk)       # query 2
+    items_cf = _count_items_con_fecha(sb, version_id, pk, contrato_id)       # query 2
     estado = _compute_estado_pk(items_total, items_cf)
     sb.table("prog_pk_estado").upsert(                          # query 3 (antes: 4)
         {
@@ -195,7 +417,7 @@ def validate_segment_quantities(
     if act_rows and total_seg != ppto_qty:
         delta = total_seg - ppto_qty
         raise BusinessRuleError(
-            f"Suma de segmentos ({total_seg}) ≠ cantidad presupuesto ({ppto_qty}) para {capitulo}/{item}; delta {delta:+}"
+            f"Suma de segmentos ({total_seg}) ? cantidad presupuesto ({ppto_qty}) para {capitulo}/{item}; delta {delta:+}"
         )
 
 
@@ -208,7 +430,7 @@ def fetch_mapa_rows_rpc(sb, contrato_id: int) -> List[dict]:
 
 
 def _ppto_distinct_item_counts_by_pk(sb, contrato_id: int) -> Dict[str, int]:
-    """Una sola consulta a presupuesto: cuenta ítems distintos (capítulo+ítem) por PK."""
+    """Una sola consulta a presupuesto: cuenta items distintos (capitulo+item) por PK."""
     rows = (
         sb.table("presupuesto")
         .select("pk_id,capitulo,item")
@@ -233,7 +455,7 @@ def _ppto_distinct_item_counts_by_pk(sb, contrato_id: int) -> Dict[str, int]:
 
 
 def fetch_mapa_rows_for_version(sb, contrato_id: int, version_id: str) -> List[dict]:
-    """Estados de PK para una versión concreta (p. ej. borrador en edición)."""
+    """Estados de PK para una version concreta (p. ej. borrador en edicion)."""
     pk_rows = (
         sb.table("pk_ids")
         .select("pk_id")
@@ -325,7 +547,7 @@ def create_version(
 ) -> dict:
     tipo = (tipo or "").strip().lower()
     if tipo not in ("baseline", "reprogramacion", "suspension"):
-        raise BusinessRuleError("tipo inválido")
+        raise BusinessRuleError("tipo invalido")
     if tipo != "baseline" and not (motivo and motivo.strip()):
         raise BusinessRuleError("motivo_reprogramacion obligatorio para tipo distinto de baseline")
     if tipo == "baseline":
@@ -339,7 +561,7 @@ def create_version(
             or []
         )
         if any((r.get("estado") or "") not in ("archivada", "rechazada") for r in bl):
-            raise BusinessRuleError("Ya existe una versión baseline activa para el contrato")
+            raise BusinessRuleError("Ya existe una version baseline activa para el contrato")
     nums = (
         sb.table("prog_versiones")
         .select("numero_version")
@@ -361,7 +583,7 @@ def create_version(
     }
     ins = sb.table("prog_versiones").insert(row).execute().data
     if not ins:
-        raise BusinessRuleError("No se pudo crear la versión")
+        raise BusinessRuleError("No se pudo crear la version")
     vid = ins[0]["id"]
     ensure_prog_pk_estado_all(sb, str(vid), contrato_id)
     return ins[0]
@@ -370,10 +592,10 @@ def create_version(
 def assert_version_editable(sb, version_id: str) -> dict:
     v = sb.table("prog_versiones").select("*").eq("id", version_id).limit(1).execute().data
     if not v:
-        raise HTTPException(status_code=404, detail="Versión no encontrada")
+        raise HTTPException(status_code=404, detail="Version no encontrada")
     row = v[0]
     if row.get("estado") == "sellada":
-        raise HTTPException(status_code=400, detail="La versión está sellada y no admite cambios")
+        raise HTTPException(status_code=400, detail="La version esta sellada y no admite cambios")
     return row
 
 
@@ -382,7 +604,7 @@ def assert_version_borrador(sb, version_id: str) -> dict:
     if (v.get("estado") or "") != "borrador":
         raise HTTPException(
             status_code=400,
-            detail="Solo se puede editar el cronograma en estado borrador (retire de validación o espere rechazo).",
+            detail="Solo se puede editar el cronograma en estado borrador (retire de validacion o espere rechazo).",
         )
     return v
 
@@ -391,7 +613,7 @@ def submit_to_validation(sb, version_id: str, contrato_id: int) -> List[dict]:
     assert_version_editable(sb, version_id)
     niveles = _niveles_prog_desde_contrato(sb, contrato_id)
     if not niveles:
-        raise BusinessRuleError("El contrato no tiene niveles de validación >= 2 configurados")
+        raise BusinessRuleError("El contrato no tiene niveles de validacion >= 2 configurados")
     sb.table("prog_versiones").update(
         {"estado": "en_validacion", "actualizado_en": datetime.now(timezone.utc).isoformat()}
     ).eq("id", version_id).execute()
@@ -443,7 +665,7 @@ def process_validation_decision(
     assert_version_editable(sb, version_id)
     vrow = sb.table("prog_versiones").select("estado").eq("id", version_id).single().execute().data
     if vrow.get("estado") != "en_validacion":
-        raise BusinessRuleError("La versión no está en validación")
+        raise BusinessRuleError("La version no esta en validacion")
     pv = (
         sb.table("prog_validaciones")
         .select("*")
@@ -454,7 +676,7 @@ def process_validation_decision(
         .data
     )
     if not pv:
-        raise BusinessRuleError("No hay fila de validación para ese nivel")
+        raise BusinessRuleError("No hay fila de validacion para ese nivel")
     val = pv[0]
     if val.get("estado") != "pendiente":
         raise BusinessRuleError("Ese nivel ya fue procesado")
@@ -471,7 +693,7 @@ def process_validation_decision(
     try:
         idx = ordered.index(int(nivel))
     except ValueError:
-        raise BusinessRuleError("Nivel no pertenece a esta versión")
+        raise BusinessRuleError("Nivel no pertenece a esta version")
     if idx > 0:
         prev_n = ordered[idx - 1]
         pr = (
@@ -484,11 +706,11 @@ def process_validation_decision(
             .data
         )
         if not pr or pr[0].get("estado") != "aprobado":
-            raise BusinessRuleError("Aún no se aprueba el nivel previo")
+            raise BusinessRuleError("Aun no se aprueba el nivel previo")
     now = datetime.now(timezone.utc).isoformat()
     if not aprobar:
         if not (observacion and observacion.strip()):
-            raise BusinessRuleError("Observación obligatoria al rechazar")
+            raise BusinessRuleError("Observacion obligatoria al rechazar")
         sb.table("prog_validaciones").update(
             {
                 "estado": "rechazado",
@@ -537,12 +759,12 @@ def aplicar_herencia_capitulo(
         .data
     )
     if not cap_row:
-        raise BusinessRuleError("No hay programación de capítulo; guarde fecha y duración primero")
+        raise BusinessRuleError("No hay programacion de capitulo; guarde fecha y duracion primero")
     cr = cap_row[0]
     fi = cr.get("fecha_inicio_sugerida")
     du = cr.get("duracion_dias_habiles")
     if not fi or not du:
-        raise BusinessRuleError("Capítulo sin fecha_inicio_sugerida o duración")
+        raise BusinessRuleError("Capitulo sin fecha_inicio_sugerida o duracion")
     if isinstance(fi, str):
         y, m, d = fi[:10].split("-")
         fi_d = date(int(y), int(m), int(d))
@@ -624,7 +846,7 @@ def sync_capitulo_desde_items(
     cache: CalendarioNoHabilesCache,
     usuario_id: Optional[int] = None,
 ) -> None:
-    """Deriva fecha_inicio_sugerida y duracion_dias_habiles del capítulo desde ítems programados."""
+    """Deriva fecha_inicio_sugerida y duracion_dias_habiles del capitulo desde items programados."""
     rows = (
         sb.table("prog_actividades")
         .select("fecha_inicio,fecha_fin_calculada")
@@ -691,13 +913,13 @@ def _sync_capitulos_bulk(
     cache: CalendarioNoHabilesCache,
     usuario_id: int,
 ) -> None:
-    """Sincroniza prog_actividades_capitulo para N capítulos en 2 queries (antes era 3×N)."""
+    """Sincroniza prog_actividades_capitulo para N capitulos en 2 queries (antes era 3xN)."""
     if not capitulos:
         return
     pk = pk_id.strip()
     cap_list = list(capitulos)
 
-    # Query 1: leer todos los ítems con fecha de todos los capítulos de una vez
+    # Query 1: leer todos los items con fecha de todos los capitulos de una vez
     rows = (
         sb.table("prog_actividades")
         .select("capitulo,fecha_inicio,fecha_fin_calculada")
@@ -710,7 +932,7 @@ def _sync_capitulos_bulk(
         or []
     )
 
-    # Calcular min(fecha_inicio) y max(fecha_fin) por capítulo, en memoria
+    # Calcular min(fecha_inicio) y max(fecha_fin) por capitulo, en memoria
     cap_dates: Dict[str, Dict] = {}
     for r in rows:
         cap = str(r.get("capitulo") or "").strip()
@@ -753,7 +975,7 @@ def _sync_capitulos_bulk(
     if not payloads:
         return
 
-    # Query 2: upsert masivo — sin loop, sin select previo
+    # Query 2: upsert masivo - sin loop, sin select previo
     sb.table("prog_actividades_capitulo").upsert(
         payloads, on_conflict="version_id,pk_id,capitulo"
     ).execute()
@@ -820,6 +1042,12 @@ def batch_upsert_actividades(
             "override_manual": bool(raw.get("override_manual")),
             "actualizado_en": now,
         }
+        ag_id = raw.get("agrupador_id")
+        if ag_id is not None:
+            row["agrupador_id"] = int(ag_id)
+        cw = raw.get("codigo_wbs")
+        if cw:
+            row["codigo_wbs"] = str(cw).strip()[:50]
         key = (cap, it, seg)
         existing = ex_map.get(key)
         row["creado_por"] = (existing.get("creado_por") or usuario_id) if existing else usuario_id
@@ -918,7 +1146,7 @@ def seed_festivos_colombia_globales(sb, y0: int, y1: int) -> int:
 
 
 # -----------------------------------------------------------------------------
-# FASE 2 � CPM: Dependencias + C�lculo
+# FASE 2 - CPM: Dependencias + Calculo
 # -----------------------------------------------------------------------------
 
 from prog_obra_cpm import (
@@ -945,25 +1173,95 @@ def listar_dependencias(sb, version_id: str) -> list:
 def crear_dependencia(
     sb, version_id, contrato_id, pk_id_origen, capitulo_origen,
     pk_id_destino, capitulo_destino, tipo, lag_dias, usuario_id,
+    agrupador_id_origen=None, agrupador_id_destino=None,
 ) -> dict:
+    ag_o = str(agrupador_id_origen).strip() if agrupador_id_origen else None
+    ag_d = str(agrupador_id_destino).strip() if agrupador_id_destino else None
+
+    def _node(pk, cap, ag):
+        return (str(pk).strip(), str(cap).strip(), ag or "")
+
+    if _node(pk_id_origen, capitulo_origen, ag_o) == _node(pk_id_destino, capitulo_destino, ag_d):
+        raise BusinessRuleError("Un nodo no puede depender de si mismo.")
+
     existing = listar_dependencias(sb, version_id)
     import networkx as nx
     G = nx.DiGraph()
     for d in existing:
-        G.add_edge((d["pk_id_origen"], d["capitulo_origen"]), (d["pk_id_destino"], d["capitulo_destino"]))
-    G.add_edge((pk_id_origen, capitulo_origen), (pk_id_destino, capitulo_destino))
+        G.add_edge(
+            _node(d["pk_id_origen"], d["capitulo_origen"], d.get("agrupador_id_origen")),
+            _node(d["pk_id_destino"], d["capitulo_destino"], d.get("agrupador_id_destino")),
+        )
+    G.add_edge(
+        _node(pk_id_origen, capitulo_origen, ag_o),
+        _node(pk_id_destino, capitulo_destino, ag_d),
+    )
     if not nx.is_directed_acyclic_graph(G):
         cycles = list(nx.simple_cycles(G))
-        cycle_str = " -> ".join(f"{pk}/{cap}" for pk, cap in cycles[0])
+        cycle_str = " -> ".join(f"{pk}/{cap}{('/' + ag) if ag else ''}" for pk, cap, ag in cycles[0])
         raise BusinessRuleError(f"La dependencia crea un ciclo: {cycle_str}")
+    row_data = {
+        "version_id": version_id,
+        "contrato_id": contrato_id,
+        "pk_id_origen": pk_id_origen,
+        "capitulo_origen": capitulo_origen,
+        "pk_id_destino": pk_id_destino,
+        "capitulo_destino": capitulo_destino,
+        "tipo": tipo,
+        "lag_dias": lag_dias,
+        "creado_por": usuario_id,
+    }
+    if ag_o:
+        row_data["agrupador_id_origen"] = int(ag_o)
+    if ag_d:
+        row_data["agrupador_id_destino"] = int(ag_d)
     row = (
         sb.table("prog_dependencias")
+        .insert(row_data)
+        .execute()
+        .data
+    )
+    sb.table("prog_versiones").update({"cpm_dirty": True}).eq("id", version_id).execute()
+    return (row or [{}])[0]
+
+
+def eliminar_dependencia(sb, dep_id: str, version_id: str) -> None:
+    sb.table("prog_dependencias").delete().eq("id", dep_id).execute()
+    sb.table("prog_versiones").update({"cpm_dirty": True}).eq("id", version_id).execute()
+
+def listar_dependencias_globales(sb, version_id: str) -> list:
+    return (
+        sb.table("prog_dependencias_globales")
+        .select("*")
+        .eq("version_id", version_id)
+        .order("creado_en")
+        .execute()
+        .data
+        or []
+    )
+
+
+def crear_dependencia_global(
+    sb, version_id, contrato_id, capitulo_origen, capitulo_destino, tipo, lag_dias, usuario_id,
+) -> dict:
+    if capitulo_origen.strip() == capitulo_destino.strip():
+        raise BusinessRuleError("El capitulo origen y destino deben ser distintos.")
+    existing = listar_dependencias_globales(sb, version_id)
+    import networkx as nx
+    G = nx.DiGraph()
+    for d in existing:
+        G.add_edge(d["capitulo_origen"], d["capitulo_destino"])
+    G.add_edge(capitulo_origen, capitulo_destino)
+    if not nx.is_directed_acyclic_graph(G):
+        cycles = list(nx.simple_cycles(G))
+        cycle_str = " -> ".join(cycles[0])
+        raise BusinessRuleError(f"La dependencia global crea un ciclo: {cycle_str}")
+    row = (
+        sb.table("prog_dependencias_globales")
         .insert({
             "version_id": version_id,
             "contrato_id": contrato_id,
-            "pk_id_origen": pk_id_origen,
             "capitulo_origen": capitulo_origen,
-            "pk_id_destino": pk_id_destino,
             "capitulo_destino": capitulo_destino,
             "tipo": tipo,
             "lag_dias": lag_dias,
@@ -976,9 +1274,59 @@ def crear_dependencia(
     return (row or [{}])[0]
 
 
-def eliminar_dependencia(sb, dep_id: str, version_id: str) -> None:
-    sb.table("prog_dependencias").delete().eq("id", dep_id).execute()
+def eliminar_dependencia_global(sb, dep_id: str, version_id: str) -> None:
+    sb.table("prog_dependencias_globales").delete().eq("id", dep_id).execute()
     sb.table("prog_versiones").update({"cpm_dirty": True}).eq("id", version_id).execute()
+
+
+def _construir_dependencias_cpm(sb, version_id: str, nodos: list) -> list:
+    """Combina dependencias especificas con globales expandidas por PK."""
+    specific = listar_dependencias(sb, version_id)
+    global_deps = listar_dependencias_globales(sb, version_id)
+
+    nodos_set = {n.key for n in nodos}
+    pks = {n.pk_id for n in nodos}
+
+    specific_intra_pairs = {
+        (d["pk_id_origen"], d["capitulo_origen"], d.get("agrupador_id_origen") or "", d["capitulo_destino"], d.get("agrupador_id_destino") or "")
+        for d in specific
+        if d["pk_id_origen"] == d["pk_id_destino"]
+    }
+
+    deps = [
+        DependenciaCPM(
+            pk_id_origen=d["pk_id_origen"],
+            capitulo_origen=d["capitulo_origen"],
+            pk_id_destino=d["pk_id_destino"],
+            capitulo_destino=d["capitulo_destino"],
+            tipo=d["tipo"],
+            lag_dias=int(d.get("lag_dias") or 0),
+            agrupador_id_origen=str(d.get("agrupador_id_origen") or ""),
+            agrupador_id_destino=str(d.get("agrupador_id_destino") or ""),
+        )
+        for d in specific
+    ]
+
+    for g in global_deps:
+        cap_o = str(g["capitulo_origen"]).strip()
+        cap_d = str(g["capitulo_destino"]).strip()
+        tipo = g["tipo"]
+        lag = int(g.get("lag_dias") or 0)
+        for pk in pks:
+            if (pk, cap_o, "") not in nodos_set or (pk, cap_d, "") not in nodos_set:
+                continue
+            if (pk, cap_o, "", cap_d, "") in specific_intra_pairs:
+                continue
+            deps.append(DependenciaCPM(
+                pk_id_origen=pk,
+                capitulo_origen=cap_o,
+                pk_id_destino=pk,
+                capitulo_destino=cap_d,
+                tipo=tipo,
+                lag_dias=lag,
+            ))
+
+    return deps
 
 
 def _parse_date_cpm(v):
@@ -1002,6 +1350,7 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
         or []
     )
     nodos = []
+    seen_ag = set()
     for r in raw_caps:
         fi = _parse_date_cpm(r.get("fecha_inicio"))
         ff = _parse_date_cpm(r.get("fecha_fin"))
@@ -1015,20 +1364,42 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
                 fecha_fin_base=ff,
             ))
 
+    raw_ags = (
+        sb.table("prog_actividades")
+        .select("pk_id,capitulo,agrupador_id,fecha_inicio,fecha_fin_calculada,duracion_dias_habiles")
+        .eq("version_id", version_id)
+        .not_.is_("agrupador_id", "null")
+        .execute()
+        .data
+        or []
+    )
+    for r in raw_ags:
+        ag_id = str(r.get("agrupador_id") or "").strip()
+        if not ag_id:
+            continue
+        pk = str(r.get("pk_id") or "").strip()
+        cap = str(r.get("capitulo") or "").strip()
+        key = (pk, cap, ag_id)
+        if key in seen_ag:
+            continue
+        fi = _parse_date_cpm(r.get("fecha_inicio"))
+        ff = _parse_date_cpm(r.get("fecha_fin_calculada"))
+        dur = int(r.get("duracion_dias_habiles") or 1)
+        if fi and ff:
+            nodos.append(NodoCPM(
+                pk_id=pk,
+                capitulo=cap,
+                duracion=max(1, dur),
+                fecha_inicio_base=fi,
+                fecha_fin_base=ff,
+                agrupador_id=ag_id,
+            ))
+            seen_ag.add(key)
+
     if not nodos:
         return ResultadoCPM(ok=True)
 
-    dependencias = [
-        DependenciaCPM(
-            pk_id_origen=d["pk_id_origen"],
-            capitulo_origen=d["capitulo_origen"],
-            pk_id_destino=d["pk_id_destino"],
-            capitulo_destino=d["capitulo_destino"],
-            tipo=d["tipo"],
-            lag_dias=int(d.get("lag_dias") or 0),
-        )
-        for d in listar_dependencias(sb, version_id)
-    ]
+    dependencias = _construir_dependencias_cpm(sb, version_id, nodos)
 
     resultado = calcular_cpm(nodos, dependencias, contrato_id, cache)
     if not resultado.ok:

@@ -12,6 +12,7 @@ import httpx
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timedelta, timezone, date
+import pytz
 from dotenv import load_dotenv
 import os
 import base64
@@ -696,7 +697,23 @@ class ListadoPrecioItem(BaseModel):
     acta_modificatoria: Optional[str] = None
     observaciones: Optional[str] = None
     estado_precio: Optional[str] = None
-    tipo_calculo:  Optional[str] = None
+    tipo_calculo: Optional[str] = None
+    agrupador_id: Optional[int] = None
+    agrupador_nombre: Optional[str] = None
+    agrupador_codigo_wbs: Optional[str] = None
+
+
+class ListadoPrecioAgrupadorAsignarBody(BaseModel):
+    agrupador_id: Optional[int] = None
+
+
+class ListadoPrecioAgrupadorBody(BaseModel):
+    capitulo: Optional[str] = None
+    nombre: str
+    codigo_wbs: Optional[str] = None
+    descripcion: Optional[str] = None
+    orden: Optional[int] = 0
+    item_ids: Optional[List[int]] = None
 
 class PresupuestoRow(BaseModel):
     pk_id: Optional[str] = None
@@ -1187,6 +1204,11 @@ def _es_cargo_administrador_sicoe(current_user) -> bool:
         return n == "administrador"
     except Exception:
         return False
+
+
+def _es_admin_o_desarrollador(current_user) -> bool:
+    """True si el usuario tiene cargo Administrador (Desarrollador se cubre aparte en callers que lo combinan con OR)."""
+    return _es_cargo_administrador_sicoe(current_user)
 
 
 def _usuario_contrato_id_por_user_id(user_id: int) -> Optional[int]:
@@ -4832,6 +4854,400 @@ def guardar_permisos(permisos: List[PermisoUpdate], current_user=Depends(get_cur
 # LISTADO DE PRECIOS
 # ─────────────────────────────────────────────
 
+def _fetch_agrupadores_contrato(contrato_id: int) -> List[dict]:
+    rows = (
+        supabase.table("listado_precios_agrupadores")
+        .select("*")
+        .eq("contrato_id", contrato_id)
+        .order("capitulo")
+        .order("orden")
+        .order("nombre")
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        return []
+    resumen = (
+        supabase.from_("v_listado_precios_agrupador_resumen")
+        .select("id, items_total, precio_unitario_suma_hijos")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    by_id = {r["id"]: r for r in resumen}
+    out = []
+    for r in rows:
+        s = by_id.get(r["id"], {})
+        out.append({
+            **r,
+            "items_total": int(s.get("items_total") or 0),
+            "precio_unitario_suma_hijos": float(s.get("precio_unitario_suma_hijos") or 0),
+        })
+    return out
+
+
+def _agrupador_lookup_maps(contrato_id: int) -> Tuple[dict, dict]:
+    rows = _fetch_agrupadores_contrato(contrato_id)
+    by_nombre: dict = {}
+    by_codigo: dict = {}
+    for r in rows:
+        cap = (r.get("capitulo") or "").strip()
+        nom = (r.get("nombre") or "").strip().lower()
+        cod = (r.get("codigo_wbs") or "").strip().lower()
+        if cap and nom:
+            by_nombre[(cap, nom)] = r["id"]
+        if cap and cod:
+            by_codigo[(cap, cod)] = r["id"]
+    return by_nombre, by_codigo
+
+
+def _capitulo_prefijo_wbs(capitulo: str) -> str:
+    cap = (capitulo or "").strip()
+    m = re.match(r"^(\d+)", cap)
+    if m:
+        return m.group(1)
+    if "." in cap:
+        return cap.split(".")[0]
+    return cap[:1] if cap else "0"
+
+
+def _next_codigo_wbs(contrato_id: int, capitulo: str) -> str:
+    prefix = _capitulo_prefijo_wbs(capitulo)
+    existing = (
+        supabase.table("listado_precios_agrupadores")
+        .select("codigo_wbs")
+        .eq("contrato_id", contrato_id)
+        .eq("capitulo", capitulo)
+        .execute()
+        .data
+        or []
+    )
+    used: Set[str] = set()
+    for r in existing:
+        cod = (r.get("codigo_wbs") or "").strip().upper()
+        if not cod:
+            continue
+        suffix = cod.split(".")[-1]
+        if len(suffix) == 1 and suffix.isalpha():
+            used.add(suffix)
+    for i in range(26):
+        letter = chr(ord("A") + i)
+        if letter not in used:
+            return f"{prefix}.{letter}"
+    raise HTTPException(status_code=400, detail="Límite de agrupadores por capítulo alcanzado (Z).")
+
+
+def _capitulo_desde_items(contrato_id: int, item_ids: List[int]) -> str:
+    rows = (
+        supabase.table("listado_precios")
+        .select("id, capitulo")
+        .eq("contrato_id", contrato_id)
+        .in_("id", item_ids)
+        .execute()
+        .data
+        or []
+    )
+    if len(rows) != len(set(item_ids)):
+        raise HTTPException(status_code=400, detail="Uno o más ítems no existen en este contrato.")
+    caps = {(r.get("capitulo") or "").strip() for r in rows}
+    caps.discard("")
+    if len(caps) != 1:
+        raise HTTPException(status_code=400, detail="Todos los ítems deben pertenecer al mismo capítulo.")
+    return caps.pop()
+
+
+def _asignar_items_agrupador(
+    contrato_id: int,
+    agrupador_id: int,
+    capitulo: str,
+    item_ids: List[int],
+    *,
+    permitir_reasignar: bool = True,
+) -> int:
+    if not item_ids:
+        return 0
+    cap = capitulo.strip()
+    rows = (
+        supabase.table("listado_precios")
+        .select("id, capitulo, agrupador_id")
+        .eq("contrato_id", contrato_id)
+        .in_("id", item_ids)
+        .execute()
+        .data
+        or []
+    )
+    if len(rows) != len(set(item_ids)):
+        raise HTTPException(status_code=400, detail="Uno o más ítems no existen en este contrato.")
+    for row in rows:
+        if (row.get("capitulo") or "").strip() != cap:
+            raise HTTPException(status_code=400, detail="Todos los ítems deben pertenecer al mismo capítulo.")
+        prev = row.get("agrupador_id")
+        if prev is not None and prev != agrupador_id and not permitir_reasignar:
+            raise HTTPException(status_code=400, detail="Uno o más ítems ya tienen agrupador asignado.")
+    supabase.table("listado_precios").update({"agrupador_id": agrupador_id}).in_("id", item_ids).execute()
+    return len(item_ids)
+
+
+def _resolve_agrupador_id(contrato_id: int, capitulo: str, item: ListadoPrecioItem) -> Optional[int]:
+    if item.agrupador_id is not None:
+        return item.agrupador_id
+    cap = (capitulo or "").strip()
+    if not cap:
+        return None
+    by_nombre, by_codigo = _agrupador_lookup_maps(contrato_id)
+    if item.agrupador_codigo_wbs:
+        key = (cap, item.agrupador_codigo_wbs.strip().lower())
+        if key in by_codigo:
+            return by_codigo[key]
+    if item.agrupador_nombre:
+        key = (cap, item.agrupador_nombre.strip().lower())
+        if key in by_nombre:
+            return by_nombre[key]
+    return None
+
+
+def _listado_precio_row(contrato_id: int, item: ListadoPrecioItem) -> dict:
+    cap = (item.capitulo or "").strip()
+    row = {
+        "contrato_id": contrato_id,
+        **{k: v for k, v in item.dict().items() if v is not None and k not in (
+            "agrupador_nombre", "agrupador_codigo_wbs",
+        )},
+    }
+    ag_id = _resolve_agrupador_id(contrato_id, cap, item)
+    if ag_id is not None:
+        row["agrupador_id"] = ag_id
+    elif item.agrupador_id is None and (
+        item.agrupador_nombre or item.agrupador_codigo_wbs
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agrupador no encontrado para capítulo '{cap}' "
+                   f"({item.agrupador_nombre or item.agrupador_codigo_wbs})",
+        )
+    if item.tipo_precio == "Precio Contractual":
+        row["estado_precio"] = "Aprobado"
+        row["acta_fijacion"] = "Contractual"
+        row.pop("acta_modificatoria", None)
+    elif item.tipo_precio == "Precio No Previsto":
+        try:
+            f_val = float(row.get("acta_fijacion") or 0)
+            m_val = float(row.get("acta_modificatoria") or 0)
+        except (ValueError, TypeError):
+            f_val, m_val = 0, 0
+        row["estado_precio"] = "Aprobado" if (f_val > 0 and m_val > 0) else "Pendiente"
+    return row
+
+
+@app.get("/listado-precios/{contrato_id}/agrupadores")
+def get_listado_precios_agrupadores(contrato_id: int, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    return _fetch_agrupadores_contrato(contrato_id)
+
+
+@app.get("/listado-precios/{contrato_id}/sin-agrupar")
+def get_listado_precios_sin_agrupar(contrato_id: int, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    rows = (
+        supabase.table("listado_precios")
+        .select("id", count="exact")
+        .eq("contrato_id", contrato_id)
+        .is_("agrupador_id", "null")
+        .execute()
+    )
+    return {"count": rows.count or 0}
+
+
+@app.post("/listado-precios/{contrato_id}/agrupadores")
+def crear_listado_precio_agrupador(
+    contrato_id: int,
+    body: ListadoPrecioAgrupadorBody,
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    nombre = body.nombre.strip()
+    if not nombre:
+        raise HTTPException(status_code=400, detail="El nombre es obligatorio.")
+    item_ids = list(dict.fromkeys(body.item_ids or []))
+    if not item_ids:
+        raise HTTPException(status_code=400, detail="Seleccione al menos un ítem para el agrupador.")
+    cap_items = _capitulo_desde_items(contrato_id, item_ids)
+    cap_hint = (body.capitulo or "").strip()
+    if cap_hint and cap_hint != cap_items:
+        raise HTTPException(status_code=400, detail="Los ítems no pertenecen al capítulo indicado.")
+    cap = cap_items
+    uid = None
+    try:
+        uid = int(current_user.get("sub"))
+    except (TypeError, ValueError):
+        pass
+    existentes = (
+        supabase.table("listado_precios_agrupadores")
+        .select("id")
+        .eq("contrato_id", contrato_id)
+        .eq("capitulo", cap)
+        .execute()
+        .data
+        or []
+    )
+    row = {
+        "contrato_id": contrato_id,
+        "capitulo": cap,
+        "nombre": nombre,
+        "codigo_wbs": _next_codigo_wbs(contrato_id, cap),
+        "descripcion": body.descripcion,
+        "orden": len(existentes),
+        "creado_por": uid,
+    }
+    try:
+        ins = supabase.table("listado_precios_agrupadores").insert(row).execute()
+    except Exception as e:
+        msg = str(e)
+        if "unique" in msg.lower() or "duplicate" in msg.lower():
+            raise HTTPException(status_code=400, detail="Ya existe un agrupador con ese nombre en el capítulo.")
+        raise
+    created = (ins.data or [{}])[0]
+    ag_id = created.get("id")
+    if not ag_id:
+        raise HTTPException(status_code=500, detail="No se pudo crear el agrupador.")
+    asignados = _asignar_items_agrupador(contrato_id, int(ag_id), cap, item_ids)
+    registrar_log(current_user, "CREAR", "PRECIOS", "listado_precios_agrupadores", str(ag_id),
+                  {"capitulo": cap, "nombre": nombre, "codigo_wbs": row["codigo_wbs"], "items": asignados})
+    created["items_asignados"] = asignados
+    return created
+
+
+@app.put("/listado-precios/agrupadores/{agrupador_id}")
+def actualizar_listado_precio_agrupador(
+    agrupador_id: int,
+    body: ListadoPrecioAgrupadorBody,
+    current_user=Depends(get_current_user),
+):
+    ex = (
+        supabase.table("listado_precios_agrupadores")
+        .select("contrato_id, capitulo")
+        .eq("id", agrupador_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not ex:
+        raise HTTPException(status_code=404, detail="Agrupador no encontrado")
+    contrato_id = ex[0]["contrato_id"]
+    _require_contract_access(current_user, contrato_id)
+    cap = (body.capitulo or ex[0].get("capitulo") or "").strip()
+    patch = {
+        "nombre": body.nombre.strip(),
+        "descripcion": body.descripcion,
+        "actualizado_en": datetime.utcnow().isoformat(),
+    }
+    if body.capitulo:
+        patch["capitulo"] = body.capitulo.strip()
+    try:
+        supabase.table("listado_precios_agrupadores").update(patch).eq("id", agrupador_id).execute()
+    except Exception as e:
+        msg = str(e)
+        if "unique" in msg.lower() or "duplicate" in msg.lower():
+            raise HTTPException(status_code=400, detail="Ya existe un agrupador con ese nombre en el capítulo.")
+        raise
+    asignados = None
+    if body.item_ids is not None:
+        item_ids = list(dict.fromkeys(body.item_ids))
+        if not item_ids:
+            raise HTTPException(status_code=400, detail="Seleccione al menos un ítem para el agrupador.")
+        actuales = (
+            supabase.table("listado_precios")
+            .select("id")
+            .eq("agrupador_id", agrupador_id)
+            .execute()
+            .data
+            or []
+        )
+        actuales_ids = {int(r["id"]) for r in actuales}
+        nuevos_ids = set(item_ids)
+        quitar = actuales_ids - nuevos_ids
+        if quitar:
+            supabase.table("listado_precios").update({"agrupador_id": None}).in_("id", list(quitar)).execute()
+        asignados = _asignar_items_agrupador(contrato_id, agrupador_id, cap, item_ids, permitir_reasignar=True)
+        patch["item_ids"] = item_ids
+    registrar_log(current_user, "EDITAR", "PRECIOS", "listado_precios_agrupadores", str(agrupador_id), patch)
+    return {"ok": True, "items_asignados": asignados}
+
+
+@app.delete("/listado-precios/agrupadores/{agrupador_id}")
+def eliminar_listado_precio_agrupador(agrupador_id: int, current_user=Depends(get_current_user)):
+    ex = (
+        supabase.table("listado_precios_agrupadores")
+        .select("contrato_id, nombre")
+        .eq("id", agrupador_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not ex:
+        raise HTTPException(status_code=404, detail="Agrupador no encontrado")
+    _require_contract_access(current_user, ex[0]["contrato_id"])
+    hijos = (
+        supabase.table("listado_precios")
+        .select("id", count="exact")
+        .eq("agrupador_id", agrupador_id)
+        .execute()
+    )
+    items_desasignados = int(hijos.count or 0)
+    if items_desasignados > 0:
+        supabase.table("listado_precios").update({"agrupador_id": None}).eq("agrupador_id", agrupador_id).execute()
+    supabase.table("listado_precios_agrupadores").delete().eq("id", agrupador_id).execute()
+    registrar_log(current_user, "ELIMINAR", "PRECIOS", "listado_precios_agrupadores", str(agrupador_id),
+                  {"nombre": ex[0].get("nombre"), "items_desasignados": items_desasignados})
+    return {"ok": True, "items_desasignados": items_desasignados}
+
+
+@app.put("/listado-precios/item/{item_id}/agrupador")
+def reasignar_item_agrupador(
+    item_id: int,
+    body: ListadoPrecioAgrupadorAsignarBody,
+    current_user=Depends(get_current_user),
+):
+    row = (
+        supabase.table("listado_precios")
+        .select("id, contrato_id, capitulo, agrupador_id")
+        .eq("id", item_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Ítem no encontrado")
+    item_row = row[0]
+    _require_contract_access(current_user, item_row["contrato_id"])
+    cap_item = (item_row.get("capitulo") or "").strip()
+    nuevo_id = body.agrupador_id
+    if nuevo_id is not None:
+        ag = (
+            supabase.table("listado_precios_agrupadores")
+            .select("id, contrato_id, capitulo, nombre, codigo_wbs")
+            .eq("id", nuevo_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not ag:
+            raise HTTPException(status_code=404, detail="Agrupador no encontrado")
+        ag_row = ag[0]
+        if int(ag_row["contrato_id"]) != int(item_row["contrato_id"]):
+            raise HTTPException(status_code=400, detail="El agrupador no pertenece a este contrato.")
+        if cap_item and (ag_row.get("capitulo") or "").strip() != cap_item:
+            raise HTTPException(status_code=400, detail="El agrupador debe pertenecer al mismo capítulo que el ítem.")
+    supabase.table("listado_precios").update({"agrupador_id": nuevo_id}).eq("id", item_id).execute()
+    registrar_log(
+        current_user, "EDITAR", "PRECIOS", "listado_precios", str(item_id),
+        {"agrupador_id": nuevo_id, "accion": "reasignar_agrupador"},
+    )
+    return {"ok": True, "agrupador_id": nuevo_id}
+
+
 @app.get("/listado-precios/{contrato_id}")
 def get_listado_precios(contrato_id: int, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
@@ -4853,19 +5269,7 @@ def bulk_precios(contrato_id: int, items: List[ListadoPrecioItem], current_user=
     if items:
         rows = []
         for item in items:
-            row = {"contrato_id": contrato_id, **{k: v for k, v in item.dict().items() if v is not None}}
-            if row.get("tipo_precio") == "Precio Contractual":
-                row["estado_precio"] = "Aprobado"
-                row["acta_fijacion"] = "Contractual"
-                row.pop("acta_modificatoria", None)
-            elif row.get("tipo_precio") == "Precio No Previsto":
-                try:
-                    f_val = float(row.get("acta_fijacion") or 0)
-                    m_val = float(row.get("acta_modificatoria") or 0)
-                except (ValueError, TypeError):
-                    f_val, m_val = 0, 0
-                row["estado_precio"] = "Aprobado" if (f_val > 0 and m_val > 0) else "Pendiente"
-            rows.append(row)
+            rows.append(_listado_precio_row(contrato_id, item))
         supabase.table("listado_precios").insert(rows).execute()
     registrar_log(current_user, "IMPORTAR", "PRECIOS", "listado_precios", str(contrato_id),
                   {"cantidad": len(items)})
@@ -4873,7 +5277,22 @@ def bulk_precios(contrato_id: int, items: List[ListadoPrecioItem], current_user=
 
 @app.put("/listado-precios/item/{item_id}")
 def update_precio(item_id: int, body: ListadoPrecioItem, current_user=Depends(get_current_user)):
-    data = body.dict(exclude_none=True)
+    raw = body.dict()
+    data = {k: v for k, v in raw.items() if v is not None and k not in ("agrupador_nombre", "agrupador_codigo_wbs")}
+    if "agrupador_id" in raw:
+        data["agrupador_id"] = raw["agrupador_id"]
+    elif body.agrupador_nombre or body.agrupador_codigo_wbs:
+        cap = (body.capitulo or "").strip()
+        if not cap:
+            prev = supabase.table("listado_precios").select("capitulo").eq("id", item_id).limit(1).execute().data
+            cap = (prev[0].get("capitulo") if prev else "") or ""
+        cid_row = supabase.table("listado_precios").select("contrato_id").eq("id", item_id).limit(1).execute().data
+        cid = cid_row[0]["contrato_id"] if cid_row else None
+        if cid:
+            ag_id = _resolve_agrupador_id(int(cid), cap, body)
+            if ag_id is None:
+                raise HTTPException(status_code=400, detail="Agrupador no encontrado para este capítulo.")
+            data["agrupador_id"] = ag_id
     tipo = data.get("tipo_precio")
     if tipo == "Precio Contractual":
         data["estado_precio"] = "Aprobado"
@@ -4899,25 +5318,119 @@ def delete_precio(item_id: int, current_user=Depends(get_current_user)):
 def crear_precio(contrato_id: int, body: ListadoPrecioItem, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     """Crea un ítem individual en el listado de precios con lógica de aprobación automática."""
-    row = body.dict(exclude_none=True)
-    row["contrato_id"] = contrato_id
-    if body.tipo_precio == "Precio Contractual":
-        row["estado_precio"] = "Aprobado"
-        row["acta_fijacion"] = "Contractual"
-        row.pop("acta_modificatoria", None)
-    else:
-        try:
-            f_val = float(row.get("acta_fijacion") or 0)
-            m_val = float(row.get("acta_modificatoria") or 0)
-        except (ValueError, TypeError):
-            f_val, m_val = 0, 0
-        row["estado_precio"] = "Aprobado" if (f_val > 0 and m_val > 0) else "Pendiente"
+    row = _listado_precio_row(contrato_id, body)
     result = supabase.table("listado_precios").insert(row).execute()
     nuevo = result.data[0] if result.data else {}
     registrar_log(current_user, "CREAR", "PRECIOS", "listado_precios", str(nuevo.get("id", "")),
                   {"item_numero": row.get("item_numero"), "descripcion": row.get("descripcion"),
                    "tipo_precio": row.get("tipo_precio"), "estado_precio": row.get("estado_precio")})
     return nuevo if nuevo else {"ok": True}
+
+def _listado_precio_cant_lookup(cant_map: dict, capitulo: str, competencia: str, item_numero: str) -> float:
+    """Busca cantidad agregada por capítulo/competencia/ítem (misma regla que get_precio_stats)."""
+    cap_k = _dash_norm_capitulo_key_py(capitulo) if capitulo else ""
+    comp_f = (competencia or "").strip()
+    it_k = _dash_norm_item_key_py(item_numero)
+    if comp_f:
+        return float(cant_map.get((cap_k, comp_f, it_k), 0))
+    total = 0.0
+    for (ck, _cp, ik), val in cant_map.items():
+        if ck == cap_k and ik == it_k:
+            total += float(val)
+    return total
+
+
+@app.get("/listado-precios/{contrato_id}/cantidades")
+def get_listado_precios_cantidades(contrato_id: int, current_user=Depends(get_current_user)):
+    """Cantidades calculadas (presupuesto) y aprobadas (so_registros, nivel máximo) por ítem del listado."""
+    _require_contract_access(current_user, contrato_id)
+    items = []
+    offset = 0
+    while True:
+        batch = (
+            supabase.table("listado_precios")
+            .select("id, capitulo, competencia, item_numero, precio_unitario")
+            .eq("contrato_id", contrato_id)
+            .order("item_numero")
+            .range(offset, offset + 999)
+            .execute()
+            .data
+        )
+        items.extend(batch or [])
+        if len(batch or []) < 1000:
+            break
+        offset += 1000
+
+    ppto_calc: Dict[tuple, float] = defaultdict(float)
+    offset = 0
+    while True:
+        batch = (
+            supabase.table("presupuesto")
+            .select("capitulo, competencia, item, cant_total")
+            .eq("contrato_id", contrato_id)
+            .eq("tipo_ejecucion", "Presupuesto de Obra")
+            .eq("dado_de_baja", False)
+            .range(offset, offset + 999)
+            .execute()
+            .data
+        )
+        for r in batch or []:
+            cap_k = _dash_norm_capitulo_key_py(r.get("capitulo") or "")
+            comp = (r.get("competencia") or "").strip()
+            it_k = _dash_norm_item_key_py(r.get("item"))
+            if not it_k:
+                continue
+            ppto_calc[(cap_k, comp, it_k)] += float(r.get("cant_total") or 0)
+        if len(batch or []) < 1000:
+            break
+        offset += 1000
+
+    so_aprob: Dict[tuple, float] = defaultdict(float)
+    offset = 0
+    while True:
+        def _q_obra(o=offset):
+            return (
+                supabase.table("so_registros")
+                .select(f"capitulo, competencia, item_numero, cantidad_total, {SICOE_SELECT_NIVELES_ESTADO}")
+                .eq("contrato_id", contrato_id)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_q_obra) or []
+        for r in batch:
+            if _matriz_validacion_norm_estado_nivel_final(r, contrato_id) != "Aprobado":
+                continue
+            cap_k = _dash_norm_capitulo_key_py(r.get("capitulo") or "")
+            comp = (r.get("competencia") or "").strip()
+            it_k = _dash_norm_item_key_py(r.get("item_numero"))
+            if not it_k:
+                continue
+            so_aprob[(cap_k, comp, it_k)] += float(r.get("cantidad_total") or 0)
+        if len(batch) < 1000:
+            break
+        offset += 1000
+
+    out = []
+    for item in items:
+        cap = item.get("capitulo") or ""
+        comp = item.get("competencia") or ""
+        it = item.get("item_numero") or ""
+        cant_calc = _listado_precio_cant_lookup(ppto_calc, cap, comp, it)
+        cant_aprob = _listado_precio_cant_lookup(so_aprob, cap, comp, it)
+        pu = float(item.get("precio_unitario") or 0)
+        out.append({
+            "item_id": item["id"],
+            "cant_calculada": round(cant_calc, 4),
+            "cant_aprobada": round(cant_aprob, 4),
+            "valor_calculado": round(cant_calc * pu),
+            "valor_aprobado": round(cant_aprob * pu),
+            "delta_cantidad": round(cant_calc - cant_aprob, 4),
+            "delta_valor": round(cant_calc * pu - cant_aprob * pu),
+        })
+    return out
+
 
 @app.get("/listado-precios/item/{item_id}/stats")
 def get_precio_stats(item_id: int, current_user=Depends(get_current_user)):
@@ -16839,7 +17352,7 @@ def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Option
             meta_ct = (cr[0].get("contratista") or cr[0].get("numero") or "").strip()
     except Exception:
         pass
-    gen_ts = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M")
+    gen_ts = datetime.now(pytz.timezone("America/Bogota")).strftime("%d/%m/%Y %H:%M")
 
     ppto_all = _ppto_rows_capitulo(contrato_id, capitulo)
     by_item: Dict[str, List[dict]] = {}
@@ -17137,7 +17650,7 @@ def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Option
     bio = io.BytesIO()
     wb.save(bio)
     safe_cap = re.sub(r"[^\w\-.]+", "_", str(capitulo or "cap"))[:40]
-    fn = f"ClaraCore_{safe_cap}_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.xlsx"
+    fn = f"ClaraCore_{safe_cap}_{datetime.now(pytz.timezone('America/Bogota')).strftime('%Y-%m-%d')}.xlsx"
     return bio.getvalue(), fn
 
 
