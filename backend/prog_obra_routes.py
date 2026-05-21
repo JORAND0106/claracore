@@ -21,6 +21,9 @@ from prog_obra_service import (
     fetch_estructura_programacion_pk,
     fetch_mapa_rows_for_version,
     fetch_mapa_rows_rpc,
+    fetch_pks_con_ruta_critica,
+    enrich_mapa_rows_with_ruta_critica,
+    mark_cpm_dirty,
     fetch_vigente_meta,
     make_prog_calendar_loader,
     process_validation_decision,
@@ -32,6 +35,7 @@ from prog_obra_service import (
     sync_capitulo_desde_items,
     upsert_prog_pk_estado,
     validate_segment_quantities,
+    _ppto_items_por_pk,
     # Fase 2 ? CPM
     listar_dependencias,
     crear_dependencia,
@@ -201,23 +205,18 @@ def prog_mapa(contrato_id: int, current_user=Depends(get_current_user)):
     require_permiso_programacion_obra(current_user, "ver")
     _require_contract_access(current_user, contrato_id)
     t0 = time.perf_counter()
-    borrador = fetch_borrador_activo(supabase, contrato_id)       # 1 query
-    vid, num = fetch_vigente_meta(supabase, contrato_id)           # 2 queries
-    # Siempre usar el RPC ? 1 sola query independientemente de borrador o vigente.
-    # prog_mapa_pk_estados acepta p_version_id opcional (ver SQL en Supabase).
-    rpc_params: dict = {"p_contrato_id": contrato_id}
+    borrador = fetch_borrador_activo(supabase, contrato_id)
+    vid, num = fetch_vigente_meta(supabase, contrato_id)
+    version_mapa_id = str(borrador["id"]) if borrador and borrador.get("id") else (str(vid) if vid else None)
+    # Borrador activo: colores del mapa desde prog_pk_estado de esa versión (no la vigente sellada).
     if borrador and borrador.get("id"):
-        rpc_params["p_version_id"] = str(borrador["id"])
-    try:
-        rpc_res = supabase.rpc("prog_mapa_pk_estados", rpc_params).execute()
-        rows = rpc_res.data or []
-    except Exception:
-        # Fallback si la RPC aún no acepta p_version_id (deploy pendiente del SQL)
-        _logger.warning("prog_mapa_pk_estados fallback: %s", _tb.format_exc()[-400:])
-        if borrador and borrador.get("id"):
-            rows = fetch_mapa_rows_for_version(supabase, contrato_id, str(borrador["id"]))
-        else:
-            rows = fetch_mapa_rows_rpc(supabase, contrato_id)
+        rows = fetch_mapa_rows_for_version(supabase, contrato_id, str(borrador["id"]))
+    else:
+        rows = fetch_mapa_rows_rpc(supabase, contrato_id)
+        if not rows:
+            rows = fetch_mapa_rows_for_version(supabase, contrato_id, vid) if vid else []
+    critico_pks = fetch_pks_con_ruta_critica(supabase, version_mapa_id)
+    rows = enrich_mapa_rows_with_ruta_critica(rows, critico_pks)
     ms = round((time.perf_counter() - t0) * 1000, 2)
     return {
         "pk": rows,
@@ -533,6 +532,7 @@ def prog_actividades_batch(
 
     propagaciones = 0
     if has_agrupadores:
+        _, ppto_items_pk = _ppto_items_por_pk(supabase, contrato_id, pk_id)
         seen_ag = set()
         for it in body.actividades:
             fi_d = it.fecha_inicio if isinstance(it.fecha_inicio, date) else None
@@ -557,10 +557,17 @@ def prog_actividades_batch(
                 fin_d,
                 uid,
                 cache,
+                ppto_items=ppto_items_pk,
             )
             propagaciones += 1
         # Tras heredar fechas a ítems hijo, recalcular prog_pk_estado (color del polígono)
         upsert_prog_pk_estado(supabase, version_id, contrato_id, pk_id)
+
+    # Siempre aplicar lógica Python (WBS-aware) por si la RPC en BD no está actualizada
+    if not has_agrupadores:
+        upsert_prog_pk_estado(supabase, version_id, contrato_id, pk_id)
+
+    mark_cpm_dirty(supabase, version_id)
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
     if elapsed_ms > 5000:
@@ -673,6 +680,7 @@ def prog_upsert_actividad(contrato_id: int, body: ActividadUpsertBody, current_u
             cache,
             _uid(current_user),
         )
+    mark_cpm_dirty(supabase, body.version_id)
     _log_prog(
         current_user,
         "PROG_ACTIVIDAD_GUARDADA",
@@ -944,11 +952,19 @@ def prog_calcular_cpm(
 
     _log_prog(current_user, "PROG_CPM_CALCULADO", "prog_version", version_id,
               {"nodos": len(resultado.nodos), "criticos": len(resultado.ruta_critica), "ms": ms})
+
+    def _node_key_dict(key: tuple) -> dict:
+        pk, cap, agr = key[0], key[1], key[2] if len(key) > 2 else ""
+        out = {"pk_id": pk, "capitulo": cap}
+        if agr:
+            out["agrupador_id"] = agr
+        return out
+
     return {
         "ok": True,
         "nodos_calculados": len(resultado.nodos),
-        "ruta_critica": [{"pk_id": pk, "capitulo": cap} for pk, cap in resultado.ruta_critica],
-        "cascada_afectados": [{"pk_id": pk, "capitulo": cap} for pk, cap in resultado.nodos_afectados_cascada],
+        "ruta_critica": [_node_key_dict(k) for k in resultado.ruta_critica],
+        "cascada_afectados": [_node_key_dict(k) for k in resultado.nodos_afectados_cascada],
         "tiempo_ms": ms,
     }
 

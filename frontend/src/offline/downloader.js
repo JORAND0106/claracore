@@ -63,13 +63,23 @@ export async function downloadContractData(contratoId, authToken, opts = {}) {
   const precios   = Array.isArray(pack.precios)   ? pack.precios   : []
   const reportes  = Array.isArray(pack.reportes)  ? pack.reportes  : []
   const registros = Array.isArray(pack.registros) ? pack.registros : []
+  const inspectores = Array.isArray(pack.inspectores) ? pack.inspectores : []
+  const subcontratistas = Array.isArray(pack.subcontratistas) ? pack.subcontratistas : []
 
   // Validar que el servidor resolvió correctamente el acta
   if (!pack.acta_id) {
     console.warn(`[offline-pack] No se encontró acta_id para acta_rpo=${actaRpoNum}. Revisa los números de acta disponibles.`)
   }
 
-  await _persistir(contratoId, { actas, semanas, precios, reportes, registros })
+  await _persistir(contratoId, {
+    actas,
+    semanas,
+    precios,
+    reportes,
+    registros,
+    inspectores,
+    subcontratistas,
+  })
 
   return {
     actas:     actas.length,
@@ -77,14 +87,25 @@ export async function downloadContractData(contratoId, authToken, opts = {}) {
     precios:   precios.length,
     reportes:  reportes.length,
     registros: registros.length,
+    inspectores: inspectores.length,
+    subcontratistas: subcontratistas.length,
   }
 }
 
-async function _persistir(contratoId, { actas, semanas, precios, reportes, registros }) {
+async function _persistir(
+  contratoId,
+  { actas, semanas, precios, reportes, registros, inspectores = [], subcontratistas = [] },
+) {
   // contrato_id siempre como número para que Dexie lo indexe consistentemente
   const cid = Number(contratoId)
   await db.transaction('rw', [
-    db.actas, db.so_semanas, db.listado_precios, db.so_reportes, db.so_registros,
+    db.actas,
+    db.so_semanas,
+    db.listado_precios,
+    db.so_reportes,
+    db.so_registros,
+    db.inspectores_cache,
+    db.subcontratistas_cache,
   ], async () => {
     if (actas.length)
       await db.actas.bulkPut(actas.map(a => ({ ...a, contrato_id: cid })))
@@ -100,5 +121,15 @@ async function _persistir(contratoId, { actas, semanas, precios, reportes, regis
 
     if (registros.length)
       await db.so_registros.bulkPut(registros.map(r => ({ ...r, contrato_id: cid })))
+
+    if (inspectores.length)
+      await db.inspectores_cache.bulkPut(
+        inspectores.map((u) => ({ ...u, contrato_id: cid })),
+      )
+
+    if (subcontratistas.length)
+      await db.subcontratistas_cache.bulkPut(
+        subcontratistas.map((s) => ({ ...s, contrato_id: cid })),
+      )
   })
 }

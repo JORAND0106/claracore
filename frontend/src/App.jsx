@@ -17,6 +17,7 @@ import {
   crearReporteLocal,
   crearRegistroLocal,
 } from './offline/offlineRouter'
+import { db } from './offline/db'
 import AdminPanel from './AdminPanel'
 import ModuloInformes from './ModuloInformes'
 import ModuloGuias from './ModuloGuias'
@@ -9755,8 +9756,12 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
     // ── Datos maestros: subcontratistas, inspectores, capítulos, PK-IDs ──────
     if (!isOnline && isOfflineReady) {
-      // Offline: capítulos desde IndexedDB, el resto vacío (no es crítico para crear el reporte)
-      getPreciosOffline(contrato_id).then(d => {
+      const cid = Number(contrato_id)
+      Promise.all([
+        getPreciosOffline(contrato_id),
+        db.inspectores_cache.where('contrato_id').equals(cid).toArray(),
+        db.subcontratistas_cache.where('contrato_id').equals(cid).toArray(),
+      ]).then(([d, insp, subs]) => {
         if (Array.isArray(d)) {
           const caps = [...new Set(d.map(r => r.capitulo).filter(Boolean))]
           const sorted = caps.sort((a, b) => {
@@ -9766,6 +9771,11 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
           })
           setCapitulos(sorted.map(c => ({ capitulo: c })))
         }
+        setInspectores(Array.isArray(insp) ? insp : [])
+        setSubcontratistas(Array.isArray(subs) ? subs : [])
+      }).catch(() => {
+        setInspectores([])
+        setSubcontratistas([])
       })
       return
     }

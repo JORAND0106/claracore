@@ -4811,21 +4811,6 @@ def guardar_permisos(permisos: List[PermisoUpdate], current_user=Depends(get_cur
             if legacy:
                 row_id = legacy[0]["id"]
 
-        if row_id is None:
-            any_row = (
-                supabase.table("permisos")
-                .select("id, contrato_id")
-                .eq("cargo_id", permiso.cargo_id)
-                .eq("funcion_id", permiso.funcion_id)
-                .limit(1)
-                .execute()
-                .data
-            )
-            if any_row:
-                row_id = any_row[0]["id"]
-                if cid_matriz is not None and any_row[0].get("contrato_id") not in (None, cid_matriz):
-                    row_id = None
-
         if row_id is not None:
             supabase.table("permisos").update(data).eq("id", row_id).execute()
         else:
@@ -9471,7 +9456,8 @@ def offline_pack(
 ):
     """
     Paquete offline completo para un acta.
-    Una sola petición devuelve: actas, semanas, precios, reportes y registros.
+    Una sola petición devuelve: actas, semanas, precios, reportes, registros,
+    inspectores y subcontratistas activos.
     El servidor resuelve acta_id desde acta_rpo internamente.
     Cada query es independiente; errores parciales se reportan en 'errores'.
     """
@@ -9547,6 +9533,50 @@ def offline_pack(
     except Exception as e:
         errores["precios"] = str(e)
 
+    # 7. Inspectores (misma regla que GET …/inspectores)
+    inspectores = []
+    try:
+        usuarios = (
+            supabase.table("usuarios")
+            .select("id, nombre, apellidos")
+            .eq("contrato_id", contrato_id)
+            .eq("estado", "aprobado")
+            .eq("cargo_id", 54)
+            .order("nombre")
+            .execute()
+            .data
+            or []
+        )
+        inspectores = [
+            {
+                "id": u["id"],
+                "nombre": f"{u.get('nombre', '')} {u.get('apellidos', '')}".strip(),
+            }
+            for u in usuarios
+        ]
+    except Exception as e:
+        errores["inspectores"] = str(e)
+
+    # 8. Subcontratistas activos (misma regla que GET …/subcontratistas-activos)
+    subcontratistas = []
+    try:
+        sub_rows = (
+            supabase.table("subcontratistas")
+            .select("id, razon_social")
+            .eq("contrato_id", contrato_id)
+            .eq("activo", True)
+            .order("razon_social")
+            .execute()
+            .data
+            or []
+        )
+        subcontratistas = [
+            {"id": r["id"], "nombre": r.get("razon_social") or ""}
+            for r in sub_rows
+        ]
+    except Exception as e:
+        errores["subcontratistas"] = str(e)
+
     return {
         "acta_id":   acta_id,
         "actas":     actas,
@@ -9554,6 +9584,8 @@ def offline_pack(
         "precios":   precios,
         "reportes":  reportes,
         "registros": registros,
+        "inspectores": inspectores,
+        "subcontratistas": subcontratistas,
         "errores":   errores,  # campo de diagnóstico — vacío si todo OK
     }
 

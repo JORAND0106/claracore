@@ -33,6 +33,8 @@ import networkx as nx
 from prog_obra_calendar import (
     CalendarioNoHabilesCache,
     es_dia_habil,
+    es_fin_de_semana,
+    festivos_colombia_año,
 )
 
 _log = logging.getLogger(__name__)
@@ -101,24 +103,34 @@ class ResultadoCPM:
 # Índice de días hábiles
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _es_dia_habil_preloaded(d: date, extra: frozenset, festivos_by_year: dict[int, frozenset]) -> bool:
+    if es_fin_de_semana(d):
+        return False
+    if d in festivos_by_year.get(d.year, frozenset()):
+        return False
+    return d not in extra
+
+
 def _build_wd_index(
     date_min: date,
     date_max: date,
     contrato_id: int,
     cache: CalendarioNoHabilesCache,
-    padding_days: int = 500,
+    padding_days: int = 90,
 ) -> tuple[list[date], dict[date, int]]:
     """
     Genera lista de días hábiles [date_min - padding, date_max + padding]
     y un dict date → índice entero.
-    El padding garantiza que fechas calculadas por CPM quepan en el índice.
+    Pre-carga calendario del contrato una sola vez para todo el rango.
     """
     start = date_min - timedelta(days=padding_days)
-    end   = date_max + timedelta(days=padding_days)
+    end = date_max + timedelta(days=padding_days)
+    extra_all = cache.fechas_extra(contrato_id, start, end)
+    festivos_by_year = {y: festivos_colombia_año(y) for y in range(start.year, end.year + 1)}
     working_days: list[date] = []
     d = start
     while d <= end:
-        if es_dia_habil(d, contrato_id, cache):
+        if _es_dia_habil_preloaded(d, extra_all, festivos_by_year):
             working_days.append(d)
         d += timedelta(days=1)
     wd_to_idx: dict[date, int] = {wd: i for i, wd in enumerate(working_days)}

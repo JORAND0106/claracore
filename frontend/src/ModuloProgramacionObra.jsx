@@ -4,6 +4,7 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { Plus, Upload } from 'lucide-react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { API_BASE } from './apiBase'
@@ -151,7 +152,7 @@ function colorForEstado(estado) {
     case 'en_progreso':
       return { fill: '#EF9F27', line: '#EF9F27', op: 0.6 }
     case 'completa':
-      return { fill: '#1D9E75', line: '#1D9E75', op: 0.7 }
+      return { fill: '#2563EB', line: '#2563EB', op: 0.7 }
     default:
       return { fill: '#888780', line: '#888780', op: 0.35 }
   }
@@ -166,6 +167,7 @@ function buildEnrichedPlano(planoFc, metaMap, criticalPkIds = new Set()) {
       const row = metaMap[pkid] || {}
       const est = row.estado_programacion || 'sin_iniciar'
       const c = colorForEstado(est)
+      const critico = Boolean(row.tiene_ruta_critica) || criticalPkIds.has(pkid)
       return {
         ...f,
         properties: {
@@ -175,7 +177,7 @@ function buildEnrichedPlano(planoFc, metaMap, criticalPkIds = new Set()) {
           prog_fill: c.fill,
           prog_line: c.line,
           prog_op: c.op,
-          prog_critico: criticalPkIds.has(pkid) ? 1 : 0,
+          prog_critico: critico ? 1 : 0,
         },
       }
     }),
@@ -187,7 +189,7 @@ const MAPA_LEYENDA_ESTADOS = [
   { key: 'sin_cantidad', label: 'Sin cantidad', desc: 'PK sin ítems activos en presupuesto', fill: '#94a3b8', op: 0.08 },
   { key: 'sin_iniciar', label: 'Sin iniciar', desc: 'Hay ítems; ninguno con fecha', fill: '#888780', op: 0.35 },
   { key: 'en_progreso', label: 'En progreso', desc: 'Algunos ítems con fecha', fill: '#EF9F27', op: 0.6 },
-  { key: 'completa', label: 'Completa', desc: 'Todos los ítems con fecha', fill: '#1D9E75', op: 0.7 },
+  { key: 'completa', label: 'Completamente programado', desc: 'Todos los ítems con fecha', fill: '#2563EB', op: 0.7 },
 ]
 
 function progBarVisual(pct, estado) {
@@ -197,60 +199,151 @@ function progBarVisual(pct, estado) {
   }
   const p = Math.max(0, Math.min(100, Number(pct)))
   const filled = Math.round(p / 10)
-  const fill = e === 'completa' ? '#1D9E75' : e === 'en_progreso' ? '#F59E0B' : '#888780'
+  const fill = e === 'completa' ? '#2563EB' : e === 'en_progreso' ? '#F59E0B' : '#888780'
   return { blocks: `${'█'.repeat(filled)}${'░'.repeat(10 - filled)}`, fill }
 }
 
+function ProgPanelIconBtn({ title, onClick, disabled, children, t }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 26,
+        height: 26,
+        padding: 0,
+        borderRadius: 6,
+        border: `1px solid ${t.border}`,
+        background: t.bg,
+        color: disabled ? t.textMuted : t.text,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.45 : 1,
+        flexShrink: 0,
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
 function ProgPkListado({ rows, selPk, t, onSelectPk }) {
+  const [collapsed, setCollapsed] = useState(true)
   const sorted = [...(rows || [])].sort((a, b) =>
     String(a.pk_id || '').localeCompare(String(b.pk_id || ''), undefined, { numeric: true }),
   )
   if (sorted.length === 0) return null
 
   return (
-    <div style={{ marginTop: 4 }}>
-      <div style={{ fontWeight: 600, fontSize: 'var(--cc-caption)', color: t.text, marginBottom: 6 }}>
-        Lista de PKs del proyecto
-      </div>
-      <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 8, maxHeight: 240, overflowY: 'auto' }}>
-        {sorted.map((r) => {
-          const pk = String(r.pk_id || '').trim()
-          if (!pk) return null
-          const est = r.estado_programacion || 'sin_iniciar'
-          const pctNum = est === 'sin_cantidad' ? null : Number(r.porcentaje_programado)
-          const { blocks, fill } = progBarVisual(pctNum, est)
-          const pctLabel = pctNum != null && Number.isFinite(pctNum) ? `${Math.round(pctNum)}%` : '—'
-          const selected = pk === selPk
-          return (
-            <button
-              key={pk}
-              type="button"
-              onClick={() => onSelectPk(pk)}
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '72px 1fr 36px 88px',
-                gap: 6,
-                alignItems: 'center',
-                width: '100%',
-                padding: '6px 8px',
-                marginBottom: 4,
-                border: `1px solid ${selected ? t.primary : t.border}`,
-                borderRadius: 6,
-                background: selected ? `${t.primary}18` : t.bg,
-                cursor: 'pointer',
-                textAlign: 'left',
-                fontSize: 'var(--cc-caption)',
-                color: t.text,
-              }}
-            >
-              <span style={{ fontWeight: selected ? 700 : 600, color: selected ? t.primary : t.text }}>PK {pk}</span>
-              <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 10, color: fill, letterSpacing: -0.5 }}>{blocks}</span>
-              <span style={{ textAlign: 'right', fontWeight: 600 }}>{pctLabel}</span>
-              <span style={{ color: t.textMuted, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis' }}>{est}</span>
-            </button>
-          )
-        })}
-      </div>
+    <div style={{ marginTop: 2 }}>
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        aria-expanded={!collapsed}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          width: '100%',
+          padding: '4px 0',
+          border: 'none',
+          background: 'transparent',
+          cursor: 'pointer',
+          fontWeight: 600,
+          fontSize: 'var(--cc-caption)',
+          color: t.text,
+          textAlign: 'left',
+        }}
+      >
+        <span style={{ color: t.textMuted, fontSize: 10, lineHeight: 1 }}>{collapsed ? '▸' : '▾'}</span>
+        <span>PKs del proyecto ({sorted.length})</span>
+      </button>
+      {!collapsed && (
+        <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 6, maxHeight: 200, overflowY: 'auto' }}>
+          {sorted.map((r) => {
+            const pk = String(r.pk_id || '').trim()
+            if (!pk) return null
+            const est = r.estado_programacion || 'sin_iniciar'
+            const pctNum = est === 'sin_cantidad' ? null : Number(r.porcentaje_programado)
+            const { blocks, fill } = progBarVisual(pctNum, est)
+            const pctLabel = pctNum != null && Number.isFinite(pctNum) ? `${Math.round(pctNum)}%` : '—'
+            const selected = pk === selPk
+            const critico = Boolean(r.tiene_ruta_critica)
+            const cardBg = critico ? '#fee2e2' : selected ? `${t.primary}18` : t.bg
+            return (
+              <button
+                key={pk}
+                type="button"
+                onClick={() => onSelectPk(pk)}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '64px 1fr auto',
+                  gridTemplateRows: critico ? 'auto auto' : 'auto',
+                  columnGap: 6,
+                  rowGap: critico ? 1 : 0,
+                  alignItems: 'center',
+                  width: '100%',
+                  padding: critico ? '4px 6px' : '3px 6px',
+                  marginBottom: 3,
+                  border: `1px solid ${selected ? t.primary : t.border}`,
+                  borderRadius: 5,
+                  background: cardBg,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  fontSize: 10,
+                  color: t.text,
+                  minHeight: 24,
+                }}
+              >
+                <span
+                  style={{
+                    gridRow: critico ? '1 / -1' : undefined,
+                    alignSelf: 'center',
+                    fontWeight: selected ? 700 : 600,
+                    color: selected ? t.primary : t.text,
+                  }}
+                >
+                  PK {pk}
+                </span>
+                <span
+                  style={{
+                    gridRow: critico ? '1 / -1' : undefined,
+                    alignSelf: 'center',
+                    fontFamily: 'ui-monospace, monospace',
+                    fontSize: 9,
+                    color: fill,
+                    letterSpacing: -0.5,
+                    overflow: 'hidden',
+                  }}
+                >
+                  {blocks}
+                </span>
+                <span style={{ gridColumn: 3, textAlign: 'right', fontWeight: 600, fontSize: 10 }}>{pctLabel}</span>
+                {critico && (
+                  <span
+                    style={{
+                      gridColumn: 3,
+                      textAlign: 'right',
+                      fontSize: 8,
+                      fontWeight: 600,
+                      color: '#dc2626',
+                      lineHeight: 1.2,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    ⚠ Ruta crítica
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -735,6 +828,14 @@ export default function ModuloProgramacionObra({
   }, [])
 
   useEffect(() => {
+    const ids = new Set()
+    for (const r of mapaResp?.pk || []) {
+      if (r.tiene_ruta_critica) ids.add(String(r.pk_id || '').trim())
+    }
+    if (mapaResp?.pk) setCriticalPkIds(ids)
+  }, [mapaResp])
+
+  useEffect(() => {
     if (criticalPulseRef.current) { clearInterval(criticalPulseRef.current); criticalPulseRef.current = null }
     const map = mapInst.current
     if (!map || criticalPkIds.size === 0) return
@@ -742,7 +843,7 @@ export default function ModuloProgramacionObra({
     const tick = () => {
       try {
         if (!map.getLayer('prog-critico-line')) return
-        map.setPaintProperty('prog-critico-line', 'line-opacity', opHigh ? 0.9 : 0.25)
+        map.setPaintProperty('prog-critico-line', 'line-opacity', opHigh ? 0.9 : 0.2)
         opHigh = !opHigh
       } catch { /* ignore */ }
     }
@@ -865,38 +966,6 @@ export default function ModuloProgramacionObra({
 
   const pkForData = progModalOpen && activeModalPk ? activeModalPk : selPk
 
-  const openProgramacionModal = useCallback(
-    (pkid) => {
-      if (!pkid) return
-      if (!workingVersionId) {
-        const vb = versiones.find((v) => (v.estado || '') === 'borrador')
-        if (vb?.id) setWorkingVersionId(String(vb.id))
-        else if (borradorMeta?.id) setWorkingVersionId(String(borradorMeta.id))
-      }
-      setSelPk(pkid)
-      setModalPkTabs((prev) => (prev.includes(pkid) ? prev : [...prev, pkid]))
-      setActiveModalPk(pkid)
-      setProgModalOpen(true)
-    },
-    [workingVersionId, versiones, borradorMeta?.id],
-  )
-
-  const onMapPkClick = useCallback(
-    (pkid) => {
-      if (!pkid) return
-      setSelPk(pkid)
-      if (progModalOpen) {
-        setModalPkTabs((prev) => (prev.includes(pkid) ? prev : [...prev, pkid]))
-        setActiveModalPk(pkid)
-      } else {
-        openProgramacionModal(pkid)
-      }
-    },
-    [progModalOpen, openProgramacionModal],
-  )
-  const onMapPkClickRef = useRef(onMapPkClick)
-  onMapPkClickRef.current = onMapPkClick
-
   const pkMeta = useCallback(() => {
     const rows = mapaResp?.pk
     if (!Array.isArray(rows)) return {}
@@ -907,6 +976,72 @@ export default function ModuloProgramacionObra({
     }
     return m
   }, [mapaResp])
+
+  const pkRowsProgramables = useMemo(
+    () => (mapaResp?.pk || []).filter((r) => (r.estado_programacion || '') !== 'sin_cantidad'),
+    [mapaResp],
+  )
+
+  const pkIdsProgramables = useMemo(
+    () => pkRowsProgramables.map((r) => String(r.pk_id || '').trim()).filter(Boolean),
+    [pkRowsProgramables],
+  )
+
+  const pkTieneCantidad = useCallback(
+    (pkid) => {
+      const id = String(pkid || '').trim()
+      if (!id) return false
+      const row = pkMeta()[id]
+      return row ? (row.estado_programacion || '') !== 'sin_cantidad' : false
+    },
+    [pkMeta],
+  )
+
+  useEffect(() => {
+    if (!mapaResp?.pk) return
+    setModalPkTabs((tabs) => tabs.filter((pk) => pkTieneCantidad(pk)))
+  }, [mapaResp, pkTieneCantidad])
+
+  const openProgramacionModal = useCallback(
+    (pkid) => {
+      if (!pkid) return
+      if (!pkTieneCantidad(pkid)) {
+        showToast?.('Este PK no tiene cantidades en presupuesto y no se puede programar.', 'info')
+        return
+      }
+      if (!workingVersionId) {
+        const vb = versiones.find((v) => (v.estado || '') === 'borrador')
+        if (vb?.id) setWorkingVersionId(String(vb.id))
+        else if (borradorMeta?.id) setWorkingVersionId(String(borradorMeta.id))
+      }
+      setSelPk(pkid)
+      setModalPkTabs((prev) => (prev.includes(pkid) ? prev : [...prev, pkid]))
+      setActiveModalPk(pkid)
+      setProgModalOpen(true)
+    },
+    [workingVersionId, versiones, borradorMeta?.id, pkTieneCantidad, showToast],
+  )
+
+  const onMapPkClick = useCallback(
+    (pkid) => {
+      if (!pkid) return
+      if (!pkTieneCantidad(pkid)) {
+        showToast?.('Este PK no tiene cantidades en presupuesto.', 'info')
+        setSelPk(pkid)
+        return
+      }
+      setSelPk(pkid)
+      if (progModalOpen) {
+        setModalPkTabs((prev) => (prev.includes(pkid) ? prev : [...prev, pkid]))
+        setActiveModalPk(pkid)
+      } else {
+        openProgramacionModal(pkid)
+      }
+    },
+    [progModalOpen, openProgramacionModal, pkTieneCantidad, showToast],
+  )
+  const onMapPkClickRef = useRef(onMapPkClick)
+  onMapPkClickRef.current = onMapPkClick
 
   useEffect(() => {
     if (!MAPBOX_TOKEN || plano === undefined) return
@@ -1474,7 +1609,6 @@ export default function ModuloProgramacionObra({
           return { capitulos: prev?.capitulos || [], actividades: [...untouched, ...updated] }
         })
 
-        await reloadActividadesPk(pkId)
         await refreshMapaYVersiones()
 
         return { ok: true, saved: actividades.length, errors: 0, pkId: String(pkId || '').trim() }
@@ -1489,7 +1623,6 @@ export default function ModuloProgramacionObra({
 
   const handleProgSaveSuccess = useCallback(
     async (pkId) => {
-      await reloadActividadesPk(pkId)
       const m = await refreshMapaYVersiones()
       const map = mapInst.current
       if (map && map.getSource('prog-pol') && m) {
@@ -1501,11 +1634,8 @@ export default function ModuloProgramacionObra({
         const enriched = buildEnrichedPlano(plano, metaMap, criticalPkIds)
         map.getSource('prog-pol').setData(enriched)
       }
-      setProgModalOpen(false)
-      setModalPkTabs([])
-      setActiveModalPk(null)
     },
-    [refreshMapaYVersiones, reloadActividadesPk, plano, criticalPkIds],
+    [refreshMapaYVersiones, plano, criticalPkIds],
   )
 
   const buildValidacionResumen = useCallback(async () => {
@@ -1891,8 +2021,9 @@ export default function ModuloProgramacionObra({
         panelBusy={panelBusy}
         onGuardarCambios={handleGuardarCambiosModal}
         onSaveSuccess={handleProgSaveSuccess}
+        onReloadActividades={reloadActividadesPk}
         showToast={showToast}
-        allPkIds={(mapaResp?.pk || []).map((r) => String(r.pk_id || '').trim()).filter(Boolean)}
+        allPkIds={pkIdsProgramables}
         onCpmUpdated={handleCpmUpdated}
       />
 
@@ -2086,90 +2217,92 @@ export default function ModuloProgramacionObra({
           flexShrink: 0,
           borderLeft: `1px solid ${t.border}`,
           background: t.bgCard,
-          padding: '10px 12px',
+          padding: '8px 10px',
           display: 'flex',
           flexDirection: 'column',
-          gap: 10,
+          gap: 8,
           overflowY: 'auto',
           fontSize: 'var(--cc-sm)',
         }}
       >
-        <div style={{ fontWeight: 700, color: t.primary, fontSize: 'var(--cc-md)', lineHeight: 1.2 }}>Programación de obra</div>
-
-        <div style={{ color: t.textMuted, fontSize: 10, lineHeight: 1.35 }}>
-          Contrato <strong style={{ color: t.text }}>{cid}</strong>
-          {meta.version_vigente_numero != null && (
-            <>
-              {' '}
-              · Vigente nº <strong style={{ color: t.text }}>{meta.version_vigente_numero}</strong>
-            </>
-          )}
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+          <div style={{ fontWeight: 700, color: t.primary, fontSize: 'var(--cc-md)', lineHeight: 1.2, minWidth: 0 }}>
+            Programación de obra
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+            {esBorradorEditable && puedeEditar && workingVersionId && (
+              <ProgPanelIconBtn
+                t={t}
+                title="Enviar a validación"
+                disabled={panelBusy}
+                onClick={() => void handleIniciarEnviarValidacion()}
+              >
+                <Upload size={14} strokeWidth={2.25} />
+              </ProgPanelIconBtn>
+            )}
+            {puedeCrearNuevaVersion && (
+              <ProgPanelIconBtn
+                t={t}
+                title={sinVersiones ? 'Crear programación inicial' : 'Nueva versión'}
+                disabled={panelBusy}
+                onClick={() => void handleClickNuevaVersion()}
+              >
+                <Plus size={14} strokeWidth={2.25} />
+              </ProgPanelIconBtn>
+            )}
+          </div>
         </div>
 
-        <div style={{ padding: 8, borderRadius: 8, border: `1px solid ${t.border}`, background: t.bg }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
-            <span style={{ fontWeight: 600, color: t.text, fontSize: 11 }}>Versión</span>
-            {workingVersion && badgeEstado(workingVersion.estado)}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 4,
+              fontSize: 11,
+              color: t.textMuted,
+              lineHeight: 1.35,
+            }}
+          >
+            <span>
+              Contrato <strong style={{ color: t.text }}>{cid}</strong>
+            </span>
+            {workingVersion && (
+              <>
+                <span>·</span>
+                <span style={{ color: t.text }}>{workingVersion.estado || '—'}</span>
+                {borradorProgResumen != null && (
+                  <>
+                    <span>·</span>
+                    <span style={{ color: t.primary, fontWeight: 600 }}>{borradorProgResumen.pct.toFixed(0)}%</span>
+                  </>
+                )}
+              </>
+            )}
           </div>
           <select
             value={workingVersionId || ''}
             onChange={(e) => setWorkingVersionId(e.target.value || null)}
-            style={{ ...inputStyle, marginBottom: 6, padding: '4px 6px', fontSize: 11 }}
+            style={{ ...inputStyle, padding: '3px 6px', fontSize: 11, width: '100%' }}
           >
-            <option value="">— Seleccione —</option>
+            <option value="">— Seleccione versión —</option>
             {versiones.map((v) => (
               <option key={v.id} value={v.id}>
                 nº{v.numero_version} · {v.tipo} · {v.estado}
               </option>
             ))}
           </select>
-          {puedeCrear && (
-            <button
-              type="button"
-              style={{ ...btnStyle(true), width: '100%', padding: '4px 8px', fontSize: 11 }}
-              disabled={panelBusy}
-              onClick={() => void handleClickNuevaVersion()}
-            >
-              {sinVersiones ? 'Crear programación inicial' : '+ Nueva versión'}
-            </button>
-          )}
-          {borradorProgResumen != null && (
-            <div
-              style={{
-                fontSize: 'var(--cc-caption)',
-                color: t.primary,
-                fontWeight: 600,
-                lineHeight: 1.35,
-                marginTop: 6,
-                padding: '6px 8px',
-                borderRadius: 6,
-                background: `${t.primary}14`,
-              }}
-            >
-              Borrador en progreso — {borradorProgResumen.pct.toFixed(0)}% programado
-            </div>
-          )}
         </div>
-
-        {esBorradorEditable && puedeEditar && workingVersionId && (
-          <button
-            type="button"
-            style={{ ...btnStyle(true), width: '100%', padding: '8px 10px', fontSize: 'var(--cc-sm)', marginBottom: 8 }}
-            disabled={panelBusy}
-            onClick={() => void handleIniciarEnviarValidacion()}
-          >
-            Enviar a validación
-          </button>
-        )}
 
         {workingVersionId && (
           <details
-            style={{ padding: 8, borderRadius: 8, border: `1px solid ${t.border}`, background: t.bg }}
+            style={{ padding: '6px 8px', borderRadius: 6, border: `1px solid ${t.border}`, background: t.bg }}
           >
             <summary style={{ fontWeight: 600, color: t.text, cursor: 'pointer', fontSize: 11 }}>
               Dependencias globales (CPM)
             </summary>
-            <div style={{ marginTop: 10 }}>
+            <div style={{ marginTop: 8 }}>
               <ProgObraDependenciasGlobales
                 cid={cid}
                 token={token}
@@ -2186,7 +2319,7 @@ export default function ModuloProgramacionObra({
         {(esEnValidacion || esSellada) && (
           <details
             open={!selPk}
-            style={{ padding: 8, borderRadius: 8, border: `1px solid ${t.border}`, background: t.bg }}
+            style={{ padding: '6px 8px', borderRadius: 6, border: `1px solid ${t.border}`, background: t.bg }}
           >
             <summary style={{ fontWeight: 600, color: t.text, cursor: 'pointer', fontSize: 11 }}>Flujo de aprobación</summary>
             <div style={{ marginTop: 8 }}>
@@ -2237,62 +2370,48 @@ export default function ModuloProgramacionObra({
         )}
 
         {selPk ? (
-          <>
-            <div>
-              <div style={{ color: t.primary, fontWeight: 700, fontSize: 'var(--cc-md)', lineHeight: 1.2 }}>PK {selPk}</div>
+          <div style={{ fontSize: 11, color: t.text, lineHeight: 1.45 }}>
+            <div style={{ fontWeight: 600 }}>
+              PK {selPk}
               {rowSel && (
-                <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: 4, lineHeight: 1.4 }}>
-                  <div>
-                    Estado: <strong style={{ color: t.text }}>{rowSel.estado_programacion || '—'}</strong>
-                  </div>
-                  <div style={{ marginTop: 2 }}>
-                    Programado:{' '}
-                    <strong style={{ color: t.text }}>
-                      {rowSel.porcentaje_programado != null
-                        ? `${Number(rowSel.porcentaje_programado).toFixed(1)}%`
-                        : '—'}
-                    </strong>
-                    {rowSel.items_total != null && (
-                      <span style={{ marginLeft: 6 }}>
-                        ({rowSel.items_con_fecha ?? 0}/{rowSel.items_total} ítems)
-                      </span>
-                    )}
-                  </div>
-                </div>
+                <>
+                  {' '}
+                  · {rowSel.estado_programacion || '—'}
+                  {' '}
+                  ·{' '}
+                  {rowSel.porcentaje_programado != null && Number.isFinite(Number(rowSel.porcentaje_programado))
+                    ? `${Math.round(Number(rowSel.porcentaje_programado))}%`
+                    : '—'}
+                  {rowSel.items_total != null && (
+                    <span style={{ fontWeight: 400, color: t.textMuted }}>
+                      {' '}
+                      ({rowSel.items_con_fecha ?? 0}/{rowSel.items_total} ítems)
+                    </span>
+                  )}
+                </>
               )}
             </div>
-
-            {!workingVersionId && <div style={{ color: t.textMuted, fontSize: 11 }}>Seleccione versión de trabajo.</div>}
+            {!workingVersionId && (
+              <div style={{ color: t.textMuted, marginTop: 2 }}>Seleccione versión de trabajo.</div>
+            )}
             {workingVersionId && !esBorradorEditable && (
-              <div style={{ color: t.textMuted, fontSize: 11 }}>
-                Solo lectura — <strong>{workingVersion?.estado}</strong>.
+              <div style={{ color: t.textMuted, marginTop: 2 }}>
+                Solo lectura — {workingVersion?.estado}.
               </div>
             )}
-            {loadPpto && <div style={{ color: t.textMuted, fontSize: 11 }}>Cargando presupuesto…</div>}
+            {loadPpto && <div style={{ color: t.textMuted, marginTop: 2 }}>Cargando presupuesto…</div>}
             {!loadPpto && pptoPorPk.length === 0 && workingVersionId && (
-              <div style={{ color: t.textMuted, fontSize: 11 }}>Sin ítems activos en este PK.</div>
+              <div style={{ color: t.textMuted, marginTop: 2 }}>Sin ítems activos en este PK.</div>
             )}
-
-            {workingVersionId && (
-              <button
-                type="button"
-                style={{ ...btnStyle(true), width: '100%', padding: '8px 10px', fontSize: 'var(--cc-sm)' }}
-                disabled={!selPk || loadPpto}
-                onClick={() => openProgramacionModal(selPk)}
-              >
-                Abrir programación
-              </button>
+            {loadAct && workingVersionId && (
+              <div style={{ color: t.textMuted, marginTop: 2 }}>Sincronizando actividades…</div>
             )}
-          </>
+          </div>
         ) : (
           <div style={{ color: t.textMuted, fontSize: 11 }}>Haz clic en un polígono del plano.</div>
         )}
 
-        <ProgPkListado rows={mapaResp?.pk} selPk={selPk} t={t} onSelectPk={selectPkAndZoom} />
-
-        {loadAct && selPk && workingVersionId && (
-          <div style={{ color: t.textMuted, marginTop: 8 }}>Sincronizando actividades…</div>
-        )}
+        <ProgPkListado rows={pkRowsProgramables} selPk={selPk} t={t} onSelectPk={selectPkAndZoom} />
       </div>
     </div>
   )

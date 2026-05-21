@@ -33,7 +33,6 @@ const STICKY_W = { item: 88, desc: 280 }
 const ROW_H = { cap: 44, agrupador: 44, hijo: 32, sinAg: 32, item: 44 }
 const PANEL_LEFT = '45%'
 const PANEL_RIGHT = '55%'
-const GANTT_LABEL_W = 160
 const GANTT_TIMELINE_H = 54
 const TABLE_HEAD_H = GANTT_TIMELINE_H
 
@@ -118,6 +117,93 @@ function computeCapConsolidado({
     cant_total: cantTotal,
     costo_directo: costoTotal,
   }
+}
+
+function cpmNodeKey(pk, cap, agrupadorId) {
+  const ag = agrupadorId != null && agrupadorId !== '' ? String(agrupadorId) : ''
+  return `${String(pk || '').trim()}\u0000${String(cap || '').trim()}\u0000${ag}`
+}
+
+function fmtDateShort(iso) {
+  const d = parseIsoDate(iso)
+  if (!d) return '—'
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+function ProgCpmResumenTable({ rows, t }) {
+  if (!rows?.length) return null
+  return (
+    <div
+      style={{
+        borderTop: `1px solid ${t.border}`,
+        background: t.bgCard,
+        flexShrink: 0,
+        maxHeight: 240,
+        overflow: 'auto',
+      }}
+    >
+      <div
+        style={{
+          padding: '8px 12px',
+          fontWeight: 700,
+          fontSize: 'var(--cc-caption)',
+          color: t.text,
+          position: 'sticky',
+          top: 0,
+          background: t.bgCard,
+          borderBottom: `1px solid ${t.border}`,
+          zIndex: 1,
+        }}
+      >
+        Resultados CPM
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-caption)' }}>
+        <thead>
+          <tr style={{ borderBottom: `1px solid ${t.border}`, color: t.textMuted }}>
+            {['Agrupador', 'Inicio temprano', 'Fin temprano', 'Holgura', 'Estado'].map((h) => (
+              <th
+                key={h}
+                style={{
+                  textAlign: h === 'Agrupador' ? 'left' : 'center',
+                  padding: '6px 10px',
+                  fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const critico = !!r.es_ruta_critica || Number(r.holgura_total) === 0
+            const holgura = Number(r.holgura_total)
+            const holguraLabel = critico
+              ? '0 días'
+              : `${Number.isFinite(holgura) ? holgura : '—'} día${holgura === 1 ? '' : 's'}`
+            return (
+              <tr
+                key={`${r.capitulo}-${r.agrupador_id}`}
+                style={{
+                  borderBottom: `1px solid ${t.border}33`,
+                  background: critico ? 'rgba(254,226,226,0.35)' : 'transparent',
+                }}
+              >
+                <td style={{ padding: '7px 10px', fontWeight: 600, color: t.text }}>{r.label}</td>
+                <td style={{ padding: '7px 10px', textAlign: 'center', color: t.text }}>{fmtDateShort(r.fecha_inicio_temprana)}</td>
+                <td style={{ padding: '7px 10px', textAlign: 'center', color: t.text }}>{fmtDateShort(r.fecha_fin_temprana)}</td>
+                <td style={{ padding: '7px 10px', textAlign: 'center', color: t.text }}>{holguraLabel}</td>
+                <td style={{ padding: '7px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                  {critico ? '🔴 Ruta crítica' : '🟡 Con holgura'}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
 /** Filas alineadas tabla ↔ Gantt + timeline del PK. */
@@ -206,6 +292,7 @@ function buildPkGanttLayout({
           key: `ag-${ag.agrupador_id}`,
           kind: 'ag',
           cap,
+          agrupadorId: ag.agrupador_id,
           height: ROW_H.agrupador,
           label: ag.codigo_wbs || actItem,
           labelTitle: label,
@@ -283,17 +370,16 @@ function buildPkGanttLayout({
   }
 }
 
-function ProgPkGanttPanel({ model, noHabilesSet, t, cpmByCapKey, activePk, bodyScrollRef, onBodyScroll, onRefresh }) {
+function ProgPkGanttPanel({ model, noHabilesSet, t, cpmByNodeKey, activePk, bodyScrollRef, onBodyScroll, onRefresh }) {
   if (!model?.timelineDays?.length) return null
   const { timelineDays, syncRows, fromT } = model
   const dayPx = GANTT_DAY_PX
   const gridW = timelineDays.length * dayPx
-  const labelW = GANTT_LABEL_W
   const monthRowH = 28
   const dayRowH = 26
   const timelineH = monthRowH + dayRowH
   const bodyH = syncRows.reduce((s, r) => s + r.height, 0)
-  const contentW = labelW + gridW
+  const contentW = gridW
 
   const monthSpans = useMemo(() => {
     const spans = []
@@ -316,23 +402,12 @@ function ProgPkGanttPanel({ model, noHabilesSet, t, cpmByCapKey, activePk, bodyS
   }
 
   const timelineHeader = (
-    <div style={{ display: 'flex', width: contentW, minWidth: contentW }}>
-      <div
-        style={{
-          width: labelW,
-          flexShrink: 0,
-          height: timelineH,
-          display: 'flex',
-          alignItems: 'flex-end',
-          justifyContent: 'flex-end',
-          padding: '2px 4px',
-          boxSizing: 'border-box',
-          borderRight: `1px solid ${t.border}`,
-          background: t.bgCard,
-        }}
-      >
-        {onRefresh ? <GanttRefreshButton onClick={onRefresh} /> : null}
-      </div>
+    <div style={{ display: 'flex', width: contentW, minWidth: contentW, position: 'relative' }}>
+      {onRefresh ? (
+        <div style={{ position: 'absolute', top: 4, right: 4, zIndex: 3 }}>
+          <GanttRefreshButton onClick={onRefresh} />
+        </div>
+      ) : null}
       <div style={{ position: 'relative', width: gridW, minWidth: gridW, flexShrink: 0 }}>
         {timelineDays.map((d, i) =>
           dayNonHabil(d) ? (
@@ -440,7 +515,7 @@ function ProgPkGanttPanel({ model, noHabilesSet, t, cpmByCapKey, activePk, bodyS
                 key={`nh-b-${isoFromDate(d)}`}
                 style={{
                   position: 'absolute',
-                  left: labelW + i * dayPx,
+                  left: i * dayPx,
                   width: dayPx,
                   top: timelineH,
                   height: bodyH,
@@ -452,7 +527,11 @@ function ProgPkGanttPanel({ model, noHabilesSet, t, cpmByCapKey, activePk, bodyS
             ) : null,
           )}
           {syncRows.map((row) => {
-            const cpmCap = row.kind === 'cap' ? cpmByCapKey?.[`${activePk}\u0000${row.cap}`] : null
+            const cpmNode = row.kind === 'cap'
+              ? cpmByNodeKey?.[cpmNodeKey(activePk, row.cap, '')]
+              : row.kind === 'ag'
+                ? cpmByNodeKey?.[cpmNodeKey(activePk, row.cap, row.agrupadorId)]
+                : null
             if (row.kind === 'spacer') {
               return <div key={row.key} style={{ height: row.height, borderBottom: `1px solid ${t.border}22` }} />
             }
@@ -461,11 +540,6 @@ function ProgPkGanttPanel({ model, noHabilesSet, t, cpmByCapKey, activePk, bodyS
                 key={row.key}
                 label={row.label}
                 labelTitle={row.labelTitle || row.label}
-                labelStyle={{
-                  fontWeight: row.isSummary ? 700 : 500,
-                  color: row.isSummary ? (cpmCap?.es_ruta_critica ? '#ef4444' : t.primary) : t.textMuted,
-                  width: labelW,
-                }}
                 rowHeight={row.height}
                 days={timelineDays}
                 fromT={fromT}
@@ -476,9 +550,9 @@ function ProgPkGanttPanel({ model, noHabilesSet, t, cpmByCapKey, activePk, bodyS
                 duracion={row.duracion}
                 diasHab={row.diasHab}
                 t={t}
-                esCritico={!!cpmCap?.es_ruta_critica}
-                holguraDias={cpmCap?.holgura_total ?? 0}
-                holguraEnd={cpmCap?.fecha_fin_tardia ?? null}
+                esCritico={!!cpmNode?.es_ruta_critica || Number(cpmNode?.holgura_total) === 0}
+                holguraDias={cpmNode?.holgura_total ?? 0}
+                holguraEnd={cpmNode?.fecha_fin_tardia ?? null}
               />
             )
           })}
@@ -581,34 +655,6 @@ function computePkTimelineDays(capitulosOrdenados, itemsPorCapitulo, actMap, act
   return eachCalendarDay(from, to)
 }
 
-function GanttRowLabel({ label, labelTitle, labelStyle, rowHeight, t }) {
-  return (
-    <div
-      style={{
-        width: labelStyle?.width ?? GANTT_LABEL_W,
-        flexShrink: 0,
-        height: rowHeight,
-        boxSizing: 'border-box',
-        display: 'flex',
-        alignItems: 'center',
-        paddingLeft: 8,
-        paddingRight: 4,
-        fontSize: 'var(--cc-caption)',
-        color: t.textMuted,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-        borderRight: `1px solid ${t.border}44`,
-        background: t.bgCard,
-        ...labelStyle,
-      }}
-      title={labelTitle || undefined}
-    >
-      {label}
-    </div>
-  )
-}
-
 function GanttBarGrid({ rowHeight, days, fromT, dayPx, barStart, barEnd, isSummary, label, duracion, diasHab, t, esCritico, holguraDias, holguraEnd }) {
   let left = 0
   let width = 0
@@ -693,8 +739,9 @@ function GanttBarGrid({ rowHeight, days, fromT, dayPx, barStart, barEnd, isSumma
             top: '50%',
             transform: 'translateY(-50%)',
             borderRadius: 4,
-            background: isSummary ? (esCritico ? '#fee2e2' : GANTT_CAP_BAR) : GANTT_TEAL,
+            background: isSummary ? (esCritico ? '#fee2e2' : GANTT_CAP_BAR) : (esCritico ? '#fecaca' : GANTT_TEAL),
             border: esCritico ? '2px solid #ef4444' : 'none',
+            boxShadow: esCritico && !isSummary ? '0 0 0 1px rgba(239,68,68,0.35)' : 'none',
             boxSizing: 'border-box',
             zIndex: 2,
           }}
@@ -706,10 +753,9 @@ function GanttBarGrid({ rowHeight, days, fromT, dayPx, barStart, barEnd, isSumma
 }
 
 function GanttBarRow(props) {
-  const { label, labelTitle, labelStyle, rowHeight, t } = props
+  const { rowHeight, t } = props
   return (
     <div style={{ display: 'flex', height: rowHeight, borderBottom: `1px solid ${t.border}44`, alignItems: 'stretch' }}>
-      <GanttRowLabel label={label} labelTitle={labelTitle} labelStyle={labelStyle} rowHeight={rowHeight} t={t} />
       <GanttBarGrid {...props} />
     </div>
   )
@@ -736,6 +782,8 @@ function ProgItemRow({
   parentAct = null,
   agExpanded = false,
   onToggleAgExpand = null,
+  saveGeneration = 0,
+  suspendAutoSave = false,
 }) {
   const ex = act || {}
   const inherited = rowKind === 'hijo'
@@ -756,6 +804,14 @@ function ProgItemRow({
     setDuracion(ex.duracion_dias_habiles != null ? String(ex.duracion_dias_habiles) : '')
     setFinCalc(fmtDateIso(ex.fecha_fin_calculada))
   }, [actSyncKey, itemDef.capitulo, itemDef.item])
+
+  useEffect(() => {
+    if (!saveGeneration) return
+    dirtyRef.current = false
+    setFechaIni(fmtDateIso(ex.fecha_inicio))
+    setDuracion(ex.duracion_dias_habiles != null ? String(ex.duracion_dias_habiles) : '')
+    setFinCalc(fmtDateIso(ex.fecha_fin_calculada))
+  }, [saveGeneration, actSyncKey])
 
   useEffect(() => {
     if (finOverride == null || finOverride === '') return
@@ -798,21 +854,21 @@ function ProgItemRow({
   }, [debFecha, debDur, cid, token, API, ex.fecha_fin_calculada])
 
   const trySave = useCallback(async () => {
-    if (!effectiveEditable || saveStatus === 'saving') return false
+    if (!effectiveEditable || saveStatus === 'saving' || suspendAutoSave) return false
     const d = parseInt(String(duracion), 10)
     if (!fechaIni || !(d > 0)) return false
     const ok = await onGuardarItem(itemDef, { fecha_inicio: fechaIni, duracion: String(d), override_manual: true, heredado_de_capitulo: false }, rk)
     if (ok) dirtyRef.current = false
     return ok
-  }, [effectiveEditable, saveStatus, onGuardarItem, itemDef, fechaIni, duracion, rk])
+  }, [effectiveEditable, saveStatus, suspendAutoSave, onGuardarItem, itemDef, fechaIni, duracion, rk])
 
   useEffect(() => {
-    if (!effectiveEditable || !dirtyRef.current) return undefined
+    if (!effectiveEditable || !dirtyRef.current || suspendAutoSave) return undefined
     const d = parseInt(String(debDur), 10)
     if (!debFecha || !(d > 0)) return undefined
     const timer = setTimeout(() => trySave(), 700)
     return () => clearTimeout(timer)
-  }, [debFecha, debDur, editable, trySave])
+  }, [debFecha, debDur, editable, trySave, suspendAutoSave])
 
   const onBlurField = () => {
     if (dirtyRef.current) trySave()
@@ -1032,6 +1088,8 @@ function ProgCapituloSection({
   finOverrides,
   isAgExpanded,
   onToggleAgExpand,
+  saveGeneration,
+  suspendAutoSave,
 }) {
   const pal = capColor(capIdx)
   const useWbs = Boolean(estructuraCap?.agrupadores?.length || estructuraCap?.sin_agrupador?.length)
@@ -1140,6 +1198,8 @@ function ProgCapituloSection({
               unregisterRowDraft={unregisterRowDraft}
               finOverride={finOverrides[rk]}
               rowKind="agrupador"
+              saveGeneration={saveGeneration}
+              suspendAutoSave={suspendAutoSave}
               agExpanded={expanded}
               onToggleAgExpand={() => onToggleAgExpand(ag.agrupador_id)}
             />
@@ -1189,6 +1249,8 @@ function ProgCapituloSection({
             registerRowDraft={registerRowDraft}
             unregisterRowDraft={unregisterRowDraft}
             finOverride={finOverrides[itemRowKey(cap, it.item)]}
+            saveGeneration={saveGeneration}
+            suspendAutoSave={suspendAutoSave}
           />
         ))}
     </>
@@ -1227,6 +1289,7 @@ export default function ProgObraProgramacionModal({
   panelBusy,
   onGuardarCambios,
   onSaveSuccess,
+  onReloadActividades,
   showToast,
   allPkIds,
   onCpmUpdated,
@@ -1237,12 +1300,15 @@ export default function ProgObraProgramacionModal({
   const [finOverrides, setFinOverrides] = useState({})
   const [localSaving, setLocalSaving] = useState(false)
   const [rowDrafts, setRowDrafts] = useState({})
+  const [saveGeneration, setSaveGeneration] = useState(0)
+  const [ganttActOverlay, setGanttActOverlay] = useState(null)
   const rowDraftRef = useRef({})
   const leftScrollRef = useRef(null)
   const rightBodyScrollRef = useRef(null)
   const scrollSyncLock = useRef(false)
   const [activeContentTab, setActiveContentTab] = useState('programacion')
   const [cpmResultados, setCpmResultados] = useState([])
+  const [cpmDirty, setCpmDirty] = useState(false)
 
   const registerRowDraft = useCallback((rk, api) => {
     rowDraftRef.current[rk] = api
@@ -1284,9 +1350,13 @@ export default function ProgObraProgramacionModal({
       .then((d) => {
         const resultados = d.resultados || []
         setCpmResultados(resultados)
+        setCpmDirty(!!d.cpm_dirty)
         onCpmUpdated?.(resultados)
       })
-      .catch(() => setCpmResultados([]))
+      .catch(() => {
+        setCpmResultados([])
+        setCpmDirty(false)
+      })
   }, [open, workingVersion?.id, cid, token, API])
 
   const toggleCap = (cap) => {
@@ -1304,13 +1374,44 @@ export default function ProgObraProgramacionModal({
     setExpandedAgs((s) => ({ ...s, [k]: !s[k] }))
   }
 
-  const cpmByCapKey = useMemo(() => {
+  const cpmByNodeKey = useMemo(() => {
     const m = {}
     for (const r of cpmResultados) {
-      m[`${r.pk_id}\u0000${r.capitulo}`] = r
+      m[cpmNodeKey(r.pk_id, r.capitulo, r.agrupador_id)] = r
     }
     return m
   }, [cpmResultados])
+
+  const agrupadorLabelById = useMemo(() => {
+    const m = {}
+    for (const cap of capitulosOrdenados) {
+      for (const ag of estructuraPorCapitulo?.[cap]?.agrupadores || []) {
+        const id = String(ag.agrupador_id ?? '')
+        if (!id) continue
+        const code = ag.codigo_wbs || id
+        m[id] = ag.agrupador_nombre ? `${code} · ${ag.agrupador_nombre}` : code
+      }
+    }
+    return m
+  }, [capitulosOrdenados, estructuraPorCapitulo])
+
+  const cpmResumenRows = useMemo(() => {
+    const pk = String(activePk || '').trim()
+    if (!pk) return []
+    return cpmResultados
+      .filter((r) => String(r.pk_id || '').trim() === pk && r.agrupador_id != null)
+      .map((r) => ({
+        ...r,
+        label: agrupadorLabelById[String(r.agrupador_id)] || String(r.agrupador_id),
+      }))
+      .sort((a, b) => {
+        const la = a.label.split(' · ')[0] || ''
+        const lb = b.label.split(' · ')[0] || ''
+        const byCode = la.localeCompare(lb, undefined, { numeric: true })
+        if (byCode !== 0) return byCode
+        return String(a.fecha_inicio_temprana || '').localeCompare(String(b.fecha_inicio_temprana || ''))
+      })
+  }, [cpmResultados, activePk, agrupadorLabelById])
 
   // Cuando fecha_fin_calculada no está en actMap (datos viejos o sin RPC),
   // la recalcula localmente usando días hábiles y noHabilesSet.
@@ -1328,6 +1429,11 @@ export default function ProgObraProgramacionModal({
     return isoFromDate(d)
   }, [noHabilesSet])
 
+  const ganttActMap = useMemo(
+    () => (ganttActOverlay ? { ...actMap, ...ganttActOverlay } : actMap),
+    [actMap, ganttActOverlay],
+  )
+
   const capResumenes = useMemo(() => {
     const m = {}
     for (const cap of capitulosOrdenados) {
@@ -1338,7 +1444,7 @@ export default function ProgObraProgramacionModal({
         agrupadorActItem,
         agrupadorRowKey,
         itemRowKey,
-        actMap,
+        actMap: ganttActMap,
         actividadKey,
         rowDraftRef,
         finOverrides,
@@ -1354,12 +1460,13 @@ export default function ProgObraProgramacionModal({
     agrupadorActItem,
     agrupadorRowKey,
     itemRowKey,
-    actMap,
+    ganttActMap,
     actividadKey,
     finOverrides,
     calcFinLocal,
     noHabilesSet,
     rowDrafts,
+    saveGeneration,
   ])
 
   const pkGanttModel = useMemo(
@@ -1370,7 +1477,7 @@ export default function ProgObraProgramacionModal({
       expandedAgs,
       estructuraPorCapitulo,
       itemsPorCapitulo,
-      actMap,
+      actMap: ganttActMap,
       actividadKey,
       agrupadorActItem,
       agrupadorRowKey,
@@ -1387,7 +1494,7 @@ export default function ProgObraProgramacionModal({
       expandedAgs,
       estructuraPorCapitulo,
       itemsPorCapitulo,
-      actMap,
+      ganttActMap,
       actividadKey,
       agrupadorActItem,
       agrupadorRowKey,
@@ -1396,6 +1503,7 @@ export default function ProgObraProgramacionModal({
       calcFinLocal,
       noHabilesSet,
       rowDrafts,
+      saveGeneration,
     ],
   )
 
@@ -1431,11 +1539,14 @@ export default function ProgObraProgramacionModal({
         }))
       for (const { rk, itemKey } of iter) {
         const draft = rowDraftRef.current[rk]?.getValues?.()
-        const act = actMap[actividadKey(cap, itemKey, 1)]
+        const act = ganttActMap[actividadKey(cap, itemKey, 1)]
         const fi = fmtDateIso(draft?.fecha_inicio ?? act?.fecha_inicio)
         const durRaw = draft?.duracion != null && draft.duracion !== '' ? draft.duracion : act?.duracion_dias_habiles
         const dur = durRaw != null ? parseInt(String(durRaw), 10) : NaN
-        if (!fi || !(dur > 0)) continue
+        if (!fi || !(dur > 0)) {
+          delete next[rk]
+          continue
+        }
         const ff = fmtDateIso(draft?.fecha_fin ?? act?.fecha_fin_calculada) || calcFinLocal(fi, dur)
         if (ff) next[rk] = ff
       }
@@ -1449,7 +1560,61 @@ export default function ProgObraProgramacionModal({
     agrupadorActItem,
     itemsPorCapitulo,
     itemRowKey,
-    actMap,
+    ganttActMap,
+    actividadKey,
+    calcFinLocal,
+  ])
+
+  /** Tras guardar: reconstruye barras del Gantt solo desde actividades persistidas (sin borradores ni overrides viejos). */
+  const syncGanttAfterSave = useCallback(async (pkId) => {
+    if (!workingVersion?.id || !cid || !token || !pkId) return
+    const q = new URLSearchParams({
+      version_id: String(workingVersion.id),
+      pk_id: String(pkId),
+    })
+    const d = await fetch(`${API}/prog-obra/${cid}/actividades?${q}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }).then((r) => (r.ok ? r.json() : null))
+    const acts = d?.actividades || []
+    const freshMap = {}
+    for (const a of acts) {
+      freshMap[actividadKey(a.capitulo, a.item, a.segmento ?? 1)] = a
+    }
+    const next = {}
+    for (const cap of capitulosOrdenados) {
+      const eCap = estructuraPorCapitulo?.[cap]
+      const agrupadores = eCap?.agrupadores || []
+      const iter = agrupadores.length
+        ? agrupadores.map((ag) => ({
+          rk: agrupadorRowKey(cap, ag),
+          itemKey: agrupadorActItem(ag),
+        }))
+        : itemsPorCapitulo(cap).map((it) => ({
+          rk: itemRowKey(cap, it.item),
+          itemKey: it.item,
+        }))
+      for (const { rk, itemKey } of iter) {
+        const act = freshMap[actividadKey(cap, itemKey, 1)]
+        const fi = fmtDateIso(act?.fecha_inicio)
+        const dur = act?.duracion_dias_habiles != null ? parseInt(String(act.duracion_dias_habiles), 10) : NaN
+        if (!fi || !(dur > 0)) continue
+        const ff = fmtDateIso(act?.fecha_fin_calculada) || calcFinLocal(fi, dur)
+        if (ff) next[rk] = ff
+      }
+    }
+    setGanttActOverlay(freshMap)
+    setFinOverrides(next)
+  }, [
+    workingVersion?.id,
+    cid,
+    token,
+    API,
+    capitulosOrdenados,
+    estructuraPorCapitulo,
+    agrupadorRowKey,
+    agrupadorActItem,
+    itemsPorCapitulo,
+    itemRowKey,
     actividadKey,
     calcFinLocal,
   ])
@@ -1493,9 +1658,19 @@ export default function ProgObraProgramacionModal({
         const fecha = fmtDateIso(liveFecha !== null ? liveFecha : (stored?.fecha_inicio ?? act?.fecha_inicio))
         const durRaw = live?.duracion ?? stored?.duracion ?? act?.duracion_dias_habiles
         const dur = parseInt(String(durRaw), 10)
+        const hadFecha = Boolean(fmtDateIso(act?.fecha_inicio))
         if (!fecha || !(dur > 0)) {
-          itemsAGuardar.push({ itemDef: row.itemDef, rk: row.rk, fecha_inicio: null, duracion: null })
-          skipped += 1
+          if (hadFecha) {
+            itemsAGuardar.push({
+              itemDef: row.itemDef,
+              rk: row.rk,
+              fecha_inicio: null,
+              duracion: null,
+              clearSchedule: true,
+            })
+          } else {
+            skipped += 1
+          }
           continue
         }
         itemsAGuardar.push({ itemDef: row.itemDef, rk: row.rk, fecha_inicio: fecha, duracion: dur })
@@ -1507,26 +1682,29 @@ export default function ProgObraProgramacionModal({
   const flushAllDrafts = useCallback(async () => {
     if (!editable) return { saved: 0, errors: 0, skipped: 0 }
     const { itemsAGuardar, skipped } = collectDraftItems()
-    const validRows = itemsAGuardar.filter((row) => row.fecha_inicio && row.duracion > 0)
+    const rowsToSave = itemsAGuardar.filter(
+      (row) => row.clearSchedule || (row.fecha_inicio && row.duracion > 0),
+    )
     console.debug('[ProgObra] flushAllDrafts', {
       filasTotal: itemsAGuardar.length,
-      filasValidas: validRows.length,
+      filasAGuardar: rowsToSave.length,
+      borrados: rowsToSave.filter((r) => r.clearSchedule).length,
       omitidas: skipped,
       draftsRegistrados: Object.keys(rowDraftRef.current).length,
       activePk,
     })
-    if (validRows.length === 0) {
+    if (rowsToSave.length === 0) {
       if (itemsAGuardar.length === 0) {
         console.warn('[ProgObra] flushAllDrafts: sin filas agrupador/ítem — revise estructura WBS')
       }
       return { saved: 0, errors: 0, skipped: skipped || itemsAGuardar.length }
     }
     if (onGuardarBatch) {
-      const batchPayload = validRows.map((row) => ({
+      const batchPayload = rowsToSave.map((row) => ({
         capitulo: row.itemDef.capitulo,
         item: row.itemDef.item,
-        fecha_inicio: row.fecha_inicio,
-        duracion: row.duracion,
+        fecha_inicio: row.clearSchedule ? null : row.fecha_inicio,
+        duracion: row.clearSchedule ? null : row.duracion,
         override_manual: true,
         heredado_de_capitulo: false,
         itemDef: row.itemDef,
@@ -1539,12 +1717,12 @@ export default function ProgObraProgramacionModal({
     }
     let saved = 0
     let errors = 0
-    for (const row of itemsAGuardar) {
+    for (const row of rowsToSave) {
       const ok = await onGuardarItem(
         row.itemDef,
         {
-          fecha_inicio: row.fecha_inicio,
-          duracion: String(row.duracion),
+          fecha_inicio: row.clearSchedule ? null : row.fecha_inicio,
+          duracion: row.clearSchedule ? '' : String(row.duracion),
           override_manual: true,
           heredado_de_capitulo: false,
         },
@@ -1582,7 +1760,8 @@ export default function ProgObraProgramacionModal({
       await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
       await new Promise((r) => setTimeout(r, 80))
       const { saved, errors, skipped, batchOk, pkId } = await flushAllDrafts()
-      if (saved === 0 && skipped > 0) {
+      const hadRowsToSave = saved > 0 || errors > 0
+      if (!hadRowsToSave && skipped > 0) {
         throw new Error('Ningún ítem tiene fecha y días hábiles válidos. Revise la tabla.')
       }
       if (errors > 0) {
@@ -1591,11 +1770,18 @@ export default function ProgObraProgramacionModal({
       if (saved > 0) {
         showToast?.(`Guardados ${saved} ítem(s).`, 'ok')
       }
-      // Siempre notificar al padre — él cierra el modal y refresca mapa
       if (batchOk && onSaveSuccess) {
         await onSaveSuccess(pkId || activePk)
-      } else {
+      } else if (saved > 0) {
         await onGuardarCambios?.()
+      }
+      if (saved > 0 || batchOk) {
+        if (onReloadActividades) {
+          await onReloadActividades(pkId || activePk)
+        }
+        await syncGanttAfterSave(pkId || activePk)
+        setSaveGeneration((g) => g + 1)
+        setCpmDirty(true)
       }
     } catch (e) {
       console.error('[ProgObra] Guardar cambios:', e)
@@ -1715,7 +1901,18 @@ export default function ProgObraProgramacionModal({
                 marginBottom: -1,
               }}
             >
-              {tab === 'programacion' ? 'Programación' : 'Dependencias'}
+              {tab === 'programacion' ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  Programación
+                  {cpmDirty && (
+                    <span style={{ fontSize: 'var(--cc-caption)', background: '#FEF3C7', color: '#92400E', borderRadius: 4, padding: '2px 6px', fontWeight: 600 }}>
+                      CPM desactualizado
+                    </span>
+                  )}
+                </span>
+              ) : (
+                'Dependencias'
+              )}
             </button>
           ))}
         </div>
@@ -1735,8 +1932,11 @@ export default function ProgObraProgramacionModal({
                 estructuraPorCapitulo={estructuraPorCapitulo}
                 editable={editable}
                 showToast={showToast}
+                cpmDirty={cpmDirty}
+                onCpmDirtyChange={setCpmDirty}
                 onCpmCalculated={(resultados) => {
                   setCpmResultados(resultados)
+                  setCpmDirty(false)
                   onCpmUpdated?.(resultados)
                 }}
               />
@@ -1829,6 +2029,8 @@ export default function ProgObraProgramacionModal({
                           finOverrides={finOverrides}
                           isAgExpanded={(agId) => isAgExpanded(cap, agId)}
                           onToggleAgExpand={(agId) => toggleAgExpand(cap, agId)}
+                          saveGeneration={saveGeneration}
+                          suspendAutoSave={localSaving}
                         />
                       )
                     })}
@@ -1855,11 +2057,12 @@ export default function ProgObraProgramacionModal({
                   noHabilesSet={noHabilesSet}
                   t={t}
                   activePk={activePk}
-                  cpmByCapKey={cpmByCapKey}
+                  cpmByNodeKey={cpmByNodeKey}
                   bodyScrollRef={rightBodyScrollRef}
                   onBodyScroll={handleRightBodyScroll}
                   onRefresh={refreshPkGantt}
                 />
+                <ProgCpmResumenTable rows={cpmResumenRows} t={t} />
               </div>
             </div>
           )}

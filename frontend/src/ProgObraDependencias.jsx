@@ -26,6 +26,70 @@ function agLabel(ag) {
   return code && name ? `${code} · ${name}` : code || name || `Agrupador ${ag.agrupador_id}`
 }
 
+function truncateText(text, maxLen = 40) {
+  const s = String(text || '').trim()
+  if (s.length <= maxLen) return s
+  return `${s.slice(0, maxLen)}...`
+}
+
+function lookupAgrupador(estructuraMap, pk, capitulo, agrupadorId) {
+  if (agrupadorId == null || agrupadorId === '') return null
+  const cap = estructuraMap?.[pk]?.[capitulo]
+  return (cap?.agrupadores || []).find((a) => String(a.agrupador_id) === String(agrupadorId)) || null
+}
+
+function depEndpointShort(dep, side, estructuraMap) {
+  const pk = side === 'orig' ? dep.pk_id_origen : dep.pk_id_destino
+  const cap = side === 'orig' ? dep.capitulo_origen : dep.capitulo_destino
+  const agId = side === 'orig' ? dep.agrupador_id_origen : dep.agrupador_id_destino
+  if (agId != null && agId !== '') {
+    const ag = lookupAgrupador(estructuraMap, pk, cap, agId)
+    return agLabel(ag) || `Agr. ${agId}`
+  }
+  return truncateText(cap, 40)
+}
+
+function depEndpointTooltipLine(dep, side, estructuraMap) {
+  const pk = String(side === 'orig' ? dep.pk_id_origen : dep.pk_id_destino || '').trim()
+  const cap = String(side === 'orig' ? dep.capitulo_origen : dep.capitulo_destino || '').trim()
+  const agId = side === 'orig' ? dep.agrupador_id_origen : dep.agrupador_id_destino
+  const otherPk = String(side === 'orig' ? dep.pk_id_destino : dep.pk_id_origen || '').trim()
+  const showPk = pk && otherPk && pk !== otherPk
+  const parts = []
+  if (showPk) parts.push(pk)
+  if (cap) parts.push(cap)
+  if (agId != null && agId !== '') {
+    const ag = lookupAgrupador(estructuraMap, pk, cap, agId)
+    parts.push(agLabel(ag) || `Agr. ${agId}`)
+  }
+  return parts.join(' / ')
+}
+
+function formatDepCellText(dep, estructuraMap) {
+  const orig = depEndpointShort(dep, 'orig', estructuraMap)
+  const dest = depEndpointShort(dep, 'dest', estructuraMap)
+  const tipo = dep.tipo || 'FS'
+  return `${orig}  →${tipo}→  ${dest}`
+}
+
+function formatDepTooltip(dep, estructuraMap) {
+  const orig = depEndpointTooltipLine(dep, 'orig', estructuraMap)
+  const dest = depEndpointTooltipLine(dep, 'dest', estructuraMap)
+  const tipo = dep.tipo || 'FS'
+  const lag = Number(dep.lag_dias) || 0
+  const lagLine = lag !== 0 ? `\nLag: ${lag} día${lag !== 1 ? 's' : ''}` : ''
+  return `${orig}\n→${tipo}→\n${dest}${lagLine}`
+}
+
+function estructuraCapMapFromResponse(data) {
+  const map = {}
+  for (const c of data?.capitulos || []) {
+    const cap = String(c?.capitulo || '').trim()
+    if (cap) map[cap] = c
+  }
+  return map
+}
+
 function agOptionKey(ag) {
   return `${ag.pk_id}\u0000${ag.capitulo}\u0000${ag.agrupador_id}`
 }
@@ -68,10 +132,14 @@ export default function ProgObraDependencias({
   editable,
   showToast,
   onCpmCalculated,
+  cpmDirty: cpmDirtyProp,
+  onCpmDirtyChange,
 }) {
   const [deps, setDeps] = useState([])
   const [loaded, setLoaded] = useState(false)
-  const [cpmDirty, setCpmDirty] = useState(false)
+  const [cpmDirtyLocal, setCpmDirtyLocal] = useState(false)
+  const cpmDirty = cpmDirtyProp ?? cpmDirtyLocal
+  const setCpmDirty = onCpmDirtyChange ?? setCpmDirtyLocal
   const [cpmCalculando, setCpmCalculando] = useState(false)
   const [cpmResultados, setCpmResultados] = useState([])
 
@@ -93,9 +161,11 @@ export default function ProgObraDependencias({
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState(null)
   const [ayudaOpen, setAyudaOpen] = useState(false)
+  const [estructuraByPk, setEstructuraByPk] = useState({})
 
   const onCpmRef = useRef(onCpmCalculated)
   onCpmRef.current = onCpmCalculated
+  const estructuraFetchRef = useRef(new Set())
 
   const hdrs = useMemo(
     () => ({ Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }),
@@ -113,6 +183,14 @@ export default function ProgObraDependencias({
     const estructura = pk === activePk ? estructuraPorCapitulo : estructuraDestPk
     return flattenAgrupadores(estructura, caps, pk)
   }, [agCrossPk, agPkDest, activePk, capitulosOrigen, capsDestPk, estructuraPorCapitulo, estructuraDestPk])
+
+  const estructuraMap = useMemo(() => {
+    const map = { ...estructuraByPk }
+    if (activePk && estructuraPorCapitulo) {
+      map[activePk] = estructuraPorCapitulo
+    }
+    return map
+  }, [estructuraByPk, activePk, estructuraPorCapitulo])
 
   useEffect(() => {
     if (capitulosOrigen.length > 0 && !capOrig) setCapOrig(capitulosOrigen[0])
@@ -150,6 +228,38 @@ export default function ProgObraDependencias({
     })()
     return () => { cancel = true }
   }, [versionId, cid, API, hdrs])
+
+  useEffect(() => {
+    if (!loaded || !cid || !token || !deps.length) return undefined
+    let cancel = false
+    const pksNeeded = [
+      ...new Set(
+        deps.flatMap((d) => [d.pk_id_origen, d.pk_id_destino].map((p) => String(p || '').trim()).filter(Boolean)),
+      ),
+    ]
+    ;(async () => {
+      for (const pk of pksNeeded) {
+        if (cancel) return
+        if (pk === activePk && estructuraPorCapitulo && Object.keys(estructuraPorCapitulo).length) continue
+        if (estructuraFetchRef.current.has(pk)) continue
+        estructuraFetchRef.current.add(pk)
+        try {
+          const res = await fetch(
+            `${API}/prog-obra/${cid}/programacion-estructura?pk_id=${encodeURIComponent(pk)}`,
+            { headers: hdrs },
+          )
+          if (cancel || !res.ok) continue
+          const data = await res.json()
+          setEstructuraByPk((prev) => (prev[pk] ? prev : { ...prev, [pk]: estructuraCapMapFromResponse(data) }))
+        } catch {
+          /* ignore */
+        }
+      }
+    })()
+    return () => {
+      cancel = true
+    }
+  }, [loaded, deps, cid, token, API, hdrs, activePk, estructuraPorCapitulo])
 
   useEffect(() => {
     if (!agCrossPk || !agPkDest || agPkDest === activePk) {
@@ -351,21 +461,25 @@ export default function ProgObraDependencias({
             <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 'var(--cc-caption)' }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${t.border}` }}>
-                  {['Origen', 'Tipo', 'Lag', 'Destino', ''].map((h) => (
-                    <th key={h} style={{ padding: '6px 8px', textAlign: 'left', color: t.textMuted }}>{h}</th>
-                  ))}
+                  <th style={{ padding: '6px 8px', textAlign: 'left', color: t.textMuted }}>Dependencia</th>
+                  <th style={{ padding: '6px 8px', width: 40 }} />
                 </tr>
               </thead>
               <tbody>
                 {depsDelPk.map((dep) => (
                   <tr key={dep.id} style={{ borderBottom: `1px solid ${t.border}22` }}>
-                    <td style={{ padding: '6px 8px' }}>
-                      {dep.capitulo_origen}{dep.agrupador_id_origen ? ` / Agr. ${dep.agrupador_id_origen}` : ''}
-                    </td>
-                    <td style={{ padding: '6px 8px' }}>{dep.tipo}</td>
-                    <td style={{ padding: '6px 8px', textAlign: 'center' }}>{dep.lag_dias ?? 0}</td>
-                    <td style={{ padding: '6px 8px' }}>
-                      {dep.pk_id_destino} / {dep.capitulo_destino}{dep.agrupador_id_destino ? ` / Agr. ${dep.agrupador_id_destino}` : ''}
+                    <td
+                      style={{
+                        padding: '6px 8px',
+                        color: t.text,
+                        maxWidth: 0,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                      title={formatDepTooltip(dep, estructuraMap)}
+                    >
+                      {formatDepCellText(dep, estructuraMap)}
                     </td>
                     <td style={{ padding: '6px 8px', textAlign: 'right' }}>
                       {editable && (

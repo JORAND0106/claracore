@@ -43,13 +43,16 @@ class CalendarioNoHabilesCache:
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def fechas_extra(self, contrato_id: int, desde: date, hasta: date) -> frozenset:
+        key = int(contrato_id)
         with self._lock:
-            key = int(contrato_id)
             cur = self._by_contract.get(key)
             if cur and cur[0] <= desde and cur[1] >= hasta:
                 return frozenset(d for d in cur[2] if desde <= d <= hasta)
-        rows = self.loader(contrato_id, desde, hasta)
-        extra: Set[date] = set()
+            load_desde = min(desde, cur[0]) if cur else desde
+            load_hasta = max(hasta, cur[1]) if cur else hasta
+            prev_extra = cur[2] if cur else frozenset()
+        rows = self.loader(contrato_id, load_desde, load_hasta)
+        extra: Set[date] = set(prev_extra)
         for r in rows or []:
             fd = r.get("fecha")
             if fd is None:
@@ -60,11 +63,11 @@ class CalendarioNoHabilesCache:
                     fd = date(int(y), int(m), int(d0))
                 except Exception:
                     continue
-            if isinstance(fd, date) and desde <= fd <= hasta:
+            if isinstance(fd, date) and load_desde <= fd <= load_hasta:
                 extra.add(fd)
         frozen = frozenset(extra)
         with self._lock:
-            self._by_contract[key] = (desde, hasta, frozen)
+            self._by_contract[key] = (load_desde, load_hasta, frozen)
         return frozenset(d for d in frozen if desde <= d <= hasta)
 
     def invalidate(self, contrato_id: int) -> None:
@@ -77,9 +80,8 @@ def es_dia_habil(d: date, contrato_id: int, cache: CalendarioNoHabilesCache) -> 
         return False
     if d in festivos_colombia_año(d.year):
         return False
-    desde = d - timedelta(days=400)
-    hasta = d + timedelta(days=400)
-    extra = cache.fechas_extra(contrato_id, desde, hasta)
+    # Una sola carga por rango ampliado (evita N consultas BD al iterar día a día).
+    extra = cache.fechas_extra(contrato_id, d, d)
     return d not in extra
 
 
