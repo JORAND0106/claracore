@@ -43,6 +43,12 @@ export function OfflineProvider({ children, contratoId, authToken }) {
 
   const syncingRef = useRef(false)
   const downloadAbortRef = useRef(null)
+  const prevIsOnlineRef = useRef(navigator.onLine)
+  const isOfflineReadyRef = useRef(false)
+  isOfflineReadyRef.current = isOfflineReady
+
+  /** Toast breve tras pérdida de red inesperada (con caché lista). */
+  const [connectionLostToast, setConnectionLostToast] = useState(false)
 
   // efectivoOffline = true cuando NO hay red real (ya sea por sistema o por toggle manual)
   const efectivoOffline = forceOffline || !isOnline
@@ -62,6 +68,30 @@ export function OfflineProvider({ children, contratoId, authToken }) {
       window.removeEventListener('online',  goOnline)
       window.removeEventListener('offline', goOffline)
     }
+  }, [])
+
+  // Pérdida de red inesperada (evento offline del navegador)
+  useEffect(() => {
+    const wasOnline = prevIsOnlineRef.current
+    prevIsOnlineRef.current = isOnline
+    if (wasOnline && !isOnline) {
+      if (isOfflineReadyRef.current) {
+        setConnectionLostToast(true)
+      }
+    }
+    if (isOnline) {
+      setConnectionLostToast(false)
+    }
+  }, [isOnline, isOfflineReady])
+
+  useEffect(() => {
+    if (!connectionLostToast) return undefined
+    const t = setTimeout(() => setConnectionLostToast(false), 8000)
+    return () => clearTimeout(t)
+  }, [connectionLostToast])
+
+  const dismissConnectionLostToast = useCallback(() => {
+    setConnectionLostToast(false)
   }, [])
 
   // ── Refrescar estado al montar y cuando cambia contratoId ──────────────────
@@ -220,6 +250,8 @@ export function OfflineProvider({ children, contratoId, authToken }) {
       syncMeta,
       conflicts,
       tilesProgress,
+      connectionLostToast,
+      dismissConnectionLostToast,
       prepareOffline,
       cancelarDescarga,
       runSync,

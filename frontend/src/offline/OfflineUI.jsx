@@ -10,6 +10,55 @@
 import React, { useState } from 'react'
 import { useOffline } from './OfflineContext'
 
+// ── ConnectionLostToast ───────────────────────────────────────────────────────
+/** Aviso no bloqueante tras caída de red con caché offline lista. */
+export function ConnectionLostToast() {
+  const { connectionLostToast, dismissConnectionLostToast } = useOffline()
+  if (!connectionLostToast) return null
+
+  return (
+    <div
+      role="status"
+      style={{
+        position: 'fixed',
+        bottom: 24,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 10040,
+        background: '#1e3a5f',
+        color: '#fff',
+        padding: '12px 20px',
+        borderRadius: 10,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+        fontSize: 14,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        maxWidth: 'min(420px, 92vw)',
+      }}
+    >
+      <span>📡</span>
+      <span>Conexión perdida — continuando con datos en caché</span>
+      <button
+        type="button"
+        onClick={dismissConnectionLostToast}
+        aria-label="Cerrar aviso"
+        style={{
+          background: 'transparent',
+          border: 'none',
+          color: '#94a3b8',
+          cursor: 'pointer',
+          fontSize: 18,
+          lineHeight: 1,
+          padding: 0,
+        }}
+      >
+        ✕
+      </button>
+    </div>
+  )
+}
+
 // ── OfflineBanner ─────────────────────────────────────────────────────────────
 export function OfflineBanner() {
   const { efectivoOffline, forceOffline, isOfflineReady, pendingCount, syncState } = useOffline()

@@ -1,6 +1,12 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, Fragment } from 'react'
 import { OfflineProvider, useOffline } from './offline/OfflineContext'
-import { OfflineBanner, PrepareOfflineBtn, ConflictModal, ForceOfflineToggle } from './offline/OfflineUI'
+import {
+  OfflineBanner,
+  ConnectionLostToast,
+  PrepareOfflineBtn,
+  ConflictModal,
+  ForceOfflineToggle,
+} from './offline/OfflineUI'
 import {
   buscarReportesOffline,
   calcularAnalisisOffline,
@@ -5278,8 +5284,37 @@ function SicoePanelDataBarCell({ value, max, color, text, textColor, trackBg = '
 /** Banner flotante que consume el contexto offline (debe estar dentro de OfflineProvider) */
 function OfflineStatusBanner() {
   const { efectivoOffline, pendingCount } = useOffline()
-  if (!efectivoOffline && pendingCount === 0) return null
-  return <OfflineBanner />
+  return (
+    <>
+      {(efectivoOffline || pendingCount > 0) && <OfflineBanner />}
+      <ConnectionLostToast />
+    </>
+  )
+}
+
+/** Sin caché offline: aviso claro (red caída o modo sin datos descargados). */
+function SicoeSinCacheOfflineBanner() {
+  const { efectivoOffline, isOfflineReady } = useOffline()
+  if (!efectivoOffline || isOfflineReady) return null
+  return (
+    <div
+      role="alert"
+      style={{
+        marginBottom: 12,
+        padding: '12px 16px',
+        borderRadius: 8,
+        background: '#fef2f2',
+        border: '1px solid #fecaca',
+        color: '#991b1b',
+        fontSize: 14,
+        lineHeight: 1.45,
+      }}
+    >
+      <strong>Sin conexión y sin datos en caché</strong>
+      {' — '}
+      Conéctate para continuar o usa <strong>Preparar offline</strong> con conexión antes de volver a campo.
+    </div>
+  )
 }
 
 /** Coincide N° registro buscado con filas de so_registros (tipos mixtos en API). */
@@ -5459,6 +5494,8 @@ function ModuloSicoeObra({
   const sicoeMapFiltroApplyPkRef = useRef(() => {})
   const sicoeMapaOpenReporteRef = useRef(() => {})
   const buscarReportesSicoeRef = useRef(null)
+  const prevEfectivoOfflineRef = useRef(false)
+  const busquedaRealizadaRef = useRef(false)
   const cargarAnalisisSicoeRef = useRef(null)
   const sicoeFiltroPkSelRef = useRef('')
   /** Misma resolución de acta RPO que la matriz del dashboard (vigente / acta explícita). */
@@ -5668,7 +5705,12 @@ function ModuloSicoeObra({
     if (!contrato_id) return
     const hdrs = { Authorization: `Bearer ${getToken()}` }
 
-    // Helper: si el fetch falla y hay cache, usar IndexedDB
+    const setListIfEmpty = (setter, incoming) => {
+      const arr = Array.isArray(incoming) ? incoming : []
+      setter((prev) => (prev?.length ? prev : arr))
+    }
+
+    // Helper: si el fetch falla y hay cache, usar IndexedDB (no vacía selección del usuario)
     const cargarFiltrosOffline = async () => {
       if (!isOfflineReady) return
       const [caps, actas, subc, tramos, costados] = await Promise.all([
@@ -5678,11 +5720,11 @@ function ModuloSicoeObra({
         getTramosOffline(contrato_id),
         getCostadosOffline(contrato_id),
       ])
-      setFiltroCapList(Array.isArray(caps) ? caps : [])
-      setFiltroActaList(Array.isArray(actas) ? actas : [])
-      setFiltroSubcList(Array.isArray(subc) ? subc : [])
-      setFiltroTramoList(Array.isArray(tramos) ? tramos : [])
-      setFiltroCostadoList(Array.isArray(costados) ? costados : [])
+      setListIfEmpty(setFiltroCapList, caps)
+      setListIfEmpty(setFiltroActaList, actas)
+      setListIfEmpty(setFiltroSubcList, subc)
+      setListIfEmpty(setFiltroTramoList, tramos)
+      setListIfEmpty(setFiltroCostadoList, costados)
     }
 
     // Sin red o modo offline manual → IndexedDB directo
@@ -5706,13 +5748,34 @@ function ModuloSicoeObra({
         await cargarFiltrosOffline()
         return
       }
-      setFiltroSubcList(Array.isArray(subc) ? subc : [])
-      setFiltroCapList(Array.isArray(caps) ? caps : [])
-      setFiltroTramoList(Array.isArray(tc?.tramos) ? tc.tramos : [])
-      setFiltroCostadoList(Array.isArray(tc?.costados) ? tc.costados : [])
-      setFiltroActaList(Array.isArray(actas) ? actas.filter(a => a.numero_rpo != null).map(a => ({ id: a.id, numero_rpo: a.numero_rpo })) : [])
+      setListIfEmpty(setFiltroSubcList, subc)
+      setListIfEmpty(setFiltroCapList, caps)
+      setListIfEmpty(setFiltroTramoList, tc?.tramos)
+      setListIfEmpty(setFiltroCostadoList, tc?.costados)
+      setListIfEmpty(
+        setFiltroActaList,
+        Array.isArray(actas)
+          ? actas.filter((a) => a.numero_rpo != null).map((a) => ({ id: a.id, numero_rpo: a.numero_rpo }))
+          : [],
+      )
     }).catch(() => cargarFiltrosOffline())
   }, [contrato_id, nivelInfo.esInterventoria, isOfflineReady, efectivoOffline])
+
+  busquedaRealizadaRef.current = busquedaRealizada
+
+  // Al pasar a offline con caché: refrescar grilla/análisis desde IndexedDB sin vaciar filtros
+  useEffect(() => {
+    const wasOffline = prevEfectivoOfflineRef.current
+    prevEfectivoOfflineRef.current = efectivoOffline
+    if (!efectivoOffline || !isOfflineReady || wasOffline) return
+    if (!busquedaRealizadaRef.current) return
+    if (!tieneParametrosBusquedaSicoe(filtrosSicoeRef.current, capasSicoeRef.current)) return
+    void ejecutarBusquedaSicoeCompleta(
+      filtrosSicoeRef.current,
+      capasSicoeRef.current,
+      capasValidacionOpRef.current,
+    )
+  }, [efectivoOffline, isOfflineReady])
 
   useEffect(() => {
     sicoeActaAutoOnceRef.current = false
@@ -7356,6 +7419,7 @@ function ModuloSicoeObra({
     <div>
       {/* ── Banners offline ── */}
       <OfflineStatusBanner />
+      <SicoeSinCacheOfflineBanner />
       <ConflictModal />
 
       {sicoeSyncOfferOpen && (
