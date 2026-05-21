@@ -7,6 +7,8 @@
 import { db } from './db'
 import { API_BASE } from '../apiBase'
 
+export { downloadTilesContrato } from './tileDownloader'
+
 async function apiFetch(path, authToken) {
   const r = await fetch(`${API_BASE}${path}`, {
     headers: { Authorization: `Bearer ${authToken}` },
@@ -92,7 +94,10 @@ export async function downloadContractData(contratoId, authToken, opts = {}) {
   const registros = Array.isArray(pack.registros) ? pack.registros : []
   const inspectores = Array.isArray(pack.inspectores) ? pack.inspectores : []
   const subcontratistas = Array.isArray(pack.subcontratistas) ? pack.subcontratistas : []
-  const pkIds = Array.isArray(pack.pk_ids) ? pack.pk_ids : []
+  let pkIds = Array.isArray(pack.pk_ids) ? pack.pk_ids : []
+  if (!pkIds.length) {
+    pkIds = await apiFetch(`/sicoe-obra/${contratoId}/pk-ids`, authToken).catch(() => [])
+  }
 
   // Validar que el servidor resolvió correctamente el acta
   if (!pack.acta_id) {

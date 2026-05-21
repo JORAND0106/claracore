@@ -19,7 +19,7 @@ import {
   getPendingMutations,
   countPendingMutations,
 } from './db'
-import { downloadContractData } from './downloader'
+import { downloadContractData, downloadTilesContrato } from './downloader'
 import { processMutationQueue } from './syncEngine'
 
 const OfflineContext = createContext(null)
@@ -39,8 +39,10 @@ export function OfflineProvider({ children, contratoId, authToken }) {
   const [syncError, setSyncError] = useState(null)
   const [syncMeta, setSyncMetaState] = useState(null)
   const [conflicts, setConflicts] = useState([])
+  const [tilesProgress, setTilesProgress] = useState({ actual: 0, total: 0 })
 
   const syncingRef = useRef(false)
+  const downloadAbortRef = useRef(null)
 
   // efectivoOffline = true cuando NO hay red real (ya sea por sistema o por toggle manual)
   const efectivoOffline = forceOffline || !isOnline
@@ -88,22 +90,52 @@ export function OfflineProvider({ children, contratoId, authToken }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOnline, forceOffline])
 
+  const cancelarDescarga = useCallback(() => {
+    downloadAbortRef.current?.abort()
+  }, [])
+
   // ── Descargar datos para modo offline ──────────────────────────────────────
   const prepareOffline = useCallback(async (actaRpo = null) => {
     if (!contratoId || !authToken) return null
+    downloadAbortRef.current?.abort()
+    const ac = new AbortController()
+    downloadAbortRef.current = ac
     setSyncState('downloading')
     setSyncError(null)
+    setTilesProgress({ actual: 0, total: 0 })
     try {
       await clearContractCache(contratoId)
+      if (ac.signal.aborted) throw new DOMException('Cancelado', 'AbortError')
       const conteos = await downloadContractData(contratoId, authToken, { actaRpo })
+      if (ac.signal.aborted) throw new DOMException('Cancelado', 'AbortError')
+
+      setSyncState('downloading-tiles')
+      const tileStats = await downloadTilesContrato(
+        contratoId,
+        (actual, total) => setTilesProgress({ actual, total }),
+        ac.signal,
+      )
+
       await setSyncMeta(contratoId, { actaRpo })
       await refreshStatus()
       setSyncState('idle')
-      return conteos
+      setTilesProgress({ actual: 0, total: 0 })
+      return { ...conteos, tiles: tileStats }
     } catch (e) {
+      if (e?.name === 'AbortError') {
+        setSyncError('Descarga cancelada')
+        setSyncState('idle')
+        setTilesProgress({ actual: 0, total: 0 })
+        return null
+      }
       setSyncError(String(e?.message || e))
       setSyncState('error')
+      setTilesProgress({ actual: 0, total: 0 })
       return null
+    } finally {
+      if (downloadAbortRef.current === ac) {
+        downloadAbortRef.current = null
+      }
     }
   }, [contratoId, authToken, refreshStatus])
 
@@ -187,7 +219,9 @@ export function OfflineProvider({ children, contratoId, authToken }) {
       syncError,
       syncMeta,
       conflicts,
+      tilesProgress,
       prepareOffline,
+      cancelarDescarga,
       runSync,
       enqueueMutation,
       resolveConflict,

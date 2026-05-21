@@ -5,6 +5,7 @@
  * el cache-first sobre el mismo CACHE_NAME dejaba la SPA “pegado” a JS viejo.
  */
 const CACHE_NAME = 'claracore-shell-v6'
+const TILES_CACHE_NAME = 'claracore-tiles-v1'
 
 self.addEventListener('install', (event) => {
   self.skipWaiting()
@@ -13,7 +14,9 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
+      Promise.all(
+        keys.filter(k => k !== CACHE_NAME && k !== TILES_CACHE_NAME).map(k => caches.delete(k)),
+      )
     )
   )
   self.clients.claim()
@@ -25,6 +28,23 @@ self.addEventListener('fetch', (event) => {
   // Favicon: nunca desde cache del SW (el navegador ya cachea bastante; evita icono “pegado” tras deploy)
   if (url.pathname === '/favicon.png' || /^\/favicon\.(ico|svg)$/.test(url.pathname)) {
     event.respondWith(fetch(event.request))
+    return
+  }
+
+  // Tiles MapTiler — cache-first para mapa Leaflet offline (SICOE)
+  if (url.hostname === 'api.maptiler.com') {
+    event.respondWith(
+      caches.open(TILES_CACHE_NAME).then((cache) =>
+        cache.match(event.request).then((cached) =>
+          cached || fetch(event.request).then((response) => {
+            if (response.ok) {
+              cache.put(event.request, response.clone())
+            }
+            return response
+          }),
+        ),
+      ),
+    )
     return
   }
 

@@ -45,7 +45,7 @@ export function OfflineBanner() {
             ? (pendingCount > 0 ? `${pendingCount} cambio(s) pendiente(s)` : 'Datos SICOE en caché.')
             : 'Datos no descargados — prepara el offline primero.'}
           {efectivoOffline && isOfflineReady && (
-            <span style={{ opacity: 0.92 }}> Los mapas Mapbox requieren internet (no se guardan en caché).</span>
+            <span style={{ opacity: 0.92 }}> Mapa SICOE offline usa tiles MapTiler en caché.</span>
           )}
         </span>
       )}
@@ -130,10 +130,20 @@ export function ForceOfflineToggle() {
 // ── PrepareOfflineBtn ─────────────────────────────────────────────────────────
 export function PrepareOfflineBtn({ actaRpo = null }) {
   const {
-    prepareOffline, syncState, syncMeta, isOfflineReady, efectivoOffline, setForceOffline,
+    prepareOffline,
+    cancelarDescarga,
+    syncState,
+    syncError,
+    syncMeta,
+    tilesProgress,
+    isOfflineReady,
+    efectivoOffline,
+    setForceOffline,
   } = useOffline()
   const [detail, setDetail] = useState(null)
-  const loading = syncState === 'downloading'
+  const loadingData = syncState === 'downloading'
+  const loadingTiles = syncState === 'downloading-tiles'
+  const loading = loadingData || loadingTiles
 
   // No mostrar si estamos offline sin internet real (no se puede descargar desde red)
   // Pero si forceOffline está activo sin datos, sí mostramos para que puedan preparar
@@ -143,11 +153,19 @@ export function PrepareOfflineBtn({ actaRpo = null }) {
     setDetail(null)
     const resultado = await prepareOffline(actaRpo || null)
     if (resultado) {
-      setDetail(`✓ ${resultado.reportes} reportes · ${resultado.registros} registros · ${resultado.actas} actas`)
-      // Un solo paso: al terminar la descarga se activa «Trabajar sin conexión» (equivalente al toggle azul).
+      const tilesLine = resultado.tiles?.total
+        ? ` · ${resultado.tiles.downloaded}/${resultado.tiles.total} tiles mapa`
+        : ''
+      setDetail(
+        `✓ ${resultado.reportes} reportes · ${resultado.registros} registros · ${resultado.actas} actas${tilesLine}`,
+      )
       setForceOffline(true)
     } else {
-      setDetail('Error al descargar — revisa la consola')
+      setDetail(
+        syncError === 'Descarga cancelada'
+          ? 'Descarga cancelada'
+          : (syncError || 'Error al descargar — revisa la consola'),
+      )
     }
   }
 
@@ -155,14 +173,18 @@ export function PrepareOfflineBtn({ actaRpo = null }) {
     ? (isOfflineReady ? `✓ Acta ${actaRpo} offline — actualizar` : `⬇ Acta ${actaRpo} para offline`)
     : (isOfflineReady ? '✓ Offline listo — actualizar' : '⬇ Preparar offline')
 
+  const tilePct = tilesProgress.total > 0
+    ? Math.min(100, Math.round((tilesProgress.actual / tilesProgress.total) * 100))
+    : 0
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 220 }}>
       <button
         onClick={handleClick}
         disabled={loading}
         title={actaRpo
-          ? `Descarga el Acta ${actaRpo} y activa modo sin conexión con esos datos`
-          : 'Descarga datos y activa modo sin conexión'}
+          ? `Descarga el Acta ${actaRpo}, tiles MapTiler y activa modo sin conexión`
+          : 'Descarga datos SICOE, tiles del mapa y activa modo sin conexión'}
         style={{
           background: isOfflineReady ? '#15803d' : '#6b7280',
           color: '#fff',
@@ -177,15 +199,58 @@ export function PrepareOfflineBtn({ actaRpo = null }) {
           opacity: loading ? 0.7 : 1,
         }}
       >
-        {loading ? '⟳ Descargando…' : label}
+        {loadingData ? '⟳ Descargando datos…' : loadingTiles ? '⟳ Descargando mapa…' : label}
       </button>
-      {syncMeta?.synced_at && !detail && (
+
+      {loadingTiles && tilesProgress.total > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span style={{ fontSize: 11, color: '#374151' }}>
+            ⟳ Descargando mapa… {tilesProgress.actual} / {tilesProgress.total} tiles ({tilePct}%)
+          </span>
+          <div
+            style={{
+              height: 8,
+              borderRadius: 4,
+              background: '#e5e7eb',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                height: '100%',
+                width: `${tilePct}%`,
+                background: '#2563eb',
+                transition: 'width 0.2s ease',
+              }}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={cancelarDescarga}
+            style={{
+              alignSelf: 'flex-start',
+              background: 'transparent',
+              border: '1px solid #dc2626',
+              color: '#dc2626',
+              borderRadius: 6,
+              padding: '4px 10px',
+              fontSize: 11,
+              cursor: 'pointer',
+              fontWeight: 600,
+            }}
+          >
+            Cancelar
+          </button>
+        </div>
+      )}
+
+      {syncMeta?.synced_at && !detail && !loading && (
         <span style={{ fontSize: 11, color: '#6b7280' }}>
           Última sync: {new Date(syncMeta.synced_at).toLocaleString('es-CO')}
           {syncMeta.actaRpo ? ` · Acta ${syncMeta.actaRpo}` : ''}
         </span>
       )}
-      {detail && (
+      {detail && !loading && (
         <span style={{ fontSize: 11, color: detail.startsWith('✓') ? '#15803d' : '#dc2626' }}>
           {detail}
         </span>

@@ -34,6 +34,7 @@ jobs:
           ###### End of Repository/Build Configurations ######
         env:
           VITE_MAPBOX_TOKEN: ${{ secrets.VITE_MAPBOX_TOKEN }}
+          VITE_MAPTILER_KEY: ${{ secrets.VITE_MAPTILER_KEY }}
 
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'

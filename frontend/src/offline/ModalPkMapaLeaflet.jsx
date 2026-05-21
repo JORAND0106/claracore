@@ -1,5 +1,5 @@
 /**
- * Mapa PK offline — Leaflet + OSM (sin Mapbox).
+ * Mapa PK offline — Leaflet + MapTiler (tiles en Cache API vía Service Worker).
  * Réplica la lógica de clic del modal Nuevo Reporte (Mapbox).
  */
 import { useEffect } from 'react'
@@ -27,7 +27,20 @@ function pkIdFromFeatureProps(props) {
   return String(props.Layer || props.PK_ID || props.pk_id || '').trim()
 }
 
+const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY
+const MAPTILER_TILE_URL = MAPTILER_KEY
+  ? `https://api.maptiler.com/maps/streets/{z}/{x}/{y}.png?key=${MAPTILER_KEY}`
+  : null
+
 export default function ModalPkMapaLeaflet({ geojson, handlersRef }) {
+  if (!MAPTILER_TILE_URL) {
+    return (
+      <div style={{ padding: 24, color: '#6b7280', fontSize: 14 }}>
+        Falta <code>VITE_MAPTILER_KEY</code> para el mapa offline. Configúrala y vuelve a preparar offline.
+      </div>
+    )
+  }
+
   if (!geojson?.features?.length) {
     return (
       <div style={{ padding: 24, color: '#6b7280', fontSize: 14 }}>
@@ -44,8 +57,8 @@ export default function ModalPkMapaLeaflet({ geojson, handlersRef }) {
       scrollWheelZoom
     >
       <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        attribution='&copy; <a href="https://www.maptiler.com/copyright/" target="_blank" rel="noreferrer">MapTiler</a>'
+        url={MAPTILER_TILE_URL}
       />
       <FitPlanoBounds geojson={geojson} />
       <GeoJSON
