@@ -483,6 +483,8 @@ function FraseDelDia({ t, fs, usuario }) {
 }
 
 // ─── Slider fotos SICOE (acta RPO vigente) ────────────────────────────────────
+const FOTOS_REFRESH_MS = 5 * 60 * 1000 // refresca cada 5 minutos
+
 function SliderFotosActaVigente({ t, fs, contratoId, token }) {
   const [acta, setActa] = useState(null)
   const [fotos, setFotos] = useState([])
@@ -493,7 +495,15 @@ function SliderFotosActaVigente({ t, fs, contratoId, token }) {
   const [fuenteFotos, setFuenteFotos] = useState('acta_vigente')
   const [indice, setIndice] = useState(0)
   const [fade, setFade] = useState(true)
+  const [refreshKey, setRefreshKey] = useState(0)
   const timerRef = useRef(null)
+
+  // Refresca las fotos cada 5 minutos silenciosamente
+  useEffect(() => {
+    if (!contratoId) return
+    const iv = setInterval(() => setRefreshKey((k) => k + 1), FOTOS_REFRESH_MS)
+    return () => clearInterval(iv)
+  }, [contratoId])
 
   useEffect(() => {
     if (!contratoId) {
@@ -507,14 +517,17 @@ function SliderFotosActaVigente({ t, fs, contratoId, token }) {
       return
     }
     let cancelled = false
-    setCargando(true)
-    setIndice(0)
+    // Solo mostrar spinner en la carga inicial (refreshKey === 0)
+    if (refreshKey === 0) {
+      setCargando(true)
+      setIndice(0)
+    }
     setErrorApi(false)
     setErrorHttp(null)
     setSinActaPeriodo(false)
     setFuenteFotos('acta_vigente')
     const h = token ? { Authorization: `Bearer ${token}` } : {}
-    fetch(`${API_BASE}/inicio/${contratoId}/fotos-acta-vigente`, { headers: h })
+    fetch(`${API_BASE}/inicio/${contratoId}/fotos-acta-vigente?limit=200`, { headers: h })
       .then(async (r) => {
         if (r.status === 401) {
           if (!cancelled) {
@@ -550,10 +563,11 @@ function SliderFotosActaVigente({ t, fs, contratoId, token }) {
         if (!cancelled) setCargando(false)
       })
     return () => { cancelled = true }
-  }, [contratoId, token])
+  }, [contratoId, token, refreshKey])
 
-  useEffect(() => {
-    if (fotos.length < 2) return undefined
+  const reiniciarTimer = () => {
+    if (timerRef.current) clearInterval(timerRef.current)
+    if (fotos.length < 2) return
     timerRef.current = setInterval(() => {
       setFade(false)
       setTimeout(() => {
@@ -561,10 +575,25 @@ function SliderFotosActaVigente({ t, fs, contratoId, token }) {
         setFade(true)
       }, 280)
     }, SLIDER_INTERVAL_MS)
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current)
-    }
-  }, [fotos.length])
+  }
+
+  useEffect(() => {
+    if (fotos.length < 2) return undefined
+    reiniciarTimer()
+    return () => { if (timerRef.current) clearInterval(timerRef.current) }
+  }, [fotos.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const irA = (nuevoIndice) => {
+    setFade(false)
+    setTimeout(() => {
+      setIndice(nuevoIndice)
+      setFade(true)
+    }, 180)
+    reiniciarTimer()
+  }
+
+  const irAnterior = () => irA((indice - 1 + fotos.length) % fotos.length)
+  const irSiguiente = () => irA((indice + 1) % fotos.length)
 
   const actual = fotos[indice]
 
@@ -644,11 +673,32 @@ function SliderFotosActaVigente({ t, fs, contratoId, token }) {
             />
             {fotos.length > 1 && (
               <div style={{
-                position: 'absolute', top: '10px', right: '10px',
-                background: 'rgba(15,23,42,0.75)', color: '#fff',
-                fontSize: fs.autor, fontWeight: '700', borderRadius: '20px', padding: '4px 10px',
+                position: 'absolute', bottom: '12px', left: '50%', transform: 'translateX(-50%)',
+                display: 'flex', alignItems: 'center', gap: '8px',
+                background: 'rgba(15,23,42,0.78)', borderRadius: '24px', padding: '5px 10px',
+                userSelect: 'none',
               }}>
-                {indice + 1} / {fotos.length}
+                <button
+                  type="button"
+                  onClick={irAnterior}
+                  style={{
+                    background: 'none', border: 'none', color: '#fff', cursor: 'pointer',
+                    fontSize: '18px', lineHeight: 1, padding: '0 4px', opacity: 0.85,
+                  }}
+                  aria-label="Foto anterior"
+                >‹</button>
+                <span style={{ color: '#fff', fontSize: fs.autor, fontWeight: '700', minWidth: '70px', textAlign: 'center' }}>
+                  {indice + 1} / {fotos.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={irSiguiente}
+                  style={{
+                    background: 'none', border: 'none', color: '#fff', cursor: 'pointer',
+                    fontSize: '18px', lineHeight: 1, padding: '0 4px', opacity: 0.85,
+                  }}
+                  aria-label="Foto siguiente"
+                >›</button>
               </div>
             )}
           </>

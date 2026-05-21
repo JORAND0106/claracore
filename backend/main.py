@@ -7896,7 +7896,7 @@ def _inicio_q_registros_recientes_contrato(contrato_id: int, fetch_limit: int):
 @app.get("/inicio/{contrato_id}/fotos-acta-vigente")
 def inicio_fotos_acta_vigente(
     contrato_id: int,
-    limit: int = Query(48, ge=1, le=120),
+    limit: int = Query(120, ge=1, le=200),
     current_user=Depends(get_current_user),
 ):
     """
@@ -9457,7 +9457,7 @@ def offline_pack(
     """
     Paquete offline completo para un acta.
     Una sola petición devuelve: actas, semanas, precios, reportes, registros,
-    inspectores y subcontratistas activos.
+    inspectores, subcontratistas activos y maestro pk_ids.
     El servidor resuelve acta_id desde acta_rpo internamente.
     Cada query es independiente; errores parciales se reportan en 'errores'.
     """
@@ -9577,6 +9577,21 @@ def offline_pack(
     except Exception as e:
         errores["subcontratistas"] = str(e)
 
+    # 9. Maestro PK-IDs (misma regla que GET …/pk-ids)
+    pk_ids = []
+    try:
+        pk_ids = (
+            supabase.table("pk_ids")
+            .select("*")
+            .eq("contrato_id", contrato_id)
+            .order("pk_id")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:
+        errores["pk_ids"] = str(e)
+
     return {
         "acta_id":   acta_id,
         "actas":     actas,
@@ -9586,6 +9601,7 @@ def offline_pack(
         "registros": registros,
         "inspectores": inspectores,
         "subcontratistas": subcontratistas,
+        "pk_ids": pk_ids,
         "errores":   errores,  # campo de diagnóstico — vacío si todo OK
     }
 

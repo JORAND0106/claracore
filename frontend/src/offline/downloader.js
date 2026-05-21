@@ -15,6 +15,25 @@ async function apiFetch(path, authToken) {
   return r.json()
 }
 
+async function _persistirMapaCache(contratoId, { planoResp, pkIds }) {
+  const cid = Number(contratoId)
+  await db.transaction('rw', [db.geojson_cache, db.pkids_cache], async () => {
+    if (planoResp && typeof planoResp === 'object') {
+      await db.geojson_cache.put({
+        contrato_id: cid,
+        plano_geojson: planoResp.plano_geojson ?? null,
+        centro_lat: planoResp.centro_lat ?? null,
+        centro_lng: planoResp.centro_lng ?? null,
+      })
+    }
+    await db.pkids_cache.where('contrato_id').equals(cid).delete()
+    const rows = Array.isArray(pkIds) ? pkIds : []
+    if (rows.length) {
+      await db.pkids_cache.bulkPut(rows.map((p) => ({ ...p, contrato_id: cid })))
+    }
+  })
+}
+
 /**
  * Descarga el paquete offline para el contrato/acta indicados.
  *
@@ -28,30 +47,38 @@ export async function downloadContractData(contratoId, authToken, opts = {}) {
 
   if (!actaRpo) {
     // Sin acta seleccionada → solo datos maestros básicos (sin registros)
-    const [actas, semanas, precios, reportes] = await Promise.all([
+    const [actas, semanas, precios, reportes, planoResp, pkIds] = await Promise.all([
       apiFetch(`/actas/${contratoId}/lista`, authToken).catch(() => []),
       apiFetch(`/sicoe-obra/${contratoId}/semanas`, authToken).catch(() => []),
       apiFetch(`/listado-precios/${contratoId}`, authToken).catch(() => []),
       apiFetch(`/sicoe-obra/${contratoId}/reportes`, authToken).catch(() => []),
+      apiFetch(`/contratos/${contratoId}/plano-geojson`, authToken).catch(() => null),
+      apiFetch(`/sicoe-obra/${contratoId}/pk-ids`, authToken).catch(() => []),
     ])
     await _persistir(contratoId, { actas, semanas, precios, reportes, registros: [] })
+    await _persistirMapaCache(contratoId, { planoResp, pkIds })
     return {
       actas: actas.length,
       semanas: semanas.length,
       precios: precios.length,
       reportes: reportes.length,
       registros: 0,
+      pk_ids: Array.isArray(pkIds) ? pkIds.length : 0,
+      plano: planoResp?.plano_geojson ? 1 : 0,
     }
   }
 
-  // Con acta → una sola petición al servidor
+  // Con acta → una sola petición al servidor + plano GeoJSON
   const actaRpoNum = parseInt(actaRpo, 10)
   if (isNaN(actaRpoNum)) throw new Error(`actaRpo inválido: ${actaRpo}`)
 
-  const pack = await apiFetch(
-    `/sicoe-obra/${contratoId}/offline-pack?acta_rpo=${actaRpoNum}`,
-    authToken
-  )
+  const [pack, planoResp] = await Promise.all([
+    apiFetch(
+      `/sicoe-obra/${contratoId}/offline-pack?acta_rpo=${actaRpoNum}`,
+      authToken,
+    ),
+    apiFetch(`/contratos/${contratoId}/plano-geojson`, authToken).catch(() => null),
+  ])
 
   // Mostrar errores parciales del servidor en consola para diagnóstico
   if (pack.errores && Object.keys(pack.errores).length > 0) {
@@ -65,6 +92,7 @@ export async function downloadContractData(contratoId, authToken, opts = {}) {
   const registros = Array.isArray(pack.registros) ? pack.registros : []
   const inspectores = Array.isArray(pack.inspectores) ? pack.inspectores : []
   const subcontratistas = Array.isArray(pack.subcontratistas) ? pack.subcontratistas : []
+  const pkIds = Array.isArray(pack.pk_ids) ? pack.pk_ids : []
 
   // Validar que el servidor resolvió correctamente el acta
   if (!pack.acta_id) {
@@ -80,6 +108,7 @@ export async function downloadContractData(contratoId, authToken, opts = {}) {
     inspectores,
     subcontratistas,
   })
+  await _persistirMapaCache(contratoId, { planoResp, pkIds })
 
   return {
     actas:     actas.length,
@@ -89,6 +118,8 @@ export async function downloadContractData(contratoId, authToken, opts = {}) {
     registros: registros.length,
     inspectores: inspectores.length,
     subcontratistas: subcontratistas.length,
+    pk_ids: pkIds.length,
+    plano: planoResp?.plano_geojson ? 1 : 0,
   }
 }
 

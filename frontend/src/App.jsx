@@ -18,6 +18,7 @@ import {
   crearRegistroLocal,
 } from './offline/offlineRouter'
 import { db } from './offline/db'
+import ModalPkMapaLeaflet from './offline/ModalPkMapaLeaflet'
 import AdminPanel from './AdminPanel'
 import ModuloInformes from './ModuloInformes'
 import ModuloGuias from './ModuloGuias'
@@ -1320,8 +1321,23 @@ function determinarNivelValidacion(usuario, sicoeContratoId = null) {
     }
   }
 
+  const _nivelInferidoComentario = (() => {
+    if (nivelDesdeRolId != null && nivelDesdeRolId !== 0) return nivelDesdeRolId
+    if (nivelDesdeCargoId != null) return nivelDesdeCargoId
+    if (nivelDesdeNombreRol != null) return nivelDesdeNombreRol
+    if (rol === 'operativo contratista') return 1
+    if (rol === 'contratista') return 2
+    if (rol === 'interventoria') return 4
+    return null
+  })()
   const nivelValidacionComentario =
-    nivelValidacion != null && nivelValidacion !== 0 ? nivelValidacion : esApoyoTecnico ? 3 : null
+    nivelValidacion != null && nivelValidacion !== 0
+      ? nivelValidacion
+      : esApoyoTecnico
+        ? 3
+        : puedeEditar && _nivelInferidoComentario != null
+          ? _nivelInferidoComentario
+          : null
 
   const nvNum = nivelValidacion
   const esInterventoriaSicoe = elevacionValidacionContratistaN1aN3
@@ -5121,15 +5137,14 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
                 <div style={{ marginTop:'12px', borderTop:`1px solid ${t.border}`, paddingTop:'12px', flexShrink:0 }}>
                   <button
                     type="button"
-                    disabled={!(nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario)}
-                    onClick={() => { if (nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) setPopupNuevoComentObra({ reg: modalComentarios.reg }) }}
+                    onClick={() => setPopupNuevoComentObra({ reg: modalComentarios.reg })}
                     style={{
                       width:'100%',
-                      background: (nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) ? `${color}18` : t.bg,
-                      color: (nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) ? color : t.textMuted,
-                      border: `1.5px solid ${(nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) ? color + '55' : t.border}`,
+                      background: `${color}18`,
+                      color: color,
+                      border: `1.5px solid ${color}55`,
                       borderRadius:'10px', padding:'10px 14px', fontSize:'var(--cc-sm)', fontWeight:'700',
-                      cursor: (nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) ? 'pointer' : 'not-allowed',
+                      cursor: 'pointer',
                     }}
                   >＋ Nueva conversación</button>
                 </div>
@@ -5139,19 +5154,19 @@ function CarpetaReporte({ t, usuario, API_URL, contrato_id, reporte: repoProp, o
         )
       })()}
 
-      {popupNuevoComentObra && (nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario) && (
+      {popupNuevoComentObra && (
         <PopupComentarioValidacion
           t={t} usuario={usuario} registro={popupNuevoComentObra.reg}
           contrato_id={contrato_id} API_URL={API_URL} hdrs={hdrs}
           estadoValidando="Mensaje"
-          nivelValidacion={nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario}
+          nivelValidacion={nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario ?? 1}
           obligatorio={true}
           modoConversacion={true}
           zIndexOverlay={10400}
           onConfirmar={async (comentarioData) => {
             if (!comentarioData) return
             const reg = popupNuevoComentObra.reg
-            const nv = nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario
+            const nv = nivelInfo.nivelValidacion ?? nivelInfo.nivelValidacionComentario ?? 1
             const body = {
               ...comentarioData,
               rol_origen: nivelInfo.rolOrigen,
@@ -9733,10 +9748,17 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
 
   useEffect(() => {
     if (!contrato_id) return
+    if (!isOnline && isOfflineReady) {
+      const cid = Number(contrato_id)
+      db.geojson_cache.get(cid)
+        .then((row) => setPlanoGeojsonContrato(row?.plano_geojson ?? null))
+        .catch(() => setPlanoGeojsonContrato(null))
+      return
+    }
     getContratoPlanoGeojson(API_URL, contrato_id, token)
       .then((d) => setPlanoGeojsonContrato(d?.plano_geojson ?? null))
       .catch(() => setPlanoGeojsonContrato(null))
-  }, [contrato_id, token, API_URL])
+  }, [contrato_id, token, API_URL, isOnline, isOfflineReady])
 
   useEffect(() => {
     // ── Número de reporte ────────────────────────────────────────────────────
@@ -9761,7 +9783,8 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         getPreciosOffline(contrato_id),
         db.inspectores_cache.where('contrato_id').equals(cid).toArray(),
         db.subcontratistas_cache.where('contrato_id').equals(cid).toArray(),
-      ]).then(([d, insp, subs]) => {
+        db.pkids_cache.where('contrato_id').equals(cid).toArray(),
+      ]).then(([d, insp, subs, pks]) => {
         if (Array.isArray(d)) {
           const caps = [...new Set(d.map(r => r.capitulo).filter(Boolean))]
           const sorted = caps.sort((a, b) => {
@@ -9773,9 +9796,11 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         }
         setInspectores(Array.isArray(insp) ? insp : [])
         setSubcontratistas(Array.isArray(subs) ? subs : [])
+        setPkIds(Array.isArray(pks) ? pks : [])
       }).catch(() => {
         setInspectores([])
         setSubcontratistas([])
+        setPkIds([])
       })
       return
     }
@@ -9883,7 +9908,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
   }
 
   useLayoutEffect(() => {
-    if (!modalMapaPk || !tienePlanoMapa) return
+    if (!isOnline || !modalMapaPk || !tienePlanoMapa) return
     const geojson = planoGeojsonContrato
     if (!geojson?.features?.length) return
     const container = mapaPkContainerRef.current
@@ -9971,7 +9996,7 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
       }
       mapaPkInstance.current = null
     }
-  }, [modalMapaPk, tienePlanoMapa, planoGeojsonContrato])
+  }, [isOnline, modalMapaPk, tienePlanoMapa, planoGeojsonContrato])
 
   const subFiltrados = subcontratistas.filter(s =>
     s.nombre.toLowerCase().includes(subBusqueda.toLowerCase())
@@ -11237,7 +11262,14 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
               </button>
             </div>
             <div style={{ flex:1, position:'relative', minHeight:0 }}>
-              <div ref={mapaPkContainerRef} style={{ width:'100%', height:'100%' }} />
+              {isOnline ? (
+                <div ref={mapaPkContainerRef} style={{ width:'100%', height:'100%' }} />
+              ) : (
+                <ModalPkMapaLeaflet
+                  geojson={planoGeojsonContrato}
+                  handlersRef={modalPkHandlersRef}
+                />
+              )}
             </div>
           </div>
         </div>

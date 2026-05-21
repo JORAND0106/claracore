@@ -4,7 +4,7 @@
  * para que un F5 normal cargue el bundle nuevo tras un deploy;
  * el cache-first sobre el mismo CACHE_NAME dejaba la SPA “pegado” a JS viejo.
  */
-const CACHE_NAME = 'claracore-shell-v5'
+const CACHE_NAME = 'claracore-shell-v6'
 
 self.addEventListener('install', (event) => {
   self.skipWaiting()
@@ -56,6 +56,22 @@ self.addEventListener('fetch', (event) => {
           return response
         })
         .catch(() => caches.match('/index.html').then((c) => c || caches.match('/')))
+    )
+    return
+  }
+
+  // Chunks Vite (/assets/*.js, *.css): red-primero — evita index nuevo + maps-*.js viejo (404) tras deploy
+  if (url.pathname.startsWith('/assets/')) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response.ok) {
+            const clone = response.clone()
+            caches.open(CACHE_NAME).then((c) => c.put(event.request, clone))
+          }
+          return response
+        })
+        .catch(() => caches.match(event.request))
     )
     return
   }

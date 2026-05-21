@@ -42,8 +42,11 @@ export function OfflineBanner() {
           <strong>{forceOffline ? 'Modo sin conexión activado' : 'Sin conexión'}</strong>
           {' — '}
           {isOfflineReady
-            ? (pendingCount > 0 ? `${pendingCount} cambio(s) pendiente(s)` : 'Datos listos en caché.')
+            ? (pendingCount > 0 ? `${pendingCount} cambio(s) pendiente(s)` : 'Datos SICOE en caché.')
             : 'Datos no descargados — prepara el offline primero.'}
+          {efectivoOffline && isOfflineReady && (
+            <span style={{ opacity: 0.92 }}> Los mapas Mapbox requieren internet (no se guardan en caché).</span>
+          )}
         </span>
       )}
       {!efectivoOffline && pendingCount > 0 && syncState !== 'syncing' && (
