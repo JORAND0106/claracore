@@ -7,12 +7,37 @@ import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 
+function polygonFeaturesOnly(geojson) {
+  return (geojson?.features || []).filter(
+    (f) =>
+      f.geometry?.type === 'Polygon' || f.geometry?.type === 'MultiPolygon',
+  )
+}
+
+function abscissaLabelFromProps(props) {
+  if (!props) return ''
+  return String(props.Layer || props.Name || props.label || '').trim()
+}
+
+function abscissaDivIcon(label) {
+  return L.divIcon({
+    className: 'pk-abscissa-label',
+    html: `<span style="font-size:10px;line-height:1;color:#374151;white-space:nowrap;">${label}</span>`,
+    iconSize: [0, 0],
+    iconAnchor: [0, 5],
+  })
+}
+
 function FitPlanoBounds({ geojson }) {
   const map = useMap()
   useEffect(() => {
-    if (!geojson?.features?.length) return
+    const polygons = polygonFeaturesOnly(geojson)
+    if (!polygons.length) return
     try {
-      const layer = L.geoJSON(geojson)
+      const layer = L.geoJSON({
+        type: 'FeatureCollection',
+        features: polygons,
+      })
       const b = layer.getBounds()
       if (b.isValid()) map.fitBounds(b, { padding: [40, 40], maxZoom: 18 })
     } catch {
@@ -69,7 +94,14 @@ export default function ModalPkMapaLeaflet({ geojson, handlersRef }) {
           color: '#00A896',
           weight: 1.5,
         }}
+        pointToLayer={(feature, latlng) =>
+          L.marker(latlng, {
+            icon: abscissaDivIcon(abscissaLabelFromProps(feature.properties)),
+            interactive: false,
+          })
+        }
         onEachFeature={(feature, layer) => {
+          if (feature.geometry?.type === 'Point') return
           layer.on({
             click: (e) => {
               const h = handlersRef.current
