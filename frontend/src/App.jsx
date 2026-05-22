@@ -23,7 +23,8 @@ import {
   crearReporteLocal,
   crearRegistroLocal,
 } from './offline/offlineRouter'
-import { db } from './offline/db'
+import { db, savePendingBlob, countAllPendingBlobs } from './offline/db'
+import { comprimirImagenOffline, warnPendingBlobsLimit } from './offline/offlineUtils'
 import ModalPkMapaLeaflet from './offline/ModalPkMapaLeaflet'
 import AdminPanel from './AdminPanel'
 import ModuloInformes from './ModuloInformes'
@@ -1768,6 +1769,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const [todosLosItems,  setTodosLosItems]  = useState([])
   const [fotoLocal,      setFotoLocal]      = useState(registro.foto_url || null)
   const [uploadingFoto,  setUploadingFoto]  = useState(false)
+  const previewObjectUrlRef = useRef(null)
   const [observacion,    setObservacion]    = useState(registro.observacion || '')
   const [subcontratistaSel, setSubcontratistaSel] = useState(registro.subcontratista_id || reporte.subcontratista_id || '')
   const [listaSubs,      setListaSubs]      = useState([])
@@ -1928,10 +1930,63 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
       .catch(() => setTodosLosItems([]))
   }, [capituloHoja, contrato_id, hdrs, API])
 
+  useEffect(() => {
+    return () => {
+      if (previewObjectUrlRef.current) {
+        URL.revokeObjectURL(previewObjectUrlRef.current)
+        previewObjectUrlRef.current = null
+      }
+    }
+  }, [])
+
+  const encolarMediaOffline = async (file, tipo) => {
+    await warnPendingBlobsLimit(countAllPendingBlobs)
+    const blob = await comprimirImagenOffline(file)
+    const mutationRef = `${registro.id}_${tipo}_${Date.now()}`
+    await savePendingBlob({
+      mutation_ref: mutationRef,
+      tipo,
+      blob,
+      nombre_archivo: file.name || `${tipo}.jpg`,
+      contrato_id,
+    })
+    const previewUrl = URL.createObjectURL(blob)
+    if (previewObjectUrlRef.current) URL.revokeObjectURL(previewObjectUrlRef.current)
+    previewObjectUrlRef.current = previewUrl
+
+    const regPatch = tipo === 'foto'
+      ? { foto_mutation_ref: mutationRef, _foto_offline: true }
+      : { grafico_mutation_ref: mutationRef, _grafico_offline: true }
+    await db.so_registros.update(registro.id, regPatch)
+
+    const bodyKey = tipo === 'foto' ? 'foto_mutation_ref' : 'grafico_mutation_ref'
+    const rid = registro?.id
+    const hasServerId = rid != null && String(rid).length && !String(rid).startsWith('local_')
+    if (hasServerId) {
+      await enqueueMutation({
+        type: tipo === 'foto' ? 'registro_foto' : 'registro_grafico',
+        method: 'PUT',
+        endpoint: `/sicoe-obra/${contrato_id}/registros/${rid}`,
+        body: {
+          reporte_id: registro.reporte_id,
+          numero_registro: registro.numero_registro,
+          [bodyKey]: mutationRef,
+        },
+      })
+    }
+    return previewUrl
+  }
+
   // Subir foto
   const subirFoto = async (file) => {
     setUploadingFoto(true)
     try {
+      if (!isOnline && isOfflineReady) {
+        const previewUrl = await encolarMediaOffline(file, 'foto')
+        setFotoLocal(previewUrl)
+        setFotoImgError(false)
+        return
+      }
       const resNum = await fetch(`${API}/sicoe-obra/${contrato_id}/next-foto`, { method:'POST', headers: hdrs })
       const numRes = await sicoeFetchJsonOThrow(resNum)
       const numero = sicoeNumeroDesdeNextApi(numRes)
@@ -1956,6 +2011,11 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const subirGrafico = async (file) => {
     setUploadingGraf(true)
     try {
+      if (!isOnline && isOfflineReady) {
+        const previewUrl = await encolarMediaOffline(file, 'grafico')
+        setGrafLocal(previewUrl)
+        return
+      }
       const resNum = await fetch(`${API}/sicoe-obra/${contrato_id}/next-grafico`, { method:'POST', headers: hdrs })
       const numRes = await sicoeFetchJsonOThrow(resNum)
       const numero = sicoeNumeroDesdeNextApi(numRes)

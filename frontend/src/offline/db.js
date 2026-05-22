@@ -60,6 +60,24 @@ db.version(3).stores({
   sync_meta: 'key',
 })
 
+db.version(4).stores({
+  contratos:       'id, numero',
+  actas:           'id, contrato_id, numero_rpo, consecutivo',
+  so_semanas:      'id, contrato_id, numero_semana',
+  listado_precios: 'id, contrato_id, capitulo, item_numero',
+  so_reportes:     'id, contrato_id, estado, updated_at, semana_id, acta_id',
+  so_registros:    'id, reporte_id, contrato_id, acta_id, item_numero, ' +
+                   'nivel1_estado, nivel2_estado, nivel3_estado, updated_at',
+  usuarios_cache:  'id, contrato_id',
+  inspectores_cache:     'id, contrato_id',
+  subcontratistas_cache: 'id, contrato_id',
+  geojson_cache:   'contrato_id',
+  pkids_cache:     'id, contrato_id',
+  pending_mutations: '++local_id, idempotency_key, status, created_at, contrato_id',
+  pending_blobs: '++id, mutation_ref, contrato_id, tipo',
+  sync_meta: 'key',
+})
+
 // Helpers de limpieza segura post-sync
 export async function clearContractCache(contrato_id) {
   await db.transaction('rw',
@@ -122,4 +140,27 @@ export async function countPendingMutations(contrato_id) {
     .where('contrato_id').equals(contrato_id)
     .and(m => m.status === 'pending' || m.status === 'error')
     .count()
+}
+
+export async function savePendingBlob({ mutation_ref, tipo, blob, nombre_archivo, contrato_id }) {
+  await db.pending_blobs.add({
+    mutation_ref,
+    tipo,
+    blob,
+    nombre_archivo: nombre_archivo || `${tipo}.jpg`,
+    contrato_id: Number(contrato_id),
+    created_at: new Date().toISOString(),
+  })
+}
+
+export async function getPendingBlob(mutation_ref) {
+  return db.pending_blobs.where('mutation_ref').equals(mutation_ref).first()
+}
+
+export async function deletePendingBlob(mutation_ref) {
+  await db.pending_blobs.where('mutation_ref').equals(mutation_ref).delete()
+}
+
+export async function countAllPendingBlobs() {
+  return db.pending_blobs.count()
 }

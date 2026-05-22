@@ -10,7 +10,7 @@
  *  - Sin mergeo peligroso: después de sync, la cache se REEMPLAZA con
  *    datos frescos del servidor (no se fusiona).
  */
-import { db, getPendingMutations } from './db'
+import { db, getPendingMutations, getPendingBlob, deletePendingBlob } from './db'
 import { API_BASE } from '../apiBase'
 
 /**
@@ -21,16 +21,107 @@ import { API_BASE } from '../apiBase'
  */
 const idMap = new Map() // local_id_ref → server_id
 
-function resolveBody(body) {
+function resolveBodyIds(body) {
   if (!body || typeof body !== 'object') return body
   const resolved = { ...body }
-  // Sustituir cualquier campo que sea un ID temporal conocido
   for (const [k, v] of Object.entries(resolved)) {
     if (typeof v === 'string' && v.startsWith('local_') && idMap.has(v)) {
       resolved[k] = idMap.get(v)
     }
   }
   return resolved
+}
+
+function parseNextNumero(data) {
+  if (data == null) return null
+  if (typeof data === 'number' && Number.isFinite(data)) return data
+  if (typeof data === 'string' && /^\d+$/.test(data.trim())) return parseInt(data.trim(), 10)
+  if (typeof data === 'object') {
+    for (const k of ['numero', 'siguiente_numero_foto', 'siguiente_numero_grafico']) {
+      const v = data[k]
+      if (typeof v === 'number' && Number.isFinite(v)) return v
+      if (Array.isArray(v) && v.length && typeof v[0] === 'number') return v[0]
+    }
+  }
+  return null
+}
+
+async function uploadPendingBlob(contratoId, authToken, mutationRef, tipo) {
+  const row = await getPendingBlob(mutationRef)
+  if (!row?.blob) throw new Error(`Blob offline no encontrado: ${mutationRef}`)
+
+  const nextPath = tipo === 'grafico'
+    ? `/sicoe-obra/${contratoId}/next-grafico`
+    : `/sicoe-obra/${contratoId}/next-foto`
+  const uploadPath = tipo === 'grafico'
+    ? `/sicoe-obra/${contratoId}/upload-grafico`
+    : `/sicoe-obra/${contratoId}/upload-foto`
+
+  const numRes = await fetch(`${API_BASE}${nextPath}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${authToken}` },
+  })
+  if (!numRes.ok) {
+    const err = await numRes.json().catch(() => ({}))
+    throw new Error(err?.detail || `Error obteniendo consecutivo (${numRes.status})`)
+  }
+  const numData = await numRes.json()
+  const numero = parseNextNumero(numData)
+  if (numero == null) throw new Error(`No se obtuvo consecutivo de ${tipo}`)
+
+  const fd = new FormData()
+  const fname = row.nombre_archivo || `${tipo}.jpg`
+  fd.append('file', row.blob, fname.endsWith('.jpg') || fname.endsWith('.jpeg') ? fname : `${fname}.jpg`)
+  fd.append('numero', String(numero))
+  fd.append('descripcion', '')
+
+  const upRes = await fetch(`${API_BASE}${uploadPath}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${authToken}` },
+    body: fd,
+  })
+  if (!upRes.ok) {
+    const err = await upRes.json().catch(() => ({}))
+    throw new Error(err?.detail || `Error subiendo ${tipo} (${upRes.status})`)
+  }
+  const upData = await upRes.json()
+  await deletePendingBlob(mutationRef)
+  return { url: upData.url, numero: upData.numero ?? numero }
+}
+
+async function resolveMediaRefsInBody(body, contratoId, authToken) {
+  if (body == null) return body
+  if (Array.isArray(body)) {
+    return Promise.all(body.map((item) => resolveMediaRefsInBody(item, contratoId, authToken)))
+  }
+  if (typeof body !== 'object') return body
+
+  const out = { ...body }
+
+  if (out.foto_mutation_ref) {
+    const { url, numero } = await uploadPendingBlob(
+      contratoId, authToken, out.foto_mutation_ref, 'foto',
+    )
+    delete out.foto_mutation_ref
+    out.foto_url = url
+    out.foto_numero = numero
+  }
+  if (out.grafico_mutation_ref) {
+    const { url, numero } = await uploadPendingBlob(
+      contratoId, authToken, out.grafico_mutation_ref, 'grafico',
+    )
+    delete out.grafico_mutation_ref
+    out.grafico_url = url
+    out.grafico_numero = numero
+  }
+
+  if (Array.isArray(out.registros)) {
+    out.registros = await Promise.all(
+      out.registros.map((r) => resolveMediaRefsInBody(r, contratoId, authToken)),
+    )
+  }
+
+  return out
 }
 
 /**
@@ -43,13 +134,14 @@ export async function processMutationQueue(contratoId, authToken) {
   idMap.clear()
 
   for (const mut of mutations) {
-    // Ya fue procesada en una ejecución anterior
     if (mut.status === 'synced') continue
 
     try {
       await db.pending_mutations.update(mut.local_id, { status: 'syncing' })
 
-      const body = resolveBody(mut.body)
+      let body = resolveBodyIds(mut.body)
+      body = await resolveMediaRefsInBody(body, contratoId, authToken)
+
       const response = await fetch(`${API_BASE}${mut.endpoint}`, {
         method: mut.method,
         headers: {
@@ -81,6 +173,9 @@ export async function processMutationQueue(contratoId, authToken) {
       if (serverData?.id && mut.local_id_ref) {
         idMap.set(mut.local_id_ref, serverData.id)
       }
+      if (serverData?.reporte?.id && mut.local_id_ref) {
+        idMap.set(mut.local_id_ref, serverData.reporte.id)
+      }
 
       await db.pending_mutations.update(mut.local_id, {
         status: 'synced',
@@ -93,7 +188,6 @@ export async function processMutationQueue(contratoId, authToken) {
         error_message: String(e?.message || e),
       })
       result.errors++
-      // Detener si un paso falla: los siguientes pueden depender de este
       console.warn('[ClaraCore Sync] Mutación falló, deteniendo cola:', e)
       break
     }
