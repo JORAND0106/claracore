@@ -47,6 +47,11 @@ from prog_obra_service import (
     obtener_cpm_resultados,
     obtener_ruta_critica,
 )
+from prog_obra_compare import (
+    compare_versions,
+    compute_desviaciones,
+    enrich_mapa_rows_with_desviacion,
+)
 
 from main import (
     _es_desarrollador,
@@ -99,6 +104,9 @@ def _cache(contrato_id: int) -> CalendarioNoHabilesCache:
 class VersionCreateBody(BaseModel):
     tipo: str
     motivo_reprogramacion: Optional[str] = None
+    version_origen_id: Optional[str] = None
+    metadata: Optional[dict] = None
+    clonar: bool = True
 
 
 class CapituloUpsertBody(BaseModel):
@@ -217,16 +225,82 @@ def prog_mapa(contrato_id: int, current_user=Depends(get_current_user)):
             rows = fetch_mapa_rows_for_version(supabase, contrato_id, vid) if vid else []
     critico_pks = fetch_pks_con_ruta_critica(supabase, version_mapa_id)
     rows = enrich_mapa_rows_with_ruta_critica(rows, critico_pks)
+    desviacion_meta = None
+    try:
+        desv = compute_desviaciones(
+            supabase,
+            contrato_id,
+            target_id=version_mapa_id,
+        )
+        rows = enrich_mapa_rows_with_desviacion(rows, desv.get("pks") or [])
+        desviacion_meta = {
+            "alerta": bool(desv.get("contrato", {}).get("alerta")),
+            "label_fechas": desv.get("contrato", {}).get("label_fechas"),
+            "baseline_id": desv.get("baseline_id"),
+            "target_id": desv.get("target_id"),
+            "contrato": desv.get("contrato"),
+        }
+    except HTTPException:
+        desviacion_meta = None
+    except BusinessRuleError:
+        desviacion_meta = None
     ms = round((time.perf_counter() - t0) * 1000, 2)
+    meta_out = {
+        "version_vigente_id": vid,
+        "version_vigente_numero": num,
+        "borrador": borrador,
+    }
+    if desviacion_meta:
+        meta_out["desviacion_contrato"] = desviacion_meta
     return {
         "pk": rows,
-        "meta": {
-            "version_vigente_id": vid,
-            "version_vigente_numero": num,
-            "borrador": borrador,
-        },
+        "meta": meta_out,
         "tiempo_ms": ms,
     }
+
+
+@router.get("/{contrato_id}/comparar")
+def prog_comparar(
+    contrato_id: int,
+    baseline_id: Optional[str] = Query(None),
+    target_id: Optional[str] = Query(None),
+    pk_id: Optional[str] = Query(None),
+    solo_cambios: bool = Query(False),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    try:
+        return compare_versions(
+            supabase,
+            contrato_id,
+            baseline_id=baseline_id,
+            target_id=target_id,
+            pk_id=pk_id,
+            solo_cambios=solo_cambios,
+        )
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+
+
+@router.get("/{contrato_id}/desviaciones")
+def prog_desviaciones(
+    contrato_id: int,
+    baseline_id: Optional[str] = Query(None),
+    target_id: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    try:
+        return compute_desviaciones(
+            supabase,
+            contrato_id,
+            baseline_id=baseline_id,
+            target_id=target_id,
+        )
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
 
 
 @router.post("/mantenimiento/seed-calendario-colombia")
@@ -245,7 +319,10 @@ def prog_list_versiones(contrato_id: int, current_user=Depends(get_current_user)
     _require_contract_access(current_user, contrato_id)
     return (
         supabase.table("prog_versiones")
-        .select("id,numero_version,tipo,estado,creado_en,sellado_en,motivo_reprogramacion")
+        .select(
+            "id,numero_version,tipo,estado,creado_en,sellado_en,motivo_reprogramacion,"
+            "version_origen_id,superseded_by_id,metadata"
+        )
         .eq("contrato_id", contrato_id)
         .order("numero_version", desc=True)
         .execute()
@@ -259,7 +336,16 @@ def prog_post_version(contrato_id: int, body: VersionCreateBody, current_user=De
     require_permiso_programacion_obra(current_user, "crear")
     _require_contract_access(current_user, contrato_id)
     try:
-        row = create_version(supabase, contrato_id, _uid(current_user), body.tipo, body.motivo_reprogramacion)
+        row = create_version(
+            supabase,
+            contrato_id,
+            _uid(current_user),
+            body.tipo,
+            body.motivo_reprogramacion,
+            version_origen_id=body.version_origen_id,
+            metadata=body.metadata,
+            clonar=body.clonar,
+        )
     except BusinessRuleError as e:
         raise HTTPException(status_code=400, detail=e.message)
     _log_prog(current_user, "PROG_VERSION_CREADA", "prog_version", row.get("id"), {"contrato_id": contrato_id, "tipo": body.tipo})

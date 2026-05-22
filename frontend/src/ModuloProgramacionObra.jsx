@@ -174,6 +174,7 @@ function buildEnrichedPlano(planoFc, metaMap, criticalPkIds = new Set()) {
       const est = row.estado_programacion || 'sin_iniciar'
       const c = colorForEstado(est)
       const critico = Boolean(row.tiene_ruta_critica) || criticalPkIds.has(pkid)
+      const desviacion = Boolean(row.tiene_desviacion) && !critico
       return {
         ...f,
         properties: {
@@ -184,6 +185,8 @@ function buildEnrichedPlano(planoFc, metaMap, criticalPkIds = new Set()) {
           prog_line: c.line,
           prog_op: c.op,
           prog_critico: critico ? 1 : 0,
+          prog_desviacion: desviacion ? 1 : 0,
+          prog_desviacion_tipo: row.desviacion_tipo || '',
         },
       }
     }),
@@ -196,6 +199,7 @@ const MAPA_LEYENDA_ESTADOS = [
   { key: 'sin_iniciar', label: 'Sin iniciar', desc: 'Hay ítems; ninguno con fecha', fill: '#888780', op: 0.35 },
   { key: 'en_progreso', label: 'En progreso', desc: 'Algunos ítems con fecha', fill: '#EF9F27', op: 0.6 },
   { key: 'completa', label: 'Completamente programado', desc: 'Todos los ítems con fecha', fill: '#2563EB', op: 0.7 },
+  { key: 'desviacion', label: 'Desviación vs baseline', desc: 'Fin de obra fuera del umbral configurado', fill: '#f97316', op: 0.9, lineOnly: true },
 ]
 
 function progBarVisual(pct, estado) {
@@ -405,6 +409,7 @@ function removeProgLayersIfAny(map) {
   try {
     if (map.getLayer('prog-labels-abscisa')) map.removeLayer('prog-labels-abscisa')
     if (map.getLayer('prog-critico-line')) map.removeLayer('prog-critico-line')
+    if (map.getLayer('prog-desviacion-line')) map.removeLayer('prog-desviacion-line')
     if (map.getLayer('prog-line')) map.removeLayer('prog-line')
     if (map.getLayer('prog-fill')) map.removeLayer('prog-fill')
   } catch {
@@ -449,6 +454,17 @@ function applyProgMapAfterStyle(map, basemapMode, enriched, onPkClick) {
     paint: {
       'line-color': ['coalesce', ['get', 'prog_line'], '#888780'],
       'line-width': 2,
+      'line-opacity': 0.9,
+    },
+  })
+  map.addLayer({
+    id: 'prog-desviacion-line',
+    type: 'line',
+    source: 'prog-pol',
+    filter: ['all', ['==', ['get', 'prog_desviacion'], 1], ['!=', ['get', 'prog_critico'], 1]],
+    paint: {
+      'line-color': '#f97316',
+      'line-width': 3,
       'line-opacity': 0.9,
     },
   })
@@ -829,6 +845,7 @@ export default function ModuloProgramacionObra({
   const [crearMotivo, setCrearMotivo] = useState('')
   const [validarModal, setValidarModal] = useState(null)
   const [progModalOpen, setProgModalOpen] = useState(false)
+  const [modalOpenCompareTab, setModalOpenCompareTab] = useState(false)
   const [modalPkTabs, setModalPkTabs] = useState([])
   const [activeModalPk, setActiveModalPk] = useState(null)
   const [criticalPkIds, setCriticalPkIds] = useState(new Set())
@@ -1018,7 +1035,7 @@ export default function ModuloProgramacionObra({
   }, [mapaResp, pkTieneCantidad])
 
   const openProgramacionModal = useCallback(
-    (pkid) => {
+    (pkid, options = {}) => {
       if (!pkid) return
       if (!pkTieneCantidad(pkid)) {
         showToast?.('Este PK no tiene cantidades en presupuesto y no se puede programar.', 'info')
@@ -1032,10 +1049,22 @@ export default function ModuloProgramacionObra({
       setSelPk(pkid)
       setModalPkTabs((prev) => (prev.includes(pkid) ? prev : [...prev, pkid]))
       setActiveModalPk(pkid)
+      setModalOpenCompareTab(!!options.compare)
       setProgModalOpen(true)
     },
     [workingVersionId, versiones, borradorMeta?.id, pkTieneCantidad, showToast],
   )
+
+  const desviacionContrato = mapaResp?.meta?.desviacion_contrato || null
+
+  const handleVerDetalleDesviacion = useCallback(() => {
+    const pk = selPk || String(pkRowsProgramables[0]?.pk_id || '').trim()
+    if (!pk) {
+      showToast('Seleccione un PK en el mapa para ver el detalle.', 'info')
+      return
+    }
+    openProgramacionModal(pk, { compare: true })
+  }, [selPk, pkRowsProgramables, openProgramacionModal, showToast])
 
   const onMapPkClick = useCallback(
     (pkid) => {
@@ -1999,6 +2028,7 @@ export default function ModuloProgramacionObra({
           setProgModalOpen(false)
           setModalPkTabs([])
           setActiveModalPk(null)
+          setModalOpenCompareTab(false)
         }}
         t={t}
         workingVersion={workingVersion}
@@ -2040,6 +2070,9 @@ export default function ModuloProgramacionObra({
         showToast={showToast}
         allPkIds={pkIdsProgramables}
         onCpmUpdated={handleCpmUpdated}
+        openCompareTab={modalOpenCompareTab}
+        compareBaselineId={desviacionContrato?.baseline_id || null}
+        compareTargetId={desviacionContrato?.target_id || versionIdForWork || null}
       />
 
       {validacionPreCheck && (
@@ -2192,12 +2225,13 @@ export default function ModuloProgramacionObra({
                 style={{
                   width: 14,
                   height: 14,
-                  borderRadius: 3,
+                  borderRadius: it.lineOnly ? 0 : 3,
                   marginTop: 2,
                   flexShrink: 0,
-                  background: it.fill,
-                  opacity: Math.max(it.op, 0.15),
-                  border: `1px solid ${t.border}`,
+                  background: it.lineOnly ? 'transparent' : it.fill,
+                  opacity: it.lineOnly ? 1 : Math.max(it.op, 0.15),
+                  border: it.lineOnly ? `3px solid ${it.fill}` : `1px solid ${t.border}`,
+                  boxSizing: 'border-box',
                 }}
               />
               <span>
@@ -2309,6 +2343,45 @@ export default function ModuloProgramacionObra({
             ))}
           </select>
         </div>
+
+        {desviacionContrato?.alerta && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              padding: '6px 8px',
+              borderRadius: 6,
+              background: '#FEF3C7',
+              border: '1px solid #FCD34D',
+              fontSize: 11,
+              color: '#92400E',
+              lineHeight: 1.35,
+            }}
+          >
+            <span>
+              ⚠ Desviación vs baseline: {desviacionContrato.label_fechas || '—'}
+            </span>
+            <button
+              type="button"
+              onClick={handleVerDetalleDesviacion}
+              style={{
+                flexShrink: 0,
+                padding: '2px 8px',
+                fontSize: 10,
+                fontWeight: 600,
+                borderRadius: 4,
+                border: '1px solid #D97706',
+                background: '#FFFBEB',
+                color: '#92400E',
+                cursor: 'pointer',
+              }}
+            >
+              Ver detalle
+            </button>
+          </div>
+        )}
 
         {workingVersionId && (
           <details

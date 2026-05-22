@@ -27,6 +27,7 @@ MODULOS_VALIDOS = frozenset({
     "listado_precios",
     "usuarios",
     "notificaciones",
+    "sicoecad",
     "general",
 })
 
@@ -49,6 +50,7 @@ _MODULO_CONTEXTO_CORTO: Dict[str, str] = {
     "listado_precios": "Listado de precios unitarios con agrupadores WBS.",
     "usuarios": "Gestión de usuarios, roles y cargos dentro del panel admin.",
     "notificaciones": "Buzón de notificaciones del contrato.",
+    "sicoecad": "SicoeCAD: plugin de AutoCAD para medición y sincronización de cantidades de obra hacia ClaraCore. No es una pantalla web.",
     "general": "Sin módulo específico detectado; responde de forma general sobre ClaraCore.",
 }
 
@@ -140,6 +142,114 @@ Módulos complementarios (solo si el contrato/permiso los tiene):
 - Guías: artículos de ayuda por módulo con buscador.
 - Almacén: inventario y movimientos.
 - SST, Ensayos, Auditor SST: documentación de seguridad y salud en el trabajo con IA en auditoría.
+
+12. SicoeCAD — Plugin de AutoCAD que sincroniza con ClaraCore
+
+SicoeCAD es un plugin independiente que corre DENTRO de AutoCAD (no es una pantalla web).
+Requiere Windows 10/11 64-bit, AutoCAD (no LT) 2019 o superior, y .NET 8.
+Se comunica directamente con ClaraCore vía internet para sincronizar cantidades de obra.
+
+12.1 FORMULARIO PRINCIPAL — PRESUPUESTO
+Es el formulario central de SicoeCAD. Permite medir entidades del dibujo de AutoCAD
+y enviar las cantidades a ClaraCore.
+
+ARCHIVOS DE ENTRADA (dos CSV obligatorios):
+- Catálogo de precios: columnas exactas Capitulo, Competencia, Item, Descripcion, Und,
+  ValorUnitario. Soporta coma o punto en ValorUnitario. Puede tener más columnas pero
+  estas 6 son obligatorias.
+- Catálogo PK_ID (CAPA): columnas CAPA, CIV, TRAMO, INFRAESTRUCTURA, CALZADA, UBICACION,
+  ABS_INICIO, ABS_FINAL. El PK_ID es el código del tramo o sector de la obra.
+  Ejemplo: 10000 → CALZ-ORIENTE-CL25-CR30-33
+
+FLUJO PASO A PASO:
+1. Cargar CSV de precios y CSV de PK_ID al iniciar sesión.
+2. Cargar el eje del dibujo (ver sección Cargue de Eje).
+3. Llenar el formulario en cascada: Capítulo → Competencia → Ítem
+   (al elegir el Ítem se cargan automáticamente Und y Valor Unitario).
+4. Seleccionar Capa/PK_ID (campo OBLIGATORIO).
+5. Elegir Tipo de entidad: Área (polilínea cerrada, mide m²), Longitud (línea o polilínea,
+   mide ml) o Nodo (punto o bloque, mide unidades).
+6. Definir parámetros geométricos: Altura de texto (> 0), Ancho y Espesor (≠ 0, permiten
+   negativos para descuentos), Color (obligatorio), Tipo de ejecución (Presupuesto/Ejecutada).
+7. Pulsar "Sel. dibujo", seleccionar entidades en AutoCAD y ENTER.
+8. Pulsar "+" para agregar: calcula abscisas por proyección al eje, clona las entidades en
+   capas apagadas con etiqueta, agrega UNA FILA POR ENTIDAD a la tabla del formulario.
+9. Sincronizar con ClaraCore (ver sección Sincronización).
+
+TIPOS DE EJECUCIÓN:
+- Presupuesto de Obra: cantidades contractuales o preliminares.
+- Obra Ejecutada: lo realmente construido según levantamientos.
+
+MULTI-ÍTEM (v9.x): se puede agregar más de un ítem sobre la misma entidad geométrica.
+EDICIÓN EN GRID (v9.x): doble clic en celda del grid permite editar el valor directamente.
+BUSCADOR DE ENTIDADES (v9.x): botón "Buscar" localiza entidades en el grid por handle, ítem
+o PK_ID.
+CLONACIÓN: al confirmar con "+", las entidades originales se reemplazan por clones etiquetados
+en capas apagadas. Cada clon tiene un ID_Pol único. No borrar los clones manualmente.
+
+ERRORES FRECUENTES EN FORMULARIO:
+- "Área salió como perímetro": verificar Tipo de entidad = Área y que la polilínea esté CERRADA.
+- "Se coló algo de la calzada contraria": revisar orientación NS/EO, límites de ordenadas y
+  que el eje y PK0 sean correctos.
+- "Ítem no aparece": elegir Capítulo y Competencia ANTES del Ítem.
+- "PK_ID no carga": verificar que el CSV tenga la columna CAPA con el nombre exacto.
+
+12.2 CARGUE DE EJE Y ABSCISADO
+El eje es la referencia geométrica para calcular abscisas y filtrar entidades por calzada.
+PASOS: pulsar "CargueEje" → configurar Calzada Única o Doble Calzada con su PK 0+000.00 →
+definir orientación NS u EO → definir intervalo de abscisado → definir ordenadas →
+seleccionar la curva en AutoCAD → indicar el punto PK 0+000.00 sobre el eje.
+Orientación NS: Calzada A = Norte (mayor Y), Calzada B = Sur. Orientación EO: Calzada A =
+Oriental (mayor X), Calzada B = Occidental.
+Si en doble calzada la Calzada A queda geométricamente al lado contrario, el sistema ofrece
+invertir A↔B automáticamente.
+Los ejes se guardan en AppData\SicoeCAD\axes_v2.json y se restauran al reabrir el plugin.
+
+12.3 MÓDULO DE NODOS
+Permite nombrar y presupuestar estructuras puntuales (cámaras, pozos, sumideros).
+Requiere bloques AutoCAD con polígonos internos NODO_EXT y NODO_MED.
+Funciona en modo MODELESS (no bloquea AutoCAD mientras está abierto).
+Por cada nodo se definen: Nombre, Rasante, Clave salida, Descuento vía/espacio público,
+Diámetro de salida y Espesor de tubería. El sistema calcula Área EXT, Área MED y Perímetro EXT
+desde la geometría del bloque.
+Ítems posibles por nodo: Excavación, Relleno, Entibado, Nodo (estructura), Mampostería,
+Placa de fondo, Pasos, Cañuela.
+Los nombres de nodo deben ser EXACTOS al usarlos en tramos (sin espacios ni cambio de mayúsculas).
+
+12.4 MÓDULO DE TRAMOS DE TUBERÍA
+Calcula volúmenes de excavación, atraque, relleno y entibado para tramos de red.
+REQUISITO: los nodos extremos deben estar nombrados previamente en el Módulo de Nodos.
+Campos por tramo: Nodo Inicial/Final (nombres exactos), Rasante Inicial/Final (m),
+Clave Inicial/Final (m), Diámetro (acepta pulgadas "12", metros 0.30, mm 300 o múltiples
+tubos 2Ø8"+1Ø6"), Espesor de pared (m), Ancho de excavación (m), Cimentación (m),
+Atraque (proporcional 1:4..1:1 para redes húmedas, o decimal 0.50 para redes secas),
+Altura de excavación manual (solo cuando no hay cotas disponibles — sobreescribe el cálculo).
+
+12.5 SINCRONIZACIÓN CON CLARACORE
+Reemplaza completamente la exportación a Excel.
+CÓMO SINCRONIZAR: con filas en el grid, pulsar el botón de sincronización → ingresar URL
+del servidor, correo y contraseña de ClaraCore → pulsar "Cargar contratos" → seleccionar
+contrato → elegir modo Agregar (append) o Reemplazar (replace, requiere clave CLARA2025,
+solo administradores) → pulsar "Enviar".
+La URL, correo y contrato se recuerdan en AppData\SicoeCAD\claracore_prefs.json.
+ERRORES FRECUENTES: "Error HTTP 401" = correo/contraseña incorrectos; "Error HTTP 403" = sin
+permiso en ese contrato; "curl.exe no encontrado" = curl debe estar en el PATH del sistema.
+
+12.6 MÓDULO DE TOPOGRAFÍA
+Importa puntos topográficos desde CSV, los une con líneas en AutoCAD y los asocia a
+Capítulo/Competencia del catálogo de precios para medirlos con el formulario principal.
+
+12.7 UTILIDADES
+Acotado especial, Offset inteligente (modeless), Importar puntos (en desarrollo),
+Configuración rápida (en desarrollo).
+
+INSTRUCCIONES PARA CLARA SOBRE SICOECAD:
+- SicoeCAD es un plugin de AutoCAD, NO una pantalla de ClaraCore web. Aclarar siempre que
+  trabaja desde AutoCAD, no desde el navegador.
+- La exportación a Excel YA NO EXISTE; el flujo actual es sincronización directa desde SicoeCAD.
+- Si preguntan cómo crear ítems de presupuesto en ClaraCore web, indicar que eso se hace
+  desde SicoeCAD en AutoCAD.
+- El modo "replace" requiere la clave CLARA2025 y solo deben usarlo administradores.
 </modulos>
 
 <reglas>

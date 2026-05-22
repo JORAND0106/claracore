@@ -6,6 +6,13 @@ import { createPortal } from 'react-dom'
 import { flushSync } from 'react-dom'
 import { RefreshCw } from 'lucide-react'
 import ProgObraDependencias from './ProgObraDependencias'
+import ProgObraComparacionTable from './ProgObraComparacionTable'
+import {
+  COMPARE_COLORS,
+  compareKeyForGanttRow,
+  fetchComparar,
+  indexCompareNodos,
+} from './progObraCompare'
 import {
   addCalendarDays,
   eachCalendarDay,
@@ -370,7 +377,19 @@ function buildPkGanttLayout({
   }
 }
 
-function ProgPkGanttPanel({ model, noHabilesSet, t, cpmByNodeKey, activePk, bodyScrollRef, onBodyScroll, onRefresh }) {
+function ProgPkGanttPanel({
+  model,
+  noHabilesSet,
+  t,
+  cpmByNodeKey,
+  activePk,
+  bodyScrollRef,
+  onBodyScroll,
+  onRefresh,
+  compareByKey,
+  ganttCompareMode,
+  showCompare,
+}) {
   if (!model?.timelineDays?.length) return null
   const { timelineDays, syncRows, fromT } = model
   const dayPx = GANTT_DAY_PX
@@ -535,6 +554,10 @@ function ProgPkGanttPanel({ model, noHabilesSet, t, cpmByNodeKey, activePk, body
             if (row.kind === 'spacer') {
               return <div key={row.key} style={{ height: row.height, borderBottom: `1px solid ${t.border}22` }} />
             }
+            const ck = compareKeyForGanttRow(activePk, row)
+            const cmpNode = ck && compareByKey ? compareByKey[ck] : null
+            const tipo = cmpNode?.tipo_cambio || 'sin_cambio'
+            const compareBarColor = showCompare && tipo !== 'sin_cambio' ? (COMPARE_COLORS[tipo] || null) : null
             return (
               <GanttBarRow
                 key={row.key}
@@ -553,6 +576,11 @@ function ProgPkGanttPanel({ model, noHabilesSet, t, cpmByNodeKey, activePk, body
                 esCritico={!!cpmNode?.es_ruta_critica || Number(cpmNode?.holgura_total) === 0}
                 holguraDias={cpmNode?.holgura_total ?? 0}
                 holguraEnd={cpmNode?.fecha_fin_tardia ?? null}
+                baselineBarStart={cmpNode?.baseline?.fecha_inicio}
+                baselineBarEnd={cmpNode?.baseline?.fecha_fin}
+                compareBarColor={compareBarColor}
+                ganttCompareMode={ganttCompareMode}
+                showCompare={showCompare && !!cmpNode}
               />
             )
           })}
@@ -655,20 +683,47 @@ function computePkTimelineDays(capitulosOrdenados, itemsPorCapitulo, actMap, act
   return eachCalendarDay(from, to)
 }
 
-function GanttBarGrid({ rowHeight, days, fromT, dayPx, barStart, barEnd, isSummary, label, duracion, diasHab, t, esCritico, holguraDias, holguraEnd }) {
-  let left = 0
-  let width = 0
-  const fi = parseIsoDate(barStart)
-  const ff = parseIsoDate(barEnd)
-  if (fi && ff) {
-    const startIdx = Math.max(0, Math.round((fi.getTime() - fromT) / 86400000))
-    const endIdx = Math.min(days.length - 1, Math.round((ff.getTime() - fromT) / 86400000))
-    left = startIdx * dayPx
-    width = Math.max((endIdx - startIdx + 1) * dayPx, dayPx)
+function GanttBarGrid({
+  rowHeight,
+  days,
+  fromT,
+  dayPx,
+  barStart,
+  barEnd,
+  isSummary,
+  label,
+  duracion,
+  diasHab,
+  t,
+  esCritico,
+  holguraDias,
+  holguraEnd,
+  baselineBarStart,
+  baselineBarEnd,
+  compareBarColor,
+  ganttCompareMode = 'overlay',
+  showCompare = false,
+}) {
+  const calcBar = (start, end) => {
+    let left = 0
+    let width = 0
+    const fi = parseIsoDate(start)
+    const ff = parseIsoDate(end)
+    if (fi && ff) {
+      const startIdx = Math.max(0, Math.round((fi.getTime() - fromT) / 86400000))
+      const endIdx = Math.min(days.length - 1, Math.round((ff.getTime() - fromT) / 86400000))
+      left = startIdx * dayPx
+      width = Math.max((endIdx - startIdx + 1) * dayPx, dayPx)
+    }
+    return { left, width }
   }
+
+  const { left, width } = calcBar(barStart, barEnd)
+  const baseline = calcBar(baselineBarStart, baselineBarEnd)
 
   let holguraLeft = 0
   let holguraWidth = 0
+  const ff = parseIsoDate(barEnd)
   if (holguraEnd && ff && !esCritico) {
     const fh = parseIsoDate(holguraEnd)
     if (fh && fh > ff) {
@@ -685,6 +740,16 @@ function GanttBarGrid({ rowHeight, days, fromT, dayPx, barStart, barEnd, isSumma
     : holguraDias > 0
     ? `Holgura: ${holguraDias} día${holguraDias !== 1 ? 's' : ''} hábiles`
     : null
+
+  const dual = showCompare && ganttCompareMode === 'dual'
+  const barH = dual ? Math.max(8, GANTT_BAR_H * 0.42) : GANTT_BAR_H
+  const targetTransform = dual ? 'translateY(-85%)' : 'translateY(-50%)'
+  const baselineTransform = dual ? 'translateY(-15%)' : 'translateY(-50%)'
+
+  const defaultBg = isSummary
+    ? (esCritico ? '#fee2e2' : GANTT_CAP_BAR)
+    : (esCritico ? '#fecaca' : GANTT_TEAL)
+  const barBg = compareBarColor && showCompare ? compareBarColor : defaultBg
 
   return (
     <div
@@ -729,18 +794,37 @@ function GanttBarGrid({ rowHeight, days, fromT, dayPx, barStart, barEnd, isSumma
           title={criticalTooltip || undefined}
         />
       )}
+      {showCompare && baseline.width > 0 && (
+        <div
+          style={{
+            position: 'absolute',
+            left: baseline.left,
+            width: baseline.width,
+            height: barH,
+            top: '50%',
+            transform: baselineTransform,
+            borderRadius: 4,
+            background: 'rgba(156,163,175,0.55)',
+            border: '1px solid #9ca3af',
+            boxSizing: 'border-box',
+            zIndex: ganttCompareMode === 'overlay' ? 1 : 1,
+            opacity: ganttCompareMode === 'overlay' ? 0.85 : 1,
+          }}
+          title={`Baseline: ${fmtDateHuman(baselineBarStart)} → ${fmtDateHuman(baselineBarEnd)}`}
+        />
+      )}
       {width > 0 && (
         <div
           style={{
             position: 'absolute',
             left,
             width,
-            height: GANTT_BAR_H,
+            height: barH,
             top: '50%',
-            transform: 'translateY(-50%)',
+            transform: targetTransform,
             borderRadius: 4,
-            background: isSummary ? (esCritico ? '#fee2e2' : GANTT_CAP_BAR) : (esCritico ? '#fecaca' : GANTT_TEAL),
-            border: esCritico ? '2px solid #ef4444' : 'none',
+            background: barBg,
+            border: esCritico ? '2px solid #ef4444' : (showCompare && compareBarColor ? '1px solid rgba(0,0,0,0.12)' : 'none'),
             boxShadow: esCritico && !isSummary ? '0 0 0 1px rgba(239,68,68,0.35)' : 'none',
             boxSizing: 'border-box',
             zIndex: 2,
@@ -1293,6 +1377,9 @@ export default function ProgObraProgramacionModal({
   showToast,
   allPkIds,
   onCpmUpdated,
+  openCompareTab = false,
+  compareBaselineId = null,
+  compareTargetId = null,
 }) {
   const [collapsedCaps, setCollapsedCaps] = useState({})
   const [expandedAgs, setExpandedAgs] = useState({})
@@ -1307,8 +1394,52 @@ export default function ProgObraProgramacionModal({
   const rightBodyScrollRef = useRef(null)
   const scrollSyncLock = useRef(false)
   const [activeContentTab, setActiveContentTab] = useState('programacion')
+  const [progSubTab, setProgSubTab] = useState('schedule')
+  const [compareData, setCompareData] = useState(null)
+  const [compareLoading, setCompareLoading] = useState(false)
+  const [ganttCompareMode, setGanttCompareMode] = useState('overlay')
   const [cpmResultados, setCpmResultados] = useState([])
   const [cpmDirty, setCpmDirty] = useState(false)
+
+  const compareEnabled = Boolean(compareBaselineId && compareTargetId && compareBaselineId !== compareTargetId)
+
+  useEffect(() => {
+    if (!open) {
+      setProgSubTab('schedule')
+      setCompareData(null)
+      return
+    }
+    if (openCompareTab && compareEnabled) setProgSubTab('compare')
+  }, [open, openCompareTab, compareEnabled])
+
+  useEffect(() => {
+    if (!open || !compareEnabled || !cid || !token) {
+      setCompareData(null)
+      return
+    }
+    let cancel = false
+    setCompareLoading(true)
+    fetchComparar(API, cid, token, {
+      pkId: activePk,
+      baselineId: compareBaselineId,
+      targetId: compareTargetId,
+    })
+      .then((data) => {
+        if (!cancel) setCompareData(data)
+      })
+      .catch(() => {
+        if (!cancel) setCompareData(null)
+      })
+      .finally(() => {
+        if (!cancel) setCompareLoading(false)
+      })
+    return () => { cancel = true }
+  }, [open, compareEnabled, cid, token, API, activePk, compareBaselineId, compareTargetId])
+
+  const compareByKey = useMemo(
+    () => indexCompareNodos(compareData?.nodos || []),
+    [compareData?.nodos],
+  )
 
   const registerRowDraft = useCallback((rk, api) => {
     rowDraftRef.current[rk] = api
@@ -1506,6 +1637,32 @@ export default function ProgObraProgramacionModal({
       saveGeneration,
     ],
   )
+
+  const pkGanttModelExtended = useMemo(() => {
+    if (!compareEnabled || !compareData?.nodos?.length || !pkGanttModel?.timelineDays?.length) {
+      return pkGanttModel
+    }
+    let minD = pkGanttModel.timelineDays[0]
+    let maxD = pkGanttModel.timelineDays[pkGanttModel.timelineDays.length - 1]
+    for (const n of compareData.nodos) {
+      for (const side of [n.baseline, n.target]) {
+        for (const iso of [side?.fecha_inicio, side?.fecha_fin]) {
+          const d = parseIsoDate(iso)
+          if (!d) continue
+          if (d < minD) minD = d
+          if (d > maxD) maxD = d
+        }
+      }
+    }
+    const from = addCalendarDays(minD, -GANTT_RANGE_PAD_DAYS)
+    const to = addCalendarDays(maxD, GANTT_RANGE_PAD_DAYS)
+    const timelineDays = eachCalendarDay(from, to)
+    return {
+      ...pkGanttModel,
+      timelineDays,
+      fromT: timelineDays[0]?.getTime() ?? pkGanttModel.fromT,
+    }
+  }, [pkGanttModel, compareEnabled, compareData?.nodos])
 
   const handleLeftScroll = useCallback(() => {
     if (scrollSyncLock.current) return
@@ -1943,6 +2100,93 @@ export default function ProgObraProgramacionModal({
             </div>
           ) : (
             <>
+          {compareEnabled && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '6px 16px',
+                borderBottom: `1px solid ${t.border}`,
+                flexShrink: 0,
+                background: t.bg,
+              }}
+            >
+              {[
+                { id: 'schedule', label: 'Programación' },
+                { id: 'compare', label: 'Comparar vs baseline' },
+              ].map((st) => (
+                <button
+                  key={st.id}
+                  type="button"
+                  onClick={() => setProgSubTab(st.id)}
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: 'var(--cc-caption)',
+                    fontWeight: progSubTab === st.id ? 700 : 500,
+                    color: progSubTab === st.id ? t.primary : t.textMuted,
+                    background: progSubTab === st.id ? `${t.primary}18` : 'transparent',
+                    border: `1px solid ${progSubTab === st.id ? t.primary : t.border}`,
+                    borderRadius: 6,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {st.label}
+                </button>
+              ))}
+              {progSubTab === 'schedule' && compareData && (
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>Gantt:</span>
+                  {[
+                    { id: 'overlay', label: 'Overlay' },
+                    { id: 'dual', label: 'Doble pista' },
+                  ].map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setGanttCompareMode(m.id)}
+                      style={{
+                        padding: '2px 8px',
+                        fontSize: 10,
+                        fontWeight: ganttCompareMode === m.id ? 700 : 500,
+                        color: ganttCompareMode === m.id ? t.primary : t.textMuted,
+                        background: ganttCompareMode === m.id ? `${t.primary}18` : t.bg,
+                        border: `1px solid ${ganttCompareMode === m.id ? t.primary : t.border}`,
+                        borderRadius: 4,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {progSubTab === 'compare' && compareEnabled ? (
+            <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+              {compareLoading && (
+                <div style={{ padding: 12, color: t.textMuted, fontSize: 'var(--cc-caption)' }}>
+                  Cargando comparación…
+                </div>
+              )}
+              {!compareLoading && compareData && (
+                <ProgObraComparacionTable
+                  nodos={compareData.nodos}
+                  resumen={compareData.resumen}
+                  t={t}
+                  pkId={activePk}
+                />
+              )}
+              {!compareLoading && !compareData && (
+                <div style={{ padding: 12, color: t.textMuted, fontSize: 'var(--cc-caption)' }}>
+                  No hay datos de comparación disponibles.
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
           {(loadPpto || loadAct) && (
             <div style={{ color: t.textMuted, padding: '8px 16px', flexShrink: 0 }}>Cargando datos del PK…</div>
           )}
@@ -2053,7 +2297,7 @@ export default function ProgObraProgramacionModal({
                 }}
               >
                 <ProgPkGanttPanel
-                  model={pkGanttModel}
+                  model={pkGanttModelExtended}
                   noHabilesSet={noHabilesSet}
                   t={t}
                   activePk={activePk}
@@ -2061,10 +2305,15 @@ export default function ProgObraProgramacionModal({
                   bodyScrollRef={rightBodyScrollRef}
                   onBodyScroll={handleRightBodyScroll}
                   onRefresh={refreshPkGantt}
+                  compareByKey={compareByKey}
+                  ganttCompareMode={ganttCompareMode}
+                  showCompare={compareEnabled && !!compareData}
                 />
                 <ProgCpmResumenTable rows={cpmResumenRows} t={t} />
               </div>
             </div>
+          )}
+            </>
           )}
             </>
           )}

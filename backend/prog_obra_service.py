@@ -619,18 +619,135 @@ def fetch_vigente_meta(sb, contrato_id: int) -> Tuple[Optional[str], Optional[in
     return str(vid) if vid else None, int(num) if num is not None else None
 
 
+def fetch_baseline_version_id(sb, contrato_id: int) -> Optional[str]:
+    c = (
+        sb.table("contratos")
+        .select("prog_version_baseline_id")
+        .eq("id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if c and c[0].get("prog_version_baseline_id"):
+        return str(c[0]["prog_version_baseline_id"])
+    rows = (
+        sb.table("prog_versiones")
+        .select("id")
+        .eq("contrato_id", contrato_id)
+        .eq("tipo", "baseline")
+        .eq("estado", "sellada")
+        .order("sellado_en", desc=True)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return str(rows[0]["id"]) if rows else None
+
+
+def _assert_no_version_abierta(sb, contrato_id: int) -> None:
+    open_rows = (
+        sb.table("prog_versiones")
+        .select("id,estado,numero_version")
+        .eq("contrato_id", contrato_id)
+        .in_("estado", ["borrador", "en_validacion"])
+        .execute()
+        .data
+        or []
+    )
+    if open_rows:
+        r = open_rows[0]
+        raise BusinessRuleError(
+            f"Ya existe la version nº{r.get('numero_version')} en estado {r.get('estado')}. "
+            "Debe sellarla o eliminar el borrador antes de crear otra."
+        )
+
+
+def _resolve_version_origen_id(
+    sb,
+    contrato_id: int,
+    version_origen_id: Optional[str],
+) -> Optional[str]:
+    if version_origen_id:
+        vid = str(version_origen_id).strip()
+        row = (
+            sb.table("prog_versiones")
+            .select("id,estado,contrato_id")
+            .eq("id", vid)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not row or int(row[0].get("contrato_id") or 0) != int(contrato_id):
+            raise BusinessRuleError("version_origen_id no pertenece al contrato")
+        if (row[0].get("estado") or "") not in ("sellada", "archivada"):
+            raise BusinessRuleError("version_origen_id debe ser una version sellada o archivada")
+        return vid
+    vid, _ = fetch_vigente_meta(sb, contrato_id)
+    if not vid:
+        raise BusinessRuleError(
+            "No hay version vigente sellada para clonar. Cree y selle la baseline primero."
+        )
+    return vid
+
+
+def clone_version_data(
+    sb,
+    origen_id: str,
+    destino_id: str,
+    contrato_id: int,
+    usuario_id: int,
+) -> dict:
+    res = sb.rpc(
+        "prog_clone_version",
+        {
+            "p_origen_id": str(origen_id),
+            "p_destino_id": str(destino_id),
+            "p_contrato_id": int(contrato_id),
+            "p_usuario_id": int(usuario_id),
+        },
+    ).execute()
+    data = res.data if res else {}
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    if not isinstance(data, dict) or not data.get("ok"):
+        raise BusinessRuleError("No se pudo clonar la version origen")
+    ensure_prog_pk_estado_all(sb, str(destino_id), contrato_id)
+    return data
+
+
+def snapshot_presupuesto_version(sb, version_id: str, contrato_id: int) -> dict:
+    res = sb.rpc(
+        "prog_snapshot_presupuesto",
+        {
+            "p_version_id": str(version_id),
+            "p_contrato_id": int(contrato_id),
+        },
+    ).execute()
+    data = res.data if res else {}
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    if not isinstance(data, dict) or not data.get("ok"):
+        raise BusinessRuleError("No se pudo generar snapshot de presupuesto")
+    return data
+
+
 def create_version(
     sb,
     contrato_id: int,
     usuario_id: int,
     tipo: str,
     motivo: Optional[str],
+    version_origen_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    clonar: bool = True,
 ) -> dict:
     tipo = (tipo or "").strip().lower()
     if tipo not in ("baseline", "reprogramacion", "suspension"):
         raise BusinessRuleError("tipo invalido")
     if tipo != "baseline" and not (motivo and motivo.strip()):
         raise BusinessRuleError("motivo_reprogramacion obligatorio para tipo distinto de baseline")
+    _assert_no_version_abierta(sb, contrato_id)
     if tipo == "baseline":
         bl = (
             sb.table("prog_versiones")
@@ -643,6 +760,12 @@ def create_version(
         )
         if any((r.get("estado") or "") not in ("archivada", "rechazada") for r in bl):
             raise BusinessRuleError("Ya existe una version baseline activa para el contrato")
+    origen_id: Optional[str] = None
+    if tipo != "baseline":
+        if clonar:
+            origen_id = _resolve_version_origen_id(sb, contrato_id, version_origen_id)
+        elif version_origen_id:
+            origen_id = _resolve_version_origen_id(sb, contrato_id, version_origen_id)
     nums = (
         sb.table("prog_versiones")
         .select("numero_version")
@@ -653,20 +776,27 @@ def create_version(
         .data
     )
     nnext = int(nums[0]["numero_version"]) + 1 if nums else 1
+    meta = metadata if isinstance(metadata, dict) else {}
     row = {
         "contrato_id": contrato_id,
         "numero_version": nnext,
         "tipo": tipo,
         "estado": "borrador",
         "motivo_reprogramacion": motivo.strip() if motivo else None,
+        "version_origen_id": origen_id,
+        "metadata": meta,
         "creado_por": usuario_id,
         "actualizado_en": datetime.now(timezone.utc).isoformat(),
     }
     ins = sb.table("prog_versiones").insert(row).execute().data
     if not ins:
         raise BusinessRuleError("No se pudo crear la version")
-    vid = ins[0]["id"]
-    ensure_prog_pk_estado_all(sb, str(vid), contrato_id)
+    vid = str(ins[0]["id"])
+    if tipo == "baseline" or not clonar or not origen_id:
+        ensure_prog_pk_estado_all(sb, vid, contrato_id)
+    else:
+        clone_stats = clone_version_data(sb, origen_id, vid, contrato_id, usuario_id)
+        ins[0]["clone_stats"] = clone_stats
     return ins[0]
 
 
@@ -721,7 +851,48 @@ def _all_validaciones_aprobado(sb, version_id: str) -> bool:
     return bool(rows) and all((r.get("estado") == "aprobado") for r in rows)
 
 
+def _archive_previous_vigente(
+    sb,
+    previous_version_id: str,
+    new_version_id: str,
+    now: str,
+) -> None:
+    sb.table("prog_versiones").update(
+        {
+            "estado": "archivada",
+            "superseded_by_id": new_version_id,
+            "actualizado_en": now,
+        }
+    ).eq("id", previous_version_id).execute()
+
+
 def seal_version(sb, version_id: str, contrato_id: int, usuario_id: int) -> None:
+    vrows = (
+        sb.table("prog_versiones")
+        .select("id,tipo,estado")
+        .eq("id", version_id)
+        .eq("contrato_id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not vrows:
+        raise BusinessRuleError("Version no encontrada para sellar")
+    vrow = vrows[0]
+    if (vrow.get("estado") or "") != "en_validacion":
+        raise BusinessRuleError("Solo se sella una version en validacion")
+
+    crows = (
+        sb.table("contratos")
+        .select("prog_version_vigente_id,prog_version_baseline_id")
+        .eq("id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    prev_vigente_id = crows[0].get("prog_version_vigente_id") if crows else None
+    baseline_id = crows[0].get("prog_version_baseline_id") if crows else None
+
     now = datetime.now(timezone.utc).isoformat()
     sb.table("prog_versiones").update(
         {
@@ -731,7 +902,16 @@ def seal_version(sb, version_id: str, contrato_id: int, usuario_id: int) -> None
             "actualizado_en": now,
         }
     ).eq("id", version_id).execute()
-    sb.table("contratos").update({"prog_version_vigente_id": version_id}).eq("id", contrato_id).execute()
+
+    if prev_vigente_id and str(prev_vigente_id) != str(version_id):
+        _archive_previous_vigente(sb, str(prev_vigente_id), str(version_id), now)
+
+    contrato_patch: dict = {"prog_version_vigente_id": version_id}
+    if (vrow.get("tipo") or "") == "baseline" and not baseline_id:
+        contrato_patch["prog_version_baseline_id"] = version_id
+    sb.table("contratos").update(contrato_patch).eq("id", contrato_id).execute()
+
+    snapshot_presupuesto_version(sb, str(version_id), contrato_id)
 
 
 def process_validation_decision(
