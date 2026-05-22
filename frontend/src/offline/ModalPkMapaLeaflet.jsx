@@ -16,15 +16,17 @@ function polygonFeaturesOnly(geojson) {
 
 function abscissaLabelFromProps(props) {
   if (!props) return ''
-  return String(props.Layer || props.Name || props.label || '').trim()
+  return String(
+    props.Layer || props.Name || props.label || props.etiqueta || '',
+  ).trim()
 }
 
-function abscissaDivIcon(label) {
+function abscissaDivIcon(labelText) {
   return L.divIcon({
-    className: 'pk-abscissa-label',
-    html: `<span style="font-size:10px;line-height:1;color:#374151;white-space:nowrap;">${label}</span>`,
-    iconSize: [0, 0],
-    iconAnchor: [0, 5],
+    className: 'abscisa-label',
+    html: `<span style="font-size:9px; color:#333; font-weight:500; white-space:nowrap; text-shadow: 1px 1px 0 white, -1px -1px 0 white;">${labelText}</span>`,
+    iconSize: null,
+    iconAnchor: [0, 0],
   })
 }
 
@@ -94,12 +96,24 @@ export default function ModalPkMapaLeaflet({ geojson, handlersRef }) {
           color: '#00A896',
           weight: 1.5,
         }}
-        pointToLayer={(feature, latlng) =>
-          L.marker(latlng, {
-            icon: abscissaDivIcon(abscissaLabelFromProps(feature.properties)),
+        pointToLayer={(feature, latlng) => {
+          const labelText = abscissaLabelFromProps(feature.properties)
+          if (!labelText) {
+            return L.marker(latlng, {
+              icon: L.divIcon({
+                className: 'abscisa-label',
+                html: '',
+                iconSize: [0, 0],
+                iconAnchor: [0, 0],
+              }),
+              interactive: false,
+            })
+          }
+          return L.marker(latlng, {
+            icon: abscissaDivIcon(labelText),
             interactive: false,
           })
-        }
+        }}
         onEachFeature={(feature, layer) => {
           if (feature.geometry?.type === 'Point') return
           layer.on({
