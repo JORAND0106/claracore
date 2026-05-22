@@ -10008,6 +10008,25 @@ function ModalNuevoReporte({ t, usuario, token, API_URL, contrato_id, onClose, o
         paint: { 'fill-color': '#F59E0B', 'fill-opacity': 0.6 },
         filter: ['==', 'Layer', ''],
       })
+      const paintLabels = {
+        'text-color': '#ffffff',
+        'text-halo-color': 'rgba(0,0,0,0.75)',
+        'text-halo-width': 1.5,
+      }
+      map.addLayer({
+        id: 'pkids-labels-abscisa',
+        type: 'symbol',
+        source: 'pkids',
+        filter: _FILTER_MAPBOX_LABEL_ABSCISA,
+        layout: _mapboxPlanoSymbolLayout([
+          'coalesce',
+          ['get', 'etiqueta'],
+          ['get', 'Etiqueta'],
+          ['get', 'Layer'],
+          ['get', 'Name'],
+        ]),
+        paint: paintLabels,
+      })
       const coords = geojson.features.flatMap(f => {
         const geom = f.geometry
         if (!geom) return []
