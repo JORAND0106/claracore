@@ -14,6 +14,12 @@ import ProgObraProgramacionModal from './ProgObraProgramacionModal'
 import ProgObraDependenciasGlobales from './ProgObraDependenciasGlobales'
 import { fmtCOP, fmtCant, fmtDateHuman, fmtDateIso } from './progObraFormat'
 import { aggregatePptoItemKeysByPk, buildProgValidationPreCheck } from './progObraValidation'
+import {
+  FILTER_MAPBOX_LABEL_ABSCISA,
+  mapboxPlanoSymbolLayout,
+  MAPBOX_PLANO_PAINT_LABELS,
+  MAPBOX_ABSCISA_TEXT_FIELD,
+} from './mapboxPlanoLabels'
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN
 /** Plano físico del contrato: norte a la izquierda; el usuario puede rotar después. */
@@ -397,6 +403,7 @@ const PROG_MAP_HANDLERS = Symbol('progMapHandlers')
 
 function removeProgLayersIfAny(map) {
   try {
+    if (map.getLayer('prog-labels-abscisa')) map.removeLayer('prog-labels-abscisa')
     if (map.getLayer('prog-critico-line')) map.removeLayer('prog-critico-line')
     if (map.getLayer('prog-line')) map.removeLayer('prog-line')
     if (map.getLayer('prog-fill')) map.removeLayer('prog-fill')
@@ -455,6 +462,14 @@ function applyProgMapAfterStyle(map, basemapMode, enriched, onPkClick) {
       'line-width': 4,
       'line-opacity': 0.9,
     },
+  })
+  map.addLayer({
+    id: 'prog-labels-abscisa',
+    type: 'symbol',
+    source: 'prog-pol',
+    filter: FILTER_MAPBOX_LABEL_ABSCISA,
+    layout: mapboxPlanoSymbolLayout(MAPBOX_ABSCISA_TEXT_FIELD),
+    paint: MAPBOX_PLANO_PAINT_LABELS,
   })
   const prev = map[PROG_MAP_HANDLERS]
   if (prev) {

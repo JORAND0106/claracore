@@ -48,6 +48,12 @@ import { supabase } from './supabaseClient'
 import { applyClaraTypography, getDashTypoUI } from './typographyScale'
 import { formatCOP, formatCOPShort } from './utils/formatCOP'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
+import {
+  FILTER_MAPBOX_LABEL_ABSCISA as _FILTER_MAPBOX_LABEL_ABSCISA,
+  mapboxPlanoSymbolLayout as _mapboxPlanoSymbolLayout,
+  MAPBOX_PLANO_PAINT_LABELS,
+  MAPBOX_ABSCISA_TEXT_FIELD,
+} from './mapboxPlanoLabels'
 import { ModuloProvider, useModulo } from './context/ModuloContext'
 import AVI from './components/AVI/AVI'
 
@@ -148,26 +154,6 @@ const _FILTER_MAPBOX_LABEL_PK = [
   ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
   ['>', ['length', ['to-string', ['get', 'pk_id']]], 0],
 ]
-const _FILTER_MAPBOX_LABEL_ABSCISA = [
-  'all',
-  ['any', ['==', ['geometry-type'], 'Point'], ['==', ['geometry-type'], 'MultiPoint']],
-  ['>', ['length', ['to-string', ['coalesce', ['get', 'etiqueta'], ['get', 'Etiqueta'], '']]], 0],
-]
-
-/** Etiquetas: fuente Regular (no semibold) y tamaño que escala con el zoom. */
-function _mapboxPlanoSymbolLayout(textField, isMini = false) {
-  const stops = isMini
-    ? [10, 11, 12, 13, 15, 16, 18, 20]
-    : [11, 14, 14, 20, 17, 28, 20, 36]
-  return {
-    'text-field': textField,
-    'text-font': ['Open Sans Regular', 'Arial Unicode MS Regular'],
-    'text-size': ['interpolate', ['linear'], ['zoom'], ...stops],
-    'text-anchor': 'center',
-    'text-allow-overlap': false,
-    'text-ignore-placement': false,
-  }
-}
 
 /** GeoJSON del contrato (FeatureCollection, JSON string u objeto). Siempre devuelve FeatureCollection con array features. */
 function _normalizeContratoPlanoGeojson(plano) {
@@ -6957,6 +6943,14 @@ function ModuloSicoeObra({
           type: 'line',
           source: 'sicoe-filtro-plano',
           paint: { 'line-color': planoSoloMaestro && planoData !== geo ? '#0F766E' : '#00A896', 'line-width': planoSoloMaestro && planoData !== geo ? 2 : 1.2 },
+        })
+        map.addLayer({
+          id: 'sicoe-filtro-labels-abscisa',
+          type: 'symbol',
+          source: 'sicoe-filtro-plano',
+          filter: _FILTER_MAPBOX_LABEL_ABSCISA,
+          layout: _mapboxPlanoSymbolLayout(MAPBOX_ABSCISA_TEXT_FIELD),
+          paint: MAPBOX_PLANO_PAINT_LABELS,
         })
         map.on('click', 'sicoe-filtro-plano-fill', (e) => {
           const feat = e.features?.[0]

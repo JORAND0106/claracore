@@ -3,6 +3,12 @@ import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { API_BASE } from '../../apiBase'
 import { getContratoPlanoGeojson } from '../../contratoPlanoGeojsonCache'
+import {
+  FILTER_MAPBOX_LABEL_ABSCISA,
+  mapboxPlanoSymbolLayout,
+  MAPBOX_PLANO_PAINT_LABELS,
+  MAPBOX_ABSCISA_TEXT_FIELD,
+} from '../../mapboxPlanoLabels'
 
 /** [lng, lat] WGS84 si el maestro trae coordenadas; si no, null. */
 function pickLngLat(row) {
@@ -164,6 +170,14 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
             type: 'line',
             source: 'ppto-plano',
             paint: { 'line-color': isFiltered ? '#0F766E' : '#00A896', 'line-width': isFiltered ? 2 : 1 },
+          })
+          map.addLayer({
+            id: 'ppto-labels-abscisa',
+            type: 'symbol',
+            source: 'ppto-plano',
+            filter: FILTER_MAPBOX_LABEL_ABSCISA,
+            layout: mapboxPlanoSymbolLayout(MAPBOX_ABSCISA_TEXT_FIELD),
+            paint: MAPBOX_PLANO_PAINT_LABELS,
           })
           map.on('click', 'ppto-plano-fill', (e) => {
             const f = e.features?.[0]
