@@ -4,6 +4,7 @@ import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache.js'
 import { getClaraTypeScaleInline } from './typographyScale'
 import { eligeFraseInicio, fraseInicioEsValida } from './data/frasesInicioCuradas.js'
 import { eligeSaludoInicio } from './data/saludosInicio.js'
+import CieloClimaCanvas from './components/inicio/CieloClimaCanvas.jsx'
 
 const API_FRASE = `${API_BASE}/frase-del-dia`
 const SLIDER_INTERVAL_MS = 10000
@@ -65,19 +66,6 @@ function fmtFechaHoraColombia(date = new Date()) {
   }).format(date)
 }
 
-function diasHasta(iso) {
-  if (!iso) return null
-  try {
-    const hoy = new Date()
-    hoy.setHours(0, 0, 0, 0)
-    const fin = new Date(String(iso).slice(0, 10) + 'T12:00:00')
-    if (Number.isNaN(fin.getTime())) return null
-    return Math.ceil((fin - hoy) / 86400000)
-  } catch {
-    return null
-  }
-}
-
 function fmtFechaCorta(iso) {
   if (!iso) return ''
   try {
@@ -97,6 +85,21 @@ function textoActaVigente(acta) {
   if (ini && fin) return `RPO #${acta.numero_rpo} · ${ini} → ${fin}`
   if (ini) return `RPO #${acta.numero_rpo} · ${ini}`
   return `RPO #${acta.numero_rpo}`
+}
+
+function textoSemanaVigente(semana) {
+  if (semana?.numero_semana == null) return 'Sin semana vigente'
+  const ini = fmtFechaCorta(semana.fecha_inicio)
+  const fin = fmtFechaCorta(semana.fecha_fin)
+  if (ini && fin) return `Sem. ${semana.numero_semana} · ${ini} → ${fin}`
+  return `Sem. ${semana.numero_semana}`
+}
+
+function numeroContratoInterventoria(contrato) {
+  if (!contrato) return null
+  const n = contrato.numero_interventoria ?? contrato.numero_contrato_interventoria
+  const txt = n != null ? String(n).trim() : ''
+  return txt || null
 }
 
 function textoPieFoto(foto) {
@@ -474,6 +477,7 @@ const META_CONTENIDO_DIA = {
 }
 
 // ─── Barra de clima (Open-Meteo) ───────────────────────────────────────────────
+// Diseño v1 de respaldo: frontend/src/components/inicio/BarraClima.v1.reference.jsx
 function BarraClima({ t, fs, contratoId, token }) {
   const [clima, setClima] = useState(null)
   const [error, setError] = useState(false)
@@ -554,69 +558,115 @@ function BarraClima({ t, fs, contratoId, token }) {
   const obra = clima?.obra?.current
   const daily = clima?.obra?.daily
   const nombreObra = zonaObra?.nombre || 'Zona de obra'
+  const wmoEscena = obra?.weather_code ?? bog?.weather_code ?? 0
+
+  const panel = {
+    background: 'rgba(0,0,0,0.2)',
+    backdropFilter: 'blur(6px)',
+    WebkitBackdropFilter: 'blur(6px)',
+    borderRadius: '10px',
+    padding: '10px 14px',
+    color: '#fff',
+    textShadow: '0 1px 3px rgba(0,0,0,0.45)',
+  }
+
+  const tarjetaZona = (label, sublabel, code, temp) => (
+    <div style={{ ...panel, display: 'flex', alignItems: 'center', gap: '10px', minWidth: '140px' }}>
+      <span style={{ fontSize: '1.5em', lineHeight: 1 }} aria-hidden>{wmoEmoji(code)}</span>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: fs.sm, fontWeight: '800', lineHeight: 1.2 }}>{label}</div>
+        {sublabel ? (
+          <div style={{ fontSize: fs.badge, opacity: 0.85, fontWeight: '600' }}>{sublabel}</div>
+        ) : null}
+        <div style={{ fontSize: fs.h2, fontWeight: '800', lineHeight: 1.1, marginTop: '2px' }}>
+          {temp != null ? `${Math.round(temp)}°C` : '—'}
+        </div>
+      </div>
+    </div>
+  )
 
   return (
     <div style={{
+      position: 'relative',
       width: '100%',
-      border: `1px solid ${t.border}`,
-      borderRadius: '12px',
-      background: `linear-gradient(90deg, ${t.primary}12 0%, ${t.bgCard} 55%)`,
-      padding: '10px 14px',
-      marginBottom: '12px',
-      boxShadow: '0 1px 6px rgba(0,0,0,0.04)',
+      borderRadius: '14px',
+      overflow: 'hidden',
+      marginBottom: '14px',
+      minHeight: '96px',
+      boxShadow: '0 4px 22px rgba(0,0,0,0.18)',
+      boxSizing: 'border-box',
     }}>
       <style>{`
         @keyframes ccPulseLive {
           0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(16,185,129,0.55); }
-          50% { opacity: 0.75; transform: scale(1.15); box-shadow: 0 0 0 6px rgba(16,185,129,0); }
+          50% { opacity: 0.85; transform: scale(1.15); box-shadow: 0 0 0 7px rgba(16,185,129,0); }
         }
       `}</style>
-      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '12px 20px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+      <CieloClimaCanvas wmoCode={wmoEscena} />
+      <div style={{
+        position: 'relative',
+        zIndex: 1,
+        padding: '14px 18px',
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'stretch',
+        gap: '10px 14px',
+        minHeight: '96px',
+        boxSizing: 'border-box',
+      }}>
+        <div style={{ ...panel, display: 'flex', alignItems: 'center', gap: '10px', alignSelf: 'center' }}>
           <span
             aria-hidden
             style={{
-              width: '8px', height: '8px', borderRadius: '50%', background: '#10B981',
+              width: '9px', height: '9px', borderRadius: '50%', background: '#10B981',
               animation: 'ccPulseLive 1.8s ease-in-out infinite', flexShrink: 0,
             }}
           />
-          <span style={{ fontSize: fs.sm, fontWeight: '800', color: t.text }}>Clima en vivo</span>
+          <div>
+            <div style={{ fontSize: fs.base, fontWeight: '800', lineHeight: 1.2 }}>Clima en vivo</div>
+            <div style={{ fontSize: fs.badge, opacity: 0.88, fontWeight: '600' }}>Cielo según obra · Open-Meteo</div>
+          </div>
         </div>
 
         {cargandoZona ? (
-          <span style={{ fontSize: fs.autor, color: t.textMuted }}>Ubicando zona de obra…</span>
+          <div style={{ ...panel, alignSelf: 'center', fontSize: fs.sm }}>Ubicando zona de obra…</div>
         ) : error && !clima ? (
-          <span style={{ fontSize: fs.autor, color: t.textMuted }}>No se pudo cargar el clima.</span>
+          <div style={{ ...panel, alignSelf: 'center', fontSize: fs.sm }}>No se pudo cargar el clima.</div>
         ) : (
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: fs.sm, color: t.text }}>
-              <span style={{ fontWeight: '700' }}>{BOGOTA_OFICINA.nombre}</span>
-              <span style={{ fontSize: fs.autor, color: t.textMuted }}>(oficina)</span>
-              <span>{wmoEmoji(bog?.weather_code)}</span>
-              <span>{bog?.temperature_2m != null ? `${Math.round(bog.temperature_2m)}°C` : '—'}</span>
-            </div>
-            {obra ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: fs.sm, color: t.text }}>
-                <span style={{ fontWeight: '700' }}>{nombreObra}</span>
-                <span style={{ fontSize: fs.autor, color: t.textMuted }}>(obra)</span>
-                <span>{wmoEmoji(obra?.weather_code)}</span>
-                <span>{obra?.temperature_2m != null ? `${Math.round(obra.temperature_2m)}°C` : '—'}</span>
-              </div>
-            ) : !cargandoZona && (
-              <span style={{ fontSize: fs.autor, color: t.textMuted }}>Obra: sin plano para clima local</span>
-            )}
+            {tarjetaZona(BOGOTA_OFICINA.nombre, 'Oficina', bog?.weather_code, bog?.temperature_2m)}
+            {obra
+              ? tarjetaZona(nombreObra, 'Obra', obra?.weather_code, obra?.temperature_2m)
+              : !cargandoZona && (
+                <div style={{ ...panel, alignSelf: 'center', fontSize: fs.autor, opacity: 0.92 }}>
+                  Obra: sin plano para clima local
+                </div>
+              )}
             {daily?.time?.length ? (
               <div style={{
-                display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px',
-                marginLeft: 'auto', fontSize: fs.autor, color: t.textMuted,
+                ...panel,
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                gap: '8px',
+                marginLeft: 'auto',
+                alignSelf: 'center',
+                maxWidth: '100%',
               }}>
-                <span style={{ fontWeight: '700', color: t.text }}>Pronóstico 5 días · {nombreObra}:</span>
+                <span style={{ fontWeight: '800', fontSize: fs.sm, width: '100%' }}>
+                  Pronóstico 5 días · {nombreObra}
+                </span>
                 {daily.time.slice(0, 5).map((dia, i) => (
                   <span
                     key={dia}
                     style={{
-                      background: t.bg, border: `1px solid ${t.border}`, borderRadius: '8px',
-                      padding: '2px 8px', whiteSpace: 'nowrap',
+                      background: 'rgba(255,255,255,0.12)',
+                      border: '1px solid rgba(255,255,255,0.18)',
+                      borderRadius: '8px',
+                      padding: '4px 9px',
+                      whiteSpace: 'nowrap',
+                      fontSize: fs.autor,
+                      fontWeight: '600',
                     }}
                   >
                     {String(dia).slice(5).replace('-', '/')} {wmoEmoji(daily.weather_code?.[i])}{' '}
@@ -773,6 +823,7 @@ function PanelSaludoContenidoDia({ t, fs, usuario, saludoVisible }) {
 function FichaContrato({ t, fs, contratoId, token }) {
   const [contrato, setContrato] = useState(null)
   const [acta, setActa] = useState(null)
+  const [semanaVigente, setSemanaVigente] = useState(null)
   const [cargando, setCargando] = useState(true)
   const [objetoExpandido, setObjetoExpandido] = useState(false)
 
@@ -784,6 +835,7 @@ function FichaContrato({ t, fs, contratoId, token }) {
     if (!contratoId) {
       setContrato(null)
       setActa(null)
+      setSemanaVigente(null)
       setCargando(false)
       return
     }
@@ -795,112 +847,99 @@ function FichaContrato({ t, fs, contratoId, token }) {
       fetch(`${API_BASE}/sicoe-obra/${contratoId}/acta-rpo-vigente`, { headers: h })
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null),
+      fetch(`${API_BASE}/sicoe-obra/${contratoId}/semana-vigente`, { headers: h })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
     ])
-      .then(([c, a]) => {
+      .then(([c, a, sem]) => {
         if (cancelled) return
         setContrato(c)
         setActa(a && typeof a === 'object' ? a : null)
+        setSemanaVigente(sem?.vigente && typeof sem.vigente === 'object' ? sem.vigente : null)
       })
       .finally(() => { if (!cancelled) setCargando(false) })
     return () => { cancelled = true }
   }, [contratoId, token])
 
-  const fechaVenc = contrato?.fecha_vencimiento || contrato?.fecha_fin || contrato?.fecha_terminacion || null
-  const dias = diasHasta(fechaVenc)
-  const badge = dias != null && dias >= 0
-    ? dias < 7
-      ? { bg: '#FEE2E2', color: '#B91C1C', texto: `Vence en ${dias} día${dias !== 1 ? 's' : ''}` }
-      : dias < 30
-        ? { bg: '#FEF3C7', color: '#B45309', texto: `Vence en ${dias} día${dias !== 1 ? 's' : ''}` }
-        : null
-    : dias != null && dias < 0
-      ? { bg: '#FEE2E2', color: '#B91C1C', texto: `Vencido hace ${Math.abs(dias)} día${Math.abs(dias) !== 1 ? 's' : ''}` }
-      : null
-
   const actaTxt = textoActaVigente(acta)
+  const semanaTxt = textoSemanaVigente(semanaVigente)
+  const numeroInterventoria = numeroContratoInterventoria(contrato)
   const objetoTxt = contrato?.objeto?.trim() || ''
   const objetoLargo = objetoTxt.length > 120
 
-  const col = (label, valor, extra = null) => (
-    <div style={{ flex: '1 1 0', minWidth: '140px', maxWidth: '100%' }}>
+  const campo = (label, valor, ultimo = false) => (
+    <div style={{ marginBottom: ultimo ? 0 : '5px' }}>
       <div style={{
-        fontSize: fs.autor, fontWeight: '700', color: t.textMuted,
-        marginBottom: '4px', letterSpacing: '0.02em',
+        fontSize: fs.badge, fontWeight: '700', color: t.textMuted,
+        marginBottom: '1px', letterSpacing: '0.02em', lineHeight: 1.2,
       }}>
         {label}
       </div>
       <div style={{
-        fontSize: fs.sm, color: t.text, fontWeight: '600',
-        lineHeight: 1.35, wordBreak: 'break-word',
+        fontSize: fs.autor, color: t.text, fontWeight: '600',
+        lineHeight: 1.25, wordBreak: 'break-word',
       }}>
         {valor || '—'}
       </div>
-      {extra}
+    </div>
+  )
+
+  const columna = (children) => (
+    <div style={{ flex: '1 1 0', minWidth: '120px', maxWidth: '100%' }}>
+      {children}
     </div>
   )
 
   return (
     <div style={{
       border: `1px solid ${t.border}`,
-      borderRadius: '12px',
+      borderRadius: '10px',
       background: t.bgCard,
-      padding: '14px 18px',
-      boxShadow: '0 1px 8px rgba(0,0,0,0.05)',
+      padding: '8px 12px',
+      boxShadow: '0 1px 6px rgba(0,0,0,0.04)',
     }}>
-      <div style={{ marginBottom: '12px' }}>
-        <span style={{ fontSize: fs.base, fontWeight: '800', color: t.primary }}>📋 Ficha del contrato</span>
+      <div style={{ marginBottom: '6px' }}>
+        <span style={{ fontSize: fs.sm, fontWeight: '800', color: t.primary }}>📋 Ficha del contrato</span>
       </div>
       {cargando ? (
-        <div style={{ fontSize: fs.sm, color: t.textMuted }}>Cargando datos del contrato…</div>
+        <div style={{ fontSize: fs.autor, color: t.textMuted }}>Cargando datos del contrato…</div>
       ) : !contrato ? (
-        <div style={{ fontSize: fs.sm, color: t.textMuted }}>No hay contrato activo.</div>
+        <div style={{ fontSize: fs.autor, color: t.textMuted }}>No hay contrato activo.</div>
       ) : (
         <>
           <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-            gap: '12px 20px',
-            marginBottom: '12px',
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '6px 14px',
+            marginBottom: objetoTxt ? '6px' : 0,
           }}>
-            {col('Número', contrato.numero)}
-            {col('Contratista', contrato.contratista)}
-            {col('Acta vigente', actaTxt, (
-              <div style={{ marginTop: '10px' }}>
-                <div style={{
-                  fontSize: fs.autor, fontWeight: '700', color: t.textMuted,
-                  marginBottom: '4px',
-                }}>
-                  Vencimiento
-                </div>
-                <div style={{ fontSize: fs.sm, color: t.text, fontWeight: '600', lineHeight: 1.35 }}>
-                  {fechaVenc ? fmtFechaCorta(fechaVenc) : 'No registrada'}
-                </div>
-                {badge ? (
-                  <span style={{
-                    display: 'inline-block', marginTop: '6px',
-                    fontSize: fs.badge, fontWeight: '800', padding: '3px 10px', borderRadius: '20px',
-                    background: badge.bg, color: badge.color,
-                  }}>
-                    {badge.texto}
-                  </span>
-                ) : null}
-              </div>
-            ))}
+            {columna(<>
+              {campo('Número de contrato', contrato.numero)}
+              {campo('Contratista', contrato.contratista, true)}
+            </>)}
+            {columna(<>
+              {numeroInterventoria ? campo('Número contrato interventoría', numeroInterventoria) : null}
+              {campo('Interventoría', contrato.interventoria, true)}
+            </>)}
+            {columna(<>
+              {campo('Acta vigente', actaTxt)}
+              {campo('# Semana', semanaTxt, true)}
+            </>)}
           </div>
 
           {objetoTxt ? (
             <div style={{
               borderTop: `1px solid ${t.border}`,
-              paddingTop: '12px',
+              paddingTop: '6px',
             }}>
               <div style={{
-                fontSize: fs.autor, fontWeight: '700', color: t.textMuted,
-                marginBottom: '4px',
+                fontSize: fs.badge, fontWeight: '700', color: t.textMuted,
+                marginBottom: '1px', lineHeight: 1.2,
               }}>
                 Objeto
               </div>
               <div style={{
-                fontSize: fs.sm, color: t.text, lineHeight: 1.45,
+                fontSize: fs.autor, color: t.text, lineHeight: 1.3,
                 ...(objetoExpandido ? {} : {
                   overflow: 'hidden',
                   display: '-webkit-box',
@@ -915,8 +954,8 @@ function FichaContrato({ t, fs, contratoId, token }) {
                   type="button"
                   onClick={() => setObjetoExpandido(true)}
                   style={{
-                    marginTop: '4px', padding: 0, border: 'none', background: 'none',
-                    color: t.primary, fontSize: fs.autor, fontWeight: '700',
+                    marginTop: '2px', padding: 0, border: 'none', background: 'none',
+                    color: t.primary, fontSize: fs.badge, fontWeight: '700',
                     cursor: 'pointer', textDecoration: 'underline',
                   }}
                 >
@@ -928,8 +967,8 @@ function FichaContrato({ t, fs, contratoId, token }) {
                   type="button"
                   onClick={() => setObjetoExpandido(false)}
                   style={{
-                    marginTop: '4px', padding: 0, border: 'none', background: 'none',
-                    color: t.primary, fontSize: fs.autor, fontWeight: '700',
+                    marginTop: '2px', padding: 0, border: 'none', background: 'none',
+                    color: t.primary, fontSize: fs.badge, fontWeight: '700',
                     cursor: 'pointer', textDecoration: 'underline',
                   }}
                 >
