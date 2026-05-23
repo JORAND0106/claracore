@@ -13,7 +13,7 @@
  *   apiBase.js    — API_BASE
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Bot, Sparkles, X, Send, Paperclip } from 'lucide-react'
+import { Bot, X, Send, Paperclip } from 'lucide-react'
 import { useModulo } from '../../context/ModuloContext'
 import { API_BASE } from '../../apiBase'
 
@@ -432,19 +432,36 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal' }) {
           e.currentTarget.style.transform = 'scale(1)'
         }}
       >
-        <Bot size={26} color="#fff" strokeWidth={2.2} aria-hidden />
-        <span
-          aria-hidden
-          style={{
-            position: 'absolute', top: '7px', right: '7px',
-            width: '14px', height: '14px', borderRadius: '50%',
-            background: 'rgba(255,255,255,0.92)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 1px 4px rgba(0,119,182,0.35)',
-            pointerEvents: 'none',
-          }}
-        >
-          <Sparkles size={9} color="#00B4C6" strokeWidth={2.5} />
+        <span aria-hidden style={{ position: 'relative', width: '40px', height: '40px', display: 'block' }}>
+          <svg width="40" height="40" viewBox="0 0 40 40" style={{ display: 'block' }}>
+            <defs>
+              <clipPath id="aviFabLogoClip">
+                <circle cx="20" cy="20" r="18" />
+              </clipPath>
+            </defs>
+            <image
+              href="/favicon.png?v=3"
+              x="2"
+              y="2"
+              width="36"
+              height="36"
+              clipPath="url(#aviFabLogoClip)"
+              preserveAspectRatio="xMidYMid slice"
+            />
+          </svg>
+          <span
+            style={{
+              position: 'absolute', bottom: '-1px', right: '-1px',
+              width: '18px', height: '18px', borderRadius: '50%',
+              background: '#00B4C6',
+              border: '2px solid #fff',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: '0 1px 4px rgba(0,50,90,0.35)',
+              pointerEvents: 'none',
+            }}
+          >
+            <i className="ti ti-robot" style={{ fontSize: '14px', color: '#fff', lineHeight: 1 }} />
+          </span>
         </span>
         {badgeVisible && !abierto && (
           <span style={{

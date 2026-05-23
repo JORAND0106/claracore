@@ -78,6 +78,27 @@ function diasHasta(iso) {
   }
 }
 
+function fmtFechaCorta(iso) {
+  if (!iso) return ''
+  try {
+    return new Date(String(iso).slice(0, 10) + 'T12:00:00').toLocaleDateString('es-CO', {
+      day: 'numeric',
+      month: 'short',
+    })
+  } catch {
+    return String(iso).slice(0, 10)
+  }
+}
+
+function textoActaVigente(acta) {
+  if (acta?.numero_rpo == null) return 'Sin acta vigente'
+  const ini = fmtFechaCorta(acta.fecha_inicio)
+  const fin = fmtFechaCorta(acta.fecha_fin)
+  if (ini && fin) return `RPO #${acta.numero_rpo} · ${ini} → ${fin}`
+  if (ini) return `RPO #${acta.numero_rpo} · ${ini}`
+  return `RPO #${acta.numero_rpo}`
+}
+
 function textoPieFoto(foto) {
   const cap = (foto?.capitulo || '').trim() || '—'
   const tramo = (foto?.tramo || '').trim() || '—'
@@ -753,6 +774,11 @@ function FichaContrato({ t, fs, contratoId, token }) {
   const [contrato, setContrato] = useState(null)
   const [acta, setActa] = useState(null)
   const [cargando, setCargando] = useState(true)
+  const [objetoExpandido, setObjetoExpandido] = useState(false)
+
+  useEffect(() => {
+    setObjetoExpandido(false)
+  }, [contratoId])
 
   useEffect(() => {
     if (!contratoId) {
@@ -791,14 +817,25 @@ function FichaContrato({ t, fs, contratoId, token }) {
       ? { bg: '#FEE2E2', color: '#B91C1C', texto: `Vencido hace ${Math.abs(dias)} día${Math.abs(dias) !== 1 ? 's' : ''}` }
       : null
 
-  const actaTxt = acta?.numero_rpo != null
-    ? `RPO #${acta.numero_rpo}${acta.fecha_inicio ? ` · ${String(acta.fecha_inicio).slice(0, 10)} → ${String(acta.fecha_fin || '').slice(0, 10)}` : ''}`
-    : 'Sin acta vigente'
+  const actaTxt = textoActaVigente(acta)
+  const objetoTxt = contrato?.objeto?.trim() || ''
+  const objetoLargo = objetoTxt.length > 120
 
-  const fila = (label, valor) => (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 8px', marginBottom: '8px', lineHeight: 1.45 }}>
-      <span style={{ fontSize: fs.autor, fontWeight: '700', color: t.textMuted, minWidth: '120px' }}>{label}</span>
-      <span style={{ fontSize: fs.sm, color: t.text, flex: 1, minWidth: 0 }}>{valor || '—'}</span>
+  const col = (label, valor, extra = null) => (
+    <div style={{ flex: '1 1 0', minWidth: '140px', maxWidth: '100%' }}>
+      <div style={{
+        fontSize: fs.autor, fontWeight: '700', color: t.textMuted,
+        marginBottom: '4px', letterSpacing: '0.02em',
+      }}>
+        {label}
+      </div>
+      <div style={{
+        fontSize: fs.sm, color: t.text, fontWeight: '600',
+        lineHeight: 1.35, wordBreak: 'break-word',
+      }}>
+        {valor || '—'}
+      </div>
+      {extra}
     </div>
   )
 
@@ -810,16 +847,8 @@ function FichaContrato({ t, fs, contratoId, token }) {
       padding: '14px 18px',
       boxShadow: '0 1px 8px rgba(0,0,0,0.05)',
     }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+      <div style={{ marginBottom: '12px' }}>
         <span style={{ fontSize: fs.base, fontWeight: '800', color: t.primary }}>📋 Ficha del contrato</span>
-        {badge ? (
-          <span style={{
-            fontSize: fs.badge, fontWeight: '800', padding: '3px 10px', borderRadius: '20px',
-            background: badge.bg, color: badge.color,
-          }}>
-            {badge.texto}
-          </span>
-        ) : null}
       </div>
       {cargando ? (
         <div style={{ fontSize: fs.sm, color: t.textMuted }}>Cargando datos del contrato…</div>
@@ -827,12 +856,88 @@ function FichaContrato({ t, fs, contratoId, token }) {
         <div style={{ fontSize: fs.sm, color: t.textMuted }}>No hay contrato activo.</div>
       ) : (
         <>
-          {fila('Número', contrato.numero)}
-          {fila('Objeto', contrato.objeto)}
-          {fila('Contratista', contrato.contratista)}
-          {fila('Interventoría', contrato.interventoria)}
-          {fila('Acta vigente', actaTxt)}
-          {fila('Fecha vencimiento', fechaVenc ? String(fechaVenc).slice(0, 10) : 'No registrada')}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+            gap: '12px 20px',
+            marginBottom: '12px',
+          }}>
+            {col('Número', contrato.numero)}
+            {col('Contratista', contrato.contratista)}
+            {col('Acta vigente', actaTxt, (
+              <div style={{ marginTop: '10px' }}>
+                <div style={{
+                  fontSize: fs.autor, fontWeight: '700', color: t.textMuted,
+                  marginBottom: '4px',
+                }}>
+                  Vencimiento
+                </div>
+                <div style={{ fontSize: fs.sm, color: t.text, fontWeight: '600', lineHeight: 1.35 }}>
+                  {fechaVenc ? fmtFechaCorta(fechaVenc) : 'No registrada'}
+                </div>
+                {badge ? (
+                  <span style={{
+                    display: 'inline-block', marginTop: '6px',
+                    fontSize: fs.badge, fontWeight: '800', padding: '3px 10px', borderRadius: '20px',
+                    background: badge.bg, color: badge.color,
+                  }}>
+                    {badge.texto}
+                  </span>
+                ) : null}
+              </div>
+            ))}
+          </div>
+
+          {objetoTxt ? (
+            <div style={{
+              borderTop: `1px solid ${t.border}`,
+              paddingTop: '12px',
+            }}>
+              <div style={{
+                fontSize: fs.autor, fontWeight: '700', color: t.textMuted,
+                marginBottom: '4px',
+              }}>
+                Objeto
+              </div>
+              <div style={{
+                fontSize: fs.sm, color: t.text, lineHeight: 1.45,
+                ...(objetoExpandido ? {} : {
+                  overflow: 'hidden',
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                }),
+              }}>
+                {objetoTxt}
+              </div>
+              {objetoLargo && !objetoExpandido ? (
+                <button
+                  type="button"
+                  onClick={() => setObjetoExpandido(true)}
+                  style={{
+                    marginTop: '4px', padding: 0, border: 'none', background: 'none',
+                    color: t.primary, fontSize: fs.autor, fontWeight: '700',
+                    cursor: 'pointer', textDecoration: 'underline',
+                  }}
+                >
+                  ver más
+                </button>
+              ) : null}
+              {objetoExpandido ? (
+                <button
+                  type="button"
+                  onClick={() => setObjetoExpandido(false)}
+                  style={{
+                    marginTop: '4px', padding: 0, border: 'none', background: 'none',
+                    color: t.primary, fontSize: fs.autor, fontWeight: '700',
+                    cursor: 'pointer', textDecoration: 'underline',
+                  }}
+                >
+                  ver menos
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </>
       )}
     </div>
