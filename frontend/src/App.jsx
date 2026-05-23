@@ -17033,7 +17033,7 @@ if (contratos.length > 1) {
         fontSize={fontSize} onFontSize={cambiarFuente}
         onOpenPerfil={() => setPerfilModalAbierto(true)}
       />
-      <AVI usuario={usuario} />
+      <AVI usuario={usuario} fontSize={fontSize} />
     </>
     </ModuloProvider>
     )

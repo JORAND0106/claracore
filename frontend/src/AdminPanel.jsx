@@ -430,16 +430,6 @@ function useApi(token, opts = {}) {
   return call;
 }
 
-// Ejecuta fn en intervalo; fn se actualiza sin reiniciar el timer
-function usePolling(fn, intervalMs) {
-  const ref = useRef(fn);
-  useEffect(() => { ref.current = fn; }, [fn]);
-  useEffect(() => {
-    const id = setInterval(() => ref.current(), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-}
-
 // ─── SECCIÓN 1: Gestión de Usuarios ───────────────────────────────────────
 function SeccionUsuarios({ call, cargos, theme, userId }) {
   const [usuarios, setUsuarios] = useState([]);
@@ -1555,23 +1545,6 @@ function SeccionLogs({ call, theme }) {
   }, [])
 
   useEffect(() => { cargarLogs(0) }, [filtUsuario, filtModulo, filtAccion, filtCategoria, filtSeveridad, filtDesde, filtHasta, filtOcultarLogin])
-
-  const POLL_MS = 180000
-  useEffect(() => {
-    const tick = () => {
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") return
-      void cargarLogs(offset, { silent: true })
-    }
-    const iv = setInterval(tick, POLL_MS)
-    const onVis = () => {
-      if (document.visibilityState === "visible") tick()
-    }
-    document.addEventListener("visibilitychange", onVis)
-    return () => {
-      clearInterval(iv)
-      document.removeEventListener("visibilitychange", onVis)
-    }
-  }, [offset, filtUsuario, filtModulo, filtAccion, filtCategoria, filtSeveridad, filtDesde, filtHasta, filtOcultarLogin])
 
   async function cargarLogs(off = 0, opts = {}) {
     const { silent = false } = opts
@@ -3165,6 +3138,7 @@ function SeccionContratos({ call, contratos, recargarContratos, perms = { crear:
 
 
 const MODAL_AGRUPADOR_ANCHO_CREAR = 1196; // 920px + 30%
+const LISTADO_PRECIOS_PAGE = 100;
 
 /** Fila del modal agrupador: tooltip con descripción completa si el texto está truncado. */
 function FilaTooltipDescripcionTruncada({ descripcion, rowStyle, theme, children }) {
@@ -3259,7 +3233,10 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   const [agrupadores,      setAgrupadores]      = useState([]);
   const [cantidades,       setCantidades]       = useState([]);
   const [sinAgruparCount,  setSinAgruparCount]  = useState(0);
+  const [totalPreciosCount, setTotalPreciosCount] = useState(null);
+  const [cargandoResto,    setCargandoResto]    = useState(false);
   const [loading,          setLoading]          = useState(false);
+  const contratoCargaGenRef = useRef(0);
   const [msg,              setMsg]              = useState(null);
   const [popup,            setPopup]            = useState(null);
   const [stats,            setStats]            = useState(null);
@@ -3577,8 +3554,6 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
         }));
         if (sinDelta !== 0) setSinAgruparCount(prev => Math.max(0, prev + sinDelta));
         cerrarAgrupadorModal();
-        await cargar({ silent: true });
-        recargarRespaldo();
       } catch (e) {
         setMsg({ type: "error", text: e.message });
       } finally {
@@ -3626,8 +3601,6 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       }
       onModoVistaChange?.("wbs");
       cerrarAgrupadorModal();
-      await cargar({ silent: true });
-      recargarRespaldo();
     } catch (e) {
       setMsg({ type: "error", text: e.message });
     } finally {
@@ -3667,48 +3640,118 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
     return false;
   };
 
-  const recargarRespaldoTimerRef = useRef(null);
-
-  // ── Carga ──────────────────────────────────────────────────────────────────
-  const cargar = useCallback(async (opts = {}) => {
-    const silent = opts?.silent === true;
-    if (!contratoId) return false;
-    if (!silent) setLoading(true);
+  // ── Carga (primera página al instante; resto en segundo plano) ─────────────
+  const cargarRestoEnSegundoPlano = useCallback(async (gen, desde, total) => {
+    setCargandoResto(true);
+    let offset = desde;
     try {
-      const [itemsData, agrData, sinData, cantData] = await Promise.all([
-        call("GET", `/listado-precios/${contratoId}`),
-        call("GET", `/listado-precios/${contratoId}/agrupadores`).catch(() => null),
-        call("GET", `/listado-precios/${contratoId}/sin-agrupar`).catch(() => ({ count: 0 })),
-        call("GET", `/listado-precios/${contratoId}/cantidades`).catch(() => []),
-      ]);
-      setItems(itemsData || []);
-      if (agrData !== null) setAgrupadores(agrData || []);
-      setSinAgruparCount(sinData?.count ?? 0);
-      setCantidades(cantData || []);
-      return true;
+      while (offset < total) {
+        if (contratoCargaGenRef.current !== gen) return;
+        const batch = await call(
+          "GET",
+          `/listado-precios/${contratoId}?limit=${LISTADO_PRECIOS_PAGE}&offset=${offset}`,
+        );
+        if (contratoCargaGenRef.current !== gen) return;
+        const chunk = Array.isArray(batch) ? batch : [];
+        if (!chunk.length) break;
+        setItems((prev) => [...prev, ...chunk]);
+        offset += chunk.length;
+        if (chunk.length < LISTADO_PRECIOS_PAGE) break;
+      }
+    } catch {
+      /* Mantener ítems ya mostrados; el usuario puede pulsar Actualizar. */
+    } finally {
+      if (contratoCargaGenRef.current === gen) setCargandoResto(false);
     }
-    catch (e) { setMsg({ type:"error", text:e.message }); return false; }
-    finally { if (!silent) setLoading(false); }
   }, [contratoId, call]);
 
-  const recargarRespaldo = useCallback(() => {
-    if (recargarRespaldoTimerRef.current) clearTimeout(recargarRespaldoTimerRef.current);
-    recargarRespaldoTimerRef.current = setTimeout(() => {
-      recargarRespaldoTimerRef.current = null;
-      void cargar({ silent: true });
-    }, 500);
-  }, [cargar]);
+  const fetchSinAgruparCount = useCallback(async () => {
+    try {
+      const sin = await call("GET", `/listado-precios/${contratoId}/sin-agrupar/count`);
+      return sin?.count ?? 0;
+    } catch {
+      try {
+        const sin = await call("GET", `/listado-precios/${contratoId}/sin-agrupar`);
+        return sin?.count ?? 0;
+      } catch {
+        return 0;
+      }
+    }
+  }, [contratoId, call]);
+
+  const cargar = useCallback(async (opts = {}) => {
+    const silent = opts?.silent === true;
+    const completo = opts?.completo === true;
+    if (!contratoId) return false;
+    const gen = ++contratoCargaGenRef.current;
+    if (!silent) setLoading(true);
+    else setCargandoResto(false);
+    try {
+      if (completo) {
+        const [itemsData, agrData, sinCount, cantData, countData] = await Promise.all([
+          call("GET", `/listado-precios/${contratoId}`),
+          call("GET", `/listado-precios/${contratoId}/agrupadores`).catch(() => null),
+          fetchSinAgruparCount(),
+          call("GET", `/listado-precios/${contratoId}/cantidades`).catch(() => []),
+          call("GET", `/listado-precios/${contratoId}/count`).catch(() => ({ count: 0 })),
+        ]);
+        if (gen !== contratoCargaGenRef.current) return false;
+        setItems(itemsData || []);
+        setTotalPreciosCount(countData?.count ?? (itemsData || []).length);
+        if (agrData !== null) setAgrupadores(agrData || []);
+        setSinAgruparCount(sinCount);
+        setCantidades(cantData || []);
+        return true;
+      }
+
+      const [countData, firstPage, agrData, sinCount, cantData] = await Promise.all([
+        call("GET", `/listado-precios/${contratoId}/count`).catch(() => ({ count: 0 })),
+        call("GET", `/listado-precios/${contratoId}?limit=${LISTADO_PRECIOS_PAGE}&offset=0`),
+        call("GET", `/listado-precios/${contratoId}/agrupadores`).catch(() => null),
+        fetchSinAgruparCount(),
+        call("GET", `/listado-precios/${contratoId}/cantidades`).catch(() => []),
+      ]);
+      if (gen !== contratoCargaGenRef.current) return false;
+
+      const total = countData?.count ?? (firstPage?.length ?? 0);
+      setTotalPreciosCount(total);
+      setItems(firstPage || []);
+      if (agrData !== null) setAgrupadores(agrData || []);
+      setSinAgruparCount(sinCount);
+      setCantidades(cantData || []);
+
+      if (total > LISTADO_PRECIOS_PAGE) {
+        void cargarRestoEnSegundoPlano(gen, LISTADO_PRECIOS_PAGE, total);
+      }
+      return true;
+    } catch (e) {
+      setMsg({ type: "error", text: e.message });
+      return false;
+    } finally {
+      if (gen === contratoCargaGenRef.current && !silent) setLoading(false);
+    }
+  }, [contratoId, call, cargarRestoEnSegundoPlano, fetchSinAgruparCount]);
 
   const actualizarListado = useCallback(async () => {
-    const ok = await cargar({ silent: false });
+    const ok = await cargar({ silent: false, completo: true });
     if (ok) setMsg({ type: "success", text: "Listado actualizado" });
   }, [cargar]);
 
-  useEffect(() => () => {
-    if (recargarRespaldoTimerRef.current) clearTimeout(recargarRespaldoTimerRef.current);
-  }, []);
+  const cargarRef = useRef(cargar);
+  useEffect(() => { cargarRef.current = cargar; }, [cargar]);
 
-  useEffect(() => { cargar(); }, [cargar]);
+  useEffect(() => {
+    if (!contratoId) {
+      setItems([]);
+      setAgrupadores([]);
+      setCantidades([]);
+      setSinAgruparCount(0);
+      setTotalPreciosCount(null);
+      setCargandoResto(false);
+      return;
+    }
+    void cargarRef.current({ silent: false });
+  }, [contratoId]);
 
   useEffect(() => {
     if (!agDropdown) return;
@@ -3735,8 +3778,6 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
         text: `✅ Agrupador "${eliminarAgConfirm.nombre}" eliminado.${n ? ` ${n} ítem(s) quedaron sin agrupador.` : ""}`,
       });
       setEliminarAgConfirm(null);
-      await cargar({ silent: true });
-      recargarRespaldo();
     } catch (e) {
       setMsg({ type: "error", text: e.message });
     } finally {
@@ -3784,8 +3825,6 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       setItems(prev => prev.map(i => (
         i.id === item.id ? { ...i, agrupador_id: nuevoAgId ?? null } : i
       )));
-      await cargar({ silent: true });
-      recargarRespaldo();
     } catch (e) {
       setMsg({ type: "error", text: e.message });
     } finally {
@@ -3820,17 +3859,16 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
     try {
       const payload = { ...popup };
       if (payload.agrupador_id === "" || payload.agrupador_id === undefined) payload.agrupador_id = null;
-      await call("PUT", `/listado-precios/item/${popup.id}`, payload);
+      const saved = await call("PUT", `/listado-precios/item/${popup.id}`, payload);
       setMsg({ type:"success", text:"✅ Precio actualizado correctamente." });
-      const [updated, freshStats, freshCant] = await Promise.all([
-        call("GET", `/listado-precios/${contratoId}`),
+      const [freshStats, freshCant] = await Promise.all([
         call("GET", `/listado-precios/item/${popup.id}/stats`).catch(() => null),
         call("GET", `/listado-precios/${contratoId}/cantidades`).catch(() => []),
       ]);
-      setItems(updated || []);
+      const merged = { ...popup, ...(saved && typeof saved === "object" ? saved : {}), ...payload };
+      setItems((prev) => prev.map((i) => (i.id === popup.id ? { ...i, ...merged } : i)));
       if (freshCant?.length) setCantidades(freshCant);
-      const fresh = (updated || []).find(i => i.id === popup.id);
-      if (fresh) setPopup({ ...fresh });
+      setPopup({ ...merged });
       if (freshStats) setStats(freshStats);
     } catch (e) { setMsg({ type:"error", text:e.message }); }
     finally { setSaving(false); }
@@ -3891,7 +3929,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
         }).filter(r=>r.descripcion||r.item_numero);
         await call("POST",`/listado-precios/${contratoId}/bulk`,parsed);
         setMsg({type:"success",text:`✅ ${parsed.length} ítems cargados correctamente.`});
-        cargar();
+        void cargar({ silent: false, completo: true });
       } catch(ex){setMsg({type:"error",text:ex.message});}
     };
     reader.readAsText(file,"UTF-8");
@@ -3952,7 +3990,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
       setShowCrear(false);
       setCrearForm({ capitulo:"",item_numero:"",descripcion:"",unidad:"",competencia:"",tipo_precio:"",precio_unitario:"",especificacion_tecnica:"",acta_fijacion:"",acta_modificatoria:"",observaciones:"",tipo_calculo:"",agrupador_id:"" });
       setUModoCustomC(false); setUCustomC("");
-      cargar();
+      void cargar({ silent: false, completo: true });
     } catch(e){ setMsg({ type:"error", text:e.message }); }
     finally { setCreating(false); }
   };
@@ -4164,9 +4202,13 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
             ⚠ {sinAgruparCount.toLocaleString("es-CO")} ítem{sinAgruparCount !== 1 ? "s" : ""} sin agrupar
           </span>
         )}
-        {items.length > 0 && (
+        {(totalPreciosCount != null || items.length > 0) && (
           <span style={{ marginLeft:"auto",fontSize:12,color:col.textMuted }}>
-            {items.length.toLocaleString("es-CO")} precios · {agrupadores.length.toLocaleString("es-CO")} agrupadores
+            {totalPreciosCount != null && items.length < totalPreciosCount
+              ? `${items.length.toLocaleString("es-CO")} / ${totalPreciosCount.toLocaleString("es-CO")} precios`
+              : `${(totalPreciosCount ?? items.length).toLocaleString("es-CO")} precios`}
+            {cargandoResto ? " · cargando resto…" : ""}
+            {" · "}{agrupadores.length.toLocaleString("es-CO")} agrupadores
           </span>
         )}
       </div>
@@ -4199,8 +4241,8 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
         </div>
       )}
 
-      {/* ── Grilla ── */}
-      {loading ? (
+      {/* ── Grilla (no vaciar la tabla si ya hay ítems en pantalla) ── */}
+      {loading && items.length === 0 ? (
         <div style={S.empty}><span style={{ color:"#00afc5" }}>Cargando...</span></div>
       ) : items.length === 0 ? (
         <div style={S.empty}>No hay precios cargados para este contrato.<br/><span style={{ fontSize:12,color:col.textMuted }}>Usa "Crear Precio" o "Importar CSV".</span></div>

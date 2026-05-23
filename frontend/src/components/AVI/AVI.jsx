@@ -2,7 +2,7 @@
  * AVI — Asistente Virtual Inteligente de ClaraCore.
  *
  * Botón flotante + panel lateral deslizante (redimensionable por el borde izquierdo).
- * Historial de conversación con pares colapsables pregunta/respuesta.
+ * Historial de conversación en burbujas (usuario / Clara) con scroll vertical.
  *
  * Props:
  *   usuario  — objeto de sesión desde App.jsx. Cuando es null (logout) se limpia el historial.
@@ -12,8 +12,8 @@
  *   ModuloContext — frontend/src/context/ModuloContext.jsx
  *   apiBase.js    — API_BASE
  */
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { MessageCircle, Bot, X, Send, Paperclip, ChevronDown, ChevronUp } from 'lucide-react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { Bot, Sparkles, X, Send, Paperclip } from 'lucide-react'
 import { useModulo } from '../../context/ModuloContext'
 import { API_BASE } from '../../apiBase'
 
@@ -86,42 +86,9 @@ function parseMarkdown(texto) {
   return elements
 }
 
-// ── Agrupador de mensajes ─────────────────────────────────────────────────────
-// Tipos de grupo:
-//   'standalone' — bienvenida (esLocal) o error (esError): siempre visible
-//   'pair'       — mensaje usuario + respuesta Clara completa
-//   'pending'    — mensaje usuario sin respuesta todavía (Clara escribiendo)
-function buildGroups(messages) {
-  const groups = []
-  let i = 0
-  while (i < messages.length) {
-    const msg = messages[i]
-    if (msg.esLocal || msg.esError) {
-      groups.push({ type: 'standalone', id: msg.id, msg })
-      i++
-      continue
-    }
-    if (msg.role === 'user') {
-      const next = messages[i + 1]
-      if (next && next.role === 'avi' && !next.esLocal && !next.esError) {
-        groups.push({ type: 'pair', id: msg.id, userMsg: msg, aviMsg: next })
-        i += 2
-      } else {
-        groups.push({ type: 'pending', id: msg.id, msg })
-        i++
-      }
-      continue
-    }
-    // Mensaje avi huérfano (no debería ocurrir en flujo normal)
-    groups.push({ type: 'standalone', id: msg.id, msg })
-    i++
-  }
-  return groups
-}
-
 // ── Componente ────────────────────────────────────────────────────────────────
 
-export default function AVI({ usuario }) {
+export default function AVI({ usuario, fontSize: _fontSize = 'normal' }) {
   const { moduloActivo } = useModulo()
 
   // Estado del panel
@@ -135,9 +102,6 @@ export default function AVI({ usuario }) {
   const [enviando, setEnviando]                     = useState(false)
   const [mensajesRestantes, setMensajesRestantes]   = useState(null)
 
-  // Historial colapsable
-  const [expandedItems, setExpandedItems]           = useState(new Set())
-
   // Input
   const [input, setInput]                           = useState('')
   const [imagenPreview, setImagenPreview]           = useState(null)
@@ -150,15 +114,13 @@ export default function AVI({ usuario }) {
   const [feedbackUtil, setFeedbackUtil]                 = useState(null)
   const [feedbackComentario, setFeedbackComentario]     = useState('')
   const [enviandoFeedback, setEnviandoFeedback]         = useState(false)
+  const [fabPressed, setFabPressed]                     = useState(false)
 
   // Refs
   const historialRef = useRef(null)
   const fileInputRef = useRef(null)
   const textareaRef  = useRef(null)
   const dragData     = useRef({ dragging: false, startX: 0, startAncho: PANEL_ANCHO_DEFAULT })
-
-  // ── Grupos calculados ─────────────────────────────────────────────────────────
-  const grupos = useMemo(() => buildGroups(mensajes), [mensajes])
 
   // ── CSS de animación (inyectado una sola vez) ─────────────────────────────────
   useEffect(() => {
@@ -202,7 +164,6 @@ export default function AVI({ usuario }) {
       setImagenPreview(null)
       setImagenBase64(null)
       setMensajesRestantes(null)
-      setExpandedItems(new Set())
       setVistaFeedback(false)
       setFeedbackDadoEnSesion(false)
       setFeedbackUtil(null)
@@ -224,7 +185,7 @@ export default function AVI({ usuario }) {
     if (historialRef.current) {
       historialRef.current.scrollTop = historialRef.current.scrollHeight
     }
-  }, [mensajes, enviando, expandedItems])
+  }, [mensajes, enviando])
 
   // ── Foco al textarea al abrir ──────────────────────────────────────────────────
   useEffect(() => {
@@ -232,25 +193,6 @@ export default function AVI({ usuario }) {
       setTimeout(() => textareaRef.current?.focus(), 60)
     }
   }, [abierto, vistaFeedback])
-
-  // ── Auto-expandir el par más reciente, colapsar anteriores ────────────────────
-  useEffect(() => {
-    // Busca el id del último par completo (userMsg seguido de aviMsg)
-    let lastPairId = null
-    for (let i = mensajes.length - 2; i >= 0; i--) {
-      const m = mensajes[i]
-      const n = mensajes[i + 1]
-      if (m && n &&
-          m.role === 'user' && !m.esLocal && !m.esError &&
-          n.role === 'avi'  && !n.esLocal && !n.esError) {
-        lastPairId = m.id
-        break
-      }
-    }
-    if (lastPairId) setExpandedItems(new Set([lastPairId]))
-  // Solo reejecutar cuando cambia el tamaño del array (nueva respuesta llegó)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mensajes.length])
 
   // ── Resize: listeners globales de arrastre ─────────────────────────────────────
   useEffect(() => {
@@ -277,15 +219,6 @@ export default function AVI({ usuario }) {
       document.removeEventListener('mouseup', onMouseUp)
     }
   }, [])
-
-  // ── Toggle de colapso de un par ────────────────────────────────────────────────
-  function toggleExpand(pairId) {
-    setExpandedItems(prev => {
-      const next = new Set(prev)
-      next.has(pairId) ? next.delete(pairId) : next.add(pairId)
-      return next
-    })
-  }
 
   // ── Abrir panel ───────────────────────────────────────────────────────────────
   function handleAbrirPanel() {
@@ -468,63 +401,60 @@ export default function AVI({ usuario }) {
 
   const puedEnviar = (input.trim().length > 0 || !!imagenBase64) && !enviando
 
-  // ── Estilos reutilizables para pares colapsables ───────────────────────────────
-  const pairContainer = {
-    border: '1px solid #e4e9ee',
-    borderLeft: '3px solid #0077B6',
-    borderRadius: '8px',
-    overflow: 'hidden',
-    background: '#fff',
-  }
-
-  const pairHeader = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    padding: '8px 10px',
-    cursor: 'pointer',
-    background: '#f6f9fb',
-    border: 'none',
-    width: '100%',
-    textAlign: 'left',
-    transition: 'background 0.12s',
-  }
-
   // ── Render ─────────────────────────────────────────────────────────────────────
   return (
     <>
       {/* ── Botón flotante ──────────────────────────────────────────────────── */}
       <button
         onClick={abierto ? handleCerrarPanel : handleAbrirPanel}
+        onMouseDown={() => setFabPressed(true)}
+        onMouseUp={() => setFabPressed(false)}
         aria-label="Abrir asistente Clara"
         aria-expanded={abierto}
         style={{
           position: 'fixed', bottom: '28px', right: '28px', zIndex: 9100,
-          width: '56px', height: '56px', borderRadius: '50%',
-          background: '#0077B6', border: 'none', cursor: 'pointer',
+          width: '58px', height: '58px', borderRadius: '50%',
+          background: 'linear-gradient(145deg, #0077B6 0%, #00B4C6 100%)',
+          border: 'none', cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          boxShadow: '0 4px 20px rgba(0,119,182,0.45)',
-          transition: 'transform 0.15s ease, box-shadow 0.15s ease',
+          boxShadow: fabPressed
+            ? '0 2px 10px rgba(0,50,90,0.35), 0 0 0 2px rgba(0,180,198,0.25)'
+            : '0 6px 22px rgba(0,50,90,0.38), 0 0 28px rgba(0,180,198,0.42)',
+          transform: fabPressed ? 'scale(0.95)' : 'scale(1)',
+          transition: 'transform 0.18s ease, box-shadow 0.18s ease',
           flexShrink: 0,
         }}
         onMouseEnter={e => {
-          e.currentTarget.style.transform = 'scale(1.08)'
-          e.currentTarget.style.boxShadow = '0 6px 28px rgba(0,119,182,0.60)'
+          if (!fabPressed) e.currentTarget.style.transform = 'scale(1.08)'
         }}
         onMouseLeave={e => {
+          setFabPressed(false)
           e.currentTarget.style.transform = 'scale(1)'
-          e.currentTarget.style.boxShadow = '0 4px 20px rgba(0,119,182,0.45)'
         }}
       >
-        <MessageCircle size={24} color="#fff" aria-hidden />
+        <Bot size={26} color="#fff" strokeWidth={2.2} aria-hidden />
+        <span
+          aria-hidden
+          style={{
+            position: 'absolute', top: '7px', right: '7px',
+            width: '14px', height: '14px', borderRadius: '50%',
+            background: 'rgba(255,255,255,0.92)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 1px 4px rgba(0,119,182,0.35)',
+            pointerEvents: 'none',
+          }}
+        >
+          <Sparkles size={9} color="#00B4C6" strokeWidth={2.5} />
+        </span>
         {badgeVisible && !abierto && (
           <span style={{
-            position: 'absolute', top: '4px', right: '4px',
-            width: '18px', height: '18px', borderRadius: '50%',
-            background: '#E53E3E', color: '#fff', fontSize: '10px',
+            position: 'absolute', top: '-2px', right: '-2px',
+            width: '20px', height: '20px', borderRadius: '50%',
+            background: '#E53E3E', color: '#fff', fontSize: 'var(--cc-caption)',
             fontWeight: '700', display: 'flex', alignItems: 'center',
-            justifyContent: 'center', border: '2px solid #fff',
+            justifyContent: 'center', border: '2.5px solid #fff',
             lineHeight: 1, pointerEvents: 'none',
+            boxShadow: '0 2px 8px rgba(229,62,62,0.45)',
           }}>
             1
           </span>
@@ -537,11 +467,12 @@ export default function AVI({ usuario }) {
         aria-label="Clara — Asistente ClaraCore"
         aria-hidden={!abierto}
         style={{
-          position: 'fixed', top: 0, right: 0,
-          width: `${panelAncho}px`, maxWidth: '100vw', height: '100dvh',
+          position: 'fixed', top: 0, right: 0, bottom: 0,
+          width: `${panelAncho}px`, maxWidth: '100vw',
           zIndex: 9200, background: '#fff',
           boxShadow: '-4px 0 40px rgba(0,0,0,0.18)',
           display: 'flex', flexDirection: 'column',
+          overflow: 'hidden',
           transform: abierto ? 'translateX(0)' : 'translateX(100%)',
           transition: dragData.current.dragging
             ? 'none'
@@ -571,13 +502,13 @@ export default function AVI({ usuario }) {
           <Bot size={20} color="#fff" aria-hidden />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{
-              color: '#fff', fontWeight: '700', fontSize: '14px',
+              color: '#fff', fontWeight: '700', fontSize: 'var(--cc-md)',
               lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
             }}>
               Clara · Asistente ClaraCore
             </div>
             {mensajesRestantes !== null && (
-              <div style={{ color: 'rgba(255,255,255,0.78)', fontSize: '11px', marginTop: '2px', lineHeight: 1 }}>
+              <div style={{ color: 'rgba(255,255,255,0.78)', fontSize: 'var(--cc-caption)', marginTop: '2px', lineHeight: 1 }}>
                 {mensajesRestantes} consulta{mensajesRestantes !== 1 ? 's' : ''} disponible{mensajesRestantes !== 1 ? 's' : ''} hoy
               </div>
             )}
@@ -597,14 +528,15 @@ export default function AVI({ usuario }) {
           </button>
         </div>
 
-        {/* ── Vista encuesta de feedback ───────────────────────────────────────── */}
+        {/* ── Cuerpo del panel (feedback o historial+footer) ─────────────────── */}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {vistaFeedback ? (
           <div style={{
-            flex: 1, display: 'flex', flexDirection: 'column',
+            display: 'flex', flexDirection: 'column',
             alignItems: 'center', justifyContent: 'center',
             padding: '32px 24px', gap: '20px',
           }}>
-            <div style={{ fontSize: '20px', fontWeight: '700', color: '#1a1a2e', textAlign: 'center', lineHeight: 1.4 }}>
+            <div style={{ fontSize: 'var(--cc-h2)', fontWeight: '700', color: '#1a1a2e', textAlign: 'center', lineHeight: 1.4 }}>
               ¿Clara te fue útil hoy? 🙂
             </div>
             <div style={{ display: 'flex', gap: '16px' }}>
@@ -617,13 +549,13 @@ export default function AVI({ usuario }) {
                     width: '90px', padding: '16px 12px', borderRadius: '14px',
                     border: `2px solid ${feedbackUtil === value ? '#0077B6' : '#ddd'}`,
                     background: feedbackUtil === value ? '#e8f4fd' : '#f9f9f9',
-                    cursor: 'pointer', fontSize: '28px',
+                    cursor: 'pointer', fontSize: 'var(--cc-h1)',
                     color: feedbackUtil === value ? '#0077B6' : '#555',
                     transition: 'all 0.15s',
                   }}
                 >
                   <span role="img" aria-label={label}>{emoji}</span>
-                  <span style={{ fontSize: '13px', fontWeight: '700' }}>{label}</span>
+                  <span style={{ fontSize: 'var(--cc-sm)', fontWeight: '700' }}>{label}</span>
                 </button>
               ))}
             </div>
@@ -635,14 +567,14 @@ export default function AVI({ usuario }) {
                 rows={3}
                 style={{
                   width: '100%', resize: 'none', border: '1px solid #ddd',
-                  borderRadius: '10px', padding: '10px 12px', fontSize: '13px',
+                  borderRadius: '10px', padding: '10px 12px', fontSize: 'var(--cc-input)',
                   fontFamily: "'Segoe UI', sans-serif", lineHeight: 1.45,
                   outline: 'none', boxSizing: 'border-box', display: 'block',
                 }}
                 onFocus={e => e.target.style.borderColor = '#0077B6'}
                 onBlur={e => e.target.style.borderColor = '#ddd'}
               />
-              <div style={{ fontSize: '11px', color: '#aaa', textAlign: 'right', marginTop: '4px' }}>
+              <div style={{ fontSize: 'var(--cc-caption)', color: '#aaa', textAlign: 'right', marginTop: '4px' }}>
                 {feedbackComentario.length}/500
               </div>
             </div>
@@ -651,7 +583,7 @@ export default function AVI({ usuario }) {
                 onClick={() => { setVistaFeedback(false); setAbierto(false) }}
                 style={{
                   flex: 1, padding: '10px', borderRadius: '10px', border: '1px solid #ddd',
-                  background: '#f5f5f5', color: '#555', fontSize: '13px', cursor: 'pointer', fontWeight: '600',
+                  background: '#f5f5f5', color: '#555', fontSize: 'var(--cc-sm)', cursor: 'pointer', fontWeight: '600',
                 }}
               >
                 Cerrar sin responder
@@ -662,7 +594,7 @@ export default function AVI({ usuario }) {
                 style={{
                   flex: 1, padding: '10px', borderRadius: '10px', border: 'none',
                   background: feedbackUtil !== null ? '#0077B6' : '#c8d6e0',
-                  color: '#fff', fontSize: '13px',
+                  color: '#fff', fontSize: 'var(--cc-sm)',
                   cursor: feedbackUtil !== null ? 'pointer' : 'not-allowed',
                   fontWeight: '700', transition: 'background 0.15s',
                 }}
@@ -672,132 +604,92 @@ export default function AVI({ usuario }) {
             </div>
           </div>
         ) : (
-          <>
-            {/* ── Área de historial (pares colapsables) ───────────────────────── */}
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {/* ── Área de historial (burbujas) ─────────────────────────────────── */}
             <div
               ref={historialRef}
               style={{
-                flex: 1, overflowY: 'auto',
-                padding: '8px 10px',
-                display: 'flex', flexDirection: 'column', gap: '4px',
+                flex: 1,
+                minHeight: 0,
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                padding: '10px 12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px',
+                WebkitOverflowScrolling: 'touch',
               }}
             >
-              {grupos.map(grupo => {
+              {mensajes.map(msg => {
+                const esUsuario = msg.role === 'user'
+                const alinear = esUsuario ? 'flex-end' : 'flex-start'
+                const fondo = msg.esError
+                  ? (msg.colorFondo || '#f8d7da')
+                  : esUsuario
+                    ? '#0077B6'
+                    : '#f0f0f0'
+                const color = (esUsuario && !msg.esError) ? '#fff' : '#333'
+                const radio = esUsuario ? '16px 16px 4px 16px' : '16px 16px 16px 4px'
 
-                /* ─ Standalone: bienvenida o error ─ */
-                if (grupo.type === 'standalone') {
-                  const msg = grupo.msg
-                  return (
-                    <div key={grupo.id} style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                      <div style={{
-                        maxWidth: '92%', padding: '9px 13px',
-                        borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                        background: msg.esError ? (msg.colorFondo || '#f8d7da') : msg.role === 'user' ? '#0077B6' : '#f0f0f0',
-                        color: (msg.role === 'user' && !msg.esError) ? '#fff' : '#333',
-                        fontSize: '13px', lineHeight: 1.55, wordBreak: 'break-word',
-                      }}>
-                        {msg.role === 'avi' ? parseMarkdown(msg.content) : msg.content}
-                      </div>
-                    </div>
-                  )
-                }
-
-                /* ─ Par completo: colapsable ─ */
-                if (grupo.type === 'pair') {
-                  const isExpanded = expandedItems.has(grupo.id)
-                  const { userMsg, aviMsg } = grupo
-                  const headerText = userMsg.imagen && !userMsg.content ? '📷 Imagen adjunta' : userMsg.content
-                  return (
-                    <div key={grupo.id} style={pairContainer}>
-                      {/* Cabecera clickeable */}
-                      <button
-                        onClick={() => toggleExpand(grupo.id)}
+                return (
+                  <div
+                    key={msg.id}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: alinear,
+                      gap: '6px',
+                      width: '100%',
+                    }}
+                  >
+                    {esUsuario && msg.imagen && (
+                      <img
+                        src={msg.imagen}
+                        alt="Imagen adjunta"
                         style={{
-                          ...pairHeader,
-                          background: isExpanded ? '#eef4f9' : '#f6f9fb',
+                          maxWidth: '160px',
+                          borderRadius: '8px',
+                          border: '2px solid #0077B6',
+                          display: 'block',
                         }}
-                        onMouseEnter={e => e.currentTarget.style.background = '#e8f2f8'}
-                        onMouseLeave={e => e.currentTarget.style.background = isExpanded ? '#eef4f9' : '#f6f9fb'}
-                      >
-                        <span style={{ color: '#0077B6', fontSize: '12px', flexShrink: 0, lineHeight: 1 }}>›</span>
-                        <span style={{
-                          flex: 1, fontSize: '13px', fontWeight: '600', color: '#1a2a3a',
-                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                          lineHeight: 1.35,
-                        }}>
-                          {headerText}
-                        </span>
-                        {isExpanded
-                          ? <ChevronUp size={14} color="#888" style={{ flexShrink: 0 }} aria-hidden />
-                          : <ChevronDown size={14} color="#888" style={{ flexShrink: 0 }} aria-hidden />
-                        }
-                      </button>
-
-                      {/* Respuesta expandible */}
-                      <div style={{
-                        maxHeight: isExpanded ? '3000px' : '0',
-                        overflow: 'hidden',
-                        transition: 'max-height 0.22s ease-in-out',
-                      }}>
-                        <div style={{
-                          borderTop: '1px solid #e4e9ee',
-                          padding: '8px 12px 10px',
-                          fontSize: '13px', lineHeight: 1.55, color: '#333',
-                          background: '#fff',
-                        }}>
-                          {/* Imagen adjunta (si la había en la pregunta) */}
-                          {userMsg.imagen && (
-                            <img
-                              src={userMsg.imagen}
-                              alt="Imagen adjunta"
-                              style={{ maxWidth: '160px', borderRadius: '6px', marginBottom: '8px', display: 'block' }}
-                            />
-                          )}
-                          {parseMarkdown(aviMsg.content)}
-                        </div>
-                      </div>
+                      />
+                    )}
+                    <div style={{
+                      maxWidth: '92%',
+                      padding: '9px 13px',
+                      borderRadius: radio,
+                      background: fondo,
+                      color,
+                      fontSize: 'var(--cc-sm)',
+                      lineHeight: 1.55,
+                      wordBreak: 'break-word',
+                    }}>
+                      {msg.role === 'avi' ? parseMarkdown(msg.content) : msg.content}
                     </div>
-                  )
-                }
-
-                /* ─ Pending: pregunta enviada, esperando respuesta ─ */
-                if (grupo.type === 'pending') {
-                  const { msg } = grupo
-                  const headerText = msg.imagen && !msg.content ? '📷 Imagen adjunta' : msg.content
-                  return (
-                    <div key={grupo.id} style={{ ...pairContainer, borderLeftColor: '#888' }}>
-                      {/* Cabecera no interactiva mientras espera */}
-                      <div style={{ ...pairHeader, cursor: 'default', background: '#f6f9fb' }}>
-                        <span style={{ color: '#888', fontSize: '12px', flexShrink: 0, lineHeight: 1 }}>›</span>
-                        <span style={{
-                          flex: 1, fontSize: '13px', fontWeight: '600', color: '#1a2a3a',
-                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                        }}>
-                          {headerText}
-                        </span>
-                      </div>
-                      {/* Typing indicator integrado en el par */}
-                      {enviando && (
-                        <div style={{
-                          borderTop: '1px solid #e4e9ee',
-                          padding: '8px 12px',
-                          display: 'flex', alignItems: 'center', gap: '2px',
-                          background: '#fff',
-                        }}>
-                          <span style={{ fontSize: '11px', color: '#888', marginRight: '6px' }}>
-                            Clara está escribiendo
-                          </span>
-                          <span className="_avi_dot" aria-hidden />
-                          <span className="_avi_dot" aria-hidden />
-                          <span className="_avi_dot" aria-hidden />
-                        </div>
-                      )}
-                    </div>
-                  )
-                }
-
-                return null
+                  </div>
+                )
               })}
+
+              {enviando && (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                  <div style={{
+                    maxWidth: '92%',
+                    padding: '9px 13px',
+                    borderRadius: '16px 16px 16px 4px',
+                    background: '#f0f0f0',
+                    color: '#666',
+                    fontSize: 'var(--cc-sm)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '2px',
+                  }}>
+                    <span style={{ marginRight: '6px' }}>Clara está escribiendo</span>
+                    <span className="_avi_dot" aria-hidden />
+                    <span className="_avi_dot" aria-hidden />
+                    <span className="_avi_dot" aria-hidden />
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* ── Footer ────────────────────────────────────────────────────── */}
@@ -830,7 +722,7 @@ export default function AVI({ usuario }) {
               )}
 
               {imagenError && (
-                <div style={{ fontSize: '12px', color: '#c53030', marginBottom: '6px', lineHeight: 1.4 }}>
+                <div style={{ fontSize: 'var(--cc-caption)', color: '#c53030', marginBottom: '6px', lineHeight: 1.4 }}>
                   {imagenError}
                 </div>
               )}
@@ -870,7 +762,7 @@ export default function AVI({ usuario }) {
                   aria-label="Escribe tu mensaje para Clara"
                   style={{
                     flex: 1, resize: 'none', border: '1px solid #ddd', borderRadius: '8px',
-                    padding: '7px 10px', fontSize: '13px', fontFamily: "'Segoe UI', sans-serif",
+                    padding: '7px 10px', fontSize: 'var(--cc-input)', fontFamily: "'Segoe UI', sans-serif",
                     lineHeight: 1.45, outline: 'none', maxHeight: '96px', overflowY: 'auto',
                     transition: 'border-color 0.15s',
                   }}
@@ -898,8 +790,9 @@ export default function AVI({ usuario }) {
                 </button>
               </div>
             </div>
-          </>
+          </div>
         )}
+        </div>
       </div>
     </>
   )

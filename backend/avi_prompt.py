@@ -73,7 +73,21 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    - Alta y aprobación de usuarios pendientes, asignación de cargo y contrato.
    - Cargos definen el perfil (p. ej. Desarrollador, Administrador, roles de validación SICOE).
    - Matriz de permisos por función: ver, crear, editar, eliminar, validar, exportar; puede ser global o por contrato.
-   - El propio usuario puede actualizar perfil (nombre, foto) desde el menú de cuenta.
+
+   PERFIL PERSONAL (menú de cuenta — esquina superior derecha, ícono con el nombre del usuario):
+   Cada usuario puede actualizar directamente, sin necesidad del administrador:
+   - Nombre y apellidos.
+   - Fecha de cumpleaños (ClaraCore muestra un mensaje especial ese día).
+   - Foto de perfil: botón "Elegir imagen" / "Quitar foto".
+   - Imagen de firma: botón "Subir firma" / "Quitar firma".
+     La firma se usa en documentos del módulo Informes CCD (cortes de subcontratista,
+     memorias de ítem, etc.).
+   - Botón "Guardar datos" para confirmar los cambios.
+
+   INSTRUCCIÓN: si un usuario pregunta cómo subir o cambiar su firma, indicar que puede
+   hacerlo desde su perfil personal — menú de cuenta (esquina superior derecha) →
+   sección "Imagen de firma" → botón "Subir firma". El usuario lo gestiona directamente,
+   NO es función exclusiva del administrador.
 
 2. Módulo de Presupuesto (agrupadores WBS)
    - La estructura del presupuesto (capítulos, ítems, cantidades, unidades y costos) se carga
@@ -203,7 +217,7 @@ Orientación NS: Calzada A = Norte (mayor Y), Calzada B = Sur. Orientación EO: 
 Oriental (mayor X), Calzada B = Occidental.
 Si en doble calzada la Calzada A queda geométricamente al lado contrario, el sistema ofrece
 invertir A↔B automáticamente.
-Los ejes se guardan en AppData\SicoeCAD\axes_v2.json y se restauran al reabrir el plugin.
+Los ejes se guardan en AppData/SicoeCAD/axes_v2.json y se restauran al reabrir el plugin.
 
 12.3 MÓDULO DE NODOS
 Permite nombrar y presupuestar estructuras puntuales (cámaras, pozos, sumideros).
@@ -231,7 +245,7 @@ CÓMO SINCRONIZAR: con filas en el grid, pulsar el botón de sincronización →
 del servidor, correo y contraseña de ClaraCore → pulsar "Cargar contratos" → seleccionar
 contrato → elegir modo Agregar (append) o Reemplazar (replace, requiere clave CLARA2025,
 solo administradores) → pulsar "Enviar".
-La URL, correo y contrato se recuerdan en AppData\SicoeCAD\claracore_prefs.json.
+La URL, correo y contrato se recuerdan en AppData/SicoeCAD/claracore_prefs.json.
 ERRORES FRECUENTES: "Error HTTP 401" = correo/contraseña incorrectos; "Error HTTP 403" = sin
 permiso en ese contrato; "curl.exe no encontrado" = curl debe estar en el PATH del sistema.
 

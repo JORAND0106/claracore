@@ -3197,24 +3197,48 @@ def _filtrar_registros_validacion_capas_sicoe(
 
 @app.post("/frase-del-dia")
 def frase_del_dia(body: dict, current_user=Depends(get_current_user)):
-    from frase_del_dia_sources import _pool_local_aleatoria, frase_dia_espanol
+    from frase_del_dia_sources import (
+        TIPOS_CONTENIDO_DIA,
+        _pool_local_aleatoria,
+        frase_desde_anthropic,
+        frase_dia_espanol,
+    )
 
-    def _fallback_min():
+    def _fallback_min(tipo: str = "reflexion"):
         return {
             "frase": "El avance de hoy construye el resultado de mañana.",
-            "autor": "ClaraCore",
-            "tipo": "motivadora",
+            "autor": "Aforismo de obra",
+            "tipo": tipo if tipo in TIPOS_CONTENIDO_DIA else "reflexion",
         }
 
-    # Versículo RVR (es) desde la red, citas de autores en español, aforismos de obra — nada en inglés
+    tipo_req = (body or {}).get("tipo")
+    if tipo_req not in TIPOS_CONTENIDO_DIA:
+        import random
+        tipo_req = random.choice(list(TIPOS_CONTENIDO_DIA))
+
     try:
-        f = frase_dia_espanol()
+        f = frase_desde_anthropic(tipo_req)
         if f and f.get("frase"):
             return f
     except Exception as e:
-        print(f"WARNING /frase-del-dia: {e}", flush=True)
+        print(f"WARNING /frase-del-dia anthropic: {e}", flush=True)
+
+    if tipo_req == "reflexion":
+        try:
+            f = frase_dia_espanol()
+            if f and f.get("frase"):
+                f["tipo"] = f.get("tipo") or "reflexion"
+                if f.get("tipo") in ("motivadora", "reflexiva", "bíblica"):
+                    f["tipo"] = "reflexion"
+                return f
+        except Exception as e:
+            print(f"WARNING /frase-del-dia: {e}", flush=True)
+
     p = _pool_local_aleatoria()
-    return p if p else _fallback_min()
+    if p and p.get("frase"):
+        p["tipo"] = tipo_req
+        return p
+    return _fallback_min(tipo_req)
 
 
 _SLOW_REQUEST_MS = int(os.getenv("CLARACORE_SLOW_REQUEST_MS", "8000"))
@@ -5048,6 +5072,24 @@ def get_listado_precios_sin_agrupar(contrato_id: int, current_user=Depends(get_c
     return {"count": rows.count or 0}
 
 
+@app.get("/listado-precios/{contrato_id}/sin-agrupar/count")
+def get_listado_precios_sin_agrupar_count(contrato_id: int, current_user=Depends(get_current_user)):
+    """Alias explícito del conteo de ítems sin agrupador (compat. frontend)."""
+    return get_listado_precios_sin_agrupar(contrato_id, current_user)
+
+
+@app.get("/listado-precios/{contrato_id}/count")
+def get_listado_precios_count(contrato_id: int, current_user=Depends(get_current_user)):
+    _require_contract_access(current_user, contrato_id)
+    rows = (
+        supabase.table("listado_precios")
+        .select("id", count="exact")
+        .eq("contrato_id", contrato_id)
+        .execute()
+    )
+    return {"count": rows.count or 0}
+
+
 @app.post("/listado-precios/{contrato_id}/agrupadores")
 def crear_listado_precio_agrupador(
     contrato_id: int,
@@ -5237,16 +5279,47 @@ def reasignar_item_agrupador(
 
 
 @app.get("/listado-precios/{contrato_id}")
-def get_listado_precios(contrato_id: int, current_user=Depends(get_current_user)):
+def get_listado_precios(
+    contrato_id: int,
+    limit: Optional[int] = None,
+    offset: int = 0,
+    current_user=Depends(get_current_user),
+):
     _require_contract_access(current_user, contrato_id)
+    if offset < 0:
+        offset = 0
+    if limit is not None:
+        if limit < 1:
+            limit = 1
+        if limit > 500:
+            limit = 500
+        end = offset + limit - 1
+        return (
+            supabase.table("listado_precios")
+            .select("*")
+            .eq("contrato_id", contrato_id)
+            .order("item_numero")
+            .range(offset, end)
+            .execute()
+            .data
+            or []
+        )
     all_rows = []
-    offset = 0
+    batch_offset = 0
     while True:
-        batch = supabase.table("listado_precios").select("*").eq("contrato_id", contrato_id).order("item_numero").range(offset, offset + 999).execute().data
+        batch = (
+            supabase.table("listado_precios")
+            .select("*")
+            .eq("contrato_id", contrato_id)
+            .order("item_numero")
+            .range(batch_offset, batch_offset + 999)
+            .execute()
+            .data
+        )
         all_rows.extend(batch)
         if len(batch) < 1000:
             break
-        offset += 1000
+        batch_offset += 1000
     return all_rows
 
 @app.post("/listado-precios/{contrato_id}/bulk")
@@ -7862,6 +7935,10 @@ def _inicio_fotos_desde_registros_rows(rows: list, limit: int) -> List[dict]:
         if not obs:
             obs = (rep.get("descripcion_actividad") or "").strip()
         ubicacion = _inicio_ubicacion_desde_reporte(rep, r)
+        cap = (r.get("capitulo") or rep.get("capitulo") or "").strip()
+        tramo = (rep.get("tramo") or "").strip()
+        desc_raw = obs or (rep.get("descripcion_actividad") or "").strip()
+        descripcion_corta = desc_raw[:120].strip() if desc_raw else ""
         fotos.append(
             {
                 "url": (r.get("foto_url") or "").strip(),
@@ -7869,6 +7946,9 @@ def _inicio_fotos_desde_registros_rows(rows: list, limit: int) -> List[dict]:
                 "foto_numero": r.get("foto_numero"),
                 "ubicacion": ubicacion,
                 "observacion": obs,
+                "capitulo": cap,
+                "tramo": tramo,
+                "descripcion_corta": descripcion_corta,
                 "registro_id": r.get("id"),
             }
         )

@@ -1,17 +1,20 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { API_BASE, logApiFailure } from './apiBase'
+import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache.js'
 import { getClaraTypeScaleInline } from './typographyScale'
 import { eligeFraseInicio, fraseInicioEsValida } from './data/frasesInicioCuradas.js'
+import { eligeSaludoInicio } from './data/saludosInicio.js'
 
 const API_FRASE = `${API_BASE}/frase-del-dia`
 const SLIDER_INTERVAL_MS = 10000
+const OPEN_METEO = 'https://api.open-meteo.com/v1/forecast'
+const BOGOTA_OFICINA = { nombre: 'Bogotá', lat: 4.711, lon: -74.0721 }
 
 function buildfs(fontSize) {
   const s = getClaraTypeScaleInline(fontSize)
   return {
     base: s.body,
     titulo: s.h1,
-    stat: s.h1,
     card: s.md,
     badge: s.caption,
     autor: s.label,
@@ -38,6 +41,95 @@ function fmtFecha(iso) {
 
 function hoyISO() {
   return new Date().toISOString().split('T')[0]
+}
+
+function wmoEmoji(code) {
+  const c = Number(code)
+  if (c === 0) return '☀️'
+  if (c >= 1 && c <= 2) return '⛅'
+  if (c === 3) return '☁️'
+  if (c >= 61 && c <= 67) return '🌧️'
+  if (c >= 80 && c <= 82) return '🌦️'
+  return '🌡️'
+}
+
+function fmtFechaHoraColombia(date = new Date()) {
+  return new Intl.DateTimeFormat('es-CO', {
+    timeZone: 'America/Bogota',
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function diasHasta(iso) {
+  if (!iso) return null
+  try {
+    const hoy = new Date()
+    hoy.setHours(0, 0, 0, 0)
+    const fin = new Date(String(iso).slice(0, 10) + 'T12:00:00')
+    if (Number.isNaN(fin.getTime())) return null
+    return Math.ceil((fin - hoy) / 86400000)
+  } catch {
+    return null
+  }
+}
+
+function textoPieFoto(foto) {
+  const cap = (foto?.capitulo || '').trim() || '—'
+  const tramo = (foto?.tramo || '').trim() || '—'
+  const desc = (foto?.descripcion_corta || foto?.observacion || '').trim() || '—'
+  return `${cap} · ${tramo} · ${desc}`
+}
+
+function centroideDesdePlano(data) {
+  if (!data) return null
+  const gj = data.plano_geojson
+  const features = gj?.type === 'FeatureCollection'
+    ? (gj.features || [])
+    : gj?.type === 'Feature'
+      ? [gj]
+      : []
+  const coords = features.flatMap((f) => {
+    const g = f.geometry
+    if (g?.type === 'Polygon') return g.coordinates[0]
+    if (g?.type === 'MultiPolygon') return g.coordinates.flat(2)
+    return []
+  })
+  if (coords.length) {
+    return {
+      lat: coords.reduce((s, c) => s + c[1], 0) / coords.length,
+      lng: coords.reduce((s, c) => s + c[0], 0) / coords.length,
+    }
+  }
+  if (data.centro_lat != null && data.centro_lng != null) {
+    const lat = Number(data.centro_lat)
+    const lng = Number(data.centro_lng)
+    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng }
+  }
+  return null
+}
+
+async function etiquetaZonaObra(lat, lng) {
+  try {
+    const r = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&format=json&accept-language=es`,
+      { headers: { 'Accept-Language': 'es', 'User-Agent': 'ClaraCore/1.0 (inicio clima)' } },
+    )
+    if (r.ok) {
+      const j = await r.json()
+      const a = j.address || {}
+      const nombre = a.city || a.town || a.municipality || a.village || a.county || a.state_district
+      if (nombre) return nombre
+    }
+  } catch { /* fallback abajo */ }
+  if (Number.isFinite(lat) && Number.isFinite(lng)) {
+    return `${lat.toFixed(3)}, ${lng.toFixed(3)}`
+  }
+  return 'Zona de obra'
 }
 
 // ─── Tarjeta de novedad (detalle) ──────────────────────────────────────────────
@@ -355,44 +447,198 @@ function BandejaNovedadesInicio({ novedades, setNovedades, t, fs, novedadesCarga
   )
 }
 
-// ─── Stat card ────────────────────────────────────────────────────────────────
-function StatCard({ icono, valor, label, color, t, fs, delay = 0 }) {
-  const [visible, setVisible] = useState(false)
+const META_CONTENIDO_DIA = {
+  biblica:    { etiqueta: 'Cita bíblica', color: '#F59E0B', icono: '📖', citar: true },
+  'bíblica':  { etiqueta: 'Cita bíblica', color: '#F59E0B', icono: '📖', citar: true },
+}
+
+// ─── Barra de clima (Open-Meteo) ───────────────────────────────────────────────
+function BarraClima({ t, fs, contratoId, token }) {
+  const [clima, setClima] = useState(null)
+  const [error, setError] = useState(false)
+  const [zonaObra, setZonaObra] = useState(null)
+  const [cargandoZona, setCargandoZona] = useState(false)
+
   useEffect(() => {
-    const timer = setTimeout(() => setVisible(true), delay)
-    return () => clearTimeout(timer)
-  }, [delay])
+    let cancelled = false
+    if (!contratoId) {
+      setZonaObra(null)
+      return undefined
+    }
+    setCargandoZona(true)
+    getContratoPlanoGeojson(API_BASE, contratoId, token)
+      .then(async (data) => {
+        if (cancelled) return
+        const centro = centroideDesdePlano(data)
+        if (!centro) {
+          setZonaObra({ nombre: 'Zona de obra', lat: null, lng: null })
+          return
+        }
+        const nombre = await etiquetaZonaObra(centro.lat, centro.lng)
+        if (!cancelled) {
+          setZonaObra({ nombre, lat: centro.lat, lng: centro.lng })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setZonaObra({ nombre: 'Zona de obra', lat: null, lng: null })
+      })
+      .finally(() => {
+        if (!cancelled) setCargandoZona(false)
+      })
+    return () => { cancelled = true }
+  }, [contratoId, token])
+
+  useEffect(() => {
+    let cancelled = false
+    async function cargar() {
+      try {
+        const fetchClima = (lat, lon, daily) => {
+          const p = new URLSearchParams({
+            latitude: String(lat),
+            longitude: String(lon),
+            current: 'temperature_2m,weather_code',
+            timezone: 'America/Bogota',
+          })
+          if (daily) {
+            p.set('daily', 'weather_code,temperature_2m_max')
+            p.set('forecast_days', '5')
+          }
+          return fetch(`${OPEN_METEO}?${p}`).then((r) => (r.ok ? r.json() : null))
+        }
+        const promesas = [fetchClima(BOGOTA_OFICINA.lat, BOGOTA_OFICINA.lon, false)]
+        if (zonaObra?.lat != null && zonaObra?.lng != null) {
+          promesas.push(fetchClima(zonaObra.lat, zonaObra.lng, true))
+        }
+        const resultados = await Promise.all(promesas)
+        if (cancelled) return
+        const bog = resultados[0]
+        const obra = resultados[1] || null
+        if (!bog?.current) {
+          setError(true)
+          return
+        }
+        setClima({ bogota: bog, obra })
+        setError(false)
+      } catch {
+        if (!cancelled) setError(true)
+      }
+    }
+    if (cargandoZona) return undefined
+    cargar()
+    const iv = setInterval(cargar, 15 * 60 * 1000)
+    return () => { cancelled = true; clearInterval(iv) }
+  }, [zonaObra, cargandoZona])
+
+  const bog = clima?.bogota?.current
+  const obra = clima?.obra?.current
+  const daily = clima?.obra?.daily
+  const nombreObra = zonaObra?.nombre || 'Zona de obra'
 
   return (
     <div style={{
-      background: t.bgCard, border: `1px solid ${t.border}`,
-      borderRadius: '10px', padding: '12px 16px', textAlign: 'center', minWidth: 0,
-      transition: 'all 0.4s ease',
-      transform: visible ? 'translateY(0)' : 'translateY(16px)',
-      opacity: visible ? 1 : 0,
+      width: '100%',
+      border: `1px solid ${t.border}`,
+      borderRadius: '12px',
+      background: `linear-gradient(90deg, ${t.primary}12 0%, ${t.bgCard} 55%)`,
+      padding: '10px 14px',
+      marginBottom: '12px',
+      boxShadow: '0 1px 6px rgba(0,0,0,0.04)',
     }}>
-      <div style={{ fontSize: '20px', marginBottom: '4px' }}>{icono}</div>
-      <div style={{ fontSize: fs.stat, fontWeight: '800', color, marginBottom: '1px' }}>{valor}</div>
-      <div style={{ fontSize: fs.autor, color: t.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</div>
+      <style>{`
+        @keyframes ccPulseLive {
+          0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 0 0 rgba(16,185,129,0.55); }
+          50% { opacity: 0.75; transform: scale(1.15); box-shadow: 0 0 0 6px rgba(16,185,129,0); }
+        }
+      `}</style>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '12px 20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+          <span
+            aria-hidden
+            style={{
+              width: '8px', height: '8px', borderRadius: '50%', background: '#10B981',
+              animation: 'ccPulseLive 1.8s ease-in-out infinite', flexShrink: 0,
+            }}
+          />
+          <span style={{ fontSize: fs.sm, fontWeight: '800', color: t.text }}>Clima en vivo</span>
+        </div>
+
+        {cargandoZona ? (
+          <span style={{ fontSize: fs.autor, color: t.textMuted }}>Ubicando zona de obra…</span>
+        ) : error && !clima ? (
+          <span style={{ fontSize: fs.autor, color: t.textMuted }}>No se pudo cargar el clima.</span>
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: fs.sm, color: t.text }}>
+              <span style={{ fontWeight: '700' }}>{BOGOTA_OFICINA.nombre}</span>
+              <span style={{ fontSize: fs.autor, color: t.textMuted }}>(oficina)</span>
+              <span>{wmoEmoji(bog?.weather_code)}</span>
+              <span>{bog?.temperature_2m != null ? `${Math.round(bog.temperature_2m)}°C` : '—'}</span>
+            </div>
+            {obra ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: fs.sm, color: t.text }}>
+                <span style={{ fontWeight: '700' }}>{nombreObra}</span>
+                <span style={{ fontSize: fs.autor, color: t.textMuted }}>(obra)</span>
+                <span>{wmoEmoji(obra?.weather_code)}</span>
+                <span>{obra?.temperature_2m != null ? `${Math.round(obra.temperature_2m)}°C` : '—'}</span>
+              </div>
+            ) : !cargandoZona && (
+              <span style={{ fontSize: fs.autor, color: t.textMuted }}>Obra: sin plano para clima local</span>
+            )}
+            {daily?.time?.length ? (
+              <div style={{
+                display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px',
+                marginLeft: 'auto', fontSize: fs.autor, color: t.textMuted,
+              }}>
+                <span style={{ fontWeight: '700', color: t.text }}>Pronóstico 5 días · {nombreObra}:</span>
+                {daily.time.slice(0, 5).map((dia, i) => (
+                  <span
+                    key={dia}
+                    style={{
+                      background: t.bg, border: `1px solid ${t.border}`, borderRadius: '8px',
+                      padding: '2px 8px', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {String(dia).slice(5).replace('-', '/')} {wmoEmoji(daily.weather_code?.[i])}{' '}
+                    {daily.temperature_2m_max?.[i] != null ? `${Math.round(daily.temperature_2m_max[i])}°` : '—'}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
     </div>
   )
 }
 
-// ─── Frase del día (autores y Biblia) ─────────────────────────────────────────
-function FraseDelDia({ t, fs, usuario }) {
-  const storageKey = `claracore_frase_v2_${usuario?.id || 'guest'}`
+// ─── Saludo + cita bíblica ─────────────────────────────────────────────────────
+function PanelSaludoContenidoDia({ t, fs, usuario, saludoVisible }) {
+  const storageKey = `claracore_frase_biblia_${usuario?.id || 'guest'}`
   const [estado, setEstado] = useState('visible')
-  const [frase, setFrase] = useState(() => eligeFraseInicio())
+  const [frase, setFrase] = useState(() => eligeFraseInicio(null, 'biblica'))
   const [visible, setVisible] = useState(false)
+  const [fechaHora, setFechaHora] = useState(() => fmtFechaHoraColombia())
+  const saludo = useMemo(
+    () => eligeSaludoInicio(usuario?.nombre),
+    [usuario?.id, usuario?.nombre],
+  )
+
+  useEffect(() => {
+    const tick = () => setFechaHora(fmtFechaHoraColombia())
+    tick()
+    const iv = setInterval(tick, 30000)
+    return () => clearInterval(iv)
+  }, [])
 
   const aplicarFrase = useCallback((parsed) => {
-    if (!fraseInicioEsValida(parsed)) return
-    setFrase(parsed)
+    const f = parsed?.frase ? { ...parsed, tipo: 'biblica' } : null
+    if (!fraseInicioEsValida(f)) return
+    setFrase(f)
     setEstado('visible')
     setVisible(false)
     setTimeout(() => setVisible(true), 80)
     try {
-      localStorage.setItem(storageKey, JSON.stringify({ fecha: hoyISO(), frase: parsed }))
+      localStorage.setItem(storageKey, JSON.stringify({ fecha: hoyISO(), frase: f }))
     } catch { /* ignore */ }
   }, [storageKey])
 
@@ -400,14 +646,14 @@ function FraseDelDia({ t, fs, usuario }) {
     try {
       const guardado = JSON.parse(localStorage.getItem(storageKey) || 'null')
       if (guardado?.frase?.frase && guardado?.fecha === hoyISO() && fraseInicioEsValida(guardado.frase)) {
-        aplicarFrase(guardado.frase)
+        aplicarFrase({ ...guardado.frase, tipo: 'biblica' })
         return
       }
     } catch { /* ignore */ }
-    aplicarFrase(eligeFraseInicio())
+    aplicarFrase(eligeFraseInicio(null, 'biblica'))
   }, [storageKey, aplicarFrase])
 
-  const generarFrase = async () => {
+  const generarContenido = async () => {
     setEstado('cargando')
     setVisible(false)
     try {
@@ -418,65 +664,176 @@ function FraseDelDia({ t, fs, usuario }) {
           'Content-Type': 'application/json',
           ...(tok ? { Authorization: `Bearer ${tok}` } : {}),
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ tipo: 'biblica' }),
       })
       if (res.ok) {
         const data = await res.json()
         if (fraseInicioEsValida(data)) {
-          aplicarFrase(data)
+          aplicarFrase({ ...data, tipo: 'biblica' })
           return
         }
       }
     } catch { /* local */ }
-    aplicarFrase(eligeFraseInicio(frase?.frase))
+    aplicarFrase(eligeFraseInicio(frase?.frase, 'biblica'))
   }
 
-  const TIPO_COLOR = { reflexiva: '#8B5CF6', motivadora: '#10B981', 'bíblica': '#F59E0B' }
-  const TIPO_ICONO = { reflexiva: '💡', motivadora: '🚀', 'bíblica': '📖' }
-  const TIPO_TEXTO = { reflexiva: 'Reflexión del día', motivadora: 'Frase motivadora', 'bíblica': 'Versículo del día' }
+  const meta = META_CONTENIDO_DIA.biblica
 
   return (
     <div style={{
-      background: t.bgCard, border: `1px solid ${t.border}`,
-      borderRadius: '12px', padding: '16px 20px',
+      background: `linear-gradient(135deg, ${t.primary}18 0%, ${t.bgCard} 55%)`,
+      border: `1px solid ${t.border}`,
+      borderRadius: '14px',
+      padding: '16px 18px',
+      width: '100%',
+      boxSizing: 'border-box',
+      transition: 'all 0.5s ease',
+      transform: saludoVisible ? 'translateY(0)' : 'translateY(-10px)',
+      opacity: saludoVisible ? 1 : 0,
     }}>
+      <div style={{ fontSize: fs.titulo, fontWeight: '800', color: t.text, marginBottom: '6px', lineHeight: 1.3 }}>
+        {saludo}
+      </div>
+      <div style={{
+        fontSize: fs.sm, color: t.textMuted, marginBottom: '12px',
+        textTransform: 'capitalize', lineHeight: 1.4,
+      }}>
+        {fechaHora}
+      </div>
+
       {estado === 'cargando' && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
-          <div style={{ fontSize: '20px', display: 'inline-block', animation: 'spin 1.2s linear infinite' }}>⏳</div>
-          <div style={{ fontSize: fs.base, color: t.textMuted }}>Cargando frase…</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+          <div style={{ fontSize: fs.lg }}>⏳</div>
+          <div style={{ fontSize: fs.base, color: t.textMuted }}>Cargando cita…</div>
         </div>
       )}
 
       {estado === 'visible' && frase && (
-        <div style={{ transition: 'all 0.5s ease', opacity: visible ? 1 : 0, transform: visible ? 'translateY(0)' : 'translateY(8px)' }}>
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '14px' }}>
-            <div style={{ fontSize: '28px', lineHeight: 1, flexShrink: 0 }}>
-              {TIPO_ICONO[frase.tipo] || '✨'}
+        <div style={{
+          transition: 'all 0.5s ease',
+          opacity: visible ? 1 : 0,
+          transform: visible ? 'translateY(0)' : 'translateY(8px)',
+        }}>
+          <div style={{
+            background: meta.color + '12',
+            borderLeft: `3px solid ${meta.color}`,
+            borderRadius: '0 8px 8px 0',
+            padding: '10px 12px',
+          }}>
+            <div style={{
+              fontSize: fs.badge, fontWeight: '700', letterSpacing: '0.5px',
+              color: meta.color, marginBottom: '6px', textTransform: 'uppercase',
+            }}>
+              {meta.icono} {meta.etiqueta}
             </div>
-            <div style={{ flex: 1 }}>
-              <div style={{
-                fontSize: fs.badge, fontWeight: '700', letterSpacing: '0.6px',
-                textTransform: 'uppercase', color: TIPO_COLOR[frase.tipo] || t.primary, marginBottom: '8px',
-              }}>
-                {TIPO_TEXTO[frase.tipo] || 'Frase del día'}
-              </div>
-              <div style={{
-                fontSize: fs.card, fontWeight: '400', color: t.text,
-                lineHeight: 1.55, fontStyle: 'italic', marginBottom: '8px',
-              }}>
-                «{frase.frase}»
-              </div>
+            <div style={{
+              fontSize: fs.card, fontWeight: '500', color: t.text, lineHeight: 1.55,
+              fontStyle: 'italic', marginBottom: frase.autor ? '6px' : 0,
+            }}>
+              «{frase.frase}»
+            </div>
+            {frase.autor ? (
               <div style={{ fontSize: fs.autor, color: t.textMuted, fontWeight: '600' }}>— {frase.autor}</div>
-            </div>
+            ) : null}
           </div>
-          <div style={{ marginTop: '10px', textAlign: 'right' }}>
-            <button type="button" onClick={generarFrase} style={{
+          <div style={{ marginTop: '6px', textAlign: 'right' }}>
+            <button type="button" onClick={generarContenido} style={{
               background: 'transparent', border: 'none',
               fontSize: fs.autor, color: t.primary, cursor: 'pointer', fontWeight: '600',
-            }}>🔄 Otra frase</button>
+            }}>🔄 Otra cita</button>
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Ficha del contrato ────────────────────────────────────────────────────────
+function FichaContrato({ t, fs, contratoId, token }) {
+  const [contrato, setContrato] = useState(null)
+  const [acta, setActa] = useState(null)
+  const [cargando, setCargando] = useState(true)
+
+  useEffect(() => {
+    if (!contratoId) {
+      setContrato(null)
+      setActa(null)
+      setCargando(false)
+      return
+    }
+    let cancelled = false
+    setCargando(true)
+    const h = token ? { Authorization: `Bearer ${token}` } : {}
+    Promise.all([
+      fetch(`${API_BASE}/contratos/${contratoId}`).then((r) => (r.ok ? r.json() : null)),
+      fetch(`${API_BASE}/sicoe-obra/${contratoId}/acta-rpo-vigente`, { headers: h })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+    ])
+      .then(([c, a]) => {
+        if (cancelled) return
+        setContrato(c)
+        setActa(a && typeof a === 'object' ? a : null)
+      })
+      .finally(() => { if (!cancelled) setCargando(false) })
+    return () => { cancelled = true }
+  }, [contratoId, token])
+
+  const fechaVenc = contrato?.fecha_vencimiento || contrato?.fecha_fin || contrato?.fecha_terminacion || null
+  const dias = diasHasta(fechaVenc)
+  const badge = dias != null && dias >= 0
+    ? dias < 7
+      ? { bg: '#FEE2E2', color: '#B91C1C', texto: `Vence en ${dias} día${dias !== 1 ? 's' : ''}` }
+      : dias < 30
+        ? { bg: '#FEF3C7', color: '#B45309', texto: `Vence en ${dias} día${dias !== 1 ? 's' : ''}` }
+        : null
+    : dias != null && dias < 0
+      ? { bg: '#FEE2E2', color: '#B91C1C', texto: `Vencido hace ${Math.abs(dias)} día${Math.abs(dias) !== 1 ? 's' : ''}` }
+      : null
+
+  const actaTxt = acta?.numero_rpo != null
+    ? `RPO #${acta.numero_rpo}${acta.fecha_inicio ? ` · ${String(acta.fecha_inicio).slice(0, 10)} → ${String(acta.fecha_fin || '').slice(0, 10)}` : ''}`
+    : 'Sin acta vigente'
+
+  const fila = (label, valor) => (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 8px', marginBottom: '8px', lineHeight: 1.45 }}>
+      <span style={{ fontSize: fs.autor, fontWeight: '700', color: t.textMuted, minWidth: '120px' }}>{label}</span>
+      <span style={{ fontSize: fs.sm, color: t.text, flex: 1, minWidth: 0 }}>{valor || '—'}</span>
+    </div>
+  )
+
+  return (
+    <div style={{
+      border: `1px solid ${t.border}`,
+      borderRadius: '12px',
+      background: t.bgCard,
+      padding: '14px 18px',
+      boxShadow: '0 1px 8px rgba(0,0,0,0.05)',
+    }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+        <span style={{ fontSize: fs.base, fontWeight: '800', color: t.primary }}>📋 Ficha del contrato</span>
+        {badge ? (
+          <span style={{
+            fontSize: fs.badge, fontWeight: '800', padding: '3px 10px', borderRadius: '20px',
+            background: badge.bg, color: badge.color,
+          }}>
+            {badge.texto}
+          </span>
+        ) : null}
+      </div>
+      {cargando ? (
+        <div style={{ fontSize: fs.sm, color: t.textMuted }}>Cargando datos del contrato…</div>
+      ) : !contrato ? (
+        <div style={{ fontSize: fs.sm, color: t.textMuted }}>No hay contrato activo.</div>
+      ) : (
+        <>
+          {fila('Número', contrato.numero)}
+          {fila('Objeto', contrato.objeto)}
+          {fila('Contratista', contrato.contratista)}
+          {fila('Interventoría', contrato.interventoria)}
+          {fila('Acta vigente', actaTxt)}
+          {fila('Fecha vencimiento', fechaVenc ? String(fechaVenc).slice(0, 10) : 'No registrada')}
+        </>
       )}
     </div>
   )
@@ -605,7 +962,9 @@ function SliderFotosActaVigente({ t, fs, contratoId, token }) {
       overflow: 'hidden',
       display: 'flex',
       flexDirection: 'column',
-      minHeight: 'min(520px, 72vh)',
+      width: '100%',
+      height: '100%',
+      minHeight: '280px',
       boxShadow: '0 1px 8px rgba(0,0,0,0.06)',
     }}>
       <div style={{
@@ -706,17 +1065,9 @@ function SliderFotosActaVigente({ t, fs, contratoId, token }) {
       </div>
 
       {actual && (
-        <div style={{ padding: '12px 16px', borderTop: `1px solid ${t.border}`, background: t.bg }}>
-          <div style={{ fontSize: fs.autor, fontWeight: '700', color: t.primary, marginBottom: '6px', lineHeight: 1.35 }}>
-            📍 {actual.ubicacion || 'Ubicación no indicada'}
-            {actual.numero_registro != null && (
-              <span style={{ color: t.textMuted, fontWeight: '500' }}> · Reg. #{actual.numero_registro}</span>
-            )}
-          </div>
+        <div style={{ padding: '10px 14px', borderTop: `1px solid ${t.border}`, background: t.bg }}>
           <div style={{ fontSize: fs.sm, color: t.text, lineHeight: 1.5 }}>
-            {actual.observacion
-              ? actual.observacion
-              : <span style={{ color: t.textMuted, fontStyle: 'italic' }}>Sin observación en el registro.</span>}
+            {textoPieFoto(actual)}
           </div>
         </div>
       )}
@@ -766,60 +1117,29 @@ export default function ModuloInicio({ t, usuario, fontSize = 'normal', puedePub
   }, [usuario?.contrato_id])
 
   const contratoId = usuario?.contrato_id
-  const hora   = new Date().getHours()
-  const saludo = hora < 12 ? 'Buenos días' : hora < 18 ? 'Buenas tardes' : 'Buenas noches'
 
   return (
     <div style={{ width: '100%', maxWidth: '1540px', margin: '0 auto', padding: '8px 0 48px', boxSizing: 'border-box' }}>
 
-      {/* ── Saludo + indicadores (misma fila) ── */}
-      <div style={{
-        display: 'flex', flexFlow: 'row wrap', alignItems: 'stretch', gap: '12px',
-        marginBottom: '20px',
-        transition: 'all 0.5s ease',
-        transform: saludoVisible ? 'translateY(0)' : 'translateY(-12px)',
-        opacity: saludoVisible ? 1 : 0,
-      }}>
-        <div style={{ flex: '1 1 300px', minWidth: 0, display: 'flex' }}>
-          <div style={{
-            flex: 1,
-            background: `linear-gradient(135deg, ${t.primary}18 0%, ${t.bgCard} 100%)`,
-            border: `1px solid ${t.border}`, borderRadius: '14px',
-            padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px', minHeight: 0,
-          }}>
-            <div style={{ fontSize: '32px', lineHeight: 1, flexShrink: 0 }}>👋</div>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: fs.titulo, fontWeight: '800', color: t.text, marginBottom: '3px' }}>
-                {saludo}, {usuario?.nombre}
-              </div>
-              <div style={{ fontSize: fs.base, color: t.textMuted, lineHeight: 1.45 }}>
-                Bienvenido a <strong style={{ color: t.primary }}>ClaraCore</strong> — plataforma de gestión de obra y control de cantidades.
-              </div>
-            </div>
-          </div>
-        </div>
-        <div style={{
-          display: 'grid',
-          /* Ancho del bloque de 3 tarjetas ampliado (+15% +15% frente a 300px) → ≈397px */
-          gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-          gap: '10px', flex: '0 1 397px', minWidth: 'min(100%, 291px)', alignContent: 'stretch',
-        }}>
-          <StatCard icono="🏗️" valor="SICOE" label="Módulo activo" color="#10B981" t={t} fs={fs} delay={150} />
-          <StatCard icono="🔐" valor="Seguro" label="Sesión activa" color="#8B5CF6" t={t} fs={fs} delay={200} />
-          <StatCard icono="☁️" valor="Online" label="Servidor" color="#F59E0B" t={t} fs={fs} delay={250} />
-        </div>
-      </div>
+      {/* ── Zona 1: clima ── */}
+      <BarraClima t={t} fs={fs} contratoId={contratoId} token={token} />
 
-      {/* ── Frase + novedades (izq) · Carrusel fotos SICOE acta vigente (der) ── */}
+      {/* ── Zona 2: saludo + cita + novedades | carrusel ── */}
       <div style={{
         display: 'flex',
         flexWrap: 'wrap',
-        gap: '20px',
-        alignItems: 'stretch',
-        marginBottom: '20px',
+        alignItems: 'flex-start',
+        gap: '12px',
+        marginBottom: '16px',
       }}>
-        <div style={{ flex: '1 1 360px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <FraseDelDia t={t} fs={fs} usuario={usuario} />
+        <div style={{
+          flex: '1 1 360px',
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px',
+        }}>
+          <PanelSaludoContenidoDia t={t} fs={fs} usuario={usuario} saludoVisible={saludoVisible} />
           <BandejaNovedadesInicio
             novedades={novedades}
             setNovedades={setNovedades}
@@ -833,6 +1153,11 @@ export default function ModuloInicio({ t, usuario, fontSize = 'normal', puedePub
         <div style={{ flex: '1 1 360px', minWidth: 0 }}>
           <SliderFotosActaVigente t={t} fs={fs} contratoId={contratoId} token={token} />
         </div>
+      </div>
+
+      {/* ── Zona 3: ficha del contrato ── */}
+      <div style={{ marginBottom: '20px' }}>
+        <FichaContrato t={t} fs={fs} contratoId={contratoId} token={token} />
       </div>
 
       {/* ── Footer ── */}

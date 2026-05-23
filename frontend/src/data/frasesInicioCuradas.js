@@ -43,17 +43,77 @@ export const FRASES_INICIO_CURADAS = [
   { frase: 'El que habita al abrigo del Altísimo morará bajo la sombra del Omnipotente.', autor: 'Salmos 91:1 (RVR)', tipo: 'bíblica' },
 ]
 
+const DATOS_DIA = [
+  { frase: 'El Puente de Occidente en Santander, inaugurado en 1895, fue el puente colgante más largo de Sudamérica en su época.', autor: 'Infraestructura Colombia', tipo: 'dato' },
+  { frase: 'El concreto no alcanza su resistencia de diseño hasta los 28 días estándar; por eso el control de curado en obra es tan crítico.', autor: 'Ingeniería de materiales', tipo: 'dato' },
+  { frase: 'Bogotá cuenta con más de 500 km de ciclovías urbanas, una de las redes más extensas de América Latina en ciudades de su tamaño.', autor: 'Urbanismo', tipo: 'dato' },
+  { frase: 'La Torre Eiffel se construyó con más de 18.000 piezas metálicas ensambladas con 2,5 millones de remaches en menos de dos años.', autor: 'Historia de la construcción', tipo: 'dato' },
+]
+
+const CONSEJOS_OBRA = [
+  { frase: 'Antes de cerrar el acta semanal, cruce las cantidades reportadas en campo con el avance físico fotografiado: evita discusiones en la interventoría.', autor: 'Gestión de obra', tipo: 'consejo' },
+  { frase: 'Documente cada no conformidad el mismo día con foto, PK y responsable: lo que no queda escrito en obra, después cuesta el doble arreglarlo.', autor: 'Interventoría', tipo: 'consejo' },
+  { frase: 'Revise el cronograma cada lunes con el equipo: una semana de desfase detectada a tiempo se corrige; un mes, ya es replanteo.', autor: 'Programación', tipo: 'consejo' },
+  { frase: 'En lluvia, priorice drenajes y estabilidad de taludes antes de avanzar terraplén: el agua no negocia plazos.', autor: 'Obra civil', tipo: 'consejo' },
+]
+
+const _PESOS_TIPO = [
+  { tipo: 'biblica',   peso: 4 },
+  { tipo: 'reflexion', peso: 2 },
+  { tipo: 'motivadora', peso: 2 },
+  { tipo: 'consejo',   peso: 1 },
+  { tipo: 'dato',      peso: 1 },
+]
+const _PESO_TOTAL = _PESOS_TIPO.reduce((s, t) => s + t.peso, 0)
+
+export const TIPOS_CONTENIDO_DIA = _PESOS_TIPO.map((t) => t.tipo)
+
+export function eligeTipoContenidoDia() {
+  let r = Math.random() * _PESO_TOTAL
+  for (const { tipo, peso } of _PESOS_TIPO) {
+    r -= peso
+    if (r <= 0) return tipo
+  }
+  return _PESOS_TIPO[0].tipo
+}
+
 export function fraseInicioEsValida(f) {
   if (!f?.frase) return false
+  const tipo = f.tipo || ''
+  if (tipo === 'dato' || tipo === 'consejo') return true
   const autor = (f.autor || '').trim().toLowerCase()
   if (autor === 'claracore') return false
   if (/^claracore\b/i.test((f.autor || '').trim())) return false
   return true
 }
 
-export function eligeFraseInicio(excluirFrase = null) {
-  let pool = FRASES_INICIO_CURADAS.filter(fraseInicioEsValida)
+export function eligeFraseInicio(excluirFrase = null, tipoPreferido = null) {
+  const tipo = tipoPreferido && TIPOS_CONTENIDO_DIA.includes(tipoPreferido)
+    ? tipoPreferido
+    : eligeTipoContenidoDia()
+  let pool
+  if (tipo === 'dato') {
+    pool = DATOS_DIA
+  } else if (tipo === 'consejo') {
+    pool = CONSEJOS_OBRA
+  } else if (tipo === 'biblica') {
+    pool = FRASES_INICIO_CURADAS
+      .filter((f) => f.tipo === 'bíblica')
+      .map((f) => ({ ...f, tipo: 'biblica' }))
+    if (!pool.length) pool = FRASES_INICIO_CURADAS.map((f) => ({ ...f, tipo: 'biblica' }))
+  } else if (tipo === 'motivadora') {
+    pool = FRASES_INICIO_CURADAS
+      .filter((f) => f.tipo === 'motivadora')
+      .map((f) => ({ ...f, tipo: 'motivadora' }))
+    if (!pool.length) pool = FRASES_INICIO_CURADAS.map((f) => ({ ...f, tipo: 'motivadora' }))
+  } else {
+    pool = FRASES_INICIO_CURADAS
+      .filter((f) => f.tipo !== 'bíblica' && f.tipo !== 'motivadora')
+      .map((f) => ({ ...f, tipo: f.tipo || 'reflexion' }))
+  }
+  pool = pool.filter(fraseInicioEsValida)
   if (excluirFrase) pool = pool.filter((f) => f.frase !== excluirFrase)
   const src = pool.length ? pool : FRASES_INICIO_CURADAS.filter(fraseInicioEsValida)
-  return src[Math.floor(Math.random() * src.length)] || FRASES_INICIO_CURADAS[0]
+  const pick = src[Math.floor(Math.random() * src.length)] || FRASES_INICIO_CURADAS[0]
+  return { ...pick, tipo: pick.tipo || tipo }
 }
