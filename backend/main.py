@@ -29,6 +29,13 @@ import math
 from urllib.parse import unquote
 from concurrent.futures import ThreadPoolExecutor
 
+from presupuesto_helpers import (
+    _presupuesto_aplica_filtro_interventoria,
+    _presupuesto_q_estructura,
+    _presupuesto_q_filtros_ubicacion,
+    _so_reg_filtro_abs_solape,
+)
+
 # ── Sesiones DWG activas (en memoria) ─────────────────────────────────────────
 # Clave: (contrato_id, usuario_id) → timestamp Unix. Nunca mezclar con otro usuario:
 # el badge «DWG enlazado» en la web debe ser solo para quien corre SicoeCAD con su sesión.
@@ -749,6 +756,42 @@ class PresupuestoRow(BaseModel):
     x_label: Optional[float] = None
     y_label: Optional[float] = None
 
+class ExportarPresupuestoInformeBody(BaseModel):
+    """Cuerpo POST exportación Excel presupuesto (resumen + soporte por ítem)."""
+    modo: str  # presupuesto_obra | obra_ejecutada
+    capitulo: Optional[str] = None
+    capitulos: Optional[List[str]] = None
+    item: Optional[str] = None
+    items: Optional[List[str]] = None
+    tramo: Optional[str] = None
+    tramos: Optional[List[str]] = None
+    calzada: Optional[str] = None
+    calzadas: Optional[List[str]] = None
+    competencia: Optional[str] = None
+    competencias: Optional[List[str]] = None
+    und: Optional[str] = None
+    unds: Optional[List[str]] = None
+    nodo_inicio: Optional[str] = None
+    nodo_final: Optional[str] = None
+    buscar: Optional[str] = None
+    id_pol: Optional[str] = None
+    pk_criterio: Optional[str] = None
+    texto: Optional[str] = None
+    abs_desde: Optional[float] = None
+    abs_hasta: Optional[float] = None
+    revisado: Optional[str] = None
+    pre_interv_estado: Optional[str] = None
+    sellado: Optional[bool] = None
+    vlr_unitario_desde: Optional[float] = None
+    vlr_unitario_hasta: Optional[float] = None
+    cant_total_desde: Optional[float] = None
+    cant_total_hasta: Optional[float] = None
+    costo_directo_desde: Optional[float] = None
+    costo_directo_hasta: Optional[float] = None
+    tipo_ejecucion: Optional[str] = None
+    papelera: bool = False
+    version_id: Optional[str] = None
+
 class PresupuestoUpdate(BaseModel):
     capitulo: Optional[str] = None
     competencia: Optional[str] = None
@@ -771,6 +814,10 @@ class PresupuestoUpdate(BaseModel):
     motivo_edicion_tras_sellado: Optional[str] = None
     # Contratista: al editar datos con revisado Pendiente/Rechazado/Aprobado (sin sellado), motivo ≥15 y reset a No Revisado.
     motivo_edicion_con_estado_interv: Optional[str] = None
+
+class PresupuestoDarBajaBody(BaseModel):
+    """Opcional: baja originada desde SicoeCAD/ClaraLink."""
+    motivo_cad: Optional[str] = None
 
 class DimOverride(BaseModel):
     id: int
@@ -1444,6 +1491,82 @@ def _ppto_puede_editar_nodos_y_area_long_como_dev(contrato_id: Optional[int], cu
     return _cargo_permiso_editar_registros_presupuesto(current_user)
 
 
+_PPTO_MSG_BAJA_PLANO = (
+    "Este registro está enlazado al plano. La baja debe gestionarse desde ClaraLink/DWG."
+)
+_PPTO_MSG_DIMS_PLANO = (
+    "Las dimensiones de registros enlazados al plano solo pueden modificarse desde ClaraLink/DWG."
+)
+_PPTO_MSG_AREA_LONG_PLANO = (
+    "El campo Área/Long/Nodo solo puede modificarse desde ClaraLink/DWG en este contrato."
+)
+
+
+def _ppto_aplica_reglas_cad(contrato_id) -> bool:
+    """True si aplican bloqueos CAD (todos los contratos excepto el de edición libre)."""
+    try:
+        return int(contrato_id) != _PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG
+    except (TypeError, ValueError):
+        return True
+
+
+def _ppto_tiene_id_pol(row: dict) -> bool:
+    v = row.get("id_pol")
+    return v is not None and str(v).strip() != ""
+
+
+def _cad_sesion_usuario_activa(contrato_id: int, current_user) -> bool:
+    """True si el usuario autenticado tiene heartbeat CAD reciente (SicoeCAD / ClaraLink)."""
+    my_uid = 0
+    try:
+        my_uid = int(current_user.get("sub") or 0)
+    except (TypeError, ValueError):
+        my_uid = 0
+    if my_uid <= 0:
+        return False
+    k = _session_key_cad(contrato_id, my_uid)
+    last = _dwg_sessions.get(k)
+    if last is not None and (time.time() - float(last)) < 30:
+        return True
+    try:
+        from datetime import timezone
+        row = (
+            supabase.table("cad_sessions")
+            .select("ultimo_heartbeat")
+            .eq("contrato_id", contrato_id)
+            .eq("usuario_id", my_uid)
+            .limit(1)
+            .execute()
+        )
+        rows = row.data or []
+        if rows:
+            tstr = rows[0]["ultimo_heartbeat"]
+            tstr = (tstr or "").replace("Z", "+00:00")
+            ultimo = datetime.fromisoformat(tstr)
+            if ultimo.tzinfo is None:
+                ultimo = ultimo.replace(tzinfo=timezone.utc)
+            diff = (datetime.now(timezone.utc) - ultimo).total_seconds()
+            return diff < 30
+    except Exception:
+        pass
+    return False
+
+
+def _ppto_validar_edicion_dimensiones(contrato_id, prev_row: dict, data: dict) -> None:
+    """Bloquea cambios de dims desde web cuando el registro está gobernado por el plano CAD."""
+    if not _ppto_aplica_reglas_cad(contrato_id):
+        return
+    for k in ("area_long_nod", "ancho", "espesor"):
+        if k not in data:
+            continue
+        if _ppto_val_eq(data.get(k), prev_row.get(k)):
+            continue
+        if k == "area_long_nod":
+            raise HTTPException(status_code=400, detail=_PPTO_MSG_AREA_LONG_PLANO)
+        if _ppto_tiene_id_pol(prev_row):
+            raise HTTPException(status_code=400, detail=_PPTO_MSG_DIMS_PLANO)
+
+
 def _caller_rol_id(current_user) -> Optional[int]:
     """rol_id del usuario autenticado (tabla usuarios → tabla roles)."""
     try:
@@ -1799,6 +1922,12 @@ app.include_router(prog_obra_router)
 
 from avi_routes import router as avi_router
 app.include_router(avi_router)
+
+from presupuesto_versiones_routes import router as presupuesto_versiones_router
+app.include_router(presupuesto_versiones_router)
+
+from filtros_plantillas_routes import router as filtros_plantillas_router
+app.include_router(filtros_plantillas_router)
 
 # Vista previa JSON (CC-SUB-001 / CC-SUB-002): registrado aquí porque en algunos equipos el router
 # importado desde informes.py no exponía estas rutas en OpenAPI (Not Found en el cliente).
@@ -2528,18 +2657,6 @@ def _so_reg_filtro_costado(q, valor: Optional[str]):
         return q
     esc = s.replace('"', '""')
     return q.or_(f'calzada.eq."{esc}",margen.eq."{esc}"')
-
-
-def _so_reg_filtro_abs_solape(q, abs_inicio: Optional[float], abs_final: Optional[float]):
-    """Abscisa en línea: solape del tramo [abs_inicio, abs_final] del registro con el rango filtrado."""
-    if abs_inicio is None and abs_final is None:
-        return q
-    q = q.not_.is_("abs_inicio", "null").not_.is_("abs_final", "null")
-    if abs_inicio is not None:
-        q = q.gte("abs_final", abs_inicio)
-    if abs_final is not None:
-        q = q.lte("abs_inicio", abs_final)
-    return q
 
 
 def _sicoe_parse_nodo_tokens(q: Optional[str]) -> list:
@@ -4866,6 +4983,31 @@ def guardar_permisos(permisos: List[PermisoUpdate], current_user=Depends(get_cur
 # LISTADO DE PRECIOS
 # ─────────────────────────────────────────────
 
+def _fetch_agrupadores_resumen_map(contrato_id: int) -> dict:
+    """Totales por agrupador (suma hijos). Agregación en backend; no expone la vista vía PostgREST."""
+    rows = (
+        supabase.table("listado_precios")
+        .select("agrupador_id, precio_unitario")
+        .eq("contrato_id", contrato_id)
+        .not_.is_("agrupador_id", "null")
+        .execute()
+        .data
+        or []
+    )
+    by_id: dict = {}
+    for r in rows:
+        ag_id = r.get("agrupador_id")
+        if ag_id is None:
+            continue
+        slot = by_id.setdefault(
+            ag_id,
+            {"items_total": 0, "precio_unitario_suma_hijos": 0.0},
+        )
+        slot["items_total"] += 1
+        slot["precio_unitario_suma_hijos"] += float(r.get("precio_unitario") or 0)
+    return by_id
+
+
 def _fetch_agrupadores_contrato(contrato_id: int) -> List[dict]:
     rows = (
         supabase.table("listado_precios_agrupadores")
@@ -4880,15 +5022,7 @@ def _fetch_agrupadores_contrato(contrato_id: int) -> List[dict]:
     )
     if not rows:
         return []
-    resumen = (
-        supabase.from_("v_listado_precios_agrupador_resumen")
-        .select("id, items_total, precio_unitario_suma_hijos")
-        .eq("contrato_id", contrato_id)
-        .execute()
-        .data
-        or []
-    )
-    by_id = {r["id"]: r for r in resumen}
+    by_id = _fetch_agrupadores_resumen_map(contrato_id)
     out = []
     for r in rows:
         s = by_id.get(r["id"], {})
@@ -5629,59 +5763,20 @@ def _cargo_puede_prevalidar_interventoria(cargo_nombre: str) -> bool:
     return False
 
 
-def _presupuesto_aplica_filtro_interventoria(current_user) -> bool:
-    """Perfiles Interventoría solo ven cantidades ya depuradas por contratista (costos u obra)."""
-    rol = (current_user.get("rol_nombre") or "").strip().lower()
-    if rol in ("administrador", "desarrollador"):
-        return False
-    cargo = (current_user.get("cargo_nombre") or "").strip().lower()
-    if cargo == "desarrollador":
-        return False
-    return rol in ("interventoría", "interventoria", "operativo interventoria")
+_PRESUPUESTO_TIPO_EJECUCION_DEFAULT = "Presupuesto de Obra"
+_PRESUPUESTO_TIPOS_EJECUCION_VALIDOS = frozenset({"Presupuesto de Obra", "Obra Ejecutada"})
 
 
-def _presupuesto_q_filtros_ubicacion(
-    q,
-    nodo_inicio: Optional[str] = None,
-    nodo_final: Optional[str] = None,
-    buscar: Optional[str] = None,
-    id_pol: Optional[str] = None,
-    pk_criterio: Optional[str] = None,
-    texto: Optional[str] = None,
-    abs_desde: Optional[float] = None,
-    abs_hasta: Optional[float] = None,
-    revisado: Optional[str] = None,
-    pre_interv_estado: Optional[str] = None,
-):
-    """Filtros opcionales para GET /presupuesto (alineable con criterios tipo SICOE / dashboard)."""
-    if nodo_inicio and str(nodo_inicio).strip():
-        q = q.ilike("no_inicio", f"%{str(nodo_inicio).strip()}%")
-    if nodo_final and str(nodo_final).strip():
-        q = q.ilike("no_final", f"%{str(nodo_final).strip()}%")
-    has_split = (id_pol and str(id_pol).strip()) or (pk_criterio and str(pk_criterio).strip()) or (texto and str(texto).strip())
-    if not has_split and buscar and str(buscar).strip():
-        b = str(buscar).strip()
-        pat = f"%{b}%"
-        # Legacy: un solo cuadro busca en cuatro columnas
-        q = q.or_(f"id_pol.ilike.{pat},pk_id.ilike.{pat},registro.ilike.{pat},descripcion.ilike.{pat}")
-    else:
-        if id_pol and str(id_pol).strip():
-            q = q.ilike("id_pol", f"%{str(id_pol).strip()}%")
-        if pk_criterio and str(pk_criterio).strip():
-            q = q.ilike("pk_id", f"%{str(pk_criterio).strip()}%")
-        if texto and str(texto).strip():
-            t = f"%{str(texto).strip()}%"
-            q = q.or_(f"registro.ilike.{t},descripcion.ilike.{t}")
-    if revisado and str(revisado).strip():
-        q = q.eq("revisado", str(revisado).strip())
-    if pre_interv_estado and str(pre_interv_estado).strip():
-        pe = str(pre_interv_estado).strip()
-        if str(pe).strip().lower() in ("no revisado", "—", "-"):
-            q = q.is_("pre_interv_estado", "null")
-        else:
-            q = q.eq("pre_interv_estado", pe)
-    q = _so_reg_filtro_abs_solape(q, abs_desde, abs_hasta)
-    return q
+def _presupuesto_resolve_tipo_ejecucion(tipo_ejecucion: Optional[str]) -> str:
+    """Sin parámetro → Presupuesto de Obra (comportamiento legado del módulo)."""
+    t = (tipo_ejecucion or "").strip()
+    if t in _PRESUPUESTO_TIPOS_EJECUCION_VALIDOS:
+        return t
+    return _PRESUPUESTO_TIPO_EJECUCION_DEFAULT
+
+
+def _presupuesto_q_tipo_ejecucion(q, tipo_ejecucion: Optional[str]):
+    return q.eq("tipo_ejecucion", _presupuesto_resolve_tipo_ejecucion(tipo_ejecucion))
 
 
 def _orden_capitulo_presupuesto(c: Optional[str]) -> tuple:
@@ -5711,6 +5806,17 @@ def get_presupuesto(
     abs_hasta: Optional[float] = None,
     revisado: Optional[str] = None,
     pre_interv_estado: Optional[str] = None,
+    competencia: Optional[str] = None,
+    und: Optional[str] = None,
+    sellado: Optional[bool] = None,
+    vlr_unitario_desde: Optional[float] = None,
+    vlr_unitario_hasta: Optional[float] = None,
+    cant_total_desde: Optional[float] = None,
+    cant_total_hasta: Optional[float] = None,
+    costo_directo_desde: Optional[float] = None,
+    costo_directo_hasta: Optional[float] = None,
+    dado_de_baja: Optional[bool] = Query(None),
+    tipo_ejecucion: Optional[str] = None,
     papelera: bool = False,
     limit: Optional[int] = Query(None, ge=1, le=20000),
     offset: int = Query(0, ge=0),
@@ -5721,15 +5827,19 @@ def get_presupuesto(
     dashboard. id_pol, pk_criterio, texto: filtros separados (campos distintos). `buscar` mantiene
     compatibilidad: OR en id_pol, pk_id, registro, descripcion si no se usan esos tres.
     pre_interv_estado: filtro depuración (roles contratista / obra); revisado: Interventoría.
+    tipo_ejecucion: «Presupuesto de Obra» (default) u «Obra Ejecutada».
     `limit` + `offset`: una sola página (grilla) sin bajar 10k+ filas. Sin `limit`, comportamiento
     legado: acumulación por lotes de 1000.
     """
     def _q_base():
         q = supabase.table("presupuesto").select("*").eq("contrato_id", contrato_id)
-        if papelera:
+        if dado_de_baja is not None:
+            q = q.eq("dado_de_baja", dado_de_baja)
+        elif papelera:
             q = q.eq("dado_de_baja", True)
         else:
             q = q.eq("dado_de_baja", False)
+        q = _presupuesto_q_tipo_ejecucion(q, tipo_ejecucion)
         if capitulo:
             q = q.eq("capitulo", capitulo)
         ins = [str(x).strip() for x in (items or []) if str(x).strip()]
@@ -5757,6 +5867,15 @@ def get_presupuesto(
             abs_hasta=abs_hasta,
             revisado=revisado,
             pre_interv_estado=pre_interv_estado,
+            competencia=competencia,
+            und=und,
+            sellado=sellado,
+            vlr_unitario_desde=vlr_unitario_desde,
+            vlr_unitario_hasta=vlr_unitario_hasta,
+            cant_total_desde=cant_total_desde,
+            cant_total_hasta=cant_total_hasta,
+            costo_directo_desde=costo_directo_desde,
+            costo_directo_hasta=costo_directo_hasta,
         )
         if _presupuesto_aplica_filtro_interventoria(current_user):
             q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
@@ -5796,6 +5915,17 @@ def get_presupuesto_conteo(
     abs_hasta: Optional[float] = None,
     revisado: Optional[str] = None,
     pre_interv_estado: Optional[str] = None,
+    competencia: Optional[str] = None,
+    und: Optional[str] = None,
+    sellado: Optional[bool] = None,
+    vlr_unitario_desde: Optional[float] = None,
+    vlr_unitario_hasta: Optional[float] = None,
+    cant_total_desde: Optional[float] = None,
+    cant_total_hasta: Optional[float] = None,
+    costo_directo_desde: Optional[float] = None,
+    costo_directo_hasta: Optional[float] = None,
+    dado_de_baja: Optional[bool] = Query(None),
+    tipo_ejecucion: Optional[str] = None,
     papelera: bool = False,
     current_user=Depends(get_current_user),
 ):
@@ -5804,10 +5934,13 @@ def get_presupuesto_conteo(
     Fase C: pre-paginación y consistencia con el listado.
     """
     q = supabase.table("presupuesto").select("id", count="exact").eq("contrato_id", contrato_id)
-    if papelera:
+    if dado_de_baja is not None:
+        q = q.eq("dado_de_baja", dado_de_baja)
+    elif papelera:
         q = q.eq("dado_de_baja", True)
     else:
         q = q.eq("dado_de_baja", False)
+    q = _presupuesto_q_tipo_ejecucion(q, tipo_ejecucion)
     if capitulo:
         q = q.eq("capitulo", capitulo)
     ins = [str(x).strip() for x in (items or []) if str(x).strip()]
@@ -5835,6 +5968,15 @@ def get_presupuesto_conteo(
         abs_hasta=abs_hasta,
         revisado=revisado,
         pre_interv_estado=pre_interv_estado,
+        competencia=competencia,
+        und=und,
+        sellado=sellado,
+        vlr_unitario_desde=vlr_unitario_desde,
+        vlr_unitario_hasta=vlr_unitario_hasta,
+        cant_total_desde=cant_total_desde,
+        cant_total_hasta=cant_total_hasta,
+        costo_directo_desde=costo_directo_desde,
+        costo_directo_hasta=costo_directo_hasta,
     )
     if _presupuesto_aplica_filtro_interventoria(current_user):
         q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
@@ -5853,7 +5995,9 @@ def get_filtros_presupuesto(
     current_user=Depends(get_current_user),
 ):
     """Devuelve valores únicos para filtros en cascada."""
-    q = supabase.table("presupuesto").select("capitulo, item, tramo, calzada").eq("contrato_id", contrato_id)
+    q = supabase.table("presupuesto").select(
+        "capitulo, item, tramo, calzada, competencia, und, revisado, pre_interv_estado, sellado, dado_de_baja, tipo_ejecucion"
+    ).eq("contrato_id", contrato_id)
     if capitulo:
         q = q.eq("capitulo", capitulo)
     ins = [str(x).strip() for x in (items or []) if str(x).strip()]
@@ -5876,7 +6020,43 @@ def get_filtros_presupuesto(
     items   = sorted(set(r["item"]     for r in rows if r.get("item")))
     tramos  = sorted(set(r["tramo"]    for r in rows if r.get("tramo")))
     calzadas= sorted(set(r["calzada"]  for r in rows if r.get("calzada")))
-    return {"capitulos": caps, "items": items, "tramos": tramos, "calzadas": calzadas}
+    competencias = sorted(set(r["competencia"] for r in rows if r.get("competencia")))
+    unds = sorted(set(r["und"] for r in rows if r.get("und")))
+    revisados = sorted(set(r["revisado"] for r in rows if r.get("revisado")))
+    pre_interv = sorted(
+        set(
+            (r.get("pre_interv_estado") or "No Revisado")
+            for r in rows
+        )
+    )
+    sellados = sorted({bool(r.get("sellado")) for r in rows})
+    dados_baja = sorted({bool(r.get("dado_de_baja")) for r in rows})
+    tipos_q = (
+        supabase.table("presupuesto")
+        .select("tipo_ejecucion")
+        .eq("contrato_id", contrato_id)
+        .eq("dado_de_baja", False)
+    )
+    if _presupuesto_aplica_filtro_interventoria(current_user):
+        tipos_q = tipos_q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+    tipos_rows = tipos_q.execute().data or []
+    tipos_ejecucion = sorted(
+        {str(r.get("tipo_ejecucion")).strip() for r in tipos_rows if r.get("tipo_ejecucion")}
+        & _PRESUPUESTO_TIPOS_EJECUCION_VALIDOS
+    )
+    return {
+        "capitulos": caps,
+        "items": items,
+        "tramos": tramos,
+        "calzadas": calzadas,
+        "competencias": competencias,
+        "unds": unds,
+        "revisados": revisados,
+        "pre_interv_estados": pre_interv,
+        "sellados": sellados,
+        "dados_de_baja": dados_baja,
+        "tipos_ejecucion": tipos_ejecucion,
+    }
 
 
 @app.get("/presupuesto/{contrato_id}/analisis-liquidacion")
@@ -5917,12 +6097,49 @@ def get_resumen_presupuesto(contrato_id: int, current_user=Depends(get_current_u
         "por_capitulo": [{"capitulo": r["capitulo"], "costo": r["presupuesto"], "registros": r["registros"]} for r in caps]
     }
 
+def _presupuesto_agregar_por_capitulo(
+    contrato_id: int,
+    tipo_ejecucion: Optional[str],
+    current_user,
+) -> List[dict]:
+    """Totales por capítulo filtrados por tipo_ejecucion (sin vista agregada)."""
+    rows: List[dict] = []
+    offset = 0
+    while True:
+        q = (
+            supabase.table("presupuesto")
+            .select("capitulo, costo_directo")
+            .eq("contrato_id", contrato_id)
+            .eq("dado_de_baja", False)
+        )
+        q = _presupuesto_q_tipo_ejecucion(q, tipo_ejecucion)
+        if _presupuesto_aplica_filtro_interventoria(current_user):
+            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        batch = q.range(offset, offset + 999).execute().data or []
+        rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        offset += 1000
+    caps: dict = {}
+    for r in rows:
+        cap = r.get("capitulo") or ""
+        if cap not in caps:
+            caps[cap] = {"capitulo": cap, "costo_total": 0.0, "total_registros": 0}
+        caps[cap]["costo_total"] += float(r.get("costo_directo") or 0)
+        caps[cap]["total_registros"] += 1
+    result = list(caps.values())
+    return sorted(result, key=lambda x: _orden_capitulo_presupuesto(x.get("capitulo")))
+
+
 @app.get("/presupuesto/{contrato_id}/capitulos-lista")
-def get_capitulos_presupuesto(contrato_id: int, current_user=Depends(get_current_user)):
+def get_capitulos_presupuesto(
+    contrato_id: int,
+    tipo_ejecucion: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
     """Devuelve capítulos con costo total y total de registros. Carga rápida sin traer filas individuales."""
-    caps = supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
-    rows = [{"capitulo": r["capitulo"], "costo_total": r["presupuesto"], "total_registros": r["registros"]} for r in (caps or [])]
-    return sorted(rows, key=lambda x: _orden_capitulo_presupuesto(x.get("capitulo")))
+    _require_contract_access(current_user, contrato_id)
+    return _presupuesto_agregar_por_capitulo(contrato_id, tipo_ejecucion, current_user)
 
 
 @app.get("/presupuesto/{contrato_id}/maestro-ubicacion-pk")
@@ -5939,14 +6156,21 @@ def get_maestro_ubicacion_pk_ids(contrato_id: int, current_user=Depends(get_curr
     return {"tramos": tramos, "calzadas": calzadas}
 
 @app.get("/presupuesto/{contrato_id}/items-lista")
-def get_items_presupuesto(contrato_id: int, capitulo: str, current_user=Depends(get_current_user)):
+def get_items_presupuesto(
+    contrato_id: int,
+    capitulo: str,
+    tipo_ejecucion: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
     """Devuelve ítems de un capítulo con costo y cantidad agregados — sin traer registros individuales."""
+    _require_contract_access(current_user, contrato_id)
     rows = []
     offset = 0
     while True:
         q_it = supabase.table("presupuesto").select(
             "item, descripcion, und, vlr_unitario, cant_total, costo_directo, revisado"
         ).eq("contrato_id", contrato_id).eq("capitulo", capitulo).eq("dado_de_baja", False)
+        q_it = _presupuesto_q_tipo_ejecucion(q_it, tipo_ejecucion)
         if _presupuesto_aplica_filtro_interventoria(current_user):
             q_it = q_it.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
         batch = q_it.range(offset, offset + 999).execute().data
@@ -5973,6 +6197,241 @@ def get_items_presupuesto(contrato_id: int, capitulo: str, current_user=Depends(
         items[it]["revisados"].append(r.get("revisado") or "No Revisado")
     result = sorted(items.values(), key=lambda x: x["item"])
     return result
+
+
+_PRESUPUESTO_EXPORT_SELECT = (
+    "capitulo, item, descripcion, und, vlr_unitario, cant_total, costo_directo, "
+    "id_pol, pk_id, tramo, calzada, abs_inicio, abs_final, area_long_nod, ancho, espesor, "
+    "revisado, pre_interv_estado, observacion, observacion_externa, tipo_ejecucion"
+)
+
+
+def _presupuesto_fetch_export_rows(contrato_id: int, body: ExportarPresupuestoInformeBody, current_user) -> List[dict]:
+    """Filas activas (o papelera) con los mismos filtros que GET /presupuesto."""
+    def _q_base():
+        q = supabase.table("presupuesto").select(_PRESUPUESTO_EXPORT_SELECT).eq("contrato_id", contrato_id)
+        if body.papelera:
+            q = q.eq("dado_de_baja", True)
+        else:
+            q = q.eq("dado_de_baja", False)
+        q = _presupuesto_q_tipo_ejecucion(q, body.tipo_ejecucion)
+        q = _presupuesto_q_estructura(
+            q,
+            capitulo=body.capitulo,
+            capitulos=body.capitulos,
+            item=body.item,
+            items=body.items,
+            tramo=body.tramo,
+            tramos=body.tramos,
+            calzada=body.calzada,
+            calzadas=body.calzadas,
+            competencia=body.competencia,
+            competencias=body.competencias,
+            und=body.und,
+            unds=body.unds,
+        )
+        q = _presupuesto_q_filtros_ubicacion(
+            q,
+            nodo_inicio=body.nodo_inicio,
+            nodo_final=body.nodo_final,
+            buscar=body.buscar,
+            id_pol=body.id_pol,
+            pk_criterio=body.pk_criterio,
+            texto=body.texto,
+            abs_desde=body.abs_desde,
+            abs_hasta=body.abs_hasta,
+            revisado=body.revisado,
+            pre_interv_estado=body.pre_interv_estado,
+            sellado=body.sellado,
+            vlr_unitario_desde=body.vlr_unitario_desde,
+            vlr_unitario_hasta=body.vlr_unitario_hasta,
+            cant_total_desde=body.cant_total_desde,
+            cant_total_hasta=body.cant_total_hasta,
+            costo_directo_desde=body.costo_directo_desde,
+            costo_directo_hasta=body.costo_directo_hasta,
+        )
+        if _presupuesto_aplica_filtro_interventoria(current_user):
+            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        return q.order("capitulo").order("item").order("pk_id")
+
+    PAGE = 1000
+    all_rows: List[dict] = []
+    off = 0
+    while True:
+        batch = _q_base().range(off, off + PAGE - 1).execute().data or []
+        all_rows.extend(batch)
+        if len(batch) < PAGE:
+            break
+        off += PAGE
+    return all_rows
+
+
+def _presupuesto_version_fetch_export_rows(
+    contrato_id: int,
+    version_id: str,
+    current_user,
+) -> List[dict]:
+    """Filas de snapshot presupuesto_version_items para export Excel."""
+    from presupuesto_versiones_service import assert_version_del_contrato
+
+    assert_version_del_contrato(supabase, contrato_id, version_id)
+    PAGE = 1000
+    all_rows: List[dict] = []
+
+    def _q_base():
+        q = (
+            supabase.table("presupuesto_version_items")
+            .select(_PRESUPUESTO_EXPORT_SELECT)
+            .eq("contrato_id", contrato_id)
+            .eq("version_id", version_id)
+            .eq("dado_de_baja", False)
+        )
+        if _presupuesto_aplica_filtro_interventoria(current_user):
+            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        return q.order("capitulo").order("item").order("pk_id")
+
+    off = 0
+    while True:
+        batch = _q_base().range(off, off + PAGE - 1).execute().data or []
+        all_rows.extend(batch)
+        if len(batch) < PAGE:
+            break
+        off += PAGE
+    return all_rows
+
+
+@app.post("/presupuesto/{contrato_id}/exportar-informe")
+def exportar_presupuesto_informe(
+    contrato_id: int,
+    body: ExportarPresupuestoInformeBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Datos para Excel de presupuesto: pestaña resumen + soporte por ítem.
+    modo=presupuesto_obra: cantidades totales subidas.
+    modo=obra_ejecutada: solo filas con revisado Interventoría = Aprobado.
+    """
+    modo = (body.modo or "").strip().lower()
+    if modo not in ("presupuesto_obra", "obra_ejecutada"):
+        raise HTTPException(status_code=422, detail="modo debe ser presupuesto_obra u obra_ejecutada")
+
+    vid = (body.version_id or "").strip() or None
+    if vid:
+        rows = _presupuesto_version_fetch_export_rows(contrato_id, vid, current_user)
+    else:
+        rows = _presupuesto_fetch_export_rows(contrato_id, body, current_user)
+    if modo == "obra_ejecutada":
+        rows = [r for r in rows if str(r.get("revisado") or "").strip() == "Aprobado"]
+
+    resumen_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    items_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    for r in rows:
+        cap = (r.get("capitulo") or "").strip()
+        it = (r.get("item") or "").strip()
+        if not cap or not it:
+            continue
+        k = (cap, it)
+        if k not in resumen_map:
+            resumen_map[k] = {
+                "capitulo": cap,
+                "item": it,
+                "descripcion": (r.get("descripcion") or "").strip(),
+                "und": (r.get("und") or "").strip(),
+                "vlr_unitario": float(r.get("vlr_unitario") or 0),
+                "cantidad": 0.0,
+            }
+        agg = resumen_map[k]
+        if not agg["descripcion"] and r.get("descripcion"):
+            agg["descripcion"] = str(r.get("descripcion")).strip()
+        if not agg["und"] and r.get("und"):
+            agg["und"] = str(r.get("und")).strip()
+        vlr = r.get("vlr_unitario")
+        if vlr is not None:
+            try:
+                agg["vlr_unitario"] = float(vlr)
+            except (TypeError, ValueError):
+                pass
+        agg["cantidad"] += float(r.get("cant_total") or 0)
+
+        if k not in items_map:
+            items_map[k] = {
+                "capitulo": cap,
+                "item": it,
+                "descripcion": (r.get("descripcion") or "").strip(),
+                "und": (r.get("und") or "").strip(),
+                "registros": [],
+            }
+        im = items_map[k]
+        if not im["descripcion"] and r.get("descripcion"):
+            im["descripcion"] = str(r.get("descripcion")).strip()
+        if not im["und"] and r.get("und"):
+            im["und"] = str(r.get("und")).strip()
+
+        pre = r.get("pre_interv_estado")
+        pre_disp = "No Revisado" if pre is None or str(pre).strip() == "" else str(pre).strip()
+        rev_disp = str(r.get("revisado") or "No Revisado").strip()
+        obs_parts = []
+        if r.get("observacion"):
+            obs_parts.append(str(r.get("observacion")).strip())
+        if r.get("observacion_externa"):
+            obs_parts.append(str(r.get("observacion_externa")).strip())
+        im["registros"].append({
+            "id_pol": r.get("id_pol") or "",
+            "pk_id": r.get("pk_id") or "",
+            "tramo": r.get("tramo") or "",
+            "calzada": r.get("calzada") or "",
+            "abs_inicio": r.get("abs_inicio"),
+            "abs_final": r.get("abs_final"),
+            "area_long_nod": r.get("area_long_nod"),
+            "ancho": r.get("ancho"),
+            "espesor": r.get("espesor"),
+            "cant_total": r.get("cant_total"),
+            "validacion": f"Dep: {pre_disp} / Int: {rev_disp}",
+            "observacion": " · ".join(obs_parts),
+        })
+
+    resumen = []
+    for k in sorted(resumen_map.keys(), key=lambda x: (_orden_capitulo_presupuesto(x[0]), x[1])):
+        agg = resumen_map[k]
+        cant = round(float(agg["cantidad"]), 6)
+        vlr = round(float(agg["vlr_unitario"]), 2)
+        resumen.append({
+            "capitulo": agg["capitulo"],
+            "item": agg["item"],
+            "descripcion": agg["descripcion"],
+            "und": agg["und"],
+            "vlr_unitario": vlr,
+            "cantidad": cant,
+            "costo_directo": round(cant * vlr, 0),
+        })
+
+    items_out = []
+    for k in sorted(items_map.keys(), key=lambda x: (_orden_capitulo_presupuesto(x[0]), x[1])):
+        items_out.append(items_map[k])
+
+    modo_label = "Presupuesto de obra" if modo == "presupuesto_obra" else "Obra ejecutada (Interventoría aprobada)"
+    if vid:
+        vrow = (
+            supabase.table("presupuesto_versiones")
+            .select("etiqueta, numero_version")
+            .eq("id", vid)
+            .eq("contrato_id", contrato_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if vrow:
+            modo_label = f"Versión {vrow[0].get('etiqueta') or vrow[0].get('numero_version')} · {modo_label}"
+    return {
+        "modo": modo,
+        "modo_label": modo_label,
+        "version_id": vid,
+        "resumen": resumen,
+        "items": items_out,
+        "total_registros": len(rows),
+    }
+
 
 @app.get("/presupuesto/item/{item_id}")
 def get_presupuesto_item(item_id: int, current_user=Depends(get_current_user)):
@@ -6101,6 +6560,7 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
     _DIMK = ("area_long_nod", "ancho", "espesor")
     toco_dimensiones = any(k in data for k in _DIMK)
     if toco_dimensiones:
+        _ppto_validar_edicion_dimensiones(_cid_row, prev_row, data)
         # prev_row ya tiene select("*") — reutilizar en vez de hacer un segundo SELECT
         def _dim_merged(k: str) -> float:
             if k not in data:
@@ -6267,10 +6727,14 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
     return row_after if updated else {"mensaje": "Registro actualizado"}
 
 @app.put("/presupuesto/item/{item_id}/dar-baja")
-def dar_baja_presupuesto(item_id: int, current_user=Depends(get_current_user)):
+def dar_baja_presupuesto(
+    item_id: int,
+    body: Optional[PresupuestoDarBajaBody] = None,
+    current_user=Depends(get_current_user),
+):
     """Soft delete: marca el registro como dado de baja y renombra sus layers en CAD."""
     row = supabase.table("presupuesto").select(
-        "layer_txt, layer_ent, x_label, y_label, contrato_id, ent_handle, txt_handle, rev_block_handle, sellado"
+        "layer_txt, layer_ent, x_label, y_label, contrato_id, ent_handle, txt_handle, rev_block_handle, sellado, id_pol"
     ).eq("id", item_id).execute().data
     if not row:
         raise HTTPException(status_code=404, detail="Registro no encontrado")
@@ -6280,6 +6744,11 @@ def dar_baja_presupuesto(item_id: int, current_user=Depends(get_current_user)):
             status_code=403,
             detail="Registro sellado (aprobado por Interventoría): no puede modificarse.",
         )
+    cid = r.get("contrato_id")
+    if _ppto_aplica_reglas_cad(cid) and _ppto_tiene_id_pol(r):
+        motivo_cad = str((body.motivo_cad if body else None) or "").strip()
+        if not motivo_cad and not _cad_sesion_usuario_activa(int(cid), current_user):
+            raise HTTPException(status_code=400, detail=_PPTO_MSG_BAJA_PLANO)
     supabase.table("presupuesto").update({
         "dado_de_baja": True,
         "updated_at": "now()"
@@ -6802,6 +7271,20 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
         "id, area_long_nod, ancho, espesor, cant_total, vlr_unitario, ent_handle, txt_handle, layer_ent, layer_txt, color_hex, competencia, id_pol"
     ).in_("id", body.ids).execute().data
 
+    for r in rows:
+        dim = dims_map.get(r["id"])
+        if not dim:
+            continue
+        patch = {}
+        if dim.area_long_nod is not None:
+            patch["area_long_nod"] = dim.area_long_nod
+        if dim.ancho is not None:
+            patch["ancho"] = dim.ancho
+        if dim.espesor is not None:
+            patch["espesor"] = dim.espesor
+        if patch:
+            _ppto_validar_edicion_dimensiones(contrato_id, r, patch)
+
     ts          = datetime.now(timezone.utc).isoformat()
     calculo_por = _calculo_usuario_label(current_user)
 
@@ -7063,38 +7546,7 @@ def cad_debug(contrato_id: int, current_user=Depends(get_current_user)):
 @app.get("/cad-queue/{contrato_id}/estado")
 def cad_estado(contrato_id: int, current_user=Depends(get_current_user)):
     """Solo el usuario cuyo SicoeCAD envía heartbeats (mismo usuario_id) ve enlazado=True."""
-    my_uid = 0
-    try:
-        my_uid = int(current_user.get("sub") or 0)
-    except (TypeError, ValueError):
-        my_uid = 0
-    if my_uid <= 0:
-        return {"enlazado": False}
-    # 1) Memoria: sesión (contrato, mi usuario)
-    k = _session_key_cad(contrato_id, my_uid)
-    last = _dwg_sessions.get(k)
-    if last is not None and (time.time() - float(last)) < 30:
-        return {"enlazado": True}
-    # 2) Supabase — filtrar por usuario; sin esto, cualquier fila del contrato ponía en verde a todos
-    try:
-        from datetime import timezone
-        row = supabase.table("cad_sessions").select("ultimo_heartbeat") \
-            .eq("contrato_id", contrato_id) \
-            .eq("usuario_id", my_uid) \
-            .limit(1) \
-            .execute()
-        rows = (row.data or [])
-        if rows:
-            tstr = rows[0]["ultimo_heartbeat"]
-            tstr = (tstr or "").replace("Z", "+00:00")
-            ultimo = datetime.fromisoformat(tstr)
-            if ultimo.tzinfo is None:
-                ultimo = ultimo.replace(tzinfo=timezone.utc)
-            diff = (datetime.now(timezone.utc) - ultimo).total_seconds()
-            return {"enlazado": diff < 30}
-    except Exception:
-        pass
-    return {"enlazado": False}
+    return {"enlazado": _cad_sesion_usuario_activa(contrato_id, current_user)}
 
 @app.get("/cad-queue/{contrato_id}/pendientes")
 def cad_pendientes(contrato_id: int, current_user=Depends(get_current_user)):

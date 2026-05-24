@@ -49,8 +49,9 @@ function wmoEmoji(code) {
   if (c === 0) return '☀️'
   if (c >= 1 && c <= 2) return '⛅'
   if (c === 3) return '☁️'
-  if (c >= 61 && c <= 67) return '🌧️'
+  if (c >= 51 && c <= 67) return '🌧️'
   if (c >= 80 && c <= 82) return '🌦️'
+  if (c >= 95 && c <= 99) return '⛈️'
   return '🌡️'
 }
 
@@ -561,13 +562,12 @@ function BarraClima({ t, fs, contratoId, token }) {
   const wmoEscena = obra?.weather_code ?? bog?.weather_code ?? 0
 
   const panel = {
-    background: 'rgba(0,0,0,0.2)',
-    backdropFilter: 'blur(6px)',
-    WebkitBackdropFilter: 'blur(6px)',
+    background: 'rgba(8,12,24,0.52)',
+    border: '1px solid rgba(255,255,255,0.14)',
     borderRadius: '10px',
     padding: '10px 14px',
     color: '#fff',
-    textShadow: '0 1px 3px rgba(0,0,0,0.45)',
+    textShadow: '0 1px 2px rgba(0,0,0,0.5)',
   }
 
   const tarjetaZona = (label, sublabel, code, temp) => (

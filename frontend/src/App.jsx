@@ -45,6 +45,7 @@ import ExcelJS from 'exceljs'
 import { API_BASE, logApiFailure, SUPABASE_ANON_KEY, SUPABASE_URL } from './apiBase'
 import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache'
 import CompetenciaSelect from './components/CompetenciaSelect'
+import CcConfirmModal from './components/CcConfirmModal'
 import { supabase } from './supabaseClient'
 import { applyClaraTypography, getDashTypoUI } from './typographyScale'
 import { formatCOP, formatCOPShort } from './utils/formatCOP'
@@ -16357,6 +16358,7 @@ export default function App() {
 
   // ── Detección de nueva versión ─────────────────────────────────────────────
   const [hayNuevaVersion, setHayNuevaVersion] = useState(false)
+  const [confirmActualizarApp, setConfirmActualizarApp] = useState(false)
   useEffect(() => {
     let htmlBaseline = null
     // Captura el html inicial como baseline
@@ -16925,16 +16927,7 @@ if (contratos.length > 1) {
           </div>
           <div style={{ display:'flex', gap:'10px', flexShrink:0 }}>
             <button
-              onClick={() => {
-                const ok = window.confirm(
-                  '⚠️ Antes de actualizar:\n\n' +
-                  '• Si tienes dimensiones editadas sin guardar → cancela, haz clic en "Recalcular" primero.\n' +
-                  '• Si tienes estados pendientes de aplicar → cancela, haz clic en "Aplicar" primero.\n\n' +
-                  'Los datos ya guardados en la plataforma NO se pierden.\n\n' +
-                  '¿Deseas actualizar ahora?'
-                )
-                if (ok) window.location.reload()
-              }}
+              onClick={() => setConfirmActualizarApp(true)}
               style={{
                 background: '#fff', color: '#0077B6', border: 'none',
                 borderRadius: '8px', padding: '8px 18px', fontSize: 'var(--cc-sm)',
@@ -16953,6 +16946,28 @@ if (contratos.length > 1) {
             </button>
           </div>
         </div>
+      )}
+      {confirmActualizarApp && (
+        <CcConfirmModal
+          titulo="Antes de actualizar"
+          tipo="warn"
+          confirmar="Actualizar ahora"
+          cancelar="Cancelar"
+          onCancel={() => setConfirmActualizarApp(false)}
+          onConfirm={() => {
+            setConfirmActualizarApp(false)
+            window.location.reload()
+          }}
+        >
+          <p style={{ margin: '0 0 12px' }}>Revise lo siguiente antes de recargar la aplicación:</p>
+          <ul style={{ margin: '0 0 12px', paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <li>Dimensiones editadas sin guardar → use <strong>Recalcular</strong> antes.</li>
+            <li>Estados pendientes de aplicar → use <strong>Aplicar</strong> antes.</li>
+          </ul>
+          <p style={{ margin: 0, fontSize: 'var(--cc-caption)', color: '#64748B' }}>
+            Lo ya guardado en la plataforma no se pierde.
+          </p>
+        </CcConfirmModal>
       )}
       {bannerMsg && (
         <div style={{ position: 'fixed', top: maintenanceBannerHeight + updateBannerHeight + apiBannerHeight, left: 0, right: 0, zIndex: 99999, background: '#0f2038', borderBottom: '2px solid #00afc5', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 'var(--cc-sm)', color: '#e0f4f7', boxShadow: '0 2px 12px rgba(0,0,0,0.4)' }}>

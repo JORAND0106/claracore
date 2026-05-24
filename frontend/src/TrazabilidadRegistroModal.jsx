@@ -1,5 +1,92 @@
 import { useEffect, useState } from 'react'
 
+const CAMPO_ETIQUETAS = {
+  id: 'ID',
+  contrato_id: 'Contrato',
+  id_pol: 'ID-POL',
+  pk_id: 'PK',
+  capitulo: 'Capítulo',
+  competencia: 'Competencia',
+  item: 'Ítem',
+  descripcion: 'Descripción',
+  und: 'Unidad',
+  calzada: 'Calzada',
+  tramo: 'Tramo',
+  no_inicio: 'Nodo inicio',
+  no_final: 'Nodo fin',
+  abs_inicio: 'Abscisa inicio',
+  abs_final: 'Abscisa fin',
+  area_long_nod: 'Área / longitud',
+  ancho: 'Ancho',
+  espesor: 'Espesor',
+  cant_total: 'Cant. total',
+  vlr_unitario: 'Vlr. unitario',
+  costo_directo: 'Costo directo',
+  revisado: 'Estado interventoría',
+  pre_interv_estado: 'Estado depuración',
+  sellado: 'Sellado',
+  tipo_ejecucion: 'Tipo ejecución',
+  tipo_entidad: 'Tipo entidad',
+  dado_de_baja: 'Dado de baja',
+  observacion_externa: 'Observación externa',
+  calculo_por: 'Calculado por',
+  calculo_en: 'Calculado en',
+}
+
+function parseJsonVal(v) {
+  if (v == null) return null
+  if (typeof v === 'object') return v
+  if (typeof v === 'string') {
+    try {
+      return JSON.parse(v)
+    } catch {
+      return v
+    }
+  }
+  return v
+}
+
+function fmtAuditVal(v) {
+  if (v === null || v === undefined || v === '') return '—'
+  if (typeof v === 'boolean') return v ? 'Sí' : 'No'
+  if (typeof v === 'number') return Number.isInteger(v) ? String(v) : String(v)
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
+}
+
+function valoresIguales(a, b) {
+  if (a === b) return true
+  if (a == null && b == null) return true
+  try {
+    return JSON.stringify(a) === JSON.stringify(b)
+  } catch {
+    return String(a) === String(b)
+  }
+}
+
+function camposModificados(valorAnterior, valorNuevo) {
+  const va = parseJsonVal(valorAnterior)
+  const vn = parseJsonVal(valorNuevo)
+  if (va == null && vn == null) return []
+  if (typeof va !== 'object' || va === null || typeof vn !== 'object' || vn === null) {
+    if (valoresIguales(va, vn)) return []
+    return [{ key: '_valor', label: 'Valor', before: va, after: vn }]
+  }
+  const keys = new Set([...Object.keys(va), ...Object.keys(vn)])
+  const out = []
+  for (const key of keys) {
+    if (!valoresIguales(va[key], vn[key])) {
+      out.push({
+        key,
+        label: CAMPO_ETIQUETAS[key] || key,
+        before: va[key],
+        after: vn[key],
+      })
+    }
+  }
+  return out
+}
+
 /**
  * Muestra el historial de auditoría de una entidad (GET /logs/entidad/...).
  * Tipografía y densidad alineadas con la escala global (--cc-*, --cc-space-*).
@@ -116,6 +203,24 @@ export default function TrazabilidadRegistroModal({
       textTransform: 'uppercase',
       letterSpacing: '0.04em',
     },
+    cambiosBox: {
+      marginTop: 'var(--cc-space-2)',
+      padding: 'var(--cc-space-2) var(--cc-space-3)',
+      background: `${t.primary || '#0077B6'}10`,
+      border: `1px solid ${t.primary || '#0077B6'}33`,
+      borderRadius: 8,
+    },
+    cambioRow: {
+      display: 'grid',
+      gridTemplateColumns: 'minmax(7rem, 34%) 1fr 1fr',
+      gap: 'var(--cc-space-2)',
+      alignItems: 'baseline',
+      padding: '4px 0',
+      borderBottom: `1px solid ${t.border}`,
+      fontSize: 'var(--cc-caption)',
+    },
+    cambioAntes: { color: '#B45309', wordBreak: 'break-word' },
+    cambioNuevo: { color: '#047857', fontWeight: 600, wordBreak: 'break-word' },
     pre: {
       margin: 0,
       whiteSpace: 'pre-wrap',
@@ -203,6 +308,11 @@ export default function TrazabilidadRegistroModal({
               const det = parseDet(h.detalle)
               const va = h.valor_anterior
               const vn = h.valor_nuevo
+              const cambios = camposModificados(va, vn)
+              const mostrarJson =
+                cambios.length === 0 &&
+                ((va != null && (typeof va === 'object' ? Object.keys(va).length : true)) ||
+                  (vn != null && (typeof vn === 'object' ? Object.keys(vn).length : true)))
               return (
                 <div key={h.id} style={sx.card}>
                   <div
@@ -231,8 +341,26 @@ export default function TrazabilidadRegistroModal({
                       ))}
                     </div>
                   )}
-                  {(va != null && (typeof va === 'object' ? Object.keys(va).length : true)) ||
-                  (vn != null && (typeof vn === 'object' ? Object.keys(vn).length : true)) ? (
+                  {cambios.length > 0 && (
+                    <div style={sx.cambiosBox}>
+                      <div style={{ ...sx.diffLabel, color: t.primary, marginBottom: 'var(--cc-space-2)' }}>
+                        Campos modificados ({cambios.length})
+                      </div>
+                      <div style={{ ...sx.cambioRow, fontWeight: 700, color: t.textMuted, borderBottom: `2px solid ${t.border}` }}>
+                        <span>Campo</span>
+                        <span>Anterior</span>
+                        <span>Nuevo</span>
+                      </div>
+                      {cambios.map((c) => (
+                        <div key={c.key} style={sx.cambioRow}>
+                          <span style={{ fontWeight: 700, color: t.text }}>{c.label}</span>
+                          <span style={sx.cambioAntes}>{fmtAuditVal(c.before)}</span>
+                          <span style={sx.cambioNuevo}>{fmtAuditVal(c.after)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {mostrarJson ? (
                     <div
                       style={{
                         marginTop: 'var(--cc-space-3)',

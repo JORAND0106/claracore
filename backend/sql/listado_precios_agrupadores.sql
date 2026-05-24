@@ -106,7 +106,9 @@ CREATE TRIGGER listado_precios_agrupador_coherente
 -- 4. Vista de resumen (precio agrupador = suma de hijos, nunca almacenado)
 -- ─────────────────────────────────────────────────────────────────────────────
 
-CREATE OR REPLACE VIEW v_listado_precios_agrupador_resumen AS
+CREATE OR REPLACE VIEW v_listado_precios_agrupador_resumen
+WITH (security_invoker = true)
+AS
 SELECT
   a.id,
   a.contrato_id,
@@ -122,19 +124,84 @@ LEFT JOIN listado_precios lp ON lp.agrupador_id = a.id
 GROUP BY a.id, a.contrato_id, a.capitulo, a.codigo_wbs, a.nombre, a.descripcion, a.orden;
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 5. RLS
+-- 5. RLS (tabla agrupadores + vista resumen)
 -- ─────────────────────────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION public.usuario_puede_ver_contrato(p_contrato_id integer)
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_uid bigint;
+  v_claims json;
+  v_raw text;
+BEGIN
+  IF p_contrato_id IS NULL THEN
+    RETURN false;
+  END IF;
+  v_raw := NULLIF(current_setting('request.jwt.claims', true), '');
+  IF v_raw IS NULL THEN
+    RETURN false;
+  END IF;
+  BEGIN
+    v_claims := v_raw::json;
+  EXCEPTION WHEN OTHERS THEN
+    RETURN false;
+  END;
+  BEGIN
+    v_uid := NULLIF(trim(v_claims->>'sub'), '')::bigint;
+  EXCEPTION WHEN OTHERS THEN
+    RETURN false;
+  END;
+  IF v_uid IS NULL THEN
+    RETURN false;
+  END IF;
+  RETURN EXISTS (
+    SELECT 1 FROM public.usuarios u
+    WHERE u.id = v_uid
+      AND (
+        u.contrato_id = p_contrato_id
+        OR EXISTS (
+          SELECT 1 FROM public.usuario_contratos uc
+          WHERE uc.usuario_id = u.id AND uc.contrato_id = p_contrato_id
+        )
+      )
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.usuario_puede_ver_contrato(integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.usuario_puede_ver_contrato(integer) TO authenticated, service_role;
 
 ALTER TABLE listado_precios_agrupadores ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS lp_agrup_select ON listado_precios_agrupadores;
+DROP POLICY IF EXISTS lp_agrup_insert ON listado_precios_agrupadores;
+DROP POLICY IF EXISTS lp_agrup_update ON listado_precios_agrupadores;
+DROP POLICY IF EXISTS lp_agrup_delete ON listado_precios_agrupadores;
+
 CREATE POLICY lp_agrup_select ON listado_precios_agrupadores
-  FOR SELECT USING (true);
+  FOR SELECT USING (public.usuario_puede_ver_contrato(contrato_id));
 
 CREATE POLICY lp_agrup_insert ON listado_precios_agrupadores
-  FOR INSERT WITH CHECK (true);
+  FOR INSERT WITH CHECK (public.usuario_puede_ver_contrato(contrato_id));
 
 CREATE POLICY lp_agrup_update ON listado_precios_agrupadores
-  FOR UPDATE USING (true);
+  FOR UPDATE USING (public.usuario_puede_ver_contrato(contrato_id));
 
 CREATE POLICY lp_agrup_delete ON listado_precios_agrupadores
-  FOR DELETE USING (true);
+  FOR DELETE USING (public.usuario_puede_ver_contrato(contrato_id));
+
+ALTER VIEW v_listado_precios_agrupador_resumen ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS v_lp_agrup_resumen_select ON v_listado_precios_agrupador_resumen;
+
+CREATE POLICY v_lp_agrup_resumen_select ON v_listado_precios_agrupador_resumen
+  FOR SELECT USING (public.usuario_puede_ver_contrato(contrato_id));
+
+REVOKE ALL ON v_listado_precios_agrupador_resumen FROM PUBLIC;
+REVOKE ALL ON v_listado_precios_agrupador_resumen FROM anon, authenticated;
+GRANT SELECT ON v_listado_precios_agrupador_resumen TO service_role;

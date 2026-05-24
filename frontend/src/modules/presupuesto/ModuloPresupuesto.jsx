@@ -10,6 +10,10 @@ import { supabase } from '../../supabaseClient'
 import { formatCOP, formatCOPShort } from '../../utils/formatCOP'
 import EmojiPicker from '../../EmojiPicker'
 import PptoFiltroObraVista from './PptoFiltroObraVista'
+import PptoVersionador from './PptoVersionador'
+import { downloadPresupuestoInformeExcel } from './presupuestoExportExcel'
+import { pptoAppendFObraToSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroValoresLista, pptoFObraToExportBody, pptoExportBodyToSearchParams } from './pptoFiltroCatalogo'
+import CcAvisoModal from '../../components/CcAvisoModal'
 
 /** Tipografía alineada con Pequeña / Mediana / Grande (`applyClaraTypography` en `typographyScale.js`) */
 function getToken() {
@@ -174,30 +178,6 @@ function cmpCapituloLabel(a, b) {
   return String(ka[2] ?? '').localeCompare(String(kb[2] ?? ''), 'es', { numeric: true })
 }
 
-function criterioVistaActivo(f) {
-  if (!f) return false
-  const e = f.eje || 'interv'
-  const hayItems =
-    (Array.isArray(f.items) && f.items.length > 0) ||
-    (f.item && String(f.item).trim())
-  return !!(
-    (f.cap && String(f.cap).trim()) ||
-    hayItems ||
-    (f.idPol && String(f.idPol).trim()) ||
-    (f.pkCriterio && String(f.pkCriterio).trim()) ||
-    (f.texto && String(f.texto).trim()) ||
-    (f.tramo && String(f.tramo).trim()) ||
-    (f.calzada && String(f.calzada).trim()) ||
-    (f.nodoI && String(f.nodoI).trim()) ||
-    (f.nodoF && String(f.nodoF).trim()) ||
-    (f.absA && String(f.absA).trim()) ||
-    (f.absB && String(f.absB).trim()) ||
-    (e === 'interv' && f.revisado && String(f.revisado).trim()) ||
-    (e === 'depur' && f.preInterv && String(f.preInterv).trim())
-  )
-}
-
-/** Ítems activos en filtro obra: `items[]` multi o un solo `item` (legado; admite varios separados por coma). */
 function fObraItemsLista(f) {
   if (!f) return []
   if (Array.isArray(f.items) && f.items.length) {
@@ -209,6 +189,20 @@ function fObraItemsLista(f) {
     return [...new Set(one.split(',').map((s) => String(s).trim()).filter(Boolean))]
   }
   return [one]
+}
+
+const PPTO_TIPO_EJECUCION_DEFAULT = 'Presupuesto de Obra'
+const PPTO_TIPO_EJECUCION_OBRA = 'Obra Ejecutada'
+
+function pptoAppendTipoEjecucion(p, f) {
+  const te = String(f?.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT).trim() || PPTO_TIPO_EJECUCION_DEFAULT
+  p.set('tipo_ejecucion', te)
+}
+
+function pptoTieneAmbosTiposEjecucion(tipos) {
+  if (!Array.isArray(tipos)) return false
+  const set = new Set(tipos.map((x) => String(x).trim()))
+  return set.has(PPTO_TIPO_EJECUCION_DEFAULT) && set.has(PPTO_TIPO_EJECUCION_OBRA)
 }
 
 // ─── MÓDULO PRESUPUESTO ───────────────────────────────────────────────────────
@@ -252,11 +246,14 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [trazabilidadPresupuesto, setTrazabilidadPresupuesto] = useState(null)
   const [popupDims, setPopupDims] = useState({ ancho: '', espesor: '', area_long_nod: '', no_inicio: '', no_final: '' })
   const [popupCap,  setPopupCap]  = useState('')
+  const [popupTipoEjecucion, setPopupTipoEjecucion] = useState(PPTO_TIPO_EJECUCION_DEFAULT)
   const [popupItem, setPopupItem] = useState('')
   const [popupItemBusq, setPopupItemBusq] = useState('')
   const [popupItemOpen, setPopupItemOpen] = useState(false)
   const [popupGuardando, setPopupGuardando] = useState(false)
   const [popupMsg, setPopupMsg] = useState('')
+  const [avisoSistema, setAvisoSistema] = useState(null)
+  const [filtroResetKey, setFiltroResetKey] = useState(0)
   // ── Revisor de Tramos ─────────────────────────────────────────────────────
   const [modalModoCapitulo, setModalModoCapitulo] = useState(null) // nombre del capítulo pendiente
   const [modoCapSeleccion,  setModoCapSeleccion]  = useState('')   // '' | 'todos' | 'tramos'
@@ -286,10 +283,12 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   useEffect(() => { registrosRef.current = registros }, [registros])
   /** Filtro tipo SICOE Obra (reemplaza drill por gráfico de barras) */
   const [fObra, setFObra] = useState({
-    cap: '', item: '', items: [], idPol: '', pkCriterio: '', texto: '', tramo: '', calzada: '', nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '',
+    cap: '', caps: [], item: '', items: [], idPol: '', pkCriterio: '', texto: '', tramo: '', tramos: [], calzada: '', calzadas: [], nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '', competencia: '', competencias: [], und: '', unds: [], sellado: '', dadoDeBaja: '', vlrUnitarioMin: '', vlrUnitarioMax: '', cantTotalMin: '', cantTotalMax: '', costoDirectoMin: '', costoDirectoMax: '', tipoEjecucion: PPTO_TIPO_EJECUCION_DEFAULT,
   })
   const fObraRef = useRef(fObra)
   useEffect(() => { fObraRef.current = fObra }, [fObra])
+  const [tiposEjecucionDisponibles, setTiposEjecucionDisponibles] = useState([])
+  const mostrarToggleTipoEjecucion = pptoTieneAmbosTiposEjecucion(tiposEjecucionDisponibles)
   const [capExpandido, setCapExpandido] = useState(null)
   const [buscandoFiltroObra, setBuscandoFiltroObra] = useState(false)
   /** Ancla de selección en panel ítems (Mayús+clic = rango desde este índice). */
@@ -309,6 +308,30 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [comentariosPorId, setComentariosPorId] = useState({})
   const [modalHilo,           setModalHilo]           = useState(null) // {registroId, tipo, data}
   const [modalResumenValidacion, setModalResumenValidacion] = useState(false)
+  const [exportPresupuestoOpen, setExportPresupuestoOpen] = useState(false)
+  const [exportPresupuestoModo, setExportPresupuestoModo] = useState('presupuesto_obra')
+  const [exportPresupuestoBusy, setExportPresupuestoBusy] = useState(false)
+  const [exportPresupuestoError, setExportPresupuestoError] = useState(null)
+  const [versionesPresupuesto, setVersionesPresupuesto] = useState([])
+  const [versionCrearOpen, setVersionCrearOpen] = useState(false)
+  const [versionPanelOpen, setVersionPanelOpen] = useState(false)
+  const [verPapelera, setVerPapelera] = useState(false)
+  const versionVigente = useMemo(
+    () => versionesPresupuesto.find((v) => v.es_vigente) || null,
+    [versionesPresupuesto],
+  )
+  const mostrarVersionadorPresupuesto =
+    !verPapelera && (fObra.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT) === PPTO_TIPO_EJECUCION_DEFAULT
+  const [exportMetaContrato, setExportMetaContrato] = useState(null)
+  const [exportEstimado, setExportEstimado] = useState({
+    cargando: false,
+    registros: null,
+    items: null,
+    alcance: '',
+    esGrande: false,
+  })
+  const EXPORT_LENTO_REGISTROS = 1200
+  const EXPORT_LENTO_SIN_FILTRO = 400
   /** SicoeCAD → API → ClaraCore (source=sicoe_cad), no el import CSV del navegador */
   const [sincroSicoeModal, setSincroSicoeModal] = useState(null) // { insertados, enviados?, ts }
   /** Discrepancias listado_precios antes de POST /bulk (mismo payload que SicoeCAD). */
@@ -376,7 +399,31 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const fmtM = (n) => (n == null ? '' : formatCOPShort(n))
 
   // ── Carga inicial ──────────────────────────────────────────────────────────
-  useEffect(() => { if (contratoId) cargarCapitulos() }, [contratoId])
+  const cargarVersionesPresupuesto = useCallback(async () => {
+    if (!contratoId) return
+    try {
+      const res = await fetch(`${API}/presupuesto/${contratoId}/versiones`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setVersionesPresupuesto(Array.isArray(data) ? data : [])
+      }
+    } catch {
+      setVersionesPresupuesto([])
+    }
+  }, [API, contratoId, token])
+
+  useEffect(() => {
+    if (!contratoId) return
+    const h = { Authorization: `Bearer ${token}` }
+    fetch(`${API}/presupuesto/${contratoId}/filtros`, { headers: h })
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((d) => setTiposEjecucionDisponibles(Array.isArray(d?.tipos_ejecucion) ? d.tipos_ejecucion : []))
+      .catch(() => setTiposEjecucionDisponibles([]))
+    void cargarCapitulos()
+    void cargarVersionesPresupuesto()
+  }, [contratoId, token, cargarVersionesPresupuesto])
   useEffect(() => {
     if (!contratoId) return
     const h = { Authorization: `Bearer ${token}` }
@@ -453,6 +500,43 @@ useEffect(() => {
   const puedeEliminar = esDeveloper || (_permPpto?.eliminar ?? false)
   const nivelInfo    = determinarNivelValidacion(usuario)
   const esSellado = (r) => r?.sellado === true
+  const aplicaReglasCadPresupuesto = Number(contratoId) !== PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG
+  const MSG_BAJA_DESDE_PLANO = 'Este registro está enlazado al plano (ID-POL). La baja debe gestionarse desde ClaraLink/DWG en SicoeCAD.'
+  const MSG_DIMS_DESDE_PLANO = 'Las dimensiones de registros enlazados al plano deben modificarse desde ClaraLink/DWG.'
+  const MSG_AREA_LONG_DESDE_PLANO = 'El campo Área/Long/Nodo debe modificarse desde ClaraLink/DWG en este contrato.'
+  const TITULO_DIM_CAD = 'Modificar desde ClaraLink/DWG (plano CAD)'
+  const registroEnlazadoPlano = (r) => {
+    const v = r?.id_pol
+    return v != null && String(v).trim() !== ''
+  }
+  const bloqueaDarDeBajaDesdeWeb = (r) => aplicaReglasCadPresupuesto && registroEnlazadoPlano(r)
+  const puedeEditarAreaLongNodInline = () => !aplicaReglasCadPresupuesto && puedeEditarNodosYAreaLongComoDev
+  const puedeEditarAnchoEspesorInline = () => puedeEditar
+  const puedeIniciarEdicionDimsInline = (r) => {
+    if (!puedeEditarDimensiones || esSellado(r)) return false
+    return true
+  }
+  const estiloDimSoloLecturaCad = {
+    color: t.textMuted,
+    opacity: 0.88,
+    fontStyle: 'italic',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+  }
+  const renderDimBloqueadaCad = (valor, titulo) => (
+    <span title={titulo || TITULO_DIM_CAD} style={estiloDimSoloLecturaCad}>
+      <span aria-hidden="true" style={{ fontSize: '0.85em' }}>🔒</span>
+      {valor ?? '—'}
+    </span>
+  )
+  const validarDarDeBajaIds = (ids, resolverReg) => {
+    if (ids.some((id) => bloqueaDarDeBajaDesdeWeb(resolverReg(id)))) {
+      window.alert(MSG_BAJA_DESDE_PLANO)
+      return false
+    }
+    return true
+  }
   /** Grilla / detalle / tramos: edición si no está sellado, o contratista con permiso que puede reabrir. */
   const puedeEditarFilaPptoNoSelladoOReabrir = (r) => !esSellado(r) || puedeReabrirTrasAprob
 
@@ -502,6 +586,7 @@ useEffect(() => {
       no_final: registro.no_final ?? '',
     })
     setPopupCap(registro.capitulo || '')
+    setPopupTipoEjecucion(registro.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT)
     setPopupItem(registro.item || '')
     setPopupItemBusq(registro.item ? `${registro.item} · ${registro.descripcion || ''}` : '')
     setPopupMsg('')
@@ -535,7 +620,6 @@ useEffect(() => {
   }
   const puedePrevalidarUI = (nivelInfo.puedePrevalidarAntesInterv || esDeveloper) && puedeValidar && !nivelInfo.esInterventoria
   const mostrarColumnaDepuracion = !nivelInfo.esInterventoria
-  const [verPapelera, setVerPapelera] = useState(false)
   const _pptoCacheRef   = useRef(null)   // { data, ts, papelera } – solo para papelera
   const _pptoCachePorCap = useRef({})    // { [capitulo]: { data, ts } }
   const _lastWriteAtRef  = useRef(0)     // timestamp de la última escritura; suprime polling 6 s post-write
@@ -581,20 +665,187 @@ useEffect(() => {
     } else if (itemD) p.set('item', itemD.valor)
     else if (itemsD && Array.isArray(itemsD.valor) && itemsD.valor.length === 1) p.set('item', String(itemsD.valor[0]))
     if (verPapelera) p.set('papelera', 'true')
-    const f = fObra
-    if (f.tramo) p.set('tramo', f.tramo)
-    if (f.calzada) p.set('calzada', f.calzada)
-    if (f.nodoI) p.set('nodo_inicio', f.nodoI.trim())
-    if (f.nodoF) p.set('nodo_final', f.nodoF.trim())
-    if (f.absA) p.set('abs_desde', String(f.absA).replace(',', '.'))
-    if (f.absB) p.set('abs_hasta', String(f.absB).replace(',', '.'))
-    if (f.eje === 'interv' && f.revisado) p.set('revisado', f.revisado)
-    if (f.eje === 'depur' && f.preInterv) p.set('pre_interv_estado', f.preInterv)
-    if (f.idPol && String(f.idPol).trim()) p.set('id_pol', f.idPol.trim())
-    if (f.pkCriterio && String(f.pkCriterio).trim()) p.set('pk_criterio', f.pkCriterio.trim())
-    if (f.texto && String(f.texto).trim()) p.set('texto', f.texto.trim())
+    pptoAppendFObraToSearchParams(p, fObra)
     return p
   }, [armarFiltrosUbicacionSolo, drill, fObra, verPapelera])
+
+  const armarPayloadExportPresupuesto = useCallback(() => {
+    const f = fObraRef.current || fObra
+    return pptoFObraToExportBody(f, {
+      drill,
+      capExpandido,
+      tipoEjecucionDefault: PPTO_TIPO_EJECUCION_DEFAULT,
+      verPapelera,
+    })
+  }, [drill, fObra, capExpandido, verPapelera])
+
+  const payloadExportAQuery = useCallback((payload) => pptoExportBodyToSearchParams(payload), [])
+
+  const describirAlcanceExport = useCallback((payload, totalReg, itemsCount) => {
+    const partes = []
+    if (payload.capitulo) {
+      const capTxt = String(payload.capitulo)
+      partes.push(`Capítulo: ${capTxt.length > 36 ? `${capTxt.slice(0, 36)}…` : capTxt}`)
+    } else if (Array.isArray(payload.capitulos) && payload.capitulos.length) {
+      partes.push(`${payload.capitulos.length} capítulo${payload.capitulos.length !== 1 ? 's' : ''}`)
+    }
+    if (Array.isArray(payload.items) && payload.items.length) {
+      partes.push(`${payload.items.length} ítem${payload.items.length !== 1 ? 's' : ''}`)
+    } else if (payload.item) {
+      partes.push(`Ítem: ${payload.item}`)
+    } else if ((payload.capitulo || payload.capitulos?.length) && itemsCount != null) {
+      partes.push(`${itemsCount} ítem${itemsCount !== 1 ? 's' : ''} del capítulo`)
+    }
+    if (payload.tipo_ejecucion) partes.push(payload.tipo_ejecucion)
+    if (payload.tramo) partes.push(`Tramo: ${payload.tramo}`)
+    else if (Array.isArray(payload.tramos) && payload.tramos.length) partes.push(`${payload.tramos.length} tramos`)
+    if (payload.calzada) partes.push(`Calzada: ${payload.calzada}`)
+    if (payload.revisado) partes.push(`Int.: ${payload.revisado}`)
+    if (payload.pre_interv_estado) partes.push(`Dep.: ${payload.pre_interv_estado}`)
+    if (payload.id_pol) partes.push(`ID-POL: ${payload.id_pol}`)
+    if (payload.pk_criterio) partes.push(`PK: ${payload.pk_criterio}`)
+    if (payload.texto) partes.push('Texto filtrado')
+    if (payload.competencia) partes.push(`Comp.: ${payload.competencia}`)
+    if (payload.und) partes.push(`Und: ${payload.und}`)
+    const base = partes.length ? partes.join(' · ') : 'Sin filtros activos'
+    if (totalReg != null) return `${base} — ${totalReg.toLocaleString('es-CO')} registros`
+    return base
+  }, [])
+
+  const abrirPopupExportPresupuesto = useCallback(async () => {
+    if (!contratoId) return
+    setExportPresupuestoOpen(true)
+    setExportPresupuestoError(null)
+    setExportPresupuestoModo('presupuesto_obra')
+    setExportMetaContrato(null)
+    setExportEstimado({ cargando: true, registros: null, items: null, alcance: 'Calculando alcance…', esGrande: false })
+    try {
+      const rc = await fetch(`${API}/contratos/${contratoId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const c = rc.ok ? await rc.json() : null
+      setExportMetaContrato(c && typeof c === 'object' ? c : null)
+    } catch {
+      setExportMetaContrato(null)
+    }
+
+    try {
+      const payload = armarPayloadExportPresupuesto()
+      const hayFiltroCapItem = !!(payload.capitulo || payload.capitulos?.length || payload.item || (payload.items && payload.items.length))
+      const p = payloadExportAQuery(payload)
+      const resC = await fetch(`${API}/presupuesto/${contratoId}/conteo${p.toString() ? `?${p.toString()}` : ''}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      let totalReg = conteoFiltroRef.current
+      if (resC.ok) {
+        const j = await resC.json()
+        if (j && typeof j.total === 'number') totalReg = j.total
+      } else if (totalReg == null && !hayFiltroCapItem) {
+        totalReg = capitulosResumen.reduce((s, x) => s + (x.total_registros || 0), 0)
+      }
+
+      let itemsCount = null
+      if (Array.isArray(payload.items) && payload.items.length) {
+        itemsCount = payload.items.length
+      } else if (payload.item) {
+        itemsCount = 1
+      } else if (payload.capitulo && String(payload.capitulo) === String(capExpandido || fObraRef.current?.cap || '')) {
+        itemsCount = itemsResumen.length
+      } else if (Array.isArray(payload.capitulos) && payload.capitulos.length === 1 && String(payload.capitulos[0]) === String(capExpandido || fObraRef.current?.cap || '')) {
+        itemsCount = itemsResumen.length
+      }
+
+      const esGrande =
+        (totalReg != null && totalReg >= EXPORT_LENTO_REGISTROS) ||
+        (!hayFiltroCapItem && totalReg != null && totalReg >= EXPORT_LENTO_SIN_FILTRO)
+
+      setExportEstimado({
+        cargando: false,
+        registros: totalReg,
+        items: itemsCount,
+        alcance: describirAlcanceExport(payload, totalReg, itemsCount),
+        esGrande,
+      })
+    } catch {
+      setExportEstimado({
+        cargando: false,
+        registros: null,
+        items: null,
+        alcance: 'No se pudo estimar el tamaño; se usarán los filtros activos.',
+        esGrande: false,
+      })
+    }
+  }, [
+    API,
+    armarPayloadExportPresupuesto,
+    capExpandido,
+    capitulosResumen,
+    contratoId,
+    describirAlcanceExport,
+    itemsResumen.length,
+    payloadExportAQuery,
+    token,
+  ])
+
+  const descargarPresupuestoExcel = useCallback(async () => {
+    if (!contratoId || exportPresupuestoBusy) return
+    setExportPresupuestoBusy(true)
+    setExportPresupuestoError(null)
+    try {
+      const filtros = armarPayloadExportPresupuesto()
+      const ctx = { drill, capExpandido, tipoEjecucionDefault: PPTO_TIPO_EJECUCION_DEFAULT }
+      if (!criterioVistaActivo(fObraRef.current || fObra, ctx)) {
+        throw new Error('Configure filtros y pulse Buscar antes de exportar.')
+      }
+      const res = await fetch(`${API}/presupuesto/${contratoId}/exportar-informe`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ...filtros, modo: exportPresupuestoModo }),
+      })
+      if (!res.ok) {
+        let msg = `Error ${res.status} exportando presupuesto`
+        try {
+          const j = JSON.parse(await res.text())
+          msg = j?.detail || msg
+        } catch {
+          /* ignore */
+        }
+        throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg))
+      }
+      const payload = await res.json()
+      if (!payload?.resumen?.length) {
+        throw new Error('No hay registros para exportar con los filtros actuales.')
+      }
+      await downloadPresupuestoInformeExcel(
+        payload,
+        {
+          ...(exportMetaContrato || {}),
+          logo_contratista: exportMetaContrato?.logo_contratista || usuario?.logo_contratista || null,
+        },
+        contratoId,
+      )
+      setExportPresupuestoOpen(false)
+    } catch (e) {
+      setExportPresupuestoError(e?.message || 'Error exportando Excel')
+    } finally {
+      setExportPresupuestoBusy(false)
+    }
+  }, [
+    API,
+    armarPayloadExportPresupuesto,
+    contratoId,
+    exportMetaContrato,
+    exportPresupuestoBusy,
+    exportPresupuestoModo,
+    token,
+    drill,
+    capExpandido,
+    fObra,
+    usuario?.logo_contratista,
+  ])
 
   const detalleConItem = !!drill.find(d => d.campo === 'item' || d.campo === 'items')
   const cacheKeyPpto = useMemo(() => {
@@ -602,7 +853,7 @@ useEffect(() => {
     const itemD = drill.find(d => d.campo === 'item')
     const itemsD = drill.find(d => d.campo === 'items')
     const f = fObra
-    const obraKey = [f.tramo, f.calzada, f.eje, f.revisado, f.preInterv, f.idPol, f.pkCriterio, f.texto, f.nodoI, f.nodoF, f.absA, f.absB].join('\x1e')
+    const obraKey = [f.tramo, f.calzada, f.eje, f.revisado, f.preInterv, f.idPol, f.pkCriterio, f.texto, f.nodoI, f.nodoF, f.absA, f.absB, f.tipoEjecucion].join('\x1e')
     const itemKey = itemsD?.valor?.length
       ? [...itemsD.valor].map(String).sort().join('\x1f')
       : (itemD?.valor ?? '')
@@ -612,7 +863,17 @@ useEffect(() => {
     ].join('|')
   }, [drill, ubicacionTramo, ubicacionCalzada, filtroEstado, busquedaTipo, busquedaV1, busquedaV2, verPapelera, fObra])
 
-  const keyCacheFila = (cap, it) => [cap, it || '', ubicacionTramo, ubicacionCalzada, filtroEstado, busquedaTipo, busquedaV1, busquedaV2].join('|')
+  const keyCacheFila = (cap, it) => [
+    cap,
+    it || '',
+    fObraRef.current?.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT,
+    ubicacionTramo,
+    ubicacionCalzada,
+    filtroEstado,
+    busquedaTipo,
+    busquedaV1,
+    busquedaV2,
+  ].join('|')
 
   /**
    * Carga el listado completo: 1 request de conteo + N páginas con concurrencia limitada (max 3).
@@ -688,7 +949,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (!contratoId) return
     setLoadingCapitulos(true)
     try {
-      const res = await fetch(`${API}/presupuesto/${contratoId}/capitulos-lista`, {
+      const p = new URLSearchParams()
+      pptoAppendTipoEjecucion(p, fObraRef.current)
+      const qs = p.toString()
+      const res = await fetch(`${API}/presupuesto/${contratoId}/capitulos-lista${qs ? `?${qs}` : ''}`, {
         headers: { Authorization: `Bearer ${token}` }
       })
       if (res.ok) {
@@ -705,6 +969,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const p = armarFiltrosUbicacionSolo()
     p.set('capitulo', capitulo)
     if (item) p.set('item', item)
+    pptoAppendTipoEjecucion(p, fObraRef.current)
     const cacheKey = keyCacheFila(capitulo, item)
     const silent = !!o.forzar && !!o.syncPreserveSize
     if (!o.forzar) {
@@ -1106,13 +1371,15 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   async function aplicarFiltroObraConF(fIn) {
     if (!contratoId) return
-    const f = { ...fIn, eje: fIn.eje || 'interv' }
-    const has = criterioVistaActivo(f)
+    const ctx = { drill, capExpandido, tipoEjecucionDefault: PPTO_TIPO_EJECUCION_DEFAULT }
+    const f = pptoFiltroNormalizar({ ...(fIn || {}), eje: fIn?.eje || 'interv' }, ctx)
+    const has = criterioVistaActivo(f, ctx)
     if (!has) {
-      window.alert('Indique al menos un criterio: capítulo, ítem, ID-POL, PK, texto, tramo, calzada, nodos, abscisas o estado (Interventoría o depuración).')
+      setAvisoSistema({ titulo: 'Filtros', mensaje: 'Indique al menos un criterio de filtro activo.', tipo: 'warn' })
       return
     }
     setFObra(f)
+    fObraRef.current = f
     setBuscandoFiltroObra(true)
     cargaPptoIdRef.current += 1
     const cargaId = cargaPptoIdRef.current
@@ -1120,32 +1387,19 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     try {
       syncFObraALegacy(f)
       const itemsLista = fObraItemsLista(f)
+      const capVals = pptoFiltroValoresLista(pptoFiltroDef('capitulo'), f)
       const d = []
-      if (f.cap) d.push({ campo: 'capitulo', valor: f.cap })
+      if (capVals.length === 1) d.push({ campo: 'capitulo', valor: capVals[0] })
       if (itemsLista.length > 1) d.push({ campo: 'items', valor: itemsLista })
       else if (itemsLista.length === 1) d.push({ campo: 'item', valor: itemsLista[0] })
       setDrill(d)
-      if (f.cap) setCapActivo(f.cap)
+      const capPrim = capVals[0] || f.cap || ''
+      if (capPrim) setCapActivo(capPrim)
 
       const p = new URLSearchParams()
       if (verPapelera) p.set('papelera', 'true')
-      if (f.cap) p.set('capitulo', f.cap)
-      if (itemsLista.length > 1) {
-        for (const it of itemsLista) p.append('items', it)
-      } else if (itemsLista.length === 1) {
-        p.set('item', itemsLista[0])
-      }
-      if (f.tramo) p.set('tramo', f.tramo)
-      if (f.calzada) p.set('calzada', f.calzada)
-      if (f.nodoI) p.set('nodo_inicio', f.nodoI.trim())
-      if (f.nodoF) p.set('nodo_final', f.nodoF.trim())
-      if (f.absA) p.set('abs_desde', String(f.absA).replace(',', '.'))
-      if (f.absB) p.set('abs_hasta', String(f.absB).replace(',', '.'))
-      if (f.eje === 'interv' && f.revisado) p.set('revisado', f.revisado)
-      if (f.eje === 'depur' && f.preInterv) p.set('pre_interv_estado', f.preInterv)
-      if (f.idPol && String(f.idPol).trim()) p.set('id_pol', f.idPol.trim())
-      if (f.pkCriterio && String(f.pkCriterio).trim()) p.set('pk_criterio', f.pkCriterio.trim())
-      if (f.texto && String(f.texto).trim()) p.set('texto', f.texto.trim())
+      pptoAppendFObraToSearchParams(p, f)
+      pptoAppendTipoEjecucion(p, f)
       const { rows, total } = await fetchPresupuestoPaginasCompletas(p, (partial) => {
         if (cargaId !== cargaPptoIdRef.current) return
         setRegistros(partial)
@@ -1155,10 +1409,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       setRegistros(rows)
       setVisibleRegistrosCount(50)
       _pptoCachePorCap.current = {}
-      const capD = f.cap
+      const capD = capPrim || f.cap
       const itemKey = itemsLista.length > 1 ? itemsLista.join('\x1f') : (itemsLista[0] || '')
       if (capD) {
-        const key = [capD, itemKey, f.tramo, f.calzada, f.eje, f.revisado, f.preInterv, f.idPol, f.pkCriterio, f.texto, f.nodoI, f.nodoF, f.absA, f.absB].join('|')
+        const key = [capD, itemKey, f.tramo, f.calzada, f.eje, f.revisado, f.preInterv, f.idPol, f.pkCriterio, f.texto, f.nodoI, f.nodoF, f.absA, f.absB, f.competencia, f.und, f.sellado, f.dadoDeBaja, f.vlrUnitarioMin, f.vlrUnitarioMax, f.cantTotalMin, f.cantTotalMax, f.costoDirectoMin, f.costoDirectoMax, f.tipoEjecucion].join('|')
         pptoCargaRef.current = { key, nextOffset: rows.length, hasMore: false, total }
         _pptoCachePorCap.current[key] = { data: rows, ts: Date.now(), total }
       }
@@ -1170,12 +1424,37 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }
 
   async function aplicarFiltroObra() {
-    await aplicarFiltroObraConF(fObra)
+    await aplicarFiltroObraConF(fObraRef.current || fObra)
   }
 
   const fObraInicialVacio = () => ({
-    cap: '', item: '', items: [], idPol: '', pkCriterio: '', texto: '', tramo: '', calzada: '', nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '',
+    cap: '', caps: [], item: '', items: [], idPol: '', pkCriterio: '', texto: '', tramo: '', tramos: [], calzada: '', calzadas: [], nodoI: '', nodoF: '', absA: '', absB: '', eje: 'interv', revisado: '', preInterv: '', competencia: '', competencias: [], und: '', unds: [], sellado: '', dadoDeBaja: '', vlrUnitarioMin: '', vlrUnitarioMax: '', cantTotalMin: '', cantTotalMax: '', costoDirectoMin: '', costoDirectoMax: '', tipoEjecucion: fObraRef.current?.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT,
   })
+
+  async function onCambioTipoEjecucion(nuevoTipo) {
+    const te = String(nuevoTipo || PPTO_TIPO_EJECUCION_DEFAULT).trim() || PPTO_TIPO_EJECUCION_DEFAULT
+    if (te === (fObraRef.current?.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT)) return
+    const next = { ...fObraRef.current, tipoEjecucion: te }
+    setFObra(next)
+    fObraRef.current = next
+    cargaPptoIdRef.current += 1
+    _pptoCachePorCap.current = {}
+    _pptoCacheRef.current = null
+    pptoCargaRef.current = { key: '', nextOffset: 0, hasMore: false, total: 0 }
+    setConteoFiltro(null)
+    setRegistros([])
+    setItemsResumen([])
+    setSeleccionados(new Set())
+    setVisibleRegistrosCount(50)
+    await cargarCapitulos()
+    const cap = (next.cap && String(next.cap).trim()) || capExpandido
+    if (cap) await cargarItemsCapitulo(cap)
+    if (criterioVistaActivo(next)) {
+      await aplicarFiltroObraConF(next)
+    } else if (drill.length > 0) {
+      await recargarCapActual(false)
+    }
+  }
 
   /** Quita búsqueda fina (PK, ID-POL, texto) y vuelve a cargar; mantiene cap/ítem y tramo/validación. */
   async function restablecerPksVistaItem() {
@@ -1201,6 +1480,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const vacio = fObraInicialVacio()
     setFObra(vacio)
     fObraRef.current = vacio
+    setFiltroResetKey((k) => k + 1)
     setDrill([])
     setUbicacionTramo(''); setUbicacionCalzada(''); setFiltroEstado(''); setBusquedaTipo(''); setBusquedaV1(''); setBusquedaV2(''); setConteoFiltro(null)
     setRegistros([]); setCapExpandido(null); setItemsResumen([]); setCapActivo(null); setPkidsSeleccionados([])
@@ -1656,8 +1936,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setItemsResumen([])
     setCapActivo(capitulo)
     try {
+      const p = new URLSearchParams({ capitulo })
+      pptoAppendTipoEjecucion(p, fObraRef.current)
       const res = await fetch(
-        `${API}/presupuesto/${contratoId}/items-lista?capitulo=${encodeURIComponent(capitulo)}`,
+        `${API}/presupuesto/${contratoId}/items-lista?${p.toString()}`,
         { headers: { Authorization: `Bearer ${token}` } }
       )
       if (res.ok) setItemsResumen(await res.json())
@@ -1700,6 +1982,26 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   async function ejecutarRecalcular() {
     const ids = [...seleccionados]
+    if (aplicaReglasCadPresupuesto) {
+      const intentaArea = ids.some((id) => {
+        const d = editDims[id]
+        return d && d.area_long_nod != null && d.area_long_nod !== ''
+      })
+      if (intentaArea) {
+        alert(MSG_AREA_LONG_DESDE_PLANO)
+        return
+      }
+      const intentaCad = ids.some((id) => {
+        const d = editDims[id]
+        const row = registros.find((r) => r.id === id)
+        if (!d || !row || !registroEnlazadoPlano(row)) return false
+        return (d.ancho != null && d.ancho !== '') || (d.espesor != null && d.espesor !== '')
+      })
+      if (intentaCad) {
+        alert(MSG_DIMS_DESDE_PLANO)
+        return
+      }
+    }
     // Solo area_long_nod está restringido al Desarrollador; ancho/espesor los puede editar cualquier editor
     const tieneAreaLong = ids.some(id => editDims[id]?.area_long_nod != null)
     if (tieneAreaLong && !puedeEditarNodosYAreaLongComoDev) {
@@ -1777,12 +2079,14 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
     const dims = ids.filter(id => editDims[id]).map(id => {
       const d = editDims[id]
+      const row = registros.find((r) => r.id === id)
+      const cad = aplicaReglasCadPresupuesto && registroEnlazadoPlano(row)
       return {
         id,
-        ancho: d.ancho !== '' && d.ancho != null ? parseFloat(d.ancho) : null,
-        espesor: d.espesor !== '' && d.espesor != null ? parseFloat(d.espesor) : null,
+        ancho: !cad && d.ancho !== '' && d.ancho != null ? parseFloat(d.ancho) : null,
+        espesor: !cad && d.espesor !== '' && d.espesor != null ? parseFloat(d.espesor) : null,
         area_long_nod:
-          puedeEditarNodosYAreaLongComoDev && d.area_long_nod !== '' && d.area_long_nod != null ? parseFloat(d.area_long_nod) : null,
+          !aplicaReglasCadPresupuesto && puedeEditarNodosYAreaLongComoDev && d.area_long_nod !== '' && d.area_long_nod != null ? parseFloat(d.area_long_nod) : null,
       }
     })
     const body = { ids, dims: dims.length > 0 ? dims : null }
@@ -2154,6 +2458,10 @@ async function highlightEnDwg(registro) {
 async function darDeBaja(id) {
     const row = registros.find(rr => rr.id === id)
     if (esSellado(row)) return
+    if (bloqueaDarDeBajaDesdeWeb(row)) {
+      window.alert(MSG_BAJA_DESDE_PLANO)
+      return
+    }
     const comentarioData = await pedirComentario('validacion', true) // obligatorio
     if (comentarioData === null) return
     const comentario = comentarioData?.mensaje || ''
@@ -2164,7 +2472,14 @@ async function darDeBaja(id) {
     if (res.ok) {
       await crearComentarios([id], 'validacion', `[BAJA] ${comentario}`, destinatarioId)
       await recargarCapActual()
-    } else alert('Error al dar de baja el registro')
+    } else {
+      try {
+        const d = await res.json()
+        alert(d.detail || 'Error al dar de baja el registro')
+      } catch {
+        alert('Error al dar de baja el registro')
+      }
+    }
   }
 
 async function restaurar(id) {
@@ -2664,6 +2979,7 @@ async function restaurar(id) {
                                     return row && !esSellado(row)
                                   })
                                   if (idsBaja.length === 0) return
+                                  if (!validarDarDeBajaIds(idsBaja, (id) => regs.find((x) => x.id === id))) return
                                   const comentarioData = await pedirComentario('validacion', true)
                                   if (comentarioData === null) return
                                   const comentario = comentarioData?.mensaje || ''
@@ -2736,26 +3052,36 @@ async function restaurar(id) {
                                 <div style={{ minWidth:'200px', flexShrink:0, fontSize:'var(--cc-sm)', color:t.textMuted, textAlign:'right', whiteSpace:'nowrap' }}>
                                   {puedeEditarDimensiones && !esSellado(r) && editDims[r.id] !== undefined ? (
                                     <div style={{ display:'flex', flexDirection:'column', gap:'4px', alignItems:'flex-end' }} onClick={e => e.stopPropagation()}>
-                                      {puedeEditarNodosYAreaLongComoDev ? (
+                                      {puedeEditarAreaLongNodInline() ? (
                                         <input type="number" placeholder="a/l/n" value={editDims[r.id].area_long_nod ?? ''}
                                           onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], area_long_nod: e.target.value } }))}
                                           style={tramoDimInput} />
+                                      ) : aplicaReglasCadPresupuesto ? (
+                                        renderDimBloqueadaCad(`a/l/n: ${r.area_long_nod ?? '—'}`, MSG_AREA_LONG_DESDE_PLANO)
                                       ) : (
                                         <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, opacity:0.95 }} title="Área/long solo Desarrollador o editor en contrato autorizado">
                                           a/l/n: {r.area_long_nod ?? '—'}
                                         </span>
                                       )}
-                                      <input type="number" placeholder="ancho" value={editDims[r.id].ancho ?? ''}
-                                        onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], ancho: e.target.value } }))}
-                                        style={tramoDimInput} />
-                                      <input type="number" placeholder="esp" value={editDims[r.id].espesor ?? ''}
-                                        onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], espesor: e.target.value } }))}
-                                        style={tramoDimInput} />
+                                      {puedeEditarAnchoEspesorInline() ? (
+                                        <>
+                                          <input type="number" placeholder="ancho" value={editDims[r.id].ancho ?? ''}
+                                            onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], ancho: e.target.value } }))}
+                                            style={tramoDimInput} />
+                                          <input type="number" placeholder="esp" value={editDims[r.id].espesor ?? ''}
+                                            onChange={e => setEditDims(p => ({ ...p, [r.id]: { ...p[r.id], espesor: e.target.value } }))}
+                                            style={tramoDimInput} />
+                                        </>
+                                      ) : (
+                                        <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>
+                                          {[r.ancho, r.espesor].filter(v => v != null && v !== '').join(' × ') || '—'}
+                                        </span>
+                                      )}
                                     </div>
                                   ) : (
-                                    <span onClick={puedeEditarDimensiones && !esSellado(r) ? (e) => { e.stopPropagation(); setEditDims(p => ({ ...p, [r.id]: { area_long_nod: r.area_long_nod ?? '', ancho: r.ancho ?? '', espesor: r.espesor ?? '' } })) } : undefined}
-                                      title={puedeEditarDimensiones && !esSellado(r) ? 'Clic para editar dims' : undefined}
-                                      style={{ cursor: puedeEditarDimensiones && !esSellado(r) ? 'pointer' : 'default', textDecoration: puedeEditarDimensiones && !esSellado(r) ? 'underline dotted' : 'none', whiteSpace:'nowrap' }}>
+                                    <span onClick={puedeIniciarEdicionDimsInline(r) ? (e) => { e.stopPropagation(); setEditDims(p => ({ ...p, [r.id]: { area_long_nod: r.area_long_nod ?? '', ancho: r.ancho ?? '', espesor: r.espesor ?? '' } })) } : undefined}
+                                      title={puedeIniciarEdicionDimsInline(r) ? 'Clic para editar dims' : undefined}
+                                      style={{ cursor: puedeIniciarEdicionDimsInline(r) ? 'pointer' : 'default', textDecoration: puedeIniciarEdicionDimsInline(r) ? 'underline dotted' : 'none', whiteSpace:'nowrap' }}>
                                       {[r.area_long_nod, r.ancho, r.espesor].filter(v => v != null && v !== '').join(' × ') || '—'}
                                     </span>
                                   )}
@@ -2816,9 +3142,9 @@ async function restaurar(id) {
                                       const a = num(d.area_long_nod)
                                       const w = num(d.ancho)
                                       const espN = num(d.espesor)
-                                      if (a !== undefined) pay.area_long_nod = a
-                                      if (w !== undefined) pay.ancho = w
-                                      if (espN !== undefined) pay.espesor = espN
+                                      if (puedeEditarAreaLongNodInline() && a !== undefined) pay.area_long_nod = a
+                                      if (puedeEditarAnchoEspesorInline() && w !== undefined) pay.ancho = w
+                                      if (puedeEditarAnchoEspesorInline() && espN !== undefined) pay.espesor = espN
                                       if (Object.keys(pay).length === 0) return
                                       // Calcular resultado localmente y aplicar de forma optimista
                                       const aF = pay.area_long_nod ?? r.area_long_nod ?? 0
@@ -3152,7 +3478,7 @@ async function restaurar(id) {
                     <div style={{ display:'flex', flexDirection:'column', gap:'5px', minWidth:0 }}>
                       <Row><F label="ID_POL" val={r.id_pol||r.pk_id}/><F label="CAPÍTULO" val={r.capitulo}/><F label="ÍTEM" val={r.item} flex={0.5}/></Row>
                       <BigF label="DESCRIPCIÓN" val={r.descripcion}/>
-                      <Row><F label="UNIDAD" val={r.und} flex={0.5}/><F label="REVISADO" val={r.revisado||'No Revisado'}/><F label="TIPO" val={r.tipo}/></Row>
+                      <Row><F label="UNIDAD" val={r.und} flex={0.5}/><F label="REVISADO" val={r.revisado||'No Revisado'}/><F label="TIPO EJECUCIÓN" val={r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT}/></Row>
                       {mostrarColumnaDepuracion && (
                         <Row>
                           <F label="DEPURACIÓN (COSTOS / OBRA)" val={r.pre_interv_estado == null || r.pre_interv_estado === '' ? '— (legado)' : r.pre_interv_estado} flex={1}/>
@@ -3192,20 +3518,23 @@ async function restaurar(id) {
                   {modalDetallePptoEditable && (puedeEditar || puedeEliminar) && (!esSellado(r) || puedeReabrirTrasAprob) && (
                     <div style={{ borderTop:`1px solid ${t.border}`, marginTop:'14px', paddingTop:'14px' }}>
                       <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px', alignItems:'stretch' }}>
-                      {/* ── Editar dimensiones (solo Desarrollador) — no aplica a sellado (reabre solo contratista, sin dims) ── */}
+                      {/* ── Editar dimensiones — ancho/espesor siempre con permiso; área/long solo sin CAD o contrato autorizado ── */}
                       {puedeEditarDimensiones && !esSellado(r) && (
                         <div style={{ background:t.bg, borderRadius:'8px', padding:'10px 12px', minWidth:0 }}>
                           <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:'#F59E0B', letterSpacing:'0.5px', marginBottom:'8px' }}>📐 EDITAR DIMENSIONES</div>
                           <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginBottom:'10px', lineHeight:1.45 }}>
-                            Ajuste <strong>ancho</strong> y <strong>espesor</strong>; al guardar se <strong>recalculan cantidad total y costo directo</strong> con el valor unitario del registro.
-                            {puedeEditarNodosYAreaLongComoDev && (
+                            Ajuste <strong>ancho</strong> y <strong>espesor</strong>; al guardar se <strong>recalculan cantidad total y costo directo</strong> con el valor unitario del registro (sin requerir plano CAD).
+                            {puedeEditarAreaLongNodInline() && (
                               <span>
                                 {' '}
                                 También puede editar <strong>área/long/nod</strong> y los <strong>nodos inicio / final</strong> (Desarrollador o editor en contrato autorizado).
                               </span>
                             )}
+                            {aplicaReglasCadPresupuesto && !puedeEditarAreaLongNodInline() && (
+                              <span> El campo <strong>área/long/nod</strong> debe modificarse desde ClaraLink/DWG en este contrato.</span>
+                            )}
                           </div>
-                          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom: puedeEditarNodosYAreaLongComoDev ? '10px' : '8px' }}>
+                          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'10px', marginBottom: puedeEditarAreaLongNodInline() ? '10px' : '8px' }}>
                             <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
                               <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>ANCHO</span>
                               <input type="number" step="any" value={popupDims.ancho}
@@ -3219,7 +3548,7 @@ async function restaurar(id) {
                                 style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box' }} />
                             </label>
                           </div>
-                          {puedeEditarNodosYAreaLongComoDev && (
+                          {puedeEditarAreaLongNodInline() && (
                             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'10px', marginBottom:'8px' }}>
                               <label style={{ display:'flex', flexDirection:'column', gap:'4px' }}>
                                 <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'700' }}>ÁREA / LONG / NOD</span>
@@ -3249,7 +3578,7 @@ async function restaurar(id) {
                             }
                             const pAncho = parseDim(popupDims.ancho)
                             const pEsp = parseDim(popupDims.espesor)
-                            const pArea = puedeEditarNodosYAreaLongComoDev ? parseDim(popupDims.area_long_nod) : parseDim(r.area_long_nod)
+                            const pArea = puedeEditarAreaLongNodInline() ? parseDim(popupDims.area_long_nod) : parseDim(r.area_long_nod)
                             if (![pArea, pAncho, pEsp].every(Number.isFinite)) {
                               window.alert('Indique valores numéricos válidos en área/longitud, ancho y espesor.')
                               return
@@ -3260,17 +3589,15 @@ async function restaurar(id) {
                             const cant = (ancho > 0 || esp > 0) ? Math.round(area * ancho * esp * 100) / 100 : Math.round(area * 100) / 100
                             const costo = Math.round(cant * (r.vlr_unitario || 0))
                             const body = {
-                              area_long_nod: area,
                               ancho,
                               espesor: esp,
                               cant_total: cant,
                               costo_directo: costo,
-                              ...(puedeEditarNodosYAreaLongComoDev
-                                ? {
-                                    no_inicio: String(popupDims.no_inicio ?? '').trim() || null,
-                                    no_final: String(popupDims.no_final ?? '').trim() || null,
-                                  }
-                                : {}),
+                            }
+                            if (puedeEditarAreaLongNodInline()) {
+                              body.area_long_nod = area
+                              body.no_inicio = String(popupDims.no_inicio ?? '').trim() || null
+                              body.no_final = String(popupDims.no_final ?? '').trim() || null
                             }
                             // Actualización optimista inmediata
                             const optimisticRow = { ...r, ...body }
@@ -3301,6 +3628,66 @@ async function restaurar(id) {
                           }}
                             style={{ background:'#F59E0B', color:'#fff', border:'none', borderRadius:'7px', padding:'7px 18px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', opacity: popupGuardando ? 0.6 : 1 }}>
                             {popupGuardando ? '⏳ Guardando...' : '💾 Recalcular y guardar'}
+                          </button>
+                        </div>
+                      )}
+
+                      {/* ── Corregir tipo de ejecución (Presupuesto de Obra / Obra Ejecutada) ── */}
+                      {puedeEditar && !esSellado(r) && (
+                        <div style={{ background:t.bg, borderRadius:'8px', padding:'10px 12px', minWidth:0 }}>
+                          <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:'#7C3AED', letterSpacing:'0.5px', marginBottom:'8px' }}>↔ TIPO DE EJECUCIÓN</div>
+                          <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginBottom:'8px', lineHeight:1.45 }}>
+                            Corrija si el registro quedó mal clasificado entre presupuesto de obra y obra ejecutada.
+                          </div>
+                          <select value={popupTipoEjecucion}
+                            onChange={e => setPopupTipoEjecucion(e.target.value)}
+                            style={{ width:'100%', background:t.inputBg, border:`1.5px solid ${t.border}`, borderRadius:'6px', padding:'6px 8px', color:t.text, fontSize:'var(--cc-sm)', boxSizing:'border-box', marginBottom:'8px' }}>
+                            <option value={PPTO_TIPO_EJECUCION_DEFAULT}>{PPTO_TIPO_EJECUCION_DEFAULT}</option>
+                            <option value={PPTO_TIPO_EJECUCION_OBRA}>{PPTO_TIPO_EJECUCION_OBRA}</option>
+                          </select>
+                          <button disabled={popupGuardando || popupTipoEjecucion === (r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT)} onClick={async () => {
+                            setPopupMsg('')
+                            const body = { tipo_ejecucion: popupTipoEjecucion }
+                            if (!(await adjuntarMotivoSiEdicionContratistaConInterv(r, body))) return
+                            const optimisticRow = { ...r, ...body }
+                            setModalDetallePpto(optimisticRow)
+                            setRegistros(prev => prev.map(x => x.id === r.id ? optimisticRow : x))
+                            _lastWriteAtRef.current = Date.now()
+                            setPopupGuardando(true)
+                            const res = await fetch(`${API}/presupuesto/item/${r.id}`, {
+                              method:'PUT', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
+                              body: JSON.stringify(body),
+                            })
+                            if (res.ok) {
+                              const d = await res.json()
+                              const nuevoTipo = d?.tipo_ejecucion || popupTipoEjecucion
+                              const vistaTipo = fObraRef.current?.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT
+                              if (nuevoTipo !== vistaTipo) {
+                                setRegistros((prev) => prev.filter((x) => x.id !== r.id))
+                                setModalDetallePpto(null)
+                                setAvisoSistema({
+                                  titulo: 'Tipo de ejecución',
+                                  mensaje: `Tipo de ejecución actualizado a «${nuevoTipo}». El registro deja de mostrarse en la vista «${vistaTipo}»; use el toggle Presupuesto de Obra / Obra Ejecutada para verlo.`,
+                                  tipo: 'info',
+                                })
+                              } else if (d?.id) {
+                                setModalDetallePpto(d)
+                                setModalDetallePptoEditable(puedeEditarFilaPptoNoSelladoOReabrir(d))
+                                setRegistros((prev) => prev.map((x) => (x.id === d.id ? d : x)))
+                                setPopupTipoEjecucion(d.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT)
+                                setPopupMsg('✅ Tipo de ejecución actualizado')
+                              }
+                              { const c = drill.find(d=>d.campo==='capitulo')?.valor; if(c) delete _pptoCachePorCap.current[c] }
+                            } else {
+                              setModalDetallePpto(r)
+                              setRegistros(prev => prev.map(x => x.id === r.id ? r : x))
+                              setPopupTipoEjecucion(r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT)
+                              setPopupMsg('❌ Error al guardar tipo de ejecución')
+                            }
+                            setPopupGuardando(false)
+                          }}
+                            style={{ background:'#7C3AED', color:'#fff', border:'none', borderRadius:'7px', padding:'7px 18px', fontSize:'var(--cc-sm)', fontWeight:'700', cursor:'pointer', opacity: popupGuardando ? 0.6 : 1 }}>
+                            {popupGuardando ? '⏳ Guardando...' : '💾 Guardar tipo'}
                           </button>
                         </div>
                       )}
@@ -3399,6 +3786,10 @@ async function restaurar(id) {
                       {/* ── Dar de baja — no disponible en registros sellados (reabrir antes con el flujo contratista) ── */}
                       {puedeEliminar && !esSellado(r) && (
                         <button onClick={async () => {
+                          if (bloqueaDarDeBajaDesdeWeb(r)) {
+                            window.alert(MSG_BAJA_DESDE_PLANO)
+                            return
+                          }
                           if (!window.confirm('¿Dar de baja este registro?')) return
                           setModalDetallePpto(null); setModalDetallePptoEditable(false)
                           await darDeBaja(r.id)
@@ -3444,6 +3835,16 @@ async function restaurar(id) {
           titulo={`Presupuesto · ID_POL ${trazabilidadPresupuesto.id_pol || trazabilidadPresupuesto.pk_id || trazabilidadPresupuesto.id}`}
           theme={t}
           onClose={() => setTrazabilidadPresupuesto(null)}
+        />
+      )}
+
+      {avisoSistema && (
+        <CcAvisoModal
+          theme={t}
+          titulo={avisoSistema.titulo}
+          mensaje={avisoSistema.mensaje}
+          tipo={avisoSistema.tipo}
+          onClose={() => setAvisoSistema(null)}
         />
       )}
 
@@ -3855,6 +4256,195 @@ async function restaurar(id) {
         )
       })()}
 
+      {!verPapelera && exportPresupuestoOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            background: 'rgba(0,0,0,0.65)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+          onClick={() => !exportPresupuestoBusy && setExportPresupuestoOpen(false)}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 480,
+              background: t.bgCard,
+              borderRadius: 16,
+              border: `1px solid ${t.border}`,
+              boxShadow: '0 28px 90px rgba(0,0,0,0.55)',
+              overflow: 'hidden',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                padding: '16px 20px',
+                borderBottom: `1px solid ${t.border}`,
+                background: '#0F1923',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 'var(--cc-body)', fontWeight: 900, color: '#fff' }}>📥 Exportar informe Excel</div>
+                <div style={{ fontSize: 'var(--cc-sm)', color: '#94A3B8', marginTop: 2 }}>
+                  Resumen + soporte de cantidades por ítem
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => !exportPresupuestoBusy && setExportPresupuestoOpen(false)}
+                style={{ background: 'transparent', border: 'none', color: t.textMuted, cursor: 'pointer', fontSize: 'var(--cc-title)' }}
+                aria-label="Cerrar"
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ padding: '20px' }}>
+              <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.text, marginBottom: 10 }}>
+                ¿Qué desea descargar?
+              </div>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  padding: '12px 14px',
+                  borderRadius: 10,
+                  border: `2px solid ${exportPresupuestoModo === 'presupuesto_obra' ? t.primary : t.border}`,
+                  background: exportPresupuestoModo === 'presupuesto_obra' ? `${t.primary}12` : t.bg,
+                  cursor: exportPresupuestoBusy ? 'wait' : 'pointer',
+                  marginBottom: 10,
+                }}
+              >
+                <input
+                  type="radio"
+                  name="exportPresupuestoModo"
+                  value="presupuesto_obra"
+                  checked={exportPresupuestoModo === 'presupuesto_obra'}
+                  onChange={() => setExportPresupuestoModo('presupuesto_obra')}
+                  disabled={exportPresupuestoBusy}
+                  style={{ marginTop: 3 }}
+                />
+                <div>
+                  <div style={{ fontWeight: 800, color: t.text }}>a) Presupuesto de obra</div>
+                  <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 4, lineHeight: 1.4 }}>
+                    Cantidad total subida y calculada por ítem. Costo directo = cantidad × valor unitario.
+                  </div>
+                </div>
+              </label>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 10,
+                  padding: '12px 14px',
+                  borderRadius: 10,
+                  border: `2px solid ${exportPresupuestoModo === 'obra_ejecutada' ? t.primary : t.border}`,
+                  background: exportPresupuestoModo === 'obra_ejecutada' ? `${t.primary}12` : t.bg,
+                  cursor: exportPresupuestoBusy ? 'wait' : 'pointer',
+                }}
+              >
+                <input
+                  type="radio"
+                  name="exportPresupuestoModo"
+                  value="obra_ejecutada"
+                  checked={exportPresupuestoModo === 'obra_ejecutada'}
+                  onChange={() => setExportPresupuestoModo('obra_ejecutada')}
+                  disabled={exportPresupuestoBusy}
+                  style={{ marginTop: 3 }}
+                />
+                <div>
+                  <div style={{ fontWeight: 800, color: t.text }}>b) Obra ejecutada</div>
+                  <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 4, lineHeight: 1.4 }}>
+                    Solo cantidades aprobadas por Interventoría (nivel máximo de validación).
+                  </div>
+                </div>
+              </label>
+              <p style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, margin: '14px 0 0', lineHeight: 1.4 }}>
+                Alcance: <strong style={{ color: t.text }}>{exportEstimado.alcance || '—'}</strong>
+              </p>
+              {exportEstimado.cargando && (
+                <p style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, margin: '8px 0 0' }}>Calculando tamaño de la descarga…</p>
+              )}
+              {exportEstimado.esGrande && !exportEstimado.cargando && (
+                <div
+                  style={{
+                    marginTop: 12,
+                    padding: '12px 14px',
+                    borderRadius: 10,
+                    background: '#FEF3C7',
+                    border: '1px solid #F59E0B',
+                    color: '#92400E',
+                    fontSize: 'var(--cc-sm)',
+                    lineHeight: 1.45,
+                  }}
+                >
+                  <strong>⏳ Descarga que puede demorar</strong>
+                  <div style={{ marginTop: 4 }}>
+                    El volumen es grande ({exportEstimado.registros != null ? `${exportEstimado.registros.toLocaleString('es-CO')} registros` : 'muchos registros'}).
+                    La generación del Excel puede tardar varios minutos. Para una descarga más rápida, filtre por capítulo o ítem en el panel izquierdo antes de exportar.
+                  </div>
+                </div>
+              )}
+              {!exportEstimado.esGrande && !exportEstimado.cargando && exportEstimado.registros != null && (
+                <p style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, margin: '8px 0 0', lineHeight: 1.4 }}>
+                  Tip: seleccione capítulo/ítem en el panel «Presupuesto por capítulo» para exportar solo ese alcance.
+                </p>
+              )}
+              {exportPresupuestoError && (
+                <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 8, background: '#FEE2E2', color: '#B91C1C', fontSize: 'var(--cc-sm)' }}>
+                  {exportPresupuestoError}
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
+                <button
+                  type="button"
+                  onClick={() => setExportPresupuestoOpen(false)}
+                  disabled={exportPresupuestoBusy}
+                  style={{
+                    background: 'transparent',
+                    border: `1px solid ${t.border}`,
+                    borderRadius: 8,
+                    padding: '8px 16px',
+                    color: t.textMuted,
+                    fontSize: 'var(--cc-sm)',
+                    cursor: exportPresupuestoBusy ? 'wait' : 'pointer',
+                  }}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void descargarPresupuestoExcel()}
+                  disabled={exportPresupuestoBusy}
+                  style={{
+                    background: exportPresupuestoBusy ? '#94a3b8' : t.primary,
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 8,
+                    padding: '8px 18px',
+                    fontSize: 'var(--cc-sm)',
+                    fontWeight: 700,
+                    cursor: exportPresupuestoBusy ? 'wait' : 'pointer',
+                  }}
+                >
+                  {exportPresupuestoBusy ? '⏳ Generando…' : '⬇ Descargar Excel'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {!verPapelera && (
         <PptoFiltroObraVista
           t={t}
@@ -3862,15 +4452,23 @@ async function restaurar(id) {
           contratoId={contratoId}
           token={token}
           f={fObra}
-          onF={(patch) => setFObra(p => ({ ...p, ...patch }))}
+          onF={(patch) => {
+            setFObra((p) => {
+              const next = { ...p, ...patch }
+              fObraRef.current = next
+              return next
+            })
+          }}
+          filtroResetKey={filtroResetKey}
           capitulosResumen={capitulosResumen}
           itemsResumen={itemsResumen}
           loadingCapitulos={loadingCapitulos}
           capExpandido={capExpandido}
           onToggleCap={onToggleCapPanelObra}
           onPickItem={onPickItemFromPanel}
-          onBuscar={aplicarFiltroObra}
+          onBuscar={(fSnap) => aplicarFiltroObraConF(fSnap || fObraRef.current || fObra)}
           onLimpiar={limpiarFiltroObra}
+          listadoPrecios={listadoPrecios}
           onRestablecerPksItem={restablecerPksVistaItem}
           onRevisorTramos={abrirRevisorTramosObra}
           tramoOptions={opcionesUbicacion.tramos}
@@ -3888,8 +4486,32 @@ async function restaurar(id) {
           )}
           onActualizar={() => recargarCapActual(drill.length === 0)}
           actualizarDisabled={loading || buscandoFiltroObra}
+          onExportarExcel={abrirPopupExportPresupuesto}
+          exportandoExcel={exportPresupuestoBusy}
           onMapPkPick={onMapPkPresu}
           pkIdsDeGrilla={pkIdsDeGrillaParaMapa}
+          mostrarToggleTipoEjecucion={mostrarToggleTipoEjecucion}
+          onTipoEjecucionChange={onCambioTipoEjecucion}
+          mostrarVersionador={mostrarVersionadorPresupuesto}
+          esVersionInicial={versionesPresupuesto.length === 0}
+          onAbrirCrearVersion={() => setVersionCrearOpen(true)}
+          onAbrirPanelVersiones={() => setVersionPanelOpen(true)}
+        />
+      )}
+      {mostrarVersionadorPresupuesto && (
+        <PptoVersionador
+          t={t}
+          token={token}
+          API={API}
+          contratoId={contratoId}
+          usuario={usuario}
+          versionesPresupuesto={versionesPresupuesto}
+          versionVigente={versionVigente}
+          createOpen={versionCrearOpen}
+          onCreateOpenChange={setVersionCrearOpen}
+          panelOpen={versionPanelOpen}
+          onPanelOpenChange={setVersionPanelOpen}
+          onVersionesReload={cargarVersionesPresupuesto}
         />
       )}
       {verPapelera && (
@@ -4156,6 +4778,7 @@ async function restaurar(id) {
                     alert('Los registros seleccionados están sellados (aprobados por Interventoría) y no pueden modificarse.')
                     return
                   }
+                  if (!validarDarDeBajaIds(idsBaja, (id) => registros.find((rr) => rr.id === id))) return
                   const comentarioData = await pedirComentario('validacion', true)
                   if (comentarioData === null) return
                   const comentario = comentarioData?.mensaje || ''
@@ -4289,7 +4912,7 @@ async function restaurar(id) {
                         {r.id_pol||r.pk_id||'-'}
                       </span>
                     </td>
-                    <td style={tdStyle}>{r.capitulo}</td>
+                    <td style={{ ...tdStyle, maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.capitulo || ''}>{r.capitulo}</td>
                     <td style={{ ...tdStyle, fontSize:'var(--cc-sm)', color:t.textMuted }}>{r.competencia||'—'}</td>
                     <td style={tdStyle}>{r.item}</td>
                     <td style={{ ...tdStyle,maxWidth:'220px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{r.descripcion}</td>
@@ -4311,21 +4934,23 @@ async function restaurar(id) {
                         : (r.no_final || '-')}
                     </td>
                     <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
-                      {puedeEditarNodosYAreaLongComoDev && seleccionados.has(r.id) && !esSellado(r)
+                      {puedeEditarAreaLongNodInline() && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.area_long_nod ?? (r.area_long_nod ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], area_long_nod: v } })) }}
                             style={{ width:'72px',background:'transparent',border:'none',borderBottom:`1.5px solid #F59E0B`,outline:'none',padding:'2px 2px',color:t.text,fontSize:'var(--cc-sm)',textAlign:'right' }} />
-                        : fmtN(r.area_long_nod)}
+                        : aplicaReglasCadPresupuesto
+                          ? renderDimBloqueadaCad(fmtN(r.area_long_nod), MSG_AREA_LONG_DESDE_PLANO)
+                          : fmtN(r.area_long_nod)}
                     </td>
                     <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
-                      {puedeEditar && seleccionados.has(r.id) && !esSellado(r)
+                      {puedeEditarAnchoEspesorInline() && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.ancho ?? (r.ancho ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], ancho: v } })) }}
                             style={{ width:'60px',background:'transparent',border:'none',borderBottom:`1.5px solid ${t.primary}`,outline:'none',padding:'2px 2px',color:t.text,fontSize:'var(--cc-sm)',textAlign:'right' }} />
                         : fmtN(r.ancho)}
                     </td>
                     <td style={{ ...tdStyle,textAlign:'right' }} onClick={e=>e.stopPropagation()}>
-                      {puedeEditar && seleccionados.has(r.id) && !esSellado(r)
+                      {puedeEditarAnchoEspesorInline() && seleccionados.has(r.id) && !esSellado(r)
                         ? <input type="number" value={editDims[r.id]?.espesor ?? (r.espesor ?? '')}
                             onChange={e => { const v = e.target.value; setEditDims(prev => ({ ...prev, [r.id]: { ...prev[r.id], espesor: v } })) }}
                             style={{ width:'60px',background:'transparent',border:'none',borderBottom:`1.5px solid ${t.primary}`,outline:'none',padding:'2px 2px',color:t.text,fontSize:'var(--cc-sm)',textAlign:'right' }} />

@@ -50,16 +50,29 @@ function boundsFromFC(fc) {
 }
 
 /**
- * `pkIdsDeGrilla`: null = mostrar todo el maestro con coordenadas; `[]` o lista = solo esos PK (armoniza con la grilla al elegir cap/ítem).
- * Vista con norte a la derecha. bearing 90° dejó el norte del pliego a la izquierda; +180° → 270°.
+ * Mapa PK en panel/drawer. Sin refresco automático.
+ * `selectedPk`: PK activo (sincronizado con chip). Persiste vía estado del padre entre aperturas.
  */
-export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIdsDeGrilla = null }) {
+export default function PptoFiltroMapaPk({
+  t,
+  token,
+  contratoId,
+  onPkPick,
+  pkIdsDeGrilla = null,
+  selectedPk = '',
+  onClearSelection,
+  height = 220,
+}) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const onPickRef = useRef(onPkPick)
+  const onClearRef = useRef(onClearSelection)
   const tokenRef = useRef(token)
+  const selectedRef = useRef(selectedPk)
   onPickRef.current = onPkPick
+  onClearRef.current = onClearSelection
   tokenRef.current = token
+  selectedRef.current = selectedPk
 
   const NORTH_RIGHT_BEARING = 270
   const filtroKey =
@@ -68,6 +81,7 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
       : pkIdsDeGrilla.length === 0
         ? 'empty'
         : [...new Set(pkIdsDeGrilla.map((x) => String(x).trim()).filter(Boolean))].sort().join('\x1e')
+  const selKey = String(selectedPk || '').trim().toLowerCase()
 
   useLayoutEffect(() => {
     if (!contratoId || !containerRef.current) return
@@ -86,7 +100,7 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
     }
     const mapEl = document.createElement('div')
     mapEl.style.width = '100%'
-    mapEl.style.height = '220px'
+    mapEl.style.height = typeof height === 'number' ? `${height}px` : height
     c.appendChild(mapEl)
 
     const tok = tokenRef.current || (typeof localStorage !== 'undefined' && localStorage.getItem('cc_token')) || (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('cc_token'))
@@ -105,6 +119,28 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
     }
 
     const isFiltered = permit != null && permitSet && permitSet.size > 0
+
+    const applySelectionStyle = (map) => {
+      const sel = String(selectedRef.current || '').trim()
+      if (!sel || !map.getLayer('ppto-plano-fill')) return
+      try {
+        map.setPaintProperty('ppto-plano-fill', 'fill-color', [
+          'case',
+          ['==', ['downcase', ['coalesce', ['get', 'PK_ID'], ['get', 'pk_id'], ['get', 'Layer'], '']], sel.toLowerCase()],
+          '#F59E0B',
+          isFiltered ? '#0D9488' : '#0077B6',
+        ])
+        map.setPaintProperty('ppto-plano-fill', 'fill-opacity', [
+          'case',
+          ['==', ['downcase', ['coalesce', ['get', 'PK_ID'], ['get', 'pk_id'], ['get', 'Layer'], '']], sel.toLowerCase()],
+          0.55,
+          isFiltered ? 0.38 : 0.3,
+        ])
+      } catch {
+        /* ignore */
+      }
+    }
+
     ;(async () => {
       const [rPk, rCt] = await Promise.all([
         fetch(`${API}/sicoe-obra/${contratoId}/pk-ids`, { headers: hdrs }).then((x) => (x.ok ? x.json() : [])),
@@ -134,11 +170,30 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
 
       let withCoords = 0
       const toFit = []
+      const markerEls = []
+
+      const togglePk = (pkv) => {
+        const v = String(pkv || '').trim()
+        if (!v) return
+        const cur = String(selectedRef.current || '').trim().toLowerCase()
+        if (cur === v.toLowerCase()) {
+          selectedRef.current = ''
+          onClearRef.current?.()
+        } else {
+          selectedRef.current = v
+          onPickRef.current(v)
+        }
+        applySelectionStyle(map)
+        markerEls.forEach(({ el, pk }) => {
+          const on = String(pk).trim().toLowerCase() === String(selectedRef.current || '').trim().toLowerCase()
+          el.style.background = on ? '#F59E0B' : isFiltered ? '#0D9488' : '#0077B6'
+          el.style.transform = on ? 'scale(1.15)' : 'scale(1)'
+        })
+      }
 
       map.on('load', () => {
         if (cancelled) return
 
-        // Con grilla filtrada por cap/ítem: polígono = solo features cuyo PK_ID está en la grilla (no el corredor completo).
         let planoData = null
         if (plano && plano.type === 'FeatureCollection' && Array.isArray(plano.features) && plano.features.length > 0) {
           if (isFiltered) {
@@ -183,7 +238,7 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
             const f = e.features?.[0]
             if (!f) return
             const v = featurePkId(f) || String(f.properties?.Layer ?? f.properties?.PK_ID ?? f.properties?.pk_id ?? '').trim()
-            if (v) onPickRef.current(v)
+            if (v) togglePk(v)
           })
           map.on('mouseenter', 'ppto-plano-fill', () => {
             map.getCanvas().style.cursor = 'pointer'
@@ -191,6 +246,7 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
           map.on('mouseleave', 'ppto-plano-fill', () => {
             map.getCanvas().style.cursor = ''
           })
+          applySelectionStyle(map)
         }
 
         const dot = isFiltered ? 14 : 12
@@ -203,12 +259,14 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
           withCoords += 1
           toFit.push(ll)
           const el = document.createElement('div')
-          el.style.cssText = `width:${dot}px;height:${dot}px;border-radius:50%;background:${col};border:2px solid #fff;box-shadow:0 0 0 1px ${col}66;cursor:pointer;`
+          const sel = String(selectedRef.current || '').trim().toLowerCase() === pkv.toLowerCase()
+          el.style.cssText = `width:${dot}px;height:${dot}px;border-radius:50%;background:${sel ? '#F59E0B' : col};border:2px solid #fff;box-shadow:0 0 0 1px ${col}66;cursor:pointer;transform:${sel ? 'scale(1.15)' : 'scale(1)'};`
           el.title = pkv
           new mapboxgl.Marker({ element: el }).setLngLat(ll).addTo(map)
+          markerEls.push({ el, pk: pkv })
           el.addEventListener('click', (ev) => {
             ev.stopPropagation()
-            onPickRef.current(pkv)
+            togglePk(pkv)
           })
         })
         try {
@@ -280,12 +338,12 @@ export default function PptoFiltroMapaPk({ t, token, contratoId, onPkPick, pkIds
       }
       mapRef.current = null
     }
-  }, [contratoId, filtroKey])
+  }, [contratoId, filtroKey, selKey, height])
 
   return (
-    <div style={{ fontSize: 'var(--cc-body)' }}>
-      <div style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.textMuted, marginBottom: 6 }}>PLANO · PK (clic = filtrar · norte → derecha)</div>
-      <div ref={containerRef} style={{ borderRadius: 8, overflow: 'hidden', border: `1px solid ${t.border}` }} />
+    <div style={{ fontSize: 'var(--cc-body)', height: typeof height === 'number' ? `${height}px` : height, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginBottom: 4 }}>Clic = filtrar PK · norte → derecha</div>
+      <div ref={containerRef} style={{ borderRadius: 8, overflow: 'hidden', border: `1px solid ${t.border}`, flex: 1, minHeight: 0 }} />
     </div>
   )
 }
