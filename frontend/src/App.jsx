@@ -14325,142 +14325,34 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
         {/* ── Contenido principal ── */}
         <div style={{ flex:1, padding:'20px 24px', minWidth:0, overflow:'hidden' }}>
-        <div style={{ ...s.topBar, alignItems: moduloActivo === 'dashboard' ? 'flex-start' : 'center' }}>
-          {moduloActivo === 'dashboard' ? (
-            <>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 0 }}>
-                {(() => {
-                  const elapsedMin = dashResumenUpdatedAt != null
-                    ? Math.floor((Date.now() - dashResumenUpdatedAt) / 60000)
-                    : null
-                  const dashInfoColor = t.primary || '#0077B6'
-                  return (
-                    <>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                        <h1 style={{ margin: 0, fontSize: 'var(--cc-xl)', fontWeight: 700, color: t.text, letterSpacing: '-0.02em' }}>
-                          Dashboard SICOE
-                        </h1>
-                        <button
-                          type="button"
-                          onClick={() => { void cargarDashboardResumen() }}
-                          disabled={dashKpiLoading}
-                          title="Actualizar resumen del dashboard"
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            background: t.bgCard,
-                            border: `1px solid ${t.border}`,
-                            borderRadius: 8,
-                            padding: '6px 12px',
-                            color: dashKpiLoading ? t.textMuted : t.primary,
-                            fontSize: 'var(--cc-sm)',
-                            fontWeight: 600,
-                            cursor: dashKpiLoading ? 'wait' : 'pointer',
-                            opacity: dashKpiLoading ? 0.75 : 1,
-                          }}
-                        >
-                          <i
-                            className="ti ti-refresh"
-                            style={{
-                              fontSize: '1.05rem',
-                              lineHeight: 1,
-                              display: 'inline-block',
-                              animation: dashKpiLoading ? 'dashRefreshSpin 0.85s linear infinite' : 'none',
-                            }}
-                          />
-                          Actualizar
-                        </button>
-                      </div>
-                      {elapsedMin != null && (
-                        <div style={{ fontSize: `${du.sub}px`, color: t.textMuted }}>
-                          {elapsedMin < 2 ? (
-                            'Datos al día'
-                          ) : elapsedMin <= 5 ? (
-                            `Actualizado hace ${elapsedMin} min`
-                          ) : (
-                            <>
-                              {`Actualizado hace ${elapsedMin} min · `}
-                              <button
-                                type="button"
-                                onClick={() => { void cargarDashboardResumen() }}
-                                disabled={dashKpiLoading}
-                                style={{
-                                  background: 'none',
-                                  border: 'none',
-                                  padding: 0,
-                                  margin: 0,
-                                  color: dashInfoColor,
-                                  fontSize: 'inherit',
-                                  fontWeight: 600,
-                                  cursor: dashKpiLoading ? 'wait' : 'pointer',
-                                  textDecoration: 'underline',
-                                  textUnderlineOffset: 2,
-                                }}
-                              >
-                                ¿Refrescar?
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </>
-                  )
-                })()}
-              </div>
-              {usuario?._contratos?.length > 1 ? (
-                <select
-                  value={usuario.contrato_id || ''}
-                  onChange={async (e) => {
-                    const cid = parseInt(e.target.value, 10)
-                    const contrato = usuario._contratos.find(c => c.id === cid)
-                    if (!contrato) return
-                    if (onCambiarContrato) await onCambiarContrato(contrato)
-                    else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
-                  }}
-                  style={{ fontSize: 'var(--cc-sm)', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none', flexShrink: 0, width: 'auto', maxWidth: 'min(420px, 100%)' }}
-                >
-                  {!usuario.contrato_id && (
-                    <option value="">— Selecciona un contrato —</option>
-                  )}
-                  {usuario._contratos.map(c => (
-                    <option key={c.id} value={c.id}>📋 {c.numero}</option>
-                  ))}
-                </select>
-              ) : (
-                <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, flexShrink: 0 }}>
-                  📋 Contrato: {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
-                </span>
+        {moduloActivo !== 'dashboard' && (
+        <div style={s.topBar}>
+          {usuario?._contratos?.length > 1 ? (
+            <select
+              value={usuario.contrato_id || ''}
+              onChange={async (e) => {
+                const cid = parseInt(e.target.value, 10)
+                const contrato = usuario._contratos.find(c => c.id === cid)
+                if (!contrato) return
+                if (onCambiarContrato) await onCambiarContrato(contrato)
+                else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
+              }}
+              style={{ fontSize: 'var(--cc-sm)', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none', width: 'auto', maxWidth: 'min(420px, 100%)' }}
+            >
+              {!usuario.contrato_id && (
+                <option value="">— Selecciona un contrato —</option>
               )}
-            </>
+              {usuario._contratos.map(c => (
+                <option key={c.id} value={c.id}>📋 {c.numero}</option>
+              ))}
+            </select>
           ) : (
-            usuario?._contratos?.length > 1 ? (
-              <select
-                value={usuario.contrato_id || ''}
-                onChange={async (e) => {
-                  const cid = parseInt(e.target.value, 10)
-                  const contrato = usuario._contratos.find(c => c.id === cid)
-                  if (!contrato) return
-                  if (onCambiarContrato) await onCambiarContrato(contrato)
-                  else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
-                }}
-                style={{ fontSize: 'var(--cc-sm)', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none', width: 'auto', maxWidth: 'min(420px, 100%)' }}
-              >
-                {!usuario.contrato_id && (
-                  <option value="">— Selecciona un contrato —</option>
-                )}
-                {usuario._contratos.map(c => (
-                  <option key={c.id} value={c.id}>📋 {c.numero}</option>
-                ))}
-              </select>
-            ) : (
-              <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-                📋 Contrato: {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
-              </span>
-            )
+            <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
+              📋 Contrato: {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
+            </span>
           )}
-          {/* Crear Contrato se gestiona desde el Panel Admin */}
         </div>
+        )}
 
 
 
@@ -14480,8 +14372,235 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           const porCapPpto = (kpiPpto?.por_capitulo || []).sort((a,b) => b.costo - a.costo).slice(0,15)
           const maxCapCosto = Math.max(...porCapPpto.map(c => c.costo), 1)
           const dashEsperando = dashKpiLoading
+          const dashElapsedMin = dashResumenUpdatedAt != null
+            ? Math.floor((Date.now() - dashResumenUpdatedAt) / 60000)
+            : null
+          const dashInfoColor = t.primary || '#0077B6'
+          const dashTabItems = [
+            ['resumen', 'Resumen'],
+            ['analisis', 'Desviaciones'],
+            ...(usuario?.contrato_fase === 'LIQUIDACION' && dashVistaEjecucion === 'Obra Ejecutada'
+              ? [['liquidacion', 'Liquidación']]
+              : []),
+          ]
 
           return <>
+            {/* Barra única: título · vista · pestañas · actualizar · contrato */}
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px 14px',
+              flexWrap: 'wrap',
+              marginBottom: '16px',
+              padding: '10px 14px',
+              background: `linear-gradient(135deg, ${t.primary}14 0%, ${t.bgCard} 42%, ${t.bgCard} 100%)`,
+              border: `1px solid ${t.primary}33`,
+              borderLeft: `4px solid ${t.primary}`,
+              borderRadius: '12px',
+              boxShadow: `0 4px 18px ${t.primary}18, ${t.shadow}`,
+            }}>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+                flexShrink: 0,
+                minWidth: 0,
+                paddingRight: '4px',
+              }}>
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 34,
+                  height: 34,
+                  borderRadius: 10,
+                  background: `${t.primary}20`,
+                  color: t.primary,
+                  fontSize: '1.05rem',
+                  fontWeight: 800,
+                  flexShrink: 0,
+                  boxShadow: `inset 0 0 0 1px ${t.primary}28`,
+                }} aria-hidden>⚖</span>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: `${du.tab}px`, fontWeight: 800, color: t.primary, letterSpacing: '-0.02em', lineHeight: 1.15, whiteSpace: 'nowrap' }}>
+                    Ppto vs Cobro
+                  </div>
+                  <div style={{ fontSize: `${du.sub}px`, color: t.text, fontWeight: 600, opacity: 0.82, whiteSpace: 'nowrap' }} title="Compara presupuesto, obra ejecutada y avance SICOE aprobado">
+                    Presupuesto · obra · SICOE
+                  </div>
+                </div>
+              </div>
+
+              <span style={{ width: 1, height: 28, background: `${t.primary}28`, flexShrink: 0 }} aria-hidden />
+
+              <span style={{ fontSize: `${du.sub}px`, fontWeight: 800, color: t.text, whiteSpace: 'nowrap', letterSpacing: '0.02em' }}>Según</span>
+              <div style={{ display: 'inline-flex', background: t.bgCard, border: `1px solid ${t.primary}28`, borderRadius: '9px', padding: '3px', flexShrink: 0, boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.04)' }}>
+                {[
+                  ['Presupuesto de Obra', 'Presupuesto'],
+                  ['Obra Ejecutada', 'Obra ejecutada'],
+                ].map(([valor, label]) => {
+                  const activo = dashVistaEjecucion === valor
+                  return (
+                    <button
+                      key={valor}
+                      type="button"
+                      onClick={() => cambiarDashVistaEjecucion(valor)}
+                      title={valor === 'Presupuesto de Obra'
+                        ? 'Versión vigente del presupuesto contractual'
+                        : 'Presupuesto Obra Ejecutada vs SICOE N3 del contrato'}
+                      style={{
+                        background: activo ? t.primary : 'transparent',
+                        color: activo ? '#fff' : t.textMuted,
+                        border: 'none',
+                        borderRadius: '7px',
+                        padding: '6px 14px',
+                        fontSize: `${du.sub}px`,
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                        whiteSpace: 'nowrap',
+                        boxShadow: activo ? `0 2px 8px ${t.primary}44` : 'none',
+                      }}
+                    >
+                      {label}
+                    </button>
+                  )
+                })}
+              </div>
+
+              <span style={{ width: 1, height: 28, background: `${t.primary}28`, flexShrink: 0 }} aria-hidden />
+
+              <div style={{ display: 'inline-flex', gap: '5px', flexShrink: 0, background: t.bgCard, border: `1px solid ${t.primary}22`, borderRadius: '9px', padding: '3px' }}>
+                {dashTabItems.map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setDashTab(key)}
+                    style={{
+                      background: dashTab === key ? t.primary : 'transparent',
+                      color: dashTab === key ? '#fff' : t.textMuted,
+                      border: 'none',
+                      borderRadius: '7px',
+                      padding: '6px 14px',
+                      fontSize: `${du.sub}px`,
+                      fontWeight: 800,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap',
+                      boxShadow: dashTab === key ? `0 2px 8px ${t.primary}44` : 'none',
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                marginLeft: 'auto',
+                flexShrink: 0,
+                flexWrap: 'wrap',
+                justifyContent: 'flex-end',
+                padding: '4px 6px',
+                borderRadius: 10,
+                background: `${t.bgCard}cc`,
+                border: `1px solid ${t.border}`,
+              }}>
+                <button
+                  type="button"
+                  onClick={() => { void cargarDashboardResumen() }}
+                  disabled={dashKpiLoading}
+                  title="Actualizar resumen"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: dashKpiLoading ? t.bg : `${t.primary}12`,
+                    border: `1px solid ${t.primary}44`,
+                    borderRadius: 8,
+                    padding: '5px 12px',
+                    color: dashKpiLoading ? t.textMuted : t.primary,
+                    fontSize: `${du.sub}px`,
+                    fontWeight: 800,
+                    cursor: dashKpiLoading ? 'wait' : 'pointer',
+                  }}
+                >
+                  <i
+                    className="ti ti-refresh"
+                    style={{
+                      fontSize: '1.05rem',
+                      lineHeight: 1,
+                      animation: dashKpiLoading ? 'dashRefreshSpin 0.85s linear infinite' : 'none',
+                    }}
+                  />
+                  Actualizar
+                </button>
+                {dashElapsedMin != null && (
+                  <span style={{
+                    fontSize: `${du.sub}px`,
+                    color: dashElapsedMin < 2 ? '#0f766e' : t.textMuted,
+                    fontWeight: 700,
+                    whiteSpace: 'nowrap',
+                    padding: '3px 8px',
+                    borderRadius: 999,
+                    background: dashElapsedMin < 2 ? '#0f766e14' : t.bg,
+                    border: `1px solid ${dashElapsedMin < 2 ? '#0f766e33' : t.border}`,
+                  }}>
+                    {dashElapsedMin < 2 ? (
+                      '● Al día'
+                    ) : dashElapsedMin <= 5 ? (
+                      `Hace ${dashElapsedMin} min`
+                    ) : (
+                      <>
+                        {`Hace ${dashElapsedMin} min · `}
+                        <button
+                          type="button"
+                          onClick={() => { void cargarDashboardResumen() }}
+                          disabled={dashKpiLoading}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            padding: 0,
+                            margin: 0,
+                            color: dashInfoColor,
+                            fontSize: 'inherit',
+                            fontWeight: 800,
+                            cursor: dashKpiLoading ? 'wait' : 'pointer',
+                            textDecoration: 'underline',
+                            textUnderlineOffset: 2,
+                          }}
+                        >
+                          ¿Refrescar?
+                        </button>
+                      </>
+                    )}
+                  </span>
+                )}
+                {usuario?._contratos?.length > 1 ? (
+                  <select
+                    value={usuario.contrato_id || ''}
+                    onChange={async (e) => {
+                      const cid = parseInt(e.target.value, 10)
+                      const contrato = usuario._contratos.find(c => c.id === cid)
+                      if (!contrato) return
+                      if (onCambiarContrato) await onCambiarContrato(contrato)
+                      else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
+                    }}
+                    style={{ fontSize: `${du.sub}px`, background: t.bgCard, border: `1px solid ${t.primary}33`, borderRadius: 8, padding: '5px 10px', color: t.primary, fontWeight: 700, cursor: 'pointer', outline: 'none', maxWidth: 'min(220px, 42vw)' }}
+                  >
+                    {!usuario.contrato_id && <option value="">Contrato…</option>}
+                    {usuario._contratos.map(c => (
+                      <option key={c.id} value={c.id}>{c.numero}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <span style={{ fontSize: `${du.sub}px`, color: t.textMuted, whiteSpace: 'nowrap' }}>
+                    📋 {usuario?.contrato_numero || '—'}
+                  </span>
+                )}
+              </div>
+            </div>
+
             {dashEsperando && (
               <div style={{ textAlign:'center', padding:'24px 16px', marginBottom:'16px', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', color:t.textMuted, fontSize:`${du.body}px` }}>
                 ⏳ Cargando resumen del dashboard…
@@ -14495,56 +14614,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             )}
             {!dashEsperando && (
             <>
-            {/* ── Toggle vista presupuesto ── */}
-            <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'16px', flexWrap:'wrap' }}>
-              <span style={{ fontSize:`${du.sub}px`, fontWeight:700, color:t.textMuted }}>Análisis según:</span>
-              <div style={{ display:'inline-flex', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'4px', boxShadow:t.shadow }}>
-                {[
-                  ['Presupuesto de Obra', 'Presupuesto de Obra'],
-                  ['Obra Ejecutada', 'Obra Ejecutada'],
-                ].map(([valor, label]) => {
-                  const activo = dashVistaEjecucion === valor
-                  return (
-                    <button
-                      key={valor}
-                      type="button"
-                      onClick={() => cambiarDashVistaEjecucion(valor)}
-                      style={{
-                        background: activo ? t.primary : 'transparent',
-                        color: activo ? '#fff' : t.textMuted,
-                        border: 'none',
-                        borderRadius: '8px',
-                        padding: '8px 18px',
-                        fontSize: `${du.tab}px`,
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      {label}
-                    </button>
-                  )
-                })}
-              </div>
-              <span style={{ fontSize:`${du.sub}px`, color:t.textMuted, maxWidth:520 }}>
-                {dashVistaEjecucion === 'Presupuesto de Obra'
-                  ? 'Versión vigente del presupuesto contractual (total + desglose por revisado).'
-                  : 'Presupuesto: Obra Ejecutada aprobada. SICOE N3 aprobado: siempre el total del contrato.'}
-              </span>
-            </div>
-
-            {/* ── Tab bar Dashboard ── */}
-            <div style={{ display:'flex', gap:'6px', marginBottom:'20px', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'6px', width:'fit-content', boxShadow:t.shadow }}>
-              {[
-                ['resumen',   '📊 Resumen'],
-                ['analisis',  '🔍 Análisis de Desviaciones'],
-                ...(usuario?.contrato_fase === 'LIQUIDACION' && dashVistaEjecucion === 'Obra Ejecutada'
-                  ? [['liquidacion', '⚖️ Análisis de Liquidación']]
-                  : []),
-              ].map(([key,label]) => (
-                <button key={key} onClick={() => setDashTab(key)} style={{ background:dashTab===key?t.primary:'transparent', color:dashTab===key?'#fff':t.textMuted, border:'none', borderRadius:'8px', padding:'8px 22px', fontSize:`${du.tab}px`, fontWeight:'700', cursor:'pointer', transition:'all 0.15s', letterSpacing:'0.2px' }}>{label}</button>
-              ))}
-            </div>
-
             {dashTab === 'resumen' && <>
             {/* ── KPIs compactos ── */}
             <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:'10px', marginBottom:'16px' }}>
