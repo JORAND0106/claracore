@@ -618,6 +618,62 @@ def scan_presupuesto_capitulo_vista(
     )
 
 
+def scan_presupuesto_resumen_bruto(sb, contrato_id: int, current_user) -> Dict[str, Any]:
+    """
+    Totales del módulo Presupuesto alineados con auditoría SQL:
+    SUM(costo_directo) WHERE dado_de_baja=false, sin filtrar tipo_ejecucion.
+    Usado en KPI y gráfico «Presupuesto por Capítulo» del dashboard.
+    """
+    key = f"{int(contrato_id)}|bruto|{'1' if _presupuesto_aplica_filtro_interventoria(current_user) else '0'}"
+    now = time.time()
+    with _SCAN_CACHE_LOCK:
+        cached = _SCAN_CACHE.get(key)
+        if cached and now - cached[0] < _SCAN_CACHE_TTL_SEC:
+            return cached[1]
+
+    ppto_ap_c: Dict[str, float] = defaultdict(float)
+    ppto_nr_c: Dict[str, float] = defaultdict(float)
+    ppto_total_c: Dict[str, float] = defaultdict(float)
+    off = 0
+    while True:
+        q = (
+            sb.table("presupuesto")
+            .select("capitulo, costo_directo, revisado")
+            .eq("contrato_id", int(contrato_id))
+            .eq("dado_de_baja", False)
+        )
+        q = _apply_interventoria_filter(q, current_user)
+        batch = q.range(off, off + 999).execute().data or []
+        for r in batch:
+            cap_disp = norm_capitulo_display(r.get("capitulo"))
+            cost = float(r.get("costo_directo") or 0)
+            rev = norm_estado_revisado(r.get("revisado"))
+            ppto_total_c[cap_disp] += cost
+            if rev == "Aprobado":
+                ppto_ap_c[cap_disp] += cost
+            else:
+                ppto_nr_c[cap_disp] += cost
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    por_capitulo = [
+        {"capitulo": cap, "costo": round(v, 2), "registros": 0}
+        for cap, v in sorted(ppto_total_c.items(), key=lambda x: str(x[0]))
+    ]
+    costo_total = sum(ppto_total_c.values())
+    result = {
+        "ppto_ap_c": dict(ppto_ap_c),
+        "ppto_nr_c": dict(ppto_nr_c),
+        "ppto_total_c": dict(ppto_total_c),
+        "por_capitulo_list": por_capitulo,
+        "costo_total": round(costo_total, 2),
+    }
+    with _SCAN_CACHE_LOCK:
+        _SCAN_CACHE[key] = (now, result)
+    return result
+
+
 def scan_presupuesto_vista(sb, contrato_id: int, vista: str, current_user, *, resumen_only: bool = False) -> Dict[str, Any]:
     key = _scan_cache_key(contrato_id, vista, current_user) + ("|resumen" if resumen_only else "")
     now = time.time()

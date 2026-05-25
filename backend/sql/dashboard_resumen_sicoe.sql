@@ -68,17 +68,9 @@ tot_nr AS (
   SELECT COALESCE(SUM(cob_nr), 0)::numeric AS t FROM obra_nr_caps
 ),
 ppto_rows AS (
-  SELECT
-    public._dash_norm_capitulo_key(
-      CASE
-        WHEN v.capitulo IS NULL OR btrim(v.capitulo::text) = '' THEN 'Sin capítulo'
-        ELSE v.capitulo::text
-      END
-    ) AS cap,
-    SUM(COALESCE(v.presupuesto, 0)::numeric) AS pres
-  FROM public.vista_ppto_por_capitulo v
-  WHERE v.contrato_id = p_contrato_id
-  GROUP BY 1
+  SELECT cap, SUM(costo) AS pres
+  FROM ppto_estado
+  GROUP BY cap
 ),
 ppto_tot AS (
   SELECT COALESCE(SUM(pres), 0)::numeric AS t FROM ppto_rows

@@ -1929,6 +1929,9 @@ app.include_router(presupuesto_versiones_router)
 from filtros_plantillas_routes import router as filtros_plantillas_router
 app.include_router(filtros_plantillas_router)
 
+from topografia_routes import router as topografia_router
+app.include_router(topografia_router, prefix="/topografia")
+
 # Vista previa JSON (CC-SUB-001 / CC-SUB-002): registrado aquí porque en algunos equipos el router
 # importado desde informes.py no exponía estas rutas en OpenAPI (Not Found en el cliente).
 from informes import _perm_informes_ccd, _respuesta_json_corte, _respuesta_json_memoria
@@ -17061,6 +17064,7 @@ from dashboard_presupuesto_vista import (
     resolve_capitulo_variants,
     apply_sicoe_capitulo_filter,
     scan_presupuesto_capitulo_vista,
+    scan_presupuesto_resumen_bruto,
     scan_presupuesto_vista,
     sicoe_registro_en_vista,
 )
@@ -18039,15 +18043,16 @@ def _dashboard_apply_vista_presupuesto(
         total_cobrado = sum(sicoe_ap_c.values())
         total_sicoe_nr = sum(sicoe_nr_c.values())
 
+    bruto = scan_presupuesto_resumen_bruto(supabase, contrato_id, current_user)
     scan = scan_presupuesto_vista(supabase, contrato_id, vista, current_user, resumen_only=True)
     base_comp = hit.get("comparativo_capitulos")
     if isinstance(base_comp, list) and base_comp:
         comparativo = _overlay_vista_presupuesto_comparativo(base_comp, scan)
     else:
         comparativo = rebuild_comparativo_capitulos(scan, sicoe_ap_c, sicoe_nr_c)
-    ppto_ap = sum((scan.get("ppto_ap_c") or {}).values())
-    ppto_nr = sum((scan.get("ppto_nr_c") or {}).values())
-    ppto_total = float(scan.get("costo_total") or (ppto_ap + ppto_nr))
+    ppto_ap = sum((bruto.get("ppto_ap_c") or {}).values())
+    ppto_nr = sum((bruto.get("ppto_nr_c") or {}).values())
+    ppto_total = float(bruto.get("costo_total") or (ppto_ap + ppto_nr))
 
     hit["comparativo_capitulos"] = comparativo
     hit["total_presupuesto"] = round(ppto_total, 2)
@@ -18058,8 +18063,8 @@ def _dashboard_apply_vista_presupuesto(
     hit["total_presupuesto_no_revisado_n3"] = round(ppto_nr, 2)
     hit["total_sicoe_n3_no_revisado"] = round(total_sicoe_nr, 2)
     hit["vista"] = parse_dash_vista(vista)
-    if scan.get("por_capitulo_list"):
-        hit["por_capitulo_presupuesto"] = scan["por_capitulo_list"]
+    if bruto.get("por_capitulo_list"):
+        hit["por_capitulo_presupuesto"] = bruto["por_capitulo_list"]
     return hit
 
 

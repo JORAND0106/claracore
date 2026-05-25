@@ -40,6 +40,7 @@ import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import ModuloPresupuesto from './modules/presupuesto/ModuloPresupuesto'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
+import TopografiaMain from './components/topografia/TopografiaMain'
 import EmojiPicker from './EmojiPicker'
 import ExcelJS from 'exceljs'
 import { API_BASE, logApiFailure, SUPABASE_ANON_KEY, SUPABASE_URL } from './apiBase'
@@ -13961,6 +13962,20 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const tieneModuloEnsayos = _permisoVerFuncion('ensayos pip')
   const tieneModuloAuditorSst = _permisoVerFuncion('auditor sst (ia)')
   const tienePermisoProgramacionObra = _permisoVerFuncion('programación de obra')
+  const tienePermisoTopografia = _permisoVerFuncion('topografía')
+  const _topoPermiso = (flag) =>
+    esDeveloper ||
+    (usuario?.permisos || []).some(
+      (p) => {
+        const n = (p.funcion_nombre || '').toLowerCase()
+        return (n === 'topografía' || n === 'topografia') && p[flag]
+      },
+    )
+  const puedeCrearTopografia = _topoPermiso('crear')
+  const puedeEditarTopografia = _topoPermiso('editar')
+  const puedeValidarTopografia = _topoPermiso('validar')
+  const puedeEliminarTopografia = _topoPermiso('eliminar')
+  const puedeExportarTopografia = _topoPermiso('exportar')
   const _progPermiso = (flag) =>
     esDeveloper ||
     (usuario?.permisos || []).some(
@@ -14158,6 +14173,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             ['informes',     '📄', 'Informes',       tienePermisoInformesCcd],
             ['almacen',      '🏪', 'Almacén',        true],
             ['programacion', '📅', 'Programación',   tienePermisoProgramacionObra],
+            ['topografia',   '📐', 'Topografía',     tienePermisoTopografia],
             ['semaforo',     '🗺️', 'Plano Semáforo', true],
             ['guias',        '📖', 'Guías',          true],
             ['sst',          '🦺', 'SST',            tieneModuloSst],
@@ -14398,9 +14414,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         {panelFoco === 'ppto-capitulo' ? '⊠' : '⤢'}
                       </button>
                     </div>
-                    <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>Top 15 capítulos por valor</div>
+                    <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>
+                      Top 15 capítulos · total cargado en presupuesto (todas las líneas activas)
+                    </div>
                   </div>
-                  <div style={{ fontSize:`${du.kpiValue - 2}px`, fontWeight:'800', color:'#0077B6' }}>{fmtD(ppto)}</div>
+                  <div style={{ fontSize:`${du.kpiValue - 2}px`, fontWeight:'800', color:'#0077B6', textAlign:'right' }}>{fmtD(ppto)}</div>
                 </div>
                 {porCapPpto.length === 0 ? (
                   <div style={{ textAlign:'center', padding:'40px', color:t.textMuted, fontSize:`${du.body}px` }}>Sin datos de presupuesto</div>
@@ -14414,10 +14432,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                           <div style={{ fontSize:`${du.table}px`, color:t.textMuted, width:'140px', flexShrink:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={cap.capitulo}>
                             {cap.capitulo}
                           </div>
-                          <div style={{ flex:1, height:'14px', background:t.border, borderRadius:'7px', overflow:'hidden' }}>
+                          <div style={{ flex:1, height:'14px', background:t.border, borderRadius:'7px', overflow:'hidden', minWidth:40 }}>
                             <div style={{ width:`${pct}%`, height:'100%', background:color, borderRadius:'7px', transition:'width 0.6s ease' }}/>
                           </div>
-                          <div style={{ fontSize:`${du.table}px`, fontWeight:'700', color, width:'52px', textAlign:'right', flexShrink:0 }}>{fmtM(cap.costo)}</div>
+                          <div style={{ fontSize:`${du.table}px`, fontWeight:'700', color, minWidth:'132px', textAlign:'right', flexShrink:0, whiteSpace:'nowrap' }} title={fmtD(cap.costo)}>
+                            {fmtD(cap.costo)}
+                          </div>
                         </div>
                       )
                     })}
@@ -16572,6 +16592,31 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
               <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: t.text, marginBottom: '10px' }}>Programación de obra</div>
               <div style={{ fontSize: 'var(--cc-body)', color: t.textMuted, lineHeight: 1.5 }}>
                 Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «Programación de obra» (acción Ver).
+              </div>
+            </div>
+          )
+        )}
+
+        {moduloActivo === 'topografia' && (
+          tienePermisoTopografia ? (
+            <TopografiaMain
+              key={`topo-${usuario?.contrato_id ?? 'x'}`}
+              t={t}
+              usuario={usuario}
+              token={getToken()}
+              permisos={{
+                crear: puedeCrearTopografia,
+                editar: puedeEditarTopografia,
+                validar: puedeValidarTopografia,
+                eliminar: puedeEliminarTopografia,
+                exportar: puedeExportarTopografia,
+              }}
+            />
+          ) : (
+            <div style={{ ...s.card, maxWidth: '560px', margin: '0 auto', textAlign: 'center', padding: '32px 24px' }}>
+              <div style={{ fontSize: 'var(--cc-lg)', fontWeight: 700, color: t.text, marginBottom: '10px' }}>Topografía</div>
+              <div style={{ fontSize: 'var(--cc-body)', color: t.textMuted, lineHeight: 1.5 }}>
+                Tu cargo no tiene permiso para este módulo. Un administrador puede habilitarlo en Panel admin → Control de accesos → función «Topografía» (acción Ver).
               </div>
             </div>
           )
