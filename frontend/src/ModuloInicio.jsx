@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { API_BASE, logApiFailure } from './apiBase'
-import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache.js'
+import { API_BASE, logApiFailure, apiFetchSignal } from './apiBase'
 import { getClaraTypeScaleInline } from './typographyScale'
 import { eligeFraseInicio, fraseInicioEsValida } from './data/frasesInicioCuradas.js'
 import { eligeSaludoInicio } from './data/saludosInicio.js'
@@ -492,7 +491,9 @@ function BarraClima({ t, fs, contratoId, token }) {
       return undefined
     }
     setCargandoZona(true)
-    getContratoPlanoGeojson(API_BASE, contratoId, token)
+    const h = token ? { Authorization: `Bearer ${token}` } : {}
+    fetch(`${API_BASE}/contratos/${contratoId}`, { headers: h })
+      .then(async (r) => (r.ok ? r.json() : null))
       .then(async (data) => {
         if (cancelled) return
         const centro = centroideDesdePlano(data)
@@ -842,12 +843,14 @@ function FichaContrato({ t, fs, contratoId, token }) {
     let cancelled = false
     setCargando(true)
     const h = token ? { Authorization: `Bearer ${token}` } : {}
+    const sig = apiFetchSignal(45000)
+    const fetchOpt = sig ? { headers: h, signal: sig } : { headers: h }
     Promise.all([
-      fetch(`${API_BASE}/contratos/${contratoId}`).then((r) => (r.ok ? r.json() : null)),
-      fetch(`${API_BASE}/sicoe-obra/${contratoId}/acta-rpo-vigente`, { headers: h })
+      fetch(`${API_BASE}/contratos/${contratoId}`, fetchOpt).then((r) => (r.ok ? r.json() : null)),
+      fetch(`${API_BASE}/sicoe-obra/${contratoId}/acta-rpo-vigente`, fetchOpt)
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null),
-      fetch(`${API_BASE}/sicoe-obra/${contratoId}/semana-vigente`, { headers: h })
+      fetch(`${API_BASE}/sicoe-obra/${contratoId}/semana-vigente`, fetchOpt)
         .then((r) => (r.ok ? r.json() : null))
         .catch(() => null),
     ])
@@ -1028,7 +1031,9 @@ function SliderFotosActaVigente({ t, fs, contratoId, token }) {
     setSinActaPeriodo(false)
     setFuenteFotos('acta_vigente')
     const h = token ? { Authorization: `Bearer ${token}` } : {}
-    fetch(`${API_BASE}/inicio/${contratoId}/fotos-acta-vigente?limit=200`, { headers: h })
+    const sig = apiFetchSignal(60000)
+    const fetchOpt = sig ? { headers: h, signal: sig } : { headers: h }
+    fetch(`${API_BASE}/inicio/${contratoId}/fotos-acta-vigente?limit=200`, fetchOpt)
       .then(async (r) => {
         if (r.status === 401) {
           if (!cancelled) {
@@ -1236,7 +1241,11 @@ export default function ModuloInicio({ t, usuario, fontSize = 'normal', puedePub
     setNovedadesCargando(true)
     const getTok = () => localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token') || ''
     const headers = getTok() ? { Authorization: `Bearer ${getTok()}` } : {}
-    fetch(`${API_BASE}/inicio/novedades`, { headers })
+    const sig = apiFetchSignal(30000)
+    fetch(`${API_BASE}/inicio/novedades`, {
+      headers,
+      ...(sig ? { signal: sig } : {}),
+    })
       .then((r) => (r.status === 401 ? [] : r.ok ? r.json() : []))
       .then((data) => {
         if (cancelled) return

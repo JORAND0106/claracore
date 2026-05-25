@@ -358,7 +358,7 @@
             MaximizeBox = false;
             MinimizeBox = false;
             Name = "FrmPkFixerDescartados";
-            StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
+            StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             Text = "SICOE — Asignar PK_ID manual a entidades descartadas";
             panelHeader.ResumeLayout(false);
             panelHeader.PerformLayout();

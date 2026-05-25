@@ -22,47 +22,70 @@ try {
 } catch { }
 
 # OneDrive suele impedir que --reload detecte cambios; el polling evita servir código viejo sin rutas nuevas.
-# Comillas simples: si no, PowerShell reemplaza $env aquí y el hijo recibe "=1" y muestra error rojo.
+# --timeout-graceful-shutdown: si hay peticiones largas (dashboard-resumen, drill), el reload no queda colgado
+#   en «Waiting for connections to close» hasta que cierres manualmente las ventanas.
+# --reload-delay: agrupa cambios seguidos en .py (evita reinicios en cadena mientras Cursor guarda).
+Write-Host "Arrancando backend (FastAPI :8000)..." -ForegroundColor DarkGray
 Start-Process -FilePath "powershell" -WorkingDirectory $backendDir -ArgumentList @(
     "-NoExit",
     "-Command",
-    '$env:WATCHFILES_FORCE_POLLING = "1"; python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000'
+    '$env:WATCHFILES_FORCE_POLLING = "1"; python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000 --reload-delay 2 --timeout-graceful-shutdown 8'
 ) | Out-Null
 
+Write-Host "Esperando backend en :8000 (hasta 45 s)..." -ForegroundColor DarkGray
+$apiOk = $false
+for ($intento = 1; $intento -le 15; $intento += 1) {
+    try {
+        $r = Invoke-WebRequest -Uri "http://127.0.0.1:8000/healthz" -UseBasicParsing -TimeoutSec 3
+        if ($r.StatusCode -eq 200) {
+            $apiOk = $true
+            break
+        }
+    } catch { }
+    if ($intento -lt 15) { Start-Sleep -Seconds 3 }
+}
+
+if (-not $apiOk) {
+    Write-Host ""
+    Write-Host "FALLO: el backend NO responde en :8000." -ForegroundColor Red
+    Write-Host "  Revise la ventana PowerShell del backend (errores de Python, .env o imports)." -ForegroundColor Yellow
+    Write-Host "  No se iniciará Vite hasta que /healthz responda (evita ECONNREFUSED en el proxy)." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Diagnóstico: .\dev-status.ps1" -ForegroundColor Cyan
+    exit 1
+}
+
+Write-Host "Backend OK. Arrancando frontend (Vite :5173)..." -ForegroundColor DarkGray
 Start-Process -FilePath "powershell" -WorkingDirectory $frontendDir -ArgumentList @(
     "-NoExit",
     "-Command",
     "npm run dev -- --host 127.0.0.1 --port 5173"
 ) | Out-Null
 
-Write-Host "Esperando arranque (5 s)..." -ForegroundColor DarkGray
-Start-Sleep -Seconds 5
-
-$apiOk = $false
 $feOk = $false
-try {
-    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8000/healthz" -UseBasicParsing -TimeoutSec 6
-    $apiOk = ($r.StatusCode -eq 200)
-} catch { }
-try {
-    $r2 = Invoke-WebRequest -Uri "http://127.0.0.1:5173/" -UseBasicParsing -TimeoutSec 6
-    $feOk = ($r2.StatusCode -ge 200 -and $r2.StatusCode -lt 500)
-} catch { }
+for ($intento = 1; $intento -le 15; $intento += 1) {
+    try {
+        $r2 = Invoke-WebRequest -Uri "http://127.0.0.1:5173/" -UseBasicParsing -TimeoutSec 3
+        if ($r2.StatusCode -ge 200 -and $r2.StatusCode -lt 500) {
+            $feOk = $true
+            break
+        }
+    } catch { }
+    if ($intento -lt 15) { Start-Sleep -Seconds 2 }
+}
 
 Write-Host ""
-if ($apiOk -and $feOk) {
+if ($feOk) {
     Write-Host "Entorno LOCAL listo." -ForegroundColor Green
-} elseif (-not $apiOk) {
-    Write-Host "ATENCION: el backend NO responde en :8000." -ForegroundColor Red
-    Write-Host "  Revise la ventana PowerShell del backend (errores de Python/.env)." -ForegroundColor Yellow
-} elseif (-not $feOk) {
+} else {
     Write-Host "ATENCION: Vite NO responde en :5173." -ForegroundColor Red
-    Write-Host "  Revise la ventana PowerShell del frontend." -ForegroundColor Yellow
+    Write-Host "  Revise la ventana PowerShell del frontend (npm install, puerto ocupado)." -ForegroundColor Yellow
 }
 Write-Host "Frontend: http://127.0.0.1:5173" -ForegroundColor Green
 Write-Host "Backend:  http://127.0.0.1:8000/docs" -ForegroundColor Green
 Write-Host ""
 Write-Host "Comprobar estado: .\dev-status.ps1" -ForegroundColor Cyan
+Write-Host "Si el backend queda en «Waiting for connections to close», use .\dev-stop.ps1 y vuelva a .\dev-start.ps1" -ForegroundColor DarkYellow
 Write-Host ""
 Write-Host "db.ps1 y df.ps1 = DESPLIEGUE A AZURE (no inician local)." -ForegroundColor Yellow
 Write-Host "Para probar en tu PC solo use dev-start + esas dos ventanas abiertas." -ForegroundColor Yellow

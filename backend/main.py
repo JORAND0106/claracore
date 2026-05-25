@@ -5,7 +5,7 @@ import io, csv, requests as req_http
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
-from typing import List, Optional, Any, Dict, Set, Tuple
+from typing import List, Optional, Any, Dict, Set, Tuple, Iterable
 from collections import Counter, defaultdict
 from supabase import create_client, ClientOptions
 import httpx
@@ -5792,10 +5792,17 @@ def _orden_capitulo_presupuesto(c: Optional[str]) -> tuple:
 def get_presupuesto(
     contrato_id: int,
     capitulo: Optional[str] = None,
+    capitulos: Optional[List[str]] = Query(None),
     item: Optional[str] = None,
     items: Optional[List[str]] = Query(None),
     tramo: Optional[str] = None,
+    tramos: Optional[List[str]] = Query(None),
     calzada: Optional[str] = None,
+    calzadas: Optional[List[str]] = Query(None),
+    competencia: Optional[str] = None,
+    competencias: Optional[List[str]] = Query(None),
+    und: Optional[str] = None,
+    unds: Optional[List[str]] = Query(None),
     nodo_inicio: Optional[str] = None,
     nodo_final: Optional[str] = None,
     buscar: Optional[str] = None,
@@ -5806,8 +5813,6 @@ def get_presupuesto(
     abs_hasta: Optional[float] = None,
     revisado: Optional[str] = None,
     pre_interv_estado: Optional[str] = None,
-    competencia: Optional[str] = None,
-    und: Optional[str] = None,
     sellado: Optional[bool] = None,
     vlr_unitario_desde: Optional[float] = None,
     vlr_unitario_hasta: Optional[float] = None,
@@ -5840,21 +5845,21 @@ def get_presupuesto(
         else:
             q = q.eq("dado_de_baja", False)
         q = _presupuesto_q_tipo_ejecucion(q, tipo_ejecucion)
-        if capitulo:
-            q = q.eq("capitulo", capitulo)
-        ins = [str(x).strip() for x in (items or []) if str(x).strip()]
-        if len(ins) > 1:
-            if len(ins) > 200:
-                raise HTTPException(status_code=422, detail="Máximo 200 ítems en lista items")
-            q = q.in_("item", ins)
-        elif len(ins) == 1:
-            q = q.eq("item", ins[0])
-        elif item:
-            q = q.eq("item", item)
-        if tramo:
-            q = q.eq("tramo", tramo)
-        if calzada:
-            q = q.eq("calzada", calzada)
+        q = _presupuesto_q_estructura(
+            q,
+            capitulo=capitulo,
+            capitulos=capitulos,
+            item=item,
+            items=items,
+            tramo=tramo,
+            tramos=tramos,
+            calzada=calzada,
+            calzadas=calzadas,
+            competencia=competencia,
+            competencias=competencias,
+            und=und,
+            unds=unds,
+        )
         q = _presupuesto_q_filtros_ubicacion(
             q,
             nodo_inicio=nodo_inicio,
@@ -5901,10 +5906,17 @@ def get_presupuesto(
 def get_presupuesto_conteo(
     contrato_id: int,
     capitulo: Optional[str] = None,
+    capitulos: Optional[List[str]] = Query(None),
     item: Optional[str] = None,
     items: Optional[List[str]] = Query(None),
     tramo: Optional[str] = None,
+    tramos: Optional[List[str]] = Query(None),
     calzada: Optional[str] = None,
+    calzadas: Optional[List[str]] = Query(None),
+    competencia: Optional[str] = None,
+    competencias: Optional[List[str]] = Query(None),
+    und: Optional[str] = None,
+    unds: Optional[List[str]] = Query(None),
     nodo_inicio: Optional[str] = None,
     nodo_final: Optional[str] = None,
     buscar: Optional[str] = None,
@@ -5915,8 +5927,6 @@ def get_presupuesto_conteo(
     abs_hasta: Optional[float] = None,
     revisado: Optional[str] = None,
     pre_interv_estado: Optional[str] = None,
-    competencia: Optional[str] = None,
-    und: Optional[str] = None,
     sellado: Optional[bool] = None,
     vlr_unitario_desde: Optional[float] = None,
     vlr_unitario_hasta: Optional[float] = None,
@@ -5941,21 +5951,21 @@ def get_presupuesto_conteo(
     else:
         q = q.eq("dado_de_baja", False)
     q = _presupuesto_q_tipo_ejecucion(q, tipo_ejecucion)
-    if capitulo:
-        q = q.eq("capitulo", capitulo)
-    ins = [str(x).strip() for x in (items or []) if str(x).strip()]
-    if len(ins) > 1:
-        if len(ins) > 200:
-            raise HTTPException(status_code=422, detail="Máximo 200 ítems en lista items")
-        q = q.in_("item", ins)
-    elif len(ins) == 1:
-        q = q.eq("item", ins[0])
-    elif item:
-        q = q.eq("item", item)
-    if tramo:
-        q = q.eq("tramo", tramo)
-    if calzada:
-        q = q.eq("calzada", calzada)
+    q = _presupuesto_q_estructura(
+        q,
+        capitulo=capitulo,
+        capitulos=capitulos,
+        item=item,
+        items=items,
+        tramo=tramo,
+        tramos=tramos,
+        calzada=calzada,
+        calzadas=calzadas,
+        competencia=competencia,
+        competencias=competencias,
+        und=und,
+        unds=unds,
+    )
     q = _presupuesto_q_filtros_ubicacion(
         q,
         nodo_inicio=nodo_inicio,
@@ -6063,38 +6073,49 @@ def get_filtros_presupuesto(
 def presupuesto_analisis_liquidacion(
     contrato_id: int,
     nivel: str = Query("item", description="item | capitulo"),
+    vista: str = Query("obra_ejecutada", description="presupuesto_obra | obra_ejecutada"),
     current_user=Depends(get_current_user),
 ):
     """
-    Contratos en fase liquidación: compara «recalculado» vs obra aprobada (SICOE N3).
-    - Ítem con polígonos en presupuesto (tipo_ejecucion = Presupuesto de Obra): recalc = suma PPTO.
-    - Ítem sin polígonos: recalc = obra N3 ✓ (igual al cobro; categoría EJECUCION).
+    Contratos en fase liquidación: compara recalculado (presupuesto) vs obra aprobada (SICOE N3).
+    En obra_ejecutada solo ítems presentes en cobro y en presupuesto Obra Ejecutada aprobado.
     """
     _require_contract_access(current_user, contrato_id)
     n = (nivel or "item").strip().lower()
     if n not in ("item", "capitulo"):
         raise HTTPException(status_code=422, detail="nivel debe ser item o capitulo")
-    items = _liquidacion_analisis_items(contrato_id, n, current_user)
-    return {"items": items}
+    items = liquidacion_items_vista(
+        supabase,
+        contrato_id,
+        n,
+        current_user,
+        vista,
+        lambda r: _matriz_validacion_norm_estado_nivel_final(r, contrato_id) == "Aprobado",
+        _dash_norm_capitulo_key_py,
+        _dash_norm_item_key_py,
+    )
+    return {"items": items, "vista": parse_dash_vista(vista)}
 
 
 @app.get("/presupuesto/{contrato_id}/resumen")
-def get_resumen_presupuesto(contrato_id: int, current_user=Depends(get_current_user)):
-    try:
-        res  = supabase.table("vista_ppto_resumen").select("*").eq("contrato_id", contrato_id).execute().data
-    except Exception:
-        res = []
-    try:
-        caps = supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
-    except Exception:
-        caps = []
-    total = res[0].get("total_ppto", 0) if res else 0
-    regs  = res[0].get("total_registros", 0) if res else 0
+def get_resumen_presupuesto(
+    contrato_id: int,
+    vista: str = Query("presupuesto_obra", description="presupuesto_obra | obra_ejecutada"),
+    current_user=Depends(get_current_user),
+):
+    _require_contract_access(current_user, contrato_id)
+    scan = scan_presupuesto_vista(supabase, contrato_id, vista, current_user)
+    por_cap = scan.get("por_capitulo_list") or []
+    total = float(scan.get("costo_total") or 0)
+    regs = sum(len(v) for v in (scan.get("ppto_by_item") or {}).values())
     return {
         "total_registros": regs,
         "costo_total": total,
-        "revisados": 0, "campo": 0, "pendientes": 0,
-        "por_capitulo": [{"capitulo": r["capitulo"], "costo": r["presupuesto"], "registros": r["registros"]} for r in caps]
+        "revisados": 0,
+        "campo": 0,
+        "pendientes": 0,
+        "por_capitulo": por_cap,
+        "vista": parse_dash_vista(vista),
     }
 
 def _presupuesto_agregar_por_capitulo(
@@ -6202,7 +6223,8 @@ def get_items_presupuesto(
 _PRESUPUESTO_EXPORT_SELECT = (
     "capitulo, item, descripcion, und, vlr_unitario, cant_total, costo_directo, "
     "id_pol, pk_id, tramo, calzada, abs_inicio, abs_final, area_long_nod, ancho, espesor, "
-    "revisado, pre_interv_estado, observacion, observacion_externa, tipo_ejecucion"
+    "revisado, pre_interv_estado, pre_interv_por, validado_por, "
+    "observacion, observacion_externa, tipo_ejecucion"
 )
 
 
@@ -6308,8 +6330,8 @@ def exportar_presupuesto_informe(
 ):
     """
     Datos para Excel de presupuesto: pestaña resumen + soporte por ítem.
-    modo=presupuesto_obra: cantidades totales subidas.
-    modo=obra_ejecutada: solo filas con revisado Interventoría = Aprobado.
+    Usa los mismos filtros del cuerpo (capítulo, tipo_ejecucion, revisado, etc.) que GET /presupuesto.
+    modo solo define la etiqueta del informe (presupuesto_obra | obra_ejecutada).
     """
     modo = (body.modo or "").strip().lower()
     if modo not in ("presupuesto_obra", "obra_ejecutada"):
@@ -6320,8 +6342,6 @@ def exportar_presupuesto_informe(
         rows = _presupuesto_version_fetch_export_rows(contrato_id, vid, current_user)
     else:
         rows = _presupuesto_fetch_export_rows(contrato_id, body, current_user)
-    if modo == "obra_ejecutada":
-        rows = [r for r in rows if str(r.get("revisado") or "").strip() == "Aprobado"]
 
     resumen_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
     items_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -6340,6 +6360,7 @@ def exportar_presupuesto_informe(
                 "und": (r.get("und") or "").strip(),
                 "vlr_unitario": float(r.get("vlr_unitario") or 0),
                 "cantidad": 0.0,
+                "costo_directo": 0.0,
             }
         agg = resumen_map[k]
         if not agg["descripcion"] and r.get("descripcion"):
@@ -6353,6 +6374,7 @@ def exportar_presupuesto_informe(
             except (TypeError, ValueError):
                 pass
         agg["cantidad"] += float(r.get("cant_total") or 0)
+        agg["costo_directo"] += float(r.get("costo_directo") or 0)
 
         if k not in items_map:
             items_map[k] = {
@@ -6368,9 +6390,6 @@ def exportar_presupuesto_informe(
         if not im["und"] and r.get("und"):
             im["und"] = str(r.get("und")).strip()
 
-        pre = r.get("pre_interv_estado")
-        pre_disp = "No Revisado" if pre is None or str(pre).strip() == "" else str(pre).strip()
-        rev_disp = str(r.get("revisado") or "No Revisado").strip()
         obs_parts = []
         if r.get("observacion"):
             obs_parts.append(str(r.get("observacion")).strip())
@@ -6387,7 +6406,8 @@ def exportar_presupuesto_informe(
             "ancho": r.get("ancho"),
             "espesor": r.get("espesor"),
             "cant_total": r.get("cant_total"),
-            "validacion": f"Dep: {pre_disp} / Int: {rev_disp}",
+            "pre_interv_por": (r.get("pre_interv_por") or "").strip(),
+            "validado_por": (r.get("validado_por") or "").strip(),
             "observacion": " · ".join(obs_parts),
         })
 
@@ -6396,6 +6416,7 @@ def exportar_presupuesto_informe(
         agg = resumen_map[k]
         cant = round(float(agg["cantidad"]), 6)
         vlr = round(float(agg["vlr_unitario"]), 2)
+        costo = round(float(agg["costo_directo"]), 0)
         resumen.append({
             "capitulo": agg["capitulo"],
             "item": agg["item"],
@@ -6403,14 +6424,18 @@ def exportar_presupuesto_informe(
             "und": agg["und"],
             "vlr_unitario": vlr,
             "cantidad": cant,
-            "costo_directo": round(cant * vlr, 0),
+            "costo_directo": costo,
         })
 
     items_out = []
     for k in sorted(items_map.keys(), key=lambda x: (_orden_capitulo_presupuesto(x[0]), x[1])):
         items_out.append(items_map[k])
 
-    modo_label = "Presupuesto de obra" if modo == "presupuesto_obra" else "Obra ejecutada (Interventoría aprobada)"
+    te = (body.tipo_ejecucion or "").strip()
+    if modo == "obra_ejecutada" or te == "Obra Ejecutada":
+        modo_label = "Obra ejecutada"
+    else:
+        modo_label = "Presupuesto de obra"
     if vid:
         vrow = (
             supabase.table("presupuesto_versiones")
@@ -16449,17 +16474,25 @@ def _parse_rpc_dashboard_resumen_raw(raw):
 
 
 def _parse_rpc_jsonb_value(raw):
-    """Primer valor jsonb devuelto por RPC (PostgREST devuelve [{ función: <payload> }])."""
+    """Payload jsonb de RPC: lista plana de filas o [{ nombre_función: <payload> }]."""
     if raw is None:
         return None
-    if isinstance(raw, list) and len(raw) > 0:
-        row = raw[0]
-        if isinstance(row, dict):
-            # No devolver el primer .values() ciegamente: a veces viene null y el payload es otra clave.
-            for v in row.values():
+    data = getattr(raw, "data", raw)
+    if isinstance(data, list):
+        if not data:
+            return []
+        first = data[0]
+        if isinstance(first, dict) and "rows" in first and (
+            "por_cobrar" in first or "devolucion" in first or "descripcion_item" in first
+        ):
+            return first
+        if isinstance(first, dict) and ("item" in first or "capitulo" in first or "nombre" in first):
+            return data
+        if isinstance(first, dict):
+            for v in first.values():
                 if isinstance(v, list):
                     return v
-            for v in row.values():
+            for v in first.values():
                 if v is None:
                     continue
                 if isinstance(v, str) and v.strip() and (v.strip()[0] in "[{"):
@@ -16471,8 +16504,9 @@ def _parse_rpc_jsonb_value(raw):
                         return parsed
                     return parsed
                 return v
-    if isinstance(raw, dict):
-        return raw
+        return data
+    if isinstance(data, dict):
+        return data
     return None
 
 
@@ -16508,8 +16542,528 @@ def _dash_pk_disp_key_py(v: Any) -> str:
     return s
 
 
+def _resolve_pk_drill(contrato_id: int, pk_input: Optional[str]) -> Dict[str, Any]:
+    """PK del plano/tabla → id interno y alias (pk_ids.pk_id, id numérico, texto presupuesto)."""
+    raw = _dash_pk_disp_key_py(pk_input) if pk_input not in (None, "") else ""
+    if raw == "(sin pk)":
+        return {"pkid_id": None, "display_keys": set(), "canonical": ""}
+    keys: set = {raw}
+    pkid_id = None
+    canonical = raw
+
+    def _ingest_row(row: dict) -> None:
+        nonlocal pkid_id, canonical
+        if not row:
+            return
+        try:
+            pkid_id = int(row.get("id"))
+        except (TypeError, ValueError):
+            pkid_id = None
+        pid = str(row.get("pk_id") or "").strip()
+        if pid:
+            keys.add(_dash_pk_disp_key_py(pid))
+            canonical = _dash_pk_disp_key_py(pid)
+        if pkid_id is not None:
+            keys.add(str(pkid_id))
+
+    rows = supabase_execute(
+        lambda: supabase.table("pk_ids")
+        .select("id, pk_id")
+        .eq("contrato_id", contrato_id)
+        .eq("pk_id", raw)
+        .limit(1)
+        .execute()
+        .data
+    ) or []
+    if rows:
+        _ingest_row(rows[0])
+    elif raw.isdigit():
+        rows2 = supabase_execute(
+            lambda: supabase.table("pk_ids")
+            .select("id, pk_id")
+            .eq("contrato_id", contrato_id)
+            .eq("id", int(raw))
+            .limit(1)
+            .execute()
+            .data
+        ) or []
+        if rows2:
+            _ingest_row(rows2[0])
+
+    return {"pkid_id": pkid_id, "display_keys": keys, "canonical": canonical}
+
+
+def _load_pk_id_disp_cache(contrato_id: int, pkid_ids: Iterable[int]) -> Dict[int, str]:
+    ids = sorted({int(x) for x in pkid_ids if x is not None})
+    if not ids:
+        return {}
+    out: Dict[int, str] = {}
+    for i in range(0, len(ids), 200):
+        chunk = ids[i : i + 200]
+        rows = supabase_execute(
+            lambda c=chunk: supabase.table("pk_ids")
+            .select("id, pk_id")
+            .eq("contrato_id", contrato_id)
+            .in_("id", c)
+            .execute()
+            .data
+        ) or []
+        for row in rows:
+            try:
+                rid = int(row.get("id"))
+            except (TypeError, ValueError):
+                continue
+            disp = str(row.get("pk_id") or "").strip() or str(rid)
+            out[rid] = _dash_pk_disp_key_py(disp)
+    return out
+
+
+def _sicoe_pk_display_key(reg: dict, pk_id_cache: Optional[Dict[int, str]] = None) -> str:
+    """Clave estable para mapa/colores: preferir pk_ids.pk_id sobre pk_id_id."""
+    pk_join = reg.get("pk_ids") or {}
+    pk_raw = pk_join.get("pk_id")
+    if pk_raw is not None and str(pk_raw).strip():
+        return _dash_pk_disp_key_py(pk_raw)
+    pid = reg.get("pk_id_id")
+    if pid is not None and pk_id_cache is not None:
+        try:
+            hit = pk_id_cache.get(int(pid))
+        except (TypeError, ValueError):
+            hit = None
+        if hit:
+            return hit
+    if pid is not None:
+        return _dash_pk_disp_key_py(pid)
+    return "(sin pk)"
+
+
+def _ppto_row_matches_pk(r: dict, display_keys: set) -> bool:
+    if not display_keys:
+        return True
+    return _dash_pk_disp_key_py(r.get("pk_id")) in display_keys
+
+
+def _registro_matches_pk(reg: dict, display_keys: set, pk_id_cache: Dict[int, str]) -> bool:
+    if not display_keys:
+        return True
+    disp = _sicoe_pk_display_key(reg, pk_id_cache)
+    if disp in display_keys:
+        return True
+    pid = reg.get("pk_id_id")
+    if pid is not None and str(pid).strip() in display_keys:
+        return True
+    return False
+
+
+def _canonicalize_pk_colores_key(contrato_id: int, key: str, alias_map: Dict[str, str]) -> str:
+    """Unifica alias (id interno vs pk_ids.pk_id) bajo la misma clave del plano."""
+    k = _dash_pk_disp_key_py(key)
+    if k in alias_map:
+        return alias_map[k]
+    if k.isdigit():
+        hit = alias_map.get(f"id:{k}")
+        if hit:
+            return hit
+    return k
+
+
+def _ppto_row_matches_pk_keys(
+    contrato_id: int,
+    row: dict,
+    display_keys: set,
+    alias_map: Dict[str, str],
+) -> bool:
+    if not display_keys:
+        return True
+    pk_raw = _dash_pk_disp_key_py(row.get("pk_id"))
+    if pk_raw in display_keys:
+        return True
+    canon_row = _canonicalize_pk_colores_key(contrato_id, pk_raw, alias_map)
+    canon_targets = {_canonicalize_pk_colores_key(contrato_id, k, alias_map) for k in display_keys}
+    return canon_row in canon_targets
+
+
+_PPTO_PK_DETALLE_SELECT = (
+    "id, capitulo, item, descripcion, und, vlr_unitario, cant_total, costo_directo, "
+    "id_pol, pk_id, no_inicio, no_final, tramo, calzada, abs_inicio, abs_final, "
+    "area_long_nod, ancho, espesor, revisado, tipo_ejecucion, sellado"
+)
+
+
+def _filter_ppto_detalle_vista(rows: List[dict], vista: str) -> List[dict]:
+    """Solo filas del tipo de ejecución activo (Presupuesto de Obra u Obra Ejecutada)."""
+    from dashboard_presupuesto_vista import ppto_row_matches_vista
+
+    return [r for r in rows if ppto_row_matches_vista(r, vista)]
+
+
+def _format_ppto_detalle_row(r: dict) -> dict:
+    return {
+        "id": r.get("id"),
+        "id_pol": r.get("id_pol"),
+        "no_inicio": r.get("no_inicio"),
+        "no_final": r.get("no_final"),
+        "cant_total": r.get("cant_total"),
+        "costo_directo": r.get("costo_directo"),
+        "descripcion": r.get("descripcion"),
+        "item": r.get("item"),
+        "revisado": r.get("revisado"),
+        "capitulo": r.get("capitulo"),
+        "pk_id": r.get("pk_id"),
+        "tipo_ejecucion": r.get("tipo_ejecucion"),
+        "und": r.get("und"),
+        "vlr_unitario": r.get("vlr_unitario"),
+        "tramo": r.get("tramo"),
+        "calzada": r.get("calzada"),
+        "abs_inicio": r.get("abs_inicio"),
+        "abs_final": r.get("abs_final"),
+        "area_long_nod": r.get("area_long_nod"),
+        "ancho": r.get("ancho"),
+        "espesor": r.get("espesor"),
+        "pre_interv_estado": r.get("pre_interv_estado"),
+        "sellado": r.get("sellado"),
+        "calculo_por": r.get("calculo_por"),
+        "calculo_en": r.get("calculo_en"),
+    }
+
+
+def _fetch_presupuesto_pk_detalle_rows(
+    contrato_id: int,
+    capitulo: str,
+    item: str,
+    vista: str,
+    display_keys: set,
+    current_user,
+) -> List[dict]:
+    """
+    Líneas de presupuesto para popup PK (cap+ítem+PK, filtradas por tipo_ejecucion del toggle).
+    """
+    from dashboard_presupuesto_vista import (
+        _apply_capitulo_filter,
+        _apply_interventoria_filter,
+        _item_variants_heuristic,
+        ppto_tipo_for_vista,
+        ppto_row_matches_vista,
+    )
+
+    cap_raw = (capitulo or "").strip()
+    it_key = _dash_norm_item_key_py(item)
+    if not cap_raw or not it_key:
+        return []
+    tipo = ppto_tipo_for_vista(vista)
+    item_vars = _item_variants_heuristic(item)
+    alias_map: Dict[str, str] = _preload_pk_alias_map(contrato_id, display_keys) if display_keys else {}
+    matched: List[dict] = []
+    off = 0
+    while True:
+        q = (
+            supabase.table("presupuesto")
+            .select(_PPTO_PK_DETALLE_SELECT)
+            .eq("contrato_id", int(contrato_id))
+            .eq("dado_de_baja", False)
+            .eq("tipo_ejecucion", tipo)
+        )
+        q = _apply_interventoria_filter(q, current_user)
+        q = _apply_capitulo_filter(q, supabase, contrato_id, cap_raw, tipo_ejecucion=tipo)
+        if item_vars:
+            if len(item_vars) == 1:
+                q = q.eq("item", item_vars[0])
+            else:
+                q = q.in_("item", item_vars)
+        batch = supabase_execute(lambda o=off, qq=q: qq.range(o, o + 999).execute().data) or []
+        for r in batch:
+            if _dash_norm_item_key_py(r.get("item")) != it_key:
+                continue
+            if display_keys and not _ppto_row_matches_pk_keys(contrato_id, r, display_keys, alias_map):
+                continue
+            if not ppto_row_matches_vista(r, vista):
+                continue
+            matched.append(r)
+        if len(batch) < 1000:
+            break
+        off += 1000
+    return matched
+
+
+def _merge_pk_colores_agg(agg: Dict[str, float], alias_map: Dict[str, str]) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for k, v in (agg or {}).items():
+        dk = _dash_pk_disp_key_py(k)
+        canon = alias_map.get(dk, alias_map.get(f"id:{dk}", dk))
+        out[canon] = out.get(canon, 0) + float(v or 0)
+    return out
+
+
+def _preload_pk_alias_map(contrato_id: int, raw_keys: Set[str]) -> Dict[str, str]:
+    """Batch pk_ids (1–2 consultas) para el mapa semáforo; evita N+1 por polígono."""
+    alias: Dict[str, str] = {}
+    clean = {k for k in (_dash_pk_disp_key_py(x) for x in raw_keys) if k and k != "(sin pk)"}
+    if not clean:
+        return alias
+
+    def _register(row: dict) -> None:
+        try:
+            rid = int(row.get("id"))
+        except (TypeError, ValueError):
+            rid = None
+        pid = _dash_pk_disp_key_py(row.get("pk_id"))
+        canon = pid if pid != "(sin pk)" else (str(rid) if rid is not None else "")
+        if not canon:
+            return
+        if pid != "(sin pk)":
+            alias[pid] = canon
+        if rid is not None:
+            alias[str(rid)] = canon
+            alias[f"id:{rid}"] = canon
+
+    pk_list = sorted(clean)
+    for i in range(0, len(pk_list), 100):
+        chunk = pk_list[i : i + 100]
+
+        def _by_pk(c=chunk):
+            return (
+                supabase.table("pk_ids")
+                .select("id, pk_id")
+                .eq("contrato_id", contrato_id)
+                .in_("pk_id", c)
+                .execute()
+                .data
+            )
+
+        for row in supabase_execute(_by_pk) or []:
+            _register(row)
+
+    nums = sorted({int(k) for k in clean if str(k).isdigit()})
+    missing = [n for n in nums if str(n) not in alias]
+    for i in range(0, len(missing), 200):
+        chunk = missing[i : i + 200]
+
+        def _by_id(c=chunk):
+            return (
+                supabase.table("pk_ids")
+                .select("id, pk_id")
+                .eq("contrato_id", contrato_id)
+                .in_("id", c)
+                .execute()
+                .data
+            )
+
+        for row in supabase_execute(_by_id) or []:
+            _register(row)
+
+    for k in clean:
+        alias.setdefault(k, alias.get(f"id:{k}", k))
+    return alias
+
+
+_PKID_COLORES_RESP_CACHE: Dict[str, Tuple[float, dict]] = {}
+_PKID_COLORES_RESP_TTL_SEC = 120.0
+_PKID_COLORES_RESP_LOCK = threading.Lock()
+
+
+def _pkid_colores_cache_get(key: str) -> Optional[dict]:
+    now = time.time()
+    with _PKID_COLORES_RESP_LOCK:
+        hit = _PKID_COLORES_RESP_CACHE.get(key)
+        if hit and now - hit[0] < _PKID_COLORES_RESP_TTL_SEC:
+            return dict(hit[1])
+    return None
+
+
+def _pkid_colores_cache_set(key: str, payload: dict) -> None:
+    with _PKID_COLORES_RESP_LOCK:
+        _PKID_COLORES_RESP_CACHE[key] = (time.time(), dict(payload))
+
+
+def _pkid_tabla_rows_to_colores(rows: List[dict]) -> Dict[str, Any]:
+    """Semáforo mapa: mismos totales que tabla PK (costo_ppto vs SICOE aprobado)."""
+    result: Dict[str, Any] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        pk = _dash_pk_disp_key_py(row.get("pk_id"))
+        if not pk or pk == "(sin pk)":
+            continue
+        pref = float(row.get("costo_ppto") or 0)
+        sap = float(row.get("costo_sicoe_aprobado") or row.get("costo_sicoe") or 0)
+        result[pk] = {
+            "cobrado": round(sap, 2),
+            "presupuesto": round(pref, 2),
+            "pct": round(sap / pref * 100, 1) if pref else 0,
+            "sobrecosto": sap > pref,
+        }
+    return result
+
+
+def _dashboard_pkid_colores_core(
+    contrato_id: int,
+    capitulo: Optional[str],
+    item: Optional[str],
+    vista: str,
+    current_user,
+) -> Dict[str, Any]:
+    cap_s = (capitulo or "").strip()
+    item_s = (item or "").strip()
+    cache_key = f"{int(contrato_id)}|{cap_s}|{item_s}|{parse_dash_vista(vista)}"
+    cached = _pkid_colores_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    t0 = time.time()
+    if cap_s:
+        try:
+            tabla = _dashboard_pkid_tabla_obra_core(
+                contrato_id, capitulo, item, vista, current_user
+            )
+            result = _pkid_tabla_rows_to_colores(tabla.get("rows") or [])
+            _pkid_colores_cache_set(cache_key, result)
+            print(
+                f"dashboard_pkid_colores RPC/tabla ok cap={cap_s!r} item={item_s!r} pks={len(result)} "
+                f"ms={int((time.time() - t0) * 1000)}",
+                flush=True,
+            )
+            return result
+        except Exception as tab_err:
+            print(
+                f"dashboard_pkid_colores tabla FALLÓ, fallback scan: "
+                f"{type(tab_err).__name__}: {tab_err}",
+                flush=True,
+            )
+
+    ppto_rows, allowed_keys, _ = ppto_filas_pk_drill(
+        supabase, contrato_id, capitulo, item, vista, current_user
+    )
+    ppto_raw: Dict[str, float] = {}
+    raw_keys: set = set()
+    for r in ppto_rows:
+        k_raw = str(r.get("pk_id") or "").strip()
+        if not k_raw:
+            continue
+        raw_keys.add(k_raw)
+        ppto_raw[k_raw] = ppto_raw.get(k_raw, 0) + float(r.get("costo_directo") or 0)
+
+    sicoe_raw: Dict[str, float] = {}
+    cap_key = _dash_norm_capitulo_key_py(capitulo) if capitulo else None
+    it_norm = _dash_norm_item_key_py(item) if item else ""
+    pk_id_cache: Dict[int, str] = {}
+    off = 0
+    while True:
+        def _fetch_sicoe(o=off, cap_eq=capitulo):
+            q = (
+                supabase.table("so_registros")
+                .select(
+                    "pk_id_id, costo_directo, pk_ids(pk_id), capitulo, item_numero, "
+                    + SICOE_SELECT_NIVELES_ESTADO
+                )
+                .eq("contrato_id", contrato_id)
+                .not_.is_("pk_id_id", "null")
+            )
+            if cap_eq and str(cap_eq).strip():
+                q = apply_sicoe_capitulo_filter(q, supabase, contrato_id, str(cap_eq).strip())
+            if it_norm:
+                item_vars = [v for v in {item_s, it_norm, f"{it_norm}."} if v]
+                if len(item_vars) == 1:
+                    q = q.eq("item_numero", item_vars[0])
+                elif item_vars:
+                    q = q.in_("item_numero", item_vars)
+            return q.range(o, o + 999).execute().data
+
+        batch = supabase_execute(_fetch_sicoe) or []
+        pending_ids: set = set()
+        for r in batch:
+            if cap_key and _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_key:
+                continue
+            if it_norm and _dash_norm_item_key_py(r.get("item_numero")) != it_norm:
+                continue
+            if not sicoe_registro_en_vista(r, allowed_keys):
+                continue
+            if _matriz_validacion_norm_estado_nivel_final(r, contrato_id) != "Aprobado":
+                continue
+            pk_join = r.get("pk_ids") or {}
+            pk_raw = pk_join.get("pk_id")
+            if pk_raw is not None and str(pk_raw).strip():
+                k = _dash_pk_disp_key_py(pk_raw)
+            else:
+                pid = r.get("pk_id_id")
+                if pid is None:
+                    continue
+                try:
+                    ip = int(pid)
+                except (TypeError, ValueError):
+                    continue
+                if ip not in pk_id_cache:
+                    pending_ids.add(ip)
+                k = pk_id_cache.get(ip, str(ip))
+            raw_keys.add(k)
+            sicoe_raw[k] = sicoe_raw.get(k, 0) + float(r.get("costo_directo") or 0)
+        if pending_ids:
+            pk_id_cache.update(_load_pk_id_disp_cache(contrato_id, pending_ids))
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    if pk_id_cache and sicoe_raw:
+        remapped: Dict[str, float] = {}
+        for k, v in sicoe_raw.items():
+            nk = k
+            if str(k).isdigit():
+                try:
+                    nk = pk_id_cache.get(int(k), k)
+                except (TypeError, ValueError):
+                    nk = k
+            remapped[nk] = remapped.get(nk, 0) + v
+            raw_keys.add(nk)
+        sicoe_raw = remapped
+
+    alias_map = _preload_pk_alias_map(contrato_id, raw_keys)
+    ppto_agg = _merge_pk_colores_agg(ppto_raw, alias_map)
+    sicoe_ap_agg = _merge_pk_colores_agg(sicoe_raw, alias_map)
+
+    result: Dict[str, Any] = {}
+    for pk in set(list(ppto_agg.keys()) + list(sicoe_ap_agg.keys())):
+        pref = float(ppto_agg.get(pk, 0))
+        sap = float(sicoe_ap_agg.get(pk, 0))
+        result[pk] = {
+            "cobrado": round(sap, 2),
+            "presupuesto": round(pref, 2),
+            "pct": round(sap / pref * 100, 1) if pref else 0,
+            "sobrecosto": sap > pref,
+        }
+    _pkid_colores_cache_set(cache_key, result)
+    print(
+        f"dashboard_pkid_colores ok cap={cap_s!r} item={item_s!r} pks={len(result)} "
+        f"ms={int((time.time() - t0) * 1000)}",
+        flush=True,
+    )
+    return result
+
+
 # ── Liquidación contrato: recalc (= polígonos presupuesto) vs «cobro» (= SICOE N3 aprobado en so_registros) ──
 from presupuesto_constants import PRESUPUESTO_TIPO_POLIGONO
+from dashboard_presupuesto_vista import (
+    DASH_VISTA_OBRA_EJECUTADA,
+    TIPO_PRESUPUESTO_OBRA,
+    TIPO_OBRA_EJECUTADA,
+    capitulo_variants_heuristic,
+    drill_items_capitulo_vista,
+    filter_sicoe_by_allowed_keys,
+    liquidacion_items_vista,
+    norm_capitulo_display,
+    norm_capitulo_key,
+    parse_dash_vista,
+    ppto_filas_pk_drill,
+    ppto_rows_capitulo_vista,
+    ppto_rows_item_pk_drill,
+    ppto_row_matches_vista,
+    ppto_tipo_for_vista,
+    rebuild_comparativo_capitulos,
+    resolve_capitulo_db,
+    resolve_capitulo_variants,
+    apply_sicoe_capitulo_filter,
+    scan_presupuesto_capitulo_vista,
+    scan_presupuesto_vista,
+    sicoe_registro_en_vista,
+)
 
 LIQ_SUPERCOBRO_COP = 20_000_000.0
 
@@ -16710,59 +17264,42 @@ def _dashboard_pkid_colores_liquidacion(
     contrato_id: int,
     capitulo: Optional[str],
     item: Optional[str],
+    vista: str = "obra_ejecutada",
+    current_user=None,
 ) -> Dict[str, Any]:
-    """Mini mapa liquidación: por PK, referencia = Σ ítem (polígono si calculado) vs cobrado = SICOE N3 ✓."""
+    """Mini mapa liquidación: por PK, referencia presupuesto vista vs cobrado SICOE N3 ✓."""
     cap_k = _dash_norm_capitulo_key_py(capitulo) if capitulo else None
     it_k = _dash_norm_item_key_py(item) if item else None
+    ppto_rows, allowed_keys, _ = ppto_filas_pk_drill(
+        supabase, contrato_id, capitulo, item, vista, current_user
+    )
 
-    calculado: Dict[Tuple[str, str], bool] = {}
     po_by: Dict[Tuple[str, str], Dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    off = 0
-    while True:
-        def _qp(o=off):
-            return (
-                supabase.table("presupuesto")
-                .select("capitulo, item, pk_id, tipo_ejecucion, costo_directo")
-                .eq("contrato_id", contrato_id)
-                .eq("dado_de_baja", False)
-                .range(o, o + 999)
-                .execute()
-                .data
-            )
-
-        batch = supabase_execute(_qp) or []
-        for r in batch:
-            ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
-            ik = _dash_norm_item_key_py(r.get("item"))
-            if not ik:
-                continue
-            if cap_k and ck != cap_k:
-                continue
-            if it_k and ik != it_k:
-                continue
-            key = (ck, ik)
-            te = (r.get("tipo_ejecucion") or "").strip()
-            if te == PRESUPUESTO_TIPO_POLIGONO:
-                calculado[key] = True
-                pk = _dash_pk_disp_key_py(r.get("pk_id"))
-                if pk != "(sin pk)":
-                    po_by[key][pk] += float(r.get("costo_directo") or 0)
-        if len(batch) < 1000:
-            break
-        off += 1000
+    for r in ppto_rows:
+        ck = _dash_norm_capitulo_key_py(r.get("capitulo"))
+        ik = _dash_norm_item_key_py(r.get("item"))
+        if not ik:
+            continue
+        if cap_k and ck != cap_k:
+            continue
+        if it_k and ik != it_k:
+            continue
+        pk = _dash_pk_disp_key_py(r.get("pk_id"))
+        if pk != "(sin pk)":
+            po_by[(ck, ik)][pk] += float(r.get("costo_directo") or 0)
 
     sic_by: Dict[Tuple[str, str], Dict[str, float]] = defaultdict(lambda: defaultdict(float))
     off = 0
     while True:
-        def _qs(o=off):
-            return (
+        def _qs(o=off, cap_eq=capitulo):
+            q = (
                 supabase.table("so_registros")
                 .select("capitulo, item_numero, costo_directo, " + SICOE_SELECT_NIVELES_ESTADO + ", pk_id_id, pk_ids(pk_id)")
                 .eq("contrato_id", contrato_id)
-                .range(o, o + 999)
-                .execute()
-                .data
             )
+            if cap_eq and str(cap_eq).strip():
+                q = apply_sicoe_capitulo_filter(q, supabase, contrato_id, str(cap_eq).strip())
+            return q.range(o, o + 999).execute().data
 
         batch = supabase_execute(_qs) or []
         for r in batch:
@@ -16775,6 +17312,8 @@ def _dashboard_pkid_colores_liquidacion(
             if cap_k and ck != cap_k:
                 continue
             if it_k and ik != it_k:
+                continue
+            if not sicoe_registro_en_vista(r, allowed_keys):
                 continue
             pk_join = r.get("pk_ids") or {}
             pk_raw = pk_join.get("pk_id")
@@ -16790,7 +17329,10 @@ def _dashboard_pkid_colores_liquidacion(
             break
         off += 1000
 
-    keys_scope = set(po_by.keys()) | set(sic_by.keys())
+    if allowed_keys is not None:
+        keys_scope = set(po_by.keys()) & set(sic_by.keys())
+    else:
+        keys_scope = set(po_by.keys()) | set(sic_by.keys())
     if cap_k:
         keys_scope = {x for x in keys_scope if x[0] == cap_k}
     if it_k:
@@ -16806,13 +17348,8 @@ def _dashboard_pkid_colores_liquidacion(
         sap = 0.0
         pref = 0.0
         for k in keys_scope:
-            sik = float(sic_by[k].get(pk, 0.0))
-            sap += sik
-            is_calc = bool(calculado.get(k, False))
-            if is_calc:
-                pref += float(po_by[k].get(pk, 0.0))
-            else:
-                pref += sik
+            sap += float(sic_by[k].get(pk, 0.0))
+            pref += float(po_by[k].get(pk, 0.0))
         result[pk] = {
             "cobrado": round(sap, 2),
             "presupuesto": round(pref, 2),
@@ -16823,8 +17360,715 @@ def _dashboard_pkid_colores_liquidacion(
     return result
 
 
+_DASH_AGG_CACHE: Dict[str, Tuple[float, Any]] = {}
+_DASH_AGG_CACHE_LOCK = threading.Lock()
+_DASH_AGG_CACHE_TTL_SEC = 90
+
+
+def _dash_agg_cache_get(kind: str, contrato_id: int):
+    key = f"{kind}:{int(contrato_id)}"
+    now = time.time()
+    with _DASH_AGG_CACHE_LOCK:
+        hit = _DASH_AGG_CACHE.get(key)
+        if hit and now - hit[0] < _DASH_AGG_CACHE_TTL_SEC:
+            return hit[1]
+    return None
+
+
+def _dash_agg_cache_set(kind: str, contrato_id: int, value: Any) -> None:
+    key = f"{kind}:{int(contrato_id)}"
+    with _DASH_AGG_CACHE_LOCK:
+        _DASH_AGG_CACHE[key] = (time.time(), value)
+
+
+def _dashboard_scan_sicoe_by_item(contrato_id: int) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """Agrega SICOE por (capítulo_norm, ítem_norm) con costos/cantidades aprobados y en cola."""
+    cached = _dash_agg_cache_get("sicoe_by_item", contrato_id)
+    if cached is not None:
+        return cached
+    sicoe_by_item: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    off = 0
+    while True:
+        def _b(o=off):
+            return (
+                supabase.table("so_registros")
+                .select(
+                    "capitulo, costo_directo, cantidad_total, item_numero, "
+                    f"{SICOE_SELECT_NIVELES_ESTADO}"
+                )
+                .eq("contrato_id", contrato_id)
+                .range(o, o + 999)
+                .execute()
+                .data
+            )
+
+        batch = supabase_execute(_b) or []
+        for reg in batch:
+            if not (reg.get("item_numero") or "").strip():
+                continue
+            ck = _dash_norm_capitulo_key_py(reg.get("capitulo"))
+            ik = _dash_norm_item_key_py(reg.get("item_numero"))
+            if not ik:
+                continue
+            k = (ck, ik)
+            if k not in sicoe_by_item:
+                sicoe_by_item[k] = {
+                    "cap_display": _dash_norm_cap(reg.get("capitulo")),
+                    "ap_c": 0.0,
+                    "nr_c": 0.0,
+                    "ap_q": 0.0,
+                    "nr_q": 0.0,
+                }
+            cd = float(reg.get("costo_directo") or 0)
+            cq = float(reg.get("cantidad_total") or 0)
+            nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
+            if nfin == "Aprobado":
+                sicoe_by_item[k]["ap_c"] += cd
+                sicoe_by_item[k]["ap_q"] += cq
+            elif _so_reg_en_cola_interventoria(reg, contrato_id) and nfin == "No Revisado":
+                sicoe_by_item[k]["nr_c"] += cd
+                sicoe_by_item[k]["nr_q"] += cq
+        if len(batch) < 1000:
+            break
+        off += 1000
+    _dash_agg_cache_set("sicoe_by_item", contrato_id, sicoe_by_item)
+    return sicoe_by_item
+
+
+def _dashboard_scan_sicoe_by_item_capitulo(contrato_id: int, capitulo: str) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """SICOE agregado por ítem solo para un capítulo (drill rápido)."""
+    cap_raw = (capitulo or "").strip()
+    if not cap_raw:
+        return {}
+    cap_key = _dash_norm_capitulo_key_py(cap_raw)
+    cache_key = f"sicoe_by_item_cap:{int(contrato_id)}:{cap_key}"
+    now = time.time()
+    with _DASH_AGG_CACHE_LOCK:
+        hit = _DASH_AGG_CACHE.get(cache_key)
+        if hit and now - hit[0] < _DASH_AGG_CACHE_TTL_SEC:
+            return hit[1]
+
+    sicoe_by_item: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+    def _ingest_batch(batch: List[dict]) -> None:
+        for reg in batch or []:
+            if cap_key and _dash_norm_capitulo_key_py(reg.get("capitulo")) != cap_key:
+                continue
+            ik = _dash_norm_item_key_py(reg.get("item_numero"))
+            if not ik:
+                continue
+            k = (cap_key, ik)
+            if k not in sicoe_by_item:
+                sicoe_by_item[k] = {
+                    "cap_display": _dash_norm_cap(reg.get("capitulo")),
+                    "ap_c": 0.0,
+                    "nr_c": 0.0,
+                    "ap_q": 0.0,
+                    "nr_q": 0.0,
+                }
+            cd = float(reg.get("costo_directo") or 0)
+            cq = float(reg.get("cantidad_total") or 0)
+            nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
+            if nfin == "Aprobado":
+                sicoe_by_item[k]["ap_c"] += cd
+                sicoe_by_item[k]["ap_q"] += cq
+            elif _so_reg_en_cola_interventoria(reg, contrato_id) and nfin == "No Revisado":
+                sicoe_by_item[k]["nr_c"] += cd
+                sicoe_by_item[k]["nr_q"] += cq
+
+    def _scan_pages(use_cap_filter: bool) -> None:
+        off = 0
+        while True:
+            def _b(o=off, cap_eq=cap_raw, filtered=use_cap_filter):
+                q = (
+                    supabase.table("so_registros")
+                    .select(
+                        "capitulo, costo_directo, cantidad_total, item_numero, "
+                        f"{SICOE_SELECT_NIVELES_ESTADO}"
+                    )
+                    .eq("contrato_id", contrato_id)
+                )
+                if filtered:
+                    q = apply_sicoe_capitulo_filter(q, supabase, contrato_id, cap_eq)
+                return q.range(o, o + 999).execute().data
+
+            batch = supabase_execute(_b) or []
+            _ingest_batch(batch)
+            if len(batch) < 1000:
+                break
+            off += 1000
+
+    _scan_pages(use_cap_filter=True)
+    if not sicoe_by_item:
+        full = _dash_agg_cache_get("sicoe_by_item", contrato_id)
+        if full is not None:
+            for k, v in full.items():
+                if k[0] == cap_key:
+                    sicoe_by_item[k] = v
+    with _DASH_AGG_CACHE_LOCK:
+        _DASH_AGG_CACHE[cache_key] = (time.time(), sicoe_by_item)
+    return sicoe_by_item
+
+
+def _sicoe_by_item_for_capitulo(contrato_id: int, capitulo: str) -> Dict[Tuple[str, str], Dict[str, Any]]:
+    """SICOE por ítem del capítulo: caché capítulo → caché contrato filtrada → scan acotado."""
+    cap_raw = (capitulo or "").strip()
+    if not cap_raw:
+        return {}
+    cap_key = _dash_norm_capitulo_key_py(cap_raw)
+    cache_key = f"sicoe_by_item_cap:{int(contrato_id)}:{cap_key}"
+    now = time.time()
+    with _DASH_AGG_CACHE_LOCK:
+        hit = _DASH_AGG_CACHE.get(cache_key)
+        if hit and now - hit[0] < _DASH_AGG_CACHE_TTL_SEC:
+            return hit[1]
+
+    full = _dash_agg_cache_get("sicoe_by_item", contrato_id)
+    if full is not None:
+        filtered = {k: v for k, v in full.items() if k[0] == cap_key}
+        if filtered:
+            with _DASH_AGG_CACHE_LOCK:
+                _DASH_AGG_CACHE[cache_key] = (time.time(), filtered)
+            return filtered
+
+    sicoe_by = _dashboard_scan_sicoe_by_item_capitulo(contrato_id, cap_raw)
+    if sicoe_by:
+        return sicoe_by
+
+    full = _dash_agg_cache_get("sicoe_by_item", contrato_id)
+    if full is not None:
+        filtered = {k: v for k, v in full.items() if k[0] == cap_key}
+        with _DASH_AGG_CACHE_LOCK:
+            _DASH_AGG_CACHE[cache_key] = (time.time(), filtered)
+        return filtered
+
+    return {}
+
+
+def _dashboard_sicoe_from_hit(hit: dict) -> Tuple[Dict[str, float], Dict[str, float], float, float]:
+    """SICOE N3 aprobado / no revisado desde RPC dashboard_resumen_sicoe_agg (sin re-escaneo)."""
+    comparativo = hit.get("comparativo_capitulos") or []
+    sicoe_ap_c: Dict[str, float] = {}
+    sicoe_nr_c: Dict[str, float] = {}
+    for row in comparativo:
+        cap = row.get("capitulo") or "Sin capítulo"
+        sicoe_ap_c[cap] = float(row.get("cobrado") or 0)
+        sicoe_nr_c[cap] = float(row.get("sicoe_no_revisado_n3") or row.get("sicoe_no_revisado") or 0)
+    total_cobrado = float(hit.get("total_cobrado") if hit.get("total_cobrado") is not None else sum(sicoe_ap_c.values()))
+    total_nr = float(
+        hit.get("total_sicoe_n3_no_revisado")
+        if hit.get("total_sicoe_n3_no_revisado") is not None
+        else sum(sicoe_nr_c.values())
+    )
+    return sicoe_ap_c, sicoe_nr_c, total_cobrado, total_nr
+
+
+def _rpc_drill_items_agg(contrato_id: int, capitulo: str) -> List[dict]:
+    """Ítems por capítulo vía SQL (normaliza capítulo; usa nivel máximo del contrato, p. ej. N4)."""
+    campo_max = _get_nivel_maximo_contrato(contrato_id)
+    na = _get_niveles_activos_contrato(contrato_id)
+
+    def _call():
+        return supabase.rpc(
+            "dashboard_drill_items_agg",
+            {
+                "p_contrato_id": int(contrato_id),
+                "p_capitulo": str(capitulo or "").strip(),
+                "p_campo_nivel_max": campo_max,
+                "p_niveles_activos": na,
+            },
+        ).execute().data
+
+    raw = supabase_execute(_call, retries=1)
+    items = _parse_rpc_jsonb_value(raw)
+    if not isinstance(items, list):
+        return []
+    return [x for x in items if isinstance(x, dict)]
+
+
+def _rpc_pkid_tabla_agg(contrato_id: int, capitulo: str, item: Optional[str] = None) -> dict:
+    """Tabla PK por capítulo+ítem vía SQL (normaliza capítulo/ítem; nivel máx. contrato)."""
+    campo_max = _get_nivel_maximo_contrato(contrato_id)
+    na = _get_niveles_activos_contrato(contrato_id)
+
+    def _call():
+        return supabase.rpc(
+            "dashboard_pkid_tabla_agg",
+            {
+                "p_contrato_id": int(contrato_id),
+                "p_capitulo": str(capitulo or "").strip(),
+                "p_item": str(item or "").strip() if item else None,
+                "p_campo_nivel_max": campo_max,
+                "p_niveles_activos": na,
+            },
+        ).execute().data
+
+    raw = supabase_execute(_call, retries=1)
+    parsed = _parse_rpc_jsonb_value(raw)
+    if isinstance(parsed, dict) and isinstance(parsed.get("rows"), list):
+        return parsed
+    return {}
+
+
+def _pkid_tabla_empty_metric() -> Dict[str, float]:
+    return {"cant": 0.0, "costo": 0.0}
+
+
+def _aggregate_pkid_ppto_rows(ppto_rows: List[dict]) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
+    agg_meta: Dict[str, Any] = {}
+    agg_p_ap: Dict[str, Any] = {}
+    agg_p_nr: Dict[str, Any] = {}
+    agg_p_pd: Dict[str, Any] = {}
+    agg_p_rj: Dict[str, Any] = {}
+    empty_m = _pkid_tabla_empty_metric
+    for r in ppto_rows or []:
+        k = _dash_pk_disp_key_py(r.get("pk_id"))
+        if k not in agg_meta:
+            agg_meta[k] = {"desc": "", "_rev_track": []}
+        cost_line = float(r.get("costo_directo") or 0)
+        agg_meta[k]["_rev_track"].append((cost_line, r.get("revisado")))
+        if not agg_meta[k]["desc"] and r.get("descripcion"):
+            agg_meta[k]["desc"] = r["descripcion"]
+        rv = _matriz_validacion_norm_estado(r.get("revisado"))
+        cq = float(r.get("cant_total") or 0)
+        cd = float(r.get("costo_directo") or 0)
+        if rv == "Aprobado":
+            tgt = agg_p_ap
+        elif rv == "Pendiente":
+            tgt = agg_p_pd
+        elif rv == "Rechazado":
+            tgt = agg_p_rj
+        else:
+            tgt = agg_p_nr
+        if k not in tgt:
+            tgt[k] = empty_m()
+        tgt[k]["cant"] += cq
+        tgt[k]["costo"] += cd
+    return agg_meta, agg_p_ap, agg_p_nr, agg_p_pd, agg_p_rj
+
+
+def _build_pkid_tabla_row_from_aggs(
+    pk: str,
+    meta: Dict[str, Any],
+    pap: Dict[str, float],
+    pnr: Dict[str, float],
+    ppd: Dict[str, float],
+    prj: Dict[str, float],
+    sic: Dict[str, float],
+    snr: Dict[str, float],
+    spe: Dict[str, float],
+    srj: Dict[str, float],
+) -> dict:
+    cant_ppto = pap["cant"] + pnr["cant"] + ppd["cant"] + prj["cant"]
+    costo_ppto = pap["costo"] + pnr["costo"] + ppd["costo"] + prj["costo"]
+    dcant = pap["cant"] - sic["cant"]
+    dcosto = pap["costo"] - sic["costo"]
+    tr = meta.get("_rev_track") or []
+    rev_dom = "No Revisado"
+    if tr:
+        rev_dom = _matriz_validacion_norm_estado(max(tr, key=lambda x: float(x[0] or 0))[1])
+    return {
+        "pk_id": pk,
+        "cant_ppto": round(cant_ppto, 2),
+        "costo_ppto": round(costo_ppto, 0),
+        "cant_ppto_aprobado_n3": round(pap["cant"], 2),
+        "costo_ppto_aprobado_n3": round(pap["costo"], 0),
+        "cant_ppto_estado_no_revisado": round(pnr["cant"], 2),
+        "costo_ppto_estado_no_revisado": round(pnr["costo"], 0),
+        "cant_ppto_estado_pendiente": round(ppd["cant"], 2),
+        "costo_ppto_estado_pendiente": round(ppd["costo"], 0),
+        "cant_ppto_estado_rechazado": round(prj["cant"], 2),
+        "costo_ppto_estado_rechazado": round(prj["costo"], 0),
+        "cant_sicoe_aprobado": round(sic["cant"], 2),
+        "costo_sicoe_aprobado": round(sic["costo"], 0),
+        "cant_sicoe_no_revisado": round(snr["cant"], 2),
+        "costo_sicoe_no_revisado": round(snr["costo"], 0),
+        "cant_sicoe_pendiente": round(spe["cant"], 2),
+        "costo_sicoe_pendiente": round(spe["costo"], 0),
+        "cant_sicoe_rechazado": round(srj["cant"], 2),
+        "costo_sicoe_rechazado": round(srj["costo"], 0),
+        "cant_sicoe": round(sic["cant"], 2),
+        "costo_sicoe": round(sic["costo"], 0),
+        "cant_facturado": 0.0,
+        "costo_facturado": 0.0,
+        "delta_cant": round(dcant, 2),
+        "delta_costo": round(dcosto, 0),
+        "descripcion": meta.get("desc", ""),
+        "revisado": rev_dom,
+    }
+
+
+def _merge_pkid_tabla_vista_ppto(rpc_payload: dict, ppto_rows: List[dict]) -> dict:
+    """Mantiene obra/SICOE del RPC; sustituye columnas de presupuesto según vista."""
+    if not ppto_rows:
+        return rpc_payload
+    empty_m = _pkid_tabla_empty_metric
+    agg_meta, agg_p_ap, agg_p_nr, agg_p_pd, agg_p_rj = _aggregate_pkid_ppto_rows(ppto_rows)
+    rpc_rows = rpc_payload.get("rows") or []
+    rpc_by_pk = {_dash_pk_disp_key_py(r.get("pk_id")): r for r in rpc_rows if isinstance(r, dict)}
+    keys = sorted(
+        set(rpc_by_pk)
+        | set(agg_meta)
+        | set(agg_p_ap)
+        | set(agg_p_nr)
+        | set(agg_p_pd)
+        | set(agg_p_rj),
+        key=lambda x: str(x),
+    )
+    rows: List[dict] = []
+    for pk in keys:
+        base = rpc_by_pk.get(pk) or {}
+        pap = agg_p_ap.get(pk, empty_m())
+        pnr = agg_p_nr.get(pk, empty_m())
+        ppd = agg_p_pd.get(pk, empty_m())
+        prj = agg_p_rj.get(pk, empty_m())
+        sic = {
+            "cant": float(base.get("cant_sicoe_aprobado") or base.get("cant_sicoe") or 0),
+            "costo": float(base.get("costo_sicoe_aprobado") or base.get("costo_sicoe") or 0),
+        }
+        snr = {"cant": float(base.get("cant_sicoe_no_revisado") or 0), "costo": float(base.get("costo_sicoe_no_revisado") or 0)}
+        spe = {"cant": float(base.get("cant_sicoe_pendiente") or 0), "costo": float(base.get("costo_sicoe_pendiente") or 0)}
+        srj = {"cant": float(base.get("cant_sicoe_rechazado") or 0), "costo": float(base.get("costo_sicoe_rechazado") or 0)}
+        meta = agg_meta.get(pk, {"desc": base.get("descripcion") or "", "_rev_track": []})
+        rows.append(_build_pkid_tabla_row_from_aggs(pk, meta, pap, pnr, ppd, prj, sic, snr, spe, srj))
+    por_cobrar = sum(r["delta_costo"] for r in rows if r["delta_costo"] > 0)
+    devolucion = sum(abs(r["delta_costo"]) for r in rows if r["delta_costo"] < 0)
+    return {
+        **rpc_payload,
+        "rows": rows,
+        "por_cobrar": por_cobrar,
+        "devolucion": devolucion,
+    }
+
+
+def _canonicalize_pkid_tabla_rows(contrato_id: int, rows: List[dict]) -> List[dict]:
+    """Unifica alias de PK (id interno vs pk_ids.pk_id) en filas de tabla drill."""
+    if not rows:
+        return []
+    raw_keys = {
+        _dash_pk_disp_key_py(row.get("pk_id"))
+        for row in rows
+        if isinstance(row, dict) and row.get("pk_id") not in (None, "")
+    }
+    alias_map = _preload_pk_alias_map(contrato_id, raw_keys)
+    merged: Dict[str, dict] = {}
+    sum_fields = (
+        "cant_ppto", "costo_ppto", "cant_ppto_aprobado_n3", "costo_ppto_aprobado_n3",
+        "cant_ppto_estado_no_revisado", "costo_ppto_estado_no_revisado",
+        "cant_ppto_estado_pendiente", "costo_ppto_estado_pendiente",
+        "cant_ppto_estado_rechazado", "costo_ppto_estado_rechazado",
+        "cant_sicoe_aprobado", "costo_sicoe_aprobado", "cant_sicoe_no_revisado", "costo_sicoe_no_revisado",
+        "cant_sicoe_pendiente", "costo_sicoe_pendiente", "cant_sicoe_rechazado", "costo_sicoe_rechazado",
+        "cant_sicoe", "costo_sicoe", "delta_cant", "delta_costo",
+    )
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        pk_raw = _dash_pk_disp_key_py(row.get("pk_id"))
+        pk = alias_map.get(pk_raw, alias_map.get(f"id:{pk_raw}", pk_raw))
+        base = dict(row)
+        base["pk_id"] = pk
+        if pk not in merged:
+            merged[pk] = base
+            continue
+        tgt = merged[pk]
+        for f in sum_fields:
+            if f in base:
+                tgt[f] = float(tgt.get(f) or 0) + float(base.get(f) or 0)
+        if not tgt.get("descripcion") and base.get("descripcion"):
+            tgt["descripcion"] = base["descripcion"]
+    out = list(merged.values())
+    for r in out:
+        pap_c = float(r.get("costo_ppto_aprobado_n3") or 0)
+        pap_q = float(r.get("cant_ppto_aprobado_n3") or 0)
+        sic_c = float(r.get("costo_sicoe_aprobado") or r.get("costo_sicoe") or 0)
+        sic_q = float(r.get("cant_sicoe_aprobado") or r.get("cant_sicoe") or 0)
+        r["delta_cant"] = round(pap_q - sic_q, 2)
+        r["delta_costo"] = round(pap_c - sic_c, 0)
+    return sorted(out, key=lambda x: str(x.get("pk_id") or ""))
+
+
+def _normalize_pkid_tabla_payload(payload: dict, contrato_id: Optional[int] = None) -> dict:
+    rows = payload.get("rows") or []
+    if not isinstance(rows, list):
+        rows = []
+    if contrato_id:
+        rows = _canonicalize_pkid_tabla_rows(contrato_id, rows)
+    por_cobrar = sum(float(r.get("delta_costo") or 0) for r in rows if float(r.get("delta_costo") or 0) > 0)
+    devolucion = sum(abs(float(r.get("delta_costo") or 0)) for r in rows if float(r.get("delta_costo") or 0) < 0)
+    return {
+        "rows": rows,
+        "por_cobrar": por_cobrar,
+        "devolucion": devolucion,
+        "descripcion_item": str(payload.get("descripcion_item") or ""),
+    }
+
+
+def _rpc_drill_capitulos_agg(contrato_id: int) -> List[dict]:
+    campo_max = _get_nivel_maximo_contrato(contrato_id)
+    na = _get_niveles_activos_contrato(contrato_id)
+
+    def _call():
+        return supabase.rpc(
+            "dashboard_drill_capitulos_agg",
+            {
+                "p_contrato_id": int(contrato_id),
+                "p_campo_nivel_max": campo_max,
+                "p_niveles_activos": na,
+            },
+        ).execute().data
+
+    raw = supabase_execute(_call)
+    rows = _parse_rpc_jsonb_value(raw)
+    if not isinstance(rows, list):
+        return []
+    out = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        cap = row.get("capitulo") or row.get("nombre") or ""
+        out.append(
+            {
+                "capitulo": cap,
+                "nombre": row.get("nombre") or cap,
+                "descripcion": row.get("descripcion") or "",
+                "presupuesto": float(row.get("presupuesto") or 0),
+                "cobrado": float(row.get("cobrado") or 0),
+                "presupuesto_aprobado_n3": float(row.get("presupuesto_aprobado_n3") or 0),
+                "presupuesto_no_revisado_n3": float(row.get("presupuesto_no_revisado_n3") or 0),
+                "sicoe_no_revisado_n3": float(row.get("sicoe_no_revisado_n3") or 0),
+                "delta": float(row.get("delta") or 0),
+                "pct": float(row.get("pct") or 0),
+                "cant_ppto": float(row.get("cant_ppto") or 0),
+                "cant_sicoe_aprobado": float(row.get("cant_sicoe_aprobado") or 0),
+                "cant_sicoe_no_revisado": float(row.get("cant_sicoe_no_revisado") or 0),
+            }
+        )
+    return out
+
+
+def _ppto_scan_maps_by_norm_cap(scan: dict) -> Tuple[dict, dict, dict, dict]:
+    """Agrega totales de presupuesto por clave normalizada de capítulo."""
+    ap_m: Dict[str, float] = defaultdict(float)
+    nr_m: Dict[str, float] = defaultdict(float)
+    tot_m: Dict[str, float] = defaultdict(float)
+    disp: Dict[str, str] = {}
+    for k, v in (scan.get("ppto_ap_c") or {}).items():
+        nk = norm_capitulo_key(k)
+        ap_m[nk] += float(v or 0)
+        disp.setdefault(nk, norm_capitulo_display(k))
+    for k, v in (scan.get("ppto_nr_c") or {}).items():
+        nk = norm_capitulo_key(k)
+        nr_m[nk] += float(v or 0)
+        disp.setdefault(nk, norm_capitulo_display(k))
+    for k, v in (scan.get("ppto_total_c") or {}).items():
+        nk = norm_capitulo_key(k)
+        tot_m[nk] += float(v or 0)
+        disp.setdefault(nk, norm_capitulo_display(k))
+    return ap_m, nr_m, tot_m, disp
+
+
+def _overlay_vista_presupuesto_comparativo(base_rows: List[dict], scan: dict) -> List[dict]:
+    """Mantiene SICOE del RPC; sustituye columnas de presupuesto según vista (tipo ejecución)."""
+    ap_m, nr_m, tot_m, disp = _ppto_scan_maps_by_norm_cap(scan)
+    out: List[dict] = []
+    seen: set = set()
+    for row in base_rows or []:
+        if not isinstance(row, dict):
+            continue
+        cap_label = row.get("capitulo") or row.get("nombre") or ""
+        nk = norm_capitulo_key(cap_label)
+        seen.add(nk)
+        pap = float(ap_m.get(nk, 0))
+        pnr = float(nr_m.get(nk, 0))
+        pt = float(tot_m.get(nk, pap + pnr))
+        cob = float(row.get("cobrado") or 0)
+        label = disp.get(nk, cap_label or nk)
+        out.append(
+            {
+                **row,
+                "capitulo": label,
+                "nombre": label,
+                "presupuesto": round(pt, 2),
+                "presupuesto_aprobado_n3": round(pap, 2),
+                "presupuesto_no_revisado_n3": round(pnr, 2),
+                "cobrado": round(cob, 2),
+                "sicoe_no_revisado_n3": round(float(row.get("sicoe_no_revisado_n3") or 0), 2),
+                "delta": round(pt - cob, 2),
+                "pct": round(cob / pt * 100, 1) if pt else 0,
+            }
+        )
+    for nk, pt in tot_m.items():
+        if nk in seen:
+            continue
+        pap = float(ap_m.get(nk, 0))
+        pnr = float(nr_m.get(nk, 0))
+        label = disp.get(nk, nk)
+        out.append(
+            {
+                "capitulo": label,
+                "nombre": label,
+                "descripcion": "",
+                "presupuesto": round(pt, 2),
+                "presupuesto_aprobado_n3": round(pap, 2),
+                "presupuesto_no_revisado_n3": round(pnr, 2),
+                "cobrado": 0.0,
+                "sicoe_no_revisado_n3": 0.0,
+                "delta": round(pt, 2),
+                "pct": 0.0,
+                "cant_ppto": 0,
+                "cant_sicoe_aprobado": 0,
+                "cant_sicoe_no_revisado": 0,
+            }
+        )
+    return out
+
+
+def _merge_drill_rpc_sicoe_vista_ppto(rpc_items: List[dict], ppto_items: List[dict]) -> List[dict]:
+    """Une obra (RPC/SICOE, nivel máx. contrato) con presupuesto filtrado por vista."""
+    rpc_map = {_dash_norm_item_key_py(r.get("item") or r.get("nombre")): r for r in (rpc_items or [])}
+    ppto_map = {_dash_norm_item_key_py(r.get("item") or r.get("nombre")): r for r in (ppto_items or [])}
+    keys = sorted(set(rpc_map) | set(ppto_map), key=lambda x: str(x))
+    out: List[dict] = []
+    for ik in keys:
+        if not ik:
+            continue
+        r = dict(rpc_map.get(ik) or {})
+        p = ppto_map.get(ik) or {}
+        pap = float((p.get("presupuesto_aprobado_n3") if p else r.get("presupuesto_aprobado_n3")) or 0)
+        pnr = float((p.get("presupuesto_no_revisado_n3") if p else r.get("presupuesto_no_revisado_n3")) or 0)
+        pp_raw = p.get("presupuesto") if p else r.get("presupuesto")
+        pp_cost = float(pp_raw) if pp_raw not in (None, "") else (pap + pnr)
+        cob = float(r.get("cobrado") or 0)
+        out.append(
+            {
+                "item": ik,
+                "nombre": ik,
+                "descripcion": (p.get("descripcion") or r.get("descripcion") or ""),
+                "presupuesto": round(pp_cost, 2),
+                "cobrado": round(cob, 2),
+                "presupuesto_aprobado_n3": round(pap, 2),
+                "presupuesto_no_revisado_n3": round(pnr, 2),
+                "sicoe_no_revisado_n3": round(float(r.get("sicoe_no_revisado_n3") or 0), 2),
+                "delta": round(pp_cost - cob, 2),
+                "pct": round(cob / pp_cost * 100, 1) if pp_cost else 0,
+                "cant_ppto": round(float(p.get("cant_ppto") or r.get("cant_ppto") or 0), 3),
+                "cant_sicoe_aprobado": round(float(r.get("cant_sicoe_aprobado") or 0), 3),
+                "cant_sicoe_no_revisado": round(float(r.get("cant_sicoe_no_revisado") or 0), 3),
+            }
+        )
+    return out
+
+
+def _drill_rows_missing_sicoe_cobrado(rows: List[dict]) -> bool:
+    if not rows:
+        return False
+    return sum(float(r.get("cobrado") or 0) for r in rows if isinstance(r, dict)) <= 0
+
+
+def _overlay_sicoe_on_drill_items(rows: List[dict], sicoe_by: dict, capitulo: str) -> List[dict]:
+    """Superpone cobrado SICOE (nivel máx. contrato) sobre filas del drill."""
+    cap_key = _dash_norm_capitulo_key_py(capitulo)
+    out: List[dict] = []
+    seen_items: set = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        r = dict(row)
+        ik = _dash_norm_item_key_py(r.get("item") or r.get("nombre"))
+        if ik:
+            seen_items.add(ik)
+        sg = sicoe_by.get((cap_key, ik), {}) if ik else {}
+        apc = float(sg.get("ap_c") or 0)
+        nrc = float(sg.get("nr_c") or 0)
+        rpc_cob = float(r.get("cobrado") or 0)
+        cob = apc if (cap_key, ik) in sicoe_by else rpc_cob
+        r["cobrado"] = round(cob, 2)
+        if (cap_key, ik) in sicoe_by:
+            r["sicoe_no_revisado_n3"] = round(nrc, 2)
+            r["cant_sicoe_aprobado"] = round(float(sg.get("ap_q") or 0), 3)
+            r["cant_sicoe_no_revisado"] = round(float(sg.get("nr_q") or 0), 3)
+        pp = float(r.get("presupuesto") or 0)
+        r["delta"] = round(pp - cob, 2)
+        r["pct"] = round(cob / pp * 100, 1) if pp else 0
+        out.append(r)
+
+    for (ck, ik), sg in (sicoe_by or {}).items():
+        if ck != cap_key or not ik or ik in seen_items:
+            continue
+        apc = float(sg.get("ap_c") or 0)
+        nrc = float(sg.get("nr_c") or 0)
+        if apc <= 0 and nrc <= 0:
+            continue
+        cob = apc
+        out.append(
+            {
+                "item": ik,
+                "nombre": ik,
+                "descripcion": "",
+                "presupuesto": 0.0,
+                "cobrado": round(cob, 2),
+                "presupuesto_aprobado_n3": 0.0,
+                "presupuesto_no_revisado_n3": 0.0,
+                "sicoe_no_revisado_n3": round(nrc, 2),
+                "delta": round(-cob, 2),
+                "pct": 0.0,
+                "cant_ppto": 0.0,
+                "cant_sicoe_aprobado": round(float(sg.get("ap_q") or 0), 3),
+                "cant_sicoe_no_revisado": round(float(sg.get("nr_q") or 0), 3),
+            }
+        )
+    out.sort(key=lambda x: str(x.get("item") or ""))
+    return out
+
+
+def _dashboard_apply_vista_presupuesto(
+    contrato_id: int,
+    hit: dict,
+    vista: str,
+    current_user,
+) -> dict:
+    """Presupuesto según vista; SICOE N3 siempre completo (no se filtra por Obra Ejecutada en el resumen)."""
+    hit = dict(hit or {})
+    if hit.get("comparativo_capitulos") is not None and hit.get("total_cobrado") is not None:
+        sicoe_ap_c, sicoe_nr_c, total_cobrado, total_sicoe_nr = _dashboard_sicoe_from_hit(hit)
+    else:
+        ex = _dashboard_resumen_scan_caps(contrato_id)
+        sicoe_ap_c = ex["sicoe_ap_c"]
+        sicoe_nr_c = ex["sicoe_nr_c"]
+        total_cobrado = sum(sicoe_ap_c.values())
+        total_sicoe_nr = sum(sicoe_nr_c.values())
+
+    scan = scan_presupuesto_vista(supabase, contrato_id, vista, current_user, resumen_only=True)
+    base_comp = hit.get("comparativo_capitulos")
+    if isinstance(base_comp, list) and base_comp:
+        comparativo = _overlay_vista_presupuesto_comparativo(base_comp, scan)
+    else:
+        comparativo = rebuild_comparativo_capitulos(scan, sicoe_ap_c, sicoe_nr_c)
+    ppto_ap = sum((scan.get("ppto_ap_c") or {}).values())
+    ppto_nr = sum((scan.get("ppto_nr_c") or {}).values())
+    ppto_total = float(scan.get("costo_total") or (ppto_ap + ppto_nr))
+
+    hit["comparativo_capitulos"] = comparativo
+    hit["total_presupuesto"] = round(ppto_total, 2)
+    hit["total_cobrado"] = round(total_cobrado, 2)
+    hit["delta"] = round(ppto_total - total_cobrado, 2)
+    hit["consumo_pct"] = round(total_cobrado / ppto_total * 100, 1) if ppto_total else 0
+    hit["total_presupuesto_aprobado_n3"] = round(ppto_ap, 2)
+    hit["total_presupuesto_no_revisado_n3"] = round(ppto_nr, 2)
+    hit["total_sicoe_n3_no_revisado"] = round(total_sicoe_nr, 2)
+    hit["vista"] = parse_dash_vista(vista)
+    if scan.get("por_capitulo_list"):
+        hit["por_capitulo_presupuesto"] = scan["por_capitulo_list"]
+    return hit
+
+
 @app.get("/sicoe-obra/{contrato_id}/dashboard-resumen")
-def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_user)):
+def dashboard_resumen_obra(
+    contrato_id: int,
+    vista: str = Query("presupuesto_obra", description="presupuesto_obra | obra_ejecutada"),
+    current_user=Depends(get_current_user),
+):
     try:
         campo_max = _get_nivel_maximo_contrato(contrato_id)
         try:
@@ -16842,7 +18086,7 @@ def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_us
 
             hit = _parse_rpc_dashboard_resumen_raw(supabase_execute(_rpc))
             if hit is not None and isinstance(hit.get("comparativo_capitulos"), list):
-                return _dashboard_resumen_merge_extras(contrato_id, hit)
+                return _dashboard_apply_vista_presupuesto(contrato_id, hit, vista, current_user)
         except Exception:
             pass
 
@@ -16925,7 +18169,7 @@ def dashboard_resumen_obra(contrato_id: int, current_user=Depends(get_current_us
             "comparativo_capitulos": comparativo,
             "por_acta": por_acta,
         }
-        return _dashboard_resumen_merge_extras(contrato_id, base)
+        return _dashboard_apply_vista_presupuesto(contrato_id, base, vista, current_user)
     except HTTPException:
         raise
     except Exception as e:
@@ -17001,6 +18245,9 @@ def _dashboard_resumen_scan_caps(contrato_id: int) -> Dict[str, Any]:
     Por capítulo: costo/cant SICOE N3 aprobado, SICOE N3 no revisado (en cola),
     y presupuesto ClaraCore partido por columna revisado (aprobado vs resto).
     """
+    cached = _dash_agg_cache_get("resumen_caps", contrato_id)
+    if cached is not None:
+        return cached
     sicoe_ap_c = defaultdict(float)
     sicoe_ap_q = defaultdict(float)
     sicoe_nr_c = defaultdict(float)
@@ -17065,7 +18312,7 @@ def _dashboard_resumen_scan_caps(contrato_id: int) -> Dict[str, Any]:
             break
         off += 1000
 
-    return {
+    result = {
         "sicoe_ap_c": dict(sicoe_ap_c),
         "sicoe_ap_q": dict(sicoe_ap_q),
         "sicoe_nr_c": dict(sicoe_nr_c),
@@ -17073,6 +18320,8 @@ def _dashboard_resumen_scan_caps(contrato_id: int) -> Dict[str, Any]:
         "ppto_ap_c": dict(ppto_ap_c),
         "ppto_nr_c": dict(ppto_nr_c),
     }
+    _dash_agg_cache_set("resumen_caps", contrato_id, result)
+    return result
 
 
 def _dashboard_resumen_merge_extras(contrato_id: int, hit: dict) -> dict:
@@ -17107,133 +18356,125 @@ def _dashboard_resumen_merge_extras(contrato_id: int, hit: dict) -> dict:
     return hit
 
 
-def _drill_agg_by_item(contrato_id: int, capitulo: str, item_filtro: Optional[str] = None) -> List[dict]:
-    """Ítems de un capítulo: presupuesto ClaraCore (revisado), obra aprobada al nivel máximo del contrato / cola interventoría."""
+def _ppto_drill_rows_for_vista(
+    contrato_id: int,
+    capitulo: str,
+    vista: str,
+    current_user,
+) -> List[dict]:
+    """Filas presupuesto para merge con RPC (solo columnas de vista / revisado)."""
+    cap_raw = (capitulo or "").strip()
+    cap_key = _dash_norm_capitulo_key_py(cap_raw)
+    if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA:
+        scan = scan_presupuesto_capitulo_vista(supabase, contrato_id, cap_raw, vista, current_user)
+        return drill_items_capitulo_vista(scan, cap_raw, {}, None)
+
     ppto_by: Dict[str, List[dict]] = {}
-    rows_p = _ppto_rows_capitulo(contrato_id, capitulo)
-    for r in rows_p:
+    for r in _ppto_rows_capitulo_tipo(contrato_id, cap_raw, TIPO_PRESUPUESTO_OBRA, current_user):
         it = _dash_norm_item_key_py(r.get("item"))
-        if not it:
-            continue
-        ppto_by.setdefault(it, []).append(r)
+        if it:
+            ppto_by.setdefault(it, []).append(r)
 
-    ap_c = defaultdict(float)
-    ap_q = defaultdict(float)
-    nr_c = defaultdict(float)
-    nr_q = defaultdict(float)
-    off = 0
-    cap_key = _dash_norm_capitulo_key_py(capitulo)
-    while True:
-        def _sr(o=off):
-            return (
-                supabase.table("so_registros")
-                .select(
-                    "item_numero, costo_directo, cantidad_total, capitulo, "
-                    f"{SICOE_SELECT_NIVELES_ESTADO}"
-                )
-                .eq("contrato_id", contrato_id)
-                .range(o, o + 999)
-                .execute()
-                .data
-            )
-
-        batch = supabase_execute(_sr) or []
-        for reg in batch:
-            if _dash_norm_capitulo_key_py(reg.get("capitulo")) != cap_key:
-                continue
-            it = _dash_norm_item_key_py(reg.get("item_numero"))
-            if not it:
-                continue
-            cd = float(reg.get("costo_directo") or 0)
-            cq = float(reg.get("cantidad_total") or 0)
-            nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
-            if nfin == "Aprobado":
-                ap_c[it] += cd
-                ap_q[it] += cq
-            elif _so_reg_en_cola_interventoria(reg, contrato_id) and nfin == "No Revisado":
-                nr_c[it] += cd
-                nr_q[it] += cq
-        if len(batch) < 1000:
-            break
-        off += 1000
-
-    keys = sorted(set(list(ppto_by.keys()) + list(ap_c.keys()) + list(nr_c.keys())), key=lambda x: str(x))
-    out = []
-    for k in keys:
-        rows_it = ppto_by.get(k, [])
+    rows: List[dict] = []
+    for k in sorted(ppto_by.keys(), key=lambda x: str(x)):
+        rows_it = ppto_by[k]
         p_cost = sum(float(x.get("costo_directo") or 0) for x in rows_it)
         p_cant = sum(float(x.get("cant_total") or 0) for x in rows_it)
         revsplit = _ppto_costo_por_revisado(rows_it)
         pap = float(revsplit.get("Aprobado") or 0)
-        pnr = float(revsplit.get("No Revisado") or 0) + float(revsplit.get("Pendiente") or 0) + float(revsplit.get("Rechazado") or 0)
-        desc = ""
-        for x in rows_it:
-            if x.get("descripcion"):
-                desc = str(x["descripcion"])
-                break
-        apc = ap_c.get(k, 0)
-        nrc = nr_c.get(k, 0)
-        out.append({
-            "item": k,
-            "nombre": k,
-            "descripcion": desc,
-            "presupuesto": p_cost,
-            "cobrado": round(apc, 2),
-            "presupuesto_aprobado_n3": round(pap, 2),
-            "presupuesto_no_revisado_n3": round(pnr, 2),
-            "sicoe_no_revisado_n3": round(nrc, 2),
-            "delta": round(p_cost - apc, 2),
-            "pct": round(apc / p_cost * 100, 1) if p_cost else 0,
-            "cant_ppto": round(p_cant, 3),
-            "cant_sicoe_aprobado": round(ap_q.get(k, 0), 3),
-            "cant_sicoe_no_revisado": round(nr_q.get(k, 0), 3),
-        })
+        pnr = (
+            float(revsplit.get("No Revisado") or 0)
+            + float(revsplit.get("Pendiente") or 0)
+            + float(revsplit.get("Rechazado") or 0)
+        )
+        desc = next((str(x["descripcion"]) for x in rows_it if x.get("descripcion")), "")
+        rows.append(
+            {
+                "item": k,
+                "nombre": k,
+                "descripcion": desc,
+                "presupuesto": round(p_cost, 2),
+                "presupuesto_aprobado_n3": round(pap, 2),
+                "presupuesto_no_revisado_n3": round(pnr, 2),
+                "cant_ppto": round(p_cant, 3),
+            }
+        )
+    return rows
+
+
+def _drill_agg_by_item(
+    contrato_id: int,
+    capitulo: str,
+    item_filtro: Optional[str] = None,
+    vista: str = "presupuesto_obra",
+    current_user=None,
+) -> List[dict]:
+    """
+    Ítems del capítulo: RPC SQL (rápido, ~5s) + presupuesto según toggle de vista.
+    Fallback acotado al capítulo si el RPC no está disponible.
+    """
+    cap_raw = (capitulo or "").strip()
+    if not cap_raw:
+        return []
+    t0 = time.time()
+    out: Optional[List[dict]] = None
+    try:
+        rpc_items = _rpc_drill_items_agg(contrato_id, cap_raw)
+        ppto_items = _ppto_drill_rows_for_vista(contrato_id, cap_raw, vista, current_user)
+        out = _merge_drill_rpc_sicoe_vista_ppto(rpc_items, ppto_items)
+        print(
+            f"dashboard_drill_items RPC ok cap={cap_raw!r} rpc={len(rpc_items)} out={len(out)} "
+            f"ms={int((time.time() - t0) * 1000)}",
+            flush=True,
+        )
+    except Exception as rpc_err:
+        print(
+            f"dashboard_drill_items_agg RPC FALLÓ, fallback capítulo: "
+            f"{type(rpc_err).__name__}: {rpc_err}",
+            flush=True,
+        )
+        scan = scan_presupuesto_capitulo_vista(supabase, contrato_id, cap_raw, vista, current_user)
+        sicoe_by = _dashboard_scan_sicoe_by_item_capitulo(contrato_id, cap_raw)
+        allowed = scan.get("allowed_sicoe_keys")
+        out = drill_items_capitulo_vista(scan, cap_raw, sicoe_by, allowed)
+        print(
+            f"dashboard_drill_items fallback cap={cap_raw!r} out={len(out or [])} "
+            f"ms={int((time.time() - t0) * 1000)}",
+            flush=True,
+        )
+    return _filter_drill_item_rows(out, item_filtro)
+
+
+def _filter_drill_item_rows(out: Optional[List[dict]], item_filtro: Optional[str]) -> List[dict]:
+    rows = out or []
     if item_filtro and str(item_filtro).strip():
         itf = _dash_norm_item_key_py(str(item_filtro).strip())
-        out = [row for row in out if row["item"] == itf]
-    return out
+        rows = [row for row in rows if _dash_norm_item_key_py(row.get("item")) == itf]
+    return rows
 
 
-def _drill_agg_capitulos(contrato_id: int) -> List[dict]:
-    """Listado por capítulo con los tres comparativos (sin cobro)."""
-    def _ppto():
-        return supabase.table("vista_ppto_por_capitulo").select("*").eq("contrato_id", contrato_id).execute().data
-
-    ppto_raw = supabase_execute(_ppto) or []
-    ppto_caps = {r["capitulo"]: float(r.get("presupuesto") or 0) for r in ppto_raw}
-    ex = _dashboard_resumen_scan_caps(contrato_id)
-    caps = sorted(
-        set(
-            list(ppto_caps.keys())
-            + list(ex["sicoe_ap_c"].keys())
-            + list(ex["sicoe_nr_c"].keys())
-            + list(ex["ppto_ap_c"].keys())
-            + list(ex["ppto_nr_c"].keys())
-        ),
-        key=lambda x: str(x),
-    )
-    out = []
-    for cap in caps:
-        apc = float(ex["sicoe_ap_c"].get(cap, 0))
-        nrc = float(ex["sicoe_nr_c"].get(cap, 0))
-        pap = float(ex["ppto_ap_c"].get(cap, 0))
-        pnr = float(ex["ppto_nr_c"].get(cap, 0))
-        pp = float(ppto_caps.get(cap, 0))
-        out.append({
-            "nombre": cap,
-            "descripcion": "",
-            "presupuesto": pp,
-            "cobrado": round(apc, 2),
-            "presupuesto_aprobado_n3": round(pap, 2),
-            "presupuesto_no_revisado_n3": round(pnr, 2),
-            "sicoe_no_revisado_n3": round(nrc, 2),
-            "delta": round(pp - apc, 2),
-            "pct": round(apc / pp * 100, 1) if pp else 0,
-            "cant_ppto": 0,
-            "cant_sicoe_aprobado": round(float(ex["sicoe_ap_q"].get(cap, 0)), 3),
-            "cant_sicoe_no_revisado": round(float(ex["sicoe_nr_q"].get(cap, 0)), 3),
-        })
-    return out
+def _drill_agg_capitulos(contrato_id: int, vista: str = "presupuesto_obra", current_user=None) -> List[dict]:
+    """Listado por capítulo: SICOE desde RPC + presupuesto según vista."""
+    scan = scan_presupuesto_vista(supabase, contrato_id, vista, current_user, resumen_only=True)
+    try:
+        rpc_rows = _rpc_drill_capitulos_agg(contrato_id)
+        return _overlay_vista_presupuesto_comparativo(rpc_rows, scan)
+    except Exception as rpc_err:
+        print(
+            f"dashboard_drill_capitulos_agg RPC FALLÓ, fallback Python: {type(rpc_err).__name__}: {rpc_err}",
+            flush=True,
+        )
+        allowed = scan.get("allowed_sicoe_keys")
+        if allowed is not None:
+            sicoe_by = _dashboard_scan_sicoe_by_item(contrato_id)
+            sicoe_ap_c, sicoe_nr_c, sicoe_ap_q, sicoe_nr_q = filter_sicoe_by_allowed_keys(sicoe_by, allowed)
+        else:
+            ex = _dashboard_resumen_scan_caps(contrato_id)
+            sicoe_ap_c = ex["sicoe_ap_c"]
+            sicoe_nr_c = ex["sicoe_nr_c"]
+            sicoe_ap_q = ex["sicoe_ap_q"]
+            sicoe_nr_q = ex["sicoe_nr_q"]
+        return rebuild_comparativo_capitulos(scan, sicoe_ap_c, sicoe_nr_c, sicoe_ap_q, sicoe_nr_q)
 
 
 def _matriz_validacion_bloque_capitulo(capitulo: Optional[str]) -> str:
@@ -17244,7 +18485,178 @@ def _matriz_validacion_bloque_capitulo(capitulo: Optional[str]) -> str:
     return "obra"
 
 
-def _matriz_validacion_empty():
+def _matriz_col_nivel(n: int) -> str:
+    return f"nivel{n}"
+
+
+def _matriz_validacion_empty(niveles_activos: Optional[List[int]] = None) -> dict:
+    na = sorted({int(x) for x in (niveles_activos or [1, 2, 3]) if 1 <= int(x) <= 6})
+    if not na:
+        na = [1, 2, 3]
+    z = {_matriz_col_nivel(n): 0.0 for n in na}
+    return {
+        "aprobado": dict(z),
+        "pendiente": dict(z),
+        "pendiente_item": dict(z),
+        "no_revisado": dict(z),
+        "rechazado": dict(z),
+        "habilitado": dict(z),
+        "otras_actas": dict(z),
+    }
+
+
+def _matriz_prereqs_aprobados(reg: dict, niveles_activos: List[int], nivel_objetivo: int) -> bool:
+    """True si todos los niveles activos estrictamente menores a nivel_objetivo están Aprobado."""
+    for n in niveles_activos:
+        if n >= nivel_objetivo:
+            break
+        campo = NIVEL_VALIDACION_NUM_A_CAMPO.get(n)
+        if not campo:
+            continue
+        if _matriz_validacion_norm_estado(reg.get(campo)) != "Aprobado":
+            return False
+    return True
+
+
+def _matriz_estado_en_nivel(reg: dict, n: int) -> str:
+    campo = NIVEL_VALIDACION_NUM_A_CAMPO.get(n)
+    if not campo:
+        return "No Revisado"
+    return _matriz_validacion_norm_estado(reg.get(campo))
+
+
+def _matriz_acc_por_estado(M: dict, estado: str, col: str, cd: float) -> None:
+    if estado == "Aprobado":
+        M["aprobado"][col] += cd
+    elif estado == "Pendiente":
+        M["pendiente"][col] += cd
+    elif estado == "Rechazado":
+        M["rechazado"][col] += cd
+    else:
+        M["no_revisado"][col] += cd
+
+
+def _matriz_legacy_bloque_a_niveles(bloque: dict, niveles_activos: List[int]) -> dict:
+    """Convierte respuesta SQL legada (inspector/residente/interventoria) a nivel1..n."""
+    na = sorted({int(x) for x in niveles_activos if 1 <= int(x) <= 6}) or [1, 2, 3]
+    if not bloque or not isinstance(bloque, dict):
+        return _matriz_validacion_empty(na)
+    sample = bloque.get("aprobado") if isinstance(bloque.get("aprobado"), dict) else {}
+    if any(str(k).startswith("nivel") for k in sample.keys()):
+        out = _matriz_validacion_empty(na)
+        for fila in out:
+            src = bloque.get(fila) if isinstance(bloque.get(fila), dict) else {}
+            for n in na:
+                col = _matriz_col_nivel(n)
+                out[fila][col] = float(src.get(col) or 0)
+        return out
+    legacy_map = {1: "inspector", 2: "residente"}
+    nmax = max(na)
+    out = _matriz_validacion_empty(na)
+    for fila in out:
+        src = bloque.get(fila) if isinstance(bloque.get(fila), dict) else {}
+        for n in na:
+            col = _matriz_col_nivel(n)
+            if n == nmax:
+                leg = "interventoria"
+            else:
+                leg = legacy_map.get(n, "interventoria")
+            out[fila][col] = float(src.get(leg) or src.get(col) or 0)
+    return out
+
+
+def _dashboard_matriz_validacion_por_niveles(
+    contrato_id: int,
+    acta_id_filtro: Optional[int],
+    niveles_activos: Optional[List[int]] = None,
+) -> dict:
+    """Agrega matriz SICOE por cada nivel de validación activo del contrato (1..6)."""
+    na = sorted({int(x) for x in (niveles_activos or _get_niveles_activos_contrato(contrato_id)) if 1 <= int(x) <= 6})
+    if not na:
+        na = [1, 2, 3]
+    obra_m = _matriz_validacion_empty(na)
+    ens_m = _matriz_validacion_empty(na)
+    n_min = na[0]
+    n_pend_item = 2 if 2 in na else (na[1] if len(na) > 1 else n_min)
+
+    off = 0
+    while True:
+        def _batch(o=off):
+            q = supabase.table("so_registros").select(
+                f"costo_directo,{SICOE_SELECT_NIVELES_ESTADO},sub_estado,"
+                "capitulo,acta_rpo_id,item_numero"
+            ).eq("contrato_id", contrato_id)
+            if acta_id_filtro is not None:
+                q = q.eq("acta_rpo_id", acta_id_filtro)
+            return q.range(o, o + 999).execute().data
+
+        batch = supabase_execute(_batch) or []
+        for reg in batch:
+            if not (reg.get("item_numero") or "").strip():
+                continue
+            cd = float(reg.get("costo_directo") or 0)
+            sub_n = _matriz_validacion_norm_estado(reg.get("sub_estado"))
+            sub_raw = str(reg.get("sub_estado") or "").strip().lower()
+            bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
+            M = ens_m if bloque == "ensayos" else obra_m
+
+            for n in na:
+                col = _matriz_col_nivel(n)
+                if n == n_min:
+                    _matriz_acc_por_estado(M, _matriz_estado_en_nivel(reg, n), col, cd)
+                    M["habilitado"][col] += cd
+                elif _matriz_prereqs_aprobados(reg, na, n):
+                    _matriz_acc_por_estado(M, _matriz_estado_en_nivel(reg, n), col, cd)
+                    M["habilitado"][col] += cd
+
+            if (sub_raw == "pendiente" or sub_n == "Pendiente") and _matriz_prereqs_aprobados(reg, na, n_pend_item):
+                M["pendiente_item"][_matriz_col_nivel(n_pend_item)] += cd
+
+        if len(batch) < 1000:
+            break
+        off += 1000
+
+    if acta_id_filtro is not None:
+        off = 0
+        while True:
+            def _bo(o=off):
+                q = supabase.table("so_registros").select(
+                    f"costo_directo,{SICOE_SELECT_NIVELES_ESTADO},capitulo,acta_rpo_id,item_numero"
+                ).eq("contrato_id", contrato_id)
+                return q.range(o, o + 999).execute().data
+
+            batch = supabase_execute(_bo) or []
+            for reg in batch:
+                if not (reg.get("item_numero") or "").strip():
+                    continue
+                aid = reg.get("acta_rpo_id")
+                if aid is not None and aid == acta_id_filtro:
+                    continue
+                cd = float(reg.get("costo_directo") or 0)
+                bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
+                Ox = ens_m if bloque == "ensayos" else obra_m
+                for n in na:
+                    if not _matriz_prereqs_aprobados(reg, na, n):
+                        continue
+                    if _matriz_estado_en_nivel(reg, n) == "Pendiente":
+                        Ox["otras_actas"][_matriz_col_nivel(n)] += cd
+            if len(batch) < 1000:
+                break
+            off += 1000
+
+    def round_block(m):
+        out = {}
+        for k, cols in m.items():
+            out[k] = {c: round(v, 0) for c, v in cols.items()}
+        return out
+
+    return {
+        "obra_ejecutada_directo_sin_aiu": round_block(obra_m),
+        "ensayos_sondeos_directo_sin_iva": round_block(ens_m),
+    }
+
+
+def _matriz_validacion_empty_legacy():
     z = {"interventoria": 0.0, "residente": 0.0, "inspector": 0.0}
     return {
         "aprobado": dict(z),
@@ -17261,109 +18673,9 @@ def _dashboard_matriz_validacion_fallback(
     contrato_id: int,
     acta_id_filtro: Optional[int],
 ) -> dict:
-    """Fallback lento si la función SQL dashboard_matriz_validacion_agg no está desplegada."""
-    obra_m = _matriz_validacion_empty()
-    ens_m = _matriz_validacion_empty()
-
-    off = 0
-    while True:
-        def _batch(o=off):
-            q = supabase.table("so_registros").select(
-                f"costo_directo,{SICOE_SELECT_NIVELES_ESTADO},sub_estado,"
-                "capitulo,acta_rpo_id,item_numero"
-            ).eq("contrato_id", contrato_id)
-            if acta_id_filtro is not None:
-                q = q.eq("acta_rpo_id", acta_id_filtro)
-            return q.range(o, o + 999).execute().data
-
-        batch = supabase_execute(_batch)
-        for reg in batch:
-            if not (reg.get("item_numero") or "").strip():
-                continue
-            cd = float(reg.get("costo_directo") or 0)
-            n1 = _matriz_validacion_norm_estado(reg.get("nivel1_estado"))
-            n2 = _matriz_validacion_norm_estado(reg.get("nivel2_estado"))
-            nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
-            sub_n = _matriz_validacion_norm_estado(reg.get("sub_estado"))
-            sub_raw = str(reg.get("sub_estado") or "").strip().lower()
-            bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
-            M = ens_m if bloque == "ensayos" else obra_m
-
-            def acc(estado_nivel: str, col: str):
-                if estado_nivel == "Aprobado":
-                    M["aprobado"][col] += cd
-                elif estado_nivel == "Pendiente":
-                    M["pendiente"][col] += cd
-                elif estado_nivel == "Rechazado":
-                    M["rechazado"][col] += cd
-                else:
-                    M["no_revisado"][col] += cd
-
-            # N1 (inspector): todas las filas del acta; solo estados nivel 1.
-            acc(n1, "inspector")
-            # N2 (residente): solo si N1 aprobó; sobre ese subconjunto, estados nivel 2.
-            if n1 == "Aprobado":
-                acc(n2, "residente")
-            # N3 (interventoría): solo si N1 y N2 aprobaron; sobre ese subconjunto, estados nivel 3.
-            if n1 == "Aprobado" and n2 == "Aprobado":
-                acc(nfin, "interventoria")
-
-            # Pendiente por ítem (sub_estado): no forma parte del bucket Pendiente del inspector; solo con N1 aprobado.
-            if (sub_raw == "pendiente" or sub_n == "Pendiente") and n1 == "Aprobado":
-                M["pendiente_item"]["residente"] += cd
-
-            M["habilitado"]["inspector"] += cd
-            if n1 == "Aprobado":
-                M["habilitado"]["residente"] += cd
-            if n1 == "Aprobado" and n2 == "Aprobado":
-                M["habilitado"]["interventoria"] += cd
-
-        if len(batch) < 1000:
-            break
-        off += 1000
-
-    if acta_id_filtro is not None:
-        off = 0
-        while True:
-            def _bo(o=off):
-                q = supabase.table("so_registros").select(
-                    f"costo_directo,{SICOE_SELECT_NIVELES_ESTADO},capitulo,acta_rpo_id,item_numero"
-                ).eq("contrato_id", contrato_id)
-                return q.range(o, o + 999).execute().data
-
-            batch = supabase_execute(_bo)
-            for reg in batch:
-                if not (reg.get("item_numero") or "").strip():
-                    continue
-                aid = reg.get("acta_rpo_id")
-                if aid is not None and aid == acta_id_filtro:
-                    continue
-                cd = float(reg.get("costo_directo") or 0)
-                n1 = _matriz_validacion_norm_estado(reg.get("nivel1_estado"))
-                n2 = _matriz_validacion_norm_estado(reg.get("nivel2_estado"))
-                nfin = _matriz_validacion_norm_estado_nivel_final(reg, contrato_id)
-                bloque = _matriz_validacion_bloque_capitulo(reg.get("capitulo"))
-                Ox = ens_m if bloque == "ensayos" else obra_m
-                if n1 == "Aprobado" and n2 == "Aprobado" and nfin == "Pendiente":
-                    Ox["otras_actas"]["interventoria"] += cd
-                if n1 == "Aprobado" and n2 == "Pendiente":
-                    Ox["otras_actas"]["residente"] += cd
-                if n1 == "Pendiente":
-                    Ox["otras_actas"]["inspector"] += cd
-            if len(batch) < 1000:
-                break
-            off += 1000
-
-    def round_block(m):
-        out = {}
-        for k, cols in m.items():
-            out[k] = {c: round(v, 0) for c, v in cols.items()}
-        return out
-
-    return {
-        "obra_ejecutada_directo_sin_aiu": round_block(obra_m),
-        "ensayos_sondeos_directo_sin_iva": round_block(ens_m),
-    }
+    """Fallback: delega en agregador dinámico por niveles activos del contrato."""
+    na = _get_niveles_activos_contrato(contrato_id)
+    return _dashboard_matriz_validacion_por_niveles(contrato_id, acta_id_filtro, na)
 
 
 @app.get("/sicoe-obra/{contrato_id}/dashboard-matriz-validacion")
@@ -17385,7 +18697,9 @@ def dashboard_matriz_validacion_obra(
         acta_rpo_resp: Optional[int] = None
         vig = None
         payload: dict = {}
+        niveles_activos = _get_niveles_activos_contrato(contrato_id)
         campo_max = _get_nivel_maximo_contrato(contrato_id)
+        usar_sql_legacy = sorted(niveles_activos) == [1, 2, 3]
 
         def _parse_rpc_matrix_raw(raw):
             if raw is None:
@@ -17471,18 +18785,36 @@ def dashboard_matriz_validacion_obra(
                     acta_id_filtro = None
 
         if "obra_ejecutada_directo_sin_aiu" not in payload or "ensayos_sondeos_directo_sin_iva" not in payload:
-            try:
-                def _rpc():
-                    return supabase.rpc(
-                        "dashboard_matriz_validacion_agg",
-                        {"p_contrato_id": contrato_id, "p_acta_id": acta_id_filtro, "p_campo_nivel_max": campo_max},
-                    ).execute().data
-                payload = _parse_rpc_matrix_raw(supabase_execute(_rpc))
-            except Exception:
-                payload = {}
-
-        if "obra_ejecutada_directo_sin_aiu" not in payload or "ensayos_sondeos_directo_sin_iva" not in payload:
-            payload = _dashboard_matriz_validacion_fallback(contrato_id, acta_id_filtro)
+            if usar_sql_legacy:
+                try:
+                    def _rpc():
+                        return supabase.rpc(
+                            "dashboard_matriz_validacion_agg",
+                            {"p_contrato_id": contrato_id, "p_acta_id": acta_id_filtro, "p_campo_nivel_max": campo_max},
+                        ).execute().data
+                    payload = _parse_rpc_matrix_raw(supabase_execute(_rpc))
+                except Exception:
+                    payload = {}
+            if "obra_ejecutada_directo_sin_aiu" not in payload or "ensayos_sondeos_directo_sin_iva" not in payload:
+                payload = _dashboard_matriz_validacion_por_niveles(contrato_id, acta_id_filtro, niveles_activos)
+            else:
+                payload = {
+                    "obra_ejecutada_directo_sin_aiu": _matriz_legacy_bloque_a_niveles(
+                        payload.get("obra_ejecutada_directo_sin_aiu"), niveles_activos
+                    ),
+                    "ensayos_sondeos_directo_sin_iva": _matriz_legacy_bloque_a_niveles(
+                        payload.get("ensayos_sondeos_directo_sin_iva"), niveles_activos
+                    ),
+                }
+        else:
+            payload = {
+                "obra_ejecutada_directo_sin_aiu": _matriz_legacy_bloque_a_niveles(
+                    payload.get("obra_ejecutada_directo_sin_aiu"), niveles_activos
+                ),
+                "ensayos_sondeos_directo_sin_iva": _matriz_legacy_bloque_a_niveles(
+                    payload.get("ensayos_sondeos_directo_sin_iva"), niveles_activos
+                ),
+            }
 
         def _acta_vigente_public(v):
             if not v:
@@ -17501,8 +18833,9 @@ def dashboard_matriz_validacion_obra(
             "acta_id_resuelto": acta_id_filtro,
             "filtro": filtro_modo,
             "acta_vigente": _acta_vigente_public(vig),
-            "obra_ejecutada_directo_sin_aiu": payload.get("obra_ejecutada_directo_sin_aiu") or {},
-            "ensayos_sondeos_directo_sin_iva": payload.get("ensayos_sondeos_directo_sin_iva") or {},
+            "niveles_activos": niveles_activos,
+            "obra_ejecutada_directo_sin_aiu": payload.get("obra_ejecutada_directo_sin_aiu") or _matriz_validacion_empty(niveles_activos),
+            "ensayos_sondeos_directo_sin_iva": payload.get("ensayos_sondeos_directo_sin_iva") or _matriz_validacion_empty(niveles_activos),
         }
     except HTTPException:
         raise
@@ -17515,7 +18848,8 @@ def dashboard_drill_obra(
     contrato_id: int,
     capitulo: Optional[str] = None,
     item: Optional[str] = None,
-    current_user=Depends(get_current_user)
+    vista: str = Query("presupuesto_obra", description="presupuesto_obra | obra_ejecutada"),
+    current_user=Depends(get_current_user),
 ):
     # Si falla después, el front espera { campo, items }; evita 500 sin CORS en Azure.
     drill_items_shape = False
@@ -17528,78 +18862,19 @@ def dashboard_drill_obra(
         campo_max = _get_nivel_maximo_contrato(contrato_id)
         niveles_activos = _get_niveles_activos_contrato(contrato_id)
         if capitulo:
-            try:
-                def _rpc_items():
-                    return (
-                        supabase.rpc(
-                            "dashboard_drill_items_agg",
-                            {
-                                "p_contrato_id": contrato_id,
-                                "p_capitulo": capitulo,
-                                "p_campo_nivel_max": campo_max,
-                                "p_niveles_activos": niveles_activos,
-                            },
-                        )
-                        .execute()
-                        .data
-                    )
-
-                raw_items = supabase_execute(_rpc_items)
-                # El RPC dashboard_drill_items_agg devuelve jsonb → PostgREST lo envuelve
-                # como [{"dashboard_drill_items_agg": [...]}] O directamente como lista.
-                if isinstance(raw_items, list) and len(raw_items) > 0:
-                    first = raw_items[0]
-                    if isinstance(first, dict) and len(first) == 1:
-                        # Patrón PostgREST wrapper: [{"nombre_rpc": [...]}]
-                        inner = list(first.values())[0]
-                        items = inner if isinstance(inner, list) else _parse_rpc_jsonb_value(raw_items)
-                    elif isinstance(first, dict) and "item" in first:
-                        # Ya es la lista de ítems directamente
-                        items = raw_items
-                    else:
-                        items = _parse_rpc_jsonb_value(raw_items)
-                else:
-                    items = _parse_rpc_jsonb_value(raw_items)
-                if isinstance(items, list):
-                    if item:
-                        itn = _dash_norm_item_key_py(str(item).strip())
-                        items = [
-                            row
-                            for row in items
-                            if isinstance(row, dict) and _dash_norm_item_key_py(row.get("item")) == itn
-                        ]
-                    return {"campo": "item", "items": items}
-                print(
-                    "RPC dashboard_drill_items_agg: respuesta no parseable como lista; devolviendo vacío.",
-                    flush=True,
-                )
-                return {"campo": "item", "items": []}
-            except Exception as rpc_err:
-                print(
-                    f"RPC dashboard_drill_items_agg FALLÓ: {type(rpc_err).__name__}: {rpc_err}",
-                    flush=True,
-                )
-                return {"campo": "item", "items": []}
+            items = _drill_agg_by_item(contrato_id, capitulo, item, vista, current_user)
+            if item:
+                itn = _dash_norm_item_key_py(str(item).strip())
+                items = [
+                    row
+                    for row in items
+                    if isinstance(row, dict) and _dash_norm_item_key_py(row.get("item")) == itn
+                ]
+            return {"campo": "item", "items": items, "vista": parse_dash_vista(vista)}
         if item:
             raise HTTPException(status_code=422, detail="Indica capitulo junto con item.")
-        try:
-            def _rpc_caps():
-                return supabase.rpc(
-                    "dashboard_drill_capitulos_agg",
-                    {
-                        "p_contrato_id": contrato_id,
-                        "p_campo_nivel_max": campo_max,
-                        "p_niveles_activos": niveles_activos,
-                    },
-                ).execute().data
-
-            caps = _parse_rpc_jsonb_value(supabase_execute(_rpc_caps))
-            if isinstance(caps, list):
-                return {"campo": "capitulo", "items": caps}
-        except Exception:
-            pass
-        result = _drill_agg_capitulos(contrato_id)
-        return {"campo": "capitulo", "items": result}
+        result = _drill_agg_capitulos(contrato_id, vista, current_user)
+        return {"campo": "capitulo", "items": result, "vista": parse_dash_vista(vista)}
     except HTTPException:
         raise
     except Exception as e:
@@ -17610,43 +18885,64 @@ def dashboard_drill_obra(
         return {"campo": "capitulo", "items": []}
 
 
-def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], item: Optional[str]) -> Dict[str, Any]:
-    """Por PK_ID: presupuesto por revisado; obra aprobada al nivel máximo activo; cola = prerequisitos de niveles activos inferiores cumplidos y nivel final no aprobado."""
-    try:
-        campo_max = _get_nivel_maximo_contrato(contrato_id)
-        na = _get_niveles_activos_contrato(contrato_id)
-
-        def _rpc_pk():
-            return (
-                supabase.rpc(
-                    "dashboard_pkid_tabla_agg",
-                    {
-                        "p_contrato_id": contrato_id,
-                        "p_capitulo": capitulo or "",
-                        "p_item": item or "",
-                        "p_campo_nivel_max": campo_max,
-                        "p_niveles_activos": na,
-                    },
+def _dashboard_pkid_tabla_obra_core(
+    contrato_id: int,
+    capitulo: Optional[str],
+    item: Optional[str],
+    vista: str = "presupuesto_obra",
+    current_user=None,
+) -> Dict[str, Any]:
+    """Por PK_ID: presupuesto según vista; obra aprobada al nivel máximo activo."""
+    cap_raw = (capitulo or "").strip() if capitulo else ""
+    item_raw = (item or "").strip() if item else ""
+    t0 = time.time()
+    if cap_raw:
+        try:
+            rpc_hit = _rpc_pkid_tabla_agg(contrato_id, cap_raw, item_raw or None)
+            rpc_rows = rpc_hit.get("rows") if isinstance(rpc_hit, dict) else None
+            if isinstance(rpc_rows, list):
+                ppto_rows: List[dict] = []
+                if item_raw:
+                    ppto_rows = ppto_rows_item_pk_drill(
+                        supabase, contrato_id, cap_raw, item_raw, vista, current_user
+                    )
+                out = _merge_pkid_tabla_vista_ppto(rpc_hit, ppto_rows) if ppto_rows else rpc_hit
+                print(
+                    f"dashboard_pkid_tabla RPC ok cap={cap_raw!r} item={item_raw!r} "
+                    f"rows={len(out.get('rows') or [])} ms={int((time.time() - t0) * 1000)}",
+                    flush=True,
                 )
-                .execute()
-                .data
+                return _normalize_pkid_tabla_payload(out, contrato_id)
+        except Exception as rpc_err:
+            print(
+                f"dashboard_pkid_tabla_agg RPC FALLÓ, fallback Python: "
+                f"{type(rpc_err).__name__}: {rpc_err}",
+                flush=True,
             )
 
-        hit = _parse_rpc_jsonb_value(supabase_execute(_rpc_pk))
-        if isinstance(hit, dict) and isinstance(hit.get("rows"), list):
-            return hit
-    except Exception:
-        pass
+    ppto, allowed_keys, _scan = ppto_filas_pk_drill(
+        supabase, contrato_id, capitulo, item, vista, current_user
+    )
 
     registros = []
     off = 0
     it_norm = _dash_norm_item_key_py(item) if item else ""
     cap_key = _dash_norm_capitulo_key_py(capitulo) if capitulo else None
+    item_vars: List[str] = []
+    if it_norm:
+        item_vars = [v for v in {(item or "").strip(), it_norm, f"{it_norm}."} if v]
     while True:
-        def _regs(o=off):
+        def _regs(o=off, caps=cap_raw, iv=item_vars):
             q = supabase.table("so_registros").select(
                 f"pk_id_id, capitulo, pk_ids(pk_id), costo_directo, cantidad_total, item_numero, {SICOE_SELECT_NIVELES_ESTADO}"
             ).eq("contrato_id", contrato_id)
+            if caps:
+                q = apply_sicoe_capitulo_filter(q, supabase, contrato_id, caps)
+            if iv:
+                if len(iv) == 1:
+                    q = q.eq("item_numero", iv[0])
+                else:
+                    q = q.in_("item_numero", iv)
             return q.range(o, o + 999).execute().data
 
         batch = supabase_execute(_regs)
@@ -17655,64 +18951,15 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
                 continue
             if it_norm and _dash_norm_item_key_py(reg.get("item_numero")) != it_norm:
                 continue
+            if not sicoe_registro_en_vista(reg, allowed_keys):
+                continue
             registros.append(reg)
         if len(batch) < 1000:
             break
         off += 1000
 
-    q_p = (
-        supabase.table("presupuesto")
-        .select("pk_id, item, cant_total, costo_directo, descripcion, revisado, capitulo")
-        .eq("contrato_id", contrato_id)
-        .eq("dado_de_baja", False)
-    )
-    cap_key = _dash_norm_capitulo_key_py(capitulo) if capitulo else None
-    ppto = []
-    off = 0
-    while True:
-        batch = q_p.range(off, off + 999).execute().data
-        for r in batch or []:
-            if cap_key and _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_key:
-                continue
-            if it_norm and _dash_norm_item_key_py(r.get("item")) != it_norm:
-                continue
-            ppto.append(r)
-        if len(batch) < 1000:
-            break
-        off += 1000
-
-    def _empty_m():
-        return {"cant": 0.0, "costo": 0.0}
-
-    agg_meta: Dict[str, Any] = {}
-    agg_p_ap: Dict[str, Any] = {}
-    agg_p_nr: Dict[str, Any] = {}
-    agg_p_pd: Dict[str, Any] = {}
-    agg_p_rj: Dict[str, Any] = {}
-
-    for r in ppto:
-        k = _dash_pk_disp_key_py(r.get("pk_id"))
-        if k not in agg_meta:
-            agg_meta[k] = {"desc": "", "_rev_track": []}
-        cost_line = float(r.get("costo_directo") or 0)
-        agg_meta[k]["_rev_track"].append((cost_line, r.get("revisado")))
-        if not agg_meta[k]["desc"] and r.get("descripcion"):
-            agg_meta[k]["desc"] = r["descripcion"]
-        rv = _matriz_validacion_norm_estado(r.get("revisado"))
-        cq = float(r.get("cant_total") or 0)
-        cd = float(r.get("costo_directo") or 0)
-        if rv == "Aprobado":
-            tgt = agg_p_ap
-        elif rv == "Pendiente":
-            tgt = agg_p_pd
-        elif rv == "Rechazado":
-            tgt = agg_p_rj
-        else:
-            tgt = agg_p_nr
-        if k not in tgt:
-            tgt[k] = _empty_m()
-        tgt[k]["cant"] += cq
-        tgt[k]["costo"] += cd
+    empty_m = _pkid_tabla_empty_metric
+    agg_meta, agg_p_ap, agg_p_nr, agg_p_pd, agg_p_rj = _aggregate_pkid_ppto_rows(ppto)
 
     agg_sicoe_ap: Dict[str, Any] = {}
     agg_sicoe_nr: Dict[str, Any] = {}
@@ -17727,7 +18974,7 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
         nfin = _matriz_validacion_norm_estado_nivel_final(r, contrato_id)
         if nfin == "Aprobado":
             if pk not in agg_sicoe_ap:
-                agg_sicoe_ap[pk] = _empty_m()
+                agg_sicoe_ap[pk] = empty_m()
             agg_sicoe_ap[pk]["cant"] += cq
             agg_sicoe_ap[pk]["costo"] += cd
             continue
@@ -17739,7 +18986,7 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
             else:
                 tgt = agg_sicoe_nr
             if pk not in tgt:
-                tgt[pk] = _empty_m()
+                tgt[pk] = empty_m()
             tgt[pk]["cant"] += cq
             tgt[pk]["costo"] += cd
 
@@ -17759,52 +19006,21 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
     )
     rows = []
     for k in keys:
-        pap = agg_p_ap.get(k, _empty_m())
-        pnr = agg_p_nr.get(k, _empty_m())
-        ppd = agg_p_pd.get(k, _empty_m())
-        prj = agg_p_rj.get(k, _empty_m())
-        sic = agg_sicoe_ap.get(k, _empty_m())
-        snr = agg_sicoe_nr.get(k, _empty_m())
-        spe = agg_sicoe_pe.get(k, _empty_m())
-        srj = agg_sicoe_rej.get(k, _empty_m())
-        cant_ppto = pap["cant"] + pnr["cant"] + ppd["cant"] + prj["cant"]
-        costo_ppto = pap["costo"] + pnr["costo"] + ppd["costo"] + prj["costo"]
-        dcant = pap["cant"] - sic["cant"]
-        dcosto = pap["costo"] - sic["costo"]
         meta = agg_meta.get(k, {"desc": "", "_rev_track": []})
-        tr = meta.get("_rev_track") or []
-        rev_dom = "No Revisado"
-        if tr:
-            rev_dom = _matriz_validacion_norm_estado(max(tr, key=lambda x: float(x[0] or 0))[1])
-        rows.append({
-            "pk_id": k,
-            "cant_ppto": round(cant_ppto, 2),
-            "costo_ppto": round(costo_ppto, 0),
-            "cant_ppto_aprobado_n3": round(pap["cant"], 2),
-            "costo_ppto_aprobado_n3": round(pap["costo"], 0),
-            "cant_ppto_estado_no_revisado": round(pnr["cant"], 2),
-            "costo_ppto_estado_no_revisado": round(pnr["costo"], 0),
-            "cant_ppto_estado_pendiente": round(ppd["cant"], 2),
-            "costo_ppto_estado_pendiente": round(ppd["costo"], 0),
-            "cant_ppto_estado_rechazado": round(prj["cant"], 2),
-            "costo_ppto_estado_rechazado": round(prj["costo"], 0),
-            "cant_sicoe_aprobado": round(sic["cant"], 2),
-            "costo_sicoe_aprobado": round(sic["costo"], 0),
-            "cant_sicoe_no_revisado": round(snr["cant"], 2),
-            "costo_sicoe_no_revisado": round(snr["costo"], 0),
-            "cant_sicoe_pendiente": round(spe["cant"], 2),
-            "costo_sicoe_pendiente": round(spe["costo"], 0),
-            "cant_sicoe_rechazado": round(srj["cant"], 2),
-            "costo_sicoe_rechazado": round(srj["costo"], 0),
-            "cant_sicoe": round(sic["cant"], 2),
-            "costo_sicoe": round(sic["costo"], 0),
-            "cant_facturado": 0.0,
-            "costo_facturado": 0.0,
-            "delta_cant": round(dcant, 2),
-            "delta_costo": round(dcosto, 0),
-            "descripcion": meta.get("desc", ""),
-            "revisado": rev_dom,
-        })
+        rows.append(
+            _build_pkid_tabla_row_from_aggs(
+                k,
+                meta,
+                agg_p_ap.get(k, empty_m()),
+                agg_p_nr.get(k, empty_m()),
+                agg_p_pd.get(k, empty_m()),
+                agg_p_rj.get(k, empty_m()),
+                agg_sicoe_ap.get(k, empty_m()),
+                agg_sicoe_nr.get(k, empty_m()),
+                agg_sicoe_pe.get(k, empty_m()),
+                agg_sicoe_rej.get(k, empty_m()),
+            )
+        )
 
     desc_item = ""
     if item and capitulo:
@@ -17824,24 +19040,57 @@ def _dashboard_pkid_tabla_obra_core(contrato_id: int, capitulo: Optional[str], i
 
     por_cobrar = sum(r["delta_costo"] for r in rows if r["delta_costo"] > 0)
     devolucion = sum(abs(r["delta_costo"]) for r in rows if r["delta_costo"] < 0)
-    return {"rows": rows, "por_cobrar": por_cobrar, "devolucion": devolucion, "descripcion_item": desc_item}
+    print(
+        f"dashboard_pkid_tabla fallback cap={cap_raw!r} item={item_raw!r} rows={len(rows)} "
+        f"ms={int((time.time() - t0) * 1000)}",
+        flush=True,
+    )
+    return _normalize_pkid_tabla_payload(
+        {"rows": rows, "por_cobrar": por_cobrar, "devolucion": devolucion, "descripcion_item": desc_item},
+        contrato_id,
+    )
 
 
-def _ppto_rows_capitulo(contrato_id: int, capitulo: str) -> List[dict]:
+def _ppto_rows_capitulo(
+    contrato_id: int,
+    capitulo: str,
+    vista: str = "presupuesto_obra",
+    current_user=None,
+) -> List[dict]:
+    return _ppto_rows_capitulo_tipo(contrato_id, capitulo, ppto_tipo_for_vista(vista), current_user)
+
+
+def _ppto_rows_capitulo_tipo(
+    contrato_id: int,
+    capitulo: str,
+    tipo_ejecucion: str,
+    current_user,
+) -> List[dict]:
+    """Presupuesto de un capítulo (filtro por variantes de texto en BD)."""
     cap_key = _dash_norm_capitulo_key_py(capitulo)
-    rows = []
+    variants = capitulo_variants_heuristic(capitulo)
+    rows: List[dict] = []
     off = 0
     while True:
-        def _b(o=off):
-            return (
+        def _b(o=off, caps=variants):
+            q = (
                 supabase.table("presupuesto")
-                .select("item, descripcion, capitulo, cant_total, costo_directo, revisado, pk_id")
+                .select(
+                    "id, item, descripcion, capitulo, cant_total, costo_directo, revisado, pk_id, "
+                    "tipo_ejecucion, und, id_pol, no_inicio, no_final, tramo, calzada"
+                )
                 .eq("contrato_id", contrato_id)
                 .eq("dado_de_baja", False)
-                .range(o, o + 999)
-                .execute()
-                .data
+                .eq("tipo_ejecucion", tipo_ejecucion)
             )
+            if current_user and _presupuesto_aplica_filtro_interventoria(current_user):
+                q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+            if caps:
+                if len(caps) == 1:
+                    q = q.eq("capitulo", caps[0])
+                else:
+                    q = q.in_("capitulo", caps)
+            return q.range(o, o + 999).execute().data
 
         batch = supabase_execute(_b) or []
         for row in batch:
@@ -17870,7 +19119,226 @@ def _xlsx_safe_sheet_name(name: str, fallback: str = "Hoja") -> str:
     return s or fallback[:31]
 
 
-def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Optional[str]):
+# Export dashboard capítulo — paleta ClaraCore
+_CC_XLSX_PRIMARY = "0077B6"
+_CC_XLSX_DARK = "0A1628"
+_CC_XLSX_PRIMARY_LIGHT = "E6F4FA"
+_CC_XLSX_GREEN_BG = "D1FAE5"
+_CC_XLSX_RED_BG = "FEE2E2"
+_XLSX_FMT_CANT = "#,##0.0000"
+_XLSX_FMT_COP = '"$"#,##0'
+_XLSX_PK_COLS = [
+    "PK_Id",
+    "Cant. ClaraCore",
+    "Costo ClaraCore",
+    "Cant. Cobrada",
+    "Costo Cobrado",
+    "Δ Cantidad",
+    "Δ Costo",
+    "Revisado",
+]
+_XLSX_PK_CANT_COLS = frozenset({2, 4, 6})
+_XLSX_PK_COP_COLS = frozenset({3, 5, 7})
+_DASH_DELTA_EPS = 0.5
+
+
+def _split_pk_export_rows(rows: List[dict]) -> Tuple[List[dict], List[dict], List[dict]]:
+    """Clasifica filas PK con el mismo umbral que el dashboard (±0,5 en Δ costo)."""
+    pos: List[dict] = []
+    neg: List[dict] = []
+    equi: List[dict] = []
+    for r in rows or []:
+        d = float(r.get("delta_costo") or 0)
+        if d > _DASH_DELTA_EPS:
+            pos.append(r)
+        elif d < -_DASH_DELTA_EPS:
+            neg.append(r)
+        else:
+            equi.append(r)
+    return pos, neg, equi
+
+
+def _xlsx_cell_display_width(val, cell) -> int:
+    if val is None:
+        return 0
+    if isinstance(val, bool):
+        return 5
+    if isinstance(val, (int, float)):
+        nf = str(cell.number_format or "")
+        if '"$"' in nf:
+            return len(f"${val:,.0f}")
+        if "0.0000" in nf:
+            return len(f"{val:.4f}")
+        if "0.00" in nf:
+            return len(f"{val:.2f}")
+        return len(str(val))
+    return len(str(val))
+
+
+def _xlsx_autofit_columns(
+    ws,
+    col_start: int = 1,
+    col_end: Optional[int] = None,
+    row_start: int = 1,
+    row_end: Optional[int] = None,
+    min_w: float = 9,
+    max_w: float = 48,
+    col_max: Optional[Dict[int, float]] = None,
+):
+    from openpyxl.utils import get_column_letter
+
+    if col_end is None:
+        col_end = ws.max_column or 1
+    if row_end is None:
+        row_end = ws.max_row or 1
+    col_max = col_max or {}
+    for col in range(col_start, col_end + 1):
+        letter = get_column_letter(col)
+        cap = col_max.get(col, max_w)
+        best = min_w
+        for row in range(row_start, row_end + 1):
+            cell = ws.cell(row=row, column=col)
+            best = max(best, min(_xlsx_cell_display_width(cell.value, cell) + 2, cap))
+        ws.column_dimensions[letter].width = best
+
+
+def _xlsx_apply_page_footer(ws, contrato_numero: str) -> None:
+    num = (contrato_numero or "—").strip()
+    for hf in (ws.oddFooter, ws.evenFooter):
+        hf.left.text = "Página &P de &N"
+        hf.center.text = "&A"
+        hf.right.text = f"Producto ClaraCore para el contrato {num}"
+
+
+def _xlsx_apply_print_summary(ws, contrato_numero: str) -> None:
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.print_options.horizontalCentered = True
+    _xlsx_apply_page_footer(ws, contrato_numero)
+
+
+def _xlsx_apply_print_item(ws, contrato_numero: str) -> None:
+    ws.page_setup.orientation = "portrait"
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.print_options.horizontalCentered = True
+    _xlsx_apply_page_footer(ws, contrato_numero)
+
+
+def _sum_pk_export_rows(rows: List[dict]) -> Dict[str, float]:
+    """Totales alineados con dashboard-pkid-tabla (mismos campos por fila PK)."""
+    return {
+        "cant_ppto": sum(float(r.get("cant_ppto") or 0) for r in rows),
+        "costo_ppto": sum(float(r.get("costo_ppto") or 0) for r in rows),
+        "cant_sicoe": sum(float(r.get("cant_sicoe") or 0) for r in rows),
+        "costo_sicoe": sum(float(r.get("costo_sicoe") or 0) for r in rows),
+        "delta_cant": sum(float(r.get("delta_cant") or 0) for r in rows),
+        "delta_costo": sum(float(r.get("delta_costo") or 0) for r in rows),
+    }
+
+
+def _dashboard_pkid_tabla_export_item(
+    contrato_id: int,
+    capitulo: str,
+    item: str,
+    vista: str,
+    current_user,
+) -> Dict[str, Any]:
+    """Ruta rápida export Excel: RPC + merge presupuesto vista (sin logs ni fallback pesado)."""
+    cap_raw = str(capitulo or "").strip()
+    item_raw = str(item or "").strip()
+    if not cap_raw or not item_raw:
+        return {"rows": [], "por_cobrar": 0.0, "devolucion": 0.0, "descripcion_item": ""}
+    try:
+        rpc_hit = _rpc_pkid_tabla_agg(contrato_id, cap_raw, item_raw)
+        ppto_rows = ppto_rows_item_pk_drill(
+            supabase, contrato_id, cap_raw, item_raw, vista, current_user
+        )
+        out = _merge_pkid_tabla_vista_ppto(rpc_hit, ppto_rows) if ppto_rows else rpc_hit
+        return _normalize_pkid_tabla_payload(out, contrato_id)
+    except Exception:
+        return _dashboard_pkid_tabla_obra_core(
+            contrato_id, capitulo, item, vista, current_user
+        )
+
+
+def _fetch_export_core_by_item(
+    contrato_id: int,
+    capitulo: str,
+    items_sorted: List[str],
+    vista: str,
+    current_user,
+) -> Dict[str, Dict[str, Any]]:
+    """Tablas PK por ítem (secuencial: evita saturar Supabase con muchas RPC en paralelo)."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for it in items_sorted:
+        out[it] = _dashboard_pkid_tabla_export_item(
+            contrato_id, capitulo, it, vista, current_user
+        )
+    return out
+
+
+def _export_sicoe_obra_rows_capitulo(
+    contrato_id: int,
+    capitulo: str,
+    items_sorted: List[str],
+) -> List[dict]:
+    """Obra SICOE aprobada (nivel máx. contrato) para ítems del capítulo en presupuesto."""
+    if not items_sorted:
+        return []
+    cap_key = _dash_norm_capitulo_key_py(capitulo)
+    item_keys = {_dash_norm_item_key_py(it) for it in items_sorted if _dash_norm_item_key_py(it)}
+    item_vars: set = set()
+    for it in items_sorted:
+        s = (it or "").strip()
+        if s:
+            item_vars.add(s)
+        ik = _dash_norm_item_key_py(it)
+        if ik:
+            item_vars.add(ik)
+            item_vars.add(f"{ik}.")
+    item_list = sorted(item_vars)
+    rows: List[dict] = []
+    off = 0
+    while True:
+
+        def _fetch(o=off, iv=item_list):
+            q = supabase.table("so_registros").select("*").eq("contrato_id", contrato_id)
+            q = apply_sicoe_capitulo_filter(q, supabase, contrato_id, capitulo)
+            if iv:
+                if len(iv) == 1:
+                    q = q.eq("item_numero", iv[0])
+                else:
+                    q = q.in_("item_numero", iv[:400])
+            return q.range(o, o + 999).execute().data
+
+        batch = supabase_execute(_fetch) or []
+        for r in batch:
+            if cap_key and _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_key:
+                continue
+            if item_keys and _dash_norm_item_key_py(r.get("item_numero")) not in item_keys:
+                continue
+            if _matriz_validacion_norm_estado_nivel_final(r, contrato_id) != "Aprobado":
+                continue
+            rows.append(r)
+        if len(batch) < 1000:
+            break
+        off += 1000
+    return rows
+
+
+def _build_dashboard_capitulo_xlsx(
+    contrato_id: int,
+    capitulo: str,
+    item: Optional[str],
+    vista: str = "presupuesto_obra",
+    current_user=None,
+):
     """
     Informe multi-hoja: (1) resumen por ítem del capítulo presupuesto vs obra aprobada N3,
     (2..n) análisis por PK por ítem, (n-1) base presupuesto capítulo, (n) obra filtrada a esos ítems.
@@ -17882,18 +19350,58 @@ def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Option
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-    fill_hdr = PatternFill("solid", fgColor="1B2A4A")
-    fill_tot = PatternFill("solid", fgColor="1B2A4A")
-    fill_green = PatternFill("solid", fgColor="DCFCE7")
-    fill_red = PatternFill("solid", fgColor="FEE2E2")
+    fill_hdr = PatternFill("solid", fgColor=_CC_XLSX_PRIMARY)
+    fill_tot = PatternFill("solid", fgColor=_CC_XLSX_DARK)
+    fill_title = PatternFill("solid", fgColor=_CC_XLSX_DARK)
+    fill_subhdr = PatternFill("solid", fgColor=_CC_XLSX_PRIMARY_LIGHT)
+    fill_green = PatternFill("solid", fgColor=_CC_XLSX_GREEN_BG)
+    fill_red = PatternFill("solid", fgColor=_CC_XLSX_RED_BG)
     fill_white = PatternFill("solid", fgColor="FFFFFF")
     font_hdr = Font(bold=True, color="FFFFFF", size=11)
-    font_bold = Font(bold=True)
+    font_bold = Font(bold=True, color=_CC_XLSX_DARK)
+    font_title = Font(bold=True, color="FFFFFF", size=14)
+    font_resumen_cant = Font(size=10, color=_CC_XLSX_DARK)
+    font_resumen_cop = Font(bold=True, size=11, color=_CC_XLSX_PRIMARY)
     al_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    al_right = Alignment(horizontal="right", vertical="center")
     _side = Side(style="thin", color="FFB4B4B4")
     border_tbl = Border(left=_side, right=_side, top=_side, bottom=_side)
+    tbl_cols = _XLSX_PK_COLS
+    n_pk_cols = len(tbl_cols)
 
-    campo_max_estado_obra = _get_nivel_maximo_contrato(contrato_id)
+    def _fmt_cell(ws, r: int, c: int, val, is_cop: bool = False, is_cant: bool = False):
+        cell = ws.cell(row=r, column=c, value=val)
+        cell.border = border_tbl
+        if is_cop:
+            cell.number_format = _XLSX_FMT_COP
+            cell.alignment = al_right
+        elif is_cant:
+            cell.number_format = _XLSX_FMT_CANT
+            cell.alignment = al_right
+        return cell
+
+    def _fmt_resumen(ws, r: int, c: int, val, kind: str = "text"):
+        cell = ws.cell(row=r, column=c, value=val)
+        cell.border = border_tbl
+        if kind == "cant":
+            cell.number_format = _XLSX_FMT_CANT
+            cell.alignment = al_right
+            cell.font = font_resumen_cant
+        elif kind == "cop":
+            cell.number_format = _XLSX_FMT_COP
+            cell.alignment = al_right
+            cell.font = font_resumen_cop
+        return cell
+
+    def _apply_pk_row_formats(ws, r: int):
+        for c in range(1, n_pk_cols + 1):
+            cell = ws.cell(row=r, column=c)
+            if c in _XLSX_PK_COP_COLS:
+                cell.number_format = _XLSX_FMT_COP
+                cell.alignment = al_right
+            elif c in _XLSX_PK_CANT_COLS:
+                cell.number_format = _XLSX_FMT_CANT
+                cell.alignment = al_right
 
     def _style_header_row(ws, row_idx: int, ncols: int):
         for c in range(1, ncols + 1):
@@ -17909,6 +19417,20 @@ def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Option
             cell.fill = fill_tot
             cell.font = Font(bold=True, color="FFFFFF")
             cell.border = border_tbl
+
+    def _style_item_total_row(ws, row_idx: int, ncols: int, delta_costo: float):
+        """Total ítem con fondo semáforo y texto oscuro legible (no blanco sobre rosa/verde)."""
+        _fill_data_row_by_delta(ws, row_idx, 1, ncols, delta_costo)
+        for c in range(1, ncols + 1):
+            cell = ws.cell(row=row_idx, column=c)
+            cell.font = Font(bold=True, color=_CC_XLSX_DARK, size=11)
+            cell.border = border_tbl
+            if c in _XLSX_PK_COP_COLS:
+                cell.number_format = _XLSX_FMT_COP
+                cell.alignment = al_right
+            elif c in _XLSX_PK_CANT_COLS:
+                cell.number_format = _XLSX_FMT_CANT
+                cell.alignment = al_right
 
     def _border_range(ws, r1: int, r2: int, c1: int, c2: int):
         for r in range(r1, r2 + 1):
@@ -17928,16 +19450,92 @@ def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Option
         else:
             _row_fill(ws, r, c1, c2, fill_white)
 
+    def _write_pk_data_row(ws, r: int, pk_id, cant_p, cost_p, cant_c, cost_c, d_cant, d_cost, revisado=""):
+        _fmt_cell(ws, r, 1, pk_id)
+        _fmt_cell(ws, r, 2, cant_p, is_cant=True)
+        _fmt_cell(ws, r, 3, cost_p, is_cop=True)
+        _fmt_cell(ws, r, 4, cant_c, is_cant=True)
+        _fmt_cell(ws, r, 5, cost_c, is_cop=True)
+        _fmt_cell(ws, r, 6, d_cant, is_cant=True)
+        _fmt_cell(ws, r, 7, d_cost, is_cop=True)
+        _fmt_cell(ws, r, 8, revisado)
+
+    def _append_pk_table(ws, block_rows, title, fill_title, uniform_row_fill, is_subtotal=False, per_row_delta=False):
+        mr = ws.max_row + 1
+        if title:
+            ws.merge_cells(start_row=mr, start_column=1, end_row=mr, end_column=n_pk_cols)
+            c = ws.cell(row=mr, column=1)
+            c.value = title
+            if fill_title:
+                c.fill = fill_title
+            c.font = font_bold
+            c.alignment = Alignment(horizontal="left", vertical="center")
+            _border_range(ws, mr, mr, 1, n_pk_cols)
+        hr = ws.max_row + 1
+        for j, h in enumerate(tbl_cols, start=1):
+            ws.cell(row=hr, column=j, value=h)
+        _style_header_row(ws, hr, n_pk_cols)
+        for row in block_rows:
+            dr = ws.max_row + 1
+            ws.append(
+                [
+                    row.get("pk_id"),
+                    row.get("cant_ppto"),
+                    row.get("costo_ppto"),
+                    row.get("cant_sicoe"),
+                    row.get("costo_sicoe"),
+                    row.get("delta_cant"),
+                    row.get("delta_costo"),
+                    row.get("revisado"),
+                ]
+            )
+            _apply_pk_row_formats(ws, dr)
+            if per_row_delta:
+                _fill_data_row_by_delta(ws, dr, 1, n_pk_cols, float(row.get("delta_costo") or 0))
+            elif uniform_row_fill:
+                _row_fill(ws, dr, 1, n_pk_cols, uniform_row_fill)
+            else:
+                _row_fill(ws, dr, 1, n_pk_cols, fill_white)
+        if is_subtotal and block_rows:
+            agg = _sum_pk_export_rows(block_rows)
+            if "DEVOL" in (title or ""):
+                label = f"Subtotal DEVOLUCIÓN ({len(block_rows)} PK)"
+            elif "POR COBRAR" in (title or ""):
+                label = f"Subtotal POR COBRAR ({len(block_rows)} PK)"
+            elif "EQUILIBRIO" in (title or ""):
+                label = f"Subtotal EQUILIBRIO ({len(block_rows)} PK)"
+            else:
+                label = f"Subtotal ({len(block_rows)} PK)"
+            sr = ws.max_row + 1
+            _write_pk_data_row(
+                ws,
+                sr,
+                label,
+                agg["cant_ppto"],
+                agg["costo_ppto"],
+                agg["cant_sicoe"],
+                agg["costo_sicoe"],
+                agg["delta_cant"],
+                agg["delta_costo"],
+                "",
+            )
+            _style_total_row(ws, sr, n_pk_cols)
+            _apply_pk_row_formats(ws, sr)
+
     meta_ct = ""
+    contrato_numero = ""
     try:
         cr = supabase.table("contratos").select("numero, contratista").eq("id", contrato_id).limit(1).execute().data
         if cr:
-            meta_ct = (cr[0].get("contratista") or cr[0].get("numero") or "").strip()
+            contrato_numero = (cr[0].get("numero") or "").strip()
+            meta_ct = (cr[0].get("contratista") or contrato_numero or "").strip()
     except Exception:
         pass
     gen_ts = datetime.now(pytz.timezone("America/Bogota")).strftime("%d/%m/%Y %H:%M")
+    tipo_ppto = ppto_tipo_for_vista(vista)
+    tipo_label = "Obra Ejecutada" if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA else "Presupuesto de Obra"
 
-    ppto_all = _ppto_rows_capitulo(contrato_id, capitulo)
+    ppto_all = _ppto_rows_capitulo(contrato_id, capitulo, vista, current_user)
     by_item: Dict[str, List[dict]] = {}
     for r in ppto_all:
         it = (r.get("item") or "").strip()
@@ -17945,10 +19543,14 @@ def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Option
             continue
         by_item.setdefault(it, []).append(r)
     items_sorted = sorted(by_item.keys(), key=lambda x: str(x))
+    if item and str(item).strip():
+        it_f = _dash_norm_item_key_py(item)
+        items_sorted = [it for it in items_sorted if _dash_norm_item_key_py(it) == it_f]
+        by_item = {k: v for k, v in by_item.items() if _dash_norm_item_key_py(k) == it_f}
     # Misma fuente que las hojas por ítem (PK), para que resumen y detalle coincidan.
-    core_by_item: Dict[str, Dict[str, Any]] = {}
-    for _it in items_sorted:
-        core_by_item[_it] = _dashboard_pkid_tabla_obra_core(contrato_id, capitulo, _it)
+    core_by_item = _fetch_export_core_by_item(
+        contrato_id, capitulo, items_sorted, vista, current_user
+    )
 
     wb = Workbook()
     ws0 = wb.active
@@ -17957,9 +19559,9 @@ def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Option
     # ── Hoja 1: resumen por ítem ───────────────────────────────────────────
     ws0.merge_cells(start_row=1, start_column=1, end_row=2, end_column=13)
     c1 = ws0.cell(row=1, column=1)
-    c1.value = f"RESUMEN POR CAPÍTULO — {capitulo}"
-    c1.font = Font(bold=True, size=14, color="FFFFFF")
-    c1.fill = fill_hdr
+    c1.value = f"RESUMEN POR CAPÍTULO — {capitulo} ({tipo_label})"
+    c1.font = font_title
+    c1.fill = fill_title
     c1.alignment = Alignment(horizontal="center", vertical="center")
     ws0.row_dimensions[1].height = 22
     ws0.row_dimensions[2].height = 6
@@ -17989,6 +19591,17 @@ def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Option
     for j, h in enumerate(hdr1, start=1):
         ws0.cell(row=r0, column=j, value=h)
     _style_header_row(ws0, r0, len(hdr1))
+    for c_cop in (4, 6, 8, 10, 11, 12, 13):
+        hc = ws0.cell(row=r0, column=c_cop)
+        hc.fill = PatternFill("solid", fgColor=_CC_XLSX_PRIMARY_LIGHT)
+        hc.font = Font(bold=True, color=_CC_XLSX_PRIMARY, size=11)
+
+    if not items_sorted:
+        ws0.cell(row=r0 + 1, column=1, value=f"Sin ítems en presupuesto ({tipo_label}) para este capítulo.")
+        ws0.merge_cells(start_row=r0 + 1, start_column=1, end_row=r0 + 1, end_column=len(hdr1))
+        c0 = ws0.cell(row=r0 + 1, column=1)
+        c0.font = Font(italic=True, color="666666")
+        c0.alignment = Alignment(horizontal="center")
 
     tot_cc_cant = tot_cc_cost = tot_cb_cant = tot_cb_cost = tot_d_cant = tot_d_cost = 0.0
     tot_ap = tot_pe = tot_re = tot_nr = 0.0
@@ -18000,13 +19613,14 @@ def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Option
             if x.get("descripcion"):
                 desc = str(x["descripcion"])
                 break
-        cant_p = sum(float(x.get("cant_total") or 0) for x in rows_it)
-        cost_p = sum(float(x.get("costo_directo") or 0) for x in rows_it)
         _rows_pk = (core_by_item.get(it) or {}).get("rows") or []
-        cant_c = sum(float(x.get("cant_sicoe") or 0) for x in _rows_pk)
-        cost_c = sum(float(x.get("costo_sicoe") or 0) for x in _rows_pk)
-        d_cant = cant_p - cant_c
-        d_cost = cost_p - cost_c
+        agg = _sum_pk_export_rows(_rows_pk)
+        cant_p = agg["cant_ppto"]
+        cost_p = agg["costo_ppto"]
+        cant_c = agg["cant_sicoe"]
+        cost_c = agg["costo_sicoe"]
+        d_cant = agg["delta_cant"]
+        d_cost = agg["delta_costo"]
         estado = "Equilibrio"
         if d_cost > 0.5:
             estado = "Por cobrar"
@@ -18025,18 +19639,20 @@ def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Option
         tot_nr += spl["No Revisado"]
 
         ws0.cell(row=row_i, column=1, value=it)
-        ws0.cell(row=row_i, column=2, value=desc)
-        ws0.cell(row=row_i, column=3, value=round(cant_p, 4))
-        ws0.cell(row=row_i, column=4, value=round(cost_p, 0))
-        ws0.cell(row=row_i, column=5, value=round(cant_c, 4))
-        ws0.cell(row=row_i, column=6, value=round(cost_c, 0))
-        ws0.cell(row=row_i, column=7, value=round(d_cant, 4))
-        ws0.cell(row=row_i, column=8, value=round(d_cost, 0))
+        c_desc = ws0.cell(row=row_i, column=2, value=desc)
+        c_desc.alignment = Alignment(wrap_text=True, vertical="top")
+        c_desc.font = Font(color=_CC_XLSX_DARK, size=10)
+        _fmt_resumen(ws0, row_i, 3, cant_p, "cant")
+        _fmt_resumen(ws0, row_i, 4, cost_p, "cop")
+        _fmt_resumen(ws0, row_i, 5, cant_c, "cant")
+        _fmt_resumen(ws0, row_i, 6, cost_c, "cop")
+        _fmt_resumen(ws0, row_i, 7, d_cant, "cant")
+        _fmt_resumen(ws0, row_i, 8, d_cost, "cop")
         ws0.cell(row=row_i, column=9, value=estado)
-        ws0.cell(row=row_i, column=10, value=round(spl["Aprobado"], 0))
-        ws0.cell(row=row_i, column=11, value=round(spl["Pendiente"], 0))
-        ws0.cell(row=row_i, column=12, value=round(spl["Rechazado"], 0))
-        ws0.cell(row=row_i, column=13, value=round(spl["No Revisado"], 0))
+        _fmt_resumen(ws0, row_i, 10, round(spl["Aprobado"], 0), "cop")
+        _fmt_resumen(ws0, row_i, 11, round(spl["Pendiente"], 0), "cop")
+        _fmt_resumen(ws0, row_i, 12, round(spl["Rechazado"], 0), "cop")
+        _fmt_resumen(ws0, row_i, 13, round(spl["No Revisado"], 0), "cop")
         if estado == "Por cobrar":
             _row_fill(ws0, row_i, 1, 13, fill_green)
         elif estado == "Devolución":
@@ -18046,173 +19662,132 @@ def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Option
         row_i += 1
 
     ws0.cell(row=row_i, column=1, value="TOTALES CAPÍTULO")
-    ws0.cell(row=row_i, column=3, value=round(tot_cc_cant, 4))
-    ws0.cell(row=row_i, column=4, value=round(tot_cc_cost, 0))
-    ws0.cell(row=row_i, column=5, value=round(tot_cb_cant, 4))
-    ws0.cell(row=row_i, column=6, value=round(tot_cb_cost, 0))
-    ws0.cell(row=row_i, column=7, value=round(tot_d_cant, 4))
-    ws0.cell(row=row_i, column=8, value=round(tot_d_cost, 0))
-    ws0.cell(row=row_i, column=10, value=round(tot_ap, 0))
-    ws0.cell(row=row_i, column=11, value=round(tot_pe, 0))
-    ws0.cell(row=row_i, column=12, value=round(tot_re, 0))
-    ws0.cell(row=row_i, column=13, value=round(tot_nr, 0))
+    _fmt_resumen(ws0, row_i, 3, tot_cc_cant, "cant")
+    _fmt_resumen(ws0, row_i, 4, tot_cc_cost, "cop")
+    _fmt_resumen(ws0, row_i, 5, tot_cb_cant, "cant")
+    _fmt_resumen(ws0, row_i, 6, tot_cb_cost, "cop")
+    _fmt_resumen(ws0, row_i, 7, tot_d_cant, "cant")
+    _fmt_resumen(ws0, row_i, 8, tot_d_cost, "cop")
+    _fmt_resumen(ws0, row_i, 10, round(tot_ap, 0), "cop")
+    _fmt_resumen(ws0, row_i, 11, round(tot_pe, 0), "cop")
+    _fmt_resumen(ws0, row_i, 12, round(tot_re, 0), "cop")
+    _fmt_resumen(ws0, row_i, 13, round(tot_nr, 0), "cop")
     _style_total_row(ws0, row_i, len(hdr1))
+    for c_cop in (4, 6, 8, 10, 11, 12, 13):
+        ws0.cell(row=row_i, column=c_cop).font = Font(bold=True, color="FFFFFF", size=11)
     _border_range(ws0, r0, row_i, 1, len(hdr1))
+    _xlsx_autofit_columns(ws0, 1, len(hdr1), r0, row_i, min_w=10, max_w=22, col_max={2: 52})
+    _xlsx_apply_print_summary(ws0, contrato_numero)
 
     # ── Hojas por ítem: análisis PK (por cobrar / devolución) ────────────────
-    tbl_cols = ["PK_Id", "Cant. ClaraCore", "Costo ClaraCore", "Cant. Cobrada", "Costo Cobrado", "Δ Cantidad", "Δ Costo", "Revisado"]
-
-    def _append_pk_table(ws, block_rows, title, fill_title, uniform_row_fill, is_subtotal=False, per_row_delta=False):
-        mr = ws.max_row + 1
-        if title:
-            ws.merge_cells(start_row=mr, start_column=1, end_row=mr, end_column=len(tbl_cols))
-            c = ws.cell(row=mr, column=1)
-            c.value = title
-            if fill_title:
-                c.fill = fill_title
-            c.font = font_bold
-            _border_range(ws, mr, mr, 1, len(tbl_cols))
-        ws.append(tbl_cols)
-        _style_header_row(ws, ws.max_row, len(tbl_cols))
-        for r in block_rows:
-            ws.append(
-                [
-                    r.get("pk_id"),
-                    r.get("cant_ppto"),
-                    r.get("costo_ppto"),
-                    r.get("cant_sicoe"),
-                    r.get("costo_sicoe"),
-                    r.get("delta_cant"),
-                    r.get("delta_costo"),
-                    r.get("revisado"),
-                ]
-            )
-            rr = ws.max_row
-            if per_row_delta:
-                _fill_data_row_by_delta(ws, rr, 1, len(tbl_cols), float(r.get("delta_costo") or 0))
-            elif uniform_row_fill:
-                _row_fill(ws, rr, 1, len(tbl_cols), uniform_row_fill)
-            else:
-                _row_fill(ws, rr, 1, len(tbl_cols), fill_white)
-            _border_range(ws, rr, rr, 1, len(tbl_cols))
-        if is_subtotal and block_rows:
-            if "DEVOL" in (title or ""):
-                label = f"Subtotal DEVOLUCIÓN ({len(block_rows)} PK)"
-            elif "POR COBRAR" in (title or ""):
-                label = f"Subtotal POR COBRAR ({len(block_rows)} PK)"
-            else:
-                label = f"Subtotal ({len(block_rows)} PK)"
-            ws.append(
-                [
-                    label,
-                    sum(r["cant_ppto"] for r in block_rows),
-                    sum(r["costo_ppto"] for r in block_rows),
-                    sum(r["cant_sicoe"] for r in block_rows),
-                    sum(r["costo_sicoe"] for r in block_rows),
-                    sum(r["delta_cant"] for r in block_rows),
-                    sum(r["delta_costo"] for r in block_rows),
-                    "",
-                ]
-            )
-            _style_total_row(ws, ws.max_row, len(tbl_cols))
-            _border_range(ws, ws.max_row, ws.max_row, 1, len(tbl_cols))
-
     for it in items_sorted:
         data = core_by_item[it]
         rows = data.get("rows") or []
         desc_item = data.get("descripcion_item") or ""
         ws = wb.create_sheet(title=_xlsx_safe_sheet_name(it, "Item"))
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_pk_cols)
         t1 = ws.cell(row=1, column=1)
         t1.value = f"ANÁLISIS DE COBRO — {it} | {desc_item[:180]}"
-        t1.font = Font(bold=True, size=12)
-        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=8)
+        t1.font = Font(bold=True, size=12, color="FFFFFF")
+        t1.fill = fill_title
+        t1.alignment = al_center
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=n_pk_cols)
         t2 = ws.cell(row=2, column=1)
-        t2.value = f"{capitulo} | Generado: {gen_ts}"
-        t2.font = Font(size=10, color="666666")
+        t2.value = f"{capitulo} | {tipo_label} | Generado: {gen_ts}"
+        t2.font = Font(size=10, color=_CC_XLSX_PRIMARY)
+        t2.alignment = al_center
 
         if rows:
-            s_cp = sum(float(r.get("cant_ppto") or 0) for r in rows)
-            s_co = sum(float(r.get("costo_ppto") or 0) for r in rows)
-            s_cc = sum(float(r.get("cant_sicoe") or 0) for r in rows)
-            s_ob = sum(float(r.get("costo_sicoe") or 0) for r in rows)
-            d_ct = s_cp - s_cc
-            d_cs = s_co - s_ob
-            ws.append([])
-            ws.append(["Cant. ClaraCore", "Costo ClaraCore", "Cant. Cobrada", "Costo Cobrado", "Δ Cantidad", "Δ Costo"])
-            rh = ws.max_row
-            _style_header_row(ws, rh, 6)
-            ws.append([round(s_cp, 3), round(s_co, 0), round(s_cc, 3), round(s_ob, 0), round(d_ct, 3), round(d_cs, 0)])
-            lr = ws.max_row
-            _fill_data_row_by_delta(ws, lr, 1, 6, d_cs)
-            _border_range(ws, rh, lr, 1, 6)
+            agg = _sum_pk_export_rows(rows)
+            hr = 4
+            for j, h in enumerate(tbl_cols, start=1):
+                ws.cell(row=hr, column=j, value=h)
+            _style_header_row(ws, hr, n_pk_cols)
+            tr = hr + 1
+            _write_pk_data_row(
+                ws,
+                tr,
+                "TOTAL ÍTEM (todos los PK)",
+                agg["cant_ppto"],
+                agg["costo_ppto"],
+                agg["cant_sicoe"],
+                agg["costo_sicoe"],
+                agg["delta_cant"],
+                agg["delta_costo"],
+                "",
+            )
+            _style_item_total_row(ws, tr, n_pk_cols, agg["delta_costo"])
+            start_detail = tr + 2
+        else:
+            start_detail = 4
 
-        pos = [r for r in rows if (r.get("delta_costo") or 0) > 0]
-        neg = [r for r in rows if (r.get("delta_costo") or 0) < 0]
-        sum_pos_cost = sum(r["delta_costo"] for r in pos)
-        sum_neg_cost = sum(r["delta_costo"] for r in neg)
+        pos, neg, equi = _split_pk_export_rows(rows)
+        agg_pos = _sum_pk_export_rows(pos)
+        agg_neg = _sum_pk_export_rows(neg)
+        agg_equi = _sum_pk_export_rows(equi)
 
-        ws.append([])
+        ws.cell(row=start_detail, column=1, value="")
         if pos:
-            tit = f"POR COBRAR | Total: +${sum_pos_cost:,.0f}"
+            tit = (
+                f"POR COBRAR (Δ costo > {_DASH_DELTA_EPS}) — Subtotal: "
+                f"${agg_pos['delta_costo']:,.0f} · {len(pos)} PK"
+            )
             _append_pk_table(ws, pos, tit, fill_green, fill_green, True, False)
-            ws.append([])
+            ws.cell(row=ws.max_row + 1, column=1, value="")
         if neg:
-            titn = f"DEVOLUCIÓN | Total: ${sum_neg_cost:,.0f}"
+            titn = (
+                f"DEVOLUCIÓN (Δ costo < -{_DASH_DELTA_EPS}) — Subtotal: "
+                f"${agg_neg['delta_costo']:,.0f} · {len(neg)} PK"
+            )
             _append_pk_table(ws, neg, titn, fill_red, fill_red, True, False)
-        if not pos and not neg and rows:
-            rnote = ws.max_row + 1
-            ws.merge_cells(start_row=rnote, start_column=1, end_row=rnote, end_column=len(tbl_cols))
-            cn = ws.cell(row=rnote, column=1)
-            cn.value = "Listado completo (Δ costo = 0 o sin clasificar por signo):"
-            cn.font = font_bold
-            _border_range(ws, rnote, rnote, 1, len(tbl_cols))
-            _append_pk_table(ws, rows, "", None, None, False, True)
+            ws.cell(row=ws.max_row + 1, column=1, value="")
+        if equi:
+            tite = (
+                f"EQUILIBRIO (|Δ costo| ≤ {_DASH_DELTA_EPS}) — "
+                f"{len(equi)} PK · ClaraCore sin desvío de cobro"
+            )
+            _append_pk_table(ws, equi, tite, fill_subhdr, None, True, True)
+        _xlsx_autofit_columns(ws, 1, n_pk_cols, 4, ws.max_row, min_w=11, max_w=24, col_max={1: 36})
+        _xlsx_apply_print_item(ws, contrato_numero)
 
-    # ── Penúltima: presupuesto capítulo (completo) ──────────────────────────
-    ws_p = wb.create_sheet(title=_xlsx_safe_sheet_name("Presupuesto cap", "Presupuesto"))
+    # ── Penúltima: presupuesto capítulo (tipo según vista del dashboard) ───
+    ws_p = wb.create_sheet(title=_xlsx_safe_sheet_name(f"Ppto {tipo_label[:8]}", "Presupuesto"))
+    ws_p.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
+    tp = ws_p.cell(row=1, column=1)
+    tp.value = f"Presupuesto ClaraCore — {tipo_label} — {capitulo}"
+    tp.font = Font(bold=True, size=12, color="FFFFFF")
+    tp.fill = fill_title
+    tp.alignment = al_center
     if ppto_all:
         keys = list(ppto_all[0].keys())
+        ws_p.append([])
         ws_p.append(keys)
-        _style_header_row(ws_p, 1, len(keys))
+        hdr_p = ws_p.max_row
+        _style_header_row(ws_p, hdr_p, len(keys))
         for r in ppto_all:
             ws_p.append([r.get(k) for k in keys])
         nc = len(keys)
-        _border_range(ws_p, 1, ws_p.max_row, 1, nc)
-        for rr in range(2, ws_p.max_row + 1):
+        _border_range(ws_p, hdr_p, ws_p.max_row, 1, nc)
+        for rr in range(hdr_p + 1, ws_p.max_row + 1):
             _row_fill(ws_p, rr, 1, nc, fill_white)
+        _xlsx_autofit_columns(ws_p, 1, nc, hdr_p, ws_p.max_row, min_w=10, max_w=28)
+    _xlsx_apply_print_summary(ws_p, contrato_numero)
 
-    # ── Última: obra (N3 aprobado) solo ítems del presupuesto ────────────────
+    # ── Última: obra SICOE aprobada (solo ítems presentes en presupuesto vista) ─
     ws_o = wb.create_sheet(title=_xlsx_safe_sheet_name("Sicoe obra items", "SicoeObra"))
-    obra_rows: List[dict] = []
-    if items_sorted:
-        for ci in range(0, len(items_sorted), 400):
-            chunk_items = items_sorted[ci : ci + 400]
-            off = 0
-            while True:
-
-                def _ob(cm=campo_max_estado_obra):
-                    return (
-                        supabase.table("so_registros")
-                        .select("*")
-                        .eq("contrato_id", contrato_id)
-                        .eq("capitulo", capitulo)
-                        .eq(cm, "Aprobado")
-                        .in_("item_numero", chunk_items)
-                        .range(off, off + 999)
-                        .execute()
-                        .data
-                    )
-
-                batch = supabase_execute(_ob) or []
-                obra_rows.extend(batch)
-                if len(batch) < 1000:
-                    break
-                off += 1000
+    ws_o.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
+    to = ws_o.cell(row=1, column=1)
+    to.value = f"SICOE Obra aprobada (nivel máx.) — ítems en {tipo_label}"
+    to.font = Font(bold=True, size=12, color="FFFFFF")
+    to.fill = fill_title
+    to.alignment = al_center
+    obra_rows = _export_sicoe_obra_rows_capitulo(contrato_id, capitulo, items_sorted)
     if obra_rows:
         keys_o = list(obra_rows[0].keys())
+        ws_o.append([])
         ws_o.append(keys_o)
-        _style_header_row(ws_o, 1, len(keys_o))
+        hdr_o = ws_o.max_row
+        _style_header_row(ws_o, hdr_o, len(keys_o))
         for r in obra_rows:
             row_vals = []
             for k in keys_o:
@@ -18223,9 +19798,11 @@ def _build_dashboard_capitulo_xlsx(contrato_id: int, capitulo: str, item: Option
                     row_vals.append(v)
             ws_o.append(row_vals)
         nco = len(keys_o)
-        _border_range(ws_o, 1, ws_o.max_row, 1, nco)
-        for rr in range(2, ws_o.max_row + 1):
+        _border_range(ws_o, hdr_o, ws_o.max_row, 1, nco)
+        for rr in range(hdr_o + 1, ws_o.max_row + 1):
             _row_fill(ws_o, rr, 1, nco, fill_white)
+        _xlsx_autofit_columns(ws_o, 1, nco, hdr_o, ws_o.max_row, min_w=10, max_w=28)
+    _xlsx_apply_print_summary(ws_o, contrato_numero)
 
     for _sh in wb.worksheets:
         _sh.sheet_view.showGridLines = False
@@ -18242,15 +19819,14 @@ def dashboard_pkid_tabla_obra(
     contrato_id: int,
     capitulo: Optional[str] = None,
     item: Optional[str] = None,
-    current_user=Depends(get_current_user)
+    vista: str = Query("presupuesto_obra", description="presupuesto_obra | obra_ejecutada"),
+    current_user=Depends(get_current_user),
 ):
     """
-    Reemplaza /cobro/{contrato_id}/pkid-tabla para el Dashboard.
-    Retorna {rows, por_cobrar, devolucion, descripcion_item}: filas con presupuesto por estado revisado,
-    SICOE solo N3 aprobado, delta_cant/costo = ppto aprobado N3 − obra aprobada N3.
+    Drill PK: presupuesto según vista (vigente u obra ejecutada) vs SICOE N3 aprobado.
     """
     try:
-        return _dashboard_pkid_tabla_obra_core(contrato_id, capitulo, item)
+        return _dashboard_pkid_tabla_obra_core(contrato_id, capitulo, item, vista, current_user)
     except HTTPException:
         raise
     except Exception as e:
@@ -18262,10 +19838,12 @@ def dashboard_export_capitulo_obra(
     contrato_id: int,
     capitulo: str = Query(..., description="Capítulo del drill del dashboard"),
     item: Optional[str] = Query(None),
+    vista: str = Query("presupuesto_obra", description="presupuesto_obra | obra_ejecutada"),
     current_user=Depends(get_current_user),
 ):
     """
     Inicia generación de Excel alineado con dashboard-pkid-tabla (reemplazo de /cobro/.../exportar-capitulo).
+    Presupuesto según vista (Presupuesto de Obra u Obra Ejecutada) + SICOE Obra aprobada.
     Respuesta: { job_id }; luego GET /exportar/estado/{job_id} y /exportar/descargar/{job_id}.
     """
     _require_contract_access(current_user, contrato_id)
@@ -18273,10 +19851,14 @@ def dashboard_export_capitulo_obra(
     _export_jobs[job_id] = {"estado": "procesando", "buf": None, "filename": None}
     cap_copy = capitulo
     item_copy = item
+    vista_copy = vista
+    user_copy = current_user
 
     def _work():
         try:
-            buf, fn = _build_dashboard_capitulo_xlsx(contrato_id, cap_copy, item_copy)
+            buf, fn = _build_dashboard_capitulo_xlsx(
+                contrato_id, cap_copy, item_copy, vista_copy, user_copy
+            )
             _export_jobs[job_id] = {"estado": "listo", "buf": buf, "filename": fn}
         except Exception as e:
             _export_jobs[job_id] = {"estado": f"error:{e!s}", "buf": None, "filename": None}
@@ -18298,7 +19880,8 @@ def dashboard_pkid_colores_obra(
     capitulo: Optional[str] = None,
     item: Optional[str] = None,
     liquidacion: Optional[str] = Query(None, description="1/true: referencia liquidación (PPTO polígono vs obra N3)"),
-    current_user=Depends(get_current_user)
+    vista: str = Query("presupuesto_obra", description="presupuesto_obra | obra_ejecutada"),
+    current_user=Depends(get_current_user),
 ):
     """
     Compat: el front aún llama GET /presupuesto/{id}/pkid-colores.
@@ -18309,62 +19892,8 @@ def dashboard_pkid_colores_obra(
     try:
         liq = str(liquidacion or "").strip().lower() in ("1", "true", "yes", "on")
         if liq:
-            return _dashboard_pkid_colores_liquidacion(contrato_id, capitulo, item)
-        campo_mx_pk = _get_nivel_maximo_contrato(contrato_id)
-        ppto_agg = {}
-        off = 0
-        while True:
-            def _fp(o=off):
-                q = supabase.table("presupuesto").select("pk_id, costo_directo").eq("contrato_id", contrato_id).eq("dado_de_baja", False)
-                if item:
-                    q = q.eq("item", item)
-                elif capitulo:
-                    q = q.eq("capitulo", capitulo)
-                return q.range(o, o + 999).execute().data
-
-            batch = supabase_execute(_fp) or []
-            for r in batch:
-                k = str(r.get("pk_id") or "").strip()
-                if k:
-                    ppto_agg[k] = ppto_agg.get(k, 0) + float(r.get("costo_directo") or 0)
-            if len(batch) < 1000:
-                break
-            off += 1000
-
-        sicoe_ap_agg = {}
-
-        def _all_sicoe_aprobados():
-            q = (
-                supabase.table("so_registros")
-                .select("pk_id_id, costo_directo, pk_ids(pk_id)")
-                .eq("contrato_id", contrato_id)
-                .eq(campo_mx_pk, "Aprobado")
-                .not_.is_("pk_id_id", "null")
-            )
-            if capitulo:
-                q = q.eq("capitulo", capitulo)
-            if item:
-                q = q.ilike("item_numero", f"%{item}%")
-            return q.range(0, 99999).execute().data
-
-        for r in supabase_execute(_all_sicoe_aprobados) or []:
-            pk_join = r.get("pk_ids") or {}
-            k = str(pk_join.get("pk_id") or r.get("pk_id_id") or "").strip()
-            if k:
-                sicoe_ap_agg[k] = sicoe_ap_agg.get(k, 0) + float(r.get("costo_directo") or 0)
-
-        result = {}
-        for pk in set(list(ppto_agg.keys()) + list(sicoe_ap_agg.keys())):
-            p = ppto_agg.get(pk, 0)
-            sap = sicoe_ap_agg.get(pk, 0)
-            result[pk] = {
-                "cobrado": round(sap, 2),
-                "presupuesto": round(p, 2),
-                "sicoe_aprobado": round(sap, 2),
-                "pct": round(sap / p * 100, 1) if p else 0,
-                "sobrecosto": sap > p,
-            }
-        return result
+            return _dashboard_pkid_colores_liquidacion(contrato_id, capitulo, item, vista, current_user)
+        return _dashboard_pkid_colores_core(contrato_id, capitulo, item, vista, current_user)
     except HTTPException:
         raise
     except Exception as e:
@@ -18377,7 +19906,8 @@ def dashboard_pkid_detalle_obra(
     pk_id: Optional[str] = None,
     item: Optional[str] = None,
     capitulo: Optional[str] = None,
-    current_user=Depends(get_current_user)
+    vista: str = Query("presupuesto_obra", description="presupuesto_obra | obra_ejecutada"),
+    current_user=Depends(get_current_user),
 ):
     """
     Detalle PK_ID: presupuesto ClaraCore y líneas SICOE por estado N3 (sin tabla cobro).
@@ -18385,77 +19915,85 @@ def dashboard_pkid_detalle_obra(
     try:
         _require_contract_access(current_user, contrato_id)
         pk_id_s = str(pk_id).strip() if pk_id is not None and str(pk_id).strip() != "" else None
+        pk_info = _resolve_pk_drill(contrato_id, pk_id_s) if pk_id_s else {"pkid_id": None, "display_keys": set(), "canonical": ""}
+        display_keys = pk_info.get("display_keys") or set()
+        pkid_id_val = pk_info.get("pkid_id")
 
-        q_p = (
-            supabase.table("presupuesto")
-            .select(
-                "id, id_pol, no_inicio, no_final, cant_total, costo_directo, descripcion, item, ent_handle, "
-                "x_label, y_label, revisado, capitulo, pk_id, pre_interv_estado, pre_interv_por, pre_interv_en, "
-                "sellado, area_long_nod, ancho, espesor, vlr_unitario, und, tipo_ejecucion"
-            )
-            .eq("contrato_id", contrato_id)
-            .eq("dado_de_baja", False)
-        )
-        if pk_id_s:
-            q_p = q_p.eq("pk_id", pk_id_s)
-        ppto_raw = supabase_execute(lambda: q_p.execute().data) or []
         it_norm = _dash_norm_item_key_py(item) if item else ""
         cap_key_det = _dash_norm_capitulo_key_py(capitulo) if capitulo else None
-        ppto = []
-        for r in ppto_raw:
-            if cap_key_det and _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_key_det:
-                continue
-            if it_norm and _dash_norm_item_key_py(r.get("item")) != it_norm:
-                continue
-            ppto.append(r)
+        allowed_keys = None
+        if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA and capitulo and item and it_norm:
+            allowed_keys = {(_dash_norm_capitulo_key_py(capitulo), _dash_norm_item_key_py(item))}
 
-        pkid_id_val = None
-        if pk_id_s:
-            res = supabase_execute(
-                lambda: supabase.table("pk_ids")
-                .select("id")
-                .eq("contrato_id", contrato_id)
-                .eq("pk_id", pk_id_s)
-                .limit(1)
-                .execute()
-                .data
+        raw_ppto = (
+            _fetch_presupuesto_pk_detalle_rows(
+                contrato_id,
+                str(capitulo or "").strip(),
+                str(item or "").strip(),
+                vista,
+                display_keys,
+                current_user,
             )
-            if res:
-                pkid_id_val = res[0]["id"]
-            if not pkid_id_val:
-                try:
-                    nid = int(pk_id_s, 10)
-                    res2 = supabase_execute(
-                        lambda: supabase.table("pk_ids")
-                        .select("id")
-                        .eq("contrato_id", contrato_id)
-                        .eq("id", nid)
-                        .limit(1)
-                        .execute()
-                        .data
-                    )
-                    if res2:
-                        pkid_id_val = res2[0]["id"]
-                except (ValueError, TypeError):
-                    pass
+            if capitulo and item
+            else []
+        )
+        ppto = [_format_ppto_detalle_row(r) for r in raw_ppto]
 
         sicoe_rows = []
-        if pk_id_s and not pkid_id_val:
-            sicoe_rows = []
-        else:
-            q_s = supabase.table("so_registros").select(
-                "id, numero_registro, tramo, nodo_ini, nodo_fin, cantidad_total, costo_directo, "
-                "item_descripcion, item_numero, acta_rpo_id, calzada, reporte_id, observacion, "
-                f"{SICOE_SELECT_NIVELES_ESTADO}"
-            ).eq("contrato_id", contrato_id)
+        pk_id_cache: Dict[int, str] = {}
+        if pk_id_s:
             if pkid_id_val:
-                q_s = q_s.eq("pk_id_id", pkid_id_val)
-            if capitulo:
-                q_s = q_s.eq("capitulo", capitulo)
-            sicoe_raw = supabase_execute(lambda: q_s.execute().data) or []
-            sicoe_rows = []
+                q_s = (
+                    supabase.table("so_registros")
+                    .select(
+                        "id, numero_registro, tramo, nodo_ini, nodo_fin, cantidad_total, costo_directo, "
+                        "item_descripcion, item_numero, acta_rpo_id, calzada, reporte_id, observacion, capitulo, "
+                        f"pk_id_id, pk_ids(pk_id), {SICOE_SELECT_NIVELES_ESTADO}"
+                    )
+                    .eq("contrato_id", contrato_id)
+                    .eq("pk_id_id", pkid_id_val)
+                )
+                if capitulo and str(capitulo).strip():
+                    q_s = apply_sicoe_capitulo_filter(q_s, supabase, contrato_id, str(capitulo).strip())
+                if it_norm:
+                    item_vars = [v for v in {(item or "").strip(), it_norm, f"{it_norm}."} if v]
+                    if len(item_vars) == 1:
+                        q_s = q_s.eq("item_numero", item_vars[0])
+                    elif item_vars:
+                        q_s = q_s.in_("item_numero", item_vars)
+                sicoe_raw = supabase_execute(lambda: q_s.execute().data) or []
+            else:
+                q_s = (
+                    supabase.table("so_registros")
+                    .select(
+                        "id, numero_registro, tramo, nodo_ini, nodo_fin, cantidad_total, costo_directo, "
+                        "item_descripcion, item_numero, acta_rpo_id, calzada, reporte_id, observacion, capitulo, "
+                        f"pk_id_id, pk_ids(pk_id), {SICOE_SELECT_NIVELES_ESTADO}"
+                    )
+                    .eq("contrato_id", contrato_id)
+                )
+                if capitulo and str(capitulo).strip():
+                    q_s = apply_sicoe_capitulo_filter(q_s, supabase, contrato_id, str(capitulo).strip())
+                if it_norm:
+                    item_vars = [v for v in {(item or "").strip(), it_norm, f"{it_norm}."} if v]
+                    if len(item_vars) == 1:
+                        q_s = q_s.eq("item_numero", item_vars[0])
+                    elif item_vars:
+                        q_s = q_s.in_("item_numero", item_vars)
+                sicoe_raw = supabase_execute(lambda: q_s.execute().data) or []
+                pk_id_cache = _load_pk_id_disp_cache(
+                    contrato_id,
+                    [r.get("pk_id_id") for r in sicoe_raw if r.get("pk_id_id") is not None],
+                )
+
             for r in sicoe_raw:
+                if cap_key_det and _dash_norm_capitulo_key_py(r.get("capitulo")) != cap_key_det:
+                    continue
                 if it_norm and _dash_norm_item_key_py(r.get("item_numero")) != it_norm:
+                    continue
+                if not _registro_matches_pk(r, display_keys, pk_id_cache):
+                    continue
+                if not sicoe_registro_en_vista(r, allowed_keys):
                     continue
                 sicoe_rows.append(r)
 
@@ -18539,6 +20077,8 @@ def dashboard_pkid_detalle_obra(
                 cost_ppto_nap += co
 
         return {
+            "vista": parse_dash_vista(vista),
+            "tipo_ejecucion": ppto_tipo_for_vista(vista),
             "ppto": ppto,
             "ppto_por_revisado": {
                 "aprobado": ppto_aprobado,
@@ -18569,8 +20109,8 @@ def dashboard_pkid_detalle_obra(
                 "costo_sicoe_no_revisado": 0.0,
                 "cant_cobro": 0.0,
                 "costo_cobro": 0.0,
-                "delta_cant": round(cant_ppto - cant_ap, 2),
-                "delta_costo": round(costo_ppto - cost_ap, 0),
+                "delta_cant": round(cant_ppto_ap - cant_ap, 2),
+                "delta_costo": round(cost_ppto_ap - cost_ap, 0),
             },
         }
     except HTTPException:

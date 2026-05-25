@@ -256,14 +256,15 @@ namespace SicoePresupuestoNET8
             }
             catch { }
 
-            // Abscisa + Calzada: MISMA lógica, MISMA decisión de eje (A/B)
-            if (_axisCtx != null && !_axisCtx.AxisA.IsNull)
+            // Abscisa + Calzada: resolver el eje/sector más cercano a la entidad
+            var axisForEnt = AxisRepository.ResolveAxisForEntity(ent) ?? _axisCtx;
+            if (axisForEnt != null && !axisForEnt.AxisA.IsNull)
             {
                 string absIni = "", absFin = "", calzada = "";
                 bool dentro = false;
 
                 // 1) Intento NORMAL (con ordenadas / dentro)
-                if (TryComputeAbsIniFin(ent, _axisCtx, 'X', out absIni, out absFin, out dentro, out calzada) && dentro)
+                if (TryComputeAbsIniFin(ent, axisForEnt, 'X', out absIni, out absFin, out dentro, out calzada) && dentro)
                 {
                     info.Abscisa = $"{absIni} - {absFin}";
                     info.Calzada = string.IsNullOrWhiteSpace(calzada) ? "—" : calzada;
@@ -272,7 +273,7 @@ namespace SicoePresupuestoNET8
                 {
                     // 2) Intento FORZADO (sin filtro Inside) para garantizar que se vea algo en el gestor
                     string absIniF = "", absFinF = "", calzadaF = "";
-                    bool okForced = TryComputeAbsIniFin_Forced(ent, _axisCtx, out absIniF, out absFinF, out calzadaF);
+                    bool okForced = TryComputeAbsIniFin_Forced(ent, axisForEnt, out absIniF, out absFinF, out calzadaF);
 
                     if (okForced)
                     {
@@ -1541,7 +1542,7 @@ namespace SicoePresupuestoNET8
                 if (ejeA == null)
                     return false;
 
-                (bool ok, double pk, double signedOffset) Project(Autodesk.AutoCAD.DatabaseServices.Curve eje, double pk0dist, Autodesk.AutoCAD.Geometry.Point3d p)
+                (bool ok, double pk, double signedOffset) Project(Autodesk.AutoCAD.DatabaseServices.Curve eje, double pk0dist, double absIniSector, Autodesk.AutoCAD.Geometry.Point3d p)
                 {
                     try
                     {
@@ -1558,7 +1559,7 @@ namespace SicoePresupuestoNET8
                         double signed = (cross > 0) ? off : -off;
 
                         double dist = eje.GetDistanceAtParameter(par);
-                        double pk = dist - pk0dist;
+                        double pk = dist - pk0dist + absIniSector;
 
                         return (true, pk, signed);
                     }
@@ -1582,7 +1583,7 @@ namespace SicoePresupuestoNET8
                 else if (prefCalz == 'B' && hasB) preferA = false;
                 else
                 {
-                    var a = Project(ejeA, ctx.Pk0DistA, pRef);
+                    var a = Project(ejeA, ctx.Pk0DistA, ctx.AbsInicioA, pRef);
                     bool inA = a.ok && Inside(a.signedOffset, ctx.OrdIzq_A, ctx.OrdDer_A);
 
                     if (!hasB)
@@ -1591,7 +1592,7 @@ namespace SicoePresupuestoNET8
                     }
                     else
                     {
-                        var b = Project(ejeB!, ctx.Pk0DistB, pRef);
+                        var b = Project(ejeB!, ctx.Pk0DistB, ctx.AbsInicioB, pRef);
                         bool inB = b.ok && Inside(b.signedOffset, ctx.OrdIzq_B, ctx.OrdDer_B);
 
                         if (inA && !inB) preferA = true;
@@ -1603,6 +1604,7 @@ namespace SicoePresupuestoNET8
 
                 var eje = preferA ? ejeA : ejeB!;
                 double pk0dist = preferA ? ctx.Pk0DistA : ctx.Pk0DistB;
+                double absInicio = preferA ? ctx.AbsInicioA : ctx.AbsInicioB;
                 double limI = preferA ? ctx.OrdIzq_A : ctx.OrdIzq_B;
                 double limD = preferA ? ctx.OrdDer_A : ctx.OrdDer_B;
 
@@ -1615,7 +1617,7 @@ namespace SicoePresupuestoNET8
 
                 foreach (var p in pts)
                 {
-                    var ev = Project(eje, pk0dist, p);
+                    var ev = Project(eje, pk0dist, absInicio, p);
                     if (!ev.ok) continue;
 
                     if (!Inside(ev.signedOffset, limI, limD))
@@ -1759,7 +1761,7 @@ namespace SicoePresupuestoNET8
                 if (ejeA == null) return false;
 
                 // Proyección robusta a pk (sin offset firmado ni Inside)
-                (bool ok, double pk) ProjectPk(acDb.Curve eje, double pk0dist, acGeo.Point3d p)
+                (bool ok, double pk) ProjectPk(acDb.Curve eje, double pk0dist, double absIniSector, acGeo.Point3d p)
                 {
                     try
                     {
@@ -1767,7 +1769,7 @@ namespace SicoePresupuestoNET8
                         var proj = eje.GetClosestPointTo(pFlat, false);
                         double par = eje.GetParameterAtPoint(proj);
                         double dist = eje.GetDistanceAtParameter(par);
-                        double pk = dist - pk0dist;
+                        double pk = dist - pk0dist + absIniSector;
                         return (true, pk);
                     }
                     catch
@@ -1812,6 +1814,7 @@ namespace SicoePresupuestoNET8
 
                 var eje = useA ? ejeA : ejeB!;
                 double pk0 = useA ? ctx.Pk0DistA : ctx.Pk0DistB;
+                double absInicio = useA ? ctx.AbsInicioA : ctx.AbsInicioB;
                 calzadaOut = useA ? "A" : "B";
 
                 double pkMin = double.MaxValue;
@@ -1820,7 +1823,7 @@ namespace SicoePresupuestoNET8
 
                 foreach (var p in pts)
                 {
-                    var r = ProjectPk(eje, pk0, p);
+                    var r = ProjectPk(eje, pk0, absInicio, p);
                     if (!r.ok) continue;
 
                     any = true;

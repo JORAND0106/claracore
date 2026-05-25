@@ -22,6 +22,14 @@ export function apiDebugVerbose() {
   return false
 }
 
+/** AbortSignal con timeout para evitar spinners infinitos si el backend local queda saturado. */
+export function apiFetchSignal(timeoutMs = 45000) {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(timeoutMs)
+  }
+  return undefined
+}
+
 /** Registro en consola cuando falle la red o el API (muchas rutas usan catch vacío y no ves nada). */
 export function logApiFailure(context, err) {
   const hint = apiDebugVerbose()

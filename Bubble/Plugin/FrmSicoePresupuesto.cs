@@ -64,6 +64,10 @@ namespace SicoePresupuestoNET8
         private HashSet<acDb.ObjectId> _aceptadosSet = null;           // para borrar solo aceptados
         private bool _saltarseResumenEnCiclo = false;                   // no volver a mostrar conteo
         private FrmNombrarTramo? _frmNombrarTramo; // controla que solo haya una ventana abierta
+        private FrmPkFixerDescartados? _frmPkFixerDescartados;
+        private bool _reanudarAgritemTrasPk = false;
+        private List<(acDb.ObjectId Id, string AbsIni, string AbsFin, string PkId)>? _aceptadasReanudar;
+        private char _prefCalzReanudar;
         private bool _sincronizadoExitoso = false; // controla flujo Sync → Export
         private void ActualizarLabelsGrid()
         {
@@ -184,6 +188,7 @@ namespace SicoePresupuestoNET8
         // true  => solo BLOQUES + abre FrmNombrarNodos
         // false => BLOQUES + POLILÍNEAS CERRADAS (conteo rápido 1 UND), NO abre FrmNombrarNodos
         private bool _nodoAnalisisDetallado = true;
+        private bool _nodoAgruparPorPkId = false;
         private bool _aplicarPrefijo = false;
         private string _nodoPrefijo = "";
         private int _nodoPrefContadorActual = 1;
@@ -922,16 +927,31 @@ namespace SicoePresupuestoNET8
                     MessageBoxIcon.Question);
 
                 _nodoAnalisisDetallado = (q == DialogResult.Yes);
+                _nodoAgruparPorPkId = false;
 
                 // Popup de prefijo (solo nodo rápido, completamente opcional)
                 if (!_nodoAnalisisDetallado)
                 {
+                    var qAgrup = MessageBox.Show(
+                        this,
+                        "¿Desea agrupar las entidades seleccionadas por PK_ID?\n\n" +
+                        "Sí: crea un bloque por PK y una fila con la cantidad total (ej. 500 tachas).\n" +
+                        "No: mantiene una fila por cada entidad individual.",
+                        "SICOE",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question);
+
+                    _nodoAgruparPorPkId = (qAgrup == DialogResult.Yes);
+
                     _aplicarPrefijo = false; // reset por si viene de ciclo anterior
-                    using var frmPref = new FrmPrefijosNodo();
-                    frmPref.ShowDialog(this);
-                    _aplicarPrefijo = frmPref.Aplicar;
-                    _nodoPrefijo = frmPref.Prefijo;
-                    _nodoPrefContadorActual = frmPref.ContadorInicial;
+                    if (!_nodoAgruparPorPkId)
+                    {
+                        using var frmPref = new FrmPrefijosNodo();
+                        frmPref.ShowDialog(this);
+                        _aplicarPrefijo = frmPref.Aplicar;
+                        _nodoPrefijo = frmPref.Prefijo;
+                        _nodoPrefContadorActual = frmPref.ContadorInicial;
+                    }
                 }
             }
 
@@ -1442,7 +1462,15 @@ namespace SicoePresupuestoNET8
                 _saltarseResumenEnCiclo = false;
                 var idsDescartadas = new List<acDb.ObjectId>();
 
-                if (_lockSelection && _cicloAgregarPendiente && _evalCache != null)
+                if (_reanudarAgritemTrasPk && _aceptadasReanudar != null)
+                {
+                    _reanudarAgritemTrasPk = false;
+                    aceptadas.AddRange(_aceptadasReanudar);
+                    _aceptadasReanudar = null;
+                    prefCalz = _prefCalzReanudar;
+                    _saltarseResumenEnCiclo = true;
+                }
+                else if (_lockSelection && _cicloAgregarPendiente && _evalCache != null)
                 {
                     foreach (var id in _selIds)
                         if (_evalCache.TryGetValue(id, out var info))
@@ -1482,9 +1510,10 @@ namespace SicoePresupuestoNET8
                                 continue;
                             }
 
-                            // Abs con validación; si queda fuera, usa fallback
+                            // Abs con validación; resolver eje/sector más cercano a la entidad
+                            var axisEnt = AxisRepository.ResolveAxisForEntity(ent) ?? _axis!;
                             string ai = "", af = "";
-                            if (TryComputeAbsIniFin(ent, _axis, prefCalz, out var aiOk, out var afOk, out var dentro) && dentro)
+                            if (TryComputeAbsIniFin(ent, axisEnt, prefCalz, out var aiOk, out var afOk, out var dentro) && dentro)
                             {
                                 ai = aiOk; af = afOk;
                             }
@@ -1492,7 +1521,7 @@ namespace SicoePresupuestoNET8
                             {
                                 try
                                 {
-                                    if (tr.GetObject(_axis!.AxisA, acDb.OpenMode.ForRead) is acDb.Curve eje)
+                                    if (tr.GetObject(axisEnt.AxisA, acDb.OpenMode.ForRead) is acDb.Curve eje)
                                     {
                                         var p0 = CentroDeSeguro(ent);
                                         var p1 = p0;
@@ -1508,9 +1537,10 @@ namespace SicoePresupuestoNET8
                                             case acDb.DBPoint pt: p1 = pt.Position; break;
                                             case acDb.BlockReference br: p1 = br.Position; break;
                                         }
-                                        double pk0 = _axis.Pk0DistA;
-                                        double d0 = eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p0, false))) - pk0;
-                                        double d1 = eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p1, false))) - pk0;
+                                        double pk0 = axisEnt.Pk0DistA;
+                                        double absBase = axisEnt.AbsInicioA;
+                                        double d0 = eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p0, false))) - pk0 + absBase;
+                                        double d1 = eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p1, false))) - pk0 + absBase;
                                         ai = PkFormatter.ToPkString(Math.Min(d0, d1));
                                         af = PkFormatter.ToPkString(Math.Max(d0, d1));
                                     }
@@ -1590,8 +1620,9 @@ namespace SicoePresupuestoNET8
                                         if (tr2.GetObject(id, acDb.OpenMode.ForRead, false, true) is not acDb.Entity ent2)
                                             continue;
 
+                                        var axisEnt2 = AxisRepository.ResolveAxisForEntity(ent2) ?? _axis!;
                                         string ai = "", af = "";
-                                        if (TryComputeAbsIniFin(ent2, _axis, prefCalz, out var aiOk, out var afOk, out var dentro) && dentro)
+                                        if (TryComputeAbsIniFin(ent2, axisEnt2, prefCalz, out var aiOk, out var afOk, out var dentro) && dentro)
                                         {
                                             ai = aiOk;
                                             af = afOk;
@@ -1600,7 +1631,7 @@ namespace SicoePresupuestoNET8
                                         {
                                             try
                                             {
-                                                if (tr2.GetObject(_axis!.AxisA, acDb.OpenMode.ForRead) is acDb.Curve eje)
+                                                if (tr2.GetObject(axisEnt2.AxisA, acDb.OpenMode.ForRead) is acDb.Curve eje)
                                                 {
                                                     var p0 = CentroDeSeguro(ent2);
                                                     var p1 = p0;
@@ -1616,9 +1647,10 @@ namespace SicoePresupuestoNET8
                                                         case acDb.DBPoint pt: p1 = pt.Position; break;
                                                         case acDb.BlockReference br: p1 = br.Position; break;
                                                     }
-                                                    double pk0 = _axis.Pk0DistA;
-                                                    double d0 = eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p0, false))) - pk0;
-                                                    double d1 = eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p1, false))) - pk0;
+                                                    double pk0 = axisEnt2.Pk0DistA;
+                                                    double absBase = axisEnt2.AbsInicioA;
+                                                    double d0 = eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p0, false))) - pk0 + absBase;
+                                                    double d1 = eje.GetDistanceAtParameter(eje.GetParameterAtPoint(eje.GetClosestPointTo(p1, false))) - pk0 + absBase;
                                                     ai = PkFormatter.ToPkString(Math.Min(d0, d1));
                                                     af = PkFormatter.ToPkString(Math.Max(d0, d1));
                                                 }
@@ -1627,7 +1659,13 @@ namespace SicoePresupuestoNET8
                                         }
 
                                         double dim = 0.0;
-                                        try { dim = Math.Round(MedidaDe(ent2), 2, MidpointRounding.AwayFromZero); }
+                                        try
+                                        {
+                                            var dimRaw = MedidaDe(ent2);
+                                            dim = (_tipo == TipoEntidad.Area)
+                                                ? AreaM2ParaUndCatalogo(dimRaw, undForm)
+                                                : Math.Round(dimRaw, 2, MidpointRounding.AwayFromZero);
+                                        }
                                         catch { }
 
                                         string handle = "";
@@ -1647,27 +1685,56 @@ namespace SicoePresupuestoNET8
                                     tr2.Commit();
                                 }
 
-                                using (var frmFix = new FrmPkFixerDescartados(listaRows, sugerencias))
+                                var aceptadasSnapshot = aceptadas.ToList();
+
+                                if (_frmPkFixerDescartados != null && !_frmPkFixerDescartados.IsDisposed)
                                 {
-                                    var dlg = frmFix.ShowDialog(this);
+                                    _frmPkFixerDescartados.Activate();
+                                    return;
+                                }
 
-                                    if (dlg == DialogResult.OK)
+                                var frmFix = new FrmPkFixerDescartados(listaRows, sugerencias);
+                                _frmPkFixerDescartados = frmFix;
+                                var prefCalzPk = prefCalz;
+
+                                frmFix.FormClosed += (_, __) =>
+                                {
+                                    try
                                     {
-                                        foreach (var row in frmFix.Resultado)
+                                        if (frmFix.DialogResult == DialogResult.OK)
                                         {
-                                            if (row.Id.IsNull) continue;
+                                            var merged = new List<(acDb.ObjectId Id, string AbsIni, string AbsFin, string PkId)>(aceptadasSnapshot);
+                                            foreach (var row in frmFix.Resultado)
+                                            {
+                                                if (row.Id.IsNull) continue;
+                                                string pkManualFila = row.PkId?.Trim() ?? "";
+                                                if (string.IsNullOrWhiteSpace(pkManualFila)) continue;
+                                                merged.Add((row.Id, row.AbsIni ?? "", row.AbsFin ?? "", pkManualFila));
+                                            }
 
-                                            string pkManualFila = row.PkId?.Trim() ?? "";
-                                            if (string.IsNullOrWhiteSpace(pkManualFila))
-                                                continue;
+                                            if (_evalCache == null) _evalCache = new();
+                                            foreach (var a in merged)
+                                                _evalCache[a.Id] = (a.AbsIni, a.AbsFin, a.PkId);
 
-                                            string absIniFila = row.AbsIni ?? "";
-                                            string absFinFila = row.AbsFin ?? "";
+                                            _aceptadosSet = new HashSet<acDb.ObjectId>(merged.Select(a => a.Id));
+                                            _aceptadasReanudar = merged;
+                                            _prefCalzReanudar = prefCalzPk;
+                                            _reanudarAgritemTrasPk = true;
+                                            _saltarseResumenEnCiclo = true;
 
-                                            aceptadas.Add((row.Id, absIniFila, absFinFila, pkManualFila));
+                                            BtnAgritem_Click(null, EventArgs.Empty);
                                         }
                                     }
-                                }
+                                    finally
+                                    {
+                                        frmFix.Dispose();
+                                        if (ReferenceEquals(_frmPkFixerDescartados, frmFix))
+                                            _frmPkFixerDescartados = null;
+                                    }
+                                };
+
+                                acApp.Application.ShowModelessDialog(frmFix);
+                                return;
                             }
 
                             foreach (var a in aceptadas)
@@ -1867,13 +1934,7 @@ namespace SicoePresupuestoNET8
 
                 using (doc3.LockDocument())
                 {
-                    var pares = DeepCloneWithMap(db3, aceptadas.Select(a => a.Id));
-                    if (pares.Count == 0)
-                    {
-                        MessageBox.Show(this, "No se pudieron duplicar las entidades.", "SICOE",
-                                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        return;
-                    }
+                    bool nodosAgrupadosProcesados = false;
 
                     // === SOLO NODO: levantar FrmNombrarNodos UNA sola vez ===
                     if(_tipo == TipoEntidad.Nodo && _nodoAnalisisDetallado && (nodoInfoMap == null || nodoInfoMap.Count == 0))
@@ -2052,6 +2113,36 @@ namespace SicoePresupuestoNET8
                     if (!int.TryParse((txt_contador.Text ?? "").Trim(), out contador) || contador <= 0)
                         contador = LoadGlobalCounter();
 
+                    // === NODO RÁPIDO AGRUPADO POR PK_ID ===
+                    if (_tipo == TipoEntidad.Nodo && !_nodoAnalisisDetallado && _nodoAgruparPorPkId && !_cicloAgregarPendiente)
+                    {
+                        int regs = ProcesarNodosAgrupadosPorPk(
+                            db3, aceptadas,
+                            capitulo, competencia, itemCodForm, descForm, undForm, vlrUnitForm,
+                            noIniForm, noFinForm, observ, alt, anchoForm, espesorForm,
+                            tipoEjec, layerEntBase, layerTxtBase, itCat.ColorHex ?? "",
+                            ref contador);
+
+                        nodosAgrupadosProcesados = true;
+
+                        SaveGlobalCounter(contador);
+                        txt_contador.Text = contador.ToString();
+                        ActualizarLabelsGrid();
+
+                        MessageBox.Show(this,
+                            $"Se agruparon {aceptadas.Count} entidad(es) en {regs} registro(s) por PK_ID.",
+                            "SICOE", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                    else
+                    {
+                    var pares = DeepCloneWithMap(db3, aceptadas.Select(a => a.Id));
+                    if (pares.Count == 0)
+                    {
+                        MessageBox.Show(this, "No se pudieron duplicar las entidades.", "SICOE",
+                                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
                     // 8) Coloca texto y arma UNA FILA POR CLON
                     using (var tr = db3.TransactionManager.StartTransaction())
                     {
@@ -2192,7 +2283,10 @@ namespace SicoePresupuestoNET8
                             string colorHexExcel = itCat.ColorHex ?? "";
 
 
-                            double medida = Math.Round(MedidaDe(entClon), 2, MidpointRounding.AwayFromZero);
+                            double medidaRaw = Math.Round(MedidaDe(entClon), 2, MidpointRounding.AwayFromZero);
+                            double medida = (_tipo == TipoEntidad.Area)
+                                ? AreaM2ParaUndCatalogo(medidaRaw, undForm)
+                                : medidaRaw;
                             double cantTotal = Math.Round(medida * anchoForm * espesorForm, 2, MidpointRounding.AwayFromZero);
                             double costoDirecto = Math.Round(cantTotal * (double)vlrUnitForm, 0, MidpointRounding.AwayFromZero);
                             // Nodo rápido: siempre 1 UND (no aplica área/perímetro/ancho/espesor)
@@ -2972,6 +3066,81 @@ namespace SicoePresupuestoNET8
 
                         tr.Commit();
                     }
+                    } // fin rama no agrupada (DeepClone)
+
+                    if (nodosAgrupadosProcesados)
+                    {
+                        var rDelGrp = MessageBox.Show(this,
+                            "¿Desea ELIMINAR la(s) entidad(es) ORIGINAL(ES) del dibujo?",
+                            "SICOE", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+                        if (rDelGrp == DialogResult.Yes)
+                        {
+                            var listaABorrar = aceptadas
+                                .Select(a => a.Id)
+                                .Where(id => id.IsValid && !id.IsNull)
+                                .Distinct()
+                                .ToList();
+
+                            if (listaABorrar.Count > 0)
+                                BorrarOriginales(listaABorrar);
+                        }
+                        else
+                        {
+                            var rLayerGrp = MessageBox.Show(this,
+                                "¿Desea dejar ENCENDIDA la capa de la(s) entidad(es) original(es)?\n\nSí = Encendida\nNo = Apagada",
+                                "SICOE", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+                            bool apagarOrig = (rLayerGrp == DialogResult.No);
+                            var layerNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            using (var trL = db3.TransactionManager.StartTransaction())
+                            {
+                                foreach (var idOrig in aceptadas.Select(a => a.Id))
+                                {
+                                    if (!idOrig.IsValid) continue;
+                                    try
+                                    {
+                                        if (trL.GetObject(idOrig, acDb.OpenMode.ForRead, false, true) is acDb.Entity entOrig)
+                                            layerNames.Add(entOrig.Layer);
+                                    }
+                                    catch { }
+                                }
+                                trL.Commit();
+                            }
+                            SetLayersOnOff(layerNames, apagarOrig);
+                            Resaltar(aceptadas.Select(a => a.Id).ToList(), false);
+                        }
+
+                        _selIds.Clear();
+                        btnSeleccionEntidad.Enabled = false;
+                        BtnAgritem.Enabled = false;
+                        _cicloAgregarPendiente = false;
+                        _nodoAgruparPorPkId = false;
+                        _ultimosOriginales.Clear();
+                        _evalCache = null;
+                        _aceptadosSet = null;
+                        _saltarseResumenEnCiclo = false;
+                        _nombresNodoSeleccion.Clear();
+                        nodoInfoMap = null;
+
+                        LimpiarFormularioParaSiguiente();
+                        cmbCapitulo.Focus();
+                        rbEjecObra.Checked = false;
+                        rbEjecPresupuesto.Checked = false;
+                        rbArea.Checked = false;
+                        rbLongitud.Checked = false;
+                        rbNodo.Checked = false;
+
+                        try
+                        {
+                            var edGrp = acApp.Application.DocumentManager.MdiActiveDocument.Editor;
+                            edGrp.Regen();
+                            edGrp.SetImpliedSelection(Array.Empty<acDb.ObjectId>());
+                        }
+                        catch { }
+
+                        return;
+                    }
                 }
 
                 // Persistir prefijo nodo rápido si se usó en este lote
@@ -3484,6 +3653,27 @@ namespace SicoePresupuestoNET8
             }
             return 0.0;
         }
+
+        /// <summary>
+        /// Convierte un área calculada en m² a la unidad del ítem del catálogo (solo Área).
+        /// 1 HA = 10 000 m².
+        /// </summary>
+        private static double AreaM2ParaUndCatalogo(double areaM2, string? und)
+        {
+            if (EsUnidadHectarea(und))
+                return Math.Round(areaM2 / 10000.0, 4, MidpointRounding.AwayFromZero);
+            return Math.Round(areaM2, 2, MidpointRounding.AwayFromZero);
+        }
+
+        private static bool EsUnidadHectarea(string? und)
+        {
+            if (string.IsNullOrWhiteSpace(und)) return false;
+            var u = und.Trim().ToUpperInvariant()
+                .Replace("²", "2").Replace("³", "3")
+                .Replace(".", "").Replace(" ", "").Replace("_", "").Replace("-", "");
+            return u is "HA" or "HAS" or "HECTAREA" or "HECTAREAS";
+        }
+
         private void LimpiarFormularioParaSiguiente()
         {
             // Info presupuestal
@@ -3736,7 +3926,7 @@ namespace SicoePresupuestoNET8
                         AxisStore.SaveToDwg(axisPrincipal);
                         Commands.SetActiveAxis(axisPrincipal); // Esto actualiza la propiedad _axis automáticamente
 
-                        MessageBox.Show(this, $"Ejes cargados correctamente: {f.Axes.Count}", "SICOE", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        MessageBox.Show(this, $"Ejes cargados correctamente: {f.Axes.Count}\n\nLas abscisas se calculan automáticamente con el eje más cercano a cada entidad.", "SICOE", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     }
                 }
             }
@@ -5612,6 +5802,204 @@ namespace SicoePresupuestoNET8
         }
         // Clona una lista de entidades dentro del espacio actual
         // y devuelve el mapeo ORIG -> CLON en el MISMO orden de entrada.
+        private int ProcesarNodosAgrupadosPorPk(
+            acDb.Database db,
+            List<(acDb.ObjectId Id, string AbsIni, string AbsFin, string PkId)> aceptadas,
+            string capitulo, string competencia, string itemCodForm, string descForm, string undForm,
+            decimal vlrUnitForm, string noIniForm, string noFinForm, string observ,
+            double alt, double anchoForm, double espesorForm, string tipoEjec,
+            string layerEntBase, string layerTxtBase, string colorHexExcel,
+            ref int contador)
+        {
+            string layerEnt = layerEntBase + itemCodForm;
+            string layerTxt = layerTxtBase + itemCodForm;
+            if (layerEnt.Length > 255) layerEnt = layerEnt.Substring(0, 255);
+            if (layerTxt.Length > 255) layerTxt = layerTxt.Substring(0, 255);
+            AsegurarCapa(layerEnt, _acadColor, true);
+            AsegurarCapa(layerTxt, _acadColor, true);
+
+            var grupos = aceptadas
+                .GroupBy(a => (a.PkId ?? "").Trim(), StringComparer.OrdinalIgnoreCase)
+                .OrderBy(g => g.Key)
+                .ToList();
+
+            int registros = 0;
+
+            using (var tr = db.TransactionManager.StartTransaction())
+            {
+                var bt = (acDb.BlockTable)tr.GetObject(db.BlockTableId, acDb.OpenMode.ForRead);
+                bt.UpgradeOpen();
+                var ms = (acDb.BlockTableRecord)tr.GetObject(db.CurrentSpaceId, acDb.OpenMode.ForWrite);
+
+                foreach (var grupo in grupos)
+                {
+                    var ids = grupo.Select(g => g.Id).ToList();
+                    int cantidad = ids.Count;
+                    if (cantidad == 0) continue;
+
+                    string pkId = string.IsNullOrWhiteSpace(grupo.Key) ? "SIN_PK" : grupo.Key;
+
+                    var first = grupo.First();
+                    string absIni = first.AbsIni;
+                    string absFin = first.AbsFin;
+
+                    double sx = 0, sy = 0;
+                    int nCentro = 0;
+                    foreach (var id in ids)
+                    {
+                        if (tr.GetObject(id, acDb.OpenMode.ForRead, false, true) is acDb.Entity ent)
+                        {
+                            var c = CentroDeSeguro(ent);
+                            sx += c.X;
+                            sy += c.Y;
+                            nCentro++;
+                        }
+                    }
+                    if (nCentro == 0) continue;
+
+                    var centro = new acGeo.Point3d(sx / nCentro, sy / nCentro, 0.0);
+                    string blkName = ObtenerNombreBloqueUnico(bt, tr, $"SICOE_PK_{SanitizarNombreBloque(pkId)}_{contador}");
+
+                    var btrDef = new acDb.BlockTableRecord
+                    {
+                        Name = blkName,
+                        Origin = acGeo.Point3d.Origin
+                    };
+                    bt.Add(btrDef);
+                    tr.AddNewlyCreatedDBObject(btrDef, true);
+
+                    var xfToLocal = acGeo.Matrix3d.Displacement(new acGeo.Vector3d(-centro.X, -centro.Y, -centro.Z));
+                    foreach (var id in ids)
+                    {
+                        if (tr.GetObject(id, acDb.OpenMode.ForRead, false, true) is not acDb.Entity entOrig)
+                            continue;
+
+                        var cl = (acDb.Entity)entOrig.Clone();
+                        cl.TransformBy(xfToLocal);
+                        cl.Layer = layerEnt;
+                        btrDef.AppendEntity(cl);
+                        tr.AddNewlyCreatedDBObject(cl, true);
+                    }
+
+                    var br = new acDb.BlockReference(centro, btrDef.ObjectId) { Layer = layerEnt };
+                    ms.AppendEntity(br);
+                    tr.AddNewlyCreatedDBObject(br, true);
+
+                    string etiqueta = string.IsNullOrWhiteSpace(itemCodForm)
+                        ? $"{contador}"
+                        : $"{itemCodForm}_{contador}";
+
+                    var dbt = new acDb.DBText
+                    {
+                        TextString = $"{etiqueta} (x{cantidad})",
+                        Height = alt,
+                        Layer = layerTxt,
+                        HorizontalMode = acDb.TextHorizontalMode.TextCenter,
+                        VerticalMode = acDb.TextVerticalMode.TextVerticalMid,
+                        AlignmentPoint = centro,
+                        Position = centro
+                    };
+                    dbt.SetDatabaseDefaults();
+                    ms.AppendEntity(dbt);
+                    tr.AddNewlyCreatedDBObject(dbt, true);
+
+                    string costadoSel = "";
+                    string tramoSel = "";
+                    var capaRow = _capasFull.FirstOrDefault(c =>
+                        string.Equals(c.CAPA, pkId, StringComparison.OrdinalIgnoreCase));
+                    if (capaRow != null)
+                    {
+                        costadoSel = capaRow.CALZADA ?? "";
+                        tramoSel = capaRow.TRAMO ?? "";
+                    }
+
+                    double anchoOut = anchoForm > 0 ? anchoForm : 1.0;
+                    double espesorOut = espesorForm > 0 ? espesorForm : 1.0;
+                    double cantOut = Math.Round(cantidad * anchoOut * espesorOut, 2, MidpointRounding.AwayFromZero);
+                    double costoOut = Math.Round(cantOut * (double)vlrUnitForm, 0, MidpointRounding.AwayFromZero);
+                    string etiquetaKey = etiqueta.Trim().ToUpperInvariant();
+
+                    if (ExisteFilaPresupuestal(pkId, itemCodForm ?? "", etiquetaKey))
+                    {
+                        contador++;
+                        continue;
+                    }
+
+                    string obsGrupo = string.IsNullOrWhiteSpace(observ)
+                        ? $"Agrupado: {cantidad} und por PK_ID."
+                        : $"{observ} | Agrupado: {cantidad} und.";
+
+                    _rows.Add(new GridRow
+                    {
+                        PK_ID = pkId,
+                        CapaSolo = pkId,
+                        Capitulo = capitulo,
+                        Competencia = competencia,
+                        Item = itemCodForm ?? "",
+                        Descripcion = descForm,
+                        Und = undForm,
+                        Calzada = costadoSel,
+                        Tramo = tramoSel,
+                        AbsIni = absIni,
+                        AbsFin = absFin,
+                        VlrUnitario = vlrUnitForm,
+                        NoInicio = noIniForm,
+                        NoFinal = noFinForm,
+                        AreaLongNod = cantidad,
+                        Ancho = anchoOut,
+                        Espesor = espesorOut,
+                        CantTotal = cantOut,
+                        CostoDirecto = costoOut,
+                        TipoEjecucion = tipoEjec,
+                        TipoEntidad = "Nodo Agrupado",
+                        ID_Pol = etiquetaKey,
+                        Observacion = obsGrupo,
+                        Remitente = _supportPending?.Remitente ?? "",
+                        FechaSoporte = _supportPending?.Fecha.ToString("yyyy-MM-dd") ?? "",
+                        AsuntoSoporte = _supportPending?.Asunto ?? "",
+                        LinkSoporte = _supportPending?.Enlace ?? "",
+                        EntHandle = br.Handle.ToString(),
+                        TxtHandle = dbt.Handle.ToString(),
+                        LayerEnt = layerEnt,
+                        LayerTxt = layerTxt,
+                        ColorHex = colorHexExcel,
+                        GUID = "",
+                        X_LABEL = Math.Round(centro.X, 3),
+                        Y_LABEL = Math.Round(centro.Y, 3),
+                    });
+
+                    registros++;
+                    contador++;
+                }
+
+                tr.Commit();
+            }
+
+            return registros;
+        }
+
+        private static string SanitizarNombreBloque(string name)
+        {
+            var s = string.IsNullOrWhiteSpace(name) ? "SIN_PK" : name.Trim();
+            foreach (var c in Path.GetInvalidFileNameChars())
+                s = s.Replace(c, '_');
+            s = s.Replace(' ', '_').Replace('+', '_').Replace(';', '_').Replace('=', '_');
+            if (s.Length > 180) s = s.Substring(0, 180);
+            return s;
+        }
+
+        private static string ObtenerNombreBloqueUnico(acDb.BlockTable bt, acDb.Transaction tr, string baseName)
+        {
+            string name = baseName;
+            int suffix = 1;
+            while (bt.Has(name))
+            {
+                name = $"{baseName}_{suffix}";
+                suffix++;
+            }
+            return name;
+        }
+
         private List<(acDb.ObjectId Original, acDb.ObjectId Clone)> DeepCloneWithMap(
             acDb.Database db,
             IEnumerable<acDb.ObjectId> originales)

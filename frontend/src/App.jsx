@@ -1185,6 +1185,15 @@ const SICOE_NIVELES_CONTRATO_DEFAULT = () => ({
 })
 
 /** Título de columna matriz «Validación por rol» (Dashboard) desde GET niveles-validacion. */
+function matrizValorNivel(cols, nivelNum) {
+  if (!cols || typeof cols !== 'object') return 0
+  const k = `nivel${nivelNum}`
+  if (cols[k] != null && cols[k] !== '') return cols[k]
+  const legacy = { 1: 'inspector', 2: 'residente', 3: 'interventoria', 4: 'interventoria', 5: 'interventoria', 6: 'interventoria' }
+  const leg = legacy[Number(nivelNum)]
+  return leg && cols[leg] != null ? cols[leg] : 0
+}
+
 function dashMatrizThDesdeNiveles(nivelesContrato, nivelNum) {
   const n = Number(nivelNum)
   if (!Number.isFinite(n) || n < 1) return `Nivel ${nivelNum}`
@@ -11749,8 +11758,38 @@ function ModuloPlanoSemaforo({ t, usuario, token }) {
     </div>
   )
 }
+function dashPptoGrupoLabel(suffix, vistaEjecucion) {
+  const pref = vistaEjecucion === 'Obra Ejecutada' ? 'Obra ejec.' : 'Presup.'
+  return `${pref} · ${suffix}`
+}
+
+function dashTipoEjecucionLabel(v) {
+  const s = String(v ?? '').trim().toLowerCase().replace(/\s+/g, '_').replace(/-/g, '_')
+  if (s === 'obra_ejecutada') return 'Obra Ejecutada'
+  if (s === 'presupuesto_obra' || s.includes('presupuesto')) return 'Presupuesto de Obra'
+  const raw = String(v ?? '').trim()
+  return raw || '—'
+}
+
+function pkidTablaRowsToColores(rows) {
+  if (!Array.isArray(rows)) return {}
+  const out = {}
+  for (const r of rows) {
+    const pk = String(r?.pk_id ?? '').trim()
+    if (!pk) continue
+    const presupuesto = Number(r.costo_ppto ?? 0)
+    const cobrado = Number(r.costo_sicoe_aprobado ?? r.costo_sicoe ?? 0)
+    out[pk] = {
+      cobrado,
+      presupuesto,
+      pct: presupuesto > 0 ? Math.round((cobrado / presupuesto) * 1000) / 10 : 0,
+      sobrecosto: cobrado > presupuesto,
+    }
+  }
+  return out
+}
 // ─── MINI MAPA SEMÁFORO (dashboard) ──────────────────────────────────────────
-function MiniMapaSemaforo({ t, colores, contratoId, token, height = 220, onPkidClick = null, bearing = 270 }) {
+function MiniMapaSemaforo({ t, colores, contratoId, token, height = 220, onPkidClick = null, bearing = 270, soloPkConDatos = false }) {
   const mapRef        = useRef(null)
   const mapInstance   = useRef(null)
   const onClickRef    = useRef(onPkidClick)
@@ -11810,6 +11849,11 @@ function MiniMapaSemaforo({ t, colores, contratoId, token, height = 220, onPkidC
             color_ppto: d.presupuesto > 0 ? '#0077B6' : '#334155',
           }
         }
+      })
+      .filter(f => {
+        if (!soloPkConDatos) return true
+        const p = f.properties || {}
+        return p.tiene_cobro === 1 || p.tiene_ppto === 1
       })
   }
 
@@ -11925,7 +11969,7 @@ function MiniMapaSemaforo({ t, colores, contratoId, token, height = 220, onPkidC
         setListo(false)
       }
     }
-  }, [bearing, contratoId, t.bg, planoBase])
+  }, [bearing, contratoId, t.bg, planoBase, soloPkConDatos])
 
   useEffect(() => {
     const map = mapInstance.current
@@ -11942,7 +11986,7 @@ function MiniMapaSemaforo({ t, colores, contratoId, token, height = 220, onPkidC
     miniColoresJsonRef.current = serial
     const raw = src._data
     if (raw && raw.features) src.setData({ ...raw, features: buildFeatures(raw) })
-  }, [colores, listo])
+  }, [colores, listo, soloPkConDatos])
 
   useEffect(() => {
     const map = mapInstance.current
@@ -12506,6 +12550,13 @@ function dashNormCapituloKey(s) {
   return t
 }
 
+/** Clave estable de caché drill por capítulo (normalizada, alineada al backend). */
+function dashDrillCapCachePart(valor) {
+  const raw = String(valor ?? '').trim()
+  if (!raw) return '__todos__'
+  return dashNormCapituloKey(raw) || raw
+}
+
 /** Ordena filas comparativo por prefijo numérico del capítulo (1, 2, … 10, 11), no alfabético. */
 function sortComparativoCapitulos(rows) {
   if (!Array.isArray(rows)) return []
@@ -12546,6 +12597,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [tabInferior, setTabInferior] = useState('programacion')
   const [analisis, setAnalisis] = useState('financiero')
   const [dashTab, setDashTab] = useState('resumen')
+  /** Presupuesto de Obra (versión vigente) | Obra Ejecutada (liquidación / intersección cobro) */
+  const [dashVistaEjecucion, setDashVistaEjecucion] = useState('Presupuesto de Obra')
   const [analisisNivel, setAnalisisNivel] = useState('capitulo')
   const [analisisDir, setAnalisisDir] = useState('todos')
   const [analisisRangoMin, setAnalisisRangoMin] = useState('')
@@ -12588,7 +12641,12 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [errorContrato, setErrorContrato] = useState('')
   const [kpiPpto,    setKpiPpto]    = useState(null)
   const [kpiCobro,   setKpiCobro]   = useState(null)
+  const [dashKpiLoading, setDashKpiLoading] = useState(false)
+  const [dashKpiError, setDashKpiError] = useState(null)
+  const [dashKpiReloadKey, setDashKpiReloadKey] = useState(0)
   const [dashDrill,    setDashDrill]    = useState([])
+  const dashDrillRef = useRef([])
+  useEffect(() => { dashDrillRef.current = dashDrill }, [dashDrill])
   const [dashData,     setDashData]     = useState(null)
   const [dashLoading,  setDashLoading]  = useState(false)
   const [dashDrillError, setDashDrillError] = useState(null)
@@ -12597,8 +12655,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashDrillPag, setDashDrillPag] = useState(0)
   const [panelFoco, setPanelFoco] = useState(null)
   const [matrizValidacion, setMatrizValidacion] = useState(null)
-  /** true al inicio para evitar un destello "Sin acta" antes del primer fetch */
-  const [matrizValidacionLoad, setMatrizValidacionLoad] = useState(true)
+  const [matrizValidacionLoad, setMatrizValidacionLoad] = useState(false)
   /** vigente = servidor usa acta del período actual; all = todo el contrato; número = acta explícita */
   const [actaFiltroMatriz, setActaFiltroMatriz] = useState('vigente')
   /** Actas del contrato (misma fuente que módulo actas): RPO + nombre asignado para el dropdown de la matriz */
@@ -12607,6 +12664,9 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const dashTablaCache = useRef({})   // caché tabla: { '${contrato}|cap|item': { data, ts } }
   /** GET /sicoe-obra/.../dashboard-pkid-colores — evita ráfagas contra Supabase (vía API). */
   const pkidColoresCache = useRef({ data: null, timestamp: 0, contratoId: null, filterKey: '' })
+  const pkidColoresFetchRef = useRef(null)
+  const dashExportInFlightRef = useRef(false)
+  const [miniMapaColoresLoad, setMiniMapaColoresLoad] = useState(false)
   const dashDrillFetchSeqRef = useRef(0) // evita race: respuestas viejas no sobrescriben drill
   const CACHE_TTL = 5 * 60 * 1000    // 5 minutos en ms
   const [popupCapitulo, setPopupCapitulo] = useState(false)
@@ -12627,7 +12687,74 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const miniMapaRef = useRef(null)
   const API_URL = API_BASE
   const contratoIdDash = usuario?.contrato_id
+  const dashModuloActivo = moduloActivo === 'dashboard'
   const du = useMemo(() => getDashTypoUI(fontSize), [fontSize])
+
+  const dashVistaParam = useMemo(
+    () => (dashVistaEjecucion === 'Obra Ejecutada' ? 'obra_ejecutada' : 'presupuesto_obra'),
+    [dashVistaEjecucion],
+  )
+
+  const limpiarCachesDashVista = useCallback(() => {
+    dashDrillCache.current = {}
+    dashTablaCache.current = {}
+    pkidColoresCache.current = { data: null, timestamp: 0, contratoId: null, filterKey: '' }
+    dashDrillFetchSeqRef.current += 1
+  }, [])
+
+  const dashDrillCacheKey = useCallback(
+    (...parts) => `${contratoIdDash}|${dashVistaParam}|${parts.join('|')}`,
+    [contratoIdDash, dashVistaParam],
+  )
+
+  const cambiarDashVistaEjecucion = useCallback((valor) => {
+    if (valor !== 'Presupuesto de Obra' && valor !== 'Obra Ejecutada') return
+    if (dashVistaEjecucion === valor) return
+    limpiarCachesDashVista()
+    setKpiCobro(null)
+    setKpiPpto(null)
+    setDashKpiError(null)
+    setDashData(null)
+    setDashTabla(null)
+    setMiniMapaColores({})
+    setAnalisisData(null)
+    setAnalisisSeleccion(null)
+    setAnalisisMapaColores({})
+    setPopupPkid(null)
+    const drillLen = dashDrillRef.current?.length || 0
+    if (drillLen > 0) {
+      setDashLoading(true)
+      if (drillLen >= 2) setDashTablaLoad(true)
+    }
+    setDashVistaEjecucion(valor)
+  }, [dashVistaEjecucion, limpiarCachesDashVista])
+
+  useEffect(() => {
+    if (!contratoIdDash) return
+    try {
+      const saved = localStorage.getItem(`clara_dash_vista_${contratoIdDash}`)
+      if (saved === 'Obra Ejecutada' || saved === 'Presupuesto de Obra') {
+        setDashVistaEjecucion(saved)
+      } else {
+        setDashVistaEjecucion('Presupuesto de Obra')
+      }
+    } catch {
+      setDashVistaEjecucion('Presupuesto de Obra')
+    }
+  }, [contratoIdDash])
+
+  useEffect(() => {
+    if (!contratoIdDash) return
+    try {
+      localStorage.setItem(`clara_dash_vista_${contratoIdDash}`, dashVistaEjecucion)
+    } catch { /* ignore */ }
+  }, [contratoIdDash, dashVistaEjecucion])
+
+  useEffect(() => {
+    if (dashVistaEjecucion !== 'Obra Ejecutada' && dashTab === 'liquidacion') {
+      setDashTab('resumen')
+    }
+  }, [dashVistaEjecucion, dashTab])
 
   const PKID_COLORES_TTL_MS = 300000
 
@@ -12646,32 +12773,49 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         ahora - cache.timestamp < PKID_COLORES_TTL_MS
       ) {
         setColores(cache.data)
+        setMiniMapaColoresLoad(false)
         return
       }
+      pkidColoresFetchRef.current?.abort()
+      const ac = new AbortController()
+      pkidColoresFetchRef.current = ac
+      setMiniMapaColoresLoad(true)
       const tok = getToken()
+      const timeoutId = setTimeout(() => ac.abort(), 35000)
       try {
         const res = await fetch(
           `${API_URL}/sicoe-obra/${contratoId}/dashboard-pkid-colores?${filterKey}`,
-          { headers: { Authorization: `Bearer ${tok}` } },
+          { headers: { Authorization: `Bearer ${tok}` }, signal: ac.signal },
         )
-        const data = res.ok ? await res.json().catch(() => ({})) : {}
-        pkidColoresCache.current = {
-          data,
-          timestamp: Date.now(),
-          contratoId,
-          filterKey,
+        if (ac.signal.aborted) return
+        const data = res.ok ? await res.json().catch(() => null) : null
+        if (data && typeof data === 'object') {
+          pkidColoresCache.current = {
+            data,
+            timestamp: Date.now(),
+            contratoId,
+            filterKey,
+          }
+          setColores(data)
         }
-        setColores(data)
-      } catch {
-        setColores({})
+      } catch (err) {
+        if (err?.name !== 'AbortError') {
+          logApiFailure('dashboard-pkid-colores', err)
+        }
+      } finally {
+        clearTimeout(timeoutId)
+        if (pkidColoresFetchRef.current === ac) {
+          pkidColoresFetchRef.current = null
+          setMiniMapaColoresLoad(false)
+        }
       }
     },
     [API_URL],
   )
 
   useEffect(() => {
-    if (!contratoIdDash) {
-      setNivelesDashContrato(SICOE_NIVELES_CONTRATO_DEFAULT())
+    if (!contratoIdDash || !dashModuloActivo) {
+      if (!contratoIdDash) setNivelesDashContrato(SICOE_NIVELES_CONTRATO_DEFAULT())
       return
     }
     const ac = new AbortController()
@@ -12704,7 +12848,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       })
       .catch(() => setNivelesDashContrato({ ...SICOE_NIVELES_CONTRATO_DEFAULT(), contrato_id: contratoIdDash }))
     return () => ac.abort()
-  }, [contratoIdDash])
+  }, [contratoIdDash, dashModuloActivo])
 
   useEffect(() => {
     const id = dashDetallePpto?.id
@@ -12728,22 +12872,75 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     if (!contratoIdDash) return
     dashDrillCache.current = {}
     dashTablaCache.current = {}
+    pkidColoresCache.current = { data: null, timestamp: 0, contratoId: null, filterKey: '' }
     dashDrillFetchSeqRef.current += 1
-    const tok = getToken()
-    fetch(`${API_URL}/presupuesto/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
-      .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiPpto(d) })
-    fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-resumen`, { headers: { Authorization:`Bearer ${tok}` } })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if(d) setKpiCobro(d) })
-    fetch(`${API_URL}/actas/${contratoIdDash}/lista`, { headers: { Authorization: `Bearer ${tok}` } })
-      .then(r => r.ok ? r.json() : [])
-      .then(rows => setActasListaMatriz(Array.isArray(rows) ? rows : []))
-      .catch(() => setActasListaMatriz([]))
+    setKpiPpto(null)
+    setKpiCobro(null)
+    setDashKpiError(null)
+    setDashDrill([])
+    setDashData(null)
+    setDashTabla(null)
+    setMatrizValidacion(null)
+    setMatrizValidacionLoad(false)
+    setMiniMapaColores({})
+    setPopupCapitulo(false)
+    setPopupPkid(null)
   }, [contratoIdDash])
 
+  useEffect(() => {
+    if (!contratoIdDash || !dashModuloActivo) return
+    let cancelled = false
+    setDashKpiLoading(true)
+    setDashKpiError(null)
+    const cid = contratoIdDash
+    const tok = getToken()
+    const vq = `vista=${encodeURIComponent(dashVistaParam)}`
+    fetch(`${API_URL}/sicoe-obra/${cid}/dashboard-resumen?${vq}`, {
+      headers: { Authorization: `Bearer ${tok}` },
+      signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+        ? AbortSignal.timeout(90000)
+        : undefined,
+    })
+      .then(async (r) => {
+        if (!r.ok) {
+          const txt = await r.text().catch(() => '')
+          throw new Error(txt?.slice(0, 120) || `Error ${r.status}`)
+        }
+        return r.json()
+      })
+      .then((d) => {
+        if (cancelled || !d) return
+        setKpiCobro(d)
+        const capSrc = d.por_capitulo_presupuesto || d.comparativo_capitulos || []
+        setKpiPpto({
+          costo_total: d.total_presupuesto ?? 0,
+          por_capitulo: capSrc.map((c) => ({
+            capitulo: c.capitulo,
+            costo: c.costo ?? c.presupuesto ?? c.presupuesto_aprobado_n3 ?? 0,
+            registros: c.registros ?? 0,
+          })),
+          vista: d.vista,
+        })
+      })
+      .catch((err) => {
+        if (!cancelled) setDashKpiError(err?.message || 'No se pudo cargar el resumen')
+      })
+      .finally(() => {
+        if (!cancelled) setDashKpiLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [contratoIdDash, dashModuloActivo, dashVistaParam, dashKpiReloadKey, API_URL])
+
+  useEffect(() => {
+    if (!contratoIdDash || !dashModuloActivo) return
+    const tok = getToken()
+    fetch(`${API_URL}/actas/${contratoIdDash}/lista`, { headers: { Authorization: `Bearer ${tok}` } })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows) => setActasListaMatriz(Array.isArray(rows) ? rows : []))
+      .catch(() => setActasListaMatriz([]))
+  }, [contratoIdDash, dashModuloActivo, API_URL])
+
 // ── Auto-refresh dashboard (menos frecuente → menos carga en Azure y menos 502 por saturación) ──
-  const dashDrillRef = useRef([])
-  useEffect(() => { dashDrillRef.current = dashDrill }, [dashDrill])
   useEffect(() => { popupCapituloRef.current = popupCapitulo }, [popupCapitulo])
 
   const cargarMatrizValidacionDashboard = useCallback((signal) => {
@@ -12786,24 +12983,38 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   }, [contratoIdDash, actaFiltroMatriz])
 
   useEffect(() => {
-    if (!contratoIdDash) return
+    if (!contratoIdDash || !dashModuloActivo) return
     const recargar = () => {
       const tok = getToken()
-      fetch(`${API_URL}/presupuesto/${contratoIdDash}/resumen`, { headers: { Authorization:`Bearer ${tok}` } })
-        .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiPpto(d) }).catch(() => {})
-      fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-resumen`, { headers: { Authorization:`Bearer ${tok}` } })
-        .then(r => r.ok ? r.json() : null).then(d => { if(d) setKpiCobro(d) }).catch(() => {})
+      const vq = `vista=${encodeURIComponent(dashVistaParam)}`
+      fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-resumen?${vq}`, { headers: { Authorization:`Bearer ${tok}` } })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+          if (!d) return
+          setKpiCobro(d)
+          const capSrc = d.por_capitulo_presupuesto || d.comparativo_capitulos || []
+          setKpiPpto({
+            costo_total: d.total_presupuesto ?? 0,
+            por_capitulo: capSrc.map(c => ({
+              capitulo: c.capitulo,
+              costo: c.costo ?? c.presupuesto ?? c.presupuesto_aprobado_n3 ?? 0,
+              registros: c.registros ?? 0,
+            })),
+            vista: d.vista,
+          })
+        })
+        .catch(() => {})
       if (dashDrillRef.current.length > 0 && !popupCapituloRef.current) refrescarDashDrillSilencioso(dashDrillRef.current)
       fetch(`${API_URL}/cad-queue/${contratoIdDash}/estado`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setDwgEnlazadoDash(d.enlazado) }).catch(() => {})
       const params2 = new URLSearchParams()
+      params2.set('vista', dashVistaParam)
       if (dashDrillRef.current[0]) params2.set('capitulo', dashDrillRef.current[0].valor)
       if (dashDrillRef.current[1]) params2.set('item', dashDrillRef.current[1].valor)
       if (!popupCapituloRef.current) {
-        void fetchDashboardPkidColoresCached(contratoIdDash, params2, setMiniMapaColores)
+        void fetchDashboardPkidColoresCached(contratoIdDash, params2, setMiniMapaColores, { force: true })
       }
     }
-    recargar()
     const iv = setInterval(recargar, 300000)
 
     /* Supabase Realtime (Dashboard): canal desactivado; recargar() sigue en intervalo 3 min.
@@ -12831,21 +13042,21 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       clearInterval(iv)
       /* if (rtChannel) void supabase.removeChannel(rtChannel) */
     }
-  }, [contratoIdDash, cargarMatrizValidacionDashboard, fetchDashboardPkidColoresCached])
+  }, [contratoIdDash, dashModuloActivo, cargarMatrizValidacionDashboard, fetchDashboardPkidColoresCached, dashVistaParam])
 
   useLayoutEffect(() => {
     setActaFiltroMatriz('vigente')
   }, [contratoIdDash])
 
   useEffect(() => {
-    if (!contratoIdDash) {
-      setMatrizValidacionLoad(false)
+    if (!contratoIdDash || !dashModuloActivo) {
+      if (!contratoIdDash) setMatrizValidacionLoad(false)
       return
     }
     const ac = new AbortController()
     cargarMatrizValidacionDashboard(ac.signal)
     return () => ac.abort()
-  }, [contratoIdDash, actaFiltroMatriz, cargarMatrizValidacionDashboard])
+  }, [contratoIdDash, dashModuloActivo, actaFiltroMatriz, cargarMatrizValidacionDashboard])
 
   function mapDrillCapituloItems(payload) {
     if (!payload) return null
@@ -12894,6 +13105,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     }
     const tok = getToken()
     const params = new URLSearchParams()
+    params.set('vista', dashVistaParam)
     drill.forEach((d) => {
       if (d?.campo && d.valor != null && String(d.valor).trim() !== '') {
         params.set(d.campo, String(d.valor).trim())
@@ -12904,41 +13116,91 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     if (drill.length >= 2) {
       setDashLoading(false)
       setDashDrillError(null)
+      pkidColoresFetchRef.current?.abort()
+      pkidColoresFetchRef.current = null
       const fetchSeq = ++dashDrillFetchSeqRef.current
-      const cacheKey = `${contratoIdDash}|${drill[0]?.valor}|${drill[1]?.valor}`
+      const cacheKey = dashDrillCacheKey(dashDrillCapCachePart(drill[0]?.valor), drill[1]?.valor || '')
       const cached = dashTablaCache.current[cacheKey]
       const ahora = Date.now()
-      if (cached && (ahora - cached.ts) < CACHE_TTL) {
+      const tablaUrl = `${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-tabla?${params}`
+      const syncMapaFromTabla = (tablaData) => {
+        const colores = pkidTablaRowsToColores(tablaData?.rows)
+        setMiniMapaColores(colores)
+        setMiniMapaColoresLoad(false)
+        pkidColoresCache.current = {
+          data: colores,
+          timestamp: Date.now(),
+          contratoId: contratoIdDash,
+          filterKey: params.toString(),
+        }
+      }
+      const fetchTablaJson = async (signal) => {
+        const res = await fetch(tablaUrl, {
+          headers: { Authorization: `Bearer ${tok}` },
+          signal,
+        })
+        if (!res.ok) {
+          let errSnippet = ''
+          try { errSnippet = (await res.text()).slice(0, 500) } catch (_) {}
+          logApiFailure(`dashboard-pkid-tabla HTTP ${res.status}`, errSnippet)
+          throw new Error(res.status === 401 ? 'Sesión expirada. Vuelva a iniciar sesión.' : `Error del servidor (${res.status})`)
+        }
+        try {
+          return await res.json()
+        } catch {
+          throw new Error('Respuesta inválida del servidor')
+        }
+      }
+      if (cached && (ahora - cached.ts) < CACHE_TTL && cached.data?.rows?.length > 0) {
         setDashTabla(cached.data)
         setDashTablaLoad(false)
-        fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
-          .then(r => r.ok ? r.json() : null)
-          .then(data => {
+        syncMapaFromTabla(cached.data)
+        const ac = new AbortController()
+        const t = setTimeout(() => ac.abort(), 45000)
+        fetchTablaJson(ac.signal)
+          .then((data) => {
             if (fetchSeq !== dashDrillFetchSeqRef.current) return
-            if (data) {
+            if (data?.rows?.length) {
               dashTablaCache.current[cacheKey] = { data, ts: Date.now() }
               setDashTabla(data)
+              syncMapaFromTabla(data)
             }
           })
           .catch(() => {})
+          .finally(() => clearTimeout(t))
         return
       }
       setDashTablaLoad(true); setDashTabla(null)
-      const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
-      if (fetchSeq !== dashDrillFetchSeqRef.current) { setDashTablaLoad(false); return }
-      if (res.ok) {
-        const data = await res.json()
-        dashTablaCache.current[cacheKey] = { data, ts: Date.now() }
-        setDashTabla(data)
+      setMiniMapaColoresLoad(true)
+      const ac = new AbortController()
+      const timeoutId = setTimeout(() => ac.abort(), 45000)
+      try {
+        const data = await fetchTablaJson(ac.signal)
+        if (fetchSeq !== dashDrillFetchSeqRef.current) return
+        if (data?.rows?.length) {
+          dashTablaCache.current[cacheKey] = { data, ts: Date.now() }
+          setDashTabla(data)
+          syncMapaFromTabla(data)
+        } else {
+          setDashTabla(data?.rows ? data : { rows: [] })
+          syncMapaFromTabla(data?.rows ? data : { rows: [] })
+        }
+      } catch (err) {
+        if (fetchSeq !== dashDrillFetchSeqRef.current) return
+        if (err?.name !== 'AbortError') logApiFailure('dashboard-pkid-tabla', err)
+        setDashTabla({ rows: [] })
+        setMiniMapaColoresLoad(false)
+      } finally {
+        clearTimeout(timeoutId)
+        if (fetchSeq === dashDrillFetchSeqRef.current) setDashTablaLoad(false)
       }
-      setDashTablaLoad(false)
       return
     }
 
     // ── Nivel 1: ítems del capítulo ──
     setDashTabla(null)
     const fetchSeq = ++dashDrillFetchSeqRef.current
-    const cacheKey = `${contratoIdDash}|${drill[0]?.valor || '__todos__'}`
+    const cacheKey = dashDrillCacheKey(dashDrillCapCachePart(drill[0]?.valor))
     const cached = dashDrillCache.current[cacheKey]
     const ahora = Date.now()
     const drillUrl = `${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill?${params}`
@@ -12961,17 +13223,17 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         throw new Error('Respuesta inválida del servidor')
       }
     }
-    if (cached && (ahora - cached.ts) < CACHE_TTL && Array.isArray(cached.data)) {
+    if (cached && (ahora - cached.ts) < CACHE_TTL && Array.isArray(cached.data) && cached.data.length > 0) {
       setDashData(cached.data)
       setDashLoading(false)
       setDashDrillError(null)
       const ac = new AbortController()
-      const t = setTimeout(() => ac.abort(), 120000)
+      const t = setTimeout(() => ac.abort(), 45000)
       fetchDrillJson(ac.signal)
         .then((data) => {
           if (fetchSeq !== dashDrillFetchSeqRef.current) return
           const lista = mapDrillCapituloItems(data)
-          if (!Array.isArray(lista)) return
+          if (!Array.isArray(lista) || lista.length === 0) return
           dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
           setDashData(lista)
         })
@@ -12983,15 +13245,18 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     setDashDrillError(null)
     setDashData(null)
     const ac = new AbortController()
-    const timeoutId = setTimeout(() => ac.abort(), 120000)
+    const timeoutId = setTimeout(() => ac.abort(), 45000)
     try {
       const data = await fetchDrillJson(ac.signal)
       if (fetchSeq !== dashDrillFetchSeqRef.current) return
       const lista = mapDrillCapituloItems(data)
-      if (Array.isArray(lista)) {
+      if (Array.isArray(lista) && lista.length > 0) {
         dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
         setDashData(lista)
         setDashDrillError(null)
+      } else if (Array.isArray(lista)) {
+        setDashData([])
+        setDashDrillError('No se encontraron ítems para este capítulo.')
       } else {
         setDashData([])
         setDashDrillError('No se pudieron interpretar los ítems del capítulo.')
@@ -13016,13 +13281,14 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     const seqAtStart = dashDrillFetchSeqRef.current
     const tok = getToken()
     const params = new URLSearchParams()
+    params.set('vista', dashVistaParam)
     drill.forEach((d) => {
       if (d?.campo && d.valor != null && String(d.valor).trim() !== '') {
         params.set(d.campo, String(d.valor).trim())
       }
     })
     if (drill.length >= 2) {
-      const cacheKey = `${contratoIdDash}|${drill[0]?.valor}|${drill[1]?.valor}`
+      const cacheKey = dashDrillCacheKey(dashDrillCapCachePart(drill[0]?.valor), drill[1]?.valor || '')
       fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-tabla?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null)
         .then(data => {
@@ -13031,20 +13297,20 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         })
         .catch(() => {})
     } else if (drill.length === 1) {
-      const cacheKey = `${contratoIdDash}|${drill[0]?.valor || '__todos__'}`
+      const cacheKey = dashDrillCacheKey(dashDrillCapCachePart(drill[0]?.valor))
       fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill?${params}`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null)
         .then(data => {
           if (seqAtStart !== dashDrillFetchSeqRef.current) return
           const lista = mapDrillCapituloItems(data)
-          if (!Array.isArray(lista)) return
+          if (!Array.isArray(lista) || lista.length === 0) return
           dashDrillCache.current[cacheKey] = { data: lista, ts: Date.now() }
         })
         .catch(() => {})
     }
   }
 
-  useEffect(() => { if (contratoIdDash) { setDashDrillPag(0); cargarDashDrill(dashDrill) } }, [contratoIdDash, dashDrill])
+  useEffect(() => { if (contratoIdDash) { setDashDrillPag(0); cargarDashDrill(dashDrill) } }, [contratoIdDash, dashDrill, dashVistaParam])
 
   async function abrirPopupPkid(pkid) {
     if (dashDrill.length < 2 || !contratoIdDash) return
@@ -13054,7 +13320,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     setPopupPkid({ pkid: pkNorm, data: null, error: null })
     try {
       const tok = getToken()
-      const params = new URLSearchParams({ pk_id: pkNorm })
+      const params = new URLSearchParams({ pk_id: pkNorm, vista: dashVistaParam })
       if (dashDrill[1]) params.set('item', dashDrill[1].valor)
       if (dashDrill[0]) params.set('capitulo', dashDrill[0].valor)
       const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-detalle?${params}`, {
@@ -13451,19 +13717,22 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
     }
   }
   useEffect(() => {
-    if (!contratoIdDash) return
+    if (!contratoIdDash || !dashModuloActivo || !dashDrill[0]) return
+    if (dashDrill.length >= 2) return
+    if (dashDrill.length === 1 && dashLoading) return
     const params = new URLSearchParams()
+    params.set('vista', dashVistaParam)
     if (dashDrill[0]) params.set('capitulo', dashDrill[0].valor)
     if (dashDrill[1]) params.set('item', dashDrill[1].valor)
     void fetchDashboardPkidColoresCached(contratoIdDash, params, setMiniMapaColores)
-  }, [contratoIdDash, dashDrill, fetchDashboardPkidColoresCached])
+  }, [contratoIdDash, dashModuloActivo, dashDrill, dashVistaParam, dashLoading, fetchDashboardPkidColoresCached])
 
   async function cargarAnalisis(nivel) {
     if (!contratoIdDash) return
     setAnalisisLoading(true); setAnalisisData(null); setAnalisisPag(0)
     const tok = getToken()
     try {
-      const url = `${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill`
+      const url = `${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-drill?vista=${encodeURIComponent(dashVistaParam)}`
       const res = await fetch(url, { headers: { Authorization: `Bearer ${tok}` } })
       if (res.ok) {
         const data = await res.json()
@@ -13482,23 +13751,24 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   }
 
   useEffect(() => {
-    if (contratoIdDash && dashTab === 'analisis') cargarAnalisis(analisisNivel)
-  }, [contratoIdDash, dashTab, analisisNivel])
+    if (contratoIdDash && dashModuloActivo && dashTab === 'analisis') cargarAnalisis(analisisNivel)
+  }, [contratoIdDash, dashModuloActivo, dashTab, analisisNivel, dashVistaParam])
 
   useEffect(() => {
     if (!contratoIdDash || !analisisSeleccion) { setAnalisisMapaColores({}); return }
     const params = new URLSearchParams()
+    params.set('vista', dashVistaParam)
     if (analisisSeleccion.capitulo) params.set('capitulo', analisisSeleccion.capitulo)
     if (analisisSeleccion.item)     params.set('item', analisisSeleccion.item)
     void fetchDashboardPkidColoresCached(contratoIdDash, params, setAnalisisMapaColores)
-  }, [contratoIdDash, analisisSeleccion, fetchDashboardPkidColoresCached])
+  }, [contratoIdDash, analisisSeleccion, dashVistaParam, fetchDashboardPkidColoresCached])
 
   async function abrirAnalisisMapaPopup(pkid) {
     if (!analisisSeleccion) return
     setAnalisisMapaPopupLoading(true); setAnalisisMapaPopup({ pkid, data: null, error: null })
     try {
       const tok = getToken()
-      const params = new URLSearchParams({ pk_id: String(pkid ?? '').trim() })
+      const params = new URLSearchParams({ pk_id: String(pkid ?? '').trim(), vista: dashVistaParam })
       if (analisisSeleccion.capitulo) params.set('capitulo', analisisSeleccion.capitulo)
       if (analisisSeleccion.item)     params.set('item', analisisSeleccion.item)
       const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-detalle?${params}`, {
@@ -13536,7 +13806,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
     setLiqLoading(true); setLiqPag(0)
     try {
       const tok = getToken()
-      const res = await fetch(`${API_URL}/presupuesto/${contratoIdDash}/analisis-liquidacion?nivel=${nivel}`, { headers: { Authorization: `Bearer ${tok}` } })
+      const res = await fetch(`${API_URL}/presupuesto/${contratoIdDash}/analisis-liquidacion?nivel=${nivel}&vista=obra_ejecutada`, { headers: { Authorization: `Bearer ${tok}` } })
       if (res.ok) {
         const items = (await res.json()).items || []
         setLiqData(items)
@@ -13553,12 +13823,13 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   }
 
   useEffect(() => {
-    if (contratoIdDash && dashTab === 'liquidacion') cargarLiquidacion(liqNivel)
-  }, [contratoIdDash, dashTab, liqNivel])
+    if (contratoIdDash && dashModuloActivo && dashTab === 'liquidacion') cargarLiquidacion(liqNivel)
+  }, [contratoIdDash, dashModuloActivo, dashTab, liqNivel])
 
   useEffect(() => {
     if (!contratoIdDash || !liqSeleccion) { setLiqMapaColores({}); return }
     const params = new URLSearchParams()
+    params.set('vista', 'obra_ejecutada')
     if (liqSeleccion.capitulo) params.set('capitulo', liqSeleccion.capitulo)
     if (liqSeleccion.item)     params.set('item', liqSeleccion.item)
     params.set('liquidacion', '1')
@@ -13570,7 +13841,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
     setLiqMapaPopupLoad(true); setLiqMapaPopup({ pkid, data: null, error: null })
     try {
       const tok = getToken()
-      const params = new URLSearchParams({ pk_id: String(pkid ?? '').trim() })
+      const params = new URLSearchParams({ pk_id: String(pkid ?? '').trim(), vista: 'obra_ejecutada' })
       if (liqSeleccion.capitulo) params.set('capitulo', liqSeleccion.capitulo)
       if (liqSeleccion.item)     params.set('item', liqSeleccion.item)
       const res = await fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-pkid-detalle?${params}`, {
@@ -13952,23 +14223,72 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           const sicoeAp = kpiCobro?.total_cobrado || 0
           const pptoApN3 = kpiCobro?.total_presupuesto_aprobado_n3 ?? 0
           const pptoNrN3 = kpiCobro?.total_presupuesto_no_revisado_n3 ?? 0
-          const maxTrio = Math.max(sicoeAp, pptoApN3, pptoNrN3, 1)
-          const delta = ppto - sicoeAp
-          const pct   = ppto ? Math.min(100, Math.round(sicoeAp/ppto*100)) : 0
-          const alerta = pct >= 90 ? '#EF4444' : pct >= 70 ? '#F59E0B' : '#10B981'
 
           // Datos para gráficos
           const porActa = (kpiCobro?.por_acta || []).sort((a,b) => (a.acta||0)-(b.acta||0))
           const porCapPpto = (kpiPpto?.por_capitulo || []).sort((a,b) => b.costo - a.costo).slice(0,15)
           const maxCapCosto = Math.max(...porCapPpto.map(c => c.costo), 1)
+          const dashEsperando = dashKpiLoading && !kpiCobro
 
           return <>
+            {dashEsperando && (
+              <div style={{ textAlign:'center', padding:'24px 16px', marginBottom:'16px', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', color:t.textMuted, fontSize:`${du.body}px` }}>
+                ⏳ Cargando resumen del dashboard…
+              </div>
+            )}
+            {dashKpiError && !dashKpiLoading && (
+              <div style={{ textAlign:'center', padding:'16px', marginBottom:'16px', background:'#FEF2F2', border:'1px solid #FECACA', borderRadius:'12px', color:'#991B1B', fontSize:`${du.body}px` }}>
+                {dashKpiError}
+                <button type="button" onClick={() => setDashKpiReloadKey((k) => k + 1)} style={{ marginLeft:10, background:'transparent', border:'1px solid #991B1B', borderRadius:6, padding:'4px 10px', color:'#991B1B', cursor:'pointer', fontWeight:700 }}>Reintentar</button>
+              </div>
+            )}
+            {!dashEsperando && (
+            <>
+            {/* ── Toggle vista presupuesto ── */}
+            <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'16px', flexWrap:'wrap' }}>
+              <span style={{ fontSize:`${du.sub}px`, fontWeight:700, color:t.textMuted }}>Análisis según:</span>
+              <div style={{ display:'inline-flex', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'4px', boxShadow:t.shadow }}>
+                {[
+                  ['Presupuesto de Obra', 'Presupuesto de Obra'],
+                  ['Obra Ejecutada', 'Obra Ejecutada'],
+                ].map(([valor, label]) => {
+                  const activo = dashVistaEjecucion === valor
+                  return (
+                    <button
+                      key={valor}
+                      type="button"
+                      onClick={() => cambiarDashVistaEjecucion(valor)}
+                      style={{
+                        background: activo ? t.primary : 'transparent',
+                        color: activo ? '#fff' : t.textMuted,
+                        border: 'none',
+                        borderRadius: '8px',
+                        padding: '8px 18px',
+                        fontSize: `${du.tab}px`,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {label}
+                    </button>
+                  )
+                })}
+              </div>
+              <span style={{ fontSize:`${du.sub}px`, color:t.textMuted, maxWidth:520 }}>
+                {dashVistaEjecucion === 'Presupuesto de Obra'
+                  ? 'Versión vigente del presupuesto contractual (total + desglose por revisado).'
+                  : 'Presupuesto: Obra Ejecutada aprobada. SICOE N3 aprobado: siempre el total del contrato.'}
+              </span>
+            </div>
+
             {/* ── Tab bar Dashboard ── */}
             <div style={{ display:'flex', gap:'6px', marginBottom:'20px', background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'12px', padding:'6px', width:'fit-content', boxShadow:t.shadow }}>
               {[
                 ['resumen',   '📊 Resumen'],
                 ['analisis',  '🔍 Análisis de Desviaciones'],
-                ...(usuario?.contrato_fase === 'LIQUIDACION' ? [['liquidacion', '⚖️ Análisis de Liquidación']] : []),
+                ...(usuario?.contrato_fase === 'LIQUIDACION' && dashVistaEjecucion === 'Obra Ejecutada'
+                  ? [['liquidacion', '⚖️ Análisis de Liquidación']]
+                  : []),
               ].map(([key,label]) => (
                 <button key={key} onClick={() => setDashTab(key)} style={{ background:dashTab===key?t.primary:'transparent', color:dashTab===key?'#fff':t.textMuted, border:'none', borderRadius:'8px', padding:'8px 22px', fontSize:`${du.tab}px`, fontWeight:'700', cursor:'pointer', transition:'all 0.15s', letterSpacing:'0.2px' }}>{label}</button>
               ))}
@@ -13991,30 +14311,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   </div>
                 ))
               })()}
-            </div>
-
-            {/* ── Tres barras: facturado · SICOE N3 aprob. · SICOE N3 no rev. ── */}
-            <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:'10px', padding:'14px 20px', marginBottom:'20px', boxShadow:t.shadow }}>
-              <div style={{ fontSize:`${du.body}px`, fontWeight:'700', color:t.text, marginBottom:'10px' }}>Comparativo global (costos)</div>
-              {[
-                { label:'SICOE aprobado Nivel 3', val: sicoeAp, color:'#0077B6' },
-                { label:'Presupuesto ClaraCore aprobado (N3)', val: pptoApN3, color:'#0f766e' },
-                { label:'Presupuesto ClaraCore no revisado (N3)', val: pptoNrN3, color:'#ca8a04' },
-              ].map((row) => (
-                <div key={row.label} style={{ marginBottom:'8px' }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', fontSize:`${du.sub}px`, color:t.textMuted, marginBottom:'3px' }}>
-                    <span>{row.label}</span>
-                    <span style={{ fontWeight:'700', color:row.color }}>{fmtD(row.val)}</span>
-                  </div>
-                  <div style={{ height:'8px', background:t.border, borderRadius:'4px', overflow:'hidden' }}>
-                    <div style={{ height:'100%', width:`${Math.min(100, (row.val / maxTrio) * 100)}%`, background:row.color, borderRadius:'4px', transition:'width 0.6s ease' }} />
-                  </div>
-                </div>
-              ))}
-              <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'6px' }}>
-                Presupuesto ClaraCore: <strong style={{ color:t.text }}>{fmtD(ppto)}</strong>
-                {pct ? <> · SICOE N3 sobre ppto: <strong style={{ color:alerta }}>{pct}%</strong></> : null}
-              </div>
             </div>
 
             {/* ── Grid 2×2 ── */}                                  
@@ -14141,7 +14437,9 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       {panelFoco === 'ppto-cobro' ? '⊠' : '⤢'}
                     </button>
                   </div>
-                  <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>SICOE N3 aprobado · Presupuesto aprobado en polígonos (revisado) · Presupuesto aún no aprobado — sin módulo cobro</div>
+                  <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>
+                    SICOE N3 aprobado · Presupuesto aprobado en polígonos (revisado) · Presupuesto aún no aprobado — vista: <strong style={{ color: t.text }}>{dashVistaEjecucion}</strong>
+                  </div>
                 </div>
                 {(() => {
                   const comp = sortComparativoCapitulos(kpiCobro?.comparativo_capitulos || [])
@@ -14204,17 +14502,23 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                           const nomCap = rawCap.length > maxChars ? `${rawCap.slice(0, maxChars)}…` : rawCap
                           const tipId = `tip-vs-h-${i}`
                           const openCap = () => {
-                            const raw = cap.capitulo ?? cap.nombre
+                            const raw = String(cap.capitulo ?? cap.nombre ?? '').trim()
                             const ck = dashNormCapituloKey(raw)
-                            if (!ck || ck === 'Sin capítulo') return
-                            if (contratoIdDash) {
-                              delete dashDrillCache.current[`${contratoIdDash}|${ck}`]
-                            }
+                            if (!raw || ck === 'Sin capítulo') return
+                            const cacheKey = contratoIdDash
+                              ? dashDrillCacheKey(dashDrillCapCachePart(raw))
+                              : null
+                            const cached = cacheKey ? dashDrillCache.current[cacheKey] : null
                             setDashDrillPag(0)
-                            setDashData(null)
                             setDashDrillError(null)
-                            setDashLoading(true)
-                            setDashDrill([{ campo: 'capitulo', valor: ck }])
+                            if (cached?.data?.length) {
+                              setDashData(cached.data)
+                              setDashLoading(false)
+                            } else {
+                              setDashData(null)
+                              setDashLoading(true)
+                            }
+                            setDashDrill([{ campo: 'capitulo', valor: raw }])
                             setPopupCapitulo(true)
                           }
                           return (
@@ -14294,23 +14598,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 <div style={{ marginBottom:'12px' }}>
                   <div style={{ fontSize:`${du.title}px`, fontWeight:'700', color:t.text }}>Validación por rol · SICOE Obra</div>
                   <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'4px' }}>
-                    {(() => {
-                      const naMat = Array.isArray(nivelesDashContrato?.niveles_activos) && nivelesDashContrato.niveles_activos.length
-                        ? [...nivelesDashContrato.niveles_activos].sort((a, b) => a - b)
-                        : [1, 2, 3]
-                      const nMaxMat = Number.isFinite(Number(nivelesDashContrato?.nivel_maximo))
-                        ? Number(nivelesDashContrato.nivel_maximo)
-                        : naMat[naMat.length - 1] ?? 3
-                      const thInt = dashMatrizThDesdeNiveles(nivelesDashContrato, nMaxMat)
-                      const thRes = dashMatrizThDesdeNiveles(nivelesDashContrato, 2)
-                      const thIns = dashMatrizThDesdeNiveles(nivelesDashContrato, 1)
-                      return (
-                        <>
-                          Por defecto se usa el acta RPO cuyo período incluye hoy. Columnas: {thInt} · {thRes} · {thIns}.
-                          Los importes en la columna del nivel 2 solo cuentan si el nivel 1 = Aprobado; los de la columna del nivel máximo solo si nivel 1 y 2 = Aprobado. «Pendiente ítem» (sub_estado) no suma en el inspector.
-                        </>
-                      )
-                    })()}
+                    Por defecto se usa el acta RPO cuyo período incluye hoy. Control de validación de cantidades ejecutadas (SICOE Obra), independiente del módulo de presupuesto.
                   </div>
                   <div style={{ display:'flex', flexWrap:'wrap', gap:'8px', alignItems:'center', marginTop:'10px' }}>
                     <span style={{ fontSize:`${du.sub}px`, color:t.textMuted }}>Acta RPO:</span>
@@ -14374,26 +14662,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 {(() => {
                   /* Filas pastel: en tema oscuro t.text es claro → ilegible; usar texto oscuro sobre fondo claro */
                   const textOnPastel = themeIsDarkChrome(activeTheme) ? '#0f172a' : t.text
-                  const naMat = Array.isArray(nivelesDashContrato?.niveles_activos) && nivelesDashContrato.niveles_activos.length
-                    ? [...nivelesDashContrato.niveles_activos].sort((a, b) => a - b)
-                    : [1, 2, 3]
-                  const nMaxMat = Number.isFinite(Number(nivelesDashContrato?.nivel_maximo))
-                    ? Number(nivelesDashContrato.nivel_maximo)
-                    : naMat[naMat.length - 1] ?? 3
-                  const thInterMatriz = dashMatrizThDesdeNiveles(nivelesDashContrato, nMaxMat)
-                  const thResidenteMatriz = dashMatrizThDesdeNiveles(nivelesDashContrato, 2)
-                  const thInspectorMatriz = dashMatrizThDesdeNiveles(nivelesDashContrato, 1)
-                  const campoMaxMatriz = String(nivelesDashContrato?.campo_nivel_maximo || 'nivel3_estado').trim() || 'nivel3_estado'
-                  const matrizAgregadoSqlUsaN3 = campoMaxMatriz === 'nivel3_estado'
-                  const encMaxRow = (nivelesDashContrato?.niveles || []).find((x) => Number(x?.nivel) === nMaxMat)
-                  const encMaxStr = String(encMaxRow?.encabezado || '').trim()
-                  const rolNMaxCorto = encMaxStr.includes('·')
-                    ? encMaxStr.split('·').pop().trim()
-                    : (() => {
-                        const fb = SICOE_NIVEL_ENCABEZADO_FALLBACK[nMaxMat]
-                        if (fb && fb.includes('·')) return fb.split('·').pop().trim()
-                        return fb || `nivel ${nMaxMat}`
-                      })()
+                  const naMat = Array.isArray(matrizValidacion?.niveles_activos) && matrizValidacion.niveles_activos.length
+                    ? [...matrizValidacion.niveles_activos].sort((a, b) => a - b)
+                    : (Array.isArray(nivelesDashContrato?.niveles_activos) && nivelesDashContrato.niveles_activos.length
+                      ? [...nivelesDashContrato.niveles_activos].sort((a, b) => a - b)
+                      : [1, 2, 3])
+                  const colsMatriz = [...naMat].sort((a, b) => b - a)
                   const filas = [
                     { key: 'aprobado', label: 'APROBADO', bg: '#DCFCE7', dark: false },
                     { key: 'pendiente', label: 'PENDIENTES', bg: '#FEF9C3', dark: false },
@@ -14404,7 +14678,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     { key: 'otras_actas', label: 'PENDIENTES OTRAS ACTAS', bg: '#FEF9C3', dark: false },
                   ]
                   const emptyBloque = () => {
-                    const z = () => ({ interventoria: 0, residente: 0, inspector: 0 })
+                    const z = () => Object.fromEntries(colsMatriz.map((n) => [`nivel${n}`, 0]))
                     return {
                       aprobado: z(), pendiente: z(), pendiente_item: z(), no_revisado: z(),
                       rechazado: z(), habilitado: z(), otras_actas: z(),
@@ -14426,13 +14700,15 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       <div key={titulo} style={{ marginBottom:'18px' }}>
                         <div style={{ fontSize:`${du.sub}px`, fontWeight:'800', color:t.text, marginBottom:'8px', letterSpacing:'0.3px' }}>{titulo}</div>
                         <div style={{ overflowX:'auto' }}>
-                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:`${du.table}px`, minWidth:'280px' }}>
+                          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:`${du.table}px`, minWidth:`${Math.max(280, 120 + colsMatriz.length * 100)}px` }}>
                             <thead>
                               <tr>
                                 <th style={{ textAlign:'left', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>Estado</th>
-                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>{thInterMatriz}</th>
-                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>{thResidenteMatriz}</th>
-                                <th style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px` }}>{thInspectorMatriz}</th>
+                                {colsMatriz.map((n) => (
+                                  <th key={n} style={{ textAlign:'right', padding:'6px 4px', borderBottom:`1px solid ${t.border}`, color:t.textMuted, textTransform:'uppercase', fontSize:`${du.table}px`, whiteSpace:'nowrap' }}>
+                                    {dashMatrizThDesdeNiveles(nivelesDashContrato, n)}
+                                  </th>
+                                ))}
                               </tr>
                             </thead>
                             <tbody>
@@ -14443,9 +14719,11 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                                 return (
                                   <tr key={row.key} style={{ background: row.bg }}>
                                     <td style={{ padding:'6px 4px', fontWeight:'700', color: tcLabel, fontSize:`${du.rowLabel}px` }}>{row.label}</td>
-                                    <td style={{ textAlign:'right', padding:'6px 4px', color: tc, fontWeight:'600', fontSize:`${du.table}px` }}>{fmtD(d.interventoria)}</td>
-                                    <td style={{ textAlign:'right', padding:'6px 4px', color: tc, fontWeight:'600', fontSize:`${du.table}px` }}>{fmtD(d.residente)}</td>
-                                    <td style={{ textAlign:'right', padding:'6px 4px', color: tc, fontWeight:'600', fontSize:`${du.table}px` }}>{fmtD(d.inspector)}</td>
+                                    {colsMatriz.map((n) => (
+                                      <td key={n} style={{ textAlign:'right', padding:'6px 4px', color: tc, fontWeight:'600', fontSize:`${du.table}px` }}>
+                                        {fmtD(matrizValorNivel(d, n))}
+                                      </td>
+                                    ))}
                                   </tr>
                                 )
                               })}
@@ -14460,24 +14738,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   }
                   return (
                     <>
-                      {!matrizAgregadoSqlUsaN3 && (
-                        <div
-                          role="note"
-                          style={{
-                            marginBottom: '12px',
-                            padding: '8px 10px',
-                            borderRadius: '8px',
-                            fontSize: `${du.sub}px`,
-                            color: '#92400e',
-                            background: 'rgba(251, 191, 36, 0.18)',
-                            border: '1px solid rgba(217, 119, 6, 0.45)',
-                            lineHeight: 1.35,
-                          }}
-                        >
-                          En cada fila, las tres cifras van <strong>de izquierda a derecha</strong>:{' '}
-                          <strong>N{nMaxMat}</strong>, {rolNMaxCorto}; <strong>N2</strong>, residente de obra; <strong>N1</strong>, inspector de obra.
-                        </div>
-                      )}
+                      <div style={{ marginBottom:'12px', fontSize:`${du.sub}px`, color:t.textMuted, lineHeight:1.35 }}>
+                        Columnas según niveles de validación del contrato ({colsMatriz.slice().sort((a,b)=>a-b).map(n => `N${n}`).join(' · ')}).
+                        En cada fila, el monto en una columna N refleja el estado de validación en ese nivel (con prerequisitos aprobados en niveles inferiores).
+                      </div>
                       {renderTabla('Obra ejecutada directo sin AIU', matrizValidacion?.obra_ejecutada_directo_sin_aiu)}
                       {renderTabla('Ensayos y sondeos directo sin IVA', matrizValidacion?.ensayos_sondeos_directo_sin_iva)}
                     </>
@@ -14527,7 +14791,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                         title="Informe Excel"
                         onClick={async (e) => {
                           const btn = e.currentTarget
-                          if (btn.disabled) return
+                          if (btn.disabled || dashExportInFlightRef.current) return
+                          dashExportInFlightRef.current = true
                           btn.disabled = true; const orig = btn.innerHTML
                           btn.style.opacity='0.6'; btn.style.cursor='wait'
                           const tok = getToken()
@@ -14538,18 +14803,17 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                             const itemQ = dashDrill[1]?.valor
                               ? `&item=${encodeURIComponent(dashDrill[1].valor)}`
                               : ''
-                            const res = await fetch(`${API}/sicoe-obra/${usuario.contrato_id}/dashboard-export-capitulo?capitulo=${cap}${itemQ}`, {
+                            const res = await fetch(`${API}/sicoe-obra/${usuario.contrato_id}/dashboard-export-capitulo?capitulo=${cap}${itemQ}&vista=${encodeURIComponent(dashVistaParam)}`, {
                               headers: { Authorization: `Bearer ${tok}` }
                             })
                             if (!res.ok) { alert('Error al iniciar exportación'); return }
                             const { job_id } = await res.json()
-                            console.log('JOB_ID:', job_id)
                             // 2) Polling hasta que esté listo
                             let intentos = 0
                             while (intentos < 60) {
-                              await new Promise(r => setTimeout(r, 3000))
+                              await new Promise(r => setTimeout(r, 2000))
                               intentos++
-                              btn.innerHTML = `⏳ ${intentos * 3}s...`
+                              btn.innerHTML = `⏳ ${intentos * 2}s...`
                               let estado = ''
                               try {
                                 const st = await fetch(`${API}/exportar/estado/${job_id}`, {
@@ -14576,7 +14840,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                               }
                             }
                           } catch { alert('Error de conexión') }
-                          finally { btn.disabled=false; btn.innerHTML=orig; btn.style.opacity='1'; btn.style.cursor='pointer' }
+                          finally {
+                            dashExportInFlightRef.current = false
+                            btn.disabled=false; btn.innerHTML=orig; btn.style.opacity='1'; btn.style.cursor='pointer'
+                          }
                         }}
                         style={{ background:'transparent', color:'#1E8449', border:'1.5px solid #1E8449', borderRadius:'8px', padding:'5px 10px', fontSize:'var(--cc-lg)', cursor:'pointer', lineHeight:1, transition:'all 0.15s' }}
                         onMouseEnter={e=>{ e.currentTarget.style.background='#1E8449'; e.currentTarget.style.color='#fff' }}
@@ -14623,9 +14890,19 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     <div style={{ position:'sticky', top:0, zIndex:10, background:t.bgCard, padding:'14px 24px 10px', borderBottom:`1px solid ${t.border}44`, flexShrink:0 }}>
                       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
                         <span style={{ fontSize:'var(--cc-label)', fontWeight:'700', color:t.textMuted, letterSpacing:'0.5px' }}>🗺️ PLANO SEMÁFORO</span>
-                        <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>{Object.keys(miniMapaColores).length} PK_IDs</span>
+                        <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted }}>
+                          {miniMapaColoresLoad ? 'Cargando mapa…' : (() => {
+                            const n = Object.keys(miniMapaColores).filter((k) => {
+                              const d = miniMapaColores[k]
+                              return d && ((Number(d.presupuesto) || 0) > 0 || (Number(d.cobrado) || 0) > 0)
+                            }).length
+                            return dashDrill.length >= 2
+                              ? `${n} PK_IDs con datos del ítem`
+                              : `${Object.keys(miniMapaColores).length} PK_IDs`
+                          })()}
+                        </span>
                       </div>
-                      <MiniMapaSemaforo t={t} colores={miniMapaColores} contratoId={contratoIdDash} token={getToken()} height={240} onPkidClick={dashDrill.length >= 2 ? abrirPopupPkid : null} />
+                      <MiniMapaSemaforo t={t} colores={miniMapaColores} contratoId={contratoIdDash} token={getToken()} height={240} onPkidClick={dashDrill.length >= 2 ? abrirPopupPkid : null} soloPkConDatos={dashDrill.length >= 2} />
                     </div>
 
                     {/* Área drill */}
@@ -14785,9 +15062,17 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                                     <thead>
                                       <tr>
                                         <th style={{ ...thH, borderBottom:`1px solid ${t.border}44`, fontSize:'var(--cc-caption)' }}>Σ</th>
-                                        {TABLA_PK_COLS.map(c => thSum(sumField(c.field, c.kind), c.kind === 'money' ? c.color : t.text, c.sumBg))}
-                                        {thSum(`${totalDeltaCant >= 0 ? '+' : ''}${totalDeltaCant.toFixed(2)}`, totalDeltaCant >= 0 ? '#10B981' : '#EF4444', totalDeltaCant >= 0 ? '#10B98112' : '#EF444412')}
-                                        {thSum(`${totalDeltaCosto >= 0 ? '+' : ''}${fmtD(totalDeltaCosto)}`, totalDeltaCosto >= 0 ? '#10B981' : '#EF4444', totalDeltaCosto >= 0 ? '#10B98112' : '#EF444412')}
+                                        {TABLA_PK_COLS.map(c => (
+                                          <Fragment key={`sum-${c.key}`}>
+                                            {thSum(sumField(c.field, c.kind), c.kind === 'money' ? c.color : t.text, c.sumBg)}
+                                          </Fragment>
+                                        ))}
+                                        <Fragment key="sum-dcant">
+                                          {thSum(`${totalDeltaCant >= 0 ? '+' : ''}${totalDeltaCant.toFixed(2)}`, totalDeltaCant >= 0 ? '#10B981' : '#EF4444', totalDeltaCant >= 0 ? '#10B98112' : '#EF444412')}
+                                        </Fragment>
+                                        <Fragment key="sum-dcost">
+                                          {thSum(`${totalDeltaCosto >= 0 ? '+' : ''}${fmtD(totalDeltaCosto)}`, totalDeltaCosto >= 0 ? '#10B981' : '#EF4444', totalDeltaCosto >= 0 ? '#10B98112' : '#EF444412')}
+                                        </Fragment>
                                       </tr>
                                       <tr>
                                         <th style={{ ...thH, color:t.textMuted, fontWeight:'800' }}>PK_ID</th>
@@ -15228,6 +15513,8 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 )}
               </>
             })()}
+            </>
+            )}
           </>
         })()}
 
@@ -15394,12 +15681,13 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 const nrList = pptoPR.no_revisado || []
                 const pdList = pptoPR.pendiente || []
                 const rjList = pptoPR.rechazado || []
+                const pptoDeltaLabel = dashVistaEjecucion === 'Obra Ejecutada' ? 'obra ejec. políg.' : 'ppto políg.'
                 const pkidColDefs = [
                   { key:'sicoe', rows: apSic, label:'SICOE · obra N3 aprobada', icon:'✅', hdr:['#0077B618','#0077B6'], cantK:'cant_sicoe_aprobado', costK:'costo_sicoe_aprobado', accent:'#0077B6', kind:'sicoe' },
-                  { key:'ppto_ap', rows: apPpto, label:'Presup. · val. N3 ✓', icon:'📋', hdr:['#0f766e22','#0f766e'], cantK:'cant_ppto_aprobado_n3', costK:'costo_ppto_aprobado_n3', accent:'#0f766e', kind:'ppto' },
-                  { key:'ppto_nr', rows: nrList, label:'Presup. · no revisado', icon:'🟠', hdr:['#ca8a0418','#b45309'], cantK:'cant_ppto_estado_no_revisado', costK:'costo_ppto_estado_no_revisado', accent:'#b45309', kind:'ppto' },
-                  { key:'ppto_pd', rows: pdList, label:'Presup. · pendiente', icon:'⏳', hdr:['#a855f718','#7c3aed'], cantK:'cant_ppto_estado_pendiente', costK:'costo_ppto_estado_pendiente', accent:'#7c3aed', kind:'ppto' },
-                  { key:'ppto_rj', rows: rjList, label:'Presup. · rechazado', icon:'⛔', hdr:['#ef444418','#dc2626'], cantK:'cant_ppto_estado_rechazado', costK:'costo_ppto_estado_rechazado', accent:'#dc2626', kind:'ppto' },
+                  { key:'ppto_ap', rows: apPpto, label: dashPptoGrupoLabel('val. N3 ✓', dashVistaEjecucion), icon:'📋', hdr:['#0f766e22','#0f766e'], cantK:'cant_ppto_aprobado_n3', costK:'costo_ppto_aprobado_n3', accent:'#0f766e', kind:'ppto' },
+                  { key:'ppto_nr', rows: nrList, label: dashPptoGrupoLabel('no revisado', dashVistaEjecucion), icon:'🟠', hdr:['#ca8a0418','#b45309'], cantK:'cant_ppto_estado_no_revisado', costK:'costo_ppto_estado_no_revisado', accent:'#b45309', kind:'ppto' },
+                  { key:'ppto_pd', rows: pdList, label: dashPptoGrupoLabel('pendiente', dashVistaEjecucion), icon:'⏳', hdr:['#a855f718','#7c3aed'], cantK:'cant_ppto_estado_pendiente', costK:'costo_ppto_estado_pendiente', accent:'#7c3aed', kind:'ppto' },
+                  { key:'ppto_rj', rows: rjList, label: dashPptoGrupoLabel('rechazado', dashVistaEjecucion), icon:'⛔', hdr:['#ef444418','#dc2626'], cantK:'cant_ppto_estado_rechazado', costK:'costo_ppto_estado_rechazado', accent:'#dc2626', kind:'ppto' },
                 ]
                 const pkidVisibleCols = pkidColDefs.filter(c => (c.rows?.length ?? 0) > 0)
                 return (
@@ -15426,7 +15714,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     </div>
                     <div style={{ flexShrink:0, marginTop:'10px', paddingTop:'12px', borderTop:`1px solid ${t.border}`, display:'flex', flexWrap:'wrap', justifyContent:'center', gap:'20px', fontSize:'var(--cc-sm)' }}>
                       <span style={{ fontWeight:'800', color: totales.delta_cant >= 0 ? '#10B981' : '#EF4444' }}>
-                        Δ Cant (ppto políg. − obra N3 ✓): {totales.delta_cant >= 0 ? '+' : ''}{fmtN(totales.delta_cant)}
+                        Δ Cant ({pptoDeltaLabel} − obra N3 ✓): {totales.delta_cant >= 0 ? '+' : ''}{fmtN(totales.delta_cant)}
                       </span>
                       <span style={{ fontWeight:'800', color: totales.delta_costo >= 0 ? '#10B981' : '#EF4444' }}>
                         Δ Costo: {totales.delta_costo >= 0 ? '+' : ''}{fmtD(totales.delta_costo)}
@@ -15519,12 +15807,13 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 const nrList = pptoPR.no_revisado || []
                 const pdList = pptoPR.pendiente || []
                 const rjList = pptoPR.rechazado || []
+                const pptoDeltaLabel3 = dashVistaEjecucion === 'Obra Ejecutada' ? 'obra ejec. políg.' : 'ppto políg.'
                 const analColDefs = [
                   { key:'sicoe', rows: apSic, label:'SICOE · obra N3 aprobada', icon:'✅', hdr:['#0077B618','#0077B6'], cantK:'cant_sicoe_aprobado', costK:'costo_sicoe_aprobado', accent:'#0077B6', kind:'sicoe' },
-                  { key:'ppto_ap', rows: apPpto, label:'Presup. · val. N3 ✓', icon:'📋', hdr:['#0f766e22','#0f766e'], cantK:'cant_ppto_aprobado_n3', costK:'costo_ppto_aprobado_n3', accent:'#0f766e', kind:'ppto' },
-                  { key:'ppto_nr', rows: nrList, label:'Presup. · no revisado', icon:'🟠', hdr:['#ca8a0418','#b45309'], cantK:'cant_ppto_estado_no_revisado', costK:'costo_ppto_estado_no_revisado', accent:'#b45309', kind:'ppto' },
-                  { key:'ppto_pd', rows: pdList, label:'Presup. · pendiente', icon:'⏳', hdr:['#a855f718','#7c3aed'], cantK:'cant_ppto_estado_pendiente', costK:'costo_ppto_estado_pendiente', accent:'#7c3aed', kind:'ppto' },
-                  { key:'ppto_rj', rows: rjList, label:'Presup. · rechazado', icon:'⛔', hdr:['#ef444418','#dc2626'], cantK:'cant_ppto_estado_rechazado', costK:'costo_ppto_estado_rechazado', accent:'#dc2626', kind:'ppto' },
+                  { key:'ppto_ap', rows: apPpto, label: dashPptoGrupoLabel('val. N3 ✓', dashVistaEjecucion), icon:'📋', hdr:['#0f766e22','#0f766e'], cantK:'cant_ppto_aprobado_n3', costK:'costo_ppto_aprobado_n3', accent:'#0f766e', kind:'ppto' },
+                  { key:'ppto_nr', rows: nrList, label: dashPptoGrupoLabel('no revisado', dashVistaEjecucion), icon:'🟠', hdr:['#ca8a0418','#b45309'], cantK:'cant_ppto_estado_no_revisado', costK:'costo_ppto_estado_no_revisado', accent:'#b45309', kind:'ppto' },
+                  { key:'ppto_pd', rows: pdList, label: dashPptoGrupoLabel('pendiente', dashVistaEjecucion), icon:'⏳', hdr:['#a855f718','#7c3aed'], cantK:'cant_ppto_estado_pendiente', costK:'costo_ppto_estado_pendiente', accent:'#7c3aed', kind:'ppto' },
+                  { key:'ppto_rj', rows: rjList, label: dashPptoGrupoLabel('rechazado', dashVistaEjecucion), icon:'⛔', hdr:['#ef444418','#dc2626'], cantK:'cant_ppto_estado_rechazado', costK:'costo_ppto_estado_rechazado', accent:'#dc2626', kind:'ppto' },
                 ]
                 const analVisibleCols = analColDefs.filter(c => (c.rows?.length ?? 0) > 0)
                 return (
@@ -15551,7 +15840,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     </div>
                     <div style={{ flexShrink:0, marginTop:'10px', paddingTop:'12px', borderTop:`1px solid ${t.border}`, display:'flex', flexWrap:'wrap', justifyContent:'center', gap:'20px', fontSize:'var(--cc-sm)' }}>
                       <span style={{ fontWeight:'800', color: totales.delta_cant >= 0 ? '#10B981' : '#EF4444' }}>
-                        Δ Cant (ppto políg. − obra N3 ✓): {totales.delta_cant >= 0 ? '+' : ''}{fmtN3(totales.delta_cant)}
+                        Δ Cant ({pptoDeltaLabel3} − obra N3 ✓): {totales.delta_cant >= 0 ? '+' : ''}{fmtN3(totales.delta_cant)}
                       </span>
                       <span style={{ fontWeight:'800', color: totales.delta_costo >= 0 ? '#10B981' : '#EF4444' }}>
                         Δ Costo: {totales.delta_costo >= 0 ? '+' : ''}{fmtD3(totales.delta_costo)}
@@ -15572,7 +15861,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         {dashDetallePpto && (() => {
           const r = dashDetallePpto
           const depTxt = (r.pre_interv_estado == null || r.pre_interv_estado === '') ? '— (legado)' : r.pre_interv_estado
-          const tipoTxt = r.tipo ?? r.tipo_ejecucion ?? r.tipo_entidad ?? ''
+          const tipoTxt = dashTipoEjecucionLabel(r.tipo_ejecucion ?? r.tipo ?? r.tipo_entidad)
           const fmtN = (x) => (x != null && x !== '' && Number.isFinite(Number(x)) ? String(x) : (x != null && x !== '' ? String(x) : null))
           const fmtCant = r.cant_total != null ? Number(r.cant_total).toFixed(2) : null
           const fmtCalcEn = (iso) => {
@@ -16208,7 +16497,15 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           </div>
         )}
         {moduloActivo === 'presupuesto' && (
-          <ModuloPresupuesto key={`ppto-${usuario?.contrato_id ?? 'x'}`} t={t} usuario={usuario} token={getToken()} s={s} navRegistroId={navRegistroId} onNavRegistroConsumed={() => setNavRegistroId(null)} />
+          <ModuloPresupuesto
+            key={`ppto-${usuario?.contrato_id ?? 'x'}`}
+            t={t}
+            usuario={usuario}
+            token={getToken()}
+            s={s}
+            navRegistroId={navRegistroId}
+            onNavRegistroConsumed={() => setNavRegistroId(null)}
+          />
         )}
 
         {moduloActivo === 'sicoe_obra' && (
@@ -16446,8 +16743,13 @@ export default function App() {
     let cancelled = false
     ;(async () => {
       try {
+        const meOpt =
+          typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+            ? { signal: AbortSignal.timeout(30000) }
+            : {}
         const res = await fetch(`${API}/usuarios/me`, {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: { Authorization: `Bearer ${token}` },
+          ...meOpt,
         })
         if (!res.ok || cancelled) return
         const fresh = await res.json()

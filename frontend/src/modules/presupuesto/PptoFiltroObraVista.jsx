@@ -823,7 +823,7 @@ export default function PptoFiltroObraVista({
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center', flex: '1 1 160px', minWidth: 0 }}>
           {chipKeys.length === 0 ? (
             <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontStyle: 'italic' }}>
-              Sin filtros activos — use + Filtro y pulse Buscar
+              Sin filtros adicionales — el toggle ya define la búsqueda; use + Filtro para acotar o pulse Buscar
             </span>
           ) : chipKeys.map((key) => {
             const def = pptoFiltroDef(key)

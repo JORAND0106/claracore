@@ -306,6 +306,8 @@ namespace SicoePresupuestoNET8
 
                     tr.Commit();
                 }
+
+                try { acApp.Application.MainWindow.Focus(); } catch { }
             }
             catch
             {

@@ -52,13 +52,15 @@ function aplicarPaginaHorizontal(ws) {
   }
 }
 
-/** Pie de página impreso: logo ClaraCore (contenedor fijo) + texto del contrato. */
-function aplicarPiePaginaClaraCore(ws, claraLogoImageId, contratoLabel) {
+/** Pie de página impreso: logo ClaraCore + contrato; paginador con nombre de pestaña. */
+function aplicarPiePaginaClaraCore(ws, claraLogoImageId, contratoLabel, sheetLabel = '') {
   const label = safeStr(contratoLabel || '—').trim() || '—'
   const texto = `Producto ClaraCore para el contrato ${label}`
+  const hoja = safeStr(sheetLabel).trim()
+  const paginador = hoja ? `${hoja} — &P de &N` : '&P de &N'
   const pie = claraLogoImageId != null
-    ? `&L&G  ${texto}&R&P de &N`
-    : `&C${texto}&R&P de &N`
+    ? `&L&G  ${texto}&R${paginador}`
+    : `&C${texto}&R${paginador}`
   ws.headerFooter.oddFooter = pie
   ws.headerFooter.evenFooter = pie
   ws.headerFooter.firstFooter = pie
@@ -379,6 +381,163 @@ function moverHojaAlInicio(wb, sheetName) {
   wb.worksheets.unshift(sheet)
 }
 
+const PARTICULAS_NOMBRE = new Set(['de', 'del', 'la', 'las', 'los', 'y'])
+
+/** Iniciales a partir del nombre completo (p. ej. Diego Rafael Manrique → DRM). */
+function inicialesNombre(nombre) {
+  const raw = safeStr(nombre).trim()
+  if (!raw) return ''
+  const partes = raw.split(/\s+/).filter((p) => p && !PARTICULAS_NOMBRE.has(p.toLowerCase()))
+  if (partes.length === 0) return ''
+  if (partes.length === 1) return partes[0].slice(0, 2).toUpperCase()
+  return partes.map((p) => p[0]).join('').toUpperCase()
+}
+
+/** Celda Validación Dep./Int.: solo iniciales de quien validó; vacío si nadie validó. */
+function formatValidacionDepInt(reg) {
+  const dep = inicialesNombre(reg?.pre_interv_por)
+  const int = inicialesNombre(reg?.validado_por)
+  if (!dep && !int) return ''
+  if (dep && int) return `${dep} / ${int}`
+  return dep || int
+}
+
+function colectarFirmantes(registros) {
+  const revisores = new Map()
+  const aprobadores = new Map()
+  for (const reg of registros || []) {
+    const depPor = safeStr(reg?.pre_interv_por).trim()
+    if (depPor && !revisores.has(depPor)) {
+      revisores.set(depPor, { nombre: depPor, rol: 'Depuración contratista' })
+    }
+    const intPor = safeStr(reg?.validado_por).trim()
+    if (intPor && !aprobadores.has(intPor)) {
+      aprobadores.set(intPor, { nombre: intPor, rol: 'Interventoría' })
+    }
+  }
+  return { revisores: [...revisores.values()], aprobadores: [...aprobadores.values()] }
+}
+
+const BORDER_FIRMA_OUTER = { style: 'medium', color: { argb: 'FF64748B' } }
+const BORDER_FIRMA_INNER = { style: 'thin', color: { argb: 'FF94A3B8' } }
+const BORDER_FIRMA_DIVIDER = { style: 'medium', color: { argb: 'FF64748B' } }
+const PASTEL_FIRMA_BODY = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FCFE' } }
+
+function bordeFirmaCell(cell, { top, left, bottom, right } = {}) {
+  const b = {}
+  if (top) b.top = top
+  if (left) b.left = left
+  if (bottom) b.bottom = bottom
+  if (right) b.right = right
+  cell.border = b
+}
+
+function aplicarMarcoBloqueFirmas(ws, rTit, rNom, rRol, leftEnd, rightStart, cols) {
+  const O = BORDER_FIRMA_OUTER
+  const I = BORDER_FIRMA_INNER
+  const D = BORDER_FIRMA_DIVIDER
+
+  bordeFirmaCell(ws.getCell(rTit, 1), { top: O, left: O, bottom: I, right: D })
+  bordeFirmaCell(ws.getCell(rTit, rightStart), { top: O, right: O, bottom: I, left: D })
+
+  bordeFirmaCell(ws.getCell(rNom, 1), { left: O, bottom: I, right: D })
+  bordeFirmaCell(ws.getCell(rNom, rightStart), { right: O, bottom: I, left: D })
+
+  bordeFirmaCell(ws.getCell(rRol, 1), { left: O, bottom: O, right: D })
+  bordeFirmaCell(ws.getCell(rRol, rightStart), { right: O, bottom: O, left: D })
+
+  for (let r = rTit; r <= rRol; r += 1) {
+    for (let c = leftEnd + 1; c < rightStart; c += 1) {
+      const cell = ws.getCell(r, c)
+      cell.fill = PASTEL_FIRMA_BODY
+      bordeFirmaCell(cell, {
+        top: r === rTit ? O : I,
+        bottom: r === rRol ? O : I,
+        left: c === leftEnd + 1 ? D : undefined,
+        right: c === rightStart - 1 ? D : undefined,
+      })
+    }
+  }
+}
+
+function escribirBloqueFirmas(ws, startRow, totalCols, firmantes) {
+  const cols = Math.max(totalCols, 7)
+  const midCol = Math.max(2, Math.ceil(cols / 2))
+  const leftEnd = midCol - 1
+  const rightStart = midCol
+
+  const estiloTitulo = (cell) => {
+    cell.fill = PASTEL_HEADER
+    cell.font = { bold: true, size: 11, color: { argb: 'FF0F2942' } }
+    cell.alignment = { horizontal: 'center', vertical: 'middle' }
+  }
+  const estiloLinea = (cell, { resaltar = false } = {}) => {
+    cell.fill = resaltar ? PASTEL_META : PASTEL_FIRMA_BODY
+    cell.font = { size: 10, color: { argb: 'FF1F4E70' } }
+    cell.alignment = { horizontal: 'left', vertical: 'top', wrapText: true, indent: 1 }
+  }
+
+  ws.addRow(new Array(cols).fill(''))
+  ws.getRow(startRow).height = 12
+
+  const rTit = startRow + 1
+  ws.mergeCells(rTit, 1, rTit, leftEnd)
+  ws.mergeCells(rTit, rightStart, rTit, cols)
+  ws.getCell(rTit, 1).value = 'Revisó'
+  ws.getCell(rTit, rightStart).value = 'Aprobó'
+  estiloTitulo(ws.getCell(rTit, 1))
+  estiloTitulo(ws.getCell(rTit, rightStart))
+  ws.getRow(rTit).height = 24
+
+  const nombresRev = (firmantes.revisores.length
+    ? firmantes.revisores.map((f) => `Nombre  ${f.nombre}`)
+    : ['Nombre'])
+    .join('\n')
+  const nombresApr = (firmantes.aprobadores.length
+    ? firmantes.aprobadores.map((f) => `Nombre  ${f.nombre}`)
+    : ['Nombre'])
+    .join('\n')
+
+  const rNom = startRow + 2
+  ws.mergeCells(rNom, 1, rNom, leftEnd)
+  ws.mergeCells(rNom, rightStart, rNom, cols)
+  ws.getCell(rNom, 1).value = nombresRev
+  ws.getCell(rNom, rightStart).value = nombresApr
+  estiloLinea(ws.getCell(rNom, 1), { resaltar: true })
+  estiloLinea(ws.getCell(rNom, rightStart), { resaltar: true })
+  ws.getRow(rNom).height = Math.max(
+    44,
+    Math.max(firmantes.revisores.length, 1) * 22,
+    Math.max(firmantes.aprobadores.length, 1) * 22,
+  )
+
+  const rolesRev = (firmantes.revisores.length
+    ? firmantes.revisores.map((f) => `Rol  ${f.rol}`)
+    : ['Rol'])
+    .join('\n')
+  const rolesApr = (firmantes.aprobadores.length
+    ? firmantes.aprobadores.map((f) => `Rol  ${f.rol}`)
+    : ['Rol'])
+    .join('\n')
+
+  const rRol = startRow + 3
+  ws.mergeCells(rRol, 1, rRol, leftEnd)
+  ws.mergeCells(rRol, rightStart, rRol, cols)
+  ws.getCell(rRol, 1).value = rolesRev
+  ws.getCell(rRol, rightStart).value = rolesApr
+  estiloLinea(ws.getCell(rRol, 1))
+  estiloLinea(ws.getCell(rRol, rightStart))
+  ws.getRow(rRol).height = Math.max(
+    26,
+    Math.max(firmantes.revisores.length, 1) * 18,
+    Math.max(firmantes.aprobadores.length, 1) * 18,
+  )
+
+  aplicarMarcoBloqueFirmas(ws, rTit, rNom, rRol, leftEnd, rightStart, cols)
+
+  return rRol
+}
+
 const DET_HEADERS = [
   'ID_POL',
   'PK_ID',
@@ -408,7 +567,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
 
   const ws = wb.addWorksheet(sheetName, { views: [{ showGridLines: false }] })
   aplicarPaginaHorizontal(ws)
-  aplicarPiePaginaClaraCore(ws, claraLogoImageId, meta.numero || meta.contrato)
+  aplicarPiePaginaClaraCore(ws, claraLogoImageId, meta.numero || meta.contrato, sheetName)
 
   const enc = escribirEncabezadoCompacto(
     ws,
@@ -425,6 +584,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   const tableRow = escribirEncabezadoItemCompacto(ws, enc.tableHeaderRow, TOTAL_COLS_DET, itemInfo)
   ws.addRow(DET_HEADERS)
   estiloFilaHeader(ws.getRow(tableRow), TOTAL_COLS_DET)
+  ws.pageSetup.printTitlesRow = `${tableRow}:${tableRow}`
   const firstDetRow = tableRow + 1
   const regs = itemInfo.registros || []
 
@@ -440,7 +600,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
       reg.ancho,
       reg.espesor,
       reg.cant_total,
-      reg.validacion,
+      formatValidacionDepInt(reg),
       reg.observacion,
     ])
     estiloCantidad(r.getCell(7))
@@ -467,6 +627,9 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
     aplicarBordesTabla(ws, tableRow, cantTotalRow, TOTAL_COLS_DET)
   }
 
+  const firmRowStart = (cantTotalRow || (regs.length > 0 ? lastDetRow : tableRow)) + 2
+  escribirBloqueFirmas(ws, firmRowStart, TOTAL_COLS_DET, colectarFirmantes(regs))
+
   ajustarAnchos(ws, tableRow, TOTAL_COLS_DET)
 
   return {
@@ -476,7 +639,7 @@ function crearHojaItem(wb, itemInfo, idx, usedNames, meta, modoLabel, generatedA
   }
 }
 
-function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros, generatedAt, logoImageId, claraLogoImageId) {
+function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros, generatedAt, logoImageId, claraLogoImageId, todosRegistros = []) {
   const resumenHeaders = [
     'Capítulo',
     'Ítem',
@@ -489,7 +652,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   const totalColsResumen = resumenHeaders.length
   const wsRes = wb.addWorksheet('Resumen', { views: [{ showGridLines: false }] })
   aplicarPaginaHorizontal(wsRes)
-  aplicarPiePaginaClaraCore(wsRes, claraLogoImageId, meta.numero || meta.contrato)
+  aplicarPiePaginaClaraCore(wsRes, claraLogoImageId, meta.numero || meta.contrato, 'Resumen')
 
   const { tableHeaderRow, totalsSummaryRow } = escribirEncabezadoCompacto(
     wsRes,
@@ -504,6 +667,7 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
 
   wsRes.addRow(resumenHeaders)
   estiloFilaHeader(wsRes.getRow(tableHeaderRow), totalColsResumen)
+  wsRes.pageSetup.printTitlesRow = `${tableHeaderRow}:${tableHeaderRow}`
 
   const firstDataRow = tableHeaderRow + 1
   let rowNum = firstDataRow
@@ -537,12 +701,16 @@ function crearHojaResumen(wb, resumen, itemRefs, meta, modoLabel, totalRegistros
   }
 
   const lastDataRow = resumen.length > 0 ? firstDataRow + resumen.length - 1 : firstDataRow - 1
+  let totalsFooterRow = null
   if (resumen.length > 0) {
-    const totalsFooterRow = lastDataRow + 1
+    totalsFooterRow = lastDataRow + 1
     wsRes.addRow(new Array(totalColsResumen).fill(''))
     completarFormulasTotales(wsRes, totalsSummaryRow, totalsFooterRow, firstDataRow, lastDataRow)
     aplicarBordesTabla(wsRes, tableHeaderRow, totalsFooterRow, totalColsResumen)
   }
+
+  const firmRowStart = (totalsFooterRow || tableHeaderRow) + 2
+  escribirBloqueFirmas(wsRes, firmRowStart, totalColsResumen, colectarFirmantes(todosRegistros))
 
   ajustarAnchos(wsRes, tableHeaderRow, totalColsResumen)
   return wsRes
@@ -569,10 +737,12 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
 
   const usedNames = new Set(['resumen'])
   const itemRefs = new Map()
+  const todosRegistros = []
 
   items.forEach((itemInfo, idx) => {
     const ref = crearHojaItem(wb, itemInfo, idx, usedNames, { ...meta, contrato: contratoLabel }, modoLabel, generatedAt, logoImageId, claraLogoImageId)
     if (ref.cantTotalRow) itemRefs.set(ref.key, ref)
+    for (const reg of itemInfo.registros || []) todosRegistros.push(reg)
   })
 
   crearHojaResumen(
@@ -585,6 +755,7 @@ export async function downloadPresupuestoInformeExcel(payload, metaContrato, con
     generatedAt,
     logoImageId,
     claraLogoImageId,
+    todosRegistros,
   )
 
   moverHojaAlInicio(wb, 'Resumen')

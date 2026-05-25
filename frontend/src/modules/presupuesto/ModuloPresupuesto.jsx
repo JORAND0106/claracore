@@ -12,7 +12,7 @@ import EmojiPicker from '../../EmojiPicker'
 import PptoFiltroObraVista from './PptoFiltroObraVista'
 import PptoVersionador from './PptoVersionador'
 import { downloadPresupuestoInformeExcel } from './presupuestoExportExcel'
-import { pptoAppendFObraToSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroValoresLista, pptoFObraToExportBody, pptoExportBodyToSearchParams } from './pptoFiltroCatalogo'
+import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroValoresLista, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
 import CcAvisoModal from '../../components/CcAvisoModal'
 
 /** Tipografía alineada con Pequeña / Mediana / Grande (`applyClaraTypography` en `typographyScale.js`) */
@@ -193,20 +193,14 @@ function fObraItemsLista(f) {
 
 const PPTO_TIPO_EJECUCION_DEFAULT = 'Presupuesto de Obra'
 const PPTO_TIPO_EJECUCION_OBRA = 'Obra Ejecutada'
+const pptoVistaLsKey = (contratoId) => `clara_dash_vista_${contratoId}`
 
-function pptoAppendTipoEjecucion(p, f) {
-  const te = String(f?.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT).trim() || PPTO_TIPO_EJECUCION_DEFAULT
-  p.set('tipo_ejecucion', te)
-}
-
-function pptoTieneAmbosTiposEjecucion(tipos) {
-  if (!Array.isArray(tipos)) return false
-  const set = new Set(tipos.map((x) => String(x).trim()))
-  return set.has(PPTO_TIPO_EJECUCION_DEFAULT) && set.has(PPTO_TIPO_EJECUCION_OBRA)
+function pptoCtxFiltro(drillRef, capExpandidoRef) {
+  return { drill: drillRef, capExpandido: capExpandidoRef, tipoEjecucionDefault: PPTO_TIPO_EJECUCION_DEFAULT }
 }
 
 // ─── MÓDULO PRESUPUESTO ───────────────────────────────────────────────────────
-function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRegistroConsumed }) {
+function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRegistroConsumed, oculto = false }) {
   const API = API_BASE
   const contratoId = usuario?.contrato_id
 
@@ -253,6 +247,8 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [popupGuardando, setPopupGuardando] = useState(false)
   const [popupMsg, setPopupMsg] = useState('')
   const [avisoSistema, setAvisoSistema] = useState(null)
+  const [confirmCargaGrande, setConfirmCargaGrande] = useState(null)
+  const confirmCargaGrandeRef = useRef(null)
   const [filtroResetKey, setFiltroResetKey] = useState(0)
   // ── Revisor de Tramos ─────────────────────────────────────────────────────
   const [modalModoCapitulo, setModalModoCapitulo] = useState(null) // nombre del capítulo pendiente
@@ -276,9 +272,27 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   useEffect(() => { conteoFiltroRef.current = conteoFiltro }, [conteoFiltro])
   /** Tamaño de lote al traer /presupuesto (limit/offset). La UI aplica un solo setRegistros al final. */
   const PRES_PTO_CHUNK = 1000
+  /** Umbral para avisar al usuario que la búsqueda puede demorar. */
+  const PRES_PTO_ALERTA_GRANDE_UMBRAL = 5000
+
+  function pedirConfirmacionCargaGrande(totalN) {
+    return new Promise((resolve) => {
+      confirmCargaGrandeRef.current = resolve
+      setConfirmCargaGrande({ total: totalN })
+    })
+  }
+
+  function resolverConfirmCargaGrande(continuar) {
+    const resolve = confirmCargaGrandeRef.current
+    confirmCargaGrandeRef.current = null
+    setConfirmCargaGrande(null)
+    if (typeof resolve === 'function') resolve(!!continuar)
+  }
   const pptoCargaRef = useRef({ key: '', nextOffset: 0, hasMore: false, total: 0 })
   const cargaPptoInFlightRef = useRef(false)
   const cargaPptoIdRef = useRef(0)
+  /** true tras Buscar con chips: no auto-refrescar cada 22 s ni al volver a la pestaña. */
+  const busquedaServidorActivaRef = useRef(false)
   const registrosRef = useRef([])
   useEffect(() => { registrosRef.current = registros }, [registros])
   /** Filtro tipo SICOE Obra (reemplaza drill por gráfico de barras) */
@@ -287,8 +301,22 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   })
   const fObraRef = useRef(fObra)
   useEffect(() => { fObraRef.current = fObra }, [fObra])
-  const [tiposEjecucionDisponibles, setTiposEjecucionDisponibles] = useState([])
-  const mostrarToggleTipoEjecucion = pptoTieneAmbosTiposEjecucion(tiposEjecucionDisponibles)
+
+  useEffect(() => {
+    if (!contratoId) return
+    try {
+      const saved = localStorage.getItem(pptoVistaLsKey(contratoId))
+      if (saved === PPTO_TIPO_EJECUCION_OBRA || saved === PPTO_TIPO_EJECUCION_DEFAULT) {
+        setFObra((prev) => {
+          if ((prev.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT) === saved) return prev
+          const next = { ...prev, tipoEjecucion: saved }
+          fObraRef.current = next
+          return next
+        })
+      }
+    } catch { /* ignore */ }
+  }, [contratoId])
+
   const [capExpandido, setCapExpandido] = useState(null)
   const [buscandoFiltroObra, setBuscandoFiltroObra] = useState(false)
   /** Ancla de selección en panel ítems (Mayús+clic = rango desde este índice). */
@@ -316,6 +344,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [versionCrearOpen, setVersionCrearOpen] = useState(false)
   const [versionPanelOpen, setVersionPanelOpen] = useState(false)
   const [verPapelera, setVerPapelera] = useState(false)
+  const mostrarToggleTipoEjecucion = !verPapelera
   const versionVigente = useMemo(
     () => versionesPresupuesto.find((v) => v.es_vigente) || null,
     [versionesPresupuesto],
@@ -345,7 +374,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   // ── Enlace DWG ──────────────────────────────────────────────────────────── 
   const [dwgEnlazado, setDwgEnlazado] = useState(false)
   useEffect(() => {
-    if (!contratoId) return
+    if (!contratoId || oculto) return
     const check = async () => {
       try {
         const tok = getToken()
@@ -360,11 +389,11 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
     // 5s generaba demasiadas peticiones concurrentes al API y empeora 502 en Azure con poco CPU/RAM.
     const iv = setInterval(check, 20000)
     return () => clearInterval(iv)
-  }, [contratoId])
+  }, [contratoId, oculto])
 
   // ── Aviso de auditoría: cantidades enviadas desde SicoeCAD (misma vía /bulk que alimenta presupuesto y la cola CAD) ──
   useEffect(() => {
-    if (!contratoId || !token) return
+    if (!contratoId || !token || oculto) return
     const poll = async () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
       try {
@@ -388,7 +417,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
       clearInterval(interval)
       document.removeEventListener('visibilitychange', onVis)
     }
-  }, [contratoId, token])
+  }, [contratoId, token, oculto])
 
     // ── Constantes drill-down ──────────────────────────────────────────────────
   const NIVELES = ['capitulo', 'item', 'pk_id']
@@ -415,23 +444,18 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   }, [API, contratoId, token])
 
   useEffect(() => {
-    if (!contratoId) return
-    const h = { Authorization: `Bearer ${token}` }
-    fetch(`${API}/presupuesto/${contratoId}/filtros`, { headers: h })
-      .then((r) => (r.ok ? r.json() : {}))
-      .then((d) => setTiposEjecucionDisponibles(Array.isArray(d?.tipos_ejecucion) ? d.tipos_ejecucion : []))
-      .catch(() => setTiposEjecucionDisponibles([]))
+    if (!contratoId || oculto) return
     void cargarCapitulos()
     void cargarVersionesPresupuesto()
-  }, [contratoId, token, cargarVersionesPresupuesto])
+  }, [contratoId, token, cargarVersionesPresupuesto, oculto])
   useEffect(() => {
-    if (!contratoId) return
+    if (!contratoId || oculto) return
     const h = { Authorization: `Bearer ${token}` }
     fetch(`${API}/presupuesto/${contratoId}/maestro-ubicacion-pk`, { headers: h })
       .then((r) => (r.ok ? r.json() : { tramos: [], calzadas: [] }))
       .then((d) => setOpcionesUbicacion({ tramos: d.tramos || [], calzadas: d.calzadas || [] }))
       .catch(() => {})
-  }, [contratoId, token])
+  }, [contratoId, token, oculto])
   
 useEffect(() => {
     if (!navRegistroId || !contratoId) return
@@ -448,14 +472,14 @@ useEffect(() => {
   }, [navRegistroId])
 
     useEffect(() => {
-    if (!contratoId) return
+    if (!contratoId || oculto) return
     const q = new URLSearchParams({ contrato_id: String(contratoId) })
     fetch(`${API}/notificaciones/usuarios-destinatarios?${q}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : []).then(setUsuariosDestinatarios).catch(() => {})
-  }, [contratoId, token])
+  }, [contratoId, token, oculto])
 
     useEffect(() => {
-    if (!contratoId) return
+    if (!contratoId || oculto) return
     const pkidDrill = drill.find(d => d.campo === 'pk_id')
     if (pkidDrill) { setPptoPkidColores({}); return }
     const params = new URLSearchParams()
@@ -470,13 +494,13 @@ useEffect(() => {
     fetch(`${API}/sicoe-obra/${contratoId}/dashboard-pkid-colores?${params}`, {
       headers: { Authorization: `Bearer ${token}` }
     }).then(r => r.ok ? r.json() : {}).then(setPptoPkidColores).catch(() => {})
-  }, [contratoId, drill])
+  }, [contratoId, drill, oculto])
 
   useEffect(() => {
-    if (!contratoId) return
+    if (!contratoId || oculto) return
     fetch(`${API}/listado-precios/${contratoId}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : []).then(setListadoPrecios).catch(() => {})
-  }, [contratoId])
+  }, [contratoId, oculto])
 
   const esDeveloper  = usuario?.cargo_nombre?.toLowerCase() === 'desarrollador'
   const _permPpto    = (usuario?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === 'editar registros presupuesto')
@@ -655,19 +679,20 @@ useEffect(() => {
    * para que el poll / debounce no borre un filtro fino (p. ej. PK elegido en el mapa).
    */
   const armarQueryPresupuestoServer = useCallback(() => {
-    const p = armarFiltrosUbicacionSolo()
-    const capD = drill.find(d => d.campo === 'capitulo')
-    const itemD = drill.find(d => d.campo === 'item')
-    const itemsD = drill.find(d => d.campo === 'items')
-    if (capD) p.set('capitulo', capD.valor)
-    if (itemsD && Array.isArray(itemsD.valor) && itemsD.valor.length > 1) {
-      for (const it of itemsD.valor) p.append('items', String(it))
-    } else if (itemD) p.set('item', itemD.valor)
-    else if (itemsD && Array.isArray(itemsD.valor) && itemsD.valor.length === 1) p.set('item', String(itemsD.valor[0]))
-    if (verPapelera) p.set('papelera', 'true')
-    pptoAppendFObraToSearchParams(p, fObra)
+    const ctx = pptoCtxFiltro(drill, capExpandido)
+    const fMerged = { ...(fObraRef.current || fObra) }
+    if (ubicacionTramo) { fMerged.tramo = ubicacionTramo; fMerged.tramos = [] }
+    if (ubicacionCalzada) { fMerged.calzada = ubicacionCalzada; fMerged.calzadas = [] }
+    if (filtroEstado) { fMerged.revisado = filtroEstado; fMerged.eje = 'interv' }
+    const p = pptoBuildPresupuestoSearchParams(fMerged, ctx, { verPapelera })
+    const leg = armarFiltrosUbicacionSolo()
+    for (const [k, v] of leg.entries()) {
+      if (k === 'buscar' || k === 'nodo_inicio' || k === 'nodo_final' || k === 'abs_desde' || k === 'abs_hasta') {
+        if (!p.has(k)) p.set(k, v)
+      }
+    }
     return p
-  }, [armarFiltrosUbicacionSolo, drill, fObra, verPapelera])
+  }, [armarFiltrosUbicacionSolo, drill, fObra, capExpandido, verPapelera, ubicacionTramo, ubicacionCalzada, filtroEstado])
 
   const armarPayloadExportPresupuesto = useCallback(() => {
     const f = fObraRef.current || fObra
@@ -716,7 +741,8 @@ useEffect(() => {
     if (!contratoId) return
     setExportPresupuestoOpen(true)
     setExportPresupuestoError(null)
-    setExportPresupuestoModo('presupuesto_obra')
+    const te = fObraRef.current?.tipoEjecucion || fObra.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT
+    setExportPresupuestoModo(te === PPTO_TIPO_EJECUCION_OBRA ? 'obra_ejecutada' : 'presupuesto_obra')
     setExportMetaContrato(null)
     setExportEstimado({ cargando: true, registros: null, items: null, alcance: 'Calculando alcance…', esGrande: false })
     try {
@@ -795,7 +821,7 @@ useEffect(() => {
       const filtros = armarPayloadExportPresupuesto()
       const ctx = { drill, capExpandido, tipoEjecucionDefault: PPTO_TIPO_EJECUCION_DEFAULT }
       if (!criterioVistaActivo(fObraRef.current || fObra, ctx)) {
-        throw new Error('Configure filtros y pulse Buscar antes de exportar.')
+        throw new Error('Pulse Buscar (o cambie el toggle) antes de exportar.')
       }
       const res = await fetch(`${API}/presupuesto/${contratoId}/exportar-informe`, {
         method: 'POST',
@@ -880,8 +906,10 @@ useEffect(() => {
    * Limitar a 3 simultáneos evita saturar el pool de conexiones de Supabase.
    * @param {URLSearchParams} pQuery mismos params que el listado
    * @param {(rows: object[]) => void} [onBatch] Tras cada tanda de hasta 3 peticiones en paralelo, filas acumuladas hasta el momento (misma orden que al finalizar).
+   * @param {{ avisarCargaGrande?: boolean, onTotalConocido?: (total: number) => void }} [opts]
    */
-  async function fetchPresupuestoPaginasCompletas(pQuery, onBatch) {
+  async function fetchPresupuestoPaginasCompletas(pQuery, onBatch, opts = {}) {
+    const { avisarCargaGrande = true, onTotalConocido } = opts
     const h = { Authorization: `Bearer ${token}` }
     const qC = new URLSearchParams(pQuery.toString()).toString()
     const resC = await fetch(`${API}/presupuesto/${contratoId}/conteo${qC ? `?${qC}` : ''}`, { headers: h })
@@ -890,19 +918,31 @@ useEffect(() => {
       const j = await resC.json()
       if (j && typeof j.total === 'number') totalN = j.total
     }
+    if (typeof onTotalConocido === 'function') onTotalConocido(totalN)
+    if (totalN > PRES_PTO_ALERTA_GRANDE_UMBRAL && avisarCargaGrande) {
+      const continuar = await pedirConfirmacionCargaGrande(totalN)
+      if (!continuar) return { rows: [], total: totalN, cancelado: true }
+    }
     if (totalN === 0) return { rows: [], total: 0 }
 
     const offsets = []
     for (let off = 0; off < totalN; off += PRES_PTO_CHUNK) offsets.push(off)
 
-    const fetchPage = (off) => {
+    const fetchPage = async (off) => {
       const p = new URLSearchParams(pQuery.toString())
       p.set('limit', String(PRES_PTO_CHUNK))
       p.set('offset', String(off))
-      return fetch(`${API}/presupuesto/${contratoId}?${p.toString()}`, { headers: h })
-        .then(r => r.ok ? r.json() : [])
-        .then(d => Array.isArray(d) ? d : [])
-        .catch(() => [])
+      for (let intento = 0; intento < 3; intento += 1) {
+        try {
+          const r = await fetch(`${API}/presupuesto/${contratoId}?${p.toString()}`, { headers: h })
+          if (r.ok) {
+            const d = await r.json()
+            if (Array.isArray(d)) return d
+          }
+        } catch { /* reintento */ }
+        if (intento < 2) await new Promise((res) => setTimeout(res, 350 * (intento + 1)))
+      }
+      return []
     }
 
     // Concurrencia máxima de 3 páginas simultáneas para no saturar Supabase
@@ -915,6 +955,9 @@ useEffect(() => {
       if (typeof onBatch === 'function') {
         onBatch(allRows.slice())
       }
+    }
+    if (allRows.length < totalN) {
+      console.warn(`[Presupuesto] Carga incompleta: ${allRows.length}/${totalN} filas`)
     }
     return { rows: allRows, total: totalN }
   }
@@ -944,32 +987,44 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setVisibleRegistrosCount(50)
   }
 
+  const capitulosFetchRef = useRef(0)
+
   // ── Carga lazy por capítulo ────────────────────────────────────────────────
-  async function cargarCapitulos() {
+  async function cargarCapitulos(opts = {}) {
+    const silent = !!opts.silent
     if (!contratoId) return
-    setLoadingCapitulos(true)
+    const seq = ++capitulosFetchRef.current
+    if (!silent) setLoadingCapitulos(true)
     try {
-      const p = new URLSearchParams()
-      pptoAppendTipoEjecucion(p, fObraRef.current)
+      const p = pptoBuildPresupuestoSearchParams(fObraRef.current || fObra, pptoCtxFiltro(drill, capExpandido), {})
       const qs = p.toString()
+      const ac = new AbortController()
+      const t = setTimeout(() => ac.abort(), 120000)
       const res = await fetch(`${API}/presupuesto/${contratoId}/capitulos-lista${qs ? `?${qs}` : ''}`, {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}` },
+        signal: ac.signal,
       })
+      clearTimeout(t)
+      if (seq !== capitulosFetchRef.current) return
       if (res.ok) {
         const list = await res.json()
         setCapitulosResumen(Array.isArray(list) ? [...list].sort(cmpCapituloLabel) : list)
       }
-    } catch {}
-    setLoadingCapitulos(false)
+    } catch { /* silencio */ } finally {
+      if (seq === capitulosFetchRef.current && !silent) setLoadingCapitulos(false)
+    }
   }
   
   async function cargarCapituloData(capitulo, item = null, opts = false) {
     const o = typeof opts === 'object' && opts && !Array.isArray(opts) ? opts : { forzar: !!opts, syncPreserveSize: false }
-    if (!contratoId) return
-    const p = armarFiltrosUbicacionSolo()
-    p.set('capitulo', capitulo)
-    if (item) p.set('item', item)
-    pptoAppendTipoEjecucion(p, fObraRef.current)
+    const cap = String(capitulo || '').trim()
+    if (!contratoId || !cap) return
+    const ctx = pptoCtxFiltro(drill, capExpandido)
+    const p = pptoBuildPresupuestoSearchParams(fObraRef.current || fObra, ctx, {
+      verPapelera,
+      capituloOverride: cap,
+      itemOverride: item,
+    })
     const cacheKey = keyCacheFila(capitulo, item)
     const silent = !!o.forzar && !!o.syncPreserveSize
     if (!o.forzar) {
@@ -997,13 +1052,17 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (silent) {
       cargaPptoInFlightRef.current = true
     } else {
+      busquedaServidorActivaRef.current = false
       setLoading(true)
+      setVisibleRegistrosCount(50)
     }
     try {
       const { rows, total } = await fetchPresupuestoPaginasCompletas(p, (partial) => {
         if (cargaId !== cargaPptoIdRef.current) return
         setRegistros(partial)
-      })
+      }, { avisarCargaGrande: !silent, onTotalConocido: silent ? undefined : (n) => {
+        if (cargaId === cargaPptoIdRef.current) setConteoFiltro(n)
+      } })
       if (cargaId !== cargaPptoIdRef.current) return
       setConteoFiltro(total)
       setRegistros(rows)
@@ -1054,6 +1113,11 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       const { rows, total } = await fetchPresupuestoPaginasCompletas(p0, (partial) => {
         if (cargaId !== cargaPptoIdRef.current) return
         setRegistros(partial)
+      }, {
+        avisarCargaGrande: !silent,
+        onTotalConocido: silent ? undefined : (n) => {
+          if (cargaId === cargaPptoIdRef.current) setConteoFiltro(n)
+        },
       })
       if (cargaId !== cargaPptoIdRef.current) return
       setConteoFiltro(total)
@@ -1126,7 +1190,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       setDrill([])
       setUbicacionTramo('')
       setUbicacionCalzada('')
-      await cargarCapitulos()
+      await cargarCapitulos({ silent: true })
       return
     }
     const capActual = drill.find(d => d.campo === 'capitulo')?.valor
@@ -1154,7 +1218,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         await cargarCapituloData(capActual, null)
       }
     }
-    await cargarCapitulos()
+    await cargarCapitulos({ silent: true })
   }
   recargarCapActualRef.current = recargarCapActual
 
@@ -1272,31 +1336,18 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (sincroSicoeModal) recargarCapActual(true)
   }, [sincroSicoeModal?.ts])
 
-  /** Realtime presupuesto: solo refresca resumen liviano (GET /resumen); el listado sigue con polling 22s. */
+  /** Realtime presupuesto: refresca resumen por capítulo en segundo plano (no bloquea grilla). */
   useEffect(() => {
-    if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contratoId) return
+    if (oculto || !SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contratoId) return
     const cid = String(contratoId)
     const filt = `contrato_id=eq.${cid}`
-    const aplicarResumen = (d) => {
-      if (!d || typeof d !== 'object') return
-      const rows = d.por_capitulo
-      if (!Array.isArray(rows)) return
-      const list = rows.map((r) => ({
-        capitulo: r.capitulo,
-        costo_total: Number(r.costo) || 0,
-        total_registros: Number(r.registros) || 0,
-      }))
-      setCapitulosResumen([...list].sort(cmpCapituloLabel))
-    }
+    let debounceTimer = null
     const onChange = () => {
-      const tok = getToken()
-      if (!tok) return
-      fetch(`${API}/presupuesto/${contratoId}/resumen`, { headers: { Authorization: `Bearer ${tok}` } })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => {
-          if (d) aplicarResumen(d)
-        })
-        .catch(() => {})
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null
+        void cargarCapitulos({ silent: true })
+      }, 1500)
     }
     const channel = supabase
       .channel(`presupuesto-${cid}`)
@@ -1307,16 +1358,18 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       )
       .subscribe()
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
       void supabase.removeChannel(channel)
     }
-  }, [contratoId])
+  }, [contratoId, oculto])
 
-  // Multisesión: refresco con pestaña activa. Intervalos cortos disparan conteo + N× presupuesto?limit=1000 y saturan el API.
+  // Multisesión: refresco solo en vista por capítulo/ítem (panel). No interrumpe búsqueda con chips.
   useEffect(() => {
     const PPTO_MULTI_POLL_MS = 22000
-    if (!contratoId) return
+    if (!contratoId || oculto) return
     const tick = () => {
       if (document.visibilityState !== 'visible') return
+      if (busquedaServidorActivaRef.current) return
       if (cargaPptoInFlightRef.current || loading) return
       if (buscandoFiltroObra) return
       // No sobreescribir estado local durante 8 s después de escritura o recarga manual del usuario
@@ -1337,8 +1390,9 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     const onVis = () => {
       if (document.visibilityState !== 'visible') return
+      if (busquedaServidorActivaRef.current) return
       tick()
-      if (!detalleConItem && drill.length === 0 && !verPapelera) void cargarCapitulos()
+      if (!detalleConItem && drill.length === 0 && !verPapelera) void cargarCapitulos({ silent: true })
     }
     document.addEventListener('visibilitychange', onVis)
     window.addEventListener('focus', onVis)
@@ -1348,7 +1402,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       window.removeEventListener('focus', onVis)
       clearInterval(iv)
     }
-  }, [contratoId, detalleConItem, drill, verPapelera, loading, buscandoFiltroObra, fObra])
+  }, [contratoId, oculto, detalleConItem, drill, verPapelera, loading, buscandoFiltroObra, fObra])
 
   function syncFObraALegacy(f) {
     setUbicacionTramo(f.tramo || '')
@@ -1371,11 +1425,11 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   async function aplicarFiltroObraConF(fIn) {
     if (!contratoId) return
-    const ctx = { drill, capExpandido, tipoEjecucionDefault: PPTO_TIPO_EJECUCION_DEFAULT }
+    const ctx = pptoCtxFiltro(drill, capExpandido)
     const f = pptoFiltroNormalizar({ ...(fIn || {}), eje: fIn?.eje || 'interv' }, ctx)
     const has = criterioVistaActivo(f, ctx)
     if (!has) {
-      setAvisoSistema({ titulo: 'Filtros', mensaje: 'Indique al menos un criterio de filtro activo.', tipo: 'warn' })
+      setAvisoSistema({ titulo: 'Filtros', mensaje: 'Seleccione Presupuesto de Obra u Obra Ejecutada, o añada un filtro con + Filtro.', tipo: 'warn' })
       return
     }
     setFObra(f)
@@ -1396,26 +1450,39 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       const capPrim = capVals[0] || f.cap || ''
       if (capPrim) setCapActivo(capPrim)
 
-      const p = new URLSearchParams()
-      if (verPapelera) p.set('papelera', 'true')
-      pptoAppendFObraToSearchParams(p, f)
-      pptoAppendTipoEjecucion(p, f)
-      const { rows, total } = await fetchPresupuestoPaginasCompletas(p, (partial) => {
+      const p = pptoBuildPresupuestoSearchParams(f, { ...ctx, drill: d }, { verPapelera })
+      const { rows, total, cancelado } = await fetchPresupuestoPaginasCompletas(p, (partial) => {
         if (cargaId !== cargaPptoIdRef.current) return
         setRegistros(partial)
+      }, {
+        avisarCargaGrande: true,
+        onTotalConocido: (n) => {
+          if (cargaId === cargaPptoIdRef.current) setConteoFiltro(n)
+        },
       })
       if (cargaId !== cargaPptoIdRef.current) return
+      if (cancelado) {
+        setConteoFiltro(total || null)
+        setRegistros([])
+        return
+      }
       setConteoFiltro(total)
       setRegistros(rows)
       setVisibleRegistrosCount(50)
+      if (rows.length < total) {
+        setAvisoSistema({
+          titulo: 'Carga incompleta',
+          mensaje: `Se recibieron ${rows.length.toLocaleString('es-CO')} de ${total.toLocaleString('es-CO')} registros. Pulse Buscar de nuevo o Actualizar.`,
+          tipo: 'warn',
+        })
+      }
       _pptoCachePorCap.current = {}
       const capD = capPrim || f.cap
       const itemKey = itemsLista.length > 1 ? itemsLista.join('\x1f') : (itemsLista[0] || '')
-      if (capD) {
-        const key = [capD, itemKey, f.tramo, f.calzada, f.eje, f.revisado, f.preInterv, f.idPol, f.pkCriterio, f.texto, f.nodoI, f.nodoF, f.absA, f.absB, f.competencia, f.und, f.sellado, f.dadoDeBaja, f.vlrUnitarioMin, f.vlrUnitarioMax, f.cantTotalMin, f.cantTotalMax, f.costoDirectoMin, f.costoDirectoMax, f.tipoEjecucion].join('|')
-        pptoCargaRef.current = { key, nextOffset: rows.length, hasMore: false, total }
-        _pptoCachePorCap.current[key] = { data: rows, ts: Date.now(), total }
-      }
+      const key = [capD || '*', itemKey, f.tramo, f.calzada, f.eje, f.revisado, f.preInterv, f.idPol, f.pkCriterio, f.texto, f.nodoI, f.nodoF, f.absA, f.absB, f.competencia, f.und, f.sellado, f.dadoDeBaja, f.vlrUnitarioMin, f.vlrUnitarioMax, f.cantTotalMin, f.cantTotalMax, f.costoDirectoMin, f.costoDirectoMax, f.tipoEjecucion].join('|')
+      pptoCargaRef.current = { key, nextOffset: rows.length, hasMore: false, total }
+      _pptoCachePorCap.current[key] = { data: rows, ts: Date.now(), total }
+      busquedaServidorActivaRef.current = true
       skipDebounceFiltrosRef.current = true
     } catch { /* silencio */ } finally {
       cargaPptoInFlightRef.current = false
@@ -1434,27 +1501,48 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   async function onCambioTipoEjecucion(nuevoTipo) {
     const te = String(nuevoTipo || PPTO_TIPO_EJECUCION_DEFAULT).trim() || PPTO_TIPO_EJECUCION_DEFAULT
     if (te === (fObraRef.current?.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT)) return
+    try {
+      if (contratoId) localStorage.setItem(pptoVistaLsKey(contratoId), te)
+    } catch { /* ignore */ }
     const next = { ...fObraRef.current, tipoEjecucion: te }
     setFObra(next)
     fObraRef.current = next
+    busquedaServidorActivaRef.current = false
     cargaPptoIdRef.current += 1
     _pptoCachePorCap.current = {}
     _pptoCacheRef.current = null
     pptoCargaRef.current = { key: '', nextOffset: 0, hasMore: false, total: 0 }
     setConteoFiltro(null)
     setRegistros([])
-    setItemsResumen([])
     setSeleccionados(new Set())
     setVisibleRegistrosCount(50)
-    await cargarCapitulos()
-    const cap = (next.cap && String(next.cap).trim()) || capExpandido
-    if (cap) await cargarItemsCapitulo(cap)
-    if (criterioVistaActivo(next)) {
-      await aplicarFiltroObraConF(next)
-    } else if (drill.length > 0) {
-      await recargarCapActual(false)
+    await cargarCapitulos({ silent: true })
+    const ctx = pptoCtxFiltro(drill, capExpandido)
+    const fNorm = pptoFiltroNormalizar(next, ctx)
+    if (!pptoTieneFiltrosChip(fNorm, ctx)) {
+      setDrill([])
+      setCapExpandido(null)
+      setCapActivo(null)
+      setItemsResumen([])
+      const fSoloTipo = { ...fNorm, cap: '', caps: [], item: '', items: [] }
+      setFObra(fSoloTipo)
+      fObraRef.current = fSoloTipo
+      await aplicarFiltroObraConF(fSoloTipo)
+      return
     }
+    await aplicarFiltroObraConF(fNorm)
   }
+
+  useEffect(() => {
+    if (!contratoId || oculto) return
+    try {
+      const saved = localStorage.getItem(pptoVistaLsKey(contratoId))
+      if (saved !== PPTO_TIPO_EJECUCION_OBRA && saved !== PPTO_TIPO_EJECUCION_DEFAULT) return
+      const actual = fObraRef.current?.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT
+      if (actual === saved) return
+      void onCambioTipoEjecucion(saved)
+    } catch { /* ignore */ }
+  }, [contratoId, oculto])
 
   /** Quita búsqueda fina (PK, ID-POL, texto) y vuelve a cargar; mantiene cap/ítem y tramo/validación. */
   async function restablecerPksVistaItem() {
@@ -1477,6 +1565,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   function limpiarFiltroObra() {
     cargaPptoIdRef.current += 1
+    busquedaServidorActivaRef.current = false
     const vacio = fObraInicialVacio()
     setFObra(vacio)
     fObraRef.current = vacio
@@ -1511,8 +1600,9 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setFObra(next)
     fObraRef.current = next
     setCapActivo(capitulo)
+    setDrill([{ campo: 'capitulo', valor: capitulo }])
     await cargarItemsCapitulo(capitulo)
-    await aplicarFiltroObraConF({ ...next, cap: capitulo, item: '' })
+    await cargarCapituloData(capitulo, null)
   }
 
   function onPickItemFromPanel(itemNum, ev) {
@@ -1936,8 +2026,9 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setItemsResumen([])
     setCapActivo(capitulo)
     try {
-      const p = new URLSearchParams({ capitulo })
-      pptoAppendTipoEjecucion(p, fObraRef.current)
+      const p = pptoBuildPresupuestoSearchParams(fObraRef.current || fObra, pptoCtxFiltro(drill, capExpandido), {
+        capituloOverride: capitulo,
+      })
       const res = await fetch(
         `${API}/presupuesto/${contratoId}/items-lista?${p.toString()}`,
         { headers: { Authorization: `Bearer ${token}` } }
@@ -2071,7 +2162,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         if (comentario.trim()) await crearComentarios(ids, tipoComent, comentario, destinatarioId)
         setRegistros(prev => prev.map(r => (updatesById[r.id] ? { ...r, ...updatesById[r.id] } : r)))
         setEditCapitulo(''); setEditItem(''); setEditDims({}); setSeleccionados(new Set()); setModalConfirm(false)
-        cargarCapitulos().catch(() => {})
+        cargarCapitulos({ silent: true }).catch(() => {})
         return
       }
       nodosMergeEnBulk = updatesById
@@ -2310,7 +2401,7 @@ async function ejecutarBulkEstadoDirecto(estado) {
         setRegistros(prev => prev.map(r => r.id === d.id ? d : r))
       }
       // Actualizar totales del panel izquierdo en background sin bloquear la UI
-      cargarCapitulos().catch(() => {})
+      cargarCapitulos({ silent: true }).catch(() => {})
     } else {
       try {
         const d = await res.json()
@@ -2337,9 +2428,6 @@ async function ejecutarBulkEstadoDirecto(estado) {
       setSeleccionados(prev => { const n = new Set(prev); idsNoSellados.forEach(i => n.add(i)); return n })
     }
   }
-  useEffect(() => {
-    setVisibleRegistrosCount(Math.min(50, registrosFiltrados.length))
-  }, [registrosFiltrados.length])
   useEffect(() => {
     const ids = registrosPagina?.map(r => r.id)
     if (ids?.length) cargarComentariosResumen(ids)
@@ -3838,6 +3926,78 @@ async function restaurar(id) {
         />
       )}
 
+      {confirmCargaGrande && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100015,
+            background: 'rgba(15, 23, 42, 0.32)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+          onClick={() => resolverConfirmCargaGrande(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 320,
+              background: t.bgCard,
+              border: `1px solid ${t.border}`,
+              borderRadius: 12,
+              padding: '16px 18px',
+              boxShadow: '0 16px 48px rgba(0,0,0,0.16)',
+            }}
+          >
+            <div style={{ fontSize: 'var(--cc-body)', fontWeight: 700, color: t.text, marginBottom: 6 }}>
+              Consulta extensa
+            </div>
+            <p style={{ margin: '0 0 14px', fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.45 }}>
+              <strong style={{ color: t.text }}>{confirmCargaGrande.total.toLocaleString('es-CO')}</strong> registros — puede demorar. ¿Continuar?
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => resolverConfirmCargaGrande(false)}
+                style={{
+                  background: 'transparent',
+                  color: t.textMuted,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: 8,
+                  padding: '7px 14px',
+                  fontSize: 'var(--cc-sm)',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                No
+              </button>
+              <button
+                type="button"
+                onClick={() => resolverConfirmCargaGrande(true)}
+                style={{
+                  background: t.primary,
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 8,
+                  padding: '7px 14px',
+                  fontSize: 'var(--cc-sm)',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Sí
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {avisoSistema && (
         <CcAvisoModal
           theme={t}
@@ -4365,7 +4525,7 @@ async function restaurar(id) {
                 <div>
                   <div style={{ fontWeight: 800, color: t.text }}>b) Obra ejecutada</div>
                   <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginTop: 4, lineHeight: 1.4 }}>
-                    Solo cantidades aprobadas por Interventoría (nivel máximo de validación).
+                    Mismo alcance que la grilla con filtros activos (tipo Obra Ejecutada). Para solo aprobados por Interventoría, añada el filtro «Estado interventoría = Aprobado» antes de exportar.
                   </div>
                 </div>
               </label>
@@ -4391,13 +4551,13 @@ async function restaurar(id) {
                   <strong>⏳ Descarga que puede demorar</strong>
                   <div style={{ marginTop: 4 }}>
                     El volumen es grande ({exportEstimado.registros != null ? `${exportEstimado.registros.toLocaleString('es-CO')} registros` : 'muchos registros'}).
-                    La generación del Excel puede tardar varios minutos. Para una descarga más rápida, filtre por capítulo o ítem en el panel izquierdo antes de exportar.
+                    La generación del Excel puede tardar varios minutos. Para una descarga más rápida, filtre por capítulo o ítem con «+ Filtro» antes de exportar.
                   </div>
                 </div>
               )}
               {!exportEstimado.esGrande && !exportEstimado.cargando && exportEstimado.registros != null && (
                 <p style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, margin: '8px 0 0', lineHeight: 1.4 }}>
-                  Tip: seleccione capítulo/ítem en el panel «Presupuesto por capítulo» para exportar solo ese alcance.
+                  Tip: agregue filtros de capítulo o ítem con «+ Filtro» y ejecute Buscar para exportar solo ese alcance.
                 </p>
               )}
               {exportPresupuestoError && (
@@ -4517,9 +4677,14 @@ async function restaurar(id) {
       {verPapelera && (
         <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:10, padding:12, marginBottom:10, color:t.textMuted, fontSize:'var(--cc-sm)' }}>Papelera: use «Actualizar»; el filtrado avanzado aplica al volver a activos.</div>
       )}
-      {((conteoFiltro != null && registros.length > 0) || (!verPapelera && registrosFiltrados.length > 0)) && (
+      {buscandoFiltroObra && conteoFiltro != null && conteoFiltro > PRES_PTO_ALERTA_GRANDE_UMBRAL && !confirmCargaGrande && (
+        <div style={{ background:'#FFFBEB', border:'1px solid #FDE68A', borderRadius:8, padding:'8px 12px', marginBottom:10, fontSize:'var(--cc-sm)', color:'#92400E' }}>
+          Descargando {conteoFiltro.toLocaleString('es-CO')} registros…
+        </div>
+      )}
+      {((conteoFiltro != null && (registros.length > 0 || buscandoFiltroObra)) || (!verPapelera && registrosFiltrados.length > 0)) && (
         <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', gap:10, marginBottom:10 }}>
-          {conteoFiltro != null && registros.length > 0 && (
+          {conteoFiltro != null && (registros.length > 0 || buscandoFiltroObra) && (
             <div style={{ fontSize:'var(--cc-sm)', fontWeight:700, color:t.primary }}>
               Coincidencias (servidor): {conteoFiltro.toLocaleString('es-CO')}
             </div>
@@ -4827,11 +4992,11 @@ async function restaurar(id) {
         </div>
       )}
 
-      {/* Carga / sin datos: dashboard drill oculto; filtros SICOE Obra arriba */}
-      {(loading || loadingCapitulos) ? (
-        <div style={s.emptyState}>{loadingCapitulos ? '⏳ Cargando presupuesto...' : '⏳ Cargando capítulo...'}</div>
-      ) : (verPapelera ? registros.length === 0 : (capitulosResumen.length === 0 && registros.length === 0)) ? (
-        <div style={s.emptyState}>📂 Importa un CSV para comenzar</div>
+      {/* Carga capítulo activo (no bloquear toda la vista por resumen de capítulos) */}
+      {loading && drill.length > 0 ? (
+        <div style={s.emptyState}>⏳ Cargando capítulo...</div>
+      ) : (verPapelera ? registros.length === 0 : (capitulosResumen.length === 0 && registros.length === 0 && !loadingCapitulos)) ? (
+        <div style={s.emptyState}>{loadingCapitulos ? '⏳ Cargando lista de capítulos…' : '📂 Importa un CSV para comenzar'}</div>
       ) : null}
 
       {/* ── Barra Editar / Validar ── */}

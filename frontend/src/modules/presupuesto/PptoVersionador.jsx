@@ -67,7 +67,9 @@ export default function PptoVersionador({
 
   const [capitulosModal, setCapitulosModal] = useState([])
   const [loadingCapitulosModal, setLoadingCapitulosModal] = useState(false)
-  const [aiuPct, setAiuPct] = useState('0')
+  /** AIU del contrato como fracción (0.23 = 23 %), igual que panel administrativo */
+  const [aiuFraccion, setAiuFraccion] = useState(0)
+  const [loadingAiu, setLoadingAiu] = useState(false)
   const [etiqueta, setEtiqueta] = useState('')
   const [justificacion, setJustificacion] = useState('')
   const [creando, setCreando] = useState(false)
@@ -91,23 +93,39 @@ export default function PptoVersionador({
     [capitulosModal],
   )
 
-  const aiuNum = useMemo(() => {
-    const n = parseFloat(String(aiuPct).replace(',', '.'))
-    return Number.isFinite(n) ? Math.max(0, n) : 0
-  }, [aiuPct])
+  const aiuDisplayPct = useMemo(() => {
+    const f = Number(aiuFraccion)
+    if (!Number.isFinite(f) || f <= 0) return '0'
+    return (f * 100).toFixed(4).replace(/\.?0+$/, '')
+  }, [aiuFraccion])
 
   const directoMasAiu = useMemo(
-    () => Math.round(costoDirectoTotal * (1 + aiuNum / 100)),
-    [costoDirectoTotal, aiuNum],
+    () => Math.round(costoDirectoTotal * (1 + (Number(aiuFraccion) || 0))),
+    [costoDirectoTotal, aiuFraccion],
   )
 
   useEffect(() => {
     if (!createOpen) return
     setErrorCrear(null)
     setJustificacion('')
-    setAiuPct('0')
     setEtiqueta(esPrimeraVersion ? 'Inicial' : `V${siguienteNumero}`)
   }, [createOpen, esPrimeraVersion, siguienteNumero])
+
+  useEffect(() => {
+    if (!createOpen || !contratoId) return
+    setLoadingAiu(true)
+    fetch(`${API}/contratos/${contratoId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((c) => {
+        const raw = c?.aiu
+        const n = parseFloat(String(raw ?? '').replace(',', '.'))
+        setAiuFraccion(Number.isFinite(n) && n >= 0 ? n : 0)
+      })
+      .catch(() => setAiuFraccion(0))
+      .finally(() => setLoadingAiu(false))
+  }, [createOpen, contratoId, token, API])
 
   useEffect(() => {
     if (!createOpen || !contratoId) return
@@ -146,7 +164,7 @@ export default function PptoVersionador({
         body: JSON.stringify({
           etiqueta: et,
           justificacion_tecnica: just || null,
-          aiu_porcentaje: aiuNum,
+          aiu_porcentaje: Number(aiuFraccion) || 0,
         }),
       })
       if (!res.ok) {
@@ -170,7 +188,7 @@ export default function PptoVersionador({
     onCreateOpenChange,
     onVersionesReload,
     token,
-    aiuNum,
+    aiuFraccion,
   ])
 
   const toggleCompareSel = useCallback((versionId) => {
@@ -388,22 +406,20 @@ export default function PptoVersionador({
                 </div>
                 <div>
                   <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700, marginBottom: 4 }}>AIU (%)</div>
-                  <input
-                    type="number"
-                    min={0}
-                    step={0.01}
-                    value={aiuPct}
-                    onChange={(e) => setAiuPct(e.target.value)}
+                  <div
                     style={{
-                      width: '100%',
-                      maxWidth: 120,
-                      padding: '4px 8px',
+                      padding: '6px 10px',
                       borderRadius: 5,
                       border: `1px solid ${t.border}`,
-                      background: t.inputBg || t.bgCard,
+                      background: t.bg || t.bgCard,
                       color: t.text,
+                      fontWeight: 700,
+                      maxWidth: 120,
                     }}
-                  />
+                    title="Valor configurado en el contrato (panel administrativo)"
+                  >
+                    {loadingAiu ? '…' : `${aiuDisplayPct} %`}
+                  </div>
                 </div>
                 <div>
                   <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 700 }}>Directo + AIU</div>

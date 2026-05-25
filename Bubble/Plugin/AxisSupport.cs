@@ -284,8 +284,8 @@ namespace SicoePresupuestoNET8
             var B = ejeB != null ? Eval(ejeB) : default;
             bool hasB = ejeB != null;
 
-            var pkA = A.dist - ctx.Pk0DistA;
-            var pkB = hasB ? B.dist - ctx.Pk0DistB : double.MaxValue;
+            var pkA = A.dist - ctx.Pk0DistA + ctx.AbsInicioA;
+            var pkB = hasB ? B.dist - ctx.Pk0DistB + ctx.AbsInicioB : double.MaxValue;
 
             PkResult rA = new PkResult
             {
@@ -488,7 +488,6 @@ namespace SicoePresupuestoNET8
 
         /// <summary>
         /// Devuelve el primer eje disponible como eje activo.
-        /// (Si quieres otra lógica de selección más adelante, cámbiala aquí).
         /// </summary>
         public static AxisContext? LoadFirstAxis()
         {
@@ -496,9 +495,106 @@ namespace SicoePresupuestoNET8
             if (axes == null || axes.Count == 0)
                 return null;
 
-            // Por ahora: tomar el PRIMERO de la lista.
-            // Más adelante podemos filtrar por nombre, orientación, etc.
             return axes[0];
+        }
+
+        /// <summary>
+        /// Distancia perpendicular mínima de un punto al eje A (o A/B si es doble).
+        /// </summary>
+        public static double MinDistanceToAxisContext(acGeo.Point3d p, AxisContext ctx)
+        {
+            if (ctx == null || ctx.AxisA.IsNull)
+                return double.MaxValue;
+
+            var doc = acApp.Application.DocumentManager.MdiActiveDocument;
+            if (doc == null) return double.MaxValue;
+
+            var db = doc.Database;
+            var pFlat = new acGeo.Point3d(p.X, p.Y, 0.0);
+
+            using var tr = db.TransactionManager.StartTransaction();
+            try
+            {
+                if (tr.GetObject(ctx.AxisA, acDb.OpenMode.ForRead) is not acDb.Curve ejeA)
+                    return double.MaxValue;
+
+                double DistTo(acDb.Curve eje)
+                {
+                    try
+                    {
+                        var proj = eje.GetClosestPointTo(pFlat, false);
+                        return pFlat.DistanceTo(proj);
+                    }
+                    catch { return double.MaxValue; }
+                }
+
+                double dMin = DistTo(ejeA);
+
+                if (ctx.IsDouble && !ctx.AxisB.IsNull &&
+                    tr.GetObject(ctx.AxisB, acDb.OpenMode.ForRead) is acDb.Curve ejeB)
+                {
+                    dMin = Math.Min(dMin, DistTo(ejeB));
+                }
+
+                tr.Commit();
+                return dMin;
+            }
+            catch
+            {
+                return double.MaxValue;
+            }
+        }
+
+        /// <summary>
+        /// Elige el eje/sector más cercano al punto (soporta múltiples sectores).
+        /// </summary>
+        public static AxisContext? ResolveAxisForPoint(acGeo.Point3d p)
+        {
+            var axes = LoadAllAxes();
+            if (axes == null || axes.Count == 0)
+                return null;
+
+            if (axes.Count == 1)
+                return axes[0];
+
+            AxisContext? best = null;
+            double bestDist = double.MaxValue;
+
+            foreach (var ax in axes)
+            {
+                double d = MinDistanceToAxisContext(p, ax);
+                if (d < bestDist)
+                {
+                    bestDist = d;
+                    best = ax;
+                }
+            }
+
+            return best ?? axes[0];
+        }
+
+        /// <summary>
+        /// Elige el eje/sector más cercano al centro geométrico de la entidad.
+        /// </summary>
+        public static AxisContext? ResolveAxisForEntity(acDb.Entity ent)
+        {
+            if (ent == null) return LoadFirstAxis();
+
+            acGeo.Point3d centro;
+            try
+            {
+                var ext = ent.GeometricExtents;
+                centro = new acGeo.Point3d(
+                    0.5 * (ext.MinPoint.X + ext.MaxPoint.X),
+                    0.5 * (ext.MinPoint.Y + ext.MaxPoint.Y),
+                    0.0);
+            }
+            catch
+            {
+                return LoadFirstAxis();
+            }
+
+            return ResolveAxisForPoint(centro) ?? LoadFirstAxis();
         }
 
         // ==== Helper privado (mismo patrón que en FrmCargueEje) ====

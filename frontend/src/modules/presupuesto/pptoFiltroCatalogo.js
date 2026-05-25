@@ -44,7 +44,6 @@ export const PPTO_FILTRO_CATALOGO = [
   { key: 'pre_interv_estado', label: 'Estado depuración', tipo: 'select', categoria: 'validacion', campoFObra: 'preInterv', opcionesKey: 'pre_interv_estados' },
   { key: 'sellado', label: 'Sellado', tipo: 'boolean', categoria: 'validacion', campoFObra: 'sellado' },
   { key: 'texto', label: 'Texto (registro / descripción)', tipo: 'text', categoria: 'otros', campoFObra: 'texto' },
-  { key: 'tipo_ejecucion', label: 'Tipo ejecución', tipo: 'select', categoria: 'otros', campoFObra: 'tipoEjecucion', opcionesKey: 'tipos_ejecucion' },
   { key: 'dado_de_baja', label: 'Dado de baja', tipo: 'boolean', categoria: 'otros', campoFObra: 'dadoDeBaja' },
 ]
 
@@ -153,12 +152,13 @@ export function pptoFiltroTieneValor(def, f) {
   return hasStr(f[def.campoFObra])
 }
 
-/** Claves de catálogo con valor o explícitamente activas. */
+/** Claves de catálogo con valor o explícitamente activas (sin tipo_ejecucion: va en el toggle). */
 export function pptoFiltrosActivosKeys(f, activeKeys = []) {
-  const set = new Set(activeKeys || [])
+  const set = new Set((activeKeys || []).filter((k) => k !== 'tipo_ejecucion'))
   for (const def of PPTO_FILTRO_CATALOGO) {
     if (pptoFiltroTieneValor(def, f)) set.add(def.key)
   }
+  set.delete('tipo_ejecucion')
   return [...set]
 }
 
@@ -220,7 +220,6 @@ export function pptoFiltroPatchLimpiar(def) {
   if (def.key === 'item') return { item: '', items: [] }
   if (def.key === 'revisado') return { revisado: '', eje: 'interv' }
   if (def.key === 'pre_interv_estado') return { preInterv: '', eje: 'depur' }
-  if (def.key === 'tipo_ejecucion') return {}
   return { [def.campoFObra]: def.tipo === 'boolean' ? '' : '' }
 }
 
@@ -249,17 +248,23 @@ export function pptoFiltroNormalizar(f, ctx = {}) {
   return base
 }
 
-/** ¿Hay al menos un criterio de búsqueda activo? (incluye tipo ejecución / toggle vista) */
-export function pptoCriterioVistaActivo(f, ctx = {}) {
+/** ¿Hay filtros chip / panel (capítulo, ítem, tramo, etc.) además del toggle? */
+export function pptoTieneFiltrosChip(f, ctx = {}) {
   const n = pptoFiltroNormalizar(f, ctx)
-  if (String(n.tipoEjecucion || '').trim()) return true
   for (const def of PPTO_FILTRO_CATALOGO) {
-    if (def.key === 'tipo_ejecucion') continue
     if (pptoFiltroTieneValor(def, n)) return true
   }
   const drill = ctx.drill || []
   if (drill.some((d) => ['capitulo', 'item', 'items'].includes(d.campo))) return true
   return false
+}
+
+/** ¿Hay criterio de búsqueda? El toggle Presupuesto de Obra | Obra Ejecutada basta. */
+export function pptoCriterioVistaActivo(f, ctx = {}) {
+  const n = pptoFiltroNormalizar(f, ctx)
+  if (pptoTieneFiltrosChip(n, ctx)) return true
+  const te = String(n.tipoEjecucion || ctx.tipoEjecucionDefault || 'Presupuesto de Obra').trim()
+  return !!te
 }
 
 function appendListaParam(p, keySingular, keyPlural, singleVal, listVal) {
@@ -307,6 +312,46 @@ export function pptoAppendFObraToSearchParams(p, f) {
   if (f.costoDirectoMax) p.set('costo_directo_hasta', String(f.costoDirectoMax).replace(',', '.'))
   const te = String(f.tipoEjecucion || '').trim()
   if (te) p.set('tipo_ejecucion', te)
+}
+
+export function pptoAppendTipoEjecucion(p, f, defaultTipo = 'Presupuesto de Obra') {
+  const te = String(f?.tipoEjecucion || defaultTipo).trim() || defaultTipo
+  p.set('tipo_ejecucion', te)
+}
+
+/** Primer capítulo activo (cap, caps[], drill o panel). */
+export function pptoPrimerCapitulo(f, ctx = {}) {
+  const n = pptoFiltroNormalizar(f, ctx)
+  const caps = pptoFiltroValoresLista(pptoFiltroDef('capitulo'), n)
+  if (caps.length) return caps[0]
+  const capDrill = (ctx.drill || []).find((d) => d.campo === 'capitulo')?.valor
+  if (capDrill) return String(capDrill)
+  if (ctx.capExpandido) return String(ctx.capExpandido)
+  return ''
+}
+
+/**
+ * Query params alineados con GET /presupuesto y /conteo.
+ * @param {object} [opts] capituloOverride, itemOverride, verPapelera, tipoEjecucionDefault
+ */
+export function pptoBuildPresupuestoSearchParams(f, ctx = {}, opts = {}) {
+  const n = pptoFiltroNormalizar(f, ctx)
+  const fQuery = { ...n }
+  const capOv = opts.capituloOverride
+  if (capOv != null && String(capOv).trim()) {
+    fQuery.cap = String(capOv).trim()
+    fQuery.caps = []
+  }
+  const itemOv = opts.itemOverride
+  if (itemOv != null && String(itemOv).trim()) {
+    fQuery.item = String(itemOv).trim()
+    fQuery.items = []
+  }
+  const p = new URLSearchParams()
+  if (opts.verPapelera) p.set('papelera', 'true')
+  pptoAppendFObraToSearchParams(p, fQuery)
+  pptoAppendTipoEjecucion(p, fQuery, opts.tipoEjecucionDefault || 'Presupuesto de Obra')
+  return p
 }
 
 /** Convierte fObra + drill al cuerpo POST exportar-informe (mismos filtros que la grilla). */
@@ -426,7 +471,7 @@ export function pptoFiltroSnapshot(f, activeKeys) {
   for (const k of ['caps', 'items', 'tramos', 'calzadas', 'competencias', 'unds']) {
     if (Array.isArray(snap[k])) snap[k] = [...snap[k]]
   }
-  return { fObra: snap, activeKeys: [...(activeKeys || [])] }
+  return { fObra: snap, activeKeys: (activeKeys || []).filter((k) => k !== 'tipo_ejecucion') }
 }
 
 /** Restaura snapshot de plantilla. */

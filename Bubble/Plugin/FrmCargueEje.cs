@@ -38,20 +38,22 @@ namespace SicoePresupuestoNET8
 
         private void SetupGrid()
         {
-            dgvEjes.Columns.Add("NombreA", "Nombre A");
+            dgvEjes.Columns.Add("Eje", "Eje");
             dgvEjes.Columns.Add("NombreB", "Nombre B");
             dgvEjes.Columns.Add("Tipo", "Tipo");
-            dgvEjes.Columns.Add("PK0", "PK0 Info");
+            dgvEjes.Columns.Add("PK0", "Info sector");
         }
 
         private void RefreshGrid()
         {
             dgvEjes.Rows.Clear();
-            foreach (var ax in Axes)
+            for (int i = 0; i < Axes.Count; i++)
             {
+                var ax = Axes[i];
                 string tipo = ax.IsDouble ? "Doble" : "Única";
-                string pkInfo = $"Int: {ax.IntervaloPk}m";
-                dgvEjes.Rows.Add(ax.NombreA, ax.NombreB, tipo, pkInfo);
+                string absIni = PkFormatter.ToPkString(ax.AbsInicioA);
+                string pkInfo = $"Abs. inicio: {absIni} | Int: {ax.IntervaloPk}m";
+                dgvEjes.Rows.Add($"Eje {i + 1}", ax.NombreB, tipo, pkInfo);
             }
 
             // Feedback Visual (Observación 4)
@@ -90,21 +92,22 @@ namespace SicoePresupuestoNET8
             double oizqB = frmConfig.OrdIzqB;
             double oderB = frmConfig.OrdDerB;
 
-            // 2. Definir nombres automáticos según orientación
-            string nomA = "Calzada Única";
+            // 2. Definir nombres: sector secuencial + calzada si es doble
+            int numEje = Axes.Count + 1;
+            string nomA = $"Eje {numEje}";
             string nomB = "";
 
             if (esDoble)
             {
                 if (orient == "EO")
                 {
-                    nomA = "Calzada Oriental";
-                    nomB = "Calzada Occidental";
+                    nomA = $"Eje {numEje} - Oriental";
+                    nomB = "Occidental";
                 }
                 else
                 {
-                    nomA = "Calzada Norte";
-                    nomB = "Calzada Sur";
+                    nomA = $"Eje {numEje} - Norte";
+                    nomB = "Sur";
                 }
             }
 
