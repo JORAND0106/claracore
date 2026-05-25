@@ -45,6 +45,103 @@ _dwg_sessions: dict = {}
 _sicoe_cad_sincro_audit: dict = {}
 # ── Jobs de exportación Excel en background ────────────────────────────────────
 _export_jobs: dict = {}  # { job_id: { "estado": "procesando"|"listo"|"error", "buf": bytes, "filename": str } }
+_EXPORT_DIR = os.path.join(
+    os.environ.get("CLARACORE_EXPORT_DIR") or os.environ.get("HOME") or os.environ.get("TEMP") or "/tmp",
+    "claracore_exports",
+)
+_EXPORT_META_SUFFIX = ".meta.json"
+
+
+def _export_dir_ensure() -> None:
+    try:
+        os.makedirs(_EXPORT_DIR, exist_ok=True)
+    except OSError:
+        pass
+
+
+def _export_meta_path(job_id: str) -> str:
+    return os.path.join(_EXPORT_DIR, f"{job_id}{_EXPORT_META_SUFFIX}")
+
+
+def _export_file_path(job_id: str) -> str:
+    return os.path.join(_EXPORT_DIR, f"{job_id}.xlsx")
+
+
+def _export_job_read_meta(job_id: str) -> Optional[dict]:
+    path = _export_meta_path(job_id)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+def _export_job_write_meta(job_id: str, meta: dict) -> None:
+    _export_dir_ensure()
+    try:
+        with open(_export_meta_path(job_id), "w", encoding="utf-8") as fh:
+            json.dump(meta, fh)
+    except OSError:
+        pass
+
+
+def _export_job_get(job_id: str, usuario_id: Optional[int] = None) -> Optional[dict]:
+    job = _export_jobs.get(job_id)
+    if job is None:
+        meta = _export_job_read_meta(job_id)
+        if not meta:
+            return None
+        job = dict(meta)
+        fp = meta.get("file_path") or _export_file_path(job_id)
+        if job.get("estado") == "listo" and os.path.isfile(fp):
+            try:
+                with open(fp, "rb") as fh:
+                    job["buf"] = fh.read()
+            except OSError:
+                job["buf"] = None
+        _export_jobs[job_id] = job
+    if usuario_id is not None and job.get("usuario_id") not in (None, usuario_id):
+        return None
+    return job
+
+
+def _export_job_set(
+    job_id: str,
+    *,
+    estado: Optional[str] = None,
+    buf: Optional[bytes] = None,
+    filename: Optional[str] = None,
+    progreso: Optional[str] = None,
+    usuario_id: Optional[int] = None,
+    contrato_id: Optional[int] = None,
+) -> None:
+    prev = _export_jobs.get(job_id) or _export_job_read_meta(job_id) or {}
+    job = {
+        "estado": estado if estado is not None else (prev.get("estado") or "procesando"),
+        "filename": filename if filename is not None else prev.get("filename"),
+        "progreso": progreso if progreso is not None else prev.get("progreso"),
+        "usuario_id": usuario_id if usuario_id is not None else prev.get("usuario_id"),
+        "contrato_id": contrato_id if contrato_id is not None else prev.get("contrato_id"),
+        "buf": buf if buf is not None else prev.get("buf"),
+    }
+    file_path = prev.get("file_path") or _export_file_path(job_id)
+    if buf is not None and estado == "listo":
+        _export_dir_ensure()
+        try:
+            with open(file_path, "wb") as fh:
+                fh.write(buf)
+            job["file_path"] = file_path
+            if len(buf) > 8_000_000:
+                job["buf"] = None
+        except OSError:
+            job["file_path"] = file_path
+    elif prev.get("file_path"):
+        job["file_path"] = prev["file_path"]
+    _export_jobs[job_id] = job
+    meta = {k: v for k, v in job.items() if k != "buf"}
+    _export_job_write_meta(job_id, meta)
 _DWG_TIMEOUT = 30  # segundos — margen para curl.exe
 _MAINTENANCE_SECRET = os.getenv("MAINTENANCE_SECRET", "claracore_deploy_2026")
 _MAINTENANCE_DEFAULT_SECONDS = int(os.getenv("MAINTENANCE_COUNTDOWN_SECONDS", "25"))
@@ -7610,7 +7707,8 @@ def bulk_tipo_ejecucion(contrato_id: int, body: PresupuestoBulkTipoEjecucion, cu
 @app.get("/exportar/estado/{job_id}")
 def exportar_estado(job_id: str, current_user=Depends(get_current_user)):
     """Frontend consulta si el Excel ya está listo."""
-    job = _export_jobs.get(job_id)
+    uid = _dashboard_resumen_user_cache_key(current_user)
+    job = _export_job_get(job_id, usuario_id=uid)
     if not job:
         raise HTTPException(status_code=404, detail="Job no encontrado")
     return {
@@ -7623,17 +7721,22 @@ def exportar_estado(job_id: str, current_user=Depends(get_current_user)):
 @app.get("/exportar/descargar/{job_id}")
 def exportar_descargar(job_id: str, current_user=Depends(get_current_user)):
     """Descarga el Excel generado en background."""
-    job = _export_jobs.get(job_id)
+    uid = _dashboard_resumen_user_cache_key(current_user)
+    job = _export_job_get(job_id, usuario_id=uid)
     if not job or job["estado"] != "listo":
         raise HTTPException(status_code=404, detail="Archivo no listo")
-    buf = io.BytesIO(job["buf"])
+    buf_bytes = job.get("buf")
+    if not buf_bytes:
+        fp = job.get("file_path") or _export_file_path(job_id)
+        if not os.path.isfile(fp):
+            raise HTTPException(status_code=404, detail="Archivo no encontrado")
+        with open(fp, "rb") as fh:
+            buf_bytes = fh.read()
     filename = job.get("filename", "ClaraCore.xlsx")
-    # No eliminar aún — permite diagnóstico
-    # del _export_jobs[job_id]
     return StreamingResponse(
-        buf,
+        io.BytesIO(buf_bytes),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 @app.post("/cad-queue/{contrato_id}/heartbeat")
@@ -18002,7 +18105,11 @@ def _merge_pkid_tabla_vista_ppto(rpc_payload: dict, ppto_rows: List[dict]) -> di
     }
 
 
-def _canonicalize_pkid_tabla_rows(contrato_id: int, rows: List[dict]) -> List[dict]:
+def _canonicalize_pkid_tabla_rows(
+    contrato_id: int,
+    rows: List[dict],
+    alias_map: Optional[Dict[str, str]] = None,
+) -> List[dict]:
     """Unifica alias de PK (id interno vs pk_ids.pk_id) en filas de tabla drill."""
     if not rows:
         return []
@@ -18011,7 +18118,8 @@ def _canonicalize_pkid_tabla_rows(contrato_id: int, rows: List[dict]) -> List[di
         for row in rows
         if isinstance(row, dict) and row.get("pk_id") not in (None, "")
     }
-    alias_map = _preload_pk_alias_map(contrato_id, raw_keys)
+    if alias_map is None:
+        alias_map = _preload_pk_alias_map(contrato_id, raw_keys)
     merged: Dict[str, dict] = {}
     sum_fields = (
         "cant_ppto", "costo_ppto", "cant_ppto_aprobado_n3", "costo_ppto_aprobado_n3",
@@ -18049,12 +18157,16 @@ def _canonicalize_pkid_tabla_rows(contrato_id: int, rows: List[dict]) -> List[di
     return sorted(out, key=lambda x: str(x.get("pk_id") or ""))
 
 
-def _normalize_pkid_tabla_payload(payload: dict, contrato_id: Optional[int] = None) -> dict:
+def _normalize_pkid_tabla_payload(
+    payload: dict,
+    contrato_id: Optional[int] = None,
+    alias_map: Optional[Dict[str, str]] = None,
+) -> dict:
     rows = payload.get("rows") or []
     if not isinstance(rows, list):
         rows = []
     if contrato_id:
-        rows = _canonicalize_pkid_tabla_rows(contrato_id, rows)
+        rows = _canonicalize_pkid_tabla_rows(contrato_id, rows, alias_map=alias_map)
     por_cobrar = sum(float(r.get("delta_costo") or 0) for r in rows if float(r.get("delta_costo") or 0) > 0)
     devolucion = sum(abs(float(r.get("delta_costo") or 0)) for r in rows if float(r.get("delta_costo") or 0) < 0)
     return {
@@ -19122,6 +19234,19 @@ def dashboard_drill_obra(
         if item is not None:
             item = unquote(str(item)).strip() or None
         drill_items_shape = bool(capitulo)
+        vista_n = parse_dash_vista(vista)
+        resp_key = (
+            "dashboard_drill",
+            int(contrato_id),
+            vista_n,
+            capitulo or "",
+            item or "",
+            _dashboard_resumen_user_cache_key(current_user),
+        )
+        cached_resp = _dashboard_response_cache_get(resp_key)
+        if cached_resp is not None:
+            return cached_resp
+
         campo_max = _get_nivel_maximo_contrato(contrato_id)
         niveles_activos = _get_niveles_activos_contrato(contrato_id)
         if capitulo:
@@ -19133,11 +19258,15 @@ def dashboard_drill_obra(
                     for row in items
                     if isinstance(row, dict) and _dash_norm_item_key_py(row.get("item")) == itn
                 ]
-            return {"campo": "item", "items": items, "vista": parse_dash_vista(vista)}
+            result = {"campo": "item", "items": items, "vista": vista_n}
+            _dashboard_response_cache_set(resp_key, result)
+            return result
         if item:
             raise HTTPException(status_code=422, detail="Indica capitulo junto con item.")
         result = _drill_agg_capitulos(contrato_id, vista, current_user)
-        return {"campo": "capitulo", "items": result, "vista": parse_dash_vista(vista)}
+        result = {"campo": "capitulo", "items": result, "vista": vista_n}
+        _dashboard_response_cache_set(resp_key, result)
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -19705,7 +19834,7 @@ def _fetch_export_core_by_item(
 ) -> Dict[str, Dict[str, Any]]:
     """
     Tablas PK por ítem para export Excel.
-    Una pasada de presupuesto + una de SICOE del capítulo (evita N×RPC lento).
+    Una pasada de presupuesto + una de SICOE del capítulo; alias PK en batch (sin N×Supabase).
     """
     if not items_sorted:
         return {}
@@ -19714,22 +19843,60 @@ def _fetch_export_core_by_item(
         ppto_all = _ppto_rows_capitulo(contrato_id, cap_raw, vista, current_user)
 
     ppto_by_item: Dict[str, List[dict]] = {}
+    all_pk_keys: Set[str] = set()
     for r in ppto_all or []:
         ik = _dash_norm_item_key_py(r.get("item"))
         if not ik:
             continue
         ppto_by_item.setdefault(ik, []).append(r)
+        pk = _dash_pk_disp_key_py(r.get("pk_id"))
+        if pk and pk != "(sin pk)":
+            all_pk_keys.add(pk)
 
+    if job_id:
+        _export_job_set(job_id, progreso="cargando SICOE obra…")
     sicoe_regs = _fetch_sicoe_regs_capitulo_export(contrato_id, cap_raw, current_user)
+
+    if job_id:
+        _export_job_set(job_id, progreso="indexando PK…")
+    alias_map = _preload_pk_alias_map(contrato_id, all_pk_keys)
+
+    sicoe_by_item: Dict[str, List[dict]] = defaultdict(list)
+    for r in sicoe_regs or []:
+        ik = _dash_norm_item_key_py(r.get("item_numero"))
+        if ik:
+            sicoe_by_item[ik].append(r)
+
     total = len(items_sorted)
     out: Dict[str, Dict[str, Any]] = {}
-    for idx, it in enumerate(items_sorted):
+
+    def _one_item(it: str) -> Tuple[str, Dict[str, Any]]:
         it_norm = _dash_norm_item_key_py(it)
         ppto_rows = _ppto_pk_rows_from_capitulo_rows(ppto_by_item.get(it_norm, []), it)
-        raw = _build_pkid_tabla_item_export(contrato_id, it, ppto_rows, sicoe_regs, vista)
-        out[it] = _normalize_pkid_tabla_payload(raw, contrato_id)
-        if job_id and job_id in _export_jobs:
-            _export_jobs[job_id]["progreso"] = f"{idx + 1}/{total}"
+        item_regs = sicoe_by_item.get(it_norm, [])
+        raw = _build_pkid_tabla_item_export(
+            contrato_id, it, ppto_rows, item_regs, vista
+        )
+        return it, _normalize_pkid_tabla_payload(raw, contrato_id, alias_map=alias_map)
+
+    workers = min(4, max(1, total))
+    done = 0
+    if total <= 2 or workers == 1:
+        for idx, it in enumerate(items_sorted):
+            k, data = _one_item(it)
+            out[k] = data
+            done = idx + 1
+            if job_id:
+                _export_job_set(job_id, progreso=f"ítems {done}/{total}")
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = {pool.submit(_one_item, it): it for it in items_sorted}
+            for fut in futs:
+                k, data = fut.result()
+                out[k] = data
+                done += 1
+                if job_id:
+                    _export_job_set(job_id, progreso=f"ítems {done}/{total}")
     return out
 
 
@@ -19789,6 +19956,7 @@ def _build_dashboard_capitulo_xlsx(
     vista: str = "presupuesto_obra",
     current_user=None,
     job_id: Optional[str] = None,
+    solo_resumen: bool = False,
 ):
     """
     Informe multi-hoja: (1) resumen por ítem del capítulo presupuesto vs obra aprobada N3,
@@ -19998,16 +20166,33 @@ def _build_dashboard_capitulo_xlsx(
         it_f = _dash_norm_item_key_py(item)
         items_sorted = [it for it in items_sorted if _dash_norm_item_key_py(it) == it_f]
         by_item = {k: v for k, v in by_item.items() if _dash_norm_item_key_py(k) == it_f}
-    # Misma fuente que las hojas por ítem (PK), para que resumen y detalle coincidan.
-    core_by_item = _fetch_export_core_by_item(
-        contrato_id,
-        capitulo,
-        items_sorted,
-        vista,
-        current_user,
-        ppto_all=ppto_all,
-        job_id=job_id,
-    )
+        solo_resumen = False
+
+    cap_only_resumen = bool(solo_resumen and not (item and str(item).strip()))
+    drill_map: Dict[str, dict] = {}
+    core_by_item: Dict[str, Dict[str, Any]] = {}
+    if cap_only_resumen:
+        drill_items = _drill_agg_by_item(contrato_id, capitulo, None, vista, current_user)
+        drill_map = {
+            _dash_norm_item_key_py(r.get("item")): r
+            for r in (drill_items or [])
+            if isinstance(r, dict) and _dash_norm_item_key_py(r.get("item"))
+        }
+        if not items_sorted and drill_map:
+            items_sorted = sorted(drill_map.keys(), key=lambda x: str(x))
+        if job_id:
+            _export_job_set(job_id, progreso="resumen capítulo")
+    else:
+        # Misma fuente que las hojas por ítem (PK), para que resumen y detalle coincidan.
+        core_by_item = _fetch_export_core_by_item(
+            contrato_id,
+            capitulo,
+            items_sorted,
+            vista,
+            current_user,
+            ppto_all=ppto_all,
+            job_id=job_id,
+        )
 
     wb = Workbook()
     ws0 = wb.active
@@ -20070,14 +20255,23 @@ def _build_dashboard_capitulo_xlsx(
             if x.get("descripcion"):
                 desc = str(x["descripcion"])
                 break
-        _rows_pk = (core_by_item.get(it) or {}).get("rows") or []
-        agg = _sum_pk_export_rows(_rows_pk)
-        cant_p = agg["cant_ppto"]
-        cost_p = agg["costo_ppto"]
-        cant_c = agg["cant_sicoe"]
-        cost_c = agg["costo_sicoe"]
-        d_cant = agg["delta_cant"]
-        d_cost = agg["delta_costo"]
+        if cap_only_resumen:
+            dr = drill_map.get(_dash_norm_item_key_py(it)) or {}
+            cant_p = float(dr.get("cant_ppto") or 0)
+            cost_p = float(dr.get("presupuesto") or 0)
+            cant_c = float(dr.get("cant_sicoe_aprobado") or 0)
+            cost_c = float(dr.get("cobrado") or 0)
+            d_cant = cant_p - cant_c
+            d_cost = cost_p - cost_c
+        else:
+            _rows_pk = (core_by_item.get(it) or {}).get("rows") or []
+            agg = _sum_pk_export_rows(_rows_pk)
+            cant_p = agg["cant_ppto"]
+            cost_p = agg["costo_ppto"]
+            cant_c = agg["cant_sicoe"]
+            cost_c = agg["costo_sicoe"]
+            d_cant = agg["delta_cant"]
+            d_cost = agg["delta_costo"]
         estado = "Equilibrio"
         if d_cost > 0.5:
             estado = "Por cobrar"
@@ -20137,7 +20331,16 @@ def _build_dashboard_capitulo_xlsx(
     _xlsx_apply_print_summary(ws0, contrato_numero)
 
     # ── Hojas por ítem: análisis PK (por cobrar / devolución) ────────────────
-    for it in items_sorted:
+    if cap_only_resumen:
+        bio = io.BytesIO()
+        wb.save(bio)
+        safe_cap = re.sub(r"[^\w\-.]+", "_", str(capitulo or "cap"))[:40]
+        fn = f"ClaraCore_{safe_cap}_resumen_{datetime.now(pytz.timezone('America/Bogota')).strftime('%Y-%m-%d')}.xlsx"
+        return bio.getvalue(), fn
+
+    for idx_it, it in enumerate(items_sorted):
+        if job_id:
+            _export_job_set(job_id, progreso=f"Excel hoja {idx_it + 1}/{len(items_sorted)}")
         data = core_by_item[it]
         rows = data.get("rows") or []
         desc_item = data.get("descripcion_item") or ""
@@ -20208,6 +20411,8 @@ def _build_dashboard_capitulo_xlsx(
         _xlsx_apply_print_item(ws, contrato_numero)
 
     # ── Penúltima: presupuesto capítulo (tipo según vista del dashboard) ───
+    if job_id:
+        _export_job_set(job_id, progreso="Excel · hoja Presupuesto")
     ws_p = wb.create_sheet(title=_xlsx_safe_sheet_name(f"Ppto {tipo_label[:8]}", "Presupuesto"))
     ws_p.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
     tp = ws_p.cell(row=1, column=1)
@@ -20231,6 +20436,8 @@ def _build_dashboard_capitulo_xlsx(
     _xlsx_apply_print_summary(ws_p, contrato_numero)
 
     # ── Última: obra SICOE aprobada (solo ítems presentes en presupuesto vista) ─
+    if job_id:
+        _export_job_set(job_id, progreso="Excel · hoja SICOE Obra")
     ws_o = wb.create_sheet(title=_xlsx_safe_sheet_name("Sicoe obra items", "SicoeObra"))
     ws_o.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
     to = ws_o.cell(row=1, column=1)
@@ -20264,6 +20471,8 @@ def _build_dashboard_capitulo_xlsx(
     for _sh in wb.worksheets:
         _sh.sheet_view.showGridLines = False
 
+    if job_id:
+        _export_job_set(job_id, progreso="guardando archivo…")
     bio = io.BytesIO()
     wb.save(bio)
     safe_cap = re.sub(r"[^\w\-.]+", "_", str(capitulo or "cap"))[:40]
@@ -20283,11 +20492,54 @@ def dashboard_pkid_tabla_obra(
     Drill PK: presupuesto según vista (vigente u obra ejecutada) vs SICOE N3 aprobado.
     """
     try:
-        return _dashboard_pkid_tabla_obra_core(contrato_id, capitulo, item, vista, current_user)
+        cap_s = unquote(str(capitulo)).strip() if capitulo is not None else ""
+        item_s = unquote(str(item)).strip() if item is not None else ""
+        vista_n = parse_dash_vista(vista)
+        resp_key = (
+            "dashboard_pkid_tabla",
+            int(contrato_id),
+            vista_n,
+            cap_s,
+            item_s,
+            _dashboard_resumen_user_cache_key(current_user),
+        )
+        cached_resp = _dashboard_response_cache_get(resp_key)
+        if cached_resp is not None:
+            return cached_resp
+        result = _dashboard_pkid_tabla_obra_core(contrato_id, cap_s or None, item_s or None, vista, current_user)
+        _dashboard_response_cache_set(resp_key, result)
+        return result
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sicoe-obra/{contrato_id}/dashboard-export-capitulo-download")
+def dashboard_export_capitulo_download_obra(
+    contrato_id: int,
+    capitulo: str = Query(..., description="Capítulo del drill del dashboard"),
+    item: Optional[str] = Query(None),
+    vista: str = Query("presupuesto_obra", description="presupuesto_obra | obra_ejecutada"),
+    solo_resumen: bool = Query(
+        False,
+        description="True: solo hoja resumen por ítem (rápido). False: incluye detalle PK por ítem.",
+    ),
+    current_user=Depends(get_current_user),
+):
+    """Descarga síncrona. Capítulo completo: usar solo_resumen=1 (1 hoja, segundos)."""
+    _require_contract_access(current_user, contrato_id)
+    try:
+        buf, fn = _build_dashboard_capitulo_xlsx(
+            contrato_id, capitulo, item, vista, current_user, solo_resumen=solo_resumen
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return StreamingResponse(
+        io.BytesIO(buf),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
 
 
 @app.get("/sicoe-obra/{contrato_id}/dashboard-export-capitulo")
@@ -20296,6 +20548,7 @@ def dashboard_export_capitulo_obra(
     capitulo: str = Query(..., description="Capítulo del drill del dashboard"),
     item: Optional[str] = Query(None),
     vista: str = Query("presupuesto_obra", description="presupuesto_obra | obra_ejecutada"),
+    solo_resumen: bool = Query(False, description="True: solo hoja resumen (rápido)."),
     current_user=Depends(get_current_user),
 ):
     """
@@ -20305,25 +20558,48 @@ def dashboard_export_capitulo_obra(
     """
     _require_contract_access(current_user, contrato_id)
     job_id = str(uuid.uuid4())
-    _export_jobs[job_id] = {"estado": "procesando", "buf": None, "filename": None, "progreso": "iniciando"}
+    uid = _dashboard_resumen_user_cache_key(current_user)
+    _export_job_set(
+        job_id,
+        estado="procesando",
+        progreso="iniciando",
+        usuario_id=uid,
+        contrato_id=int(contrato_id),
+    )
     cap_copy = capitulo
     item_copy = item
     vista_copy = vista
+    resumen_copy = solo_resumen
     user_copy = current_user
 
     def _work():
         try:
             buf, fn = _build_dashboard_capitulo_xlsx(
-                contrato_id, cap_copy, item_copy, vista_copy, user_copy, job_id=job_id
+                contrato_id,
+                cap_copy,
+                item_copy,
+                vista_copy,
+                user_copy,
+                job_id=job_id,
+                solo_resumen=resumen_copy,
             )
-            _export_jobs[job_id] = {"estado": "listo", "buf": buf, "filename": fn, "progreso": "listo"}
+            _export_job_set(
+                job_id,
+                estado="listo",
+                buf=buf,
+                filename=fn,
+                progreso="listo",
+                usuario_id=uid,
+                contrato_id=int(contrato_id),
+            )
         except Exception as e:
-            _export_jobs[job_id] = {
-                "estado": f"error:{e!s}",
-                "buf": None,
-                "filename": None,
-                "progreso": None,
-            }
+            _export_job_set(
+                job_id,
+                estado=f"error:{e!s}",
+                progreso=None,
+                usuario_id=uid,
+                contrato_id=int(contrato_id),
+            )
 
     threading.Thread(target=_work, daemon=True).start()
     return {"job_id": job_id}

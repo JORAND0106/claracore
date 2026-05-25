@@ -594,6 +594,9 @@ export default function ModuloInformes({
   /** CC-GER-001: acta presente = RPO en período (misma lógica que matriz SICOE), vía /json/informe-gerencia-matriz. */
   const [gerAutoActaId, setGerAutoActaId] = useState(null)
   const [gerMatDato, setGerMatDato] = useState(null)
+  const [gerMatrizCargando, setGerMatrizCargando] = useState(false)
+  /** null | { seg, origen: 'preview' | 'download' } */
+  const [gerPdfProgreso, setGerPdfProgreso] = useState(null)
   const [formatosInformeGerAbierto, setFormatosInformeGerAbierto] = useState(false)
   const [formatoGer001Abierto, setFormatoGer001Abierto] = useState(false)
   /** Descarga PDF conciliación (CC-SEM / CC-MES): independiente del registro de firma. */
@@ -1074,6 +1077,7 @@ export default function ModuloInformes({
       return
     }
     let cancelled = false
+    setGerMatrizCargando(true)
     fetchConFallback(`/informes/${contratoId}/json/informe-gerencia-matriz`, {
       headers: { Authorization: `Bearer ${authToken}` },
     })
@@ -1095,6 +1099,9 @@ export default function ModuloInformes({
           setGerAutoActaId(null)
           setGerMatDato(null)
         }
+      })
+      .finally(() => {
+        if (!cancelled) setGerMatrizCargando(false)
       })
     return () => {
       cancelled = true
@@ -1627,8 +1634,17 @@ export default function ModuloInformes({
           /* noop */
         }
       }
-      return { fase: 'cargando', tipo: 'corte-ger' }
+      return { fase: 'cargando', tipo: 'corte-ger', seg: 0 }
     })
+    setGerPdfProgreso({ seg: 0, origen: 'preview' })
+    const t0 = Date.now()
+    const tickIv = setInterval(() => {
+      const seg = Math.round((Date.now() - t0) / 1000)
+      setGerPdfProgreso({ seg, origen: 'preview' })
+      setVistaPrevia((prev) =>
+        prev?.tipo === 'corte-ger' && prev?.fase === 'cargando' ? { ...prev, seg } : prev
+      )
+    }, 1000)
     setError(null)
     const opts = { headers: { Authorization: `Bearer ${authToken}` } }
     const pathPdf = rutaInformeGerenciaPdf(false)
@@ -1645,6 +1661,31 @@ export default function ModuloInformes({
     } catch (e) {
       const msg = String(e?.message || e)
       setVistaPrevia({ fase: 'error', tipo: 'corte-ger', mensaje: msg })
+    } finally {
+      clearInterval(tickIv)
+      setGerPdfProgreso(null)
+    }
+  }
+
+  async function descargarPdfGerencia(conSello) {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    setConcPdfBusy(true)
+    setError(null)
+    const t0 = Date.now()
+    setGerPdfProgreso({ seg: 0, origen: 'download' })
+    const tickIv = setInterval(() => {
+      setGerPdfProgreso({ seg: Math.round((Date.now() - t0) / 1000), origen: 'download' })
+    }, 1000)
+    try {
+      await descargarPdfConc(rutaInformeGerenciaPdf(conSello), 'CC-GER-001.pdf', { skipBusy: true })
+    } finally {
+      clearInterval(tickIv)
+      setGerPdfProgreso(null)
+      setConcPdfBusy(false)
     }
   }
 
@@ -1710,13 +1751,13 @@ export default function ModuloInformes({
     return `${s.slice(0, qi)}/con-sello-firma${s.slice(qi)}`
   }
 
-  async function descargarPdfConc(rutaRelativa, fallbackNombre) {
+  async function descargarPdfConc(rutaRelativa, fallbackNombre, opts = {}) {
     const authToken = getAuthToken()
     if (!authToken) {
       setError('Sesion no autenticada.')
       return
     }
-    setConcPdfBusy(true)
+    if (!opts.skipBusy) setConcPdfBusy(true)
     setError(null)
     try {
       const r = await fetchConFallback(rutaRelativa, { headers: { Authorization: `Bearer ${authToken}` } })
@@ -1737,7 +1778,7 @@ export default function ModuloInformes({
     } catch (e) {
       setError(String(e?.message || e))
     } finally {
-      setConcPdfBusy(false)
+      if (!opts.skipBusy) setConcPdfBusy(false)
     }
   }
 
@@ -4256,6 +4297,42 @@ export default function ModuloInformes({
             <strong>columna 1</strong> (con la misma estructura en aprobados y pendientes en las otras columnas). «CCD» es el sello
             de <strong>ClaraCore Documentación</strong> (código de documento; la biblioteca define estilo y firmas por código).
           </div>
+          {gerMatrizCargando && (
+            <div
+              style={{
+                fontSize: ui.hint + 'px',
+                color: '#92400e',
+                background: '#fef3c7',
+                border: '1px solid #fcd34d',
+                borderRadius: '8px',
+                padding: '10px 12px',
+                marginBottom: ui.gap + 'px',
+                fontWeight: 600,
+              }}
+            >
+              ⏳ Cargando datos del informe de gerencia…
+            </div>
+          )}
+          {(gerPdfProgreso || (vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'corte-ger')) && (
+            <div
+              style={{
+                fontSize: ui.hint + 'px',
+                color: '#1e40af',
+                background: '#dbeafe',
+                border: '1px solid #93c5fd',
+                borderRadius: '8px',
+                padding: '10px 12px',
+                marginBottom: ui.gap + 'px',
+                fontWeight: 600,
+              }}
+            >
+              ⏳ Generando PDF CC-GER-001…{' '}
+              {gerPdfProgreso?.seg ?? vistaPrevia?.seg ?? 0}s
+              <span style={{ display: 'block', fontWeight: 500, color: '#475569', marginTop: '4px' }}>
+                Matriz de costos directos por capítulo. La primera vez puede tardar ~30–60 s; las siguientes suelen ser más rápidas.
+              </span>
+            </div>
+          )}
           {gerAutoActaId && (
             <div style={{ ...infoBoxSub, marginBottom: ui.gap + 'px' }}>
               <span>
@@ -4353,7 +4430,7 @@ export default function ModuloInformes({
                     <button
                       type="button"
                       style={btnCcdToolbar(concPdfBusy, 'pdf')}
-                      onClick={() => descargarPdfConc(rutaInformeGerenciaPdf(true), 'CC-GER-001.pdf')}
+                      onClick={() => descargarPdfGerencia(true)}
                       disabled={concPdfBusy}
                       title="Descargar con página de sello (huella, fecha)"
                       aria-label="Descargar CC-GER-001 con sello"
@@ -5145,7 +5222,21 @@ export default function ModuloInformes({
 
             {vistaPrevia.fase === 'cargando' && (
               <div style={{ padding: '32px', textAlign: 'center', color: '#64748b' }}>
-                Generando vista previa PDF…
+                {vistaPrevia.tipo === 'corte-ger' ? (
+                  <>
+                    <div style={{ fontSize: f.title + 'px', fontWeight: 800, color: '#334155', marginBottom: '8px' }}>
+                      Generando informe de gerencia…
+                    </div>
+                    <div style={{ fontSize: f.body + 'px', marginBottom: '6px' }}>
+                      ⏳ {vistaPrevia.seg ?? 0} segundos
+                    </div>
+                    <div style={{ fontSize: f.sub + 'px', maxWidth: '420px', margin: '0 auto', lineHeight: 1.45 }}>
+                      Consultando actas RPO y totales de costo directo. No cierre esta ventana.
+                    </div>
+                  </>
+                ) : (
+                  'Generando vista previa PDF…'
+                )}
               </div>
             )}
 

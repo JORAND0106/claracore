@@ -48,7 +48,7 @@ import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache'
 import CompetenciaSelect from './components/CompetenciaSelect'
 import CcConfirmModal from './components/CcConfirmModal'
 import { supabase } from './supabaseClient'
-import { applyClaraTypography, getDashTypoUI } from './typographyScale'
+import { applyClaraTypography, getDashTypoUI, getClaraTypeScaleInline } from './typographyScale'
 import { formatCOP, formatCOPShort } from './utils/formatCOP'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
 import {
@@ -12670,6 +12670,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [miniMapaColoresLoad, setMiniMapaColoresLoad] = useState(false)
   const dashDrillFetchSeqRef = useRef(0) // evita race: respuestas viejas no sobrescriben drill
   const CACHE_TTL = 5 * 60 * 1000    // 5 minutos en ms
+  const DASH_DRILL_TIMEOUT_MS = 180 * 1000  // alineado con timeout Gunicorn (300s) y capítulos grandes
   const [popupCapitulo, setPopupCapitulo] = useState(false)
   const popupCapituloRef = useRef(false)
   const [notifNavegar, setNotifNavegar] = useState(null)
@@ -12679,6 +12680,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [popupLoading,   setPopupLoading]   = useState(false)
   const [dashReportesDeltaLoad, setDashReportesDeltaLoad] = useState(false)
   const [dashMigracionModal, setDashMigracionModal] = useState(null)
+  /** null | { phase, capitulo, item?, itemCount?, soloResumen?, seg?, progreso?, error? } */
+  const [dashExportModal, setDashExportModal] = useState(null)
   const [dashBibliotecaBalance, setDashBibliotecaBalance] = useState([])
   const [dashBibliotecaLoad, setDashBibliotecaLoad] = useState(false)
   const [dashBibliotecaError, setDashBibliotecaError] = useState(null)
@@ -12690,6 +12693,23 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const contratoIdDash = usuario?.contrato_id
   const dashModuloActivo = moduloActivo === 'dashboard'
   const du = useMemo(() => getDashTypoUI(fontSize), [fontSize])
+  const exportModalUi = useMemo(() => {
+    const cc = getClaraTypeScaleInline(fontSize)
+    const isPeq = fontSize === 'pequena'
+    const isGra = fontSize === 'grande'
+    return {
+      cc,
+      pad: isGra ? '22px 24px' : isPeq ? '12px 14px' : '16px 20px',
+      padBody: isGra ? '22px 24px 24px' : isPeq ? '12px 14px 14px' : '18px 20px 20px',
+      gap: isGra ? '18px' : isPeq ? '10px' : '14px',
+      iconBox: isGra ? 48 : isPeq ? 32 : 40,
+      iconEmoji: isGra ? '1.65rem' : isPeq ? '1.1rem' : '1.35rem',
+      iconHero: isGra ? '2.75rem' : isPeq ? '1.75rem' : '2.25rem',
+      maxChoose: isGra ? 'min(100%, 720px)' : isPeq ? 'min(100%, 520px)' : 'min(100%, 640px)',
+      maxGen: isGra ? 'min(100%, 520px)' : isPeq ? 'min(100%, 420px)' : 'min(100%, 480px)',
+      radius: isGra ? '18px' : isPeq ? '12px' : '16px',
+    }
+  }, [fontSize])
 
   const dashVistaParam = useMemo(
     () => (dashVistaEjecucion === 'Obra Ejecutada' ? 'obra_ejecutada' : 'presupuesto_obra'),
@@ -13157,7 +13177,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         setDashTablaLoad(false)
         syncMapaFromTabla(cached.data)
         const ac = new AbortController()
-        const t = setTimeout(() => ac.abort(), 45000)
+        const t = setTimeout(() => ac.abort(), DASH_DRILL_TIMEOUT_MS)
         fetchTablaJson(ac.signal)
           .then((data) => {
             if (fetchSeq !== dashDrillFetchSeqRef.current) return
@@ -13174,7 +13194,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       setDashTablaLoad(true); setDashTabla(null)
       setMiniMapaColoresLoad(true)
       const ac = new AbortController()
-      const timeoutId = setTimeout(() => ac.abort(), 45000)
+      const timeoutId = setTimeout(() => ac.abort(), DASH_DRILL_TIMEOUT_MS)
       try {
         const data = await fetchTablaJson(ac.signal)
         if (fetchSeq !== dashDrillFetchSeqRef.current) return
@@ -13313,6 +13333,154 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
 
   useEffect(() => { if (contratoIdDash) { setDashDrillPag(0); cargarDashDrill(dashDrill) } }, [contratoIdDash, dashDrill, dashVistaParam])
 
+  async function ejecutarExportDashExcel({ soloResumen, capitulo, itemValor }) {
+    if (dashExportInFlightRef.current) return
+    dashExportInFlightRef.current = true
+    const tok = getToken()
+    const capRaw = capitulo || dashDrill[0]?.valor || ''
+    const cap = encodeURIComponent(capRaw)
+    const itemQ = itemValor ? `&item=${encodeURIComponent(itemValor)}` : ''
+    const resumenQ = soloResumen ? '&solo_resumen=1' : ''
+    const downloadFilename = `ClaraCore_${capRaw.slice(0, 30)}_${new Date().toISOString().slice(0, 10)}.xlsx`
+    const saveBlob = (blob, filename) => {
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = filename || downloadFilename
+      a.click()
+      URL.revokeObjectURL(a.href)
+    }
+    const tickStart = Date.now()
+    const tickIv = setInterval(() => {
+      const seg = Math.round((Date.now() - tickStart) / 1000)
+      setDashExportModal((prev) => (prev ? { ...prev, seg, phase: 'generating' } : prev))
+    }, 1000)
+    setDashExportModal((prev) => ({
+      ...(prev || {}),
+      phase: 'generating',
+      capitulo: capRaw,
+      item: itemValor || null,
+      soloResumen: !!soloResumen,
+      seg: 0,
+      progreso: soloResumen ? 'resumen' : 'iniciando',
+      error: null,
+    }))
+    try {
+      if (soloResumen || itemValor) {
+        const exportDownload = `${API}/sicoe-obra/${usuario.contrato_id}/dashboard-export-capitulo-download?capitulo=${cap}${itemQ}${resumenQ}&vista=${encodeURIComponent(dashVistaParam)}`
+        const ac = new AbortController()
+        const to = setTimeout(() => ac.abort(), DASH_DRILL_TIMEOUT_MS)
+        try {
+          const dl = await fetch(exportDownload, {
+            headers: { Authorization: `Bearer ${tok}` },
+            signal: ac.signal,
+          })
+          if (!dl.ok) {
+            const errTxt = await dl.text().catch(() => '')
+            throw new Error(errTxt?.slice(0, 280) || `Error al generar Excel (${dl.status})`)
+          }
+          const blob = await dl.blob()
+          if (!blob?.size) throw new Error('El servidor devolvió un archivo vacío.')
+          const cd = dl.headers.get('Content-Disposition') || ''
+          const fnMatch = cd.match(/filename="([^"]+)"/)
+          saveBlob(blob, fnMatch?.[1] || downloadFilename)
+          setDashExportModal(null)
+          return
+        } finally {
+          clearTimeout(to)
+        }
+      }
+
+      const exportStart = `${API}/sicoe-obra/${usuario.contrato_id}/dashboard-export-capitulo?capitulo=${cap}${itemQ}&vista=${encodeURIComponent(dashVistaParam)}`
+      const res = await fetch(exportStart, { headers: { Authorization: `Bearer ${tok}` } })
+      if (!res.ok) throw new Error('No se pudo iniciar la exportación completa.')
+      const { job_id } = await res.json()
+      const pollMs = 2000
+      const maxIntentos = 300
+      let intentos = 0
+      let listo = false
+      let notFoundRetries = 0
+      while (intentos < maxIntentos) {
+        await new Promise((r) => setTimeout(r, pollMs))
+        intentos++
+        let estado = ''
+        let progreso = ''
+        try {
+          const st = await fetch(`${API}/exportar/estado/${job_id}`, {
+            headers: { Authorization: `Bearer ${tok}` },
+          })
+          if (st.status === 404) {
+            notFoundRetries += 1
+            if (notFoundRetries <= 5) {
+              setDashExportModal((prev) =>
+                prev ? { ...prev, progreso: 'reconectando…' } : prev
+              )
+              continue
+            }
+            throw new Error('La exportación se interrumpió (servidor reiniciado). Intente de nuevo.')
+          }
+          notFoundRetries = 0
+          if (st.ok) {
+            const d = await st.json()
+            estado = d.estado || ''
+            progreso = d.progreso || ''
+            setDashExportModal((prev) =>
+              prev ? { ...prev, progreso: progreso || prev.progreso } : prev
+            )
+          }
+        } catch (e) {
+          if (e?.message?.includes('interrumpió')) throw e
+          continue
+        }
+        if (estado.startsWith('error')) throw new Error(String(estado).replace(/^error:/, 'Error generando Excel: '))
+        if (estado === 'listo') {
+          const dl = await fetch(`${API}/exportar/descargar/${job_id}`, {
+            headers: { Authorization: `Bearer ${tok}` },
+          })
+          if (!dl.ok) throw new Error('No se pudo descargar el archivo generado.')
+          const blob = await dl.blob()
+          saveBlob(blob, downloadFilename)
+          listo = true
+          setDashExportModal(null)
+          break
+        }
+      }
+      if (!listo) {
+        throw new Error(
+          `La exportación completa tardó más de ${Math.round((maxIntentos * pollMs) / 60000)} minutos. Intente filtrar por ítem o contacte al administrador.`
+        )
+      }
+    } catch (err) {
+      const msg =
+        err?.name === 'AbortError'
+          ? 'La exportación tardó demasiado. Pruebe el resumen ejecutivo o filtre por ítem.'
+          : err?.message || 'Error de conexión al generar Excel.'
+      setDashExportModal((prev) => (prev ? { ...prev, phase: 'error', error: msg } : { phase: 'error', error: msg, capitulo: capRaw }))
+    } finally {
+      clearInterval(tickIv)
+      dashExportInFlightRef.current = false
+    }
+  }
+
+  function abrirModalExportDashExcel() {
+    if (dashExportInFlightRef.current) return
+    if (dashDrill[1]?.valor) {
+      void ejecutarExportDashExcel({
+        soloResumen: false,
+        capitulo: dashDrill[0]?.valor,
+        itemValor: dashDrill[1].valor,
+      })
+      return
+    }
+    setDashExportModal({
+      phase: 'choose',
+      capitulo: dashDrill[0]?.valor || '',
+      itemCount: Array.isArray(dashData) ? dashData.length : null,
+      seg: 0,
+      progreso: null,
+      error: null,
+    })
+  }
+
   async function abrirPopupPkid(pkid) {
     if (dashDrill.length < 2 || !contratoIdDash) return
     const pkNorm = String(pkid ?? '').trim()
@@ -13408,6 +13576,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
       setDashBibliotecaBalance([])
       setDashBibliotecaError(null)
       setDashMigracionModal(null)
+      setDashExportModal(null)
       setDwgEnlazadoDash(false)
       setNavRegistroId(null)
       setNavRegistroNumero(null)
@@ -14808,85 +14977,10 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     <div style={{ display:'flex', gap:'8px', alignItems:'center', flexShrink:0 }}>
                       <button
                         id="btn-exportar-xlsx"
-                        title="Informe Excel"
-                        onClick={async (e) => {
-                          const btn = e.currentTarget
-                          if (btn.disabled || dashExportInFlightRef.current) return
-                          dashExportInFlightRef.current = true
-                          btn.disabled = true; const orig = btn.innerHTML
-                          btn.style.opacity='0.6'; btn.style.cursor='wait'
-                          const tok = getToken()
-                          const cap = encodeURIComponent(dashDrill[0]?.valor || '')
-                          try {
-                            // 1) Iniciar generación en background
-                            btn.innerHTML = '⏳ Generando...'
-                            const itemQ = dashDrill[1]?.valor
-                              ? `&item=${encodeURIComponent(dashDrill[1].valor)}`
-                              : ''
-                            const res = await fetch(`${API}/sicoe-obra/${usuario.contrato_id}/dashboard-export-capitulo?capitulo=${cap}${itemQ}&vista=${encodeURIComponent(dashVistaParam)}`, {
-                              headers: { Authorization: `Bearer ${tok}` }
-                            })
-                            if (!res.ok) { alert('Error al iniciar exportación'); return }
-                            const { job_id } = await res.json()
-                            // 2) Polling hasta que esté listo (capítulos grandes pueden tardar varios minutos)
-                            const pollMs = 2000
-                            const maxIntentos = 180
-                            let intentos = 0
-                            let listo = false
-                            while (intentos < maxIntentos) {
-                              await new Promise(r => setTimeout(r, pollMs))
-                              intentos++
-                              const seg = intentos * (pollMs / 1000)
-                              btn.innerHTML = `⏳ ${Math.round(seg)}s…`
-                              let estado = ''
-                              let progreso = ''
-                              try {
-                                const st = await fetch(`${API}/exportar/estado/${job_id}`, {
-                                  headers: { Authorization: `Bearer ${tok}` }
-                                })
-                                if (st.status === 404) {
-                                  alert('La exportación se interrumpió (servidor reiniciado). Intente de nuevo.')
-                                  break
-                                }
-                                if (st.ok) {
-                                  const d = await st.json()
-                                  estado = d.estado || ''
-                                  progreso = d.progreso || ''
-                                  if (progreso && progreso !== 'listo' && progreso !== 'iniciando') {
-                                    btn.innerHTML = `⏳ ${progreso} · ${Math.round(seg)}s`
-                                  }
-                                }
-                              } catch { continue }
-                              if (estado.startsWith('error')) { alert('Error generando Excel: ' + estado); break }
-                              if (estado === 'listo') {
-                                // 3) Descargar
-                                btn.innerHTML = '⬇️ Descargando...'
-                                const dl = await fetch(`${API}/exportar/descargar/${job_id}`, {
-                                  headers: { Authorization: `Bearer ${tok}` }
-                                })
-                                if (!dl.ok) {
-                                  alert('No se pudo descargar el archivo generado.')
-                                  break
-                                }
-                                const blob = await dl.blob()
-                                const a = document.createElement('a')
-                                a.href = URL.createObjectURL(blob)
-                                a.download = `ClaraCore_${(dashDrill[0]?.valor||'').slice(0,30)}_${new Date().toISOString().slice(0,10)}.xlsx`
-                                a.click(); URL.revokeObjectURL(a.href)
-                                listo = true
-                                break
-                              }
-                            }
-                            if (!listo && intentos >= maxIntentos) {
-                              alert(`La exportación tardó más de ${Math.round(maxIntentos * pollMs / 1000 / 60)} minutos. Intente filtrar por ítem o contacte al administrador.`)
-                            }
-                          } catch { alert('Error de conexión') }
-                          finally {
-                            dashExportInFlightRef.current = false
-                            btn.disabled=false; btn.innerHTML=orig; btn.style.opacity='1'; btn.style.cursor='pointer'
-                          }
-                        }}
-                        style={{ background:'transparent', color:'#1E8449', border:'1.5px solid #1E8449', borderRadius:'8px', padding:'5px 10px', fontSize:'var(--cc-lg)', cursor:'pointer', lineHeight:1, transition:'all 0.15s' }}
+                        title="Exportar informe Excel del capítulo o ítem"
+                        disabled={dashExportModal?.phase === 'generating'}
+                        onClick={() => abrirModalExportDashExcel()}
+                        style={{ background:'transparent', color:'#1E8449', border:'1.5px solid #1E8449', borderRadius:'8px', padding:'5px 10px', fontSize:'var(--cc-lg)', cursor: dashExportModal?.phase === 'generating' ? 'wait' : 'pointer', lineHeight:1, transition:'all 0.15s', opacity: dashExportModal?.phase === 'generating' ? 0.55 : 1 }}
                         onMouseEnter={e=>{ e.currentTarget.style.background='#1E8449'; e.currentTarget.style.color='#fff' }}
                         onMouseLeave={e=>{ e.currentTarget.style.background='transparent'; e.currentTarget.style.color='#1E8449' }}>
                         📊
@@ -16214,6 +16308,283 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             </div>
           )
         })()}
+        {dashExportModal && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="dash-export-modal-title"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(15, 23, 42, 0.72)',
+              backdropFilter: 'blur(3px)',
+              WebkitBackdropFilter: 'blur(3px)',
+              zIndex: 9850,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: exportModalUi.pad,
+            }}
+            onClick={() => {
+              if (!dashExportInFlightRef.current && dashExportModal.phase !== 'generating') {
+                setDashExportModal(null)
+              }
+            }}
+          >
+            <div
+              style={{
+                background: t.bgCard,
+                borderRadius: exportModalUi.radius,
+                border: `1px solid ${t.border}`,
+                maxWidth: dashExportModal.phase === 'choose' ? exportModalUi.maxChoose : exportModalUi.maxGen,
+                width: '100%',
+                boxShadow: '0 24px 64px rgba(0,0,0,0.45)',
+                overflow: 'hidden',
+                fontSize: exportModalUi.cc.body,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                style={{
+                  padding: exportModalUi.pad,
+                  borderBottom: `1px solid ${t.border}`,
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: exportModalUi.gap,
+                }}
+              >
+                <div
+                  style={{
+                    width: exportModalUi.iconBox,
+                    height: exportModalUi.iconBox,
+                    borderRadius: '10px',
+                    background: '#ecfdf5',
+                    color: '#047857',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: exportModalUi.iconEmoji,
+                    flexShrink: 0,
+                  }}
+                >
+                  📊
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div id="dash-export-modal-title" style={{ fontWeight: 800, fontSize: exportModalUi.cc.md, color: t.text }}>
+                    Exportar informe Excel
+                  </div>
+                  <div style={{ fontSize: exportModalUi.cc.caption, color: t.textMuted, marginTop: '4px', lineHeight: 1.45 }}>
+                    {dashExportModal.capitulo}
+                    {dashExportModal.itemCount != null ? (
+                      <> · <strong style={{ color: t.text }}>{dashExportModal.itemCount}</strong> ítems</>
+                    ) : null}
+                  </div>
+                </div>
+                {dashExportModal.phase !== 'generating' && (
+                  <button
+                    type="button"
+                    onClick={() => setDashExportModal(null)}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      fontSize: 'var(--cc-lg)',
+                      cursor: 'pointer',
+                      color: t.textMuted,
+                      lineHeight: 1,
+                    }}
+                    aria-label="Cerrar"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              {dashExportModal.phase === 'choose' && (
+                <div style={{ padding: '18px 20px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                  <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: t.textMuted, lineHeight: 1.5 }}>
+                    Elija el tipo de archivo según lo que necesite revisar o compartir.
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void ejecutarExportDashExcel({
+                        soloResumen: true,
+                        capitulo: dashExportModal.capitulo,
+                      })
+                    }
+                    style={{
+                      textAlign: 'left',
+                      border: `2px solid #059669`,
+                      borderRadius: '12px',
+                      padding: '14px 16px',
+                      background: '#ecfdf5',
+                      cursor: 'pointer',
+                      transition: 'box-shadow 0.15s',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '22px' }} aria-hidden>📋</span>
+                      <div>
+                        <div style={{ fontWeight: 800, color: '#065f46', fontSize: 'var(--cc-sm)' }}>Resumen ejecutivo</div>
+                        <div style={{ fontSize: 'var(--cc-caption)', color: '#047857', marginTop: '2px' }}>Recomendado · listo en segundos</div>
+                      </div>
+                    </div>
+                    <ul style={{ margin: 0, paddingLeft: '20px', fontSize: 'var(--cc-caption)', color: '#334155', lineHeight: 1.55 }}>
+                      <li>Una hoja con totales por ítem (presupuesto vs cobro)</li>
+                      <li>Ideal para revisión rápida o gerencia</li>
+                    </ul>
+                  </button>
+
+                  <div
+                    style={{
+                      border: `1px solid ${t.border}`,
+                      borderRadius: '12px',
+                      padding: '14px 16px',
+                      background: t.bgCard,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '22px' }} aria-hidden>📁</span>
+                      <div>
+                        <div style={{ fontWeight: 800, color: t.text, fontSize: 'var(--cc-sm)' }}>Archivo completo</div>
+                        <div style={{ fontSize: 'var(--cc-caption)', color: t.textMuted, marginTop: '2px' }}>Análisis detallado del capítulo</div>
+                      </div>
+                    </div>
+                    <ul style={{ margin: '0 0 12px', paddingLeft: '20px', fontSize: 'var(--cc-caption)', color: t.textMuted, lineHeight: 1.55 }}>
+                      <li>Detalle por PK en cada ítem (por cobrar / devolución / equilibrio)</li>
+                      <li>Hoja base <strong style={{ color: t.text }}>Presupuesto</strong> del capítulo</li>
+                      <li>Hoja base <strong style={{ color: t.text }}>SICOE Obra</strong> aprobada</li>
+                    </ul>
+                    <div
+                      style={{
+                        fontSize: 'var(--cc-caption)',
+                        color: '#92400e',
+                        background: '#fffbeb',
+                        border: '1px solid #fcd34d',
+                        borderRadius: '8px',
+                        padding: '10px 12px',
+                        marginBottom: '12px',
+                        lineHeight: 1.45,
+                      }}
+                    >
+                      ⏱ Este archivo puede tardar <strong>varios minutos</strong> en capítulos con muchos ítems.
+                      No cierre la ventana mientras se genera.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void ejecutarExportDashExcel({
+                          soloResumen: false,
+                          capitulo: dashExportModal.capitulo,
+                        })
+                      }
+                      style={{
+                        width: '100%',
+                        padding: '10px 14px',
+                        borderRadius: '8px',
+                        border: `1.5px solid ${t.primary || '#0f766e'}`,
+                        background: 'transparent',
+                        color: t.primary || '#0f766e',
+                        fontWeight: 700,
+                        fontSize: 'var(--cc-sm)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Generar archivo completo
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {dashExportModal.phase === 'generating' && (
+                <div style={{ padding: exportModalUi.padBody, textAlign: 'center' }}>
+                  <div style={{ fontSize: exportModalUi.iconHero, marginBottom: '12px' }} aria-hidden>⏳</div>
+                  <div style={{ fontWeight: 800, color: t.text, fontSize: exportModalUi.cc.sm, marginBottom: '6px' }}>
+                    {dashExportModal.soloResumen ? 'Generando resumen ejecutivo…' : 'Generando archivo completo…'}
+                  </div>
+                  <div style={{ fontSize: exportModalUi.cc.body, color: t.text, marginBottom: '8px', fontWeight: 600 }}>
+                    {dashExportModal.progreso && dashExportModal.progreso !== 'iniciando' && dashExportModal.progreso !== 'resumen'
+                      ? dashExportModal.progreso
+                      : dashExportModal.soloResumen
+                        ? 'Preparando hoja resumen…'
+                        : 'Iniciando…'}
+                  </div>
+                  <div style={{ fontSize: exportModalUi.cc.caption, color: t.textMuted, marginBottom: '16px' }}>
+                    {dashExportModal.seg ?? 0} segundos
+                  </div>
+                  {!dashExportModal.soloResumen && (
+                    <div style={{ fontSize: exportModalUi.cc.caption, color: t.textMuted, maxWidth: '28em', margin: '0 auto', lineHeight: 1.45 }}>
+                      Incluye hojas por ítem, presupuesto y SICOE Obra. El avance se actualiza por etapa.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {dashExportModal.phase === 'error' && (
+                <div style={{ padding: '20px 24px 24px' }}>
+                  <div
+                    style={{
+                      fontSize: 'var(--cc-sm)',
+                      color: '#b91c1c',
+                      background: '#fef2f2',
+                      border: '1px solid #fecaca',
+                      borderRadius: '8px',
+                      padding: '12px 14px',
+                      marginBottom: '16px',
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    {dashExportModal.error || 'No se pudo completar la exportación.'}
+                  </div>
+                  <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => setDashExportModal(null)}
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: '8px',
+                        border: `1px solid ${t.border}`,
+                        background: t.bgCard,
+                        color: t.text,
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        fontSize: 'var(--cc-sm)',
+                      }}
+                    >
+                      Cerrar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDashExportModal({
+                          phase: 'choose',
+                          capitulo: dashExportModal.capitulo,
+                          itemCount: dashExportModal.itemCount,
+                          seg: 0,
+                          progreso: null,
+                          error: null,
+                        })
+                      }
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: '8px',
+                        border: 'none',
+                        background: '#059669',
+                        color: '#fff',
+                        cursor: 'pointer',
+                        fontWeight: 700,
+                        fontSize: 'var(--cc-sm)',
+                      }}
+                    >
+                      Elegir de nuevo
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         {dashMigracionModal && (
           <div
             style={{

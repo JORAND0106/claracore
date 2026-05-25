@@ -22,6 +22,9 @@ _GERENCIA_MATRIZ_CACHE: Dict[tuple, Dict[str, Any]] = {}
 _GERENCIA_MATRIZ_CACHE_LOCK = threading.Lock()
 _GERENCIA_MATRIZ_CACHE_TTL_SEC = 600
 _GERENCIA_MATRIZ_CACHE_STALE_SEC = 1800
+_GERENCIA_PDF_CACHE: Dict[tuple, Dict[str, Any]] = {}
+_GERENCIA_PDF_CACHE_LOCK = threading.Lock()
+_GERENCIA_PDF_CACHE_TTL_SEC = 600
 
 
 def _gerencia_matriz_cache_key(contrato_id: int, acta_presente_override: Optional[int]) -> tuple:
@@ -48,6 +51,31 @@ def _gerencia_matriz_cache_set(key: tuple, data: Dict[str, Any]) -> None:
         if len(_GERENCIA_MATRIZ_CACHE) > 32:
             oldest = min(_GERENCIA_MATRIZ_CACHE, key=lambda k: _GERENCIA_MATRIZ_CACHE[k]["ts"])
             _GERENCIA_MATRIZ_CACHE.pop(oldest, None)
+
+
+def _gerencia_pdf_cache_key(contrato_id: int, acta_presente: Optional[int], modo: str, con_sello: bool) -> tuple:
+    ap = int(acta_presente) if acta_presente is not None else -1
+    return ("gerencia_pdf", int(contrato_id), ap, (modo or "matriz").lower().strip(), bool(con_sello))
+
+
+def _gerencia_pdf_cache_get(key: tuple) -> Optional[Tuple[bytes, str]]:
+    now = time.time()
+    with _GERENCIA_PDF_CACHE_LOCK:
+        entry = _GERENCIA_PDF_CACHE.get(key)
+        if not entry:
+            return None
+        if now - entry["ts"] <= _GERENCIA_PDF_CACHE_TTL_SEC:
+            return entry["data"], str(entry.get("nr") or "ger")
+        _GERENCIA_PDF_CACHE.pop(key, None)
+    return None
+
+
+def _gerencia_pdf_cache_set(key: tuple, data: bytes, nr: str = "ger") -> None:
+    with _GERENCIA_PDF_CACHE_LOCK:
+        _GERENCIA_PDF_CACHE[key] = {"data": data, "ts": time.time(), "nr": nr}
+        if len(_GERENCIA_PDF_CACHE) > 16:
+            oldest = min(_GERENCIA_PDF_CACHE, key=lambda k: _GERENCIA_PDF_CACHE[k]["ts"])
+            _GERENCIA_PDF_CACHE.pop(oldest, None)
 
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -5186,6 +5214,36 @@ def json_informe_gerencia_matriz(
     }
 
 
+def _pdf_cc_ger_001_bytes_cached(
+    contrato_id: int,
+    current_user,
+    acta_presente: Optional[int],
+    acta_referencia: Optional[int],
+    modo: str,
+) -> Tuple[bytes, str]:
+    m = (modo or "").lower().strip()
+    cache_key = _gerencia_pdf_cache_key(contrato_id, acta_presente, m, False)
+    cached = _gerencia_pdf_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    if m in ("pareja", "2", "dos", "clásico", "clasico"):
+        raw = _pdf_bytes_informe_gerencia_pareja(
+            contrato_id, int(acta_presente), acta_referencia, current_user
+        )
+        ac = _row("actas", "numero_rpo, consecutivo", id=int(acta_presente)) or {}
+        nr = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_presente)
+    else:
+        datosg = _construir_datos_informe_gerencia_matriz(contrato_id, acta_presente)
+        raw = _pdf_bytes_informe_gerencia_matriz(
+            contrato_id, current_user, acta_presente, datos=datosg
+        )
+        apd = (datosg.get("acta_presente") or {}) or {}
+        nr = str(apd.get("numero_rpo") or apd.get("consecutivo") or apd.get("id") or "ger")
+    _gerencia_pdf_cache_set(cache_key, raw, nr)
+    return raw, nr
+
+
 @router.get("/{contrato_id}/pdf/cc-ger-001")
 def pdf_cc_ger_001_pareja(
     contrato_id: int,
@@ -5209,20 +5267,9 @@ def pdf_cc_ger_001_pareja(
     m = (modo or "").lower().strip()
     if m in ("pareja", "2", "dos", "clásico", "clasico") and acta_presente is None:
         raise HTTPException(400, "Con modo=pareja debe indicar acta_presente")
-    if m in ("pareja", "2", "dos", "clásico", "clasico"):
-        a_ref = acta_referencia
-        raw = _pdf_bytes_informe_gerencia_pareja(
-            contrato_id, int(acta_presente), a_ref, current_user
-        )
-        ac = _row("actas", "numero_rpo, consecutivo", id=int(acta_presente)) or {}
-        nr = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_presente)
-    else:
-        datosg = _construir_datos_informe_gerencia_matriz(contrato_id, acta_presente)
-        raw = _pdf_bytes_informe_gerencia_matriz(
-            contrato_id, current_user, acta_presente, datos=datosg
-        )
-        apd = (datosg.get("acta_presente") or {}) or {}
-        nr = str(apd.get("numero_rpo") or apd.get("consecutivo") or apd.get("id") or "ger")
+    raw, nr = _pdf_cc_ger_001_bytes_cached(
+        contrato_id, current_user, acta_presente, acta_referencia, m
+    )
     fname = _safe_filename_part(f"CC-GER-001_RPO{nr}.pdf")
     return Response(
         content=raw,
@@ -5249,19 +5296,9 @@ def pdf_cc_ger_001_pareja_con_sello_firma(
     m = (modo or "").lower().strip()
     if m in ("pareja", "2", "dos", "clásico", "clasico") and acta_presente is None:
         raise HTTPException(400, "Con modo=pareja debe indicar acta_presente")
-    if m in ("pareja", "2", "dos", "clásico", "clasico"):
-        pdf_bytes = _pdf_bytes_informe_gerencia_pareja(
-            contrato_id, int(acta_presente), acta_referencia, current_user
-        )
-        ac = _row("actas", "numero_rpo, consecutivo", id=int(acta_presente)) or {}
-        nr = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_presente)
-    else:
-        datosg = _construir_datos_informe_gerencia_matriz(contrato_id, acta_presente)
-        pdf_bytes = _pdf_bytes_informe_gerencia_matriz(
-            contrato_id, current_user, acta_presente, datos=datosg
-        )
-        apd = (datosg.get("acta_presente") or {}) or {}
-        nr = str(apd.get("numero_rpo") or apd.get("consecutivo") or apd.get("id") or "ger")
+    pdf_bytes, nr = _pdf_cc_ger_001_bytes_cached(
+        contrato_id, current_user, acta_presente, acta_referencia, m
+    )
     fname = _safe_filename_part(f"CC-GER-001_RPO{nr}.pdf")
     ctr = _row("contratos", "numero", id=contrato_id) or {}
     return _attachment_pdf_con_pagina_sello_usuario(
