@@ -725,18 +725,11 @@ def rpo_resumen_actas_rpc(
     if campo_nivel_max is None or niveles_activos is None:
         campo_nivel_max, niveles_activos = matriz_params_contrato(sb, contrato_id)
     try:
-        res = (
-            sb.rpc(
-                "rpo_panel_actas_resumen",
-                {
-                    "p_contrato_id": contrato_id,
-                    "p_acta_ids": ids,
-                    "p_campo_nivel_max": campo_nivel_max,
-                    "p_niveles_activos": niveles_activos,
-                },
-            ).execute()
-        )
-        rows = res.data or []
+        from main import _rpo_panel_actas_resumen_cached
+
+        rows = _rpo_panel_actas_resumen_cached(
+            contrato_id, ids, campo_nivel_max, niveles_activos
+        ) or []
     except Exception as e:
         _log.warning("rpo_panel_actas_resumen: %s", e)
         return None

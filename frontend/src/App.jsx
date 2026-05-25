@@ -14326,87 +14326,89 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
         {/* ── Contenido principal ── */}
         <div style={{ flex:1, padding:'20px 24px', minWidth:0, overflow:'hidden' }}>
         <div style={{ ...s.topBar, alignItems: moduloActivo === 'dashboard' ? 'flex-start' : 'center' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 0 }}>
-            {moduloActivo === 'dashboard' && (() => {
-              const elapsedMin = dashResumenUpdatedAt != null
-                ? Math.floor((Date.now() - dashResumenUpdatedAt) / 60000)
-                : null
-              const dashInfoColor = t.primary || '#0077B6'
-              return (
-                <>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                    <h1 style={{ margin: 0, fontSize: 'var(--cc-xl)', fontWeight: 700, color: t.text, letterSpacing: '-0.02em' }}>
-                      Dashboard SICOE
-                    </h1>
-                    <button
-                      type="button"
-                      onClick={() => { void cargarDashboardResumen() }}
-                      disabled={dashKpiLoading}
-                      title="Actualizar resumen del dashboard"
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        background: t.bgCard,
-                        border: `1px solid ${t.border}`,
-                        borderRadius: 8,
-                        padding: '6px 12px',
-                        color: dashKpiLoading ? t.textMuted : t.primary,
-                        fontSize: 'var(--cc-sm)',
-                        fontWeight: 600,
-                        cursor: dashKpiLoading ? 'wait' : 'pointer',
-                        opacity: dashKpiLoading ? 0.75 : 1,
-                      }}
-                    >
-                      <i
-                        className="ti ti-refresh"
-                        style={{
-                          fontSize: '1.05rem',
-                          lineHeight: 1,
-                          display: 'inline-block',
-                          animation: dashKpiLoading ? 'dashRefreshSpin 0.85s linear infinite' : 'none',
-                        }}
-                      />
-                      Actualizar
-                    </button>
-                  </div>
-                  {elapsedMin != null && (
-                    <div style={{ fontSize: `${du.sub}px`, color: t.textMuted }}>
-                      {elapsedMin < 2 ? (
-                        'Datos al día'
-                      ) : elapsedMin <= 5 ? (
-                        `Actualizado hace ${elapsedMin} min`
-                      ) : (
-                        <>
-                          {`Actualizado hace ${elapsedMin} min · `}
-                          <button
-                            type="button"
-                            onClick={() => { void cargarDashboardResumen() }}
-                            disabled={dashKpiLoading}
+          {moduloActivo === 'dashboard' ? (
+            <>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 0 }}>
+                {(() => {
+                  const elapsedMin = dashResumenUpdatedAt != null
+                    ? Math.floor((Date.now() - dashResumenUpdatedAt) / 60000)
+                    : null
+                  const dashInfoColor = t.primary || '#0077B6'
+                  return (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                        <h1 style={{ margin: 0, fontSize: 'var(--cc-xl)', fontWeight: 700, color: t.text, letterSpacing: '-0.02em' }}>
+                          Dashboard SICOE
+                        </h1>
+                        <button
+                          type="button"
+                          onClick={() => { void cargarDashboardResumen() }}
+                          disabled={dashKpiLoading}
+                          title="Actualizar resumen del dashboard"
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            background: t.bgCard,
+                            border: `1px solid ${t.border}`,
+                            borderRadius: 8,
+                            padding: '6px 12px',
+                            color: dashKpiLoading ? t.textMuted : t.primary,
+                            fontSize: 'var(--cc-sm)',
+                            fontWeight: 600,
+                            cursor: dashKpiLoading ? 'wait' : 'pointer',
+                            opacity: dashKpiLoading ? 0.75 : 1,
+                          }}
+                        >
+                          <i
+                            className="ti ti-refresh"
                             style={{
-                              background: 'none',
-                              border: 'none',
-                              padding: 0,
-                              margin: 0,
-                              color: dashInfoColor,
-                              fontSize: 'inherit',
-                              fontWeight: 600,
-                              cursor: dashKpiLoading ? 'wait' : 'pointer',
-                              textDecoration: 'underline',
-                              textUnderlineOffset: 2,
+                              fontSize: '1.05rem',
+                              lineHeight: 1,
+                              display: 'inline-block',
+                              animation: dashKpiLoading ? 'dashRefreshSpin 0.85s linear infinite' : 'none',
                             }}
-                          >
-                            ¿Refrescar?
-                          </button>
-                        </>
+                          />
+                          Actualizar
+                        </button>
+                      </div>
+                      {elapsedMin != null && (
+                        <div style={{ fontSize: `${du.sub}px`, color: t.textMuted }}>
+                          {elapsedMin < 2 ? (
+                            'Datos al día'
+                          ) : elapsedMin <= 5 ? (
+                            `Actualizado hace ${elapsedMin} min`
+                          ) : (
+                            <>
+                              {`Actualizado hace ${elapsedMin} min · `}
+                              <button
+                                type="button"
+                                onClick={() => { void cargarDashboardResumen() }}
+                                disabled={dashKpiLoading}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  padding: 0,
+                                  margin: 0,
+                                  color: dashInfoColor,
+                                  fontSize: 'inherit',
+                                  fontWeight: 600,
+                                  cursor: dashKpiLoading ? 'wait' : 'pointer',
+                                  textDecoration: 'underline',
+                                  textUnderlineOffset: 2,
+                                }}
+                              >
+                                ¿Refrescar?
+                              </button>
+                            </>
+                          )}
+                        </div>
                       )}
-                    </div>
-                  )}
-                </>
-              )
-            })()}
-            {moduloActivo !== 'dashboard' && (
-              usuario?._contratos?.length > 1 ? (
+                    </>
+                  )
+                })()}
+              </div>
+              {usuario?._contratos?.length > 1 ? (
                 <select
                   value={usuario.contrato_id || ''}
                   onChange={async (e) => {
@@ -14416,7 +14418,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                     if (onCambiarContrato) await onCambiarContrato(contrato)
                     else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
                   }}
-                  style={{ fontSize: 'var(--cc-sm)', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none' }}
+                  style={{ fontSize: 'var(--cc-sm)', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none', flexShrink: 0, width: 'auto', maxWidth: 'min(420px, 100%)' }}
                 >
                   {!usuario.contrato_id && (
                     <option value="">— Selecciona un contrato —</option>
@@ -14426,13 +14428,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   ))}
                 </select>
               ) : (
-                <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
+                <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, flexShrink: 0 }}>
                   📋 Contrato: {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
                 </span>
-              )
-            )}
-          </div>
-          {moduloActivo === 'dashboard' && (
+              )}
+            </>
+          ) : (
             usuario?._contratos?.length > 1 ? (
               <select
                 value={usuario.contrato_id || ''}
@@ -14443,7 +14444,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   if (onCambiarContrato) await onCambiarContrato(contrato)
                   else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
                 }}
-                style={{ fontSize: 'var(--cc-sm)', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none', flexShrink: 0 }}
+                style={{ fontSize: 'var(--cc-sm)', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none', width: 'auto', maxWidth: 'min(420px, 100%)' }}
               >
                 {!usuario.contrato_id && (
                   <option value="">— Selecciona un contrato —</option>
@@ -14453,7 +14454,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                 ))}
               </select>
             ) : (
-              <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, flexShrink: 0 }}>
+              <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
                 📋 Contrato: {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
               </span>
             )

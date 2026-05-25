@@ -471,9 +471,51 @@ function BandejaNovedadesInicio({ novedades, setNovedades, t, fs, novedadesCarga
   )
 }
 
-const META_CONTENIDO_DIA = {
-  biblica:    { etiqueta: 'Cita bíblica', color: '#F59E0B', icono: '📖', citar: true },
-  'bíblica':  { etiqueta: 'Cita bíblica', color: '#F59E0B', icono: '📖', citar: true },
+const OPCIONES_CONTENIDO_DIA = [
+  { id: 'biblica', etiqueta: 'Cita bíblica', icono: '📖', color: '#F59E0B', citar: true, otroLabel: 'Otra cita', cargandoLabel: 'Cargando cita…' },
+  { id: 'reflexion', etiqueta: 'Reflexión', icono: '💭', color: '#6366F1', citar: false, otroLabel: 'Otra reflexión', cargandoLabel: 'Cargando reflexión…' },
+  { id: 'motivadora', etiqueta: 'Frase motivadora', icono: '⚡', color: '#10B981', citar: false, otroLabel: 'Otra frase', cargandoLabel: 'Cargando frase…' },
+  { id: 'dato', etiqueta: 'Dato del día', icono: '📊', color: '#0EA5E9', citar: false, otroLabel: 'Otro dato', cargandoLabel: 'Cargando dato…' },
+]
+
+const TIPO_CONTENIDO_DIA_DEFAULT = 'biblica'
+
+function normalizaTipoContenidoDia(tipo) {
+  const t = String(tipo || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+  if (t === 'biblica') return 'biblica'
+  if (t === 'reflexion' || t === 'reflexiva') return 'reflexion'
+  if (OPCIONES_CONTENIDO_DIA.some((o) => o.id === t)) return t
+  return TIPO_CONTENIDO_DIA_DEFAULT
+}
+
+function metaContenidoDia(tipo) {
+  const id = normalizaTipoContenidoDia(tipo)
+  return OPCIONES_CONTENIDO_DIA.find((o) => o.id === id) || OPCIONES_CONTENIDO_DIA[0]
+}
+
+function prefTipoContenidoKey(userId) {
+  return `claracore_inicio_tipo_default_${userId || 'guest'}`
+}
+
+function cacheFraseDiaKey(userId) {
+  return `claracore_frase_dia_${userId || 'guest'}`
+}
+
+function leerTipoPredeterminado(userId) {
+  try {
+    const v = localStorage.getItem(prefTipoContenidoKey(userId))
+    if (v) return normalizaTipoContenidoDia(v)
+  } catch { /* ignore */ }
+  return TIPO_CONTENIDO_DIA_DEFAULT
+}
+
+function guardarTipoPredeterminado(userId, tipo) {
+  try {
+    localStorage.setItem(prefTipoContenidoKey(userId), normalizaTipoContenidoDia(tipo))
+  } catch { /* ignore */ }
 }
 
 // ─── Barra de clima (Open-Meteo) ───────────────────────────────────────────────
@@ -572,16 +614,24 @@ function BarraClima({ t, fs, contratoId, token }) {
   }
 
   const tarjetaZona = (label, sublabel, code, temp) => (
-    <div style={{ ...panel, display: 'flex', alignItems: 'center', gap: '10px', minWidth: '140px' }}>
-      <span style={{ fontSize: '1.5em', lineHeight: 1 }} aria-hidden>{wmoEmoji(code)}</span>
+    <div style={{
+      ...panel,
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      minWidth: 0,
+      flex: '0 1 auto',
+      padding: '8px 12px',
+    }}>
+      <span style={{ fontSize: '1.25em', lineHeight: 1, flexShrink: 0 }} aria-hidden>{wmoEmoji(code)}</span>
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: fs.sm, fontWeight: '800', lineHeight: 1.2 }}>{label}</div>
+        <div style={{ fontSize: fs.sm, fontWeight: '800', lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
         {sublabel ? (
-          <div style={{ fontSize: fs.badge, opacity: 0.85, fontWeight: '600' }}>{sublabel}</div>
+          <div style={{ fontSize: fs.badge, opacity: 0.85, fontWeight: '600', lineHeight: 1.2 }}>{sublabel}</div>
         ) : null}
-        <div style={{ fontSize: fs.h2, fontWeight: '800', lineHeight: 1.1, marginTop: '2px' }}>
-          {temp != null ? `${Math.round(temp)}°C` : '—'}
-        </div>
+      </div>
+      <div style={{ fontSize: fs.sm, fontWeight: '800', lineHeight: 1, flexShrink: 0, marginLeft: '2px' }}>
+        {temp != null ? `${Math.round(temp)}°C` : '—'}
       </div>
     </div>
   )
@@ -593,7 +643,7 @@ function BarraClima({ t, fs, contratoId, token }) {
       borderRadius: '14px',
       overflow: 'hidden',
       marginBottom: '14px',
-      minHeight: '96px',
+      minHeight: '88px',
       boxShadow: '0 4px 22px rgba(0,0,0,0.18)',
       boxSizing: 'border-box',
     }}>
@@ -607,87 +657,95 @@ function BarraClima({ t, fs, contratoId, token }) {
       <div style={{
         position: 'relative',
         zIndex: 1,
-        padding: '14px 18px',
+        padding: '12px 16px',
         display: 'flex',
         flexWrap: 'wrap',
-        alignItems: 'stretch',
-        gap: '10px 14px',
-        minHeight: '96px',
+        alignItems: 'center',
+        gap: '10px',
+        minHeight: '88px',
         boxSizing: 'border-box',
       }}>
-        <div style={{ ...panel, display: 'flex', alignItems: 'center', gap: '10px', alignSelf: 'center' }}>
-          <span
-            aria-hidden
-            style={{
-              width: '9px', height: '9px', borderRadius: '50%', background: '#10B981',
-              animation: 'ccPulseLive 1.8s ease-in-out infinite', flexShrink: 0,
-            }}
-          />
-          <div>
-            <div style={{ fontSize: fs.base, fontWeight: '800', lineHeight: 1.2 }}>Clima en vivo</div>
-            <div style={{ fontSize: fs.badge, opacity: 0.88, fontWeight: '600' }}>Cielo según obra · Open-Meteo</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px', flex: '0 1 auto', minWidth: 0 }}>
+          <div style={{ ...panel, display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px' }}>
+            <span
+              aria-hidden
+              style={{
+                width: '9px', height: '9px', borderRadius: '50%', background: '#10B981',
+                animation: 'ccPulseLive 1.8s ease-in-out infinite', flexShrink: 0,
+              }}
+            />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: fs.sm, fontWeight: '800', lineHeight: 1.2 }}>Clima en vivo</div>
+              <div style={{ fontSize: fs.badge, opacity: 0.88, fontWeight: '600', lineHeight: 1.2 }}>Cielo según obra · Open-Meteo</div>
+            </div>
           </div>
+
+          {cargandoZona ? (
+            <div style={{ ...panel, fontSize: fs.sm, padding: '8px 12px' }}>Ubicando zona de obra…</div>
+          ) : error && !clima ? (
+            <div style={{ ...panel, fontSize: fs.sm, padding: '8px 12px' }}>No se pudo cargar el clima.</div>
+          ) : (
+            <>
+              {tarjetaZona(BOGOTA_OFICINA.nombre, 'Oficina', bog?.weather_code, bog?.temperature_2m)}
+              {obra
+                ? tarjetaZona(nombreObra, 'Obra', obra?.weather_code, obra?.temperature_2m)
+                : !cargandoZona && (
+                  <div style={{ ...panel, fontSize: fs.autor, opacity: 0.92, padding: '8px 12px' }}>
+                    Obra: sin plano para clima local
+                  </div>
+                )}
+            </>
+          )}
         </div>
 
-        {cargandoZona ? (
-          <div style={{ ...panel, alignSelf: 'center', fontSize: fs.sm }}>Ubicando zona de obra…</div>
-        ) : error && !clima ? (
-          <div style={{ ...panel, alignSelf: 'center', fontSize: fs.sm }}>No se pudo cargar el clima.</div>
-        ) : (
-          <>
-            {tarjetaZona(BOGOTA_OFICINA.nombre, 'Oficina', bog?.weather_code, bog?.temperature_2m)}
-            {obra
-              ? tarjetaZona(nombreObra, 'Obra', obra?.weather_code, obra?.temperature_2m)
-              : !cargandoZona && (
-                <div style={{ ...panel, alignSelf: 'center', fontSize: fs.autor, opacity: 0.92 }}>
-                  Obra: sin plano para clima local
-                </div>
-              )}
-            {daily?.time?.length ? (
-              <div style={{
-                ...panel,
-                display: 'flex',
-                flexWrap: 'wrap',
-                alignItems: 'center',
-                gap: '8px',
-                marginLeft: 'auto',
-                alignSelf: 'center',
-                maxWidth: '100%',
-              }}>
-                <span style={{ fontWeight: '800', fontSize: fs.sm, width: '100%' }}>
-                  Pronóstico 5 días · {nombreObra}
-                </span>
-                {daily.time.slice(0, 5).map((dia, i) => (
-                  <span
-                    key={dia}
-                    style={{
-                      background: 'rgba(255,255,255,0.12)',
-                      border: '1px solid rgba(255,255,255,0.18)',
-                      borderRadius: '8px',
-                      padding: '4px 9px',
-                      whiteSpace: 'nowrap',
-                      fontSize: fs.autor,
-                      fontWeight: '600',
-                    }}
-                  >
-                    {String(dia).slice(5).replace('-', '/')} {wmoEmoji(daily.weather_code?.[i])}{' '}
-                    {daily.temperature_2m_max?.[i] != null ? `${Math.round(daily.temperature_2m_max[i])}°` : '—'}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-          </>
-        )}
+        {!cargandoZona && !error && daily?.time?.length ? (
+          <div style={{
+            ...panel,
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            gap: '8px',
+            flex: '1 1 280px',
+            marginLeft: 'auto',
+            minWidth: 0,
+            padding: '8px 12px',
+          }}>
+            <span style={{ fontWeight: '800', fontSize: fs.sm, whiteSpace: 'nowrap', flexShrink: 0 }}>
+              Pronóstico 5 días · {nombreObra}
+            </span>
+            {daily.time.slice(0, 5).map((dia, i) => (
+              <span
+                key={dia}
+                style={{
+                  background: 'rgba(255,255,255,0.12)',
+                  border: '1px solid rgba(255,255,255,0.18)',
+                  borderRadius: '8px',
+                  padding: '3px 8px',
+                  whiteSpace: 'nowrap',
+                  fontSize: fs.badge,
+                  fontWeight: '600',
+                  lineHeight: 1.3,
+                }}
+              >
+                {String(dia).slice(5).replace('-', '/')} {wmoEmoji(daily.weather_code?.[i])}{' '}
+                {daily.temperature_2m_max?.[i] != null ? `${Math.round(daily.temperature_2m_max[i])}°` : '—'}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
     </div>
   )
 }
 
-// ─── Saludo + cita bíblica ─────────────────────────────────────────────────────
+// ─── Saludo + contenido del día (cita, reflexión, dato, etc.) ─────────────────
 function PanelSaludoContenidoDia({ t, fs, usuario, saludoVisible }) {
-  const storageKey = `claracore_frase_biblia_${usuario?.id || 'guest'}`
+  const userId = usuario?.id || 'guest'
   const [estado, setEstado] = useState('visible')
-  const [frase, setFrase] = useState(() => eligeFraseInicio(null, 'biblica'))
+  const [tipoActivo, setTipoActivo] = useState(() => leerTipoPredeterminado(userId))
+  const [tipoPredeterminado, setTipoPredeterminado] = useState(() => leerTipoPredeterminado(userId))
+  const [frase, setFrase] = useState(() => eligeFraseInicio(null, leerTipoPredeterminado(userId)))
   const [visible, setVisible] = useState(false)
   const [fechaHora, setFechaHora] = useState(() => fmtFechaHoraColombia())
   const saludo = useMemo(
@@ -702,30 +760,52 @@ function PanelSaludoContenidoDia({ t, fs, usuario, saludoVisible }) {
     return () => clearInterval(iv)
   }, [])
 
-  const aplicarFrase = useCallback((parsed) => {
-    const f = parsed?.frase ? { ...parsed, tipo: 'biblica' } : null
+  useEffect(() => {
+    const def = leerTipoPredeterminado(userId)
+    setTipoPredeterminado(def)
+    setTipoActivo(def)
+  }, [userId])
+
+  const aplicarFrase = useCallback((parsed, tipo) => {
+    const tipoNorm = normalizaTipoContenidoDia(tipo || parsed?.tipo)
+    const f = parsed?.frase ? { ...parsed, tipo: tipoNorm } : null
     if (!fraseInicioEsValida(f)) return
     setFrase(f)
     setEstado('visible')
     setVisible(false)
     setTimeout(() => setVisible(true), 80)
     try {
-      localStorage.setItem(storageKey, JSON.stringify({ fecha: hoyISO(), frase: f }))
+      localStorage.setItem(cacheFraseDiaKey(userId), JSON.stringify({ fecha: hoyISO(), frase: f, tipo: tipoNorm }))
     } catch { /* ignore */ }
-  }, [storageKey])
+  }, [userId])
 
-  useEffect(() => {
+  const cargarContenidoLocal = useCallback((tipo, excluirFrase = null) => {
+    aplicarFrase(eligeFraseInicio(excluirFrase, tipo), tipo)
+  }, [aplicarFrase])
+
+  const cargarContenidoInicial = useCallback((tipo) => {
+    const tipoNorm = normalizaTipoContenidoDia(tipo)
     try {
-      const guardado = JSON.parse(localStorage.getItem(storageKey) || 'null')
-      if (guardado?.frase?.frase && guardado?.fecha === hoyISO() && fraseInicioEsValida(guardado.frase)) {
-        aplicarFrase({ ...guardado.frase, tipo: 'biblica' })
+      const guardado = JSON.parse(localStorage.getItem(cacheFraseDiaKey(userId)) || 'null')
+      if (
+        guardado?.frase?.frase
+        && guardado?.fecha === hoyISO()
+        && normalizaTipoContenidoDia(guardado?.tipo) === tipoNorm
+        && fraseInicioEsValida(guardado.frase)
+      ) {
+        aplicarFrase(guardado.frase, tipoNorm)
         return
       }
     } catch { /* ignore */ }
-    aplicarFrase(eligeFraseInicio(null, 'biblica'))
-  }, [storageKey, aplicarFrase])
+    cargarContenidoLocal(tipoNorm)
+  }, [userId, aplicarFrase, cargarContenidoLocal])
 
-  const generarContenido = async () => {
+  useEffect(() => {
+    cargarContenidoInicial(tipoActivo)
+  }, [tipoActivo, cargarContenidoInicial])
+
+  const generarContenido = async (tipo = tipoActivo) => {
+    const tipoNorm = normalizaTipoContenidoDia(tipo)
     setEstado('cargando')
     setVisible(false)
     try {
@@ -736,20 +816,33 @@ function PanelSaludoContenidoDia({ t, fs, usuario, saludoVisible }) {
           'Content-Type': 'application/json',
           ...(tok ? { Authorization: `Bearer ${tok}` } : {}),
         },
-        body: JSON.stringify({ tipo: 'biblica' }),
+        body: JSON.stringify({ tipo: tipoNorm }),
       })
       if (res.ok) {
         const data = await res.json()
         if (fraseInicioEsValida(data)) {
-          aplicarFrase({ ...data, tipo: 'biblica' })
+          aplicarFrase({ ...data, tipo: tipoNorm }, tipoNorm)
           return
         }
       }
     } catch { /* local */ }
-    aplicarFrase(eligeFraseInicio(frase?.frase, 'biblica'))
+    cargarContenidoLocal(tipoNorm, frase?.frase)
   }
 
-  const meta = META_CONTENIDO_DIA.biblica
+  const cambiarTipo = (tipo) => {
+    const tipoNorm = normalizaTipoContenidoDia(tipo)
+    if (tipoNorm === tipoActivo) return
+    setTipoActivo(tipoNorm)
+  }
+
+  const marcarComoPredeterminado = (tipo) => {
+    const tipoNorm = normalizaTipoContenidoDia(tipo)
+    guardarTipoPredeterminado(userId, tipoNorm)
+    setTipoPredeterminado(tipoNorm)
+  }
+
+  const meta = metaContenidoDia(frase?.tipo || tipoActivo)
+  const esPredeterminado = tipoActivo === tipoPredeterminado
 
   return (
     <div style={{
@@ -767,16 +860,79 @@ function PanelSaludoContenidoDia({ t, fs, usuario, saludoVisible }) {
         {saludo}
       </div>
       <div style={{
-        fontSize: fs.sm, color: t.textMuted, marginBottom: '12px',
+        fontSize: fs.sm, color: t.textMuted, marginBottom: '10px',
         textTransform: 'capitalize', lineHeight: 1.4,
       }}>
         {fechaHora}
       </div>
 
+      <div style={{ marginBottom: '12px' }}>
+        <div style={{ fontSize: fs.badge, fontWeight: '700', color: t.textMuted, marginBottom: '6px', letterSpacing: '0.3px' }}>
+          ¿Qué quieres leer hoy?
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+          {OPCIONES_CONTENIDO_DIA.map((op) => {
+            const activo = tipoActivo === op.id
+            const esDefault = tipoPredeterminado === op.id
+            return (
+              <button
+                key={op.id}
+                type="button"
+                onClick={() => cambiarTipo(op.id)}
+                title={esDefault ? `${op.etiqueta} (predeterminado al abrir Inicio)` : op.etiqueta}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  background: activo ? op.color : t.bgCard,
+                  color: activo ? '#fff' : t.textMuted,
+                  border: `1px solid ${activo ? op.color : t.border}`,
+                  borderRadius: 999,
+                  padding: '5px 11px',
+                  fontSize: fs.badge,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  boxShadow: activo ? `0 2px 8px ${op.color}44` : 'none',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                <span aria-hidden>{op.icono}</span>
+                <span>{op.etiqueta}</span>
+                {esDefault ? <span aria-label="Predeterminado" style={{ opacity: activo ? 0.95 : 0.75 }}>★</span> : null}
+              </button>
+            )
+          })}
+        </div>
+        {!esPredeterminado ? (
+          <button
+            type="button"
+            onClick={() => marcarComoPredeterminado(tipoActivo)}
+            style={{
+              marginTop: '8px',
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              color: t.primary,
+              fontSize: fs.badge,
+              fontWeight: 600,
+              cursor: 'pointer',
+              textDecoration: 'underline',
+              textUnderlineOffset: 2,
+            }}
+          >
+            ★ Usar «{metaContenidoDia(tipoActivo).etiqueta}» como predeterminado al abrir Inicio
+          </button>
+        ) : (
+          <div style={{ marginTop: '8px', fontSize: fs.badge, color: t.textMuted, fontWeight: 600 }}>
+            ★ «{metaContenidoDia(tipoActivo).etiqueta}» es tu lectura predeterminada
+          </div>
+        )}
+      </div>
+
       {estado === 'cargando' && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
           <div style={{ fontSize: fs.lg }}>⏳</div>
-          <div style={{ fontSize: fs.base, color: t.textMuted }}>Cargando cita…</div>
+          <div style={{ fontSize: fs.base, color: t.textMuted }}>{meta.cargandoLabel || 'Cargando…'}</div>
         </div>
       )}
 
@@ -799,20 +955,24 @@ function PanelSaludoContenidoDia({ t, fs, usuario, saludoVisible }) {
               {meta.icono} {meta.etiqueta}
             </div>
             <div style={{
-              fontSize: fs.card, fontWeight: '500', color: t.text, lineHeight: 1.55,
-              fontStyle: 'italic', marginBottom: frase.autor ? '6px' : 0,
+              fontSize: fs.card,
+              fontWeight: meta.citar ? '500' : '600',
+              color: t.text,
+              lineHeight: 1.55,
+              fontStyle: meta.citar ? 'italic' : 'normal',
+              marginBottom: frase.autor ? '6px' : 0,
             }}>
-              «{frase.frase}»
+              {meta.citar ? `«${frase.frase}»` : frase.frase}
             </div>
             {frase.autor ? (
               <div style={{ fontSize: fs.autor, color: t.textMuted, fontWeight: '600' }}>— {frase.autor}</div>
             ) : null}
           </div>
           <div style={{ marginTop: '6px', textAlign: 'right' }}>
-            <button type="button" onClick={generarContenido} style={{
+            <button type="button" onClick={() => generarContenido(tipoActivo)} style={{
               background: 'transparent', border: 'none',
               fontSize: fs.autor, color: t.primary, cursor: 'pointer', fontWeight: '600',
-            }}>🔄 Otra cita</button>
+            }}>🔄 {meta.otroLabel || 'Otro'}</button>
           </div>
         </div>
       )}

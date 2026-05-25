@@ -674,13 +674,22 @@ def scan_presupuesto_resumen_bruto(sb, contrato_id: int, current_user) -> Dict[s
     return result
 
 
-def scan_presupuesto_vista(sb, contrato_id: int, vista: str, current_user, *, resumen_only: bool = False) -> Dict[str, Any]:
+def scan_presupuesto_vista(
+    sb,
+    contrato_id: int,
+    vista: str,
+    current_user,
+    *,
+    resumen_only: bool = False,
+    skip_cache: bool = False,
+) -> Dict[str, Any]:
     key = _scan_cache_key(contrato_id, vista, current_user) + ("|resumen" if resumen_only else "")
     now = time.time()
-    with _SCAN_CACHE_LOCK:
-        cached = _SCAN_CACHE.get(key)
-        if cached and now - cached[0] < _SCAN_CACHE_TTL_SEC:
-            return cached[1]
+    if not skip_cache:
+        with _SCAN_CACHE_LOCK:
+            cached = _SCAN_CACHE.get(key)
+            if cached and now - cached[0] < _SCAN_CACHE_TTL_SEC:
+                return cached[1]
 
     if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA:
         result = (
@@ -697,8 +706,9 @@ def scan_presupuesto_vista(sb, contrato_id: int, vista: str, current_user, *, re
             resumen_only=resumen_only,
         )
 
-    with _SCAN_CACHE_LOCK:
-        _SCAN_CACHE[key] = (now, result)
+    if not skip_cache:
+        with _SCAN_CACHE_LOCK:
+            _SCAN_CACHE[key] = (now, result)
     return result
 
 

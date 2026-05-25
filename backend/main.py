@@ -6918,6 +6918,12 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
         )
     except Exception:
         pass
+    try:
+        cid = row_after.get("contrato_id") or prev_row.get("contrato_id")
+        if cid:
+            _invalidate_dashboard_financial_caches(int(cid))
+    except Exception:
+        pass
     return row_after if updated else {"mensaje": "Registro actualizado"}
 
 @app.put("/presupuesto/item/{item_id}/dar-baja")
@@ -6997,7 +7003,13 @@ def dar_baja_presupuesto(
         )
     except Exception:
         pass
+    try:
+        if cid:
+            _invalidate_dashboard_financial_caches(int(cid))
+    except Exception:
+        pass
     return {"ok": True}
+
 
 @app.put("/presupuesto/item/{item_id}/restaurar")
 def restaurar_presupuesto(item_id: int, current_user=Depends(get_current_user)):
@@ -7211,6 +7223,10 @@ def bulk_presupuesto(
                     insertados += 1
                 except Exception:
                     pass
+    try:
+        _invalidate_dashboard_financial_caches(contrato_id)
+    except Exception:
+        pass
     registrar_log(current_user, "IMPORTAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id),
         {"contrato_id": contrato_id, "mode": mode, "registros_insertados": insertados,
          "source": (source or "").lower() or None})
@@ -7619,6 +7635,10 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
         data_upd["validado_en"]  = None
     # Una sola query batch en lugar de N queries secuenciales
     supabase.table("presupuesto").update(data_upd).in_("id", body.ids).execute()
+    try:
+        _invalidate_dashboard_financial_caches(contrato_id)
+    except Exception:
+        pass
     registrar_log(current_user, "VALIDAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id),
         {"contrato_id": contrato_id, "cantidad_registros": len(body.ids), "estado": body.revisado})
     return {"actualizados": len(body.ids)}
@@ -7659,6 +7679,10 @@ def bulk_pre_interv(contrato_id: int, body: PresupuestoBulkPreInterv, current_us
         data_upd["pre_interv_en"] = None
     # Una sola query batch en lugar de N queries secuenciales
     supabase.table("presupuesto").update(data_upd).in_("id", body.ids).execute()
+    try:
+        _invalidate_dashboard_financial_caches(contrato_id)
+    except Exception:
+        pass
     registrar_log(
         current_user, "VALIDAR", "PRESUPUESTO", "presupuesto_pre_interv", str(contrato_id),
         {"contrato_id": contrato_id, "cantidad_registros": len(body.ids), "estado": body.estado},
@@ -7684,9 +7708,7 @@ def bulk_tipo_ejecucion(contrato_id: int, body: PresupuestoBulkTipoEjecucion, cu
         raise HTTPException(status_code=400, detail="Ningún registro válido para este contrato.")
     supabase.table("presupuesto").update({"tipo_ejecucion": te, "updated_at": "now()"}).in_("id", ids_ok).execute()
     try:
-        from dashboard_presupuesto_vista import invalidate_scan_presupuesto_cache
-
-        invalidate_scan_presupuesto_cache(contrato_id)
+        _invalidate_dashboard_financial_caches(contrato_id)
     except Exception:
         pass
     registrar_log(
@@ -15114,12 +15136,9 @@ def _acta_rpo_id_matriz_dashboard_default(contrato_id: int) -> Optional[int]:
     try:
         campo_max = _get_nivel_maximo_contrato(contrato_id)
 
-        def _bundle():
-            return supabase.rpc(
-                "dashboard_matriz_validacion_vigente_bundle",
-                {"p_contrato_id": contrato_id, "p_campo_nivel_max": campo_max},
-            ).execute().data
-        pay = _sicoe_parse_matriz_vigente_bundle_raw(supabase_execute(_bundle))
+        pay = _sicoe_parse_matriz_vigente_bundle_raw(
+            _dashboard_matriz_vigente_cached(contrato_id, campo_max)
+        )
         vm = pay.get("_vigente") if isinstance(pay, dict) else None
         if isinstance(vm, dict) and "obra_ejecutada_directo_sin_aiu" in pay:
             aid = vm.get("acta_id")
@@ -16664,8 +16683,8 @@ def validar_sub(contrato_id: int, registro_id: int, body: ValidarSubBody,
 # SICOE-OBRA — Dashboard endpoints (reemplazan /cobro/ leyendo so_registros)
 # ══════════════════════════════════════════════════════════════════════════════
 
-_DASHBOARD_RPC_CACHE_TTL_SEC = 300
-_DASHBOARD_RESPONSE_STALE_SEC = 900
+_DASHBOARD_RPC_CACHE_TTL_SEC = 120
+_DASHBOARD_RESPONSE_STALE_SEC = 120
 _DASHBOARD_RPC_CACHE_MAX_KEYS = 128
 _dashboard_rpc_cache: Dict[Any, Dict[str, Any]] = {}
 _dashboard_response_cache: Dict[Any, Dict[str, Any]] = {}
@@ -16680,6 +16699,25 @@ def _dashboard_rpc_cache_key_resumen(contrato_id: int, campo_max: str, niveles_a
 
 def _dashboard_rpc_cache_key_matriz_vigente(contrato_id: int, campo_max: str) -> tuple:
     return ("dashboard_matriz_validacion_vigente_bundle", contrato_id, campo_max or "")
+
+
+def _invalidate_dashboard_financial_caches(contrato_id: int) -> None:
+    """Tras cambios en presupuesto: evitar KPIs financieros con totales obsoletos o mezclados por vista."""
+    cid = int(contrato_id)
+    key = f"{cid}"
+    with _dashboard_rpc_cache_lock:
+        _cache_dashboard_resumen.pop(key, None)
+        _cache_dashboard_matriz.pop(key, None)
+        _cache_rpo_panel_actas.pop(key, None)
+        for cache_key in list(_dashboard_response_cache.keys()):
+            if isinstance(cache_key, tuple) and len(cache_key) >= 2 and cache_key[1] == cid:
+                _dashboard_response_cache.pop(cache_key, None)
+    try:
+        from dashboard_presupuesto_vista import invalidate_scan_presupuesto_cache
+
+        invalidate_scan_presupuesto_cache(cid)
+    except Exception:
+        pass
 
 
 def _trim_dashboard_rpc_cache() -> None:
@@ -16744,8 +16782,19 @@ def _get_dashboard_rpc_cached(cache_key: tuple, fetch_fn, *, ttl_sec: Optional[i
         inflight["event"].set()
 
 
-def _fetch_dashboard_resumen_sicoe_agg(contrato_id: int, campo_max: str, niveles_activos):
-    cache_key = _dashboard_rpc_cache_key_resumen(contrato_id, campo_max, niveles_activos)
+_cache_dashboard_resumen: Dict[str, Dict[str, Any]] = {}
+_cache_dashboard_matriz: Dict[str, Dict[str, Any]] = {}
+_CACHE_RPC_RESUMEN_TTL_SEC = 120
+_CACHE_RPC_MATRIZ_TTL_SEC = 120
+
+
+def _dashboard_resumen_cached(contrato_id: int, campo_max: str, niveles_activos) -> Any:
+    key = f"{contrato_id}"
+    now = time.time()
+    with _dashboard_rpc_cache_lock:
+        entry = _cache_dashboard_resumen.get(key)
+        if entry and entry["exp"] > now:
+            return entry["data"]
 
     def _rpc():
         return supabase.rpc(
@@ -16757,15 +16806,19 @@ def _fetch_dashboard_resumen_sicoe_agg(contrato_id: int, campo_max: str, niveles
             },
         ).execute().data
 
-    raw, _hit = _get_dashboard_rpc_cached(
-        cache_key,
-        lambda: supabase_execute(_rpc, retries=1),
-    )
-    return _parse_rpc_dashboard_resumen_raw(raw)
+    result = supabase_execute(_rpc, retries=1)
+    with _dashboard_rpc_cache_lock:
+        _cache_dashboard_resumen[key] = {"data": result, "exp": now + _CACHE_RPC_RESUMEN_TTL_SEC}
+    return result
 
 
-def _fetch_dashboard_matriz_vigente_bundle(contrato_id: int, campo_max: str):
-    cache_key = _dashboard_rpc_cache_key_matriz_vigente(contrato_id, campo_max)
+def _dashboard_matriz_vigente_cached(contrato_id: int, campo_max: str) -> Any:
+    key = f"{contrato_id}"
+    now = time.time()
+    with _dashboard_rpc_cache_lock:
+        entry = _cache_dashboard_matriz.get(key)
+        if entry and entry["exp"] > now:
+            return entry["data"]
 
     def _rpc():
         return supabase.rpc(
@@ -16773,7 +16826,51 @@ def _fetch_dashboard_matriz_vigente_bundle(contrato_id: int, campo_max: str):
             {"p_contrato_id": contrato_id, "p_campo_nivel_max": campo_max},
         ).execute().data
 
-    return _get_dashboard_rpc_cached(cache_key, lambda: supabase_execute(_rpc, retries=1))
+    result = supabase_execute(_rpc, retries=1)
+    with _dashboard_rpc_cache_lock:
+        _cache_dashboard_matriz[key] = {"data": result, "exp": now + _CACHE_RPC_MATRIZ_TTL_SEC}
+    return result
+
+
+_cache_rpo_panel_actas: Dict[str, Dict[str, Any]] = {}
+_CACHE_RPO_PANEL_ACTAS_TTL_SEC = 180
+
+
+def _rpo_panel_actas_resumen_cached(
+    contrato_id: int,
+    acta_ids: List[int],
+    campo_nivel_max: str,
+    niveles_activos: List[int],
+) -> Any:
+    key = f"{contrato_id}"
+    now = time.time()
+    with _dashboard_rpc_cache_lock:
+        entry = _cache_rpo_panel_actas.get(key)
+        if entry and entry["exp"] > now:
+            return entry["data"]
+
+    result = supabase.rpc(
+        "rpo_panel_actas_resumen",
+        {
+            "p_contrato_id": contrato_id,
+            "p_acta_ids": acta_ids,
+            "p_campo_nivel_max": campo_nivel_max,
+            "p_niveles_activos": niveles_activos,
+        },
+    ).execute().data
+
+    with _dashboard_rpc_cache_lock:
+        _cache_rpo_panel_actas[key] = {"data": result, "exp": now + _CACHE_RPO_PANEL_ACTAS_TTL_SEC}
+    return result
+
+
+def _fetch_dashboard_resumen_sicoe_agg(contrato_id: int, campo_max: str, niveles_activos):
+    raw = _dashboard_resumen_cached(contrato_id, campo_max, niveles_activos)
+    return _parse_rpc_dashboard_resumen_raw(raw)
+
+
+def _fetch_dashboard_matriz_vigente_bundle(contrato_id: int, campo_max: str):
+    return _dashboard_matriz_vigente_cached(contrato_id, campo_max), True
 
 
 def _dashboard_response_cache_get(cache_key: tuple):
@@ -16782,8 +16879,6 @@ def _dashboard_response_cache_get(cache_key: tuple):
         if not entry:
             return None
         age = time.time() - entry["ts"]
-        if age <= _DASHBOARD_RPC_CACHE_TTL_SEC:
-            return entry["data"]
         if age <= _DASHBOARD_RESPONSE_STALE_SEC:
             return entry["data"]
         _dashboard_response_cache.pop(cache_key, None)
@@ -18412,7 +18507,9 @@ def _dashboard_apply_vista_presupuesto(
         total_cobrado = sum(sicoe_ap_c.values())
         total_sicoe_nr = sum(sicoe_nr_c.values())
 
-    scan = scan_presupuesto_vista(supabase, contrato_id, vista, current_user, resumen_only=True)
+    scan = scan_presupuesto_vista(
+        supabase, contrato_id, vista, current_user, resumen_only=True, skip_cache=True
+    )
     base_comp = hit.get("comparativo_capitulos")
     if isinstance(base_comp, list) and base_comp:
         comparativo = _overlay_vista_presupuesto_comparativo(base_comp, scan)
@@ -18444,19 +18541,12 @@ def dashboard_resumen_obra(
 ):
     try:
         vista_n = parse_dash_vista(vista)
-        resp_key = ("dashboard_resumen", int(contrato_id), vista_n, _dashboard_resumen_user_cache_key(current_user))
-        cached_resp = _dashboard_response_cache_get(resp_key)
-        if cached_resp is not None:
-            return cached_resp
-
         campo_max = _get_nivel_maximo_contrato(contrato_id)
         try:
             na = _get_niveles_activos_contrato(contrato_id)
             hit = _fetch_dashboard_resumen_sicoe_agg(contrato_id, campo_max, na)
             if hit is not None and isinstance(hit.get("comparativo_capitulos"), list):
-                result = _dashboard_apply_vista_presupuesto(contrato_id, hit, vista, current_user)
-                _dashboard_response_cache_set(resp_key, result)
-                return result
+                return _dashboard_apply_vista_presupuesto(contrato_id, hit, vista, current_user)
         except Exception:
             pass
 
@@ -18539,9 +18629,7 @@ def dashboard_resumen_obra(
             "comparativo_capitulos": comparativo,
             "por_acta": por_acta,
         }
-        result = _dashboard_apply_vista_presupuesto(contrato_id, base, vista, current_user)
-        _dashboard_response_cache_set(resp_key, result)
-        return result
+        return _dashboard_apply_vista_presupuesto(contrato_id, base, vista, current_user)
     except HTTPException:
         raise
     except Exception as e:
