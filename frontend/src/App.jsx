@@ -14415,7 +14415,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       </button>
                     </div>
                     <div style={{ fontSize:`${du.sub}px`, color:t.textMuted, marginTop:'2px' }}>
-                      Top 15 capítulos · total cargado en presupuesto (todas las líneas activas)
+                      Top 15 capítulos · {dashVistaEjecucion}
                     </div>
                   </div>
                   <div style={{ fontSize:`${du.kpiValue - 2}px`, fontWeight:'800', color:'#0077B6', textAlign:'right' }}>{fmtD(ppto)}</div>

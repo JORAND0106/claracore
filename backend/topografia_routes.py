@@ -16,6 +16,7 @@ from topografia_utils import (
     calcular_verificacion_estacion_total,
     calcular_verificacion_nivel,
     decimal_to_gms,
+    enriquecer_estaciones_poligonal,
     gms_to_decimal,
     html_encabezado_pdf,
     html_firmas_pdf,
@@ -42,6 +43,20 @@ def _uid(current_user) -> int:
         return int(current_user.get("sub"))
     except (TypeError, ValueError):
         raise HTTPException(status_code=401, detail="Token inválido")
+
+
+def _sanitize_uuid_optional(value: Optional[str]) -> Optional[str]:
+    if value is None or value == "":
+        return None
+    return value
+
+
+def _dump_model(body: BaseModel, uuid_fields: tuple[str, ...] = ()) -> dict:
+    data = body.model_dump()
+    for field in uuid_fields:
+        if field in data:
+            data[field] = _sanitize_uuid_optional(data[field])
+    return data
 
 
 def _row(table: str, select: str = "*", **eq) -> Optional[dict]:
@@ -307,7 +322,6 @@ def listar_puntos_verificados(contrato_id: int, current_user=Depends(get_current
 def crear_punto(contrato_id: int, body: PuntoBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "crear")
-    uid = _uid(current_user)
     if body.verificado and not body.norte and body.tipo != "BM":
         raise HTTPException(status_code=422, detail="Solo BM iniciales pueden crearse verificados manualmente")
     row = (
@@ -321,7 +335,6 @@ def crear_punto(contrato_id: int, body: PuntoBody, current_user=Depends(get_curr
                 "cota": body.cota,
                 "tipo": body.tipo,
                 "verificado": body.verificado,
-                "creado_por": str(uid),
                 "fecha_verificacion": datetime.now(timezone.utc).isoformat() if body.verificado else None,
             }
         )
@@ -395,13 +408,27 @@ def listar_poligonales(contrato_id: int, current_user=Depends(get_current_user))
 def crear_poligonal(contrato_id: int, body: PoligonalBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "crear")
-    if body.punto_inicial_id:
-        _punto_verificado(body.punto_inicial_id, contrato_id)
-    if body.punto_final_id:
-        _punto_verificado(body.punto_final_id, contrato_id)
+    payload = _dump_model(body, ("punto_inicial_id", "punto_final_id"))
+    if not (payload.get("nombre") or "").strip():
+        raise HTTPException(status_code=422, detail="Indique un nombre para la poligonal.")
+    if payload["tipo"] == "cerrada":
+        if not payload.get("punto_inicial_id"):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Las poligonales cerradas requieren un punto BM verificado como inicio. "
+                    "Si la biblioteca esta vacia, solicite al administrador cargar los BM iniciales del contrato."
+                ),
+            )
+        if not payload.get("punto_final_id"):
+            payload["punto_final_id"] = payload["punto_inicial_id"]
+    if payload.get("punto_inicial_id"):
+        _punto_verificado(payload["punto_inicial_id"], contrato_id)
+    if payload.get("punto_final_id"):
+        _punto_verificado(payload["punto_final_id"], contrato_id)
     row = (
         supabase.table("topo_poligonales")
-        .insert({**body.model_dump(), "contrato_id": contrato_id, "creado_por": str(_uid(current_user))})
+        .insert({**payload, "contrato_id": contrato_id})
         .execute()
         .data
     )
@@ -424,7 +451,7 @@ def obtener_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
         .data
         or []
     )
-    return {"poligonal": pol, "estaciones": estaciones}
+    return {"poligonal": pol, "estaciones": enriquecer_estaciones_poligonal(estaciones)}
 
 
 @router.put("/{contrato_id}/poligonales/{poligonal_id}")
@@ -437,7 +464,7 @@ def actualizar_poligonal(contrato_id: int, poligonal_id: str, body: PoligonalBod
     _assert_editable(pol.get("nivel_validacion", 0))
     row = (
         supabase.table("topo_poligonales")
-        .update(body.model_dump())
+        .update(_dump_model(body, ("punto_inicial_id", "punto_final_id")))
         .eq("id", poligonal_id)
         .execute()
         .data
@@ -453,13 +480,17 @@ def agregar_estacion(contrato_id: int, poligonal_id: str, body: EstacionBody, cu
     if not pol:
         raise HTTPException(status_code=404, detail="Poligonal no encontrada")
     _assert_editable(pol.get("nivel_validacion", 0))
+    if not (body.nombre_punto or "").strip():
+        raise HTTPException(status_code=422, detail="Indique el nombre del punto observado.")
+    if body.distancia <= 0:
+        raise HTTPException(status_code=422, detail="La distancia debe ser mayor que cero.")
     row = (
         supabase.table("topo_poligonal_estaciones")
         .insert(
             {
                 "poligonal_id": poligonal_id,
                 "orden": body.orden,
-                "nombre_punto": body.nombre_punto,
+                "nombre_punto": body.nombre_punto.strip(),
                 "angulo_medido": gms_to_decimal(body.angulo_gms),
                 "distancia": body.distancia,
             }
@@ -523,7 +554,6 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
             "modulo_origen": "poligonal",
             "circuito_id": poligonal_id,
             "fecha_verificacion": now,
-            "creado_por": uid,
         }
         if existing:
             supabase.table("topo_puntos").update(payload).eq("id", existing["id"]).execute()
@@ -595,7 +625,7 @@ def crear_nivelacion(contrato_id: int, body: NivelacionBody, current_user=Depend
         _punto_verificado(body.bm_inicial_id, contrato_id)
     if body.bm_final_id:
         _punto_verificado(body.bm_final_id, contrato_id)
-    row = supabase.table("topo_nivelaciones").insert({**body.model_dump(), "contrato_id": contrato_id, "creado_por": str(_uid(current_user))}).execute().data
+    row = supabase.table("topo_nivelaciones").insert({**_dump_model(body, ("bm_inicial_id", "bm_final_id")), "contrato_id": contrato_id}).execute().data
     return row[0] if row else {}
 
 
@@ -675,7 +705,6 @@ def cerrar_nivelacion(contrato_id: int, nivelacion_id: str, current_user=Depends
             "modulo_origen": "nivelacion",
             "circuito_id": nivelacion_id,
             "fecha_verificacion": now,
-            "creado_por": uid,
         }
         existing = _row("topo_puntos", contrato_id=contrato_id, nombre=lect.get("nombre_punto"))
         if existing:
@@ -756,7 +785,6 @@ def crear_area(contrato_id: int, body: AreaBody, current_user=Depends(get_curren
         "perimetro": perimetro,
         "operador": body.operador,
         "fecha": str(body.fecha) if body.fecha else None,
-        "creado_por": str(_uid(current_user)),
     }).execute().data
     result = row[0] if row else {}
     result["svg"] = svg_poligono(body.puntos, titulo=body.nombre)
@@ -864,7 +892,6 @@ def crear_interseccion(contrato_id: int, body: InterseccionBody, current_user=De
         "admisible": admisible,
         "operador": body.operador,
         "fecha": str(body.fecha) if body.fecha else None,
-        "creado_por": str(_uid(current_user)),
     }).execute().data
     result = row[0] if row else {}
     result["calculo"] = calc
@@ -906,7 +933,6 @@ def agregar_interseccion_biblioteca(contrato_id: int, interseccion_id: str, curr
         "modulo_origen": "interseccion",
         "circuito_id": interseccion_id,
         "fecha_verificacion": now,
-        "creado_por": uid,
     }
     existing = _row("topo_puntos", contrato_id=contrato_id, nombre=inter.get("nombre_punto_nuevo"))
     if existing:
@@ -1040,7 +1066,6 @@ def crear_verificacion_equipo(contrato_id: int, equipo_id: str, body: Verificaci
         "cumple": calc.get("cumple"),
         "observaciones": body.observaciones,
         "proxima_verificacion": str(prox),
-        "creado_por": str(_uid(current_user)),
     }).execute().data
     return row[0] if row else {}
 
@@ -1226,7 +1251,7 @@ def listar_tuberias(contrato_id: int, current_user=Depends(get_current_user)):
 def crear_tuberia(contrato_id: int, body: TuberiaBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "crear")
-    row = supabase.table("topo_tuberias").insert({**body.model_dump(), "contrato_id": contrato_id, "creado_por": str(_uid(current_user))}).execute().data
+    row = supabase.table("topo_tuberias").insert({**body.model_dump(), "contrato_id": contrato_id}).execute().data
     return row[0] if row else {}
 
 

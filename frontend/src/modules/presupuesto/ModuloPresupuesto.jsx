@@ -221,6 +221,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [modalConfirm, setModalConfirm] = useState(false)
   const [bulkEstado, setBulkEstado] = useState('')
   const [bulkPreInterv, setBulkPreInterv] = useState('')
+  const [bulkTipoEjecucion, setBulkTipoEjecucion] = useState('')
   const [busquedaTipo, setBusquedaTipo] = useState('')   // 'nodo' | 'abscisa' | 'idpol'
   const [busquedaV1,   setBusquedaV1]   = useState('')   // nodo_ini | abs_ini | idpol
   const [busquedaV2,   setBusquedaV2]   = useState('')   // nodo_fin | abs_fin (no se usa en idpol)
@@ -2227,7 +2228,51 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
   }
 
-async function ejecutarBulkEstadoDirecto(estado) {
+  async function ejecutarBulkTipoEjecucion() {
+    if (!bulkTipoEjecucion || seleccionados.size === 0) return
+    const selIds = [...seleccionados]
+    if (selIds.some(id => esSellado(registros.find(rr => rr.id === id)))) {
+      alert('Hay registros sellados (aprobados por Interventoría) en la selección; no pueden modificarse.')
+      return
+    }
+    const vistaTipo = fObraRef.current?.tipoEjecucion || fObra.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT
+    if (!window.confirm(`¿Cambiar tipo de ejecución a «${bulkTipoEjecucion}» en ${selIds.length} registro(s)?`)) return
+    setGuardandoBulk(true)
+    const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-tipo-ejecucion`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ids: selIds, tipo_ejecucion: bulkTipoEjecucion }),
+    })
+    setGuardandoBulk(false)
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      alert(err?.detail || 'No se pudo cambiar el tipo de ejecución.')
+      return
+    }
+    const d = await res.json().catch(() => ({}))
+    const nuevoTipo = d?.tipo_ejecucion || bulkTipoEjecucion
+    _lastWriteAtRef.current = Date.now()
+    setBulkTipoEjecucion('')
+    setSeleccionados(new Set())
+    if (nuevoTipo !== vistaTipo) {
+      setRegistros(prev => prev.filter(r => !selIds.includes(r.id)))
+      setAvisoSistema({
+        titulo: 'Tipo de ejecución',
+        mensaje: `${d?.actualizados ?? selIds.length} registro(s) pasaron a «${nuevoTipo}». Ya no aparecen en la vista «${vistaTipo}»; use el toggle Presupuesto de Obra / Obra Ejecutada.`,
+        tipo: 'info',
+      })
+    } else {
+      setRegistros(prev => prev.map(r => (selIds.includes(r.id) ? { ...r, tipo_ejecucion: nuevoTipo } : r)))
+      setAvisoSistema({
+        titulo: 'Tipo de ejecución',
+        mensaje: `${d?.actualizados ?? selIds.length} registro(s) actualizados a «${nuevoTipo}».`,
+        tipo: 'ok',
+      })
+    }
+    { const c = drill.find(x => x.campo === 'capitulo')?.valor; if (c) delete _pptoCachePorCap.current[c] }
+  }
+
+  async function ejecutarBulkEstadoDirecto(estado) {
     if (!estado || seleccionados.size === 0) return
     const selIds = [...seleccionados]
     if (selIds.some(id => esSellado(registros.find(rr => rr.id === id)))) {
@@ -4933,6 +4978,19 @@ async function restaurar(id) {
                   disabled={!hayModificaciones}
                   style={{ background:hayModificaciones?t.primary:t.border,color:hayModificaciones?'#fff':t.textMuted,border:'none',borderRadius:'7px',padding:'6px 14px',fontSize:'var(--cc-sm)',fontWeight:'700',cursor:hayModificaciones?'pointer':'not-allowed',whiteSpace:'nowrap' }}>
                   🔄 Recalcular
+                </button>
+
+                <select value={bulkTipoEjecucion} onChange={e => setBulkTipoEjecucion(e.target.value)}
+                  title="Presupuesto de Obra u Obra Ejecutada (masivo)"
+                  style={{ background:t.inputBg, border:`1.5px solid ${bulkTipoEjecucion ? '#7C3AED' : t.border}`, borderRadius:'7px', padding:'5px 10px', color:bulkTipoEjecucion ? '#7C3AED' : t.textMuted, fontSize:'var(--cc-sm)', cursor:'pointer', fontWeight: bulkTipoEjecucion ? '700' : '400' }}>
+                  <option value="">Tipo ejecución…</option>
+                  <option value={PPTO_TIPO_EJECUCION_DEFAULT}>{PPTO_TIPO_EJECUCION_DEFAULT}</option>
+                  <option value={PPTO_TIPO_EJECUCION_OBRA}>{PPTO_TIPO_EJECUCION_OBRA}</option>
+                </select>
+                <button onClick={ejecutarBulkTipoEjecucion}
+                  disabled={!bulkTipoEjecucion || guardandoBulk}
+                  style={{ background:bulkTipoEjecucion?'#7C3AED':t.border,color:bulkTipoEjecucion?'#fff':t.textMuted,border:'none',borderRadius:'7px',padding:'6px 14px',fontSize:'var(--cc-sm)',fontWeight:'700',cursor:bulkTipoEjecucion?'pointer':'not-allowed',whiteSpace:'nowrap' }}>
+                  ↔ Aplicar tipo
                 </button>
               </>)}
 

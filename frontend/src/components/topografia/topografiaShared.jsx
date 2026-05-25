@@ -25,17 +25,36 @@ export function useTopografiaApi(contratoId, token) {
   const api = useCallback(async (path, options = {}) => {
     const url = `${API_BASE}/topografia/${contratoId}${path}`
     const res = await fetch(url, { ...options, headers: { ...headers, ...(options.headers || {}) } })
+    const ct = res.headers.get('content-type') || ''
+    const isJson = ct.includes('application/json')
+    const isPdf = ct.includes('application/pdf')
+
     if (!res.ok) {
       let detail = res.statusText
-      try {
-        const j = await res.json()
-        detail = j.detail || JSON.stringify(j)
-      } catch { /* ignore */ }
+      if (isJson) {
+        try {
+          const j = await res.json()
+          detail = j.detail || JSON.stringify(j)
+        } catch { /* ignore */ }
+      } else {
+        const text = await res.text()
+        if (text.trimStart().startsWith('<!')) {
+          detail = 'No se pudo conectar con el API de Topografia. Verifique que el backend este en :8000 y reinicie Vite tras actualizar el proxy.'
+        } else {
+          detail = text.slice(0, 200)
+        }
+      }
       throw new Error(typeof detail === 'string' ? detail : 'Error en solicitud')
     }
     if (res.status === 204) return null
-    const ct = res.headers.get('content-type') || ''
-    if (ct.includes('application/pdf')) return res.blob()
+    if (isPdf) return res.blob()
+    if (!isJson) {
+      const text = await res.text()
+      if (text.trimStart().startsWith('<!')) {
+        throw new Error('El servidor devolvio HTML en lugar de JSON. Reinicie el frontend (Vite) para aplicar el proxy /topografia.')
+      }
+      throw new Error(text.slice(0, 200) || 'Respuesta no JSON')
+    }
     return res.json()
   }, [contratoId, headers])
 
@@ -155,4 +174,54 @@ export function OfflineBadge({ online }) {
       {online ? 'En linea' : 'Offline — borrador local'}
     </span>
   )
+}
+
+/** Convierte errores del API en titulo + mensaje legible para el usuario. */
+export function parseApiError(raw) {
+  let msg = String(raw || 'Error desconocido').trim()
+  msg = msg.replace(/^APIError:\s*/i, '').replace(/^Error:\s*/i, '')
+
+  try {
+    if (msg.startsWith('{') || msg.startsWith('[')) {
+      const j = JSON.parse(msg.replace(/'/g, '"'))
+      if (j?.message) msg = j.message
+      else if (j?.detail) msg = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail)
+    }
+  } catch { /* usar msg tal cual */ }
+
+  if (/invalid input syntax for type uuid/i.test(msg)) {
+    return {
+      titulo: 'Identificador invalido',
+      mensaje: 'Se envio un dato con formato incorrecto. Si acaba de crear la poligonal, verifique que selecciono un BM verificado. Si el error continua, cierre sesion y vuelva a entrar.',
+    }
+  }
+  if (/El punto no esta verificado/i.test(msg)) {
+    return {
+      titulo: 'Punto no verificado',
+      mensaje: 'Solo puede usar puntos marcados como verificados en la biblioteca (BM iniciales o puntos provenientes de circuitos cerrados).',
+    }
+  }
+  if (/Error de cierre fuera de tolerancia/i.test(msg)) {
+    return {
+      titulo: 'Cierre inadmisible',
+      mensaje: 'El error lineal supera la tolerancia configurada. Revise angulos y distancias de campo, recalcule, o ajuste la tolerancia antes de cerrar el circuito.',
+    }
+  }
+  if (/requieren un punto BM/i.test(msg) || /Indique un nombre/i.test(msg)) {
+    return { titulo: 'Datos incompletos', mensaje: msg }
+  }
+  if (/Sin estaciones|angulo|distancia|Nombre del punto/i.test(msg)) {
+    return { titulo: 'Revise los datos', mensaje: msg }
+  }
+  if (/No se pudo conectar|proxy|HTML/i.test(msg)) {
+    return {
+      titulo: 'Servidor no disponible',
+      mensaje: msg,
+    }
+  }
+
+  return {
+    titulo: 'No se pudo completar la operacion',
+    mensaje: msg,
+  }
 }

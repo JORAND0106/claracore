@@ -814,6 +814,7 @@ class PresupuestoUpdate(BaseModel):
     motivo_edicion_tras_sellado: Optional[str] = None
     # Contratista: al editar datos con revisado Pendiente/Rechazado/Aprobado (sin sellado), motivo ≥15 y reset a No Revisado.
     motivo_edicion_con_estado_interv: Optional[str] = None
+    tipo_ejecucion: Optional[str] = None
 
 class PresupuestoDarBajaBody(BaseModel):
     """Opcional: baja originada desde SicoeCAD/ClaraLink."""
@@ -844,6 +845,11 @@ class PresupuestoBulkPreInterv(BaseModel):
     """Depuración contratista antes de que Interventoría revise (Residente de Costos u Obra)."""
     ids: List[int]
     estado: str
+
+
+class PresupuestoBulkTipoEjecucion(BaseModel):
+    ids: List[int]
+    tipo_ejecucion: str
 
 class ComentariosValidacionIds(BaseModel):
     """Lista de filas `presupuesto` para comentarios de validación; POST evita query strings gigantes (5xx en proxy)."""
@@ -6643,6 +6649,19 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
                     status_code=403,
                     detail="No tiene permiso de validación en «editar registros presupuesto» para cambiar el estado «revisado».",
                 )
+    if "tipo_ejecucion" in data:
+        te = str(data.get("tipo_ejecucion") or "").strip()
+        if te not in ("Presupuesto de Obra", "Obra Ejecutada"):
+            raise HTTPException(
+                status_code=422,
+                detail="tipo_ejecucion debe ser «Presupuesto de Obra» u «Obra Ejecutada».",
+            )
+        if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(current_user):
+            raise HTTPException(
+                status_code=403,
+                detail="No tiene permiso para editar registros de presupuesto.",
+            )
+        data["tipo_ejecucion"] = te
     data["updated_at"] = "now()"
     supabase.table("presupuesto").update(data).eq("id", item_id).execute()
 
@@ -7498,6 +7517,40 @@ def bulk_pre_interv(contrato_id: int, body: PresupuestoBulkPreInterv, current_us
         {"contrato_id": contrato_id, "cantidad_registros": len(body.ids), "estado": body.estado},
     )
     return {"actualizados": len(body.ids)}
+
+
+@app.put("/presupuesto/{contrato_id}/bulk-tipo-ejecucion")
+def bulk_tipo_ejecucion(contrato_id: int, body: PresupuestoBulkTipoEjecucion, current_user=Depends(get_current_user)):
+    """Cambia tipo_ejecucion (Presupuesto de Obra / Obra Ejecutada) en lote."""
+    _require_contract_access(current_user, contrato_id)
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(current_user):
+        raise HTTPException(status_code=403, detail="No tiene permiso para editar registros de presupuesto.")
+    te = str(body.tipo_ejecucion or "").strip()
+    if te not in ("Presupuesto de Obra", "Obra Ejecutada"):
+        raise HTTPException(status_code=422, detail="tipo_ejecucion debe ser «Presupuesto de Obra» u «Obra Ejecutada».")
+    _reject_if_presupuesto_sellado(supabase, body.ids)
+    rows = supabase.table("presupuesto").select("id, contrato_id").in_("id", body.ids).execute().data or []
+    ids_ok = [int(r["id"]) for r in rows if int(r.get("contrato_id") or 0) == int(contrato_id)]
+    if not ids_ok:
+        raise HTTPException(status_code=400, detail="Ningún registro válido para este contrato.")
+    supabase.table("presupuesto").update({"tipo_ejecucion": te, "updated_at": "now()"}).in_("id", ids_ok).execute()
+    try:
+        from dashboard_presupuesto_vista import invalidate_scan_presupuesto_cache
+
+        invalidate_scan_presupuesto_cache(contrato_id)
+    except Exception:
+        pass
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "PRESUPUESTO",
+        "presupuesto_bulk_tipo_ejecucion",
+        str(contrato_id),
+        {"contrato_id": contrato_id, "cantidad_registros": len(ids_ok), "tipo_ejecucion": te},
+    )
+    return {"actualizados": len(ids_ok), "tipo_ejecucion": te}
 
 # ─────────────────────────────────────────────
 # CAD QUEUE
@@ -17064,7 +17117,6 @@ from dashboard_presupuesto_vista import (
     resolve_capitulo_variants,
     apply_sicoe_capitulo_filter,
     scan_presupuesto_capitulo_vista,
-    scan_presupuesto_resumen_bruto,
     scan_presupuesto_vista,
     sicoe_registro_en_vista,
 )
@@ -18032,7 +18084,7 @@ def _dashboard_apply_vista_presupuesto(
     vista: str,
     current_user,
 ) -> dict:
-    """Presupuesto según vista; SICOE N3 siempre completo (no se filtra por Obra Ejecutada en el resumen)."""
+    """Presupuesto KPI/gráfico según vista (tipo_ejecucion); SICOE N3 siempre completo."""
     hit = dict(hit or {})
     if hit.get("comparativo_capitulos") is not None and hit.get("total_cobrado") is not None:
         sicoe_ap_c, sicoe_nr_c, total_cobrado, total_sicoe_nr = _dashboard_sicoe_from_hit(hit)
@@ -18043,16 +18095,15 @@ def _dashboard_apply_vista_presupuesto(
         total_cobrado = sum(sicoe_ap_c.values())
         total_sicoe_nr = sum(sicoe_nr_c.values())
 
-    bruto = scan_presupuesto_resumen_bruto(supabase, contrato_id, current_user)
     scan = scan_presupuesto_vista(supabase, contrato_id, vista, current_user, resumen_only=True)
     base_comp = hit.get("comparativo_capitulos")
     if isinstance(base_comp, list) and base_comp:
         comparativo = _overlay_vista_presupuesto_comparativo(base_comp, scan)
     else:
         comparativo = rebuild_comparativo_capitulos(scan, sicoe_ap_c, sicoe_nr_c)
-    ppto_ap = sum((bruto.get("ppto_ap_c") or {}).values())
-    ppto_nr = sum((bruto.get("ppto_nr_c") or {}).values())
-    ppto_total = float(bruto.get("costo_total") or (ppto_ap + ppto_nr))
+    ppto_ap = sum((scan.get("ppto_ap_c") or {}).values())
+    ppto_nr = sum((scan.get("ppto_nr_c") or {}).values())
+    ppto_total = float(scan.get("costo_total") or (ppto_ap + ppto_nr))
 
     hit["comparativo_capitulos"] = comparativo
     hit["total_presupuesto"] = round(ppto_total, 2)
@@ -18063,8 +18114,8 @@ def _dashboard_apply_vista_presupuesto(
     hit["total_presupuesto_no_revisado_n3"] = round(ppto_nr, 2)
     hit["total_sicoe_n3_no_revisado"] = round(total_sicoe_nr, 2)
     hit["vista"] = parse_dash_vista(vista)
-    if bruto.get("por_capitulo_list"):
-        hit["por_capitulo_presupuesto"] = bruto["por_capitulo_list"]
+    if scan.get("por_capitulo_list"):
+        hit["por_capitulo_presupuesto"] = scan["por_capitulo_list"]
     return hit
 
 

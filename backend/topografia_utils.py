@@ -26,6 +26,49 @@ def decimal_to_gms(decimal: float) -> str:
     return f"{grados}°{minutos:02d}'{segundos:05.2f}\""
 
 
+def decimal_a_gms_numero(decimal: float) -> float:
+    """Convierte grados decimales al formato numerico GG.MMSS."""
+    decimal = float(decimal or 0) % 360
+    grados = int(decimal)
+    minutos_dec = (decimal - grados) * 60
+    minutos = int(minutos_dec)
+    segundos = round((minutos_dec - minutos) * 60, 2)
+    return round(grados + minutos / 100 + segundos / 10000, 4)
+
+
+def azimut_desde_deltas(dn: float, de: float) -> float:
+    az = math.degrees(math.atan2(de or 0, dn or 0))
+    if az < 0:
+        az += 360
+    return az
+
+
+def enriquecer_estaciones_poligonal(estaciones: list) -> list:
+    """Agrega columnas de calculo para la libreta de poligonal."""
+    out = []
+    for e in estaciones or []:
+        ang = e.get("angulo_medido")
+        dn = e.get("delta_norte")
+        de = e.get("delta_este")
+        cn = e.get("correccion_norte") or 0
+        ce = e.get("correccion_este") or 0
+        az_corr = None
+        if dn is not None and de is not None:
+            az_corr = azimut_desde_deltas((dn or 0) + cn, (de or 0) + ce)
+        out.append({
+            **e,
+            "angulo_observado_gms": decimal_a_gms_numero(ang) if ang is not None else None,
+            "angulo_observado_texto": decimal_to_gms(ang) if ang is not None else None,
+            "azimut_inicio_gms": decimal_a_gms_numero(ang) if ang is not None else None,
+            "azimut_inicio_texto": decimal_to_gms(ang) if ang is not None else None,
+            "azimut_corregido_gms": decimal_a_gms_numero(az_corr) if az_corr is not None else None,
+            "azimut_corregido_texto": decimal_to_gms(az_corr) if az_corr is not None else None,
+            "proyeccion_norte": dn,
+            "proyeccion_este": de,
+        })
+    return out
+
+
 def azimut_to_decimal(azimut_gms: float) -> float:
     return gms_to_decimal(azimut_gms)
 

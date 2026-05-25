@@ -1,26 +1,25 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { btnPrimary, btnSecondary, card, inputStyle, PermisoAviso, puede, useTopografiaApi } from './topografiaShared'
+import TopoErrorModal from './TopoErrorModal'
+import { btnSecondary, card, inputStyle, parseApiError, useTopografiaApi } from './topografiaShared'
 
 const TIPOS = ['BM', 'estacion', 'auxiliar', 'PI', 'cambio']
 
-export default function BibliiotecaPuntos({ contratoId, token, soloVerificados = false, permisos }) {
+export default function BibliiotecaPuntos({ contratoId, token, soloVerificados = false, t: theme }) {
   const { api } = useTopografiaApi(contratoId, token)
   const [puntos, setPuntos] = useState([])
   const [filtroTipo, setFiltroTipo] = useState('')
   const [filtroVerificado, setFiltroVerificado] = useState(soloVerificados ? 'verificado' : '')
-  const [form, setForm] = useState({ nombre: '', norte: '', este: '', cota: '', tipo: 'BM', verificado: false })
-  const [error, setError] = useState('')
+  const [errorModal, setErrorModal] = useState(null)
   const [loading, setLoading] = useState(false)
 
   const cargar = useCallback(async () => {
     setLoading(true)
-    setError('')
     try {
       const path = soloVerificados ? '/puntos/verificados' : '/puntos'
       const data = await api(path)
       setPuntos(Array.isArray(data) ? data : [])
     } catch (e) {
-      setError(e.message)
+      setErrorModal(parseApiError(e.message))
     } finally {
       setLoading(false)
     }
@@ -35,37 +34,6 @@ export default function BibliiotecaPuntos({ contratoId, token, soloVerificados =
     return true
   }), [puntos, filtroTipo, filtroVerificado])
 
-  const guardar = async () => {
-    setError('')
-    try {
-      await api('/puntos', {
-        method: 'POST',
-        body: JSON.stringify({
-          nombre: form.nombre,
-          norte: form.norte === '' ? null : Number(form.norte),
-          este: form.este === '' ? null : Number(form.este),
-          cota: form.cota === '' ? null : Number(form.cota),
-          tipo: form.tipo,
-          verificado: form.verificado,
-        }),
-      })
-      setForm({ nombre: '', norte: '', este: '', cota: '', tipo: 'BM', verificado: false })
-      cargar()
-    } catch (e) {
-      setError(e.message)
-    }
-  }
-
-  const eliminar = async (id) => {
-    if (!window.confirm('Eliminar punto?')) return
-    try {
-      await api(`/puntos/${id}`, { method: 'DELETE' })
-      cargar()
-    } catch (e) {
-      setError(e.message)
-    }
-  }
-
   if (soloVerificados) {
     return (
       <select value="" onChange={() => {}} style={inputStyle} disabled={loading}>
@@ -79,30 +47,18 @@ export default function BibliiotecaPuntos({ contratoId, token, soloVerificados =
 
   return (
     <div>
-      <PermisoAviso permisos={permisos} accion="crear">
-      <div style={{ ...card, marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Nuevo punto (BM inicial)</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8 }}>
-          <input placeholder="Nombre" value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} style={inputStyle} />
-          <input placeholder="Norte" value={form.norte} onChange={(e) => setForm({ ...form, norte: e.target.value })} style={inputStyle} />
-          <input placeholder="Este" value={form.este} onChange={(e) => setForm({ ...form, este: e.target.value })} style={inputStyle} />
-          <input placeholder="Cota" value={form.cota} onChange={(e) => setForm({ ...form, cota: e.target.value })} style={inputStyle} />
-          <select value={form.tipo} onChange={(e) => setForm({ ...form, tipo: e.target.value })} style={inputStyle}>
-            {TIPOS.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input type="checkbox" checked={form.verificado} onChange={(e) => setForm({ ...form, verificado: e.target.checked })} />
-            Verificado (solo BM)
-          </label>
-        </div>
-        <button type="button" style={{ ...btnPrimary, marginTop: 10 }} onClick={guardar}>Agregar</button>
+      <div style={{ ...card, marginBottom: 16, background: '#f8fafc' }}>
+        <h3 style={{ marginTop: 0 }}>Biblioteca de puntos</h3>
+        <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: '#475569', lineHeight: 1.5 }}>
+          Esta biblioteca es de solo consulta. Los puntos se incorporan automaticamente al cerrar poligonales,
+          nivelaciones o intersecciones admisibles. Los BM iniciales del contrato los carga el administrador.
+        </p>
       </div>
-      </PermisoAviso>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
         <select value={filtroTipo} onChange={(e) => setFiltroTipo(e.target.value)} style={inputStyle}>
           <option value="">Todos los tipos</option>
-          {TIPOS.map((t) => <option key={t} value={t}>{t}</option>)}
+          {TIPOS.map((tipo) => <option key={tipo} value={tipo}>{tipo}</option>)}
         </select>
         <select value={filtroVerificado} onChange={(e) => setFiltroVerificado(e.target.value)} style={inputStyle}>
           <option value="">Todos</option>
@@ -112,16 +68,28 @@ export default function BibliiotecaPuntos({ contratoId, token, soloVerificados =
         <button type="button" style={btnSecondary} onClick={cargar}>Actualizar</button>
       </div>
 
-      {error && <div style={{ color: '#dc2626', marginBottom: 8 }}>{error}</div>}
       {loading ? <div>Cargando...</div> : (
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
             <thead>
               <tr style={{ background: '#f1f5f9' }}>
-                <th style={th}>Nombre</th><th style={th}>Norte</th><th style={th}>Este</th><th style={th}>Cota</th><th style={th}>Tipo</th><th style={th}>Estado</th><th style={th}></th>
+                <th style={th}>Nombre</th>
+                <th style={th}>Norte</th>
+                <th style={th}>Este</th>
+                <th style={th}>Cota</th>
+                <th style={th}>Tipo</th>
+                <th style={th}>Origen</th>
+                <th style={th}>Estado</th>
               </tr>
             </thead>
             <tbody>
+              {!filtrados.length && (
+                <tr>
+                  <td colSpan={7} style={{ ...td, color: '#64748b', textAlign: 'center' }}>
+                    No hay puntos registrados. Cree y cierre una poligonal para poblar la biblioteca.
+                  </td>
+                </tr>
+              )}
               {filtrados.map((p) => (
                 <tr key={p.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
                   <td style={td}>{p.nombre}</td>
@@ -129,21 +97,23 @@ export default function BibliiotecaPuntos({ contratoId, token, soloVerificados =
                   <td style={td}>{p.este ?? '—'}</td>
                   <td style={td}>{p.cota ?? '—'}</td>
                   <td style={td}>{p.tipo}</td>
+                  <td style={td}>{p.modulo_origen || '—'}</td>
                   <td style={td}>
                     <span style={{ color: p.verificado ? '#16a34a' : '#64748b', fontWeight: 600 }}>
                       {p.verificado ? 'Verificado' : 'Pendiente'}
                     </span>
-                  </td>
-                  <td style={td}>
-                    {!p.circuito_id && puede(permisos, 'eliminar') && (
-                      <button type="button" style={btnSecondary} onClick={() => eliminar(p.id)}>Eliminar</button>
-                    )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+      )}
+
+      {errorModal && (
+        <TopoErrorModal theme={theme} titulo={errorModal.titulo} onClose={() => setErrorModal(null)}>
+          {errorModal.mensaje}
+        </TopoErrorModal>
       )}
     </div>
   )

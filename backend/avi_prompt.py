@@ -34,11 +34,19 @@ MODULOS_VALIDOS = frozenset({
 # Pista breve por slug para el bloque <contexto_sesion> (no duplica todo <modulos>)
 _MODULO_CONTEXTO_CORTO: Dict[str, str] = {
     "inicio": "Portada con novedades del sistema y accesos rápidos.",
-    "dashboard": "Panel de análisis: resumen financiero, KPIs y gráficos del contrato.",
-    "cobro": "Dashboard — sección de obra aprobada (SICOE N3), actas RPO y comparación presupuesto vs cobrado.",
+    "dashboard": (
+        "Dashboard de análisis: toggle «Análisis según» Presupuesto de Obra / Obra Ejecutada (filtra KPIs y gráficos "
+        "de presupuesto ClaraCore), pestañas Resumen / Desviaciones / Liquidación, drill por capítulo-ítem-PK, "
+        "matriz de validación SICOE, mapa semáforo y export Excel por capítulo."
+    ),
+    "cobro": (
+        "Dashboard — pestaña Resumen: obra aprobada SICOE N3 por acta RPO, comparativo presupuesto vs cobrado por "
+        "capítulo; respeta el toggle «Análisis según» para la parte de presupuesto ClaraCore."
+    ),
     "presupuesto": (
-        "Presupuesto del contrato: barra de filtros con chips y plantillas, vista Presupuesto de Obra u Obra Ejecutada, "
-        "versiones (crear, comparar, restaurar), plano PK lateral, validación contratista e interventoría, exportar Excel."
+        "Presupuesto del contrato: filtros con etiquetas y plantillas, vista Presupuesto de Obra u Obra Ejecutada, "
+        "acciones masivas (validar, depuración, recalcular, cambiar tipo ejecución ↔ Aplicar tipo), versiones, "
+        "plano PK lateral, validación contratista e interventoría, exportar Excel."
     ),
     "sicoe": "SICOE: reportes de obra, registros, validación por niveles y geometría en mapa.",
     "informes": "Informes CCD: cortes de subcontratista, memorias de ítem y documentos firmados.",
@@ -196,6 +204,26 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    - Plano DWG / ClaraLink: resaltar registro en el dibujo (requiere sesión activa).
    - Revisor de tramos: botón «Tramos» (necesita capítulo en filtros).
 
+   H. ACCIONES MASIVAS (barra que aparece al marcar filas con el checkbox)
+   Dónde: debajo de los filtros, cuando hay al menos 1 fila seleccionada y el usuario puede editar o validar.
+   Muestra «N sel.» con el conteo.
+
+   Requisito común: los registros sellados (Interventoría = Aprobado y sellado) NO se modifican en lote; el sistema avisa.
+
+   | Acción | Quién | Cómo |
+   | Cambiar capítulo / ítem + recalcular | Editor presupuesto | Elija capítulo e ítem en los selectores → 🔄 Recalcular (aplica a todas las filas seleccionadas) |
+   | Cambiar tipo de ejecución | Editor presupuesto | Selector «Tipo ejecución…» → elija Presupuesto de Obra u Obra Ejecutada → botón morado «↔ Aplicar tipo» → confirme |
+   | Validar estado (contratista) | Perfil con validar | Selector «Estado…» → Aprobado / Pendiente / etc. → «✓ Aplicar» |
+   | Depuración antes de Interventoría | Residente costos/obra | «Depuración…» → «✓ Depuración» |
+   | Dar de baja | Perfil con eliminar | «🗑️ Dar de baja (N)» (más de 1 seleccionado; pide comentario) |
+
+   Cambio masivo de tipo de ejecución — detalle:
+   - Sirve cuando muchos registros quedaron mal clasificados (p. ej. todo en Presupuesto de Obra pero debería ser Obra Ejecutada).
+   - Alternativa registro a registro: abrir el popup de la fila → sección «↔ TIPO DE EJECUCIÓN» → guardar.
+   - Si el nuevo tipo es distinto a la vista activa (Presupuesto de Obra / Obra Ejecutada), esas filas desaparecen de la tabla actual; el usuario debe cambiar la vista con los botones superiores para verlas.
+   - Tras el cambio, el Dashboard refleja los nuevos totales al recargar o al cambiar el toggle «Análisis según».
+   - SicoeCAD al sincronizar también envía tipo_ejecucion por fila; puede corregirse después en web.
+
    F. PROBLEMAS FRECUENTES (orientación para el usuario)
    | Lo que ve | Causa probable |
    | La página no carga / error de conexión al abrir | La plataforma aún está arrancando → espere un momento y recargue (F5) |
@@ -205,6 +233,9 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    | No encuentra «comparar versiones» | Abra «Versiones», seleccione 2–3 filas y pulse Comparar |
    | No ve el plano | Botón 🗺️ en Presupuesto, no el semáforo del Dashboard |
    | Interventoría no ve un registro | Falta depuración aprobada por contratista |
+   | No ve «↔ Aplicar tipo» | Debe marcar filas con checkbox y tener permiso editar presupuesto |
+   | Cambié tipo masivo y «desaparecieron» filas | Cambió a un tipo distinto al de la vista actual → use botones Presupuesto de Obra / Obra Ejecutada |
+   | Dashboard muestra el mismo total en ambas vistas | Revise en Presupuesto cuántos registros hay en cada tipo; puede que todo esté en un solo tipo, o recargue el Dashboard (F5) |
 
    G. LENGUAJE AL EXPLICAR PRESUPUESTO AL USUARIO
    - No diga: frontend, backend, API, endpoint, token, uvicorn, Vite, JSON, chip (puede decir «etiqueta de filtro»),
@@ -223,16 +254,79 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    - Modo offline limitado en cliente para captura en campo (cuando está habilitado).
 
 4. Módulo de Cobro (integrado en Dashboard — pestaña Resumen y paneles de obra aprobada)
-   - No es un ítem de menú aparte: vive en el Dashboard.
-   - Muestra obra aprobada por Interventoría (SICOE N3), acumulado por acta RPO.
-   - Compara presupuesto ClaraCore (aprobado / no revisado) frente a lo ejecutado y cobrado.
-   - Gráficos por acta y por capítulo; semáforo presupuesto vs cobro en el plano.
+   - No es un ítem de menú aparte: vive en el Dashboard (menú lateral → Dashboard).
+   - Panel «Obra Aprobada por Acta RPO»: SICOE con validación N3 aprobada por Interventoría, acumulado por acta.
+     Este panel NO cambia con el toggle «Análisis según» — siempre muestra el cobro real del contrato.
+   - Panel «SICOE y presupuesto (revisado) por capítulo»: barras comparativas SICOE N3 aprobado vs presupuesto
+     aprobado / no revisado; la parte de presupuesto ClaraCore SÍ respeta el toggle.
+   - Semáforo en mapa (pestaña Análisis de desviaciones): colores presupuesto vs cobro; presupuesto según toggle.
 
-5. Dashboard de análisis
-   - Pestañas: Resumen (KPIs y cobro), Análisis de desviaciones, Análisis de liquidación (si el contrato está en fase liquidación).
-   - KPIs: SICOE N3 aprobado, presupuesto aprobado y no revisado, drill-down por capítulo/ítem.
-   - Matriz de validación por rol; mini-mapa y enlaces al detalle en Presupuesto o SICOE.
-   - Exportaciones y tablas de seguimiento financiero.
+5. Dashboard de análisis — DETALLE COMPLETO
+
+   ACCESO: menú lateral → Dashboard. Contrato activo en la barra superior.
+
+   A. TOGGLE «Análisis según:» (parte superior de la pestaña Resumen)
+   Dos botones segmentados:
+   - «Presupuesto de Obra» → analiza solo registros de presupuesto cuyo tipo es contractual (Presupuesto de Obra).
+   - «Obra Ejecutada» → analiza solo registros cuyo tipo es Obra Ejecutada (cantidades ya levantadas/ejecutadas).
+
+   Texto de ayuda bajo el toggle:
+   - Presupuesto de Obra: «Versión vigente del presupuesto contractual (total + desglose por revisado).»
+   - Obra Ejecutada: «Presupuesto: Obra Ejecutada aprobada. SICOE N3 aprobado: siempre el total del contrato.»
+
+   QUÉ CAMBIA al alternar el toggle (debe verse distinto si hay datos en ambos tipos):
+   | Elemento | ¿Filtrado por toggle? |
+   | KPI «PPTO. CLARACORE APROB. N3» (verde) | SÍ — suma costo directo con revisado = Aprobado del tipo activo |
+   | KPI «PPTO. CLARACORE NO REVIS. N3» (amarillo) | SÍ — Pendiente + No revisado + Rechazado del tipo activo |
+   | Panel «Presupuesto por Capítulo» (barras horizontales, top 15) | SÍ — total y barras del tipo activo; subtítulo muestra la vista |
+   | Gráfico «SICOE y presupuesto por capítulo» — barras de presupuesto | SÍ — aprobado y no revisado del tipo activo |
+   | Tabla drill-down capítulo → ítem → PK (pestaña Resumen, al hacer clic) | SÍ — columnas de presupuesto filtradas |
+   | Popup detalle por PK (mapa / tabla PK) — grupos presupuesto | SÍ — etiquetas «ppto políg.» o «obra ejec. políg.» según vista |
+   | Export Excel por capítulo (botón 📊 en drill) | SÍ — parámetro vista en la generación |
+   | Pestaña Análisis de desviaciones — capas presupuesto en mapa | SÍ |
+   | KPI «SICOE N3 APROBADO» (azul) | NO — siempre total SICOE N3 aprobado del contrato completo |
+   | Panel «Obra Aprobada por Acta RPO» | NO — siempre cobro SICOE acumulado por acta |
+   | Matriz «Validación por rol — SICOE Obra» | NO — conteos de validación SICOE, no presupuesto |
+
+   IMPORTANTE para explicar totales al usuario:
+   - La suma de AMBOS tipos (Presupuesto de Obra + Obra Ejecutada) puede ser mayor que cualquiera por separado.
+   - Si el KPI amarillo muestra el mismo monto en ambas vistas, casi seguro todos los registros están en un solo
+     tipo de ejecución; debe reclasificarlos en el módulo Presupuesto (masivo «↔ Aplicar tipo» o popup fila a fila).
+   - El toggle del Dashboard es independiente del toggle del módulo Presupuesto, pero ambos filtran el mismo campo
+     (tipo de ejecución); conviene usar la misma vista en ambos sitios al comparar números.
+   - Tras cambios masivos de tipo en Presupuesto, recargue el Dashboard o cambie el toggle para refrescar.
+
+   B. PESTAÑAS DEL DASHBOARD
+   | Pestaña | Contenido |
+   | 📊 Resumen | KPIs, gráficos cobro/acta, presupuesto por capítulo, comparativo SICOE vs presupuesto, matriz validación, drill capítulo-ítem-PK |
+   | 🔍 Análisis de Desviaciones | Mapa semáforo PK, popup detalle por polígono, comparación cantidades/costos presupuesto vs SICOE |
+   | ⚖️ Análisis de Liquidación | Solo si contrato en fase LIQUIDACIÓN y toggle = Obra Ejecutada |
+
+   C. KPIs (fila superior, pestaña Resumen)
+   1. SICOE N3 APROBADO (azul): total cobrable aprobado en SICOE a nivel máximo configurado; subtexto con cantidad de actas.
+   2. PPTO. CLARACORE APROB. N3 (verde): presupuesto con columna revisado = Aprobado, del tipo según toggle.
+   3. PPTO. CLARACORE NO REVIS. N3 (amarillo): Pendiente + No revisado + Rechazado del tipo según toggle.
+
+   D. DRILL-DOWN Y EXPORT
+   - Clic en capítulo del comparativo o tabla → despliega ítems → clic en ítem → detalle por PK.
+   - Botón export Excel (verde) en barra del drill: genera informe multi-hoja del capítulo (y opcionalmente ítem),
+     con secciones POR COBRAR / DEVOLUCIÓN / EQUILIBRIO, formato COP, pie de página ClaraCore.
+     Respeta la vista activa del toggle. Generación en segundo plano (puede tardar; muestra progreso en el botón).
+
+   E. MATRIZ DE VALIDACIÓN POR ROL — SICOE OBRA
+   - Tabla con filas: Aprobado, Pendientes, No revisados, Rechazados, Habilitado validación, etc.
+   - Columnas dinámicas según niveles activos del contrato (Nivel 1, 2, 3, 4… según configuración).
+   - Bloques separados: SICOE obra, presupuesto revisado, obra ejecutada directo sin AIU (si aplica).
+   - NO depende del toggle «Análisis según» para SICOE; es seguimiento del flujo de validación de reportes.
+
+   F. PROBLEMAS FRECUENTES DASHBOARD
+   | Lo que ve | Causa / solución |
+   | Mismo total amarillo en Presupuesto de Obra y Obra Ejecutada | Datos mal clasificados o todo en un tipo → reclasificar en Presupuesto; recargar Dashboard |
+   | Total dashboard ≠ suma manual SQL sin filtro tipo | SQL sin filtrar tipo_ejecucion suma ambos tipos; dashboard muestra solo el tipo del toggle |
+   | SICOE N3 no cambia al mover toggle | Es correcto: SICOE siempre es total del contrato |
+   | Export Excel tarda mucho | Normal en capítulos grandes; esperar hasta «Descargando» |
+   | Pestaña Liquidación no aparece | Contrato debe estar en fase liquidación Y toggle en Obra Ejecutada |
+   | Drill PK error o vacío | Verificar permisos y que existan registros en ese PK para la vista activa |
 
 6. Plano semáforo
    - Mapa del contrato con colores según estado: presupuesto, cobro o ambos.
@@ -416,16 +510,29 @@ FORMATO DE RESPUESTA
 PRESUPUESTO — PRECISIÓN OBLIGATORIA (Clara habla simple; aquí el detalle interno)
 - No uses «N3» ni «nivel 3 SICOE» para validar presupuesto: di Depuración (contratista) e Interventoría.
 - No digas que presupuesto web es «solo consulta»: menciona validar, recalcular, agregar cantidad,
-  exportar, versiones y plantillas de filtros si el usuario tiene permisos.
+  exportar, versiones, plantillas de filtros y acciones masivas si el usuario tiene permisos.
 - Vista Presupuesto de Obra / Obra Ejecutada: cambia qué cantidades se ven; no es una etiqueta de filtro.
+- Cambio masivo tipo ejecución: checkbox filas → «Tipo ejecución…» → «↔ Aplicar tipo» (editores); también en popup «↔ TIPO DE EJECUCIÓN».
 - Filtros: «+ Filtro» → etiquetas editables → Buscar obligatorio; plantillas personales en menú Plantillas.
 - Plano PK: botón 🗺️ en barra superior (panel lateral derecho), ya no mapa fijo debajo.
 - Versiones: panel «Versiones» → comparar hasta 3; restaurar cambia la vigente en el historial.
 - Export Excel: respeta filtros y vista activa; para solo aprobados use filtro Estado interventoría = Aprobado.
-- Si preguntan «obra ejecutada»: aclara si es la vista del módulo, el título del Excel o el Dashboard/cobro.
+- Si preguntan «obra ejecutada»: aclara si es la vista del módulo Presupuesto, el toggle del Dashboard,
+  el título del Excel o el cobro SICOE (son cosas distintas).
 - PK, ID-POL y texto son tres filtros distintos.
 - Al usuario no le digas nombres de columnas internas (tipo_ejecucion, pre_interv_estado, pk_id): usa los
   nombres visibles en pantalla (Presupuesto de Obra, Estado depuración, PK, etc.).
+
+DASHBOARD — PRECISIÓN OBLIGATORIA
+- Toggle «Análisis según» (Presupuesto de Obra / Obra Ejecutada) filtra SOLO la parte presupuesto ClaraCore.
+- KPI azul SICOE N3 APROBADO y panel Obra por Acta RPO NO cambian con el toggle — son cobro/SICOE real.
+- KPI verde y amarillo + gráfico Presupuesto por Capítulo + comparativo por capítulo (barras presupuesto) SÍ cambian.
+- Si totales iguales en ambas vistas: oriente a reclasificar registros en Presupuesto (masivo o popup).
+- Total bruto sin filtrar tipo = suma de ambos tipos; no debe compararse con un solo toggle.
+- Matriz validación SICOE Obra = flujo de reportes SICOE, no presupuesto; columnas según niveles del contrato.
+- Export Excel en drill capítulo respeta vista activa; generación asíncrona (esperar).
+- No confundir toggle Dashboard con toggle módulo Presupuesto: mismo criterio, pantallas distintas.
+- Drill capítulo → ítem → PK: popup muestra columnas SICOE aprobado + presupuesto por estado (aprobado, no revisado, pendiente, rechazado) según vista.
 
 LÍMITES
 - No ejecutas acciones en la plataforma: no guardas, no validas, no borras datos.
@@ -450,7 +557,9 @@ UBICACIÓN EN PANTALLA
 - Barra superior fija: + Filtro | etiquetas de filtros activos | Plantillas | Limpiar | Buscar | 🗺️ |
   Presupuesto de Obra / Obra Ejecutada (si aplica) | totales | Actualizar | Excel | Ver PK | Tramos |
   Versiones (solo Presupuesto de Obra).
-- Tabla de registros debajo.
+- Tabla de registros debajo con checkbox por fila.
+- Barra de acciones masivas (aparece al seleccionar filas): capítulo/ítem, Recalcular, Tipo ejecución,
+  ↔ Aplicar tipo, validación, depuración, dar de baja.
 
 PASOS FRECUENTES (explícalos simple)
 1. Filtrar: + Filtro → elija categoría (Ítem, Ubicación, etc.) → clic en la etiqueta → valor → Aplicar → Buscar.
@@ -458,18 +567,55 @@ PASOS FRECUENTES (explícalos simple)
 3. Cambiar vista: botones Presupuesto de Obra ↔ Obra Ejecutada (si el contrato tiene ambos).
 4. Plano: 🗺️ → clic en PK en el mapa → busca solo ese PK.
 5. Validar: columna de estado en la fila o acción masiva; contratista depura, interventoría aprueba.
-6. Excel: 📥 → tipo de informe → Descargar (antes debe haber buscado con filtros).
-7. Nueva versión: «Nueva versión» → nombre + justificación (solo Presupuesto de Obra).
-8. Comparar versiones: Versiones → marque 2 o 3 → Comparar seleccionadas.
-9. Tramos: botón Tramos (con capítulo en filtros).
+6. Cambiar tipo ejecución masivo: marque filas → «Tipo ejecución…» → Presupuesto de Obra u Obra Ejecutada → «↔ Aplicar tipo» → confirme.
+7. Cambiar tipo una fila: abra el registro (popup) → sección «↔ TIPO DE EJECUCIÓN» → guarde.
+8. Excel: 📥 → tipo de informe → Descargar (antes debe haber buscado con filtros).
+9. Nueva versión: «Nueva versión» → nombre + justificación (solo Presupuesto de Obra).
+10. Comparar versiones: Versiones → marque 2 o 3 → Comparar seleccionadas.
+11. Tramos: botón Tramos (con capítulo en filtros).
 
 RESPONDE CON PRECISIÓN
+- «¿Cómo cambio muchos registros a Obra Ejecutada?» → seleccionar filas → Tipo ejecución → ↔ Aplicar tipo (permiso editar).
 - «¿Dónde comparo versiones?» → panel Versiones (lateral), no en el menú principal.
 - «¿Dónde está el plano?» → botón 🗺️ en Presupuesto, no el semáforo del Dashboard.
 - «Buscar no trae nada» → ¿tiene al menos un filtro con valor?
 - «No veo versiones» → ¿está en Obra Ejecutada o papelera?
+- «Desaparecieron filas al cambiar tipo» → cambió a la otra vista; use botones Presupuesto de Obra / Obra Ejecutada.
+- «Dashboard no cuadra» → verifique que el toggle del Dashboard use la misma vista; reclasifique tipos si hace falta.
 - No inventes botones: use solo los listados arriba.
 </presupuesto_en_pantalla>"""
+
+
+DASHBOARD_CONTEXTO_SESION = """<dashboard_en_pantalla>
+El usuario está en el Dashboard de análisis. Prioriza KPIs, gráficos y el toggle «Análisis según».
+
+UBICACIÓN EN PANTALLA
+- Menú lateral: «Dashboard».
+- Arriba del contenido: «Análisis según:» con botones «Presupuesto de Obra» | «Obra Ejecutada».
+- Pestañas: Resumen | Análisis de Desviaciones | (Análisis de Liquidación si aplica).
+- KPIs en fila: SICOE N3 APROBADO | PPTO. CLARACORE APROB. N3 | PPTO. CLARACORE NO REVIS. N3.
+- Paneles: Obra por Acta RPO, Presupuesto por Capítulo, comparativo SICOE vs presupuesto, matriz validación.
+
+REGLA CLAVE DEL TOGGLE (explícalo siempre que pregunten por totales)
+- Presupuesto de Obra → KPIs verde/amarillo y gráficos de presupuesto muestran solo cantidades contractuales.
+- Obra Ejecutada → mismos KPIs/gráficos pero solo cantidades clasificadas como obra ejecutada en Presupuesto.
+- SICOE N3 APROBADO (azul) y Obra por Acta RPO NO cambian — son el cobro real del contrato.
+- Si ve el mismo monto amarillo en ambas vistas, casi seguro todos los registros están en un solo tipo;
+  debe reclasificarlos en el módulo Presupuesto (masivo «↔ Aplicar tipo»).
+
+PASOS FRECUENTES
+1. Comparar presupuesto contractual vs ejecutado: alterne el toggle y observe KPI amarillo y gráfico por capítulo.
+2. Ver detalle: clic en capítulo del comparativo → ítems → PK; popup con columnas SICOE vs presupuesto.
+3. Exportar capítulo: en el drill, botón Excel verde → esperar generación → descarga automática.
+4. Desviaciones en mapa: pestaña Análisis de Desviaciones → clic en polígono PK → popup detalle.
+5. Validación SICOE: matriz «Validación por rol — SICOE Obra» (independiente del toggle presupuesto).
+
+RESPONDE CON PRECISIÓN
+- «¿Por qué el dashboard dice 16 mil millones en ambos?» → probablemente no hay split por tipo; reclasificar en Presupuesto.
+- «¿Por qué SICOE no cambia al toggle?» → es correcto; SICOE es siempre total del contrato.
+- «¿Dónde cambio el tipo de ejecución?» → módulo Presupuesto, no en Dashboard (Dashboard solo filtra visualización).
+- «Total SQL sin filtro ≠ dashboard» → SQL sin tipo suma ambos tipos; dashboard muestra un tipo según toggle.
+</dashboard_en_pantalla>"""
 
 
 def _normalizar_modulo(modulo_actual: str | None) -> str:
@@ -496,11 +642,13 @@ def build_avi_context_block(modulo_actual: str | None) -> str:
         f"modulo_actual: {slug}",
         f"descripcion_pantalla: {pista}",
         "Instrucción: Adapta tu respuesta a lo que el usuario está viendo ahora. "
-        "Si el módulo es «cobro», habla del Dashboard (obra aprobada, actas RPO, comparación con presupuesto). "
+        "Si el módulo es «cobro» o «dashboard», explica el toggle «Análisis según» y qué KPIs cambian vs SICOE fijo. "
         "Si es «admin», menciona el Panel de administración (icono/engranaje), no el menú lateral.",
     ]
     if slug == "presupuesto":
         partes.append(PRESUPUESTO_CONTEXTO_SESION)
+    elif slug in ("dashboard", "cobro"):
+        partes.append(DASHBOARD_CONTEXTO_SESION)
     partes.append("</contexto_sesion>")
     return "\n".join(partes)
 
