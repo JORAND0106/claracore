@@ -8,7 +8,7 @@ export default function BibliiotecaPuntos({ contratoId, token, soloVerificados =
   const { api } = useTopografiaApi(contratoId, token)
   const [puntos, setPuntos] = useState([])
   const [filtroTipo, setFiltroTipo] = useState('')
-  const [filtroVerificado, setFiltroVerificado] = useState(soloVerificados ? 'verificado' : '')
+  const [filtroVerificado, setFiltroVerificado] = useState('verificado')
   const [errorModal, setErrorModal] = useState(null)
   const [loading, setLoading] = useState(false)
 
@@ -51,7 +51,7 @@ export default function BibliiotecaPuntos({ contratoId, token, soloVerificados =
         <h3 style={{ marginTop: 0 }}>Biblioteca de puntos</h3>
         <p style={{ margin: 0, fontSize: 'var(--cc-sm)', color: '#475569', lineHeight: 1.5 }}>
           Esta biblioteca es de solo consulta. Los puntos se incorporan automaticamente al cerrar poligonales,
-          nivelaciones o intersecciones admisibles. Los BM iniciales del contrato los carga el administrador.
+          nivelaciones o intersecciones admisibles. El primer BM se define en el popup de la poligonal (punto de amarre).
         </p>
       </div>
 

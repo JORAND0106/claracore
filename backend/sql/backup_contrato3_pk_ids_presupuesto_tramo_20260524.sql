@@ -1,0 +1,7 @@
+-- Backup contrato 3 antes de actualizar pk_ids y tramo presupuesto (2026-05-24)
+-- Tablas creadas en Supabase:
+--   public.pk_ids_backup_c3_20260524
+--   public.presupuesto_tramo_backup_c3_20260524
+--
+-- Fuente: PK_ID_v0.csv (105 PK)
+-- Restore: backend/sql/restore_contrato3_pk_ids_presupuesto_tramo_20260524.sql

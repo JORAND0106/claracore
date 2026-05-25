@@ -88,6 +88,64 @@ def _punto_verificado(punto_id: str, contrato_id: int) -> dict:
     return p
 
 
+def _crear_punto_amarre(contrato_id: int, amarre: AmarreBody) -> str:
+    nombre = (amarre.nombre or "").strip()
+    if not nombre:
+        raise HTTPException(status_code=422, detail="Indique el nombre del punto de amarre.")
+    existing = _row("topo_puntos", contrato_id=contrato_id, nombre=nombre)
+    if existing:
+        if existing.get("verificado"):
+            return existing["id"]
+        supabase.table("topo_puntos").update(
+            {
+                "norte": amarre.norte,
+                "este": amarre.este,
+                "cota": amarre.cota,
+                "tipo": "BM",
+            }
+        ).eq("id", existing["id"]).execute()
+        return existing["id"]
+    row = (
+        supabase.table("topo_puntos")
+        .insert(
+            {
+                "contrato_id": contrato_id,
+                "nombre": nombre,
+                "norte": amarre.norte,
+                "este": amarre.este,
+                "cota": amarre.cota,
+                "tipo": "BM",
+                "verificado": False,
+                "modulo_origen": "poligonal_amarre",
+            }
+        )
+        .execute()
+        .data
+    )
+    if not row:
+        raise HTTPException(status_code=500, detail="No se pudo crear el punto de amarre")
+    return row[0]["id"]
+
+
+def _resolver_amarres_poligonal(contrato_id: int, body: PoligonalBody, payload: dict) -> None:
+    if payload.get("punto_inicial_id"):
+        _punto_verificado(payload["punto_inicial_id"], contrato_id)
+    elif body.amarre_inicial:
+        payload["punto_inicial_id"] = _crear_punto_amarre(contrato_id, body.amarre_inicial)
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail="Indique el punto de amarre inicial (nombre, Norte y Este) o seleccione un BM verificado.",
+        )
+
+    if payload["tipo"] == "cerrada":
+        payload["punto_final_id"] = payload["punto_inicial_id"]
+    elif payload.get("punto_final_id"):
+        _punto_verificado(payload["punto_final_id"], contrato_id)
+    elif body.amarre_final:
+        payload["punto_final_id"] = _crear_punto_amarre(contrato_id, body.amarre_final)
+
+
 def _guardar_firma(modulo: str, referencia_id: str, body: "FirmaBody", uid: int) -> dict:
     row = (
         supabase.table("topo_firmas")
@@ -129,13 +187,24 @@ class PuntoBody(BaseModel):
     verificado: bool = False
 
 
+class AmarreBody(BaseModel):
+    nombre: str
+    norte: float
+    este: float
+    cota: Optional[float] = None
+
+
 class PoligonalBody(BaseModel):
     nombre: str
     tipo: Literal["abierta", "cerrada"] = "cerrada"
     sentido: Optional[str] = None
     punto_inicial_id: Optional[str] = None
     punto_final_id: Optional[str] = None
+    amarre_inicial: Optional[AmarreBody] = None
+    amarre_final: Optional[AmarreBody] = None
     tolerancia_relativa: int = 3000
+    tolerancia_cota_mm_km: float = 12
+    metodo: Literal["trigonometrica"] = "trigonometrica"
     observaciones: Optional[str] = None
     operador: Optional[str] = None
     equipo: Optional[str] = None
@@ -147,6 +216,10 @@ class EstacionBody(BaseModel):
     nombre_punto: str
     angulo_gms: float
     distancia: float
+    altura_instrumento: float
+    angulo_vertical_gms: float
+    altura_objetivo: Optional[float] = 0
+    lectura_mira: Optional[float] = None
 
 
 class NivelacionBody(BaseModel):
@@ -408,24 +481,12 @@ def listar_poligonales(contrato_id: int, current_user=Depends(get_current_user))
 def crear_poligonal(contrato_id: int, body: PoligonalBody, current_user=Depends(get_current_user)):
     _require_contract_access(current_user, contrato_id)
     _perm(current_user, "crear")
-    payload = _dump_model(body, ("punto_inicial_id", "punto_final_id"))
+    payload = body.model_dump(exclude={"amarre_inicial", "amarre_final"})
+    for field in ("punto_inicial_id", "punto_final_id"):
+        payload[field] = _sanitize_uuid_optional(payload.get(field))
     if not (payload.get("nombre") or "").strip():
         raise HTTPException(status_code=422, detail="Indique un nombre para la poligonal.")
-    if payload["tipo"] == "cerrada":
-        if not payload.get("punto_inicial_id"):
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "Las poligonales cerradas requieren un punto BM verificado como inicio. "
-                    "Si la biblioteca esta vacia, solicite al administrador cargar los BM iniciales del contrato."
-                ),
-            )
-        if not payload.get("punto_final_id"):
-            payload["punto_final_id"] = payload["punto_inicial_id"]
-    if payload.get("punto_inicial_id"):
-        _punto_verificado(payload["punto_inicial_id"], contrato_id)
-    if payload.get("punto_final_id"):
-        _punto_verificado(payload["punto_final_id"], contrato_id)
+    _resolver_amarres_poligonal(contrato_id, body, payload)
     row = (
         supabase.table("topo_poligonales")
         .insert({**payload, "contrato_id": contrato_id})
@@ -451,7 +512,12 @@ def obtener_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(
         .data
         or []
     )
-    return {"poligonal": pol, "estaciones": enriquecer_estaciones_poligonal(estaciones)}
+    return {
+        "poligonal": pol,
+        "estaciones": enriquecer_estaciones_poligonal(estaciones),
+        "punto_inicial": _row("topo_puntos", id=pol.get("punto_inicial_id")) if pol.get("punto_inicial_id") else None,
+        "punto_final": _row("topo_puntos", id=pol.get("punto_final_id")) if pol.get("punto_final_id") else None,
+    }
 
 
 @router.put("/{contrato_id}/poligonales/{poligonal_id}")
@@ -484,6 +550,8 @@ def agregar_estacion(contrato_id: int, poligonal_id: str, body: EstacionBody, cu
         raise HTTPException(status_code=422, detail="Indique el nombre del punto observado.")
     if body.distancia <= 0:
         raise HTTPException(status_code=422, detail="La distancia debe ser mayor que cero.")
+    if body.altura_instrumento is None or body.altura_instrumento < 0:
+        raise HTTPException(status_code=422, detail="Indique la altura del instrumento (HI) en metros.")
     row = (
         supabase.table("topo_poligonal_estaciones")
         .insert(
@@ -493,6 +561,10 @@ def agregar_estacion(contrato_id: int, poligonal_id: str, body: EstacionBody, cu
                 "nombre_punto": body.nombre_punto.strip(),
                 "angulo_medido": gms_to_decimal(body.angulo_gms),
                 "distancia": body.distancia,
+                "altura_instrumento": body.altura_instrumento,
+                "angulo_vertical": gms_to_decimal(body.angulo_vertical_gms),
+                "altura_objetivo": body.altura_objetivo or 0,
+                "lectura_mira": body.lectura_mira,
             }
         )
         .execute()
@@ -538,8 +610,20 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
         .data
         or []
     )
-    uid = str(_uid(current_user))
     now = datetime.now(timezone.utc).isoformat()
+
+    if pol.get("punto_inicial_id"):
+        pi = _row("topo_puntos", id=pol["punto_inicial_id"], contrato_id=contrato_id)
+        if pi:
+            supabase.table("topo_puntos").update(
+                {
+                    "verificado": True,
+                    "modulo_origen": "poligonal",
+                    "circuito_id": poligonal_id,
+                    "fecha_verificacion": now,
+                }
+            ).eq("id", pi["id"]).execute()
+
     for est in estaciones:
         if not est.get("norte_ajustado"):
             continue
@@ -549,6 +633,7 @@ def cerrar_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(g
             "nombre": est.get("nombre_punto"),
             "norte": est.get("norte_ajustado"),
             "este": est.get("este_ajustado"),
+            "cota": est.get("cota_ajustada"),
             "tipo": "estacion",
             "verificado": True,
             "modulo_origen": "poligonal",
@@ -598,12 +683,20 @@ def pdf_poligonal(contrato_id: int, poligonal_id: str, current_user=Depends(get_
     img_html = f'<img src="data:image/png;base64,{img}" style="max-width:100%;" />' if img else ""
     rows = ""
     for e in estaciones:
-        rows += f"<tr><td>{html.escape(str(e.get('nombre_punto')))}</td><td>{decimal_to_gms(e.get('angulo_medido') or 0)}</td><td>{e.get('distancia')}</td><td>{e.get('norte_ajustado')}</td><td>{e.get('este_ajustado')}</td></tr>"
+        rows += (
+            f"<tr><td>{html.escape(str(e.get('nombre_punto')))}</td>"
+            f"<td>{decimal_to_gms(e.get('angulo_medido') or 0)}</td>"
+            f"<td>{decimal_to_gms(e.get('angulo_vertical') or 0)}</td>"
+            f"<td>{e.get('distancia')}</td>"
+            f"<td>{e.get('norte_ajustado')}</td>"
+            f"<td>{e.get('este_ajustado')}</td>"
+            f"<td>{e.get('cota_ajustada')}</td></tr>"
+        )
     firmas = _firmas_referencia(poligonal_id)
     html_doc = f"""<!DOCTYPE html><html><head><meta charset="utf-8"/></head><body style="font-family:Arial;font-size:9pt;">
     {html_encabezado_pdf(contrato, f"Poligonal — {pol.get('nombre')}")}<table width="100%" border="1" cellspacing="0" cellpadding="4">
-    <tr style="background:#e2e8f0;"><th>Punto</th><th>Angulo</th><th>Dist</th><th>Norte</th><th>Este</th></tr>{rows}</table>
-    <p>Precision: 1:{int(pol.get('precision_relativa') or 0)} | Error lineal: {pol.get('error_lineal')} m</p>{img_html}{html_firmas_pdf(firmas)}{html_pie_pdf(contrato)}</body></html>"""
+    <tr style="background:#e2e8f0;"><th>Punto</th><th>Ang. hor.</th><th>Ang. vert.</th><th>Dist</th><th>Norte</th><th>Este</th><th>Cota</th></tr>{rows}</table>
+    <p>Precision: 1:{int(pol.get('precision_relativa') or 0)} | Error lineal: {pol.get('error_lineal')} m | Error cota: {pol.get('error_cierre_dz')} m</p>{img_html}{html_firmas_pdf(firmas)}{html_pie_pdf(contrato)}</body></html>"""
     pdf = to_pdf_bytes(html_doc)
     return Response(content=pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="poligonal_{poligonal_id[:8]}.pdf"'})
 

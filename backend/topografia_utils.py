@@ -44,14 +44,17 @@ def azimut_desde_deltas(dn: float, de: float) -> float:
 
 
 def enriquecer_estaciones_poligonal(estaciones: list) -> list:
-    """Agrega columnas de calculo para la libreta de poligonal."""
+    """Agrega columnas de calculo para la libreta de poligonal trigonométrica."""
     out = []
     for e in estaciones or []:
         ang = e.get("angulo_medido")
+        ang_v = e.get("angulo_vertical")
         dn = e.get("delta_norte")
         de = e.get("delta_este")
+        dz = e.get("delta_cota")
         cn = e.get("correccion_norte") or 0
         ce = e.get("correccion_este") or 0
+        cz = e.get("correccion_cota") or 0
         az_corr = None
         if dn is not None and de is not None:
             az_corr = azimut_desde_deltas((dn or 0) + cn, (de or 0) + ce)
@@ -59,12 +62,15 @@ def enriquecer_estaciones_poligonal(estaciones: list) -> list:
             **e,
             "angulo_observado_gms": decimal_a_gms_numero(ang) if ang is not None else None,
             "angulo_observado_texto": decimal_to_gms(ang) if ang is not None else None,
+            "angulo_vertical_gms": decimal_a_gms_numero(ang_v) if ang_v is not None else None,
+            "angulo_vertical_texto": decimal_to_gms(ang_v) if ang_v is not None else None,
             "azimut_inicio_gms": decimal_a_gms_numero(ang) if ang is not None else None,
             "azimut_inicio_texto": decimal_to_gms(ang) if ang is not None else None,
             "azimut_corregido_gms": decimal_a_gms_numero(az_corr) if az_corr is not None else None,
             "azimut_corregido_texto": decimal_to_gms(az_corr) if az_corr is not None else None,
             "proyeccion_norte": dn,
             "proyeccion_este": de,
+            "proyeccion_cota": dz,
         })
     return out
 

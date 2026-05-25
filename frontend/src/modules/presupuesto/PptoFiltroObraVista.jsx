@@ -428,6 +428,7 @@ export default function PptoFiltroObraVista({
       item: f.item || undefined,
       tramo: f.tramo || undefined,
       calzada: f.calzada || undefined,
+      tipo_ejecucion: tipoEjecucionActivo,
     })
       .then((data) => {
         if (!cancelled) setOpciones(data || {})
@@ -436,7 +437,7 @@ export default function PptoFiltroObraVista({
     return () => {
       cancelled = true
     }
-  }, [contratoId, token, f.cap, f.item, f.tramo, f.calzada])
+  }, [contratoId, token, f.cap, f.item, f.tramo, f.calzada, tipoEjecucionActivo])
 
   const cargarPlantillas = useCallback(async () => {
     if (!token) return

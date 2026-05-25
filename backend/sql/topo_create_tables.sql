@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS topo_poligonales (
     error_cierre_de      DOUBLE PRECISION,
     error_lineal         DOUBLE PRECISION,
     precision_relativa   DOUBLE PRECISION,
+    metodo               VARCHAR(20) DEFAULT 'trigonometrica',
+    tolerancia_cota_mm_km DOUBLE PRECISION DEFAULT 12,
+    error_cierre_dz      DOUBLE PRECISION,
     estado               VARCHAR(20) DEFAULT 'borrador',
     nivel_validacion     INTEGER DEFAULT 0,
     observaciones        TEXT,
@@ -53,12 +56,19 @@ CREATE TABLE IF NOT EXISTS topo_poligonal_estaciones (
     nombre_punto      VARCHAR(50),
     angulo_medido     DOUBLE PRECISION,
     distancia         DOUBLE PRECISION,
+    altura_instrumento DOUBLE PRECISION,
+    angulo_vertical   DOUBLE PRECISION,
+    altura_objetivo   DOUBLE PRECISION DEFAULT 0,
+    lectura_mira      DOUBLE PRECISION,
     delta_norte       DOUBLE PRECISION,
     delta_este        DOUBLE PRECISION,
+    delta_cota        DOUBLE PRECISION,
     correccion_norte  DOUBLE PRECISION,
     correccion_este   DOUBLE PRECISION,
+    correccion_cota   DOUBLE PRECISION,
     norte_ajustado    DOUBLE PRECISION,
-    este_ajustado     DOUBLE PRECISION
+    este_ajustado     DOUBLE PRECISION,
+    cota_ajustada     DOUBLE PRECISION
 );
 
 -- Puntos auxiliares de poligonal (radiacion)

@@ -207,8 +207,8 @@ export function parseApiError(raw) {
       mensaje: 'El error lineal supera la tolerancia configurada. Revise angulos y distancias de campo, recalcule, o ajuste la tolerancia antes de cerrar el circuito.',
     }
   }
-  if (/requieren un punto BM/i.test(msg) || /Indique un nombre/i.test(msg)) {
-    return { titulo: 'Datos incompletos', mensaje: msg }
+  if (/requieren un punto BM|amarre inicial|Indique el punto de amarre/i.test(msg)) {
+    return { titulo: 'Punto de amarre requerido', mensaje: msg }
   }
   if (/Sin estaciones|angulo|distancia|Nombre del punto/i.test(msg)) {
     return { titulo: 'Revise los datos', mensaje: msg }

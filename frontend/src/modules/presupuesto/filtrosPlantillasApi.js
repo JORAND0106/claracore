@@ -48,6 +48,7 @@ export async function fetchPresupuestoFiltrosOpciones(contratoId, token, params 
   if (params.item) p.set('item', params.item)
   if (params.tramo) p.set('tramo', params.tramo)
   if (params.calzada) p.set('calzada', params.calzada)
+  if (params.tipo_ejecucion) p.set('tipo_ejecucion', params.tipo_ejecucion)
   const qs = p.toString()
   const r = await fetch(`${API}/presupuesto/${contratoId}/filtros${qs ? `?${qs}` : ''}`, {
     headers: authHeaders(token),
