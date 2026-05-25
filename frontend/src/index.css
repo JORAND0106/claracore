@@ -43,3 +43,8 @@ select.cc-dashboard-acta-select--light option {
   background-color: #ffffff;
   color: #0f172a;
 }
+
+@keyframes dashRefreshSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

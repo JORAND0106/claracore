@@ -12645,6 +12645,8 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [dashKpiLoading, setDashKpiLoading] = useState(false)
   const [dashKpiError, setDashKpiError] = useState(null)
   const [dashKpiReloadKey, setDashKpiReloadKey] = useState(0)
+  const [dashResumenUpdatedAt, setDashResumenUpdatedAt] = useState(null)
+  const [, setDashRefreshTick] = useState(0)
   const [dashDrill,    setDashDrill]    = useState([])
   const dashDrillRef = useRef([])
   useEffect(() => { dashDrillRef.current = dashDrill }, [dashDrill])
@@ -12897,6 +12899,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     dashDrillFetchSeqRef.current += 1
     setKpiPpto(null)
     setKpiCobro(null)
+    setDashResumenUpdatedAt(null)
     setDashKpiError(null)
     setDashDrill([])
     setDashData(null)
@@ -12908,49 +12911,66 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     setPopupPkid(null)
   }, [contratoIdDash])
 
-  useEffect(() => {
+  const cargarDashboardResumen = useCallback(async () => {
     if (!contratoIdDash || !dashModuloActivo) return
-    let cancelled = false
     setDashKpiLoading(true)
     setDashKpiError(null)
+    setKpiCobro(null)
+    setKpiPpto(null)
     const cid = contratoIdDash
     const tok = getToken()
     const vq = `vista=${encodeURIComponent(dashVistaParam)}`
-    fetch(`${API_URL}/sicoe-obra/${cid}/dashboard-resumen?${vq}`, {
-      headers: { Authorization: `Bearer ${tok}` },
-      signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
-        ? AbortSignal.timeout(90000)
-        : undefined,
-    })
-      .then(async (r) => {
-        if (!r.ok) {
-          const txt = await r.text().catch(() => '')
-          throw new Error(txt?.slice(0, 120) || `Error ${r.status}`)
-        }
-        return r.json()
+    try {
+      const r = await fetch(`${API_URL}/sicoe-obra/${cid}/dashboard-resumen?${vq}`, {
+        headers: { Authorization: `Bearer ${tok}` },
+        signal: typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(90000)
+          : undefined,
       })
-      .then((d) => {
-        if (cancelled || !d) return
-        setKpiCobro(d)
-        const capSrc = d.por_capitulo_presupuesto || d.comparativo_capitulos || []
-        setKpiPpto({
-          costo_total: d.total_presupuesto ?? 0,
-          por_capitulo: capSrc.map((c) => ({
-            capitulo: c.capitulo,
-            costo: c.costo ?? c.presupuesto ?? c.presupuesto_aprobado_n3 ?? 0,
-            registros: c.registros ?? 0,
-          })),
-          vista: d.vista,
-        })
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '')
+        throw new Error(txt?.slice(0, 120) || `Error ${r.status}`)
+      }
+      const d = await r.json()
+      if (!d) return
+      setKpiCobro(d)
+      const capSrc = d.por_capitulo_presupuesto || d.comparativo_capitulos || []
+      setKpiPpto({
+        costo_total: d.total_presupuesto ?? 0,
+        por_capitulo: capSrc.map((c) => ({
+          capitulo: c.capitulo,
+          costo: c.costo ?? c.presupuesto ?? c.presupuesto_aprobado_n3 ?? 0,
+          registros: c.registros ?? 0,
+        })),
+        vista: d.vista,
       })
-      .catch((err) => {
-        if (!cancelled) setDashKpiError(err?.message || 'No se pudo cargar el resumen')
-      })
-      .finally(() => {
-        if (!cancelled) setDashKpiLoading(false)
-      })
-    return () => { cancelled = true }
-  }, [contratoIdDash, dashModuloActivo, dashVistaParam, dashKpiReloadKey, API_URL])
+      setDashResumenUpdatedAt(Date.now())
+    } catch (err) {
+      setDashKpiError(err?.message || 'No se pudo cargar el resumen')
+    } finally {
+      setDashKpiLoading(false)
+    }
+  }, [contratoIdDash, dashModuloActivo, dashVistaParam, API_URL])
+
+  useEffect(() => {
+    if (!contratoIdDash || !dashModuloActivo) return
+    void cargarDashboardResumen()
+  }, [contratoIdDash, dashModuloActivo, dashVistaParam, dashKpiReloadKey, cargarDashboardResumen])
+
+  useEffect(() => {
+    if (!contratoIdDash || !dashModuloActivo) return
+    const tok = getToken()
+    fetch(`${API_URL}/cad-queue/${contratoIdDash}/estado`, { headers: { Authorization: `Bearer ${tok}` } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d) setDwgEnlazadoDash(d.enlazado) })
+      .catch(() => {})
+  }, [contratoIdDash, dashModuloActivo, API_URL])
+
+  useEffect(() => {
+    if (!dashModuloActivo || dashResumenUpdatedAt == null) return
+    const iv = setInterval(() => setDashRefreshTick((n) => n + 1), 30000)
+    return () => clearInterval(iv)
+  }, [dashModuloActivo, dashResumenUpdatedAt])
 
   useEffect(() => {
     if (!contratoIdDash || !dashModuloActivo) return
@@ -12961,7 +12981,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       .catch(() => setActasListaMatriz([]))
   }, [contratoIdDash, dashModuloActivo, API_URL])
 
-// ── Auto-refresh dashboard (menos frecuente → menos carga en Azure y menos 502 por saturación) ──
   useEffect(() => { popupCapituloRef.current = popupCapitulo }, [popupCapitulo])
 
   const cargarMatrizValidacionDashboard = useCallback((signal) => {
@@ -13002,68 +13021,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
         setMatrizValidacionLoad(false)
       })
   }, [contratoIdDash, actaFiltroMatriz])
-
-  useEffect(() => {
-    if (!contratoIdDash || !dashModuloActivo) return
-    const recargar = () => {
-      if (typeof document !== 'undefined' && document.hidden) return
-      const tok = getToken()
-      const vq = `vista=${encodeURIComponent(dashVistaParam)}`
-      fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-resumen?${vq}`, { headers: { Authorization:`Bearer ${tok}` } })
-        .then(r => r.ok ? r.json() : null)
-        .then(d => {
-          if (!d) return
-          setKpiCobro(d)
-          const capSrc = d.por_capitulo_presupuesto || d.comparativo_capitulos || []
-          setKpiPpto({
-            costo_total: d.total_presupuesto ?? 0,
-            por_capitulo: capSrc.map(c => ({
-              capitulo: c.capitulo,
-              costo: c.costo ?? c.presupuesto ?? c.presupuesto_aprobado_n3 ?? 0,
-              registros: c.registros ?? 0,
-            })),
-            vista: d.vista,
-          })
-        })
-        .catch(() => {})
-      fetch(`${API_URL}/cad-queue/${contratoIdDash}/estado`, { headers: { Authorization:`Bearer ${tok}` } })
-        .then(r => r.ok ? r.json() : null).then(d => { if(d) setDwgEnlazadoDash(d.enlazado) }).catch(() => {})
-      const params2 = new URLSearchParams()
-      params2.set('vista', dashVistaParam)
-      if (dashDrillRef.current[0]) params2.set('capitulo', dashDrillRef.current[0].valor)
-      if (dashDrillRef.current[1]) params2.set('item', dashDrillRef.current[1].valor)
-      if (!popupCapituloRef.current) {
-        void fetchDashboardPkidColoresCached(contratoIdDash, params2, setMiniMapaColores)
-      }
-    }
-    const iv = setInterval(recargar, 600000)
-
-    /* Supabase Realtime (Dashboard): canal desactivado; recargar() sigue en intervalo 3 min.
-    let rtChannel = null
-    if (SUPABASE_URL && SUPABASE_ANON_KEY) {
-      const cid = String(contratoIdDash)
-      const filt = `contrato_id=eq.${cid}`
-      rtChannel = supabase
-        .channel(`dashboard-so-${cid}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'so_registros', filter: filt }, () => {
-          recargar()
-          cargarMatrizValidacionDashboard()
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'so_reportes', filter: filt }, () => {
-          recargar()
-          cargarMatrizValidacionDashboard()
-        })
-        .subscribe((status) => {
-          console.log('Realtime status:', status)
-        })
-    }
-    */
-
-    return () => {
-      clearInterval(iv)
-      /* if (rtChannel) void supabase.removeChannel(rtChannel) */
-    }
-  }, [contratoIdDash, dashModuloActivo, cargarMatrizValidacionDashboard, fetchDashboardPkidColoresCached, dashVistaParam])
 
   useLayoutEffect(() => {
     setActaFiltroMatriz('vigente')
@@ -14368,30 +14325,138 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
 
         {/* ── Contenido principal ── */}
         <div style={{ flex:1, padding:'20px 24px', minWidth:0, overflow:'hidden' }}>
-        <div style={s.topBar}>
-          {usuario?._contratos?.length > 1 ? (
-            <select
-              value={usuario.contrato_id || ''}
-              onChange={async (e) => {
-                const cid = parseInt(e.target.value, 10)
-                const contrato = usuario._contratos.find(c => c.id === cid)
-                if (!contrato) return
-                if (onCambiarContrato) await onCambiarContrato(contrato)
-                else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
-              }}
-              style={{ fontSize: 'var(--cc-sm)', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none' }}
-            >
-              {!usuario.contrato_id && (
-                <option value="">— Selecciona un contrato —</option>
-              )}
-              {usuario._contratos.map(c => (
-                <option key={c.id} value={c.id}>📋 {c.numero}</option>
-              ))}
-            </select>
-          ) : (
-            <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
-              📋 Contrato: {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
-            </span>
+        <div style={{ ...s.topBar, alignItems: moduloActivo === 'dashboard' ? 'flex-start' : 'center' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minWidth: 0 }}>
+            {moduloActivo === 'dashboard' && (() => {
+              const elapsedMin = dashResumenUpdatedAt != null
+                ? Math.floor((Date.now() - dashResumenUpdatedAt) / 60000)
+                : null
+              const dashInfoColor = t.primary || '#0077B6'
+              return (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <h1 style={{ margin: 0, fontSize: 'var(--cc-xl)', fontWeight: 700, color: t.text, letterSpacing: '-0.02em' }}>
+                      Dashboard SICOE
+                    </h1>
+                    <button
+                      type="button"
+                      onClick={() => { void cargarDashboardResumen() }}
+                      disabled={dashKpiLoading}
+                      title="Actualizar resumen del dashboard"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        background: t.bgCard,
+                        border: `1px solid ${t.border}`,
+                        borderRadius: 8,
+                        padding: '6px 12px',
+                        color: dashKpiLoading ? t.textMuted : t.primary,
+                        fontSize: 'var(--cc-sm)',
+                        fontWeight: 600,
+                        cursor: dashKpiLoading ? 'wait' : 'pointer',
+                        opacity: dashKpiLoading ? 0.75 : 1,
+                      }}
+                    >
+                      <i
+                        className="ti ti-refresh"
+                        style={{
+                          fontSize: '1.05rem',
+                          lineHeight: 1,
+                          display: 'inline-block',
+                          animation: dashKpiLoading ? 'dashRefreshSpin 0.85s linear infinite' : 'none',
+                        }}
+                      />
+                      Actualizar
+                    </button>
+                  </div>
+                  {elapsedMin != null && (
+                    <div style={{ fontSize: `${du.sub}px`, color: t.textMuted }}>
+                      {elapsedMin < 2 ? (
+                        'Datos al día'
+                      ) : elapsedMin <= 5 ? (
+                        `Actualizado hace ${elapsedMin} min`
+                      ) : (
+                        <>
+                          {`Actualizado hace ${elapsedMin} min · `}
+                          <button
+                            type="button"
+                            onClick={() => { void cargarDashboardResumen() }}
+                            disabled={dashKpiLoading}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              padding: 0,
+                              margin: 0,
+                              color: dashInfoColor,
+                              fontSize: 'inherit',
+                              fontWeight: 600,
+                              cursor: dashKpiLoading ? 'wait' : 'pointer',
+                              textDecoration: 'underline',
+                              textUnderlineOffset: 2,
+                            }}
+                          >
+                            ¿Refrescar?
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </>
+              )
+            })()}
+            {moduloActivo !== 'dashboard' && (
+              usuario?._contratos?.length > 1 ? (
+                <select
+                  value={usuario.contrato_id || ''}
+                  onChange={async (e) => {
+                    const cid = parseInt(e.target.value, 10)
+                    const contrato = usuario._contratos.find(c => c.id === cid)
+                    if (!contrato) return
+                    if (onCambiarContrato) await onCambiarContrato(contrato)
+                    else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
+                  }}
+                  style={{ fontSize: 'var(--cc-sm)', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none' }}
+                >
+                  {!usuario.contrato_id && (
+                    <option value="">— Selecciona un contrato —</option>
+                  )}
+                  {usuario._contratos.map(c => (
+                    <option key={c.id} value={c.id}>📋 {c.numero}</option>
+                  ))}
+                </select>
+              ) : (
+                <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted }}>
+                  📋 Contrato: {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
+                </span>
+              )
+            )}
+          </div>
+          {moduloActivo === 'dashboard' && (
+            usuario?._contratos?.length > 1 ? (
+              <select
+                value={usuario.contrato_id || ''}
+                onChange={async (e) => {
+                  const cid = parseInt(e.target.value, 10)
+                  const contrato = usuario._contratos.find(c => c.id === cid)
+                  if (!contrato) return
+                  if (onCambiarContrato) await onCambiarContrato(contrato)
+                  else setUsuario({ ...usuario, contrato_id: contrato.id, contrato_numero: contrato.numero })
+                }}
+                style={{ fontSize: 'var(--cc-sm)', background: t.cardBg, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', color: t.primary, fontWeight: 600, cursor: 'pointer', outline: 'none', flexShrink: 0 }}
+              >
+                {!usuario.contrato_id && (
+                  <option value="">— Selecciona un contrato —</option>
+                )}
+                {usuario._contratos.map(c => (
+                  <option key={c.id} value={c.id}>📋 {c.numero}</option>
+                ))}
+              </select>
+            ) : (
+              <span style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, flexShrink: 0 }}>
+                📋 Contrato: {usuario?.contrato_numero || (esDeveloper ? 'Todos los contratos' : 'Sin asignar')}
+              </span>
+            )
           )}
           {/* Crear Contrato se gestiona desde el Panel Admin */}
         </div>
@@ -14413,7 +14478,7 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           const porActa = (kpiCobro?.por_acta || []).sort((a,b) => (a.acta||0)-(b.acta||0))
           const porCapPpto = (kpiPpto?.por_capitulo || []).sort((a,b) => b.costo - a.costo).slice(0,15)
           const maxCapCosto = Math.max(...porCapPpto.map(c => c.costo), 1)
-          const dashEsperando = dashKpiLoading && !kpiCobro
+          const dashEsperando = dashKpiLoading
 
           return <>
             {dashEsperando && (
