@@ -856,11 +856,10 @@ def informe_gerencia_matriz_maps_por_rpc(
     acta_anterior_id: Optional[int],
     acta_ids_acumulado: List[int],
     items_cobro: Optional[set],
-) -> Optional[Dict[str, Dict[Tuple[str, str], float]]]:
+    ) -> Dict[str, Dict[Tuple[str, str], float]]:
     """
-    Suma c1..c4 por (capítulo, bloque) vía `sql/rpo_informe_gerencia.sql`: c1 habilitado (ítem);
-    c2 cascada N1·N2·N3 en acta de referencia; c3 acum. solo con nivel3 Aprobado; c4 pendiente.
-    None = RPC no disponible.
+    Suma c1..c4 por (capítulo, bloque) vía `sql/rpo_informe_gerencia.sql`.
+    Ante timeout parcial devuelve columnas vacías (evita fallback Python lento).
     """
     cid, ap = int(contrato_id), int(acta_presente_id)
     _ = items_cobro  # Col. 1 = todo ítem con registro (matriz HABILITADO), sin filtrar por tabla cobro
@@ -884,7 +883,7 @@ def informe_gerencia_matriz_maps_por_rpc(
             )
         except Exception as e:
             _log.warning("rpo_ger col1: %s", e)
-            raise
+            return []
 
     def _run_c2():
         if acta_ant_i <= 0:
@@ -904,7 +903,7 @@ def informe_gerencia_matriz_maps_por_rpc(
             )
         except Exception as e2:
             _log.warning("rpo_ger cascade ant: %s", e2)
-            raise
+            return []
 
     def _run_c3():
         try:
@@ -919,7 +918,7 @@ def informe_gerencia_matriz_maps_por_rpc(
             )
         except Exception as e3:
             _log.warning("rpo_ger solo_n3 acum: %s", e3)
-            raise
+            return []
 
     def _run_c4():
         try:
@@ -934,20 +933,17 @@ def informe_gerencia_matriz_maps_por_rpc(
             )
         except Exception as e4:
             _log.warning("rpo_ger pend: %s", e4)
-            raise
+            return []
 
-    try:
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            f1 = pool.submit(_run_c1)
-            f2 = pool.submit(_run_c2)
-            f3 = pool.submit(_run_c3)
-            f4 = pool.submit(_run_c4)
-            c1q = f1.result()
-            c2d = f2.result()
-            c3d = f3.result()
-            c4d = f4.result()
-    except Exception:
-        return None
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        f1 = pool.submit(_run_c1)
+        f2 = pool.submit(_run_c2)
+        f3 = pool.submit(_run_c3)
+        f4 = pool.submit(_run_c4)
+        c1q = f1.result()
+        c2d = f2.result()
+        c3d = f3.result()
+        c4d = f4.result()
 
     c1m = _mapa_cap_bloque_desde_rpc_rows(c1q)
     c2m = _mapa_cap_bloque_desde_rpc_rows(c2d)

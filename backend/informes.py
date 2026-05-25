@@ -8,6 +8,8 @@ import difflib
 import math
 import os as _os
 import re
+import threading
+import time
 from datetime import datetime, date
 import pytz
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -15,6 +17,39 @@ from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 _log = logging.getLogger("uvicorn.error")
+
+_GERENCIA_MATRIZ_CACHE: Dict[tuple, Dict[str, Any]] = {}
+_GERENCIA_MATRIZ_CACHE_LOCK = threading.Lock()
+_GERENCIA_MATRIZ_CACHE_TTL_SEC = 600
+_GERENCIA_MATRIZ_CACHE_STALE_SEC = 1800
+
+
+def _gerencia_matriz_cache_key(contrato_id: int, acta_presente_override: Optional[int]) -> tuple:
+    ap = int(acta_presente_override) if acta_presente_override is not None else None
+    return ("gerencia_matriz", int(contrato_id), ap)
+
+
+def _gerencia_matriz_cache_get(key: tuple) -> Optional[Dict[str, Any]]:
+    now = time.time()
+    with _GERENCIA_MATRIZ_CACHE_LOCK:
+        entry = _GERENCIA_MATRIZ_CACHE.get(key)
+        if not entry:
+            return None
+        age = now - entry["ts"]
+        if age <= _GERENCIA_MATRIZ_CACHE_STALE_SEC:
+            return entry["data"]
+        _GERENCIA_MATRIZ_CACHE.pop(key, None)
+    return None
+
+
+def _gerencia_matriz_cache_set(key: tuple, data: Dict[str, Any]) -> None:
+    with _GERENCIA_MATRIZ_CACHE_LOCK:
+        _GERENCIA_MATRIZ_CACHE[key] = {"data": data, "ts": time.time()}
+        if len(_GERENCIA_MATRIZ_CACHE) > 32:
+            oldest = min(_GERENCIA_MATRIZ_CACHE, key=lambda k: _GERENCIA_MATRIZ_CACHE[k]["ts"])
+            _GERENCIA_MATRIZ_CACHE.pop(oldest, None)
+
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from openpyxl import Workbook
@@ -3026,6 +3061,11 @@ def _embalaje_informe_gerencia_bloques(
 def _construir_datos_informe_gerencia_matriz(
     contrato_id: int, acta_presente_override: Optional[int] = None
 ) -> Dict[str, Any]:
+    cache_key = _gerencia_matriz_cache_key(contrato_id, acta_presente_override)
+    cached = _gerencia_matriz_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     pres, ant, actas_asc = _resolver_acta_gerencia_presente_y_anterior(
         int(contrato_id), acta_presente_override
     )
@@ -3082,6 +3122,9 @@ def _construir_datos_informe_gerencia_matriz(
         maps = _f_map.result()
         d_p = _f_con.result()
 
+    if not isinstance(r_all, dict):
+        r_all = {}
+
     t_presente_lista = float((r_all.get(int(ap_id)) or {}).get("costo_directo_total", 0) or 0)
     t2 = 0.0
     if a_ant is not None:
@@ -3103,18 +3146,23 @@ def _construir_datos_informe_gerencia_matriz(
             iva_c = None
 
     if d_p is None:
-        d_p = (rpo_conciliacion_por_contrato(_sb, contrato_id, [ap_id]) or {}).get(ap_id) or _rpo_gerencia_vacio()
+        d_p = _rpo_gerencia_vacio()
+        _log.warning(
+            "CC-GER-001: rpo_panel_acta_por_capitulo_bloque no disponible; secciones AIU en cero."
+        )
     if maps is None:
         _log.warning(
-            "CC-GER-001: RPC informe gerencia no disponible o falló; usando fallback Python (lento). "
+            "CC-GER-001: RPC informe gerencia maps vacío; usando fallback Python (lento). "
             "Verifique funciones rpo_ger_* en Supabase (backend/sql/rpo_informe_gerencia.sql)."
         )
-        return _construir_datos_informe_gerencia_matriz_fallback_por_capitulo(
+        result = _construir_datos_informe_gerencia_matriz_fallback_por_capitulo(
             contrato_id, pres, ant, ap_id, c_pres, a_ant, ids_cascade_hasta, t2, t_acc, aiu_c, iva_c, ctr_r
         )
+        _gerencia_matriz_cache_set(cache_key, result)
+        return result
 
     c1, c2, c3, c4 = maps["c1"], maps["c2"], maps["c3"], maps["c4"]
-    return _embalaje_informe_gerencia_bloques(
+    result = _embalaje_informe_gerencia_bloques(
         pres,
         ant,
         c_pres,
@@ -3133,6 +3181,8 @@ def _construir_datos_informe_gerencia_matriz(
         vr_contr=ctr_r,
         contrato_id=contrato_id,
     )
+    _gerencia_matriz_cache_set(cache_key, result)
+    return result
 
 
 def _acta_cab_gerencia(acta_id: int) -> Dict[str, Any]:
