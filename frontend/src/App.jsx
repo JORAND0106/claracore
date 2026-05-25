@@ -12986,6 +12986,7 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   useEffect(() => {
     if (!contratoIdDash || !dashModuloActivo) return
     const recargar = () => {
+      if (typeof document !== 'undefined' && document.hidden) return
       const tok = getToken()
       const vq = `vista=${encodeURIComponent(dashVistaParam)}`
       fetch(`${API_URL}/sicoe-obra/${contratoIdDash}/dashboard-resumen?${vq}`, { headers: { Authorization:`Bearer ${tok}` } })
@@ -13005,7 +13006,6 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
           })
         })
         .catch(() => {})
-      if (dashDrillRef.current.length > 0 && !popupCapituloRef.current) refrescarDashDrillSilencioso(dashDrillRef.current)
       fetch(`${API_URL}/cad-queue/${contratoIdDash}/estado`, { headers: { Authorization:`Bearer ${tok}` } })
         .then(r => r.ok ? r.json() : null).then(d => { if(d) setDwgEnlazadoDash(d.enlazado) }).catch(() => {})
       const params2 = new URLSearchParams()
@@ -13013,10 +13013,10 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
       if (dashDrillRef.current[0]) params2.set('capitulo', dashDrillRef.current[0].valor)
       if (dashDrillRef.current[1]) params2.set('item', dashDrillRef.current[1].valor)
       if (!popupCapituloRef.current) {
-        void fetchDashboardPkidColoresCached(contratoIdDash, params2, setMiniMapaColores, { force: true })
+        void fetchDashboardPkidColoresCached(contratoIdDash, params2, setMiniMapaColores)
       }
     }
-    const iv = setInterval(recargar, 300000)
+    const iv = setInterval(recargar, 600000)
 
     /* Supabase Realtime (Dashboard): canal desactivado; recargar() sigue en intervalo 3 min.
     let rtChannel = null
@@ -14828,20 +14828,33 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                             })
                             if (!res.ok) { alert('Error al iniciar exportación'); return }
                             const { job_id } = await res.json()
-                            // 2) Polling hasta que esté listo
+                            // 2) Polling hasta que esté listo (capítulos grandes pueden tardar varios minutos)
+                            const pollMs = 2000
+                            const maxIntentos = 180
                             let intentos = 0
-                            while (intentos < 60) {
-                              await new Promise(r => setTimeout(r, 2000))
+                            let listo = false
+                            while (intentos < maxIntentos) {
+                              await new Promise(r => setTimeout(r, pollMs))
                               intentos++
-                              btn.innerHTML = `⏳ ${intentos * 2}s...`
+                              const seg = intentos * (pollMs / 1000)
+                              btn.innerHTML = `⏳ ${Math.round(seg)}s…`
                               let estado = ''
+                              let progreso = ''
                               try {
                                 const st = await fetch(`${API}/exportar/estado/${job_id}`, {
                                   headers: { Authorization: `Bearer ${tok}` }
                                 })
+                                if (st.status === 404) {
+                                  alert('La exportación se interrumpió (servidor reiniciado). Intente de nuevo.')
+                                  break
+                                }
                                 if (st.ok) {
                                   const d = await st.json()
                                   estado = d.estado || ''
+                                  progreso = d.progreso || ''
+                                  if (progreso && progreso !== 'listo' && progreso !== 'iniciando') {
+                                    btn.innerHTML = `⏳ ${progreso} · ${Math.round(seg)}s`
+                                  }
                                 }
                               } catch { continue }
                               if (estado.startsWith('error')) { alert('Error generando Excel: ' + estado); break }
@@ -14851,13 +14864,21 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                                 const dl = await fetch(`${API}/exportar/descargar/${job_id}`, {
                                   headers: { Authorization: `Bearer ${tok}` }
                                 })
+                                if (!dl.ok) {
+                                  alert('No se pudo descargar el archivo generado.')
+                                  break
+                                }
                                 const blob = await dl.blob()
                                 const a = document.createElement('a')
                                 a.href = URL.createObjectURL(blob)
                                 a.download = `ClaraCore_${(dashDrill[0]?.valor||'').slice(0,30)}_${new Date().toISOString().slice(0,10)}.xlsx`
                                 a.click(); URL.revokeObjectURL(a.href)
+                                listo = true
                                 break
                               }
+                            }
+                            if (!listo && intentos >= maxIntentos) {
+                              alert(`La exportación tardó más de ${Math.round(maxIntentos * pollMs / 1000 / 60)} minutos. Intente filtrar por ítem o contacte al administrador.`)
                             }
                           } catch { alert('Error de conexión') }
                           finally {

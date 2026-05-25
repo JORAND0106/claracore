@@ -15,7 +15,7 @@
 # Application settings (opcional): WEB_CONCURRENCY=3 en B2/B3.
 set -e
 PORT="${PORT:-8000}"
-WORKERS="${WEB_CONCURRENCY:-2}"
+WORKERS="${WEB_CONCURRENCY:-1}"
 exec gunicorn main:app \
   --workers "${WORKERS}" \
   --worker-class uvicorn.workers.UvicornWorker \

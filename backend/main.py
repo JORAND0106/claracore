@@ -6003,6 +6003,55 @@ def get_presupuesto_conteo(
     return {"total": int(result.count or 0)}
 
 
+def _presupuesto_fetch_filtros_source_rows(
+    contrato_id: int,
+    current_user,
+    *,
+    capitulo: Optional[str] = None,
+    item: Optional[str] = None,
+    items: Optional[List[str]] = None,
+    tramo: Optional[str] = None,
+    calzada: Optional[str] = None,
+    tipo_ejecucion: Optional[str] = None,
+) -> List[dict]:
+    """Filas para opciones de filtros — paginado (Supabase limita ~1000 por consulta)."""
+    rows: List[dict] = []
+    offset = 0
+    while True:
+        q = (
+            supabase.table("presupuesto")
+            .select(
+                "capitulo, item, tramo, calzada, competencia, und, revisado, pre_interv_estado, sellado, dado_de_baja, tipo_ejecucion"
+            )
+            .eq("contrato_id", contrato_id)
+            .eq("dado_de_baja", False)
+        )
+        q = _presupuesto_q_tipo_ejecucion(q, tipo_ejecucion)
+        if capitulo:
+            q = q.eq("capitulo", capitulo)
+        ins = [str(x).strip() for x in (items or []) if str(x).strip()]
+        if len(ins) > 1:
+            if len(ins) > 200:
+                raise HTTPException(status_code=422, detail="Máximo 200 ítems en lista items")
+            q = q.in_("item", ins)
+        elif len(ins) == 1:
+            q = q.eq("item", ins[0])
+        elif item:
+            q = q.eq("item", item)
+        if tramo:
+            q = q.eq("tramo", tramo)
+        if calzada:
+            q = q.eq("calzada", calzada)
+        if _presupuesto_aplica_filtro_interventoria(current_user):
+            q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+        batch = q.range(offset, offset + 999).execute().data or []
+        rows.extend(batch)
+        if len(batch) < 1000:
+            break
+        offset += 1000
+    return rows
+
+
 @app.get("/presupuesto/{contrato_id}/filtros")
 def get_filtros_presupuesto(
     contrato_id: int,
@@ -6011,31 +6060,25 @@ def get_filtros_presupuesto(
     items: Optional[List[str]] = Query(None),
     tramo: Optional[str] = None,
     calzada: Optional[str] = None,
+    tipo_ejecucion: Optional[str] = None,
     current_user=Depends(get_current_user),
 ):
-    """Devuelve valores únicos para filtros en cascada."""
-    q = supabase.table("presupuesto").select(
-        "capitulo, item, tramo, calzada, competencia, und, revisado, pre_interv_estado, sellado, dado_de_baja, tipo_ejecucion"
-    ).eq("contrato_id", contrato_id)
-    if capitulo:
-        q = q.eq("capitulo", capitulo)
-    ins = [str(x).strip() for x in (items or []) if str(x).strip()]
-    if len(ins) > 1:
-        if len(ins) > 200:
-            raise HTTPException(status_code=422, detail="Máximo 200 ítems en lista items")
-        q = q.in_("item", ins)
-    elif len(ins) == 1:
-        q = q.eq("item", ins[0])
-    elif item:
-        q = q.eq("item", item)
-    if tramo:
-        q = q.eq("tramo", tramo)
-    if calzada:
-        q = q.eq("calzada", calzada)
-    if _presupuesto_aplica_filtro_interventoria(current_user):
-        q = q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
-    rows = q.execute().data
-    caps    = sorted(set(r["capitulo"] for r in rows if r.get("capitulo")))
+    """Devuelve valores únicos para filtros en cascada (respeta vista Presupuesto de Obra / Obra Ejecutada)."""
+    _require_contract_access(current_user, contrato_id)
+    rows = _presupuesto_fetch_filtros_source_rows(
+        contrato_id,
+        current_user,
+        capitulo=capitulo,
+        item=item,
+        items=items,
+        tramo=tramo,
+        calzada=calzada,
+        tipo_ejecucion=tipo_ejecucion,
+    )
+    caps = sorted(
+        {r["capitulo"] for r in rows if r.get("capitulo")},
+        key=_orden_capitulo_presupuesto,
+    )
     items   = sorted(set(r["item"]     for r in rows if r.get("item")))
     tramos  = sorted(set(r["tramo"]    for r in rows if r.get("tramo")))
     calzadas= sorted(set(r["calzada"]  for r in rows if r.get("calzada")))
@@ -6058,7 +6101,14 @@ def get_filtros_presupuesto(
     )
     if _presupuesto_aplica_filtro_interventoria(current_user):
         tipos_q = tipos_q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
-    tipos_rows = tipos_q.execute().data or []
+    tipos_rows: List[dict] = []
+    tipos_off = 0
+    while True:
+        tipos_batch = tipos_q.range(tipos_off, tipos_off + 999).execute().data or []
+        tipos_rows.extend(tipos_batch)
+        if len(tipos_batch) < 1000:
+            break
+        tipos_off += 1000
     tipos_ejecucion = sorted(
         {str(r.get("tipo_ejecucion")).strip() for r in tipos_rows if r.get("tipo_ejecucion")}
         & _PRESUPUESTO_TIPOS_EJECUCION_VALIDOS
@@ -7563,7 +7613,11 @@ def exportar_estado(job_id: str, current_user=Depends(get_current_user)):
     job = _export_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job no encontrado")
-    return {"estado": job["estado"], "filename": job.get("filename","")}
+    return {
+        "estado": job["estado"],
+        "filename": job.get("filename", ""),
+        "progreso": job.get("progreso"),
+    }
 
 
 @app.get("/exportar/descargar/{job_id}")
@@ -16507,6 +16561,145 @@ def validar_sub(contrato_id: int, registro_id: int, body: ValidarSubBody,
 # SICOE-OBRA — Dashboard endpoints (reemplazan /cobro/ leyendo so_registros)
 # ══════════════════════════════════════════════════════════════════════════════
 
+_DASHBOARD_RPC_CACHE_TTL_SEC = 300
+_DASHBOARD_RESPONSE_STALE_SEC = 900
+_DASHBOARD_RPC_CACHE_MAX_KEYS = 128
+_dashboard_rpc_cache: Dict[Any, Dict[str, Any]] = {}
+_dashboard_response_cache: Dict[Any, Dict[str, Any]] = {}
+_dashboard_rpc_cache_lock = threading.Lock()
+_dashboard_rpc_inflight: Dict[Any, Dict[str, Any]] = {}
+
+
+def _dashboard_rpc_cache_key_resumen(contrato_id: int, campo_max: str, niveles_activos) -> tuple:
+    na = tuple(int(x) for x in (niveles_activos or ()))
+    return ("dashboard_resumen_sicoe_agg", contrato_id, campo_max or "", na)
+
+
+def _dashboard_rpc_cache_key_matriz_vigente(contrato_id: int, campo_max: str) -> tuple:
+    return ("dashboard_matriz_validacion_vigente_bundle", contrato_id, campo_max or "")
+
+
+def _trim_dashboard_rpc_cache() -> None:
+    if len(_dashboard_rpc_cache) <= _DASHBOARD_RPC_CACHE_MAX_KEYS:
+        return
+    now = time.time()
+    for key in list(_dashboard_rpc_cache.keys()):
+        if _dashboard_rpc_cache[key]["expires_at"] <= now:
+            _dashboard_rpc_cache.pop(key, None)
+    while len(_dashboard_rpc_cache) > _DASHBOARD_RPC_CACHE_MAX_KEYS:
+        oldest = min(_dashboard_rpc_cache, key=lambda k: _dashboard_rpc_cache[k]["expires_at"])
+        _dashboard_rpc_cache.pop(oldest, None)
+
+
+def _get_dashboard_rpc_cached(cache_key: tuple, fetch_fn, *, ttl_sec: Optional[int] = None):
+    """TTL en memoria + single-flight para evitar tormenta de RPC idénticas al expirar caché."""
+    ttl = ttl_sec or _DASHBOARD_RPC_CACHE_TTL_SEC
+
+    with _dashboard_rpc_cache_lock:
+        entry = _dashboard_rpc_cache.get(cache_key)
+        if entry and entry["expires_at"] > time.time():
+            return entry["data"], True
+
+    inflight = None
+    leader = False
+    with _dashboard_rpc_cache_lock:
+        entry = _dashboard_rpc_cache.get(cache_key)
+        if entry and entry["expires_at"] > time.time():
+            return entry["data"], True
+        inflight = _dashboard_rpc_inflight.get(cache_key)
+        if inflight is None:
+            inflight = {"event": threading.Event(), "result": None, "error": None}
+            _dashboard_rpc_inflight[cache_key] = inflight
+            leader = True
+
+    if not leader:
+        inflight["event"].wait(timeout=max(ttl + 30, 90))
+        with _dashboard_rpc_cache_lock:
+            entry = _dashboard_rpc_cache.get(cache_key)
+            if entry and entry["expires_at"] > time.time():
+                return entry["data"], True
+        if inflight["error"] is not None:
+            raise inflight["error"]
+        if inflight["result"] is not None:
+            return inflight["result"], True
+        return _get_dashboard_rpc_cached(cache_key, fetch_fn, ttl_sec=ttl)
+
+    try:
+        data = fetch_fn()
+        with _dashboard_rpc_cache_lock:
+            _dashboard_rpc_cache[cache_key] = {"data": data, "expires_at": time.time() + ttl}
+            _trim_dashboard_rpc_cache()
+            inflight["result"] = data
+        return data, False
+    except Exception as exc:
+        with _dashboard_rpc_cache_lock:
+            inflight["error"] = exc
+        raise
+    finally:
+        with _dashboard_rpc_cache_lock:
+            _dashboard_rpc_inflight.pop(cache_key, None)
+        inflight["event"].set()
+
+
+def _fetch_dashboard_resumen_sicoe_agg(contrato_id: int, campo_max: str, niveles_activos):
+    cache_key = _dashboard_rpc_cache_key_resumen(contrato_id, campo_max, niveles_activos)
+
+    def _rpc():
+        return supabase.rpc(
+            "dashboard_resumen_sicoe_agg",
+            {
+                "p_contrato_id": contrato_id,
+                "p_campo_nivel_max": campo_max,
+                "p_niveles_activos": list(niveles_activos or []),
+            },
+        ).execute().data
+
+    raw, _hit = _get_dashboard_rpc_cached(
+        cache_key,
+        lambda: supabase_execute(_rpc, retries=1),
+    )
+    return _parse_rpc_dashboard_resumen_raw(raw)
+
+
+def _fetch_dashboard_matriz_vigente_bundle(contrato_id: int, campo_max: str):
+    cache_key = _dashboard_rpc_cache_key_matriz_vigente(contrato_id, campo_max)
+
+    def _rpc():
+        return supabase.rpc(
+            "dashboard_matriz_validacion_vigente_bundle",
+            {"p_contrato_id": contrato_id, "p_campo_nivel_max": campo_max},
+        ).execute().data
+
+    return _get_dashboard_rpc_cached(cache_key, lambda: supabase_execute(_rpc, retries=1))
+
+
+def _dashboard_response_cache_get(cache_key: tuple):
+    with _dashboard_rpc_cache_lock:
+        entry = _dashboard_response_cache.get(cache_key)
+        if not entry:
+            return None
+        age = time.time() - entry["ts"]
+        if age <= _DASHBOARD_RPC_CACHE_TTL_SEC:
+            return entry["data"]
+        if age <= _DASHBOARD_RESPONSE_STALE_SEC:
+            return entry["data"]
+        _dashboard_response_cache.pop(cache_key, None)
+    return None
+
+
+def _dashboard_response_cache_set(cache_key: tuple, data: Any) -> None:
+    with _dashboard_rpc_cache_lock:
+        _dashboard_response_cache[cache_key] = {"data": data, "ts": time.time()}
+        if len(_dashboard_response_cache) > _DASHBOARD_RPC_CACHE_MAX_KEYS:
+            oldest = min(_dashboard_response_cache, key=lambda k: _dashboard_response_cache[k]["ts"])
+            _dashboard_response_cache.pop(oldest, None)
+
+
+def _dashboard_resumen_user_cache_key(current_user) -> int:
+    if isinstance(current_user, dict):
+        return int(current_user.get("id") or 0)
+    return int(getattr(current_user, "id", 0) or 0)
+
 
 def _parse_rpc_dashboard_resumen_raw(raw):
     """Deserializa respuesta de dashboard_resumen_sicoe_agg (PostgREST / RPC)."""
@@ -17418,7 +17611,7 @@ def _dashboard_pkid_colores_liquidacion(
 
 _DASH_AGG_CACHE: Dict[str, Tuple[float, Any]] = {}
 _DASH_AGG_CACHE_LOCK = threading.Lock()
-_DASH_AGG_CACHE_TTL_SEC = 90
+_DASH_AGG_CACHE_TTL_SEC = 300
 
 
 def _dash_agg_cache_get(kind: str, contrato_id: int):
@@ -17623,19 +17816,21 @@ def _rpc_drill_items_agg(contrato_id: int, capitulo: str) -> List[dict]:
     """Ítems por capítulo vía SQL (normaliza capítulo; usa nivel máximo del contrato, p. ej. N4)."""
     campo_max = _get_nivel_maximo_contrato(contrato_id)
     na = _get_niveles_activos_contrato(contrato_id)
+    cap_s = str(capitulo or "").strip()
+    cache_key = ("dashboard_drill_items_agg", int(contrato_id), cap_s, campo_max or "", tuple(int(x) for x in (na or ())))
 
     def _call():
         return supabase.rpc(
             "dashboard_drill_items_agg",
             {
                 "p_contrato_id": int(contrato_id),
-                "p_capitulo": str(capitulo or "").strip(),
+                "p_capitulo": cap_s,
                 "p_campo_nivel_max": campo_max,
                 "p_niveles_activos": na,
             },
         ).execute().data
 
-    raw = supabase_execute(_call, retries=1)
+    raw, _hit = _get_dashboard_rpc_cached(cache_key, lambda: supabase_execute(_call, retries=1))
     items = _parse_rpc_jsonb_value(raw)
     if not isinstance(items, list):
         return []
@@ -17646,20 +17841,30 @@ def _rpc_pkid_tabla_agg(contrato_id: int, capitulo: str, item: Optional[str] = N
     """Tabla PK por capítulo+ítem vía SQL (normaliza capítulo/ítem; nivel máx. contrato)."""
     campo_max = _get_nivel_maximo_contrato(contrato_id)
     na = _get_niveles_activos_contrato(contrato_id)
+    cap_s = str(capitulo or "").strip()
+    item_s = str(item or "").strip() if item else None
+    cache_key = (
+        "dashboard_pkid_tabla_agg",
+        int(contrato_id),
+        cap_s,
+        item_s or "",
+        campo_max or "",
+        tuple(int(x) for x in (na or ())),
+    )
 
     def _call():
         return supabase.rpc(
             "dashboard_pkid_tabla_agg",
             {
                 "p_contrato_id": int(contrato_id),
-                "p_capitulo": str(capitulo or "").strip(),
-                "p_item": str(item or "").strip() if item else None,
+                "p_capitulo": cap_s,
+                "p_item": item_s,
                 "p_campo_nivel_max": campo_max,
                 "p_niveles_activos": na,
             },
         ).execute().data
 
-    raw = supabase_execute(_call, retries=1)
+    raw, _hit = _get_dashboard_rpc_cached(cache_key, lambda: supabase_execute(_call, retries=1))
     parsed = _parse_rpc_jsonb_value(raw)
     if isinstance(parsed, dict) and isinstance(parsed.get("rows"), list):
         return parsed
@@ -18126,23 +18331,20 @@ def dashboard_resumen_obra(
     current_user=Depends(get_current_user),
 ):
     try:
+        vista_n = parse_dash_vista(vista)
+        resp_key = ("dashboard_resumen", int(contrato_id), vista_n, _dashboard_resumen_user_cache_key(current_user))
+        cached_resp = _dashboard_response_cache_get(resp_key)
+        if cached_resp is not None:
+            return cached_resp
+
         campo_max = _get_nivel_maximo_contrato(contrato_id)
         try:
             na = _get_niveles_activos_contrato(contrato_id)
-
-            def _rpc():
-                return supabase.rpc(
-                    "dashboard_resumen_sicoe_agg",
-                    {
-                        "p_contrato_id": contrato_id,
-                        "p_campo_nivel_max": campo_max,
-                        "p_niveles_activos": na,
-                    },
-                ).execute().data
-
-            hit = _parse_rpc_dashboard_resumen_raw(supabase_execute(_rpc))
+            hit = _fetch_dashboard_resumen_sicoe_agg(contrato_id, campo_max, na)
             if hit is not None and isinstance(hit.get("comparativo_capitulos"), list):
-                return _dashboard_apply_vista_presupuesto(contrato_id, hit, vista, current_user)
+                result = _dashboard_apply_vista_presupuesto(contrato_id, hit, vista, current_user)
+                _dashboard_response_cache_set(resp_key, result)
+                return result
         except Exception:
             pass
 
@@ -18225,7 +18427,9 @@ def dashboard_resumen_obra(
             "comparativo_capitulos": comparativo,
             "por_acta": por_acta,
         }
-        return _dashboard_apply_vista_presupuesto(contrato_id, base, vista, current_user)
+        result = _dashboard_apply_vista_presupuesto(contrato_id, base, vista, current_user)
+        _dashboard_response_cache_set(resp_key, result)
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -18748,6 +18952,11 @@ def dashboard_matriz_validacion_obra(
     Preferir función SQL dashboard_matriz_validacion_agg (rápido); si no existe, fallback en Python.
     """
     try:
+        matriz_key = ("dashboard_matriz", int(contrato_id), bool(todo_contrato), acta_rpo)
+        cached_matriz = _dashboard_response_cache_get(matriz_key)
+        if cached_matriz is not None:
+            return cached_matriz
+
         acta_id_filtro: Optional[int] = None
         filtro_modo = "vigente"
         acta_rpo_resp: Optional[int] = None
@@ -18789,12 +18998,8 @@ def dashboard_matriz_validacion_obra(
             # Acta vigente: preferir RPC único (resuelve acta + agrega en BD; menos latencia).
             bundle_meta = None
             try:
-                def _bundle():
-                    return supabase.rpc(
-                        "dashboard_matriz_validacion_vigente_bundle",
-                        {"p_contrato_id": contrato_id, "p_campo_nivel_max": campo_max},
-                    ).execute().data
-                pay = _parse_rpc_matrix_raw(supabase_execute(_bundle))
+                raw_bundle, _cache_hit = _fetch_dashboard_matriz_vigente_bundle(contrato_id, campo_max)
+                pay = _parse_rpc_matrix_raw(raw_bundle)
                 vm = pay.get("_vigente") if isinstance(pay, dict) else None
                 if isinstance(vm, dict) and "obra_ejecutada_directo_sin_aiu" in pay:
                     bundle_meta = vm
@@ -18884,7 +19089,7 @@ def dashboard_matriz_validacion_obra(
                 "asignado_nombre": nm,
             }
 
-        return {
+        result = {
             "acta_rpo": acta_rpo_resp,
             "acta_id_resuelto": acta_id_filtro,
             "filtro": filtro_modo,
@@ -18893,6 +19098,8 @@ def dashboard_matriz_validacion_obra(
             "obra_ejecutada_directo_sin_aiu": payload.get("obra_ejecutada_directo_sin_aiu") or _matriz_validacion_empty(niveles_activos),
             "ensayos_sondeos_directo_sin_iva": payload.get("ensayos_sondeos_directo_sin_iva") or _matriz_validacion_empty(niveles_activos),
         }
+        _dashboard_response_cache_set(matriz_key, result)
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -19323,19 +19530,206 @@ def _dashboard_pkid_tabla_export_item(
         )
 
 
+def _fetch_sicoe_regs_capitulo_export(
+    contrato_id: int,
+    capitulo: str,
+    current_user=None,
+) -> List[dict]:
+    """Registros SICOE del capítulo (una sola pasada paginada) para export Excel."""
+    cap_raw = (capitulo or "").strip()
+    cap_key = _dash_norm_capitulo_key_py(cap_raw) if cap_raw else None
+    registros: List[dict] = []
+    off = 0
+    while True:
+        def _regs(o=off, caps=cap_raw):
+            q = supabase.table("so_registros").select(
+                f"pk_id_id, capitulo, pk_ids(pk_id), costo_directo, cantidad_total, item_numero, {SICOE_SELECT_NIVELES_ESTADO}"
+            ).eq("contrato_id", contrato_id)
+            if caps:
+                q = apply_sicoe_capitulo_filter(q, supabase, contrato_id, caps)
+            return q.range(o, o + 999).execute().data
+
+        batch = supabase_execute(_regs) or []
+        for reg in batch:
+            if cap_key and _dash_norm_capitulo_key_py(reg.get("capitulo")) != cap_key:
+                continue
+            registros.append(reg)
+        if len(batch) < 1000:
+            break
+        off += 1000
+    return registros
+
+
+def _ppto_pk_rows_from_capitulo_rows(rows: List[dict], item: str) -> List[dict]:
+    """Formato pk drill desde filas presupuesto ya cargadas del capítulo."""
+    it_norm = _dash_norm_item_key_py(item)
+    if not it_norm:
+        return []
+    out: List[dict] = []
+    for r in rows or []:
+        if _dash_norm_item_key_py(r.get("item")) != it_norm:
+            continue
+        out.append(
+            {
+                "pk_id": r.get("pk_id"),
+                "item": it_norm,
+                "cant_total": float(r.get("cant_total") or 0),
+                "costo_directo": float(r.get("costo_directo") or 0),
+                "descripcion": r.get("descripcion") or "",
+                "revisado": r.get("revisado"),
+                "capitulo": r.get("capitulo") or "",
+            }
+        )
+    return out
+
+
+def _build_pkid_tabla_item_export(
+    contrato_id: int,
+    item: str,
+    ppto_rows: List[dict],
+    sicoe_regs: List[dict],
+    vista: str,
+) -> Dict[str, Any]:
+    """Tabla PK por ítem sin RPC (memoria + un solo scan SICOE del capítulo)."""
+    it_norm = _dash_norm_item_key_py(item)
+    cap_key = None
+    if ppto_rows:
+        cap_key = _dash_norm_capitulo_key_py(ppto_rows[0].get("capitulo"))
+    allowed = {(cap_key, it_norm)} if parse_dash_vista(vista) == DASH_VISTA_OBRA_EJECUTADA and cap_key and it_norm else None
+
+    item_vars: List[str] = []
+    if it_norm:
+        item_vars = [v for v in {(item or "").strip(), it_norm, f"{it_norm}."} if v]
+
+    registros: List[dict] = []
+    for r in sicoe_regs or []:
+        if it_norm and _dash_norm_item_key_py(r.get("item_numero")) != it_norm:
+            continue
+        if not sicoe_registro_en_vista(r, allowed):
+            continue
+        registros.append(r)
+
+    empty_m = _pkid_tabla_empty_metric
+    agg_meta, agg_p_ap, agg_p_nr, agg_p_pd, agg_p_rj = _aggregate_pkid_ppto_rows(ppto_rows)
+
+    agg_sicoe_ap: Dict[str, Any] = {}
+    agg_sicoe_nr: Dict[str, Any] = {}
+    agg_sicoe_pe: Dict[str, Any] = {}
+    agg_sicoe_rej: Dict[str, Any] = {}
+    for r in registros:
+        pk_join = r.get("pk_ids") or {}
+        pk_raw = pk_join.get("pk_id")
+        pk = (
+            _dash_pk_disp_key_py(pk_raw)
+            if pk_raw is not None and str(pk_raw).strip() != ""
+            else _dash_pk_disp_key_py(r.get("pk_id_id"))
+        )
+        cd = float(r.get("costo_directo") or 0)
+        cq = float(r.get("cantidad_total") or 0)
+        nfin = _matriz_validacion_norm_estado_nivel_final(r, contrato_id)
+        if nfin == "Aprobado":
+            if pk not in agg_sicoe_ap:
+                agg_sicoe_ap[pk] = empty_m()
+            agg_sicoe_ap[pk]["cant"] += cq
+            agg_sicoe_ap[pk]["costo"] += cd
+            continue
+        if _so_reg_prereqs_activos_aprobados_antes_max(r, contrato_id):
+            if nfin == "Pendiente":
+                tgt = agg_sicoe_pe
+            elif nfin == "Rechazado":
+                tgt = agg_sicoe_rej
+            else:
+                tgt = agg_sicoe_nr
+            if pk not in tgt:
+                tgt[pk] = empty_m()
+            tgt[pk]["cant"] += cq
+            tgt[pk]["costo"] += cd
+
+    keys = sorted(
+        set(
+            list(agg_meta.keys())
+            + list(agg_p_ap.keys())
+            + list(agg_p_nr.keys())
+            + list(agg_p_pd.keys())
+            + list(agg_p_rj.keys())
+            + list(agg_sicoe_ap.keys())
+            + list(agg_sicoe_nr.keys())
+            + list(agg_sicoe_pe.keys())
+            + list(agg_sicoe_rej.keys())
+        ),
+        key=lambda x: str(x),
+    )
+    rows_out = []
+    for k in keys:
+        meta = agg_meta.get(k, {"desc": "", "_rev_track": []})
+        rows_out.append(
+            _build_pkid_tabla_row_from_aggs(
+                k,
+                meta,
+                agg_p_ap.get(k, empty_m()),
+                agg_p_nr.get(k, empty_m()),
+                agg_p_pd.get(k, empty_m()),
+                agg_p_rj.get(k, empty_m()),
+                agg_sicoe_ap.get(k, empty_m()),
+                agg_sicoe_nr.get(k, empty_m()),
+                agg_sicoe_pe.get(k, empty_m()),
+                agg_sicoe_rej.get(k, empty_m()),
+            )
+        )
+
+    desc_item = ""
+    for row in ppto_rows or []:
+        if row.get("descripcion"):
+            desc_item = str(row["descripcion"])
+            break
+
+    por_cobrar = sum(r["delta_costo"] for r in rows_out if r["delta_costo"] > 0)
+    devolucion = sum(abs(r["delta_costo"]) for r in rows_out if r["delta_costo"] < 0)
+    return {
+        "rows": rows_out,
+        "por_cobrar": por_cobrar,
+        "devolucion": devolucion,
+        "descripcion_item": desc_item,
+    }
+
+
 def _fetch_export_core_by_item(
     contrato_id: int,
     capitulo: str,
     items_sorted: List[str],
     vista: str,
     current_user,
+    *,
+    ppto_all: Optional[List[dict]] = None,
+    job_id: Optional[str] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    """Tablas PK por ítem (secuencial: evita saturar Supabase con muchas RPC en paralelo)."""
+    """
+    Tablas PK por ítem para export Excel.
+    Una pasada de presupuesto + una de SICOE del capítulo (evita N×RPC lento).
+    """
+    if not items_sorted:
+        return {}
+    cap_raw = str(capitulo or "").strip()
+    if ppto_all is None:
+        ppto_all = _ppto_rows_capitulo(contrato_id, cap_raw, vista, current_user)
+
+    ppto_by_item: Dict[str, List[dict]] = {}
+    for r in ppto_all or []:
+        ik = _dash_norm_item_key_py(r.get("item"))
+        if not ik:
+            continue
+        ppto_by_item.setdefault(ik, []).append(r)
+
+    sicoe_regs = _fetch_sicoe_regs_capitulo_export(contrato_id, cap_raw, current_user)
+    total = len(items_sorted)
     out: Dict[str, Dict[str, Any]] = {}
-    for it in items_sorted:
-        out[it] = _dashboard_pkid_tabla_export_item(
-            contrato_id, capitulo, it, vista, current_user
-        )
+    for idx, it in enumerate(items_sorted):
+        it_norm = _dash_norm_item_key_py(it)
+        ppto_rows = _ppto_pk_rows_from_capitulo_rows(ppto_by_item.get(it_norm, []), it)
+        raw = _build_pkid_tabla_item_export(contrato_id, it, ppto_rows, sicoe_regs, vista)
+        out[it] = _normalize_pkid_tabla_payload(raw, contrato_id)
+        if job_id and job_id in _export_jobs:
+            _export_jobs[job_id]["progreso"] = f"{idx + 1}/{total}"
     return out
 
 
@@ -19394,6 +19788,7 @@ def _build_dashboard_capitulo_xlsx(
     item: Optional[str],
     vista: str = "presupuesto_obra",
     current_user=None,
+    job_id: Optional[str] = None,
 ):
     """
     Informe multi-hoja: (1) resumen por ítem del capítulo presupuesto vs obra aprobada N3,
@@ -19605,7 +20000,13 @@ def _build_dashboard_capitulo_xlsx(
         by_item = {k: v for k, v in by_item.items() if _dash_norm_item_key_py(k) == it_f}
     # Misma fuente que las hojas por ítem (PK), para que resumen y detalle coincidan.
     core_by_item = _fetch_export_core_by_item(
-        contrato_id, capitulo, items_sorted, vista, current_user
+        contrato_id,
+        capitulo,
+        items_sorted,
+        vista,
+        current_user,
+        ppto_all=ppto_all,
+        job_id=job_id,
     )
 
     wb = Workbook()
@@ -19904,7 +20305,7 @@ def dashboard_export_capitulo_obra(
     """
     _require_contract_access(current_user, contrato_id)
     job_id = str(uuid.uuid4())
-    _export_jobs[job_id] = {"estado": "procesando", "buf": None, "filename": None}
+    _export_jobs[job_id] = {"estado": "procesando", "buf": None, "filename": None, "progreso": "iniciando"}
     cap_copy = capitulo
     item_copy = item
     vista_copy = vista
@@ -19913,11 +20314,16 @@ def dashboard_export_capitulo_obra(
     def _work():
         try:
             buf, fn = _build_dashboard_capitulo_xlsx(
-                contrato_id, cap_copy, item_copy, vista_copy, user_copy
+                contrato_id, cap_copy, item_copy, vista_copy, user_copy, job_id=job_id
             )
-            _export_jobs[job_id] = {"estado": "listo", "buf": buf, "filename": fn}
+            _export_jobs[job_id] = {"estado": "listo", "buf": buf, "filename": fn, "progreso": "listo"}
         except Exception as e:
-            _export_jobs[job_id] = {"estado": f"error:{e!s}", "buf": None, "filename": None}
+            _export_jobs[job_id] = {
+                "estado": f"error:{e!s}",
+                "buf": None,
+                "filename": None,
+                "progreso": None,
+            }
 
     threading.Thread(target=_work, daemon=True).start()
     return {"job_id": job_id}

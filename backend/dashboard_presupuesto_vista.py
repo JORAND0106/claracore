@@ -23,7 +23,7 @@ ItemKey = Tuple[str, str]
 
 _SCAN_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _SCAN_CACHE_LOCK = threading.Lock()
-_SCAN_CACHE_TTL_SEC = 90
+_SCAN_CACHE_TTL_SEC = 300
 
 _CAP_INDEX_CACHE: Dict[str, Tuple[float, Dict[str, List[str]]]] = {}
 _CAP_INDEX_LOCK = threading.Lock()
