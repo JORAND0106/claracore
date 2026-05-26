@@ -523,21 +523,30 @@ def suma_por_capitulo_solo_cdirecto_almacenado(registros: List[Dict[str, Any]]) 
     return dict(by)
 
 
-def suma_por_capitulo_solo_n3_aprobado(registros: List[Dict[str, Any]]) -> Dict[str, float]:
+def suma_por_capitulo_interventoria_sellada(
+    registros: List[Dict[str, Any]],
+    *,
+    niveles_activos: Optional[List[int]] = None,
+    campo_nivel_max: Optional[str] = None,
+) -> Dict[str, float]:
     """
-    Suma por capítulo con rpo_panel / línea: solo filas con ítem y nivel3 = Aprobado
-    (informe CC-GER-001 col. «Total Aprobados» / interventoría).
+    Suma por capítulo: ítem asignado y sellado en el nivel máximo activo del contrato
+    (informe CC-GER-001 col. «Total Aprobados»; misma regla que dashboard matriz / rpo_panel).
     """
+    na = niveles_activos or [1, 2, 3]
+    campo = campo_nivel_max or _campo_nivel_maximo_matriz(na)
     by: Dict[str, float] = defaultdict(float)
     for r in registros or []:
-        if _nivel_norm_matriz(r.get("nivel3_estado")) != "Aprobado":
-            continue
-        inum = (str(r.get("item_numero") or "")).strip()
-        if not inum:
+        if not _registro_aprobado_matriz_panel(r, na, campo):
             continue
         cap = (str(r.get("capitulo") or "").strip()) or "Sin capítulo"
         by[cap] += _linea_costo_registro(r)
     return dict(by)
+
+
+def suma_por_capitulo_solo_n3_aprobado(registros: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Compat.: contratos [1,2,3]. Preferir suma_por_capitulo_interventoria_sellada con niveles del contrato."""
+    return suma_por_capitulo_interventoria_sellada(registros, niveles_activos=[1, 2, 3])
 
 
 def fetch_registros_acta_todas_sico_obra(
@@ -869,8 +878,8 @@ def informe_gerencia_matriz_maps_por_rpc(
 ) -> Optional[Dict[str, Dict[Tuple[str, str], float]]]:
     """
     Suma c1..c4 por (capítulo, bloque) vía `sql/rpo_informe_gerencia.sql`.
+    Col. 2 y 3 usan sellado en el nivel máximo activo (contrato_niveles_validacion), no solo N3.
     Si alguna RPC falla, devuelve None para forzar fallback Python (datos correctos).
-    No devolver columnas vacías parciales: eso dejaba c2/c3 en cero en el PDF.
     """
     cid, ap = int(contrato_id), int(acta_presente_id)
     _ = items_cobro  # Col. 1 = todo ítem con registro (matriz HABILITADO), sin filtrar por tabla cobro

@@ -262,7 +262,41 @@ def _cargo_norm(user: dict) -> str:
     return (user.get("cargo_nombre") or "").strip().lower()
 
 
-def _cargar_permisos_por_sub(uid: int) -> List[dict]:
+def _permisos_rows_cargo_exp(cargo_id: int, contrato_id: Optional[int] = None) -> List[dict]:
+    """Misma prioridad que main._permisos_rows_para_cargo (matriz por contrato)."""
+    try:
+        if contrato_id is not None:
+            scoped = (
+                _sb.table("permisos")
+                .select("*")
+                .eq("cargo_id", cargo_id)
+                .eq("contrato_id", int(contrato_id))
+                .execute()
+                .data
+                or []
+            )
+            if scoped:
+                return scoped
+        legacy = (
+            _sb.table("permisos")
+            .select("*")
+            .eq("cargo_id", cargo_id)
+            .is_("contrato_id", "null")
+            .execute()
+            .data
+            or []
+        )
+        if legacy:
+            return legacy
+    except Exception as e:
+        _log.debug("exp perms scoped: %s", e)
+    try:
+        return _sb.table("permisos").select("*").eq("cargo_id", cargo_id).execute().data or []
+    except Exception:
+        return []
+
+
+def _cargar_permisos_por_sub(uid: int, contrato_id: Optional[int] = None) -> List[dict]:
     if not uid:
         return []
     try:
@@ -286,7 +320,8 @@ def _cargar_permisos_por_sub(uid: int) -> List[dict]:
     if cargo_nombre == "subcontratista" and not urow.get("subcontratista_id"):
         return []
     try:
-        permisos_raw = _sb.table("permisos").select("*").eq("cargo_id", cargo_id).execute().data or []
+        cid_scope = contrato_id if contrato_id is not None else None
+        permisos_raw = _permisos_rows_cargo_exp(int(cargo_id), cid_scope)
         funciones_rows = _sb.table("funciones").select("id, nombre").execute().data or []
     except Exception as e:
         _log.debug("exp perms matriz: %s", e)
@@ -298,24 +333,42 @@ def _cargar_permisos_por_sub(uid: int) -> List[dict]:
     return out or []
 
 
-def _perms_resolve(user: dict) -> List[dict]:
+def _perms_resolve(user: dict, contrato_id: Optional[int] = None) -> List[dict]:
     pl = user.get("permisos")
     if isinstance(pl, list) and len(pl) > 0:
         return pl
     uid = _uid(user)
     if uid:
-        user = {**user, "permisos": _cargar_permisos_por_sub(uid)}
+        user = {**user, "permisos": _cargar_permisos_por_sub(uid, contrato_id)}
     return user.get("permisos") or []
 
 
-def _perm_funcion(user: dict, nombre: str, accion: str) -> bool:
-    # Solo Desarrollador tiene bypass; Administrador debe tener la función marcada en Control de accesos.
+def _perm_fila_contrato(rows: List[dict], contrato_id: Optional[int]) -> List[dict]:
+    if not rows:
+        return rows
+    if contrato_id is None:
+        return rows
+    try:
+        cid = int(contrato_id)
+    except (TypeError, ValueError):
+        return rows
+    exact = [p for p in rows if p.get("contrato_id") is not None and int(p["contrato_id"]) == cid]
+    if exact:
+        return exact
+    legacy = [p for p in rows if p.get("contrato_id") is None]
+    return legacy if legacy else rows
+
+
+def _perm_funcion(user: dict, nombre: str, accion: str, contrato_id: Optional[int] = None) -> bool:
     if _cargo_norm(user) == "desarrollador":
         return True
     n = nombre.strip().lower()
-    for p in _perms_resolve(user):
-        if (p.get("funcion_nombre") or "").strip().lower() != n:
-            continue
+    matches = [
+        p
+        for p in _perms_resolve(user, contrato_id)
+        if (p.get("funcion_nombre") or "").strip().lower() == n
+    ]
+    for p in _perm_fila_contrato(matches, contrato_id):
         if accion == "ver" and p.get("ver"):
             return True
         if accion == "crear" and p.get("crear"):
@@ -327,8 +380,8 @@ def _perm_funcion(user: dict, nombre: str, accion: str) -> bool:
     return False
 
 
-def _require_perm(user: dict, nombre: str, accion: str):
-    if not _perm_funcion(user, nombre, accion):
+def _require_perm(user: dict, nombre: str, accion: str, contrato_id: Optional[int] = None):
+    if not _perm_funcion(user, nombre, accion, contrato_id):
         raise HTTPException(403, f"Sin permiso ({nombre} · {accion})")
 
 

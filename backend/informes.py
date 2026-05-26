@@ -29,8 +29,8 @@ _GERENCIA_PDF_CACHE_TTL_SEC = 600
 
 def _gerencia_matriz_cache_key(contrato_id: int, acta_presente_override: Optional[int]) -> tuple:
     ap = int(acta_presente_override) if acta_presente_override is not None else None
-    # v4: c3 RPC por lotes + fallback si columnas incompletas
-    return ("gerencia_matriz", 4, int(contrato_id), ap)
+    # v5: col.2/3 = nivel máximo activo del contrato (no solo N3 fijo)
+    return ("gerencia_matriz", 5, int(contrato_id), ap)
 
 
 def _gerencia_matriz_cache_get(key: tuple) -> Optional[Dict[str, Any]]:
@@ -114,7 +114,9 @@ from ccd_conciliacion import (
     registro_tiene_pendiente_matriz,
     suma_por_capitulo_desde_registros,
     suma_por_capitulo_solo_cdirecto_almacenado,
-    suma_por_capitulo_solo_n3_aprobado,
+    suma_por_capitulo_interventoria_sellada,
+    _fetch_cascade_interventoria_actas_rpo,
+    matriz_params_contrato,
 )
 
 # ClaraCore Documentación (CCD): código único por tipo de formato (gestión documental).
@@ -2513,12 +2515,19 @@ def _construir_datos_informe_gerencia_matriz_fallback_por_capitulo(
         for row in d_a.get("por_capitulo") or []:
             c2 = (str(row.get("capitulo") or "—").strip()) or "—"
             m2[c2] = m2.get(c2, 0.0) + float(row.get("costo_directo") or 0.0)
-    m3: Dict[str, float] = {}
-    for _aid in ids_cascade_hasta:
-        toda = fetch_registros_acta_todas_sico_obra(_sb, contrato_id, int(_aid))
-        part = suma_por_capitulo_solo_n3_aprobado(toda)
-        for c, v in part.items():
-            m3[c] = m3.get(c, 0) + v
+    campo_max, niveles_act = matriz_params_contrato(_sb, contrato_id)
+    sellados = _fetch_cascade_interventoria_actas_rpo(
+        _sb,
+        contrato_id,
+        [int(x) for x in ids_cascade_hasta],
+        campo_nivel_max=campo_max,
+        niveles_activos=niveles_act,
+    )
+    m3 = suma_por_capitulo_interventoria_sellada(
+        sellados,
+        niveles_activos=niveles_act,
+        campo_nivel_max=campo_max,
+    )
     caps = set(m1) | set(m2) | set(m3) | set(m4)
     caps_orden = sorted(caps, key=lambda c: _orden_titulo_capitulo_obra(c))
     c1b: Dict[Tuple[str, str], float] = {}
