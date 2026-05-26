@@ -12435,22 +12435,6 @@ def filtros_capitulos_reportes(
         m = re.match(r'^(\d+)', c)
         return (int(m.group(1)) if m else 9999, c)
 
-    # Sin filtros → lista completa con paginación
-    if acta_rpo is None and semana is None and subcontratista_id is None:
-        todos: list = []
-        off = 0
-        while True:
-            def _q(o=off):
-                return supabase.table("so_reportes").select("capitulo")\
-                    .eq("contrato_id", contrato_id)\
-                    .not_.is_("capitulo", "null").range(o, o + 999).execute().data
-            batch = supabase_execute(_q)
-            todos.extend(batch)
-            if len(batch) < 1000:
-                break
-            off += 1000
-        return sorted({r["capitulo"] for r in todos if r.get("capitulo")}, key=orden_cap)
-
     # Resolver acta_id
     acta_id = None
     if acta_rpo is not None:
@@ -12483,48 +12467,30 @@ def filtros_capitulos_reportes(
         except Exception:
             return []
 
-    # Obtener reporte_ids desde so_registros si hay filtro de acta o semana
-    reporte_ids = None
-    if acta_id is not None or semana_id is not None:
-        try:
-            _acta_id_l = acta_id
-            _semana_id_l = semana_id
-            def _regs():
-                q = supabase.table("so_registros").select("reporte_id")\
-                    .eq("contrato_id", contrato_id)
+    # Capítulos únicos desde so_registros (no so_reportes: ahí capitulo puede ser CSV agregado)
+    try:
+        _acta_id_l = acta_id
+        _semana_id_l = semana_id
+        _sub_id_l = subcontratista_id
+        cap_todos: list = []
+        off = 0
+        while True:
+            def _caps(o=off):
+                q = supabase.table("so_registros").select("capitulo")\
+                    .eq("contrato_id", contrato_id)\
+                    .not_.is_("capitulo", "null")
                 if _acta_id_l is not None:
                     q = q.eq("acta_rpo_id", _acta_id_l)
                 if _semana_id_l is not None:
                     q = q.eq("semana_id", _semana_id_l)
-                return q.execute().data
-            reg_rows = supabase_execute(_regs)
-            reporte_ids = list({r["reporte_id"] for r in reg_rows if r.get("reporte_id")})
-            if not reporte_ids:
-                return []
-        except Exception:
-            return []
-
-    # Obtener capítulos desde so_reportes (paginado)
-    try:
-        _rep_ids_l = reporte_ids
-        _sub_id_l  = subcontratista_id
-        cap_todos: list = []
-        off2 = 0
-        while True:
-            def _caps(o=off2):
-                q = supabase.table("so_reportes").select("capitulo")\
-                    .eq("contrato_id", contrato_id)\
-                    .not_.is_("capitulo", "null")
                 if _sub_id_l is not None:
                     q = q.eq("subcontratista_id", _sub_id_l)
-                if _rep_ids_l is not None:
-                    q = q.in_("id", _rep_ids_l)
                 return q.range(o, o + 999).execute().data
             batch = supabase_execute(_caps)
             cap_todos.extend(batch)
             if len(batch) < 1000:
                 break
-            off2 += 1000
+            off += 1000
         return sorted({r["capitulo"] for r in cap_todos if r.get("capitulo")}, key=orden_cap)
     except Exception:
         return []

@@ -48,6 +48,7 @@ import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache'
 import CompetenciaSelect from './components/CompetenciaSelect'
 import CcConfirmModal from './components/CcConfirmModal'
 import { supabase } from './supabaseClient'
+import { createRealtimeDebouncer, isEfectivoOffline } from './realtimeUtils'
 import { applyClaraTypography, getDashTypoUI, getClaraTypeScaleInline } from './typographyScale'
 import { formatCOP, formatCOPShort } from './utils/formatCOP'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
@@ -6592,84 +6593,77 @@ function ModuloSicoeObra({
       typeof refrescarMatrizValidacionDashboard === 'function' ? refrescarMatrizValidacionDashboard : null
   }, [refrescarMatrizValidacionDashboard])
 
-  /* Supabase Realtime (SICOE Obra): canal desactivado; el refresco sigue por polling / acciones del usuario.
+  const reporteRealtimeId =
+    navReporteId || (modalCarpeta && reporteSeleccionado?.id)
+      ? (navReporteId || reporteSeleccionado?.id)
+      : null
+
+  const refrescarDetalleReporteAbierto = useCallback(() => {
+    const rid = sicoeRealtimeReporteDetalleIdRef.current
+    if (!rid || !contrato_id) return
+    const cid = String(contrato_id)
+    const u = urlReporteDetalleRef.current?.(rid) ?? `${API_URL}/sicoe-obra/${cid}/reportes/${rid}`
+    fetch(u, { headers: { Authorization: `Bearer ${getToken()}` } })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data?.id) return
+        setReporteSeleccionado((prev) =>
+          prev?.id === rid ? { ...prev, ...data, _cargandoDetalle: false } : prev,
+        )
+      })
+      .catch(() => {})
+  }, [contrato_id])
+
+  const refrescarSicoeObraCompleto = useCallback(() => {
+    const f = filtrosSicoeRef.current
+    const cap = capasSicoeRef.current
+    void Promise.all([
+      buscarReportesSicoeRef.current?.(f, 0, cap),
+      cargarAnalisisSicoeRef.current?.(f, cap),
+    ]).catch(() => {})
+    void refrescarMatrizDashboardRef.current?.()
+    refrescarDetalleReporteAbierto()
+  }, [refrescarDetalleReporteAbierto])
+
+  /** Canal 2 — so_reportes: cambios a nivel reporte en el contrato activo */
   useEffect(() => {
-    if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contrato_id) return
+    if (efectivoOffline || !SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contrato_id) return
     const cid = String(contrato_id)
     const filt = `contrato_id=eq.${cid}`
-    const IDLE_MS = 8000
-    const MAX_MS = 30000
-
-    let idleTimer = null
-    let maxTimer = null
-    let burstStart = null
-
-    const clearTimers = () => {
-      if (idleTimer) {
-        clearTimeout(idleTimer)
-        idleTimer = null
-      }
-      if (maxTimer) {
-        clearTimeout(maxTimer)
-        maxTimer = null
-      }
-    }
-
-    const runFlush = () => {
-      clearTimers()
-      burstStart = null
-      const f = filtrosSicoeRef.current
-      const cap = capasSicoeRef.current
-      void Promise.all([
-        buscarReportesSicoeRef.current?.(f, 0, cap),
-        cargarAnalisisSicoeRef.current?.(f, cap),
-      ]).catch(() => {})
-      void refrescarMatrizDashboardRef.current?.()
-      const rid = sicoeRealtimeReporteDetalleIdRef.current
-      if (!rid) return
-      const u = urlReporteDetalleRef.current?.(rid) ?? `${API_URL}/sicoe-obra/${cid}/reportes/${rid}`
-      fetch(u, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      })
-        .then((r) => r.json())
-        .then((data) => {
-          if (!data?.id) return
-          setReporteSeleccionado((prev) =>
-            prev?.id === rid ? { ...prev, ...data, _cargandoDetalle: false } : prev,
-          )
-        })
-        .catch(() => {})
-    }
-
-    const onDbChange = () => {
-      const now = Date.now()
-      if (burstStart == null) {
-        burstStart = now
-        maxTimer = setTimeout(runFlush, MAX_MS)
-      }
-      if (idleTimer) clearTimeout(idleTimer)
-      idleTimer = setTimeout(runFlush, IDLE_MS)
-    }
-
+    const debouncer = createRealtimeDebouncer(refrescarSicoeObraCompleto)
     const channel = supabase
-      .channel(`sicoe-obra-${cid}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'so_registros', filter: filt },
-        onDbChange,
-      )
+      .channel(`sicoe-obra-reportes-${cid}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'so_reportes', filter: filt },
-        onDbChange,
+        () => debouncer.schedule(),
       )
       .subscribe()
     return () => {
-      clearTimers()
+      debouncer.dispose()
       void supabase.removeChannel(channel)
     }
-  }, [contrato_id])
-  */
+  }, [contrato_id, efectivoOffline, refrescarSicoeObraCompleto])
+
+  /** Canal 1 — so_registros: solo el reporte abierto (carpeta / navegación profunda) */
+  useEffect(() => {
+    if (efectivoOffline || !SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !reporteRealtimeId) return
+    const rid = String(reporteRealtimeId)
+    const filt = `reporte_id=eq.${rid}`
+    const debouncer = createRealtimeDebouncer(refrescarDetalleReporteAbierto)
+    const channel = supabase
+      .channel(`sicoe-obra-registros-${rid}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'so_registros', filter: filt },
+        () => debouncer.schedule(),
+      )
+      .subscribe()
+    return () => {
+      debouncer.dispose()
+      void supabase.removeChannel(channel)
+    }
+  }, [reporteRealtimeId, efectivoOffline, refrescarDetalleReporteAbierto])
 
   sicoeMapFiltroApplyPkRef.current = (pkIdInt) => {
     setModalPkAsignacionMapa({ pk_id_id: pkIdInt })
@@ -12165,11 +12159,44 @@ function BuzonNotificaciones({ t, usuario, token, onNavegar }) {
     }
   }
 
+  const cargarCountRef = useRef(cargarCount)
+  cargarCountRef.current = cargarCount
+  const cargarRecibidosRef = useRef(cargarRecibidos)
+  cargarRecibidosRef.current = cargarRecibidos
+  const buzonAbiertoRef = useRef(abierto)
+  buzonAbiertoRef.current = abierto
+
   useEffect(() => {
     cargarCount()
     const iv = setInterval(cargarCount, 60000)
     return () => clearInterval(iv)
   }, [contratoCtx])
+
+  /** Canal 4 — notificaciones: destinatario = usuario actual (global mientras hay sesión) */
+  useEffect(() => {
+    const uid = usuario?.id
+    if (isEfectivoOffline() || !SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !uid) return
+    const filt = `destinatario_id=eq.${uid}`
+    const onFlush = () => {
+      void cargarCountRef.current?.()
+      if (buzonAbiertoRef.current) {
+        void cargarRecibidosRef.current?.()
+      }
+    }
+    const debouncer = createRealtimeDebouncer(onFlush)
+    const channel = supabase
+      .channel(`notificaciones-${uid}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'notificaciones', filter: filt },
+        () => debouncer.schedule(),
+      )
+      .subscribe()
+    return () => {
+      debouncer.dispose()
+      void supabase.removeChannel(channel)
+    }
+  }, [usuario?.id])
 
   useEffect(() => {
     if (!abierto) return

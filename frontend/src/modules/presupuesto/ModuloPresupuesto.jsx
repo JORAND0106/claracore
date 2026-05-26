@@ -7,6 +7,7 @@ import * as XLSX from "xlsx"
 import ExcelJS from "exceljs"
 import { API_BASE, SUPABASE_ANON_KEY, SUPABASE_URL } from '../../apiBase'
 import { supabase } from '../../supabaseClient'
+import { createRealtimeDebouncer, isEfectivoOffline } from '../../realtimeUtils'
 import { formatCOP, formatCOPShort } from '../../utils/formatCOP'
 import EmojiPicker from '../../EmojiPicker'
 import PptoFiltroObraVista from './PptoFiltroObraVista'
@@ -1337,32 +1338,49 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (sincroSicoeModal) recargarCapActual(true)
   }, [sincroSicoeModal?.ts])
 
-  /** Realtime presupuesto: refresca resumen por capítulo en segundo plano (no bloquea grilla). */
+  /** Canal 3 — presupuesto: resumen por capítulo (filtro contrato_id). */
   useEffect(() => {
-    if (oculto || !SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contratoId) return
+    if (oculto || isEfectivoOffline() || !SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contratoId) return
     const cid = String(contratoId)
     const filt = `contrato_id=eq.${cid}`
-    let debounceTimer = null
-    const onChange = () => {
-      if (debounceTimer) clearTimeout(debounceTimer)
-      debounceTimer = setTimeout(() => {
-        debounceTimer = null
-        void cargarCapitulos({ silent: true })
-      }, 1500)
-    }
+    const debouncer = createRealtimeDebouncer(() => {
+      void cargarCapitulos({ silent: true })
+    })
     const channel = supabase
       .channel(`presupuesto-${cid}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'presupuesto', filter: filt },
-        onChange,
+        () => debouncer.schedule(),
       )
       .subscribe()
     return () => {
-      if (debounceTimer) clearTimeout(debounceTimer)
+      debouncer.dispose()
       void supabase.removeChannel(channel)
     }
   }, [contratoId, oculto])
+
+  /** Canal 5 — cad_queue: cola SicoeCAD ↔ ClaraCore (solo con DWG enlazado). */
+  useEffect(() => {
+    if (oculto || !dwgEnlazado || isEfectivoOffline() || !SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contratoId) return
+    const cid = String(contratoId)
+    const filt = `contrato_id=eq.${cid}`
+    const debouncer = createRealtimeDebouncer(() => {
+      void recargarCapActualRef.current?.(false)
+    })
+    const channel = supabase
+      .channel(`cad-queue-${cid}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'cad_queue', filter: filt },
+        () => debouncer.schedule(),
+      )
+      .subscribe()
+    return () => {
+      debouncer.dispose()
+      void supabase.removeChannel(channel)
+    }
+  }, [contratoId, oculto, dwgEnlazado])
 
   // Multisesión: refresco solo en vista por capítulo/ítem (panel). No interrumpe búsqueda con chips.
   useEffect(() => {
