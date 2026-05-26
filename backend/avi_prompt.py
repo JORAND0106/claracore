@@ -354,7 +354,7 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    | No ve pestaña interventoría en masivo | Rol contratista sin perfil interventoría; o sin permiso validar |
    | Interventoría bloqueada en grilla o masivo | Depuración debe estar «Aprobado» antes (salvo registro legado) |
    | Interventoría no ve algunos registros | Listado filtra los que aún no tienen depuración aprobada |
-   | Área/Long/Nodo en masivo | No existe; plano SicoeCAD / ClaraLink; en masivo solo Ancho y Espesor |
+   | Área/Long/Nodo en masivo | No editable en masa (plano ClaraLink); Ancho y Espesor sí, con recálculo cant/costo |
    | Deshacer no aparece | No ha guardado nada en esta sesión, o ya hizo otra acción después |
    | Desaparecieron filas al cambiar tipo | Cambió tipo distinto a la vista activa → botones Presupuesto de Obra / Obra Ejecutada |
    | ¿Dónde está + Filtro o chips viejos? | Reemplazado por «🔍 Filtros» con modal de dos pestañas |
@@ -639,7 +639,7 @@ PRESUPUESTO — PRECISIÓN OBLIGATORIA (Clara habla simple; aquí el detalle int
 - Vista Presupuesto de Obra / Obra Ejecutada: cambia qué cantidades se ven; no es una etiqueta de filtro.
 - Edición masiva: marque filas → «✏️ Edición masiva» → pestañas según rol (editar = cap/ítem, dimensiones, tipo;
   validar + rol contratista = depuración; validar + rol interventoría = interventoría). Desarrollador: todas.
-- Dimensiones en masivo: solo Ancho y Espesor; Área/Long/Nodo NO está en el modal (plano/SicoeCAD).
+- Dimensiones en masivo: Ancho y Espesor (también registros con ID-POL); recalcula cant_total y costo_directo; Área/Long/Nodo no en masivo (plano).
 - Interventoría en masivo o en grilla: solo si depuración = Aprobado (legado sin depuración también permitido).
 - Deshacer: un solo paso — botón «↩ Deshacer» revierte la última acción guardada, no un historial completo.
 - Cambio masivo tipo: pestaña «Tipo de ejecución» del modal, o popup fila «↔ TIPO DE EJECUCIÓN».
@@ -745,7 +745,7 @@ Deshacer: «↩ Deshacer: …» solo la ÚLTIMA acción guardada; confirmar; no 
 4. Validar 50 filas depuración: filtrar → marcar filas → Edición masiva → depuración → estado → Editar masivamente.
 5. Validar interventoría: solo filas con depuración Aprobado → masivo → pestaña Interventoría.
 6. Cambiar ítem en bloque: masivo → Capítulo/Ítem (no usar barra antigua Recalcular).
-7. Cambiar ancho/espesor: masivo → Dimensiones (área viene del plano).
+7. Cambiar ancho/espesor: masivo → Dimensiones (sin ClaraLink; área del plano se mantiene; recalcula cant y costo).
 8. Cambiar tipo contractual/ejecutada: masivo → Tipo de ejecución.
 9. Corregir error recién guardado: ↩ Deshacer de inmediato.
 10. Exportar: 📥 Excel después de Buscar; para solo aprobados filtre Estado interventoría = Aprobado antes.

@@ -1526,7 +1526,7 @@ _PPTO_MSG_BAJA_PLANO = (
     "Este registro está enlazado al plano. La baja debe gestionarse desde ClaraLink/DWG."
 )
 _PPTO_MSG_DIMS_PLANO = (
-    "Las dimensiones de registros enlazados al plano solo pueden modificarse desde ClaraLink/DWG."
+    "Ancho y espesor pueden editarse en la web; el área/long/nodo enlazado al plano solo desde ClaraLink/DWG."
 )
 _PPTO_MSG_AREA_LONG_PLANO = (
     "El campo Área/Long/Nodo solo puede modificarse desde ClaraLink/DWG en este contrato."
@@ -1584,7 +1584,7 @@ def _cad_sesion_usuario_activa(contrato_id: int, current_user) -> bool:
 
 
 def _ppto_validar_edicion_dimensiones(contrato_id, prev_row: dict, data: dict) -> None:
-    """Bloquea cambios de dims desde web cuando el registro está gobernado por el plano CAD."""
+    """Bloquea área/long/nodo desde web en registros CAD; ancho/espesor se editan en web y recalculan cant/costo."""
     if not _ppto_aplica_reglas_cad(contrato_id):
         return
     for k in ("area_long_nod", "ancho", "espesor"):
@@ -1592,10 +1592,8 @@ def _ppto_validar_edicion_dimensiones(contrato_id, prev_row: dict, data: dict) -
             continue
         if _ppto_val_eq(data.get(k), prev_row.get(k)):
             continue
-        if k == "area_long_nod":
+        if k == "area_long_nod" and _ppto_tiene_id_pol(prev_row):
             raise HTTPException(status_code=400, detail=_PPTO_MSG_AREA_LONG_PLANO)
-        if _ppto_tiene_id_pol(prev_row):
-            raise HTTPException(status_code=400, detail=_PPTO_MSG_DIMS_PLANO)
 
 
 def _caller_rol_id(current_user) -> Optional[int]:

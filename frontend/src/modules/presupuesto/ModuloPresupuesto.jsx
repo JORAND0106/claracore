@@ -406,25 +406,52 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [respuestaHiloPorId,  setRespuestaHiloPorId]  = useState({})
   const [nuevoComentTexto,    setNuevoComentTexto]    = useState('')
   
-  // ── Enlace DWG ──────────────────────────────────────────────────────────── 
+  // ── Enlace DWG (SicoeCAD heartbeat → cola cad_queue, no ClaraLink) ───────
   const [dwgEnlazado, setDwgEnlazado] = useState(false)
+  const dwgEnlazadoRef = useRef(false)
+  const navPlanoTimerRef = useRef(null)
+
+  const refrescarDwgEnlazado = useCallback(async () => {
+    if (!contratoId) return false
+    try {
+      const tok = getToken()
+      if (!tok) return false
+      const r = await fetch(`${API}/cad-queue/${contratoId}/estado`, {
+        headers: { Authorization: `Bearer ${tok}` },
+      })
+      if (!r.ok) return false
+      const d = await r.json()
+      const enlazado = !!d.enlazado
+      dwgEnlazadoRef.current = enlazado
+      setDwgEnlazado(enlazado)
+      return enlazado
+    } catch {
+      return false
+    }
+  }, [contratoId])
+
   useEffect(() => {
     if (!contratoId || oculto) return
-    const check = async () => {
-      try {
-        const tok = getToken()
-        if (!tok) return
-        const r = await fetch(`${API}/cad-queue/${contratoId}/estado`, {
-          headers: { Authorization: `Bearer ${tok}` }
-        })
-        if (r.ok) { const d = await r.json(); setDwgEnlazado(d.enlazado) }
-      } catch {}
+    void refrescarDwgEnlazado()
+    const iv = setInterval(() => {
+      if (document.visibilityState === 'visible') void refrescarDwgEnlazado()
+    }, 5000)
+    const onActivo = () => { if (document.visibilityState === 'visible') void refrescarDwgEnlazado() }
+    document.addEventListener('visibilitychange', onActivo)
+    window.addEventListener('focus', onActivo)
+    return () => {
+      clearInterval(iv)
+      document.removeEventListener('visibilitychange', onActivo)
+      window.removeEventListener('focus', onActivo)
     }
-    check()
-    // 5s generaba demasiadas peticiones concurrentes al API y empeora 502 en Azure con poco CPU/RAM.
-    const iv = setInterval(check, 20000)
-    return () => clearInterval(iv)
-  }, [contratoId, oculto])
+  }, [contratoId, oculto, refrescarDwgEnlazado])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+      window.__claralink_disponible = true
+    }
+  }, [])
 
   // ── Aviso de auditoría: cantidades enviadas desde SicoeCAD (misma vía /bulk que alimenta presupuesto y la cola CAD) ──
   useEffect(() => {
@@ -566,7 +593,6 @@ useEffect(() => {
   const esSellado = (r) => r?.sellado === true
   const aplicaReglasCadPresupuesto = Number(contratoId) !== PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG
   const MSG_BAJA_DESDE_PLANO = 'Este registro está enlazado al plano (ID-POL). La baja debe gestionarse desde ClaraLink/DWG en SicoeCAD.'
-  const MSG_DIMS_DESDE_PLANO = 'Las dimensiones de registros enlazados al plano deben modificarse desde ClaraLink/DWG.'
   const MSG_AREA_LONG_DESDE_PLANO = 'El campo Área/Long/Nodo debe modificarse desde ClaraLink/DWG en este contrato.'
   const TITULO_DIM_CAD = 'Modificar desde ClaraLink/DWG (plano CAD)'
   const registroEnlazadoPlano = (r) => {
@@ -2312,16 +2338,6 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         alert(MSG_AREA_LONG_DESDE_PLANO)
         return
       }
-      const intentaCad = ids.some((id) => {
-        const d = editDims[id]
-        const row = registros.find((r) => r.id === id)
-        if (!d || !row || !registroEnlazadoPlano(row)) return false
-        return (d.ancho != null && d.ancho !== '') || (d.espesor != null && d.espesor !== '')
-      })
-      if (intentaCad) {
-        alert(MSG_DIMS_DESDE_PLANO)
-        return
-      }
     }
     // Solo area_long_nod está restringido al Desarrollador; ancho/espesor los puede editar cualquier editor
     const tieneAreaLong = ids.some(id => editDims[id]?.area_long_nod != null)
@@ -2402,13 +2418,13 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const dims = ids.filter(id => editDims[id]).map(id => {
       const d = editDims[id]
       const row = registros.find((r) => r.id === id)
-      const cad = aplicaReglasCadPresupuesto && registroEnlazadoPlano(row)
+      const cad = aplicaReglasCadPresupuesto && row && registroEnlazadoPlano(row)
       return {
         id,
-        ancho: !cad && d.ancho !== '' && d.ancho != null ? parseFloat(d.ancho) : null,
-        espesor: !cad && d.espesor !== '' && d.espesor != null ? parseFloat(d.espesor) : null,
+        ancho: d.ancho !== '' && d.ancho != null ? parseFloat(d.ancho) : null,
+        espesor: d.espesor !== '' && d.espesor != null ? parseFloat(d.espesor) : null,
         area_long_nod:
-          !aplicaReglasCadPresupuesto && puedeEditarNodosYAreaLongComoDev && d.area_long_nod !== '' && d.area_long_nod != null ? parseFloat(d.area_long_nod) : null,
+          !cad && puedeEditarNodosYAreaLongComoDev && d.area_long_nod !== '' && d.area_long_nod != null ? parseFloat(d.area_long_nod) : null,
       }
     })
     const body = { ids, dims: dims.length > 0 ? dims : null }
@@ -2685,15 +2701,20 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const obs = String(observacion || '').trim()
     const ids = idsSeleccionadosEditables()
     if (!ids.length) throw new Error('No hay registros editables (los sellados se omiten).')
-    registrarUndoPresupuesto('Edición masiva: Dimensiones', ids)
 
-    const patch = {}
-    // Edición masiva: área/long/nodo solo desde plano (ClaraLink), nunca por este flujo.
-    if (String(ancho ?? '').trim() !== '') patch.ancho = String(ancho).trim()
-    if (String(espesor ?? '').trim() !== '') patch.espesor = String(espesor).trim()
-    const tieneDims = Object.keys(patch).length > 0
-    if (!tieneDims && !obs) {
+    const parseDim = (s) => {
+      const n = parseFloat(String(s ?? '').replace(',', '.'))
+      return Number.isFinite(n) ? n : null
+    }
+    const tieneAn = String(ancho ?? '').trim() !== ''
+    const tieneEsp = String(espesor ?? '').trim() !== ''
+    const anNum = tieneAn ? parseDim(ancho) : null
+    const espNum = tieneEsp ? parseDim(espesor) : null
+    if (!tieneAn && !tieneEsp && !obs) {
       throw new Error('Indique al menos una dimensión u observación (opcional).')
+    }
+    if ((tieneAn && anNum === null) || (tieneEsp && espNum === null)) {
+      throw new Error('Ancho y espesor deben ser valores numéricos válidos.')
     }
 
     const fmtD = (v) => (v != null && v !== '' ? String(v) : '—')
@@ -2701,8 +2722,17 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       const r = registros.find((x) => x.id === id)
       if (!r) return null
       const partes = []
-      if ('ancho' in patch) partes.push(`Ancho: ${fmtD(r.ancho)} → ${patch.ancho}`)
-      if ('espesor' in patch) partes.push(`Espesor: ${fmtD(r.espesor)} → ${patch.espesor}`)
+      if (anNum != null) partes.push(`Ancho: ${fmtD(r.ancho)} → ${anNum}`)
+      if (espNum != null) partes.push(`Espesor: ${fmtD(r.espesor)} → ${espNum}`)
+      if (anNum != null || espNum != null) {
+        const area = parseFloat(r.area_long_nod) || 0
+        const w = anNum ?? (parseFloat(r.ancho) || 0)
+        const e = espNum ?? (parseFloat(r.espesor) || 0)
+        const cant = (w > 0 || e > 0) ? Math.round(area * w * e * 100) / 100 : Math.round(area * 100) / 100
+        const costo = Math.round(cant * (parseFloat(r.vlr_unitario) || 0))
+        partes.push(`Cant: ${fmtD(r.cant_total)} → ${cant}`)
+        partes.push(`CD: ${formatCOP(r.costo_directo)} → ${formatCOP(costo)}`)
+      }
       if (obs) partes.push(`Obs: ${obs}`)
       return filaResumenMasivo(
         r,
@@ -2710,22 +2740,55 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         `${fmtD(r.area_long_nod)} · ${fmtD(r.ancho)} · ${fmtD(r.espesor)}`,
         partes.join(' · '),
       )
-    })
+    }).filter(Boolean)
 
-    if (tieneDims) {
-      flushSync(() => {
-        setEditCapitulo('')
-        setEditItem('')
-        setEditDims((prev) => {
-          const next = { ...prev }
-          for (const id of ids) {
-            next[id] = { ...(next[id] || {}), ...patch }
-          }
-          return next
-        })
+    if (anNum != null || espNum != null) {
+      const comentarioData = await pedirComentario('dims', true)
+      if (comentarioData === null) throw new Error('Operación cancelada.')
+
+      registrarUndoPresupuesto('Edición masiva: Dimensiones', ids)
+      const dims = ids.map((id) => {
+        const o = { id }
+        if (anNum != null) o.ancho = anNum
+        if (espNum != null) o.espesor = espNum
+        return o
       })
-      setModalConfirm(false)
-      await ejecutarRecalcular({ skipUndo: true })
+      const snapOriginal = registros.filter((r) => ids.includes(r.id))
+      setRegistros((prev) => prev.map((r) => {
+        if (!ids.includes(r.id)) return r
+        const area = parseFloat(r.area_long_nod) || 0
+        const w = anNum ?? (parseFloat(r.ancho) || 0)
+        const e = espNum ?? (parseFloat(r.espesor) || 0)
+        const cant = (w > 0 || e > 0) ? Math.round(area * w * e * 100) / 100 : Math.round(area * 100) / 100
+        const costo = Math.round(cant * (parseFloat(r.vlr_unitario) || 0))
+        return {
+          ...r,
+          ...(anNum != null && { ancho: anNum }),
+          ...(espNum != null && { espesor: espNum }),
+          cant_total: cant,
+          costo_directo: costo,
+        }
+      }))
+      _lastWriteAtRef.current = Date.now()
+      setGuardandoBulk(true)
+      const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-recalcular`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ ids, dims }),
+      })
+      setGuardandoBulk(false)
+      if (!res.ok) {
+        setRegistros((prev) => prev.map((r) => {
+          const orig = snapOriginal.find((x) => x.id === r.id)
+          return orig || r
+        }))
+        const err = await res.json().catch(() => ({}))
+        const detail = err?.detail
+        throw new Error(typeof detail === 'string' ? detail : 'No se pudieron aplicar las dimensiones.')
+      }
+      const comentario = comentarioData?.mensaje || ''
+      if (comentario.trim()) await crearComentarios(ids, 'dims', comentario, comentarioData?.destinatarioId || null)
+      cargarCapitulos({ silent: true }).catch(() => {})
     }
     if (obs) await aplicarObservacionMasiva(ids, obs)
     return resumen
@@ -2925,39 +2988,73 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     { valor: 'Aprobado',  color: '#16A34A', label: '🟢' },
   ]
 
-async function highlightEnDwg(registro) {
-  if (!registro?.id) return
-  const esTablet = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-  const contratoId = registro.contrato_id
-  const token = getToken()
-  if (esTablet || !window.__claralink_disponible) {
-    // vía cad_queue
-    await fetch(`${API}/cad-queue/${contratoId}/highlight-registro`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ presupuesto_id: registro.id })
-    }).catch(() => {})
-  } else {
-    // vía ClaraLink (mismo esquema que zoomEnDwg)
-    const url = `claralink://highlight?handle=${registro.ent_handle}&txt=${registro.txt_handle || ''}&x=${registro.x_label || 0}&y=${registro.y_label || 0}`
-    window.location.href = url
-  }
-}
+  /** Zoom + resaltado en plano. Con DWG enlazado (SicoeCAD) → cola; si no, ClaraLink (sin maximizar ni SELECT). */
+  function navegarRegistroEnPlano(registro) {
+    if (!registro?.id) return
+    const tieneHandle = registro.ent_handle != null && String(registro.ent_handle).trim() !== ''
+    const tieneCoords = registro.x_label != null && registro.y_label != null
+    if (!tieneHandle && !tieneCoords) return
 
-  function zoomEnDwg(registro) {
-    if (!registro.x_label || !registro.y_label) return
     setFilaZoom(registro.id)
-    const esClaraLinkDisponible = !(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
-    if (esClaraLinkDisponible) {
-      const uri = `claralink://zoom?x=${registro.x_label}&y=${registro.y_label}&radio=20&handle=${registro.ent_handle || ''}&txt=${registro.txt_handle || ''}`
-      window.location.href = uri
-    } else {
-      if (!registro.pk_id) return
-      const tok = getToken()
-      fetch(`${API}/cad-queue/${contratoId}/zoom-pkid?pk_id=${encodeURIComponent(registro.pk_id)}`, {
-        method: 'POST', headers: { Authorization: `Bearer ${tok}` }
-      }).catch(() => {})
+    if (navPlanoTimerRef.current) clearTimeout(navPlanoTimerRef.current)
+    navPlanoTimerRef.current = setTimeout(() => {
+      navPlanoTimerRef.current = null
+      void ejecutarNavegarRegistroEnPlano(registro, tieneHandle, tieneCoords)
+    }, 150)
+  }
+
+  async function ejecutarNavegarRegistroEnPlano(registro, tieneHandle, tieneCoords) {
+    const esTablet = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+    const tok = getToken()
+    const cid = registro.contrato_id || contratoId
+    let usarCola = dwgEnlazadoRef.current || dwgEnlazado
+    if (!usarCola && tok) {
+      usarCola = await refrescarDwgEnlazado()
     }
+
+    const encolarHighlight = async () => {
+      if (!tok || !tieneHandle) return false
+      const r = await fetch(`${API}/cad-queue/${cid}/highlight-registro`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({ presupuesto_id: registro.id }),
+      })
+      return r.ok
+    }
+
+    const encolarPk = async () => {
+      if (!tok || !registro.pk_id) return false
+      const r = await fetch(`${API}/cad-queue/${cid}/zoom-pkid?pk_id=${encodeURIComponent(registro.pk_id)}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tok}` },
+      })
+      return r.ok
+    }
+
+    if (usarCola) {
+      try {
+        if (await encolarHighlight()) return
+        if (await encolarPk()) return
+      } catch { /* fallback ClaraLink */ }
+    }
+
+    if (esTablet) {
+      try {
+        if (await encolarHighlight()) return
+        await encolarPk()
+      } catch { /* ignore */ }
+      return
+    }
+
+    const p = new URLSearchParams()
+    if (registro.ent_handle) p.set('handle', registro.ent_handle)
+    if (registro.txt_handle) p.set('txt', registro.txt_handle)
+    if (tieneCoords) {
+      p.set('x', String(registro.x_label))
+      p.set('y', String(registro.y_label))
+    }
+    p.set('radio', '20')
+    window.location.href = `claralink://highlight?${p.toString()}`
   }
 
   async function cambiarEstadoDirecto(id, nuevoEstado) {
@@ -3141,7 +3238,7 @@ async function restaurar(id) {
           const est = r.revisado || 'No Revisado'
           const clr = estadoColor(est)
           return (
-            <div onClick={() => { zoomEnDwg(r); highlightEnDwg(r) }}
+            <div onClick={() => { navegarRegistroEnPlano(r) }}
               style={{ display:'flex', gap:'8px', alignItems:'center', padding:'8px 10px',
                 borderRadius:'8px', cursor:'pointer', background:t.bg, marginBottom:'6px',
                 border:`1px solid ${t.border}` }}>
@@ -3604,7 +3701,7 @@ async function restaurar(id) {
                                     setNuevaCant({ itemBusq:'', itemSel:null, area_long_nod:'', ancho:'', espesor:'' })
                                     setModalAgregarCant(true)
                                   } else {
-                                    zoomEnDwg(r); highlightEnDwg(r)
+                                    navegarRegistroEnPlano(r)
                                   }
                                 }}
                                 style={{ display:'flex', gap:'8px', alignItems:'center', padding:'8px 10px', cursor:'pointer' }}>
@@ -5524,7 +5621,9 @@ async function restaurar(id) {
           <div style={{ width:'8px', height:'8px', borderRadius:'50%',
             background: dwgEnlazado ? '#16A34A' : '#EF4444',
             boxShadow: dwgEnlazado ? '0 0 6px #16A34A' : 'none' }} />
-          {dwgEnlazado ? '🔗 DWG Enlazado — Semáforo y edición activos' : '⛓️ Sin DWG — Semáforo y edición deshabilitados'}
+          {dwgEnlazado
+            ? '🔗 DWG Enlazado — Clic en grilla navega el plano vía SicoeCAD (cola). Semáforo activo.'
+            : '⛓️ Sin DWG — En SicoeCAD pulse «Sincronizar» con el mismo usuario de la web. Mientras tanto puede usar ClaraLink.'}
         </div>
       </div>
       {/* ── Tabla ── */}
@@ -5562,7 +5661,7 @@ async function restaurar(id) {
                 const bgSellado = esSellado(r) ? 'rgba(22,101,52,0.06)' : 'transparent'
                 return (
                   <tr key={r.id} data-id={r.id} style={{ background: filaZoom===r.id ? '#F59E0B22' : seleccionados.has(r.id) ? (t.primary+'18') : bgSellado, cursor: r.x_label ? 'crosshair' : 'default', outline: filaZoom===r.id ? '2px solid #F59E0B88' : 'none', transition:'background 0.3s, outline 0.3s' }}
-                    onClick={() => { zoomEnDwg(r); highlightEnDwg(r); if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && r.pk_id) { const td = document.getElementById(`zoom-feedback-${r.id}`); if(td){td.style.opacity='1'; setTimeout(()=>{td.style.opacity='0'},2000)} } }}>
+                    onClick={() => { navegarRegistroEnPlano(r); if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && r.pk_id) { const td = document.getElementById(`zoom-feedback-${r.id}`); if(td){td.style.opacity='1'; setTimeout(()=>{td.style.opacity='0'},2000)} } }}>
                     <td style={{...tdStyle, whiteSpace:'nowrap'}} onClick={e=>e.stopPropagation()}>
                       <div style={{ display:'flex', alignItems:'center', gap:'6px' }}>
                         <input type="checkbox" checked={seleccionados.has(r.id)} disabled={esSellado(r)} onChange={() => toggleSel(r.id)}

@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 
 using acApp = Autodesk.AutoCAD.ApplicationServices;
 using acDb  = Autodesk.AutoCAD.DatabaseServices;
+using acEd  = Autodesk.AutoCAD.EditorInput;
 using acGe  = Autodesk.AutoCAD.Geometry;
 
 namespace SicoePresupuestoNET8
@@ -195,92 +196,7 @@ namespace SicoePresupuestoNET8
             var y = p["y"]?.Value<double>() ?? 0;
             var radio = p["radio"]?.Value<double>() ?? 30;
             var handle = p["ent_handle"]?.Value<string>() ?? "";
-
-            // Si no hay x,y pero hay handle, calcular centroide del polígono
-            if ((x == 0 && y == 0) && !string.IsNullOrEmpty(handle))
-            {
-                var acadDoc = acApp.Application.DocumentManager.MdiActiveDocument;
-                if (acadDoc == null) return;
-                using var docLock = acadDoc.LockDocument();
-                using var tr = acadDoc.Database.TransactionManager.StartTransaction();
-                try
-                {
-                    var h = new acDb.Handle(Convert.ToInt64(handle, 16));
-                    if (acadDoc.Database.TryGetObjectId(h, out var objId))
-                    {
-                        var ent = tr.GetObject(objId, acDb.OpenMode.ForRead);
-                        if (ent is acDb.Polyline pl)
-                        {
-                            var ext = pl.GeometricExtents;
-                            x = (ext.MinPoint.X + ext.MaxPoint.X) / 2;
-                            y = (ext.MinPoint.Y + ext.MaxPoint.Y) / 2;
-                            // Radio proporcional al tamaño del polígono
-                            radio = Math.Max(
-                                (ext.MaxPoint.X - ext.MinPoint.X),
-                                (ext.MaxPoint.Y - ext.MinPoint.Y)) * 0.7;
-                        }
-                    }
-                }
-                catch { }
-                tr.Commit();
-            }
-
-            if (x == 0 && y == 0) return;
-
-            var acadDoc2 = acApp.Application.DocumentManager.MdiActiveDocument;
-            if (acadDoc2 == null) return;
-
-            // Traer AutoCAD al frente y hacer zoom
-            try
-            {
-                acApp.Application.MainWindow.WindowState = Autodesk.AutoCAD.Windows.Window.State.Normal;
-                acApp.Application.MainWindow.Focus();
-            }
-            catch { }
-
-            string sx = x.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
-            string sy = y.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
-            string sr = radio.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
-            acadDoc2.SendStringToExecute($"_.ZOOM _C {sx},{sy} {sr}\n", false, false, false);
-
-            // Resaltar entidad si hay handle
-            if (!string.IsNullOrEmpty(handle))
-            {
-                try
-                {
-                    var acadDocH = acApp.Application.DocumentManager.MdiActiveDocument;
-                    using var docLockH = acadDocH.LockDocument();
-                    using var trH = acadDocH.Database.TransactionManager.StartTransaction();
-                    var hObj = new acDb.Handle(Convert.ToInt64(handle, 16));
-                    if (acadDocH.Database.TryGetObjectId(hObj, out var objIdH))
-                    {
-                        var ent = trH.GetObject(objIdH, acDb.OpenMode.ForWrite) as acDb.Entity;
-                        if (ent != null)
-                        {
-                            var colorOrig = ent.ColorIndex;
-                            ent.ColorIndex = 2; // Amarillo
-                            trH.Commit();
-                            // Restaurar color original después de 3 segundos
-                            Task.Delay(3000).ContinueWith(_ =>
-                            {
-                                try
-                                {
-                                    var doc2 = acApp.Application.DocumentManager.MdiActiveDocument;
-                                    using var lk = doc2.LockDocument();
-                                    using var tr2 = doc2.Database.TransactionManager.StartTransaction();
-                                    var ent2 = tr2.GetObject(objIdH, acDb.OpenMode.ForWrite) as acDb.Entity;
-                                    if (ent2 != null) ent2.ColorIndex = colorOrig;
-                                    tr2.Commit();
-                                }
-                                catch { }
-                            });
-                        }
-                        else trH.Commit();
-                    }
-                    else trH.Commit();
-                }
-                catch { }
-            }
+            NavegarRegistroEnPlano(handle, "", x, y, radio);
         }
 
         // ── Operación: highlight de registro presupuesto ────────────────────
@@ -290,108 +206,175 @@ namespace SicoePresupuestoNET8
             var txtHandle = p["txt_handle"]?.Value<string>() ?? "";
             var x = p["x_label"]?.Value<double>() ?? 0;
             var y = p["y_label"]?.Value<double>() ?? 0;
+            if (string.IsNullOrEmpty(entHandle) && (x == 0 && y == 0)) return;
+            NavegarRegistroEnPlano(entHandle, txtHandle, x, y, 20);
+        }
 
-            if (string.IsNullOrEmpty(entHandle)) return;
-
+        /// <summary>
+        /// Zoom + selección implícita sin dejar comandos activos en la línea de comando (evita SELECT pendiente).
+        /// </summary>
+        private static void NavegarRegistroEnPlano(string entHandle, string txtHandle, double x, double y, double radioFallback)
+        {
             var acadDoc = acApp.Application.DocumentManager.MdiActiveDocument;
             if (acadDoc == null) return;
 
-            // Calcular zoom: extents de la entidad
-            double zx = x, zy = y, radio = 20;
+            TraerAcadAlFrenteSinRedimensionar();
+            CancelarComandoPendiente(acadDoc);
+
+            acDb.ObjectId? entOid = null;
+            var handlesFlash = new List<string>();
+            if (!string.IsNullOrWhiteSpace(entHandle)) handlesFlash.Add(entHandle.Trim());
+            if (!string.IsNullOrWhiteSpace(txtHandle)) handlesFlash.Add(txtHandle.Trim());
+
             try
             {
-                using var docLock0 = acadDoc.LockDocument();
-                using var tr0 = acadDoc.Database.TransactionManager.StartTransaction();
-                var h0 = new acDb.Handle(Convert.ToInt64(entHandle, 16));
-                if (acadDoc.Database.TryGetObjectId(h0, out var oid0))
+                using var docLock = acadDoc.LockDocument();
+                using var tr = acadDoc.Database.TransactionManager.StartTransaction();
+                var ed = acadDoc.Editor;
+                bool zoomHecho = false;
+
+                if (!string.IsNullOrWhiteSpace(entHandle))
                 {
-                    var ent0 = tr0.GetObject(oid0, acDb.OpenMode.ForRead) as acDb.Entity;
-                    if (ent0 != null)
+                    try
                     {
-                        var ext = ent0.GeometricExtents;
-                        zx = (ext.MinPoint.X + ext.MaxPoint.X) / 2;
-                        zy = (ext.MinPoint.Y + ext.MaxPoint.Y) / 2;
-                        radio = Math.Max(
-                            (ext.MaxPoint.X - ext.MinPoint.X),
-                            (ext.MaxPoint.Y - ext.MinPoint.Y)) * 0.8 + 10;
+                        var h = new acDb.Handle(Convert.ToInt64(entHandle.Trim(), 16));
+                        if (acadDoc.Database.TryGetObjectId(h, out var oid))
+                        {
+                            entOid = oid;
+                            if (tr.GetObject(oid, acDb.OpenMode.ForRead, false, true) is acDb.Entity ent)
+                            {
+                                ZoomExtentsEditor(ed, ent.GeometricExtents, 1.25);
+                                zoomHecho = true;
+                            }
+                        }
                     }
+                    catch { }
                 }
-                tr0.Commit();
+
+                if (!zoomHecho && (x != 0 || y != 0))
+                {
+                    double half = Math.Max(radioFallback, 5.0);
+                    var ext = new acDb.Extents3d(
+                        new acGe.Point3d(x - half, y - half, 0),
+                        new acGe.Point3d(x + half, y + half, 0));
+                    ZoomExtentsEditor(ed, ext, 1.0);
+                    zoomHecho = true;
+                }
+
+                if (entOid.HasValue)
+                {
+                    try { ed.SetImpliedSelection(new[] { entOid.Value }); } catch { }
+                    try { ed.Regen(); } catch { }
+                }
+
+                tr.Commit();
             }
             catch { }
 
-            // Traer AutoCAD al frente y hacer zoom
+            if (handlesFlash.Count > 0)
+                ResaltarHandlesTemporal(acadDoc, handlesFlash);
+        }
+
+        /// <summary>Trae AutoCAD al frente sin cambiar WindowState (no maximiza ni restaura).</summary>
+        private static void TraerAcadAlFrenteSinRedimensionar()
+        {
             try
             {
-                acApp.Application.MainWindow.WindowState = Autodesk.AutoCAD.Windows.Window.State.Normal;
-                acApp.Application.MainWindow.Focus();
+                var mw = acApp.Application.MainWindow;
+                mw?.Focus();
             }
             catch { }
+        }
 
-            string sx = zx.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
-            string sy = zy.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
-            string sr = radio.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
-            acadDoc.SendStringToExecute($"_.ZOOM _C {sx},{sy} {sr}\n", false, false, false);
+        /// <summary>ESC + espera a que el editor quede libre (sin SELECT u otro comando a medias).</summary>
+        private static void CancelarComandoPendiente(acApp.Document doc)
+        {
+            if (doc == null) return;
+            try
+            {
+                doc.SendStringToExecute("\x03\x03", true, false, false);
+                var ed = doc.Editor;
+                for (int i = 0; i < 20 && !ed.IsQuiescent; i++)
+                    System.Threading.Thread.Sleep(15);
+            }
+            catch { }
+        }
 
-            // Resaltar entidad + texto: amarillo 3 segundos
-            var handlesToFlash = new List<string>();
-            if (!string.IsNullOrEmpty(entHandle)) handlesToFlash.Add(entHandle);
-            if (!string.IsNullOrEmpty(txtHandle)) handlesToFlash.Add(txtHandle);
+        private static void ZoomExtentsEditor(acEd.Editor ed, acDb.Extents3d ext, double factor)
+        {
+            if (factor <= 0) factor = 1.25;
+            using var view = ed.GetCurrentView();
+            var wc2ec = acGe.Matrix3d.PlaneToWorld(view.ViewDirection);
+            wc2ec = acGe.Matrix3d.Displacement(view.Target - acGe.Point3d.Origin) * wc2ec;
+            wc2ec = acGe.Matrix3d.Rotation(-view.ViewTwist, view.ViewDirection, view.Target) * wc2ec;
 
+            var extEc = ext;
+            extEc.TransformBy(wc2ec.Inverse());
+
+            var min = extEc.MinPoint;
+            var max = extEc.MaxPoint;
+            double width = Math.Max((max.X - min.X) * factor, 1e-6);
+            double height = Math.Max((max.Y - min.Y) * factor, 1e-6);
+            if (width <= 0) width = view.Width;
+            if (height <= 0) height = view.Height;
+
+            view.Width = width;
+            view.Height = height;
+            view.CenterPoint = new acGe.Point2d((max.X + min.X) / 2.0, (max.Y + min.Y) / 2.0);
+            ed.SetCurrentView(view);
+        }
+
+        private static void ResaltarHandlesTemporal(acApp.Document doc, List<string> handles)
+        {
             var coloresOriginales = new Dictionary<string, int>();
 
             try
             {
-                var acadDocH = acApp.Application.DocumentManager.MdiActiveDocument;
-                using var lkH = acadDocH.LockDocument();
-                using var trH = acadDocH.Database.TransactionManager.StartTransaction();
-
-                foreach (var hStr in handlesToFlash)
+                using var lk = doc.LockDocument();
+                using var tr = doc.Database.TransactionManager.StartTransaction();
+                foreach (var hStr in handles)
                 {
                     try
                     {
                         var hObj = new acDb.Handle(Convert.ToInt64(hStr, 16));
-                        if (acadDocH.Database.TryGetObjectId(hObj, out var objId))
+                        if (!doc.Database.TryGetObjectId(hObj, out var objId)) continue;
+                        if (tr.GetObject(objId, acDb.OpenMode.ForWrite, false, true) is acDb.Entity ent)
                         {
-                            var ent = trH.GetObject(objId, acDb.OpenMode.ForWrite) as acDb.Entity;
-                            if (ent != null)
-                            {
-                                coloresOriginales[hStr] = ent.ColorIndex;
-                                ent.ColorIndex = 2; // Amarillo
-                            }
+                            coloresOriginales[hStr] = ent.ColorIndex;
+                            ent.ColorIndex = 2;
                         }
                     }
                     catch { }
                 }
-                trH.Commit();
-
-                // Restaurar después de 3 segundos
-                Task.Delay(3000).ContinueWith(_ =>
-                {
-                    try
-                    {
-                        var doc2 = acApp.Application.DocumentManager.MdiActiveDocument;
-                        using var lk2 = doc2.LockDocument();
-                        using var tr2 = doc2.Database.TransactionManager.StartTransaction();
-                        foreach (var kvp in coloresOriginales)
-                        {
-                            try
-                            {
-                                var hObj2 = new acDb.Handle(Convert.ToInt64(kvp.Key, 16));
-                                if (doc2.Database.TryGetObjectId(hObj2, out var oid2))
-                                {
-                                    var ent2 = tr2.GetObject(oid2, acDb.OpenMode.ForWrite) as acDb.Entity;
-                                    if (ent2 != null) ent2.ColorIndex = kvp.Value;
-                                }
-                            }
-                            catch { }
-                        }
-                        tr2.Commit();
-                    }
-                    catch { }
-                });
+                tr.Commit();
             }
-            catch { }
+            catch { return; }
+
+            if (coloresOriginales.Count == 0) return;
+
+            Task.Delay(3000).ContinueWith(_ =>
+            {
+                try
+                {
+                    var doc2 = acApp.Application.DocumentManager.MdiActiveDocument;
+                    if (doc2 == null) return;
+                    using var lk2 = doc2.LockDocument();
+                    using var tr2 = doc2.Database.TransactionManager.StartTransaction();
+                    foreach (var kvp in coloresOriginales)
+                    {
+                        try
+                        {
+                            var hObj2 = new acDb.Handle(Convert.ToInt64(kvp.Key, 16));
+                            if (doc2.Database.TryGetObjectId(hObj2, out var oid2)
+                                && tr2.GetObject(oid2, acDb.OpenMode.ForWrite, false, true) is acDb.Entity ent2)
+                                ent2.ColorIndex = kvp.Value;
+                        }
+                        catch { }
+                    }
+                    tr2.Commit();
+                }
+                catch { }
+            });
         }
 
         // ── Operación: insertar bloque semáforo ─────────────────────────────

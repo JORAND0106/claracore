@@ -302,10 +302,25 @@ export default function PptoEdicionMasivaModal({
     const hasE = dimEspesor.trim() !== ''
     const hasObs = obsDims.trim() !== ''
     if (!hasAn && !hasE && !hasObs) return []
+    const parseDim = (s) => {
+      const n = parseFloat(String(s).replace(',', '.'))
+      return Number.isFinite(n) ? n : null
+    }
+    const anNum = hasAn ? parseDim(dimAncho.trim()) : null
+    const espNum = hasE ? parseDim(dimEspesor.trim()) : null
     return editables.map((r) => {
       const partes = []
-      if (hasAn) partes.push(`Ancho: ${fmtDim(r.ancho)} → ${dimAncho.trim()}`)
-      if (hasE) partes.push(`Espesor: ${fmtDim(r.espesor)} → ${dimEspesor.trim()}`)
+      if (hasAn && anNum != null) partes.push(`Ancho: ${fmtDim(r.ancho)} → ${anNum}`)
+      if (hasE && espNum != null) partes.push(`Espesor: ${fmtDim(r.espesor)} → ${espNum}`)
+      if (anNum != null || espNum != null) {
+        const area = parseFloat(r.area_long_nod) || 0
+        const w = anNum ?? (parseFloat(r.ancho) || 0)
+        const e = espNum ?? (parseFloat(r.espesor) || 0)
+        const cant = (w > 0 || e > 0) ? Math.round(area * w * e * 100) / 100 : Math.round(area * 100) / 100
+        const costo = Math.round(cant * (parseFloat(r.vlr_unitario) || 0))
+        partes.push(`Cant → ${cant}`)
+        partes.push(`CD → ${formatCOP(costo)}`)
+      }
       if (hasObs) partes.push(`Obs: ${obsDims.trim()}`)
       return {
         id: r.id,
@@ -313,7 +328,7 @@ export default function PptoEdicionMasivaModal({
         capitulo: r.capitulo,
         item: r.item,
         campo: 'Dimensiones',
-        antiguo: `${fmtDim(r.ancho)} · ${fmtDim(r.espesor)}`,
+        antiguo: `a/l/n ${fmtDim(r.area_long_nod)} · ${fmtDim(r.ancho)} × ${fmtDim(r.espesor)}`,
         nuevo: partes.join(' · '),
       }
     })
@@ -585,7 +600,7 @@ export default function PptoEdicionMasivaModal({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <AvisoMasivaSeleccion t={t} n={nEditables} />
               <p style={{ margin: 0, fontSize: cc.caption, color: t.textMuted, fontStyle: 'italic', opacity: 0.82 }}>
-                Área / Long / Nodo proviene del plano (ClaraLink/DWG) y no se edita en masa. Solo Ancho y Espesor.
+                <strong>Ancho</strong> y <strong>espesor</strong> se editan aquí (también en registros enlazados al plano). El <strong>área/long/nodo</strong> del plano no se cambia en masa — viene de ClaraLink/DWG.
               </p>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
                 <DimInput label="ANCHO" value={dimAncho} onChange={setDimAncho} disabled={!nEditables} t={t} />
