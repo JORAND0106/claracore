@@ -251,12 +251,16 @@ export default function PptoEdicionMasivaModal({
   const [obsInterv, setObsInterv] = useState('')
   const [resumenPost, setResumenPost] = useState(null)
   const [errorApply, setErrorApply] = useState('')
+  const [mensajeExito, setMensajeExito] = useState('')
+  const [aplicando, setAplicando] = useState(false)
   const itemDropRef = useRef(null)
 
   useEffect(() => {
     if (!open) return
     setResumenPost(null)
     setErrorApply('')
+    setMensajeExito('')
+    setAplicando(false)
     if (!tabs.some((tb) => tb.id === tabActivo)) setTabActivo(tabs[0]?.id || 'capitem')
   }, [open, tabs, tabActivo])
 
@@ -386,7 +390,9 @@ export default function PptoEdicionMasivaModal({
 
   const handleApply = async () => {
     setErrorApply('')
+    setMensajeExito('')
     setResumenPost(null)
+    setAplicando(true)
     try {
       let resumen = []
       if (tabSafe === 'capitem') {
@@ -429,11 +435,22 @@ export default function PptoEdicionMasivaModal({
         }
         resumen = await onApplyInterventoria({ estado: estadoInterv, observacion: obsInterv })
       }
+      const n = resumen?.length ?? 0
       if (resumen?.length) setResumenPost(resumen)
+      setMensajeExito(
+        n > 0
+          ? `La edición masiva se aplicó correctamente en ${n} registro${n !== 1 ? 's' : ''}.`
+          : 'La edición masiva se ejecutó correctamente.',
+      )
+      window.setTimeout(() => onClose(), 900)
     } catch (e) {
       setErrorApply(e?.message || 'No se pudo aplicar la edición masiva.')
+    } finally {
+      setAplicando(false)
     }
   }
+
+  const busy = guardandoBulk || aplicando
 
   const previewActual =
     tabSafe === 'capitem' ? previewCapItem
@@ -464,7 +481,7 @@ export default function PptoEdicionMasivaModal({
         lineHeight: 1.45,
         fontFamily: 'inherit',
       }}
-      onClick={(e) => e.target === e.currentTarget && !guardandoBulk && onClose()}
+      onClick={(e) => e.target === e.currentTarget && !busy && onClose()}
     >
       <div
         style={{
@@ -500,7 +517,7 @@ export default function PptoEdicionMasivaModal({
           <button
             type="button"
             onClick={onClose}
-            disabled={guardandoBulk}
+            disabled={busy}
             style={{ background: 'transparent', border: 'none', fontSize: cc.lg, cursor: 'pointer', color: t.textMuted, lineHeight: 1 }}
             aria-label="Cerrar"
           >
@@ -667,6 +684,12 @@ export default function PptoEdicionMasivaModal({
             />
           </div>
 
+          {mensajeExito && (
+            <div style={{ marginTop: 12, padding: `${cc.padSm} ${cc.pad}`, background: '#DCFCE7', border: '1px solid #86EFAC', borderRadius: 8, color: '#166534', fontSize: cc.sm, fontWeight: 600 }}>
+              {mensajeExito}
+            </div>
+          )}
+
           {errorApply && (
             <div style={{ marginTop: 12, padding: `${cc.padSm} ${cc.pad}`, background: '#FEE2E2', border: '1px solid #FECACA', borderRadius: 8, color: '#B91C1C', fontSize: cc.sm }}>
               {errorApply}
@@ -678,7 +701,7 @@ export default function PptoEdicionMasivaModal({
           <button
             type="button"
             onClick={onClose}
-            disabled={guardandoBulk}
+            disabled={busy}
             style={{ background: 'transparent', border: `1px solid ${t.border}`, borderRadius: 8, padding: `10px 20px`, color: t.textMuted, cursor: 'pointer', fontSize: cc.label }}
           >
             Cancelar
@@ -686,7 +709,7 @@ export default function PptoEdicionMasivaModal({
           <button
             type="button"
             onClick={handleApply}
-            disabled={guardandoBulk || (tabSafe === 'interv' ? nEditablesInterv === 0 : nEditables === 0)}
+            disabled={busy || (tabSafe === 'interv' ? nEditablesInterv === 0 : nEditables === 0)}
             style={{
               background: t.primary,
               color: '#fff',
@@ -695,11 +718,11 @@ export default function PptoEdicionMasivaModal({
               padding: `10px 24px`,
               fontWeight: 700,
               fontSize: cc.label,
-              cursor: guardandoBulk || nEditables === 0 ? 'not-allowed' : 'pointer',
-              opacity: guardandoBulk ? 0.7 : 1,
+              cursor: busy || nEditables === 0 ? 'not-allowed' : 'pointer',
+              opacity: busy ? 0.7 : 1,
             }}
           >
-            {guardandoBulk ? 'Aplicando…' : 'Editar masivamente'}
+            {busy ? 'Aplicando…' : 'Editar masivamente'}
           </button>
         </div>
       </div>

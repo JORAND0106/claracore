@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form, Query, Header
+from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form, Query, Header, BackgroundTasks
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import StreamingResponse, JSONResponse
 import io, csv, requests as req_http
@@ -1254,6 +1254,35 @@ def registrar_log(
             pass
     except Exception:
         pass
+
+
+def _registrar_logs_presupuesto_por_fila(
+    usuario,
+    accion: str,
+    filas: List[Tuple[dict, dict]],
+    detalle_extra: Optional[dict] = None,
+):
+    """Auditoría por registro (entidad presupuesto/{id}) para trazabilidad en la grilla."""
+    base = dict(detalle_extra or {})
+    base.setdefault("edicion_masiva", True)
+    for prev, nuevo in filas:
+        rid = prev.get("id") or nuevo.get("id")
+        if rid is None:
+            continue
+        det = {**base, "id_pol": nuevo.get("id_pol") or prev.get("id_pol")}
+        try:
+            registrar_log(
+                usuario,
+                accion,
+                "PRESUPUESTO",
+                "presupuesto",
+                str(rid),
+                det,
+                valor_anterior=_json_for_log(prev),
+                valor_nuevo=_json_for_log(nuevo),
+            )
+        except Exception:
+            pass
 
 
 def _track_login_failure_alert(email: str, ip: str):
@@ -3436,7 +3465,12 @@ def root():
 @app.get("/healthz")
 def healthz():
     """Sin Supabase ni lógica pesada — útil para keep-alive y comprobar que el worker responde (Azure cold start)."""
-    return {"ok": True}
+    return {
+        "ok": True,
+        "acta_cierre_v2": True,
+        "acta_cierre_defer_mover": True,
+        "acta_mover_residuales_lote": True,
+    }
 
 @app.get("/cargos")
 def listar_cargos():
@@ -7678,9 +7712,23 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
     if batch_cad:
         supabase.table("cad_queue").insert(batch_cad).execute()
 
-    registrar_log(current_user, "RECALCULAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id),
-        {"contrato_id": contrato_id, "cantidad_registros": len(rows),
-         "capitulo": body.capitulo, "item": body.item})
+    rows_by_id = {int(r["id"]): r for r in rows}
+    audit_filas: List[Tuple[dict, dict]] = []
+    for item in batch_ppto:
+        rid = int(item["id"])
+        prev = rows_by_id.get(rid)
+        if not prev:
+            continue
+        patch = {k: v for k, v in item.items() if k != "id"}
+        audit_filas.append((prev, {**prev, **patch}))
+    det_bulk = {
+        "contrato_id": contrato_id,
+        "cantidad_registros": len(rows),
+        "capitulo": body.capitulo,
+        "item": body.item,
+    }
+    _registrar_logs_presupuesto_por_fila(current_user, "EDITAR", audit_filas, det_bulk)
+    registrar_log(current_user, "RECALCULAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id), det_bulk)
     return {"actualizados": len(rows)}
 
 @app.put("/presupuesto/{contrato_id}/bulk-estado")
@@ -7696,7 +7744,7 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
         )
     # Traer sellado, pre_interv y datos CAD
     rows_info = supabase.table("presupuesto").select(
-        "id, x_label, y_label, layer_txt, rev_block_handle, sellado, pre_interv_estado"
+        "id, id_pol, x_label, y_label, layer_txt, rev_block_handle, sellado, pre_interv_estado, revisado, validado_por, validado_en"
     ).in_("id", body.ids).execute().data or []
     info_map = {r["id"]: r for r in rows_info}
     if any(r.get("sellado") for r in rows_info):
@@ -7736,8 +7784,20 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
         _invalidate_dashboard_financial_caches(contrato_id)
     except Exception:
         pass
-    registrar_log(current_user, "VALIDAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id),
-        {"contrato_id": contrato_id, "cantidad_registros": len(body.ids), "estado": body.revisado})
+    det_bulk = {"contrato_id": contrato_id, "cantidad_registros": len(body.ids), "estado": body.revisado}
+    audit_filas = []
+    for r in rows_info:
+        prev = dict(r)
+        nuevo = {
+            **prev,
+            "revisado": body.revisado,
+            "sellado": data_upd.get("sellado", prev.get("sellado")),
+            "validado_por": data_upd.get("validado_por"),
+            "validado_en": data_upd.get("validado_en"),
+        }
+        audit_filas.append((prev, nuevo))
+    _registrar_logs_presupuesto_por_fila(current_user, "VALIDAR", audit_filas, det_bulk)
+    registrar_log(current_user, "VALIDAR", "PRESUPUESTO", "presupuesto_bulk", str(contrato_id), det_bulk)
     return {"actualizados": len(body.ids)}
 
 
@@ -7767,6 +7827,14 @@ def bulk_pre_interv(contrato_id: int, body: PresupuestoBulkPreInterv, current_us
                 detail="Solo Residente de Costos u Residente de Obra puede validar esta etapa.",
             )
     nombre_usuario = current_user.get("nombre") or current_user.get("email") or "Usuario"
+    rows_prev = (
+        supabase.table("presupuesto")
+        .select("id, id_pol, pre_interv_estado, pre_interv_por, pre_interv_en")
+        .in_("id", body.ids)
+        .execute()
+        .data
+        or []
+    )
     data_upd = {"pre_interv_estado": body.estado, "updated_at": "now()"}
     if body.estado == "Aprobado":
         data_upd["pre_interv_por"] = nombre_usuario
@@ -7780,9 +7848,11 @@ def bulk_pre_interv(contrato_id: int, body: PresupuestoBulkPreInterv, current_us
         _invalidate_dashboard_financial_caches(contrato_id)
     except Exception:
         pass
+    det_bulk = {"contrato_id": contrato_id, "cantidad_registros": len(body.ids), "estado": body.estado}
+    audit_filas = [(dict(r), {**dict(r), **data_upd}) for r in rows_prev]
+    _registrar_logs_presupuesto_por_fila(current_user, "VALIDAR", audit_filas, det_bulk)
     registrar_log(
-        current_user, "VALIDAR", "PRESUPUESTO", "presupuesto_pre_interv", str(contrato_id),
-        {"contrato_id": contrato_id, "cantidad_registros": len(body.ids), "estado": body.estado},
+        current_user, "VALIDAR", "PRESUPUESTO", "presupuesto_pre_interv", str(contrato_id), det_bulk,
     )
     return {"actualizados": len(body.ids)}
 
@@ -7801,22 +7871,33 @@ def bulk_tipo_ejecucion(contrato_id: int, body: PresupuestoBulkTipoEjecucion, cu
     if te not in ("Presupuesto de Obra", "Obra Ejecutada"):
         raise HTTPException(status_code=422, detail="tipo_ejecucion debe ser «Presupuesto de Obra» u «Obra Ejecutada».")
     _reject_if_presupuesto_sellado(supabase, body.ids)
-    rows = supabase.table("presupuesto").select("id, contrato_id").in_("id", body.ids).execute().data or []
+    rows = (
+        supabase.table("presupuesto")
+        .select("id, contrato_id, id_pol, tipo_ejecucion")
+        .in_("id", body.ids)
+        .execute()
+        .data
+        or []
+    )
     ids_ok = [int(r["id"]) for r in rows if int(r.get("contrato_id") or 0) == int(contrato_id)]
     if not ids_ok:
         raise HTTPException(status_code=400, detail="Ningún registro válido para este contrato.")
+    rows_ok = [r for r in rows if int(r["id"]) in ids_ok]
     supabase.table("presupuesto").update({"tipo_ejecucion": te, "updated_at": "now()"}).in_("id", ids_ok).execute()
     try:
         _invalidate_dashboard_financial_caches(contrato_id)
     except Exception:
         pass
+    det_bulk = {"contrato_id": contrato_id, "cantidad_registros": len(ids_ok), "tipo_ejecucion": te}
+    audit_filas = [(dict(r), {**dict(r), "tipo_ejecucion": te}) for r in rows_ok]
+    _registrar_logs_presupuesto_por_fila(current_user, "EDITAR", audit_filas, det_bulk)
     registrar_log(
         current_user,
         "EDITAR",
         "PRESUPUESTO",
         "presupuesto_bulk_tipo_ejecucion",
         str(contrato_id),
-        {"contrato_id": contrato_id, "cantidad_registros": len(ids_ok), "tipo_ejecucion": te},
+        det_bulk,
     )
     return {"actualizados": len(ids_ok), "tipo_ejecucion": te}
 
@@ -7837,20 +7918,31 @@ def bulk_observacion_externa(
     ):
         raise HTTPException(status_code=403, detail="No tiene permiso para editar registros de presupuesto.")
     _reject_if_presupuesto_sellado(supabase, body.ids)
-    rows = supabase.table("presupuesto").select("id, contrato_id").in_("id", body.ids).execute().data or []
+    rows = (
+        supabase.table("presupuesto")
+        .select("id, contrato_id, id_pol, observacion_externa")
+        .in_("id", body.ids)
+        .execute()
+        .data
+        or []
+    )
     ids_ok = [int(r["id"]) for r in rows if int(r.get("contrato_id") or 0) == int(contrato_id)]
     if not ids_ok:
         raise HTTPException(status_code=400, detail="Ningún registro válido para este contrato.")
+    rows_ok = [r for r in rows if int(r["id"]) in ids_ok]
     supabase.table("presupuesto").update(
         {"observacion_externa": texto, "updated_at": "now()"}
     ).in_("id", ids_ok).execute()
+    det_bulk = {"contrato_id": contrato_id, "cantidad_registros": len(ids_ok)}
+    audit_filas = [(dict(r), {**dict(r), "observacion_externa": texto}) for r in rows_ok]
+    _registrar_logs_presupuesto_por_fila(current_user, "EDITAR", audit_filas, det_bulk)
     registrar_log(
         current_user,
         "EDITAR",
         "PRESUPUESTO",
         "presupuesto_bulk_observacion",
         str(contrato_id),
-        {"contrato_id": contrato_id, "cantidad_registros": len(ids_ok)},
+        det_bulk,
     )
     return {"actualizados": len(ids_ok)}
 
@@ -9717,13 +9809,13 @@ def _buscar_acta_rpo_siguiente_existente(contrato_id: int, cerrar_id: int, fc: d
 
 def _mover_registros_residual_hacia_acta(contrato_id: int, source_acta_ids: List[int], hacia_acta_id: int) -> int:
     """
-    Traslada so_registros sin aprobación N3 ('aprobado') desde los actas fuente hacia hacia_acta_id;
-    actualiza acta_rpo_id en so_reportes tocados.
+    Traslada so_registros sin aprobación en el último nivel activo del contrato desde actas fuente
+    hacia hacia_acta_id; actualiza acta_rpo_id en so_reportes tocados (updates en lote, no fila a fila).
     """
     sources = sorted({int(x) for x in source_acta_ids if x is not None and int(x) != int(hacia_acta_id)})
     if not sources or not hacia_acta_id:
         return 0
-    registros_movidos = 0
+    ids_mover: List[int] = []
     reportes_tocados: Set[int] = set()
     off = 0
     while True:
@@ -9733,19 +9825,69 @@ def _mover_registros_residual_hacia_acta(contrato_id: int, source_acta_ids: List
         for reg in batch:
             if _registro_nivel_max_aprobado(reg, contrato_id):
                 continue
-            rid = reg["id"]
-            supabase.table("so_registros").update({"acta_rpo_id": hacia_acta_id}).eq("id", rid).execute()
-            registros_movidos += 1
+            ids_mover.append(int(reg["id"]))
             rp = reg.get("reporte_id")
             if rp is not None:
                 reportes_tocados.add(int(rp))
         if len(batch) < 200:
             break
         off += 200
-    for rep_id in reportes_tocados:
+    chunk = 200
+    for i in range(0, len(ids_mover), chunk):
+        parte = ids_mover[i : i + chunk]
+        supabase.table("so_registros").update({"acta_rpo_id": hacia_acta_id})\
+            .eq("contrato_id", contrato_id).in_("id", parte).execute()
+    reportes_list = sorted(reportes_tocados)
+    for i in range(0, len(reportes_list), chunk):
+        parte = reportes_list[i : i + chunk]
         supabase.table("so_reportes").update({"acta_rpo_id": hacia_acta_id})\
-            .eq("id", rep_id).eq("contrato_id", contrato_id).execute()
-    return registros_movidos
+            .eq("contrato_id", contrato_id).in_("id", parte).execute()
+    return len(ids_mover)
+
+
+def _cerrar_acta_rpo_mover_residuales_background(
+    contrato_id: int,
+    cerrar_id: int,
+    nueva_id: int,
+    fc_iso: str,
+    current_user: dict,
+    log_accion: str,
+    reutilizo: bool,
+):
+    """Traslado de residuales fuera del request HTTP (evita timeout/CORS en Azure)."""
+    try:
+        n = _mover_registros_residual_hacia_acta(contrato_id, [cerrar_id], nueva_id)
+        registrar_log(
+            current_user,
+            "EDITAR",
+            "ACTAS",
+            "acta",
+            str(cerrar_id),
+            {
+                "accion": log_accion,
+                "fecha_cierre": fc_iso,
+                "nueva_acta_id": nueva_id,
+                "registros_movidos": n,
+                "reutilizo_acta_existente": reutilizo,
+                "movimiento_segundo_plano": True,
+            },
+        )
+    except Exception as e:
+        try:
+            registrar_log_sistema(
+                "ERROR",
+                "/actas/rpo/cerrar-mover-residuales",
+                "BACKGROUND",
+                {
+                    "contrato_id": contrato_id,
+                    "cerrar_id": cerrar_id,
+                    "nueva_acta_id": nueva_id,
+                    "error": str(e)[:2000],
+                },
+                traceback.format_exc()[:8000],
+            )
+        except Exception:
+            pass
 
 
 def _cerrar_acta_rpo_ejecutar(
@@ -9755,6 +9897,8 @@ def _cerrar_acta_rpo_ejecutar(
     acta_row: dict,
     current_user,
     log_accion: str = "cerrar_rpo_anticipado",
+    *,
+    defer_mover_residuales: bool = False,
 ) -> dict:
     """
     Cierra acta RPO (acorta fecha_fin), traslada residuales sin N3 aprobado al acta siguiente.
@@ -9838,25 +9982,50 @@ def _cerrar_acta_rpo_ejecutar(
             ins = supabase.table("actas").insert(new_row).execute()
             creada = ins.data[0] if ins.data else {}
             nueva_id = creada.get("id")
+            if not nueva_id:
+                raise HTTPException(
+                    status_code=500,
+                    detail="No se pudo crear el acta RPO siguiente (insert sin id). Revise permisos o restricciones en la tabla actas.",
+                )
 
     registros_movidos = 0
-    if nueva_id:
+    movimiento_pendiente = False
+    if nueva_id and not defer_mover_residuales:
         registros_movidos = _mover_registros_residual_hacia_acta(contrato_id, [cerrar_id], nueva_id)
+    elif nueva_id and defer_mover_residuales:
+        movimiento_pendiente = True
 
-    registrar_log(
-        current_user,
-        "EDITAR",
-        "ACTAS",
-        "acta",
-        str(cerrar_id),
-        {
-            "accion": log_accion,
-            "fecha_cierre": fc.isoformat(),
-            "nueva_acta_id": nueva_id,
-            "registros_movidos": registros_movidos,
-            "reutilizo_acta_existente": reutilizo,
-        },
-    )
+    if not defer_mover_residuales:
+        registrar_log(
+            current_user,
+            "EDITAR",
+            "ACTAS",
+            "acta",
+            str(cerrar_id),
+            {
+                "accion": log_accion,
+                "fecha_cierre": fc.isoformat(),
+                "nueva_acta_id": nueva_id,
+                "registros_movidos": registros_movidos,
+                "reutilizo_acta_existente": reutilizo,
+            },
+        )
+    else:
+        registrar_log(
+            current_user,
+            "EDITAR",
+            "ACTAS",
+            "acta",
+            str(cerrar_id),
+            {
+                "accion": log_accion,
+                "fecha_cierre": fc.isoformat(),
+                "nueva_acta_id": nueva_id,
+                "registros_movidos": 0,
+                "reutilizo_acta_existente": reutilizo,
+                "movimiento_segundo_plano": True,
+            },
+        )
 
     peri_fi = (creada.get("fecha_inicio") or fi_ns)[:10] if creada else fi_ns
     peri_ff = (creada.get("fecha_fin") or ff_ns)[:10] if creada else ff_ns
@@ -9865,9 +10034,11 @@ def _cerrar_acta_rpo_ejecutar(
         "ok": True,
         "acta_cerrada": {"id": cerrar_id, "fecha_fin": fc.isoformat()},
         "acta_creada": creada,
+        "nueva_acta_id": nueva_id,
         "periodo_siguiente": {"fecha_inicio": peri_fi, "fecha_fin": peri_ff},
         "registros_movidos_residual": registros_movidos,
         "reutilizo_acta_existente": reutilizo,
+        "movimiento_en_segundo_plano": movimiento_pendiente,
     }
 
 
@@ -9875,6 +10046,7 @@ def _cerrar_acta_rpo_ejecutar(
 def cerrar_acta_rpo_y_crear_siguiente(
     contrato_id: int,
     body: CerrarActaRpoBody,
+    background_tasks: BackgroundTasks,
     current_user=Depends(get_current_user),
 ):
     try:
@@ -9902,7 +10074,23 @@ def cerrar_acta_rpo_y_crear_siguiente(
         acta_row = rows[0]
         cerrar_id = acta_row["id"]
 
-    return _cerrar_acta_rpo_ejecutar(contrato_id, fc, cerrar_id, acta_row, current_user, "cerrar_rpo_anticipado")
+    u_log = dict(current_user) if isinstance(current_user, dict) else current_user
+    r = _cerrar_acta_rpo_ejecutar(
+        contrato_id, fc, cerrar_id, acta_row, u_log, "cerrar_rpo_anticipado", defer_mover_residuales=True,
+    )
+    nueva_id = r.get("nueva_acta_id")
+    if r.get("movimiento_en_segundo_plano") and nueva_id:
+        background_tasks.add_task(
+            _cerrar_acta_rpo_mover_residuales_background,
+            contrato_id,
+            int(cerrar_id),
+            int(nueva_id),
+            fc.isoformat(),
+            u_log,
+            "cerrar_rpo_anticipado",
+            bool(r.get("reutilizo_acta_existente")),
+        )
+    return r
 
 
 def sincronizar_actas_rpo_por_vencimiento(contrato_id: int, current_user) -> dict:

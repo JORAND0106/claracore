@@ -366,6 +366,16 @@ function _sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/** Timeout de fetch: AbortSignal.timeout si existe; si no, AbortController (evita quedar en «Procesando…» sin límite). */
+function _abortSignalAfter(ms) {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(ms);
+  }
+  const ctrl = new AbortController();
+  setTimeout(() => ctrl.abort(), ms);
+  return ctrl.signal;
+}
+
 function useApi(token, opts = {}) {
   const { maxRetries = 5, timeoutMs = 55000 } = opts;
   /** body puede ser null; reqOpts opcional: { timeoutMs, maxRetries } por petición (p. ej. cierre de acta RPO que puede tardar minutos). */
@@ -384,16 +394,19 @@ function useApi(token, opts = {}) {
       reqOpts && typeof reqOpts.timeoutMs === "number" ? reqOpts.timeoutMs : timeoutMs;
     let res;
     for (let i = 0; i < intentos; i++) {
-      const intentoOpts = {};
-      if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
-        intentoOpts.signal = AbortSignal.timeout(timeoutPorIntentoMs);
-      }
+      const intentoOpts = { signal: reqOpts?.signal || _abortSignalAfter(timeoutPorIntentoMs) };
       try {
         res = await fetch(url, { ...optsFetch, ...intentoOpts });
         break;
       } catch (e) {
         if (!_esFalloRedTransitorio(e) || i === intentos - 1) {
           const raw = e && e.message ? String(e.message) : String(e);
+          if (e?.name === "AbortError") {
+            throw new Error(
+              `Tiempo de espera agotado (${Math.round(timeoutPorIntentoMs / 1000)} s). ` +
+                `Si el contrato tiene muchos registros SICOE, el cierre puede seguir en el servidor: recarga la lista de actas en 1–2 minutos y comprueba si las fechas cambiaron.`,
+            );
+          }
           if (_esFalloRedTransitorio(e)) {
             throw new Error(
               `Sin conexión con el backend (${url}). Si es la primera carga del día, el servidor en Azure puede tardar más de un minuto en despertar: espera y vuelve a abrir el panel. ` +
@@ -5263,6 +5276,8 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
   const [modalCerrar, setModalCerrar] = useState(null);
   const [fechaCierre, setFechaCierre] = useState(() => new Date().toISOString().slice(0, 10));
   const [cerrando, setCerrando] = useState(false);
+  const [cerrandoSeg, setCerrandoSeg] = useState(0);
+  const cerrarAbortRef = useRef(null);
   const [calCierreOpen, setCalCierreOpen] = useState(false);
 
   const [modalForm, setModalForm] = useState(false);
@@ -5540,17 +5555,34 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
     setModalCerrar(a);
     setFechaCierre(hoy);
     setCalCierreOpen(false);
+    setCerrando(false);
+    setCerrandoSeg(0);
     setMsg(null);
   };
 
+  useEffect(() => {
+    if (!cerrando) {
+      setCerrandoSeg(0);
+      return undefined;
+    }
+    const t0 = Date.now();
+    const id = window.setInterval(() => {
+      setCerrandoSeg(Math.floor((Date.now() - t0) / 1000));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [cerrando]);
+
+  useEffect(() => () => {
+    cerrarAbortRef.current?.abort?.();
+  }, []);
+
   const confirmarCerrar = async () => {
     if (!modalCerrar || !contratoId) return;
-    if (!window.confirm(
-      `¿Cerrar el Acta RPO #${modalCerrar.numero_rpo} el ${fechaCierre}?\n\n` +
-      `Se acortará el período. Los registros sin aprobación de Interventoría pasarán al acta siguiente ` +
-      `(si ya existe desde el día después del cierre, se usa ese acta; si no, se crea desde ese día hasta fin de mes).`,
-    )) return;
+    cerrarAbortRef.current?.abort?.();
+    const ctrl = new AbortController();
+    cerrarAbortRef.current = ctrl;
     setCerrando(true);
+    setCerrandoSeg(0);
     try {
       const res = await call(
         "POST",
@@ -5559,34 +5591,54 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
           fecha_cierre: fechaCierre,
           acta_id: modalCerrar.id,
         },
-        { timeoutMs: 600_000, maxRetries: 1 },
+        { timeoutMs: 300_000, maxRetries: 1, signal: ctrl.signal },
       );
       const creada = res.acta_creada || {};
       const per = res.periodo_siguiente || {};
       const n = res.registros_movidos_residual ?? 0;
       const reu = !!res.reutilizo_acta_existente;
+      const enBg = !!res.movimiento_en_segundo_plano;
       setMsg({
         type: "success",
         text:
           (reu
             ? `Período cerrado. Acta siguiente ya existía — RPO #${creada.numero_rpo ?? "—"} (${per.fecha_inicio ?? ""} → ${per.fecha_fin ?? ""}). `
             : `Período cerrado. Acta RPO #${creada.numero_rpo ?? "—"} (${per.fecha_inicio ?? ""} → ${per.fecha_fin ?? ""}). `) +
-          `${n} registro(s) residual(es) reasignado(s).`,
+          (enBg
+            ? "Los registros residuales se reasignan en segundo plano (1–3 min); recarga la lista si hace falta."
+            : `${n} registro(s) residual(es) reasignado(s).`),
       });
       setModalCerrar(null);
       cargar();
     } catch (e) {
       const raw = e?.message || String(e);
       const isTimeout = /timed out|timeout|abort/i.test(raw);
+      const pareceCors =
+        /Failed to fetch|NetworkError|ERR_FAILED|CORS|Access-Control/i.test(raw) ||
+        (e instanceof TypeError && /fetch/i.test(raw));
       setMsg({
         type: "error",
-        text: isTimeout
-          ? `Tiempo de espera agotado mientras el servidor procesaba el cierre (suele pasar con muchos registros o Azure arrancando). Espera 1–2 minutos y recarga la lista de actas; si el cierre quedó aplicado, verás fechas actualizadas. Detalle: ${raw}`
-          : raw,
+        text: pareceCors
+          ? "El navegador no recibió respuesta del servidor (suele ser timeout de Azure, no un fallo de permisos). Despliega el backend actualizado, espera 1–2 minutos y recarga la lista de actas: si las fechas ya cambiaron, el cierre sí se aplicó."
+          : isTimeout
+            ? `Tiempo de espera agotado. Recarga la lista de actas en 1–2 minutos; si las fechas cambiaron, el cierre quedó aplicado. Detalle: ${raw}`
+            : raw,
       });
     } finally {
+      cerrarAbortRef.current = null;
       setCerrando(false);
     }
+  };
+
+  const cancelarEsperaCierre = () => {
+    cerrarAbortRef.current?.abort?.();
+    cerrarAbortRef.current = null;
+    setCerrando(false);
+    setMsg({
+      type: "error",
+      text:
+        "Se canceló la espera en el navegador. Si el servidor ya terminó, recarga la lista de actas; si no, intenta de nuevo tras desplegar el backend actualizado.",
+    });
   };
 
   const labelStyle = { fontSize: "var(--cc-label)", color: col.textSecondary, marginBottom: 4 };
@@ -6113,8 +6165,13 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
               Cerrar Acta RPO #{modalCerrar.numero_rpo}
             </div>
             <div style={{ fontSize: 12, color: col.textMuted, marginBottom: 16, lineHeight: 1.45 }}>
-              El acta quedará con último día <strong>{fechaCierre}</strong>. Se creará el acta del mes siguiente (calendario completo) y se moverán los registros sin cierre en Interventoría.
+              El acta quedará con último día <strong>{fechaCierre}</strong>. Se creará o reutilizará el acta desde el día siguiente hasta fin de mes. Los registros residuales se reasignan en segundo plano (la respuesta es rápida).
             </div>
+            {cerrando && (
+              <div style={{ fontSize: 12, color: "#B45309", marginBottom: 12, lineHeight: 1.45 }}>
+                Procesando… {cerrandoSeg > 0 ? `${cerrandoSeg} s` : ""} — con muchos registros SICOE puede tardar 1–3 minutos.
+              </div>
+            )}
             <div style={{ marginBottom: 16 }}>
               <div style={labelStyle}>Fecha de cierre *</div>
               <ActasCalPicker
@@ -6125,10 +6182,16 @@ function SeccionActasRpo({ call, user, contratos, theme }) {
                 theme={theme}
               />
             </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-              <button type="button" style={S.btn("ghost")} disabled={cerrando} onClick={() => setModalCerrar(null)}>
-                Cancelar
-              </button>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
+              {cerrando ? (
+                <button type="button" style={S.btn("ghost")} onClick={cancelarEsperaCierre}>
+                  Dejar de esperar
+                </button>
+              ) : (
+                <button type="button" style={S.btn("ghost")} onClick={() => setModalCerrar(null)}>
+                  Cancelar
+                </button>
+              )}
               <button type="button" style={S.btn("primary")} disabled={cerrando} onClick={confirmarCerrar}>
                 {cerrando ? "Procesando…" : "Confirmar cierre"}
               </button>
