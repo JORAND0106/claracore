@@ -1078,7 +1078,7 @@ export default function ModuloInformes({
     }
     let cancelled = false
     setGerMatrizCargando(true)
-    fetchConFallback(`/informes/${contratoId}/json/informe-gerencia-matriz`, {
+    fetchConFallback(`/informes/${contratoId}/json/informe-gerencia-matriz?refresh=1`, {
       headers: { Authorization: `Bearer ${authToken}` },
     })
       .then((r) => (r.ok ? r.json() : null))
@@ -1604,7 +1604,7 @@ export default function ModuloInformes({
   }
 
   function rutaInformeGerenciaPdf(conSello) {
-    const base = `/informes/${contratoId}/pdf/cc-ger-001`
+    const base = `/informes/${contratoId}/pdf/cc-ger-001?refresh=1`
     return conSello ? rutaPdfConcConSello(base) : base
   }
 

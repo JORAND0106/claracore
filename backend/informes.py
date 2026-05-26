@@ -29,7 +29,8 @@ _GERENCIA_PDF_CACHE_TTL_SEC = 600
 
 def _gerencia_matriz_cache_key(contrato_id: int, acta_presente_override: Optional[int]) -> tuple:
     ap = int(acta_presente_override) if acta_presente_override is not None else None
-    return ("gerencia_matriz", int(contrato_id), ap)
+    # v4: c3 RPC por lotes + fallback si columnas incompletas
+    return ("gerencia_matriz", 4, int(contrato_id), ap)
 
 
 def _gerencia_matriz_cache_get(key: tuple) -> Optional[Dict[str, Any]]:
@@ -55,7 +56,7 @@ def _gerencia_matriz_cache_set(key: tuple, data: Dict[str, Any]) -> None:
 
 def _gerencia_pdf_cache_key(contrato_id: int, acta_presente: Optional[int], modo: str, con_sello: bool) -> tuple:
     ap = int(acta_presente) if acta_presente is not None else -1
-    return ("gerencia_pdf", int(contrato_id), ap, (modo or "matriz").lower().strip(), bool(con_sello))
+    return ("gerencia_pdf", 4, int(contrato_id), ap, (modo or "matriz").lower().strip(), bool(con_sello))
 
 
 def _gerencia_pdf_cache_get(key: tuple) -> Optional[Tuple[bytes, str]]:
@@ -76,6 +77,13 @@ def _gerencia_pdf_cache_set(key: tuple, data: bytes, nr: str = "ger") -> None:
         if len(_GERENCIA_PDF_CACHE) > 16:
             oldest = min(_GERENCIA_PDF_CACHE, key=lambda k: _GERENCIA_PDF_CACHE[k]["ts"])
             _GERENCIA_PDF_CACHE.pop(oldest, None)
+
+
+def _gerencia_caches_clear() -> None:
+    with _GERENCIA_MATRIZ_CACHE_LOCK:
+        _GERENCIA_MATRIZ_CACHE.clear()
+    with _GERENCIA_PDF_CACHE_LOCK:
+        _GERENCIA_PDF_CACHE.clear()
 
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -99,6 +107,7 @@ from ccd_conciliacion import (
     fetch_registros_memoria_cc_mes_alineado_acta,
     fetch_registros_memoria_conciliacion,
     informe_gerencia_matriz_maps_por_rpc,
+    _norm_cap_informe_gerencia,
     rpo_conciliacion_por_contrato,
     rpo_conciliacion_un_acta_rpc,
     rpo_resumen_actas_rpc,
@@ -2517,14 +2526,18 @@ def _construir_datos_informe_gerencia_matriz_fallback_por_capitulo(
     c3b: Dict[Tuple[str, str], float] = {}
     c4b: Dict[Tuple[str, str], float] = {}
     for c in m1:
+        nk = _norm_cap_informe_gerencia(c)
         bl = _bloque_capitulo_matriz(c)
-        c1b[(c, bl)] = c1b.get((c, bl), 0.0) + m1.get(c, 0.0)
+        c1b[(nk, bl)] = c1b.get((nk, bl), 0.0) + m1.get(c, 0.0)
     for c in m2:
-        c2b[(c, _bloque_capitulo_matriz(c))] = m2.get(c, 0.0)
+        nk = _norm_cap_informe_gerencia(c)
+        c2b[(nk, _bloque_capitulo_matriz(c))] = c2b.get((nk, _bloque_capitulo_matriz(c)), 0.0) + m2.get(c, 0.0)
     for c in m3:
-        c3b[(c, _bloque_capitulo_matriz(c))] = m3.get(c, 0.0)
+        nk = _norm_cap_informe_gerencia(c)
+        c3b[(nk, _bloque_capitulo_matriz(c))] = c3b.get((nk, _bloque_capitulo_matriz(c)), 0.0) + m3.get(c, 0.0)
     for c in m4:
-        c4b[(c, _bloque_capitulo_matriz(c))] = m4.get(c, 0.0)
+        nk = _norm_cap_informe_gerencia(c)
+        c4b[(nk, _bloque_capitulo_matriz(c))] = c4b.get((nk, _bloque_capitulo_matriz(c)), 0.0) + m4.get(c, 0.0)
     rpv = rpo_resumen_actas_rpc(_sb, contrato_id, [ap_id]) or {}
     t_pl = float((rpv.get(int(ap_id)) or {}).get("costo_directo_total", 0) or 0)
     vr = vr_contr
@@ -3087,12 +3100,16 @@ def _embalaje_informe_gerencia_bloques(
 
 
 def _construir_datos_informe_gerencia_matriz(
-    contrato_id: int, acta_presente_override: Optional[int] = None
+    contrato_id: int,
+    acta_presente_override: Optional[int] = None,
+    *,
+    skip_cache: bool = False,
 ) -> Dict[str, Any]:
     cache_key = _gerencia_matriz_cache_key(contrato_id, acta_presente_override)
-    cached = _gerencia_matriz_cache_get(cache_key)
-    if cached is not None:
-        return cached
+    if not skip_cache:
+        cached = _gerencia_matriz_cache_get(cache_key)
+        if cached is not None:
+            return cached
 
     pres, ant, actas_asc = _resolver_acta_gerencia_presente_y_anterior(
         int(contrato_id), acta_presente_override
@@ -3180,7 +3197,7 @@ def _construir_datos_informe_gerencia_matriz(
         )
     if maps is None:
         _log.warning(
-            "CC-GER-001: RPC informe gerencia maps vacío; usando fallback Python (lento). "
+            "CC-GER-001: RPC informe gerencia incompleto; usando fallback Python (lento, datos completos). "
             "Verifique funciones rpo_ger_* en Supabase (backend/sql/rpo_informe_gerencia.sql)."
         )
         result = _construir_datos_informe_gerencia_matriz_fallback_por_capitulo(
@@ -5200,11 +5217,19 @@ def json_informe_gerencia_matriz(
         description="Opcional. Si se omite: acta RPO **en período** (hoy ∈ fechas del acta), "
         "igual que la matriz SICOE; si no aplica ninguna, la de mayor consecutivo.",
     ),
+    refresh: bool = Query(
+        False,
+        description="true = ignora caché en memoria y recalcula (usar tras correcciones o si el PDF salió mal).",
+    ),
     current_user=Depends(_get_user),
 ):
     """4 columnas (habil. cobro, acta ant. N3, acum. N3, pendiente) por capítulo, costo directo."""
     _perm_informes_ccd(current_user, "ver")
-    d = _construir_datos_informe_gerencia_matriz(contrato_id, acta_presente)
+    if refresh:
+        _gerencia_caches_clear()
+    d = _construir_datos_informe_gerencia_matriz(
+        contrato_id, acta_presente, skip_cache=refresh
+    )
     ap = d.get("acta_presente") or {}
     return {
         "formato_ccd": CODIGO_FORMATO_CCD_CC_GER_001,
@@ -5220,12 +5245,15 @@ def _pdf_cc_ger_001_bytes_cached(
     acta_presente: Optional[int],
     acta_referencia: Optional[int],
     modo: str,
+    *,
+    skip_cache: bool = False,
 ) -> Tuple[bytes, str]:
     m = (modo or "").lower().strip()
     cache_key = _gerencia_pdf_cache_key(contrato_id, acta_presente, m, False)
-    cached = _gerencia_pdf_cache_get(cache_key)
-    if cached is not None:
-        return cached
+    if not skip_cache:
+        cached = _gerencia_pdf_cache_get(cache_key)
+        if cached is not None:
+            return cached
 
     if m in ("pareja", "2", "dos", "clásico", "clasico"):
         raw = _pdf_bytes_informe_gerencia_pareja(
@@ -5234,13 +5262,16 @@ def _pdf_cc_ger_001_bytes_cached(
         ac = _row("actas", "numero_rpo, consecutivo", id=int(acta_presente)) or {}
         nr = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_presente)
     else:
-        datosg = _construir_datos_informe_gerencia_matriz(contrato_id, acta_presente)
+        datosg = _construir_datos_informe_gerencia_matriz(
+            contrato_id, acta_presente, skip_cache=skip_cache
+        )
         raw = _pdf_bytes_informe_gerencia_matriz(
             contrato_id, current_user, acta_presente, datos=datosg
         )
         apd = (datosg.get("acta_presente") or {}) or {}
         nr = str(apd.get("numero_rpo") or apd.get("consecutivo") or apd.get("id") or "ger")
-    _gerencia_pdf_cache_set(cache_key, raw, nr)
+    if not skip_cache:
+        _gerencia_pdf_cache_set(cache_key, raw, nr)
     return raw, nr
 
 
@@ -5257,6 +5288,7 @@ def pdf_cc_ger_001_pareja(
     modo: str = Query(
         "matriz", description="matriz = 4 col. (defecto). pareja = dos actas requiere acta_presente (Query obligatorio manual)."
     ),
+    refresh: bool = Query(False, description="true = recalcula sin caché PDF/matríz."),
     current_user=Depends(_get_user),
 ):
     """
@@ -5267,8 +5299,10 @@ def pdf_cc_ger_001_pareja(
     m = (modo or "").lower().strip()
     if m in ("pareja", "2", "dos", "clásico", "clasico") and acta_presente is None:
         raise HTTPException(400, "Con modo=pareja debe indicar acta_presente")
+    if refresh:
+        _gerencia_caches_clear()
     raw, nr = _pdf_cc_ger_001_bytes_cached(
-        contrato_id, current_user, acta_presente, acta_referencia, m
+        contrato_id, current_user, acta_presente, acta_referencia, m, skip_cache=refresh
     )
     fname = _safe_filename_part(f"CC-GER-001_RPO{nr}.pdf")
     return Response(
@@ -5289,6 +5323,7 @@ def pdf_cc_ger_001_pareja_con_sello_firma(
         None, description="(Deprecada) solo modo pareja; ignorada en matriz v2"
     ),
     modo: str = Query("matriz", description="matriz | pareja"),
+    refresh: bool = Query(False, description="true = recalcula sin caché PDF/matríz."),
     current_user=Depends(_get_user),
 ):
     """Mismo PDF CC-GER-001 (matriz v2 o pareja) + página de sello (huella, fecha)."""
@@ -5296,8 +5331,10 @@ def pdf_cc_ger_001_pareja_con_sello_firma(
     m = (modo or "").lower().strip()
     if m in ("pareja", "2", "dos", "clásico", "clasico") and acta_presente is None:
         raise HTTPException(400, "Con modo=pareja debe indicar acta_presente")
+    if refresh:
+        _gerencia_caches_clear()
     pdf_bytes, nr = _pdf_cc_ger_001_bytes_cached(
-        contrato_id, current_user, acta_presente, acta_referencia, m
+        contrato_id, current_user, acta_presente, acta_referencia, m, skip_cache=refresh
     )
     fname = _safe_filename_part(f"CC-GER-001_RPO{nr}.pdf")
     ctr = _row("contratos", "numero", id=contrato_id) or {}

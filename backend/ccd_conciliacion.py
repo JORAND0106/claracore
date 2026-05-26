@@ -831,15 +831,32 @@ def rpo_conciliacion_un_acta_rpc(
     }
 
 
+def _norm_cap_informe_gerencia(s: Optional[str]) -> str:
+    """Misma regla que dashboard `norm_capitulo_key` — alinea c1..c4 por capítulo."""
+    if s is None:
+        return "Sin capítulo"
+    t = str(s).strip()
+    if not t:
+        return "Sin capítulo"
+    t = re.sub(r"\s+", " ", t)
+    t = re.sub(r"^(\d+\.)\s+", r"\1", t)
+    return t
+
+
 def _mapa_cap_bloque_desde_rpc_rows(rows: List[Dict[str, Any]]) -> Dict[Tuple[str, str], float]:
     m: Dict[Tuple[str, str], float] = {}
     for r in rows or []:
-        cap = (str(r.get("capitulo") or "Sin capítulo").strip()) or "Sin capítulo"
+        raw = (str(r.get("capitulo") or "Sin capítulo").strip()) or "Sin capítulo"
+        cap = _norm_cap_informe_gerencia(raw)
         bl = (str(r.get("bloque") or "obra")).strip().lower()
         if bl not in ("ensayos", "obra"):
             bl = "obra"
         m[(cap, bl)] = m.get((cap, bl), 0.0) + _sf(r.get("sum_cd"), 0.0)
     return m
+
+
+def _sum_mapa_en_claves_de(m_src: Dict[Tuple[str, str], float], keys: set) -> float:
+    return float(sum(m_src.get(k, 0.0) for k in keys))
 
 
 def informe_gerencia_matriz_maps_por_rpc(
@@ -849,15 +866,17 @@ def informe_gerencia_matriz_maps_por_rpc(
     acta_anterior_id: Optional[int],
     acta_ids_acumulado: List[int],
     items_cobro: Optional[set],
-    ) -> Dict[str, Dict[Tuple[str, str], float]]:
+) -> Optional[Dict[str, Dict[Tuple[str, str], float]]]:
     """
     Suma c1..c4 por (capítulo, bloque) vía `sql/rpo_informe_gerencia.sql`.
-    Ante timeout parcial devuelve columnas vacías (evita fallback Python lento).
+    Si alguna RPC falla, devuelve None para forzar fallback Python (datos correctos).
+    No devolver columnas vacías parciales: eso dejaba c2/c3 en cero en el PDF.
     """
     cid, ap = int(contrato_id), int(acta_presente_id)
     _ = items_cobro  # Col. 1 = todo ítem con registro (matriz HABILITADO), sin filtrar por tabla cobro
     acta_ant_i = int(acta_anterior_id) if acta_anterior_id is not None else 0
     ids_c3 = [int(x) for x in (acta_ids_acumulado or []) if x is not None]
+    rpc_failed: List[str] = []
 
     def _run_c1():
         try:
@@ -876,6 +895,7 @@ def informe_gerencia_matriz_maps_por_rpc(
             )
         except Exception as e:
             _log.warning("rpo_ger col1: %s", e)
+            rpc_failed.append("c1")
             return []
 
     def _run_c2():
@@ -896,21 +916,31 @@ def informe_gerencia_matriz_maps_por_rpc(
             )
         except Exception as e2:
             _log.warning("rpo_ger cascade ant: %s", e2)
+            rpc_failed.append("c2")
             return []
 
     def _run_c3():
+        if not ids_c3:
+            return []
+        merged: List[Dict[str, Any]] = []
+        chunk_sz = 10
         try:
-            return (
-                sb.rpc(
-                    "rpo_ger_suma_por_capitulo_bloque_solo_n3",
-                    {"p_contrato_id": cid, "p_acta_ids": ids_c3},
+            for off in range(0, len(ids_c3), chunk_sz):
+                batch = ids_c3[off : off + chunk_sz]
+                rows = (
+                    sb.rpc(
+                        "rpo_ger_suma_por_capitulo_bloque_solo_n3",
+                        {"p_contrato_id": cid, "p_acta_ids": batch},
+                    )
+                    .execute()
+                    .data
+                    or []
                 )
-                .execute()
-                .data
-                or []
-            )
+                merged.extend(rows)
+            return merged
         except Exception as e3:
-            _log.warning("rpo_ger solo_n3 acum: %s", e3)
+            _log.warning("rpo_ger solo_n3 acum (%s actas): %s", len(ids_c3), e3)
+            rpc_failed.append("c3")
             return []
 
     def _run_c4():
@@ -926,6 +956,7 @@ def informe_gerencia_matriz_maps_por_rpc(
             )
         except Exception as e4:
             _log.warning("rpo_ger pend: %s", e4)
+            rpc_failed.append("c4")
             return []
 
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -938,8 +969,41 @@ def informe_gerencia_matriz_maps_por_rpc(
         c3d = f3.result()
         c4d = f4.result()
 
+    if rpc_failed:
+        _log.warning(
+            "informe gerencia: RPC falló (%s); fallback Python.",
+            ",".join(rpc_failed),
+        )
+        return None
+
     c1m = _mapa_cap_bloque_desde_rpc_rows(c1q)
     c2m = _mapa_cap_bloque_desde_rpc_rows(c2d)
     c3m = _mapa_cap_bloque_desde_rpc_rows(c3d)
     c4m = _mapa_cap_bloque_desde_rpc_rows(c4d)
+
+    keys_obra_c1 = {k for k in c1m if k[1] == "obra"}
+
+    # Heurística: c3 global vacío o sin montos en las mismas filas obra que c1 → RPC incompleta
+    if ids_c3 and keys_obra_c1:
+        s1 = sum(c1m.get(k, 0.0) for k in keys_obra_c1)
+        s3_en_filas_c1 = _sum_mapa_en_claves_de(c3m, keys_obra_c1)
+        if s1 > 1_000_000.0 and s3_en_filas_c1 < 1.0:
+            _log.warning(
+                "informe gerencia: col.3 sin datos en filas obra (col.1=%.0f, %s actas); fallback Python.",
+                s1,
+                len(ids_c3),
+            )
+            return None
+
+    if acta_ant_i > 0 and keys_obra_c1:
+        s1 = sum(c1m.get(k, 0.0) for k in keys_obra_c1)
+        s2_en_filas_c1 = _sum_mapa_en_claves_de(c2m, keys_obra_c1)
+        if s1 > 1_000_000.0 and s2_en_filas_c1 < 1.0:
+            _log.warning(
+                "informe gerencia: col.2 sin datos en filas obra (acta ant. %s, col.1=%.0f); fallback Python.",
+                acta_ant_i,
+                s1,
+            )
+            return None
+
     return {"c1": c1m, "c2": c2m, "c3": c3m, "c4": c4m}
