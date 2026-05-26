@@ -605,37 +605,106 @@ useEffect(() => {
   const puedeEditarFilaPptoNoSelladoOReabrir = (r) => !esSellado(r) || puedeReabrirTrasAprob
 
   const ESTADOS_INTERV_CT_REQUIERE_MOTIVO = ['Aprobado', 'Pendiente', 'Rechazado']
+  const MIN_JUSTIFICACION_INTERV = 15
+  const MIN_JUSTIFICACION_EDICION = 3
+
+  function valorCampoCambio(reg, body, k) {
+    const a = body[k]
+    const b = reg[k]
+    if (k === 'vlr_unitario' || k === 'costo_directo' || k === 'area_long_nod' || k === 'ancho' || k === 'espesor') {
+      const na = Number(a)
+      const nb = Number(b)
+      if (Number.isFinite(na) && Number.isFinite(nb)) return Math.abs(na - nb) > 1e-4
+      return String(a ?? '') !== String(b ?? '')
+    }
+    return String(a ?? '').trim() !== String(b ?? '').trim()
+  }
+
+  function cuerpoTieneCambioSustantivo(reg, body) {
+    if (!reg || !body || typeof body !== 'object') return false
+    const keys = [
+      'capitulo', 'item', 'descripcion', 'und', 'vlr_unitario', 'observacion_externa', 'costo_directo',
+      'area_long_nod', 'ancho', 'espesor', 'no_inicio', 'no_final', 'tipo_ejecucion',
+    ]
+    return keys.some((k) => k in body && valorCampoCambio(reg, body, k))
+  }
 
   function requiereMotivoIntervContratista(reg, body) {
-    if (!esRolContratistaPpto || esDeveloper || esSellado(reg) || !body || typeof body !== 'object') return false
+    if (esDeveloper || esSellado(reg) || !body || typeof body !== 'object') return false
+    if (!esRolContratistaDepuracion(usuario)) return false
     const rv = String(reg?.revisado || 'No Revisado').trim()
     if (!ESTADOS_INTERV_CT_REQUIERE_MOTIVO.includes(rv)) return false
-    const keys = ['capitulo', 'item', 'descripcion', 'und', 'vlr_unitario', 'observacion_externa', 'costo_directo', 'area_long_nod', 'ancho', 'espesor']
-    for (const k of keys) {
-      if (!(k in body)) continue
-      const a = body[k]
-      const b = reg[k]
-      if (k === 'vlr_unitario' || k === 'costo_directo' || k === 'area_long_nod' || k === 'ancho' || k === 'espesor') {
-        const na = Number(a), nb = Number(b)
-        if (Number.isFinite(na) && Number.isFinite(nb)) {
-          if (Math.abs(na - nb) > 1e-4) return true
-        } else if (String(a ?? '') !== String(b ?? '')) return true
-      } else if (String(a ?? '').trim() !== String(b ?? '').trim()) return true
+    return cuerpoTieneCambioSustantivo(reg, body)
+  }
+
+  function mensajeJustificacionCorta(len, minLen, esInterv = false) {
+    if (len <= 0) {
+      return esInterv
+        ? `Debe escribir una justificación de la modificación (mínimo ${minLen} caracteres). El registro volverá a «No Revisado» en Interventoría.`
+        : 'Debe escribir una justificación de la modificación antes de guardar (explique qué cambió y por qué).'
     }
-    return false
+    return `La justificación es muy corta (${len} de ${minLen} caracteres). Amplíe el texto: indique qué dato modificó, el valor anterior si aplica y el motivo del cambio.`
   }
 
   async function adjuntarMotivoSiEdicionContratistaConInterv(reg, body) {
-    if (!requiereMotivoIntervContratista(reg, body)) return true
+    if (!requiereMotivoIntervContratista(reg, body)) return { ok: true }
     const com = await pedirComentario('contratista_edita_interv', true)
-    if (com == null) return false
+    if (com == null) return { ok: false }
     const m = String(com.mensaje || '').trim()
-    if (m.length < 15) {
-      window.alert('El motivo debe tener al menos 15 caracteres (queda registrado para Interventoría).')
-      return false
+    if (m.length < MIN_JUSTIFICACION_INTERV) {
+      window.alert(mensajeJustificacionCorta(m.length, MIN_JUSTIFICACION_INTERV, true))
+      return { ok: false }
     }
     body.motivo_edicion_con_estado_interv = m
-    return true
+    return { ok: true }
+  }
+
+  /**
+   * Panel detalle: popup de justificación (mismo espíritu que edición masiva / recálculo en grilla).
+   * Devuelve { ok, comentarioTrazabilidad } para crear comentario tras guardar OK.
+   */
+  async function pedirJustificacionEdicionDetalle(reg, body, contexto) {
+    if (!cuerpoTieneCambioSustantivo(reg, body)) return { ok: true }
+
+    if (requiereMotivoIntervContratista(reg, body)) {
+      const interv = await adjuntarMotivoSiEdicionContratistaConInterv(reg, body)
+      return interv.ok ? { ok: true } : { ok: false }
+    }
+
+    if (esDeveloper) return { ok: true }
+
+    const tipoComent = contexto === 'item_capitulo' ? 'item_capitulo' : 'dims'
+    const com = await pedirComentario(tipoComent, true)
+    if (com == null) return { ok: false }
+    const m = String(com.mensaje || '').trim()
+    if (m.length < MIN_JUSTIFICACION_EDICION) {
+      window.alert(mensajeJustificacionCorta(m.length, MIN_JUSTIFICACION_EDICION, false))
+      return { ok: false }
+    }
+    return {
+      ok: true,
+      comentarioTrazabilidad: { tipo: tipoComent, mensaje: m, destinatarioId: com.destinatarioId || null },
+    }
+  }
+
+  function textoObservacionRegistro(r) {
+    const partes = []
+    if (r?.observacion_externa) partes.push(String(r.observacion_externa).trim())
+    if (r?.observacion) partes.push(String(r.observacion).trim())
+    return partes.filter(Boolean).join(' · ') || null
+  }
+
+  async function leerDetalleErrorRes(res, fallback = 'Error al guardar') {
+    try {
+      const d = await res.json()
+      const detail = d?.detail
+      if (typeof detail === 'string' && detail.trim()) return detail.trim()
+      if (Array.isArray(detail)) {
+        const parts = detail.map((x) => (typeof x === 'object' && x?.msg ? x.msg : String(x))).filter(Boolean)
+        if (parts.length) return parts.join('; ')
+      }
+    } catch { /* ignore */ }
+    return fallback
   }
 
   function abrirDetallePptoDesdeFila(registro) {
@@ -1277,7 +1346,12 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     fetch(`${API}/presupuesto/${contratoId}/filtros?${u}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setOpcionesUbicacion({ tramos: d.tramos || [], calzadas: d.calzadas || [] }) })
-      .catch(() => {})
+      .catch(() => {
+        fetch(`${API}/presupuesto/${contratoId}/maestro-ubicacion-pk`, { headers: { Authorization: `Bearer ${token}` } })
+          .then(r => r.ok ? r.json() : null)
+          .then(d => { if (d) setOpcionesUbicacion({ tramos: d.tramos || [], calzadas: d.calzadas || [] }) })
+          .catch(() => {})
+      })
   }, [contratoId, detalleConItem, drill, token])
 
   useEffect(() => {
@@ -2783,7 +2857,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       }
     }
     if (motivoReap) body.motivo_edicion_tras_sellado = motivoReap
-    if (!(await adjuntarMotivoSiEdicionContratistaConInterv(reg, body))) return
+    const just = await pedirJustificacionEdicionDetalle(reg, body, 'dims')
+    if (!just.ok) return
     registrarUndoPresupuesto('Edición de registro', [id])
     const res = await fetch(`${API}/presupuesto/item/${id}`, {
       method: 'PUT',
@@ -2796,7 +2871,10 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (d && d.id) {
         setRegistros(prev => prev.map(r => r.id === d.id ? d : r))
       }
-      // Actualizar totales del panel izquierdo en background sin bloquear la UI
+      if (just.comentarioTrazabilidad) {
+        const c = just.comentarioTrazabilidad
+        await crearComentarios([id], c.tipo, c.mensaje, c.destinatarioId)
+      }
       cargarCapitulos({ silent: true }).catch(() => {})
     } else {
       try {
@@ -3980,6 +4058,7 @@ async function restaurar(id) {
                     <div style={{ display:'flex', flexDirection:'column', gap:'5px', minWidth:0 }}>
                       <Row><F label="ID_POL" val={r.id_pol||r.pk_id}/><F label="CAPÍTULO" val={r.capitulo}/><F label="ÍTEM" val={r.item} flex={0.5}/></Row>
                       <BigF label="DESCRIPCIÓN" val={r.descripcion}/>
+                      <BigF label="OBSERVACIÓN" val={textoObservacionRegistro(r)}/>
                       <Row><F label="UNIDAD" val={r.und} flex={0.5}/><F label="REVISADO" val={r.revisado||'No Revisado'}/><F label="TIPO EJECUCIÓN" val={r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT}/></Row>
                       {mostrarColumnaDepuracion && (
                         <Row>
@@ -4026,6 +4105,7 @@ async function restaurar(id) {
                           <div style={{ fontSize:'var(--cc-caption)', fontWeight:'700', color:'#F59E0B', letterSpacing:'0.5px', marginBottom:'8px' }}>📐 EDITAR DIMENSIONES</div>
                           <div style={{ fontSize:'var(--cc-caption)', color:t.textMuted, marginBottom:'10px', lineHeight:1.45 }}>
                             Ajuste <strong>ancho</strong> y <strong>espesor</strong>; al guardar se <strong>recalculan cantidad total y costo directo</strong> con el valor unitario del registro (sin requerir plano CAD).
+                            {' '}Al pulsar guardar se abrirá una ventana para la <strong>justificación del cambio</strong> (obligatoria).
                             {puedeEditarAreaLongNodInline() && (
                               <span>
                                 {' '}
@@ -4101,12 +4181,8 @@ async function restaurar(id) {
                               body.no_inicio = String(popupDims.no_inicio ?? '').trim() || null
                               body.no_final = String(popupDims.no_final ?? '').trim() || null
                             }
-                            // Actualización optimista inmediata
-                            const optimisticRow = { ...r, ...body }
-                            setModalDetallePpto(optimisticRow)
-                            setRegistros(prev => prev.map(x => x.id === r.id ? optimisticRow : x))
-                            setPopupMsg('✅ Dimensiones actualizadas')
-                            _lastWriteAtRef.current = Date.now()
+                            const justDims = await pedirJustificacionEdicionDetalle(r, body, 'dims')
+                            if (!justDims.ok) return
                             setPopupGuardando(true)
                             const res = await fetch(`${API}/presupuesto/item/${r.id}`, {
                               method:'PUT', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
@@ -4114,17 +4190,28 @@ async function restaurar(id) {
                             })
                             if (res.ok) {
                               const d = await res.json()
+                              if (justDims.comentarioTrazabilidad) {
+                                const c = justDims.comentarioTrazabilidad
+                                await crearComentarios([r.id], c.tipo, c.mensaje, c.destinatarioId)
+                              }
                               if (d && d.id) {
                                 setModalDetallePpto(d)
                                 setModalDetallePptoEditable(puedeEditarFilaPptoNoSelladoOReabrir(d))
                                 setRegistros(prev => prev.map(x => x.id === d.id ? d : x))
+                                setPopupDims({
+                                  ancho: d.ancho ?? '',
+                                  espesor: d.espesor ?? '',
+                                  area_long_nod: d.area_long_nod ?? '',
+                                  no_inicio: d.no_inicio ?? '',
+                                  no_final: d.no_final ?? '',
+                                })
                               }
+                              _lastWriteAtRef.current = Date.now()
+                              setPopupMsg('✅ Dimensiones actualizadas')
                               { const c = drill.find(d=>d.campo==='capitulo')?.valor; if(c) delete _pptoCachePorCap.current[c] }
                             } else {
-                              // Revertir si falló
-                              setModalDetallePpto(r)
-                              setRegistros(prev => prev.map(x => x.id === r.id ? r : x))
-                              setPopupMsg('❌ Error al guardar')
+                              const msg = await leerDetalleErrorRes(res)
+                              setPopupMsg(`❌ ${msg}`)
                             }
                             setPopupGuardando(false)
                           }}
@@ -4150,17 +4237,18 @@ async function restaurar(id) {
                           <button disabled={popupGuardando || popupTipoEjecucion === (r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT)} onClick={async () => {
                             setPopupMsg('')
                             const body = { tipo_ejecucion: popupTipoEjecucion }
-                            if (!(await adjuntarMotivoSiEdicionContratistaConInterv(r, body))) return
-                            const optimisticRow = { ...r, ...body }
-                            setModalDetallePpto(optimisticRow)
-                            setRegistros(prev => prev.map(x => x.id === r.id ? optimisticRow : x))
-                            _lastWriteAtRef.current = Date.now()
+                            const justTipo = await pedirJustificacionEdicionDetalle(r, body, 'item_capitulo')
+                            if (!justTipo.ok) return
                             setPopupGuardando(true)
                             const res = await fetch(`${API}/presupuesto/item/${r.id}`, {
                               method:'PUT', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
                               body: JSON.stringify(body),
                             })
                             if (res.ok) {
+                              if (justTipo.comentarioTrazabilidad) {
+                                const c = justTipo.comentarioTrazabilidad
+                                await crearComentarios([r.id], c.tipo, c.mensaje, c.destinatarioId)
+                              }
                               const d = await res.json()
                               const nuevoTipo = d?.tipo_ejecucion || popupTipoEjecucion
                               const vistaTipo = fObraRef.current?.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT
@@ -4184,7 +4272,8 @@ async function restaurar(id) {
                               setModalDetallePpto(r)
                               setRegistros(prev => prev.map(x => x.id === r.id ? r : x))
                               setPopupTipoEjecucion(r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT)
-                              setPopupMsg('❌ Error al guardar tipo de ejecución')
+                              const msg = await leerDetalleErrorRes(res, 'Error al guardar tipo de ejecución')
+                              setPopupMsg(`❌ ${msg}`)
                             }
                             setPopupGuardando(false)
                           }}
@@ -4236,7 +4325,10 @@ async function restaurar(id) {
                               const com = await pedirComentario('reapertura', true)
                               if (com == null) { return }
                               motivoReap = String(com.mensaje || '').trim()
-                              if (motivoReap.length < 15) { alert('El motivo de reapertura debe tener al menos 15 caracteres (visible para Interventoría).'); return }
+                              if (motivoReap.length < MIN_JUSTIFICACION_INTERV) {
+                                window.alert(mensajeJustificacionCorta(motivoReap.length, MIN_JUSTIFICACION_INTERV, true))
+                                return
+                              }
                             }
                             const precio = listadoPrecios.find(p => p.item_numero === popupItem)
                             const vlr =
@@ -4250,31 +4342,37 @@ async function restaurar(id) {
                               costo_directo: Math.round(cant * vlr),
                               ...(motivoReap ? { motivo_edicion_tras_sellado: motivoReap } : {}),
                             }
-                            if (!(await adjuntarMotivoSiEdicionContratistaConInterv(r, body))) { return }
-                            // Actualización optimista inmediata
-                            const optimisticRow = { ...r, ...body }
-                            setModalDetallePpto(optimisticRow)
-                            setRegistros(prev => prev.map(x => x.id === r.id ? optimisticRow : x))
-                            setPopupMsg('✅ Capítulo/ítem actualizado')
-                            _lastWriteAtRef.current = Date.now()
+                            if (popupCap && popupCap !== (r.capitulo || '') && !popupItem) {
+                              window.alert('Cambió el capítulo: seleccione un ítem del listado de precios para ese capítulo.')
+                              return
+                            }
+                            const justCap = await pedirJustificacionEdicionDetalle(r, body, 'item_capitulo')
+                            if (!justCap.ok) return
                             setPopupGuardando(true)
                             const res = await fetch(`${API}/presupuesto/item/${r.id}`, {
                               method:'PUT', headers:{'Content-Type':'application/json', Authorization:`Bearer ${token}`},
                               body: JSON.stringify(body)
                             })
                             if (res.ok) {
+                              if (justCap.comentarioTrazabilidad) {
+                                const c = justCap.comentarioTrazabilidad
+                                await crearComentarios([r.id], c.tipo, c.mensaje, c.destinatarioId)
+                              }
                               const d = await res.json()
                               if (d && d.id) {
                                 setModalDetallePpto(d)
                                 setModalDetallePptoEditable(puedeEditarFilaPptoNoSelladoOReabrir(d))
                                 setRegistros(prev => prev.map(x => x.id === d.id ? d : x))
+                                setPopupCap(d.capitulo || '')
+                                setPopupItem(d.item || '')
+                                setPopupItemBusq(d.item ? `${d.item} · ${d.descripcion || ''}` : '')
                               }
+                              _lastWriteAtRef.current = Date.now()
+                              setPopupMsg('✅ Capítulo/ítem actualizado')
                               { const c = drill.find(d=>d.campo==='capitulo')?.valor; if(c) delete _pptoCachePorCap.current[c] }
                             } else {
-                              // Revertir si falló
-                              setModalDetallePpto(r)
-                              setRegistros(prev => prev.map(x => x.id === r.id ? r : x))
-                              try { const d = await res.json(); setPopupMsg(`❌ ${d.detail || 'Error al guardar'}`) } catch { setPopupMsg('❌ Error al guardar') }
+                              const msg = await leerDetalleErrorRes(res)
+                              setPopupMsg(`❌ ${msg}`)
                             }
                             setPopupGuardando(false)
                           }}
@@ -4427,10 +4525,14 @@ async function restaurar(id) {
         const TITULOS = { dims:'📐 Comentario — Cambio de Dimensiones', item_capitulo:'🔄 Comentario — Cambio de Ítem/Capítulo', validacion:'🔍 Comentario — Cambio de Estado', reapertura:'🔓 Motivo — Reapertura tras aprobación Interventoría', contratista_edita_interv:'✏️ Motivo — Edición con validación Interventoría' }
         const COLORES = { dims:'#F59E0B', item_capitulo:'#0077B6', validacion:'#10B981', reapertura:'#0EA5E9', contratista_edita_interv:'#0D9488' }
         const color   = COLORES[modalComentario.tipo] || t.primary
-        const minLen  = (modalComentario.tipo === 'reapertura' || modalComentario.tipo === 'contratista_edita_interv') ? 15 : 1
-        const valido  = !modalComentario.obligatorio || textoComentario.trim().length >= minLen
+        const minLen  = (modalComentario.tipo === 'reapertura' || modalComentario.tipo === 'contratista_edita_interv')
+          ? MIN_JUSTIFICACION_INTERV
+          : MIN_JUSTIFICACION_EDICION
+        const lenTxt  = textoComentario.trim().length
+        const valido  = !modalComentario.obligatorio || lenTxt >= minLen
+        const esIntervMotivo = modalComentario.tipo === 'reapertura' || modalComentario.tipo === 'contratista_edita_interv'
         return (
-          <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex:6000,display:'flex',alignItems:'center',justifyContent:'center' }}>
+          <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.6)',zIndex: modalDetallePpto ? 100020 : 6000,display:'flex',alignItems:'center',justifyContent:'center' }}>
             <div style={{ background:t.bgCard,border:`1.5px solid ${color}44`,borderRadius:'16px',padding:'28px',width:'460px',maxWidth:'95vw',boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}>
               <div style={{ fontSize:'var(--cc-body)',fontWeight:'700',color,marginBottom:'6px' }}>{TITULOS[modalComentario.tipo] || TITULOS.validacion}</div>
               <div style={{ fontSize:'var(--cc-sm)',color:t.textMuted,marginBottom:'16px' }}>
@@ -4465,19 +4567,27 @@ async function restaurar(id) {
                   <EmojiPicker t={t} onSelect={em => setTextoComentario(prev => prev + em)} />
                 </div>
               </div>
-              {modalComentario.obligatorio && textoComentario.trim().length < minLen && (
-                <div style={{ fontSize:'var(--cc-sm)',color:'#EF4444',marginTop:'4px' }}>* {(modalComentario.tipo === 'reapertura' || modalComentario.tipo === 'contratista_edita_interv') ? `Mínimo ${minLen} caracteres` : 'Este campo es obligatorio'}</div>
+              {modalComentario.obligatorio && lenTxt < minLen && (
+                <div style={{ fontSize:'var(--cc-sm)',color:'#EF4444',marginTop:'6px',lineHeight:1.45 }}>
+                  {lenTxt > 0
+                    ? `La justificación es muy corta (${lenTxt} de ${minLen} caracteres). Amplíe el texto: qué modificó, por qué y, si aplica, el valor anterior.`
+                    : (esIntervMotivo
+                      ? `Escriba la justificación de la modificación (mínimo ${minLen} caracteres). El estado de Interventoría volverá a «No Revisado».`
+                      : `Escriba la justificación del cambio (mínimo ${minLen} caracteres) antes de guardar.`)}
+                </div>
               )}
               <div style={{ display:'flex',gap:'10px',justifyContent:'flex-end',marginTop:'18px' }}>
                 <button onClick={() => { modalComentario.resolve(null); setModalComentario(null) }}
                   style={{ background:'transparent',border:`1px solid ${t.border}`,borderRadius:'8px',padding:'9px 18px',fontSize:'var(--cc-label)',color:t.textMuted,cursor:'pointer' }}>Cancelar</button>
                 <button onClick={() => {
-                  if (!valido) return;
+                  if (!valido) {
+                    window.alert(mensajeJustificacionCorta(lenTxt, minLen, esIntervMotivo))
+                    return
+                  }
                   modalComentario.resolve({ mensaje: textoComentario, destinatarioId: destinatarioComentario || null });
                   setModalComentario(null);
                 }}
-                  disabled={!valido}
-                  style={{ background:valido?color:'#999',color:'#fff',border:'none',borderRadius:'8px',padding:'9px 22px',fontSize:'var(--cc-label)',fontWeight:'700',cursor:valido?'pointer':'not-allowed' }}>
+                  style={{ background:valido?color:'#999',color:'#fff',border:'none',borderRadius:'8px',padding:'9px 22px',fontSize:'var(--cc-label)',fontWeight:'700',cursor:valido?'pointer':'not-allowed',opacity:valido?1:0.85 }}>
                   {modalComentario.obligatorio ? '✓ Confirmar' : '✓ Continuar'}
                 </button>
               </div>

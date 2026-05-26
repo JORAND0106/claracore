@@ -6035,6 +6035,180 @@ def get_presupuesto_conteo(
     return {"total": int(result.count or 0)}
 
 
+_PRESUPUESTO_FILTROS_CACHE: Dict[tuple, Tuple[float, dict]] = {}
+_PRESUPUESTO_FILTROS_CACHE_TTL = 90.0
+
+
+def _presupuesto_filtros_cache_get(key: tuple) -> Optional[dict]:
+    row = _PRESUPUESTO_FILTROS_CACHE.get(key)
+    if not row:
+        return None
+    exp, data = row
+    if exp < time.time():
+        _PRESUPUESTO_FILTROS_CACHE.pop(key, None)
+        return None
+    return data
+
+
+def _presupuesto_filtros_cache_set(key: tuple, data: dict) -> None:
+    _PRESUPUESTO_FILTROS_CACHE[key] = (time.time() + _PRESUPUESTO_FILTROS_CACHE_TTL, data)
+    if len(_PRESUPUESTO_FILTROS_CACHE) > 400:
+        now = time.time()
+        dead = [k for k, (e, _) in _PRESUPUESTO_FILTROS_CACHE.items() if e < now]
+        for k in dead:
+            _PRESUPUESTO_FILTROS_CACHE.pop(k, None)
+
+
+def _presupuesto_filtros_rpc_parse(raw: Any) -> dict:
+    if raw is None:
+        return {}
+    if isinstance(raw, list):
+        if len(raw) == 1:
+            raw = raw[0]
+        elif not raw:
+            return {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict = {}
+    for k, v in raw.items():
+        if isinstance(v, list):
+            out[k] = v
+        elif v is None:
+            out[k] = []
+        else:
+            out[k] = [v] if not isinstance(v, (list, tuple)) else list(v)
+    return out
+
+
+def _presupuesto_filtros_opciones_rpc(
+    contrato_id: int,
+    current_user,
+    *,
+    capitulo: Optional[str] = None,
+    item: Optional[str] = None,
+    tramo: Optional[str] = None,
+    calzada: Optional[str] = None,
+    tipo_ejecucion: Optional[str] = None,
+) -> dict:
+    payload = {
+        "p_contrato_id": int(contrato_id),
+        "p_tipo_ejecucion": (tipo_ejecucion or "").strip() or None,
+        "p_capitulo": (capitulo or "").strip() or None,
+        "p_item": (item or "").strip() or None,
+        "p_tramo": (tramo or "").strip() or None,
+        "p_calzada": (calzada or "").strip() or None,
+        "p_filtrar_interv": bool(_presupuesto_aplica_filtro_interventoria(current_user)),
+    }
+
+    def _rpc():
+        return supabase.rpc("presupuesto_filtros_opciones", payload).execute().data
+
+    raw = supabase_execute(_rpc, retries=1)
+    return _presupuesto_filtros_rpc_parse(raw)
+
+
+def _presupuesto_filtros_respuesta_formateada(data: dict) -> dict:
+    caps = sorted(
+        {str(x).strip() for x in (data.get("capitulos") or []) if str(x).strip()},
+        key=_orden_capitulo_presupuesto,
+    )
+    tipos_ejecucion = sorted(
+        {str(x).strip() for x in (data.get("tipos_ejecucion") or []) if str(x).strip()}
+        & _PRESUPUESTO_TIPOS_EJECUCION_VALIDOS
+    )
+    return {
+        "capitulos": caps,
+        "items": [],
+        "tramos": sorted({str(x).strip() for x in (data.get("tramos") or []) if str(x).strip()}),
+        "calzadas": sorted({str(x).strip() for x in (data.get("calzadas") or []) if str(x).strip()}),
+        "competencias": sorted({str(x).strip() for x in (data.get("competencias") or []) if str(x).strip()}),
+        "unds": sorted({str(x).strip() for x in (data.get("unds") or []) if str(x).strip()}),
+        "revisados": sorted({str(x).strip() for x in (data.get("revisados") or []) if str(x).strip()}),
+        "pre_interv_estados": sorted(
+            {str(x).strip() for x in (data.get("pre_interv_estados") or []) if str(x).strip()}
+        ),
+        "sellados": sorted({bool(x) for x in (data.get("sellados") or [])}),
+        "dados_de_baja": sorted({bool(x) for x in (data.get("dados_de_baja") or [])}),
+        "tipos_ejecucion": tipos_ejecucion,
+    }
+
+
+def _presupuesto_filtros_opciones_legacy(
+    contrato_id: int,
+    current_user,
+    *,
+    capitulo: Optional[str] = None,
+    item: Optional[str] = None,
+    items: Optional[List[str]] = None,
+    tramo: Optional[str] = None,
+    calzada: Optional[str] = None,
+    tipo_ejecucion: Optional[str] = None,
+) -> dict:
+    """Fallback: escaneo paginado (lento). Solo si RPC presupuesto_filtros_opciones no existe."""
+    rows = _presupuesto_fetch_filtros_source_rows(
+        contrato_id,
+        current_user,
+        capitulo=capitulo,
+        item=item,
+        items=items,
+        tramo=tramo,
+        calzada=calzada,
+        tipo_ejecucion=tipo_ejecucion,
+    )
+    caps = sorted(
+        {r["capitulo"] for r in rows if r.get("capitulo")},
+        key=_orden_capitulo_presupuesto,
+    )
+    tramos = sorted(set(r["tramo"] for r in rows if r.get("tramo")))
+    calzadas = sorted(set(r["calzada"] for r in rows if r.get("calzada")))
+    competencias = sorted(set(r["competencia"] for r in rows if r.get("competencia")))
+    unds = sorted(set(r["und"] for r in rows if r.get("und")))
+    revisados = sorted(set(r["revisado"] for r in rows if r.get("revisado")))
+    pre_interv = sorted(
+        set((r.get("pre_interv_estado") or "No Revisado") for r in rows)
+    )
+    sellados = sorted({bool(r.get("sellado")) for r in rows})
+    dados_baja = sorted({bool(r.get("dado_de_baja")) for r in rows})
+    tipos_q = (
+        supabase.table("presupuesto")
+        .select("tipo_ejecucion")
+        .eq("contrato_id", contrato_id)
+        .eq("dado_de_baja", False)
+    )
+    if _presupuesto_aplica_filtro_interventoria(current_user):
+        tipos_q = tipos_q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
+    tipos_rows: List[dict] = []
+    tipos_off = 0
+    while True:
+        tipos_batch = tipos_q.range(tipos_off, tipos_off + 999).execute().data or []
+        tipos_rows.extend(tipos_batch)
+        if len(tipos_batch) < 1000:
+            break
+        tipos_off += 1000
+    tipos_ejecucion = sorted(
+        {str(r.get("tipo_ejecucion")).strip() for r in tipos_rows if r.get("tipo_ejecucion")}
+        & _PRESUPUESTO_TIPOS_EJECUCION_VALIDOS
+    )
+    return {
+        "capitulos": caps,
+        "items": [],
+        "tramos": tramos,
+        "calzadas": calzadas,
+        "competencias": competencias,
+        "unds": unds,
+        "revisados": revisados,
+        "pre_interv_estados": pre_interv,
+        "sellados": sellados,
+        "dados_de_baja": dados_baja,
+        "tipos_ejecucion": tipos_ejecucion,
+    }
+
+
 def _presupuesto_fetch_filtros_source_rows(
     contrato_id: int,
     current_user,
@@ -6095,69 +6269,49 @@ def get_filtros_presupuesto(
     tipo_ejecucion: Optional[str] = None,
     current_user=Depends(get_current_user),
 ):
-    """Devuelve valores únicos para filtros en cascada (respeta vista Presupuesto de Obra / Obra Ejecutada)."""
+    """Valores únicos para filtros en cascada (RPC DISTINCT + caché; ítems vía listado-precios en UI)."""
     _require_contract_access(current_user, contrato_id)
-    rows = _presupuesto_fetch_filtros_source_rows(
-        contrato_id,
-        current_user,
-        capitulo=capitulo,
-        item=item,
-        items=items,
-        tramo=tramo,
-        calzada=calzada,
-        tipo_ejecucion=tipo_ejecucion,
+    item_eff = (item or "").strip() or None
+    if not item_eff and items:
+        ins = [str(x).strip() for x in items if str(x).strip()]
+        if len(ins) == 1:
+            item_eff = ins[0]
+    cache_key = (
+        int(contrato_id),
+        (tipo_ejecucion or "").strip(),
+        (capitulo or "").strip(),
+        item_eff or "",
+        (tramo or "").strip(),
+        (calzada or "").strip(),
+        bool(_presupuesto_aplica_filtro_interventoria(current_user)),
     )
-    caps = sorted(
-        {r["capitulo"] for r in rows if r.get("capitulo")},
-        key=_orden_capitulo_presupuesto,
-    )
-    items   = sorted(set(r["item"]     for r in rows if r.get("item")))
-    tramos  = sorted(set(r["tramo"]    for r in rows if r.get("tramo")))
-    calzadas= sorted(set(r["calzada"]  for r in rows if r.get("calzada")))
-    competencias = sorted(set(r["competencia"] for r in rows if r.get("competencia")))
-    unds = sorted(set(r["und"] for r in rows if r.get("und")))
-    revisados = sorted(set(r["revisado"] for r in rows if r.get("revisado")))
-    pre_interv = sorted(
-        set(
-            (r.get("pre_interv_estado") or "No Revisado")
-            for r in rows
+    cached = _presupuesto_filtros_cache_get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        raw = _presupuesto_filtros_opciones_rpc(
+            contrato_id,
+            current_user,
+            capitulo=capitulo,
+            item=item_eff,
+            tramo=tramo,
+            calzada=calzada,
+            tipo_ejecucion=tipo_ejecucion,
         )
-    )
-    sellados = sorted({bool(r.get("sellado")) for r in rows})
-    dados_baja = sorted({bool(r.get("dado_de_baja")) for r in rows})
-    tipos_q = (
-        supabase.table("presupuesto")
-        .select("tipo_ejecucion")
-        .eq("contrato_id", contrato_id)
-        .eq("dado_de_baja", False)
-    )
-    if _presupuesto_aplica_filtro_interventoria(current_user):
-        tipos_q = tipos_q.or_("pre_interv_estado.is.null,pre_interv_estado.eq.Aprobado")
-    tipos_rows: List[dict] = []
-    tipos_off = 0
-    while True:
-        tipos_batch = tipos_q.range(tipos_off, tipos_off + 999).execute().data or []
-        tipos_rows.extend(tipos_batch)
-        if len(tipos_batch) < 1000:
-            break
-        tipos_off += 1000
-    tipos_ejecucion = sorted(
-        {str(r.get("tipo_ejecucion")).strip() for r in tipos_rows if r.get("tipo_ejecucion")}
-        & _PRESUPUESTO_TIPOS_EJECUCION_VALIDOS
-    )
-    return {
-        "capitulos": caps,
-        "items": items,
-        "tramos": tramos,
-        "calzadas": calzadas,
-        "competencias": competencias,
-        "unds": unds,
-        "revisados": revisados,
-        "pre_interv_estados": pre_interv,
-        "sellados": sellados,
-        "dados_de_baja": dados_baja,
-        "tipos_ejecucion": tipos_ejecucion,
-    }
+        out = _presupuesto_filtros_respuesta_formateada(raw)
+    except Exception:
+        out = _presupuesto_filtros_opciones_legacy(
+            contrato_id,
+            current_user,
+            capitulo=capitulo,
+            item=item_eff,
+            items=items,
+            tramo=tramo,
+            calzada=calzada,
+            tipo_ejecucion=tipo_ejecucion,
+        )
+    _presupuesto_filtros_cache_set(cache_key, out)
+    return out
 
 
 @app.get("/presupuesto/{contrato_id}/analisis-liquidacion")

@@ -10,7 +10,7 @@ import {
   pptoFiltroDef,
   pptoFiltroChipResumen,
   pptoFiltrosActivosKeys,
-  pptoMergeItemsOpciones,
+  pptoCmpItemNumero,
 } from './pptoFiltroCatalogo'
 import {
   crearFiltroPlantilla,
@@ -66,34 +66,43 @@ export default function PptoFiltroModal({
     setTab('plantillas')
   }, [open, fAplicado])
 
+  const cascadeKey = useMemo(() => {
+    const capSingle = draftF.caps?.length === 1 ? draftF.caps[0] : (draftF.cap || '')
+    return [capSingle, draftF.tramo || '', draftF.calzada || ''].join('|')
+  }, [draftF.cap, draftF.caps, draftF.tramo, draftF.calzada])
+
   useEffect(() => {
     if (!open || !contratoId || !token) return
     let cancelled = false
-    fetchPresupuestoFiltrosOpciones(contratoId, token, {
-      capitulo: draftF.cap || undefined,
-      item: draftF.item || undefined,
-      tramo: draftF.tramo || undefined,
-      calzada: draftF.calzada || undefined,
-      tipo_ejecucion: tipoEjecucionActivo,
-    })
-      .then((data) => { if (!cancelled) setOpciones(data || {}) })
-      .catch(() => {})
-    return () => { cancelled = true }
-  }, [open, contratoId, token, draftF.cap, draftF.item, draftF.tramo, draftF.calzada, tipoEjecucionActivo])
+    const capSingle = draftF.caps?.length === 1 ? draftF.caps[0] : (draftF.cap || undefined)
+    const timer = setTimeout(() => {
+      fetchPresupuestoFiltrosOpciones(contratoId, token, {
+        capitulo: capSingle,
+        tramo: draftF.tramo || undefined,
+        calzada: draftF.calzada || undefined,
+        tipo_ejecucion: tipoEjecucionActivo,
+      })
+        .then((data) => { if (!cancelled) setOpciones(data || {}) })
+        .catch(() => {})
+    }, cascadeKey === '||' ? 0 : 320)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [open, contratoId, token, tipoEjecucionActivo, cascadeKey])
 
   const opcionesConItems = useMemo(() => {
     const base = opciones || {}
-    const fromApi = Array.isArray(base.items_opciones)
-      ? base.items_opciones
-      : (base.items || []).map((i) => (typeof i === 'string' ? { item: i } : i))
+    const capsSel = draftF.caps?.length ? draftF.caps : (draftF.cap ? [draftF.cap] : [])
     const fromLp = (listadoPrecios || [])
-      .filter((p) => {
-        if (!draftF.cap && !(draftF.caps?.length)) return true
-        const caps = draftF.caps?.length ? draftF.caps : (draftF.cap ? [draftF.cap] : [])
-        return !caps.length || caps.includes(p.capitulo)
-      })
+      .filter((p) => !capsSel.length || capsSel.includes(p.capitulo))
       .map((p) => ({ item: p.item_numero, descripcion: p.descripcion }))
-    return { ...base, items_opciones: pptoMergeItemsOpciones(fromApi, fromLp) }
+      .filter((o) => o.item)
+      .sort((a, b) => pptoCmpItemNumero(a.item, b.item))
+    const capitulos = base.capitulos?.length
+      ? base.capitulos
+      : [...new Set((listadoPrecios || []).map((p) => p.capitulo).filter(Boolean))]
+    return { ...base, capitulos, items_opciones: fromLp, items: [] }
   }, [opciones, listadoPrecios, draftF.cap, draftF.caps])
 
   const opcionesResueltas = useMemo(
