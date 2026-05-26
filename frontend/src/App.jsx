@@ -1076,6 +1076,23 @@ function permisoReporteCantidades(usuario) {
   )
 }
 
+/** Matriz por contrato activo (misma lógica que ModuloPresupuesto). */
+function permisoFuncionContrato(usuario, nombreFuncion, contratoId) {
+  const want = (nombreFuncion || '').toLowerCase()
+  const rows = (usuario?.permisos || []).filter(
+    (p) => (p.funcion_nombre || '').toLowerCase() === want,
+  )
+  if (!rows.length) return null
+  const cid = Number(contratoId ?? usuario?.contrato_id)
+  if (Number.isFinite(cid)) {
+    const exact = rows.find((p) => Number(p.contrato_id) === cid)
+    if (exact) return exact
+    const legacy = rows.find((p) => p.contrato_id == null || p.contrato_id === '')
+    if (legacy) return legacy
+  }
+  return rows[0]
+}
+
 /** Alineado con backend `_es_desarrollador`: cargo o rol «desarrollador». */
 function esUsuarioDesarrollador(usuario) {
   const norm = (txt) =>
@@ -14095,13 +14112,12 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
   const puedeEditarInformesCcd = _permisoInformesCcdFlag('editar')
   const puedeValidarInformesCcd = _permisoInformesCcdFlag('validar')
   const puedeExportarInformesCcd = _permisoInformesCcdFlag('exportar')
-  const tienePermisoPresupuesto = esDeveloper || (usuario?.permisos || []).some(p => {
-    const nombre = (p.funcion_nombre || '').toLowerCase()
-    return nombre === 'editar registros presupuesto' && p.ver
-  })
-  const permisoMatrizEditarPpto = (usuario?.permisos || []).find(p =>
-    (p.funcion_nombre || '').toLowerCase() === 'editar registros presupuesto'
+  const permisoMatrizEditarPpto = permisoFuncionContrato(
+    usuario,
+    'editar registros presupuesto',
+    usuario?.contrato_id,
   )
+  const tienePermisoPresupuesto = esDeveloper || !!(permisoMatrizEditarPpto?.ver)
   const puedeEditarDimensionesPresupuesto = esDeveloper || !!(permisoMatrizEditarPpto?.editar)
 
   // Módulos experimentales: solo aparecen en el menú lateral si el cargo tiene Ver en Control de accesos
@@ -17346,7 +17362,9 @@ export default function App() {
           typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
             ? { signal: AbortSignal.timeout(30000) }
             : {}
-        const res = await fetch(`${API}/usuarios/me`, {
+        const cid = usuario?.contrato_id
+        const meUrl = cid ? `${API}/usuarios/me?contrato_id=${cid}` : `${API}/usuarios/me`
+        const res = await fetch(meUrl, {
           headers: { Authorization: `Bearer ${token}` },
           ...meOpt,
         })
@@ -17362,6 +17380,7 @@ export default function App() {
             _contratos: prev._contratos,
             logo_contratista: prev.logo_contratista,
             logo_interventoria: prev.logo_interventoria,
+            permisos: fresh.permisos ?? prev.permisos,
           }
           const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
           storage.setItem('cc_usuario', JSON.stringify(next))
@@ -17448,7 +17467,12 @@ export default function App() {
       // Polling de cambios de perfil (cargo, permisos, etc.)
       try {
         const freshToken = getToken()
-        const res = await fetch(`${API}/usuarios/me`, {
+        const prev0 = usuarioRef.current
+        const cidPoll = prev0?.contrato_id
+        const mePollUrl = cidPoll
+          ? `${API}/usuarios/me?contrato_id=${cidPoll}`
+          : `${API}/usuarios/me`
+        const res = await fetch(mePollUrl, {
           headers: { Authorization: `Bearer ${freshToken}` }
         })
         if (!res.ok) return
@@ -17478,6 +17502,7 @@ export default function App() {
             _contratos:       prev._contratos,
             logo_contratista: prev.logo_contratista,
             logo_interventoria: prev.logo_interventoria,
+            permisos: fresh.permisos ?? prev.permisos,
           }
           const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage
           storage.setItem('cc_usuario', JSON.stringify(updated))
@@ -17627,6 +17652,20 @@ if (contratos.length > 1) {
     }
   }
 
+  async function permisosParaContratoActivo(contratoId, token) {
+    if (!contratoId || !token) return null
+    try {
+      const res = await fetch(`${API}/usuarios/me?contrato_id=${contratoId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) return null
+      const fresh = await res.json()
+      return fresh.permisos || null
+    } catch {
+      return null
+    }
+  }
+
   async function cambiarContratoActivo(contrato, baseUser = null) {
     const prev = baseUser ?? usuario
     if (!prev || !contrato?.id) return null
@@ -17646,6 +17685,8 @@ if (contratos.length > 1) {
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify({ contrato_id: contrato.id }),
         })
+        const permisos = await permisosParaContratoActivo(contrato.id, token)
+        if (permisos) u.permisos = permisos
       }
     } catch { /* silencioso */ }
     const storage = localStorage.getItem('cc_token') ? localStorage : sessionStorage

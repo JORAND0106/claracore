@@ -1393,60 +1393,53 @@ def _caller_cargo_id(current_user) -> Optional[int]:
         return None
 
 
-def _cargo_permiso_editar_registros_presupuesto(current_user) -> bool:
-    """Matriz de permisos: función «editar registros presupuesto» con acción editar (alineado con el frontend)."""
+def _cargo_tiene_permiso_funcion(
+    current_user,
+    funcion_nombre: str,
+    flag: str,
+    contrato_id: Optional[int] = None,
+) -> bool:
+    """Matriz por cargo; si contrato_id, filas de ese contrato (misma lógica que login y /usuarios/me)."""
     cid = _caller_cargo_id(current_user)
     if cid is None:
         return False
+    want = (funcion_nombre or "").strip().lower()
     try:
-        perms = supabase_execute(
-            lambda: supabase.table("permisos")
-            .select("funcion_id, editar")
-            .eq("cargo_id", cid)
-            .execute()
-            .data
-        ) or []
-        fids = [p["funcion_id"] for p in perms if p.get("editar")]
+        perms = _permisos_rows_para_cargo(
+            int(cid),
+            int(contrato_id) if contrato_id is not None else None,
+        )
+        fids = [p["funcion_id"] for p in perms if p.get(flag)]
         if not fids:
             return False
         funcs = supabase_execute(
-            lambda: supabase.table("funciones").select("id, nombre").in_("id", fids).execute().data
+            lambda: supabase.table("funciones")
+            .select("id, nombre")
+            .in_("id", fids)
+            .execute()
+            .data
         ) or []
-        want = "editar registros presupuesto"
-        for f in funcs:
-            if (f.get("nombre") or "").strip().lower() == want:
-                return True
+        return any((f.get("nombre") or "").strip().lower() == want for f in funcs)
     except Exception:
         return False
-    return False
 
 
-def _cargo_permiso_validar_presupuesto(current_user) -> bool:
+def _cargo_permiso_editar_registros_presupuesto(
+    current_user, contrato_id: Optional[int] = None
+) -> bool:
+    """Matriz: función «editar registros presupuesto» con acción editar."""
+    return _cargo_tiene_permiso_funcion(
+        current_user, "editar registros presupuesto", "editar", contrato_id
+    )
+
+
+def _cargo_permiso_validar_presupuesto(
+    current_user, contrato_id: Optional[int] = None
+) -> bool:
     """Matriz: función «editar registros presupuesto» con acción validar."""
-    cid = _caller_cargo_id(current_user)
-    if cid is None:
-        return False
-    try:
-        perms = supabase_execute(
-            lambda: supabase.table("permisos")
-            .select("funcion_id, validar")
-            .eq("cargo_id", cid)
-            .execute()
-            .data
-        ) or []
-        fids = [p["funcion_id"] for p in perms if p.get("validar")]
-        if not fids:
-            return False
-        funcs = supabase_execute(
-            lambda: supabase.table("funciones").select("id, nombre").in_("id", fids).execute().data
-        ) or []
-        want = "editar registros presupuesto"
-        for f in funcs:
-            if (f.get("nombre") or "").strip().lower() == want:
-                return True
-    except Exception:
-        return False
-    return False
+    return _cargo_tiene_permiso_funcion(
+        current_user, "editar registros presupuesto", "validar", contrato_id
+    )
 
 
 def _cargo_permiso_validar_reporte_cantidades_user_id(user_id: int) -> bool:
@@ -1573,8 +1566,12 @@ def _puede_eliminar_reporte_cantidades(current_user) -> bool:
     return _es_desarrollador(current_user) or _cargo_permiso_eliminar_reporte_cantidades(current_user)
 
 
-def _puede_editar_dimensiones_presupuesto(current_user) -> bool:
-    return _es_desarrollador(current_user) or _cargo_permiso_editar_registros_presupuesto(current_user)
+def _puede_editar_dimensiones_presupuesto(
+    current_user, contrato_id: Optional[int] = None
+) -> bool:
+    return _es_desarrollador(current_user) or _cargo_permiso_editar_registros_presupuesto(
+        current_user, contrato_id
+    )
 
 
 # Contrato donde editores con «editar registros presupuesto» pueden editar nodos y área/long como Desarrollador (regla puntual).
@@ -1591,7 +1588,7 @@ def _ppto_puede_editar_nodos_y_area_long_como_dev(contrato_id: Optional[int], cu
         return False
     if cid != _PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG:
         return False
-    return _cargo_permiso_editar_registros_presupuesto(current_user)
+    return _cargo_permiso_editar_registros_presupuesto(current_user, contrato_id)
 
 
 _PPTO_MSG_BAJA_PLANO = (
@@ -3899,7 +3896,10 @@ def registro_usuario(usuario: UsuarioRegistro):
 # ─────────────────────────────────────────────
 
 @app.get("/usuarios/me")
-def get_mi_usuario(current_user=Depends(get_current_user)):
+def get_mi_usuario(
+    contrato_id: Optional[int] = None,
+    current_user=Depends(get_current_user),
+):
     """Devuelve el perfil actualizado del usuario en sesión."""
     uid = int(current_user["sub"])
     sb = get_supabase()
@@ -3925,7 +3925,11 @@ def get_mi_usuario(current_user=Depends(get_current_user)):
     permisos = []
     if u.get("cargo_id"):
         try:
-            permisos_raw = sb.table("permisos").select("*").eq("cargo_id", u["cargo_id"]).execute().data
+            cid_scope = contrato_id if contrato_id is not None else u.get("contrato_id")
+            permisos_raw = _permisos_rows_para_cargo(
+                int(u["cargo_id"]),
+                int(cid_scope) if cid_scope is not None else None,
+            )
             funciones_rows = sb.table("funciones").select("id, nombre").execute().data
             funciones_map = {f["id"]: f["nombre"] for f in funciones_rows}
             permisos = [{**p, "funcion_nombre": funciones_map.get(p["funcion_id"], "")} for p in permisos_raw]
@@ -6729,7 +6733,7 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
             data["validado_por"] = None
             data["validado_en"] = None
             reset_interv_comment = motivo_interv
-    if not _puede_editar_dimensiones_presupuesto(current_user):
+    if not _puede_editar_dimensiones_presupuesto(current_user, _cid_row):
         for k in ("area_long_nod", "ancho", "espesor", "cant_total"):
             if k in data:
                 raise HTTPException(
@@ -6791,7 +6795,9 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
         nu = str(data.get("revisado") or "No Revisado").strip()
         prev_rev_cmp = str(prev_row.get("revisado") or "No Revisado").strip()
         if nu != prev_rev_cmp and not reset_interv_comment:
-            if not _es_desarrollador(current_user) and not _cargo_permiso_validar_presupuesto(current_user):
+            if not _es_desarrollador(current_user) and not _cargo_permiso_validar_presupuesto(
+                current_user, _cid_row
+            ):
                 raise HTTPException(
                     status_code=403,
                     detail="No tiene permiso de validación en «editar registros presupuesto» para cambiar el estado «revisado».",
@@ -6803,7 +6809,9 @@ def update_presupuesto_item(item_id: int, body: PresupuestoUpdate, current_user=
                 status_code=422,
                 detail="tipo_ejecucion debe ser «Presupuesto de Obra» u «Obra Ejecutada».",
             )
-        if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(current_user):
+        if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(
+            current_user, _cid_row
+        ):
             raise HTTPException(
                 status_code=403,
                 detail="No tiene permiso para editar registros de presupuesto.",
@@ -7596,7 +7604,9 @@ def bulk_recalcular(contrato_id: int, body: PresupuestoBulkRecalc, current_user=
 def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depends(get_current_user)):
     if not body.ids:
         raise HTTPException(status_code=400, detail="No hay registros seleccionados")
-    if not _es_desarrollador(current_user) and not _cargo_permiso_validar_presupuesto(current_user):
+    if not _es_desarrollador(current_user) and not _cargo_permiso_validar_presupuesto(
+        current_user, contrato_id
+    ):
         raise HTTPException(
             status_code=403,
             detail="No tiene permiso de validación en «editar registros presupuesto» (matriz de accesos).",
@@ -7657,7 +7667,7 @@ def bulk_pre_interv(contrato_id: int, body: PresupuestoBulkPreInterv, current_us
     cargo = (current_user.get("cargo_nombre") or "").strip().lower()
     es_dev = cargo == "desarrollador" or rol == "desarrollador"
     if not es_dev:
-        if not _cargo_permiso_validar_presupuesto(current_user):
+        if not _cargo_permiso_validar_presupuesto(current_user, contrato_id):
             raise HTTPException(
                 status_code=403,
                 detail="No tiene permiso de validación en «editar registros presupuesto» (matriz de accesos).",
@@ -7696,7 +7706,9 @@ def bulk_tipo_ejecucion(contrato_id: int, body: PresupuestoBulkTipoEjecucion, cu
     _require_contract_access(current_user, contrato_id)
     if not body.ids:
         raise HTTPException(status_code=400, detail="No hay registros seleccionados")
-    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(current_user):
+    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(
+        current_user, contrato_id
+    ):
         raise HTTPException(status_code=403, detail="No tiene permiso para editar registros de presupuesto.")
     te = str(body.tipo_ejecucion or "").strip()
     if te not in ("Presupuesto de Obra", "Obra Ejecutada"):

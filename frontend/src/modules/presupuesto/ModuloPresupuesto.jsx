@@ -85,8 +85,25 @@ function aplicarCorreccionesDiscrepanciasSicoeCad(items, discrepancias) {
   return out
 }
 
+/** Fila de matriz «editar registros presupuesto» para el contrato activo (evita .find() con permisos de otro contrato). */
+function permisoEditarRegistrosPresupuesto(usuario, contratoId) {
+  const want = 'editar registros presupuesto'
+  const rows = (usuario?.permisos || []).filter(
+    (p) => (p.funcion_nombre || '').toLowerCase() === want,
+  )
+  if (!rows.length) return null
+  const cid = Number(contratoId)
+  if (Number.isFinite(cid)) {
+    const exact = rows.find((p) => Number(p.contrato_id) === cid)
+    if (exact) return exact
+    const legacy = rows.find((p) => p.contrato_id == null || p.contrato_id === '')
+    if (legacy) return legacy
+  }
+  return rows[0]
+}
+
 /** Visibilidad y niveles de validación presupuesto (depuración / interventoría): permisos de «editar registros presupuesto», no Reporte de cantidades. */
-function determinarNivelValidacion(usuario) {
+function determinarNivelValidacion(usuario, contratoId) {
   const norm = (txt) =>
     String(txt || '')
       .normalize('NFD')
@@ -96,10 +113,7 @@ function determinarNivelValidacion(usuario) {
       .replace(/\s+/g, ' ')
   const rol     = norm(usuario?.rol_nombre || usuario?.rol || '')
   const cargo   = norm(usuario?.cargo_nombre || usuario?.cargo || '')
-  const permisos = usuario?.permisos || []
-  const permPpto = permisos.find(p =>
-    (p.funcion_nombre || '').toLowerCase() === 'editar registros presupuesto'
-  )
+  const permPpto = permisoEditarRegistrosPresupuesto(usuario, contratoId)
   const puedeValidar = !!(permPpto?.validar)
   const puedeEditar  = !!(permPpto?.editar)
 
@@ -505,7 +519,7 @@ useEffect(() => {
   }, [contratoId, oculto])
 
   const esDeveloper  = usuario?.cargo_nombre?.toLowerCase() === 'desarrollador'
-  const _permPpto    = (usuario?.permisos || []).find(p => p.funcion_nombre?.toLowerCase() === 'editar registros presupuesto')
+  const _permPpto    = permisoEditarRegistrosPresupuesto(usuario, contratoId)
   /** Contrato 2: editores con matriz «editar» pueden tratar No.Ini / No.Fin y área/long como Desarrollador (backend alineado). */
   const PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG = 2
   const puedeEditarNodosYAreaLongComoDev =
@@ -524,7 +538,7 @@ useEffect(() => {
   const puedeReabrirTrasAprob = esRolContratistaPpto && !esDeveloper && (_permPpto?.editar ?? false)
   const puedeValidar = esDeveloper || (_permPpto?.validar  ?? false)
   const puedeEliminar = esDeveloper || (_permPpto?.eliminar ?? false)
-  const nivelInfo    = determinarNivelValidacion(usuario)
+  const nivelInfo    = determinarNivelValidacion(usuario, contratoId)
   const esSellado = (r) => r?.sellado === true
   const aplicaReglasCadPresupuesto = Number(contratoId) !== PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG
   const MSG_BAJA_DESDE_PLANO = 'Este registro está enlazado al plano (ID-POL). La baja debe gestionarse desde ClaraLink/DWG en SicoeCAD.'
