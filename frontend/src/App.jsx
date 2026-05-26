@@ -39,6 +39,7 @@ import TrazabilidadRegistroModal from './TrazabilidadRegistroModal'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import ModuloPresupuesto from './modules/presupuesto/ModuloPresupuesto'
+import { limpiarTodasFiltroSesionPresupuesto } from './modules/presupuesto/pptoFiltroSesion'
 import ModuloProgramacionObra from './ModuloProgramacionObra'
 import TopografiaMain from './components/topografia/TopografiaMain'
 import EmojiPicker from './EmojiPicker'
@@ -17715,6 +17716,7 @@ if (contratos.length > 1) {
     }
     localStorage.removeItem('cc_token'); localStorage.removeItem('cc_usuario')
     sessionStorage.removeItem('cc_token'); sessionStorage.removeItem('cc_usuario')
+    limpiarTodasFiltroSesionPresupuesto()
     setUsuario(null)
   }
 

@@ -948,6 +948,11 @@ class PresupuestoBulkTipoEjecucion(BaseModel):
     ids: List[int]
     tipo_ejecucion: str
 
+
+class PresupuestoBulkObservacion(BaseModel):
+    ids: List[int]
+    observacion_externa: str
+
 class ComentariosValidacionIds(BaseModel):
     """Lista de filas `presupuesto` para comentarios de validación; POST evita query strings gigantes (5xx en proxy)."""
     ids: List[int]
@@ -7557,12 +7562,16 @@ def bulk_estado(contrato_id: int, body: PresupuestoBulkEstado, current_user=Depe
                     status_code=403,
                     detail="El registro debe estar aprobado en depuración contratista (Residente de Costos u Obra) antes de la validación de Interventoría.",
                 )
-    es_interventoria_sellar = current_user.get("rol_nombre") == "Interventoría"
+    es_interventoria_sellar = rol_l in ("interventoría", "interventoria") or (
+        "intervent" in rol_l and "gerencial" in rol_l
+    )
     sellar = body.revisado == "Aprobado" and es_interventoria_sellar
     nombre_usuario = current_user.get("nombre") or current_user.get("email") or "Usuario"
     data_upd = {"revisado": body.revisado, "updated_at": "now()"}
     if sellar:
         data_upd["sellado"] = True
+    elif body.revisado != "Aprobado":
+        data_upd["sellado"] = False
     if body.revisado == "Aprobado":
         data_upd["validado_por"] = nombre_usuario
         data_upd["validado_en"]  = datetime.utcnow().isoformat()
@@ -7658,6 +7667,41 @@ def bulk_tipo_ejecucion(contrato_id: int, body: PresupuestoBulkTipoEjecucion, cu
         {"contrato_id": contrato_id, "cantidad_registros": len(ids_ok), "tipo_ejecucion": te},
     )
     return {"actualizados": len(ids_ok), "tipo_ejecucion": te}
+
+
+@app.put("/presupuesto/{contrato_id}/bulk-observacion")
+def bulk_observacion_externa(
+    contrato_id: int, body: PresupuestoBulkObservacion, current_user=Depends(get_current_user)
+):
+    """Actualiza observacion_externa en lote (edición masiva presupuesto)."""
+    _require_contract_access(current_user, contrato_id)
+    if not body.ids:
+        raise HTTPException(status_code=400, detail="No hay registros seleccionados")
+    texto = str(body.observacion_externa or "").strip()
+    if not texto:
+        raise HTTPException(status_code=422, detail="observacion_externa no puede estar vacía.")
+    if not _es_desarrollador(current_user) and not _cargo_permiso_editar_registros_presupuesto(
+        current_user, contrato_id
+    ):
+        raise HTTPException(status_code=403, detail="No tiene permiso para editar registros de presupuesto.")
+    _reject_if_presupuesto_sellado(supabase, body.ids)
+    rows = supabase.table("presupuesto").select("id, contrato_id").in_("id", body.ids).execute().data or []
+    ids_ok = [int(r["id"]) for r in rows if int(r.get("contrato_id") or 0) == int(contrato_id)]
+    if not ids_ok:
+        raise HTTPException(status_code=400, detail="Ningún registro válido para este contrato.")
+    supabase.table("presupuesto").update(
+        {"observacion_externa": texto, "updated_at": "now()"}
+    ).in_("id", ids_ok).execute()
+    registrar_log(
+        current_user,
+        "EDITAR",
+        "PRESUPUESTO",
+        "presupuesto_bulk_observacion",
+        str(contrato_id),
+        {"contrato_id": contrato_id, "cantidad_registros": len(ids_ok)},
+    )
+    return {"actualizados": len(ids_ok)}
+
 
 # ─────────────────────────────────────────────
 # CAD QUEUE

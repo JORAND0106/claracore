@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react"
+import { flushSync } from "react-dom"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts"
 import TrazabilidadRegistroModal from '../../TrazabilidadRegistroModal'
 import mapboxgl from "mapbox-gl"
@@ -11,9 +12,23 @@ import { createRealtimeDebouncer, isEfectivoOffline } from '../../realtimeUtils'
 import { formatCOP, formatCOPShort } from '../../utils/formatCOP'
 import EmojiPicker from '../../EmojiPicker'
 import PptoFiltroObraVista from './PptoFiltroObraVista'
+import PptoEdicionMasivaModal from './PptoEdicionMasivaModal'
+import {
+  esDesarrolladorPresupuesto,
+  esRolContratistaDepuracion,
+  esRolInterventoriaValidacion,
+  esContratistaGerencialPresupuesto,
+  preIntervLiberadoParaInterventoria,
+} from './pptoRolesValidacion'
+import {
+  capturarSnapshotFilas,
+  restaurarSnapshotPresupuesto,
+  filasDesdeSnapshot,
+} from './pptoUndoUltima'
 import PptoVersionador from './PptoVersionador'
 import { downloadPresupuestoInformeExcel } from './presupuestoExportExcel'
-import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroValoresLista, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
+import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
+import { cargarFiltroSesion, guardarFiltroSesion, limpiarFiltroSesion } from './pptoFiltroSesion'
 import CcAvisoModal from '../../components/CcAvisoModal'
 
 /** Tipografía alineada con Pequeña / Mediana / Grande (`applyClaraTypography` en `typographyScale.js`) */
@@ -234,6 +249,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [editItem, setEditItem] = useState('')
   const [editDims, setEditDims] = useState({})      // {[id]: { area_long_nod?, ancho, espesor }}
   const [modalConfirm, setModalConfirm] = useState(false)
+  const [modalEdicionMasiva, setModalEdicionMasiva] = useState(false)
   const [bulkEstado, setBulkEstado] = useState('')
   const [bulkPreInterv, setBulkPreInterv] = useState('')
   const [bulkTipoEjecucion, setBulkTipoEjecucion] = useState('')
@@ -242,6 +258,9 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const [busquedaV2,   setBusquedaV2]   = useState('')   // nodo_fin | abs_fin (no se usa en idpol)
   const [filtroEstado, setFiltroEstado] = useState('')   // filtro permanente de estado de revisión
   const [guardandoBulk, setGuardandoBulk] = useState(false)
+  const [undoUltima, setUndoUltima] = useState(null)
+  const [deshaciendo, setDeshaciendo] = useState(false)
+  const undoSnapRef = useRef(null)
   const [itemBusqueda, setItemBusqueda] = useState('')
   const [itemDropOpen, setItemDropOpen] = useState(false)
   const [itemNavIdx, setItemNavIdx] = useState(-1)
@@ -513,12 +532,17 @@ useEffect(() => {
   }, [contratoId, drill, oculto])
 
   useEffect(() => {
+    limpiarUndoPresupuesto()
+  }, [contratoId])
+
+  useEffect(() => {
     if (!contratoId || oculto) return
     fetch(`${API}/listado-precios/${contratoId}`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : []).then(setListadoPrecios).catch(() => {})
   }, [contratoId, oculto])
 
   const esDeveloper  = usuario?.cargo_nombre?.toLowerCase() === 'desarrollador'
+  const esDevPpto    = esDeveloper || esDesarrolladorPresupuesto(usuario)
   const _permPpto    = permisoEditarRegistrosPresupuesto(usuario, contratoId)
   /** Contrato 2: editores con matriz «editar» pueden tratar No.Ini / No.Fin y área/long como Desarrollador (backend alineado). */
   const PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG = 2
@@ -658,11 +682,88 @@ useEffect(() => {
     }
     return next
   }
-  const puedePrevalidarUI = (nivelInfo.puedePrevalidarAntesInterv || esDeveloper) && puedeValidar && !nivelInfo.esInterventoria
+  const puedePrevalidarUI =
+    (esDevPpto
+      || (puedeValidar
+        && esRolContratistaDepuracion(usuario)
+        && !nivelInfo.esInterventoria
+        && (nivelInfo.puedePrevalidarAntesInterv || esContratistaGerencialPresupuesto(usuario))))
+  const puedeValidarInterventoriaUI =
+    esDevPpto || (puedeValidar && esRolInterventoriaValidacion(usuario))
+  const puedeValidarInterventoriaRegistro = (r) => {
+    if (!puedeValidarInterventoriaUI || esSellado(r)) return false
+    if (esDevPpto) return true
+    return preIntervLiberadoParaInterventoria(r)
+  }
+  const puedeTabEditarMasiva = esDevPpto || puedeEditar
+  const puedeTabDepuracionMasiva =
+    esDevPpto
+    || (puedeValidar
+      && esRolContratistaDepuracion(usuario)
+      && !nivelInfo.esInterventoria
+      && (nivelInfo.puedePrevalidarAntesInterv || esContratistaGerencialPresupuesto(usuario)))
+  const puedeTabInterventoriaMasiva =
+    esDevPpto || (puedeValidar && esRolInterventoriaValidacion(usuario))
+  const puedeAbrirEdicionMasiva =
+    puedeTabEditarMasiva || puedeTabDepuracionMasiva || puedeTabInterventoriaMasiva
   const mostrarColumnaDepuracion = !nivelInfo.esInterventoria
   const _pptoCacheRef   = useRef(null)   // { data, ts, papelera } – solo para papelera
   const _pptoCachePorCap = useRef({})    // { [capitulo]: { data, ts } }
   const _lastWriteAtRef  = useRef(0)     // timestamp de la última escritura; suprime polling 6 s post-write
+
+  function registrarUndoPresupuesto(label, ids) {
+    const lista = [...new Set((ids || []).filter(Boolean))]
+    if (!lista.length) return
+    const snap = capturarSnapshotFilas(registros, lista)
+    if (!snap) return
+    undoSnapRef.current = snap
+    setUndoUltima({ label: String(label || 'Última acción'), count: lista.length, at: Date.now() })
+  }
+
+  function limpiarUndoPresupuesto() {
+    undoSnapRef.current = null
+    setUndoUltima(null)
+  }
+
+  async function deshacerUltimaAccionPresupuesto() {
+    const snap = undoSnapRef.current
+    const meta = undoUltima
+    if (!snap || !meta || deshaciendo) return
+    if (
+      !window.confirm(
+        `¿Deshacer «${meta.label}» en ${meta.count} registro(s)? Solo se revierte la última acción guardada.`,
+      )
+    ) {
+      return
+    }
+    limpiarUndoPresupuesto()
+    setDeshaciendo(true)
+    try {
+      const ids = await restaurarSnapshotPresupuesto({
+        API,
+        token,
+        contratoId,
+        snap,
+        aplicaReglasCadPresupuesto: aplicaReglasCadPresupuesto,
+        puedeEditarAreaLongNod: puedeEditarAreaLongNodInline(),
+      })
+      const byId = Object.fromEntries(filasDesdeSnapshot(snap).map((r) => [r.id, r]))
+      setRegistros((prev) => prev.map((r) => (byId[r.id] ? { ...r, ...byId[r.id] } : r)))
+      _lastWriteAtRef.current = Date.now()
+      setAvisoSistema({
+        titulo: 'Deshacer',
+        mensaje: `Se restauró la última acción (${ids.length} registro(s)).`,
+        tipo: 'ok',
+      })
+      cargarCapitulos({ silent: true }).catch(() => {})
+    } catch (e) {
+      undoSnapRef.current = snap
+      setUndoUltima(meta)
+      window.alert(e?.message || 'No se pudo deshacer la última acción.')
+    } finally {
+      setDeshaciendo(false)
+    }
+  }
   // Caché corta: otras sesiones (p. ej. interventoría) deben ver ediciones con latencia de segundos, no minutos
   const PPTO_CACHE_TTL  = 2 * 1000  // 2 s — vista papelera / lista plana
   const CAP_CACHE_TTL   = 2 * 1000  // 2 s — grilla por capítulo e ítem (antes 5–10 min)
@@ -1517,6 +1618,11 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       _pptoCachePorCap.current[key] = { data: rows, ts: Date.now(), total }
       busquedaServidorActivaRef.current = true
       skipDebounceFiltrosRef.current = true
+      guardarFiltroSesion(contratoId, {
+        f,
+        activeKeys: pptoFiltrosActivosKeys(f, []),
+        searched: true,
+      })
     } catch { /* silencio */ } finally {
       cargaPptoInFlightRef.current = false
       setBuscandoFiltroObra(false)
@@ -1577,6 +1683,22 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     } catch { /* ignore */ }
   }, [contratoId, oculto])
 
+  const sesionFiltroRestauradaRef = useRef(false)
+  useEffect(() => {
+    sesionFiltroRestauradaRef.current = false
+  }, [contratoId])
+
+  useEffect(() => {
+    if (!contratoId || oculto || sesionFiltroRestauradaRef.current) return
+    const ses = cargarFiltroSesion(contratoId)
+    if (!ses?.searched || !ses?.f) return
+    sesionFiltroRestauradaRef.current = true
+    const te = fObraRef.current?.tipoEjecucion || ses.f.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT
+    const fRest = { ...ses.f, tipoEjecucion: te }
+    skipDebounceFiltrosRef.current = true
+    void aplicarFiltroObraConF(fRest)
+  }, [contratoId, oculto])
+
   /** Quita búsqueda fina (PK, ID-POL, texto) y vuelve a cargar; mantiene cap/ítem y tramo/validación. */
   async function restablecerPksVistaItem() {
     const base = fObraRef.current
@@ -1599,6 +1721,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   function limpiarFiltroObra() {
     cargaPptoIdRef.current += 1
     busquedaServidorActivaRef.current = false
+    limpiarFiltroSesion(contratoId)
     const vacio = fObraInicialVacio()
     setFObra(vacio)
     fObraRef.current = vacio
@@ -2104,7 +2227,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     (puedeEditar && [...seleccionados].some(id => editDims[id]))
   ) && ![...seleccionados].some(id => esSellado(registros.find(r => r.id === id)))
 
-  async function ejecutarRecalcular() {
+  async function ejecutarRecalcular({ skipUndo = false, undoLabel = 'Recálculo masivo' } = {}) {
     const ids = [...seleccionados]
     if (aplicaReglasCadPresupuesto) {
       const intentaArea = ids.some((id) => {
@@ -2153,6 +2276,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (comentarioData === null) return  // canceló
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
+    if (!skipUndo) registrarUndoPresupuesto(undoLabel, ids)
 
     let nodosMergeEnBulk = {}
     if (tieneCambioNodos) {
@@ -2260,7 +2384,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
   }
 
-  async function ejecutarBulkTipoEjecucion() {
+  async function ejecutarBulkTipoEjecucion({ skipConfirm = false } = {}) {
     if (!bulkTipoEjecucion || seleccionados.size === 0) return
     const selIds = [...seleccionados]
     if (selIds.some(id => esSellado(registros.find(rr => rr.id === id)))) {
@@ -2268,7 +2392,8 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       return
     }
     const vistaTipo = fObraRef.current?.tipoEjecucion || fObra.tipoEjecucion || PPTO_TIPO_EJECUCION_DEFAULT
-    if (!window.confirm(`¿Cambiar tipo de ejecución a «${bulkTipoEjecucion}» en ${selIds.length} registro(s)?`)) return
+    if (!skipConfirm && !window.confirm(`¿Cambiar tipo de ejecución a «${bulkTipoEjecucion}» en ${selIds.length} registro(s)?`)) return
+    registrarUndoPresupuesto('Tipo de ejecución (selección)', selIds)
     setGuardandoBulk(true)
     const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-tipo-ejecucion`, {
       method: 'PUT',
@@ -2316,6 +2441,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     if (comentarioData === null) return
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
+    registrarUndoPresupuesto('Validación Interventoría (selección)', selIds)
     // Actualización optimista inmediata
     setRegistros(prev => prev.map(r => aplicarCambioEstadoLocal(r, selIds, estado)))
     setBulkEstado(''); setSeleccionados(new Set())
@@ -2345,6 +2471,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
     const estadoAplicado = bulkEstado
+    registrarUndoPresupuesto('Validación Interventoría (selección)', selIds)
     // Actualización optimista inmediata
     setRegistros(prev => prev.map(r => aplicarCambioEstadoLocal(r, selIds, estadoAplicado)))
     setBulkEstado(''); setSeleccionados(new Set())
@@ -2374,6 +2501,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
     const estadoPre = bulkPreInterv
+    registrarUndoPresupuesto('Depuración (selección)', selIds)
     // Capturar estado original para revertir si falla
     const snapOriginal = registros.filter(r => selIds.includes(r.id))
     // Actualización optimista inmediata
@@ -2401,6 +2529,196 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         alert('No se pudo aplicar la depuración previa.')
       }
     }
+  }
+
+  function idsSeleccionadosEditables() {
+    return [...seleccionados].filter((id) => !esSellado(registros.find((r) => r.id === id)))
+  }
+
+  function filaResumenMasivo(r, campo, antiguo, nuevo) {
+    return {
+      id: r.id,
+      ref: r.pk_id || r.id,
+      capitulo: r.capitulo,
+      item: r.item,
+      campo,
+      antiguo: String(antiguo ?? '—'),
+      nuevo: String(nuevo ?? '—'),
+    }
+  }
+
+  async function aplicarObservacionMasiva(ids, texto) {
+    const t0 = String(texto || '').trim()
+    if (!t0 || !ids.length) return
+    const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-observacion`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ids, observacion_externa: t0 }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err?.detail || 'No se pudo actualizar la observación.')
+    }
+    setRegistros((prev) => prev.map((r) => (ids.includes(r.id) ? { ...r, observacion_externa: t0 } : r)))
+  }
+
+  async function aplicarMasivoCapItem({ capitulo, item, precioSeleccionado, observacion }) {
+    const cap = capitulo || ''
+    const it = item || ''
+    const obs = String(observacion || '').trim()
+    const ids = idsSeleccionadosEditables()
+    if (!ids.length) throw new Error('No hay registros editables (los sellados se omiten).')
+    registrarUndoPresupuesto('Edición masiva: Capítulo / Ítem', ids)
+
+    const tieneCapItem = !!(cap || it)
+    if (!tieneCapItem && !obs) {
+      throw new Error('Indique capítulo, ítem u observación (opcional).')
+    }
+
+    const resumen = ids.map((id) => {
+      const r = registros.find((x) => x.id === id)
+      if (!r) return null
+      const partes = []
+      if (cap && cap !== (r.capitulo || '')) partes.push(`Cap: ${r.capitulo || '—'} → ${cap}`)
+      if (it && it !== (r.item || '')) partes.push(`Ítem: ${r.item || '—'} → ${it}`)
+      if (precioSeleccionado && it) partes.push(`V.U: ${fmt(precioSeleccionado.precio_unitario)}`)
+      if (obs) partes.push(`Obs: ${obs}`)
+      if (!partes.length) return null
+      return filaResumenMasivo(
+        r,
+        'Capítulo / Ítem',
+        `${r.capitulo || '—'} / ${r.item || '—'}`,
+        partes.join(' · '),
+      )
+    }).filter(Boolean)
+
+    if (tieneCapItem) {
+      flushSync(() => {
+        setEditCapitulo(cap)
+        setEditItem(it)
+        if (it && precioSeleccionado) {
+          setItemBusqueda(`${precioSeleccionado.item_numero} · ${precioSeleccionado.descripcion || ''}`)
+        }
+      })
+      setModalConfirm(false)
+      await ejecutarRecalcular({ skipUndo: true })
+    }
+    if (obs) await aplicarObservacionMasiva(ids, obs)
+    return resumen
+  }
+
+  async function aplicarMasivoDimensiones({ ancho, espesor, observacion }) {
+    const obs = String(observacion || '').trim()
+    const ids = idsSeleccionadosEditables()
+    if (!ids.length) throw new Error('No hay registros editables (los sellados se omiten).')
+    registrarUndoPresupuesto('Edición masiva: Dimensiones', ids)
+
+    const patch = {}
+    // Edición masiva: área/long/nodo solo desde plano (ClaraLink), nunca por este flujo.
+    if (String(ancho ?? '').trim() !== '') patch.ancho = String(ancho).trim()
+    if (String(espesor ?? '').trim() !== '') patch.espesor = String(espesor).trim()
+    const tieneDims = Object.keys(patch).length > 0
+    if (!tieneDims && !obs) {
+      throw new Error('Indique al menos una dimensión u observación (opcional).')
+    }
+
+    const fmtD = (v) => (v != null && v !== '' ? String(v) : '—')
+    const resumen = ids.map((id) => {
+      const r = registros.find((x) => x.id === id)
+      if (!r) return null
+      const partes = []
+      if ('ancho' in patch) partes.push(`Ancho: ${fmtD(r.ancho)} → ${patch.ancho}`)
+      if ('espesor' in patch) partes.push(`Espesor: ${fmtD(r.espesor)} → ${patch.espesor}`)
+      if (obs) partes.push(`Obs: ${obs}`)
+      return filaResumenMasivo(
+        r,
+        'Dimensiones',
+        `${fmtD(r.area_long_nod)} · ${fmtD(r.ancho)} · ${fmtD(r.espesor)}`,
+        partes.join(' · '),
+      )
+    })
+
+    if (tieneDims) {
+      flushSync(() => {
+        setEditCapitulo('')
+        setEditItem('')
+        setEditDims((prev) => {
+          const next = { ...prev }
+          for (const id of ids) {
+            next[id] = { ...(next[id] || {}), ...patch }
+          }
+          return next
+        })
+      })
+      setModalConfirm(false)
+      await ejecutarRecalcular({ skipUndo: true })
+    }
+    if (obs) await aplicarObservacionMasiva(ids, obs)
+    return resumen
+  }
+
+  async function aplicarMasivoTipo({ tipo_ejecucion, observacion }) {
+    const obs = String(observacion || '').trim()
+    const ids = idsSeleccionadosEditables()
+    if (!ids.length) throw new Error('No hay registros editables.')
+    registrarUndoPresupuesto('Edición masiva: Tipo de ejecución', ids)
+    const resumen = ids.map((id) => {
+      const r = registros.find((x) => x.id === id)
+      if (!r) return null
+      const ant = r.tipo_ejecucion || PPTO_TIPO_EJECUCION_DEFAULT
+      return filaResumenMasivo(r, 'Tipo ejecución', ant, tipo_ejecucion + (obs ? ` · Obs: ${obs}` : ''))
+    }).filter(Boolean)
+
+    flushSync(() => setBulkTipoEjecucion(tipo_ejecucion))
+    await ejecutarBulkTipoEjecucion({ skipConfirm: true })
+    if (obs) await aplicarObservacionMasiva(ids, obs)
+    return resumen
+  }
+
+  async function aplicarMasivoDepuracion({ estado, observacion }) {
+    const obs = String(observacion || '').trim()
+    const ids = idsSeleccionadosEditables()
+    if (!ids.length) throw new Error('No hay registros editables.')
+    registrarUndoPresupuesto('Edición masiva: Depuración', ids)
+    const resumen = ids.map((id) => {
+      const r = registros.find((x) => x.id === id)
+      if (!r) return null
+      const ant = r.pre_interv_estado || 'No Revisado'
+      return filaResumenMasivo(r, 'Depuración', ant, estado + (obs ? ` · Obs: ${obs}` : ''))
+    }).filter(Boolean)
+
+    flushSync(() => setBulkPreInterv(estado))
+    await ejecutarBulkPreInterv()
+    if (obs) await aplicarObservacionMasiva(ids, obs)
+    return resumen
+  }
+
+  async function aplicarMasivoInterventoria({ estado, observacion }) {
+    const obs = String(observacion || '').trim()
+    let ids = idsSeleccionadosEditables()
+    if (!esDevPpto) {
+      ids = ids.filter((id) => {
+        const r = registros.find((x) => x.id === id)
+        return r && preIntervLiberadoParaInterventoria(r)
+      })
+    }
+    if (!ids.length) {
+      throw new Error(
+        'Ningún registro seleccionado tiene depuración contratista aprobada. Interventoría solo valida tras «Aprobado» en depuración.',
+      )
+    }
+    registrarUndoPresupuesto('Edición masiva: Interventoría', ids)
+    const resumen = ids.map((id) => {
+      const r = registros.find((x) => x.id === id)
+      if (!r) return null
+      const ant = r.revisado || 'No Revisado'
+      return filaResumenMasivo(r, 'Interventoría', ant, estado + (obs ? ` · Obs: ${obs}` : ''))
+    }).filter(Boolean)
+
+    flushSync(() => setBulkEstado(estado))
+    await ejecutarBulkEstado()
+    if (obs) await aplicarObservacionMasiva(ids, obs)
+    return resumen
   }
 
   // ── Edición inline ─────────────────────────────────────────────────────────
@@ -2466,6 +2784,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
     if (motivoReap) body.motivo_edicion_tras_sellado = motivoReap
     if (!(await adjuntarMotivoSiEdicionContratistaConInterv(reg, body))) return
+    registrarUndoPresupuesto('Edición de registro', [id])
     const res = await fetch(`${API}/presupuesto/item/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -2566,11 +2885,18 @@ async function highlightEnDwg(registro) {
   async function cambiarEstadoDirecto(id, nuevoEstado) {
     const row = registros.find(rr => rr.id === id)
     if (esSellado(row)) return
+    if (puedeValidarInterventoriaUI && !esDevPpto && !preIntervLiberadoParaInterventoria(row)) {
+      window.alert(
+        'El registro debe estar aprobado en depuración contratista (Residente de Costos u Obra) antes de la validación de Interventoría.',
+      )
+      return
+    }
     const obligatorio = nuevoEstado === 'Pendiente' || nuevoEstado === 'Rechazado'
     const comentarioData = await pedirComentario('validacion', obligatorio)
     if (comentarioData === null) return
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
+    registrarUndoPresupuesto('Validación Interventoría', [id])
     // Actualización optimista inmediata — el usuario ve el cambio al instante
     setRegistros(prev => prev.map(r => aplicarCambioEstadoLocal(r, [id], nuevoEstado)))
     _lastWriteAtRef.current = Date.now()
@@ -2581,6 +2907,7 @@ async function highlightEnDwg(registro) {
       body: JSON.stringify({ ids: [id], revisado: nuevoEstado })
     })
     if (!res.ok) {
+      limpiarUndoPresupuesto()
       // Revertir si falló
       setRegistros(prev => prev.map(r => r.id === id ? row : r))
       return
@@ -2597,6 +2924,7 @@ async function highlightEnDwg(registro) {
     if (comentarioData === null) return
     const comentario = comentarioData?.mensaje || ''
     const destinatarioId = comentarioData?.destinatarioId || null
+    registrarUndoPresupuesto('Depuración', [id])
     // Actualización optimista inmediata
     setRegistros(prev => prev.map(r => aplicarCambioPreIntervLocal(r, [id], nuevoEstado)))
     _lastWriteAtRef.current = Date.now()
@@ -2607,6 +2935,7 @@ async function highlightEnDwg(registro) {
       body: JSON.stringify({ ids: [id], estado: nuevoEstado })
     })
     if (!res.ok) {
+      limpiarUndoPresupuesto()
       // Revertir si falló
       setRegistros(prev => prev.map(r => r.id === id ? row : r))
       try {
@@ -2763,11 +3092,11 @@ async function restaurar(id) {
                 {[{valor:'Rechazado',label:'🔴'},{valor:'Pendiente',label:'🟡'},{valor:'Aprobado',label:'🟢'}].map(op => (
                   <button key={op.valor}
                     title={op.valor}
-                    onClick={async (e) => { e.stopPropagation(); if (puedeValidar && !esSellado(r)) await cambiarEstadoDirecto(r.id, op.valor) }}
+                    onClick={async (e) => { e.stopPropagation(); if (puedeValidarInterventoriaRegistro(r)) await cambiarEstadoDirecto(r.id, op.valor) }}
                     style={{ background: est === op.valor ? clr : t.bgCard,
                       border:`1.5px solid ${est === op.valor ? clr : t.border}`,
                       borderRadius:'50%', width:'22px', height:'22px', fontSize:'var(--cc-sm)',
-                      cursor: puedeValidar && !esSellado(r) ? 'pointer' : 'default',
+                      cursor: puedeValidarInterventoriaRegistro(r) ? 'pointer' : 'default',
                       display:'flex', alignItems:'center', justifyContent:'center', padding:0 }}>
                     {op.label}
                   </button>
@@ -3101,14 +3430,22 @@ async function restaurar(id) {
                   const validarTab = async (estado) => {
                     let ids = [...selTab].filter(id => {
                       const row = regs.find(x => x.id === id)
-                      return row && !esSellado(row)
+                      return row && !esSellado(row) && (esDevPpto || preIntervLiberadoParaInterventoria(row))
                     })
-                    if (!ids.length) return
+                    if (!ids.length) {
+                      if (puedeValidarInterventoriaUI && !esDevPpto) {
+                        window.alert(
+                          'Ningún registro seleccionado tiene depuración contratista aprobada. Interventoría solo valida tras «Aprobado» en depuración.',
+                        )
+                      }
+                      return
+                    }
                     const obligatorio = estado === 'Pendiente' || estado === 'Rechazado'
                     const comentarioData = await pedirComentario('validacion', obligatorio)
                     if (comentarioData === null) return
                     const comentario = comentarioData?.mensaje || ''
                     const destinatarioId = comentarioData?.destinatarioId || null
+                    registrarUndoPresupuesto('Validación Interventoría (tramo)', ids)
                     const res = await fetch(`${API}/presupuesto/${contratoId}/bulk-estado`, {
                       method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                       body: JSON.stringify({ ids, revisado: estado })
@@ -3131,7 +3468,7 @@ async function restaurar(id) {
                           </span>
                           {algunoSelec && (
                             <div style={{ marginLeft:'auto', display:'flex', gap:'4px', flexWrap:'wrap' }}>
-                              {puedeValidar && SEMAFORO.map(s => (
+                              {puedeValidarInterventoriaUI && SEMAFORO.map(s => (
                                 <button key={s.valor} onClick={() => validarTab(s.valor)}
                                   style={{ background:t.bgCard, border:`1.5px solid ${s.color}`, borderRadius:'6px', padding:'3px 8px', fontSize:'var(--cc-sm)', cursor:'pointer', color:s.color, fontWeight:'700' }}>
                                   {s.label} {s.valor}
@@ -3344,11 +3681,11 @@ async function restaurar(id) {
                                     const clr = estadoColor(est)
                                     return (
                                       <button key={op.valor} title={op.valor}
-                                        onClick={async (e) => { e.stopPropagation(); if (puedeValidar && !esSellado(r)) await cambiarEstadoDirecto(r.id, op.valor) }}
+                                        onClick={async (e) => { e.stopPropagation(); if (puedeValidarInterventoriaRegistro(r)) await cambiarEstadoDirecto(r.id, op.valor) }}
                                         style={{ background: est === op.valor ? clr : t.bgCard,
                                           border:`1.5px solid ${est === op.valor ? clr : t.border}`,
                                           borderRadius:'50%', width:'22px', height:'22px', fontSize:'var(--cc-sm)',
-                                          cursor: puedeValidar && !esSellado(r) ? 'pointer' : 'default',
+                                          cursor: puedeValidarInterventoriaRegistro(r) ? 'pointer' : 'default',
                                           display:'flex', alignItems:'center', justifyContent:'center', padding:0 }}>
                                         {op.label}
                                       </button>
@@ -4236,6 +4573,28 @@ async function restaurar(id) {
           </div>
         )
       })()}
+      <PptoEdicionMasivaModal
+        open={modalEdicionMasiva}
+        onClose={() => setModalEdicionMasiva(false)}
+        t={t}
+        seleccionados={seleccionados}
+        registros={registros}
+        esSellado={esSellado}
+        puedeTabEditar={puedeTabEditarMasiva}
+        puedeTabDepuracion={puedeTabDepuracionMasiva}
+        puedeTabInterventoria={puedeTabInterventoriaMasiva}
+        puedeEditarDimensiones={puedeEditarDimensiones || esDevPpto}
+        requiereDepuracionAprobadaInterv={!esDevPpto}
+        capitulosListado={capitulosListado}
+        listadoPrecios={listadoPrecios}
+        guardandoBulk={guardandoBulk}
+        onApplyCapItem={aplicarMasivoCapItem}
+        onApplyDimensiones={aplicarMasivoDimensiones}
+        onApplyTipo={aplicarMasivoTipo}
+        onApplyDepuracion={aplicarMasivoDepuracion}
+        onApplyInterventoria={aplicarMasivoInterventoria}
+      />
+
       {/* ── Modal confirmar recálculo ── */}
       {modalConfirm && (
         <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.55)',zIndex:2000,display:'flex',alignItems:'center',justifyContent:'center' }}>
@@ -4941,90 +5300,65 @@ async function restaurar(id) {
         )
       })()}
 
-      {((!verPapelera && capitulosResumen.length > 0) || registros.length > 0) && (puedeEditar || puedeValidar) && (
+      {((!verPapelera && capitulosResumen.length > 0) || registros.length > 0) && (puedeAbrirEdicionMasiva || puedeEliminar) && (
         <div style={{ background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'10px',padding:'10px 14px',marginBottom:'10px',boxShadow:t.shadow,display:'flex',flexWrap:'wrap',gap:'8px',alignItems:'center' }}>
+          {puedeAbrirEdicionMasiva && (
+            <>
+              {seleccionados.size > 0 ? (
+                <span style={{ fontSize:'var(--cc-sm)',fontWeight:'700',color:t.primary,background:t.primary+'18',borderRadius:'20px',padding:'3px 10px',whiteSpace:'nowrap' }}>
+                  {seleccionados.size} sel.
+                </span>
+              ) : (
+                <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontStyle:'italic' }}>
+                  Marque filas en la grilla para editar en lote
+                </span>
+              )}
+              <button
+                type="button"
+                disabled={seleccionados.size === 0}
+                title={seleccionados.size === 0 ? 'Seleccione uno o más registros (checkbox)' : 'Capítulo, dimensiones, validación…'}
+                onClick={() => seleccionados.size > 0 && setModalEdicionMasiva(true)}
+                style={{
+                  background: seleccionados.size > 0 ? t.primary : t.border,
+                  color: seleccionados.size > 0 ? '#fff' : t.textMuted,
+                  border: 'none',
+                  borderRadius: 8,
+                  padding: '8px 18px',
+                  fontSize: 'var(--cc-sm)',
+                  fontWeight: 700,
+                  cursor: seleccionados.size > 0 ? 'pointer' : 'not-allowed',
+                  whiteSpace: 'nowrap',
+                  opacity: seleccionados.size > 0 ? 1 : 0.85,
+                }}
+              >
+                ✏️ Edición masiva
+              </button>
+            </>
+          )}
           {seleccionados.size > 0 && (
             <>
-              <span style={{ fontSize:'var(--cc-sm)',fontWeight:'700',color:t.primary,background:t.primary+'18',borderRadius:'20px',padding:'3px 10px',whiteSpace:'nowrap' }}>
-                {seleccionados.size} sel.
-              </span>
-
-              {puedeEditar && (<>
-                {/* Capítulo */}
-                <select value={editCapitulo}
-                  onChange={e => { setEditCapitulo(e.target.value); setEditItem(''); setItemBusqueda(''); setItemDropOpen(false) }}
-                  style={{ background:t.inputBg,border:`1.5px solid ${editCapitulo?t.primary:t.border}`,borderRadius:'7px',padding:'5px 10px',color:editCapitulo?t.text:t.textMuted,fontSize:'var(--cc-sm)',cursor:'pointer',maxWidth:'180px' }}>
-                  <option value="">Capítulo…</option>
-                  {capitulosListado.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-
-                {/* Buscador predictivo de ítem */}
-                <div style={{ position:'relative' }}>
-                  <input
-                    value={itemBusqueda}
-                    onChange={e => { setItemBusqueda(e.target.value); setItemDropOpen(true); setItemNavIdx(-1); if (!e.target.value) setEditItem('') }}
-                    onFocus={() => setItemDropOpen(true)}
-                    onBlur={() => setTimeout(() => { setItemDropOpen(false); setItemNavIdx(-1) }, 180)}
-                    onKeyDown={e => {
-                      const filtrados = itemsListado.filter(p => `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase())).slice(0, 30)
-                      if (e.key === 'ArrowDown') { e.preventDefault(); setItemNavIdx(i => { const n = Math.min(i + 1, filtrados.length - 1); setTimeout(() => { const el = itemDropRef.current?.children[n]; el?.scrollIntoView({ block:'nearest' }) }, 0); return n }) }
-                      else if (e.key === 'ArrowUp') { e.preventDefault(); setItemNavIdx(i => { const n = Math.max(i - 1, 0); setTimeout(() => { const el = itemDropRef.current?.children[n]; el?.scrollIntoView({ block:'nearest' }) }, 0); return n }) }
-                      else if (e.key === 'Enter' && itemNavIdx >= 0 && filtrados[itemNavIdx]) {
-                        const p = filtrados[itemNavIdx]
-                        setEditItem(p.item_numero); setItemBusqueda(`${p.item_numero} · ${p.descripcion}`); setItemDropOpen(false); setItemNavIdx(-1)
-                      }
-                      else if (e.key === 'Escape') { setItemDropOpen(false); setItemNavIdx(-1) }
-                    }}
-                    placeholder={editCapitulo ? 'Buscar ítem…' : 'Primero selecciona capítulo'}
-                    disabled={!editCapitulo}
-                    style={{ background:t.inputBg,border:`1.5px solid ${editItem?t.primary:t.border}`,borderRadius:'7px',padding:'5px 10px',color:t.text,fontSize:'var(--cc-sm)',width:'280px',opacity:editCapitulo?1:0.45,cursor:editCapitulo?'text':'not-allowed' }}
-                  />
-                  {itemDropOpen && editCapitulo && itemBusqueda.length > 0 && (
-                    <div ref={itemDropRef} style={{ position:'absolute',top:'100%',left:0,right:0,zIndex:999,background:t.bgCard,border:`1px solid ${t.border}`,borderRadius:'8px',boxShadow:'0 8px 24px rgba(0,0,0,0.2)',maxHeight:'220px',overflowY:'auto',marginTop:'3px' }}>
-                      {itemsListado
-                        .filter(p => `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase()))
-                        .slice(0, 80)
-                        .map((p, idx) => (
-                          <div key={p.id}
-                            onMouseDown={() => { setEditItem(p.item_numero); setItemBusqueda(`${p.item_numero} · ${p.descripcion}`); setItemDropOpen(false); setItemNavIdx(-1) }}
-                            onMouseEnter={() => setItemNavIdx(idx)}
-                            style={{ padding:'8px 12px', fontSize:'var(--cc-sm)', cursor:'pointer', borderBottom:`1px solid ${t.border}`, color: idx === itemNavIdx ? '#fff' : t.text, background: idx === itemNavIdx ? t.primary : 'transparent', transition:'background 0.1s' }}>
-                            <strong>{p.item_numero}</strong> · {p.descripcion}
-                          </div>
-                        ))}
-                      {itemsListado.filter(p => `${p.item_numero} ${p.descripcion}`.toLowerCase().includes(itemBusqueda.toLowerCase())).length === 0 && (
-                        <div style={{ padding:'10px 12px',fontSize:'var(--cc-sm)',color:t.textMuted }}>Sin resultados</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Vlr unit badge */}
-                {precioSeleccionado && (
-                  <span style={{ fontSize:'var(--cc-sm)',fontWeight:'700',color:t.primary,background:t.primary+'18',borderRadius:'7px',padding:'5px 10px',whiteSpace:'nowrap' }}>
-                    {fmt(precioSeleccionado.precio_unitario)}
-                  </span>
-                )}
-
-                <button onClick={() => hayModificaciones && setModalConfirm(true)}
-                  disabled={!hayModificaciones}
-                  style={{ background:hayModificaciones?t.primary:t.border,color:hayModificaciones?'#fff':t.textMuted,border:'none',borderRadius:'7px',padding:'6px 14px',fontSize:'var(--cc-sm)',fontWeight:'700',cursor:hayModificaciones?'pointer':'not-allowed',whiteSpace:'nowrap' }}>
-                  🔄 Recalcular
+              {undoUltima && (
+                <button
+                  type="button"
+                  title={`Deshacer: ${undoUltima.label}`}
+                  onClick={() => void deshacerUltimaAccionPresupuesto()}
+                  disabled={deshaciendo || guardandoBulk}
+                  style={{
+                    background: t.bgCard,
+                    color: '#B45309',
+                    border: '1.5px solid #F59E0B',
+                    borderRadius: 8,
+                    padding: '8px 14px',
+                    fontSize: 'var(--cc-sm)',
+                    fontWeight: 700,
+                    cursor: deshaciendo || guardandoBulk ? 'not-allowed' : 'pointer',
+                    whiteSpace: 'nowrap',
+                    opacity: deshaciendo || guardandoBulk ? 0.6 : 1,
+                  }}
+                >
+                  {deshaciendo ? '⏳ Deshaciendo…' : `↩ Deshacer: ${undoUltima.label}`}
                 </button>
-
-                <select value={bulkTipoEjecucion} onChange={e => setBulkTipoEjecucion(e.target.value)}
-                  title="Presupuesto de Obra u Obra Ejecutada (masivo)"
-                  style={{ background:t.inputBg, border:`1.5px solid ${bulkTipoEjecucion ? '#7C3AED' : t.border}`, borderRadius:'7px', padding:'5px 10px', color:bulkTipoEjecucion ? '#7C3AED' : t.textMuted, fontSize:'var(--cc-sm)', cursor:'pointer', fontWeight: bulkTipoEjecucion ? '700' : '400' }}>
-                  <option value="">Tipo ejecución…</option>
-                  <option value={PPTO_TIPO_EJECUCION_DEFAULT}>{PPTO_TIPO_EJECUCION_DEFAULT}</option>
-                  <option value={PPTO_TIPO_EJECUCION_OBRA}>{PPTO_TIPO_EJECUCION_OBRA}</option>
-                </select>
-                <button onClick={ejecutarBulkTipoEjecucion}
-                  disabled={!bulkTipoEjecucion || guardandoBulk}
-                  style={{ background:bulkTipoEjecucion?'#7C3AED':t.border,color:bulkTipoEjecucion?'#fff':t.textMuted,border:'none',borderRadius:'7px',padding:'6px 14px',fontSize:'var(--cc-sm)',fontWeight:'700',cursor:bulkTipoEjecucion?'pointer':'not-allowed',whiteSpace:'nowrap' }}>
-                  ↔ Aplicar tipo
-                </button>
-              </>)}
+              )}
 
               {puedeEliminar && !verPapelera && seleccionados.size > 1 && (
                 <button onClick={async () => {
@@ -5051,32 +5385,6 @@ async function restaurar(id) {
                 </button>
               )}
 
-              {puedeValidar && (<>
-                <select value={bulkEstado} onChange={e => setBulkEstado(e.target.value)}
-                  style={{ background:t.inputBg, border:`1.5px solid ${bulkEstado ? estadoColor(bulkEstado) : t.border}`, borderRadius:'7px', padding:'5px 10px', color:bulkEstado ? estadoColor(bulkEstado) : t.textMuted, fontSize:'var(--cc-sm)', cursor:'pointer', fontWeight: bulkEstado ? '700' : '400' }}>
-                  <option value="">Estado…</option>
-                  {SEMAFORO.map(s => <option key={s.valor} value={s.valor}>{s.label} {s.valor}</option>)}
-                </select>
-                <button onClick={ejecutarBulkEstado}
-                  disabled={!bulkEstado || guardandoBulk}
-                  style={{ background:bulkEstado?'#16A34A':t.border,color:bulkEstado?'#fff':t.textMuted,border:'none',borderRadius:'7px',padding:'6px 14px',fontSize:'var(--cc-sm)',fontWeight:'700',cursor:bulkEstado?'pointer':'not-allowed',whiteSpace:'nowrap' }}>
-                  ✓ Aplicar
-                </button>
-              </>)}
-
-              {puedePrevalidarUI && (<>
-                <span style={{ fontSize:'var(--cc-sm)', fontWeight:'700', color:t.textMuted, whiteSpace:'nowrap' }} title="Residente de Costos u Obra — antes de Interventoría">Depuración → Interv.</span>
-                <select value={bulkPreInterv} onChange={e => setBulkPreInterv(e.target.value)}
-                  style={{ background:t.inputBg, border:`1.5px solid ${bulkPreInterv ? estadoColor(bulkPreInterv) : t.border}`, borderRadius:'7px', padding:'5px 10px', color:bulkPreInterv ? estadoColor(bulkPreInterv) : t.textMuted, fontSize:'var(--cc-sm)', cursor:'pointer', fontWeight: bulkPreInterv ? '700' : '400' }}>
-                  <option value="">Depuración…</option>
-                  {SEMAFORO.map(s => <option key={s.valor} value={s.valor}>{s.label} {s.valor}</option>)}
-                </select>
-                <button onClick={ejecutarBulkPreInterv}
-                  disabled={!bulkPreInterv || guardandoBulk}
-                  style={{ background:bulkPreInterv?'#0D9488':t.border,color:bulkPreInterv?'#fff':t.textMuted,border:'none',borderRadius:'7px',padding:'6px 14px',fontSize:'var(--cc-sm)',fontWeight:'700',cursor:bulkPreInterv?'pointer':'not-allowed',whiteSpace:'nowrap' }}>
-                  ✓ Depuración
-                </button>
-              </>)}
             </>
           )}
         </div>
@@ -5256,15 +5564,19 @@ async function restaurar(id) {
                           return (
                             <div
                               key={s.valor}
-                              title={s.valor}
-                              onClick={() => puedeValidar && !activo && !esSellado(r) && cambiarEstadoDirecto(r.id, s.valor)}
+                              title={
+                                puedeValidarInterventoriaUI && !preIntervLiberadoParaInterventoria(r) && !esDevPpto
+                                  ? `${s.valor} — requiere depuración aprobada`
+                                  : s.valor
+                              }
+                              onClick={() => puedeValidarInterventoriaRegistro(r) && !activo && cambiarEstadoDirecto(r.id, s.valor)}
                               style={{
                                 width: activo ? '18px' : '12px',
                                 height: activo ? '18px' : '12px',
                                 borderRadius: '50%',
                                 background: activo ? s.color : s.color + '33',
                                 border: `2px solid ${activo ? s.color : s.color + '66'}`,
-                                cursor: puedeValidar && !activo && !esSellado(r) ? 'pointer' : 'default',
+                                cursor: puedeValidarInterventoriaRegistro(r) && !activo ? 'pointer' : 'default',
                                 opacity: esSellado(r) ? 0.55 : 1,
                                 transition: 'all 0.2s',
                                 boxShadow: activo ? `0 0 8px ${s.color}88` : 'none',

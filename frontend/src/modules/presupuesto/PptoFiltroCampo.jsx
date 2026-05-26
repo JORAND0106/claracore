@@ -1,0 +1,327 @@
+import { useMemo, useState } from 'react'
+import {
+  pptoFiltroPatchActivar,
+  pptoFiltroPatchLimpiar,
+  pptoFiltroPatchLista,
+  pptoFiltroValoresLista,
+  pptoMatchItemNumero,
+} from './pptoFiltroCatalogo'
+
+const inp = (t) => ({
+  background: t.inputBg,
+  border: `1px solid ${t.border}`,
+  borderRadius: 6,
+  padding: '6px 10px',
+  color: t.text,
+  fontSize: 'var(--cc-sm)',
+  width: '100%',
+  boxSizing: 'border-box',
+})
+
+function normalizeOpts(raw, def) {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map((o) => {
+      if (o != null && typeof o === 'object') {
+        const v = String(o.item ?? o.value ?? o.capitulo ?? '').trim()
+        if (!v) return null
+        const desc = String(o.descripcion ?? o.label ?? '').trim()
+        return { value: v, label: desc && desc !== v ? `${v} — ${desc}` : v, descripcion: desc }
+      }
+      const s = String(o ?? '').trim()
+      return s ? { value: s, label: s } : null
+    })
+    .filter(Boolean)
+}
+
+function TagsLista({ lista, onRemove, t, labelFn }) {
+  if (!lista.length) return null
+  const tagStyle = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    background: t.primary + '18',
+    border: `1px solid ${t.primary}44`,
+    borderRadius: 12,
+    padding: '2px 8px',
+    fontSize: 'var(--cc-caption)',
+    color: t.text,
+    maxWidth: '100%',
+  }
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+      {lista.map((v) => (
+        <span key={v} style={tagStyle} title={String(v)}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200 }}>
+            {labelFn ? labelFn(v) : v}
+          </span>
+          <button
+            type="button"
+            onClick={() => onRemove(v)}
+            style={{ background: 'transparent', border: 'none', color: t.textMuted, cursor: 'pointer', padding: 0, flexShrink: 0 }}
+            aria-label={`Quitar ${v}`}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function ItemPickerInline({ opts, lista, onChangeLista, t }) {
+  const [busq, setBusq] = useState('')
+  const [open, setOpen] = useState(false)
+
+  const disponibles = useMemo(
+    () => opts.filter((o) => !lista.some((v) => pptoMatchItemNumero(v, o.value))),
+    [opts, lista],
+  )
+
+  const filtrados = useMemo(() => {
+    const q = busq.trim().toLowerCase()
+    const base = q
+      ? disponibles.filter(
+          (o) =>
+            o.value.toLowerCase().includes(q) ||
+            (o.descripcion || '').toLowerCase().includes(q),
+        )
+      : disponibles
+    return base.slice(0, 60)
+  }, [disponibles, busq])
+
+  const pick = (val) => {
+    if (!val || lista.some((v) => pptoMatchItemNumero(v, val))) return
+    onChangeLista([...lista, val])
+    setBusq('')
+    setOpen(false)
+  }
+
+  return (
+    <div>
+      <TagsLista lista={lista} onRemove={(v) => onChangeLista(lista.filter((x) => x !== v))} t={t} />
+      <input
+        value={busq}
+        onChange={(e) => { setBusq(e.target.value); setOpen(true) }}
+        onFocus={() => setOpen(true)}
+        placeholder="Buscar ítem…"
+        style={inp(t)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && filtrados[0]) { e.preventDefault(); pick(filtrados[0].value) }
+        }}
+      />
+      {open && filtrados.length > 0 && (
+        <div
+          style={{
+            marginTop: 4,
+            maxHeight: 140,
+            overflowY: 'auto',
+            border: `1px solid ${t.border}`,
+            borderRadius: 8,
+            background: t.bgCard,
+          }}
+        >
+          {filtrados.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => pick(o.value)}
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                background: 'transparent',
+                border: 'none',
+                borderBottom: `1px solid ${t.border}44`,
+                padding: '8px 10px',
+                cursor: 'pointer',
+                color: t.text,
+                fontSize: 'var(--cc-sm)',
+              }}
+            >
+              <strong style={{ color: t.primary }}>{o.value}</strong>
+              {o.descripcion ? (
+                <span style={{ display: 'block', fontSize: 'var(--cc-caption)', color: t.textMuted }}>{o.descripcion}</span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MultiSelectAdd({ opts, lista, onChangeLista, t, labelFn }) {
+  const [pickAdd, setPickAdd] = useState('')
+
+  const disponibles = useMemo(
+    () => opts.filter((o) => !lista.includes(o.value)),
+    [opts, lista],
+  )
+
+  const agregar = (val) => {
+    const v = String(val ?? '').trim()
+    if (!v || lista.includes(v)) return
+    onChangeLista([...lista, v])
+    setPickAdd('')
+  }
+
+  return (
+    <div>
+      <TagsLista
+        lista={lista}
+        onRemove={(v) => onChangeLista(lista.filter((x) => x !== v))}
+        t={t}
+        labelFn={labelFn}
+      />
+      <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
+        <select
+          value={pickAdd}
+          onChange={(e) => {
+            const v = e.target.value
+            setPickAdd(v)
+            if (v) agregar(v)
+          }}
+          style={{ ...inp(t), flex: 1, minWidth: 0 }}
+        >
+          <option value="">— Elegir y agregar —</option>
+          {disponibles.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={!pickAdd}
+          onClick={() => agregar(pickAdd)}
+          title="Agregar valor"
+          style={{
+            flexShrink: 0,
+            minWidth: 40,
+            background: t.primary,
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            fontWeight: 700,
+            fontSize: 'var(--cc-md)',
+            cursor: pickAdd ? 'pointer' : 'not-allowed',
+            opacity: pickAdd ? 1 : 0.45,
+          }}
+        >
+          +
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Campo de filtro inline (modal).
+ */
+export default function PptoFiltroCampo({ def, f, onChange, t, opciones, itemLabels }) {
+  const lista = pptoFiltroValoresLista(def, f)
+
+  const opts = useMemo(() => {
+    if (def.key === 'item') {
+      return normalizeOpts(opciones.items_opciones || opciones.items || [], def)
+    }
+    const raw = def.opcionesKey ? (opciones[def.opcionesKey] || []) : []
+    return normalizeOpts(raw, def)
+  }, [def, opciones])
+
+  const patchLista = (nextLista) => {
+    onChange({ ...pptoFiltroPatchLista(def, nextLista), ...pptoFiltroPatchActivar(def) })
+  }
+
+  const limpiarCampo = () => {
+    onChange(pptoFiltroPatchLimpiar(def))
+  }
+
+  const valorSelect = def.tipo === 'select' || def.tipo === 'boolean'
+    ? String(f[def.campoFObra] ?? '')
+    : ''
+
+  const labelItem = (v) => (def.key === 'item' && itemLabels?.[v] ? itemLabels[v] : v)
+
+  return (
+    <div style={{ marginBottom: 0, minWidth: 0 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8 }}>
+        <label style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.text }}>{def.label}</label>
+        {lista.length > 0 || valorSelect ? (
+          <button
+            type="button"
+            onClick={limpiarCampo}
+            style={{ background: 'transparent', border: 'none', color: t.textMuted, fontSize: 'var(--cc-caption)', cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}
+          >
+            Limpiar
+          </button>
+        ) : null}
+      </div>
+
+      {(def.tipo === 'select_multi' || def.key === 'item') && (
+        def.key === 'item' ? (
+          <ItemPickerInline opts={opts} lista={lista} onChangeLista={patchLista} t={t} />
+        ) : (
+          <MultiSelectAdd opts={opts} lista={lista} onChangeLista={patchLista} t={t} labelFn={labelItem} />
+        )
+      )}
+
+      {(def.tipo === 'rango_numerico' || def.key === 'abs_inicio') && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            value={f[def.campoFObra] ?? ''}
+            onChange={(e) => onChange({ [def.campoFObra]: e.target.value, ...pptoFiltroPatchActivar(def) })}
+            placeholder="Desde"
+            style={inp(t)}
+          />
+          <span style={{ color: t.textMuted, flexShrink: 0 }}>–</span>
+          <input
+            value={f[def.campoFObraHasta] ?? ''}
+            onChange={(e) => onChange({ [def.campoFObraHasta]: e.target.value, ...pptoFiltroPatchActivar(def) })}
+            placeholder="Hasta"
+            style={inp(t)}
+          />
+        </div>
+      )}
+
+      {def.tipo === 'text' && (
+        <input
+          value={f[def.campoFObra] ?? ''}
+          onChange={(e) => onChange({ [def.campoFObra]: e.target.value, ...pptoFiltroPatchActivar(def) })}
+          style={inp(t)}
+          placeholder={def.key === 'pk_id' ? 'Ej. PK-001' : ''}
+        />
+      )}
+
+      {def.tipo === 'select' && (
+        <select
+          value={valorSelect}
+          onChange={(e) => onChange({ [def.campoFObra]: e.target.value, ...pptoFiltroPatchActivar(def) })}
+          style={inp(t)}
+        >
+          <option value="">— Todos —</option>
+          {opts.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+      )}
+
+      {def.tipo === 'boolean' && (
+        <select
+          value={valorSelect}
+          onChange={(e) => {
+            const v = e.target.value
+            onChange({
+              [def.campoFObra]: v === 'true' ? true : v === 'false' ? false : '',
+              ...pptoFiltroPatchActivar(def),
+            })
+          }}
+          style={inp(t)}
+        >
+          <option value="">—</option>
+          <option value="true">Sí</option>
+          <option value="false">No</option>
+        </select>
+      )}
+    </div>
+  )
+}
