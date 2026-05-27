@@ -24,12 +24,27 @@ namespace ClaraLink
             // Escuchar URIs que lleguen de otros procesos
             Program.IniciarServidorPipe(uri =>
             {
-                _ctx?.Post(__ => ZoomHandler.EjecutarDesdeUri(uri), null);
+                _ctx?.Post(_ => ProcesarUri(uri), null);
             });
 
-            // Si arrancó con una URI directa, ejecutarla
             if (uriInicial != null)
-                ZoomHandler.EjecutarDesdeUri(uriInicial);
+                ProcesarUri(uriInicial);
+        }
+
+        private void ProcesarUri(string uri)
+        {
+            try
+            {
+                ZoomHandler.EjecutarDesdeUri(uri);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"ClaraLink no pudo procesar el enlace:\n{ex.Message}",
+                    "ClaraLink",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
         }
 
         private void ConfigurarTray()

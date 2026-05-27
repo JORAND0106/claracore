@@ -13,6 +13,7 @@
  *   apiBase.js    — API_BASE
  */
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { Bot, X, Send, Paperclip } from 'lucide-react'
 import { useModulo } from '../../context/ModuloContext'
 import { API_BASE } from '../../apiBase'
@@ -132,6 +133,10 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal' }) {
         0%, 80%, 100% { opacity: 0.25; transform: translateY(0);    }
         40%            { opacity: 1;    transform: translateY(-4px); }
       }
+      @keyframes _avi_fab_float {
+        0%, 100% { transform: translateY(0); }
+        50%      { transform: translateY(-5px); }
+      }
       ._avi_dot {
         display: inline-block; width: 6px; height: 6px;
         border-radius: 50%; background: #999; margin: 0 2px;
@@ -139,6 +144,14 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal' }) {
       }
       ._avi_dot:nth-child(2) { animation-delay: 0.18s; }
       ._avi_dot:nth-child(3) { animation-delay: 0.36s; }
+      .cc-avi-fab {
+        position: fixed !important;
+        z-index: 100050;
+        pointer-events: auto;
+        animation: _avi_fab_float 3.2s ease-in-out infinite;
+      }
+      .cc-avi-fab--pressed { animation: none !important; }
+      .cc-avi-fab--panel-open { animation: none !important; }
     `
     document.head.appendChild(s)
   }, [])
@@ -401,36 +414,41 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal' }) {
 
   const puedEnviar = (input.trim().length > 0 || !!imagenBase64) && !enviando
 
-  // ── Render ─────────────────────────────────────────────────────────────────────
-  return (
+  const fabRight = abierto ? Math.min(panelAncho + 16, typeof window !== 'undefined' ? window.innerWidth - 80 : panelAncho + 16) : 24
+  const fabBottom = 'max(24px, env(safe-area-inset-bottom, 0px))'
+
+  // ── Render (portal: flotante sobre toda la app, sin quedar preso al layout) ──
+  const ui = (
     <>
       {/* ── Botón flotante ──────────────────────────────────────────────────── */}
       <button
+        type="button"
+        className={`cc-avi-fab${fabPressed ? ' cc-avi-fab--pressed' : ''}${abierto ? ' cc-avi-fab--panel-open' : ''}`}
         onClick={abierto ? handleCerrarPanel : handleAbrirPanel}
         onMouseDown={() => setFabPressed(true)}
         onMouseUp={() => setFabPressed(false)}
-        aria-label="Abrir asistente Clara"
+        aria-label={abierto ? 'Cerrar chat con Clara' : 'Abrir chat con Clara'}
         aria-expanded={abierto}
         style={{
-          position: 'fixed', bottom: '28px', right: '28px', zIndex: 9100,
-          width: '58px', height: '58px', borderRadius: '50%',
+          bottom: fabBottom,
+          right: `${fabRight}px`,
+          width: '58px',
+          height: '58px',
+          borderRadius: '50%',
           background: 'linear-gradient(145deg, #0077B6 0%, #00B4C6 100%)',
-          border: 'none', cursor: 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          border: 'none',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
           boxShadow: fabPressed
             ? '0 2px 10px rgba(0,50,90,0.35), 0 0 0 2px rgba(0,180,198,0.25)'
-            : '0 6px 22px rgba(0,50,90,0.38), 0 0 28px rgba(0,180,198,0.42)',
-          transform: fabPressed ? 'scale(0.95)' : 'scale(1)',
-          transition: 'transform 0.18s ease, box-shadow 0.18s ease',
+            : '0 8px 28px rgba(0,50,90,0.42), 0 0 32px rgba(0,180,198,0.38)',
+          transform: fabPressed ? 'scale(0.94)' : undefined,
+          transition: 'right 0.25s cubic-bezier(0.4, 0, 0.2, 1), transform 0.18s ease, box-shadow 0.18s ease',
           flexShrink: 0,
         }}
-        onMouseEnter={e => {
-          if (!fabPressed) e.currentTarget.style.transform = 'scale(1.08)'
-        }}
-        onMouseLeave={e => {
-          setFabPressed(false)
-          e.currentTarget.style.transform = 'scale(1)'
-        }}
+        onMouseLeave={() => setFabPressed(false)}
       >
         <span aria-hidden style={{ position: 'relative', width: '40px', height: '40px', display: 'block' }}>
           <svg width="40" height="40" viewBox="0 0 40 40" style={{ display: 'block' }}>
@@ -486,7 +504,7 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal' }) {
         style={{
           position: 'fixed', top: 0, right: 0, bottom: 0,
           width: `${panelAncho}px`, maxWidth: '100vw',
-          zIndex: 9200, background: '#fff',
+          zIndex: 100040, background: '#fff',
           boxShadow: '-4px 0 40px rgba(0,0,0,0.18)',
           display: 'flex', flexDirection: 'column',
           overflow: 'hidden',
@@ -813,4 +831,8 @@ export default function AVI({ usuario, fontSize: _fontSize = 'normal' }) {
       </div>
     </>
   )
+
+  if (!usuario) return null
+  if (typeof document === 'undefined') return ui
+  return createPortal(ui, document.body)
 }

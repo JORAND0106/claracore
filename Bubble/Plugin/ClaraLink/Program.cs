@@ -34,7 +34,7 @@ namespace ClaraLink
             try
             {
                 using var client = new NamedPipeClientStream(".", PIPE_NAME, PipeDirection.Out);
-                client.Connect(500);   // espera 500ms
+                client.Connect(2500);  // espera a instancia en bandeja (navegador lanza URI)
                 using var sw = new StreamWriter(client);
                 sw.WriteLine(uri);
                 return true;

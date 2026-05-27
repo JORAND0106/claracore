@@ -1,11 +1,12 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.Globalization;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.ComTypes;
 using System.Threading;
-using System.Web;
 
 namespace ClaraLink
 {
@@ -18,7 +19,7 @@ namespace ClaraLink
             try
             {
                 var u = new Uri(uri);
-                var qs = HttpUtility.ParseQueryString(u.Query);
+                var qs = System.Web.HttpUtility.ParseQueryString(u.Query);
                 var accion = (u.Host ?? "").ToLowerInvariant();
 
                 if (accion == "insertar")
@@ -36,7 +37,7 @@ namespace ClaraLink
             catch (Exception ex)
             {
                 System.Windows.Forms.MessageBox.Show(
-                    $"Error al hacer zoom:\n{ex.Message}",
+                    $"Error al navegar en el plano:\n{ex.Message}",
                     "ClaraLink",
                     System.Windows.Forms.MessageBoxButtons.OK,
                     System.Windows.Forms.MessageBoxIcon.Error);
@@ -44,65 +45,152 @@ namespace ClaraLink
         }
 
         /// <summary>
-        /// Zoom + selección implícita (sssetfirst). Sin SELECT interactivo ni cambiar tamaño de ventana.
+        /// Zoom + selección implícita. Prioriza handle (extents reales); si no, coordenadas x/y.
         /// </summary>
         private static void EjecutarNavegarEnPlano(NameValueCollection qs)
         {
             double x = ParseDouble(qs["x"] ?? "0");
             double y = ParseDouble(qs["y"] ?? "0");
             double radio = ParseDouble(qs["radio"] ?? "20");
-            string handle = (qs["handle"] ?? "").Trim();
-            string txtHandle = (qs["txt"] ?? "").Trim();
+            if (radio <= 0) radio = 20;
+
+            string handle = (qs["handle"] ?? qs["ent_handle"] ?? "").Trim();
+            string txtHandle = (qs["txt"] ?? qs["txt_handle"] ?? "").Trim();
 
             if (!TryGetAcadDoc(out dynamic doc))
                 return;
 
             CancelarComandoPendiente(doc);
-
-            if ((x == 0 && y == 0) && !string.IsNullOrEmpty(handle))
-            {
-                try
-                {
-                    dynamic ent = doc.HandleToObject(handle);
-                    if (ent != null)
-                    {
-                        dynamic min = ent.GetBoundingBox()[0];
-                        dynamic max = ent.GetBoundingBox()[1];
-                        x = ((double)min[0] + (double)max[0]) / 2.0;
-                        y = ((double)min[1] + (double)max[1]) / 2.0;
-                        double w = Math.Abs((double)max[0] - (double)min[0]);
-                        double h = Math.Abs((double)max[1] - (double)min[1]);
-                        radio = Math.Max(Math.Max(w, h) * 0.8, 15.0);
-                    }
-                }
-                catch { /* seguir con x,y si vienen en URI */ }
-            }
-
-            if (x == 0 && y == 0) return;
-
             TraerAcadAlFrenteSinRedimensionar();
 
-            string sx = x.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
-            string sy = y.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
-            string sr = radio.ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
-            doc.SendCommand($"_.ZOOM _C {sx},{sy} {sr}\n");
+            bool zoomHecho = false;
 
             if (!string.IsNullOrEmpty(handle))
             {
-                try
-                {
-                    doc.SendCommand($"(sssetfirst nil (list (handent \"{handle}\")))\n");
-                }
-                catch { }
+                if (TryZoomPorHandle(doc, handle, ref x, ref y, ref radio))
+                    zoomHecho = true;
             }
 
-            if (!string.IsNullOrEmpty(txtHandle) && txtHandle != handle)
+            if (!zoomHecho && (x != 0 || y != 0))
+            {
+                ZoomPorCoordenadas(doc, x, y, radio);
+                zoomHecho = true;
+            }
+
+            if (!zoomHecho)
+            {
+                MsgSinUbicacion();
+                return;
+            }
+
+            SeleccionarHandles(doc, handle, txtHandle);
+        }
+
+        private static bool TryZoomPorHandle(dynamic doc, string handle, ref double x, ref double y, ref double radio)
+        {
+            foreach (var h in VariantesHandle(handle))
             {
                 try
                 {
-                    doc.SendCommand($"(sssetfirst nil (list (handent \"{txtHandle}\")))\n");
+                    dynamic ent = doc.HandleToObject(h);
+                    if (ent == null) continue;
+
+                    dynamic bbMin = ent.GetBoundingBox()[0];
+                    dynamic bbMax = ent.GetBoundingBox()[1];
+                    double minX = (double)bbMin[0];
+                    double minY = (double)bbMin[1];
+                    double maxX = (double)bbMax[0];
+                    double maxY = (double)bbMax[1];
+
+                    x = (minX + maxX) / 2.0;
+                    y = (minY + maxY) / 2.0;
+                    double w = Math.Abs(maxX - minX);
+                    double hgt = Math.Abs(maxY - minY);
+                    radio = Math.Max(Math.Max(w, hgt) * 0.65, 15.0);
+
+                    ZoomVentana(doc, minX, minY, maxX, maxY, 1.25);
+                    return true;
                 }
-                catch { }
+                catch { /* probar siguiente variante de handle */ }
+            }
+
+            return false;
+        }
+
+        private static void ZoomPorCoordenadas(dynamic doc, double x, double y, double radio)
+        {
+            double half = Math.Max(radio, 5.0);
+            ZoomVentana(doc, x - half, y - half, x + half, y + half, 1.0);
+        }
+
+        private static void ZoomVentana(dynamic doc, double minX, double minY, double maxX, double maxY, double factor)
+        {
+            if (factor <= 0) factor = 1.25;
+            double cx = (minX + maxX) / 2.0;
+            double cy = (minY + maxY) / 2.0;
+            double halfW = Math.Max((maxX - minX) * factor / 2.0, 5.0);
+            double halfH = Math.Max((maxY - minY) * factor / 2.0, 5.0);
+
+            try
+            {
+                dynamic app = doc.Application;
+                object pMin = new[] { cx - halfW, cy - halfH, 0.0 };
+                object pMax = new[] { cx + halfW, cy + halfH, 0.0 };
+                app.ZoomWindow(pMin, pMax);
+                return;
+            }
+            catch { /* fallback SendCommand */ }
+
+            string ix = cx.ToString("F6", CultureInfo.InvariantCulture);
+            string iy = cy.ToString("F6", CultureInfo.InvariantCulture);
+            string ir = Math.Max(halfW, halfH).ToString("F2", CultureInfo.InvariantCulture);
+            doc.SendCommand($"_.ZOOM _C {ix},{iy} {ir}\n");
+        }
+
+        private static void SeleccionarHandles(dynamic doc, string handle, string txtHandle)
+        {
+            var lista = new List<string>();
+            if (!string.IsNullOrWhiteSpace(handle)) lista.Add(handle.Trim());
+            if (!string.IsNullOrWhiteSpace(txtHandle)
+                && !string.Equals(txtHandle.Trim(), handle.Trim(), StringComparison.OrdinalIgnoreCase))
+                lista.Add(txtHandle.Trim());
+
+            foreach (var h in lista)
+            {
+                foreach (var hv in VariantesHandle(h))
+                {
+                    try
+                    {
+                        doc.SendCommand($"(sssetfirst nil (list (handent \"{hv}\")))\n");
+                        return;
+                    }
+                    catch { }
+                }
+            }
+        }
+
+        /// <summary>AutoCAD guarda handles en hex; la web puede enviar decimal o hex.</summary>
+        private static IEnumerable<string> VariantesHandle(string raw)
+        {
+            var s = (raw ?? "").Trim();
+            if (string.IsNullOrEmpty(s)) yield break;
+
+            yield return s;
+
+            if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            {
+                var hx = s.Substring(2);
+                if (!string.IsNullOrEmpty(hx)) yield return hx.ToUpperInvariant();
+            }
+
+            if (long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var dec) && dec > 0)
+                yield return dec.ToString("X", CultureInfo.InvariantCulture);
+
+            if (long.TryParse(s, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var hex) && hex > 0)
+            {
+                var up = hex.ToString("X", CultureInfo.InvariantCulture);
+                yield return up;
+                yield return hex.ToString(CultureInfo.InvariantCulture);
             }
         }
 
@@ -112,7 +200,6 @@ namespace ClaraLink
             {
                 if (_acadApp == null) return;
                 _acadApp.Visible = true;
-                // No tocar WindowState (evita maximizar/restaurar y romper el layout del usuario).
                 try
                 {
                     int hwnd = (int)_acadApp.HWND;
@@ -131,7 +218,7 @@ namespace ClaraLink
             try
             {
                 doc.SendCommand("\x03\x03");
-                Thread.Sleep(80);
+                Thread.Sleep(120);
             }
             catch { }
         }
@@ -160,7 +247,11 @@ namespace ClaraLink
             catch
             {
                 _acadApp = null;
-                try { _acadApp = GetActiveObject("AutoCAD.Application"); doc = _acadApp.ActiveDocument; }
+                try
+                {
+                    _acadApp = GetActiveObject("AutoCAD.Application");
+                    doc = _acadApp.ActiveDocument;
+                }
                 catch
                 {
                     MsgAcadNoAbierto();
@@ -196,18 +287,22 @@ namespace ClaraLink
                 {
                     int total = 0;
                     try { total = (int)ms.Count; } catch { }
-                    for (int i = 0; i < total; i++)
+                    foreach (var hv in VariantesHandle(handleBorrar))
                     {
-                        try
+                        for (int i = 0; i < total; i++)
                         {
-                            dynamic ent = ms.Item(i);
-                            if ((string)ent.Handle == handleBorrar)
+                            try
                             {
-                                ent.Delete();
-                                break;
+                                dynamic ent = ms.Item(i);
+                                if (string.Equals((string)ent.Handle, hv, StringComparison.OrdinalIgnoreCase)
+                                    || string.Equals((string)ent.Handle, handleBorrar.Trim(), StringComparison.OrdinalIgnoreCase))
+                                {
+                                    ent.Delete();
+                                    break;
+                                }
                             }
+                            catch { }
                         }
-                        catch { }
                     }
                 }
 
@@ -253,7 +348,17 @@ namespace ClaraLink
         private static void MsgAcadNoAbierto()
         {
             System.Windows.Forms.MessageBox.Show(
-                "AutoCAD no está abierto.\nAbre el DWG antes de usar ClaraLink.",
+                "AutoCAD no está abierto.\nAbre el DWG del contrato antes de usar ClaraLink.",
+                "ClaraLink",
+                System.Windows.Forms.MessageBoxButtons.OK,
+                System.Windows.Forms.MessageBoxIcon.Warning);
+        }
+
+        private static void MsgSinUbicacion()
+        {
+            System.Windows.Forms.MessageBox.Show(
+                "No se pudo ubicar la entidad en el plano.\n\n" +
+                "Verifique que el DWG abierto sea el del contrato y que el registro tenga handle o coordenadas (x_label, y_label).",
                 "ClaraLink",
                 System.Windows.Forms.MessageBoxButtons.OK,
                 System.Windows.Forms.MessageBoxIcon.Warning);
@@ -272,6 +377,7 @@ namespace ClaraLink
                 "AutoCAD.Application.25",
                 "AutoCAD.Application.24",
                 "AutoCAD.Application.23",
+                "AutoCAD.Application",
             };
 
             foreach (var pid in progIds)
@@ -330,9 +436,8 @@ namespace ClaraLink
 
         private static double ParseDouble(string s)
         {
-            if (double.TryParse(s,
-                System.Globalization.NumberStyles.Any,
-                System.Globalization.CultureInfo.InvariantCulture, out var v)) return v;
+            if (double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v)) return v;
+            if (double.TryParse(s, NumberStyles.Any, CultureInfo.CurrentCulture, out v)) return v;
             return 0;
         }
     }

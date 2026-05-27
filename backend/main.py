@@ -8483,7 +8483,10 @@ def cad_debug(contrato_id: int, current_user=Depends(get_current_user)):
 @app.get("/cad-queue/{contrato_id}/estado")
 def cad_estado(contrato_id: int, current_user=Depends(get_current_user)):
     """Solo el usuario cuyo SicoeCAD envía heartbeats (mismo usuario_id) ve enlazado=True."""
-    return {"enlazado": _cad_sesion_usuario_activa(contrato_id, current_user)}
+    try:
+        return {"enlazado": _cad_sesion_usuario_activa(contrato_id, current_user)}
+    except Exception:
+        return {"enlazado": False}
 
 @app.get("/cad-queue/{contrato_id}/pendientes")
 def cad_pendientes(contrato_id: int, current_user=Depends(get_current_user)):

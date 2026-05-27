@@ -49,8 +49,8 @@ _MODULO_CONTEXTO_CORTO: Dict[str, str] = {
         "según rol), deshacer última acción, versiones, plano PK lateral, depuración e interventoría en dos capas, Excel."
     ),
     "sicoe": (
-        "SICOE Obra: modal «🔍 Filtros» (plantillas + criterios libres), autocomplete Semana/Acta RPO con periodo, "
-        "capas de validación, grilla de reportes, panel de análisis y mapa."
+        "SICOE Obra: modal y barra «🔍 Filtros» / Buscar, autocomplete Semana/Acta RPO, capas de validación, "
+        "grilla de reportes, panel de análisis con drill-down y selección por filas (Aplicar filtros), mapa."
     ),
     "informes": "Informes CCD: cortes de subcontratista, memorias de ítem y documentos firmados.",
     "almacen": "Almacén y materiales vinculados al contrato.",
@@ -390,11 +390,14 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    A. SISTEMA DE FILTROS (modal «🔍 Filtros») — IGUAL FILOSOFÍA QUE PRESUPUESTO
    Ya NO hay barra antigua de filtros sueltos: todo va en el modal amplio con dos pestañas.
 
-   Barra FUERA del modal:
-   - «Criterios: …» resume lo aplicado tras pulsar Buscar (o «Sin criterios…» si aún no buscó).
-   - «🔍 Filtros» abre el modal. «Limpiar» (barra) quita criterios aplicados y vacía grilla/panel.
+   Barra FUERA del modal (cinta superior fija):
+   - «🔍 Filtros» abre el modal (Plantillas + Filtros libres).
+   - «Buscar» (junto a Filtros, misma cinta): ejecuta la búsqueda con los criterios ya definidos en el modal
+     **sin tener que reabrirlo**; equivalente al Buscar del pie del modal. Útil tras ajustar criterios y cerrar el modal.
+   - «Criterios: …» resume lo aplicado tras la última búsqueda (o «Sin criterios…» si aún no buscó).
+   - «Limpiar» (barra) quita todos los criterios aplicados y vacía grilla y panel.
    - «⟳ Actualizar» recalcula grilla y panel de análisis con los MISMOS criterios ya aplicados
-     (no borra filtros; sirve para refrescar totales tras validar registros).
+     (no borra filtros del modal ni la selección del panel ya aplicada; sirve tras validar registros).
 
    ── Pestaña «Plantillas» ──
    Guardar y reutilizar combinaciones de criterios (incluye capas de validación si las definió).
@@ -440,9 +443,40 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    - El **panel de análisis** suma el costo directo de **todas las líneas** que cumplen (puede ser mayor
      en registros que el conteo de reportes si un reporte tiene varias líneas).
 
-   C. PANEL DE ANÁLISIS (fondo oscuro, tras Buscar)
+   C. PANEL DE ANÁLISIS (fondo oscuro, tras Buscar en modal o barra)
+   Solo visible cuando ya hay criterios aplicados y resultados. Encabezado oscuro con totales; tabla expandible abajo.
+
+   Qué muestra según el «nivel» del filtro (jerarquía automática):
+   | Situación (criterios aplicados) | Vista del panel | Columnas principales |
+   | Semana y/o acta, sin capítulo concreto | Por **capítulos** | Capítulo, costo, regs., sin rev., aprob., pend., rech. |
+   | Un capítulo elegido (modal o drill) | Por **ítems** del capítulo | Ítem, descripción, cantidad, und., costo, estados |
+   | Un solo ítem (modal o drill) | **Detalle por actas** | Acta RPO, capítulo, cantidad, costo, regs., estados |
+
+   DRILL-DOWN (clic en la fila, NO en el checkbox):
+   - Clic en un **capítulo** → carga ese capítulo en los criterios y busca → panel pasa a ítems del capítulo.
+   - Clic en un **ítem** → carga ese ítem y busca → panel muestra en qué **actas RPO** se cobró esa actividad.
+   - Botón «← Volver» en el panel: sube un nivel (ítem→capítulo→vista general) sin perder el resto de criterios
+     (semana, acta, capas, etc.).
+   - El drill **limpia** la selección por checkboxes del nivel anterior y lanza búsqueda al instante.
+
+   SELECCIÓN POR FILAS (checkboxes — corrección reciente):
+   - Primera columna de la tabla: checkbox por fila; cabecera con «marcar / desmarcar todos».
+   - Al cargar datos del panel, **todas las filas visibles vienen marcadas por defecto** (más fácil desmarcar
+     lo que no interesa que marcar una a una).
+   - Marcar o desmarcar **NO actualiza** la grilla ni los totales al instante: el panel permanece estable.
+   - Botón **«Aplicar filtros»** en la barra oscura del panel (junto al contador «X/Y filas»):
+     · Sin cambios pendientes: texto «Aplicar filtros».
+     · Si cambió la selección respecto a la última aplicación: «Aplicar filtros ●» (resaltado).
+     · Ahí sí filtra grilla + panel con las filas marcadas.
+   - Si **todas** las filas siguen marcadas al aplicar → equivale a «sin filtro extra de panel» (universo completo
+     de la búsqueda actual). Si desmarcó algunas → solo entran las marcadas (unión lógica OR entre filas).
+   - Aplica en los tres modos: capítulos, ítems y actas del detalle de ítem.
+   - El **Buscar** de la cinta superior y el del modal definen el universo (semana, acta, capas…); el **Aplicar filtros**
+     del panel solo acota dentro de ese universo por filas marcadas.
+
+   Totales y verificación:
    - Muestra registros, costo directo total, conteos por estado de validación.
-   - «⟳ Actualizar» en la barra vuelve a calcular sin cambiar criterios (totales estables si los datos no cambiaron).
+   - «⟳ Actualizar» en la cinta vuelve a calcular sin cambiar criterios del modal ni re-aplicar checks del panel.
    - Puede mostrar línea de verificación vs KPI del dashboard («✓ coincide» o «Δ …») cuando el filtro es
      comparable al cobro SICOE nivel máximo aprobado.
    - No confundir: pulsar Actualizar varias veces con el mismo filtro debe dar el mismo total de dinero
@@ -454,15 +488,22 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    - Modo offline limitado en cliente para captura en campo (cuando está habilitado).
    - SicoeCAD (AutoCAD) es la vía habitual de medición masiva; la web valida y complementa.
 
-   E. PROBLEMAS FRECUENTES SICOE — FILTROS Y TOTALES
+   E. PROBLEMAS FRECUENTES SICOE — FILTROS, PANEL Y TOTALES
    | Lo que ve | Causa / solución |
    | Lista semana/acta sin fechas | Acta o semana sin fecha_inicio/fin en administración del contrato |
    | Autocompletado repetido o raro | Recargue F5; versión nueva muestra título + periodo en dos líneas |
+   | Clic en capítulo/ítem no filtra | Debe haber buscado antes; el drill aplica criterio y recarga (no es solo visual) |
+   | Marqué checks y no cambió nada | Normal en versión nueva: pulse **Aplicar filtros** en el panel (no basta marcar) |
+   | No veo «Aplicar filtros» | Tras Buscar, expanda el panel (▼); está en la franja oscura superior del panel |
+   | Quiero ver solo 2 capítulos | Desmarque el resto en el panel → Aplicar filtros (o deje todos y use drill) |
+   | Todos marcados pero quiero menos | Desmarque filas que NO quiere → Aplicar filtros |
+   | Clic en fila abrió otro nivel | Eso es drill; el checkbox es solo para incluir/excluir en filtro al aplicar |
    | Total panel ≠ KPI dashboard | Revise si filtró solo nivel máx. aprobado; otros estados o capas cambian la suma |
    | «Limpiar todo» dejó capas | Use Limpiar en barra o abra modal → Limpiar todo de nuevo (versión nueva limpia capas) |
    | Criterios viejos al reabrir | Sesión guarda búsqueda pero no capas; capas hay que definirlas de nuevo si hace falta |
    | Actualizar cambia el $ sin tocar nada | Debería ser estable; si persiste, F5 y repetir Buscar |
    | Grilla muestra reporte pero panel bajo | Normal: grilla por reporte con ≥1 línea; panel suma todas las líneas filtradas |
+   | Aplicar filtros no acota la grilla | Requiere backend actualizado (filtros capitulos_filtro / actas_filtro); contacte soporte si persiste tras F5 |
 
 4. Módulo de Cobro (integrado en Dashboard — pestaña Resumen y paneles de obra aprobada)
    - No es un ítem de menú aparte: vive en el Dashboard (menú lateral → Dashboard).
@@ -752,12 +793,15 @@ DASHBOARD — PRECISIÓN OBLIGATORIA
 - En dashboard y SICOE use «nivel máximo» del contrato en validación SICOE, no asuma siempre «N3».
 
 SICOE OBRA — PRECISIÓN OBLIGATORIA
-- Filtros: botón «🔍 Filtros» → Plantillas / Filtros libres → **Buscar**; barra muestra resumen de criterios.
+- Filtros globales: «🔍 Filtros» (modal) o **Buscar** en la cinta (mismo efecto que Buscar del modal).
 - Semana y Acta RPO: autocompletado con periodo (inicio | fin), lista descendente (mayor primero).
 - No diga que semana/acta son texto libre sin lista; sí puede escribir para buscar dentro de lo existente.
 - Capas de validación: operador Y/O; «Aprobado nivel máx.» alineado con KPI dashboard SICOE nivel máximo.
 - Grilla = reportes con al menos una línea que cumple; panel análisis = suma de líneas filtradas (costo directo).
-- «⟳ Actualizar» (barra) refresca con mismos criterios; «Limpiar» quita filtros aplicados.
+- Panel: drill por **clic en fila** (capítulo → ítems → actas); checkboxes + **Aplicar filtros** para acotar por filas.
+- Checkboxes: todas las filas **marcadas al cargar**; desmarcar no busca hasta **Aplicar filtros**; todas marcadas al aplicar = sin recorte extra.
+- No diga que marcar un checkbox filtra al instante (versión actual: solo al aplicar).
+- «⟳ Actualizar» (cinta) refresca con mismos criterios; «Limpiar» quita filtros aplicados y selección del panel.
 - «Limpiar todo» en modal borra borrador y capas; memoria de sesión NO guarda capas de validación.
 - No confundir validación SICOE (niveles del contrato) con Depuración/Interventoría del Presupuesto.
 - SicoeCAD mide en AutoCAD; SICOE web valida, filtra, reporta y analiza.
@@ -900,65 +944,84 @@ RESPONDE CON PRECISIÓN
 
 SICOE_CONTEXTO_SESION = """<sicoe_en_pantalla>
 El usuario está en el módulo SICOE (obra ejecutada). Responde con pasos concretos en español de obra
-(interventoría, contratista), sin tecnicismos de programación. Prioriza el modal «🔍 Filtros» actualizado.
+(interventoría, contratista), sin tecnicismos de programación. Prioriza filtros (modal o barra), panel de análisis
+con drill-down y selección por filas con «Aplicar filtros».
 
 ── MAPA DE LA PANTALLA ──
 Menú lateral → «SICOE».
-Barra superior (fija):
-  · «🔍 Filtros» — modal principal (Plantillas + Filtros libres)
-  · «Criterios: …» — resumen tras Buscar
-  · Limpiar — quita filtros aplicados y vacía resultados
-  · ⟳ Actualizar — recalcula grilla y panel de análisis SIN cambiar criterios
-  · Excel — exportación según permisos y búsqueda activa
-Debajo: grilla de reportes; panel de análisis (totales oscuros) cuando ya buscó.
+Barra superior (cinta fija):
+  · «🔍 Filtros» — abre modal (Plantillas + Filtros libres)
+  · «Buscar» — ejecuta búsqueda con criterios del modal sin reabrirlo (igual que Buscar dentro del modal)
+  · «Criterios: …» — resumen de lo ya aplicado
+  · Limpiar — quita criterios y vacía grilla y panel
+  · ⟳ Actualizar — recalcula grilla y panel con los MISMOS criterios (tras validar registros)
+  · Excel — si tiene permiso y hay búsqueda activa
+Debajo (tras Buscar): panel de análisis (franja oscura + tabla) y grilla de reportes.
 
 ── MODAL «🔍 FILTROS» ──
 
 PESTAÑA «Filtros libres»:
-1. Abra grupos: Fechas y usuario | Reporte | Ítem | Ubicación | Valores | Validación | Otros.
-2. **Semana** y **Acta RPO**: escriba o despliegue la lista → elija una fila.
-   - Lista ordenada de mayor a menor (75, 74, 73…).
-   - Primera línea: número (Semana N / RPO #N).
-   - Segunda línea: periodo «fecha inicio | fecha fin».
-   - Si no hay segunda línea, faltan fechas del periodo en administración del contrato.
-3. Capas de validación (grupo Validación): agregue nivel + estado; Y u O entre capas.
-4. Ítem: «Buscar ítem…» predictivo (como Presupuesto).
-5. Ubicación: tramo, calzada, abscisa; PK desde mapa si aplica.
-6. Pulse «Buscar» (abajo) — cierra modal y carga grilla + panel.
-   «Cancelar» cierra sin aplicar. «Limpiar todo» borra todo el borrador incluidas capas.
+1. Grupos: Fechas y usuario | Reporte | Ítem | Ubicación | Valores | Validación | Otros.
+2. **Semana** / **Acta RPO**: lista descendente; línea 1 = número; línea 2 = periodo inicio | fin.
+3. Validación: capas por nivel + estado; operador Y u O.
+4. Pulse «Buscar» al pie del modal (o «Buscar» en la cinta) → carga grilla + panel.
+   Cancelar cierra sin aplicar. Limpiar todo borra borrador y capas.
 
-PESTAÑA «Plantillas»:
-CREAR: Filtros libres → criterios (y capas si aplica) → Plantillas → nombre → Guardar.
-USAR: Plantillas → clic nombre → revisar Filtros libres → Buscar.
+PESTAÑA «Plantillas»: guardar/reusar búsquedas (puede incluir capas al guardar).
+Memoria de sesión: recuerda última búsqueda al volver al contrato; **no** guarda capas de validación.
 
-Memoria de sesión: recuerda la última búsqueda al volver al contrato; **no** guarda capas de validación.
+── PANEL DE ANÁLISIS (después de Buscar) ──
 
-── SEMANA Y ACTA (preguntas frecuentes) ──
-· «¿Cómo filtro la acta 30?» → 🔍 Filtros → Reporte → Acta RPO → escriba 30 o elija en lista → Buscar.
-· «No veo fechas en la lista» → El acta/semana no tiene periodo registrado; revise actas/semanas en admin.
-· «Sale repetido RPO #75» → Recargue F5; versión nueva: título arriba, fechas abajo (no duplicar etiqueta).
-· «¿Por qué la lista empieza en 75?» → Orden descendente: las más recientes arriba.
+VISTAS (automáticas según criterios):
+  · Sin capítulo/ítem fijo → tabla por **CAPÍTULOS**
+  · Con un capítulo → tabla por **ÍTEMS**
+  · Con un ítem → tabla por **ACTA RPO** (dónde se cobró ese ítem)
 
-── CAPAS, GRILLA Y PANEL ──
-· Grilla: muestra **reportes** con al menos una línea que cumple el filtro.
-· Panel análisis: suma **todas las líneas** filtradas (costo directo); puede no coincidir en conteo con reportes.
-· Filtro «Aprobado en nivel máximo» debe acercarse al KPI azul del Dashboard (SICOE nivel máx. aprobado).
-· Si el panel muestra verificación vs dashboard: «✓ coincide» o delta — use eso para explicar diferencias.
-· ⟳ Actualizar: mismo filtro, datos frescos; no sustituye Buscar tras cambiar criterios en el modal.
+DRILL-DOWN — clic en la fila (texto/números), NO en el checkbox:
+  · Clic capítulo → filtra ese capítulo y muestra ítems
+  · Clic ítem → muestra actas donde se cobró
+  · «← Volver» sube un nivel
+  · El drill busca al instante y limpia checks del nivel anterior
+
+SELECCIÓN POR FILAS — checkboxes (primera columna):
+  · Al cargar el panel, **todas las filas vienen marcadas** (desmarque lo que no quiere).
+  · Marcar/desmarcar **no cambia** grilla ni totales hasta pulsar **«Aplicar filtros»**
+    (botón en la franja oscura del panel, junto a «X/Y filas»).
+  · Si sigue **todo marcado** al aplicar → ve el universo completo de la búsqueda actual.
+  · Si desmarcó algunas → solo entran las filas que quedaron marcadas.
+  · Cabecera: checkbox para marcar/desmarcar todas.
+
+Dos tipos de «buscar» (no confundir):
+  1. **Buscar** (cinta o modal) — define semana, acta, capas, capítulo en modal, etc.
+  2. **Aplicar filtros** (solo en el panel) — acota por filas marcadas dentro de ese universo.
+
+── SEMANA Y ACTA ──
+· Filtrar acta 30: Filtros → Reporte → Acta RPO → lista o escribir 30 → Buscar (cinta o modal).
+· Sin fechas en lista → acta/semana sin periodo en administración.
+· Lista empieza en número alto → orden descendente (más reciente arriba).
+
+── GRILLA Y TOTALES ──
+· Grilla: reportes con ≥1 línea que cumple el filtro global.
+· Panel: suma costo directo de **todas las líneas** filtradas (global + recorte del panel si aplicó).
+· ⟳ Actualizar: refresca datos; no reemplaza Buscar ni Aplicar filtros del panel.
 
 ── PASOS FRECUENTES ──
-1. Obra aprobada nivel máx. de una acta: Acta RPO = N → capa Nivel máx. · Aprobado → Buscar.
-2. Semana de corte: Semana = N (con fechas visibles en lista) → Buscar.
-3. Guardar búsqueda habitual: criterios → Plantillas → nombre → Guardar.
-4. Refrescar totales tras validar registros: ⟳ Actualizar (sin reabrir filtros).
-5. Empezar de cero: Limpiar (barra) o modal → Limpiar todo.
+1. Acta + aprobado nivel máx.: Acta RPO + capa → Buscar.
+2. Ver ítems de un capítulo: Buscar → clic en fila del capítulo (drill) O desmarcar otros capítulos → Aplicar filtros.
+3. Ver en qué actas se cobró un ítem: drill hasta detalle por acta, o filtrar ítem en modal → Buscar.
+4. Solo capítulos 03 y 07: Buscar → desmarcar resto en panel → **Aplicar filtros**.
+5. Refrescar tras validar: ⟳ Actualizar.
+6. Desde cero: Limpiar (cinta).
 
 ── RESPUESTAS PRECISAS ──
-· «¿Dónde está + Filtro?» → Sustituido por 🔍 Filtros (modal).
-· «Buscar no hace nada» → Defina al menos un criterio o capa → Buscar.
-· «Panel y dashboard distintos» → Revise capas/estados; grilla vs suma de líneas; nivel máx. vs otros niveles.
-· «Limpiar no quitó validación» → Limpiar todo en modal (versión nueva) o Limpiar en barra.
-· No invente botones ni niveles que el contrato no tenga (columnas dinámicas según configuración).
+· «Marqué y no pasó nada» → Pulse **Aplicar filtros** en el panel (no filtra al marcar).
+· «¿Dónde está Aplicar filtros?» → Franja oscura superior del panel, tras expandirlo.
+· «Clic en fila me cambió de vista» → Es drill; use checkbox para filtrar varias filas sin entrar.
+· «Todos vienen marcados» → Es normal; desmarque lo que excluya → Aplicar filtros.
+· «Buscar en barra vs modal» → Mismo efecto para criterios globales.
+· «Panel ≠ dashboard» → Capas, nivel máx., grilla vs suma de líneas.
+· «Aplicar filtros no filtra» → F5; si persiste, backend desactualizado (soporte).
+· No invente botones ni niveles que el contrato no tenga.
 </sicoe_en_pantalla>"""
 
 
@@ -987,7 +1050,8 @@ def build_avi_context_block(modulo_actual: str | None) -> str:
         f"descripcion_pantalla: {pista}",
         "Instrucción: Adapta tu respuesta a lo que el usuario está viendo ahora. "
         "Si el módulo es «cobro» o «dashboard», explica el toggle «Análisis según» y qué KPIs cambian vs SICOE fijo. "
-        "Si es «sicoe», prioriza el modal 🔍 Filtros, autocomplete Semana/Acta con periodo, capas y panel de análisis. "
+        "Si es «sicoe», prioriza 🔍 Filtros / Buscar en cinta, autocomplete Semana/Acta, capas, panel con drill "
+        "y checkboxes + Aplicar filtros (no filtra al marcar solamente). "
         "Si es «admin», menciona el Panel de administración (icono/engranaje), no el menú lateral.",
     ]
     if slug == "presupuesto":

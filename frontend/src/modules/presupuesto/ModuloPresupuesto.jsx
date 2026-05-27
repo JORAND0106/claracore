@@ -592,14 +592,19 @@ useEffect(() => {
   const nivelInfo    = determinarNivelValidacion(usuario, contratoId)
   const esSellado = (r) => r?.sellado === true
   const aplicaReglasCadPresupuesto = Number(contratoId) !== PRESUPUESTO_CONTRATO_EDICION_NODOS_AREA_LONG
-  const MSG_BAJA_DESDE_PLANO = 'Este registro está enlazado al plano (ID-POL). La baja debe gestionarse desde ClaraLink/DWG en SicoeCAD.'
+  const MSG_BAJA_DESDE_PLANO =
+    'Este registro está enlazado al plano (ID-POL). Para darlo de baja desde la web, abra AutoCAD con el DWG del contrato y pulse «Sincronizar» en SicoeCAD con el mismo usuario de ClaraCore (debe verse «DWG Enlazado» arriba). Si no hay enlace activo, gestione la baja desde SicoeCAD en el dibujo.'
   const MSG_AREA_LONG_DESDE_PLANO = 'El campo Área/Long/Nodo debe modificarse desde ClaraLink/DWG en este contrato.'
   const TITULO_DIM_CAD = 'Modificar desde ClaraLink/DWG (plano CAD)'
   const registroEnlazadoPlano = (r) => {
     const v = r?.id_pol
     return v != null && String(v).trim() !== ''
   }
-  const bloqueaDarDeBajaDesdeWeb = (r) => aplicaReglasCadPresupuesto && registroEnlazadoPlano(r)
+  /** Misma regla que el backend: con id_pol solo bloquea si NO hay sesión CAD del usuario. */
+  const bloqueaDarDeBajaDesdeWeb = (r, enlazado = dwgEnlazadoRef.current || dwgEnlazado) => {
+    if (!aplicaReglasCadPresupuesto || !registroEnlazadoPlano(r)) return false
+    return !enlazado
+  }
   const puedeEditarAreaLongNodInline = () => !aplicaReglasCadPresupuesto && puedeEditarNodosYAreaLongComoDev
   const puedeEditarAnchoEspesorInline = () => puedeEditar
   const puedeIniciarEdicionDimsInline = (r) => {
@@ -620,8 +625,14 @@ useEffect(() => {
       {valor ?? '—'}
     </span>
   )
-  const validarDarDeBajaIds = (ids, resolverReg) => {
-    if (ids.some((id) => bloqueaDarDeBajaDesdeWeb(resolverReg(id)))) {
+  const validarDarDeBajaIds = async (ids, resolverReg) => {
+    const requiereCad = ids.some((id) => {
+      const r = resolverReg(id)
+      return r && aplicaReglasCadPresupuesto && registroEnlazadoPlano(r)
+    })
+    let enlazado = dwgEnlazadoRef.current || dwgEnlazado
+    if (requiereCad && !enlazado) enlazado = await refrescarDwgEnlazado()
+    if (ids.some((id) => bloqueaDarDeBajaDesdeWeb(resolverReg(id), enlazado))) {
       window.alert(MSG_BAJA_DESDE_PLANO)
       return false
     }
@@ -3127,9 +3138,13 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 async function darDeBaja(id) {
     const row = registros.find(rr => rr.id === id)
     if (esSellado(row)) return
-    if (bloqueaDarDeBajaDesdeWeb(row)) {
-      window.alert(MSG_BAJA_DESDE_PLANO)
-      return
+    let enlazado = dwgEnlazadoRef.current || dwgEnlazado
+    if (bloqueaDarDeBajaDesdeWeb(row, enlazado)) {
+      enlazado = await refrescarDwgEnlazado()
+      if (bloqueaDarDeBajaDesdeWeb(row, enlazado)) {
+        window.alert(MSG_BAJA_DESDE_PLANO)
+        return
+      }
     }
     const comentarioData = await pedirComentario('validacion', true) // obligatorio
     if (comentarioData === null) return
@@ -3656,7 +3671,7 @@ async function restaurar(id) {
                                     return row && !esSellado(row)
                                   })
                                   if (idsBaja.length === 0) return
-                                  if (!validarDarDeBajaIds(idsBaja, (id) => regs.find((x) => x.id === id))) return
+                                  if (!(await validarDarDeBajaIds(idsBaja, (id) => regs.find((x) => x.id === id)))) return
                                   const comentarioData = await pedirComentario('validacion', true)
                                   if (comentarioData === null) return
                                   const comentario = comentarioData?.mensaje || ''
@@ -4483,9 +4498,13 @@ async function restaurar(id) {
                       {/* ── Dar de baja — no disponible en registros sellados (reabrir antes con el flujo contratista) ── */}
                       {puedeEliminar && !esSellado(r) && (
                         <button onClick={async () => {
-                          if (bloqueaDarDeBajaDesdeWeb(r)) {
-                            window.alert(MSG_BAJA_DESDE_PLANO)
-                            return
+                          let enlazado = dwgEnlazadoRef.current || dwgEnlazado
+                          if (bloqueaDarDeBajaDesdeWeb(r, enlazado)) {
+                            enlazado = await refrescarDwgEnlazado()
+                            if (bloqueaDarDeBajaDesdeWeb(r, enlazado)) {
+                              window.alert(MSG_BAJA_DESDE_PLANO)
+                              return
+                            }
                           }
                           if (!window.confirm('¿Dar de baja este registro?')) return
                           setModalDetallePpto(null); setModalDetallePptoEditable(false)
@@ -5574,7 +5593,7 @@ async function restaurar(id) {
                     alert('Los registros seleccionados están sellados (aprobados por Interventoría) y no pueden modificarse.')
                     return
                   }
-                  if (!validarDarDeBajaIds(idsBaja, (id) => registros.find((rr) => rr.id === id))) return
+                  if (!(await validarDarDeBajaIds(idsBaja, (id) => registros.find((rr) => rr.id === id)))) return
                   const comentarioData = await pedirComentario('validacion', true)
                   if (comentarioData === null) return
                   const comentario = comentarioData?.mensaje || ''

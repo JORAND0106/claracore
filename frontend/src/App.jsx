@@ -15692,15 +15692,32 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                   </div>
                 </div>
                 <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
-                  {dwgEnlazadoDash && (
-                    <button
-                      onClick={() => enviarZoomPkid(popupPkid.pkid)}
-                      disabled={zoomingPkid}
-                      title="Zoom a este PK_ID en AutoCAD"
-                      style={{ background: zoomingPkid ? '#10B981' : t.primary, border:'none', borderRadius:'8px', padding:'6px 14px', color:'#fff', fontSize:'var(--cc-sm)', fontWeight:'700', cursor: zoomingPkid ? 'default' : 'pointer', transition:'all 0.3s', opacity: zoomingPkid ? 0.85 : 1 }}>
-                      {zoomingPkid ? '✅ Enviado a AutoCAD' : '🎯 Ver en AutoCAD'}
-                    </button>
-                  )}
+                  <button
+                    onClick={() => {
+                      const p0 = popupPkid.data?.ppto?.[0]
+                      const tieneCoords = p0?.x_label != null && p0?.y_label != null
+                        && (Number(p0.x_label) !== 0 || Number(p0.y_label) !== 0)
+                      const tieneHandle = p0?.ent_handle != null && String(p0.ent_handle).trim() !== ''
+                      const esTablet = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+                      if (!esTablet && (tieneCoords || tieneHandle)) {
+                        const p = new URLSearchParams()
+                        if (tieneCoords) {
+                          p.set('x', String(p0.x_label))
+                          p.set('y', String(p0.y_label))
+                        }
+                        if (p0.ent_handle) p.set('handle', String(p0.ent_handle))
+                        if (p0.txt_handle) p.set('txt', String(p0.txt_handle))
+                        p.set('radio', '20')
+                        window.location.href = `claralink://highlight?${p.toString()}`
+                        return
+                      }
+                      if (dwgEnlazadoDash && popupPkid.pkid) enviarZoomPkid(popupPkid.pkid)
+                    }}
+                    disabled={zoomingPkid}
+                    title="Zoom en AutoCAD (ClaraLink o SicoeCAD)"
+                    style={{ background: zoomingPkid ? '#10B981' : t.primary, border:'none', borderRadius:'8px', padding:'6px 14px', color:'#fff', fontSize:'var(--cc-sm)', fontWeight:'700', cursor: zoomingPkid ? 'default' : 'pointer', transition:'all 0.3s', opacity: zoomingPkid ? 0.85 : 1 }}>
+                    {zoomingPkid ? '✅ Enviado a AutoCAD' : '🎯 Ver en AutoCAD'}
+                  </button>
                   <button onClick={() => setPopupPkid(null)} style={{ background:'transparent', border:'none', fontSize:'var(--cc-lg)', cursor:'pointer', color:t.textMuted }}>✕</button>
                 </div>
               </div>
@@ -16152,11 +16169,23 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
                       type="button"
                       onClick={() => {
                         const esTablet = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-                        if (!esTablet && r.x_label && r.y_label) {
-                          window.location.href = `claralink://zoom?x=${r.x_label}&y=${r.y_label}&radio=20&handle=${r.ent_handle || ''}`
-                        } else if (dwgEnlazadoDash && popupPkid?.pkid) {
-                          enviarZoomPkid(popupPkid.pkid)
+                        const tieneCoords = r.x_label != null && r.y_label != null
+                          && (Number(r.x_label) !== 0 || Number(r.y_label) !== 0)
+                        const tieneHandle = r.ent_handle != null && String(r.ent_handle).trim() !== ''
+                        if (!esTablet && (tieneCoords || tieneHandle)) {
+                          const p = new URLSearchParams()
+                          if (tieneCoords) {
+                            p.set('x', String(r.x_label))
+                            p.set('y', String(r.y_label))
+                          }
+                          if (r.ent_handle) p.set('handle', String(r.ent_handle))
+                          if (r.txt_handle) p.set('txt', String(r.txt_handle))
+                          p.set('radio', '20')
+                          window.location.href = `claralink://highlight?${p.toString()}`
+                          return
                         }
+                        const pkid = r.pk_id || popupPkid?.pkid
+                        if (dwgEnlazadoDash && pkid) enviarZoomPkid(pkid)
                       }}
                       style={{ background: t.primary, border: 'none', borderRadius: '8px', padding: '6px 14px', color: '#fff', fontSize: 'var(--cc-sm)', fontWeight: '700', cursor: 'pointer' }}
                     >
