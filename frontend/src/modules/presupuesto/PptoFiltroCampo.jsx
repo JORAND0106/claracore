@@ -7,6 +7,14 @@ import {
   pptoMatchItemNumero,
 } from './pptoFiltroCatalogo'
 
+const defaultCatalogHelpers = {
+  filtroValoresLista: pptoFiltroValoresLista,
+  filtroPatchLista: pptoFiltroPatchLista,
+  filtroPatchLimpiar: pptoFiltroPatchLimpiar,
+  filtroPatchActivar: pptoFiltroPatchActivar,
+  matchItemNumero: pptoMatchItemNumero,
+}
+
 const inp = (t) => ({
   background: t.inputBg,
   border: `1px solid ${t.border}`,
@@ -25,6 +33,12 @@ function normalizeOpts(raw, def) {
       if (o != null && typeof o === 'object') {
         const v = String(o.item ?? o.value ?? o.capitulo ?? '').trim()
         if (!v) return null
+        // Opciones ya armadas (Sicoe semana/acta: título + periodo aparte)
+        if ('descripcion' in o) {
+          const label = String(o.label ?? v).trim() || v
+          const descripcion = String(o.descripcion ?? '').trim()
+          return { value: v, label, descripcion: descripcion || undefined }
+        }
         const desc = String(o.descripcion ?? o.label ?? '').trim()
         return { value: v, label: desc && desc !== v ? `${v} — ${desc}` : v, descripcion: desc }
       }
@@ -151,6 +165,105 @@ function ItemPickerInline({ opts, lista, onChangeLista, t }) {
   )
 }
 
+function AutocompleteSingle({ opts, value, onChange, t, placeholder }) {
+  const [busq, setBusq] = useState('')
+  const [open, setOpen] = useState(false)
+
+  const valStr = String(value ?? '').trim()
+  const selected = opts.find((o) => String(o.value) === valStr)
+
+  const filtrados = useMemo(() => {
+    const q = (open ? busq : valStr).trim().toLowerCase()
+    const base = q
+      ? opts.filter(
+          (o) =>
+            o.value.toLowerCase().includes(q) ||
+            (o.label || '').toLowerCase().includes(q),
+        )
+      : opts
+    return base.slice(0, 50)
+  }, [opts, busq, valStr, open])
+
+  const pick = (val) => {
+    onChange(String(val ?? '').trim())
+    setBusq('')
+    setOpen(false)
+  }
+
+  const display = open
+    ? busq
+    : selected
+      ? (selected.descripcion ? `${selected.label} — ${selected.descripcion}` : selected.label)
+      : valStr
+
+  return (
+    <div>
+      <input
+        value={display}
+        onChange={(e) => {
+          setBusq(e.target.value)
+          setOpen(true)
+          onChange(e.target.value)
+        }}
+        onFocus={() => {
+          setOpen(true)
+          setBusq(valStr)
+        }}
+        onBlur={() => setTimeout(() => setOpen(false), 160)}
+        placeholder={placeholder || 'Escribir o elegir…'}
+        style={inp(t)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && filtrados[0]) {
+            e.preventDefault()
+            pick(filtrados[0].value)
+          }
+          if (e.key === 'Escape') setOpen(false)
+        }}
+      />
+      {open && filtrados.length > 0 && (
+        <div
+          style={{
+            marginTop: 4,
+            maxHeight: 140,
+            overflowY: 'auto',
+            border: `1px solid ${t.border}`,
+            borderRadius: 8,
+            background: t.bgCard,
+          }}
+        >
+          {filtrados.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => pick(o.value)}
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                background: String(o.value) === valStr ? `${t.primary}12` : 'transparent',
+                border: 'none',
+                borderBottom: `1px solid ${t.border}44`,
+                padding: '8px 10px',
+                cursor: 'pointer',
+                color: t.text,
+                fontSize: 'var(--cc-sm)',
+              }}
+            >
+              <strong style={{ color: t.primary }}>{o.label || o.value}</strong>
+              {o.descripcion ? (
+                <span style={{ display: 'block', fontSize: 'var(--cc-caption)', color: t.textMuted, fontWeight: 400 }}>
+                  {o.descripcion}
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function MultiSelectAdd({ opts, lista, onChangeLista, t, labelFn }) {
   const [pickAdd, setPickAdd] = useState('')
 
@@ -217,8 +330,9 @@ function MultiSelectAdd({ opts, lista, onChangeLista, t, labelFn }) {
 /**
  * Campo de filtro inline (modal).
  */
-export default function PptoFiltroCampo({ def, f, onChange, t, opciones, itemLabels }) {
-  const lista = pptoFiltroValoresLista(def, f)
+export default function PptoFiltroCampo({ def, f, onChange, t, opciones, itemLabels, catalogHelpers }) {
+  const h = catalogHelpers || defaultCatalogHelpers
+  const lista = h.filtroValoresLista(def, f)
 
   const opts = useMemo(() => {
     if (def.key === 'item') {
@@ -229,11 +343,11 @@ export default function PptoFiltroCampo({ def, f, onChange, t, opciones, itemLab
   }, [def, opciones])
 
   const patchLista = (nextLista) => {
-    onChange({ ...pptoFiltroPatchLista(def, nextLista), ...pptoFiltroPatchActivar(def) })
+    onChange({ ...h.filtroPatchLista(def, nextLista), ...h.filtroPatchActivar(def) })
   }
 
   const limpiarCampo = () => {
-    onChange(pptoFiltroPatchLimpiar(def))
+    onChange(h.filtroPatchLimpiar(def))
   }
 
   const valorSelect = def.tipo === 'select' || def.tipo === 'boolean'
@@ -246,7 +360,7 @@ export default function PptoFiltroCampo({ def, f, onChange, t, opciones, itemLab
     <div style={{ marginBottom: 0, minWidth: 0 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8 }}>
         <label style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.text }}>{def.label}</label>
-        {lista.length > 0 || valorSelect ? (
+        {lista.length > 0 || valorSelect || (def.tipo === 'autocomplete' && String(f[def.campoFObra] ?? '').trim()) ? (
           <button
             type="button"
             onClick={limpiarCampo}
@@ -269,14 +383,14 @@ export default function PptoFiltroCampo({ def, f, onChange, t, opciones, itemLab
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input
             value={f[def.campoFObra] ?? ''}
-            onChange={(e) => onChange({ [def.campoFObra]: e.target.value, ...pptoFiltroPatchActivar(def) })}
+            onChange={(e) => onChange({ [def.campoFObra]: e.target.value, ...h.filtroPatchActivar(def) })}
             placeholder="Desde"
             style={inp(t)}
           />
           <span style={{ color: t.textMuted, flexShrink: 0 }}>–</span>
           <input
             value={f[def.campoFObraHasta] ?? ''}
-            onChange={(e) => onChange({ [def.campoFObraHasta]: e.target.value, ...pptoFiltroPatchActivar(def) })}
+            onChange={(e) => onChange({ [def.campoFObraHasta]: e.target.value, ...h.filtroPatchActivar(def) })}
             placeholder="Hasta"
             style={inp(t)}
           />
@@ -286,16 +400,26 @@ export default function PptoFiltroCampo({ def, f, onChange, t, opciones, itemLab
       {def.tipo === 'text' && (
         <input
           value={f[def.campoFObra] ?? ''}
-          onChange={(e) => onChange({ [def.campoFObra]: e.target.value, ...pptoFiltroPatchActivar(def) })}
+          onChange={(e) => onChange({ [def.campoFObra]: e.target.value, ...h.filtroPatchActivar(def) })}
           style={inp(t)}
-          placeholder={def.key === 'pk_id' ? 'Ej. PK-001' : ''}
+          placeholder={def.key === 'pk_id' ? 'Ej. PK o ID' : ''}
+        />
+      )}
+
+      {def.tipo === 'autocomplete' && (
+        <AutocompleteSingle
+          opts={opts}
+          value={f[def.campoFObra] ?? ''}
+          onChange={(v) => onChange({ [def.campoFObra]: v, ...h.filtroPatchActivar(def) })}
+          t={t}
+          placeholder={def.key === 'semana' ? 'Nº de semana…' : def.key === 'acta_rpo' ? 'Nº acta RPO…' : 'Escribir o elegir…'}
         />
       )}
 
       {def.tipo === 'select' && (
         <select
           value={valorSelect}
-          onChange={(e) => onChange({ [def.campoFObra]: e.target.value, ...pptoFiltroPatchActivar(def) })}
+          onChange={(e) => onChange({ [def.campoFObra]: e.target.value, ...h.filtroPatchActivar(def) })}
           style={inp(t)}
         >
           <option value="">— Todos —</option>
@@ -312,7 +436,7 @@ export default function PptoFiltroCampo({ def, f, onChange, t, opciones, itemLab
             const v = e.target.value
             onChange({
               [def.campoFObra]: v === 'true' ? true : v === 'false' ? false : '',
-              ...pptoFiltroPatchActivar(def),
+              ...h.filtroPatchActivar(def),
             })
           }}
           style={inp(t)}

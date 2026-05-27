@@ -2142,6 +2142,25 @@ def _get_nivel_maximo_contrato(contrato_id: int) -> str:
     return f"nivel{mx}_estado"
 
 
+def _sicoe_capa_alinea_dashboard_kpi(capa: dict, contrato_id: Optional[int]) -> bool:
+    """
+    Una capa «Aprobado» en el nivel máximo del contrato usa la misma regla que
+    dashboard_resumen_sicoe_agg (solo nmax = Aprobado, sin prerrequisitos ni exigir ítem).
+    """
+    if contrato_id is None or not isinstance(capa, dict):
+        return False
+    ev = (capa.get("estado") or "").strip()
+    if ev != "Aprobado":
+        return False
+    fld = capa.get("campo") or _capa_campo_validacion(capa)
+    if not fld:
+        return False
+    try:
+        return fld == _get_nivel_maximo_contrato(int(contrato_id))
+    except (TypeError, ValueError):
+        return False
+
+
 def _sicoe_campo_usuario_fecha_desde_estado(campo_estado: str) -> tuple:
     base = (campo_estado or "").replace("_estado", "")
     return f"{base}_usuario_id", f"{base}_fecha"
@@ -2585,6 +2604,7 @@ def _so_registros_q_y_capas_validacion(
         evp = (capa.get("estado") or "").strip()
         if not evp:
             continue
+        alinea_dash = _sicoe_capa_alinea_dashboard_kpi(capa, contrato_id)
         if contrato_id is not None:
             try:
                 prereq = _get_prereq_nivel_activo(fld, int(contrato_id))
@@ -2592,7 +2612,7 @@ def _so_registros_q_y_capas_validacion(
                 prereq = None
         else:
             prereq = CARGO_NIVEL_PRERREQUISITO.get(fld)
-        if prereq:
+        if prereq and not alinea_dash:
             q = q.eq(prereq[0], prereq[1])
         if evp in ("No Revisado", "No Revisados"):
             q = _so_reg_or_pendiente_nivel(q, fld)
@@ -2601,8 +2621,11 @@ def _so_registros_q_y_capas_validacion(
                 q = _so_reg_item_asignado(q)
         else:
             evq = _estado_registro_eq_desde_filtro_ui(evp)
-            q = q.eq(fld, evq)
-        if _es_validacion_avanzada(fld):
+            if alinea_dash and evp == "Aprobado":
+                q = q.eq(fld, "Aprobado")
+            else:
+                q = q.eq(fld, evq)
+        if _es_validacion_avanzada(fld) and not alinea_dash:
             q = _so_reg_item_asignado(q)
     if pk_id_val is not None:
         q = q.eq("pk_id_id", pk_id_val)
@@ -2910,12 +2933,86 @@ def _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q):
     return q.in_("sub_estado", ["Pendiente", "pendiente", "PENDIENTE"])
 
 
+def _sicoe_parse_filtros_fecha_usuario(
+    ambito_fecha: Optional[str] = None,
+    tipo_fecha: Optional[str] = None,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    usuario_id: Optional[int] = None,
+    usuario_accion: Optional[str] = None,
+):
+    amb = (ambito_fecha or "reporte").strip().lower()
+    if amb not in ("reporte", "registro"):
+        amb = "reporte"
+    tip = (tipo_fecha or "creacion").strip().lower()
+    if tip not in ("creacion", "modificacion"):
+        tip = "creacion"
+    fd = (fecha_desde or "").strip() or None
+    fh = (fecha_hasta or "").strip() or None
+    uid = None
+    if usuario_id is not None:
+        try:
+            uid = int(usuario_id)
+        except (TypeError, ValueError):
+            uid = None
+    uacc = (usuario_accion or "creo").strip().lower()
+    if uacc not in ("creo", "edito", "valido"):
+        uacc = "creo"
+    tiene = bool(fd or fh or uid is not None)
+    return amb, tip, fd, fh, uid, uacc, tiene
+
+
+def _sicoe_fecha_hasta_iso(fecha_hasta: Optional[str]) -> Optional[str]:
+    if not fecha_hasta or not str(fecha_hasta).strip():
+        return None
+    s = str(fecha_hasta).strip()
+    if "T" in s:
+        return s
+    return f"{s}T23:59:59"
+
+
+def _sicoe_aplicar_filtro_fecha_q(q, campo: str, fecha_desde: Optional[str], fecha_hasta: Optional[str]):
+    if fecha_desde and str(fecha_desde).strip():
+        q = q.gte(campo, str(fecha_desde).strip())
+    fh = _sicoe_fecha_hasta_iso(fecha_hasta)
+    if fh:
+        q = q.lte(campo, fh)
+    return q
+
+
+def _sicoe_aplicar_filtro_usuario_reportes_q(q, usuario_id: Optional[int], usuario_accion: Optional[str]):
+    if usuario_id is None:
+        return q
+    acc = (usuario_accion or "creo").strip().lower()
+    if acc == "edito":
+        return q.eq("modificado_por", usuario_id)
+    if acc == "valido":
+        return q.eq("modificado_por", usuario_id)
+    return q.eq("creado_por", usuario_id)
+
+
+def _sicoe_aplicar_filtro_usuario_registros_q(q, usuario_id: Optional[int], usuario_accion: Optional[str]):
+    if usuario_id is None:
+        return q
+    acc = (usuario_accion or "creo").strip().lower()
+    if acc == "edito":
+        return q.eq("modificado_por_reg", usuario_id)
+    if acc == "valido":
+        parts = [f"nivel{i}_usuario_id.eq.{usuario_id}" for i in range(1, 7)]
+        return q.or_(",".join(parts))
+    return q.eq("creado_por_reg", usuario_id)
+
+
 def _sicoe_so_registros_q_linea_filtros_busqueda(
     q,
     *,
     numero_registro: Optional[int] = None,
     abs_inicio: Optional[float] = None,
     abs_final: Optional[float] = None,
+    cantidad_desde: Optional[float] = None,
+    cantidad_hasta: Optional[float] = None,
+    costo_directo_desde: Optional[float] = None,
+    costo_directo_hasta: Optional[float] = None,
     capitulo: Optional[str] = None,
     item: Optional[str] = None,
     items: Optional[List[str]] = None,
@@ -2934,6 +3031,12 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     pendiente_item: bool = False,
     registro_id_in: Optional[List[int]] = None,
     contrato_id: Optional[int] = None,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    tipo_fecha: Optional[str] = None,
+    usuario_id: Optional[int] = None,
+    usuario_accion: Optional[str] = None,
+    ambito_fecha_registro: bool = True,
 ):
     """AND sobre columnas de so_registros; misma semántica que /reportes/buscar y /analisis."""
     items_eff = list(items) if items else []
@@ -2942,6 +3045,14 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     if numero_registro is not None:
         q = q.eq("numero_registro", numero_registro)
     q = _so_reg_filtro_abs_solape(q, abs_inicio, abs_final)
+    if cantidad_desde is not None:
+        q = q.gte("cantidad", cantidad_desde)
+    if cantidad_hasta is not None:
+        q = q.lte("cantidad", cantidad_hasta)
+    if costo_directo_desde is not None:
+        q = q.gte("costo_directo", costo_directo_desde)
+    if costo_directo_hasta is not None:
+        q = q.lte("costo_directo", costo_directo_hasta)
     if capitulo:
         q = q.eq("capitulo", capitulo)
     q = _apply_item_patterns_to_so_registros_q(q, items_eff, items_op)
@@ -2979,6 +3090,11 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
             q = q.eq("id", -1)
         else:
             q = q.in_("id", registro_id_in)
+    if ambito_fecha_registro and (fecha_desde or fecha_hasta):
+        col_f = "updated_at" if (tipo_fecha or "").strip().lower() == "modificacion" else "created_at"
+        q = _sicoe_aplicar_filtro_fecha_q(q, col_f, fecha_desde, fecha_hasta)
+    if ambito_fecha_registro and usuario_id is not None:
+        q = _sicoe_aplicar_filtro_usuario_registros_q(q, usuario_id, usuario_accion)
     return q
 
 
@@ -3003,6 +3119,10 @@ def _sicoe_collect_reporte_ids_misma_linea(
     numero_registro: Optional[int] = None,
     abs_inicio: Optional[float] = None,
     abs_final: Optional[float] = None,
+    cantidad_desde: Optional[float] = None,
+    cantidad_hasta: Optional[float] = None,
+    costo_directo_desde: Optional[float] = None,
+    costo_directo_hasta: Optional[float] = None,
     capitulo: Optional[str] = None,
     item: Optional[str] = None,
     items: Optional[List[str]] = None,
@@ -3020,6 +3140,12 @@ def _sicoe_collect_reporte_ids_misma_linea(
     registro_ids_etiqueta: Optional[Set[int]] = None,
     capas_v_op: Optional[str] = None,
     pendiente_item: bool = False,
+    filtro_fecha_usuario_registro: bool = False,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    tipo_fecha: Optional[str] = None,
+    usuario_id: Optional[int] = None,
+    usuario_accion: Optional[str] = None,
 ) -> set:
     """
     reporte_id tales que existe al menos una fila en so_registros que cumple todos
@@ -3031,6 +3157,16 @@ def _sicoe_collect_reporte_ids_misma_linea(
     items_eff: List[str] = list(items) if items else []
     if not items_eff and item is not None and str(item).strip():
         items_eff = [str(item).strip()]
+    _reg_fu: Dict[str, Any] = {}
+    if filtro_fecha_usuario_registro:
+        _reg_fu = {
+            "fecha_desde": fecha_desde,
+            "fecha_hasta": fecha_hasta,
+            "tipo_fecha": tipo_fecha,
+            "usuario_id": usuario_id,
+            "usuario_accion": usuario_accion,
+            "ambito_fecha_registro": True,
+        }
     ids: set = set()
     capas_ok = bool(capas_v)
     if (
@@ -3051,6 +3187,10 @@ def _sicoe_collect_reporte_ids_misma_linea(
                 numero_registro=numero_registro,
                 abs_inicio=abs_inicio,
                 abs_final=abs_final,
+                cantidad_desde=cantidad_desde,
+                cantidad_hasta=cantidad_hasta,
+                costo_directo_desde=costo_directo_desde,
+                costo_directo_hasta=costo_directo_hasta,
                 capitulo=capitulo,
                 items=items_eff,
                 items_op=items_op,
@@ -3067,6 +3207,12 @@ def _sicoe_collect_reporte_ids_misma_linea(
                 estado=estado,
                 registro_ids_etiqueta=registro_ids_etiqueta,
                 pendiente_item=pendiente_item,
+                filtro_fecha_usuario_registro=filtro_fecha_usuario_registro,
+                fecha_desde=fecha_desde,
+                fecha_hasta=fecha_hasta,
+                tipo_fecha=tipo_fecha,
+                usuario_id=usuario_id,
+                usuario_accion=usuario_accion,
             )
         return merged
 
@@ -3090,6 +3236,10 @@ def _sicoe_collect_reporte_ids_misma_linea(
                             numero_registro=numero_registro,
                             abs_inicio=abs_inicio,
                             abs_final=abs_final,
+                            cantidad_desde=cantidad_desde,
+                            cantidad_hasta=cantidad_hasta,
+                            costo_directo_desde=costo_directo_desde,
+                            costo_directo_hasta=costo_directo_hasta,
                             capitulo=capitulo,
                             items=items_eff,
                             items_op=items_op,
@@ -3106,6 +3256,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                             pendiente_item=pendiente_item,
                             registro_id_in=c,
                             contrato_id=contrato_id,
+                            **_reg_fu,
                         )
                         return q.limit(5000).execute().data
 
@@ -3124,6 +3275,10 @@ def _sicoe_collect_reporte_ids_misma_linea(
                         numero_registro=numero_registro,
                         abs_inicio=abs_inicio,
                         abs_final=abs_final,
+                        cantidad_desde=cantidad_desde,
+                        cantidad_hasta=cantidad_hasta,
+                        costo_directo_desde=costo_directo_desde,
+                        costo_directo_hasta=costo_directo_hasta,
                         capitulo=capitulo,
                         items=items_eff,
                         items_op=items_op,
@@ -3140,6 +3295,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                         pendiente_item=pendiente_item,
                         registro_id_in=c,
                         contrato_id=contrato_id,
+                        **_reg_fu,
                     )
                     return q.limit(5000).execute().data
 
@@ -3162,6 +3318,10 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     numero_registro=numero_registro,
                     abs_inicio=abs_inicio,
                     abs_final=abs_final,
+                    cantidad_desde=cantidad_desde,
+                    cantidad_hasta=cantidad_hasta,
+                    costo_directo_desde=costo_directo_desde,
+                    costo_directo_hasta=costo_directo_hasta,
                     capitulo=capitulo,
                     items=items_eff,
                     items_op=items_op,
@@ -3179,6 +3339,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     estado=estado,
                     pendiente_item=pendiente_item,
                     contrato_id=contrato_id,
+                    **_reg_fu,
                 )
                 return q.limit(5000).execute().data
 
@@ -3199,6 +3360,10 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     numero_registro=numero_registro,
                     abs_inicio=abs_inicio,
                     abs_final=abs_final,
+                    cantidad_desde=cantidad_desde,
+                    cantidad_hasta=cantidad_hasta,
+                    costo_directo_desde=costo_directo_desde,
+                    costo_directo_hasta=costo_directo_hasta,
                     capitulo=capitulo,
                     items=items_eff,
                     items_op=items_op,
@@ -3214,6 +3379,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     estado=estado,
                     pendiente_item=pendiente_item,
                     contrato_id=contrato_id,
+                    **_reg_fu,
                 )
                 return q.range(o, o + page - 1).execute().data
 
@@ -3247,15 +3413,22 @@ def _filtrar_registros_validacion_por_campo(
     fld: str,
     estado_validacion: Optional[str],
     reporte_row: Optional[dict] = None,
+    contrato_id: Optional[int] = None,
 ) -> list:
     """Filtra registros por campo nivelX_estado y estado UI (coherente con búsqueda Sicoe)."""
     if not regs or not fld or not (estado_validacion or "").strip():
         return regs
-    prereq = CARGO_NIVEL_PRERREQUISITO.get(fld)
     ev = estado_validacion.strip()
+    alinea_dash = False
+    if contrato_id is not None:
+        try:
+            alinea_dash = fld == _get_nivel_maximo_contrato(int(contrato_id)) and ev == "Aprobado"
+        except (TypeError, ValueError):
+            alinea_dash = False
+    prereq = None if alinea_dash else CARGO_NIVEL_PRERREQUISITO.get(fld)
     out: List[dict] = []
     for reg in regs:
-        if _es_validacion_avanzada(fld):
+        if _es_validacion_avanzada(fld) and not alinea_dash:
             if not (reg.get("item_numero") or "").strip():
                 continue
         if fld == "nivel1_estado" and ev in ("No Revisado", "No Revisados"):
@@ -3267,8 +3440,11 @@ def _filtrar_registros_validacion_por_campo(
         if ev in ("No Revisado", "No Revisados"):
             if cur is None or str(cur).strip() in ("", "No Revisado"):
                 out.append(reg)
+        elif alinea_dash:
+            if _matriz_validacion_norm_estado(cur) == ev:
+                out.append(reg)
         else:
-            if cur == ev:
+            if _matriz_validacion_norm_estado(cur) == ev or cur == ev:
                 out.append(reg)
     return out
 
@@ -3338,11 +3514,20 @@ def _apply_item_patterns_to_so_registros_q(q, items: List[str], items_op: Option
     return q
 
 
-def _registro_cumple_capa_validacion_sicoe(reg: dict, capa: dict, reporte_row: Optional[dict] = None) -> bool:
+def _registro_cumple_capa_validacion_sicoe(
+    reg: dict,
+    capa: dict,
+    reporte_row: Optional[dict] = None,
+    contrato_id: Optional[int] = None,
+) -> bool:
     fld = capa.get("campo") or _capa_campo_validacion(capa)
     if not fld or not (str(capa.get("estado") or "").strip()):
         return False
-    return bool(_filtrar_registros_validacion_por_campo([reg], fld, capa.get("estado"), reporte_row))
+    return bool(
+        _filtrar_registros_validacion_por_campo(
+            [reg], fld, capa.get("estado"), reporte_row, contrato_id
+        )
+    )
 
 
 def _filtrar_registros_validacion_capas_sicoe(
@@ -3350,6 +3535,7 @@ def _filtrar_registros_validacion_capas_sicoe(
     capas: List[dict],
     reporte_row: Optional[dict] = None,
     op: str = "and",
+    contrato_id: Optional[int] = None,
 ) -> list:
     """AND: todas las capas (legado). OR: basta que el registro cumpla una capa cualquiera."""
     if not capas:
@@ -3358,14 +3544,19 @@ def _filtrar_registros_validacion_capas_sicoe(
     if o == "or" and len(capas) > 1:
         return [
             reg for reg in regs
-            if any(_registro_cumple_capa_validacion_sicoe(reg, c, reporte_row) for c in capas)
+            if any(
+                _registro_cumple_capa_validacion_sicoe(reg, c, reporte_row, contrato_id)
+                for c in capas
+            )
         ]
     out = regs
     for c in capas:
         fld = c.get("campo") or _capa_campo_validacion(c)
         if not fld:
             continue
-        out = _filtrar_registros_validacion_por_campo(out, fld, c.get("estado"), reporte_row)
+        out = _filtrar_registros_validacion_por_campo(
+            out, fld, c.get("estado"), reporte_row, contrato_id
+        )
     return out
 
 
@@ -9745,7 +9936,8 @@ def usuarios_del_contrato(contrato_id: int, current_user=Depends(get_current_use
     todos_ids = list(set(ids_uc + ids_principal))
     if not todos_ids:
         return []
-    users = supabase.table("usuarios").select("id, nombre, apellidos").in_("id", todos_ids).execute().data or []
+    users = supabase.table("usuarios").select("id, nombre, apellidos, email, activo")\
+        .in_("id", todos_ids).eq("activo", True).execute().data or []
     return users
 
 @app.post("/actas/{contrato_id}")
@@ -10904,6 +11096,16 @@ def buscar_reportes_obra(
     q_observacion: Optional[str] = None,
     q_nodo: Optional[str] = None,
     etiqueta_validacion: Optional[str] = None,
+    cantidad_desde: Optional[float] = None,
+    cantidad_hasta: Optional[float] = None,
+    costo_directo_desde: Optional[float] = None,
+    costo_directo_hasta: Optional[float] = None,
+    ambito_fecha: Optional[str] = None,
+    tipo_fecha: Optional[str] = None,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    usuario_id: Optional[int] = None,
+    usuario_accion: Optional[str] = None,
     pendiente_item: bool = Query(False),
     offset: int = 0,
     limit: int = 50,
@@ -10911,6 +11113,11 @@ def buscar_reportes_obra(
 ):
     limit = min(limit, 100)
     _ocultar_costo_rep = _sicoe_ocultar_costo_directo_reportes(current_user)
+    _amb_fu, _tip_fu, _fd_fu, _fh_fu, _uid_fu, _uacc_fu, _tiene_fu = _sicoe_parse_filtros_fecha_usuario(
+        ambito_fecha, tipo_fecha, fecha_desde, fecha_hasta, usuario_id, usuario_accion
+    )
+    _filtro_fu_rep = _amb_fu == "reporte" and _tiene_fu
+    _filtro_fu_reg = _amb_fu == "registro" and _tiene_fu
     capas_v = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
     consulta_directa_identificador = (
         numero_reporte is not None or numero_registro is not None
@@ -10942,6 +11149,8 @@ def buscar_reportes_obra(
     has_reg_f = any([
         capitulo, bool(items_buscar_norm), subcontratista_id is not None,
         bool(tramo), bool(costado),
+        cantidad_desde is not None, cantidad_hasta is not None,
+        costo_directo_desde is not None, costo_directo_hasta is not None,
     ])
     capas_aplican_a_lineas = bool(capas_v) and not _estado_filtro_omite_validacion_por_cargo(estado)
     q_obs_trim = (str(q_observacion).strip() if q_observacion is not None else "")
@@ -11013,6 +11222,9 @@ def buscar_reportes_obra(
         acta_id_filtro is not None,
         bool(etiqueta_f),
         pendiente_item,
+        cantidad_desde is not None or cantidad_hasta is not None,
+        costo_directo_desde is not None or costo_directo_hasta is not None,
+        _filtro_fu_reg,
     ])
 
     if unified_line:
@@ -11021,6 +11233,10 @@ def buscar_reportes_obra(
             numero_registro=numero_registro,
             abs_inicio=abs_inicio,
             abs_final=abs_final,
+            cantidad_desde=cantidad_desde,
+            cantidad_hasta=cantidad_hasta,
+            costo_directo_desde=costo_directo_desde,
+            costo_directo_hasta=costo_directo_hasta,
             capitulo=capitulo,
             items=items_buscar_norm,
             items_op=items_buscar_op,
@@ -11036,12 +11252,39 @@ def buscar_reportes_obra(
             estado=estado,
             registro_ids_etiqueta=registro_ids_etiqueta,
             pendiente_item=pendiente_item,
+            filtro_fecha_usuario_registro=_filtro_fu_reg,
+            fecha_desde=_fd_fu,
+            fecha_hasta=_fh_fu,
+            tipo_fecha=_tip_fu,
+            usuario_id=_uid_fu,
+            usuario_accion=_uacc_fu,
         )
         if not ids_unif:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
         reporte_ids_from_reg = list(ids_unif)
         if semana_id_filtro is not None or acta_id_filtro is not None:
             omit_header_semana_acta_en_reportes = True
+
+    if _filtro_fu_rep:
+        try:
+            def _rep_fu_ids():
+                q = supabase.table("so_reportes").select("id").eq("contrato_id", contrato_id)
+                col_f = "updated_at" if _tip_fu == "modificacion" else "created_at"
+                q = _sicoe_aplicar_filtro_fecha_q(q, col_f, _fd_fu, _fh_fu)
+                if _uid_fu is not None:
+                    q = _sicoe_aplicar_filtro_usuario_reportes_q(q, _uid_fu, _uacc_fu)
+                return q.limit(50000).execute().data
+            ids_fu = {r["id"] for r in supabase_execute(_rep_fu_ids) if r.get("id")}
+            if not ids_fu:
+                return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+            if reporte_ids_from_reg is not None:
+                reporte_ids_from_reg = [x for x in reporte_ids_from_reg if x in ids_fu]
+                if not reporte_ids_from_reg:
+                    return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
+            else:
+                reporte_ids_from_reg = list(ids_fu)
+        except Exception:
+            return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
     if q_nodo is not None and str(q_nodo).strip():
         ids_n = _sicoe_reporte_ids_coinciden_nodo(contrato_id, q_nodo, reporte_ids_from_reg)
@@ -11092,6 +11335,11 @@ def buscar_reportes_obra(
                 q = q.eq("acta_rpo_id", acta_id_filtro)
         if ids_chunk is not None:
             q = q.in_("id", ids_chunk)
+        if _filtro_fu_rep and ids_chunk is None:
+            col_f = "updated_at" if _tip_fu == "modificacion" else "created_at"
+            q = _sicoe_aplicar_filtro_fecha_q(q, col_f, _fd_fu, _fh_fu)
+            if _uid_fu is not None:
+                q = _sicoe_aplicar_filtro_usuario_reportes_q(q, _uid_fu, _uacc_fu)
         return q
 
     # ── Cabeceras: sin precargar miles de reportes (*) para ordenar/paginar en Python.
@@ -11254,7 +11502,9 @@ def buscar_reportes_obra(
                     if not (str(x.get("item_numero") or "").strip())
                 ]
             if _defer_capas_or_grilla:
-                reg_estados = _filtrar_registros_validacion_capas_sicoe(reg_estados, capas_v, None, "or")
+                reg_estados = _filtrar_registros_validacion_capas_sicoe(
+                    reg_estados, capas_v, None, "or", contrato_id
+                )
             cmx_aggr = _get_nivel_maximo_contrato(contrato_id)
             cargo_map = {r["id"]: {"n1": [], "n2": [], "n3": [], "sub": [], "count": 0} for r in rows}
             costo_map = {}
@@ -11613,7 +11863,9 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
                 if not (str(r.get("item_numero") or "").strip())
             ]
         if _defer_capas_or_export and capas_exp_export:
-            batch = _filtrar_registros_validacion_capas_sicoe(batch, capas_exp_export, None, "or")
+            batch = _filtrar_registros_validacion_capas_sicoe(
+                batch, capas_exp_export, None, "or", contrato_id
+            )
         for row in batch:
             if row.get("nivel2_objeto_pago_sub"):
                 excluidos_objeto_pago_sub += 1
@@ -12146,7 +12398,9 @@ def exportar_registros_sicoe(
                 off += batch_size + 1
         registros = _enriquecer_registros_export(registros)
         if _defer_capas_or_export and registros:
-            registros = _filtrar_registros_validacion_capas_sicoe(registros, capas_exp_export, None, "or")
+            registros = _filtrar_registros_validacion_capas_sicoe(
+                registros, capas_exp_export, None, "or", contrato_id
+            )
         try:
             u_log = _audit_user_contrato(current_user, contrato_id)
             registrar_log(
@@ -12169,7 +12423,9 @@ def exportar_registros_sicoe(
 
     registros = _enriquecer_registros_export(registros)
     if _defer_capas_or_export and registros:
-        registros = _filtrar_registros_validacion_capas_sicoe(registros, capas_exp_export, None, "or")
+        registros = _filtrar_registros_validacion_capas_sicoe(
+            registros, capas_exp_export, None, "or", contrato_id
+        )
     try:
         u_log = _audit_user_contrato(current_user, contrato_id)
         registrar_log(
@@ -12185,42 +12441,104 @@ def exportar_registros_sicoe(
     return registros
 
 
+def _sicoe_registro_cumple_estado_capa_ui(reg: dict, fld: str, ev: str, contrato_id: int) -> bool:
+    """Misma normalización que matriz / dashboard (_matriz_validacion_norm_estado)."""
+    cur = reg.get(fld)
+    if ev in ("No Revisado", "No Revisados"):
+        return cur is None or str(cur).strip() in ("", "No Revisado")
+    return _matriz_validacion_norm_estado(cur) == ev
+
+
+def _sicoe_registros_postfiltro_capas_norm(regs: list, capas: List[dict], contrato_id: int) -> list:
+    """Tras el fetch SQL: alinear con dashboard (norm) en capas de validación."""
+    if not regs or not capas:
+        return regs
+    out = regs
+    for capa in capas:
+        fld = capa.get("campo") or _capa_campo_validacion(capa)
+        ev = (capa.get("estado") or "").strip()
+        if not fld or not ev:
+            continue
+        out = [
+            r for r in out
+            if _sicoe_registro_cumple_estado_capa_ui(r, fld, ev, contrato_id)
+        ]
+    return out
+
+
+def _sicoe_analisis_verificacion_totales(regs: list, contrato_id: int, capas: List[dict]) -> dict:
+    """Suma línea a línea + comparación con KPI dashboard cuando aplica."""
+    suma = round(sum(float(r.get("costo_directo") or 0) for r in regs), 0)
+    ver: dict = {
+        "suma_costo_directo_registros": suma,
+        "conteo_registros": len(regs),
+        "metodo": "suma_linea_a_linea_por_id_unico",
+    }
+    if len(capas) == 1 and _sicoe_capa_alinea_dashboard_kpi(capas[0], contrato_id):
+        try:
+            cm = _get_nivel_maximo_contrato(int(contrato_id))
+            na = _get_niveles_activos_contrato(int(contrato_id))
+            hit = _fetch_dashboard_resumen_sicoe_agg(int(contrato_id), cm, na)
+            if hit is not None and hit.get("total_cobrado") is not None:
+                kpi = round(float(hit["total_cobrado"]), 0)
+                ver["dashboard_kpi_cobrado"] = kpi
+                ver["delta_vs_dashboard"] = round(suma - kpi, 0)
+                ver["coherente_dashboard"] = ver["delta_vs_dashboard"] == 0
+        except Exception:
+            pass
+    return ver
+
+
+def _sicoe_dedupe_registros_por_id(regs: list) -> list:
+    """Evita doble conteo si PostgREST devolvió solapamiento entre páginas."""
+    if not regs:
+        return regs
+    seen: set = set()
+    out: List[dict] = []
+    for r in regs:
+        rid = r.get("id")
+        if rid is None:
+            out.append(r)
+            continue
+        try:
+            key = int(rid)
+        except (TypeError, ValueError):
+            key = rid
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
 def _sicoe_analisis_fetch_registros_paginated(build_q):
     """
-    Carga todas las filas filtradas para el panel /analisis. Antes: bucle secuencial de páginas
-    de 1000 filas (muy lento con muchas filas). Ahora: oleadas de varias páginas en paralelo;
-    tamaño de página configurable para proyectos con max-rows mayor en PostgREST.
+    Carga todas las filas filtradas para el panel /analisis.
+    Paginación secuencial con ORDER BY id (estable): la versión paralela sin orden
+    hacía que el total $ variara entre peticiones con el mismo número de regs.
 
-    build_q: callable sin argumentos que devuelve el query builder Supabase (sin .range).
+    build_q: callable que devuelve el query builder Supabase (sin .range ni .order).
 
-    Variables de entorno opcionales:
-      SICOE_ANALISIS_PAGE_SIZE   (default 1000; igual al toque habitual de PostgREST/Supabase.
-                                  Si en tu proyecto elevaste max-rows, puedes probar 3000–8000.)
-      SICOE_ANALISIS_FETCH_WORKERS (default 8; peticiones paralelas por oleada. Bajar si hay rate limit.)
+    Variable opcional: SICOE_ANALISIS_PAGE_SIZE (default 1000).
     """
     PAGE = max(200, min(50000, int(os.getenv("SICOE_ANALISIS_PAGE_SIZE", "1000"))))
-    WORKERS = max(1, min(16, int(os.getenv("SICOE_ANALISIS_FETCH_WORKERS", "8"))))
 
     def _page(off: int):
         return supabase_execute(
-            lambda o=off: build_q().range(o, o + PAGE - 1).execute().data
+            lambda o=off: build_q().order("id").range(o, o + PAGE - 1).execute().data
         )
 
     out: list = []
-    first = _page(0)
-    out.extend(first)
-    if len(first) < PAGE:
-        return out
-    off = PAGE
+    off = 0
     while True:
-        offsets = [off + i * PAGE for i in range(WORKERS)]
-        with ThreadPoolExecutor(max_workers=WORKERS) as ex:
-            waves = list(ex.map(_page, offsets))
-        for batch in waves:
-            out.extend(batch)
-            if len(batch) < PAGE:
-                return out
-        off += WORKERS * PAGE
+        batch = _page(off)
+        if not batch:
+            break
+        out.extend(batch)
+        if len(batch) < PAGE:
+            break
+        off += PAGE
+    return _sicoe_dedupe_registros_por_id(out)
 
 
 @app.get("/sicoe-obra/{contrato_id}/analisis")
@@ -12248,13 +12566,37 @@ def analisis_registros_obra(
     q_observacion: Optional[str] = None,
     q_nodo: Optional[str] = None,
     etiqueta_validacion: Optional[str] = None,
+    cantidad_desde: Optional[float] = None,
+    cantidad_hasta: Optional[float] = None,
+    costo_directo_desde: Optional[float] = None,
+    costo_directo_hasta: Optional[float] = None,
+    ambito_fecha: Optional[str] = None,
+    tipo_fecha: Optional[str] = None,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    usuario_id: Optional[int] = None,
+    usuario_accion: Optional[str] = None,
     pendiente_item: bool = Query(False),
     current_user=Depends(get_current_user)
 ):
     """Agregados del panel dinámico: cada query param activo es un filtro AND sobre el universo de registros."""
-    _empty = {"modo":"general","encabezado":"Sin resultados","grupos":[],
-              "total_costo_directo":0,"total_registros":0,"total_cantidad":0,
-              "total_aprobados":0,"total_pendientes":0,"total_rechazados":0}
+    _amb_fu, _tip_fu, _fd_fu, _fh_fu, _uid_fu, _uacc_fu, _tiene_fu = _sicoe_parse_filtros_fecha_usuario(
+        ambito_fecha, tipo_fecha, fecha_desde, fecha_hasta, usuario_id, usuario_accion
+    )
+    _filtro_fu_rep = _amb_fu == "reporte" and _tiene_fu
+    _filtro_fu_reg = _amb_fu == "registro" and _tiene_fu
+    _empty = {
+        "modo": "general",
+        "encabezado": "Sin resultados",
+        "grupos": [],
+        "total_costo_directo": 0,
+        "total_registros": 0,
+        "total_cantidad": 0,
+        "total_aprobados": 0,
+        "total_pendientes": 0,
+        "total_rechazados": 0,
+        "verificacion": {"suma_costo_directo_registros": 0, "conteo_registros": 0, "metodo": "suma_linea_a_linea_por_id_unico"},
+    }
 
     items_ana = _normalize_items_filtro_list(items_filtro, item)
     _pendiente_acta_matriz = False
@@ -12341,6 +12683,7 @@ def analisis_registros_obra(
     has_rep_f = any([
         numero_reporte is not None,
         bool(estado and str(estado).strip()),
+        _filtro_fu_rep,
     ])
     if has_rep_f:
         try:
@@ -12351,6 +12694,11 @@ def analisis_registros_obra(
                     q = q.eq("numero_reporte", numero_reporte)
                 if estado and str(estado).strip():
                     q = _so_reportes_q_por_estado(q, estado.strip())
+                if _filtro_fu_rep:
+                    col_f = "updated_at" if _tip_fu == "modificacion" else "created_at"
+                    q = _sicoe_aplicar_filtro_fecha_q(q, col_f, _fd_fu, _fh_fu)
+                    if _uid_fu is not None:
+                        q = _sicoe_aplicar_filtro_usuario_reportes_q(q, _uid_fu, _uacc_fu)
                 return q.limit(50000).execute().data
             rr = supabase_execute(_reps)
             reporte_ids_base = list({r["id"] for r in rr if r.get("id")})
@@ -12418,7 +12766,7 @@ def analisis_registros_obra(
 
         def _build_regs_q(reg_id_filter: Optional[List[int]] = None):
             q = supabase.table("so_registros")\
-                .select("reporte_id, costo_directo, cantidad_total, item_numero, item_descripcion, unidad, acta_rpo_id, " + SICOE_SELECT_NIVELES_ESTADO + ", capitulo, subcontratista_id")\
+                .select("id, reporte_id, costo_directo, cantidad_total, item_numero, item_descripcion, unidad, acta_rpo_id, " + SICOE_SELECT_NIVELES_ESTADO + ", capitulo, subcontratista_id")\
                 .eq("contrato_id", contrato_id)
             q = _so_reg_filtro_abs_solape(q, _abs_ai, _abs_af)
             if _nr is not None:
@@ -12444,6 +12792,14 @@ def analisis_registros_obra(
                 q = q.eq("pk_id_id", pk_id)
             if q_observacion is not None and str(q_observacion).strip():
                 q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
+            if cantidad_desde is not None:
+                q = q.gte("cantidad", cantidad_desde)
+            if cantidad_hasta is not None:
+                q = q.lte("cantidad", cantidad_hasta)
+            if costo_directo_desde is not None:
+                q = q.gte("costo_directo", costo_directo_desde)
+            if costo_directo_hasta is not None:
+                q = q.lte("costo_directo", costo_directo_hasta)
             if _a_l is not None and not _estado_filtro_es_sin_asignar_item(estado):
                 q = _so_reg_item_asignado(q)
             if _capas_sql and not _estado_filtro_omite_validacion_por_cargo(estado):
@@ -12454,6 +12810,11 @@ def analisis_registros_obra(
                 q = _so_reg_sin_item_asignado(q)
             if pendiente_item:
                 q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q)
+            if _filtro_fu_reg:
+                col_f = "updated_at" if _tip_fu == "modificacion" else "created_at"
+                q = _sicoe_aplicar_filtro_fecha_q(q, col_f, _fd_fu, _fh_fu)
+                if _uid_fu is not None:
+                    q = _sicoe_aplicar_filtro_usuario_registros_q(q, _uid_fu, _uacc_fu)
             return q
 
         if reg_ids_etiqueta_ana is not None:
@@ -12471,13 +12832,20 @@ def analisis_registros_obra(
             registros = []
 
     if _defer_capas_or_ana and registros:
-        registros = _filtrar_registros_validacion_capas_sicoe(registros, capas_ana, None, "or")
+        registros = _filtrar_registros_validacion_capas_sicoe(
+            registros, capas_ana, None, "or", contrato_id
+        )
 
     if _estado_filtro_es_sin_asignar_item(estado):
         registros = [
             r for r in registros
             if not (str(r.get("item_numero") or "").strip())
         ]
+
+    if capas_ana and registros and not _estado_filtro_omite_validacion_por_cargo(estado):
+        registros = _sicoe_registros_postfiltro_capas_norm(registros, capas_ana, contrato_id)
+
+    verificacion = _sicoe_analisis_verificacion_totales(registros, contrato_id, capas_ana or [])
 
     # No re-filtrar por estado de so_reportes (coherente con dashboard_matriz_validacion / SQL del usuario).
 
@@ -12705,8 +13073,8 @@ def analisis_registros_obra(
             )
         encabezado = " · ".join(partes) if partes else "Todos los registros"
 
-    tc  = round(sum(g["costo_directo"]   for g in grupos_list), 0)
-    tr  = sum(g["total_registros"] for g in grupos_list)
+    tc  = round(sum(float(r.get("costo_directo") or 0) for r in registros), 0)
+    tr  = len(registros)
     ta  = sum(g["aprobados"]       for g in grupos_list)
     tp  = sum(g["pendientes"]      for g in grupos_list)
     trj = sum(g["rechazados"]      for g in grupos_list)
@@ -12717,31 +13085,49 @@ def analisis_registros_obra(
     tnrc  = round(sum(g.get("no_revisados_costo", 0.0) for g in grupos_list), 0)
     t_cant = round(sum(float(g.get("cantidad_total") or 0) for g in grupos_list), 2)
 
-    return {"modo": modo, "encabezado": encabezado, "grupos": grupos_list,
-            "total_costo_directo": tc, "total_registros": tr,
-            "total_cantidad": t_cant,
-            "total_no_revisados": tnr,
-            "total_no_revisados_costo": tnrc,
-            "total_aprobados": ta, "total_pendientes": tp, "total_rechazados": trj,
-            "total_aprobados_count": ta_c, "total_pendientes_count": tp_c, "total_rechazados_count": trj_c}
+    return {
+        "modo": modo,
+        "encabezado": encabezado,
+        "grupos": grupos_list,
+        "total_costo_directo": tc,
+        "total_registros": tr,
+        "total_cantidad": t_cant,
+        "total_no_revisados": tnr,
+        "total_no_revisados_costo": tnrc,
+        "total_aprobados": ta,
+        "total_pendientes": tp,
+        "total_rechazados": trj,
+        "total_aprobados_count": ta_c,
+        "total_pendientes_count": tp_c,
+        "total_rechazados_count": trj_c,
+        "verificacion": verificacion,
+    }
 
 
 @app.get("/sicoe-obra/{contrato_id}/filtros/semanas")
 def filtros_semanas(contrato_id: int, current_user=Depends(get_current_user)):
     def _q():
-        return supabase.table("so_semanas").select("id, numero_semana")\
-            .eq("contrato_id", contrato_id).order("numero_semana").execute().data
+        return supabase.table("so_semanas").select("id, numero_semana, fecha_inicio, fecha_fin")\
+            .eq("contrato_id", contrato_id).order("numero_semana", desc=True).execute().data
     return supabase_execute(_q)
 
 
 @app.get("/sicoe-obra/{contrato_id}/filtros/actas")
 def filtros_actas(contrato_id: int, current_user=Depends(get_current_user)):
     def _q():
-        return supabase.table("actas").select("id, numero_rpo")\
+        return supabase.table("actas").select("id, numero_rpo, fecha_inicio, fecha_fin")\
             .eq("contrato_id", contrato_id).not_.is_("numero_rpo", "null")\
-            .order("numero_rpo").execute().data
+            .order("numero_rpo", desc=True).execute().data
     rows = supabase_execute(_q)
-    return [{"numero_rpo": r["numero_rpo"]} for r in rows if r.get("numero_rpo") is not None]
+    return [
+        {
+            "numero_rpo": r["numero_rpo"],
+            "fecha_inicio": r.get("fecha_inicio"),
+            "fecha_fin": r.get("fecha_fin"),
+        }
+        for r in (rows or [])
+        if r.get("numero_rpo") is not None
+    ]
 
 
 @app.get("/sicoe-obra/{contrato_id}/filtros/capitulos")
@@ -13089,7 +13475,9 @@ def obtener_reporte(
                 break
             off += page
         if _defer_capas_or_detalle:
-            out = _filtrar_registros_validacion_capas_sicoe(out, capas_v, None, "or")
+            out = _filtrar_registros_validacion_capas_sicoe(
+                out, capas_v, None, "or", contrato_id
+            )
         if reg_tag_detalle is not None:
             out = [r for r in out if r.get("id") in reg_tag_detalle]
         return out
@@ -21696,7 +22084,7 @@ def get_reporte_de_registro(
         _capas_gr = _parse_validacion_capas_param(validacion_capas, cargo_id, estado_validacion)
         if _capas_gr:
             regs_raw = _filtrar_registros_validacion_capas_sicoe(
-                regs_raw, _capas_gr, r, validacion_capas_op or "and"
+                regs_raw, _capas_gr, r, validacion_capas_op or "and", contrato_id
             )
         _enriquecer_num_comentarios_visibles(regs_raw, current_user)
         _enriquecer_registros_labels_reversion_doble_llave(regs_raw)
