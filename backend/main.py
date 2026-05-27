@@ -3191,6 +3191,7 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     costo_directo_desde: Optional[float] = None,
     costo_directo_hasta: Optional[float] = None,
     capitulo: Optional[str] = None,
+    capitulos: Optional[List[str]] = None,
     item: Optional[str] = None,
     items: Optional[List[str]] = None,
     items_op: Optional[str] = None,
@@ -3201,6 +3202,7 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     q_observacion: Optional[str] = None,
     semana_id: Optional[int] = None,
     acta_rpo_id: Optional[int] = None,
+    acta_rpo_ids: Optional[List[int]] = None,
     reporte_id_in: Optional[List[int]] = None,
     require_item: bool = False,
     capas_v: Optional[List[dict]] = None,
@@ -3230,8 +3232,11 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
         q = q.gte("costo_directo", costo_directo_desde)
     if costo_directo_hasta is not None:
         q = q.lte("costo_directo", costo_directo_hasta)
-    if capitulo:
-        q = q.eq("capitulo", capitulo)
+    caps_eff = list(capitulos) if capitulos else []
+    if not caps_eff and capitulo is not None and str(capitulo).strip():
+        caps_eff = [str(capitulo).strip()]
+    if caps_eff:
+        q = _apply_capitulos_to_so_registros_q(q, caps_eff)
     q = _apply_item_patterns_to_so_registros_q(q, items_eff, items_op)
     if subcontratista_id is not None:
         q = q.eq("subcontratista_id", subcontratista_id)
@@ -3246,8 +3251,12 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     # reporte_id_in tiene precedencia: filtra por los reportes del acta (semántica correcta)
     if reporte_id_in is not None:
         q = q.in_("reporte_id", reporte_id_in)
-    elif acta_rpo_id is not None:
-        q = q.eq("acta_rpo_id", acta_rpo_id)
+    else:
+        aids_eff = list(acta_rpo_ids) if acta_rpo_ids else []
+        if not aids_eff and acta_rpo_id is not None:
+            aids_eff = [int(acta_rpo_id)]
+        if aids_eff:
+            q = _apply_acta_rpo_ids_to_so_registros_q(q, aids_eff)
     if q_observacion and str(q_observacion).strip():
         q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
     if capas_v:
@@ -3301,6 +3310,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
     costo_directo_desde: Optional[float] = None,
     costo_directo_hasta: Optional[float] = None,
     capitulo: Optional[str] = None,
+    capitulos: Optional[List[str]] = None,
     item: Optional[str] = None,
     items: Optional[List[str]] = None,
     items_op: Optional[str] = None,
@@ -3311,6 +3321,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
     q_observacion: Optional[str] = None,
     semana_id: Optional[int] = None,
     acta_rpo_id: Optional[int] = None,
+    acta_rpo_ids: Optional[List[int]] = None,
     reporte_ids_restrict: Optional[List[int]] = None,
     capas_v: Optional[List[dict]] = None,
     estado: Optional[str] = None,
@@ -3334,6 +3345,12 @@ def _sicoe_collect_reporte_ids_misma_linea(
     items_eff: List[str] = list(items) if items else []
     if not items_eff and item is not None and str(item).strip():
         items_eff = [str(item).strip()]
+    caps_eff: List[str] = list(capitulos) if capitulos else []
+    if not caps_eff and capitulo is not None and str(capitulo).strip():
+        caps_eff = [str(capitulo).strip()]
+    aids_eff: List[int] = list(acta_rpo_ids) if acta_rpo_ids else []
+    if not aids_eff and acta_rpo_id is not None:
+        aids_eff = [int(acta_rpo_id)]
     _reg_fu: Dict[str, Any] = {}
     if filtro_fecha_usuario_registro:
         _reg_fu = {
@@ -3368,7 +3385,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                 cantidad_hasta=cantidad_hasta,
                 costo_directo_desde=costo_directo_desde,
                 costo_directo_hasta=costo_directo_hasta,
-                capitulo=capitulo,
+                capitulos=caps_eff,
                 items=items_eff,
                 items_op=items_op,
                 subcontratista_id=subcontratista_id,
@@ -3377,7 +3394,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                 pk_id=pk_id,
                 q_observacion=q_observacion,
                 semana_id=semana_id,
-                acta_rpo_id=acta_rpo_id,
+                acta_rpo_ids=aids_eff,
                 reporte_ids_restrict=reporte_ids_restrict,
                 capas_v=[c],
                 capas_v_op="and",
@@ -3417,7 +3434,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                             cantidad_hasta=cantidad_hasta,
                             costo_directo_desde=costo_directo_desde,
                             costo_directo_hasta=costo_directo_hasta,
-                            capitulo=capitulo,
+                            capitulos=caps_eff,
                             items=items_eff,
                             items_op=items_op,
                             subcontratista_id=subcontratista_id,
@@ -3426,6 +3443,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                             pk_id=pk_id,
                             q_observacion=q_observacion,
                             semana_id=semana_id,
+                            acta_rpo_ids=aids_eff,
                             reporte_id_in=rp_fix,
                             require_item=True,
                             capas_v=(capas_v if capas_ok else None),
@@ -3456,7 +3474,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                         cantidad_hasta=cantidad_hasta,
                         costo_directo_desde=costo_directo_desde,
                         costo_directo_hasta=costo_directo_hasta,
-                        capitulo=capitulo,
+                        capitulos=caps_eff,
                         items=items_eff,
                         items_op=items_op,
                         subcontratista_id=subcontratista_id,
@@ -3465,8 +3483,8 @@ def _sicoe_collect_reporte_ids_misma_linea(
                         pk_id=pk_id,
                         q_observacion=q_observacion,
                         semana_id=semana_id,
-                        acta_rpo_id=acta_rpo_id,
-                        require_item=(acta_rpo_id is not None),
+                        acta_rpo_ids=aids_eff,
+                        require_item=bool(aids_eff),
                         capas_v=(capas_v if capas_ok else None),
                         estado=estado,
                         pendiente_item=pendiente_item,
@@ -3499,7 +3517,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     cantidad_hasta=cantidad_hasta,
                     costo_directo_desde=costo_directo_desde,
                     costo_directo_hasta=costo_directo_hasta,
-                    capitulo=capitulo,
+                    capitulos=caps_eff,
                     items=items_eff,
                     items_op=items_op,
                     subcontratista_id=subcontratista_id,
@@ -3508,6 +3526,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     pk_id=pk_id,
                     q_observacion=q_observacion,
                     semana_id=semana_id,
+                    acta_rpo_ids=aids_eff,
                     reporte_id_in=c,
                     # Cuando filtramos por acta del reporte, alineamos con la semántica
                     # del dashboard: solo registros con ítem asignado cuentan.
@@ -3541,7 +3560,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     cantidad_hasta=cantidad_hasta,
                     costo_directo_desde=costo_directo_desde,
                     costo_directo_hasta=costo_directo_hasta,
-                    capitulo=capitulo,
+                    capitulos=caps_eff,
                     items=items_eff,
                     items_op=items_op,
                     subcontratista_id=subcontratista_id,
@@ -3550,8 +3569,8 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     pk_id=pk_id,
                     q_observacion=q_observacion,
                     semana_id=semana_id,
-                    acta_rpo_id=acta_rpo_id,
-                    require_item=(acta_rpo_id is not None),
+                    acta_rpo_ids=aids_eff,
+                    require_item=bool(aids_eff),
                     capas_v=(capas_v if capas_ok else None),
                     estado=estado,
                     pendiente_item=pendiente_item,
@@ -3647,6 +3666,70 @@ def _parse_capas_validacion_op(val: Optional[str]) -> str:
     if s in ("or", "o", "||", "any", "cualquiera"):
         return "or"
     return "and"
+
+
+def _normalize_actas_filtro_list(actas_filtro_json: Optional[str], acta_rpo_legacy: Optional[int]) -> List[int]:
+    """Varios RPO vía JSON `actas_filtro` o un solo `acta_rpo` (query legado)."""
+    out: List[int] = []
+    if actas_filtro_json and str(actas_filtro_json).strip():
+        try:
+            j = json.loads(actas_filtro_json)
+            if isinstance(j, list):
+                for x in j:
+                    try:
+                        n = int(x)
+                        if n not in out:
+                            out.append(n)
+                    except (TypeError, ValueError):
+                        pass
+        except Exception:
+            pass
+    if not out and acta_rpo_legacy is not None:
+        try:
+            out = [int(acta_rpo_legacy)]
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def _sicoe_resolve_acta_ids_por_rpo(contrato_id: int, rpo_list: List[int]) -> List[int]:
+    if not rpo_list:
+        return []
+    ids: List[int] = []
+    seen: Set[int] = set()
+    for rpo in rpo_list:
+        try:
+            def _one(rv=rpo):
+                rows = supabase.table("actas").select("id")\
+                    .eq("contrato_id", contrato_id).eq("numero_rpo", rv).execute().data
+                if not rows:
+                    rows = supabase.table("actas").select("id")\
+                        .eq("contrato_id", contrato_id).eq("consecutivo", rv).execute().data
+                return rows
+            for row in supabase_execute(_one):
+                aid = row.get("id")
+                if aid is not None and aid not in seen:
+                    seen.add(aid)
+                    ids.append(int(aid))
+        except Exception:
+            pass
+    return ids
+
+
+def _apply_capitulos_to_so_registros_q(q, capitulos: List[str]):
+    if not capitulos:
+        return q
+    if len(capitulos) == 1:
+        return q.eq("capitulo", capitulos[0])
+    return q.in_("capitulo", capitulos)
+
+
+def _apply_acta_rpo_ids_to_so_registros_q(q, acta_rpo_ids: List[int]):
+    if not acta_rpo_ids:
+        return q
+    if len(acta_rpo_ids) == 1:
+        return q.eq("acta_rpo_id", acta_rpo_ids[0])
+    return q.in_("acta_rpo_id", acta_rpo_ids)
 
 
 def _normalize_items_filtro_list(items_filtro_json: Optional[str], item_legacy: Optional[str]) -> List[str]:
@@ -11257,9 +11340,11 @@ def buscar_reportes_obra(
     acta_rpo: Optional[int] = None,
     subcontratista_id: Optional[int] = None,
     capitulo: Optional[str] = None,
+    capitulos_filtro: Optional[str] = None,
     item: Optional[str] = None,
     items_filtro: Optional[str] = None,
     items_filtro_op: Optional[str] = Query(None),
+    actas_filtro: Optional[str] = None,
     tramo: Optional[str] = None,
     costado: Optional[str] = None,
     pk_id: Optional[int] = None,
@@ -11322,9 +11407,17 @@ def buscar_reportes_obra(
 
     items_buscar_norm = _normalize_items_filtro_list(items_filtro, item)
     items_buscar_op = items_filtro_op
+    caps_buscar_norm = _normalize_items_filtro_list(capitulos_filtro, capitulo)
+    actas_rpo_buscar_norm = _normalize_actas_filtro_list(actas_filtro, acta_rpo)
+    acta_ids_panel_buscar = (
+        _sicoe_resolve_acta_ids_por_rpo(contrato_id, actas_rpo_buscar_norm)
+        if actas_rpo_buscar_norm else []
+    )
+    if actas_rpo_buscar_norm and not acta_ids_panel_buscar:
+        return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
 
     has_reg_f = any([
-        capitulo, bool(items_buscar_norm), subcontratista_id is not None,
+        bool(caps_buscar_norm), bool(items_buscar_norm), subcontratista_id is not None,
         bool(tramo), bool(costado),
         cantidad_desde is not None, cantidad_hasta is not None,
         costo_directo_desde is not None, costo_directo_hasta is not None,
@@ -11385,8 +11478,13 @@ def buscar_reportes_obra(
         and not consulta_directa_identificador
         and acta_id_para_lineas is None
         and semana_id_filtro is None
+        and not acta_ids_panel_buscar
     ):
         acta_id_para_lineas = _acta_rpo_id_matriz_dashboard_default(contrato_id)
+
+    aids_linea_buscar: List[int] = list(acta_ids_panel_buscar)
+    if not aids_linea_buscar and acta_id_para_lineas is not None:
+        aids_linea_buscar = [int(acta_id_para_lineas)]
 
     unified_line = any([
         numero_registro is not None,
@@ -11397,6 +11495,7 @@ def buscar_reportes_obra(
         capas_aplican_a_lineas,
         semana_id_filtro is not None,
         acta_id_filtro is not None,
+        bool(acta_ids_panel_buscar),
         bool(etiqueta_f),
         pendiente_item,
         cantidad_desde is not None or cantidad_hasta is not None,
@@ -11414,7 +11513,7 @@ def buscar_reportes_obra(
             cantidad_hasta=cantidad_hasta,
             costo_directo_desde=costo_directo_desde,
             costo_directo_hasta=costo_directo_hasta,
-            capitulo=capitulo,
+            capitulos=caps_buscar_norm,
             items=items_buscar_norm,
             items_op=items_buscar_op,
             subcontratista_id=subcontratista_id,
@@ -11423,7 +11522,7 @@ def buscar_reportes_obra(
             pk_id=pk_id,
             q_observacion=q_obs_trim or None,
             semana_id=semana_id_filtro,
-            acta_rpo_id=acta_id_para_lineas,
+            acta_rpo_ids=aids_linea_buscar,
             capas_v=(capas_v if capas_aplican_a_lineas else None),
             capas_v_op=validacion_capas_op,
             estado=estado,
@@ -11439,7 +11538,7 @@ def buscar_reportes_obra(
         if not ids_unif:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
         reporte_ids_from_reg = list(ids_unif)
-        if semana_id_filtro is not None or acta_id_filtro is not None:
+        if semana_id_filtro is not None or acta_id_filtro is not None or acta_ids_panel_buscar:
             omit_header_semana_acta_en_reportes = True
 
     if _filtro_fu_rep:
@@ -11659,10 +11758,10 @@ def buscar_reportes_obra(
                 # Mantener coherencia con el universo filtrado de grilla/panel
                 if semana_id_filtro is not None:
                     q = q.eq("semana_id", semana_id_filtro)
-                if acta_id_para_lineas is not None:
-                    q = q.eq("acta_rpo_id", acta_id_para_lineas)
-                if capitulo:
-                    q = q.eq("capitulo", capitulo)
+                if aids_linea_buscar:
+                    q = _apply_acta_rpo_ids_to_so_registros_q(q, aids_linea_buscar)
+                if caps_buscar_norm:
+                    q = _apply_capitulos_to_so_registros_q(q, caps_buscar_norm)
                 if subcontratista_id is not None:
                     q = q.eq("subcontratista_id", subcontratista_id)
                 q = _apply_item_patterns_to_so_registros_q(q, items_buscar_norm, items_buscar_op)
@@ -12771,9 +12870,11 @@ def analisis_registros_obra(
     semana:           Optional[int]   = None,
     subcontratista_id: Optional[int]  = None,
     capitulo:         Optional[str]   = None,
+    capitulos_filtro: Optional[str]   = None,
     item:             Optional[str]   = None,
     items_filtro:     Optional[str]   = None,
     items_filtro_op:  Optional[str]   = Query(None),
+    actas_filtro:     Optional[str]   = None,
     tramo:            Optional[str]   = None,
     costado:          Optional[str]   = None,
     abs_inicio:       Optional[float] = None,
@@ -12822,6 +12923,13 @@ def analisis_registros_obra(
     }
 
     items_ana = _normalize_items_filtro_list(items_filtro, item)
+    caps_ana = _normalize_items_filtro_list(capitulos_filtro, capitulo)
+    actas_rpo_ana = _normalize_actas_filtro_list(actas_filtro, acta_rpo)
+    acta_ids_panel_ana = (
+        _sicoe_resolve_acta_ids_por_rpo(contrato_id, actas_rpo_ana) if actas_rpo_ana else []
+    )
+    if actas_rpo_ana and not acta_ids_panel_ana:
+        return _empty
     _pendiente_acta_matriz = False
 
     consulta_directa_identificador = (
@@ -12835,7 +12943,7 @@ def analisis_registros_obra(
     tiene_contexto = bool(acta_rpo or semana)
     if len(items_ana) == 1:
         modo = "item_detalle"
-    elif capitulo:
+    elif len(caps_ana) == 1 or (capitulo and not caps_ana):
         modo = "capitulo_items"
     elif tiene_contexto:
         modo = "acta_semana"
@@ -12900,7 +13008,7 @@ def analisis_registros_obra(
 
     # ── 4. Filtros AND a nivel so_reportes (misma idea que export / buscar grilla) ─
     # tramo/costado van en so_registros (paso 5). subcontratista_id va en registros.
-    _cap_l = capitulo
+    _caps_l = list(caps_ana)
     _sub_l = subcontratista_id
     reporte_ids_base = None
     has_rep_f = any([
@@ -12975,6 +13083,9 @@ def analisis_registros_obra(
     _defer_capas_or_ana = False
     try:
         _a_l = acta_id
+        _aids_l = list(acta_ids_panel_ana)
+        if not _aids_l and _a_l is not None:
+            _aids_l = [int(_a_l)]
         _s_l = semana_id
         _rp_l = reporte_ids_base
         _cap_op_ana = _parse_capas_validacion_op(validacion_capas_op)
@@ -12994,13 +13105,13 @@ def analisis_registros_obra(
             q = _so_reg_filtro_abs_solape(q, _abs_ai, _abs_af)
             if _nr is not None:
                 q = q.eq("numero_registro", _nr)
-            if _a_l is not None:
-                q = q.eq("acta_rpo_id", _a_l)
+            if _aids_l:
+                q = _apply_acta_rpo_ids_to_so_registros_q(q, _aids_l)
             if _s_l is not None:
                 q = q.eq("semana_id", _s_l)
             q = _apply_item_patterns_to_so_registros_q(q, items_ana, items_filtro_op)
-            if _cap_l:
-                q = q.eq("capitulo", _cap_l)
+            if _caps_l:
+                q = _apply_capitulos_to_so_registros_q(q, _caps_l)
             if _sub_l is not None:
                 q = q.eq("subcontratista_id", _sub_l)
             if _rp_l is not None:
@@ -13023,11 +13134,12 @@ def analisis_registros_obra(
                 q = q.gte("costo_directo", costo_directo_desde)
             if costo_directo_hasta is not None:
                 q = q.lte("costo_directo", costo_directo_hasta)
-            if _a_l is not None and not _estado_filtro_es_sin_asignar_item(estado):
+            if _aids_l and not _estado_filtro_es_sin_asignar_item(estado):
                 q = _so_reg_item_asignado(q)
             if _capas_sql and not _estado_filtro_omite_validacion_por_cargo(estado):
+                _cap_capas = _caps_l[0] if len(_caps_l) == 1 else None
                 q = _so_registros_q_y_capas_validacion(
-                    q, _capas_sql, pk_id, tramo, costado, _cap_l, _sub_l, None, contrato_id
+                    q, _capas_sql, pk_id, tramo, costado, _cap_capas, _sub_l, None, contrato_id
                 )
             if _estado_filtro_es_sin_asignar_item(estado):
                 q = _so_reg_sin_item_asignado(q)

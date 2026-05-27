@@ -50,6 +50,7 @@ import {
   sicoeFSicoeToFiltros,
   sicoeFSicoeVacios,
   sicoeItemsChipsFromFSicoe,
+  sicoePanelLabelToRpo,
 } from './modules/sicoe-obra/sicoeFiltroCatalogo'
 import {
   cargarSicoeFiltroSesion,
@@ -5531,6 +5532,16 @@ function ModuloSicoeObra({
   const [analisis, setAnalisis] = useState(null)
   const [cargandoAnalisis, setCargandoAnalisis] = useState(false)
   const [panelExpandido, setPanelExpandido] = useState(false)
+  /** Checkboxes del panel dinámico (clave = label de fila en el modo actual). */
+  const [sicoePanelChecks, setSicoePanelChecks] = useState(() => new Set())
+  const sicoePanelChecksRef = useRef(new Set())
+  const sicoePanelCheckModoRef = useRef(null)
+  const [sicoePanelChecksAplicados, setSicoePanelChecksAplicados] = useState(() => new Set())
+  const sicoePanelChecksAplicadosRef = useRef(new Set())
+  const [sicoePanelCapitulos, setSicoePanelCapitulos] = useState([])
+  const [sicoePanelActasRpo, setSicoePanelActasRpo] = useState([])
+  const sicoePanelCapitulosRef = useRef([])
+  const sicoePanelActasRpoRef = useRef([])
   const [busquedaRealizada, setBusquedaRealizada] = useState(false)
   const sicoeAutoBusquedaTimerRef = useRef(null)
   const sicoeSkipAutoBusquedaOnceRef = useRef(true)
@@ -5910,6 +5921,10 @@ function ModuloSicoeObra({
       itemsOp: itemsFiltroOpRef.current,
       q_observacion: sicoeFiltroObsRef.current,
       q_nodo: sicoeFiltroNodoRef.current,
+      panelBundle: {
+        panelCapitulos: sicoePanelCapitulosRef.current,
+        panelActasRpo: sicoePanelActasRpoRef.current,
+      },
     })
     if (esSub && subIdUsuario && !params.has('subcontratista_id')) {
       params.set('subcontratista_id', String(subIdUsuario))
@@ -6181,6 +6196,28 @@ function ModuloSicoeObra({
   }, [analisis, verEco])
 
   const mx = sicoePanelMax || {}
+  const panelGrupoLabels = useMemo(
+    () => (analisis?.grupos || []).map((g) => g.label).filter(Boolean),
+    [analisis?.grupos],
+  )
+  const panelModoChecks = analisis?.modo === 'capitulo_items'
+    ? 'capitulo_items'
+    : analisis?.modo === 'item_detalle'
+      ? 'item_detalle'
+      : (analisis?.modo === 'acta_semana' || analisis?.modo === 'general')
+        ? analisis.modo
+        : null
+  const panelTodosMarcados = panelGrupoLabels.length > 0 && panelGrupoLabels.every((l) => sicoePanelChecks.has(l))
+  const panelChecksPendientes = useMemo(() => {
+    if (!panelGrupoLabels.length) return false
+    const a = sicoePanelChecks
+    const b = sicoePanelChecksAplicados
+    if (a.size !== b.size) return true
+    for (const x of a) {
+      if (!b.has(x)) return true
+    }
+    return false
+  }, [sicoePanelChecks, sicoePanelChecksAplicados, panelGrupoLabels])
 
   const cargarAnalisis = async (nuevosFiltros, capas = [], capasOpParam, opSeqParam) => {
     const capasOpEff = capasOpParam ?? capasValidacionOpRef.current
@@ -6268,6 +6305,12 @@ function ModuloSicoeObra({
     capasSicoeRef.current = bundle.capasValidacion || []
     setCapasValidacionOp(bundle.capasValidacionOp || 'and')
     capasValidacionOpRef.current = bundle.capasValidacionOp || 'and'
+    const pCaps = bundle.panelCapitulos || []
+    const pActas = bundle.panelActasRpo || []
+    sicoePanelCapitulosRef.current = pCaps
+    sicoePanelActasRpoRef.current = pActas
+    setSicoePanelCapitulos(pCaps)
+    setSicoePanelActasRpo(pActas)
     guardarSicoeFiltroSesion(contrato_id, bundle)
     if (ejecutarBusqueda) {
       if (!sicoeBundleTieneCriteriosUsuario(bundle)) {
@@ -6282,9 +6325,113 @@ function ModuloSicoeObra({
     }
   }, [contrato_id])
 
+  const limpiarChecksPanelSicoe = useCallback(() => {
+    sicoePanelChecksRef.current = new Set()
+    setSicoePanelChecks(new Set())
+    sicoePanelChecksAplicadosRef.current = new Set()
+    setSicoePanelChecksAplicados(new Set())
+    sicoePanelCheckModoRef.current = null
+    sicoePanelCapitulosRef.current = []
+    sicoePanelActasRpoRef.current = []
+    setSicoePanelCapitulos([])
+    setSicoePanelActasRpo([])
+  }, [])
+
+  const sincronizarChecksPanelTodos = useCallback((labels) => {
+    const next = new Set(labels)
+    sicoePanelChecksRef.current = next
+    setSicoePanelChecks(next)
+    sicoePanelChecksAplicadosRef.current = new Set(next)
+    setSicoePanelChecksAplicados(new Set(next))
+  }, [])
+
+  const aplicarSeleccionChecksPanel = useCallback((checks, modo) => {
+    const nf = { ...filtrosSicoeRef.current }
+    let itemsChips = [...itemsFiltroChipsRef.current]
+    let itemsOp = itemsFiltroOpRef.current
+    let panelCapitulos = []
+    let panelActasRpo = []
+
+    if (checks.size > 0 && modo) {
+      sicoePanelCheckModoRef.current = modo
+      if (modo === 'capitulo_items') {
+        itemsChips = [...checks]
+        itemsOp = 'or'
+        nf.item = ''
+      } else if (modo === 'item_detalle') {
+        panelActasRpo = [...checks].map(sicoePanelLabelToRpo).filter((n) => n != null)
+      } else {
+        panelCapitulos = [...checks]
+        nf.capitulo = ''
+        nf.item = ''
+        itemsChips = []
+      }
+    } else {
+      sicoePanelCheckModoRef.current = null
+      if (modo === 'capitulo_items') {
+        itemsChips = []
+        itemsOp = 'and'
+        nf.item = ''
+      }
+    }
+
+    sicoePanelCapitulosRef.current = panelCapitulos
+    sicoePanelActasRpoRef.current = panelActasRpo
+    setSicoePanelCapitulos(panelCapitulos)
+    setSicoePanelActasRpo(panelActasRpo)
+    itemsFiltroChipsRef.current = itemsChips
+    setItemsFiltroChips(itemsChips)
+    setItemsFiltroOp(itemsOp)
+    itemsFiltroOpRef.current = itemsOp
+
+    const snap = sicoeBundleFromAppState({
+      filtros: nf,
+      itemsChips,
+      itemsOp,
+      sicoeFiltroObs: sicoeFiltroObsRef.current,
+      sicoeFiltroNodo: sicoeFiltroNodoRef.current,
+      capasValidacion: capasSicoeRef.current ?? [],
+      capasValidacionOp: capasValidacionOpRef.current ?? 'and',
+      panelCapitulos,
+      panelActasRpo,
+    })
+    aplicarSicoeFiltroBundle(snap, true)
+    setPanelExpandido(true)
+  }, [aplicarSicoeFiltroBundle])
+
+  const toggleCheckFilaPanel = useCallback((label, checked) => {
+    const next = new Set(sicoePanelChecksRef.current)
+    if (checked) next.add(label)
+    else next.delete(label)
+    sicoePanelChecksRef.current = next
+    setSicoePanelChecks(new Set(next))
+  }, [])
+
+  const toggleTodosChecksPanel = useCallback((labels, marcar) => {
+    const next = marcar ? new Set(labels) : new Set()
+    sicoePanelChecksRef.current = next
+    setSicoePanelChecks(new Set(next))
+  }, [])
+
+  const aplicarFiltrosPanelDesdeChecks = useCallback(() => {
+    if (!panelModoChecks || !panelGrupoLabels.length) return
+    const checks = sicoePanelChecksRef.current
+    const todosMarcados = panelGrupoLabels.every((l) => checks.has(l))
+    const eff = todosMarcados ? new Set() : new Set(checks)
+    aplicarSeleccionChecksPanel(eff, panelModoChecks)
+    sicoePanelChecksAplicadosRef.current = new Set(checks)
+    setSicoePanelChecksAplicados(new Set(checks))
+  }, [aplicarSeleccionChecksPanel, panelModoChecks, panelGrupoLabels])
+
+  useEffect(() => {
+    if (cargandoAnalisis || !panelGrupoLabels.length) return
+    sincronizarChecksPanelTodos(panelGrupoLabels)
+  }, [cargandoAnalisis, panelGrupoLabels, sincronizarChecksPanelTodos])
+
   /** Aplica criterios de grilla/panel y ejecuta búsqueda (grilla + análisis en paralelo). */
   const aplicarFiltrosSicoeYBuscar = useCallback((nf, opts = {}) => {
-    const { clearItems = false, capasOverride, capasOpOverride, expandirPanel = true } = opts
+    const { clearItems = false, clearPanelChecks = false, capasOverride, capasOpOverride, expandirPanel = true } = opts
+    if (clearPanelChecks) limpiarChecksPanelSicoe()
     if (clearItems) {
       itemsFiltroChipsRef.current = []
       setItemsFiltroChips([])
@@ -6301,10 +6448,12 @@ function ModuloSicoeObra({
       sicoeFiltroNodo: sicoeFiltroNodoRef.current,
       capasValidacion: capas,
       capasValidacionOp: capasOp,
+      panelCapitulos: clearPanelChecks ? [] : sicoePanelCapitulosRef.current,
+      panelActasRpo: clearPanelChecks ? [] : sicoePanelActasRpoRef.current,
     })
     aplicarSicoeFiltroBundle(snap, true)
     if (expandirPanel) setPanelExpandido(true)
-  }, [aplicarSicoeFiltroBundle])
+  }, [aplicarSicoeFiltroBundle, limpiarChecksPanelSicoe])
 
   const actualizarFiltrosDisponibles = async (filtrosActivos) => {
     // Modo offline: leer desde IndexedDB sin tocar la red (ref para evitar stale closure)
@@ -6389,8 +6538,10 @@ function ModuloSicoeObra({
       capasValidacion,
       capasValidacionOp,
       fSicoeOverride: sicoeFSicoeRef.current,
+      panelCapitulos: sicoePanelCapitulos,
+      panelActasRpo: sicoePanelActasRpo,
     }),
-    [filtros, itemsFiltroChips, itemsFiltroOp, sicoeFiltroObs, sicoeFiltroNodo, capasValidacion, capasValidacionOp],
+    [filtros, itemsFiltroChips, itemsFiltroOp, sicoeFiltroObs, sicoeFiltroNodo, capasValidacion, capasValidacionOp, sicoePanelCapitulos, sicoePanelActasRpo],
   )
 
   const sicoeVistaResultadosActiva =
@@ -6882,7 +7033,7 @@ function ModuloSicoeObra({
     } else {
       return
     }
-    aplicarFiltrosSicoeYBuscar(nf, { clearItems: true })
+    aplicarFiltrosSicoeYBuscar(nf, { clearItems: true, clearPanelChecks: true })
   }
   const puedeVolverPanel = !!(
     String(filtros.item || '').trim() ||
@@ -7227,6 +7378,7 @@ function ModuloSicoeObra({
       clearTimeout(sicoeAutoBusquedaTimerRef.current)
       sicoeAutoBusquedaTimerRef.current = null
     }
+    limpiarChecksPanelSicoe()
     setSicoeMapaFiltroAbierto(false)
     setSicoeFiltroObs('')
     setSicoeFiltroNodo('')
@@ -7935,6 +8087,33 @@ function ModuloSicoeObra({
                 </button>
               )}
               <span style={{ fontSize:'var(--cc-sm)', fontWeight:'800', color:'#F1F5F9', flex:1, minWidth:0 }}>📊 {analisis.encabezado}</span>
+              {panelGrupoLabels.length > 0 ? (
+                <>
+                  <span style={{ fontSize:'var(--cc-caption)', color:'#94A3B8', fontWeight:600, flexShrink:0 }}>
+                    {sicoePanelChecks.size}/{panelGrupoLabels.length} filas
+                  </span>
+                  <button
+                    type="button"
+                    data-sicoe-aplicar-panel
+                    onClick={(e) => { e.stopPropagation(); aplicarFiltrosPanelDesdeChecks() }}
+                    disabled={cargando || cargandoAnalisis}
+                    title="Aplica la selección del panel a la grilla (sin recargar al marcar/desmarcar)"
+                    style={{
+                      background: panelChecksPendientes ? '#2563eb' : 'rgba(255,255,255,0.12)',
+                      border: panelChecksPendientes ? 'none' : '1px solid rgba(255,255,255,0.25)',
+                      borderRadius: 6,
+                      padding: '5px 12px',
+                      fontSize: 'var(--cc-caption)',
+                      fontWeight: 700,
+                      color: '#F1F5F9',
+                      cursor: (cargando || cargandoAnalisis) ? 'wait' : 'pointer',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {cargando || cargandoAnalisis ? '⏳…' : panelChecksPendientes ? 'Aplicar filtros ●' : 'Aplicar filtros'}
+                  </button>
+                </>
+              ) : null}
               <span style={{ marginLeft:'auto', fontSize:'var(--cc-label)', color:'#94A3B8', flexShrink:0, textAlign:'right' }}>
                 {analisis.total_registros.toLocaleString()} regs{nivelInfo.verValoresEconomicos ? ` · ${fmtPesos(analisis.total_costo_directo)}` : ''}
                 {analisis.verificacion?.dashboard_kpi_cobrado != null && nivelInfo.verValoresEconomicos ? (
@@ -7954,6 +8133,14 @@ function ModuloSicoeObra({
                 <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
                   <thead>
                     <tr style={{ color:t.textMuted, fontSize:'var(--cc-label)', fontWeight:'700', letterSpacing:'0.4px' }}>
+                      <th style={{ padding:'6px 10px', width:36, borderBottom:`1px solid ${t.border}` }} onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={panelTodosMarcados}
+                          onChange={(e) => toggleTodosChecksPanel(panelGrupoLabels, e.target.checked)}
+                          title="Marcar / desmarcar todos"
+                        />
+                      </th>
                       <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>ÍTEM</th>
                       <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>DESCRIPCIÓN</th>
                       <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>CANTIDAD</th>
@@ -7972,12 +8159,20 @@ function ModuloSicoeObra({
                         onClick={(e) => {
                           e.stopPropagation()
                           const newF = { ...filtrosSicoeRef.current, item: g.label }
-                          aplicarFiltrosSicoeYBuscar(newF, { clearItems: true })
+                          aplicarFiltrosSicoeYBuscar(newF, { clearItems: true, clearPanelChecks: true })
                         }}
                         style={{ borderBottom:`1px solid ${t.border}22`, cursor:'pointer' }}
                         onMouseEnter={e => { e.currentTarget.style.background = t.bg + '88' }}
                         onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
                       >
+                        <td style={{ padding:'6px 10px', width:36, verticalAlign:'middle' }} onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={sicoePanelChecks.has(g.label)}
+                            onChange={(e) => toggleCheckFilaPanel(g.label, e.target.checked)}
+                            title="Incluir al aplicar filtros del panel"
+                          />
+                        </td>
                         <td style={{ padding:'6px 16px', color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{g.label}</td>
                         <td style={{ padding:'6px 16px', color:t.text, fontSize:'var(--cc-label)', maxWidth:'220px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{g.descripcion}</td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
@@ -8022,7 +8217,7 @@ function ModuloSicoeObra({
                   </tbody>
                   <tfoot>
                     <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
-                      <td colSpan={4} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
+                      <td colSpan={5} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'var(--cc-sm)' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
                       <td style={{ padding:'7px 16px', textAlign:'right', color:SICOE_PANEL_COLOR_NO_REVISADO }}>
                         {nivelInfo.verValoresEconomicos ? fmtPesos(analisis.total_no_revisados_costo ?? 0) : (analisis.total_no_revisados ?? '—')}
@@ -8048,6 +8243,14 @@ function ModuloSicoeObra({
                 <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
                   <thead>
                     <tr style={{ color:t.textMuted, fontSize:'var(--cc-label)', fontWeight:'700', letterSpacing:'0.4px' }}>
+                      <th style={{ padding:'6px 10px', width:36, borderBottom:`1px solid ${t.border}` }} onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={panelTodosMarcados}
+                          onChange={(e) => toggleTodosChecksPanel(panelGrupoLabels, e.target.checked)}
+                          title="Marcar / desmarcar todos"
+                        />
+                      </th>
                       <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>ACTA RPO</th>
                       <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>CAPÍTULO</th>
                       <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>CANTIDAD</th>
@@ -8062,6 +8265,14 @@ function ModuloSicoeObra({
                   <tbody>
                     {analisis.grupos.map(g => (
                       <tr key={`${g.label}-${g.capitulo}`} style={{ borderBottom:`1px solid ${t.border}22` }}>
+                        <td style={{ padding:'6px 10px', width:36, verticalAlign:'middle' }}>
+                          <input
+                            type="checkbox"
+                            checked={sicoePanelChecks.has(g.label)}
+                            onChange={(e) => toggleCheckFilaPanel(g.label, e.target.checked)}
+                            title="Incluir al aplicar filtros del panel"
+                          />
+                        </td>
                         <td style={{ padding:'6px 16px', color:t.primary, fontWeight:'700', whiteSpace:'nowrap' }}>{g.label}</td>
                         <td style={{ padding:'6px 16px', color:t.text, fontSize:'var(--cc-label)' }}>{g.capitulo}</td>
                         <td style={{ padding:0, verticalAlign:'middle' }}>
@@ -8108,7 +8319,7 @@ function ModuloSicoeObra({
                   </tbody>
                   <tfoot>
                     <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
-                      <td colSpan={2} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
+                      <td colSpan={3} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.text, fontSize:'var(--cc-sm)' }}>
                         {(analisis.total_cantidad != null
                           ? Number(analisis.total_cantidad)
@@ -8140,6 +8351,14 @@ function ModuloSicoeObra({
                 <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'var(--cc-sm)' }}>
                   <thead>
                     <tr style={{ color:t.textMuted, fontSize:'var(--cc-label)', fontWeight:'700', letterSpacing:'0.4px' }}>
+                      <th style={{ padding:'6px 10px', width:36, borderBottom:`1px solid ${t.border}` }} onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={panelTodosMarcados}
+                          onChange={(e) => toggleTodosChecksPanel(panelGrupoLabels, e.target.checked)}
+                          title="Marcar / desmarcar todos"
+                        />
+                      </th>
                       <th style={{ padding:'6px 16px', textAlign:'left',  borderBottom:`1px solid ${t.border}` }}>CAPÍTULO</th>
                       {nivelInfo.verValoresEconomicos && <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>COSTO DIRECTO</th>}
                       <th style={{ padding:'6px 16px', textAlign:'right', borderBottom:`1px solid ${t.border}` }}>REGS.</th>
@@ -8153,10 +8372,18 @@ function ModuloSicoeObra({
                     {analisis.grupos.map(g => (
                       <tr key={g.label} onClick={() => {
                         const newF = { ...filtrosSicoeRef.current, capitulo: g.label, item: '' }
-                        aplicarFiltrosSicoeYBuscar(newF, { clearItems: true })
+                        aplicarFiltrosSicoeYBuscar(newF, { clearItems: true, clearPanelChecks: true })
                       }} style={{ borderBottom:`1px solid ${t.border}22`, cursor:'pointer' }}
                       onMouseEnter={e => e.currentTarget.style.background = t.bg + '88'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                        <td style={{ padding:'6px 10px', width:36, verticalAlign:'middle' }} onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={sicoePanelChecks.has(g.label)}
+                            onChange={(e) => toggleCheckFilaPanel(g.label, e.target.checked)}
+                            title="Incluir al aplicar filtros del panel"
+                          />
+                        </td>
                         <td style={{ padding:'6px 16px', color:t.text, fontWeight:'600' }}>{g.label}</td>
                         {nivelInfo.verValoresEconomicos && (
                           <td style={{ padding:0, verticalAlign:'middle' }}>
@@ -8193,7 +8420,7 @@ function ModuloSicoeObra({
                   </tbody>
                   <tfoot>
                     <tr style={{ fontWeight:'800', borderTop:`2px solid ${t.border}`, background:t.bg }}>
-                      <td style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
+                      <td colSpan={2} style={{ padding:'7px 16px', color:t.text }}>TOTAL</td>
                       {nivelInfo.verValoresEconomicos && <td style={{ padding:'7px 16px', textAlign:'right', color:t.primary, fontSize:'var(--cc-sm)' }}>{fmtPesos(analisis.total_costo_directo)}</td>}
                       <td style={{ padding:'7px 16px', textAlign:'right', color:t.text }}>{analisis.total_registros}</td>
                       <td style={{ padding:'7px 16px', textAlign:'right', color:SICOE_PANEL_COLOR_NO_REVISADO }}>

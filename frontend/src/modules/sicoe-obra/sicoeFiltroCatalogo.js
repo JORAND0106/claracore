@@ -337,6 +337,32 @@ export function sicoeAppendFSicoeToSearchParams(p, fSicoe, ctx = {}) {
     const acc = ['creo', 'edito', 'valido'].includes(fSicoe.usuarioAccion) ? fSicoe.usuarioAccion : 'creo'
     p.set('usuario_accion', acc)
   }
+  sicoeAppendPanelChecksToSearchParams(p, ctx.panelBundle)
+}
+
+/** Multi-selección del panel dinámico (capítulos / actas RPO). */
+export function sicoeAppendPanelChecksToSearchParams(p, panelBundle) {
+  if (!p || !panelBundle) return
+  const caps = Array.isArray(panelBundle.panelCapitulos)
+    ? panelBundle.panelCapitulos.map((x) => strVal(x)).filter(Boolean)
+    : []
+  const actas = Array.isArray(panelBundle.panelActasRpo)
+    ? panelBundle.panelActasRpo.map((x) => parseInt(String(x), 10)).filter((n) => Number.isFinite(n))
+    : []
+  if (caps.length > 1) {
+    p.set('capitulos_filtro', JSON.stringify(caps))
+    p.delete('capitulo')
+  } else if (caps.length === 1) {
+    p.set('capitulo', caps[0])
+    p.delete('capitulos_filtro')
+  }
+  if (actas.length > 1) {
+    p.set('actas_filtro', JSON.stringify(actas))
+    p.delete('acta_rpo')
+  } else if (actas.length === 1) {
+    p.set('acta_rpo', String(actas[0]))
+    p.delete('actas_filtro')
+  }
 }
 
 export function sicoeFiltroSnapshot(bundle) {
@@ -351,6 +377,8 @@ export function sicoeFiltroSnapshot(bundle) {
     capasValidacionOp: b.capasValidacionOp === 'or' ? 'or' : 'and',
     q_observacion: strVal(b.q_observacion ?? fSicoe.q_observacion),
     q_nodo: strVal(b.q_nodo ?? fSicoe.q_nodo),
+    panelCapitulos: Array.isArray(b.panelCapitulos) ? [...b.panelCapitulos] : [],
+    panelActasRpo: Array.isArray(b.panelActasRpo) ? [...b.panelActasRpo] : [],
   }
 }
 
@@ -364,6 +392,8 @@ export function sicoeFiltroFromSnapshot(snap) {
       capasValidacionOp: 'and',
       q_observacion: '',
       q_nodo: '',
+      panelCapitulos: [],
+      panelActasRpo: [],
     }
   }
   if (snap.fSicoe) {
@@ -378,6 +408,8 @@ export function sicoeFiltroFromSnapshot(snap) {
       capasValidacionOp: snap.capasValidacionOp === 'or' ? 'or' : 'and',
       q_observacion: strVal(snap.q_observacion ?? fSicoe.q_observacion),
       q_nodo: strVal(snap.q_nodo ?? fSicoe.q_nodo),
+      panelCapitulos: Array.isArray(snap.panelCapitulos) ? [...snap.panelCapitulos] : [],
+      panelActasRpo: Array.isArray(snap.panelActasRpo) ? [...snap.panelActasRpo] : [],
     }
   }
   return sicoeFiltroFromSnapshot({ fSicoe: { ...sicoeFSicoeVacios(), ...snap } })
@@ -393,6 +425,8 @@ export function sicoeBundleFromAppState({
   capasValidacionOp,
   subcLabel,
   fSicoeOverride,
+  panelCapitulos,
+  panelActasRpo,
 }) {
   const fSicoe = fSicoeOverride
     ? { ...sicoeFSicoeVacios(), ...fSicoeOverride }
@@ -411,7 +445,15 @@ export function sicoeBundleFromAppState({
     capasValidacionOp,
     q_observacion: sicoeFiltroObs,
     q_nodo: sicoeFiltroNodo,
+    panelCapitulos: panelCapitulos || [],
+    panelActasRpo: panelActasRpo || [],
   })
+}
+
+/** Extrae número RPO de etiqueta del panel (p. ej. "RPO 12"). */
+export function sicoePanelLabelToRpo(label) {
+  const m = String(label || '').match(/(\d+)/)
+  return m ? parseInt(m[1], 10) : null
 }
 
 export function sicoeResumenFiltros(bundle, itemLabels = {}, encCapas = {}) {
