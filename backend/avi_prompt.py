@@ -48,7 +48,10 @@ _MODULO_CONTEXTO_CORTO: Dict[str, str] = {
         "colapsables), vista Presupuesto de Obra / Obra Ejecutada, edición masiva centralizada (modal por pestañas "
         "según rol), deshacer última acción, versiones, plano PK lateral, depuración e interventoría en dos capas, Excel."
     ),
-    "sicoe": "SICOE: reportes de obra, registros, validación por niveles y geometría en mapa.",
+    "sicoe": (
+        "SICOE Obra: modal «🔍 Filtros» (plantillas + criterios libres), autocomplete Semana/Acta RPO con periodo, "
+        "capas de validación, grilla de reportes, panel de análisis y mapa."
+    ),
     "informes": "Informes CCD: cortes de subcontratista, memorias de ítem y documentos firmados.",
     "almacen": "Almacén y materiales vinculados al contrato.",
     "programacion_obra": "Programación de obra: versiones, Gantt, CPM, dependencias y agrupadores.",
@@ -372,11 +375,94 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    - PK, ID-POL y «Texto» son tres filtros distintos en Ubicación / Otros.
    - «Estado depuración» ≠ «Estado interventoría»: son dos capas de validación.
 
-3. Módulo SICOE — registro y validación de obra ejecutada
-   - Reportes de obra por semana/acta; registros con cantidades, dimensiones y soporte fotográfico.
-   - Flujo de validación por niveles (según configuración del contrato); matriz de validación en dashboard.
-   - Plano del contrato con geometría por PK; consecutivos de reporte y registro.
+3. Módulo SICOE — registro y validación de obra ejecutada (DETALLE ACTUAL)
+
+   PROPÓSITO: capturar y validar la obra ejecutada del contrato — reportes por semana/acta RPO, registros
+   con cantidades, dimensiones, fotos y geometría en mapa. Los niveles de validación dependen del contrato
+   (p. ej. Nivel 1…4); el dashboard muestra «SICOE NIVEL MÁX. APROBADO» según el nivel máximo configurado,
+   no siempre «N3».
+
+   PANTALLA PRINCIPAL (menú lateral → SICOE):
+   - Barra superior fija: botón «🔍 Filtros», resumen «Criterios: …», Limpiar, ⟳ Actualizar, Excel (si aplica).
+   - Grilla de reportes (carpetas por reporte) y, tras Buscar, panel de análisis (totales en fondo oscuro).
+   - Mapa del contrato con PK; al abrir un reporte, registros con validación por nivel.
+
+   A. SISTEMA DE FILTROS (modal «🔍 Filtros») — IGUAL FILOSOFÍA QUE PRESUPUESTO
+   Ya NO hay barra antigua de filtros sueltos: todo va en el modal amplio con dos pestañas.
+
+   Barra FUERA del modal:
+   - «Criterios: …» resume lo aplicado tras pulsar Buscar (o «Sin criterios…» si aún no buscó).
+   - «🔍 Filtros» abre el modal. «Limpiar» (barra) quita criterios aplicados y vacía grilla/panel.
+   - «⟳ Actualizar» recalcula grilla y panel de análisis con los MISMOS criterios ya aplicados
+     (no borra filtros; sirve para refrescar totales tras validar registros).
+
+   ── Pestaña «Plantillas» ──
+   Guardar y reutilizar combinaciones de criterios (incluye capas de validación si las definió).
+   Crear: Filtros libres → criterios visibles → opcional Buscar → Plantillas → nombre → Guardar.
+   Usar: Plantillas → clic en nombre → Filtros libres → Buscar.
+
+   ── Pestaña «Filtros libres» — grupos colapsables ──
+   | Grupo | Criterios |
+   | Fechas y usuario | Ámbito (reporte/registro), tipo fecha, desde/hasta, usuario y acción |
+   | Reporte | N° reporte, N° registro, **Semana**, **Acta RPO**, subcontratista, estado del reporte |
+   | Ítem | Capítulo, Ítem (lista predictiva), etiqueta validación |
+   | Ubicación | Tramo, calzada, abscisa desde–hasta, PK desde mapa |
+   | Valores | Cantidad línea, costo directo línea (rangos) |
+   | Validación | Capas por nivel + estado (Aprobado, Pendiente, No revisado, Rechazado…), operador Y / O |
+   | Otros | Observación, nodo inicio/fin, estado registro, cargo |
+
+   SEMANA y ACTA RPO (autocompletado — corrección reciente):
+   - No son cajas de texto libre: al escribir o abrir la lista, muestra solo semanas/actas que EXISTEN
+     en el contrato activo.
+   - Orden de la lista: de MAYOR a MENOR (semana 75, 74… / RPO #75, #74…).
+   - Cada opción muestra DOS líneas:
+     · Arriba (destacado): «Semana 12» o «RPO #30»
+     · Abajo (gris): periodo calendario «fecha inicio | fecha fin» (ej. 15 ene 2024 | 21 ene 2024)
+   - Al elegir una opción, el campo queda como «Semana 12 — 15 ene 2024 | 21 ene 2024» (o equivalente acta).
+   - Puede escribir el número para filtrar la lista; Enter elige la primera coincidencia.
+   - «Limpiar» junto al campo borra solo ese criterio.
+   - Si no aparece el periodo en la segunda línea, el acta/semana no tiene fechas cargadas en administración.
+
+   Reglas de filtros SICOE:
+   - Debe pulsar «Buscar» en el modal para aplicar; «Cancelar» cierra sin cambiar lo aplicado.
+   - «Limpiar todo» (modal) borra criterios del borrador Y, al confirmar flujo, también capas de validación.
+   - La última búsqueda se recuerda al volver al contrato en la misma sesión del navegador, pero las
+     **capas de validación NO se guardan** en esa memoria (evita filtros «fantasma» al reabrir).
+   - Al abrir el modal, el borrador se sincroniza solo la primera vez que lo abre (no pisa lo que está escribiendo).
+   - Capítulo/ítem/tramo en cascada: al elegir semana o acta, las listas de capítulos/ítems se acotan.
+
+   B. CAPAS DE VALIDACIÓN (bloque en Filtros libres)
+   - Permite combinar condiciones por nivel (p. ej. «Nivel 4 · Aprobado»).
+   - Operador «Y» (todas las capas) u «O» (cualquiera).
+   - Cuando filtra «Aprobado en nivel máximo», el criterio está alineado con el KPI del dashboard
+     «SICOE NIVEL MÁX. APROBADO» (misma regla de negocio, sin exigir prerrequisitos de niveles inferiores).
+   - La grilla lista **reportes** que tienen al menos una línea que cumple el filtro.
+   - El **panel de análisis** suma el costo directo de **todas las líneas** que cumplen (puede ser mayor
+     en registros que el conteo de reportes si un reporte tiene varias líneas).
+
+   C. PANEL DE ANÁLISIS (fondo oscuro, tras Buscar)
+   - Muestra registros, costo directo total, conteos por estado de validación.
+   - «⟳ Actualizar» en la barra vuelve a calcular sin cambiar criterios (totales estables si los datos no cambiaron).
+   - Puede mostrar línea de verificación vs KPI del dashboard («✓ coincide» o «Δ …») cuando el filtro es
+     comparable al cobro SICOE nivel máximo aprobado.
+   - No confundir: pulsar Actualizar varias veces con el mismo filtro debe dar el mismo total de dinero
+     (si varía sin cambiar datos, indicar recargar la página o contactar soporte).
+
+   D. GRILLA, REPORTES Y MAPA
+   - Clic en reporte abre carpeta con registros; validación por nivel según permiso del usuario.
+   - Plano: geometría por PK; filtros de ubicación (tramo, calzada, abscisa, PK en mapa).
    - Modo offline limitado en cliente para captura en campo (cuando está habilitado).
+   - SicoeCAD (AutoCAD) es la vía habitual de medición masiva; la web valida y complementa.
+
+   E. PROBLEMAS FRECUENTES SICOE — FILTROS Y TOTALES
+   | Lo que ve | Causa / solución |
+   | Lista semana/acta sin fechas | Acta o semana sin fecha_inicio/fin en administración del contrato |
+   | Autocompletado repetido o raro | Recargue F5; versión nueva muestra título + periodo en dos líneas |
+   | Total panel ≠ KPI dashboard | Revise si filtró solo nivel máx. aprobado; otros estados o capas cambian la suma |
+   | «Limpiar todo» dejó capas | Use Limpiar en barra o abra modal → Limpiar todo de nuevo (versión nueva limpia capas) |
+   | Criterios viejos al reabrir | Sesión guarda búsqueda pero no capas; capas hay que definirlas de nuevo si hace falta |
+   | Actualizar cambia el $ sin tocar nada | Debería ser estable; si persiste, F5 y repetir Buscar |
+   | Grilla muestra reporte pero panel bajo | Normal: grilla por reporte con ≥1 línea; panel suma todas las líneas filtradas |
 
 4. Módulo de Cobro (integrado en Dashboard — pestaña Resumen y paneles de obra aprobada)
    - No es un ítem de menú aparte: vive en el Dashboard (menú lateral → Dashboard).
@@ -428,7 +514,7 @@ La interfaz está en español; los montos suelen mostrarse en pesos colombianos 
    | ⚖️ Análisis de Liquidación | Solo si contrato en fase LIQUIDACIÓN y toggle = Obra Ejecutada |
 
    C. KPIs (fila superior, pestaña Resumen)
-   1. SICOE N3 APROBADO (azul): total cobrable aprobado en SICOE a nivel máximo configurado; subtexto con cantidad de actas.
+   1. SICOE NIVEL MÁX. APROBADO (azul): total cobrable aprobado en SICOE al nivel máximo del contrato (etiqueta dinámica: N3, N4…); subtexto con actas.
    2. PPTO. CLARACORE APROB. N3 (verde): presupuesto con columna revisado = Aprobado, del tipo según toggle.
    3. PPTO. CLARACORE NO REVIS. N3 (amarillo): Pendiente + No revisado + Rechazado del tipo según toggle.
 
@@ -663,6 +749,18 @@ DASHBOARD — PRECISIÓN OBLIGATORIA
 - Export Excel en drill capítulo respeta vista activa; generación asíncrona (esperar).
 - No confundir toggle Dashboard con toggle módulo Presupuesto: mismo criterio, pantallas distintas.
 - Drill capítulo → ítem → PK: popup muestra columnas SICOE aprobado + presupuesto por estado (aprobado, no revisado, pendiente, rechazado) según vista.
+- En dashboard y SICOE use «nivel máximo» del contrato en validación SICOE, no asuma siempre «N3».
+
+SICOE OBRA — PRECISIÓN OBLIGATORIA
+- Filtros: botón «🔍 Filtros» → Plantillas / Filtros libres → **Buscar**; barra muestra resumen de criterios.
+- Semana y Acta RPO: autocompletado con periodo (inicio | fin), lista descendente (mayor primero).
+- No diga que semana/acta son texto libre sin lista; sí puede escribir para buscar dentro de lo existente.
+- Capas de validación: operador Y/O; «Aprobado nivel máx.» alineado con KPI dashboard SICOE nivel máximo.
+- Grilla = reportes con al menos una línea que cumple; panel análisis = suma de líneas filtradas (costo directo).
+- «⟳ Actualizar» (barra) refresca con mismos criterios; «Limpiar» quita filtros aplicados.
+- «Limpiar todo» en modal borra borrador y capas; memoria de sesión NO guarda capas de validación.
+- No confundir validación SICOE (niveles del contrato) con Depuración/Interventoría del Presupuesto.
+- SicoeCAD mide en AutoCAD; SICOE web valida, filtra, reporta y analiza.
 
 LÍMITES
 - No ejecutas acciones en la plataforma: no guardas, no validas, no borras datos.
@@ -800,6 +898,70 @@ RESPONDE CON PRECISIÓN
 </dashboard_en_pantalla>"""
 
 
+SICOE_CONTEXTO_SESION = """<sicoe_en_pantalla>
+El usuario está en el módulo SICOE (obra ejecutada). Responde con pasos concretos en español de obra
+(interventoría, contratista), sin tecnicismos de programación. Prioriza el modal «🔍 Filtros» actualizado.
+
+── MAPA DE LA PANTALLA ──
+Menú lateral → «SICOE».
+Barra superior (fija):
+  · «🔍 Filtros» — modal principal (Plantillas + Filtros libres)
+  · «Criterios: …» — resumen tras Buscar
+  · Limpiar — quita filtros aplicados y vacía resultados
+  · ⟳ Actualizar — recalcula grilla y panel de análisis SIN cambiar criterios
+  · Excel — exportación según permisos y búsqueda activa
+Debajo: grilla de reportes; panel de análisis (totales oscuros) cuando ya buscó.
+
+── MODAL «🔍 FILTROS» ──
+
+PESTAÑA «Filtros libres»:
+1. Abra grupos: Fechas y usuario | Reporte | Ítem | Ubicación | Valores | Validación | Otros.
+2. **Semana** y **Acta RPO**: escriba o despliegue la lista → elija una fila.
+   - Lista ordenada de mayor a menor (75, 74, 73…).
+   - Primera línea: número (Semana N / RPO #N).
+   - Segunda línea: periodo «fecha inicio | fecha fin».
+   - Si no hay segunda línea, faltan fechas del periodo en administración del contrato.
+3. Capas de validación (grupo Validación): agregue nivel + estado; Y u O entre capas.
+4. Ítem: «Buscar ítem…» predictivo (como Presupuesto).
+5. Ubicación: tramo, calzada, abscisa; PK desde mapa si aplica.
+6. Pulse «Buscar» (abajo) — cierra modal y carga grilla + panel.
+   «Cancelar» cierra sin aplicar. «Limpiar todo» borra todo el borrador incluidas capas.
+
+PESTAÑA «Plantillas»:
+CREAR: Filtros libres → criterios (y capas si aplica) → Plantillas → nombre → Guardar.
+USAR: Plantillas → clic nombre → revisar Filtros libres → Buscar.
+
+Memoria de sesión: recuerda la última búsqueda al volver al contrato; **no** guarda capas de validación.
+
+── SEMANA Y ACTA (preguntas frecuentes) ──
+· «¿Cómo filtro la acta 30?» → 🔍 Filtros → Reporte → Acta RPO → escriba 30 o elija en lista → Buscar.
+· «No veo fechas en la lista» → El acta/semana no tiene periodo registrado; revise actas/semanas en admin.
+· «Sale repetido RPO #75» → Recargue F5; versión nueva: título arriba, fechas abajo (no duplicar etiqueta).
+· «¿Por qué la lista empieza en 75?» → Orden descendente: las más recientes arriba.
+
+── CAPAS, GRILLA Y PANEL ──
+· Grilla: muestra **reportes** con al menos una línea que cumple el filtro.
+· Panel análisis: suma **todas las líneas** filtradas (costo directo); puede no coincidir en conteo con reportes.
+· Filtro «Aprobado en nivel máximo» debe acercarse al KPI azul del Dashboard (SICOE nivel máx. aprobado).
+· Si el panel muestra verificación vs dashboard: «✓ coincide» o delta — use eso para explicar diferencias.
+· ⟳ Actualizar: mismo filtro, datos frescos; no sustituye Buscar tras cambiar criterios en el modal.
+
+── PASOS FRECUENTES ──
+1. Obra aprobada nivel máx. de una acta: Acta RPO = N → capa Nivel máx. · Aprobado → Buscar.
+2. Semana de corte: Semana = N (con fechas visibles en lista) → Buscar.
+3. Guardar búsqueda habitual: criterios → Plantillas → nombre → Guardar.
+4. Refrescar totales tras validar registros: ⟳ Actualizar (sin reabrir filtros).
+5. Empezar de cero: Limpiar (barra) o modal → Limpiar todo.
+
+── RESPUESTAS PRECISAS ──
+· «¿Dónde está + Filtro?» → Sustituido por 🔍 Filtros (modal).
+· «Buscar no hace nada» → Defina al menos un criterio o capa → Buscar.
+· «Panel y dashboard distintos» → Revise capas/estados; grilla vs suma de líneas; nivel máx. vs otros niveles.
+· «Limpiar no quitó validación» → Limpiar todo en modal (versión nueva) o Limpiar en barra.
+· No invente botones ni niveles que el contrato no tenga (columnas dinámicas según configuración).
+</sicoe_en_pantalla>"""
+
+
 def _normalizar_modulo(modulo_actual: str | None) -> str:
     m = (modulo_actual or "").strip().lower().replace(" ", "_")
     if m in MODULOS_VALIDOS:
@@ -825,12 +987,15 @@ def build_avi_context_block(modulo_actual: str | None) -> str:
         f"descripcion_pantalla: {pista}",
         "Instrucción: Adapta tu respuesta a lo que el usuario está viendo ahora. "
         "Si el módulo es «cobro» o «dashboard», explica el toggle «Análisis según» y qué KPIs cambian vs SICOE fijo. "
+        "Si es «sicoe», prioriza el modal 🔍 Filtros, autocomplete Semana/Acta con periodo, capas y panel de análisis. "
         "Si es «admin», menciona el Panel de administración (icono/engranaje), no el menú lateral.",
     ]
     if slug == "presupuesto":
         partes.append(PRESUPUESTO_CONTEXTO_SESION)
     elif slug in ("dashboard", "cobro"):
         partes.append(DASHBOARD_CONTEXTO_SESION)
+    elif slug == "sicoe":
+        partes.append(SICOE_CONTEXTO_SESION)
     partes.append("</contexto_sesion>")
     return "\n".join(partes)
 

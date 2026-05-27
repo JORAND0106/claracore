@@ -2090,6 +2090,183 @@ NIVEL_VALIDACION_ENCABEZADO = {
 
 SICOE_SELECT_NIVELES_ESTADO = ",".join(f"nivel{i}_estado" for i in range(1, 7))
 
+_VM_COBRADO_NIVEL_COL = {i: f"cobrado_nivel{i}" for i in range(1, 7)}
+_VM_NR_NIVEL_COL = {i: f"no_revisado_nivel{i}" for i in range(3, 7)}
+
+
+def _vm_cobrado_col(campo_max: str) -> str:
+    n = _sicoe_nivel_num_desde_campo(campo_max) or 3
+    return _VM_COBRADO_NIVEL_COL.get(n, "cobrado_nivel3")
+
+
+def _vm_nr_col(campo_max: str) -> str:
+    n = _sicoe_nivel_num_desde_campo(campo_max) or 3
+    return _VM_NR_NIVEL_COL.get(n, "no_revisado_nivel3")
+
+
+def _sicoe_vm_grilla_paginar(
+    contrato_id: int,
+    offset: int,
+    limit: int,
+    *,
+    numero_reporte: Optional[int] = None,
+    semana_id: Optional[int] = None,
+    acta_id: Optional[int] = None,
+    estado: Optional[str] = None,
+    excluir_estados_avanzados: bool = False,
+    reporte_ids: Optional[List[int]] = None,
+) -> Tuple[List[int], bool]:
+    """IDs de reporte ordenados por numero_reporte desc desde vm_sicoe_grilla."""
+    page_lim = max(1, min(int(limit or 50), 100))
+    off = max(0, int(offset or 0))
+
+    def _q():
+        q = supabase.table("vm_sicoe_grilla").select("id, numero_reporte").eq("contrato_id", contrato_id)
+        if numero_reporte is not None:
+            q = q.eq("numero_reporte", numero_reporte)
+        if semana_id is not None:
+            q = q.eq("semana_id", semana_id)
+        if acta_id is not None:
+            q = q.eq("acta_rpo_id", acta_id)
+        if estado:
+            q = _so_reportes_q_por_estado(q, estado)
+        elif excluir_estados_avanzados:
+            q = q.not_.in_("estado", list(ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA))
+        if reporte_ids is not None:
+            if not reporte_ids:
+                return type("R", (), {"data": []})()
+            q = q.in_("id", reporte_ids)
+        return q.order("numero_reporte", desc=True).range(off, off + page_lim).execute()
+
+    data = supabase_execute(_q).data or []
+    ids = [int(r["id"]) for r in data if r.get("id") is not None]
+    hay_mas = len(ids) > page_lim
+    return ids[:page_lim], hay_mas
+
+
+def _sicoe_vm_grilla_agregados(reporte_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    if not reporte_ids:
+        return {}
+    out: Dict[int, Dict[str, Any]] = {}
+    chunk = 200
+    for i in range(0, len(reporte_ids), chunk):
+        part = reporte_ids[i : i + chunk]
+
+        def _q(p=part):
+            return (
+                supabase.table("vm_sicoe_grilla")
+                .select("id, total_registros, costo_directo_total")
+                .in_("id", p)
+                .execute()
+                .data
+            )
+
+        for row in supabase_execute(_q) or []:
+            rid = row.get("id")
+            if rid is not None:
+                out[int(rid)] = row
+    return out
+
+
+def _fetch_dashboard_resumen_from_vm(contrato_id: int, campo_max: str, niveles_activos: List[int]):
+    """Construye payload tipo dashboard_resumen_sicoe_agg desde vistas materializadas."""
+    try:
+
+        def _caps():
+            return (
+                supabase.table("vm_dashboard_resumen")
+                .select("*")
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+
+        cap_rows = supabase_execute(_caps) or []
+        if not cap_rows:
+            return None
+
+        cob_col = _vm_cobrado_col(campo_max)
+        nr_col = _vm_nr_col(campo_max)
+        obra_caps = {}
+        total_cobrado = 0.0
+        total_nr = 0.0
+        comparativo_sicoe = []
+        for r in cap_rows:
+            cap = r.get("capitulo") or "Sin capítulo"
+            cob = float(r.get(cob_col) or 0)
+            nr = float(r.get(nr_col) or 0)
+            obra_caps[cap] = cob
+            total_cobrado += cob
+            total_nr += nr
+            comparativo_sicoe.append(
+                {
+                    "capitulo": cap,
+                    "cobrado": round(cob, 2),
+                    "sicoe_aprobado": round(cob, 2),
+                    "sicoe_no_revisado": round(nr, 2),
+                }
+            )
+
+        def _actas_vm():
+            return (
+                supabase.table("vm_dashboard_por_acta")
+                .select("acta_rpo_id, " + cob_col)
+                .eq("contrato_id", contrato_id)
+                .execute()
+                .data
+            )
+
+        acta_vm = supabase_execute(_actas_vm) or []
+        acta_id_to_nr = {}
+        if acta_vm:
+            aids = list({a["acta_rpo_id"] for a in acta_vm if a.get("acta_rpo_id") is not None})
+
+            def _actas_nr():
+                return (
+                    supabase.table("actas")
+                    .select("id, numero_rpo")
+                    .eq("contrato_id", contrato_id)
+                    .in_("id", aids)
+                    .execute()
+                    .data
+                )
+
+            for a in supabase_execute(_actas_nr) or []:
+                if a.get("id") is not None:
+                    acta_id_to_nr[int(a["id"])] = a.get("numero_rpo")
+
+        por_acta = []
+        actas_keys = []
+        for row in acta_vm:
+            aid = row.get("acta_rpo_id")
+            nr = acta_id_to_nr.get(int(aid)) if aid is not None else None
+            if nr is None:
+                continue
+            v = round(float(row.get(cob_col) or 0), 2)
+            por_acta.append({"acta": nr, "cobrado": v})
+            actas_keys.append(nr)
+
+        def _sort_acta_key(x):
+            try:
+                return float(x)
+            except (TypeError, ValueError):
+                return 0.0
+
+        por_acta.sort(key=lambda x: _sort_acta_key(x.get("acta")), reverse=True)
+        actas_keys = sorted(set(actas_keys), key=_sort_acta_key, reverse=True)
+
+        return {
+            "total_cobrado": round(total_cobrado, 2),
+            "total_sicoe_n3_no_revisado": round(total_nr, 2),
+            "comparativo_capitulos": comparativo_sicoe,
+            "por_acta": por_acta,
+            "actas": actas_keys,
+            "obra_por_capitulo": obra_caps,
+            "_fuente": "vm_dashboard_resumen",
+        }
+    except Exception:
+        return None
+
 
 def _get_niveles_activos_contrato(contrato_id: int) -> List[int]:
     """Lee `contrato_niveles_validacion.niveles_activos`; sin fila o error → [1, 2, 3]."""
@@ -11349,7 +11526,53 @@ def buscar_reportes_obra(
     rows: List[Dict[str, Any]] = []
     hay_mas = False
 
-    if reporte_ids_from_reg is not None:
+    _hay_n23_vm = (
+        (_validacion_cualquier_nivel2_o_3(capas_v) if capas_v else False)
+        or (_nivel_l is not None and _es_validacion_avanzada(_nivel_l))
+    )
+    _puede_vm_grilla = (
+        not consulta_directa_identificador
+        and not unified_line
+        and not capas_aplican_a_lineas
+        and not _defer_capas_or_grilla
+        and not _filtro_fu_rep
+        and not (q_nodo is not None and str(q_nodo).strip())
+        and etiqueta_f is None
+        and not pendiente_item
+    )
+
+    if _puede_vm_grilla:
+        try:
+            vm_page_ids, vm_hay_mas = _sicoe_vm_grilla_paginar(
+                contrato_id,
+                offset,
+                limit,
+                numero_reporte=numero_reporte,
+                semana_id=semana_id_filtro,
+                acta_id=acta_id_filtro,
+                estado=estado,
+                excluir_estados_avanzados=_hay_n23_vm,
+                reporte_ids=reporte_ids_from_reg,
+            )
+            hay_mas = vm_hay_mas
+            page_ids_ordered = vm_page_ids
+            rows = []
+            for j in range(0, len(page_ids_ordered), _IDS_CHUNK_SIZE):
+                chk = page_ids_ordered[j : j + _IDS_CHUNK_SIZE]
+
+                def _qfull_ids(c=chk):
+                    return _build_q(c).execute().data
+
+                batch = supabase_execute(_qfull_ids) or []
+                by_id = {r["id"]: r for r in batch}
+                for rid_one in chk:
+                    if rid_one in by_id:
+                        rows.append(by_id[rid_one])
+        except Exception:
+            rows = []
+            hay_mas = False
+
+    if reporte_ids_from_reg is not None and not rows:
         id_num: Dict[int, int] = {}
         seen_rid = set()
         for i in range(0, len(reporte_ids_from_reg), _IDS_CHUNK_SIZE):
@@ -11384,7 +11607,7 @@ def buscar_reportes_obra(
             for rid_one in chk:
                 if rid_one in by_id:
                     rows.append(by_id[rid_one])
-    else:
+    elif not rows:
         q_page = _build_q(None).order("numero_reporte", desc=True)
 
         def _qrange_pg():
@@ -17543,6 +17766,9 @@ def _rpo_panel_actas_resumen_cached(
 
 
 def _fetch_dashboard_resumen_sicoe_agg(contrato_id: int, campo_max: str, niveles_activos):
+    vm_hit = _fetch_dashboard_resumen_from_vm(contrato_id, campo_max, niveles_activos)
+    if vm_hit is not None:
+        return vm_hit
     raw = _dashboard_resumen_cached(contrato_id, campo_max, niveles_activos)
     return _parse_rpc_dashboard_resumen_raw(raw)
 

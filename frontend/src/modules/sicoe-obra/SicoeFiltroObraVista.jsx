@@ -96,6 +96,31 @@ export default function SicoeFiltroObraVista({
             ) : null}
           </button>
 
+          <button
+            type="button"
+            disabled={buscando}
+            onClick={() => {
+              if (!sicoeBundleTieneCriteriosUsuario(bundleAplicado)) {
+                window.alert('Defina al menos un criterio de búsqueda antes de continuar.')
+                return
+              }
+              if (typeof onBuscar === 'function') onBuscar(bundleAplicado)
+            }}
+            title="Ejecutar búsqueda con los criterios actuales (grilla y panel)"
+            style={{
+              ...btnSec,
+              background: t.primary,
+              color: '#fff',
+              border: 'none',
+              fontWeight: 700,
+              padding: '6px 14px',
+              flexShrink: 0,
+              opacity: buscando ? 0.65 : 1,
+            }}
+          >
+            {buscando ? '⏳ Buscando…' : 'Buscar'}
+          </button>
+
           <div
             style={{
               flex: '1 1 200px',

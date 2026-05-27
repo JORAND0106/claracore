@@ -5532,8 +5532,6 @@ function ModuloSicoeObra({
   const [cargandoAnalisis, setCargandoAnalisis] = useState(false)
   const [panelExpandido, setPanelExpandido] = useState(false)
   const [busquedaRealizada, setBusquedaRealizada] = useState(false)
-  /** @deprecated Los cambios de filtro disparan búsqueda automática (debounce); ya no vacía grilla/panel. */
-  const sicoeMarcarFiltrosPendientesBuscar = () => {}
   const sicoeAutoBusquedaTimerRef = useRef(null)
   const sicoeSkipAutoBusquedaOnceRef = useRef(true)
   const [popupMasivoFiltro, setPopupMasivoFiltro] = useState(null)
@@ -6284,6 +6282,30 @@ function ModuloSicoeObra({
     }
   }, [contrato_id])
 
+  /** Aplica criterios de grilla/panel y ejecuta búsqueda (grilla + análisis en paralelo). */
+  const aplicarFiltrosSicoeYBuscar = useCallback((nf, opts = {}) => {
+    const { clearItems = false, capasOverride, capasOpOverride, expandirPanel = true } = opts
+    if (clearItems) {
+      itemsFiltroChipsRef.current = []
+      setItemsFiltroChips([])
+      setItemsFiltroOp('and')
+      itemsFiltroOpRef.current = 'and'
+    }
+    const capas = capasOverride ?? capasSicoeRef.current ?? []
+    const capasOp = capasOpOverride ?? capasValidacionOpRef.current ?? 'and'
+    const snap = sicoeBundleFromAppState({
+      filtros: nf,
+      itemsChips: clearItems ? [] : itemsFiltroChipsRef.current,
+      itemsOp: itemsFiltroOpRef.current,
+      sicoeFiltroObs: sicoeFiltroObsRef.current,
+      sicoeFiltroNodo: sicoeFiltroNodoRef.current,
+      capasValidacion: capas,
+      capasValidacionOp: capasOp,
+    })
+    aplicarSicoeFiltroBundle(snap, true)
+    if (expandirPanel) setPanelExpandido(true)
+  }, [aplicarSicoeFiltroBundle])
+
   const actualizarFiltrosDisponibles = async (filtrosActivos) => {
     // Modo offline: leer desde IndexedDB sin tocar la red (ref para evitar stale closure)
     if (efectivoOfflineRef.current && isOfflineReadyRef.current) {
@@ -6687,6 +6709,31 @@ function ModuloSicoeObra({
       .catch(() => {})
   }, [contrato_id])
 
+  const aplicarRegistroRealtime = useCallback((payload) => {
+    const rid = sicoeRealtimeReporteDetalleIdRef.current
+    if (!rid) return
+    const row = payload?.new ?? payload?.old
+    if (!row?.id) return
+    const ev = payload?.eventType
+    setReporteSeleccionado((prev) => {
+      if (!prev || String(prev.id) !== String(rid)) return prev
+      const regs = Array.isArray(prev.registros) ? [...prev.registros] : []
+      if (ev === 'DELETE') {
+        return { ...prev, registros: regs.filter((r) => String(r.id) !== String(row.id)) }
+      }
+      const idx = regs.findIndex((r) => String(r.id) === String(row.id))
+      if (idx >= 0) {
+        const next = [...regs]
+        next[idx] = { ...next[idx], ...row }
+        return { ...prev, registros: next }
+      }
+      if (ev === 'INSERT' && String(row.reporte_id) === String(rid)) {
+        return { ...prev, registros: [...regs, row] }
+      }
+      return prev
+    })
+  }, [])
+
   const refrescarSicoeObraCompleto = useCallback(() => {
     if (sicoeRefrescoEnCursoRef.current) return
     const f = filtrosSicoeRef.current
@@ -6700,34 +6747,19 @@ function ModuloSicoeObra({
     refrescarDetalleReporteAbierto()
   }, [refrescarDetalleReporteAbierto])
 
-  /** Canal 2 — so_reportes: cambios a nivel reporte en el contrato activo */
+  /** Canal 1 — grilla: so_reportes (MV vm_sicoe_grilla se refresca por trigger; API lee la MV) */
   useEffect(() => {
     if (efectivoOffline || !SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contrato_id) return
     const cid = String(contrato_id)
     const filt = `contrato_id=eq.${cid}`
     const debouncer = createRealtimeDebouncer(refrescarSicoeObraCompleto)
     const channel = supabase
-      .channel(`sicoe-obra-reportes-${cid}`)
+      .channel(`sicoe-grilla-${cid}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'so_reportes', filter: filt },
         () => debouncer.schedule(),
       )
-      .subscribe()
-    return () => {
-      debouncer.dispose()
-      void supabase.removeChannel(channel)
-    }
-  }, [contrato_id, efectivoOffline, refrescarSicoeObraCompleto])
-
-  /** Canal 1 — so_registros: solo el reporte abierto (carpeta / navegación profunda) */
-  useEffect(() => {
-    if (efectivoOffline || !SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !reporteRealtimeId) return
-    const rid = String(reporteRealtimeId)
-    const filt = `reporte_id=eq.${rid}`
-    const debouncer = createRealtimeDebouncer(refrescarDetalleReporteAbierto)
-    const channel = supabase
-      .channel(`sicoe-obra-registros-${rid}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'so_registros', filter: filt },
@@ -6738,7 +6770,34 @@ function ModuloSicoeObra({
       debouncer.dispose()
       void supabase.removeChannel(channel)
     }
-  }, [reporteRealtimeId, efectivoOffline, refrescarDetalleReporteAbierto])
+  }, [contrato_id, efectivoOffline, refrescarSicoeObraCompleto])
+
+  /** Canal 2 — detalle: so_registros del reporte abierto; parchea fila sin recargar carpeta entera */
+  useEffect(() => {
+    if (efectivoOffline || !SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !reporteRealtimeId) return
+    const rid = String(reporteRealtimeId)
+    const filt = `reporte_id=eq.${rid}`
+    let lastPayload = null
+    const debouncer = createRealtimeDebouncer(() => {
+      if (lastPayload) aplicarRegistroRealtime(lastPayload)
+      lastPayload = null
+    })
+    const channel = supabase
+      .channel(`sicoe-registro-${rid}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'so_registros', filter: filt },
+        (payload) => {
+          lastPayload = payload
+          debouncer.schedule()
+        },
+      )
+      .subscribe()
+    return () => {
+      debouncer.dispose()
+      void supabase.removeChannel(channel)
+    }
+  }, [reporteRealtimeId, efectivoOffline, aplicarRegistroRealtime])
 
   sicoeMapFiltroApplyPkRef.current = (pkIdInt) => {
     setModalPkAsignacionMapa({ pk_id_id: pkIdInt })
@@ -6823,8 +6882,7 @@ function ModuloSicoeObra({
     } else {
       return
     }
-    sicoeMarcarFiltrosPendientesBuscar()
-    setFiltros(nf)
+    aplicarFiltrosSicoeYBuscar(nf, { clearItems: true })
   }
   const puedeVolverPanel = !!(
     String(filtros.item || '').trim() ||
@@ -7732,7 +7790,7 @@ function ModuloSicoeObra({
                       capasValidacionOpRef.current = 'or'
                       setCapaTemp({ nivel: '', estado: '' })
                       setSicoeModalCombCapas(null)
-                      sicoeMarcarFiltrosPendientesBuscar()
+                      aplicarFiltrosSicoeYBuscar(filtrosSicoeRef.current, { capasOverride: nextCapas, capasOpOverride: 'or' })
                     }}
                     style={{ flex: '1 1 160px', background: t.primary, border: 'none', borderRadius: '10px', padding: '12px 16px', color: '#fff', fontWeight: '800', cursor: 'pointer' }}
                   >O — cualquiera (recomendado)</button>
@@ -7746,7 +7804,7 @@ function ModuloSicoeObra({
                       capasValidacionOpRef.current = 'and'
                       setCapaTemp({ nivel: '', estado: '' })
                       setSicoeModalCombCapas(null)
-                      sicoeMarcarFiltrosPendientesBuscar()
+                      aplicarFiltrosSicoeYBuscar(filtrosSicoeRef.current, { capasOverride: nextCapas, capasOpOverride: 'and' })
                     }}
                     style={{ flex: '1 1 140px', background: t.bg, border: `2px solid ${t.border}`, borderRadius: '10px', padding: '12px 16px', color: t.textMuted, fontWeight: '800', cursor: 'pointer' }}
                   >Y — todas</button>
@@ -7763,7 +7821,7 @@ function ModuloSicoeObra({
                       capasValidacionOpRef.current = 'and'
                       setCapaTemp({ nivel: '', estado: '' })
                       setSicoeModalCombCapas(null)
-                      sicoeMarcarFiltrosPendientesBuscar()
+                      aplicarFiltrosSicoeYBuscar(filtrosSicoeRef.current, { capasOverride: nextCapas, capasOpOverride: 'and' })
                     }}
                     style={{ flex: '1 1 140px', background: t.bg, border: `2px solid ${t.primary}`, borderRadius: '10px', padding: '12px 16px', color: t.primary, fontWeight: '800', cursor: 'pointer' }}
                   >Y — todas</button>
@@ -7777,7 +7835,7 @@ function ModuloSicoeObra({
                       capasValidacionOpRef.current = 'or'
                       setCapaTemp({ nivel: '', estado: '' })
                       setSicoeModalCombCapas(null)
-                      sicoeMarcarFiltrosPendientesBuscar()
+                      aplicarFiltrosSicoeYBuscar(filtrosSicoeRef.current, { capasOverride: nextCapas, capasOpOverride: 'or' })
                     }}
                     style={{ flex: '1 1 160px', background: t.primary, border: 'none', borderRadius: '10px', padding: '12px 16px', color: '#fff', fontWeight: '800', cursor: 'pointer' }}
                   >O — cualquiera</button>
@@ -7913,13 +7971,8 @@ function ModuloSicoeObra({
                         key={g.label}
                         onClick={(e) => {
                           e.stopPropagation()
-                          setItemsFiltroChips([])
-                          itemsFiltroChipsRef.current = []
-                          setItemsFiltroOp('and')
-                          itemsFiltroOpRef.current = 'and'
-                          const newF = { ...filtros, item: g.label }
-                          sicoeMarcarFiltrosPendientesBuscar()
-                          setFiltros(newF)
+                          const newF = { ...filtrosSicoeRef.current, item: g.label }
+                          aplicarFiltrosSicoeYBuscar(newF, { clearItems: true })
                         }}
                         style={{ borderBottom:`1px solid ${t.border}22`, cursor:'pointer' }}
                         onMouseEnter={e => { e.currentTarget.style.background = t.bg + '88' }}
@@ -8099,13 +8152,8 @@ function ModuloSicoeObra({
                   <tbody>
                     {analisis.grupos.map(g => (
                       <tr key={g.label} onClick={() => {
-                        setItemsFiltroChips([])
-                        itemsFiltroChipsRef.current = []
-                        setItemsFiltroOp('and')
-                        itemsFiltroOpRef.current = 'and'
-                        const newF = { ...filtros, capitulo: g.label, item: '' }
-                        sicoeMarcarFiltrosPendientesBuscar()
-                        setFiltros(newF)
+                        const newF = { ...filtrosSicoeRef.current, capitulo: g.label, item: '' }
+                        aplicarFiltrosSicoeYBuscar(newF, { clearItems: true })
                       }} style={{ borderBottom:`1px solid ${t.border}22`, cursor:'pointer' }}
                       onMouseEnter={e => e.currentTarget.style.background = t.bg + '88'}
                       onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
@@ -8176,7 +8224,7 @@ function ModuloSicoeObra({
         onLimpiar={limpiarFiltros}
         onActualizar={refrescarVistaSicoeObra}
         actualizarDisabled={cargandoAnalisis || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)}
-        buscando={cargandoAnalisis}
+        buscando={cargando || cargandoAnalisis}
         puedeExportar={puedeExportar}
         onExportarExcel={abrirPopupExportRegistros}
         exportDisabled={!reportesMostrados || reportesMostrados.length === 0}
@@ -8591,8 +8639,7 @@ function ModuloSicoeObra({
                   const pid = modalPkAsignacionMapa.pk_id_id
                   setModalPkAsignacionMapa(null)
                   const nf = { ...filtrosSicoeRef.current, pk_id: String(pid) }
-                  sicoeMarcarFiltrosPendientesBuscar()
-                  setFiltros(nf)
+                  aplicarFiltrosSicoeYBuscar(nf)
                 }}
                 style={{ padding: '8px 14px', borderRadius: '8px', border: `1px solid ${t.border}`, background: t.bg, color: t.text, cursor: 'pointer', fontWeight: '700' }}
               >
@@ -8628,8 +8675,7 @@ function ModuloSicoeObra({
                     setPkMapaGuardandoActores(false)
                     setModalPkAsignacionMapa(null)
                     const nf = { ...filtrosSicoeRef.current, pk_id: String(pid) }
-                    sicoeMarcarFiltrosPendientesBuscar()
-                    setFiltros(nf)
+                    aplicarFiltrosSicoeYBuscar(nf)
                   }}
                   style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', background: t.primary, color: '#fff', cursor: 'pointer', fontWeight: '800' }}
                 >
@@ -12468,6 +12514,26 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
     if (!contratoIdDash || !dashModuloActivo) return
     void cargarDashboardResumen()
   }, [contratoIdDash, dashModuloActivo, dashVistaParam, dashKpiReloadKey, cargarDashboardResumen])
+
+  /** Canal 3 — dashboard: so_registros del contrato (MV dashboard se refresca; API lee VM, no RPC pesado) */
+  useEffect(() => {
+    if (isEfectivoOffline() || !SUPABASE_URL || !SUPABASE_ANON_KEY || !supabase || !contratoIdDash || !dashModuloActivo) return
+    const cid = String(contratoIdDash)
+    const filt = `contrato_id=eq.${cid}`
+    const debouncer = createRealtimeDebouncer(() => { void cargarDashboardResumen() })
+    const channel = supabase
+      .channel(`dashboard-resumen-${cid}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'so_registros', filter: filt },
+        () => debouncer.schedule(),
+      )
+      .subscribe()
+    return () => {
+      debouncer.dispose()
+      void supabase.removeChannel(channel)
+    }
+  }, [contratoIdDash, dashModuloActivo, cargarDashboardResumen])
 
   useEffect(() => {
     if (!contratoIdDash || !dashModuloActivo) return
