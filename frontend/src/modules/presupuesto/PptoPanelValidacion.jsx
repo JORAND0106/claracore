@@ -98,6 +98,8 @@ export default function PptoPanelValidacion({
   t,
   registrosFiltrados = [],
   registrosBusqueda = [],
+  /** Filas pre-agregadas del servidor (GET panel-validacion-interv); prioridad sobre registros locales. */
+  filasServidor = null,
   capitulosResumen = [],
   verValoresEconomicos = true,
   busquedaActiva = false,
@@ -175,16 +177,17 @@ export default function PptoPanelValidacion({
     return m
   }, [listadoPrecios])
 
-  const filas = useMemo(
-    () =>
-      pptoPanelAgruparValidacion(
-        registrosPanel,
-        nivel,
-        nivel === 'item' ? capSel : null,
-        capitulosResumen,
-      ),
-    [registrosPanel, nivel, capSel, capitulosResumen],
-  )
+  const filas = useMemo(() => {
+    if (filasServidor != null && Array.isArray(filasServidor)) {
+      return filasServidor
+    }
+    return pptoPanelAgruparValidacion(
+      registrosPanel,
+      nivel,
+      nivel === 'item' ? capSel : null,
+      capitulosResumen,
+    )
+  }, [filasServidor, registrosPanel, nivel, capSel, capitulosResumen])
 
   const totales = useMemo(() => pptoPanelTotalesFilas(filas), [filas])
   const avanceGlobal = useMemo(() => pptoPanelAvanceGlobal(filas), [filas])

@@ -35,6 +35,10 @@ from presupuesto_helpers import (
     _presupuesto_q_filtros_ubicacion,
     _so_reg_filtro_abs_solape,
 )
+from presupuesto_panel_validacion import (
+    fetch_panel_validacion_interv,
+    presupuesto_filtros_a_jsonb,
+)
 
 # ── Sesiones DWG activas (en memoria) ─────────────────────────────────────────
 # Clave: (contrato_id, usuario_id) → timestamp Unix. Nunca mezclar con otro usuario:
@@ -6930,6 +6934,99 @@ def get_capitulos_presupuesto(
     """Devuelve capítulos con costo total y total de registros. Carga rápida sin traer filas individuales."""
     _require_contract_access(current_user, contrato_id)
     return _presupuesto_agregar_por_capitulo(contrato_id, tipo_ejecucion, current_user)
+
+
+@app.get("/presupuesto/{contrato_id}/panel-validacion-interv")
+def get_presupuesto_panel_validacion_interv(
+    contrato_id: int,
+    nivel: str = Query("capitulo", description="capitulo | item"),
+    capitulo: Optional[str] = None,
+    capitulos: Optional[List[str]] = Query(None),
+    item: Optional[str] = None,
+    items: Optional[List[str]] = Query(None),
+    tramo: Optional[str] = None,
+    tramos: Optional[List[str]] = Query(None),
+    calzada: Optional[str] = None,
+    calzadas: Optional[List[str]] = Query(None),
+    competencia: Optional[str] = None,
+    competencias: Optional[List[str]] = Query(None),
+    und: Optional[str] = None,
+    unds: Optional[List[str]] = Query(None),
+    nodo_inicio: Optional[str] = None,
+    nodo_final: Optional[str] = None,
+    buscar: Optional[str] = None,
+    id_pol: Optional[str] = None,
+    pk_criterio: Optional[str] = None,
+    texto: Optional[str] = None,
+    abs_desde: Optional[float] = None,
+    abs_hasta: Optional[float] = None,
+    revisado: Optional[str] = None,
+    pre_interv_estado: Optional[str] = None,
+    sellado: Optional[bool] = None,
+    vlr_unitario_desde: Optional[float] = None,
+    vlr_unitario_hasta: Optional[float] = None,
+    cant_total_desde: Optional[float] = None,
+    cant_total_hasta: Optional[float] = None,
+    costo_directo_desde: Optional[float] = None,
+    costo_directo_hasta: Optional[float] = None,
+    tipo_ejecucion: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
+    """
+    Agregado ligero para el panel de validación Interventoría (presupuesto vigente).
+    Mismos filtros que GET /presupuesto; no devuelve filas individuales.
+    Con nivel=item requiere capitulo (drill del panel).
+    """
+    _require_contract_access(current_user, contrato_id)
+    nv = (nivel or "capitulo").strip().lower()
+    if nv not in ("capitulo", "item"):
+        raise HTTPException(status_code=422, detail="nivel debe ser capitulo o item")
+    cap_drill = (capitulo or "").strip() or None
+    if nv == "item" and not cap_drill:
+        raise HTTPException(status_code=422, detail="capitulo requerido cuando nivel=item")
+    filtros = presupuesto_filtros_a_jsonb(
+        capitulo=capitulo,
+        capitulos=capitulos,
+        item=item,
+        items=items,
+        tramo=tramo,
+        tramos=tramos,
+        calzada=calzada,
+        calzadas=calzadas,
+        competencia=competencia,
+        competencias=competencias,
+        und=und,
+        unds=unds,
+        nodo_inicio=nodo_inicio,
+        nodo_final=nodo_final,
+        buscar=buscar,
+        id_pol=id_pol,
+        pk_criterio=pk_criterio,
+        texto=texto,
+        abs_desde=abs_desde,
+        abs_hasta=abs_hasta,
+        revisado=revisado,
+        pre_interv_estado=pre_interv_estado,
+        sellado=sellado,
+        vlr_unitario_desde=vlr_unitario_desde,
+        vlr_unitario_hasta=vlr_unitario_hasta,
+        cant_total_desde=cant_total_desde,
+        cant_total_hasta=cant_total_hasta,
+        costo_directo_desde=costo_directo_desde,
+        costo_directo_hasta=costo_directo_hasta,
+    )
+    out = fetch_panel_validacion_interv(
+        supabase_execute,
+        supabase,
+        contrato_id,
+        current_user,
+        nivel=nv,
+        capitulo=cap_drill if nv == "item" else None,
+        tipo_ejecucion=tipo_ejecucion,
+        filtros=filtros,
+        orden_capitulos=None,
+    )
+    return out
 
 
 @app.get("/presupuesto/{contrato_id}/maestro-ubicacion-pk")

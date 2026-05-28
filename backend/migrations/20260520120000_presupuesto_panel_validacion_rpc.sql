@@ -1,0 +1,4 @@
+-- Panel validación Interventoría: ejecutar en Supabase el contenido de:
+-- backend/sql/presupuesto_panel_validacion_rpc.sql
+--
+-- Crea la función public.presupuesto_panel_validacion_interv (agregado GROUP BY en servidor).

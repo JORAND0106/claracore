@@ -29,6 +29,7 @@ import {
 import PptoVersionador from './PptoVersionador'
 import { downloadPresupuestoInformeExcel } from './presupuestoExportExcel'
 import { pptoBuildPresupuestoSearchParams, pptoCriterioVistaActivo as criterioVistaActivo, pptoFiltroNormalizar, pptoFiltroDef, pptoFiltroValoresLista, pptoFiltrosActivosKeys, pptoFObraToExportBody, pptoExportBodyToSearchParams, pptoTieneFiltrosChip } from './pptoFiltroCatalogo'
+import { fetchPptoPanelValidacion, pptoBuildPanelValidacionParams } from './pptoPanelValidacionApi'
 import { cargarFiltroSesion, guardarFiltroSesion, limpiarFiltroSesion } from './pptoFiltroSesion'
 import CcAvisoModal from '../../components/CcAvisoModal'
 
@@ -196,6 +197,19 @@ function PresupuestoTooltip({ active, payload, t, color, fmt }) {
 }
 
 /** Orden 1, 2, … 10, 11 (no lexicográfico 1,10,11,2). */
+/** Lista de capítulos derivada del panel agregado (evita GET capitulos-lista = otro barrido 40k). */
+function capitulosResumenDesdePanelFilas(filas) {
+  if (!Array.isArray(filas) || !filas.length) return []
+  return filas
+    .map((g) => ({
+      capitulo: g.capitulo || g.label || '',
+      costo_total: Number(g.totalCosto) || 0,
+      total_registros: Number(g.totalRegs) || 0,
+    }))
+    .filter((c) => c.capitulo)
+    .sort(cmpCapituloLabel)
+}
+
 function cmpCapituloLabel(a, b) {
   const key = (row) => {
     const c = row?.capitulo ?? row
@@ -331,6 +345,9 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const busquedaServidorActivaRef = useRef(false)
   const [busquedaServidorActiva, setBusquedaServidorActiva] = useState(false)
   const [panelBusquedaSeq, setPanelBusquedaSeq] = useState(0)
+  /** Filas del panel desde GET /panel-validacion-interv (agregado servidor). */
+  const [panelFilasServidor, setPanelFilasServidor] = useState(null)
+  const [cargandoGrillaPresupuesto, setCargandoGrillaPresupuesto] = useState(false)
   /** Snapshot fObra/drill antes de entrar a ítems desde el panel (restaurar en «Atrás»). */
   const panelDrillRestoreRef = useRef(null)
   const registrosRef = useRef([])
@@ -511,7 +528,7 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
 
   useEffect(() => {
     if (!contratoId || oculto) return
-    void cargarCapitulos()
+    // Capítulos: se llenan con el panel agregado (Buscar), no con capitulos-lista al abrir.
     void cargarVersionesPresupuesto()
   }, [contratoId, token, cargarVersionesPresupuesto, oculto])
   useEffect(() => {
@@ -1679,7 +1696,33 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     }
   }
 
-  async function aplicarFiltroObraConF(fIn) {
+  async function cargarPanelValidacionServidor(f, ctx, { nivel = 'capitulo', capituloDrill = '' } = {}) {
+    const pPanel = pptoBuildPanelValidacionParams(f, ctx, {
+      verPapelera,
+      nivel,
+      capituloDrill,
+    })
+    const data = await fetchPptoPanelValidacion(API, token, contratoId, pPanel)
+    const filas = Array.isArray(data?.filas) ? data.filas : []
+    setPanelFilasServidor(filas)
+    const total = typeof data?.total_registros === 'number' ? data.total_registros : null
+    if (total != null) setConteoFiltro(total)
+    if ((nivel || data?.nivel || 'capitulo') === 'capitulo' && filas.length) {
+      setCapitulosResumen(capitulosResumenDesdePanelFilas(filas))
+    }
+    if (data?.fuente === 'legacy') {
+      setAvisoSistema({
+        titulo: 'Panel en modo lento',
+        mensaje:
+          'La función SQL del panel no respondió; se usó barrido fila a fila. Ejecute backend/sql/presupuesto_panel_validacion_rpc.sql en Supabase y reinicie el backend.',
+        tipo: 'warn',
+      })
+    }
+    return data
+  }
+
+  async function aplicarFiltroObraConF(fIn, opts = {}) {
+    const cargarGrilla = opts.cargarGrilla === true
     if (!contratoId) return
     // Solo tabla presupuesto (vigente en edición); nunca presupuesto_version_items / historial.
     const ctx = pptoCtxFiltro(drill, capExpandido)
@@ -1692,6 +1735,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setFObra(f)
     fObraRef.current = f
     setBuscandoFiltroObra(true)
+    if (cargarGrilla) setCargandoGrillaPresupuesto(true)
     cargaPptoIdRef.current += 1
     const cargaId = cargaPptoIdRef.current
     cargaPptoInFlightRef.current = true
@@ -1707,19 +1751,52 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       const capPrim = capVals[0] || f.cap || ''
       if (capPrim) setCapActivo(capPrim)
 
-      const p = pptoBuildPresupuestoSearchParams(f, { ...ctx, drill: d }, { verPapelera })
-      const { rows, total, cancelado } = await fetchPresupuestoPaginasCompletas(p, (partial) => {
-        if (cargaId !== cargaPptoIdRef.current) return
-        setRegistros(partial)
-      }, {
-        avisarCargaGrande: true,
-        onTotalConocido: (n) => {
-          if (cargaId === cargaPptoIdRef.current) setConteoFiltro(n)
-        },
+      const ctxBusqueda = { ...ctx, drill: d }
+      const nivelPanel = capVals.length === 1 ? 'item' : 'capitulo'
+      const capDrillPanel = capVals.length === 1 ? capVals[0] : ''
+
+      const panelPromise = cargarPanelValidacionServidor(f, ctxBusqueda, {
+        nivel: nivelPanel,
+        capituloDrill: capDrillPanel,
       })
+
+      if (!cargarGrilla) {
+        await panelPromise
+        if (cargaId !== cargaPptoIdRef.current) return
+        setRegistros([])
+        setSeleccionados(new Set())
+        setVisibleRegistrosCount(50)
+        _pptoCachePorCap.current = {}
+        pptoCargaRef.current = { key: '', nextOffset: 0, hasMore: false, total: 0 }
+        busquedaServidorActivaRef.current = true
+        setBusquedaServidorActiva(true)
+        setPanelBusquedaSeq((n) => n + 1)
+        panelDrillRestoreRef.current = null
+        skipDebounceFiltrosRef.current = true
+        guardarFiltroSesion(contratoId, {
+          f,
+          activeKeys: pptoFiltrosActivosKeys(f, []),
+          searched: true,
+        })
+        return
+      }
+
+      const p = pptoBuildPresupuestoSearchParams(f, ctxBusqueda, { verPapelera })
+      const [_, gridResult] = await Promise.all([
+        panelPromise,
+        fetchPresupuestoPaginasCompletas(p, (partial) => {
+          if (cargaId !== cargaPptoIdRef.current) return
+          setRegistros(partial)
+        }, {
+          avisarCargaGrande: true,
+          onTotalConocido: (n) => {
+            if (cargaId === cargaPptoIdRef.current) setConteoFiltro(n)
+          },
+        }),
+      ])
+      const { rows, total, cancelado } = gridResult
       if (cargaId !== cargaPptoIdRef.current) return
       if (cancelado) {
-        setConteoFiltro(total || null)
         setRegistros([])
         busquedaServidorActivaRef.current = true
         setBusquedaServidorActiva(true)
@@ -1760,6 +1837,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     } finally {
       cargaPptoInFlightRef.current = false
       setBuscandoFiltroObra(false)
+      setCargandoGrillaPresupuesto(false)
     }
   }
 
@@ -1781,12 +1859,12 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       setDrill(list.length === 1 ? [{ campo: 'capitulo', valor: list[0] }] : [])
       if (!list.length) setCapActivo(null)
       panelDrillRestoreRef.current = null
-      await aplicarFiltroObraConF(next)
+      await aplicarFiltroObraConF(next, { cargarGrilla: true })
     },
     [contratoId],
   )
 
-  const drillCapituloDesdePanel = useCallback((capitulo) => {
+  const drillCapituloDesdePanel = useCallback(async (capitulo) => {
     const cap = String(capitulo || '').trim()
     if (!cap) return
     const base = fObraRef.current || fObra
@@ -1806,12 +1884,26 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setDrill([{ campo: 'capitulo', valor: cap }])
     setCapActivo(cap)
     setVisibleRegistrosCount(80)
+    try {
+      const ctx = pptoCtxFiltro(drill, capExpandido)
+      await cargarPanelValidacionServidor(fObraRef.current || fObra, { ...ctx, drill: [{ campo: 'capitulo', valor: cap }] }, {
+        nivel: 'item',
+        capituloDrill: cap,
+      })
+      setPanelBusquedaSeq((n) => n + 1)
+    } catch (err) {
+      setAvisoSistema({
+        titulo: 'Panel de validación',
+        mensaje: err?.message || 'No se pudo cargar ítems del capítulo.',
+        tipo: 'warn',
+      })
+    }
     window.setTimeout(() => {
       pptoTablaScrollRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }, 120)
-  }, [fObra, drill])
+  }, [fObra, drill, capExpandido, contratoId, token])
 
-  const volverPanelCapitulos = useCallback(() => {
+  const volverPanelCapitulos = useCallback(async () => {
     const snap = panelDrillRestoreRef.current
     if (snap) {
       const next = {
@@ -1828,10 +1920,15 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       panelDrillRestoreRef.current = null
       if (snap.cap) setCapActivo(snap.cap)
       else setCapActivo(null)
-      return
+    } else {
+      setDrill((d) => (d || []).filter((x) => x.campo !== 'item' && x.campo !== 'items'))
     }
-    setDrill((d) => (d || []).filter((x) => x.campo !== 'item' && x.campo !== 'items'))
-  }, [fObra, drill])
+    try {
+      const ctx = pptoCtxFiltro(drill, capExpandido)
+      await cargarPanelValidacionServidor(fObraRef.current || fObra, ctx, { nivel: 'capitulo' })
+      setPanelBusquedaSeq((n) => n + 1)
+    } catch { /* panel opcional al volver */ }
+  }, [fObra, drill, capExpandido])
 
   const aplicarPanelItems = useCallback(
     async (capitulo, items) => {
@@ -1845,7 +1942,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         items: list.length > 1 ? list : [],
       }
       panelDrillRestoreRef.current = null
-      await aplicarFiltroObraConF(next)
+      await aplicarFiltroObraConF(next, { cargarGrilla: true })
     },
     [contratoId],
   )
@@ -1871,7 +1968,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (cap) setCapActivo(cap)
       panelDrillRestoreRef.current = null
       setVisibleRegistrosCount(80)
-      await aplicarFiltroObraConF(next)
+      await aplicarFiltroObraConF(next, { cargarGrilla: true })
       window.setTimeout(() => {
         pptoTablaScrollRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       }, 200)
@@ -1902,7 +1999,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
     setRegistros([])
     setSeleccionados(new Set())
     setVisibleRegistrosCount(50)
-    await cargarCapitulos({ silent: true })
+    setPanelFilasServidor(null)
     const ctx = pptoCtxFiltro(drill, capExpandido)
     const fNorm = pptoFiltroNormalizar(next, ctx)
     if (!pptoTieneFiltrosChip(fNorm, ctx)) {
@@ -1967,6 +2064,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
 
   function limpiarFiltroObra() {
     panelDrillRestoreRef.current = null
+    setPanelFilasServidor(null)
     cargaPptoIdRef.current += 1
     busquedaServidorActivaRef.current = false
     setBusquedaServidorActiva(false)
@@ -5423,6 +5521,7 @@ async function restaurar(id) {
           t={t}
           registrosFiltrados={registrosFiltrados}
           registrosBusqueda={registros}
+          filasServidor={panelFilasServidor}
           capitulosResumen={capitulosResumen}
           verValoresEconomicos={nivelInfo.verValoresEconomicos}
           busquedaActiva={busquedaServidorActiva || buscandoFiltroObra}
@@ -5463,14 +5562,24 @@ async function restaurar(id) {
       {verPapelera && (
         <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:10, padding:12, marginBottom:10, color:t.textMuted, fontSize:'var(--cc-sm)' }}>Papelera: use «Actualizar»; el filtrado avanzado aplica al volver a activos.</div>
       )}
-      {buscandoFiltroObra && conteoFiltro != null && conteoFiltro > PRES_PTO_ALERTA_GRANDE_UMBRAL && !confirmCargaGrande && (
+      {cargandoGrillaPresupuesto && conteoFiltro != null && conteoFiltro > PRES_PTO_ALERTA_GRANDE_UMBRAL && !confirmCargaGrande && (
         <div style={{ background:'#FFFBEB', border:'1px solid #FDE68A', borderRadius:8, padding:'8px 12px', marginBottom:10, fontSize:'var(--cc-sm)', color:'#92400E' }}>
-          Descargando {conteoFiltro.toLocaleString('es-CO')} registros…
+          Descargando {conteoFiltro.toLocaleString('es-CO')} registros en la grilla…
         </div>
       )}
-      {conteoFiltro != null && (registros.length > 0 || buscandoFiltroObra) && (
+      {conteoFiltro != null && (busquedaServidorActiva || buscandoFiltroObra) && (
         <div style={{ fontSize:'var(--cc-sm)', fontWeight:700, color:t.primary, marginBottom:8 }}>
           Coincidencias (servidor): {conteoFiltro.toLocaleString('es-CO')}
+          {registros.length > 0
+            ? ` · ${registrosFiltrados.length.toLocaleString('es-CO')} en grilla`
+            : busquedaServidorActiva && !cargandoGrillaPresupuesto
+              ? ' · grilla vacía (use el panel para filtrar filas)'
+              : ''}
+        </div>
+      )}
+      {busquedaServidorActiva && registrosFiltrados.length === 0 && (panelFilasServidor?.length > 0) && !cargandoGrillaPresupuesto && (
+        <div style={{ background:t.bgCard, border:`1px solid ${t.border}`, borderRadius:8, padding:'10px 14px', marginBottom:10, fontSize:'var(--cc-sm)', color:t.textMuted, lineHeight:1.45 }}>
+          Resumen cargado en el panel. Pulse una <strong style={{ color:t.text }}>celda de estado</strong> o <strong style={{ color:t.text }}>Aplicar filtros</strong> para traer registros a la grilla.
         </div>
       )}
 

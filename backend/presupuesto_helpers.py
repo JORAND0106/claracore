@@ -108,7 +108,7 @@ def _presupuesto_q_filtros_ubicacion(
         b = str(buscar).strip()
         pat = f"%{b}%"
         # Legacy: un solo cuadro busca en cuatro columnas
-        q = q.or_(f"id_pol.ilike.{pat},pk_id.ilike.{pat},registro.ilike.{pat},descripcion.ilike.{pat}")
+        q = q.or_(f"id_pol.ilike.{pat},pk_id.ilike.{pat},descripcion.ilike.{pat},observacion.ilike.{pat}")
     else:
         if id_pol and str(id_pol).strip():
             q = q.ilike("id_pol", f"%{str(id_pol).strip()}%")
@@ -116,7 +116,7 @@ def _presupuesto_q_filtros_ubicacion(
             q = q.ilike("pk_id", f"%{str(pk_criterio).strip()}%")
         if texto and str(texto).strip():
             t = f"%{str(texto).strip()}%"
-            q = q.or_(f"registro.ilike.{t},descripcion.ilike.{t}")
+            q = q.or_(f"descripcion.ilike.{t},id_pol.ilike.{t},pk_id.ilike.{t},observacion.ilike.{t}")
     if competencia and str(competencia).strip():
         q = q.eq("competencia", str(competencia).strip())
     if und and str(und).strip():
