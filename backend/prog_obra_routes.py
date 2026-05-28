@@ -8,6 +8,7 @@ from datetime import date, datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from prog_obra_calendar import CalendarioNoHabilesCache, add_dias_habiles
@@ -22,9 +23,12 @@ from prog_obra_service import (
     fetch_mapa_rows_for_version,
     fetch_mapa_rows_rpc,
     fetch_pks_con_ruta_critica,
+    fetch_sin_agrupador_count_by_pk,
     enrich_mapa_rows_with_ruta_critica,
+    enrich_mapa_rows_sin_agrupador,
     mark_cpm_dirty,
     fetch_vigente_meta,
+    list_versiones_enriched,
     make_prog_calendar_loader,
     process_validation_decision,
     propagar_fechas_agrupador_a_hijos,
@@ -32,6 +36,7 @@ from prog_obra_service import (
     seed_festivos_colombia_globales,
     submit_to_validation,
     ensure_prog_pk_estado_all,
+    sync_presupuesto_version,
     sync_capitulo_desde_items,
     upsert_prog_pk_estado,
     validate_segment_quantities,
@@ -51,6 +56,22 @@ from prog_obra_compare import (
     compare_versions,
     compute_desviaciones,
     enrich_mapa_rows_with_desviacion,
+)
+from prog_obra_suspension import (
+    preview_suspension_impact,
+    create_and_apply_suspension,
+    apply_suspension_to_version,
+    validate_suspension_metadata,
+)
+from prog_obra_curva_s import build_curva_s, build_curva_s_pdf_html
+from prog_obra_auto_schedule import (
+    check_auto_schedule_prereqs,
+    preview_auto_schedule,
+    apply_auto_schedule,
+)
+from prog_obra_presupuesto_bridge import (
+    build_delta_presupuesto,
+    presupuesto_aprobacion_estado,
 )
 
 from main import (
@@ -107,6 +128,30 @@ class VersionCreateBody(BaseModel):
     version_origen_id: Optional[str] = None
     metadata: Optional[dict] = None
     clonar: bool = True
+
+
+class SuspensionPreviewBody(BaseModel):
+    version_id: str
+    fecha_inicio_suspension: str
+    fecha_fin_suspension: str
+
+
+class SuspensionApplyBody(BaseModel):
+    motivo: str
+    metadata: dict
+
+
+class AutoSchedulePreviewBody(BaseModel):
+    version_id: str
+    fecha_inicio: str
+    fecha_fin: str
+    estrategia: str = "equitativa"
+    pk_order: Optional[List[str]] = None
+    pk_parallel_groups: Optional[List[List[str]]] = None
+
+
+class AutoScheduleApplyBody(BaseModel):
+    propuesta: List[dict]
 
 
 class CapituloUpsertBody(BaseModel):
@@ -225,6 +270,8 @@ def prog_mapa(contrato_id: int, current_user=Depends(get_current_user)):
             rows = fetch_mapa_rows_for_version(supabase, contrato_id, vid) if vid else []
     critico_pks = fetch_pks_con_ruta_critica(supabase, version_mapa_id)
     rows = enrich_mapa_rows_with_ruta_critica(rows, critico_pks)
+    sin_ag_by_pk = fetch_sin_agrupador_count_by_pk(supabase, contrato_id)
+    rows = enrich_mapa_rows_sin_agrupador(rows, sin_ag_by_pk)
     desviacion_meta = None
     try:
         desv = compute_desviaciones(
@@ -317,18 +364,7 @@ def prog_seed_calendario(
 def prog_list_versiones(contrato_id: int, current_user=Depends(get_current_user)):
     require_permiso_programacion_obra(current_user, "ver")
     _require_contract_access(current_user, contrato_id)
-    return (
-        supabase.table("prog_versiones")
-        .select(
-            "id,numero_version,tipo,estado,creado_en,sellado_en,motivo_reprogramacion,"
-            "version_origen_id,superseded_by_id,metadata"
-        )
-        .eq("contrato_id", contrato_id)
-        .order("numero_version", desc=True)
-        .execute()
-        .data
-        or []
-    )
+    return list_versiones_enriched(supabase, contrato_id)
 
 
 @router.post("/{contrato_id}/versiones")
@@ -386,21 +422,48 @@ def prog_list_validaciones(contrato_id: int, version_id: str, current_user=Depen
 
 @router.post("/{contrato_id}/versiones/{version_id}/sincronizar-estados-pk")
 def prog_sincronizar_estados_pk(contrato_id: int, version_id: str, current_user=Depends(get_current_user)):
-    """Recalcula prog_pk_estado para todos los PK del contrato (tras guardado masivo)."""
+    """Recalcula prog_pk_estado y cantidades de actividades vs presupuesto actual."""
     require_permiso_programacion_obra(current_user, "editar")
     _require_contract_access(current_user, contrato_id)
     v = assert_version_borrador(supabase, version_id)
     if int(v.get("contrato_id") or 0) != int(contrato_id):
         raise HTTPException(status_code=404, detail="Versión no encontrada")
-    ensure_prog_pk_estado_all(supabase, version_id, contrato_id)
+    result = sync_presupuesto_version(supabase, version_id, contrato_id)
     _log_prog(
         current_user,
         "PROG_SINCRONIZAR_ESTADOS_PK",
         "prog_version",
         version_id,
-        {"contrato_id": contrato_id},
+        {"contrato_id": contrato_id, **result},
     )
-    return {"ok": True}
+    return result
+
+
+@router.get("/{contrato_id}/presupuesto-aprobacion-estado")
+def prog_presupuesto_aprobacion_estado(contrato_id: int, current_user=Depends(get_current_user)):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    return presupuesto_aprobacion_estado(supabase, contrato_id)
+
+
+@router.get("/{contrato_id}/versiones/{version_id}/delta-presupuesto")
+def prog_delta_presupuesto(contrato_id: int, version_id: str, current_user=Depends(get_current_user)):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    v = supabase.table("prog_versiones").select("id,contrato_id,tipo,estado,version_origen_id").eq("id", version_id).limit(1).execute().data
+    if not v or int(v[0].get("contrato_id") or 0) != int(contrato_id):
+        raise HTTPException(status_code=404, detail="Versión no encontrada")
+    row = v[0]
+    if (row.get("estado") or "") not in ("borrador", "en_validacion"):
+        raise HTTPException(status_code=400, detail="Delta presupuesto solo disponible en borrador o en validación")
+    delta = build_delta_presupuesto(
+        supabase,
+        contrato_id,
+        version_id,
+        row.get("version_origen_id"),
+        row.get("tipo") or "",
+    )
+    return delta
 
 
 @router.post("/{contrato_id}/versiones/{version_id}/enviar-validacion")
@@ -1082,3 +1145,188 @@ def prog_get_ruta_critica(
     require_permiso_programacion_obra(current_user, "ver")
     _require_contract_access(current_user, contrato_id)
     return obtener_ruta_critica(supabase, version_id)
+
+
+@router.post("/{contrato_id}/suspension/preview")
+def prog_suspension_preview(
+    contrato_id: int,
+    body: SuspensionPreviewBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    try:
+        f_ini = date.fromisoformat(str(body.fecha_inicio_suspension)[:10])
+        f_fin = date.fromisoformat(str(body.fecha_fin_suspension)[:10])
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Fechas de suspensión inválidas")
+    try:
+        return preview_suspension_impact(supabase, contrato_id, body.version_id, f_ini, f_fin)
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+
+
+@router.post("/{contrato_id}/suspension/aplicar")
+def prog_suspension_aplicar(
+    contrato_id: int,
+    body: SuspensionApplyBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "crear")
+    _require_contract_access(current_user, contrato_id)
+    try:
+        result = create_and_apply_suspension(
+            supabase,
+            contrato_id,
+            _uid(current_user),
+            body.motivo,
+            body.metadata,
+        )
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    _log_prog(
+        current_user,
+        "PROG_SUSPENSION_APLICADA",
+        "prog_version",
+        result.get("version", {}).get("id"),
+        {"contrato_id": contrato_id, "actividades": result.get("actividades_recalculadas")},
+    )
+    return result
+
+
+@router.post("/{contrato_id}/versiones/{version_id}/suspension/aplicar")
+def prog_suspension_aplicar_version(
+    contrato_id: int,
+    version_id: str,
+    body: SuspensionApplyBody,
+    current_user=Depends(get_current_user),
+):
+    """Aplica suspensión a versión borrador existente tipo suspension."""
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    try:
+        result = apply_suspension_to_version(
+            supabase,
+            contrato_id,
+            version_id,
+            _uid(current_user),
+            body.metadata,
+            body.motivo,
+        )
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    _log_prog(current_user, "PROG_SUSPENSION_APLICADA", "prog_version", version_id, {"contrato_id": contrato_id})
+    return result
+
+
+@router.get("/{contrato_id}/curva-s")
+def prog_curva_s(
+    contrato_id: int,
+    baseline_id: Optional[str] = Query(None),
+    target_id: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    try:
+        return build_curva_s(supabase, contrato_id, baseline_id=baseline_id, target_id=target_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/{contrato_id}/curva-s/pdf")
+def prog_curva_s_pdf(
+    contrato_id: int,
+    baseline_id: Optional[str] = Query(None),
+    target_id: Optional[str] = Query(None),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    try:
+        data = build_curva_s(supabase, contrato_id, baseline_id=baseline_id, target_id=target_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    crows = supabase.table("contratos").select("id,numero,objeto,contratista,interventoria").eq("id", contrato_id).limit(1).execute().data or [{}]
+    html = build_curva_s_pdf_html(crows[0], data)
+    try:
+        from topografia_utils import to_pdf_bytes
+        pdf = to_pdf_bytes(html)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"No se pudo generar PDF: {e}")
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="curva-s-contrato-{contrato_id}.pdf"'},
+    )
+
+
+@router.get("/{contrato_id}/auto-schedule/prereqs")
+def prog_auto_schedule_prereqs(
+    contrato_id: int,
+    version_id: str = Query(...),
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    return check_auto_schedule_prereqs(supabase, contrato_id, version_id)
+
+
+@router.post("/{contrato_id}/auto-schedule/preview")
+def prog_auto_schedule_preview(
+    contrato_id: int,
+    body: AutoSchedulePreviewBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "ver")
+    _require_contract_access(current_user, contrato_id)
+    try:
+        f_ini = date.fromisoformat(str(body.fecha_inicio)[:10])
+        f_fin = date.fromisoformat(str(body.fecha_fin)[:10])
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Fechas del contrato inválidas")
+    try:
+        return preview_auto_schedule(
+            supabase,
+            contrato_id,
+            body.version_id,
+            f_ini,
+            f_fin,
+            body.estrategia,
+            pk_order=body.pk_order,
+            pk_parallel_groups=body.pk_parallel_groups,
+        )
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+
+
+@router.post("/{contrato_id}/versiones/{version_id}/auto-schedule/aplicar")
+def prog_auto_schedule_aplicar(
+    contrato_id: int,
+    version_id: str,
+    body: AutoScheduleApplyBody,
+    current_user=Depends(get_current_user),
+):
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    v = assert_version_borrador(supabase, version_id)
+    if int(v.get("contrato_id") or 0) != int(contrato_id):
+        raise HTTPException(status_code=404, detail="Versión no encontrada")
+    try:
+        result = apply_auto_schedule(
+            supabase,
+            contrato_id,
+            version_id,
+            _uid(current_user),
+            body.propuesta,
+        )
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    _log_prog(
+        current_user,
+        "PROG_AUTO_SCHEDULE_APLICADO",
+        "prog_version",
+        version_id,
+        {"contrato_id": contrato_id, "actividades": result.get("actividades_aplicadas")},
+    )
+    return result

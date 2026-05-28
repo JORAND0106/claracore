@@ -124,7 +124,12 @@ def _presupuesto_q_filtros_ubicacion(
     if sellado is not None:
         q = q.eq("sellado", bool(sellado))
     if revisado and str(revisado).strip():
-        q = q.eq("revisado", str(revisado).strip())
+        rv = str(revisado).strip()
+        # UI trata NULL como «No Revisado»; eq solo no coincide con filas sin valor.
+        if rv.lower() in ("no revisado", "no revisados"):
+            q = q.or_('revisado.is.null,revisado.eq."No Revisado"')
+        else:
+            q = q.eq("revisado", rv)
     if pre_interv_estado and str(pre_interv_estado).strip():
         pe = str(pre_interv_estado).strip()
         if str(pe).strip().lower() in ("no revisado", "—", "-"):

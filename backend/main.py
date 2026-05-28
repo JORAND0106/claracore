@@ -6352,13 +6352,13 @@ def get_presupuesto(
     current_user=Depends(get_current_user),
 ):
     """
-    Listado de presupuesto con filtros de servidor. Parámetros capitulo / item alinean con el drill del
-    dashboard. id_pol, pk_criterio, texto: filtros separados (campos distintos). `buscar` mantiene
-    compatibilidad: OR en id_pol, pk_id, registro, descripcion si no se usan esos tres.
-    pre_interv_estado: filtro depuración (roles contratista / obra); revisado: Interventoría.
+    Listado del presupuesto VIGENTE en edición (tabla `presupuesto` del contrato).
+    No consulta `presupuesto_version_items` ni versiones históricas; exportar/consultar snapshots
+    usa rutas /presupuesto/{id}/versiones/... con version_id explícito.
+    Parámetros capitulo / item alinean con el drill del dashboard. id_pol, pk_criterio, texto: filtros
+    separados. pre_interv_estado: depuración; revisado: Interventoría.
     tipo_ejecucion: «Presupuesto de Obra» (default) u «Obra Ejecutada».
-    `limit` + `offset`: una sola página (grilla) sin bajar 10k+ filas. Sin `limit`, comportamiento
-    legado: acumulación por lotes de 1000.
+    `limit` + `offset`: paginación; sin `limit`, acumulación por lotes de 1000.
     """
     def _q_base():
         q = supabase.table("presupuesto").select("*").eq("contrato_id", contrato_id)
@@ -6464,8 +6464,8 @@ def get_presupuesto_conteo(
     current_user=Depends(get_current_user),
 ):
     """
-    Mismos query params que GET /presupuesto/{id}; respuesta mínima para dashboard y UI sin bajar filas.
-    Fase C: pre-paginación y consistencia con el listado.
+    Conteo del presupuesto VIGENTE (misma tabla que GET /presupuesto/{id}, sin historial de versiones).
+    Mismos query params que el listado; respuesta mínima para dashboard y UI.
     """
     q = supabase.table("presupuesto").select("id", count="exact").eq("contrato_id", contrato_id)
     if dado_de_baja is not None:

@@ -4,14 +4,22 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus, Upload } from 'lucide-react'
+import { Plus, Upload, RefreshCw } from 'lucide-react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { API_BASE } from './apiBase'
 import { getContratoPlanoGeojson } from './contratoPlanoGeojsonCache'
 import { sanitizePlanoFeatureCollection } from './geoPlanoSanitize'
 import ProgObraProgramacionModal from './ProgObraProgramacionModal'
+import { openAdminListadoPrecios, permisoEditarListadoPrecios } from './openAdminListadoPrecios'
+import ProgHistorialVersiones from './ProgHistorialVersiones'
+import { parseVersionesResponse } from './progObraVersiones'
+import ProgObraPresupuestoDeltaModal from './ProgObraPresupuestoDeltaModal'
 import ProgObraDependenciasGlobales from './ProgObraDependenciasGlobales'
+import ProgObraComparacionGlobalModal from './ProgObraComparacionGlobalModal'
+import ProgObraSuspensionWizard from './ProgObraSuspensionWizard'
+import ProgObraCurvaSModal from './ProgObraCurvaSModal'
+import ProgObraAutoScheduleWizard from './ProgObraAutoScheduleWizard'
 import { fmtCOP, fmtCant, fmtDateHuman, fmtDateIso } from './progObraFormat'
 import { aggregatePptoItemKeysByPk, buildProgValidationPreCheck } from './progObraValidation'
 import {
@@ -284,6 +292,7 @@ function ProgPkListado({ rows, selPk, t, onSelectPk }) {
             const pctLabel = pctNum != null && Number.isFinite(pctNum) ? `${Math.round(pctNum)}%` : '—'
             const selected = pk === selPk
             const critico = Boolean(r.tiene_ruta_critica)
+            const sinAg = Number(r.items_sin_agrupador) || 0
             const cardBg = critico ? '#fee2e2' : selected ? `${t.primary}18` : t.bg
             return (
               <button
@@ -333,7 +342,10 @@ function ProgPkListado({ rows, selPk, t, onSelectPk }) {
                 >
                   {blocks}
                 </span>
-                <span style={{ gridColumn: 3, textAlign: 'right', fontWeight: 600, fontSize: 10 }}>{pctLabel}</span>
+                <span style={{ gridColumn: 3, textAlign: 'right', fontWeight: 600, fontSize: 10 }}>
+                  {sinAg > 0 ? <span style={{ color: '#b45309', marginRight: 3 }} title={`${sinAg} ítems sin agrupador`}>⚠</span> : null}
+                  {pctLabel}
+                </span>
                 {critico && (
                   <span
                     style={{
@@ -825,6 +837,11 @@ export default function ModuloProgramacionObra({
   const [plano, setPlano] = useState(undefined)
   const [mapaResp, setMapaResp] = useState(null)
   const [versiones, setVersiones] = useState([])
+  const [versionVigenteId, setVersionVigenteId] = useState(null)
+  const [versionBaselineId, setVersionBaselineId] = useState(null)
+  const [modalVersionId, setModalVersionId] = useState(null)
+  const [modalCompareBaselineId, setModalCompareBaselineId] = useState(null)
+  const [modalCompareTargetId, setModalCompareTargetId] = useState(null)
   const [selPk, setSelPk] = useState(null)
   const [err, setErr] = useState('')
   const [toast, setToast] = useState(null)
@@ -843,6 +860,13 @@ export default function ModuloProgramacionObra({
   const [loadVal, setLoadVal] = useState(false)
   const [showCrearVersion, setShowCrearVersion] = useState(false)
   const [crearMotivo, setCrearMotivo] = useState('')
+  const [crearTipo, setCrearTipo] = useState('reprogramacion')
+  const [showComparacionGlobal, setShowComparacionGlobal] = useState(false)
+  const [showCurvaS, setShowCurvaS] = useState(false)
+  const [showSuspensionWizard, setShowSuspensionWizard] = useState(false)
+  const [showAutoSchedule, setShowAutoSchedule] = useState(false)
+  const [presupuestoDelta, setPresupuestoDelta] = useState(null)
+  const [presupuestoBloqueoValidacion, setPresupuestoBloqueoValidacion] = useState(null)
   const [validarModal, setValidarModal] = useState(null)
   const [progModalOpen, setProgModalOpen] = useState(false)
   const [modalOpenCompareTab, setModalOpenCompareTab] = useState(false)
@@ -893,6 +917,22 @@ export default function ModuloProgramacionObra({
     setTimeout(() => setToast(null), 5000)
   }, [])
 
+  const applyVersionesPayload = useCallback((data, ensureVersionRow = null) => {
+    const parsed = parseVersionesResponse(data)
+    let arr = parsed.versiones
+    if (ensureVersionRow?.id != null) {
+      const id = String(ensureVersionRow.id)
+      if (!arr.some((x) => String(x.id) === id)) {
+        arr = [ensureVersionRow, ...arr]
+      }
+    }
+    arr = [...arr].sort((a, b) => (Number(b.numero_version) || 0) - (Number(a.numero_version) || 0))
+    setVersiones(arr)
+    setVersionVigenteId(parsed.version_vigente_id ? String(parsed.version_vigente_id) : null)
+    setVersionBaselineId(parsed.version_baseline_id ? String(parsed.version_baseline_id) : null)
+    return arr
+  }, [])
+
   const refreshMapaYVersiones = useCallback(
     async (ensureVersionRow = null) => {
       if (!cid || !token) return
@@ -905,18 +945,10 @@ export default function ModuloProgramacionObra({
         ),
       ])
       setMapaResp(m && typeof m === 'object' ? m : { pk: [], meta: {} })
-      let arr = Array.isArray(v) ? v : []
-      if (ensureVersionRow?.id != null) {
-        const id = String(ensureVersionRow.id)
-        if (!arr.some((x) => String(x.id) === id)) {
-          arr = [ensureVersionRow, ...arr]
-        }
-      }
-      arr = [...arr].sort((a, b) => (Number(b.numero_version) || 0) - (Number(a.numero_version) || 0))
-      setVersiones(arr)
+      applyVersionesPayload(v, ensureVersionRow)
       return m
     },
-    [cid, token, API],
+    [cid, token, API, applyVersionesPayload],
   )
 
   const scheduleMapRefresh = useCallback(() => {
@@ -934,8 +966,10 @@ export default function ModuloProgramacionObra({
       return
     }
     let cancel = false
-    setPlano(undefined)
-    setErr('')
+      setPlano(undefined)
+      setErr('')
+      setVersionVigenteId(null)
+      setVersionBaselineId(null)
     Promise.all([
       getContratoPlanoGeojson(API, cid, token).then((d) =>
         d && typeof d === 'object' ? { plano_geojson: d.plano_geojson } : null,
@@ -952,7 +986,7 @@ export default function ModuloProgramacionObra({
         const raw = c?.plano_geojson ?? null
         setPlano(normalizePlanoGeojson(raw))
         setMapaResp(m && typeof m === 'object' ? m : { pk: [], meta: {} })
-        setVersiones(Array.isArray(v) ? v : [])
+        applyVersionesPayload(v)
       })
       .catch((e) => {
         if (!cancel) setErr(e?.message || 'Error de red')
@@ -960,7 +994,7 @@ export default function ModuloProgramacionObra({
     return () => {
       cancel = true
     }
-  }, [cid, token, API])
+  }, [cid, token, API, applyVersionesPayload])
 
   const meta = mapaResp?.meta || {}
   const borradorMeta = meta.borrador
@@ -988,12 +1022,32 @@ export default function ModuloProgramacionObra({
     if (workingVersionId) return workingVersionId
     if (borradorMeta?.id) return String(borradorMeta.id)
     const vb = versiones.find((v) => (v.estado || '') === 'borrador')
-    return vb?.id != null ? String(vb.id) : null
-  }, [workingVersionId, borradorMeta?.id, versiones])
+    if (vb?.id != null) return String(vb.id)
+    if (versionVigenteId) return String(versionVigenteId)
+    return null
+  }, [workingVersionId, borradorMeta?.id, versiones, versionVigenteId])
+
+  const versionIdForModal = modalVersionId || versionIdForWork
+  const versionIdForData = progModalOpen ? versionIdForModal : versionIdForWork
 
   const workingVersion = useMemo(
     () => versiones.find((v) => String(v.id) === String(versionIdForWork)) || null,
     [versiones, versionIdForWork],
+  )
+
+  const modalVersion = useMemo(
+    () => versiones.find((v) => String(v.id) === String(versionIdForModal)) || null,
+    [versiones, versionIdForModal],
+  )
+
+  const modalHistoricalReadOnly = useMemo(() => {
+    if (!progModalOpen || !modalVersion) return false
+    if ((modalVersion.estado || '') !== 'borrador') return true
+    return Boolean(modalVersionId && String(modalVersionId) !== String(versionIdForWork))
+  }, [progModalOpen, modalVersion, modalVersionId, versionIdForWork])
+
+  const modalEditable = Boolean(
+    modalVersion && (modalVersion.estado || '') === 'borrador' && puedeEditar && !modalHistoricalReadOnly,
   )
 
   const pkForData = progModalOpen && activeModalPk ? activeModalPk : selPk
@@ -1041,6 +1095,19 @@ export default function ModuloProgramacionObra({
         showToast?.('Este PK no tiene cantidades en presupuesto y no se puede programar.', 'info')
         return
       }
+      if (options.modalVersionId != null) {
+        setModalVersionId(String(options.modalVersionId))
+      } else if (!options.keepModalVersion) {
+        setModalVersionId(null)
+        setModalCompareBaselineId(null)
+        setModalCompareTargetId(null)
+      }
+      if (options.compareBaselineId != null) {
+        setModalCompareBaselineId(String(options.compareBaselineId))
+      }
+      if (options.compareTargetId != null) {
+        setModalCompareTargetId(String(options.compareTargetId))
+      }
       if (!workingVersionId) {
         const vb = versiones.find((v) => (v.estado || '') === 'borrador')
         if (vb?.id) setWorkingVersionId(String(vb.id))
@@ -1053,6 +1120,74 @@ export default function ModuloProgramacionObra({
       setProgModalOpen(true)
     },
     [workingVersionId, versiones, borradorMeta?.id, pkTieneCantidad, showToast],
+  )
+
+  const pickPkForModal = useCallback(() => {
+    const pk = selPk || String(pkRowsProgramables[0]?.pk_id || '').trim()
+    return pk || null
+  }, [selPk, pkRowsProgramables])
+
+  const closeProgModal = useCallback(() => {
+    setProgModalOpen(false)
+    setModalPkTabs([])
+    setActiveModalPk(null)
+    setModalOpenCompareTab(false)
+    setModalVersionId(null)
+    setModalCompareBaselineId(null)
+    setModalCompareTargetId(null)
+  }, [])
+
+  const handleHistorialConsultar = useCallback(
+    (v) => {
+      const pk = pickPkForModal()
+      if (!pk) {
+        showToast('Seleccione un PK en el mapa para consultar la programación.', 'info')
+        return
+      }
+      openProgramacionModal(pk, {
+        keepModalVersion: true,
+        modalVersionId: v.id,
+        compare: false,
+      })
+    },
+    [pickPkForModal, openProgramacionModal, showToast],
+  )
+
+  const handleHistorialContinuar = useCallback(
+    (v) => {
+      if ((v.estado || '') !== 'borrador') return
+      const pk = pickPkForModal()
+      if (!pk) {
+        showToast('Seleccione un PK en el mapa para continuar la edición.', 'info')
+        return
+      }
+      setWorkingVersionId(String(v.id))
+      openProgramacionModal(pk, { keepModalVersion: true, compare: false })
+    },
+    [pickPkForModal, openProgramacionModal, showToast],
+  )
+
+  const handleHistorialComparar = useCallback(
+    (v) => {
+      const baselineId = versionBaselineId
+      if (!baselineId || String(baselineId) === String(v.id)) {
+        showToast('No hay baseline disponible para comparar.', 'info')
+        return
+      }
+      const pk = pickPkForModal()
+      if (!pk) {
+        showToast('Seleccione un PK en el mapa para comparar versiones.', 'info')
+        return
+      }
+      openProgramacionModal(pk, {
+        keepModalVersion: true,
+        modalVersionId: v.id,
+        compare: true,
+        compareBaselineId: baselineId,
+        compareTargetId: v.id,
+      })
+    },
+    [versionBaselineId, pickPkForModal, openProgramacionModal, showToast],
   )
 
   const desviacionContrato = mapaResp?.meta?.desviacion_contrato || null
@@ -1347,13 +1482,13 @@ export default function ModuloProgramacionObra({
   }, [cid, token, pkForData, API])
 
   useEffect(() => {
-    if (!cid || !token || !pkForData || !versionIdForWork) {
+    if (!cid || !token || !pkForData || !versionIdForData) {
       setActData({ capitulos: [], actividades: [] })
       return
     }
     let cancel = false
     setLoadAct(true)
-    const q = new URLSearchParams({ version_id: String(versionIdForWork), pk_id: pkForData })
+    const q = new URLSearchParams({ version_id: String(versionIdForData), pk_id: pkForData })
     fetch(`${API}/prog-obra/${cid}/actividades?${q}`, { headers: { Authorization: `Bearer ${token}` } })
       .then((r) => (r.ok ? r.json() : { capitulos: [], actividades: [] }))
       .then((d) => {
@@ -1368,7 +1503,7 @@ export default function ModuloProgramacionObra({
     return () => {
       cancel = true
     }
-  }, [cid, token, pkForData, versionIdForWork, API])
+  }, [cid, token, pkForData, versionIdForData, API])
 
   useEffect(() => {
     if (!cid || !token || !workingVersionId) {
@@ -1408,7 +1543,19 @@ export default function ModuloProgramacionObra({
     const lower = key.toLowerCase()
     return Object.values(m).find((r) => String(r.pk_id || '').trim().toLowerCase() === lower) || null
   }, [selPk, mapaResp, pkMeta])
+  const sinAgCountSel = useMemo(
+    () => Number(rowSel?.items_sin_agrupador) || Number(progEstructura?.total_sin_agrupador) || 0,
+    [rowSel, progEstructura?.total_sin_agrupador]
+  )
   const esBorradorEditable = workingVersion && (workingVersion.estado || '') === 'borrador'
+  const puedeEditarListadoPrecios = useMemo(
+    () => permisoEditarListadoPrecios(usuario),
+    [usuario]
+  )
+  const handleIrListadoPreciosWbs = useCallback(() => {
+    closeProgModal()
+    openAdminListadoPrecios(cid, { modoVista: 'wbs' })
+  }, [cid, closeProgModal])
 
   const borradorProgResumen = useMemo(() => {
     if (!borradorMeta || !esBorradorEditable) return null
@@ -1500,6 +1647,9 @@ export default function ModuloProgramacionObra({
       await refreshMapaYVersiones(row)
       if (vid) setWorkingVersionId(vid)
       showToast(`Versión nº${row.numero_version} creada (${row.estado}).`)
+      if (tipo === 'reprogramacion' && row?.delta_presupuesto) {
+        setPresupuestoDelta(row.delta_presupuesto)
+      }
     } catch (e) {
       showToast(e?.message || 'No se pudo crear la versión', 'err')
     } finally {
@@ -1528,8 +1678,57 @@ export default function ModuloProgramacionObra({
       return
     }
     setCrearMotivo('')
+    setCrearTipo('reprogramacion')
     setShowCrearVersion(true)
   }
+
+  const handleConfirmarNuevaVersion = async () => {
+    if (crearTipo === 'suspension') {
+      setShowCrearVersion(false)
+      setShowSuspensionWizard(true)
+      return
+    }
+    await handleCrearVersion()
+  }
+
+  const handleSuspensionSuccess = useCallback(
+    async (res) => {
+      const row = res?.version
+      await refreshMapaYVersiones(row)
+      if (row?.id) setWorkingVersionId(String(row.id))
+      showToast(
+        `Suspensión aplicada. ${res?.actividades_recalculadas ?? 0} actividades recalculadas.`,
+        'ok',
+      )
+      setShowSuspensionWizard(false)
+    },
+    [refreshMapaYVersiones, showToast],
+  )
+
+  const handleAutoScheduleSuccess = useCallback(async () => {
+    await refreshMapaYVersiones()
+    showToast('Programación automática aplicada. Revise las fechas en el mapa.', 'ok')
+  }, [refreshMapaYVersiones, showToast])
+
+  const compareTargetForGlobal = useMemo(() => {
+    if (borradorMeta?.id) return String(borradorMeta.id)
+    if (versionVigenteId) return String(versionVigenteId)
+    return versionIdForWork
+  }, [borradorMeta?.id, versionVigenteId, versionIdForWork])
+
+  const suspensionPreviewVersionId = useMemo(() => {
+    if (versionVigenteId) return String(versionVigenteId)
+    const sellada = versiones.find((v) => (v.estado || '') === 'sellada')
+    return sellada?.id ? String(sellada.id) : null
+  }, [versionVigenteId, versiones])
+
+  const autoScheduleDefaultDates = useMemo(() => {
+    const dc = mapaResp?.meta?.desviacion_contrato
+    return {
+      inicio: mapaResp?.meta?.inicio_proyecto || '',
+      fin: mapaResp?.meta?.fin_proyecto || '',
+    }
+  }, [mapaResp])
 
   useEffect(() => {
     if (!cid || !token) {
@@ -1699,6 +1898,16 @@ export default function ModuloProgramacionObra({
     if (!puedeEditar || !cid || !workingVersionId) return
     setPanelBusy(true)
     try {
+      const pptoRes = await fetch(`${API}/prog-obra/${cid}/presupuesto-aprobacion-estado`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!pptoRes.ok) throw new Error(await parseApiError(pptoRes))
+      const pptoEst = await pptoRes.json()
+      const pend = Number(pptoEst?.items_pendientes || 0)
+      if (pend > 0) {
+        setPresupuestoBloqueoValidacion(pptoEst)
+        return
+      }
       const resumen = await buildValidacionResumen()
       setValidacionPreCheck(resumen)
     } catch (e) {
@@ -1721,6 +1930,30 @@ export default function ModuloProgramacionObra({
     await reloadActividadesPk()
     await refreshMapaYVersiones()
   }, [cid, versionIdForWork, token, hdrs, API, refreshMapaYVersiones, reloadActividadesPk])
+
+  const handleSincronizarPresupuesto = useCallback(async () => {
+    if (!puedeEditar || !cid || !versionIdForWork) {
+      showToast('Seleccione una versión en borrador con permiso de edición.', 'err')
+      return
+    }
+    setPanelBusy(true)
+    try {
+      const res = await fetch(`${API}/prog-obra/${cid}/versiones/${versionIdForWork}/sincronizar-estados-pk`, {
+        method: 'POST',
+        headers: hdrs,
+      })
+      if (!res.ok) throw new Error(await parseApiError(res))
+      const data = await res.json()
+      await reloadActividadesPk()
+      await refreshMapaYVersiones()
+      const n = Number(data?.pks_actualizados ?? 0)
+      showToast(`${n} PK${n === 1 ? '' : 's'} actualizado${n === 1 ? '' : 's'}`)
+    } catch (e) {
+      showToast(e?.message || 'No se pudo sincronizar con el presupuesto', 'err')
+    } finally {
+      setPanelBusy(false)
+    }
+  }, [puedeEditar, cid, versionIdForWork, hdrs, API, showToast, reloadActividadesPk, refreshMapaYVersiones])
 
   const handleConfirmEnviarValidacion = async () => {
     if (!puedeEditar || !cid || !workingVersionId) return
@@ -1999,23 +2232,52 @@ export default function ModuloProgramacionObra({
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div style={{ fontWeight: 700, marginBottom: 8, color: t.primary }}>Nueva reprogramación</div>
+            <div style={{ fontWeight: 700, marginBottom: 8, color: t.primary }}>Nueva versión</div>
             <div style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, marginBottom: 12 }}>
-              Nueva versión tras la programación sellada. Indique el motivo (obligatorio).
+              Seleccione el tipo de versión a crear.
             </div>
-            <label style={{ display: 'block', fontSize: 11, color: t.textMuted, marginBottom: 4 }}>Motivo *</label>
-            <textarea
-              value={crearMotivo}
-              onChange={(e) => setCrearMotivo(e.target.value)}
-              rows={3}
-              style={{ ...inputStyle, resize: 'vertical', marginBottom: 12 }}
-            />
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: 'block', fontSize: 12, marginBottom: 6, cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="crearTipo"
+                  checked={crearTipo === 'reprogramacion'}
+                  onChange={() => setCrearTipo('reprogramacion')}
+                />{' '}
+                Reprogramación
+              </label>
+              <label style={{ display: 'block', fontSize: 12, cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="crearTipo"
+                  checked={crearTipo === 'suspension'}
+                  onChange={() => setCrearTipo('suspension')}
+                />{' '}
+                Suspensión contractual
+              </label>
+            </div>
+            {crearTipo === 'reprogramacion' && (
+              <>
+                <label style={{ display: 'block', fontSize: 11, color: t.textMuted, marginBottom: 4 }}>Motivo *</label>
+                <textarea
+                  value={crearMotivo}
+                  onChange={(e) => setCrearMotivo(e.target.value)}
+                  rows={3}
+                  style={{ ...inputStyle, resize: 'vertical', marginBottom: 12 }}
+                />
+              </>
+            )}
+            {crearTipo === 'suspension' && (
+              <div style={{ fontSize: 11, color: t.textMuted, marginBottom: 12, lineHeight: 1.5 }}>
+                Se abrirá el asistente legal para registrar el acta, calcular el impacto y aplicar la suspensión al cronograma.
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button type="button" style={btnStyle(false, panelBusy)} disabled={panelBusy} onClick={() => setShowCrearVersion(false)}>
                 Cancelar
               </button>
-              <button type="button" style={btnStyle(true, panelBusy)} disabled={panelBusy} onClick={handleCrearVersion}>
-                Crear reprogramación
+              <button type="button" style={btnStyle(true, panelBusy)} disabled={panelBusy} onClick={() => void handleConfirmarNuevaVersion()}>
+                {crearTipo === 'suspension' ? 'Iniciar wizard' : 'Crear reprogramación'}
               </button>
             </div>
           </div>
@@ -2024,14 +2286,10 @@ export default function ModuloProgramacionObra({
 
       <ProgObraProgramacionModal
         open={progModalOpen && modalPkTabs.length > 0}
-        onClose={() => {
-          setProgModalOpen(false)
-          setModalPkTabs([])
-          setActiveModalPk(null)
-          setModalOpenCompareTab(false)
-        }}
+        onClose={closeProgModal}
         t={t}
-        workingVersion={workingVersion}
+        workingVersion={modalVersion}
+        historicalReadOnly={modalHistoricalReadOnly}
         pkTabs={modalPkTabs}
         activePk={activeModalPk || modalPkTabs[0]}
         onSelectPk={setActiveModalPk}
@@ -2052,7 +2310,7 @@ export default function ModuloProgramacionObra({
         actMap={actMap}
         actividadKey={actividadKey}
         itemRowKey={itemRowKey}
-        editable={!!(versionIdForWork && esBorradorEditable && puedeEditar)}
+        editable={modalEditable}
         rowSaveStatus={rowSaveStatus}
         onHerencia={handleHerencia}
         onGuardarCap={handleGuardarCapitulo}
@@ -2071,9 +2329,122 @@ export default function ModuloProgramacionObra({
         allPkIds={pkIdsProgramables}
         onCpmUpdated={handleCpmUpdated}
         openCompareTab={modalOpenCompareTab}
-        compareBaselineId={desviacionContrato?.baseline_id || null}
-        compareTargetId={desviacionContrato?.target_id || versionIdForWork || null}
+        compareBaselineId={modalCompareBaselineId ?? desviacionContrato?.baseline_id ?? versionBaselineId}
+        compareTargetId={modalCompareTargetId ?? desviacionContrato?.target_id ?? versionIdForModal}
+        puedeEditarListadoPrecios={puedeEditarListadoPrecios}
+        onIrListadoPrecios={handleIrListadoPreciosWbs}
       />
+
+      {presupuestoDelta && (
+        <ProgOverlay onBackdropClick={() => !panelBusy && setPresupuestoDelta(null)}>
+          <ProgObraPresupuestoDeltaModal
+            open
+            delta={presupuestoDelta}
+            onClose={() => setPresupuestoDelta(null)}
+            t={t}
+            btnStyle={btnStyle}
+            panelBusy={panelBusy}
+          />
+        </ProgOverlay>
+      )}
+
+      <ProgObraComparacionGlobalModal
+        open={showComparacionGlobal}
+        onClose={() => setShowComparacionGlobal(false)}
+        t={t}
+        API={API}
+        cid={cid}
+        token={token}
+        baselineId={versionBaselineId}
+        targetId={compareTargetForGlobal}
+        contratoNumero={usuario?.contrato_numero || cid}
+        contratista={usuario?.contratista || ''}
+      />
+
+      <ProgObraCurvaSModal
+        open={showCurvaS}
+        onClose={() => setShowCurvaS(false)}
+        t={t}
+        API={API}
+        cid={cid}
+        token={token}
+        baselineId={versionBaselineId}
+        targetId={compareTargetForGlobal}
+        contratoNumero={usuario?.contrato_numero || cid}
+        contratista={usuario?.contratista || ''}
+        interventoria={usuario?.interventoria || ''}
+      />
+
+      {showSuspensionWizard && suspensionPreviewVersionId && (
+        <ProgObraSuspensionWizard
+          open
+          onClose={() => setShowSuspensionWizard(false)}
+          onSuccess={(res) => void handleSuspensionSuccess(res)}
+          t={t}
+          API={API}
+          cid={cid}
+          token={token}
+          versionId={suspensionPreviewVersionId}
+          btnStyle={btnStyle}
+          inputStyle={inputStyle}
+        />
+      )}
+
+      {showAutoSchedule && workingVersionId && (
+        <ProgObraAutoScheduleWizard
+          open
+          onClose={() => setShowAutoSchedule(false)}
+          onSuccess={() => void handleAutoScheduleSuccess()}
+          t={t}
+          API={API}
+          cid={cid}
+          token={token}
+          versionId={String(workingVersionId)}
+          btnStyle={btnStyle}
+          inputStyle={inputStyle}
+          defaultFechaInicio={autoScheduleDefaultDates.inicio}
+          defaultFechaFin={autoScheduleDefaultDates.fin}
+        />
+      )}
+
+      {presupuestoBloqueoValidacion && (
+        <ProgOverlay onBackdropClick={() => !panelBusy && setPresupuestoBloqueoValidacion(null)}>
+          <div
+            style={{
+              background: t.bgCard,
+              borderRadius: 12,
+              border: `1px solid ${t.border}`,
+              padding: 20,
+              maxWidth: 480,
+              width: '100%',
+              boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: 700, fontSize: 'var(--cc-md)', color: '#b45309', marginBottom: 12 }}>
+              ⚠ No se puede enviar a validación
+            </div>
+            <p style={{ fontSize: 'var(--cc-sm)', color: t.text, margin: '0 0 8px', lineHeight: 1.5 }}>
+              El presupuesto del contrato tiene{' '}
+              <strong>{presupuestoBloqueoValidacion.items_pendientes}</strong> ítems pendientes de aprobación por
+              interventoría.
+            </p>
+            <p style={{ fontSize: 'var(--cc-sm)', color: t.textMuted, margin: '0 0 16px', lineHeight: 1.5 }}>
+              Aprueba el presupuesto completo antes de enviar la programación a validación.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                style={btnStyle(true, panelBusy)}
+                disabled={panelBusy}
+                onClick={() => setPresupuestoBloqueoValidacion(null)}
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
+        </ProgOverlay>
+      )}
 
       {validacionPreCheck && (
         <ProgOverlay onBackdropClick={() => !panelBusy && setValidacionPreCheck(null)}>
@@ -2321,6 +2692,12 @@ export default function ModuloProgramacionObra({
               <>
                 <span>·</span>
                 <span style={{ color: t.text }}>{workingVersion.estado || '—'}</span>
+                {versionVigenteId && String(workingVersion.id) === String(versionVigenteId) && (
+                  <>
+                    <span>·</span>
+                    <span style={{ color: t.primary, fontWeight: 600 }}>vigente</span>
+                  </>
+                )}
                 {borradorProgResumen != null && (
                   <>
                     <span>·</span>
@@ -2330,19 +2707,65 @@ export default function ModuloProgramacionObra({
               </>
             )}
           </div>
-          <select
-            value={workingVersionId || ''}
-            onChange={(e) => setWorkingVersionId(e.target.value || null)}
-            style={{ ...inputStyle, padding: '3px 6px', fontSize: 11, width: '100%' }}
-          >
-            <option value="">— Seleccione versión —</option>
-            {versiones.map((v) => (
-              <option key={v.id} value={v.id}>
-                nº{v.numero_version} · {v.tipo} · {v.estado}
-              </option>
-            ))}
-          </select>
+          <ProgHistorialVersiones
+            versiones={versiones}
+            versionBaselineId={versionBaselineId}
+            t={t}
+            puedeEditar={puedeEditar}
+            panelBusy={panelBusy}
+            onConsultar={handleHistorialConsultar}
+            onContinuar={handleHistorialContinuar}
+            onComparar={handleHistorialComparar}
+          />
         </div>
+
+        {borradorProgResumen != null && esBorradorEditable && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              padding: '6px 8px',
+              borderRadius: 6,
+              background: `${t.primary}12`,
+              border: `1px solid ${t.primary}44`,
+              fontSize: 11,
+              lineHeight: 1.35,
+            }}
+          >
+            <span style={{ color: t.text, minWidth: 0 }}>
+              Borrador en progreso —{' '}
+              <strong style={{ color: t.primary }}>{borradorProgResumen.pct.toFixed(0)}% programado</strong>
+            </span>
+            {puedeEditar && workingVersionId && (
+              <button
+                type="button"
+                title="Sincronizar estado de PKs con presupuesto actual"
+                disabled={panelBusy}
+                onClick={() => void handleSincronizarPresupuesto()}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  flexShrink: 0,
+                  padding: '4px 8px',
+                  fontSize: 10,
+                  fontWeight: 600,
+                  borderRadius: 6,
+                  border: `1px solid ${t.primary}`,
+                  background: t.bgCard,
+                  color: t.primary,
+                  cursor: panelBusy ? 'not-allowed' : 'pointer',
+                  opacity: panelBusy ? 0.55 : 1,
+                }}
+              >
+                <RefreshCw size={12} strokeWidth={2.25} />
+                Sincronizar con presupuesto
+              </button>
+            )}
+          </div>
+        )}
 
         {desviacionContrato?.alerta && (
           <div
@@ -2381,6 +2804,130 @@ export default function ModuloProgramacionObra({
               Ver detalle
             </button>
           </div>
+        )}
+
+        {versionBaselineId && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <button
+              type="button"
+              disabled={panelBusy}
+              onClick={() => setShowComparacionGlobal(true)}
+              style={{
+                width: '100%',
+                padding: '8px 10px',
+                fontSize: 11,
+                fontWeight: 600,
+                borderRadius: 6,
+                border: `1px solid ${t.primary}`,
+                background: `${t.primary}10`,
+                color: t.primary,
+                cursor: panelBusy ? 'not-allowed' : 'pointer',
+              }}
+            >
+              Ver comparación global
+            </button>
+            <button
+              type="button"
+              disabled={panelBusy}
+              onClick={() => setShowCurvaS(true)}
+              style={{
+                width: '100%',
+                padding: '8px 10px',
+                fontSize: 11,
+                fontWeight: 600,
+                borderRadius: 6,
+                border: `1px solid ${t.border}`,
+                background: t.bg,
+                color: t.text,
+                cursor: panelBusy ? 'not-allowed' : 'pointer',
+              }}
+            >
+              Curva S
+            </button>
+          </div>
+        )}
+
+        {esBorradorEditable && puedeEditar && workingVersionId && (
+          <button
+            type="button"
+            disabled={panelBusy}
+            onClick={() => setShowAutoSchedule(true)}
+            style={{
+              width: '100%',
+              padding: '8px 10px',
+              fontSize: 11,
+              fontWeight: 600,
+              borderRadius: 6,
+              border: `1px solid #d97706`,
+              background: '#fffbeb',
+              color: '#92400e',
+              cursor: panelBusy ? 'not-allowed' : 'pointer',
+            }}
+          >
+            Programación automática ⚡
+          </button>
+        )}
+
+        {versionBaselineId && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <button
+              type="button"
+              disabled={panelBusy}
+              onClick={() => setShowComparacionGlobal(true)}
+              style={{
+                width: '100%',
+                padding: '8px 10px',
+                fontSize: 11,
+                fontWeight: 600,
+                borderRadius: 6,
+                border: `1px solid ${t.primary}`,
+                background: `${t.primary}10`,
+                color: t.primary,
+                cursor: panelBusy ? 'not-allowed' : 'pointer',
+              }}
+            >
+              Ver comparación global
+            </button>
+            <button
+              type="button"
+              disabled={panelBusy}
+              onClick={() => setShowCurvaS(true)}
+              style={{
+                width: '100%',
+                padding: '8px 10px',
+                fontSize: 11,
+                fontWeight: 600,
+                borderRadius: 6,
+                border: `1px solid ${t.border}`,
+                background: t.bg,
+                color: t.text,
+                cursor: panelBusy ? 'not-allowed' : 'pointer',
+              }}
+            >
+              Curva S
+            </button>
+          </div>
+        )}
+
+        {esBorradorEditable && puedeEditar && workingVersionId && (
+          <button
+            type="button"
+            disabled={panelBusy}
+            onClick={() => setShowAutoSchedule(true)}
+            style={{
+              width: '100%',
+              padding: '8px 10px',
+              fontSize: 11,
+              fontWeight: 600,
+              borderRadius: 6,
+              border: '1px solid #d97706',
+              background: '#fffbeb',
+              color: '#92400e',
+              cursor: panelBusy ? 'not-allowed' : 'pointer',
+            }}
+          >
+            Programación automática ⚡
+          </button>
         )}
 
         {workingVersionId && (
@@ -2493,6 +3040,14 @@ export default function ModuloProgramacionObra({
             )}
             {loadAct && workingVersionId && (
               <div style={{ color: t.textMuted, marginTop: 2 }}>Sincronizando actividades…</div>
+            )}
+            {sinAgCountSel > 0 && (
+              <div
+                style={{ marginTop: 4, fontSize: 10, color: '#b45309', lineHeight: 1.3 }}
+                title={`${sinAgCountSel} ítem${sinAgCountSel === 1 ? '' : 's'} sin agrupador WBS — ve al Listado de Precios para asignarlos`}
+              >
+                ⚠ {sinAgCountSel} ítem{sinAgCountSel === 1 ? '' : 's'} sin agrupador
+              </div>
             )}
           </div>
         ) : (

@@ -231,7 +231,78 @@ def fetch_estructura_programacion_pk(sb, contrato_id: int, pk_id: str) -> dict:
             "agrupadores": agrupadores,
             "sin_agrupador": sin,
         })
-    return {"capitulos": capitulos}
+    total_sin = sum(len(c.get("sin_agrupador") or []) for c in capitulos)
+    return {"capitulos": capitulos, "total_sin_agrupador": total_sin}
+
+
+def fetch_sin_agrupador_count_by_pk(sb, contrato_id: int) -> Dict[str, int]:
+    """Cuenta ítems de presupuesto poligonal sin agrupador WBS válido, por PK."""
+    ag_by_item, _ = _listado_agrupador_por_item(sb, contrato_id)
+    agr_rows = (
+        sb.table("listado_precios_agrupadores")
+        .select("id")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    agr_validos: set = set()
+    for a in agr_rows:
+        aid = a.get("id")
+        if aid is not None:
+            try:
+                agr_validos.add(int(aid))
+            except (TypeError, ValueError):
+                pass
+
+    rows = (
+        sb.table("presupuesto")
+        .select("pk_id,capitulo,item,cant_total")
+        .eq("contrato_id", contrato_id)
+        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+        .eq("dado_de_baja", False)
+        .execute()
+        .data
+        or []
+    )
+    agg: Dict[Tuple[str, str, str], float] = {}
+    for r in rows:
+        pk = str(r.get("pk_id") or "").strip()
+        cap = str(r.get("capitulo") or "").strip()
+        it = str(r.get("item") or "").strip()
+        if not pk or not cap or not it:
+            continue
+        try:
+            ct = float(r.get("cant_total") or 0)
+        except (TypeError, ValueError):
+            ct = 0.0
+        key = (pk, cap, it)
+        agg[key] = agg.get(key, 0.0) + ct
+
+    counts: Dict[str, int] = {}
+    for (pk, cap, it), cant in agg.items():
+        if cant <= 0:
+            continue
+        ag_id = ag_by_item.get((cap, it))
+        sin = False
+        if ag_id is None:
+            sin = True
+        else:
+            try:
+                sin = int(ag_id) not in agr_validos
+            except (TypeError, ValueError):
+                sin = True
+        if sin:
+            counts[pk] = counts.get(pk, 0) + 1
+    return counts
+
+
+def enrich_mapa_rows_sin_agrupador(rows: List[dict], counts_by_pk: Dict[str, int]) -> List[dict]:
+    out: List[dict] = []
+    for r in rows:
+        pk = str(r.get("pk_id") or "").strip()
+        out.append({**r, "items_sin_agrupador": int(counts_by_pk.get(pk, 0))})
+    return out
 
 
 def propagar_fechas_agrupador_a_hijos(
@@ -398,12 +469,58 @@ def _count_items_con_fecha(sb, version_id: str, pk_id: str, contrato_id: int) ->
     return len(seen)
 
 
-def _compute_estado_pk(items_total: int, items_con_fecha: int) -> str:
+def _agrupadores_validos_por_contrato(sb, contrato_id: int) -> set:
+    rows = (
+        sb.table("listado_precios_agrupadores")
+        .select("id")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    out: set = set()
+    for r in rows:
+        aid = r.get("id")
+        if aid is not None:
+            try:
+                out.add(int(aid))
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
+def _count_items_sin_agrupador(sb, contrato_id: int, pk_id: str) -> int:
+    """
+    Ítems de presupuesto del PK sin agrupador WBS asignado (no programables en modal WBS).
+    Misma regla que fetch_estructura_programacion_pk → sin_agrupador.
+    """
+    _, ppto_items = _ppto_items_por_pk(sb, contrato_id, pk_id)
+    if not ppto_items:
+        return 0
+    ag_by_item, _ = _listado_agrupador_por_item(sb, contrato_id)
+    agr_validos = _agrupadores_validos_por_contrato(sb, contrato_id)
+    n = 0
+    for cap, it, _, _, _ in ppto_items:
+        ag_id = ag_by_item.get((cap, it))
+        if ag_id is None:
+            n += 1
+            continue
+        try:
+            if int(ag_id) not in agr_validos:
+                n += 1
+        except (TypeError, ValueError):
+            n += 1
+    return n
+
+
+def _compute_estado_pk(items_total: int, items_con_fecha: int, items_sin_agrupador: int = 0) -> str:
     if items_total <= 0:
         return "sin_cantidad"
     if items_con_fecha <= 0:
         return "sin_iniciar"
     if items_con_fecha >= items_total:
+        if items_sin_agrupador > 0:
+            return "en_progreso"
         return "completa"
     return "en_progreso"
 
@@ -412,7 +529,8 @@ def upsert_prog_pk_estado(sb, version_id: str, contrato_id: int, pk_id: str) -> 
     pk = (pk_id or "").strip()
     items_total, _ = _ppto_items_por_pk(sb, contrato_id, pk)   # query 1
     items_cf = _count_items_con_fecha(sb, version_id, pk, contrato_id)       # query 2
-    estado = _compute_estado_pk(items_total, items_cf)
+    items_sin_ag = _count_items_sin_agrupador(sb, contrato_id, pk)           # query 3
+    estado = _compute_estado_pk(items_total, items_cf, items_sin_ag)
     sb.table("prog_pk_estado").upsert(                          # query 3 (antes: 4)
         {
             "version_id": version_id,
@@ -428,11 +546,117 @@ def upsert_prog_pk_estado(sb, version_id: str, contrato_id: int, pk_id: str) -> 
 
 
 def ensure_prog_pk_estado_all(sb, version_id: str, contrato_id: int) -> None:
-    pks = sb.table("pk_ids").select("pk_id").eq("contrato_id", contrato_id).execute().data or []
-    for row in pks:
-        pk = (row.get("pk_id") or "").strip()
+    for pk in _all_pks_contrato(sb, contrato_id):
+        upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
+
+
+def _all_pks_contrato(sb, contrato_id: int) -> List[str]:
+    """PKs del contrato: unión de pk_ids y presupuesto poligonal activo."""
+    pks: set = set()
+    for r in sb.table("pk_ids").select("pk_id").eq("contrato_id", contrato_id).execute().data or []:
+        pk = str(r.get("pk_id") or "").strip()
         if pk:
-            upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
+            pks.add(pk)
+    rows = (
+        sb.table("presupuesto")
+        .select("pk_id")
+        .eq("contrato_id", contrato_id)
+        .eq("tipo_ejecucion", PRESUPUESTO_TIPO_POLIGONO)
+        .eq("dado_de_baja", False)
+        .execute()
+        .data
+        or []
+    )
+    for r in rows:
+        pk = str(r.get("pk_id") or "").strip()
+        if pk:
+            pks.add(pk)
+    return sorted(pks)
+
+
+def _sync_actividades_pk_desde_presupuesto(
+    sb, version_id: str, contrato_id: int, pk_id: str
+) -> int:
+    """Actualiza cantidad/unidad/costo en actividades existentes según presupuesto vivo del PK."""
+    _, items = _ppto_items_por_pk(sb, contrato_id, pk_id)
+    ppto_map: Dict[Tuple[str, str], Tuple[Decimal, str, Decimal]] = {
+        (cap, it): (cant, und, vlr) for cap, it, cant, und, vlr in items
+    }
+    acts = (
+        sb.table("prog_actividades")
+        .select("id,capitulo,item,segmento,cantidad_programada,agrupador_id")
+        .eq("version_id", version_id)
+        .eq("pk_id", pk_id.strip())
+        .execute()
+        .data
+        or []
+    )
+    by_item: Dict[Tuple[str, str], List[dict]] = {}
+    for a in acts:
+        if a.get("agrupador_id") is not None:
+            continue
+        cap = (a.get("capitulo") or "").strip()
+        it = (a.get("item") or "").strip()
+        if not cap or not it:
+            continue
+        key = (cap, it)
+        by_item.setdefault(key, []).append(a)
+
+    now = datetime.now(timezone.utc).isoformat()
+    n_updated = 0
+    for key, segs in by_item.items():
+        if key not in ppto_map:
+            continue
+        cant_ppto, und, vlr = ppto_map[key]
+        cant_ppto_f = float(cant_ppto)
+        vlr_f = float(vlr)
+        und_s = (und or "?")[:20]
+        segs_sorted = sorted(segs, key=lambda x: int(x.get("segmento") or 1))
+        if len(segs_sorted) == 1:
+            sb.table("prog_actividades").update(
+                {
+                    "cantidad_programada": cant_ppto_f,
+                    "unidad": und_s,
+                    "costo_unitario": vlr_f,
+                    "actualizado_en": now,
+                }
+            ).eq("id", segs_sorted[0]["id"]).execute()
+            n_updated += 1
+            continue
+        old_total = sum(float(s.get("cantidad_programada") or 0) for s in segs_sorted)
+        for s in segs_sorted:
+            old_c = float(s.get("cantidad_programada") or 0)
+            if old_total > 0:
+                new_c = cant_ppto_f * (old_c / old_total)
+            else:
+                new_c = cant_ppto_f / len(segs_sorted)
+            sb.table("prog_actividades").update(
+                {
+                    "cantidad_programada": new_c,
+                    "unidad": und_s,
+                    "costo_unitario": vlr_f,
+                    "actualizado_en": now,
+                }
+            ).eq("id", s["id"]).execute()
+            n_updated += 1
+    return n_updated
+
+
+def sync_presupuesto_version(sb, version_id: str, contrato_id: int) -> dict:
+    """
+    Sincroniza actividades y prog_pk_estado de todos los PK del contrato
+    contra el presupuesto poligonal vigente.
+    """
+    pks = _all_pks_contrato(sb, contrato_id)
+    act_updates = 0
+    for pk in pks:
+        act_updates += _sync_actividades_pk_desde_presupuesto(sb, version_id, contrato_id, pk)
+        upsert_prog_pk_estado(sb, version_id, contrato_id, pk)
+    return {
+        "ok": True,
+        "pks_actualizados": len(pks),
+        "actividades_actualizadas": act_updates,
+    }
 
 
 def validate_segment_quantities(
@@ -619,6 +843,98 @@ def fetch_vigente_meta(sb, contrato_id: int) -> Tuple[Optional[str], Optional[in
     return str(vid) if vid else None, int(num) if num is not None else None
 
 
+def _format_usuario_nombre(row: Optional[dict]) -> Optional[str]:
+    if not row:
+        return None
+    nombre = (row.get("nombre") or "").strip()
+    apellidos = (row.get("apellidos") or "").strip()
+    full = f"{nombre} {apellidos}".strip()
+    return full or None
+
+
+def list_versiones_enriched(sb, contrato_id: int) -> dict:
+    """Lista versiones del contrato con es_vigente, baseline_id y nombres de trazabilidad."""
+    crows = (
+        sb.table("contratos")
+        .select("prog_version_vigente_id,prog_version_baseline_id")
+        .eq("id", contrato_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    vid_vigente = crows[0].get("prog_version_vigente_id") if crows else None
+    vid_baseline = crows[0].get("prog_version_baseline_id") if crows else None
+    if not vid_baseline:
+        vid_baseline = fetch_baseline_version_id(sb, contrato_id)
+
+    rows = (
+        sb.table("prog_versiones")
+        .select(
+            "id,numero_version,tipo,estado,creado_en,sellado_en,motivo_reprogramacion,"
+            "version_origen_id,superseded_by_id,metadata,creado_por,sellado_por"
+        )
+        .eq("contrato_id", contrato_id)
+        .order("numero_version", desc=True)
+        .execute()
+        .data
+        or []
+    )
+
+    user_ids: set = set()
+    for r in rows:
+        for key in ("creado_por", "sellado_por"):
+            uid = r.get(key)
+            if uid is not None:
+                try:
+                    user_ids.add(int(uid))
+                except (TypeError, ValueError):
+                    pass
+
+    users_by_id: Dict[int, dict] = {}
+    if user_ids:
+        urows = (
+            sb.table("usuarios")
+            .select("id,nombre,apellidos")
+            .in_("id", list(user_ids))
+            .execute()
+            .data
+            or []
+        )
+        for u in urows:
+            try:
+                users_by_id[int(u["id"])] = u
+            except (TypeError, ValueError, KeyError):
+                continue
+
+    num_by_id = {str(r.get("id")): int(r.get("numero_version") or 0) for r in rows if r.get("id")}
+
+    enriched: List[dict] = []
+    vigente_str = str(vid_vigente) if vid_vigente else None
+    for r in rows:
+        out = dict(r)
+        rid = str(r.get("id") or "")
+        out["es_vigente"] = bool(vigente_str and rid == vigente_str)
+        cp = r.get("creado_por")
+        sp = r.get("sellado_por")
+        out["creado_por_nombre"] = (
+            _format_usuario_nombre(users_by_id.get(int(cp))) if cp is not None else None
+        )
+        out["sellado_por_nombre"] = (
+            _format_usuario_nombre(users_by_id.get(int(sp))) if sp is not None else None
+        )
+        oid = r.get("version_origen_id")
+        if oid:
+            out["version_origen_numero"] = num_by_id.get(str(oid))
+        enriched.append(out)
+
+    return {
+        "version_vigente_id": vigente_str,
+        "version_baseline_id": str(vid_baseline) if vid_baseline else None,
+        "versiones": enriched,
+    }
+
+
 def fetch_baseline_version_id(sb, contrato_id: int) -> Optional[str]:
     c = (
         sb.table("contratos")
@@ -797,6 +1113,23 @@ def create_version(
     else:
         clone_stats = clone_version_data(sb, origen_id, vid, contrato_id, usuario_id)
         ins[0]["clone_stats"] = clone_stats
+
+    if tipo != "baseline" and origen_id:
+        from prog_obra_presupuesto_bridge import (
+            build_delta_presupuesto,
+            persist_delta_metadata,
+        )
+
+        delta = build_delta_presupuesto(sb, contrato_id, vid, origen_id, tipo)
+        persist_delta_metadata(sb, vid, ins[0].get("metadata") or meta, delta)
+        ins[0]["delta_presupuesto"] = delta
+        # Reflejar metadata persistida en respuesta
+        meta_rows = (
+            sb.table("prog_versiones").select("metadata").eq("id", vid).limit(1).execute().data or []
+        )
+        if meta_rows:
+            ins[0]["metadata"] = meta_rows[0].get("metadata") or {}
+
     return ins[0]
 
 
@@ -822,6 +1155,20 @@ def assert_version_borrador(sb, version_id: str) -> dict:
 
 def submit_to_validation(sb, version_id: str, contrato_id: int) -> List[dict]:
     assert_version_editable(sb, version_id)
+    from prog_obra_presupuesto_bridge import presupuesto_aprobacion_estado
+
+    ppto_est = presupuesto_aprobacion_estado(sb, contrato_id)
+    pend = int(ppto_est.get("items_pendientes") or 0)
+    if pend > 0:
+        raise BusinessRuleError(
+            f"No se puede enviar a validación. El presupuesto del contrato tiene "
+            f"{pend} ítems pendientes de aprobación por interventoría. "
+            f"Aprueba el presupuesto completo antes de enviar la programación a validación."
+        )
+    if int(ppto_est.get("items_total") or 0) <= 0:
+        raise BusinessRuleError(
+            "No se puede enviar a validación: el contrato no tiene ítems de presupuesto poligonal activos."
+        )
     niveles = _niveles_prog_desde_contrato(sb, contrato_id)
     if not niveles:
         raise BusinessRuleError("El contrato no tiene niveles de validacion >= 2 configurados")
@@ -1689,6 +2036,8 @@ def ejecutar_cpm_version(sb, version_id, contrato_id, cache) -> "ResultadoCPM":
             "holgura_total": n.holgura_total,
             "holgura_libre": n.holgura_libre,
             "es_ruta_critica": n.es_ruta_critica,
+            "tiene_sucesores": n.tiene_sucesores,
+            "es_actividad_final_tramo": n.es_actividad_final_tramo,
         }
         if n.agrupador_id:
             try:

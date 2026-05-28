@@ -9,6 +9,7 @@ import { clearContratoPlanoGeojsonCache } from "./contratoPlanoGeojsonCache";
 import ModuloNube from "./ModuloNube";
 import CompetenciaSelect from "./components/CompetenciaSelect";
 import { RefreshCw } from "lucide-react";
+import { consumeAdminNavIntent } from "./openAdminListadoPrecios";
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const API = API_BASE;
@@ -7256,6 +7257,16 @@ export default function AdminPanel({ user, token, onClose, activeTheme, t: tProp
       startTransition(() => setTab(TABS[0].id));
     }
   }, [TABS, tab]);
+
+  useEffect(() => {
+    const nav = consumeAdminNavIntent();
+    if (nav?.tab && TABS.some((x) => x.id === nav.tab)) {
+      setTab(nav.tab);
+    }
+    if (nav?.modoVista === "wbs") {
+      setModoVistaPreciosPersist("wbs");
+    }
+  }, [TABS]);
 
   /** Contratos visibles en el panel: no privilegiados solo el asignado en su perfil. */
   const contratosVisibles = useMemo(() => {

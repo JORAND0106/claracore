@@ -22,12 +22,13 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-    v_pk              text        := trim(p_pk_id);
-    v_now             timestamptz := now();
-    v_items_total     int;
-    v_items_con_fecha int;
-    v_estado          text;
-    v_result          jsonb;
+    v_pk                   text        := trim(p_pk_id);
+    v_now                  timestamptz := now();
+    v_items_total          int;
+    v_items_con_fecha      int;
+    v_items_sin_agrupador  int;
+    v_estado               text;
+    v_result               jsonb;
 BEGIN
 
     -- ─────────────────────────────────────────────────────────────
@@ -142,27 +143,38 @@ BEGIN
     -- ─────────────────────────────────────────────────────────────
     -- 3. Upsert prog_pk_estado
     -- ─────────────────────────────────────────────────────────────
-    SELECT COUNT(DISTINCT (capitulo, item))::int
-    INTO v_items_total
-    FROM public.presupuesto
-    WHERE contrato_id    = p_contrato_id
-      AND pk_id          = v_pk
-      AND tipo_ejecucion = 'Presupuesto de Obra'
-      AND dado_de_baja   = false;
-
-    -- Ítems de presupuesto con fecha directa o vía agrupador WBS programado
-    SELECT COUNT(*)::int
-    INTO v_items_con_fecha
-    FROM (
-        SELECT DISTINCT trim(p.capitulo::text) AS capitulo, trim(p.item::text) AS item
+    WITH ppto_items AS (
+        SELECT DISTINCT
+            trim(p.capitulo::text) AS capitulo,
+            trim(p.item::text)     AS item
         FROM public.presupuesto p
-        WHERE p.contrato_id    = p_contrato_id
+        WHERE p.contrato_id = p_contrato_id
           AND trim(p.pk_id::text) = v_pk
           AND trim(coalesce(p.tipo_ejecucion::text, '')) = 'Presupuesto de Obra'
           AND coalesce(p.dado_de_baja, false) = false
           AND trim(coalesce(p.capitulo::text, '')) <> ''
           AND trim(coalesce(p.item::text, '')) <> ''
-    ) ppto
+    )
+    SELECT COUNT(*)::int
+    INTO v_items_total
+    FROM ppto_items;
+
+    -- Ítems de presupuesto con fecha directa o vía agrupador WBS programado
+    WITH ppto_items AS (
+        SELECT DISTINCT
+            trim(p.capitulo::text) AS capitulo,
+            trim(p.item::text)     AS item
+        FROM public.presupuesto p
+        WHERE p.contrato_id = p_contrato_id
+          AND trim(p.pk_id::text) = v_pk
+          AND trim(coalesce(p.tipo_ejecucion::text, '')) = 'Presupuesto de Obra'
+          AND coalesce(p.dado_de_baja, false) = false
+          AND trim(coalesce(p.capitulo::text, '')) <> ''
+          AND trim(coalesce(p.item::text, '')) <> ''
+    )
+    SELECT COUNT(*)::int
+    INTO v_items_con_fecha
+    FROM ppto_items ppto
     WHERE EXISTS (
         SELECT 1
         FROM public.prog_actividades a
@@ -187,10 +199,39 @@ BEGIN
           AND lp.agrupador_id IS NOT NULL
     );
 
+    -- Ítems no programables vía WBS (sin agrupador válido en listado_precios)
+    WITH ppto_items AS (
+        SELECT DISTINCT
+            trim(p.capitulo::text) AS capitulo,
+            trim(p.item::text)     AS item
+        FROM public.presupuesto p
+        WHERE p.contrato_id = p_contrato_id
+          AND trim(p.pk_id::text) = v_pk
+          AND trim(coalesce(p.tipo_ejecucion::text, '')) = 'Presupuesto de Obra'
+          AND coalesce(p.dado_de_baja, false) = false
+          AND trim(coalesce(p.capitulo::text, '')) <> ''
+          AND trim(coalesce(p.item::text, '')) <> ''
+    )
+    SELECT COUNT(*)::int
+    INTO v_items_sin_agrupador
+    FROM ppto_items ppto
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM public.listado_precios lp
+        INNER JOIN public.listado_precios_agrupadores lpa
+          ON lpa.id = lp.agrupador_id
+         AND lpa.contrato_id = p_contrato_id
+        WHERE lp.contrato_id = p_contrato_id
+          AND trim(lp.capitulo::text) = ppto.capitulo
+          AND trim(lp.item_numero::text) = ppto.item
+          AND lp.agrupador_id IS NOT NULL
+    );
+
     v_estado := CASE
         WHEN v_items_total     <= 0             THEN 'sin_cantidad'
         WHEN v_items_con_fecha <= 0             THEN 'sin_iniciar'
-        WHEN v_items_con_fecha >= v_items_total THEN 'completa'
+        WHEN v_items_con_fecha >= v_items_total
+             AND coalesce(v_items_sin_agrupador, 0) <= 0 THEN 'completa'
         ELSE                                         'en_progreso'
     END;
 

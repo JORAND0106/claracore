@@ -13,6 +13,8 @@ import {
   fetchComparar,
   indexCompareNodos,
 } from './progObraCompare'
+import { clasificarNodoCpm, cpmTooltipClasificacion } from './progObraCpmClasificacion'
+import ProgSinAgrupadorCapIcon from './ProgSinAgrupadorCapIcon'
 import {
   addCalendarDays,
   eachCalendarDay,
@@ -37,9 +39,74 @@ const GANTT_TEAL_DARK = '#157a5c'
 const GANTT_CAP_BAR = 'rgba(59, 130, 246, 0.3)'
 const GANTT_RANGE_PAD_DAYS = 7
 const STICKY_W = { item: 88, desc: 280 }
-const ROW_H = { cap: 44, agrupador: 44, hijo: 32, sinAg: 32, item: 44 }
-const PANEL_LEFT = '45%'
-const PANEL_RIGHT = '55%'
+const SCROLL_COL_W = { und: 48, cant: 88, costo: 120, fechaIni: 148, dias: 72, fechaFin: 120, save: 28 }
+
+function stickyItemCell(bg, zIndex = 2) {
+  return {
+    position: 'sticky',
+    left: 0,
+    width: STICKY_W.item,
+    minWidth: STICKY_W.item,
+    maxWidth: STICKY_W.item,
+    zIndex,
+    background: bg,
+    overflow: 'hidden',
+    boxSizing: 'border-box',
+  }
+}
+
+function stickyDescCell(bg, zIndex = 3) {
+  return {
+    position: 'sticky',
+    left: STICKY_W.item,
+    width: STICKY_W.desc,
+    minWidth: STICKY_W.desc,
+    maxWidth: STICKY_W.desc,
+    zIndex,
+    background: bg,
+    overflow: 'hidden',
+    boxSizing: 'border-box',
+    boxShadow: '4px 0 6px -2px rgba(0,0,0,0.1)',
+  }
+}
+
+function stickyHeadTh(left, width, zIndex, bg) {
+  return {
+    position: 'sticky',
+    top: 0,
+    left,
+    width,
+    minWidth: width,
+    maxWidth: width,
+    zIndex,
+    background: bg,
+    boxSizing: 'border-box',
+    ...(left === STICKY_W.item ? { boxShadow: '4px 0 6px -2px rgba(0,0,0,0.1)' } : {}),
+  }
+}
+
+function ellipsisTextStyle() {
+  return { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }
+}
+const ROW_H = { cap: 44, agrupador: 44, hijo: 32, item: 44 }
+const PANEL_SPLIT_DEFAULT = 45
+const PANEL_SPLIT_MIN = 28
+const PANEL_SPLIT_MAX = 72
+const PANEL_SPLIT_STORAGE_KEY = 'progObraModalPanelSplitPct'
+function readStoredPanelSplit() {
+  try {
+    const v = parseFloat(sessionStorage.getItem(PANEL_SPLIT_STORAGE_KEY))
+    if (Number.isFinite(v) && v >= PANEL_SPLIT_MIN && v <= PANEL_SPLIT_MAX) return v
+  } catch {
+    /* ignore */
+  }
+  return PANEL_SPLIT_DEFAULT
+}
+
+function clampPanelSplit(pct) {
+  return Math.min(PANEL_SPLIT_MAX, Math.max(PANEL_SPLIT_MIN, pct))
+}
+
 const GANTT_TIMELINE_H = 54
 const TABLE_HEAD_H = GANTT_TIMELINE_H
 
@@ -137,7 +204,125 @@ function fmtDateShort(iso) {
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
-function ProgCpmResumenTable({ rows, t }) {
+function ProgCpmResumenTable({ rows, t, variant = 'inline', onClose = null }) {
+  const isPopup = variant === 'popup'
+  const content = (
+    <>
+      <div
+        style={{
+          padding: '8px 12px',
+          fontWeight: 700,
+          fontSize: 'var(--cc-caption)',
+          color: t.text,
+          position: isPopup ? 'sticky' : 'sticky',
+          top: 0,
+          background: t.bgCard,
+          borderBottom: `1px solid ${t.border}`,
+          zIndex: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+        }}
+      >
+        <span>
+          Resultados CPM
+          {rows?.length ? ` (${rows.length})` : ''}
+        </span>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Cerrar"
+            style={{
+              border: 'none',
+              background: 'transparent',
+              fontSize: 18,
+              lineHeight: 1,
+              cursor: 'pointer',
+              color: t.textMuted,
+              padding: '0 4px',
+            }}
+          >
+            ×
+          </button>
+        )}
+      </div>
+      {!rows?.length ? (
+        <div style={{ padding: 16, color: t.textMuted, fontSize: 'var(--cc-caption)', textAlign: 'center' }}>
+          Sin resultados CPM para este PK. Calcule CPM en la pestaña Dependencias.
+        </div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-caption)' }}>
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${t.border}`, color: t.textMuted }}>
+              {['Agrupador', 'Inicio temprano', 'Fin temprano', 'Holgura', 'Estado'].map((h) => (
+                <th
+                  key={h}
+                  style={{
+                    textAlign: h === 'Agrupador' ? 'left' : 'center',
+                    padding: '6px 10px',
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const clasif = clasificarNodoCpm(r)
+              const holgura = Number(r.holgura_total)
+              const holguraLabel = clasif.holguraCero
+                ? '0 días'
+                : `${Number.isFinite(holgura) ? holgura : '—'} día${holgura === 1 ? '' : 's'}`
+              const rowBg = clasif.bgCritico
+                ? 'rgba(254,226,226,0.35)'
+                : clasif.bgFinal
+                  ? 'rgba(219,234,254,0.45)'
+                  : 'transparent'
+              return (
+                <tr
+                  key={`${r.capitulo}-${r.agrupador_id}`}
+                  style={{
+                    borderBottom: `1px solid ${t.border}33`,
+                    background: rowBg,
+                  }}
+                >
+                  <td style={{ padding: '7px 10px', fontWeight: 600, color: t.text }}>{r.label}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'center', color: t.text }}>{fmtDateShort(r.fecha_inicio_temprana)}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'center', color: t.text }}>{fmtDateShort(r.fecha_fin_temprana)}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'center', color: t.text }}>{holguraLabel}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                    {clasif.tipo === 'critica' && (
+                      <span style={{ color: '#dc2626', fontWeight: 600 }}>{clasif.label}</span>
+                    )}
+                    {clasif.tipo === 'final_tramo' && (
+                      <span style={{ color: '#1d4ed8', fontWeight: 600 }}>{clasif.label}</span>
+                    )}
+                    {clasif.tipo === 'holgura' && (
+                      <span style={{ color: '#b45309' }}>{clasif.label}</span>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
+    </>
+  )
+
+  if (isPopup) {
+    return (
+      <div style={{ overflow: 'auto', maxHeight: 'min(70vh, 520px)' }}>
+        {content}
+      </div>
+    )
+  }
+
   if (!rows?.length) return null
   return (
     <div
@@ -149,66 +334,7 @@ function ProgCpmResumenTable({ rows, t }) {
         overflow: 'auto',
       }}
     >
-      <div
-        style={{
-          padding: '8px 12px',
-          fontWeight: 700,
-          fontSize: 'var(--cc-caption)',
-          color: t.text,
-          position: 'sticky',
-          top: 0,
-          background: t.bgCard,
-          borderBottom: `1px solid ${t.border}`,
-          zIndex: 1,
-        }}
-      >
-        Resultados CPM
-      </div>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-caption)' }}>
-        <thead>
-          <tr style={{ borderBottom: `1px solid ${t.border}`, color: t.textMuted }}>
-            {['Agrupador', 'Inicio temprano', 'Fin temprano', 'Holgura', 'Estado'].map((h) => (
-              <th
-                key={h}
-                style={{
-                  textAlign: h === 'Agrupador' ? 'left' : 'center',
-                  padding: '6px 10px',
-                  fontWeight: 600,
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => {
-            const critico = !!r.es_ruta_critica || Number(r.holgura_total) === 0
-            const holgura = Number(r.holgura_total)
-            const holguraLabel = critico
-              ? '0 días'
-              : `${Number.isFinite(holgura) ? holgura : '—'} día${holgura === 1 ? '' : 's'}`
-            return (
-              <tr
-                key={`${r.capitulo}-${r.agrupador_id}`}
-                style={{
-                  borderBottom: `1px solid ${t.border}33`,
-                  background: critico ? 'rgba(254,226,226,0.35)' : 'transparent',
-                }}
-              >
-                <td style={{ padding: '7px 10px', fontWeight: 600, color: t.text }}>{r.label}</td>
-                <td style={{ padding: '7px 10px', textAlign: 'center', color: t.text }}>{fmtDateShort(r.fecha_inicio_temprana)}</td>
-                <td style={{ padding: '7px 10px', textAlign: 'center', color: t.text }}>{fmtDateShort(r.fecha_fin_temprana)}</td>
-                <td style={{ padding: '7px 10px', textAlign: 'center', color: t.text }}>{holguraLabel}</td>
-                <td style={{ padding: '7px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                  {critico ? '🔴 Ruta crítica' : '🟡 Con holgura'}
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
+      {content}
     </div>
   )
 }
@@ -322,17 +448,6 @@ function buildPkGanttLayout({
             })
           }
         }
-      }
-      if (sinAgrupador.length > 0) {
-        syncRows.push({
-          key: `sin-ag-${cap}`,
-          kind: 'spacer',
-          cap,
-          height: ROW_H.sinAg,
-          label: '',
-          barStart: null,
-          barEnd: null,
-        })
       }
     } else {
       for (const it of items) {
@@ -503,20 +618,20 @@ function ProgPkGanttPanel({
       style={{
         flex: 1,
         minHeight: 0,
+        minWidth: 0,
         display: 'flex',
         flexDirection: 'column',
         background: t.bg,
         overflow: 'hidden',
         position: 'relative',
-        isolation: 'isolate',
       }}
     >
       <div
         ref={bodyScrollRef}
         onScroll={onBodyScroll}
-        style={{ flex: 1, minHeight: 0, overflow: 'auto' }}
+        style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: 'auto', overscrollBehavior: 'contain' }}
       >
-        <div style={{ width: contentW, minWidth: '100%', position: 'relative', minHeight: bodyH + timelineH }}>
+        <div style={{ width: contentW, position: 'relative', minHeight: bodyH + timelineH }}>
           <div
             style={{
               position: 'sticky',
@@ -551,6 +666,7 @@ function ProgPkGanttPanel({
               : row.kind === 'ag'
                 ? cpmByNodeKey?.[cpmNodeKey(activePk, row.cap, row.agrupadorId)]
                 : null
+            const cpmClasif = clasificarNodoCpm(cpmNode)
             if (row.kind === 'spacer') {
               return <div key={row.key} style={{ height: row.height, borderBottom: `1px solid ${t.border}22` }} />
             }
@@ -573,7 +689,7 @@ function ProgPkGanttPanel({
                 duracion={row.duracion}
                 diasHab={row.diasHab}
                 t={t}
-                esCritico={!!cpmNode?.es_ruta_critica || Number(cpmNode?.holgura_total) === 0}
+                cpmClasif={cpmClasif}
                 holguraDias={cpmNode?.holgura_total ?? 0}
                 holguraEnd={cpmNode?.fecha_fin_tardia ?? null}
                 baselineBarStart={cmpNode?.baseline?.fecha_inicio}
@@ -695,7 +811,7 @@ function GanttBarGrid({
   duracion,
   diasHab,
   t,
-  esCritico,
+  cpmClasif,
   holguraDias,
   holguraEnd,
   baselineBarStart,
@@ -724,7 +840,9 @@ function GanttBarGrid({
   let holguraLeft = 0
   let holguraWidth = 0
   const ff = parseIsoDate(barEnd)
-  if (holguraEnd && ff && !esCritico) {
+  const esCriticoReal = cpmClasif?.bgCritico === true
+  const esFinalTramo = cpmClasif?.bgFinal === true
+  if (holguraEnd && ff && !esCriticoReal && !esFinalTramo) {
     const fh = parseIsoDate(holguraEnd)
     if (fh && fh > ff) {
       const endIdx = Math.min(days.length - 1, Math.round((ff.getTime() - fromT) / 86400000))
@@ -735,11 +853,8 @@ function GanttBarGrid({
   }
 
   const tooltip = ganttBarTooltip({ isSummary, label, barStart, barEnd, duracion, diasHab })
-  const criticalTooltip = esCritico
-    ? 'Ruta crítica — Holgura: 0 días'
-    : holguraDias > 0
-    ? `Holgura: ${holguraDias} día${holguraDias !== 1 ? 's' : ''} hábiles`
-    : null
+  const clasifTip = cpmTooltipClasificacion(cpmClasif, holguraDias)
+  const criticalTooltip = clasifTip || tooltip
 
   const dual = showCompare && ganttCompareMode === 'dual'
   const barH = dual ? Math.max(8, GANTT_BAR_H * 0.42) : GANTT_BAR_H
@@ -747,8 +862,13 @@ function GanttBarGrid({
   const baselineTransform = dual ? 'translateY(-15%)' : 'translateY(-50%)'
 
   const defaultBg = isSummary
-    ? (esCritico ? '#fee2e2' : GANTT_CAP_BAR)
-    : (esCritico ? '#fecaca' : GANTT_TEAL)
+    ? (esCriticoReal ? '#fee2e2' : esFinalTramo ? '#dbeafe' : GANTT_CAP_BAR)
+    : (esCriticoReal ? '#fecaca' : esFinalTramo ? '#bfdbfe' : GANTT_TEAL)
+  const barBorder = esCriticoReal
+    ? '2px solid #dc2626'
+    : esFinalTramo
+      ? '2px solid #2563eb'
+      : 'none'
   const barBg = compareBarColor && showCompare ? compareBarColor : defaultBg
 
   return (
@@ -824,8 +944,8 @@ function GanttBarGrid({
             transform: targetTransform,
             borderRadius: 4,
             background: barBg,
-            border: esCritico ? '2px solid #ef4444' : (showCompare && compareBarColor ? '1px solid rgba(0,0,0,0.12)' : 'none'),
-            boxShadow: esCritico && !isSummary ? '0 0 0 1px rgba(239,68,68,0.35)' : 'none',
+            border: barBorder !== 'none' ? barBorder : (showCompare && compareBarColor ? '1px solid rgba(0,0,0,0.12)' : 'none'),
+            boxShadow: esCriticoReal && !isSummary ? '0 0 0 1px rgba(239,68,68,0.35)' : 'none',
             boxSizing: 'border-box',
             zIndex: 2,
           }}
@@ -1012,53 +1132,39 @@ function ProgItemRow({
     boxSizing: 'border-box',
     overflow: 'hidden',
   }
-  const sticky = { position: 'sticky', background: isHijo ? hijoBg : stickyBg, zIndex: 1 }
 
   if (rowKind === 'agrupador') {
+    const agBg = stickyBg
     return (
       <tr style={{ borderBottom: `1px solid ${t.border}` }}>
-        <td
-          colSpan={2}
-          style={{
-            ...cell,
-            ...sticky,
-            left: 0,
-            minWidth: STICKY_W.item + STICKY_W.desc,
-            maxWidth: STICKY_W.item + STICKY_W.desc,
-            fontWeight: 700,
-            color: t.text,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation()
-                onToggleAgExpand?.()
-              }}
-              aria-expanded={agExpanded}
-              style={{
-                border: 'none',
-                background: 'transparent',
-                cursor: 'pointer',
-                fontSize: 'var(--cc-sm)',
-                color: t.textMuted,
-                padding: '0 2px',
-                lineHeight: 1,
-                flexShrink: 0,
-              }}
-            >
-              {agExpanded ? '▼' : '▶'}
-            </button>
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={agrupadorLabel}>
-              {agrupadorLabel}
-            </span>
-          </div>
+        <td style={{ ...cell, ...stickyItemCell(agBg), fontWeight: 700, paddingLeft: 4 }}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggleAgExpand?.()
+            }}
+            aria-expanded={agExpanded}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer',
+              fontSize: 'var(--cc-sm)',
+              color: t.textMuted,
+              padding: '0 2px',
+              lineHeight: 1,
+            }}
+          >
+            {agExpanded ? '▼' : '▶'}
+          </button>
         </td>
-        <td style={{ ...cell, minWidth: 48 }}>{itemDef.und || '—'}</td>
-        <td style={{ ...cell, textAlign: 'right', minWidth: 72 }}>{fmtCant(itemDef.cant_total)}</td>
-        <td style={{ ...cell, textAlign: 'right', minWidth: 110, whiteSpace: 'nowrap' }}>{fmtCOP(itemDef.costo_directo)}</td>
-        <td style={{ ...cell, minWidth: 148 }}>
+        <td style={{ ...cell, ...stickyDescCell(agBg), fontWeight: 700, color: t.text }} title={agrupadorLabel}>
+          <span style={ellipsisTextStyle()}>{agrupadorLabel}</span>
+        </td>
+        <td style={{ ...cell, minWidth: SCROLL_COL_W.und, width: SCROLL_COL_W.und }}>{itemDef.und || '—'}</td>
+        <td style={{ ...cell, textAlign: 'right', minWidth: SCROLL_COL_W.cant, width: SCROLL_COL_W.cant }}>{fmtCant(itemDef.cant_total)}</td>
+        <td style={{ ...cell, textAlign: 'right', minWidth: SCROLL_COL_W.costo, width: SCROLL_COL_W.costo, whiteSpace: 'nowrap' }}>{fmtCOP(itemDef.costo_directo)}</td>
+        <td style={{ ...cell, minWidth: SCROLL_COL_W.fechaIni, width: SCROLL_COL_W.fechaIni }}>
           {effectiveEditable ? (
             <input
               type="date"
@@ -1074,7 +1180,7 @@ function ProgItemRow({
             displayIni
           )}
         </td>
-        <td style={{ ...cell, minWidth: 64 }}>
+        <td style={{ ...cell, minWidth: SCROLL_COL_W.dias, width: SCROLL_COL_W.dias }}>
           {effectiveEditable ? (
             <input
               type="number"
@@ -1091,24 +1197,25 @@ function ProgItemRow({
             displayDur
           )}
         </td>
-        <td style={{ ...cell, minWidth: 200, color: t.textMuted, whiteSpace: 'nowrap' }}>{displayFin}</td>
-        <td style={{ ...cell, width: 28, textAlign: 'center' }}>{saveIcon}</td>
+        <td style={{ ...cell, minWidth: SCROLL_COL_W.fechaFin, width: SCROLL_COL_W.fechaFin, color: t.textMuted, whiteSpace: 'nowrap' }}>{displayFin}</td>
+        <td style={{ ...cell, width: SCROLL_COL_W.save, minWidth: SCROLL_COL_W.save, textAlign: 'center' }}>{saveIcon}</td>
       </tr>
     )
   }
 
+  const rowBg = isHijo ? hijoBg : stickyBg
   return (
     <tr style={{ borderBottom: `1px solid ${t.border}`, background: isHijo ? hijoBg : undefined }}>
-      <td style={{ ...cell, ...sticky, left: 0, fontWeight: isHijo ? 500 : 600, minWidth: STICKY_W.item, maxWidth: STICKY_W.item, paddingLeft: isHijo ? 36 : 8 }} title={itemDef.item}>
-        {itemDef.item}
+      <td style={{ ...cell, ...stickyItemCell(rowBg), fontWeight: isHijo ? 500 : 600, paddingLeft: isHijo ? 36 : 8 }} title={itemDef.item}>
+        <span style={ellipsisTextStyle()}>{itemDef.item}</span>
       </td>
-      <td style={{ ...cell, ...sticky, left: STICKY_W.item, minWidth: STICKY_W.desc, maxWidth: STICKY_W.desc, color: isHijo ? t.textMuted : t.textMuted, paddingLeft: isHijo ? 12 : 8 }} title={itemDef.descripcion}>
-        {itemDef.descripcion || '—'}
+      <td style={{ ...cell, ...stickyDescCell(rowBg), color: t.textMuted, paddingLeft: isHijo ? 12 : 8 }} title={itemDef.descripcion}>
+        <span style={ellipsisTextStyle()}>{itemDef.descripcion || '—'}</span>
       </td>
-      <td style={{ ...cell, minWidth: 48 }}>{itemDef.und || '—'}</td>
-      <td style={{ ...cell, textAlign: 'right', minWidth: 72 }}>{fmtCant(itemDef.cant_total)}</td>
-      <td style={{ ...cell, textAlign: 'right', minWidth: 110, whiteSpace: 'nowrap' }}>{fmtCOP(itemDef.costo_directo)}</td>
-      <td style={{ ...cell, minWidth: 148 }}>
+      <td style={{ ...cell, minWidth: SCROLL_COL_W.und, width: SCROLL_COL_W.und }}>{itemDef.und || '—'}</td>
+      <td style={{ ...cell, textAlign: 'right', minWidth: SCROLL_COL_W.cant, width: SCROLL_COL_W.cant }}>{fmtCant(itemDef.cant_total)}</td>
+      <td style={{ ...cell, textAlign: 'right', minWidth: SCROLL_COL_W.costo, width: SCROLL_COL_W.costo, whiteSpace: 'nowrap' }}>{fmtCOP(itemDef.costo_directo)}</td>
+      <td style={{ ...cell, minWidth: SCROLL_COL_W.fechaIni, width: SCROLL_COL_W.fechaIni }}>
         {effectiveEditable ? (
           <input
             type="date"
@@ -1124,7 +1231,7 @@ function ProgItemRow({
           displayIni
         )}
       </td>
-      <td style={{ ...cell, minWidth: 64 }}>
+      <td style={{ ...cell, minWidth: SCROLL_COL_W.dias, width: SCROLL_COL_W.dias }}>
         {effectiveEditable ? (
           <input
             type="number"
@@ -1141,8 +1248,8 @@ function ProgItemRow({
           displayDur
         )}
       </td>
-      <td style={{ ...cell, minWidth: 200, color: t.textMuted, whiteSpace: 'nowrap' }}>{displayFin}</td>
-      <td style={{ ...cell, width: 28, textAlign: 'center' }}>{saveIcon}</td>
+      <td style={{ ...cell, minWidth: SCROLL_COL_W.fechaFin, width: SCROLL_COL_W.fechaFin, color: t.textMuted, whiteSpace: 'nowrap' }}>{displayFin}</td>
+      <td style={{ ...cell, width: SCROLL_COL_W.save, minWidth: SCROLL_COL_W.save, textAlign: 'center' }}>{saveIcon}</td>
     </tr>
   )
 }
@@ -1174,6 +1281,8 @@ function ProgCapituloSection({
   onToggleAgExpand,
   saveGeneration,
   suspendAutoSave,
+  puedeEditarListadoPrecios = false,
+  onIrListadoPrecios = null,
 }) {
   const pal = capColor(capIdx)
   const useWbs = Boolean(estructuraCap?.agrupadores?.length || estructuraCap?.sin_agrupador?.length)
@@ -1213,50 +1322,53 @@ function ProgCapituloSection({
   return (
     <>
       <tr style={{ background: pal.bg, borderTop: `2px solid ${pal.border}` }}>
-        <td colSpan={2} style={{ ...capCell, fontWeight: 700, color: t.text }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-            <button
-              type="button"
-              onClick={onToggleCollapse}
-              aria-expanded={!collapsed}
-              style={{
-                border: 'none',
-                background: 'transparent',
-                cursor: 'pointer',
-                fontSize: 'var(--cc-md)',
-                color: pal.accent,
-                padding: '0 4px',
-                lineHeight: 1,
-                flexShrink: 0,
-              }}
-            >
-              {collapsed ? '▸' : '▾'}
-            </button>
-            <span
-              style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-              title={`Capítulo ${cap}`}
-            >
-              Capítulo {cap}
-            </span>
-          </div>
+        <td style={{ ...capCell, ...stickyItemCell(pal.bg), paddingLeft: 4 }}>
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            aria-expanded={!collapsed}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              cursor: 'pointer',
+              fontSize: 'var(--cc-md)',
+              color: pal.accent,
+              padding: '0 4px',
+              lineHeight: 1,
+            }}
+          >
+            {collapsed ? '▸' : '▾'}
+          </button>
         </td>
-        <td style={{ ...capCell, color: t.textMuted }}>—</td>
-        <td style={{ ...capCell, textAlign: 'right' }} title={String(capResumen?.cant_total ?? '')}>
+        <td style={{ ...capCell, ...stickyDescCell(pal.bg), fontWeight: 700, color: t.text }} title={`Capítulo ${cap}`}>
+          <span style={{ ...ellipsisTextStyle(), display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: '100%' }}>
+            <span style={ellipsisTextStyle()}>Capítulo {cap}</span>
+            {sinAgrupador.length > 0 && (
+              <ProgSinAgrupadorCapIcon
+                count={sinAgrupador.length}
+                puedeEditarListadoPrecios={puedeEditarListadoPrecios}
+                onIrListadoPrecios={onIrListadoPrecios}
+              />
+            )}
+          </span>
+        </td>
+        <td style={{ ...capCell, minWidth: SCROLL_COL_W.und, width: SCROLL_COL_W.und, color: t.textMuted }}>—</td>
+        <td style={{ ...capCell, minWidth: SCROLL_COL_W.cant, width: SCROLL_COL_W.cant, textAlign: 'right' }} title={String(capResumen?.cant_total ?? '')}>
           {capResumen?.cant_total > 0 ? fmtCant(capResumen.cant_total) : '—'}
         </td>
-        <td style={{ ...capCell, textAlign: 'right', whiteSpace: 'nowrap' }} title={String(capResumen?.costo_directo ?? '')}>
+        <td style={{ ...capCell, minWidth: SCROLL_COL_W.costo, width: SCROLL_COL_W.costo, textAlign: 'right', whiteSpace: 'nowrap' }} title={String(capResumen?.costo_directo ?? '')}>
           {capResumen?.costo_directo > 0 ? fmtCOP(capResumen.costo_directo) : '—'}
         </td>
-        <td style={{ ...capCell, color: t.textMuted }} title={capResumen?.fecha_inicio || ''}>
+        <td style={{ ...capCell, minWidth: SCROLL_COL_W.fechaIni, width: SCROLL_COL_W.fechaIni, color: t.textMuted }} title={capResumen?.fecha_inicio || ''}>
           {capResumen?.fecha_inicio || '—'}
         </td>
-        <td style={{ ...capCell, textAlign: 'right', color: t.textMuted }} title="Días hábiles entre inicio y fin del capítulo">
+        <td style={{ ...capCell, minWidth: SCROLL_COL_W.dias, width: SCROLL_COL_W.dias, textAlign: 'right', color: t.textMuted }} title="Días hábiles entre inicio y fin del capítulo">
           {capResumen?.dias_habiles ?? '—'}
         </td>
-        <td style={{ ...capCell, color: t.textMuted, whiteSpace: 'nowrap' }} title={capResumen?.fecha_fin || ''}>
+        <td style={{ ...capCell, minWidth: SCROLL_COL_W.fechaFin, width: SCROLL_COL_W.fechaFin, color: t.textMuted, whiteSpace: 'nowrap' }} title={capResumen?.fecha_fin || ''}>
           {capResumen?.fecha_fin ? fmtDateHuman(capResumen.fecha_fin) : '—'}
         </td>
-        <td style={{ ...capCell, width: 28 }} />
+        <td style={{ ...capCell, width: SCROLL_COL_W.save, minWidth: SCROLL_COL_W.save }} />
       </tr>
       {!collapsed && useWbs && agrupadores.map((ag) => {
         const agDef = buildAgItemDef(ag)
@@ -1308,13 +1420,6 @@ function ProgCapituloSection({
           </Fragment>
         )
       })}
-      {!collapsed && useWbs && sinAgrupador.length > 0 && (
-        <tr style={{ background: 'rgba(245,158,11,0.06)' }}>
-          <td colSpan={9} style={{ padding: '6px 12px', fontSize: 'var(--cc-sm)', fontWeight: 600, color: '#b45309' }}>
-            ⚠ Ítems sin agrupador ({sinAgrupador.length})
-          </td>
-        </tr>
-      )}
       {!collapsed && !useWbs &&
         items.map((it) => (
           <ProgItemRow
@@ -1380,6 +1485,9 @@ export default function ProgObraProgramacionModal({
   openCompareTab = false,
   compareBaselineId = null,
   compareTargetId = null,
+  puedeEditarListadoPrecios = false,
+  onIrListadoPrecios = null,
+  historicalReadOnly = false,
 }) {
   const [collapsedCaps, setCollapsedCaps] = useState({})
   const [expandedAgs, setExpandedAgs] = useState({})
@@ -1393,6 +1501,11 @@ export default function ProgObraProgramacionModal({
   const leftScrollRef = useRef(null)
   const rightBodyScrollRef = useRef(null)
   const scrollSyncLock = useRef(false)
+  const splitContainerRef = useRef(null)
+  const splitDragRef = useRef(false)
+  const panelSplitPctRef = useRef(PANEL_SPLIT_DEFAULT)
+  const [panelSplitPct, setPanelSplitPct] = useState(readStoredPanelSplit)
+  const [splitDragging, setSplitDragging] = useState(false)
   const [activeContentTab, setActiveContentTab] = useState('programacion')
   const [progSubTab, setProgSubTab] = useState('schedule')
   const [compareData, setCompareData] = useState(null)
@@ -1400,13 +1513,63 @@ export default function ProgObraProgramacionModal({
   const [ganttCompareMode, setGanttCompareMode] = useState('overlay')
   const [cpmResultados, setCpmResultados] = useState([])
   const [cpmDirty, setCpmDirty] = useState(false)
+  const [cpmResumenOpen, setCpmResumenOpen] = useState(false)
 
   const compareEnabled = Boolean(compareBaselineId && compareTargetId && compareBaselineId !== compareTargetId)
+
+  panelSplitPctRef.current = panelSplitPct
+
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!splitDragRef.current || !splitContainerRef.current) return
+      const rect = splitContainerRef.current.getBoundingClientRect()
+      if (rect.width <= 0) return
+      const pct = clampPanelSplit(((e.clientX - rect.left) / rect.width) * 100)
+      setPanelSplitPct(pct)
+    }
+    const onUp = () => {
+      if (!splitDragRef.current) return
+      splitDragRef.current = false
+      setSplitDragging(false)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      try {
+        sessionStorage.setItem(PANEL_SPLIT_STORAGE_KEY, String(panelSplitPctRef.current))
+      } catch {
+        /* ignore */
+      }
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [])
+
+  const handleSplitMouseDown = useCallback((e) => {
+    e.preventDefault()
+    splitDragRef.current = true
+    setSplitDragging(true)
+    document.body.style.cursor = 'ew-resize'
+    document.body.style.userSelect = 'none'
+  }, [])
+
+  const handleSplitDoubleClick = useCallback(() => {
+    const pct = PANEL_SPLIT_DEFAULT
+    setPanelSplitPct(pct)
+    try {
+      sessionStorage.setItem(PANEL_SPLIT_STORAGE_KEY, String(pct))
+    } catch {
+      /* ignore */
+    }
+  }, [])
 
   useEffect(() => {
     if (!open) {
       setProgSubTab('schedule')
       setCompareData(null)
+      setCpmResumenOpen(false)
       return
     }
     if (openCompareTab && compareEnabled) setProgSubTab('compare')
@@ -1981,8 +2144,27 @@ export default function ProgObraProgramacionModal({
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: `1px solid ${t.border}`, flexShrink: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 'var(--cc-md)', color: t.primary }}>Programación de obra — {versionTitle}</div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: `1px solid ${t.border}`, flexShrink: 0, gap: 12 }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: 'var(--cc-md)', color: t.primary }}>Programación de obra — {versionTitle}</div>
+            {historicalReadOnly && (
+              <div
+                style={{
+                  marginTop: 4,
+                  display: 'inline-block',
+                  padding: '2px 8px',
+                  borderRadius: 6,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  background: '#f3f4f6',
+                  color: '#4b5563',
+                  border: `1px solid ${t.border}`,
+                }}
+              >
+                Versión histórica — solo consulta
+              </div>
+            )}
+          </div>
           <button
             type="button"
             onClick={onClose}
@@ -2135,7 +2317,7 @@ export default function ProgObraProgramacionModal({
                 </button>
               ))}
               {progSubTab === 'schedule' && compareData && (
-                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ fontSize: 'var(--cc-caption)', color: t.textMuted }}>Gantt:</span>
                   {[
                     { id: 'overlay', label: 'Overlay' },
@@ -2161,6 +2343,64 @@ export default function ProgObraProgramacionModal({
                   ))}
                 </div>
               )}
+              <div style={{ marginLeft: 'auto' }}>
+                <button
+                  type="button"
+                  onClick={() => setCpmResumenOpen(true)}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: 'var(--cc-caption)',
+                    fontWeight: 600,
+                    borderRadius: 6,
+                    border: `1px solid ${t.border}`,
+                    background: cpmResumenRows.length ? t.bgCard : t.bg,
+                    color: cpmResumenRows.length ? t.text : t.textMuted,
+                    cursor: 'pointer',
+                  }}
+                  title="Ver holguras y ruta crítica por agrupador"
+                >
+                  Resultados CPM
+                  {cpmResumenRows.length > 0 && (
+                    <span style={{ marginLeft: 6, color: t.primary }}>({cpmResumenRows.length})</span>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!compareEnabled && progSubTab === 'schedule' && capitulosOrdenados.length > 0 && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'flex-end',
+                gap: 8,
+                padding: '6px 16px',
+                borderBottom: `1px solid ${t.border}`,
+                flexShrink: 0,
+                background: t.bg,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setCpmResumenOpen(true)}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: 'var(--cc-caption)',
+                  fontWeight: 600,
+                  borderRadius: 6,
+                  border: `1px solid ${t.border}`,
+                  background: cpmResumenRows.length ? t.bgCard : t.bg,
+                  color: cpmResumenRows.length ? t.text : t.textMuted,
+                  cursor: 'pointer',
+                }}
+                title="Ver holguras y ruta crítica por agrupador"
+              >
+                Resultados CPM
+                {cpmResumenRows.length > 0 && (
+                  <span style={{ marginLeft: 6, color: t.primary }}>({cpmResumenRows.length})</span>
+                )}
+              </button>
             </div>
           )}
 
@@ -2194,28 +2434,45 @@ export default function ProgObraProgramacionModal({
             <div style={{ color: t.textMuted, padding: '8px 16px' }}>Sin ítems de presupuesto para este PK.</div>
           )}
           {capitulosOrdenados.length > 0 && (
-            <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'flex-start', overflow: 'hidden' }}>
+            <div
+              ref={splitContainerRef}
+              style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'stretch', overflow: 'hidden', position: 'relative' }}
+            >
               <div
                 style={{
-                  width: PANEL_LEFT,
+                  width: `${panelSplitPct}%`,
                   flexShrink: 0,
                   display: 'flex',
                   flexDirection: 'column',
                   minHeight: 0,
+                  minWidth: 0,
                   alignSelf: 'stretch',
-                  borderRight: `1px solid ${t.border}`,
                   overflow: 'hidden',
                   position: 'relative',
                   zIndex: 1,
                 }}
               >
-                <div style={{ flexShrink: 0, overflow: 'hidden', padding: '0 8px', background: t.bg, height: TABLE_HEAD_H, boxSizing: 'border-box' }}>
-                  <table style={{ borderCollapse: 'collapse', width: 'max-content', minWidth: '100%', height: TABLE_HEAD_H }}>
+                <div
+                  ref={leftScrollRef}
+                  onScroll={handleLeftScroll}
+                  style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '0 8px 8px' }}
+                >
+                  <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: 'max-content', minWidth: '100%' }}>
                     <thead>
-                      <tr style={{ background: t.bg, borderBottom: `2px solid ${t.border}`, height: TABLE_HEAD_H }}>
-                        {['Ítem', 'Descripción', 'Und', 'Cantidad', 'Costo Directo', 'Fecha inicio', 'Días hábiles', 'Fecha fin', ''].map((h, i) => (
+                      <tr style={{ borderBottom: `2px solid ${t.border}`, height: TABLE_HEAD_H }}>
+                        {[
+                          { h: 'Ítem', w: STICKY_W.item, left: 0, zi: 22 },
+                          { h: 'Descripción', w: STICKY_W.desc, left: STICKY_W.item, zi: 23 },
+                          { h: 'Und', w: SCROLL_COL_W.und },
+                          { h: 'Cantidad', w: SCROLL_COL_W.cant, right: true },
+                          { h: 'Costo Directo', w: SCROLL_COL_W.costo, right: true },
+                          { h: 'Fecha inicio', w: SCROLL_COL_W.fechaIni },
+                          { h: 'Días hábiles', w: SCROLL_COL_W.dias, right: true },
+                          { h: 'Fecha fin', w: SCROLL_COL_W.fechaFin },
+                          { h: '', w: SCROLL_COL_W.save },
+                        ].map(({ h, w, left, zi, right }) => (
                           <th
-                            key={h}
+                            key={h || 'save'}
                             style={{
                               padding: '0 10px',
                               height: TABLE_HEAD_H,
@@ -2223,9 +2480,15 @@ export default function ProgObraProgramacionModal({
                               fontSize: 'var(--cc-caption)',
                               fontWeight: 700,
                               color: t.textMuted,
-                              textAlign: i >= 3 && i <= 4 ? 'right' : 'left',
+                              textAlign: right ? 'right' : 'left',
                               verticalAlign: 'middle',
-                              minWidth: i === 0 ? STICKY_W.item : i === 1 ? STICKY_W.desc : undefined,
+                              width: w,
+                              minWidth: w,
+                              maxWidth: w,
+                              background: t.bg,
+                              ...(left != null
+                                ? stickyHeadTh(left, w, zi, t.bg)
+                                : { position: 'sticky', top: 0, zIndex: 10 }),
                             }}
                           >
                             {h}
@@ -2233,14 +2496,6 @@ export default function ProgObraProgramacionModal({
                         ))}
                       </tr>
                     </thead>
-                  </table>
-                </div>
-                <div
-                  ref={leftScrollRef}
-                  onScroll={handleLeftScroll}
-                  style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '0 8px 8px' }}
-                >
-                  <table style={{ borderCollapse: 'collapse', width: 'max-content', minWidth: '100%' }}>
                     <tbody>
                     {capitulosOrdenados.map((cap, capIdx) => {
                       const capKey = `${activePk}\u0000${cap}`
@@ -2275,6 +2530,8 @@ export default function ProgObraProgramacionModal({
                           onToggleAgExpand={(agId) => toggleAgExpand(cap, agId)}
                           saveGeneration={saveGeneration}
                           suspendAutoSave={localSaving}
+                          puedeEditarListadoPrecios={puedeEditarListadoPrecios}
+                          onIrListadoPrecios={onIrListadoPrecios}
                         />
                       )
                     })}
@@ -2283,17 +2540,53 @@ export default function ProgObraProgramacionModal({
                 </div>
               </div>
               <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-valuenow={Math.round(panelSplitPct)}
+                aria-valuemin={PANEL_SPLIT_MIN}
+                aria-valuemax={PANEL_SPLIT_MAX}
+                title="Arrastre para ajustar paneles · doble clic para restablecer"
+                onMouseDown={handleSplitMouseDown}
+                onDoubleClick={handleSplitDoubleClick}
                 style={{
-                  width: PANEL_RIGHT,
+                  width: 6,
+                  flexShrink: 0,
+                  cursor: 'ew-resize',
+                  alignSelf: 'stretch',
+                  position: 'relative',
+                  zIndex: 5,
+                  background: splitDragging ? `${t.primary}33` : 'transparent',
+                  borderLeft: `1px solid ${splitDragging ? t.primary : t.border}`,
+                  borderRight: `1px solid ${splitDragging ? t.primary : t.border}`,
+                  transition: splitDragging ? 'none' : 'background 0.15s, border-color 0.15s',
+                }}
+              >
+                <div
+                  aria-hidden
+                  style={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    width: 4,
+                    height: 36,
+                    borderRadius: 4,
+                    background: splitDragging ? t.primary : t.border,
+                    opacity: splitDragging ? 1 : 0.85,
+                    boxShadow: splitDragging ? `0 0 0 2px ${t.primary}22` : 'none',
+                  }}
+                />
+              </div>
+              <div
+                style={{
                   flex: 1,
                   minWidth: 0,
+                  minHeight: 0,
                   display: 'flex',
                   flexDirection: 'column',
-                  minHeight: 0,
                   alignSelf: 'stretch',
                   overflow: 'hidden',
                   position: 'relative',
-                  isolation: 'isolate',
                 }}
               >
                 <ProgPkGanttPanel
@@ -2309,8 +2602,44 @@ export default function ProgObraProgramacionModal({
                   ganttCompareMode={ganttCompareMode}
                   showCompare={compareEnabled && !!compareData}
                 />
-                <ProgCpmResumenTable rows={cpmResumenRows} t={t} />
               </div>
+              {cpmResumenOpen && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    zIndex: 30,
+                    background: 'rgba(0,0,0,0.4)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 16,
+                  }}
+                  onClick={() => setCpmResumenOpen(false)}
+                >
+                  <div
+                    style={{
+                      background: t.bgCard,
+                      borderRadius: 10,
+                      border: `1px solid ${t.border}`,
+                      boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
+                      width: 'min(720px, 100%)',
+                      maxHeight: '85%',
+                      overflow: 'hidden',
+                      display: 'flex',
+                      flexDirection: 'column',
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <ProgCpmResumenTable
+                      rows={cpmResumenRows}
+                      t={t}
+                      variant="popup"
+                      onClose={() => setCpmResumenOpen(false)}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           )}
             </>

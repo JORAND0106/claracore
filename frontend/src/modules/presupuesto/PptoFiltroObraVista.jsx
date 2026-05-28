@@ -265,8 +265,8 @@ export default function PptoFiltroObraVista({
         token={token}
         fAplicado={f}
         tipoEjecucionActivo={tipoEjecucionActivo}
-        onBuscar={(fSnap) => {
-          if (typeof onBuscar === 'function') onBuscar(fSnap)
+        onBuscar={async (fSnap) => {
+          if (typeof onBuscar === 'function') await onBuscar(fSnap)
         }}
         onLimpiarAplicado={onLimpiar}
         listadoPrecios={listadoPrecios}

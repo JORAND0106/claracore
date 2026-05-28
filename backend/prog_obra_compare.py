@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import HTTPException
@@ -348,6 +349,114 @@ def _version_meta_out(row: dict) -> dict:
     }
 
 
+def _fetch_all_pk_ids(sb, contrato_id: int) -> List[str]:
+    rows = (
+        sb.table("pk_ids")
+        .select("pk_id")
+        .eq("contrato_id", contrato_id)
+        .execute()
+        .data
+        or []
+    )
+    out = sorted({str(r.get("pk_id") or "").strip() for r in rows if r.get("pk_id")})
+    if out:
+        return out
+    rows2 = (
+        sb.table("presupuesto")
+        .select("pk_id")
+        .eq("contrato_id", contrato_id)
+        .eq("dado_de_baja", False)
+        .execute()
+        .data
+        or []
+    )
+    return sorted({str(r.get("pk_id") or "").strip() for r in rows2 if r.get("pk_id")})
+
+
+def _estado_pk_resumen(tipos: List[str], tiene_target: bool) -> str:
+    if not tiene_target:
+        return "sin_programar"
+    if not tipos:
+        return "sin_programar"
+    if all(t == "sin_cambio" for t in tipos):
+        return "sin_cambio"
+    peor = _peor_tipo([t for t in tipos if t != "sin_cambio"])
+    if peor == "adelantado":
+        return "adelantado"
+    if peor == "atrasado":
+        return "atrasado"
+    if peor == "nuevo":
+        return "nuevo"
+    if peor == "eliminado":
+        return "eliminado"
+    return peor or "sin_cambio"
+
+
+def compute_resumen_global_pks(
+    nodos: List[dict],
+    all_pk_ids: List[str],
+    base_nodes: Dict[str, dict],
+    tgt_nodes: Dict[str, dict],
+) -> dict:
+    """Resumen por PK para vista comparación global (Fase 3C-1)."""
+    by_pk: Dict[str, List[dict]] = defaultdict(list)
+    for n in nodos or []:
+        pk = str(n.get("pk_id") or "").strip()
+        if pk:
+            by_pk[pk].append(n)
+
+    pks_con_target = {str(v.get("pk_id") or "").strip() for v in tgt_nodes.values() if v.get("pk_id")}
+
+    grupos: List[dict] = []
+    counts = {"adelantado": 0, "atrasado": 0, "sin_cambio": 0, "sin_programar": 0, "nuevo": 0, "eliminado": 0}
+
+    pk_list = sorted(set(all_pk_ids) | set(by_pk.keys()) | pks_con_target)
+    for pk in pk_list:
+        if not pk:
+            continue
+        nodos_pk = by_pk.get(pk, [])
+        tipos = [n.get("tipo_cambio") or "sin_cambio" for n in nodos_pk]
+        tiene_target = pk in pks_con_target or any(n.get("target") for n in nodos_pk)
+        estado = _estado_pk_resumen(tipos, tiene_target)
+        counts[estado] = counts.get(estado, 0) + 1
+
+        deltas_fin = [abs(int(n.get("delta", {}).get("dias_fin") or 0)) for n in nodos_pk if n.get("delta", {}).get("dias_fin") is not None]
+        delta_max = max(deltas_fin) if deltas_fin else 0
+        delta_fin_vals = [int(n.get("delta", {}).get("dias_fin") or 0) for n in nodos_pk if n.get("delta", {}).get("dias_fin") is not None]
+        delta_fin_pk = max(delta_fin_vals, key=abs) if delta_fin_vals else 0
+        delta_costo = sum(float(n.get("delta", {}).get("costo") or 0) for n in nodos_pk)
+
+        b_min, b_max, _ = _span_for_pk(base_nodes, pk)
+        t_min, t_max, _ = _span_for_pk(tgt_nodes, pk)
+
+        grupos.append(
+            {
+                "pk_id": pk,
+                "estado_pk": estado,
+                "delta_fin_max_abs": delta_max,
+                "delta_fin_pk": delta_fin_pk,
+                "delta_costo_total": round(delta_costo, 2),
+                "fin_baseline": b_max.isoformat() if b_max else None,
+                "fin_actual": t_max.isoformat() if t_max else None,
+                "inicio_baseline": b_min.isoformat() if b_min else None,
+                "inicio_actual": t_min.isoformat() if t_min else None,
+                "nodos_count": len(nodos_pk),
+            }
+        )
+
+    grupos.sort(key=lambda g: (-abs(int(g.get("delta_fin_pk") or 0)), str(g.get("pk_id") or "")))
+
+    return {
+        "pks_adelantados": counts.get("adelantado", 0),
+        "pks_atrasados": counts.get("atrasado", 0),
+        "pks_sin_cambio": counts.get("sin_cambio", 0),
+        "pks_sin_programar": counts.get("sin_programar", 0),
+        "pks_nuevos": counts.get("nuevo", 0),
+        "pks_eliminados": counts.get("eliminado", 0),
+        "grupos_pk": grupos,
+    }
+
+
 def compare_versions(
     sb,
     contrato_id: int,
@@ -422,30 +531,36 @@ def compare_versions(
     delta_costo = t_cost_total - b_cost_total
     pct_costo = _pct_desviacion(delta_costo, b_cost_total)
 
-    return {
+    resumen_out = {
+        "nodos_total": len(all_keys),
+        "nodos_adelantados": counts.get("adelantado", 0),
+        "nodos_atrasados": counts.get("atrasado", 0),
+        "nodos_duracion": counts.get("duracion", 0),
+        "nodos_nuevos": counts.get("nuevo", 0),
+        "nodos_eliminados": counts.get("eliminado", 0),
+        "fin_proyecto_baseline": b_max.isoformat() if b_max else None,
+        "fin_proyecto_target": t_max.isoformat() if t_max else None,
+        "inicio_proyecto_baseline": b_min.isoformat() if b_min else None,
+        "inicio_proyecto_target": t_min.isoformat() if t_min else None,
+        "delta_fin_proyecto_dias": delta_fin_proj,
+        "duracion_baseline_dias": b_dur_span,
+        "pct_desviacion_fechas": pct_fechas,
+        "costo_total_baseline": round(b_cost_total, 2),
+        "costo_total_target": round(t_cost_total, 2),
+        "delta_costo_total": round(delta_costo, 2),
+        "pct_desviacion_costo": pct_costo,
+    }
+
+    out = {
         "baseline": _version_meta_out(meta_b),
         "target": _version_meta_out(meta_t),
-        "resumen": {
-            "nodos_total": len(all_keys),
-            "nodos_adelantados": counts.get("adelantado", 0),
-            "nodos_atrasados": counts.get("atrasado", 0),
-            "nodos_duracion": counts.get("duracion", 0),
-            "nodos_nuevos": counts.get("nuevo", 0),
-            "nodos_eliminados": counts.get("eliminado", 0),
-            "fin_proyecto_baseline": b_max.isoformat() if b_max else None,
-            "fin_proyecto_target": t_max.isoformat() if t_max else None,
-            "inicio_proyecto_baseline": b_min.isoformat() if b_min else None,
-            "inicio_proyecto_target": t_min.isoformat() if t_min else None,
-            "delta_fin_proyecto_dias": delta_fin_proj,
-            "duracion_baseline_dias": b_dur_span,
-            "pct_desviacion_fechas": pct_fechas,
-            "costo_total_baseline": round(b_cost_total, 2),
-            "costo_total_target": round(t_cost_total, 2),
-            "delta_costo_total": round(delta_costo, 2),
-            "pct_desviacion_costo": pct_costo,
-        },
+        "resumen": resumen_out,
         "nodos": nodos_out,
     }
+    if not pk_id:
+        all_pks = _fetch_all_pk_ids(sb, contrato_id)
+        out["resumen_global"] = compute_resumen_global_pks(nodos_out, all_pks, base_nodes, tgt_nodes)
+    return out
 
 
 def _span_for_pk(nodes: Dict[str, dict], pk: str) -> Tuple[Optional[date], Optional[date], int]:

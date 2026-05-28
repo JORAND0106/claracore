@@ -332,6 +332,7 @@ export function pptoPrimerCapitulo(f, ctx = {}) {
 
 /**
  * Query params alineados con GET /presupuesto y /conteo.
+ * Siempre contra el presupuesto vigente (tabla `presupuesto`); no envía version_id ni snapshots históricos.
  * @param {object} [opts] capituloOverride, itemOverride, verPapelera, tipoEjecucionDefault
  */
 export function pptoBuildPresupuestoSearchParams(f, ctx = {}, opts = {}) {

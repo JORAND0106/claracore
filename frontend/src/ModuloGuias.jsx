@@ -8,6 +8,7 @@ const MODULOS_OPCIONES = [
   'Dashboard',
   'SICOE Obra',
   'Presupuesto',
+  'Programación de Obra',
   'Informes',
   'Administración',
   'General',

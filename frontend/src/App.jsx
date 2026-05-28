@@ -28,7 +28,6 @@ import { comprimirImagenOffline, warnPendingBlobsLimit } from './offline/offline
 import ModalPkMapaLeaflet from './offline/ModalPkMapaLeaflet'
 import AdminPanel from './AdminPanel'
 import ModuloInformes from './ModuloInformes'
-import ModuloGuias from './ModuloGuias'
 import ModuloSST from './ModuloSST'
 import ModuloEnsayos from './ModuloEnsayos'
 import ModuloAuditorSST from './ModuloAuditorSST'
@@ -12413,6 +12412,12 @@ function Dashboard({ t, activeTheme, themeMode, onTheme, usuario, setUsuario, on
   const [showModalContrato, setShowModalContrato] = useState(false)
   const [showAdmin, setShowAdmin] = useState(false)
 
+  useEffect(() => {
+    const onOpenAdmin = () => setShowAdmin(true)
+    window.addEventListener('cc-open-admin', onOpenAdmin)
+    return () => window.removeEventListener('cc-open-admin', onOpenAdmin)
+  }, [])
+
   // ── Clara (AVI): publica módulo activo al context ───────────────────────────
   const { setModuloActivo: _setCtxModulo } = useModulo()
   useEffect(() => {
@@ -14105,7 +14110,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
             ['programacion', '📅', 'Programación',   tienePermisoProgramacionObra],
             ['topografia',   '📐', 'Topografía',     tienePermisoTopografia],
             ['semaforo',     '🗺️', 'Plano Semáforo', true],
-            ['guias',        '📖', 'Guías',          true],
             ['sst',          '🦺', 'SST',            tieneModuloSst],
             ['ensayos',      '🧪', 'Ensayos',        tieneModuloEnsayos],
             ['auditor_sst',  '🛡️', 'Auditor SST',   tieneModuloAuditorSst],
@@ -16933,9 +16937,6 @@ const [navRegistroNumero, setNavRegistroNumero] = useState(null)
           )
         )}
 
-        {moduloActivo === 'guias' && (
-          <ModuloGuias t={t} usuario={usuario} token={getToken()} s={s} fontSize={fontSize} />
-        )}
 
         {moduloActivo === 'sst' && tieneModuloSst && <ModuloSST t={t} usuario={usuario} />}
 

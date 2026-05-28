@@ -55,3 +55,20 @@ def test_todos_agrupadores_programados_estado_completa():
     n = _count_ppto_items_con_fecha(ppto_keys, ag_by_item, actividades)
     assert n == 2
     assert _compute_estado_pk(2, n) == "completa"
+
+
+def test_items_sin_agrupador_impiden_estado_completa():
+    """Todos los ítems con agrupador programados, pero queda uno sin agrupador → en_progreso."""
+    ppto_keys = {("01", "1.1"), ("01", "1.2"), ("01", "9.9")}
+    ag_by_item = {("01", "1.1"): 10, ("01", "1.2"): 10}
+    actividades = [
+        {"capitulo": "01", "item": "A", "fecha_inicio": "2026-06-01", "agrupador_id": 10},
+    ]
+    n = _count_ppto_items_con_fecha(ppto_keys, ag_by_item, actividades)
+    assert n == 2
+    assert _compute_estado_pk(3, n, items_sin_agrupador=1) == "en_progreso"
+
+
+def test_sin_agrupador_bloquea_completa_si_conteos_coinciden():
+    """Si items_total omitió ítems sin agrupador, igual no debe marcar completa."""
+    assert _compute_estado_pk(2, 2, items_sin_agrupador=1) == "en_progreso"

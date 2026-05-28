@@ -204,10 +204,13 @@ export default function PptoFiltroModal({
     setDraftF(vacio)
   }
 
-  const ejecutarBuscar = () => {
+  const ejecutarBuscar = async () => {
     const fOut = { ...draftF, eje: draftF.eje || 'interv' }
-    onBuscar(fOut)
-    onClose()
+    try {
+      if (typeof onBuscar === 'function') await onBuscar(fOut)
+    } finally {
+      onClose()
+    }
   }
 
   const ejecutarLimpiarTodo = () => {

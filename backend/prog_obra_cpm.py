@@ -63,6 +63,8 @@ class NodoCPM:
     holgura_total: int = 0
     holgura_libre: int = 0
     es_ruta_critica: bool = False
+    tiene_sucesores: bool = False
+    es_actividad_final_tramo: bool = False
 
     @property
     def key(self) -> NodeKey:
@@ -257,14 +259,22 @@ def calcular_cpm(
 
         LS[key] = LF[key] - dur[key] + 1
 
-    # ── 7. Holguras y ruta crítica ────────────────────────────────────────
+    # ── 7. Holguras, sucesores y clasificación ruta crítica ───────────────
     ruta_critica: list[NodeKey] = []
     for key, n in node_map.items():
         ht = LS[key] - ES[key]   # holgura total (en días hábiles índice)
         n.holgura_total = max(0, ht)
-        n.es_ruta_critica = (ht == 0)
-        if n.es_ruta_critica:
+        n.tiene_sucesores = G.out_degree(key) > 0
+        if ht == 0 and n.tiene_sucesores:
+            n.es_ruta_critica = True
+            n.es_actividad_final_tramo = False
             ruta_critica.append(key)
+        elif ht == 0:
+            n.es_ruta_critica = False
+            n.es_actividad_final_tramo = True
+        else:
+            n.es_ruta_critica = False
+            n.es_actividad_final_tramo = False
 
     # Holgura libre: min ES de sucesores FS - EF_propio - 1
     for key, n in node_map.items():
