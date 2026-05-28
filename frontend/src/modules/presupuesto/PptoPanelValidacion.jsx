@@ -108,6 +108,7 @@ export default function PptoPanelValidacion({
   onBuscar,
   onLimpiarTodo,
   onVolverCapitulos,
+  onDrillCapitulo,
   onAplicarCapitulos,
   onAplicarItems,
   onFiltrarEstadoCelda,
@@ -258,6 +259,7 @@ export default function PptoPanelValidacion({
     navegacionManualRef.current = 'item'
     setCapSel(g.capitulo)
     setNivel('item')
+    onDrillCapitulo?.(g.capitulo)
   }
 
   const volverCapitulos = () => {

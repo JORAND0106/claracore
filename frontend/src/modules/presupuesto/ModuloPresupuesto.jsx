@@ -331,6 +331,8 @@ function ModuloPresupuesto({ t, usuario, token, s, navRegistroId = null, onNavRe
   const busquedaServidorActivaRef = useRef(false)
   const [busquedaServidorActiva, setBusquedaServidorActiva] = useState(false)
   const [panelBusquedaSeq, setPanelBusquedaSeq] = useState(0)
+  /** Snapshot fObra/drill antes de entrar a ítems desde el panel (restaurar en «Atrás»). */
+  const panelDrillRestoreRef = useRef(null)
   const registrosRef = useRef([])
   useEffect(() => { registrosRef.current = registros }, [registros])
   /** Filtro tipo SICOE Obra (reemplaza drill por gráfico de barras) */
@@ -1742,6 +1744,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       busquedaServidorActivaRef.current = true
       setBusquedaServidorActiva(true)
       setPanelBusquedaSeq((n) => n + 1)
+      panelDrillRestoreRef.current = null
       skipDebounceFiltrosRef.current = true
       guardarFiltroSesion(contratoId, {
         f,
@@ -1777,14 +1780,58 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       }
       setDrill(list.length === 1 ? [{ campo: 'capitulo', valor: list[0] }] : [])
       if (!list.length) setCapActivo(null)
+      panelDrillRestoreRef.current = null
       await aplicarFiltroObraConF(next)
     },
     [contratoId],
   )
 
+  const drillCapituloDesdePanel = useCallback((capitulo) => {
+    const cap = String(capitulo || '').trim()
+    if (!cap) return
+    const base = fObraRef.current || fObra
+    if (!panelDrillRestoreRef.current) {
+      panelDrillRestoreRef.current = {
+        cap: base.cap || '',
+        caps: Array.isArray(base.caps) ? [...base.caps] : [],
+        item: base.item || '',
+        items: Array.isArray(base.items) ? [...base.items] : [],
+        drill: [...(drill || [])],
+      }
+    }
+    const next = { ...base, cap, caps: [], item: '', items: [] }
+    setFObra(next)
+    fObraRef.current = next
+    syncFObraALegacy(next)
+    setDrill([{ campo: 'capitulo', valor: cap }])
+    setCapActivo(cap)
+    setVisibleRegistrosCount(80)
+    window.setTimeout(() => {
+      pptoTablaScrollRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 120)
+  }, [fObra, drill])
+
   const volverPanelCapitulos = useCallback(() => {
+    const snap = panelDrillRestoreRef.current
+    if (snap) {
+      const next = {
+        ...(fObraRef.current || fObra),
+        cap: snap.cap,
+        caps: snap.caps,
+        item: snap.item,
+        items: snap.items,
+      }
+      setFObra(next)
+      fObraRef.current = next
+      syncFObraALegacy(next)
+      setDrill(snap.drill || [])
+      panelDrillRestoreRef.current = null
+      if (snap.cap) setCapActivo(snap.cap)
+      else setCapActivo(null)
+      return
+    }
     setDrill((d) => (d || []).filter((x) => x.campo !== 'item' && x.campo !== 'items'))
-  }, [])
+  }, [fObra, drill])
 
   const aplicarPanelItems = useCallback(
     async (capitulo, items) => {
@@ -1797,6 +1844,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
         item: list.length === 1 ? list[0] : '',
         items: list.length > 1 ? list : [],
       }
+      panelDrillRestoreRef.current = null
       await aplicarFiltroObraConF(next)
     },
     [contratoId],
@@ -1821,6 +1869,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
       if (it) d.push({ campo: 'item', valor: it })
       setDrill(d)
       if (cap) setCapActivo(cap)
+      panelDrillRestoreRef.current = null
       setVisibleRegistrosCount(80)
       await aplicarFiltroObraConF(next)
       window.setTimeout(() => {
@@ -1917,6 +1966,7 @@ async function cargarRegistros(modoPapelera, forzar = false) {
   }
 
   function limpiarFiltroObra() {
+    panelDrillRestoreRef.current = null
     cargaPptoIdRef.current += 1
     busquedaServidorActivaRef.current = false
     setBusquedaServidorActiva(false)
@@ -5386,6 +5436,7 @@ async function restaurar(id) {
           }}
           onLimpiarTodo={limpiarFiltroObra}
           onVolverCapitulos={volverPanelCapitulos}
+          onDrillCapitulo={drillCapituloDesdePanel}
           onAplicarCapitulos={aplicarPanelCapitulos}
           onAplicarItems={aplicarPanelItems}
           onFiltrarEstadoCelda={filtrarEstadoDesdePanel}
