@@ -5864,6 +5864,39 @@ def actualizar_listado_precio_agrupador(
     return {"ok": True, "items_asignados": asignados}
 
 
+@app.get("/listado-precios/agrupadores/{agrupador_id}/eliminar-preview")
+def preview_eliminar_listado_precio_agrupador(agrupador_id: int, current_user=Depends(get_current_user)):
+    ex = (
+        supabase.table("listado_precios_agrupadores")
+        .select("contrato_id, nombre")
+        .eq("id", agrupador_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not ex:
+        raise HTTPException(status_code=404, detail="Agrupador no encontrado")
+    _require_contract_access(current_user, ex[0]["contrato_id"])
+    hijos = (
+        supabase.table("listado_precios")
+        .select("id", count="exact")
+        .eq("agrupador_id", agrupador_id)
+        .execute()
+    )
+    acts = (
+        supabase.table("prog_actividades")
+        .select("id", count="exact")
+        .eq("agrupador_id", agrupador_id)
+        .execute()
+    )
+    return {
+        "agrupador_id": agrupador_id,
+        "nombre": ex[0].get("nombre"),
+        "items_asignados": int(hijos.count or 0),
+        "actividades_programadas": int(acts.count or 0),
+    }
+
+
 @app.delete("/listado-precios/agrupadores/{agrupador_id}")
 def eliminar_listado_precio_agrupador(agrupador_id: int, current_user=Depends(get_current_user)):
     ex = (
@@ -5886,10 +5919,18 @@ def eliminar_listado_precio_agrupador(agrupador_id: int, current_user=Depends(ge
     items_desasignados = int(hijos.count or 0)
     if items_desasignados > 0:
         supabase.table("listado_precios").update({"agrupador_id": None}).eq("agrupador_id", agrupador_id).execute()
+    acts = (
+        supabase.table("prog_actividades")
+        .select("id", count="exact")
+        .eq("agrupador_id", agrupador_id)
+        .execute()
+    )
+    actividades_programadas = int(acts.count or 0)
     supabase.table("listado_precios_agrupadores").delete().eq("id", agrupador_id).execute()
     registrar_log(current_user, "ELIMINAR", "PRECIOS", "listado_precios_agrupadores", str(agrupador_id),
-                  {"nombre": ex[0].get("nombre"), "items_desasignados": items_desasignados})
-    return {"ok": True, "items_desasignados": items_desasignados}
+                  {"nombre": ex[0].get("nombre"), "items_desasignados": items_desasignados,
+                   "actividades_programadas": actividades_programadas})
+    return {"ok": True, "items_desasignados": items_desasignados, "actividades_programadas": actividades_programadas}
 
 
 @app.put("/listado-precios/item/{item_id}/agrupador")

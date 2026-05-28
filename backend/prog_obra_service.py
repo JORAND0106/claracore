@@ -1153,6 +1153,42 @@ def assert_version_borrador(sb, version_id: str) -> dict:
     return v
 
 
+def clear_version_programacion(sb, version_id: str, contrato_id: int) -> dict:
+    """Elimina toda la programación (fechas, CPM, estados PK) de una versión borrador."""
+    v = assert_version_borrador(sb, version_id)
+    if int(v.get("contrato_id") or 0) != int(contrato_id):
+        raise HTTPException(status_code=404, detail="Versión no encontrada")
+
+    def _count(table: str) -> int:
+        r = sb.table(table).select("id", count="exact").eq("version_id", version_id).execute()
+        return int(r.count or 0)
+
+    counts = {
+        "prog_actividades": _count("prog_actividades"),
+        "prog_actividades_capitulo": _count("prog_actividades_capitulo"),
+        "prog_cpm_resultados": _count("prog_cpm_resultados"),
+        "prog_pk_estado": _count("prog_pk_estado"),
+    }
+
+    sb.table("prog_actividades").delete().eq("version_id", version_id).execute()
+    sb.table("prog_actividades_capitulo").delete().eq("version_id", version_id).execute()
+    sb.table("prog_cpm_resultados").delete().eq("version_id", version_id).execute()
+    sb.table("prog_pk_estado").delete().eq("version_id", version_id).execute()
+
+    now = datetime.now(timezone.utc).isoformat()
+    sb.table("prog_versiones").update(
+        {"cpm_dirty": True, "cpm_calculado_en": None, "actualizado_en": now}
+    ).eq("id", version_id).execute()
+
+    return {
+        "ok": True,
+        "version_id": version_id,
+        "numero_version": v.get("numero_version"),
+        "tipo": v.get("tipo"),
+        "eliminados": counts,
+    }
+
+
 def submit_to_validation(sb, version_id: str, contrato_id: int) -> List[dict]:
     assert_version_editable(sb, version_id)
     from prog_obra_presupuesto_bridge import presupuesto_aprobacion_estado

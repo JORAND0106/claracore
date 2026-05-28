@@ -20,6 +20,7 @@ import ProgObraComparacionGlobalModal from './ProgObraComparacionGlobalModal'
 import ProgObraSuspensionWizard from './ProgObraSuspensionWizard'
 import ProgObraCurvaSModal from './ProgObraCurvaSModal'
 import ProgObraAutoScheduleWizard from './ProgObraAutoScheduleWizard'
+import { clearVersionProgramacion } from './progObraApi'
 import { fmtCOP, fmtCant, fmtDateHuman, fmtDateIso } from './progObraFormat'
 import { aggregatePptoItemKeysByPk, buildProgValidationPreCheck } from './progObraValidation'
 import {
@@ -865,6 +866,7 @@ export default function ModuloProgramacionObra({
   const [showCurvaS, setShowCurvaS] = useState(false)
   const [showSuspensionWizard, setShowSuspensionWizard] = useState(false)
   const [showAutoSchedule, setShowAutoSchedule] = useState(false)
+  const [showEliminarProgramacion, setShowEliminarProgramacion] = useState(false)
   const [presupuestoDelta, setPresupuestoDelta] = useState(null)
   const [presupuestoBloqueoValidacion, setPresupuestoBloqueoValidacion] = useState(null)
   const [validarModal, setValidarModal] = useState(null)
@@ -1710,6 +1712,29 @@ export default function ModuloProgramacionObra({
     showToast('Programación automática aplicada. Revise las fechas en el mapa.', 'ok')
   }, [refreshMapaYVersiones, showToast])
 
+  const handleEliminarProgramacion = useCallback(async () => {
+    if (!puedeEditar || !cid || !workingVersionId || !token) return
+    setPanelBusy(true)
+    try {
+      await clearVersionProgramacion(API, cid, token, String(workingVersionId))
+      setShowEliminarProgramacion(false)
+      await refreshMapaYVersiones()
+      showToast('Programación eliminada. El mapa se actualizó.', 'ok')
+    } catch (e) {
+      showToast(e?.message || 'No se pudo eliminar la programación', 'err')
+    } finally {
+      setPanelBusy(false)
+    }
+  }, [puedeEditar, cid, workingVersionId, token, API, refreshMapaYVersiones, showToast])
+
+  const progTipoLabel = (tipo) => {
+    const t0 = (tipo || '').toLowerCase()
+    if (t0 === 'baseline') return 'baseline'
+    if (t0 === 'reprogramacion') return 'reprogramación'
+    if (t0 === 'suspension') return 'suspensión'
+    return t0 || 'versión'
+  }
+
   const compareTargetForGlobal = useMemo(() => {
     if (borradorMeta?.id) return String(borradorMeta.id)
     if (versionVigenteId) return String(versionVigenteId)
@@ -2284,6 +2309,62 @@ export default function ModuloProgramacionObra({
         </ProgOverlay>
       )}
 
+      {showEliminarProgramacion && workingVersion && (
+        <ProgOverlay onBackdropClick={() => !panelBusy && setShowEliminarProgramacion(false)}>
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 440,
+              background: t.bgCard,
+              border: `1px solid ${t.border}`,
+              borderRadius: 12,
+              padding: 20,
+              color: t.text,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: 700, marginBottom: 12, color: '#b45309', fontSize: 'var(--cc-md)' }}>
+              ⚠ ¿Eliminar toda la programación de esta versión?
+            </div>
+            <p style={{ fontSize: 'var(--cc-sm)', lineHeight: 1.55, margin: '0 0 10px', color: t.text }}>
+              Esta acción eliminará todas las fechas, agrupadores programados y resultados CPM de la versión nº
+              {workingVersion.numero_version} {progTipoLabel(workingVersion.tipo)}.
+            </p>
+            <p style={{ fontSize: 'var(--cc-sm)', lineHeight: 1.55, margin: '0 0 10px', color: t.textMuted }}>
+              Los agrupadores del Listado de Precios <strong style={{ color: t.text }}>NO</strong> se eliminan.
+              <br />
+              El presupuesto <strong style={{ color: t.text }}>NO</strong> se modifica.
+            </p>
+            <p style={{ fontSize: 'var(--cc-sm)', lineHeight: 1.55, margin: '0 0 16px', color: '#991b1b', fontWeight: 600 }}>
+              Esta acción no se puede deshacer.
+            </p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                style={btnStyle(false, panelBusy)}
+                disabled={panelBusy}
+                onClick={() => setShowEliminarProgramacion(false)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                style={{
+                  ...btnStyle(true, panelBusy),
+                  background: '#dc2626',
+                  borderColor: '#dc2626',
+                  color: '#fff',
+                }}
+                disabled={panelBusy}
+                onClick={() => void handleEliminarProgramacion()}
+              >
+                Eliminar programación
+              </button>
+            </div>
+          </div>
+        </ProgOverlay>
+      )}
+
       <ProgObraProgramacionModal
         open={progModalOpen && modalPkTabs.length > 0}
         onClose={closeProgModal}
@@ -2717,6 +2798,28 @@ export default function ModuloProgramacionObra({
             onContinuar={handleHistorialContinuar}
             onComparar={handleHistorialComparar}
           />
+          {esBorradorEditable && puedeEditar && workingVersionId && (
+            <button
+              type="button"
+              disabled={panelBusy}
+              onClick={() => setShowEliminarProgramacion(true)}
+              style={{
+                marginTop: 6,
+                width: '100%',
+                padding: '6px 10px',
+                fontSize: 11,
+                fontWeight: 600,
+                borderRadius: 6,
+                border: '1px solid #dc2626',
+                background: '#fef2f2',
+                color: '#991b1b',
+                cursor: panelBusy ? 'not-allowed' : 'pointer',
+                opacity: panelBusy ? 0.55 : 1,
+              }}
+            >
+              Eliminar programación
+            </button>
+          )}
         </div>
 
         {borradorProgResumen != null && esBorradorEditable && (
@@ -2859,68 +2962,6 @@ export default function ModuloProgramacionObra({
               fontWeight: 600,
               borderRadius: 6,
               border: `1px solid #d97706`,
-              background: '#fffbeb',
-              color: '#92400e',
-              cursor: panelBusy ? 'not-allowed' : 'pointer',
-            }}
-          >
-            Programación automática ⚡
-          </button>
-        )}
-
-        {versionBaselineId && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <button
-              type="button"
-              disabled={panelBusy}
-              onClick={() => setShowComparacionGlobal(true)}
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                fontSize: 11,
-                fontWeight: 600,
-                borderRadius: 6,
-                border: `1px solid ${t.primary}`,
-                background: `${t.primary}10`,
-                color: t.primary,
-                cursor: panelBusy ? 'not-allowed' : 'pointer',
-              }}
-            >
-              Ver comparación global
-            </button>
-            <button
-              type="button"
-              disabled={panelBusy}
-              onClick={() => setShowCurvaS(true)}
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                fontSize: 11,
-                fontWeight: 600,
-                borderRadius: 6,
-                border: `1px solid ${t.border}`,
-                background: t.bg,
-                color: t.text,
-                cursor: panelBusy ? 'not-allowed' : 'pointer',
-              }}
-            >
-              Curva S
-            </button>
-          </div>
-        )}
-
-        {esBorradorEditable && puedeEditar && workingVersionId && (
-          <button
-            type="button"
-            disabled={panelBusy}
-            onClick={() => setShowAutoSchedule(true)}
-            style={{
-              width: '100%',
-              padding: '8px 10px',
-              fontSize: 11,
-              fontWeight: 600,
-              borderRadius: 6,
-              border: '1px solid #d97706',
               background: '#fffbeb',
               color: '#92400e',
               cursor: panelBusy ? 'not-allowed' : 'pointer',

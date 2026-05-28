@@ -18,6 +18,7 @@ from prog_obra_service import (
     aplicar_herencia_capitulo,
     assert_version_borrador,
     create_version,
+    clear_version_programacion,
     fetch_borrador_activo,
     fetch_estructura_programacion_pk,
     fetch_mapa_rows_for_version,
@@ -400,6 +401,31 @@ def prog_delete_version(contrato_id: int, version_id: str, current_user=Depends(
     supabase.table("prog_versiones").delete().eq("id", version_id).execute()
     _log_prog(current_user, "PROG_VERSION_ELIMINADA", "prog_version", version_id, {"contrato_id": contrato_id})
     return {"ok": True}
+
+
+@router.delete("/{contrato_id}/versiones/{version_id}/programacion")
+def prog_clear_version_programacion(
+    contrato_id: int,
+    version_id: str,
+    current_user=Depends(get_current_user),
+):
+    """Elimina fechas, actividades, CPM y estados PK de una versión borrador (no toca presupuesto ni WBS)."""
+    require_permiso_programacion_obra(current_user, "editar")
+    _require_contract_access(current_user, contrato_id)
+    try:
+        result = clear_version_programacion(supabase, version_id, contrato_id)
+    except HTTPException:
+        raise
+    except BusinessRuleError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    _log_prog(
+        current_user,
+        "PROG_PROGRAMACION_ELIMINADA",
+        "prog_version",
+        version_id,
+        {"contrato_id": contrato_id, "eliminados": result.get("eliminados")},
+    )
+    return result
 
 
 @router.get("/{contrato_id}/versiones/{version_id}/validaciones")

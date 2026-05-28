@@ -79,3 +79,12 @@ export async function applySuspension(API, cid, token, { motivo, metadata }) {
   if (!res.ok) await parseErr(res)
   return res.json()
 }
+
+export async function clearVersionProgramacion(API, cid, token, versionId) {
+  const res = await fetch(`${API}/prog-obra/${cid}/versiones/${versionId}/programacion`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) await parseErr(res)
+  return res.json()
+}

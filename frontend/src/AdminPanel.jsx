@@ -3266,6 +3266,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   const [agrupadorBusqueda,setAgrupadorBusqueda]= useState("");
   const [agrupadorSaving,  setAgrupadorSaving]  = useState(false);
   const [eliminarAgConfirm, setEliminarAgConfirm] = useState(null);
+  const [eliminarAgPreview, setEliminarAgPreview] = useState(null);
   const [eliminandoAg,      setEliminandoAg]      = useState(false);
   const [agDropdown,        setAgDropdown]        = useState(null);
   const [reasignandoAg,     setReasignandoAg]     = useState(false);
@@ -3779,7 +3780,19 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
   const contarHijosAg = (agId) =>
     items.filter(i => normAgId(i.agrupador_id) === normAgId(agId)).length;
 
-  const solicitarEliminarAgrupador = (ag) => setEliminarAgConfirm(ag);
+  const solicitarEliminarAgrupador = async (ag) => {
+    setEliminarAgConfirm(ag);
+    setEliminarAgPreview(null);
+    try {
+      const prev = await call("GET", `/listado-precios/agrupadores/${ag.id}/eliminar-preview`);
+      setEliminarAgPreview(prev);
+    } catch {
+      setEliminarAgPreview({
+        items_asignados: contarHijosAg(ag.id),
+        actividades_programadas: 0,
+      });
+    }
+  };
 
   const confirmarEliminarAgrupador = async () => {
     if (!eliminarAgConfirm || eliminandoAg) return;
@@ -3792,6 +3805,7 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
         text: `✅ Agrupador "${eliminarAgConfirm.nombre}" eliminado.${n ? ` ${n} ítem(s) quedaron sin agrupador.` : ""}`,
       });
       setEliminarAgConfirm(null);
+      setEliminarAgPreview(null);
     } catch (e) {
       setMsg({ type: "error", text: e.message });
     } finally {
@@ -5035,23 +5049,30 @@ function SeccionListadoPrecios({ call, user, perms, theme, modoCantidad = "calcu
 
       {/* ── Confirmación eliminar agrupador ── */}
       {eliminarAgConfirm && (
-        <div style={overlayStyle} onClick={e => e.target === e.currentTarget && !eliminandoAg && setEliminarAgConfirm(null)}>
+        <div style={overlayStyle} onClick={e => e.target === e.currentTarget && !eliminandoAg && (setEliminarAgConfirm(null), setEliminarAgPreview(null))}>
           <div style={{ ...modalStyle(480), padding: 0 }} onClick={e => e.stopPropagation()}>
             <div style={modalHead}>
               <div style={agTypo.modalTitle}>Eliminar agrupador</div>
-              <button type="button" style={S.closeBtn(theme)} onClick={() => !eliminandoAg && setEliminarAgConfirm(null)} disabled={eliminandoAg}>✕</button>
+              <button type="button" style={S.closeBtn(theme)} onClick={() => !eliminandoAg && (setEliminarAgConfirm(null), setEliminarAgPreview(null))} disabled={eliminandoAg}>✕</button>
             </div>
             <div style={{ ...modalScroll, padding: "16px 20px" }}>
               <p style={{ fontSize: "var(--cc-sm)", color: col.textPrimary, lineHeight: 1.55, margin: 0 }}>
                 ¿Eliminar el agrupador <strong>{eliminarAgConfirm.nombre}</strong>?
                 {" "}Los{" "}
-                <strong>{contarHijosAg(eliminarAgConfirm.id).toLocaleString("es-CO")}</strong>
-                {" "}ítem{contarHijosAg(eliminarAgConfirm.id) !== 1 ? "s" : ""} asignados quedarán sin agrupador y mostrarán alerta ⚠️.
+                <strong>{(eliminarAgPreview?.items_asignados ?? contarHijosAg(eliminarAgConfirm.id)).toLocaleString("es-CO")}</strong>
+                {" "}ítem{(eliminarAgPreview?.items_asignados ?? contarHijosAg(eliminarAgConfirm.id)) !== 1 ? "s" : ""} asignados quedarán sin agrupador y mostrarán alerta ⚠️.
                 {" "}Esta acción no elimina los ítems del listado de precios.
               </p>
+              {(eliminarAgPreview?.actividades_programadas ?? 0) > 0 && (
+                <p style={{ fontSize: "var(--cc-sm)", color: "#b45309", lineHeight: 1.55, margin: "12px 0 0", fontWeight: 600 }}>
+                  ⚠ Este agrupador tiene {eliminarAgPreview.actividades_programadas} actividad
+                  {eliminarAgPreview.actividades_programadas !== 1 ? "es" : ""} programada
+                  {eliminarAgPreview.actividades_programadas !== 1 ? "s" : ""}. Al eliminarlo, esas actividades perderán su agrupador pero las fechas se conservan.
+                </p>
+              )}
             </div>
             <div style={modalFoot}>
-              <button type="button" style={S.btn("ghost")} onClick={() => setEliminarAgConfirm(null)} disabled={eliminandoAg}>Cancelar</button>
+              <button type="button" style={S.btn("ghost")} onClick={() => { setEliminarAgConfirm(null); setEliminarAgPreview(null); }} disabled={eliminandoAg}>Cancelar</button>
               <button type="button" style={S.btn("danger")} onClick={confirmarEliminarAgrupador} disabled={eliminandoAg}>
                 {eliminandoAg ? "Eliminando..." : "🗑 Eliminar agrupador"}
               </button>
