@@ -289,7 +289,7 @@ export function sicoeFSicoeToFiltros(fSicoe = {}) {
 export function sicoeItemsChipsFromFSicoe(fSicoe = {}) {
   const lista = sicoeFiltroValoresLista(sicoeFiltroDef('item'), fSicoe)
   if (fSicoe.items?.length) return [...fSicoe.items]
-  return lista.length > 1 || (fSicoe.items?.length === 0 && fSicoe.item === '') ? lista : []
+  return lista
 }
 
 function parseNum(v) {

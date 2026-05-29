@@ -8,6 +8,7 @@ import {
 import SicoeFiltroCapasBlock from './SicoeFiltroCapasBlock'
 import SicoeFiltroFechasUsuario from './SicoeFiltroFechasUsuario'
 import SicoeFiltroUbicacionInline from './SicoeFiltroUbicacionInline'
+import SicoeItemPickerInline from './SicoeItemPickerInline'
 import { fetchSicoeFiltrosOpciones, sicoeOpcionActa, sicoeOpcionSemana } from './sicoeFiltrosApi'
 import { API_BASE } from '../../apiBase'
 import {
@@ -264,9 +265,7 @@ export default function SicoeFiltroModal({
   const ejecutarBuscar = () => {
     const snap = sicoeFiltroSnapshot({
       fSicoe: draftF,
-      itemsChips: draftF.items?.length ? [...draftF.items] : sicoeFiltroValoresLista(sicoeFiltroDef('item'), draftF).length > 1
-        ? sicoeFiltroValoresLista(sicoeFiltroDef('item'), draftF)
-        : [],
+      itemsChips: sicoeFiltroValoresLista(sicoeFiltroDef('item'), draftF),
       itemsOp: draftF.itemsOp,
       capasValidacion: draftCapas,
       capasValidacionOp: draftCapasOp,
@@ -620,15 +619,50 @@ export default function SicoeFiltroModal({
                         ) : null}
                         {defs.map((def) => (
                           <div key={def.key}>
-                            <PptoFiltroCampo
-                              def={def}
-                              f={draftF}
-                              onChange={(patch) => setDraftF((prev) => ({ ...prev, ...patch }))}
-                              t={t}
-                              opciones={opcionesResueltas}
-                              itemLabels={itemLabels}
-                              catalogHelpers={sicoeCatalogHelpers}
-                            />
+                            {def.key === 'item' ? (
+                              <div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                                  <label style={{ fontSize: cc.caption, fontWeight: 700, color: t.text }}>{def.label}</label>
+                                  {itemsLista.length > 0 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setDraftF((p) => ({ ...p, ...sicoeFiltroPatchLimpiar(def) }))}
+                                      style={{ background: 'transparent', border: 'none', color: t.textMuted, fontSize: cc.caption, cursor: 'pointer', textDecoration: 'underline' }}
+                                    >
+                                      Limpiar
+                                    </button>
+                                  ) : null}
+                                </div>
+                                <SicoeItemPickerInline
+                                  t={t}
+                                  contratoId={contratoId}
+                                  token={token}
+                                  lista={itemsLista}
+                                  onChangeLista={(next) =>
+                                    setDraftF((prev) => ({
+                                      ...prev,
+                                      ...sicoeFiltroPatchLista(def, next),
+                                      ...sicoeFiltroPatchActivar(def),
+                                    }))
+                                  }
+                                  itemLabels={itemLabels}
+                                  acta_rpo={draftF.acta_rpo}
+                                  capitulo={draftF.capitulo}
+                                  semana={draftF.semana}
+                                  opcionesLocales={opcionesResueltas.items_opciones}
+                                />
+                              </div>
+                            ) : (
+                              <PptoFiltroCampo
+                                def={def}
+                                f={draftF}
+                                onChange={(patch) => setDraftF((prev) => ({ ...prev, ...patch }))}
+                                t={t}
+                                opciones={opcionesResueltas}
+                                itemLabels={itemLabels}
+                                catalogHelpers={sicoeCatalogHelpers}
+                              />
+                            )}
                             {def.key === 'item' && itemsLista.length >= 2 && (
                               <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
                                 <span style={{ fontSize: cc.caption, color: t.textMuted, fontWeight: 700 }}>Combinar ítems:</span>

@@ -549,8 +549,6 @@ export default function ModuloInformes({
   const [subsistemaFoEo04, setSubsistemaFoEo04] = useState('vial')
   /** Acta seleccionada para la vista previa del FO-IDU-EO-04-V2 */
   const [actaIdFoEo04, setActaIdFoEo04] = useState('')
-  /** Lista de actas RPO disponibles para el contrato */
-  const [actasRpoFoEo04, setActasRpoFoEo04] = useState([])
   /** Nombre del supervisor(a) — se persiste en localStorage por contrato */
   const [supervisorFoEo04, setSupervisorFoEo04] = useState('')
   /** Job de generación progresiva de PDF para FO-IDU-EO-04-V2 */
@@ -641,10 +639,12 @@ export default function ModuloInformes({
       setBiblioCcd([])
       setFirmantesCcd([])
       setActasConc([])
+      setActaIdFoEo04('')
       setSemanasConc([])
       semanasConcFetchRef.current = null
       return
     }
+    setActaIdFoEo04('')
     const authToken = getAuthToken()
     if (!authToken) {
       setError('Sesion no autenticada. Ingresa de nuevo para generar informes.')
@@ -839,26 +839,17 @@ export default function ModuloInformes({
     if (!formatoMes002Abierto) setCcMes002ListadoItemsAbierto(false)
   }, [formatoMes002Abierto])
 
-  /** Actas RPO + supervisor guardado: carga cuando se abre la sección de Formatos Entidades Externas */
+  /** FO-EO-04: supervisor guardado + acta por defecto (actas = actasConc, ya cargadas con el contrato). */
   useEffect(() => {
     if (!formatosEntExtAbierto || !contratoId) return
-    // Restaurar supervisor guardado para este contrato
     const savedSup = localStorage.getItem(`supervisor_fo_eo_04_${contratoId}`) || ''
     setSupervisorFoEo04(savedSup)
-    const authToken = getAuthToken()
-    if (!authToken) return
-    fetchConFallback(`/informes/${contratoId}/ccd/actas-rpo`, {
-      headers: { Authorization: `Bearer ${authToken}` },
-    })
-      .then(r => r.ok ? r.json() : [])
-      .then(data => {
-        setActasRpoFoEo04(Array.isArray(data) ? data : [])
-        if (Array.isArray(data) && data.length > 0 && !actaIdFoEo04) {
-          setActaIdFoEo04(String(data[0].id))
-        }
-      })
-      .catch(() => {})
-  }, [formatosEntExtAbierto, contratoId])
+    if (cargandoSub || !actasConc.length) return
+    const idsValidos = new Set(actasConc.map((a) => String(a.id)))
+    if (!actaIdFoEo04 || !idsValidos.has(String(actaIdFoEo04))) {
+      setActaIdFoEo04(String(actasConc[0].id))
+    }
+  }, [formatosEntExtAbierto, contratoId, actasConc, actaIdFoEo04, cargandoSub])
 
   /** Semanas (pesado en servidor): solo al abrir «Formatos Semanales»; una vez por contrato. */
   useEffect(() => {
@@ -2442,6 +2433,18 @@ export default function ModuloInformes({
   async function abrirPreviewFoEo04ConProgreso() {
     const authToken = getAuthToken()
     if (!authToken || !contratoId) { setError('Sesión no autenticada.'); return }
+    if (cargandoSub && !actasConc.length) {
+      setError('Espere a que carguen las actas RPO del contrato.')
+      return
+    }
+    if (!actaIdFoEo04) {
+      setError('Selecciona un acta RPO para generar la memoria.')
+      return
+    }
+    if (!actasConc.some((a) => String(a.id) === String(actaIdFoEo04))) {
+      setError('El acta seleccionado no está en la lista del contrato. Elija otro acta.')
+      return
+    }
 
     // Limpiar job anterior y su poll
     if (foEo04JobPollRef.current) {
@@ -2522,6 +2525,7 @@ export default function ModuloInformes({
               ...prev,
               status: estado.status,
               pct: estado.pct ?? prev?.pct ?? 0,
+              msg: estado.msg ?? prev?.msg ?? '',
               currentItem: estado.current_item ?? null,
               totalItems: estado.total_items ?? null,
             }))
@@ -5002,13 +5006,20 @@ export default function ModuloInformes({
                       <select
                         value={actaIdFoEo04}
                         onChange={e => setActaIdFoEo04(e.target.value)}
+                        disabled={cargandoSub && actasConc.length === 0}
                         style={{ fontSize: ui.hint + 'px', padding: '4px 8px', borderRadius: '6px', border: `1px solid ${t.border}`, background: t.bgCard, color: t.text, cursor: 'pointer' }}
                       >
-                        <option value="">— Sin acta —</option>
-                        {actasRpoFoEo04.map(a => (
+                        <option value="">
+                          {cargandoSub && actasConc.length === 0
+                            ? 'Cargando actas RPO…'
+                            : actasConc.length === 0
+                              ? 'Sin actas RPO en este contrato'
+                              : '— Selecciona acta —'}
+                        </option>
+                        {actasConc.map(a => (
                           <option key={a.id} value={String(a.id)}>
                             Acta RPO {a.numero_rpo ?? a.consecutivo}
-                            {a.fecha_inicio ? ` (${a.fecha_inicio.slice(0,10)})` : ''}
+                            {a.fecha_inicio ? ` (${a.fecha_inicio.slice(0, 10)})` : ''}
                           </option>
                         ))}
                       </select>
@@ -5056,9 +5067,17 @@ export default function ModuloInformes({
                     onClick={abrirPreviewFoEo04ConProgreso}
                     disabled={
                       !supervisorFoEo04.trim() ||
+                      !actaIdFoEo04 ||
+                      (cargandoSub && actasConc.length === 0) ||
                       (['cargando','progreso'].includes(vistaPrevia?.fase) && vistaPrevia?.tipo === 'idu-plantilla-vacia')
                     }
-                    title={!supervisorFoEo04.trim() ? 'Ingrese el nombre del supervisor(a) para continuar' : 'Vista previa PDF'}
+                    title={
+                      !supervisorFoEo04.trim()
+                        ? 'Ingrese el nombre del supervisor(a) para continuar'
+                        : !actaIdFoEo04
+                          ? 'Seleccione un acta RPO'
+                          : 'Vista previa PDF'
+                    }
                     aria-label="Vista previa FO-IDU-EO-04-V2"
                   >
                     {['cargando','progreso'].includes(vistaPrevia?.fase) && vistaPrevia?.tipo === 'idu-plantilla-vacia' ? (
@@ -5082,8 +5101,14 @@ export default function ModuloInformes({
                         'FO-IDU-EO-04-V2.pdf'
                       )
                     }}
-                    disabled={!supervisorFoEo04.trim() || concPdfBusy}
-                    title={!supervisorFoEo04.trim() ? 'Ingrese el nombre del supervisor(a) para continuar' : 'Descargar PDF con página de sello (firma del perfil, fecha, huella SHA-256)'}
+                    disabled={!supervisorFoEo04.trim() || !actaIdFoEo04 || concPdfBusy}
+                    title={
+                      !supervisorFoEo04.trim()
+                        ? 'Ingrese el nombre del supervisor(a) para continuar'
+                        : !actaIdFoEo04
+                          ? 'Seleccione un acta RPO'
+                          : 'Descargar PDF con página de sello (firma del perfil, fecha, huella SHA-256)'
+                    }
                     aria-label="Descargar PDF FO-IDU-EO-04-V2 con sello"
                   >
                     {concPdfBusy
@@ -5247,13 +5272,16 @@ export default function ModuloInformes({
               const tot  = job.totalItems
               // Etiqueta de fase estable (no cambia con cada ítem)
               const totN = typeof tot === 'number' ? tot : 0
+              const msgBackend = String(job.msg || '').trim()
               const fase = pct < 30
                 ? 'Consultando información del acta…'
                 : pct < 55
                 ? 'Calculando cantidades…'
                 : pct < 76
                 ? `Generando ítem${tot ? ` (${curr || '…'} de ${tot})` : '…'}`
-                : `Se han creado ${totN} de ${totN} ítems\n\nEste proceso puede tardar según la cantidad de ítems. Por favor no cierre esta ventana.`
+                : pct < 100
+                ? (msgBackend || (tot ? `Renderizando PDF (${totN} ítems)…` : 'Renderizando PDF…'))
+                : '¡Listo!'
               return (
                 <div style={{
                   flex: 1,

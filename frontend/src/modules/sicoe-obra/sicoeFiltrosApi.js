@@ -85,9 +85,9 @@ export async function fetchSicoeFiltrosOpciones(contratoId, token, ctx = {}) {
 
   let items = []
   const capSingle = ctx.capitulo || (Array.isArray(ctx.caps) && ctx.caps.length === 1 ? ctx.caps[0] : '')
-  if (capSingle) {
+  if (capSingle || ctx.acta_rpo) {
     const pIt = new URLSearchParams(pCap)
-    pIt.set('capitulo', capSingle)
+    if (capSingle) pIt.set('capitulo', capSingle)
     items = await fetch(`${API}/sicoe-obra/${contratoId}/filtros/items?${pIt}`, { headers: hdrs })
       .then((r) => (r.ok ? r.json() : []))
       .catch(() => [])

@@ -1,6 +1,7 @@
 """Consultas so_registros para formatos CCD de conciliación interventoría–contratista (semana / acta RPO)."""
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
@@ -102,6 +103,11 @@ def _niveles_activos_contrato_sb(sb, contrato_id: int) -> List[int]:
         )
         if res and res[0] is not None:
             raw = res[0].get("niveles_activos")
+            if isinstance(raw, str) and raw.strip():
+                try:
+                    raw = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    raw = None
             if isinstance(raw, list) and raw:
                 out: List[int] = []
                 for x in raw:

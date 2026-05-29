@@ -1448,6 +1448,13 @@ function determinarNivelValidacion(usuario, sicoeContratoId = null) {
     if ((inferred === 4 || inferred === 5) && permiteLlaveN3) nivelLlaveReversion = 3
   }
 
+  // Interventoría N4–N6 comparten slot N3 en la doble llave (misma UI que nivel 3).
+  if (nivelLlaveReversion != null && nivelLlaveReversion !== 0) {
+    const nll = Number(nivelLlaveReversion)
+    if (nll >= 3 && nll <= 6) nivelLlaveReversion = 3
+    else if (nll !== 2) nivelLlaveReversion = null
+  }
+
   return {
     nivelValidacion,
     nivelValidacionComentario,
@@ -2427,15 +2434,26 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
   const uidLlave = usuario?.id != null ? Number(usuario.id) : NaN
   const arm2Llave = registro.reversion_arm_n2_usuario_id != null ? Number(registro.reversion_arm_n2_usuario_id) : null
   const arm3Llave = registro.reversion_arm_n3_usuario_id != null ? Number(registro.reversion_arm_n3_usuario_id) : null
+  const slotLlaveReversion = (nv) => {
+    const n = Number(nv)
+    if (n === 2) return 2
+    if (n >= 3 && n <= 6) return 3
+    return null
+  }
   let nvLlave = nivelInfo.nivelLlaveReversion
   if (esUsuarioDesarrollador(usuario) && regSelladoMax && !!registro.bloqueado) {
     if (arm2Llave == null) nvLlave = 2
     else if (arm3Llave == null) nvLlave = 3
   }
-  const muestraPanelDobleLlave = regSelladoMax && !!registro.bloqueado && (nvLlave === 2 || nvLlave === 3)
-  const miSlotLibre = nvLlave === 2 ? arm2Llave == null : nvLlave === 3 ? arm3Llave == null : false
+  const slotLlave = slotLlaveReversion(nvLlave)
+  const muestraPanelDobleLlave = regSelladoMax && !!registro.bloqueado && (slotLlave === 2 || slotLlave === 3)
+  const miSlotLibre = slotLlave === 2 ? arm2Llave == null : slotLlave === 3 ? arm3Llave == null : false
   /** Otro usuario ya ocupó «tu» lado de la llave */
-  const llaveContrariaOcupadaPorOtro = nvLlave === 2 ? (arm2Llave != null && arm2Llave !== uidLlave) : nvLlave === 3 ? (arm3Llave != null && arm3Llave !== uidLlave) : false
+  const llaveContrariaOcupadaPorOtro = slotLlave === 2
+    ? (arm2Llave != null && arm2Llave !== uidLlave)
+    : slotLlave === 3
+      ? (arm3Llave != null && arm3Llave !== uidLlave)
+      : false
   const puedeTurnarLlaveMisil = muestraPanelDobleLlave && miSlotLibre && !llaveContrariaOcupadaPorOtro
 
   const CampoRO = ({ label, valor, color }) => (
@@ -2639,7 +2657,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               </span>
               <span style={{ display:'flex', flexDirection:'column', gap:'2px', minWidth:0 }}>
                 <span style={{ fontSize:'var(--cc-sm)', fontWeight:'900', color:'#b91c1c', letterSpacing:'0.03em' }}>
-                  Reversión N3 · doble autorización
+                  Reversión sellado · doble autorización
                 </span>
                 <span style={{ fontSize:'var(--cc-caption)', color:t.textMuted, fontWeight:'600', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
                   {puedeTurnarLlaveMisil
@@ -2662,7 +2680,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                 border:`1px solid ${arm3Llave ? '#16a34a88' : t.border}`,
                 background: arm3Llave ? '#16a34a14' : `${t.bgCard}99`,
                 color: arm3Llave ? '#15803d' : t.textMuted,
-              }}>N3 {arm3Llave ? '✓' : '○'}</span>
+              }}>{encPorNivelHojaReg[nivelesContrato?.nivel_maximo ?? 3] || 'N máx.'} {arm3Llave ? '✓' : '○'}</span>
               <span style={{
                 fontSize:'12px', color:t.textMuted, fontWeight:'900', width:'22px', textAlign:'center',
                 transform: panelReversionExpandido ? 'rotate(0deg)' : 'rotate(-90deg)',
@@ -2681,8 +2699,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
               }}
             >
               <div style={{ fontSize:'var(--cc-label)', color:t.textMuted, lineHeight:1.45, marginBottom:'12px', paddingTop:'12px' }}>
-                Residente de costos (N2) e Interventoría (N3) deben registrar cada uno un comentario con destinatarios, igual que en Pendiente o Rechazado.
-                Solo cuando ambas autorizaciones estén registradas se desbloquea el registro y el N3 vuelve a «No revisado».
+                Residente de costos (N2) y un validador de interventoría con permiso en el nivel máximo del contrato ({encPorNivelHojaReg[nivelesContrato?.nivel_maximo ?? 3] || 'nivel máx.'}) deben registrar cada uno un comentario con destinatarios.
+                Solo cuando ambas autorizaciones estén registradas se desbloquea el registro y la aprobación del nivel máximo vuelve a «No revisado».
               </div>
               <div style={{ display:'flex', flexWrap:'wrap', gap:'14px', alignItems:'center', marginBottom:'12px', fontSize:'var(--cc-label)', fontWeight:'700' }}>
                 <span style={{
@@ -2702,7 +2720,7 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
                   color: arm3Llave ? '#15803d' : t.textMuted,
                   display:'flex', alignItems:'center', gap:'6px',
                 }}>
-                  🔑 N3 {arm3Llave ? `✓ ${registro.reversion_arm_n3_nombre || `#${arm3Llave}`}` : '··· sin autorizar'}
+                  🔑 {encPorNivelHojaReg[nivelesContrato?.nivel_maximo ?? 3] || 'N máx.'} {arm3Llave ? `✓ ${registro.reversion_arm_n3_nombre || `#${arm3Llave}`}` : '··· sin autorizar'}
                 </span>
               </div>
               {llaveContrariaOcupadaPorOtro && (

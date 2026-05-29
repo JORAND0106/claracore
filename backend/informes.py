@@ -100,6 +100,7 @@ from ccd_conciliacion import (
     _bloque_capitulo_matriz,
     _nivel_norm_matriz as _norm_estado_n3,
     _orden_titulo_capitulo_obra,
+    _registro_aprobado_matriz_panel,
     aggregate_items_conciliacion,
     fetch_registros_acta_todas_sico_obra,
     fetch_registros_conciliacion,
@@ -2052,6 +2053,50 @@ def ccd_listar_semanas(contrato_id: int, current_user=Depends(_get_user)):
 
     rows.sort(key=_sort_key, reverse=True)
     return rows
+
+
+@router.get("/{contrato_id}/ccd/fo-eo-04/diagnostico")
+def ccd_fo_eo_04_diagnostico(
+    contrato_id: int,
+    acta_id: int = Query(..., description="Id del acta RPO"),
+    current_user=Depends(_get_user),
+):
+    """Diagnóstico: por qué el FO-EO-04 puede salir sin cantidades (misma regla que panel Actas)."""
+    _perm_informes_ccd(current_user, "ver")
+    acta_norm = _resolver_acta_id_en_contrato(contrato_id, acta_id)
+    if not acta_norm:
+        raise HTTPException(404, "Acta no encontrada en este contrato")
+    matriz = matriz_params_contrato(_sb, int(contrato_id))
+    campo_mx, niveles_act = matriz
+    cascade = _fetch_cascade_interventoria_actas_rpo(
+        _sb,
+        int(contrato_id),
+        [int(acta_norm)],
+        campo_nivel_max=campo_mx,
+        niveles_activos=niveles_act,
+    )
+    raw = _fo_eo_04_fetch_registros_acta(int(contrato_id), int(acta_norm))
+    sellados = _fo_eo_04_registros_sellados_acta(
+        int(contrato_id), int(acta_norm), matriz=matriz
+    )
+    items = _fetch_items_n3_acta(int(acta_norm), int(contrato_id))
+    return {
+        "acta_id": acta_norm,
+        "campo_nivel_maximo": campo_mx,
+        "niveles_activos": niveles_act,
+        "registros_raw_acta": len(raw),
+        "registros_cascade_panel_actas": len(cascade or []),
+        "registros_sellados_memoria": len(sellados),
+        "items_pdf": len(items),
+        "mensaje": (
+            "OK: hay ítems para el PDF."
+            if items
+            else (
+                "Sin ítems: no hay líneas selladas en el nivel máximo del contrato para este acta. "
+                "Revise matriz SICOE y acta_rpo_id en registros/reportes."
+            )
+        ),
+    }
 
 
 @router.get("/{contrato_id}/ccd/actas-rpo")
@@ -5986,6 +6031,119 @@ def _url_a_data_url_pdf(url: Optional[str]) -> Optional[str]:
         return None
 
 
+_FO_EO_04_SEL_REGISTROS = (
+    "id, capitulo, item_numero, item_descripcion, unidad, "
+    "nivel1_estado, nivel2_estado, nivel3_estado, nivel4_estado, nivel5_estado, nivel6_estado, "
+    "cantidad_total, semana_id, foto_url, foto_numero, grafico_url, grafico_numero"
+)
+
+
+def _fo_eo_04_paginar_so_registros(q_builder) -> list:
+    """Pagina una query de so_registros (máx. 200k filas)."""
+    _PAGE = 1000
+    rows: list = []
+    off = 0
+    for _ in range(200):
+        part = q_builder().range(off, off + _PAGE - 1).execute().data or []
+        rows.extend(part)
+        if len(part) < _PAGE:
+            break
+        off += _PAGE
+    return rows
+
+
+def _fo_eo_04_fetch_registros_acta(contrato_id: int, acta_id: int) -> List[Dict[str, Any]]:
+    """
+    Solo líneas con acta_rpo_id = acta seleccionada (misma regla que rpo_panel_actas_resumen / panel Actas).
+    No usa reporte_id: evita arrastrar historial de otras actas dentro del mismo reporte.
+    """
+    cid, aid = int(contrato_id), int(acta_id)
+
+    def _base_q():
+        return (
+            _sb.table("so_registros")
+            .select(_FO_EO_04_SEL_REGISTROS)
+            .eq("contrato_id", cid)
+            .eq("acta_rpo_id", aid)
+            .not_.is_("item_numero", "null")
+            .neq("item_numero", "")
+        )
+
+    rows = _fo_eo_04_paginar_so_registros(_base_q)
+    _log.info("fo_eo_04 registros_acta: acta=%s filas=%s", aid, len(rows))
+    return rows
+
+
+def _fo_eo_04_actas_anteriores_ids(contrato_id: int, acta_id: int) -> List[int]:
+    """Actas RPO anteriores a la seleccionada (por numero_rpo; si no, por consecutivo)."""
+    try:
+        acta_row = (
+            _sb.table("actas")
+            .select("id, consecutivo, numero_rpo, tipo_grupo")
+            .eq("id", int(acta_id))
+            .single()
+            .execute()
+            .data
+            or {}
+        )
+    except Exception:
+        return []
+    num_rpo = acta_row.get("numero_rpo")
+    consec = acta_row.get("consecutivo")
+    q = _sb.table("actas").select("id").eq("contrato_id", int(contrato_id)).eq("tipo_grupo", "RPO")
+    if num_rpo is not None:
+        try:
+            q = q.lt("numero_rpo", int(num_rpo))
+        except (TypeError, ValueError):
+            pass
+    elif consec is not None:
+        q = q.lt("consecutivo", int(consec))
+    else:
+        q = q.lt("id", int(acta_id))
+    try:
+        return [int(r["id"]) for r in (q.execute().data or []) if r.get("id") is not None]
+    except Exception:
+        return []
+
+
+def _fo_eo_04_registro_aprobado_interventoria(
+    reg: Dict[str, Any],
+    contrato_id: int,
+    *,
+    matriz: Optional[Tuple[str, List[int]]] = None,
+) -> bool:
+    """Sellado en el nivel máximo activo del contrato (no solo N3). Igual que panel actas / matriz."""
+    if matriz is None:
+        matriz = matriz_params_contrato(_sb, int(contrato_id))
+    campo_mx, niveles_act = matriz
+    return _registro_aprobado_matriz_panel(reg, niveles_act, campo_mx)
+
+
+def _fo_eo_04_registros_sellados_acta(
+    contrato_id: int,
+    acta_id: int,
+    *,
+    matriz: Optional[Tuple[str, List[int]]] = None,
+) -> List[Dict[str, Any]]:
+    """Líneas del acta con sellado en el nivel máximo activo del contrato (solo acta_rpo_id en línea)."""
+    if matriz is None:
+        matriz = matriz_params_contrato(_sb, int(contrato_id))
+    campo_mx, niveles_act = matriz
+    raw = _fo_eo_04_fetch_registros_acta(int(contrato_id), int(acta_id))
+    sellados = [
+        r for r in raw if _registro_aprobado_matriz_panel(r, niveles_act, campo_mx)
+    ]
+    _log.info(
+        "fo_eo_04 sellados_acta: acta=%s campo_max=%s niveles=%s raw=%s sellados=%s",
+        acta_id,
+        campo_mx,
+        niveles_act,
+        len(raw),
+        len(sellados),
+    )
+    return sellados
+
+
 def _fetch_total_actas_anteriores(
     contrato_id: int, acta_id: int, item_numero: str, capitulo: str = ""
 ) -> float:
@@ -5997,69 +6155,24 @@ def _fetch_total_actas_anteriores(
     if not acta_id or not item_numero:
         return 0.0
     try:
-        acta_row = (
-            _sb.table("actas")
-            .select("id, consecutivo")
-            .eq("id", int(acta_id))
-            .single()
-            .execute()
-            .data
-            or {}
-        )
-        consec = acta_row.get("consecutivo")
-
-        # Obtener IDs de actas anteriores (mismo contrato, consecutivo menor)
-        if consec is not None:
-            prev_actas = (
-                _sb.table("actas")
-                .select("id")
-                .eq("contrato_id", int(contrato_id))
-                .lt("consecutivo", int(consec))
-                .execute()
-                .data
-                or []
-            )
-        else:
-            prev_actas = (
-                _sb.table("actas")
-                .select("id")
-                .eq("contrato_id", int(contrato_id))
-                .lt("id", int(acta_id))
-                .execute()
-                .data
-                or []
-            )
-
-        prev_ids = [r["id"] for r in prev_actas if r.get("id")]
+        prev_ids = _fo_eo_04_actas_anteriores_ids(int(contrato_id), int(acta_id))
         if not prev_ids:
             return 0.0
 
-        # Sumar cantidad_total filtrando por capítulo + ítem + N3 Aprobado
-        _PAGE = 1000
-        CHUNK = 200
+        matriz = matriz_params_contrato(_sb, int(contrato_id))
         total = 0.0
         cap_strip = (capitulo or "").strip()
+        itn = (item_numero or "").strip()
 
-        for i in range(0, len(prev_ids), CHUNK):
-            chunk = prev_ids[i : i + CHUNK]
-            off = 0
-            while True:
-                q = (
-                    _sb.table("so_registros")
-                    .select("cantidad_total, nivel3_estado, capitulo")
-                    .eq("contrato_id", int(contrato_id))
-                    .in_("acta_rpo_id", chunk)
-                    .eq("item_numero", item_numero)
-                )
-                if cap_strip:
-                    q = q.eq("capitulo", cap_strip)
-                rows = q.range(off, off + _PAGE - 1).execute().data or []
-                for r in rows:
-                    if _norm_estado_n3(r.get("nivel3_estado")) == "Aprobado":
-                        total += float(r.get("cantidad_total") or 0)
-                if len(rows) < _PAGE:
-                    break
-                off += _PAGE
+        for pid in prev_ids:
+            for r in _fo_eo_04_registros_sellados_acta(
+                int(contrato_id), int(pid), matriz=matriz
+            ):
+                if (r.get("item_numero") or "").strip() != itn:
+                    continue
+                if cap_strip and (r.get("capitulo") or "").strip() != cap_strip:
+                    continue
+                total += float(r.get("cantidad_total") or 0)
 
         _log.info(
             "fo_eo_04 actas_anteriores: contrato=%s acta=%s item=%s cap=%s prev_actas=%s total=%.3f",
@@ -6081,20 +6194,7 @@ def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> dict:
     if not items or not acta_id:
         return {}
     try:
-        # 1. Consecutivo del acta actual (1 query)
-        acta_row = (
-            _sb.table("actas").select("id, consecutivo")
-            .eq("id", int(acta_id)).single().execute().data or {}
-        )
-        consec = acta_row.get("consecutivo")
-
-        # 2. IDs de actas anteriores (1 query)
-        q_prev = _sb.table("actas").select("id").eq("contrato_id", int(contrato_id))
-        if consec is not None:
-            q_prev = q_prev.lt("consecutivo", int(consec))
-        else:
-            q_prev = q_prev.lt("id", int(acta_id))
-        prev_ids = [r["id"] for r in (q_prev.execute().data or []) if r.get("id")]
+        prev_ids = _fo_eo_04_actas_anteriores_ids(int(contrato_id), int(acta_id))
 
         # Resultado vacío pero bien formado para todos los ítems
         default_result: dict = {
@@ -6104,40 +6204,23 @@ def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> dict:
         if not prev_ids:
             return default_result
 
-        # 3. Fetch so_registros en batch para todos los ítems relevantes
+        matriz = matriz_params_contrato(_sb, int(contrato_id))
         items_set = {
             ((item.get("item_numero") or "").strip(), (item.get("capitulo") or "").strip())
             for item in items
         }
-        item_nums = list({k[0] for k in items_set if k[0]})
-        _PAGE = 1000
-        CHUNK = 200
         totales: dict = defaultdict(float)
 
-        for i in range(0, len(prev_ids), CHUNK):
-            chunk = prev_ids[i: i + CHUNK]
-            off = 0
-            while True:
-                q = (
-                    _sb.table("so_registros")
-                    .select("item_numero, capitulo, cantidad_total, nivel3_estado")
-                    .eq("contrato_id", int(contrato_id))
-                    .in_("acta_rpo_id", chunk)
-                    .in_("item_numero", item_nums)
-                    .range(off, off + _PAGE - 1)
+        for pid in prev_ids:
+            for r in _fo_eo_04_registros_sellados_acta(
+                int(contrato_id), int(pid), matriz=matriz
+            ):
+                k = (
+                    (r.get("item_numero") or "").strip(),
+                    (r.get("capitulo") or "").strip(),
                 )
-                rows = q.execute().data or []
-                for r in rows:
-                    if _norm_estado_n3(r.get("nivel3_estado")) == "Aprobado":
-                        k = (
-                            (r.get("item_numero") or "").strip(),
-                            (r.get("capitulo") or "").strip(),
-                        )
-                        if k in items_set:
-                            totales[k] += float(r.get("cantidad_total") or 0)
-                if len(rows) < _PAGE:
-                    break
-                off += _PAGE
+                if k in items_set:
+                    totales[k] += float(r.get("cantidad_total") or 0)
 
         _log.info(
             "fo_eo_04 totales_batch: acta=%s prev_actas=%s items=%s",
@@ -6153,8 +6236,8 @@ def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> dict:
 
 def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
     """
-    Ítems N3-Aprobado del acta, agrupados por semana de aprobación.
-    Optimizado: so_semanas y listado_precios se consultan en paralelo.
+    Ítems del acta con validación en el nivel máximo activo del contrato (matriz SICOE),
+    solo so_registros.acta_rpo_id = acta seleccionada, agrupados por semana.
     """
     from collections import defaultdict
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -6162,36 +6245,10 @@ def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
     if not acta_id:
         return []
     try:
-        # 1. Registros del acta (paginado)
-        _PAGE = 1000
-        sel = (
-            "capitulo, item_numero, item_descripcion, unidad, "
-            "nivel3_estado, cantidad_total, semana_id, "
-            "foto_url, foto_numero, grafico_url, grafico_numero"
+        matriz = matriz_params_contrato(_sb, int(contrato_id))
+        aprobados = _fo_eo_04_registros_sellados_acta(
+            int(contrato_id), int(acta_id), matriz=matriz
         )
-        rows: list = []
-        off = 0
-        for _ in range(200):
-            part = (
-                _sb.table("so_registros")
-                .select(sel)
-                .eq("contrato_id", int(contrato_id))
-                .eq("acta_rpo_id", int(acta_id))
-                .not_.is_("item_numero", "null")
-                .neq("item_numero", "")
-                .range(off, off + _PAGE - 1)
-                .execute()
-                .data
-                or []
-            )
-            rows.extend(part)
-            if len(part) < _PAGE:
-                break
-            off += _PAGE
-        _log.info("fo_eo_04 fetch_items_n3: acta=%s total_rows=%s", acta_id, len(rows))
-
-        # 2. Filtrar N3 aprobado
-        aprobados = [r for r in rows if _norm_estado_n3(r.get("nivel3_estado")) == "Aprobado"]
         if not aprobados:
             return []
 
@@ -6250,24 +6307,43 @@ def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
                 return {}
 
         def _fetch_esp():
+            nums = list({k[0] for k in items_meta if k[0]})
+            if not nums:
+                return {}
+            esp: dict = {}
             try:
-                lp = (
-                    _sb.table("listado_precios")
-                    .select("item_numero, especificacion_tecnica")
-                    .eq("contrato_id", int(contrato_id))
-                    .execute()
-                    .data or []
-                )
-                return {(r.get("item_numero") or "").strip(): (r.get("especificacion_tecnica") or "") for r in lp}
+                for i in range(0, len(nums), 100):
+                    part = nums[i : i + 100]
+                    lp = (
+                        _sb.table("listado_precios")
+                        .select("item_numero, especificacion_tecnica")
+                        .eq("contrato_id", int(contrato_id))
+                        .in_("item_numero", part)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    for r in lp:
+                        n = (r.get("item_numero") or "").strip()
+                        if n and n not in esp:
+                            esp[n] = (r.get("especificacion_tecnica") or "")
             except Exception as exc:
                 _log.warning("fetch_items_n3: listado_precios: %s", exc)
-                return {}
+            return esp
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             f_sem = pool.submit(_fetch_semanas)
             f_esp = pool.submit(_fetch_esp)
-            sem_info = f_sem.result()
-            esp_map  = f_esp.result()
+            try:
+                sem_info = f_sem.result()
+            except Exception as exc:
+                _log.warning("fetch_items_n3: semanas pool: %s", exc)
+                sem_info = {}
+            try:
+                esp_map = f_esp.result()
+            except Exception as exc:
+                _log.warning("fetch_items_n3: esp pool: %s", exc)
+                esp_map = {}
 
         # 6. Construir lista final con semanas ordenadas por numero_semana
         result: list = []
@@ -6288,7 +6364,7 @@ def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
             meta["semanas"] = sem_entries
             meta["total_acta"] = total_acta
             meta["especificacion_tecnica"] = esp_map.get(num, "")
-            # Fotos directamente de los registros N3-aprobados del acta
+            # Fotos de registros sellados en el nivel máximo del contrato
             fi = items_foto.get(key, {})
             meta["foto_url"]       = fi.get("foto_url")
             meta["foto_numero"]    = fi.get("foto_numero")
@@ -7362,6 +7438,12 @@ def _build_fo_eo_04_pdf_bytes(
     )
 
     items_n3 = _fetch_items_n3_acta(acta_id_norm, contrato_id) if acta_id_norm else []
+    if acta_id_norm and not items_n3:
+        campo_mx, niveles_act = matriz_params_contrato(_sb, int(contrato_id))
+        raise ValueError(
+            f"No hay líneas aprobadas en {campo_mx} (niveles activos {niveles_act}) "
+            f"para el acta {acta_id_norm}."
+        )
 
     if items_n3:
         # Totales de actas anteriores: 1 lote → O(1) queries en lugar de O(N ítems)
@@ -7562,9 +7644,16 @@ def _build_fo_eo_04_pdf_bytes_prog(
         reviso2_marca_hora=r2m_h,
     )
 
-    _prog(30, "Obteniendo ítems aprobados en Nivel 3…")
+    _prog(30, "Obteniendo ítems sellados (nivel máximo del contrato)…")
     items_n3 = _fetch_items_n3_acta(acta_id_norm, contrato_id) if acta_id_norm else []
     n_items = len(items_n3)
+    if acta_id_norm and not items_n3:
+        campo_mx, niveles_act = matriz_params_contrato(_sb, int(contrato_id))
+        raise ValueError(
+            f"No hay líneas aprobadas en {campo_mx} (niveles activos {niveles_act}) "
+            f"para el acta {acta_id_norm}. Verifique validación en SICOE o use "
+            f"GET /informes/{contrato_id}/ccd/fo-eo-04/diagnostico?acta_id={acta_id_norm}"
+        )
 
     if items_n3:
         _prog(48, f"Calculando totales de actas anteriores ({n_items} ítem{'s' if n_items != 1 else ''})…",

@@ -2673,19 +2673,36 @@ def _require_sicoe_puede_validar_nivel(
         )
 
 
+def _sicoe_slot_llave_reversion(nivel: Optional[int]) -> Optional[int]:
+    """Mapea nivel de validación (2–6) al slot de doble llave: 2 = costos, 3 = interventoría."""
+    if nivel is None:
+        return None
+    try:
+        n = int(nivel)
+    except (TypeError, ValueError):
+        return None
+    if n == 2:
+        return 2
+    if n in (3, 4, 5, 6):
+        return 3
+    return None
+
+
 def _require_llave_reversion_sicoe_nivel(current_user, user_id: int, nivel_arm: int) -> None:
     """
-    Doble llave reversión N3: debe coincidir el nivel SICOE obra del usuario (rol/cargo en BD) con la llave.
-    No se exige la matriz «Reporte de cantidades» para esta acción (evita falsos negativos si la matriz está incompleta).
+    Doble llave reversión N3: debe coincidir el slot (N2 o N3) del usuario con la llave solicitada.
+    Interventoría N4/N5/N6 usa el mismo slot que N3.
     """
     if _es_desarrollador(current_user):
         return
-    if nivel_arm not in (2, 3, 4, 5, 6):
+    slot = _sicoe_slot_llave_reversion(nivel_arm)
+    if slot not in (2, 3):
         raise HTTPException(status_code=403, detail="Llave de reversión no reconocida.")
     got = _sicoe_db_nivel_validacion_usuario(user_id)
     if got == 0:
         return
-    if got != nivel_arm:
+    got_slot = _sicoe_slot_llave_reversion(got)
+    if got_slot != slot:
         raise HTTPException(
             status_code=403,
             detail="Tu rol no autoriza esta llave en SICOE obra.",
@@ -3757,15 +3774,37 @@ def _normalize_items_filtro_list(items_filtro_json: Optional[str], item_legacy: 
     return deduped
 
 
+def _item_numero_filter_variants(item: str) -> List[str]:
+    """Variantes con/sin punto final (p. ej. 1.02 vs 1.02.) para igualdad exacta."""
+    it = (item or "").strip()
+    if not it:
+        return []
+    out: List[str] = [it]
+    if it.endswith("."):
+        bare = it.rstrip(".")
+        if bare and bare not in out:
+            out.append(bare)
+    else:
+        dotted = it + "."
+        if dotted not in out:
+            out.append(dotted)
+    return out
+
+
 def _apply_item_patterns_to_so_registros_q(q, items: List[str], items_op: Optional[str] = None):
     """
-    Filtro por texto en item_numero (ilike %pat%). Varias patrones: Y (todas en la misma fila) u O (cualquiera).
-    Misma semántica de operador que validacion_capas_op.
+    Un ítem: igualdad exacta (variantes 1.02 / 1.02.) para no mezclar 21.02 con 1.02.
+    Varios ítems: ilike %pat% por patrón; Y (todas) u O (cualquiera).
     """
     if not items:
         return q
     if len(items) == 1:
-        return q.ilike("item_numero", f"%{items[0]}%")
+        variants = _item_numero_filter_variants(items[0])
+        if not variants:
+            return q
+        if len(variants) == 1:
+            return q.eq("item_numero", variants[0])
+        return q.in_("item_numero", variants)
     op = _parse_capas_validacion_op(items_op)
     if op == "or":
         parts = [f"item_numero.ilike.%{it}%" for it in items]
@@ -16896,7 +16935,21 @@ def _insertar_comentario(contrato_id: int, registro_id: int, autor_id: int,
 
     def _ins():
         return supabase.table("so_registro_comentarios").insert(row).execute().data
-    data = supabase_execute(_ins)
+    try:
+        data = supabase_execute(_ins)
+    except Exception as ex:
+        low = str(ex).lower()
+        if "so_registro_comentarios_tipo_check" in low or (
+            "23514" in low and "tipo" in low
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Falta ejecutar la migración SQL "
+                    "alter_so_registro_comentarios_tipo_reversion_doble_llave.sql en Supabase."
+                ),
+            ) from ex
+        raise
     ins_row = data[0] if data else {}
     if audit_user and ins_row:
         try:
@@ -22332,7 +22385,8 @@ def reversion_n3_doble_llave(
             )
 
         cd_send = {**cd, "mensaje": mensaje_limpio}
-        tipo_c = "reversion_doble_llave_n2" if nivel == 2 else "reversion_doble_llave_n3"
+        slot_llave = _sicoe_slot_llave_reversion(nivel)
+        tipo_c = "reversion_doble_llave_n2" if slot_llave == 2 else "reversion_doble_llave_n3"
         _insertar_comentario(
             contrato_id,
             registro_id,
