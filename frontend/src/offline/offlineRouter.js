@@ -389,9 +389,14 @@ export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0
   // Filtrar registros si hay filtros de línea
   let reporteIdsDesdeRegistros = null
   const { list: itemsBuscarList } = itemsListaYOpDesdeFiltros(filtros)
+  const esEstadoReversion =
+    String(filtros.estado || '')
+      .trim()
+      .toLowerCase()
+      .replace('ó', 'o') === 'reversion'
   const necesitaRegistros = !!(
     filtros.capitulo || itemsBuscarList.length || filtros.numero_registro ||
-    filtros.cargo || filtros.estado_registro || capasEff.length > 0
+    filtros.cargo || filtros.estado_registro || capasEff.length > 0 || esEstadoReversion
   )
 
   if (necesitaRegistros) {
@@ -423,6 +428,14 @@ export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0
     if (actaIdFiltro != null && actaIdFiltro > 0) {
       regs = regs.filter(r => Number(r.acta_rpo_id) === actaIdFiltro)
     }
+    if (esEstadoReversion) {
+      regs = regs.filter(
+        (r) =>
+          r.reversion_arm_n2_usuario_id != null &&
+          r.reversion_arm_n3_usuario_id == null &&
+          r.bloqueado,
+      )
+    }
 
     reporteIdsDesdeRegistros = new Set(regs.map(r => String(r.reporte_id)))
   }
@@ -433,7 +446,7 @@ export async function buscarReportesOffline(contratoId, filtros = {}, offset = 0
 
   todos = todos.filter(r => {
     if (filtros.numero_reporte && String(r.numero_reporte) !== String(filtros.numero_reporte)) return false
-    if (filtros.estado && r.estado !== filtros.estado) return false
+    if (filtros.estado && !esEstadoReversion && r.estado !== filtros.estado) return false
     if (actaIdFiltro !== null && Number(r.acta_rpo_id) !== actaIdFiltro) return false
     if (semanaIdFiltro !== null && Number(r.semana_id) !== semanaIdFiltro) return false
     if (filtros.subcontratista_id && String(r.subcontratista_id) !== String(filtros.subcontratista_id)) return false

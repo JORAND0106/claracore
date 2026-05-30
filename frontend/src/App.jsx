@@ -50,6 +50,7 @@ import {
   sicoeFSicoeVacios,
   sicoeItemsChipsFromFSicoe,
   sicoePanelLabelToRpo,
+  sicoeEstadosReporteFiltro,
 } from './modules/sicoe-obra/sicoeFiltroCatalogo'
 import {
   cargarSicoeFiltroSesion,
@@ -5694,6 +5695,10 @@ function ModuloSicoeObra({
 
   const perm = permisoReporteCantidades(usuario)
   const nivelInfo = determinarNivelValidacion(usuario, contrato_id)
+  const estadosReporteFiltro = useMemo(
+    () => sicoeEstadosReporteFiltro(usuario, nivelInfo),
+    [usuario, nivelInfo.esInterventoria, usuario?.rol_nombre],
+  )
   const elevCapPanel = nivelInfo.elevacionValidacionContratistaN1aN3 || nivelInfo.nivelValidacion === 0
   const nivelesActivosPanelSicoe = useMemo(
     () => sicoeNivelesActivosNormalizados(nivelesContrato?.niveles_activos),
@@ -8473,7 +8478,7 @@ function ModuloSicoeObra({
         onExportarExcel={abrirPopupExportRegistros}
         exportDisabled={!reportesMostrados || reportesMostrados.length === 0}
         puedeVerSubcontratista={puedeVerFiltroSubcontratista(usuario) && !nivelInfo.esInterventoria}
-        estadosReporte={['Borrador', 'Sin Asignar Ítem', 'No Revisados', 'No Objeto de Cobro', 'En Papelera']}
+        estadosReporte={estadosReporteFiltro}
         etiquetasValidacion={ETIQUETAS_VALIDACION}
         nivelesDisponibles={nivelesDisponiblesEnFiltro}
         encabezadoPorNivel={encabezadoPorNivelFiltro}

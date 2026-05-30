@@ -2,6 +2,36 @@
 
 export const SICOE_FILTRO_MODULO = 'sicoe_obra'
 
+/** Valor enviado a la API como filtro virtual (no es estado de cabecera so_reportes). */
+export const SICOE_ESTADO_REPORTE_REVERSION = 'Reversión'
+
+const ESTADOS_REPORTE_CONTRATISTA = [
+  'Borrador',
+  'Sin Asignar Ítem',
+  'No Revisados',
+  'No Objeto de Cobro',
+  'En Papelera',
+  SICOE_ESTADO_REPORTE_REVERSION,
+]
+
+/** Operativo / Interventoría / Interventoría Gerencial: solo cola de reversión (primera llave pendiente). */
+export function sicoeFiltroSoloReversionInterventoria(usuario) {
+  const rol = String(usuario?.rol_nombre || usuario?.rol || '')
+    .toLowerCase()
+    .trim()
+    .replace(/í/g, 'i')
+  if (rol === 'operativo interventoria' || rol === 'interventoria') return true
+  if (rol.includes('gerencial') && rol.includes('intervent')) return true
+  return false
+}
+
+export function sicoeEstadosReporteFiltro(usuario, nivelInfo) {
+  if (sicoeFiltroSoloReversionInterventoria(usuario) || nivelInfo?.esInterventoria) {
+    return [SICOE_ESTADO_REPORTE_REVERSION]
+  }
+  return ESTADOS_REPORTE_CONTRATISTA
+}
+
 export const SICOE_FILTRO_CATEGORIAS = [
   { id: 'fechas', label: 'Fechas y usuario' },
   { id: 'reporte', label: 'Reporte' },

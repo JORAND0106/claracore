@@ -2921,9 +2921,11 @@ def _so_reportes_estado_valores_desde_filtro_ui(estado: Optional[str]) -> Option
 
 
 def _estado_filtro_omite_validacion_por_cargo(estado: Optional[str]) -> bool:
-    """Borrador / Sin asignar ítem: cola distinta a validación N1–N3; no combinar con filtro por cargo."""
+    """Borrador / Sin asignar ítem / Reversión: cola distinta a validación N1–N3; no combinar con filtro por cargo."""
     if estado is None or not str(estado).strip():
         return False
+    if _estado_filtro_es_reversion(estado):
+        return True
     sl = str(estado).strip().lower()
     if sl == "borrador":
         return True
@@ -2940,8 +2942,75 @@ def _estado_filtro_es_sin_asignar_item(estado: Optional[str]) -> bool:
     return "sin asignar" in sl and "item" in sl.replace("í", "i")
 
 
+def _estado_filtro_es_reversion(estado: Optional[str]) -> bool:
+    if estado is None or not str(estado).strip():
+        return False
+    sl = str(estado).strip().lower().replace("ó", "o")
+    return sl == "reversion"
+
+
+def _usuario_filtro_reversion_solo_interventoria(current_user) -> bool:
+    """Operativo / Interventoría / Interventoría Gerencial: solo opción Reversión en filtros."""
+    r = (current_user.get("rol_nombre") or "").strip().lower().replace("í", "i")
+    if r == "operativo interventoria":
+        return True
+    if r == "interventoria":
+        return True
+    if "gerencial" in r and "intervent" in r:
+        return True
+    return False
+
+
+def _sicoe_reversion_modo_filtro(estado: Optional[str], current_user) -> Optional[str]:
+    """
+    Modo de filtro virtual «Reversión» (no es estado de so_reportes).
+    interv_primera_llave: N2 ya firmó, falta llave de interventoría.
+    contratista: solicitud o doble llave en curso.
+    """
+    if not _estado_filtro_es_reversion(estado):
+        return None
+    if _usuario_filtro_reversion_solo_interventoria(current_user):
+        return "interv_primera_llave"
+    return "contratista"
+
+
+def _so_reg_q_aplicar_filtro_reversion(q, reversion_modo: Optional[str]):
+    if reversion_modo == "interv_primera_llave":
+        return (
+            q.not_.is_("reversion_arm_n2_usuario_id", "null")
+            .is_("reversion_arm_n3_usuario_id", "null")
+            .eq("bloqueado", True)
+        )
+    if reversion_modo == "contratista":
+        return q.or_(
+            "solicitud_reversion.eq.true,"
+            "reversion_arm_n2_usuario_id.not.is.null,"
+            "reversion_arm_n3_usuario_id.not.is.null"
+        )
+    return q
+
+
+def _sicoe_so_reportes_q_filtro_estado_ui(q, contrato_id: int, estado: Optional[str], current_user):
+    """Estado de cabecera en UI o filtro virtual Reversión (por rol)."""
+    rev = _sicoe_reversion_modo_filtro(estado, current_user)
+    if rev:
+        ids_r = list(
+            _sicoe_collect_reporte_ids_misma_linea(
+                int(contrato_id), reversion_modo=rev, estado=estado
+            )
+        )
+        if not ids_r:
+            return q.eq("id", -1)
+        return q.in_("id", ids_r)
+    if estado and str(estado).strip():
+        return _so_reportes_q_por_estado(q, estado)
+    return q
+
+
 def _so_reportes_q_por_estado(q, estado: Optional[str]):
     """Aplica filtro por estado de cabecera (OR entre variantes plural/singular)."""
+    if _estado_filtro_es_reversion(estado):
+        return q
     evs = _so_reportes_estado_valores_desde_filtro_ui(estado)
     if not evs:
         return q
@@ -3277,6 +3346,7 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     usuario_id: Optional[int] = None,
     usuario_accion: Optional[str] = None,
     ambito_fecha_registro: bool = True,
+    reversion_modo: Optional[str] = None,
 ):
     """AND sobre columnas de so_registros; misma semántica que /reportes/buscar y /analisis."""
     items_eff = list(items) if items else []
@@ -3342,6 +3412,8 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
         q = _sicoe_aplicar_filtro_fecha_q(q, col_f, fecha_desde, fecha_hasta)
     if ambito_fecha_registro and usuario_id is not None:
         q = _sicoe_aplicar_filtro_usuario_registros_q(q, usuario_id, usuario_accion)
+    if reversion_modo:
+        q = _so_reg_q_aplicar_filtro_reversion(q, reversion_modo)
     return q
 
 
@@ -3395,6 +3467,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
     tipo_fecha: Optional[str] = None,
     usuario_id: Optional[int] = None,
     usuario_accion: Optional[str] = None,
+    reversion_modo: Optional[str] = None,
 ) -> set:
     """
     reporte_id tales que existe al menos una fila en so_registros que cumple todos
@@ -3423,7 +3496,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
             "ambito_fecha_registro": True,
         }
     ids: set = set()
-    capas_ok = bool(capas_v)
+    capas_ok = bool(capas_v) and not reversion_modo
     if (
         capas_ok
         and not _estado_filtro_omite_validacion_por_cargo(estado)
@@ -3468,6 +3541,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                 tipo_fecha=tipo_fecha,
                 usuario_id=usuario_id,
                 usuario_accion=usuario_accion,
+                reversion_modo=reversion_modo,
             )
         return merged
 
@@ -3512,6 +3586,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                             pendiente_item=pendiente_item,
                             registro_id_in=c,
                             contrato_id=contrato_id,
+                            reversion_modo=reversion_modo,
                             **_reg_fu,
                         )
                         return q.limit(5000).execute().data
@@ -3551,6 +3626,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                         pendiente_item=pendiente_item,
                         registro_id_in=c,
                         contrato_id=contrato_id,
+                        reversion_modo=reversion_modo,
                         **_reg_fu,
                     )
                     return q.limit(5000).execute().data
@@ -3596,6 +3672,7 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     estado=estado,
                     pendiente_item=pendiente_item,
                     contrato_id=contrato_id,
+                    reversion_modo=reversion_modo,
                     **_reg_fu,
                 )
                 return q.limit(5000).execute().data
@@ -3631,11 +3708,12 @@ def _sicoe_collect_reporte_ids_misma_linea(
                     q_observacion=q_observacion,
                     semana_id=semana_id,
                     acta_rpo_ids=aids_eff,
-                    require_item=bool(aids_eff),
+                    require_item=bool(aids_eff) or reversion_modo == "interv_primera_llave",
                     capas_v=(capas_v if capas_ok else None),
                     estado=estado,
                     pendiente_item=pendiente_item,
                     contrato_id=contrato_id,
+                    reversion_modo=reversion_modo,
                     **_reg_fu,
                 )
                 return q.range(o, o + page - 1).execute().data
@@ -11609,6 +11687,7 @@ def buscar_reportes_obra(
         semana = None
         acta_rpo = None
     _cap_op_buscar = _parse_capas_validacion_op(validacion_capas_op)
+    _rev_modo = _sicoe_reversion_modo_filtro(estado, current_user)
     _defer_capas_or_grilla = (
         bool(capas_v)
         and not _estado_filtro_omite_validacion_por_cargo(estado)
@@ -11721,6 +11800,7 @@ def buscar_reportes_obra(
         cantidad_desde is not None or cantidad_hasta is not None,
         costo_directo_desde is not None or costo_directo_hasta is not None,
         _filtro_fu_reg,
+        _rev_modo is not None,
     ])
 
     if unified_line:
@@ -11754,11 +11834,14 @@ def buscar_reportes_obra(
             tipo_fecha=_tip_fu,
             usuario_id=_uid_fu,
             usuario_accion=_uacc_fu,
+            reversion_modo=_rev_modo,
         )
         if not ids_unif:
             return {"reportes": [], "total": 0, "offset": offset, "limit": limit, "hay_mas": False}
         reporte_ids_from_reg = list(ids_unif)
         if semana_id_filtro is not None or acta_id_filtro is not None or acta_ids_panel_buscar:
+            omit_header_semana_acta_en_reportes = True
+        if _rev_modo is not None:
             omit_header_semana_acta_en_reportes = True
 
     if _filtro_fu_rep:
@@ -11816,7 +11899,7 @@ def buscar_reportes_obra(
             (_validacion_cualquier_nivel2_o_3(capas_v) if capas_v else False)
             or (_nivel_l is not None and _es_validacion_avanzada(_nivel_l))
         )
-        if estado:
+        if estado and not _estado_filtro_es_reversion(estado):
             q = _so_reportes_q_por_estado(q, estado)
         elif _hay_n23_build and ids_chunk is None:
             q = q.not_.in_("estado", list(ESTADOS_REPORTE_EXCL_VALIDACION_AVANZADA))
@@ -12202,7 +12285,7 @@ def _sicoe_masivo_filtro_to_export_body(b: ValidarNivelMasivoFiltroBody) -> Expo
 
 
 def _sicoe_colectar_registros_masivo_desde_filtros(
-    contrato_id: int, body: ExportarRegistrosBody
+    contrato_id: int, body: ExportarRegistrosBody, current_user=None
 ) -> Tuple[List[dict], Dict[str, Any]]:
     """
     Registros elegibles para validación masiva (misma semántica que exportar), excluyendo
@@ -12278,8 +12361,7 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
                 q = q.eq("numero_reporte", body.numero_reporte)
             if body.pk_id is not None:
                 q = q.eq("pk_id_id", body.pk_id)
-            if body.estado:
-                q = _so_reportes_q_por_estado(q, body.estado)
+            q = _sicoe_so_reportes_q_filtro_estado_ui(q, contrato_id, body.estado, current_user or {})
             if body.subcontratista_id is not None:
                 q = q.eq("subcontratista_id", body.subcontratista_id)
             if semana_x is not None and semana_id_filtro is not None:
@@ -12329,6 +12411,7 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
     )
 
     items_export_norm = _normalize_items_filtro_list(body.items_filtro, body.item)
+    _rev_modo_collect = _sicoe_reversion_modo_filtro(body.estado, current_user or {})
 
     def _aplicar_filtros_reg(q):
         q = q.eq("contrato_id", contrato_id)
@@ -12371,6 +12454,8 @@ def _sicoe_colectar_registros_masivo_desde_filtros(
                     None,
                     contrato_id,
                 )
+        if _rev_modo_collect:
+            q = _so_reg_q_aplicar_filtro_reversion(q, _rev_modo_collect)
 
         return q
 
@@ -12644,8 +12729,7 @@ def exportar_registros_sicoe(
                 q = q.eq("numero_reporte", body.numero_reporte)
             if body.pk_id is not None:
                 q = q.eq("pk_id_id", body.pk_id)
-            if body.estado:
-                q = _so_reportes_q_por_estado(q, body.estado)
+            q = _sicoe_so_reportes_q_filtro_estado_ui(q, contrato_id, body.estado, current_user)
             if body.subcontratista_id is not None:
                 q = q.eq("subcontratista_id", body.subcontratista_id)
             if semana_x is not None and semana_id_filtro is not None:
@@ -12693,6 +12777,7 @@ def exportar_registros_sicoe(
     )
 
     items_export_norm = _normalize_items_filtro_list(body.items_filtro, body.item)
+    _rev_modo_export = _sicoe_reversion_modo_filtro(body.estado, current_user)
 
     # 3) Query base sobre so_registros
     def _aplicar_filtros_reg(q):
@@ -12737,6 +12822,8 @@ def exportar_registros_sicoe(
                     None,
                     contrato_id,
                 )
+        if _rev_modo_export:
+            q = _so_reg_q_aplicar_filtro_reversion(q, _rev_modo_export)
 
         return q
 
@@ -13230,6 +13317,7 @@ def analisis_registros_obra(
     # tramo/costado van en so_registros (paso 5). subcontratista_id va en registros.
     _caps_l = list(caps_ana)
     _sub_l = subcontratista_id
+    _rev_modo_ana = _sicoe_reversion_modo_filtro(estado, current_user)
     reporte_ids_base = None
     has_rep_f = any([
         numero_reporte is not None,
@@ -13243,8 +13331,7 @@ def analisis_registros_obra(
                     .eq("contrato_id", contrato_id)
                 if numero_reporte is not None:
                     q = q.eq("numero_reporte", numero_reporte)
-                if estado and str(estado).strip():
-                    q = _so_reportes_q_por_estado(q, estado.strip())
+                q = _sicoe_so_reportes_q_filtro_estado_ui(q, contrato_id, estado, current_user)
                 if _filtro_fu_rep:
                     col_f = "updated_at" if _tip_fu == "modificacion" else "created_at"
                     q = _sicoe_aplicar_filtro_fecha_q(q, col_f, _fd_fu, _fh_fu)
@@ -13365,6 +13452,8 @@ def analisis_registros_obra(
                 q = _so_reg_sin_item_asignado(q)
             if pendiente_item:
                 q = _sicoe_so_registros_q_aplicar_filtro_pendiente_item_matriz(q)
+            if _rev_modo_ana:
+                q = _so_reg_q_aplicar_filtro_reversion(q, _rev_modo_ana)
             if _filtro_fu_reg:
                 col_f = "updated_at" if _tip_fu == "modificacion" else "created_at"
                 q = _sicoe_aplicar_filtro_fecha_q(q, col_f, _fd_fu, _fh_fu)
@@ -13987,6 +14076,8 @@ def obtener_reporte(
             if aid_inj is not None:
                 acta_id_lineas = aid_inj
 
+        _rev_modo_det = _sicoe_reversion_modo_filtro(estado, current_user)
+
         if reg_tag_detalle is not None and not reg_tag_detalle:
             return []
 
@@ -14021,6 +14112,7 @@ def obtener_reporte(
                     estado=estado,
                     pendiente_item=pendiente_item,
                     contrato_id=contrato_id,
+                    reversion_modo=_rev_modo_det,
                 )
                 return q.order("id").range(o, o + page - 1).execute().data
 
@@ -17625,7 +17717,9 @@ def validar_nivel_masivo_preview(
         _require_sicoe_puede_validar_nivel(current_user, autor_id, nivel, contrato_id)
 
         exp_body = _sicoe_masivo_filtro_to_export_body(body_in)
-        candidatos, st_collect = _sicoe_colectar_registros_masivo_desde_filtros(contrato_id, exp_body)
+        candidatos, st_collect = _sicoe_colectar_registros_masivo_desde_filtros(
+            contrato_id, exp_body, current_user
+        )
         ocultar_cd = _sicoe_ocultar_costo_directo_reportes(current_user)
         registros = []
         for r in candidatos:
@@ -17694,7 +17788,9 @@ def validar_nivel_masivo_por_filtro(
         _require_sicoe_puede_validar_nivel(current_user, autor_id, nivel, contrato_id)
 
         exp_body = _sicoe_masivo_filtro_to_export_body(body_in)
-        candidatos, st_collect = _sicoe_colectar_registros_masivo_desde_filtros(contrato_id, exp_body)
+        candidatos, st_collect = _sicoe_colectar_registros_masivo_desde_filtros(
+            contrato_id, exp_body, current_user
+        )
 
         if body_in.registro_ids is not None:
             if len(body_in.registro_ids) == 0:
@@ -22677,7 +22773,7 @@ def reversion_n3_doble_llave(
         def _upd():
             return (
                 supabase.table("so_registros")
-                .update({**update, "updated_at": datetime.now(timezone.utc).isoformat()})
+                .update(update)
                 .eq("id", registro_id)
                 .eq("contrato_id", contrato_id)
                 .execute()

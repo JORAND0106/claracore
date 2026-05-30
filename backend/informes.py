@@ -6952,6 +6952,15 @@ _FO_EO04_MAX_DATA_URI_LEN = 400_000
 _FO_EO04_PDF_PAGE_WORKERS = max(4, min(10, (_os.cpu_count() or 4)))
 _FO_EO04_PDF_PARALLEL_MIN_PAGES = 4
 _FO_EO04_PDF_PAGES_PER_TASK = 2
+_FO_EO04_PDF_TASK_TIMEOUT_SEC = max(
+    60,
+    int(_os.environ.get("FO_EO04_PDF_TASK_TIMEOUT_SEC", "240") or "240"),
+)
+_FO_EO04_PDF_USE_PROCESSES = _os.environ.get("FO_EO04_PDF_USE_PROCESSES", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+)
 _FO_EO04_PROCESS_POOL = None
 _FO_EO04_POOL_LOCK = threading.Lock()
 _FO_EO04_MARCA_LBL_ELABORO = "Elaborado y firmado por:"
@@ -7765,7 +7774,11 @@ def _fo_eo_04_pdf_from_pages(
             "total_items": n,
         })
 
-    use_processes = n >= _FO_EO04_PDF_PARALLEL_MIN_PAGES and _FO_EO04_PROCESS_POOL is not None
+    use_processes = (
+        _FO_EO04_PDF_USE_PROCESSES
+        and n >= _FO_EO04_PDF_PARALLEL_MIN_PAGES
+        and _FO_EO04_PROCESS_POOL is not None
+    )
     per_task = max(1, _FO_EO04_PDF_PAGES_PER_TASK)
     page_pdfs: List[Optional[bytes]] = [None] * n
 
@@ -7779,11 +7792,16 @@ def _fo_eo_04_pdf_from_pages(
         futs = {pool.submit(render_html_batch, batch_html): start for start, batch_html in batches}
         for fut in as_completed(futs):
             start = futs[fut]
+            batch_html = pages_html[start : start + per_task]
             try:
-                chunk_pdfs = fut.result()
+                chunk_pdfs = fut.result(timeout=_FO_EO04_PDF_TASK_TIMEOUT_SEC)
             except Exception as exc:
-                _log.warning("fo_eo_04 lote PDF start=%s: %s", start, exc)
-                raise
+                _log.warning(
+                    "fo_eo_04 lote PDF start=%s timeout/err (%s); secuencial",
+                    start,
+                    exc,
+                )
+                chunk_pdfs = [_to_pdf(h) for h in batch_html]
             for j, pdf in enumerate(chunk_pdfs):
                 if start + j < n:
                     page_pdfs[start + j] = pdf
@@ -8059,9 +8077,105 @@ import uuid as _uuid_mod
 import threading as _threading_mod
 import time as _time_mod
 import tempfile as _tempfile_mod
+import secrets as _secrets_mod
+import shutil as _shutil_mod
 
 _pdf_jobs: dict = {}
 _pdf_jobs_lock = _threading_mod.Lock()
+_PDF_JOBS_ROOT = _os.environ.get(
+    "FO_EO04_PDF_JOBS_DIR",
+    _os.path.join(_tempfile_mod.gettempdir(), "claracore_pdf_jobs"),
+)
+_PDF_JOB_DISK_TTL_SEC = 1800
+_PDF_JOB_DL_TOKEN_TTL_SEC = 900
+
+
+def _pdf_job_disk_dir(job_id: str) -> str:
+    root = _PDF_JOBS_ROOT
+    _os.makedirs(root, exist_ok=True)
+    d = _os.path.join(root, str(job_id))
+    _os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _pdf_job_disk_meta_path(job_id: str) -> str:
+    return _os.path.join(_pdf_job_disk_dir(job_id), "meta.json")
+
+
+def _pdf_job_disk_pdf_path(job_id: str) -> str:
+    return _os.path.join(_pdf_job_disk_dir(job_id), "memoria.pdf")
+
+
+def _pdf_job_disk_save(job_id: str, patch: dict) -> None:
+    """Persiste estado en disco para que cualquier worker Gunicorn vea el job."""
+    try:
+        path = _pdf_job_disk_meta_path(job_id)
+        cur: dict = {}
+        if _os.path.isfile(path):
+            with open(path, encoding="utf-8") as f:
+                cur = json.load(f)
+        cur.update(patch)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cur, f)
+        _os.replace(tmp, path)
+    except Exception as exc:
+        _log.warning("pdf_job disk save %s: %s", job_id[:8], exc)
+
+
+def _pdf_job_disk_load(job_id: str) -> Optional[dict]:
+    try:
+        path = _pdf_job_disk_meta_path(job_id)
+        if not _os.path.isfile(path):
+            return None
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception as exc:
+        _log.warning("pdf_job disk load %s: %s", job_id[:8], exc)
+        return None
+
+
+def _pdf_job_resolve(job_id: str) -> Optional[dict]:
+    with _pdf_jobs_lock:
+        mem = dict(_pdf_jobs.get(job_id) or {})
+    disk = _pdf_job_disk_load(job_id) or {}
+    if not mem and not disk:
+        return None
+    merged = {**disk, **mem}
+    pdf_disk = _pdf_job_disk_pdf_path(job_id)
+    if _os.path.isfile(pdf_disk):
+        merged["pdf_path"] = pdf_disk
+    return merged
+
+
+def _pdf_job_issue_download_token(job_id: str) -> str:
+    tok = _secrets_mod.token_urlsafe(24)
+    exp = _time_mod.time() + _PDF_JOB_DL_TOKEN_TTL_SEC
+    _pdf_job_disk_save(job_id, {"download_token": tok, "download_token_exp": exp})
+    with _pdf_jobs_lock:
+        if job_id in _pdf_jobs:
+            _pdf_jobs[job_id]["download_token"] = tok
+            _pdf_jobs[job_id]["download_token_exp"] = exp
+    return tok
+
+
+def _pdf_job_validate_download_token(contrato_id: int, job_id: str, token: str) -> dict:
+    job = _pdf_job_resolve(job_id)
+    if not job or int(job.get("contrato_id") or 0) != int(contrato_id):
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+    if job.get("status") != "listo":
+        raise HTTPException(status_code=409, detail="PDF aún no está listo")
+    exp = job.get("download_token_exp")
+    try:
+        exp_f = float(exp)
+    except (TypeError, ValueError):
+        exp_f = 0.0
+    if not token or token != str(job.get("download_token") or ""):
+        raise HTTPException(status_code=403, detail="Token de descarga inválido")
+    if _time_mod.time() > exp_f:
+        raise HTTPException(status_code=410, detail="Enlace de descarga expirado; genere de nuevo.")
+    return job
 
 
 def _pdf_job_unlink_path(path: Optional[str]) -> None:
@@ -8073,16 +8187,20 @@ def _pdf_job_unlink_path(path: Optional[str]) -> None:
         pass
 
 
-def _pdf_job_store_pdf(job_id: str, pdf_bytes: bytes) -> str:
-    """Guarda en disco (evita RAM gigante y WriteError al descargar)."""
-    fd, path = _tempfile_mod.mkstemp(prefix=f"foeo04_{job_id[:8]}_", suffix=".pdf")
+def _pdf_job_remove_dir(job_id: str) -> None:
     try:
-        _os.write(fd, pdf_bytes)
-    finally:
-        try:
-            _os.close(fd)
-        except OSError:
-            pass
+        _shutil_mod.rmtree(_pdf_job_disk_dir(job_id), ignore_errors=True)
+    except Exception:
+        pass
+
+
+def _pdf_job_store_pdf(job_id: str, pdf_bytes: bytes) -> str:
+    """Guarda en carpeta del job (compartida entre workers en el mismo servidor)."""
+    path = _pdf_job_disk_pdf_path(job_id)
+    tmp = path + ".part"
+    with open(tmp, "wb") as f:
+        f.write(pdf_bytes)
+    _os.replace(tmp, path)
     return path
 
 
@@ -8098,7 +8216,7 @@ def _pdf_job_read_bytes(job: dict) -> bytes:
 
 
 def _pdf_jobs_cleanup():
-    """Elimina jobs con más de 30 minutos de antigüedad."""
+    """Elimina jobs en memoria y carpetas en disco con más de 30 minutos."""
     ahora = _time_mod.time()
     with _pdf_jobs_lock:
         caducados: List[str] = []
@@ -8109,12 +8227,29 @@ def _pdf_jobs_cleanup():
             except (TypeError, ValueError):
                 caducados.append(k)
                 continue
-            if ahora - ca_f > 1800:
+            if ahora - ca_f > _PDF_JOB_DISK_TTL_SEC:
                 caducados.append(k)
         for k in caducados:
-            job = _pdf_jobs.pop(k, None)
-            if isinstance(job, dict):
-                _pdf_job_unlink_path(job.get("pdf_path"))
+            _pdf_jobs.pop(k, None)
+    try:
+        if _os.path.isdir(_PDF_JOBS_ROOT):
+            for name in _os.listdir(_PDF_JOBS_ROOT):
+                d = _os.path.join(_PDF_JOBS_ROOT, name)
+                if not _os.path.isdir(d):
+                    continue
+                meta_p = _os.path.join(d, "meta.json")
+                ca_f = ahora
+                if _os.path.isfile(meta_p):
+                    try:
+                        with open(meta_p, encoding="utf-8") as f:
+                            meta = json.load(f)
+                        ca_f = float(meta.get("created_at") or 0)
+                    except Exception:
+                        ca_f = 0.0
+                if ahora - ca_f > _PDF_JOB_DISK_TTL_SEC:
+                    _pdf_job_remove_dir(name)
+    except Exception as exc:
+        _log.warning("pdf_jobs_cleanup disk: %s", exc)
 
 
 def _build_fo_eo_04_pdf_bytes_prog(
@@ -8169,19 +8304,22 @@ def ccd_pdf_job_iniciar(
         _log.warning("fo_eo_04 pool al iniciar job (se usará modo secuencial): %s", pool_exc)
     _pdf_jobs_cleanup()
     job_id = str(_uuid_mod.uuid4())
+    created_at = _time_mod.time()
+    job_base = {
+        "status": "pendiente",
+        "pct": 0,
+        "msg": "Iniciando…",
+        "current_item": None,
+        "total_items": None,
+        "bytes": None,
+        "fname": None,
+        "error": None,
+        "contrato_id": contrato_id,
+        "created_at": created_at,
+    }
     with _pdf_jobs_lock:
-        _pdf_jobs[job_id] = {
-            "status": "pendiente",
-            "pct": 0,
-            "msg": "Iniciando…",
-            "current_item": None,
-            "total_items": None,
-            "bytes": None,
-            "fname": None,
-            "error": None,
-            "contrato_id": contrato_id,
-            "created_at": _time_mod.time(),
-        }
+        _pdf_jobs[job_id] = dict(job_base)
+    _pdf_job_disk_save(job_id, job_base)
 
     cu_pdf = current_user if isinstance(current_user, dict) else dict(current_user)
 
@@ -8192,14 +8330,18 @@ def ccd_pdf_job_iniciar(
             _log.warning("fo_eo_04 pool en worker: %s", pool_exc)
 
         def on_progress(d: dict):
+            patch = {
+                "status": "progresando",
+                "pct": d.get("pct", 0),
+                "msg": d.get("msg", ""),
+                "current_item": d.get("current_item"),
+                "total_items": d.get("total_items"),
+            }
             with _pdf_jobs_lock:
                 if job_id in _pdf_jobs:
-                    _pdf_jobs[job_id].update({
-                        "pct": d.get("pct", 0),
-                        "msg": d.get("msg", ""),
-                        "current_item": d.get("current_item"),
-                        "total_items": d.get("total_items"),
-                    })
+                    _pdf_jobs[job_id].update(patch)
+            _pdf_job_disk_save(job_id, patch)
+
         try:
             pdf_bytes, fname, contrato_numero = _build_fo_eo_04_pdf_bytes_prog(
                 contrato_id, formato_codigo, subsistema, acta_id, supervisor,
@@ -8207,23 +8349,35 @@ def ccd_pdf_job_iniciar(
                 current_user=cu_pdf,
             )
             pdf_path = _pdf_job_store_pdf(job_id, pdf_bytes)
+            dl_tok = _pdf_job_issue_download_token(job_id)
+            done_patch = {
+                "status": "listo",
+                "pct": 100,
+                "msg": "¡Listo!",
+                "bytes": None,
+                "pdf_path": pdf_path,
+                "fname": fname,
+                "contrato_numero": contrato_numero,
+                "formato_codigo": formato_codigo,
+                "acta_id": acta_id,
+                "download_token": dl_tok,
+            }
             with _pdf_jobs_lock:
                 if job_id in _pdf_jobs:
-                    _pdf_jobs[job_id].update({
-                        "status": "listo",
-                        "pct": 100,
-                        "bytes": None,
-                        "pdf_path": pdf_path,
-                        "fname": fname,
-                        "contrato_numero": contrato_numero,
-                        "formato_codigo": formato_codigo,
-                        "acta_id": acta_id,
-                    })
+                    _pdf_jobs[job_id].update(done_patch)
+            _pdf_job_disk_save(job_id, done_patch)
+            _log.info(
+                "ccd_pdf_job listo job_id=%s bytes=%s",
+                job_id[:8],
+                len(pdf_bytes),
+            )
         except Exception as exc:
             _log.exception("ccd_pdf_job error job_id=%s", job_id)
+            err_patch = {"status": "error", "error": str(exc)[:2000]}
             with _pdf_jobs_lock:
                 if job_id in _pdf_jobs:
-                    _pdf_jobs[job_id].update({"status": "error", "error": str(exc)})
+                    _pdf_jobs[job_id].update(err_patch)
+            _pdf_job_disk_save(job_id, err_patch)
 
     t = _threading_mod.Thread(target=_run, daemon=False, name=f"pdf-job-{job_id[:8]}")
     t.start()
@@ -8238,11 +8392,10 @@ def ccd_pdf_job_estado(
 ):
     """Retorna el estado actual del job (para polling desde el frontend)."""
     _perm_informes_ccd(current_user, "ver")
-    with _pdf_jobs_lock:
-        job = _pdf_jobs.get(job_id)
+    job = _pdf_job_resolve(job_id)
     if not job or job.get("contrato_id") != contrato_id:
         raise HTTPException(status_code=404, detail="Job no encontrado")
-    return {
+    out = {
         "status": job.get("status"),
         "pct": job.get("pct", 0),
         "msg": job.get("msg", ""),
@@ -8250,23 +8403,19 @@ def ccd_pdf_job_estado(
         "total_items": job.get("total_items"),
         "error": job.get("error"),
     }
+    if job.get("status") == "listo" and job.get("download_token"):
+        out["download_token"] = job.get("download_token")
+        pdf_p = job.get("pdf_path") or _pdf_job_disk_pdf_path(job_id)
+        try:
+            if pdf_p and _os.path.isfile(pdf_p):
+                out["pdf_size_bytes"] = _os.path.getsize(pdf_p)
+        except OSError:
+            pass
+    return out
 
 
-@router.get("/{contrato_id}/ccd/pdf-job/{job_id}/pdf")
-def ccd_pdf_job_resultado(
-    contrato_id: int,
-    job_id: str,
-    current_user=Depends(_get_user),
-):
-    """Retorna los bytes del PDF una vez que el job ha finalizado."""
-    _perm_informes_ccd(current_user, "ver")
-    with _pdf_jobs_lock:
-        job = dict(_pdf_jobs.get(job_id) or {})
-    if not job or job.get("contrato_id") != contrato_id:
-        raise HTTPException(status_code=404, detail="Job no encontrado")
-    if job.get("status") != "listo":
-        raise HTTPException(status_code=409, detail="PDF aún no está listo")
-    path = job.get("pdf_path")
+def _ccd_pdf_job_file_response(job: dict):
+    path = job.get("pdf_path") or ""
     fname = job.get("fname") or "memoria.pdf"
     if path and _os.path.isfile(path):
         from fastapi.responses import FileResponse
@@ -8275,7 +8424,10 @@ def ccd_pdf_job_resultado(
             path,
             media_type="application/pdf",
             filename=fname,
-            headers={"Content-Disposition": f'inline; filename="{fname}"'},
+            headers={
+                "Content-Disposition": f'inline; filename="{fname}"',
+                "Cache-Control": "private, max-age=300",
+            },
         )
     if job.get("bytes"):
         return Response(
@@ -8286,6 +8438,26 @@ def ccd_pdf_job_resultado(
     raise HTTPException(status_code=410, detail="PDF no disponible; genere de nuevo.")
 
 
+@router.get("/{contrato_id}/ccd/pdf-job/{job_id}/pdf")
+def ccd_pdf_job_resultado(
+    contrato_id: int,
+    job_id: str,
+    token: Optional[str] = Query(None, description="Token de descarga (evita blob gigante con JWT)"),
+    current_user=Depends(_get_user),
+):
+    """PDF del job: FileResponse en streaming. Acepta ?token= del estado o JWT."""
+    if token:
+        job = _pdf_job_validate_download_token(contrato_id, job_id, token)
+    else:
+        _perm_informes_ccd(current_user, "ver")
+        job = _pdf_job_resolve(job_id)
+        if not job or job.get("contrato_id") != contrato_id:
+            raise HTTPException(status_code=404, detail="Job no encontrado")
+        if job.get("status") != "listo":
+            raise HTTPException(status_code=409, detail="PDF aún no está listo")
+    return _ccd_pdf_job_file_response(job)
+
+
 @router.get("/{contrato_id}/ccd/pdf-job/{job_id}/con-sello-firma")
 def ccd_pdf_job_con_sello_firma(
     contrato_id: int,
@@ -8294,8 +8466,7 @@ def ccd_pdf_job_con_sello_firma(
 ):
     """Anexa sello al PDF ya generado por el job (sin volver a armar las memorias)."""
     _perm_informes_ccd(current_user, "ver")
-    with _pdf_jobs_lock:
-        job = dict(_pdf_jobs.get(job_id) or {})
+    job = _pdf_job_resolve(job_id) or {}
     if not job or job.get("contrato_id") != contrato_id:
         raise HTTPException(status_code=404, detail="Job no encontrado")
     if job.get("status") != "listo":
