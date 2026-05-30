@@ -2674,7 +2674,7 @@ export default function ModuloInformes({
                 foMeta &&
                 Number(foMeta.prev_actas_count) > 0 &&
                 Number(foMeta.items_con_acumulado) === 0
-                  ? ' El servidor encontró actas anteriores pero ningún ítem con acumulado (revise sellado en actas cerradas).'
+                  ? ` El servidor encontró ${foMeta.prev_actas_count} acta(s) anterior(es) y ${foMeta.registros_prev_nivel_max ?? 0} línea(s) con nivel máximo aprobado, pero ningún ítem coincide con acumulado en el PDF (revise ítem/capítulo).`
                   : foMeta && Number(foMeta.prev_actas_count) === 0
                     ? ' No se detectaron actas RPO anteriores para este acta (revise numero_rpo/consecutivo en producción).'
                     : ''
@@ -2708,6 +2708,7 @@ export default function ModuloInformes({
             setFoEo04Job((prev) => ({
               ...prev,
               status: estado.status,
+              pct: estado.pct ?? prev?.pct ?? 0,
               msg: estado.msg ?? prev?.msg ?? '',
               currentItem: estado.current_item ?? null,
               totalItems: estado.total_items ?? null,
@@ -5748,6 +5749,7 @@ export default function ModuloInformes({
                   </div>
                   <div style={{ fontSize: (f.title - 4) + 'px', fontWeight: '800', color: '#1e40af', fontVariantNumeric: 'tabular-nums' }}>
                     {formatTiempoEsperaInformes(seg)}
+                    {typeof job.pct === 'number' && job.pct > 0 ? ` · ${job.pct}%` : ''}
                   </div>
                   {msgBackend ? (
                     <div style={{ fontSize: f.body + 'px', color: '#475569', textAlign: 'center', maxWidth: '480px', lineHeight: 1.45 }}>

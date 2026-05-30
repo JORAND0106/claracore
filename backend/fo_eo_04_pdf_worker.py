@@ -3,36 +3,21 @@ from __future__ import annotations
 
 import io
 import logging
-import os
-import tempfile
 from typing import List
 
 _log = logging.getLogger("uvicorn.error")
 
 
 def _pdf_link_callback(uri: str, rel) -> str:
-    """Descarga imágenes http(s) para xhtml2pdf cuando no van embebidas en data-URI."""
+    """Solo data-URI locales; no re-descargar http (prefetch ya embebió o omitió)."""
     if not uri:
         return uri
     s = str(uri).strip()
     if s.startswith("data:") or not s.startswith("http"):
         return s
-    try:
-        import requests
-
-        r = requests.get(s, timeout=25, headers={"User-Agent": "ClaraCore-pdf/1"})
-        r.raise_for_status()
-        ct = (r.headers.get("Content-Type") or "").lower()
-        ext = ".png" if "png" in ct or s.lower().endswith(".png") else ".jpg"
-        fd, path = tempfile.mkstemp(suffix=ext, prefix="cc_fo04_img_")
-        try:
-            os.write(fd, r.content)
-        finally:
-            os.close(fd)
-        return path
-    except Exception as exc:
-        _log.warning("fo_eo_04 link_callback %s: %s", s[:72], exc)
-        return s
+    # Evita cuelgues en Azure: xhtml2pdf no debe volver a pedir la red por página.
+    _log.debug("fo_eo_04 link_callback omit http: %s", s[:72])
+    return ""
 
 
 def render_html_to_pdf(html: str) -> bytes:

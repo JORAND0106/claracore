@@ -1,5 +1,5 @@
-"""FO-IDU-EO-04-V2: sellado matriz y deduplicación de registros por acta."""
-from ccd_conciliacion import _registro_aprobado_matriz_panel
+"""FO-IDU-EO-04-V2: aprobación nivel máximo vs sellado en cascada."""
+from ccd_conciliacion import _nivel_norm_matriz, _registro_aprobado_matriz_panel
 
 
 def _fo_eo_04_es_acta_rpo(acta_row):
@@ -62,6 +62,19 @@ def test_registro_sellado_nivel_max_4_requiere_prerequisitos():
         "nivel4_estado": "Aprobado",
     }
     assert _registro_aprobado_matriz_panel(reg, [1, 2, 3, 4], "nivel4_estado") is True
+
+
+def test_sellado_cascada_distinto_de_solo_nivel_max():
+    """FO-EO-04 debe usar solo nivel máximo Aprobado, no cascada (sellado panel)."""
+    reg = {
+        "item_numero": "9.01",
+        "nivel1_estado": "Pendiente",
+        "nivel2_estado": "Aprobado",
+        "nivel3_estado": "Aprobado",
+        "nivel4_estado": "Aprobado",
+    }
+    assert _registro_aprobado_matriz_panel(reg, [1, 2, 3, 4], "nivel4_estado") is False
+    assert _nivel_norm_matriz(reg.get("nivel4_estado")) == "Aprobado"
 
 
 def test_fo_eo_04_solo_actas_rpo():

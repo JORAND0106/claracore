@@ -2181,7 +2181,7 @@ def ccd_fo_eo_04_diagnostico(
             "OK: hay ítems para el PDF."
             if items
             else (
-                "Sin ítems: no hay líneas selladas en el nivel máximo del contrato para este acta. "
+                "Sin ítems: no hay líneas con el nivel máximo del contrato en Aprobado para este acta. "
                 "Revise matriz SICOE y acta_rpo_id en registros/reportes."
             )
         ),
@@ -6121,7 +6121,7 @@ def _url_a_data_url_pdf(url: Optional[str]) -> Optional[str]:
         return None
     try:
         import base64, io
-        resp = requests.get(url.strip(), timeout=25)
+        resp = requests.get(url.strip(), timeout=_FO_EO04_IMG_FETCH_TIMEOUT_SEC)
         resp.raise_for_status()
         ct = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
         data = resp.content
@@ -6408,16 +6408,23 @@ def _fo_eo_04_fetch_registros_actas_ids(
     acta_ids: List[int],
     *,
     select_cols: str = _FO_EO_04_SEL_REGISTROS,
+    item_numeros: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Líneas de varias actas: acta_rpo_id en el conjunto y registros vía so_reportes.acta_rpo_id
     (misma regla que _fo_eo_04_fetch_registros_acta; necesario para totales acumulados).
+    item_numeros: si se pasa, solo trae esos ítems (mucho más rápido en prod).
     """
     if not acta_ids:
         return []
     cid = int(contrato_id)
     ids_u = sorted({int(x) for x in acta_ids})
     by_id: Dict[Any, Dict[str, Any]] = {}
+    item_chunks: List[Optional[List[str]]] = [None]
+    if item_numeros:
+        inums = sorted({(x or "").strip() for x in item_numeros if (x or "").strip()})
+        if inums:
+            item_chunks = [inums[i : i + 40] for i in range(0, len(inums), 40)]
 
     def _base_q():
         return (
@@ -6432,58 +6439,86 @@ def _fo_eo_04_fetch_registros_actas_ids(
         chunk = ids_u[i : i + 80]
         chunk_set = set(chunk)
 
-        rows_direct = _fo_eo_04_paginar_so_registros(
-            lambda c=chunk: _base_q().in_("acta_rpo_id", c)
-        )
-
-        reporte_ids: List[int] = []
-        try:
-            rp = (
-                _sb.table("so_reportes")
-                .select("id")
-                .eq("contrato_id", cid)
-                .in_("acta_rpo_id", chunk)
-                .execute()
-                .data
-                or []
+        for ic in item_chunks:
+            rows_direct = _fo_eo_04_paginar_so_registros(
+                lambda c=chunk, ic=ic: (
+                    _base_q().in_("acta_rpo_id", c).in_("item_numero", ic)
+                    if ic is not None
+                    else _base_q().in_("acta_rpo_id", c)
+                )
             )
-            reporte_ids = [int(x["id"]) for x in rp if x.get("id") is not None]
-        except Exception as exc:
-            _log.warning("fo_eo_04 reportes actas_prev: %s", exc)
 
-        rows_rep: list = []
-        for j in range(0, len(reporte_ids), 80):
-            rep_chunk = reporte_ids[j : j + 80]
+            reporte_ids: List[int] = []
+            try:
+                rp = (
+                    _sb.table("so_reportes")
+                    .select("id")
+                    .eq("contrato_id", cid)
+                    .in_("acta_rpo_id", chunk)
+                    .execute()
+                    .data
+                    or []
+                )
+                reporte_ids = [int(x["id"]) for x in rp if x.get("id") is not None]
+            except Exception as exc:
+                _log.warning("fo_eo_04 reportes actas_prev: %s", exc)
 
-            def _q_rep(ids=rep_chunk):
-                return _base_q().in_("reporte_id", ids).is_("acta_rpo_id", "null")
+            rows_rep: list = []
+            for j in range(0, len(reporte_ids), 80):
+                rep_chunk = reporte_ids[j : j + 80]
 
-            rows_rep.extend(_fo_eo_04_paginar_so_registros(_q_rep))
+                def _q_rep(ids=rep_chunk, ic=ic):
+                    q = _base_q().in_("reporte_id", ids).is_("acta_rpo_id", "null")
+                    if ic is not None:
+                        q = q.in_("item_numero", ic)
+                    return q
 
-        for r in rows_direct:
-            rid = r.get("id")
-            if rid is not None:
-                by_id[rid] = r
-        for r in rows_rep:
-            rid = r.get("id")
-            if rid is None:
-                continue
-            ara = r.get("acta_rpo_id")
-            if ara is not None:
-                try:
-                    if int(ara) not in chunk_set:
-                        continue
-                except (TypeError, ValueError):
+                rows_rep.extend(_fo_eo_04_paginar_so_registros(_q_rep))
+
+            for r in rows_direct:
+                rid = r.get("id")
+                if rid is not None:
+                    by_id[rid] = r
+            for r in rows_rep:
+                rid = r.get("id")
+                if rid is None:
                     continue
-            by_id[rid] = r
+                ara = r.get("acta_rpo_id")
+                if ara is not None:
+                    try:
+                        if int(ara) not in chunk_set:
+                            continue
+                    except (TypeError, ValueError):
+                        continue
+                by_id[rid] = r
 
     rows = list(by_id.values())
     _log.info(
-        "fo_eo_04 registros_actas_ids: actas=%s registros=%s",
+        "fo_eo_04 registros_actas_ids: actas=%s items_filtro=%s registros=%s",
         len(ids_u),
+        len(item_numeros or []),
         len(rows),
     )
     return rows
+
+
+def _fo_eo_04_registro_aprobado_nivel_max(
+    reg: Dict[str, Any],
+    contrato_id: int,
+    *,
+    matriz: Optional[Tuple[str, List[int]]] = None,
+) -> bool:
+    """
+    FO-EO-04 / acumulados: solo «Aprobado» en el nivel máximo activo del contrato.
+    No exige cascada N1·N2·… (eso es sellado / panel matriz; aquí no aplica).
+    Misma regla que SICOE KPI dashboard (_registro_nivel_max_aprobado en main).
+    """
+    if not (str(reg.get("item_numero") or "").strip()):
+        return False
+    if matriz is None:
+        matriz = matriz_params_contrato(_sb, int(contrato_id))
+    campo_mx, _niveles_act = matriz
+    return _norm_estado_n3(reg.get(campo_mx)) == "Aprobado"
 
 
 def _fo_eo_04_registro_aprobado_interventoria(
@@ -6492,11 +6527,8 @@ def _fo_eo_04_registro_aprobado_interventoria(
     *,
     matriz: Optional[Tuple[str, List[int]]] = None,
 ) -> bool:
-    """Sellado en el nivel máximo activo del contrato (no solo N3). Igual que panel actas / matriz."""
-    if matriz is None:
-        matriz = matriz_params_contrato(_sb, int(contrato_id))
-    campo_mx, niveles_act = matriz
-    return _registro_aprobado_matriz_panel(reg, niveles_act, campo_mx)
+    """Alias histórico → aprobado en nivel máximo (no sellado en cascada)."""
+    return _fo_eo_04_registro_aprobado_nivel_max(reg, contrato_id, matriz=matriz)
 
 
 def _fo_eo_04_registros_sellados_acta(
@@ -6505,23 +6537,25 @@ def _fo_eo_04_registros_sellados_acta(
     *,
     matriz: Optional[Tuple[str, List[int]]] = None,
 ) -> List[Dict[str, Any]]:
-    """Líneas del acta con sellado en el nivel máximo activo del contrato (solo acta_rpo_id en línea)."""
+    """Líneas del acta con nivel máximo en Aprobado (vínculo acta/reporte)."""
     if matriz is None:
         matriz = matriz_params_contrato(_sb, int(contrato_id))
     campo_mx, niveles_act = matriz
     raw = _fo_eo_04_fetch_registros_acta(int(contrato_id), int(acta_id))
-    sellados = [
-        r for r in raw if _registro_aprobado_matriz_panel(r, niveles_act, campo_mx)
+    aprobados = [
+        r
+        for r in raw
+        if _fo_eo_04_registro_aprobado_nivel_max(r, int(contrato_id), matriz=matriz)
     ]
     _log.info(
-        "fo_eo_04 sellados_acta: acta=%s campo_max=%s niveles=%s raw=%s sellados=%s",
+        "fo_eo_04 aprobados_nivel_max_acta: acta=%s campo_max=%s niveles=%s raw=%s aprobados=%s",
         acta_id,
         campo_mx,
         niveles_act,
         len(raw),
-        len(sellados),
+        len(aprobados),
     )
-    return sellados
+    return aprobados
 
 
 def _fetch_total_actas_anteriores(
@@ -6548,9 +6582,10 @@ def _fetch_total_actas_anteriores(
         raw_prev = _fo_eo_04_fetch_registros_actas_ids(
             int(contrato_id), prev_ids, select_cols=_FO_EO_04_SEL_TOTALES
         )
-        campo_mx, niveles_act = matriz
         for r in raw_prev:
-            if not _registro_aprobado_matriz_panel(r, niveles_act, campo_mx):
+            if not _fo_eo_04_registro_aprobado_nivel_max(
+                r, int(contrato_id), matriz=matriz
+            ):
                 continue
             if _fo_eo_04_norm_item_key(
                 r.get("item_numero") or "", r.get("capitulo") or ""
@@ -6570,14 +6605,20 @@ def _fetch_total_actas_anteriores(
 
 def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> Tuple[dict, Dict[str, Any]]:
     """
-    Calcula totales sellados de actas anteriores para TODOS los ítems en un solo lote.
+    Totales de actas anteriores: cantidad_total con nivel máximo del contrato en Aprobado
+    (sin exigir cascada / sellado en niveles inferiores).
     Returns: (dict {(item_numero, capitulo): total_float}, meta diagnóstico).
     """
     from collections import defaultdict
+    matriz0 = matriz_params_contrato(_sb, int(contrato_id)) if acta_id and items else None
+    campo_mx0 = matriz0[0] if matriz0 else ""
     meta: Dict[str, Any] = {
         "prev_actas_count": 0,
         "registros_prev_raw": 0,
+        "registros_prev_nivel_max": 0,
         "items_con_acumulado": 0,
+        "criterio_aprobacion": "nivel_max_aprobado",
+        "campo_nivel_maximo": campo_mx0,
     }
     if not items or not acta_id:
         return {}, meta
@@ -6600,7 +6641,6 @@ def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> Tuple[d
             return default_result, meta
 
         matriz = matriz_params_contrato(_sb, int(contrato_id))
-        campo_mx, niveles_act = matriz
         items_set = {
             _fo_eo_04_norm_item_key(
                 item.get("item_numero") or "", item.get("capitulo") or ""
@@ -6609,27 +6649,42 @@ def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> Tuple[d
         }
         totales: dict = defaultdict(float)
 
+        nums_pdf = [
+            (item.get("item_numero") or "").strip()
+            for item in items
+            if (item.get("item_numero") or "").strip()
+        ]
         raw_prev = _fo_eo_04_fetch_registros_actas_ids(
-            int(contrato_id), prev_ids, select_cols=_FO_EO_04_SEL_TOTALES
+            int(contrato_id),
+            prev_ids,
+            select_cols=_FO_EO_04_SEL_TOTALES,
+            item_numeros=nums_pdf,
         )
         meta["registros_prev_raw"] = len(raw_prev)
+        n_nivel_max = 0
         for r in raw_prev:
-            if not _registro_aprobado_matriz_panel(r, niveles_act, campo_mx):
+            if not _fo_eo_04_registro_aprobado_nivel_max(
+                r, int(contrato_id), matriz=matriz
+            ):
                 continue
+            n_nivel_max += 1
             k = _fo_eo_04_norm_item_key(
                 r.get("item_numero") or "", r.get("capitulo") or ""
             )
             if k in items_set:
                 totales[k] += float(r.get("cantidad_total") or 0)
+        meta["registros_prev_nivel_max"] = n_nivel_max
 
         meta["items_con_acumulado"] = sum(1 for v in totales.values() if v)
         _log.info(
-            "fo_eo_04 totales_batch: acta=%s prev_actas=%s raw_prev=%s items=%s con_total=%s",
+            "fo_eo_04 totales_batch: acta=%s prev_actas=%s raw_prev=%s nivel_max=%s items=%s con_total=%s campo=%s",
             acta_id,
             len(prev_ids),
             len(raw_prev),
+            n_nivel_max,
             len(items_set),
             meta["items_con_acumulado"],
+            meta.get("campo_nivel_maximo"),
         )
         # Combinar: ítems con datos + ítems sin registros anteriores (→ 0.0)
         result = {**default_result, **dict(totales)}
@@ -6646,7 +6701,7 @@ def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> Tuple[d
 
 def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
     """
-    Ítems del acta con sellado en el nivel máximo activo del contrato (interventoría / matriz SICOE).
+    Ítems del acta con nivel máximo del contrato en Aprobado (FO-EO-04; no cascada sellado).
     """
     from collections import defaultdict
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -7054,14 +7109,28 @@ _FO_EO04_PDF_PAGE_WORKERS = max(4, min(10, (_os.cpu_count() or 4)))
 _FO_EO04_PDF_PARALLEL_MIN_PAGES = 2
 _FO_EO04_PDF_PAGES_PER_TASK = 2
 _FO_EO04_PDF_TASK_TIMEOUT_SEC = max(
-    60,
-    int(_os.environ.get("FO_EO04_PDF_TASK_TIMEOUT_SEC", "240") or "240"),
+    45,
+    int(_os.environ.get("FO_EO04_PDF_TASK_TIMEOUT_SEC", "90") or "90"),
 )
-_FO_EO04_PDF_USE_PROCESSES = _os.environ.get("FO_EO04_PDF_USE_PROCESSES", "1").strip().lower() not in (
-    "0",
-    "false",
-    "no",
+_FO_EO04_IMG_FETCH_TIMEOUT_SEC = max(
+    5,
+    int(_os.environ.get("FO_EO04_IMG_FETCH_TIMEOUT_SEC", "12") or "12"),
 )
+
+
+def _fo_eo_04_pdf_use_processes() -> bool:
+    """
+    ProcessPool acelera en PC local; en Azure App Service suele colgar (spawn + memoria).
+    FO_EO04_PDF_USE_PROCESSES=1 fuerza procesos; =0 fuerza hilo principal.
+    """
+    env = (_os.environ.get("FO_EO04_PDF_USE_PROCESSES") or "").strip().lower()
+    if env in ("0", "false", "no"):
+        return False
+    if env in ("1", "true", "yes"):
+        return True
+    if _os.environ.get("WEBSITE_SITE_NAME") or _os.environ.get("WEBSITE_INSTANCE_ID"):
+        return False
+    return True
 _FO_EO04_PROCESS_POOL = None
 _FO_EO04_POOL_LOCK = threading.Lock()
 _FO_EO04_MARCA_LBL_ELABORO = "Elaborado y firmado por:"
@@ -7781,6 +7850,7 @@ def _fo_eo_04_img_src_for_pdf(http_url: str, cache: Dict[str, str]) -> Optional[
 
 def _fo_eo_04_prefetch_item_imgs_data_uri(
     items_n3: list,
+    on_progress=None,
 ) -> List[Tuple[Optional[str], Optional[str]]]:
     """Data URI por ítem; cada URL única se descarga una sola vez (mismo foto_numero en muchos ítems)."""
     n = len(items_n3)
@@ -7794,12 +7864,20 @@ def _fo_eo_04_prefetch_item_imgs_data_uri(
                 unique_urls.add(u)
     url_to_uri: Dict[str, str] = {}
     if unique_urls:
-        with ThreadPoolExecutor(max_workers=_FO_EO04_ITEM_IMG_WORKERS) as pool:
+        n_u = len(unique_urls)
+        done_u = 0
+        with ThreadPoolExecutor(max_workers=min(_FO_EO04_ITEM_IMG_WORKERS, n_u)) as pool:
             futs = {pool.submit(_url_a_data_url_pdf, u): u for u in unique_urls}
             for fut in as_completed(futs):
                 u = futs[fut]
+                done_u += 1
+                if on_progress:
+                    on_progress({
+                        "pct": 50 + int(4 * done_u / max(n_u, 1)),
+                        "msg": f"Descargando fotos/gráficos ({done_u}/{n_u})…",
+                    })
                 try:
-                    uri = fut.result()
+                    uri = fut.result(timeout=_FO_EO04_IMG_FETCH_TIMEOUT_SEC + 5)
                     if uri and len(uri) <= _FO_EO04_MAX_DATA_URI_LEN:
                         url_to_uri[u] = uri
                     else:
@@ -7876,7 +7954,7 @@ def _fo_eo_04_pdf_from_pages(
         })
 
     use_processes = (
-        _FO_EO04_PDF_USE_PROCESSES
+        _fo_eo_04_pdf_use_processes()
         and n >= _FO_EO04_PDF_PARALLEL_MIN_PAGES
         and _FO_EO04_PROCESS_POOL is not None
     )
@@ -7909,8 +7987,16 @@ def _fo_eo_04_pdf_from_pages(
             done_pages = sum(1 for p in page_pdfs if p is not None)
             _report(done_pages)
     else:
+        _log.info("fo_eo_04 PDF secuencial (sin ProcessPool): %s páginas", n)
         for i, h in enumerate(pages_html):
-            page_pdfs[i] = _to_pdf(h)
+            if on_progress:
+                on_progress({
+                    "pct": 76 + int(22 * (i + 1) / max(n, 1)),
+                    "msg": f"Renderizando PDF página {i + 1}/{n}…",
+                    "current_item": i + 1,
+                    "total_items": n,
+                })
+            page_pdfs[i] = _to_pdf_unlocked(h)
             _report(i + 1)
 
     parts = [p for p in page_pdfs if p]
@@ -8090,7 +8176,7 @@ def _build_fo_eo_04_html(
         reviso2_marca_hora=r2m_h,
     )
 
-    _prog(30, "Obteniendo ítems sellados (nivel máximo del contrato)…")
+    _prog(30, "Obteniendo ítems (aprobados en nivel máximo del contrato)…")
     items_n3 = _fetch_items_n3_acta(acta_id_norm, contrato_id) if acta_id_norm else []
     n_items = len(items_n3)
     if acta_id_norm and not items_n3:
@@ -8117,13 +8203,24 @@ def _build_fo_eo_04_html(
             total_items=n_items,
             fo_totales_meta=fo_totales_meta,
         )
-        img_pairs = None if preview_ui else _fo_eo_04_prefetch_item_imgs_data_uri(items_n3)
         if not preview_ui:
             _prog(
-                52,
+                50,
                 f"Descargando fotos y gráficos ({n_items} ítem{'s' if n_items != 1 else ''})…",
                 total_items=n_items,
             )
+            img_pairs = _fo_eo_04_prefetch_item_imgs_data_uri(
+                items_n3,
+                on_progress=lambda d: _prog(
+                    d.get("pct", 52),
+                    d.get("msg", "Descargando imágenes…"),
+                    total_items=n_items,
+                )
+                if on_progress
+                else None,
+            )
+        else:
+            img_pairs = None
 
         pages = []
         for i, item in enumerate(items_n3):
@@ -8422,10 +8519,13 @@ def ccd_pdf_job_iniciar(
     if acta_id is not None and _resolver_acta_id_en_contrato(contrato_id, acta_id) is None:
         raise HTTPException(status_code=404, detail="Acta no encontrada en este contrato")
 
-    try:
-        _fo_eo_04_init_pdf_pool()
-    except Exception as pool_exc:
-        _log.warning("fo_eo_04 pool al iniciar job (se usará modo secuencial): %s", pool_exc)
+    if _fo_eo_04_pdf_use_processes():
+        try:
+            _fo_eo_04_init_pdf_pool()
+        except Exception as pool_exc:
+            _log.warning("fo_eo_04 pool al iniciar job (se usará modo secuencial): %s", pool_exc)
+    else:
+        _log.info("fo_eo_04 PDF job: modo secuencial (Azure o FO_EO04_PDF_USE_PROCESSES=0)")
     _pdf_jobs_cleanup()
     job_id = str(_uuid_mod.uuid4())
     created_at = _time_mod.time()
@@ -8448,10 +8548,11 @@ def ccd_pdf_job_iniciar(
     cu_pdf = current_user if isinstance(current_user, dict) else dict(current_user)
 
     def _run():
-        try:
-            _fo_eo_04_init_pdf_pool()
-        except Exception as pool_exc:
-            _log.warning("fo_eo_04 pool en worker: %s", pool_exc)
+        if _fo_eo_04_pdf_use_processes():
+            try:
+                _fo_eo_04_init_pdf_pool()
+            except Exception as pool_exc:
+                _log.warning("fo_eo_04 pool en worker: %s", pool_exc)
 
         def on_progress(d: dict):
             patch = {
