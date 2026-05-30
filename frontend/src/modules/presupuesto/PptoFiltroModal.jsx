@@ -48,23 +48,26 @@ export default function PptoFiltroModal({
   const [nombrePlantilla, setNombrePlantilla] = useState('')
   const [guardandoPlantilla, setGuardandoPlantilla] = useState(false)
   const [opciones, setOpciones] = useState({})
+  const seccionIds = useMemo(() => PPTO_FILTRO_CATEGORIAS.map((c) => c.id), [])
   const [seccionesAbiertas, setSeccionesAbiertas] = useState(() =>
-    Object.fromEntries(
-      PPTO_FILTRO_CATEGORIAS.map((c) => [c.id, c.id === 'item' || c.id === 'ubicacion']),
-    ),
+    Object.fromEntries(seccionIds.map((id) => [id, id === 'item'])),
   )
 
   const catalogoPorCat = pptoFiltroCatalogoPorCategoria()
 
   const toggleSeccion = (id) => {
-    setSeccionesAbiertas((prev) => ({ ...prev, [id]: !prev[id] }))
+    setSeccionesAbiertas((prev) => {
+      if (prev[id]) return Object.fromEntries(seccionIds.map((sid) => [sid, false]))
+      return Object.fromEntries(seccionIds.map((sid) => [sid, sid === id]))
+    })
   }
 
   useEffect(() => {
     if (!open) return
     setDraftF({ ...fAplicado })
     setTab('plantillas')
-  }, [open, fAplicado])
+    setSeccionesAbiertas(Object.fromEntries(seccionIds.map((sid) => [sid, sid === 'item'])))
+  }, [open, fAplicado, seccionIds])
 
   const cascadeKey = useMemo(() => {
     const capSingle = draftF.caps?.length === 1 ? draftF.caps[0] : (draftF.cap || '')

@@ -180,6 +180,20 @@ export function sicoeFiltrosActivosKeys(f, extra = {}) {
 }
 
 /** Criterios elegidos en el modal (sin capas por defecto de rol). */
+/**
+ * Filtro de validación acotado a «nivel máximo del contrato = Aprobado» (todas las capas deben coincidir).
+ * Habilita reversión masiva de cantidades en el panel SICOE Obra.
+ */
+export function sicoeCapasEsFiltroNivelMaxAprobado(capas, nivelMaximo) {
+  const nm = Number(nivelMaximo)
+  if (!Number.isFinite(nm) || nm < 1) return false
+  const ser = Array.isArray(capas) ? capas : []
+  if (!ser.length) return false
+  return ser.every(
+    (c) => Number(c.nivel) === nm && String(c.estado || '').trim() === 'Aprobado',
+  )
+}
+
 export function sicoeBundleTieneCriteriosUsuario(bundle) {
   const b = bundle || {}
   const f = b.fSicoe || {}

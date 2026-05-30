@@ -78,8 +78,9 @@ export default function SicoeFiltroModal({
   const [nombrePlantilla, setNombrePlantilla] = useState('')
   const [guardandoPlantilla, setGuardandoPlantilla] = useState(false)
   const [opciones, setOpciones] = useState({})
+  const seccionIds = useMemo(() => SICOE_FILTRO_CATEGORIAS.map((c) => c.id), [])
   const [seccionesAbiertas, setSeccionesAbiertas] = useState(() =>
-    Object.fromEntries(SICOE_FILTRO_CATEGORIAS.map((c) => [c.id, false])),
+    Object.fromEntries(seccionIds.map((id) => [id, false])),
   )
   const [usuariosActivos, setUsuariosActivos] = useState([])
   const modalAbiertoPrevRef = useRef(false)
@@ -87,7 +88,10 @@ export default function SicoeFiltroModal({
   const catalogoPorCat = sicoeFiltroCatalogoPorCategoria()
 
   const toggleSeccion = (id) => {
-    setSeccionesAbiertas((prev) => ({ ...prev, [id]: !prev[id] }))
+    setSeccionesAbiertas((prev) => {
+      if (prev[id]) return Object.fromEntries(seccionIds.map((sid) => [sid, false]))
+      return Object.fromEntries(seccionIds.map((sid) => [sid, sid === id]))
+    })
   }
 
   useEffect(() => {
@@ -105,7 +109,8 @@ export default function SicoeFiltroModal({
     setCapaTemp({ nivel: '', estado: '' })
     setCombCapasPendiente(null)
     setTab('libre')
-  }, [open, bundleAplicado])
+    setSeccionesAbiertas(Object.fromEntries(seccionIds.map((sid) => [sid, sid === 'reporte'])))
+  }, [open, bundleAplicado, seccionIds])
 
   const cascadeKey = useMemo(
     () => [draftF.capitulo, draftF.acta_rpo, draftF.semana, draftF.subcontratista_id].join('|'),

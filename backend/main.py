@@ -12274,6 +12274,386 @@ class ValidarNivelMasivoFiltroBody(BaseModel):
     registro_ids: Optional[List[int]] = None
 
 
+class ReversionMasivaFiltroBody(BaseModel):
+    """Mismos filtros que validación masiva; fase 1 = primera llave doble autorización por registro."""
+    comentario_data: Optional[dict] = None
+
+    numero_reporte: Optional[int] = None
+    numero_registro: Optional[int] = None
+    semana: Optional[int] = None
+    acta_rpo: Optional[int] = None
+    subcontratista_id: Optional[int] = None
+    capitulo: Optional[str] = None
+    item: Optional[str] = None
+    items_filtro: Optional[str] = None
+    items_filtro_op: Optional[str] = None
+    tramo: Optional[str] = None
+    costado: Optional[str] = None
+    pk_id: Optional[int] = None
+    abs_inicio: Optional[float] = None
+    abs_final: Optional[float] = None
+    estado: Optional[str] = None
+
+    cargo_id: Optional[int] = None
+    estado_validacion: Optional[str] = None
+    validacion_capas: Optional[str] = None
+    validacion_capas_op: Optional[str] = None
+
+    q_observacion: Optional[str] = None
+    q_nodo: Optional[str] = None
+    etiqueta_validacion: Optional[str] = None
+    pendiente_item: bool = False
+    registro_ids: Optional[List[int]] = None
+
+
+def _sicoe_reversion_masivo_filtro_to_export_body(b: ReversionMasivaFiltroBody) -> ExportarRegistrosBody:
+    _dump = getattr(b, "model_dump", None)
+    if _dump:
+        d = _dump(exclude={"comentario_data", "registro_ids"})
+    else:
+        d = b.dict(exclude={"comentario_data", "registro_ids"})
+    return ExportarRegistrosBody(
+        campos=[
+            "id",
+            "reporte_id",
+            "contrato_id",
+            "bloqueado",
+            "solicitud_reversion",
+            "reversion_arm_n2_usuario_id",
+            "reversion_arm_n3_usuario_id",
+            "nivel1_estado",
+            "nivel2_estado",
+            "nivel3_estado",
+            "nivel4_estado",
+            "nivel5_estado",
+            "nivel6_estado",
+            "nivel2_objeto_pago_sub",
+            "item_numero",
+            "item_descripcion",
+            "cantidad_total",
+            "costo_directo",
+        ],
+        **d,
+    )
+
+
+def _sicoe_validar_capas_filtro_solo_nivel_max_aprobado(contrato_id: int, body) -> None:
+    capas = _parse_validacion_capas_param(
+        getattr(body, "validacion_capas", None),
+        getattr(body, "cargo_id", None),
+        getattr(body, "estado_validacion", None),
+    )
+    if not capas:
+        raise HTTPException(
+            status_code=422,
+            detail="La reversión masiva exige filtrar por el nivel máximo del contrato en estado Aprobado.",
+        )
+    nm = _get_nivel_numero_maximo_contrato(contrato_id)
+    for c in capas:
+        try:
+            n = int(c.get("nivel"))
+        except (TypeError, ValueError):
+            n = None
+        est = (c.get("estado") or "").strip()
+        if n != nm or est != "Aprobado":
+            raise HTTPException(
+                status_code=422,
+                detail="Solo aplica con filtro de validación: nivel máximo del contrato = Aprobado (sin otras capas).",
+            )
+
+
+def _sicoe_nid_reversion_arm(v):
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _sicoe_reversion_doble_llave_nivel_usuario(
+    current_user, autor_id: int, arm2: Optional[int], arm3: Optional[int]
+) -> int:
+    nivel_db = _sicoe_db_nivel_validacion_usuario(autor_id)
+    if _es_desarrollador(current_user) or nivel_db == 0:
+        if arm2 is None:
+            return 2
+        if arm3 is None:
+            return 3
+        raise HTTPException(
+            status_code=422,
+            detail="Las dos llaves ya están registradas para este registro.",
+        )
+    nivel = nivel_db
+    if nivel not in (2, 3, 4, 5, 6):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo Residente de costos (Nivel 2) o perfiles de interventoría con permiso de validación pueden activar esta llave.",
+        )
+    return nivel
+
+
+def _sicoe_reversion_doble_llave_procesar_registro(
+    contrato_id: int,
+    registro_id: int,
+    autor_id: int,
+    current_user,
+    cd: dict,
+    row: Optional[dict] = None,
+) -> Dict[str, Any]:
+    """
+    Primera llave o ejecución completa de reversión doble. Retorna dict con ok, ejecutada, nivel, omitido?, motivo?.
+    """
+    mensaje_limpio = (cd.get("mensaje") or "").strip()
+    if not mensaje_limpio:
+        raise HTTPException(status_code=422, detail="El cuerpo del mensaje es obligatorio.")
+    dest_raw = cd.get("destinatarios") or []
+    n_dest = sum(1 for d in dest_raw if isinstance(d, dict) and d.get("id") is not None)
+    if n_dest < 1:
+        raise HTTPException(
+            status_code=422,
+            detail="Debe indicar al menos un destinatario (para quién va el mensaje).",
+        )
+
+    if row is None:
+        def _get():
+            return (
+                supabase.table("so_registros")
+                .select(
+                    f"{SICOE_SELECT_NIVELES_ESTADO},bloqueado,contrato_id,"
+                    "reversion_arm_n2_usuario_id,reversion_arm_n3_usuario_id"
+                )
+                .eq("id", registro_id)
+                .eq("contrato_id", contrato_id)
+                .limit(1)
+                .execute()
+                .data
+            )
+
+        try:
+            rows = supabase_execute(_get)
+        except Exception as ex:
+            raise _http_reversion_doble_llave_db_error(ex) from ex
+        if not rows:
+            raise HTTPException(status_code=404, detail="Registro no encontrado.")
+        row = rows[0]
+
+    if not _registro_nivel_max_aprobado(row, contrato_id) or not row.get("bloqueado"):
+        return {"ok": False, "omitido": True, "motivo": "no_aprobado_o_no_bloqueado"}
+
+    prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
+    arm2 = _sicoe_nid_reversion_arm(row.get("reversion_arm_n2_usuario_id"))
+    arm3 = _sicoe_nid_reversion_arm(row.get("reversion_arm_n3_usuario_id"))
+
+    try:
+        nivel = _sicoe_reversion_doble_llave_nivel_usuario(current_user, autor_id, arm2, arm3)
+    except HTTPException as ex:
+        if ex.status_code in (403, 422):
+            return {"ok": False, "omitido": True, "motivo": str(ex.detail)}
+        raise
+
+    _require_llave_reversion_sicoe_nivel(current_user, autor_id, nivel)
+
+    if nivel == 2:
+        if arm2 is not None and arm2 != autor_id:
+            return {"ok": False, "omitido": True, "motivo": "llave_n2_otro_usuario"}
+        if arm2 is not None and arm2 == autor_id:
+            return {"ok": False, "omitido": True, "motivo": "llave_n2_ya_registrada"}
+    else:
+        if arm3 is not None and arm3 != autor_id:
+            return {"ok": False, "omitido": True, "motivo": "llave_n3_otro_usuario"}
+        if arm3 is not None and arm3 == autor_id:
+            return {"ok": False, "omitido": True, "motivo": "llave_n3_ya_registrada"}
+
+    new2 = autor_id if nivel == 2 else arm2
+    new3 = autor_id if nivel in (3, 4, 5, 6) else arm3
+    ejecutar = new2 is not None and new3 is not None
+    if ejecutar and new2 == new3:
+        return {"ok": False, "omitido": True, "motivo": "misma_persona_dos_llaves"}
+
+    cd_send = {**cd, "mensaje": mensaje_limpio}
+    slot_llave = _sicoe_slot_llave_reversion(nivel)
+    tipo_c = "reversion_doble_llave_n2" if slot_llave == 2 else "reversion_doble_llave_n3"
+    _insertar_comentario(
+        contrato_id,
+        registro_id,
+        autor_id,
+        cd_send,
+        tipo_override=tipo_c,
+        nivel_validacion_override=f"Nivel {nivel}",
+        audit_user=current_user,
+    )
+    try:
+        _push_notif_validacion_sicoe_destinatarios(
+            current_user,
+            autor_id,
+            contrato_id,
+            registro_id,
+            f"Doble llave reversión N3 — Nivel {nivel}",
+            mensaje_limpio,
+            cd_send,
+        )
+    except Exception:
+        pass
+
+    if ejecutar:
+        campo_mx = _get_nivel_maximo_contrato(contrato_id)
+        u_k, f_k = _sicoe_campo_usuario_fecha_desde_estado(campo_mx)
+        update = {
+            "bloqueado": False,
+            "solicitud_reversion": False,
+            campo_mx: "No Revisado",
+            u_k: None,
+            f_k: None,
+            "reversion_arm_n2_usuario_id": None,
+            "reversion_arm_n3_usuario_id": None,
+        }
+    else:
+        update = (
+            {"reversion_arm_n2_usuario_id": autor_id}
+            if nivel == 2
+            else {"reversion_arm_n3_usuario_id": autor_id}
+        )
+
+    def _upd():
+        return (
+            supabase.table("so_registros")
+            .update(update)
+            .eq("id", registro_id)
+            .eq("contrato_id", contrato_id)
+            .execute()
+            .data
+        )
+
+    try:
+        supabase_execute(_upd)
+    except Exception as ex:
+        raise _http_reversion_doble_llave_db_error(ex) from ex
+
+    if ejecutar:
+        try:
+            _aplicar_acta_rpo_vigente_a_registro(contrato_id, registro_id, date.today())
+        except Exception:
+            pass
+
+    accion_log = (
+        "REVERSION_DOBLE_EJECUTADA"
+        if ejecutar
+        else ("REVERSION_LLAVE_N2" if nivel == 2 else "REVERSION_LLAVE_N3")
+    )
+    try:
+        u_log = _audit_user_contrato(current_user, contrato_id)
+        after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
+        registrar_log(
+            u_log,
+            accion_log,
+            "SICOE",
+            "registro",
+            str(registro_id),
+            {"nivel_llave": nivel, "ejecutada": ejecutar},
+            valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
+            valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
+            severidad="AUDIT",
+        )
+    except Exception:
+        pass
+
+    return {"ok": True, "ejecutada": ejecutar, "nivel": nivel}
+
+
+def _sicoe_enriquecer_registros_reversion_meta(contrato_id: int, candidatos: List[dict]) -> List[dict]:
+    if not candidatos:
+        return []
+    meta: Dict[int, dict] = {}
+    ids = [int(r["id"]) for r in candidatos if r.get("id") is not None]
+    for chunk in _sicoe_chunks_int(ids, 200):
+        ch = list(chunk)
+
+        def _q():
+            return (
+                supabase.table("so_registros")
+                .select(
+                    "id,bloqueado,reversion_arm_n2_usuario_id,reversion_arm_n3_usuario_id,contrato_id"
+                )
+                .eq("contrato_id", contrato_id)
+                .in_("id", ch)
+                .execute()
+                .data
+            )
+
+        for row in supabase_execute(_q) or []:
+            if row.get("id") is not None:
+                meta[int(row["id"])] = row
+    out = []
+    for r in candidatos:
+        rid = r.get("id")
+        if rid is None:
+            continue
+        m = meta.get(int(rid), {})
+        out.append({**r, **m})
+    return out
+
+
+def _sicoe_colectar_elegibles_reversion_masiva(
+    contrato_id: int, body_in: ReversionMasivaFiltroBody, current_user
+) -> Tuple[List[dict], Dict[str, Any]]:
+    _sicoe_validar_capas_filtro_solo_nivel_max_aprobado(contrato_id, body_in)
+    exp_body = _sicoe_reversion_masivo_filtro_to_export_body(body_in)
+    candidatos, st_collect = _sicoe_colectar_registros_masivo_desde_filtros(
+        contrato_id, exp_body, current_user
+    )
+    candidatos = _sicoe_enriquecer_registros_reversion_meta(contrato_id, candidatos)
+    autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+    nivel_db = _sicoe_db_nivel_validacion_usuario(autor_id)
+    if not (
+        _es_desarrollador(current_user)
+        or nivel_db == 0
+        or nivel_db in (2, 3, 4, 5, 6)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo Residente de costos (Nivel 2) o perfiles de interventoría con permiso de validación pueden iniciar reversión masiva.",
+        )
+
+    elegibles = []
+    omitidos = 0
+    for r in candidatos:
+        if not r.get("bloqueado"):
+            omitidos += 1
+            continue
+        if not _registro_nivel_max_aprobado(r, contrato_id):
+            omitidos += 1
+            continue
+        arm2 = _sicoe_nid_reversion_arm(r.get("reversion_arm_n2_usuario_id"))
+        arm3 = _sicoe_nid_reversion_arm(r.get("reversion_arm_n3_usuario_id"))
+        if arm2 is not None and arm3 is not None:
+            omitidos += 1
+            continue
+        if _es_desarrollador(current_user) or nivel_db == 0:
+            if arm2 is None or arm3 is None:
+                elegibles.append(r)
+            else:
+                omitidos += 1
+            continue
+        slot_u = _sicoe_slot_llave_reversion(nivel_db)
+        if slot_u == 2:
+            if arm2 is not None:
+                omitidos += 1
+                continue
+        elif slot_u == 3:
+            if arm3 is not None:
+                omitidos += 1
+                continue
+        else:
+            omitidos += 1
+            continue
+        elegibles.append(r)
+
+    st = dict(st_collect or {})
+    st["omitidos_reversion"] = omitidos
+    return elegibles, st
+
+
 def _sicoe_masivo_filtro_to_export_body(b: ValidarNivelMasivoFiltroBody) -> ExportarRegistrosBody:
     _dump = getattr(b, "model_dump", None)
     if _dump:
@@ -22588,6 +22968,10 @@ def aceptar_reversion(contrato_id: int, registro_id: int, body: AceptarReversion
         supabase_execute(_upd)
 
         if body.aceptar:
+            try:
+                _aplicar_acta_rpo_vigente_a_registro(contrato_id, registro_id, date.today())
+            except Exception:
+                pass
             comentario_data = {
                 "tipo":    "aceptar_reversion",
                 "mensaje": "Reversión aceptada.",
@@ -22618,6 +23002,135 @@ def aceptar_reversion(contrato_id: int, registro_id: int, body: AceptarReversion
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/sicoe-obra/{contrato_id}/registros/reversion-masiva-preview")
+def reversion_masiva_preview(
+    contrato_id: int,
+    body_in: ReversionMasivaFiltroBody,
+    current_user=Depends(get_current_user),
+):
+    """Vista previa de reversión masiva (fase 1: llave del usuario) con el mismo universo que la grilla."""
+    try:
+        elegibles, st_collect = _sicoe_colectar_elegibles_reversion_masiva(
+            contrato_id, body_in, current_user
+        )
+        ocultar_cd = _sicoe_ocultar_costo_directo_reportes(current_user)
+        registros = []
+        for r in elegibles:
+            desc = r.get("item_descripcion")
+            if desc is not None and not isinstance(desc, str):
+                desc = str(desc)
+            if isinstance(desc, str) and len(desc) > 240:
+                desc = desc[:237] + "..."
+            item_num = r.get("item_numero")
+            item_str = str(item_num).strip() if item_num is not None else ""
+            rec = {
+                "id": int(r["id"]),
+                "numero_registro": r.get("numero_registro"),
+                "item": item_str,
+                "item_descripcion": (desc or "").strip(),
+                "cantidad_total": float(r.get("cantidad_total") or 0),
+            }
+            if ocultar_cd:
+                rec["costo_directo"] = None
+            else:
+                rec["costo_directo"] = float(r.get("costo_directo") or 0)
+            registros.append(rec)
+
+        return {
+            "ok": True,
+            "registros": registros,
+            "total_en_lote": len(registros),
+            "omitidos_reversion": st_collect.get("omitidos_reversion", 0),
+            "excluidos_objeto_pago_sub": st_collect.get("excluidos_objeto_pago_sub", 0),
+            "truncado_mas_de_500": bool(st_collect.get("truncado")),
+            "tope_registros": SICOE_MASIVO_MAX_REGISTROS,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/sicoe-obra/{contrato_id}/registros/reversion-masiva-fase1")
+def reversion_masiva_fase1(
+    contrato_id: int,
+    body_in: ReversionMasivaFiltroBody,
+    current_user=Depends(get_current_user),
+):
+    """
+    Registra la primera llave de reversión doble (o ejecuta si la contraparte ya autorizó)
+    en bloque sobre registros filtrados (nivel máx. Aprobado + bloqueados).
+    """
+    try:
+        cd = body_in.comentario_data or {}
+        autor_id = int(current_user.get("sub") or current_user.get("id", 0))
+        elegibles, st_collect = _sicoe_colectar_elegibles_reversion_masiva(
+            contrato_id, body_in, current_user
+        )
+
+        if body_in.registro_ids is not None:
+            if len(body_in.registro_ids) == 0:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Debe incluir al menos un id en registro_ids u omitir el campo para procesar todo el lote filtrado.",
+                )
+            if len(body_in.registro_ids) > SICOE_MASIVO_MAX_REGISTROS:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"No puede enviar más de {SICOE_MASIVO_MAX_REGISTROS} registro_ids por solicitud.",
+                )
+            want = {int(x) for x in body_in.registro_ids}
+            elegibles = [r for r in elegibles if int(r["id"]) in want]
+            if not elegibles:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Ningún registro de la selección coincide con el lote elegible del filtro actual.",
+                )
+
+        llaves_registradas = 0
+        reversiones_ejecutadas = 0
+        omitidos = 0
+        errores = []
+
+        for r in elegibles:
+            rid = int(r["id"])
+            try:
+                res = _sicoe_reversion_doble_llave_procesar_registro(
+                    contrato_id, rid, autor_id, current_user, cd, row=r
+                )
+            except HTTPException as ex:
+                errores.append({"id": rid, "detail": ex.detail})
+                continue
+            except Exception as ex:
+                errores.append({"id": rid, "detail": str(ex)})
+                continue
+            if res.get("omitido"):
+                omitidos += 1
+                continue
+            if res.get("ejecutada"):
+                reversiones_ejecutadas += 1
+            else:
+                llaves_registradas += 1
+
+        out = {
+            "ok": True,
+            "llaves_registradas": llaves_registradas,
+            "reversiones_ejecutadas": reversiones_ejecutadas,
+            "omitidos": omitidos,
+            "errores": errores[:20],
+            "truncado_mas_de_500": bool(st_collect.get("truncado")),
+        }
+        if st_collect.get("truncado"):
+            out["alerta_tope"] = (
+                f"Se procesaron como máximo {SICOE_MASIVO_MAX_REGISTROS} registros por solicitud."
+            )
+        return out
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.put("/sicoe-obra/{contrato_id}/registros/{registro_id}/reversion-n3-doble-llave")
 def reversion_n3_doble_llave(
     contrato_id: int,
@@ -22626,202 +23139,20 @@ def reversion_n3_doble_llave(
     current_user=Depends(get_current_user),
 ):
     """
-    Revierte la aprobación N3 (Interventoría) solo tras acción coordinada de N2 y N3 (doble llave).
-    Cada llamada registra comentario con destinatarios; al completar ambas llaves se desbloquea y
-    nivel3 pasa a «No Revisado».
+    Revierte la aprobación en el nivel máximo solo tras doble llave N2 + Interventoría.
+    Cada llamada registra comentario con destinatarios; al completar ambas llaves se desbloquea
+    y el nivel máximo pasa a «No Revisado».
     """
     try:
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
         cd = body.comentario_data or {}
-        mensaje_limpio = (cd.get("mensaje") or "").strip()
-        if not mensaje_limpio:
-            raise HTTPException(status_code=422, detail="El cuerpo del mensaje es obligatorio.")
-        dest_raw = cd.get("destinatarios") or []
-        n_dest = sum(1 for d in dest_raw if isinstance(d, dict) and d.get("id") is not None)
-        if n_dest < 1:
-            raise HTTPException(
-                status_code=422,
-                detail="Debe indicar al menos un destinatario (para quién va el mensaje).",
-            )
-
-        def _get():
-            return (
-                supabase.table("so_registros")
-                .select(
-                    f"{SICOE_SELECT_NIVELES_ESTADO},bloqueado,contrato_id,"
-                    "reversion_arm_n2_usuario_id, reversion_arm_n3_usuario_id"
-                )
-                .eq("id", registro_id)
-                .eq("contrato_id", contrato_id)
-                .limit(1)
-                .execute()
-                .data
-            )
-
-        try:
-            rows = supabase_execute(_get)
-        except HTTPException:
-            raise
-        except Exception as ex:
-            raise _http_reversion_doble_llave_db_error(ex) from ex
-        if not rows:
-            raise HTTPException(status_code=404, detail="Registro no encontrado.")
-        row = rows[0]
-        if not _registro_nivel_max_aprobado(row, contrato_id) or not row.get("bloqueado"):
-            raise HTTPException(
-                status_code=422,
-                detail="Solo aplica a registros aprobados en el último nivel de validación y bloqueados.",
-            )
-
-        prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
-
-        def _nid(v):
-            if v is None:
-                return None
-            try:
-                return int(v)
-            except (TypeError, ValueError):
-                return None
-
-        arm2 = _nid(row.get("reversion_arm_n2_usuario_id"))
-        arm3 = _nid(row.get("reversion_arm_n3_usuario_id"))
-
-        nivel_db = _sicoe_db_nivel_validacion_usuario(autor_id)
-        if _es_desarrollador(current_user) or nivel_db == 0:
-            if arm2 is None:
-                nivel = 2
-            elif arm3 is None:
-                nivel = 3
-            else:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Las dos llaves ya están registradas para este registro.",
-                )
-        else:
-            nivel = nivel_db
-            if nivel not in (2, 3, 4, 5, 6):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Solo Residente de costos (Nivel 2) o perfiles de interventoría con permiso de validación pueden activar esta llave.",
-                )
-        _require_llave_reversion_sicoe_nivel(current_user, autor_id, nivel)
-
-        if nivel == 2:
-            if arm2 is not None and arm2 != autor_id:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Otro usuario de Nivel 2 ya registró su llave para este registro.",
-                )
-            if arm2 is not None and arm2 == autor_id:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Ya registraste la llave de Nivel 2; falta la llave de Interventoría (N3).",
-                )
-        else:
-            if arm3 is not None and arm3 != autor_id:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Otro usuario de Interventoría ya registró su llave para este registro.",
-                )
-            if arm3 is not None and arm3 == autor_id:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Ya registraste la llave de Interventoría; falta la llave de Nivel 2.",
-                )
-
-        new2 = autor_id if nivel == 2 else arm2
-        new3 = autor_id if nivel in (3, 4, 5, 6) else arm3
-        ejecutar = new2 is not None and new3 is not None
-        if ejecutar and new2 == new3:
-            raise HTTPException(
-                status_code=422,
-                detail="La reversión doble requiere dos personas distintas (Nivel 2 e Interventoría).",
-            )
-
-        cd_send = {**cd, "mensaje": mensaje_limpio}
-        slot_llave = _sicoe_slot_llave_reversion(nivel)
-        tipo_c = "reversion_doble_llave_n2" if slot_llave == 2 else "reversion_doble_llave_n3"
-        _insertar_comentario(
-            contrato_id,
-            registro_id,
-            autor_id,
-            cd_send,
-            tipo_override=tipo_c,
-            nivel_validacion_override=f"Nivel {nivel}",
-            audit_user=current_user,
+        res = _sicoe_reversion_doble_llave_procesar_registro(
+            contrato_id, registro_id, autor_id, current_user, cd
         )
-        try:
-            _push_notif_validacion_sicoe_destinatarios(
-                current_user,
-                autor_id,
-                contrato_id,
-                registro_id,
-                f"Doble llave reversión N3 — Nivel {nivel}",
-                mensaje_limpio,
-                cd_send,
-            )
-        except Exception:
-            pass
-
-        if ejecutar:
-            campo_mx = _get_nivel_maximo_contrato(contrato_id)
-            u_k, f_k = _sicoe_campo_usuario_fecha_desde_estado(campo_mx)
-            update = {
-                "bloqueado": False,
-                "solicitud_reversion": False,
-                campo_mx: "No Revisado",
-                u_k: None,
-                f_k: None,
-                "reversion_arm_n2_usuario_id": None,
-                "reversion_arm_n3_usuario_id": None,
-            }
-        else:
-            update = (
-                {"reversion_arm_n2_usuario_id": autor_id}
-                if nivel == 2
-                else {"reversion_arm_n3_usuario_id": autor_id}
-            )
-
-        def _upd():
-            return (
-                supabase.table("so_registros")
-                .update(update)
-                .eq("id", registro_id)
-                .eq("contrato_id", contrato_id)
-                .execute()
-                .data
-            )
-
-        try:
-            supabase_execute(_upd)
-        except HTTPException:
-            raise
-        except Exception as ex:
-            raise _http_reversion_doble_llave_db_error(ex) from ex
-
-        accion_log = (
-            "REVERSION_DOBLE_EJECUTADA"
-            if ejecutar
-            else ("REVERSION_LLAVE_N2" if nivel == 2 else "REVERSION_LLAVE_N3")
-        )
-        try:
-            u_log = _audit_user_contrato(current_user, contrato_id)
-            after_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
-            registrar_log(
-                u_log,
-                accion_log,
-                "SICOE",
-                "registro",
-                str(registro_id),
-                {"nivel_llave": nivel, "ejecutada": ejecutar},
-                valor_anterior=_so_registro_validacion_audit_snapshot(prev_audit),
-                valor_nuevo=_so_registro_validacion_audit_snapshot(after_audit),
-                severidad="AUDIT",
-            )
-        except Exception:
-            pass
-
-        return {"ok": True, "ejecutada": ejecutar}
+        if res.get("omitido"):
+            motivo = res.get("motivo") or "Registro no elegible para reversión."
+            raise HTTPException(status_code=422, detail=motivo)
+        return {"ok": True, "ejecutada": bool(res.get("ejecutada"))}
     except HTTPException:
         raise
     except Exception as e:

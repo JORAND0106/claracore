@@ -51,6 +51,7 @@ import {
   sicoeItemsChipsFromFSicoe,
   sicoePanelLabelToRpo,
   sicoeEstadosReporteFiltro,
+  sicoeCapasEsFiltroNivelMaxAprobado,
 } from './modules/sicoe-obra/sicoeFiltroCatalogo'
 import {
   cargarSicoeFiltroSesion,
@@ -5566,6 +5567,11 @@ function ModuloSicoeObra({
   const [popupMasivoFiltro, setPopupMasivoFiltro] = useState(null)
   /** Vista previa + selección antes de validar masivo (mismo universo que el API). */
   const [modalMasivoFiltroConfirm, setModalMasivoFiltroConfirm] = useState(null)
+  const [modalReversionCantidades, setModalReversionCantidades] = useState(null)
+  const [popupReversionCantidades, setPopupReversionCantidades] = useState(null)
+  const [ejecutandoReversionCantidades, setEjecutandoReversionCantidades] = useState(false)
+  const [reversionCantidadesProgresoPct, setReversionCantidadesProgresoPct] = useState(0)
+  const [msgReversionCantidades, setMsgReversionCantidades] = useState('')
   const [ejecutandoMasivoFiltro, setEjecutandoMasivoFiltro] = useState(false)
   /** 0–100: barra de progreso mientras corre validar-nivel-masivo con el modal de confirmación abierto. */
   const [masivoFiltroProgresoPct, setMasivoFiltroProgresoPct] = useState(0)
@@ -6526,6 +6532,13 @@ function ModuloSicoeObra({
     return Array.isArray(na) && na.length ? [...na].sort((a, b) => a - b) : [1, 2, 3]
   }, [nivelesContrato])
 
+  const nivelMaximoSicoeFiltro = useMemo(() => {
+    const nm = nivelesContrato?.nivel_maximo
+    if (nm != null && Number.isFinite(Number(nm))) return Number(nm)
+    const nums = nivelesDisponiblesEnFiltro.map(Number).filter((n) => Number.isFinite(n) && n > 0)
+    return nums.length ? Math.max(...nums) : null
+  }, [nivelesContrato, nivelesDisponiblesEnFiltro])
+
   const [capasValidacion, setCapasValidacion] = useState([])
 
   const sicoeEstiloChipCapa = (estado) => {
@@ -6568,6 +6581,22 @@ function ModuloSicoeObra({
 
   const sicoeVistaResultadosActiva =
     busquedaRealizada && sicoeBundleTieneCriteriosUsuario(sicoeBundleAplicado)
+
+  const puedeReversionCantidadesMasiva = useMemo(() => {
+    if (!busquedaRealizada || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) return false
+    if (!sicoeCapasEsFiltroNivelMaxAprobado(capasValidacion, nivelMaximoSicoeFiltro)) return false
+    if (esUsuarioDesarrollador(usuario) || nivelInfo.nivelValidacion === 0) return true
+    const nv = nivelInfo.nivelLlaveReversion
+    return nv === 2 || nv === 3
+  }, [
+    busquedaRealizada,
+    filtros,
+    capasValidacion,
+    nivelMaximoSicoeFiltro,
+    usuario,
+    nivelInfo.nivelLlaveReversion,
+    nivelInfo.nivelValidacion,
+  ])
 
   useEffect(() => {
     if (!contrato_id) return
@@ -6768,6 +6797,115 @@ function ModuloSicoeObra({
       setMasivoFiltroProgresoPct(0)
       setEjecutandoMasivoFiltro(false)
       if (keepConfirmModalOpen) setModalMasivoFiltroConfirm(null)
+    }
+  }
+
+  const iniciarReversionCantidadesMasiva = () => {
+    if (!puedeReversionCantidadesMasiva || !contrato_id) return
+    setModalReversionCantidades({
+      cargando: true,
+      error: '',
+      filas: [],
+      selectedIds: [],
+      truncado: false,
+      omitidosReversion: 0,
+    })
+    const base = armarPayloadFiltrosRegistrosMasivo()
+    void fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/reversion-masiva-preview`, {
+      method: 'POST',
+      headers: hdrsJSON,
+      body: JSON.stringify(base),
+    })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          const d = data?.detail
+          const msg =
+            typeof d === 'string'
+              ? d
+              : Array.isArray(d)
+                ? d.map((x) => x?.msg || JSON.stringify(x)).join(', ')
+                : d && typeof d === 'object'
+                  ? JSON.stringify(d)
+                  : `Error ${res.status}`
+          throw new Error(msg)
+        }
+        const filas = Array.isArray(data.registros) ? data.registros : []
+        const ids = filas.map((f) => f.id)
+        setModalReversionCantidades({
+          cargando: false,
+          error: '',
+          filas,
+          selectedIds: ids.slice(),
+          truncado: !!data.truncado_mas_de_500,
+          omitidosReversion: data.omitidos_reversion ?? 0,
+        })
+      })
+      .catch((e) => {
+        setModalReversionCantidades({
+          cargando: false,
+          error: e?.message || String(e),
+          filas: [],
+          selectedIds: [],
+          truncado: false,
+          omitidosReversion: 0,
+        })
+      })
+  }
+
+  const ejecutarReversionCantidadesMasivaApi = async (comentarioData, registroIds) => {
+    setPopupReversionCantidades(null)
+    if (!comentarioData || !registroIds?.length) return
+    setEjecutandoReversionCantidades(true)
+    setMsgReversionCantidades('')
+    setReversionCantidadesProgresoPct(5)
+    const progressTick = setInterval(() => {
+      setReversionCantidadesProgresoPct((p) => (p >= 86 ? p : p + Math.max(0.45, (86 - p) * 0.065)))
+    }, 400)
+    try {
+      const base = armarPayloadFiltrosRegistrosMasivo()
+      const body = {
+        ...base,
+        comentario_data: { ...comentarioData, rol_origen: nivelInfo.rolOrigen, tipo: 'reversion_doble_llave' },
+        registro_ids: registroIds,
+      }
+      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/reversion-masiva-fase1`, {
+        method: 'POST',
+        headers: hdrsJSON,
+        body: JSON.stringify(body),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const d = data?.detail
+        const msg =
+          typeof d === 'string'
+            ? d
+            : Array.isArray(d)
+              ? d.map((x) => x?.msg || JSON.stringify(x)).join(', ')
+              : d && typeof d === 'object'
+                ? JSON.stringify(d)
+                : `Error ${res.status}`
+        throw new Error(msg)
+      }
+      setReversionCantidadesProgresoPct(100)
+      await new Promise((r) => setTimeout(r, 380))
+      let msgOk = `Listo: ${data.llaves_registradas ?? 0} llave(s) registrada(s)`
+      if (data.reversiones_ejecutadas) {
+        msgOk += `, ${data.reversiones_ejecutadas} reversión(es) completada(s)`
+      }
+      if (data.omitidos) msgOk += `, ${data.omitidos} omitido(s)`
+      if (data.alerta_tope) msgOk += `\n\n${data.alerta_tope}`
+      setMsgReversionCantidades(msgOk)
+      if (data.alerta_tope || data.omitidos) window.alert(msgOk)
+      setModalReversionCantidades(null)
+      await ejecutarBusquedaSicoeCompleta(filtros, capasValidacion)
+    } catch (e) {
+      setMsgReversionCantidades(`Error: ${e?.message || String(e)}`)
+      window.alert(`Reversión masiva: ${e?.message || String(e)}`)
+    } finally {
+      clearInterval(progressTick)
+      setReversionCantidadesProgresoPct(0)
+      setEjecutandoReversionCantidades(false)
     }
   }
 
@@ -8487,6 +8625,29 @@ function ModuloSicoeObra({
         filtroSubcList={filtroSubcList}
         pkList={sicoePkList}
         busquedaRealizada={busquedaRealizada}
+        extraActions={
+          puedeReversionCantidadesMasiva ? (
+            <button
+              type="button"
+              title="Reversión de cantidades"
+              disabled={ejecutandoReversionCantidades || buscando}
+              onClick={iniciarReversionCantidadesMasiva}
+              style={{
+                background: 'transparent',
+                border: '1px solid rgba(147,51,234,0.55)',
+                borderRadius: 6,
+                padding: '5px 10px',
+                fontSize: 'var(--cc-caption)',
+                fontWeight: 700,
+                color: '#a855f7',
+                cursor: ejecutandoReversionCantidades || buscando ? 'not-allowed' : 'pointer',
+                opacity: ejecutandoReversionCantidades || buscando ? 0.55 : 1,
+              }}
+            >
+              ↩ Reversión
+            </button>
+          ) : null
+        }
         validacionMasivaPanel={
           mostrarValidacionMasivaGrilla &&
           sicoeVistaResultadosActiva &&
@@ -9496,6 +9657,220 @@ function ModuloSicoeObra({
             </div>
           )
         })()}
+
+      {modalReversionCantidades &&
+        (() => {
+          const m = modalReversionCantidades
+          const filas = m.filas || []
+          const sel = new Set(m.selectedIds || [])
+          const fmtCd = (v) => {
+            if (v == null) return '—'
+            try {
+              return new Intl.NumberFormat('es-CO', {
+                style: 'currency',
+                currency: 'COP',
+                maximumFractionDigits: 0,
+              }).format(v)
+            } catch {
+              return String(v)
+            }
+          }
+          const fmtQty = (v) => {
+            try {
+              return new Intl.NumberFormat('es-CO', { maximumFractionDigits: 4 }).format(Number(v) || 0)
+            } catch {
+              return String(v ?? '')
+            }
+          }
+          const allOn = filas.length > 0 && sel.size === filas.length
+          const toggleAll = () => {
+            if (filas.length === 0) return
+            if (allOn) setModalReversionCantidades((x) => x && { ...x, selectedIds: [] })
+            else setModalReversionCantidades((x) => x && { ...x, selectedIds: filas.map((f) => f.id) })
+          }
+          const toggleOne = (id) => {
+            setModalReversionCantidades((x) => {
+              if (!x) return x
+              const cur = new Set(x.selectedIds || [])
+              if (cur.has(id)) cur.delete(id)
+              else cur.add(id)
+              return { ...x, selectedIds: Array.from(cur) }
+            })
+          }
+          const cerrar = () => {
+            if (ejecutandoReversionCantidades) return
+            setModalReversionCantidades(null)
+          }
+          const confirmarSi = () => {
+            const chosen = [...(m.selectedIds || [])]
+            if (!chosen.length) {
+              window.alert('Seleccione al menos un registro para revertir.')
+              return
+            }
+            setPopupReversionCantidades({ registro_ids: chosen })
+          }
+          return (
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 10500,
+                background: 'rgba(0,0,0,0.6)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '12px',
+              }}
+              onClick={cerrar}
+            >
+              <div
+                style={{
+                  position: 'relative',
+                  overflow: 'hidden',
+                  background: t.bgCard,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: '16px',
+                  width: 'min(920px, 98vw)',
+                  maxHeight: '90vh',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  boxShadow: '0 24px 80px rgba(0,0,0,0.45)',
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div style={{ padding: '18px 22px 14px', borderBottom: `1px solid ${t.border}` }}>
+                  <div style={{ fontSize: 'var(--cc-md)', fontWeight: '800', color: '#f59e0b' }}>
+                    Atención
+                  </div>
+                  <div style={{ fontSize: 'var(--cc-sm)', color: t.text, marginTop: '8px', lineHeight: 1.45 }}>
+                    Se solicitará la reversión de los siguientes registros:
+                  </div>
+                  {m.truncado && !m.cargando && (
+                    <div style={{ marginTop: '8px', fontSize: 'var(--cc-caption)', color: '#f59e0b', fontWeight: 700 }}>
+                      Solo se muestran los primeros {SICOE_MASIVO_MAX_UI} del lote; acote el filtro si necesita ver más.
+                    </div>
+                  )}
+                  {(m.omitidosReversion ?? 0) > 0 && !m.cargando && (
+                    <div style={{ marginTop: '6px', fontSize: 'var(--cc-caption)', color: t.textMuted }}>
+                      {m.omitidosReversion} línea(s) del filtro no son elegibles (ya tienen llave, no están bloqueadas, etc.).
+                    </div>
+                  )}
+                </div>
+                <div style={{ padding: '12px 22px', flex: 1, overflow: 'auto' }}>
+                  {m.error ? (
+                    <div style={{ color: '#f87171', fontSize: 'var(--cc-sm)' }}>{m.error}</div>
+                  ) : m.cargando ? (
+                    <div style={{ textAlign: 'center', padding: '28px', color: t.textMuted }}>Cargando…</div>
+                  ) : filas.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '24px', color: t.textMuted }}>
+                      No hay registros elegibles con el filtro actual.
+                    </div>
+                  ) : (
+                    <div style={{ overflow: 'auto', maxHeight: 'min(52vh, 480px)', border: `1px solid ${t.border}`, borderRadius: '12px' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--cc-sm)' }}>
+                        <thead>
+                          <tr style={{ background: '#0F1923' }}>
+                            <th style={{ width: 44, padding: '10px 8px' }}>
+                              <input type="checkbox" checked={allOn} onChange={toggleAll} />
+                            </th>
+                            <th style={{ padding: '10px 8px', textAlign: 'left' }}>Ítem</th>
+                            <th style={{ padding: '10px 8px', textAlign: 'left' }}>Descripción</th>
+                            <th style={{ padding: '10px 8px', textAlign: 'right' }}>Cantidad</th>
+                            <th style={{ padding: '10px 8px', textAlign: 'right' }}>Costo directo</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filas.map((row) => (
+                            <tr key={row.id} style={{ borderTop: `1px solid ${t.border}` }}>
+                              <td style={{ padding: '8px', textAlign: 'center' }}>
+                                <input type="checkbox" checked={sel.has(row.id)} onChange={() => toggleOne(row.id)} />
+                              </td>
+                              <td style={{ padding: '8px' }}>{row.item || '—'}</td>
+                              <td style={{ padding: '8px' }}>{row.item_descripcion || '—'}</td>
+                              <td style={{ padding: '8px', textAlign: 'right' }}>{fmtQty(row.cantidad_total)}</td>
+                              <td style={{ padding: '8px', textAlign: 'right' }}>
+                                {nivelInfo.verValoresEconomicos ? fmtCd(row.costo_directo) : '—'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+                <div
+                  style={{
+                    padding: '14px 20px',
+                    borderTop: `1px solid ${t.border}`,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: '10px',
+                  }}
+                >
+                  <span style={{ fontSize: 'var(--cc-sm)', fontWeight: 700, color: t.text }}>¿Desea continuar?</span>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button type="button" onClick={cerrar} disabled={ejecutandoReversionCantidades} style={{ padding: '8px 16px', borderRadius: 8, border: `1px solid ${t.border}`, background: t.bg, cursor: 'pointer' }}>
+                      No
+                    </button>
+                    <button
+                      type="button"
+                      onClick={confirmarSi}
+                      disabled={ejecutandoReversionCantidades || m.cargando || !filas.length}
+                      style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#9333ea', color: '#fff', fontWeight: 800, cursor: 'pointer' }}
+                    >
+                      Sí
+                    </button>
+                  </div>
+                </div>
+                {ejecutandoReversionCantidades && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      background: 'rgba(15,23,35,0.88)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '14px',
+                      zIndex: 2,
+                    }}
+                  >
+                    <div style={{ width: 'min(320px, 80%)', height: 8, background: '#1e293b', borderRadius: 4, overflow: 'hidden' }}>
+                      <div style={{ width: `${Math.min(100, Math.round(reversionCantidadesProgresoPct))}%`, height: '100%', background: '#9333ea', transition: 'width 0.25s' }} />
+                    </div>
+                    <div style={{ color: '#e2e8f0', fontSize: 'var(--cc-sm)' }}>Aplicando reversión…</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })()}
+
+      {popupReversionCantidades && (
+        <PopupComentarioValidacion
+          t={t}
+          usuario={usuario}
+          registro={{
+            id: 0,
+            numero_registro: `varios (${popupReversionCantidades.registro_ids.length} seleccionados)`,
+          }}
+          contrato_id={contrato_id}
+          API_URL={API_URL}
+          hdrs={hdrsJSON}
+          estadoValidando="ReversionN3"
+          nivelValidacion={nivelInfo.nivelLlaveReversion ?? nivelInfo.nivelValidacion}
+          obligatorio
+          zIndexOverlay={10600}
+          tituloModal="Reversión de cantidades"
+          onConfirmar={(comentarioData) =>
+            ejecutarReversionCantidadesMasivaApi(comentarioData, popupReversionCantidades.registro_ids)
+          }
+          onCancelar={() => setPopupReversionCantidades(null)}
+        />
+      )}
 
       {popupMasivoFiltro &&
         mostrarValidacionMasivaGrilla && (
