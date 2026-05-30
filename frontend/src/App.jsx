@@ -6912,11 +6912,11 @@ function ModuloSicoeObra({
                 : d && typeof d === 'object'
                   ? JSON.stringify(d)
                   : `Error ${res.status}`
-          throw new Error(
+          const prefijoLote =
             ids.length > REVERSION_MASIVA_LOTE_HTTP
-              ? `${msg} (lote ${Math.floor(off / REVERSION_MASIVA_LOTE_HTTP) + 1}, registros ${off + 1}–${off + chunk.length})`
-              : msg,
-          )
+              ? ` (lote ${Math.floor(off / REVERSION_MASIVA_LOTE_HTTP) + 1}, ítems ${off + 1}–${off + chunk.length})`
+              : ''
+          throw new Error(`${msg}${prefijoLote}`)
         }
         llavesTotal += data.llaves_registradas ?? 0
         ejecutadasTotal += data.reversiones_ejecutadas ?? 0

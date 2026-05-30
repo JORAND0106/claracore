@@ -6156,6 +6156,11 @@ _FO_EO_04_SEL_REGISTROS = (
     "nivel1_estado, nivel2_estado, nivel3_estado, nivel4_estado, nivel5_estado, nivel6_estado, "
     "cantidad_total, semana_id, foto_url, foto_numero, grafico_url, grafico_numero"
 )
+_FO_EO_04_SEL_TOTALES = (
+    "id, acta_rpo_id, reporte_id, capitulo, item_numero, "
+    "nivel1_estado, nivel2_estado, nivel3_estado, nivel4_estado, nivel5_estado, nivel6_estado, "
+    "cantidad_total"
+)
 
 
 def _fo_eo_04_paginar_so_registros(q_builder) -> list:
@@ -6258,8 +6263,12 @@ def _fo_eo_04_item_keys_match(a_item: str, a_cap: str, b_item: str, b_cap: str) 
     return _fo_eo_04_norm_item_key(a_item, a_cap) == _fo_eo_04_norm_item_key(b_item, b_cap)
 
 
+def _fo_eo_04_es_acta_rpo(acta_row: Dict[str, Any]) -> bool:
+    return (str(acta_row.get("tipo_grupo") or "").strip().upper()) == "RPO"
+
+
 def _fo_eo_04_actas_anteriores_ids(contrato_id: int, acta_id: int) -> List[int]:
-    """Actas con numero_rpo menor al del acta actual (misma noción que recibo parcial 1..N-1)."""
+    """Actas RPO con numero_rpo menor al del acta actual (recibo parcial 1..N-1)."""
     try:
         acta_row = (
             _sb.table("actas")
@@ -6285,11 +6294,12 @@ def _fo_eo_04_actas_anteriores_ids(contrato_id: int, acta_id: int) -> List[int]:
         )
     except Exception:
         return []
+    rpo_actas = [a for a in todas if _fo_eo_04_es_acta_rpo(a)]
     prev: List[int] = []
     if num_rpo is not None:
         try:
             n_cur = int(num_rpo)
-            for a in todas:
+            for a in rpo_actas:
                 nr = a.get("numero_rpo")
                 if nr is None:
                     continue
@@ -6303,7 +6313,7 @@ def _fo_eo_04_actas_anteriores_ids(contrato_id: int, acta_id: int) -> List[int]:
     elif consec is not None:
         try:
             c_cur = int(consec)
-            for a in todas:
+            for a in rpo_actas:
                 c = a.get("consecutivo")
                 if c is not None:
                     try:
@@ -6316,7 +6326,7 @@ def _fo_eo_04_actas_anteriores_ids(contrato_id: int, acta_id: int) -> List[int]:
     else:
         try:
             aid = int(acta_id)
-            for a in todas:
+            for a in rpo_actas:
                 if a.get("id") is not None and int(a["id"]) < aid:
                     prev.append(int(a["id"]))
         except (TypeError, ValueError):
@@ -6329,7 +6339,10 @@ def _fo_eo_04_actas_anteriores_ids(contrato_id: int, acta_id: int) -> List[int]:
 
 
 def _fo_eo_04_fetch_registros_actas_ids(
-    contrato_id: int, acta_ids: List[int]
+    contrato_id: int,
+    acta_ids: List[int],
+    *,
+    select_cols: str = _FO_EO_04_SEL_REGISTROS,
 ) -> List[Dict[str, Any]]:
     """
     Líneas de varias actas: acta_rpo_id en el conjunto y registros vía so_reportes.acta_rpo_id
@@ -6344,7 +6357,7 @@ def _fo_eo_04_fetch_registros_actas_ids(
     def _base_q():
         return (
             _sb.table("so_registros")
-            .select(_FO_EO_04_SEL_REGISTROS)
+            .select(select_cols)
             .eq("contrato_id", cid)
             .not_.is_("item_numero", "null")
             .neq("item_numero", "")
@@ -6467,7 +6480,9 @@ def _fetch_total_actas_anteriores(
         itn = (item_numero or "").strip()
 
         key_tgt = _fo_eo_04_norm_item_key(itn, cap_strip)
-        raw_prev = _fo_eo_04_fetch_registros_actas_ids(int(contrato_id), prev_ids)
+        raw_prev = _fo_eo_04_fetch_registros_actas_ids(
+            int(contrato_id), prev_ids, select_cols=_FO_EO_04_SEL_TOTALES
+        )
         campo_mx, niveles_act = matriz
         for r in raw_prev:
             if not _registro_aprobado_matriz_panel(r, niveles_act, campo_mx):
@@ -6518,7 +6533,9 @@ def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> dict:
         }
         totales: dict = defaultdict(float)
 
-        raw_prev = _fo_eo_04_fetch_registros_actas_ids(int(contrato_id), prev_ids)
+        raw_prev = _fo_eo_04_fetch_registros_actas_ids(
+            int(contrato_id), prev_ids, select_cols=_FO_EO_04_SEL_TOTALES
+        )
         for r in raw_prev:
             if not _registro_aprobado_matriz_panel(r, niveles_act, campo_mx):
                 continue
@@ -6951,7 +6968,7 @@ _FO_EO04_ITEM_IMG_WORKERS = 16
 _FO_EO04_IMG_MAX_PX = 720
 _FO_EO04_MAX_DATA_URI_LEN = 400_000
 _FO_EO04_PDF_PAGE_WORKERS = max(4, min(10, (_os.cpu_count() or 4)))
-_FO_EO04_PDF_PARALLEL_MIN_PAGES = 4
+_FO_EO04_PDF_PARALLEL_MIN_PAGES = 2
 _FO_EO04_PDF_PAGES_PER_TASK = 2
 _FO_EO04_PDF_TASK_TIMEOUT_SEC = max(
     60,

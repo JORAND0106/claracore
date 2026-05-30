@@ -2639,48 +2639,54 @@ export default function ModuloInformes({
           if (estado.status === 'listo') {
             done = true
             foEo04JobPollRef.current = null
-            detenerTimerFoEo04()
             setFoEo04LastJobId(job_id)
-            setFoEo04Job(null)
+            setFoEo04Job({
+              status: 'descargando',
+              msg: 'Descargando PDF para vista previa…',
+              currentItem: estado.total_items,
+              totalItems: estado.total_items,
+            })
             const dlTok = estado.download_token
-            if (dlTok) {
-              const pdfUrl = `${API}/informes/${encodeURIComponent(contratoId)}/ccd/pdf-job/${encodeURIComponent(job_id)}/pdf?token=${encodeURIComponent(dlTok)}`
-              setVistaPrevia({ fase: 'ok', tipo: 'idu-plantilla-vacia-pdf', pdfUrl })
-            } else {
-              setFoEo04Job((prev) => ({
-                ...prev,
-                status: 'listo',
-                msg: 'Descargando PDF…',
-                currentItem: estado.total_items,
-                totalItems: estado.total_items,
-              }))
-              const pdfOpts = {
-                headers: { Authorization: `Bearer ${authToken}` },
-              }
-              if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
-                pdfOpts.signal = AbortSignal.timeout(600000)
-              }
-              try {
-                const rPdf = await fetchConFallback(
-                  `/informes/${contratoId}/ccd/pdf-job/${job_id}/pdf`,
-                  pdfOpts,
-                )
-                if (!rPdf.ok) {
-                  setVistaPrevia({ fase: 'error', tipo: 'idu-plantilla-vacia', mensaje: await leerErrorRespuesta(rPdf) })
-                  setFoEo04Job(null)
-                  return
-                }
-                const blob = await rPdf.blob()
-                setVistaPrevia({ fase: 'ok', tipo: 'idu-plantilla-vacia-pdf', pdfUrl: URL.createObjectURL(blob) })
-                setFoEo04Job(null)
-              } catch (e) {
+            const pdfPath = dlTok
+              ? `/informes/${contratoId}/ccd/pdf-job/${job_id}/pdf?token=${encodeURIComponent(dlTok)}`
+              : `/informes/${contratoId}/ccd/pdf-job/${job_id}/pdf`
+            const pdfOpts = {
+              headers: { Authorization: `Bearer ${authToken}` },
+            }
+            if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+              pdfOpts.signal = AbortSignal.timeout(600000)
+            }
+            try {
+              const rPdf = await fetchConFallback(pdfPath, pdfOpts)
+              detenerTimerFoEo04()
+              setFoEo04Job(null)
+              if (!rPdf.ok) {
                 setVistaPrevia({
                   fase: 'error',
                   tipo: 'idu-plantilla-vacia',
-                  mensaje: String(e?.message || e) || 'No se pudo descargar el PDF.',
+                  mensaje: await leerErrorRespuesta(rPdf),
                 })
-                setFoEo04Job(null)
+                return
               }
+              const blob = await rPdf.blob()
+              setVistaPrevia({
+                fase: 'ok',
+                tipo: 'idu-plantilla-vacia-pdf',
+                pdfUrl: URL.createObjectURL(blob),
+              })
+            } catch (e) {
+              detenerTimerFoEo04()
+              setFoEo04Job(null)
+              const msg = String(e?.message || e) || 'No se pudo descargar el PDF.'
+              const corsHint =
+                /failed to fetch|cors/i.test(msg)
+                  ? ' Si el servidor tardó demasiado, vuelva a generar; el PDF ya puede estar listo en el job.'
+                  : ''
+              setVistaPrevia({
+                fase: 'error',
+                tipo: 'idu-plantilla-vacia',
+                mensaje: msg + corsHint,
+              })
             }
           } else if (estado.status === 'error') {
             done = true

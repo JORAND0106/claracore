@@ -12694,6 +12694,7 @@ def _sicoe_fetch_registros_reversion_por_ids(
     if not want:
         return []
     campos = (
+        "id,"
         f"{SICOE_SELECT_NIVELES_ESTADO},bloqueado,contrato_id,solicitud_reversion,"
         "reversion_arm_n2_usuario_id,reversion_arm_n3_usuario_id,"
         "item_numero,item_descripcion,cantidad_total,costo_directo,numero_registro"
@@ -23149,6 +23150,11 @@ def reversion_masiva_fase1(
             filas = _sicoe_fetch_registros_reversion_por_ids(
                 contrato_id, [int(x) for x in body_in.registro_ids]
             )
+            if not filas:
+                raise HTTPException(
+                    status_code=422,
+                    detail="No se encontraron en el contrato los registros enviados en este lote.",
+                )
             elegibles, omit_prev = _sicoe_filtrar_filas_elegibles_reversion(
                 contrato_id, filas, current_user
             )
@@ -23156,7 +23162,11 @@ def reversion_masiva_fase1(
             if not elegibles:
                 raise HTTPException(
                     status_code=422,
-                    detail="Ningún registro de la selección es elegible para reversión en este lote.",
+                    detail=(
+                        "Ningún registro de la selección es elegible para reversión en este lote "
+                        f"({omit_prev} omitido(s) de {len(filas)} cargado(s): sin bloqueo, sin aprobación "
+                        "en nivel máximo, llaves ya registradas, aprobación Nivel 6 para pago, etc.)."
+                    ),
                 )
         else:
             elegibles, st_collect = _sicoe_colectar_elegibles_reversion_masiva(
