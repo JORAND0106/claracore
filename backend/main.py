@@ -1763,6 +1763,18 @@ def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depen
         raise HTTPException(status_code=401, detail="Token inválido")
 
 
+def get_current_user_optional(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+) -> Optional[dict]:
+    """JWT opcional (p. ej. iframe PDF con ?token= de descarga sin encabezado Authorization)."""
+    if credentials is None:
+        return None
+    try:
+        return jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+
+
 def _calculo_usuario_label(current_user) -> str:
     """Etiqueta legible del usuario autenticado (JWT) para auditoría de recálculo."""
     if not current_user:

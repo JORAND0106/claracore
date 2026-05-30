@@ -94,6 +94,7 @@ from openpyxl.utils import get_column_letter
 from pydantic import BaseModel
 from xhtml2pdf import pisa
 from main import get_current_user as _get_user
+from main import get_current_user_optional as _get_user_optional
 from mail_smtp import try_send_text_email
 from supabase import create_client as _create_client
 from ccd_conciliacion import (
@@ -8442,19 +8443,25 @@ def _ccd_pdf_job_file_response(job: dict):
 def ccd_pdf_job_resultado(
     contrato_id: int,
     job_id: str,
-    token: Optional[str] = Query(None, description="Token de descarga (evita blob gigante con JWT)"),
-    current_user=Depends(_get_user),
+    token: Optional[str] = Query(None, description="Token de descarga (iframe sin Authorization)"),
+    current_user=Depends(_get_user_optional),
 ):
-    """PDF del job: FileResponse en streaming. Acepta ?token= del estado o JWT."""
-    if token:
-        job = _pdf_job_validate_download_token(contrato_id, job_id, token)
-    else:
+    """PDF del job: FileResponse en streaming. ?token= (visor) o JWT Bearer."""
+    dl_tok = (token or "").strip()
+    if dl_tok:
+        job = _pdf_job_validate_download_token(contrato_id, job_id, dl_tok)
+    elif current_user:
         _perm_informes_ccd(current_user, "ver")
         job = _pdf_job_resolve(job_id)
         if not job or job.get("contrato_id") != contrato_id:
             raise HTTPException(status_code=404, detail="Job no encontrado")
         if job.get("status") != "listo":
             raise HTTPException(status_code=409, detail="PDF aún no está listo")
+    else:
+        raise HTTPException(
+            status_code=401,
+            detail="Indique ?token= de descarga (estado del job) o Authorization: Bearer.",
+        )
     return _ccd_pdf_job_file_response(job)
 
 
