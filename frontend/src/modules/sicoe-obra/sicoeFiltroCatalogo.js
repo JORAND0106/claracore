@@ -194,6 +194,21 @@ export function sicoeCapasEsFiltroNivelMaxAprobado(capas, nivelMaximo) {
   )
 }
 
+/** N6 activo y es el nivel máximo: sellado N6 = pago; no hay reversión masiva por filtro. */
+export function sicoeReversionMasivaPermitidaContrato(nivelesActivos, nivelMaximo) {
+  const na = (nivelesActivos || []).map(Number).filter((n) => Number.isFinite(n) && n > 0)
+  const nm = Number(nivelMaximo)
+  if (na.includes(6) && nm === 6) return false
+  return true
+}
+
+/** Registro con N6 Aprobado en contrato que tiene nivel 6 activo. */
+export function sicoeRegistroReversionBloqueadaNivel6(registro, nivelesActivos) {
+  const na = (nivelesActivos || []).map(Number).filter((n) => Number.isFinite(n) && n > 0)
+  if (!na.includes(6)) return false
+  return String(registro?.nivel6_estado || '').trim() === 'Aprobado'
+}
+
 export function sicoeBundleTieneCriteriosUsuario(bundle) {
   const b = bundle || {}
   const f = b.fSicoe || {}

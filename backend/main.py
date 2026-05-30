@@ -2421,6 +2421,24 @@ def _registro_nivel_max_aprobado(row: Optional[Dict[str, Any]], contrato_id: int
     return (row.get(campo) or "").strip() == "Aprobado"
 
 
+def _registro_reversion_bloqueada_por_aprobacion_nivel6(
+    row: Optional[Dict[str, Any]], contrato_id: int
+) -> bool:
+    """
+    Nivel 6 = aprobación del funcionario para pago directo: con N6 activo en el contrato,
+    un registro con nivel6_estado Aprobado no admite reversión (masiva ni individual).
+    """
+    if not row:
+        return False
+    try:
+        cid = int(contrato_id)
+    except (TypeError, ValueError):
+        return False
+    if 6 not in _get_niveles_activos_contrato(cid):
+        return False
+    return (row.get("nivel6_estado") or "").strip() == "Aprobado"
+
+
 def _registro_nivel3_aprobado(row: Optional[Dict[str, Any]]) -> bool:
     """Compatibilidad: delega en el nivel máximo activo del contrato cuando la fila trae `contrato_id`."""
     if not row:
@@ -12441,6 +12459,9 @@ def _sicoe_reversion_doble_llave_procesar_registro(
     if not _registro_nivel_max_aprobado(row, contrato_id) or not row.get("bloqueado"):
         return {"ok": False, "omitido": True, "motivo": "no_aprobado_o_no_bloqueado"}
 
+    if _registro_reversion_bloqueada_por_aprobacion_nivel6(row, contrato_id):
+        return {"ok": False, "omitido": True, "motivo": "aprobacion_nivel6_pago"}
+
     prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
     arm2 = _sicoe_nid_reversion_arm(row.get("reversion_arm_n2_usuario_id"))
     arm3 = _sicoe_nid_reversion_arm(row.get("reversion_arm_n3_usuario_id"))
@@ -12622,6 +12643,9 @@ def _sicoe_colectar_elegibles_reversion_masiva(
             omitidos += 1
             continue
         if not _registro_nivel_max_aprobado(r, contrato_id):
+            omitidos += 1
+            continue
+        if _registro_reversion_bloqueada_por_aprobacion_nivel6(r, contrato_id):
             omitidos += 1
             continue
         arm2 = _sicoe_nid_reversion_arm(r.get("reversion_arm_n2_usuario_id"))
@@ -22900,6 +22924,11 @@ def solicitar_reversion(contrato_id: int, registro_id: int, body: SolicitarRever
         if not _registro_nivel_max_aprobado(reg, contrato_id) or not reg.get("bloqueado"):
             raise HTTPException(status_code=422,
                 detail="El registro debe estar aprobado en el último nivel de validación y bloqueado para solicitar reversión.")
+        if _registro_reversion_bloqueada_por_aprobacion_nivel6(reg, contrato_id):
+            raise HTTPException(
+                status_code=422,
+                detail="No se puede revertir: el registro tiene aprobación en Nivel 6 (aprobación para pago del funcionario).",
+            )
 
         prev_audit = _so_registro_fetch_validacion_audit(contrato_id, registro_id) or {}
         def _upd():
@@ -23151,6 +23180,11 @@ def reversion_n3_doble_llave(
         )
         if res.get("omitido"):
             motivo = res.get("motivo") or "Registro no elegible para reversión."
+            if motivo == "aprobacion_nivel6_pago":
+                motivo = (
+                    "No se puede revertir: el registro tiene aprobación en Nivel 6 "
+                    "(aprobación para pago del funcionario)."
+                )
             raise HTTPException(status_code=422, detail=motivo)
         return {"ok": True, "ejecutada": bool(res.get("ejecutada"))}
     except HTTPException:

@@ -52,6 +52,8 @@ import {
   sicoePanelLabelToRpo,
   sicoeEstadosReporteFiltro,
   sicoeCapasEsFiltroNivelMaxAprobado,
+  sicoeReversionMasivaPermitidaContrato,
+  sicoeRegistroReversionBloqueadaNivel6,
 } from './modules/sicoe-obra/sicoeFiltroCatalogo'
 import {
   cargarSicoeFiltroSesion,
@@ -1916,6 +1918,10 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     nivelesContrato,
   ])
   const regSelladoMax = sicoeRegistroSelladoMaxActivo(registro, nivelesContrato)
+  const reversionBloqueadaN6 = sicoeRegistroReversionBloqueadaNivel6(
+    registro,
+    nivelesContrato?.niveles_activos,
+  )
   const editableCampos = puedeEditar && !regSelladoMax
   const soloCorteNivel3 = puedeEditar && regSelladoMax
   // Foto y gráfico: editables siempre que el usuario tenga permiso (no afectan valor ni cantidad)
@@ -2448,7 +2454,8 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
     else if (arm3Llave == null) nvLlave = 3
   }
   const slotLlave = slotLlaveReversion(nvLlave)
-  const muestraPanelDobleLlave = regSelladoMax && !!registro.bloqueado && (slotLlave === 2 || slotLlave === 3)
+  const muestraPanelDobleLlave =
+    regSelladoMax && !!registro.bloqueado && !reversionBloqueadaN6 && (slotLlave === 2 || slotLlave === 3)
   const miSlotLibre = slotLlave === 2 ? arm2Llave == null : slotLlave === 3 ? arm3Llave == null : false
   /** Otro usuario ya ocupó «tu» lado de la llave */
   const llaveContrariaOcupadaPorOtro = slotLlave === 2
@@ -2605,6 +2612,12 @@ function HojaRegistro({ t, usuario, API_URL, contrato_id, reporte, registro, pue
         <div style={{ marginBottom:'12px', background:'#0d948818', border:'1px solid #0d948855', borderRadius:'8px', padding:'8px 12px', fontSize:'var(--cc-sm)', color:t.text }}>
           Sellado: el último nivel activo del contrato está aprobado ({encPorNivelHojaReg[nivelesContrato?.nivel_maximo ?? 3] || 'Nivel máximo'})
           {registro.bloqueado ? ' (sello de bloqueo en costos activo)' : ''}. No se pueden cambiar cantidades ni ítem; solo puede ajustarse el corte de subcontratista (y foto/gráfico si aplica).
+        </div>
+      )}
+
+      {reversionBloqueadaN6 && (
+        <div style={{ marginBottom:'12px', background:'rgba(234,179,8,0.12)', border:'1px solid rgba(234,179,8,0.45)', borderRadius:'8px', padding:'8px 12px', fontSize:'var(--cc-sm)', color:'#92400e', fontWeight:'600' }}>
+          Este registro tiene aprobación en Nivel 6 (funcionario / aprobación para pago). No admite reversión de cantidades.
         </div>
       )}
 
@@ -6585,6 +6598,7 @@ function ModuloSicoeObra({
   const puedeReversionCantidadesMasiva = useMemo(() => {
     if (!busquedaRealizada || !tieneParametrosBusquedaSicoe(filtros, capasValidacion)) return false
     if (!sicoeCapasEsFiltroNivelMaxAprobado(capasValidacion, nivelMaximoSicoeFiltro)) return false
+    if (!sicoeReversionMasivaPermitidaContrato(nivelesDisponiblesEnFiltro, nivelMaximoSicoeFiltro)) return false
     if (esUsuarioDesarrollador(usuario) || nivelInfo.nivelValidacion === 0) return true
     const nv = nivelInfo.nivelLlaveReversion
     return nv === 2 || nv === 3
@@ -6593,6 +6607,7 @@ function ModuloSicoeObra({
     filtros,
     capasValidacion,
     nivelMaximoSicoeFiltro,
+    nivelesDisponiblesEnFiltro,
     usuario,
     nivelInfo.nivelLlaveReversion,
     nivelInfo.nivelValidacion,
@@ -8630,7 +8645,7 @@ function ModuloSicoeObra({
             <button
               type="button"
               title="Reversión de cantidades"
-              disabled={ejecutandoReversionCantidades || buscando}
+              disabled={ejecutandoReversionCantidades || cargando || cargandoAnalisis}
               onClick={iniciarReversionCantidadesMasiva}
               style={{
                 background: 'transparent',
@@ -8640,8 +8655,8 @@ function ModuloSicoeObra({
                 fontSize: 'var(--cc-caption)',
                 fontWeight: 700,
                 color: '#a855f7',
-                cursor: ejecutandoReversionCantidades || buscando ? 'not-allowed' : 'pointer',
-                opacity: ejecutandoReversionCantidades || buscando ? 0.55 : 1,
+                cursor: ejecutandoReversionCantidades || cargando || cargandoAnalisis ? 'not-allowed' : 'pointer',
+                opacity: ejecutandoReversionCantidades || cargando || cargandoAnalisis ? 0.55 : 1,
               }}
             >
               ↩ Reversión
@@ -9752,7 +9767,7 @@ function ModuloSicoeObra({
                   )}
                   {(m.omitidosReversion ?? 0) > 0 && !m.cargando && (
                     <div style={{ marginTop: '6px', fontSize: 'var(--cc-caption)', color: t.textMuted }}>
-                      {m.omitidosReversion} línea(s) del filtro no son elegibles (ya tienen llave, no están bloqueadas, etc.).
+                      {m.omitidosReversion} línea(s) del filtro no son elegibles (llave previa, sin bloqueo, aprobación Nivel 6 para pago, etc.).
                     </div>
                   )}
                 </div>
