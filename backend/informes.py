@@ -87,7 +87,7 @@ def _gerencia_caches_clear() -> None:
 
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import HTMLResponse, Response
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -2055,6 +2055,78 @@ def ccd_listar_semanas(contrato_id: int, current_user=Depends(_get_user)):
     return rows
 
 
+def _fo_eo_04_list_imagenes_acta(contrato_id: int, acta_id: int) -> List[Dict[str, Any]]:
+    """
+    Fotos/gráficos de ítems del acta con sellado interventoría (nivel máximo del contrato).
+    Una entrada por ítem del PDF, no por cada línea suelta de so_registros.
+    """
+    items = _fetch_items_n3_acta(int(acta_id), int(contrato_id))
+    out: List[Dict[str, Any]] = []
+    seen_f: set = set()
+    seen_g: set = set()
+    for it in items:
+        itn = (it.get("item_numero") or "").strip()
+        cap = (it.get("capitulo") or "").strip()
+        desc = (it.get("item_descripcion") or "").strip() or f"{itn} · {cap}".strip(" ·")
+        fn = it.get("foto_numero")
+        fu = (it.get("foto_url") or "").strip()
+        if fn is not None and fu:
+            try:
+                n = int(fn)
+                if n not in seen_f:
+                    seen_f.add(n)
+                    out.append({
+                        "item_numero": itn,
+                        "capitulo": cap,
+                        "item_descripcion": desc,
+                        "foto_url": fu,
+                        "foto_numero": n,
+                        "grafico_url": None,
+                        "grafico_numero": None,
+                    })
+            except (TypeError, ValueError):
+                pass
+        gn = it.get("grafico_numero")
+        gu = (it.get("grafico_url") or "").strip()
+        if gn is not None and gu:
+            try:
+                n = int(gn)
+                if n not in seen_g:
+                    seen_g.add(n)
+                    out.append({
+                        "item_numero": itn,
+                        "capitulo": cap,
+                        "item_descripcion": desc,
+                        "foto_url": None,
+                        "foto_numero": None,
+                        "grafico_url": gu,
+                        "grafico_numero": n,
+                    })
+            except (TypeError, ValueError):
+                pass
+    _log.info(
+        "fo_eo_04 list_imagenes_acta: acta=%s items_pdf=%s entradas_img=%s",
+        acta_id,
+        len(items),
+        len(out),
+    )
+    return out
+
+
+@router.get("/{contrato_id}/ccd/fo-eo-04/fotos-acta")
+def ccd_fo_eo_04_fotos_acta(
+    contrato_id: int,
+    acta_id: int = Query(..., description="Id del acta RPO"),
+    current_user=Depends(_get_user),
+):
+    """Fotos/gráficos de ítems sellados por interventoría (mismos que el PDF FO-EO-04)."""
+    _perm_informes_ccd(current_user, "ver")
+    acta_norm = _resolver_acta_id_en_contrato(contrato_id, acta_id)
+    if not acta_norm:
+        raise HTTPException(404, "Acta no encontrada en este contrato")
+    return _fo_eo_04_list_imagenes_acta(int(contrato_id), int(acta_norm))
+
+
 @router.get("/{contrato_id}/ccd/fo-eo-04/diagnostico")
 def ccd_fo_eo_04_diagnostico(
     contrato_id: int,
@@ -2080,6 +2152,16 @@ def ccd_fo_eo_04_diagnostico(
         int(contrato_id), int(acta_norm), matriz=matriz
     )
     items = _fetch_items_n3_acta(int(acta_norm), int(contrato_id))
+    prev_ids = _fo_eo_04_actas_anteriores_ids(int(contrato_id), int(acta_norm))
+    raw_prev = (
+        _fo_eo_04_fetch_registros_actas_ids(int(contrato_id), prev_ids) if prev_ids else []
+    )
+    tot_batch = _fetch_totales_batch(int(contrato_id), int(acta_norm), items) if items else {}
+    muestra_ant = None
+    if items:
+        it0 = items[0]
+        k0 = _fo_eo_04_norm_item_key(it0.get("item_numero") or "", it0.get("capitulo") or "")
+        muestra_ant = tot_batch.get(k0, 0.0)
     return {
         "acta_id": acta_norm,
         "campo_nivel_maximo": campo_mx,
@@ -2088,6 +2170,9 @@ def ccd_fo_eo_04_diagnostico(
         "registros_cascade_panel_actas": len(cascade or []),
         "registros_sellados_memoria": len(sellados),
         "items_pdf": len(items),
+        "actas_anteriores_ids": len(prev_ids),
+        "registros_actas_anteriores_raw": len(raw_prev),
+        "muestra_total_anteriores_item0": muestra_ant,
         "mensaje": (
             "OK: hay ítems para el PDF."
             if items
@@ -4114,15 +4199,35 @@ def _generar_pdf_bytes_corte_sub_desde_ctx(
 
 
 def _merge_pdf_bytes(parte_principal: bytes, parte_anexa: bytes) -> bytes:
+    return _merge_pdf_bytes_list([parte_principal, parte_anexa])
+
+
+def _merge_pdf_bytes_list(partes: List[bytes]) -> bytes:
     from pypdf import PdfReader, PdfWriter
     w = PdfWriter()
-    for page in PdfReader(io.BytesIO(parte_principal)).pages:
-        w.add_page(page)
-    for page in PdfReader(io.BytesIO(parte_anexa)).pages:
-        w.add_page(page)
+    for parte in partes:
+        if not parte:
+            continue
+        for page in PdfReader(io.BytesIO(parte)).pages:
+            w.add_page(page)
     out = io.BytesIO()
     w.write(out)
     return out.getvalue()
+
+
+def _merge_pdf_bytes_tree(partes: List[bytes]) -> bytes:
+    """Fusiona muchos PDFs en árbol (menos picos de RAM que un solo merge gigante)."""
+    chunk = [p for p in partes if p]
+    if not chunk:
+        return b""
+    if len(chunk) == 1:
+        return chunk[0]
+    while len(chunk) > 1:
+        next_lvl: List[bytes] = []
+        for i in range(0, len(chunk), 12):
+            next_lvl.append(_merge_pdf_bytes_list(chunk[i : i + 12]))
+        chunk = next_lvl
+    return chunk[0]
 
 
 def _attachment_pdf_con_pagina_sello_usuario(
@@ -6012,18 +6117,32 @@ def _url_a_data_url_pdf(url: Optional[str]) -> Optional[str]:
         return None
     try:
         import base64, io
-        resp = requests.get(url.strip(), timeout=15)
+        resp = requests.get(url.strip(), timeout=25)
         resp.raise_for_status()
         ct = resp.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
         data = resp.content
-        # Convertir GIF a PNG
+        from PIL import Image
+        img = Image.open(io.BytesIO(data))
         if ct == "image/gif" or url.lower().endswith(".gif"):
-            from PIL import Image
-            img = Image.open(io.BytesIO(data)).convert("RGBA")
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            data = buf.getvalue()
+            img = img.convert("RGBA")
             ct = "image/png"
+        elif img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+            ct = "image/jpeg"
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+            ct = "image/jpeg"
+        w, h = img.size
+        if max(w, h) > _FO_EO04_IMG_MAX_PX:
+            scale = _FO_EO04_IMG_MAX_PX / float(max(w, h))
+            img = img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        if ct == "image/png":
+            img.save(buf, format="PNG", optimize=True)
+        else:
+            img.save(buf, format="JPEG", quality=75, optimize=True)
+            ct = "image/jpeg"
+        data = buf.getvalue()
         b64 = base64.b64encode(data).decode()
         return f"data:{ct};base64,{b64}"
     except Exception as exc:
@@ -6032,7 +6151,7 @@ def _url_a_data_url_pdf(url: Optional[str]) -> Optional[str]:
 
 
 _FO_EO_04_SEL_REGISTROS = (
-    "id, capitulo, item_numero, item_descripcion, unidad, "
+    "id, acta_rpo_id, reporte_id, capitulo, item_numero, item_descripcion, unidad, "
     "nivel1_estado, nivel2_estado, nivel3_estado, nivel4_estado, nivel5_estado, nivel6_estado, "
     "cantidad_total, semana_id, foto_url, foto_numero, grafico_url, grafico_numero"
 )
@@ -6054,8 +6173,9 @@ def _fo_eo_04_paginar_so_registros(q_builder) -> list:
 
 def _fo_eo_04_fetch_registros_acta(contrato_id: int, acta_id: int) -> List[Dict[str, Any]]:
     """
-    Solo líneas con acta_rpo_id = acta seleccionada (misma regla que rpo_panel_actas_resumen / panel Actas).
-    No usa reporte_id: evita arrastrar historial de otras actas dentro del mismo reporte.
+    Líneas del acta: acta_rpo_id en el registro y, además, registros de reportes con
+    so_reportes.acta_rpo_id = acta (muchos contratos no replican acta_rpo_id en cada línea).
+    Excluye líneas con acta_rpo_id distinto al acta seleccionado.
     """
     cid, aid = int(contrato_id), int(acta_id)
 
@@ -6064,18 +6184,81 @@ def _fo_eo_04_fetch_registros_acta(contrato_id: int, acta_id: int) -> List[Dict[
             _sb.table("so_registros")
             .select(_FO_EO_04_SEL_REGISTROS)
             .eq("contrato_id", cid)
-            .eq("acta_rpo_id", aid)
             .not_.is_("item_numero", "null")
             .neq("item_numero", "")
         )
 
-    rows = _fo_eo_04_paginar_so_registros(_base_q)
-    _log.info("fo_eo_04 registros_acta: acta=%s filas=%s", aid, len(rows))
+    rows_direct = _fo_eo_04_paginar_so_registros(lambda: _base_q().eq("acta_rpo_id", aid))
+
+    reporte_ids: List[int] = []
+    try:
+        rp = (
+            _sb.table("so_reportes")
+            .select("id")
+            .eq("contrato_id", cid)
+            .eq("acta_rpo_id", aid)
+            .execute()
+            .data
+            or []
+        )
+        reporte_ids = [int(x["id"]) for x in rp if x.get("id") is not None]
+    except Exception as exc:
+        _log.warning("fo_eo_04 reportes acta: %s", exc)
+
+    rows_rep: list = []
+    for i in range(0, len(reporte_ids), 80):
+        chunk = reporte_ids[i : i + 80]
+
+        def _q_rep(ids=chunk):
+            # Solo líneas sin acta en registro (las de acta_rpo_id=acta ya están en rows_direct)
+            return _base_q().in_("reporte_id", ids).is_("acta_rpo_id", "null")
+
+        rows_rep.extend(_fo_eo_04_paginar_so_registros(_q_rep))
+
+    by_id: Dict[Any, Dict[str, Any]] = {}
+    for r in rows_direct:
+        rid = r.get("id")
+        if rid is not None:
+            by_id[rid] = r
+    for r in rows_rep:
+        rid = r.get("id")
+        if rid is None:
+            continue
+        ara = r.get("acta_rpo_id")
+        if ara is not None:
+            try:
+                if int(ara) != aid:
+                    continue
+            except (TypeError, ValueError):
+                continue
+        by_id[rid] = r
+
+    rows = list(by_id.values())
+    _log.info(
+        "fo_eo_04 registros_acta: acta=%s direct=%s via_reporte=%s uniq=%s reportes=%s",
+        aid,
+        len(rows_direct),
+        len(rows_rep),
+        len(rows),
+        len(reporte_ids),
+    )
     return rows
 
 
+def _fo_eo_04_norm_item_key(item_numero: str, capitulo: str = "") -> tuple:
+    """Clave ítem+capítulo alineada con UI (1.02 vs 1.02.)."""
+    it = (item_numero or "").strip()
+    while it.endswith("."):
+        it = it[:-1].strip()
+    return (it, (capitulo or "").strip())
+
+
+def _fo_eo_04_item_keys_match(a_item: str, a_cap: str, b_item: str, b_cap: str) -> bool:
+    return _fo_eo_04_norm_item_key(a_item, a_cap) == _fo_eo_04_norm_item_key(b_item, b_cap)
+
+
 def _fo_eo_04_actas_anteriores_ids(contrato_id: int, acta_id: int) -> List[int]:
-    """Actas RPO anteriores a la seleccionada (por numero_rpo; si no, por consecutivo)."""
+    """Actas con numero_rpo menor al del acta actual (misma noción que recibo parcial 1..N-1)."""
     try:
         acta_row = (
             _sb.table("actas")
@@ -6090,20 +6273,138 @@ def _fo_eo_04_actas_anteriores_ids(contrato_id: int, acta_id: int) -> List[int]:
         return []
     num_rpo = acta_row.get("numero_rpo")
     consec = acta_row.get("consecutivo")
-    q = _sb.table("actas").select("id").eq("contrato_id", int(contrato_id)).eq("tipo_grupo", "RPO")
+    try:
+        todas = (
+            _sb.table("actas")
+            .select("id, numero_rpo, consecutivo, tipo_grupo")
+            .eq("contrato_id", int(contrato_id))
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        return []
+    prev: List[int] = []
     if num_rpo is not None:
         try:
-            q = q.lt("numero_rpo", int(num_rpo))
+            n_cur = int(num_rpo)
+            for a in todas:
+                nr = a.get("numero_rpo")
+                if nr is None:
+                    continue
+                try:
+                    if int(nr) < n_cur:
+                        prev.append(int(a["id"]))
+                except (TypeError, ValueError):
+                    continue
         except (TypeError, ValueError):
             pass
     elif consec is not None:
-        q = q.lt("consecutivo", int(consec))
+        try:
+            c_cur = int(consec)
+            for a in todas:
+                c = a.get("consecutivo")
+                if c is not None:
+                    try:
+                        if int(c) < c_cur:
+                            prev.append(int(a["id"]))
+                    except (TypeError, ValueError):
+                        continue
+        except (TypeError, ValueError):
+            pass
     else:
-        q = q.lt("id", int(acta_id))
-    try:
-        return [int(r["id"]) for r in (q.execute().data or []) if r.get("id") is not None]
-    except Exception:
+        try:
+            aid = int(acta_id)
+            for a in todas:
+                if a.get("id") is not None and int(a["id"]) < aid:
+                    prev.append(int(a["id"]))
+        except (TypeError, ValueError):
+            pass
+    _log.info(
+        "fo_eo_04 actas_anteriores_ids: acta=%s num_rpo=%s prev=%s",
+        acta_id, num_rpo, len(prev),
+    )
+    return prev
+
+
+def _fo_eo_04_fetch_registros_actas_ids(
+    contrato_id: int, acta_ids: List[int]
+) -> List[Dict[str, Any]]:
+    """
+    Líneas de varias actas: acta_rpo_id en el conjunto y registros vía so_reportes.acta_rpo_id
+    (misma regla que _fo_eo_04_fetch_registros_acta; necesario para totales acumulados).
+    """
+    if not acta_ids:
         return []
+    cid = int(contrato_id)
+    ids_u = sorted({int(x) for x in acta_ids})
+    by_id: Dict[Any, Dict[str, Any]] = {}
+
+    def _base_q():
+        return (
+            _sb.table("so_registros")
+            .select(_FO_EO_04_SEL_REGISTROS)
+            .eq("contrato_id", cid)
+            .not_.is_("item_numero", "null")
+            .neq("item_numero", "")
+        )
+
+    for i in range(0, len(ids_u), 80):
+        chunk = ids_u[i : i + 80]
+        chunk_set = set(chunk)
+
+        rows_direct = _fo_eo_04_paginar_so_registros(
+            lambda c=chunk: _base_q().in_("acta_rpo_id", c)
+        )
+
+        reporte_ids: List[int] = []
+        try:
+            rp = (
+                _sb.table("so_reportes")
+                .select("id")
+                .eq("contrato_id", cid)
+                .in_("acta_rpo_id", chunk)
+                .execute()
+                .data
+                or []
+            )
+            reporte_ids = [int(x["id"]) for x in rp if x.get("id") is not None]
+        except Exception as exc:
+            _log.warning("fo_eo_04 reportes actas_prev: %s", exc)
+
+        rows_rep: list = []
+        for j in range(0, len(reporte_ids), 80):
+            rep_chunk = reporte_ids[j : j + 80]
+
+            def _q_rep(ids=rep_chunk):
+                return _base_q().in_("reporte_id", ids).is_("acta_rpo_id", "null")
+
+            rows_rep.extend(_fo_eo_04_paginar_so_registros(_q_rep))
+
+        for r in rows_direct:
+            rid = r.get("id")
+            if rid is not None:
+                by_id[rid] = r
+        for r in rows_rep:
+            rid = r.get("id")
+            if rid is None:
+                continue
+            ara = r.get("acta_rpo_id")
+            if ara is not None:
+                try:
+                    if int(ara) not in chunk_set:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            by_id[rid] = r
+
+    rows = list(by_id.values())
+    _log.info(
+        "fo_eo_04 registros_actas_ids: actas=%s registros=%s",
+        len(ids_u),
+        len(rows),
+    )
+    return rows
 
 
 def _fo_eo_04_registro_aprobado_interventoria(
@@ -6164,15 +6465,17 @@ def _fetch_total_actas_anteriores(
         cap_strip = (capitulo or "").strip()
         itn = (item_numero or "").strip()
 
-        for pid in prev_ids:
-            for r in _fo_eo_04_registros_sellados_acta(
-                int(contrato_id), int(pid), matriz=matriz
-            ):
-                if (r.get("item_numero") or "").strip() != itn:
-                    continue
-                if cap_strip and (r.get("capitulo") or "").strip() != cap_strip:
-                    continue
-                total += float(r.get("cantidad_total") or 0)
+        key_tgt = _fo_eo_04_norm_item_key(itn, cap_strip)
+        raw_prev = _fo_eo_04_fetch_registros_actas_ids(int(contrato_id), prev_ids)
+        campo_mx, niveles_act = matriz
+        for r in raw_prev:
+            if not _registro_aprobado_matriz_panel(r, niveles_act, campo_mx):
+                continue
+            if _fo_eo_04_norm_item_key(
+                r.get("item_numero") or "", r.get("capitulo") or ""
+            ) != key_tgt:
+                continue
+            total += float(r.get("cantidad_total") or 0)
 
         _log.info(
             "fo_eo_04 actas_anteriores: contrato=%s acta=%s item=%s cap=%s prev_actas=%s total=%.3f",
@@ -6193,51 +6496,56 @@ def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> dict:
     from collections import defaultdict
     if not items or not acta_id:
         return {}
+    default_result: dict = {
+        _fo_eo_04_norm_item_key(
+            item.get("item_numero") or "", item.get("capitulo") or ""
+        ): 0.0
+        for item in items
+    }
     try:
         prev_ids = _fo_eo_04_actas_anteriores_ids(int(contrato_id), int(acta_id))
-
-        # Resultado vacío pero bien formado para todos los ítems
-        default_result: dict = {
-            ((item.get("item_numero") or "").strip(), (item.get("capitulo") or "").strip()): 0.0
-            for item in items
-        }
         if not prev_ids:
             return default_result
 
         matriz = matriz_params_contrato(_sb, int(contrato_id))
+        campo_mx, niveles_act = matriz
         items_set = {
-            ((item.get("item_numero") or "").strip(), (item.get("capitulo") or "").strip())
+            _fo_eo_04_norm_item_key(
+                item.get("item_numero") or "", item.get("capitulo") or ""
+            )
             for item in items
         }
         totales: dict = defaultdict(float)
 
-        for pid in prev_ids:
-            for r in _fo_eo_04_registros_sellados_acta(
-                int(contrato_id), int(pid), matriz=matriz
-            ):
-                k = (
-                    (r.get("item_numero") or "").strip(),
-                    (r.get("capitulo") or "").strip(),
-                )
-                if k in items_set:
-                    totales[k] += float(r.get("cantidad_total") or 0)
+        raw_prev = _fo_eo_04_fetch_registros_actas_ids(int(contrato_id), prev_ids)
+        for r in raw_prev:
+            if not _registro_aprobado_matriz_panel(r, niveles_act, campo_mx):
+                continue
+            k = _fo_eo_04_norm_item_key(
+                r.get("item_numero") or "", r.get("capitulo") or ""
+            )
+            if k in items_set:
+                totales[k] += float(r.get("cantidad_total") or 0)
 
         _log.info(
-            "fo_eo_04 totales_batch: acta=%s prev_actas=%s items=%s",
-            acta_id, len(prev_ids), len(items_set),
+            "fo_eo_04 totales_batch: acta=%s prev_actas=%s raw_prev=%s items=%s con_total=%s",
+            acta_id,
+            len(prev_ids),
+            len(raw_prev),
+            len(items_set),
+            sum(1 for v in totales.values() if v),
         )
         # Combinar: ítems con datos + ítems sin registros anteriores (→ 0.0)
         result = {**default_result, **dict(totales)}
         return result
     except Exception as exc:
         _log.warning("fetch_totales_batch ERROR: %s", exc)
-        return {}
+        return default_result
 
 
 def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
     """
-    Ítems del acta con validación en el nivel máximo activo del contrato (matriz SICOE),
-    solo so_registros.acta_rpo_id = acta seleccionada, agrupados por semana.
+    Ítems del acta con sellado en el nivel máximo activo del contrato (interventoría / matriz SICOE).
     """
     from collections import defaultdict
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -6638,7 +6946,14 @@ def _fo_eo_04_firmas_marcas_registro(
 _FO_EO04_FIRMA_BOX = "45px"
 _FO_EO04_FIRMA_IMG = "38px"
 # Descarga paralela de foto + gráfico por ítem (alineado con informe gerencia matriz).
-_FO_EO04_ITEM_IMG_WORKERS = 8
+_FO_EO04_ITEM_IMG_WORKERS = 16
+_FO_EO04_IMG_MAX_PX = 720
+_FO_EO04_MAX_DATA_URI_LEN = 400_000
+_FO_EO04_PDF_PAGE_WORKERS = max(4, min(10, (_os.cpu_count() or 4)))
+_FO_EO04_PDF_PARALLEL_MIN_PAGES = 4
+_FO_EO04_PDF_PAGES_PER_TASK = 2
+_FO_EO04_PROCESS_POOL = None
+_FO_EO04_POOL_LOCK = threading.Lock()
 _FO_EO04_MARCA_LBL_ELABORO = "Elaborado y firmado por:"
 _FO_EO04_MARCA_LBL_REVISO = "Revisado y Aprobado por:"
 
@@ -6822,8 +7137,75 @@ def _html_fo_eo_04_firmas_4(
 </table>"""
 
 
+_FO_EO_04_PREVIEW_HEAD_EXTRA = """
+<style>
+.cc-rotate-btn { font-family: system-ui, sans-serif; }
+.cc-rotate-btn:hover { background: #eef2ff !important; }
+.cc-rotate-btn:disabled { opacity: 0.55; cursor: wait; }
+@media print { .cc-rotate-btn { display: none !important; } }
+</style>
+"""
+
+
+def _fo_eo_04_wrap_preview_html(html: str) -> str:
+    if not html:
+        return html
+    if "<head>" in html:
+        return html.replace("<head>", "<head>" + _FO_EO_04_PREVIEW_HEAD_EXTRA, 1)
+    return _FO_EO_04_PREVIEW_HEAD_EXTRA + html
+
+
+def _fo_eo_04_html_embed_fragment(html: str) -> str:
+    """Fragmento sin documento HTML anidado (mejor para embeber en React)."""
+    if not html:
+        return html
+    bs = html.lower().find("<body")
+    be = html.lower().rfind("</body>")
+    if bs != -1 and be != -1:
+        start = html.find(">", bs)
+        if start != -1:
+            return html[start + 1 : be].strip()
+    return html
+
+
+def _fo_eo_04_img_block_html(
+    url: Optional[str],
+    numero: Optional[int],
+    tipo: str,
+    *,
+    preview_ui: bool,
+    empty_label: str,
+    max_height: str = "228px",
+) -> str:
+    if not url or not str(url).strip():
+        return f'<div style="font-size:6pt;color:#94a3b8;padding-top:100px;">{empty_label}</div>'
+    src = html.escape(str(url).strip(), quote=True)
+    img = (
+        f'<img data-cc-img="1" src="{src}" alt="" '
+        f'style="max-width:98%;max-height:{max_height};display:block;margin:0 auto;object-fit:contain;" />'
+    )
+    if not preview_ui or numero is None:
+        return img
+    num = int(numero)
+    tipo_esc = html.escape(tipo, quote=True)
+    btn = (
+        f'<button type="button" class="cc-rotate-btn" data-cc-rotate="1" '
+        f'data-cc-tipo="{tipo_esc}" data-cc-num="{num}" '
+        f'style="position:absolute;top:6px;right:6px;z-index:5;padding:6px 10px;'
+        f'font-size:11px;font-weight:700;border:1px solid #6366f1;border-radius:8px;'
+        f'background:rgba(255,255,255,0.92);cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.15);">'
+        f'&#8635; Girar</button>'
+    )
+    return (
+        f'<div class="cc-img-slot" data-cc-slot="1" data-cc-tipo="{tipo_esc}" data-cc-num="{num}" '
+        f'style="position:relative;height:100%;min-height:200px;display:flex;align-items:center;'
+        f'justify-content:center;">{img}{btn}</div>'
+    )
+
+
 def _html_idu_fo_eo_04_v2_plantilla_vacia(
     logo_entidad: Optional[str] = None,
+    logo_entidad_html: Optional[str] = None,
     entidad: str = "IDU",
     subsistema: str = "vial",
     num_contrato: str = "",
@@ -6873,11 +7255,11 @@ def _html_idu_fo_eo_04_v2_plantilla_vacia(
     semanas_item: Optional[list] = None,
     # Totales de actas anteriores (Opción A: actas con consecutivo < actual)
     total_actas_anteriores: Optional[float] = None,
-    # Imágenes del ítem (URL directa de Cloudinary)
     foto_url: Optional[str] = None,
     foto_numero: Optional[int] = None,
     grafico_url: Optional[str] = None,
     grafico_numero: Optional[int] = None,
+    preview_ui: bool = False,
 ) -> str:
     """Plantilla FO-EO-04 V2.0: vista previa sin datos de obra.
 
@@ -6902,8 +7284,9 @@ def _html_idu_fo_eo_04_v2_plantilla_vacia(
         "en la entrega mensual para la verificación final del acta de recibo parcial de obra."
     )
 
-    # Logo de la entidad desde el contrato (admite PNG, JPEG, WebP y GIF)
-    logo_entidad_html = _html_logo_entidad(logo_entidad)
+    # Logo precargado en data-URI (evita N descargas HTTP al renderizar cada memoria)
+    if not logo_entidad_html:
+        logo_entidad_html = _html_logo_entidad(logo_entidad)
 
     # ── Sección institucional debajo del encabezado ──────────────────────────
     _lbl_inst = (
@@ -7227,8 +7610,7 @@ body {{ margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:7pt;
               border-bottom:1px solid {navy};text-align:center;
               background-color:{bg_hdr};color:{navy_hdr};">PLANO/ESQUEMA</div>
   <div style="height:240px;min-height:240px;max-height:240px;padding:6px;text-align:center;overflow:hidden;">
-    {"<img src='" + html.escape(grafico_url, quote=True) + "' alt='Grafico' style='max-width:98%;max-height:228px;display:block;margin:0 auto;' />" if grafico_url else
-     "<div style='font-size:6pt;color:#94a3b8;padding-top:100px;'>Sin gr&aacute;fico</div>"}
+    {_fo_eo_04_img_block_html(grafico_url, grafico_numero, "grafico", preview_ui=preview_ui, empty_label="Sin gr&aacute;fico")}
   </div>
   <div style="height:16px;min-height:16px;font-size:5.5pt;text-align:center;padding:2px;border-top:1px solid {navy};color:{navy_hdr};">
     {"Gr&aacute;fico #" + str(grafico_numero) if grafico_numero else "&nbsp;"}
@@ -7239,9 +7621,8 @@ body {{ margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:7pt;
               border-bottom:1px solid {navy};text-align:center;
               background-color:{bg_hdr};color:{navy_hdr};">FOTOGRAF&#205;A</div>
   <div style="height:240px;min-height:240px;max-height:240px;padding:6px;text-align:center;overflow:hidden;">
-    {"<img src='" + html.escape(foto_url, quote=True) + "' alt='Foto' style='max-width:98%;max-height:228px;display:block;margin:0 auto;' />" if foto_url else
-     "<div style='font-size:6pt;color:#94a3b8;padding-top:100px;'>Sin fotograf&iacute;a</div>"}
-</div>
+    {_fo_eo_04_img_block_html(foto_url, foto_numero, "foto", preview_ui=preview_ui, empty_label="Sin fotograf&iacute;a")}
+  </div>
   <div style="height:16px;min-height:16px;font-size:5.5pt;text-align:center;padding:2px;border-top:1px solid {navy};color:{navy_hdr};">
     {"Foto #" + str(foto_numero) if foto_numero else "&nbsp;"}
   </div>
@@ -7273,257 +7654,177 @@ Vista previa ClaraCore &middot; sin datos de obra &middot; {CODIGO_FORMATO_IDU_F
 </body></html>"""
 
 
+def _fo_eo_04_img_src_for_pdf(http_url: str, cache: Dict[str, str]) -> Optional[str]:
+    """
+    src para xhtml2pdf: data-URI embebida si cabe; si falla o es enorme, URL http
+    (el worker usa link_callback para descargarla al renderizar).
+    """
+    if not http_url or not str(http_url).strip():
+        return None
+    u = str(http_url).strip()
+    if u.startswith("data:"):
+        return u
+    if u in cache:
+        return cache[u] or u
+    return u
+
+
 def _fo_eo_04_prefetch_item_imgs_data_uri(
     items_n3: list,
 ) -> List[Tuple[Optional[str], Optional[str]]]:
-    """Para cada ítem, obtiene data URI de foto y gráfico en paralelo (orden = items_n3)."""
+    """Data URI por ítem; cada URL única se descarga una sola vez (mismo foto_numero en muchos ítems)."""
     n = len(items_n3)
     if not n:
         return []
-    out_foto: List[Optional[str]] = [None] * n
-    out_graf: List[Optional[str]] = [None] * n
-    futures: dict = {}
-    with ThreadPoolExecutor(max_workers=_FO_EO04_ITEM_IMG_WORKERS) as pool:
-        for i, item in enumerate(items_n3):
-            fu = (item.get("foto_url") or "").strip()
-            if fu:
-                futures[pool.submit(_fetch_img_data_uri, fu)] = (i, "foto", fu)
-            gu = (item.get("grafico_url") or "").strip()
-            if gu:
-                futures[pool.submit(_fetch_img_data_uri, gu)] = (i, "grafico", gu)
-        for fut in as_completed(futures):
-            i, kind, orig_url = futures[fut]
-            try:
-                uri = fut.result()
-            except Exception as exc:
-                _log.warning("fo_eo_04 prefetch %s item_idx=%s: %s", kind, i, exc)
-                uri = orig_url
-            if kind == "foto":
-                out_foto[i] = uri
-            else:
-                out_graf[i] = uri
-    return list(zip(out_foto, out_graf))
-
-
-def _build_fo_eo_04_pdf_bytes(
-    contrato_id: int,
-    formato_codigo: str,
-    subsistema: str,
-    acta_id: Optional[int],
-    supervisor: str,
-    current_user: Optional[dict] = None,
-) -> tuple:
-    """
-    Genera los bytes del PDF FO-IDU-EO-04-V2.
-    Optimización principal: _fetch_totales_batch reemplaza N llamadas secuenciales
-    a _fetch_total_actas_anteriores por un único lote de ~3 queries.
-    Devuelve (pdf_bytes, fname, contrato_numero).
-    """
-    def _fmt_fecha(f: object) -> str:
-        if not f:
-            return ""
-        try:
-            from datetime import date as _date
-            d = _date.fromisoformat(str(f)[:10])
-            return f"{d.day:02d}/{d.month:02d}/{d.year}"
-        except Exception:
-            return str(f)[:10]
-
-    # Normalizar referencia de acta para evitar cruces (id vs numero_rpo/consecutivo).
-    acta_id_norm = _resolver_acta_id_en_contrato(contrato_id, acta_id)
-
-    # ── Datos del contrato ────────────────────────────────────────────────────
-    logo_entidad: Optional[str] = None
-    entidad: str = "IDU"
-    num_contrato: str = ""
-    año_contrato: str = ""
-    objeto_contrato: str = ""
-    contratista_nombre: str = ""
-    interventoria_nombre: str = ""
-    contrato_numero_raw: str = ""
-    contrato_row: Optional[Dict[str, Any]] = None
-    try:
-        contrato_row = _row(
-            "contratos",
-            "logo_entidad, entidad, entidad_otra, numero, objeto, contratista, interventoria",
-            id=contrato_id,
+    unique_urls: set = set()
+    for item in items_n3:
+        for key in ("foto_url", "grafico_url"):
+            u = (item.get(key) or "").strip()
+            if u.startswith("http"):
+                unique_urls.add(u)
+    url_to_uri: Dict[str, str] = {}
+    if unique_urls:
+        with ThreadPoolExecutor(max_workers=_FO_EO04_ITEM_IMG_WORKERS) as pool:
+            futs = {pool.submit(_url_a_data_url_pdf, u): u for u in unique_urls}
+            for fut in as_completed(futs):
+                u = futs[fut]
+                try:
+                    uri = fut.result()
+                    if uri and len(uri) <= _FO_EO04_MAX_DATA_URI_LEN:
+                        url_to_uri[u] = uri
+                    else:
+                        url_to_uri[u] = u
+                except Exception as exc:
+                    _log.warning("fo_eo_04 prefetch url=%s: %s", u[:80], exc)
+                    url_to_uri[u] = u
+        ok_embed = sum(1 for v in url_to_uri.values() if v.startswith("data:"))
+        _log.info(
+            "fo_eo_04 prefetch: %s urls, %s embebidas, %s http para %s ítems",
+            len(unique_urls),
+            ok_embed,
+            len(unique_urls) - ok_embed,
+            n,
         )
-        if contrato_row:
-            logo_entidad = contrato_row.get("logo_entidad") or None
-            ent = (contrato_row.get("entidad") or "").strip().upper()
-            if ent == "OTRA":
-                ent = (contrato_row.get("entidad_otra") or "OTRA").strip().upper()
-            entidad = ent or "IDU"
-            num_contrato, año_contrato = _parse_numero_contrato(contrato_row.get("numero") or "")
-            objeto_contrato      = (contrato_row.get("objeto") or "").strip()
-            contratista_nombre   = (contrato_row.get("contratista") or "").strip()
-            interventoria_nombre = (contrato_row.get("interventoria") or "").strip()
-            contrato_numero_raw  = (contrato_row.get("numero") or "").strip()
-    except Exception:
-        pass
+    out: List[Tuple[Optional[str], Optional[str]]] = []
+    for item in items_n3:
+        fu = (item.get("foto_url") or "").strip()
+        gu = (item.get("grafico_url") or "").strip()
+        out.append((
+            _fo_eo_04_img_src_for_pdf(fu, url_to_uri) if fu else None,
+            _fo_eo_04_img_src_for_pdf(gu, url_to_uri) if gu else None,
+        ))
+    return out
 
-    # ── Datos del acta ────────────────────────────────────────────────────────
-    num_acta: str = ""
-    fecha_desde: str = ""
-    fecha_hasta: str = ""
-    if acta_id_norm:
-        try:
-            acta_row = _row("actas", "id, numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id_norm)
-            if acta_row:
-                num_acta    = str(acta_row.get("numero_rpo") or acta_row.get("consecutivo") or "")
-                fecha_desde = _fmt_fecha(acta_row.get("fecha_inicio"))
-                fecha_hasta = _fmt_fecha(acta_row.get("fecha_fin"))
-        except Exception:
-            pass
 
-    subsistema_norm = subsistema.strip().lower()
-    if subsistema_norm not in ("vial", "transporte"):
-        subsistema_norm = "vial"
+def _fo_eo_04_init_pdf_pool() -> None:
+    """Crea el pool en el hilo de la petición HTTP (Windows no permite hijos desde hilos daemon)."""
+    global _FO_EO04_PROCESS_POOL
+    if _FO_EO04_PROCESS_POOL is not None:
+        return
+    with _FO_EO04_POOL_LOCK:
+        if _FO_EO04_PROCESS_POOL is not None:
+            return
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
 
-    firma_cfg: Dict[str, Any] = {}
-    try:
-        firma_cfg = _get_firma_cfg_para_documento(
-            contrato_id, formato_codigo,
-            contexto_tipo="acta_rpo" if acta_id_norm else None,
-            contexto_id=acta_id_norm if acta_id_norm else None,
+        ctx = multiprocessing.get_context("spawn")
+        _FO_EO04_PROCESS_POOL = ProcessPoolExecutor(
+            max_workers=_FO_EO04_PDF_PAGE_WORKERS,
+            mp_context=ctx,
         )
-    except Exception:
-        pass
-
-    _base_kwargs = dict(
-        logo_entidad=logo_entidad,
-        entidad=entidad,
-        subsistema=subsistema_norm,
-        num_contrato=num_contrato,
-        año_contrato=año_contrato,
-        objeto_contrato=objeto_contrato,
-        num_acta=num_acta,
-        fecha_desde=fecha_desde,
-        fecha_hasta=fecha_hasta,
-        contratista=contratista_nombre,
-        interventoria=interventoria_nombre,
-        supervisor=supervisor.strip(),
-        elaboro_nombre=str(firma_cfg.get("elaboro_nombre") or "").strip(),
-        elaboro_cargo=str(firma_cfg.get("elaboro_cargo") or "").strip(),
-        elaboro2_nombre=str(firma_cfg.get("elaboro2_nombre") or "").strip(),
-        elaboro2_cargo=str(firma_cfg.get("elaboro2_cargo") or "").strip(),
-        reviso_nombre=str(firma_cfg.get("reviso_nombre") or "").strip(),
-        reviso_cargo=str(firma_cfg.get("reviso_cargo") or "").strip(),
-        reviso2_nombre=str(firma_cfg.get("reviso2_nombre") or "").strip(),
-        reviso2_cargo=str(firma_cfg.get("reviso2_cargo") or "").strip(),
-    )
-    e_uri, e2_uri, r_uri, r2_uri = _fo_eo_04_firmas_data_uris(
-        contrato_id, formato_codigo, acta_id_norm, firma_cfg, current_user
-    )
-    (em_u, em_f, em_h), (e2m_u, e2m_f, e2m_h), (rm_u, rm_f, rm_h), (r2m_u, r2m_f, r2m_h) = _fo_eo_04_firmas_marcas_registro(
-        contrato_id, formato_codigo, acta_id_norm
-    )
-    _base_kwargs.update(
-        elaboro_firma_data_uri=e_uri,
-        elaboro2_firma_data_uri=e2_uri,
-        reviso_firma_data_uri=r_uri,
-        reviso2_firma_data_uri=r2_uri,
-        elaboro_marca_usuario=em_u,
-        elaboro_marca_fecha=em_f,
-        elaboro_marca_hora=em_h,
-        elaboro2_marca_usuario=e2m_u,
-        elaboro2_marca_fecha=e2m_f,
-        elaboro2_marca_hora=e2m_h,
-        reviso_marca_usuario=rm_u,
-        reviso_marca_fecha=rm_f,
-        reviso_marca_hora=rm_h,
-        reviso2_marca_usuario=r2m_u,
-        reviso2_marca_fecha=r2m_f,
-        reviso2_marca_hora=r2m_h,
-    )
-
-    items_n3 = _fetch_items_n3_acta(acta_id_norm, contrato_id) if acta_id_norm else []
-    if acta_id_norm and not items_n3:
-        campo_mx, niveles_act = matriz_params_contrato(_sb, int(contrato_id))
-        raise ValueError(
-            f"No hay líneas aprobadas en {campo_mx} (niveles activos {niveles_act}) "
-            f"para el acta {acta_id_norm}."
-        )
-
-    if items_n3:
-        # Totales de actas anteriores: 1 lote → O(1) queries en lugar de O(N ítems)
-        totales_batch = _fetch_totales_batch(contrato_id, acta_id_norm, items_n3) if acta_id_norm else {}
-        img_pairs = _fo_eo_04_prefetch_item_imgs_data_uri(items_n3)
-
-        pages = []
-        for idx, item in enumerate(items_n3):
-            item_num = (item.get("item_numero") or "").strip()
-            item_cap = (item.get("capitulo") or "").strip()
-            t_anteriores = totales_batch.get((item_num, item_cap), 0.0) if acta_id_norm else None
-            foto_uri, graf_uri = img_pairs[idx]
-            pages.append(
-                _html_idu_fo_eo_04_v2_plantilla_vacia(
-                    **_base_kwargs,
-                    item_numero=item_num,
-                    item_unidad=item.get("unidad") or "",
-                    item_especificacion=item.get("especificacion_tecnica") or "",
-                    item_capitulo=item_cap,
-                    item_descripcion=item.get("item_descripcion") or "",
-                    semanas_item=item.get("semanas") or [],
-                    total_actas_anteriores=t_anteriores,
-                    foto_url=foto_uri,
-                    foto_numero=item.get("foto_numero"),
-                    grafico_url=graf_uri,
-                    grafico_numero=item.get("grafico_numero"),
-                )
-            )
-        html = _combine_html_pages(pages)
-    else:
-        html = _html_idu_fo_eo_04_v2_plantilla_vacia(**_base_kwargs)
-
-    pdf_bytes = _to_pdf(html)
-    suffix = f"_acta{num_acta}" if num_acta else ""
-    fname  = _safe_filename_part(f"{formato_codigo}{suffix}.pdf")
-    return pdf_bytes, fname, contrato_numero_raw
+        _log.info("fo_eo_04 PDF pool: %s workers", _FO_EO04_PDF_PAGE_WORKERS)
 
 
-# ── Sistema de jobs en background para generación progresiva de PDF ──────────
-
-import uuid as _uuid_mod
-import threading as _threading_mod
-import time as _time_mod
-
-_pdf_jobs: dict = {}
-_pdf_jobs_lock = _threading_mod.Lock()
-
-def _pdf_jobs_cleanup():
-    """Elimina jobs con más de 30 minutos de antigüedad."""
-    ahora = _time_mod.time()
-    with _pdf_jobs_lock:
-        caducados: List[str] = []
-        for k, v in list(_pdf_jobs.items()):
-            ca = v.get("created_at", 0)
-            try:
-                ca_f = float(ca)
-            except (TypeError, ValueError):
-                caducados.append(k)
-                continue
-            if ahora - ca_f > 1800:
-                caducados.append(k)
-        for k in caducados:
-            _pdf_jobs.pop(k, None)
-
-
-def _build_fo_eo_04_pdf_bytes_prog(
-    contrato_id: int,
-    formato_codigo: str,
-    subsistema: str,
-    acta_id: Optional[int],
-    supervisor: str,
+def _fo_eo_04_pdf_from_pages(
+    pages_html: List[str],
     on_progress=None,
+) -> bytes:
+    """
+    Una memoria → un PDF pequeño → fusión. Procesos en lotes de 2 páginas (~meta 2 mem/s).
+    """
+    n = len(pages_html)
+    if n == 0:
+        return _to_pdf("<!DOCTYPE html><html><head><meta charset=\"UTF-8\"/></head><body></body></html>")
+    if n == 1:
+        if on_progress:
+            on_progress({"pct": 88, "msg": "Renderizando PDF…", "current_item": 1, "total_items": 1})
+        return _to_pdf(pages_html[0])
+
+    t0 = time.time()
+    done_pages = 0
+
+    def _report(done: int) -> None:
+        if not on_progress:
+            return
+        elapsed = max(0.001, time.time() - t0)
+        rate = done / elapsed
+        on_progress({
+            "pct": 76 + int(22 * done / n),
+            "msg": f"Renderizando PDF… ({done}/{n} páginas · ~{rate:.1f} mem/s)",
+            "current_item": done,
+            "total_items": n,
+        })
+
+    use_processes = n >= _FO_EO04_PDF_PARALLEL_MIN_PAGES and _FO_EO04_PROCESS_POOL is not None
+    per_task = max(1, _FO_EO04_PDF_PAGES_PER_TASK)
+    page_pdfs: List[Optional[bytes]] = [None] * n
+
+    if use_processes:
+        from fo_eo_04_pdf_worker import render_html_batch
+
+        pool = _FO_EO04_PROCESS_POOL
+        batches: List[Tuple[int, List[str]]] = []
+        for start in range(0, n, per_task):
+            batches.append((start, pages_html[start : start + per_task]))
+        futs = {pool.submit(render_html_batch, batch_html): start for start, batch_html in batches}
+        for fut in as_completed(futs):
+            start = futs[fut]
+            try:
+                chunk_pdfs = fut.result()
+            except Exception as exc:
+                _log.warning("fo_eo_04 lote PDF start=%s: %s", start, exc)
+                raise
+            for j, pdf in enumerate(chunk_pdfs):
+                if start + j < n:
+                    page_pdfs[start + j] = pdf
+            done_pages = sum(1 for p in page_pdfs if p is not None)
+            _report(done_pages)
+    else:
+        for i, h in enumerate(pages_html):
+            page_pdfs[i] = _to_pdf(h)
+            _report(i + 1)
+
+    parts = [p for p in page_pdfs if p]
+    if not parts:
+        raise ValueError("No se generó ninguna página PDF")
+    merged = _merge_pdf_bytes_tree(parts)
+    elapsed = time.time() - t0
+    _log.info(
+        "fo_eo_04 PDF listo: %s páginas en %.1fs (%.2f mem/s) procesos=%s",
+        n,
+        elapsed,
+        n / max(0.001, elapsed),
+        use_processes,
+    )
+    return merged
+
+
+def _build_fo_eo_04_html(
+    contrato_id: int,
+    formato_codigo: str,
+    subsistema: str,
+    acta_id: Optional[int],
+    supervisor: str,
     current_user: Optional[dict] = None,
+    *,
+    preview_ui: bool = False,
+    on_progress=None,
 ) -> tuple:
     """
-    Igual que _build_fo_eo_04_pdf_bytes pero reporta progreso a través de on_progress(dict).
-    on_progress recibe: {"pct": int 0-100, "msg": str, "current_item": int|None, "total_items": int|None}
+    Arma el HTML del FO-IDU-EO-04-V2 (todas las páginas del acta).
+    preview_ui=True: URLs directas y botones de rotación (solo vista previa en pantalla).
+    Devuelve (html_combinado, fname, contrato_numero, lista_html_por_página).
     """
-    # Normalizar referencia de acta para evitar cruces (id vs numero_rpo/consecutivo).
-    acta_id_norm = _resolver_acta_id_en_contrato(contrato_id, acta_id)
 
     def _prog(pct: int, msg: str, current_item: Optional[int] = None, total_items: Optional[int] = None):
         if on_progress:
@@ -7539,6 +7840,8 @@ def _build_fo_eo_04_pdf_bytes_prog(
         except Exception:
             return str(f)[:10]
 
+    acta_id_norm = _resolver_acta_id_en_contrato(contrato_id, acta_id)
+
     _prog(5, "Leyendo datos del contrato…")
     logo_entidad: Optional[str] = None
     entidad: str = "IDU"
@@ -7548,7 +7851,6 @@ def _build_fo_eo_04_pdf_bytes_prog(
     contratista_nombre: str = ""
     interventoria_nombre: str = ""
     contrato_numero_raw: str = ""
-    contrato_row: Optional[Dict[str, Any]] = None
     try:
         contrato_row = _row(
             "contratos",
@@ -7562,12 +7864,21 @@ def _build_fo_eo_04_pdf_bytes_prog(
                 ent = (contrato_row.get("entidad_otra") or "OTRA").strip().upper()
             entidad = ent or "IDU"
             num_contrato, año_contrato = _parse_numero_contrato(contrato_row.get("numero") or "")
-            objeto_contrato      = (contrato_row.get("objeto") or "").strip()
-            contratista_nombre   = (contrato_row.get("contratista") or "").strip()
+            objeto_contrato = (contrato_row.get("objeto") or "").strip()
+            contratista_nombre = (contrato_row.get("contratista") or "").strip()
             interventoria_nombre = (contrato_row.get("interventoria") or "").strip()
-            contrato_numero_raw  = (contrato_row.get("numero") or "").strip()
+            contrato_numero_raw = (contrato_row.get("numero") or "").strip()
     except Exception:
         pass
+
+    logo_entidad_html = _html_logo_entidad(None)
+    if logo_entidad:
+        try:
+            logo_du = _url_a_data_url_pdf(logo_entidad)
+            logo_entidad_html = _html_logo_entidad(logo_du or logo_entidad)
+        except Exception as exc:
+            _log.warning("fo_eo_04 logo entidad: %s", exc)
+            logo_entidad_html = _html_logo_entidad(logo_entidad)
 
     _prog(15, "Consultando datos del acta…")
     num_acta: str = ""
@@ -7577,7 +7888,7 @@ def _build_fo_eo_04_pdf_bytes_prog(
         try:
             acta_row = _row("actas", "id, numero_rpo, consecutivo, fecha_inicio, fecha_fin", id=acta_id_norm)
             if acta_row:
-                num_acta    = str(acta_row.get("numero_rpo") or acta_row.get("consecutivo") or "")
+                num_acta = str(acta_row.get("numero_rpo") or acta_row.get("consecutivo") or "")
                 fecha_desde = _fmt_fecha(acta_row.get("fecha_inicio"))
                 fecha_hasta = _fmt_fecha(acta_row.get("fecha_fin"))
         except Exception:
@@ -7587,10 +7898,12 @@ def _build_fo_eo_04_pdf_bytes_prog(
     subsistema_norm = subsistema.strip().lower()
     if subsistema_norm not in ("vial", "transporte"):
         subsistema_norm = "vial"
+
     firma_cfg: Dict[str, Any] = {}
     try:
         firma_cfg = _get_firma_cfg_para_documento(
-            contrato_id, formato_codigo,
+            contrato_id,
+            formato_codigo,
             contexto_tipo="acta_rpo" if acta_id_norm else None,
             contexto_id=acta_id_norm if acta_id_norm else None,
         )
@@ -7599,6 +7912,7 @@ def _build_fo_eo_04_pdf_bytes_prog(
 
     _base_kwargs = dict(
         logo_entidad=logo_entidad,
+        logo_entidad_html=logo_entidad_html,
         entidad=entidad,
         subsistema=subsistema_norm,
         num_contrato=num_contrato,
@@ -7651,29 +7965,38 @@ def _build_fo_eo_04_pdf_bytes_prog(
         campo_mx, niveles_act = matriz_params_contrato(_sb, int(contrato_id))
         raise ValueError(
             f"No hay líneas aprobadas en {campo_mx} (niveles activos {niveles_act}) "
-            f"para el acta {acta_id_norm}. Verifique validación en SICOE o use "
-            f"GET /informes/{contrato_id}/ccd/fo-eo-04/diagnostico?acta_id={acta_id_norm}"
+            f"para el acta {acta_id_norm}."
         )
 
     if items_n3:
-        _prog(48, f"Calculando totales de actas anteriores ({n_items} ítem{'s' if n_items != 1 else ''})…",
-              total_items=n_items)
+        _prog(
+            48,
+            f"Calculando totales de actas anteriores ({n_items} ítem{'s' if n_items != 1 else ''})…",
+            total_items=n_items,
+        )
         totales_batch = _fetch_totales_batch(contrato_id, acta_id_norm, items_n3) if acta_id_norm else {}
-
-        _prog(52, f"Descargando fotos y gráficos ({n_items} ítem{'s' if n_items != 1 else ''})…",
-              total_items=n_items)
-        img_pairs = _fo_eo_04_prefetch_item_imgs_data_uri(items_n3)
+        img_pairs = None if preview_ui else _fo_eo_04_prefetch_item_imgs_data_uri(items_n3)
+        if not preview_ui:
+            _prog(
+                52,
+                f"Descargando fotos y gráficos ({n_items} ítem{'s' if n_items != 1 else ''})…",
+                total_items=n_items,
+            )
 
         pages = []
         for i, item in enumerate(items_n3):
             item_num = (item.get("item_numero") or "").strip()
             item_cap = (item.get("capitulo") or "").strip()
             desc_corta = (item.get("item_descripcion") or item_num or "")[:40]
-            pct_page = 55 + int(20 * (i + 1) / max(n_items, 1))
-            _prog(pct_page, f"Página {i+1}/{n_items}: {desc_corta}",
-                  current_item=i + 1, total_items=n_items)
-            t_anteriores = totales_batch.get((item_num, item_cap), 0.0) if acta_id_norm else None
-            foto_uri, graf_uri = img_pairs[i]
+            if on_progress:
+                pct_page = 55 + int(20 * (i + 1) / max(n_items, 1))
+                _prog(pct_page, f"Página {i + 1}/{n_items}: {desc_corta}", current_item=i + 1, total_items=n_items)
+            t_anteriores = totales_batch.get(_fo_eo_04_norm_item_key(item_num, item_cap), 0.0) if acta_id_norm else None
+            if preview_ui:
+                foto_src = (item.get("foto_url") or "").strip() or None
+                graf_src = (item.get("grafico_url") or "").strip() or None
+            else:
+                foto_src, graf_src = img_pairs[i]
             pages.append(
                 _html_idu_fo_eo_04_v2_plantilla_vacia(
                     **_base_kwargs,
@@ -7684,23 +8007,140 @@ def _build_fo_eo_04_pdf_bytes_prog(
                     item_descripcion=item.get("item_descripcion") or "",
                     semanas_item=item.get("semanas") or [],
                     total_actas_anteriores=t_anteriores,
-                    foto_url=foto_uri,
+                    foto_url=foto_src,
                     foto_numero=item.get("foto_numero"),
-                    grafico_url=graf_uri,
+                    grafico_url=graf_src,
                     grafico_numero=item.get("grafico_numero"),
+                    preview_ui=preview_ui,
                 )
             )
-        _prog(76, f"Renderizando PDF ({n_items} página{'s' if n_items != 1 else ''})…",
-              total_items=n_items)
+        _prog(76, f"Documento listo ({n_items} página{'s' if n_items != 1 else ''})…", total_items=n_items)
         html = _combine_html_pages(pages)
+        pages_out = pages
     else:
         _prog(76, "Generando plantilla vacía…")
-        html = _html_idu_fo_eo_04_v2_plantilla_vacia(**_base_kwargs)
+        pages_out = [_html_idu_fo_eo_04_v2_plantilla_vacia(**_base_kwargs, preview_ui=preview_ui)]
+        html = pages_out[0]
 
-    pdf_bytes = _to_pdf(html)
-    _prog(100, "¡Listo!", total_items=n_items or None)
+    if preview_ui:
+        html = _fo_eo_04_wrap_preview_html(_fo_eo_04_html_embed_fragment(html))
+
     suffix = f"_acta{num_acta}" if num_acta else ""
-    fname  = _safe_filename_part(f"{formato_codigo}{suffix}.pdf")
+    fname = _safe_filename_part(f"{formato_codigo}{suffix}.pdf")
+    return html, fname, contrato_numero_raw, pages_out
+
+
+def _build_fo_eo_04_pdf_bytes(
+    contrato_id: int,
+    formato_codigo: str,
+    subsistema: str,
+    acta_id: Optional[int],
+    supervisor: str,
+    current_user: Optional[dict] = None,
+) -> tuple:
+    """Genera los bytes del PDF FO-IDU-EO-04-V2. Devuelve (pdf_bytes, fname, contrato_numero)."""
+    cu = current_user if isinstance(current_user, dict) else dict(current_user or {})
+    _html, fname, contrato_numero_raw, pages = _build_fo_eo_04_html(
+        contrato_id,
+        formato_codigo,
+        subsistema,
+        acta_id,
+        supervisor,
+        current_user=cu,
+        preview_ui=False,
+    )
+    pdf_bytes = _fo_eo_04_pdf_from_pages(pages)
+    return pdf_bytes, fname, contrato_numero_raw
+
+
+# ── Sistema de jobs en background para generación progresiva de PDF ──────────
+
+import uuid as _uuid_mod
+import threading as _threading_mod
+import time as _time_mod
+import tempfile as _tempfile_mod
+
+_pdf_jobs: dict = {}
+_pdf_jobs_lock = _threading_mod.Lock()
+
+
+def _pdf_job_unlink_path(path: Optional[str]) -> None:
+    if not path:
+        return
+    try:
+        _os.unlink(path)
+    except OSError:
+        pass
+
+
+def _pdf_job_store_pdf(job_id: str, pdf_bytes: bytes) -> str:
+    """Guarda en disco (evita RAM gigante y WriteError al descargar)."""
+    fd, path = _tempfile_mod.mkstemp(prefix=f"foeo04_{job_id[:8]}_", suffix=".pdf")
+    try:
+        _os.write(fd, pdf_bytes)
+    finally:
+        try:
+            _os.close(fd)
+        except OSError:
+            pass
+    return path
+
+
+def _pdf_job_read_bytes(job: dict) -> bytes:
+    path = job.get("pdf_path")
+    if path and _os.path.isfile(path):
+        with open(path, "rb") as f:
+            return f.read()
+    raw = job.get("bytes")
+    if raw:
+        return raw
+    raise HTTPException(status_code=410, detail="PDF del job ya no está disponible; vuelva a generar.")
+
+
+def _pdf_jobs_cleanup():
+    """Elimina jobs con más de 30 minutos de antigüedad."""
+    ahora = _time_mod.time()
+    with _pdf_jobs_lock:
+        caducados: List[str] = []
+        for k, v in list(_pdf_jobs.items()):
+            ca = v.get("created_at", 0)
+            try:
+                ca_f = float(ca)
+            except (TypeError, ValueError):
+                caducados.append(k)
+                continue
+            if ahora - ca_f > 1800:
+                caducados.append(k)
+        for k in caducados:
+            job = _pdf_jobs.pop(k, None)
+            if isinstance(job, dict):
+                _pdf_job_unlink_path(job.get("pdf_path"))
+
+
+def _build_fo_eo_04_pdf_bytes_prog(
+    contrato_id: int,
+    formato_codigo: str,
+    subsistema: str,
+    acta_id: Optional[int],
+    supervisor: str,
+    on_progress=None,
+    current_user: Optional[dict] = None,
+) -> tuple:
+    """Igual que _build_fo_eo_04_pdf_bytes con reporte de progreso."""
+    cu = current_user if isinstance(current_user, dict) else dict(current_user or {})
+    _html, fname, contrato_numero_raw, pages = _build_fo_eo_04_html(
+        contrato_id,
+        formato_codigo,
+        subsistema,
+        acta_id,
+        supervisor,
+        current_user=cu,
+        preview_ui=False,
+        on_progress=on_progress,
+    )
+    pdf_bytes = _fo_eo_04_pdf_from_pages(pages, on_progress=on_progress)
+    if on_progress:
+        on_progress({"pct": 100, "msg": "¡Listo!"})
     return pdf_bytes, fname, contrato_numero_raw
 
 
@@ -7723,6 +8163,10 @@ def ccd_pdf_job_iniciar(
     if acta_id is not None and _resolver_acta_id_en_contrato(contrato_id, acta_id) is None:
         raise HTTPException(status_code=404, detail="Acta no encontrada en este contrato")
 
+    try:
+        _fo_eo_04_init_pdf_pool()
+    except Exception as pool_exc:
+        _log.warning("fo_eo_04 pool al iniciar job (se usará modo secuencial): %s", pool_exc)
     _pdf_jobs_cleanup()
     job_id = str(_uuid_mod.uuid4())
     with _pdf_jobs_lock:
@@ -7742,6 +8186,11 @@ def ccd_pdf_job_iniciar(
     cu_pdf = current_user if isinstance(current_user, dict) else dict(current_user)
 
     def _run():
+        try:
+            _fo_eo_04_init_pdf_pool()
+        except Exception as pool_exc:
+            _log.warning("fo_eo_04 pool en worker: %s", pool_exc)
+
         def on_progress(d: dict):
             with _pdf_jobs_lock:
                 if job_id in _pdf_jobs:
@@ -7752,21 +8201,31 @@ def ccd_pdf_job_iniciar(
                         "total_items": d.get("total_items"),
                     })
         try:
-            pdf_bytes, fname, _ = _build_fo_eo_04_pdf_bytes_prog(
+            pdf_bytes, fname, contrato_numero = _build_fo_eo_04_pdf_bytes_prog(
                 contrato_id, formato_codigo, subsistema, acta_id, supervisor,
                 on_progress=on_progress,
                 current_user=cu_pdf,
             )
+            pdf_path = _pdf_job_store_pdf(job_id, pdf_bytes)
             with _pdf_jobs_lock:
                 if job_id in _pdf_jobs:
-                    _pdf_jobs[job_id].update({"status": "listo", "pct": 100, "bytes": pdf_bytes, "fname": fname})
+                    _pdf_jobs[job_id].update({
+                        "status": "listo",
+                        "pct": 100,
+                        "bytes": None,
+                        "pdf_path": pdf_path,
+                        "fname": fname,
+                        "contrato_numero": contrato_numero,
+                        "formato_codigo": formato_codigo,
+                        "acta_id": acta_id,
+                    })
         except Exception as exc:
             _log.exception("ccd_pdf_job error job_id=%s", job_id)
             with _pdf_jobs_lock:
                 if job_id in _pdf_jobs:
                     _pdf_jobs[job_id].update({"status": "error", "error": str(exc)})
 
-    t = _threading_mod.Thread(target=_run, daemon=True, name=f"pdf-job-{job_id[:8]}")
+    t = _threading_mod.Thread(target=_run, daemon=False, name=f"pdf-job-{job_id[:8]}")
     t.start()
     return {"job_id": job_id}
 
@@ -7805,12 +8264,97 @@ def ccd_pdf_job_resultado(
         job = dict(_pdf_jobs.get(job_id) or {})
     if not job or job.get("contrato_id") != contrato_id:
         raise HTTPException(status_code=404, detail="Job no encontrado")
-    if job.get("status") != "listo" or not job.get("bytes"):
+    if job.get("status") != "listo":
         raise HTTPException(status_code=409, detail="PDF aún no está listo")
-    return Response(
-        content=job["bytes"],
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="{job.get("fname", "memoria.pdf")}"'},
+    path = job.get("pdf_path")
+    fname = job.get("fname") or "memoria.pdf"
+    if path and _os.path.isfile(path):
+        from fastapi.responses import FileResponse
+
+        return FileResponse(
+            path,
+            media_type="application/pdf",
+            filename=fname,
+            headers={"Content-Disposition": f'inline; filename="{fname}"'},
+        )
+    if job.get("bytes"):
+        return Response(
+            content=job["bytes"],
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{fname}"'},
+        )
+    raise HTTPException(status_code=410, detail="PDF no disponible; genere de nuevo.")
+
+
+@router.get("/{contrato_id}/ccd/pdf-job/{job_id}/con-sello-firma")
+def ccd_pdf_job_con_sello_firma(
+    contrato_id: int,
+    job_id: str,
+    current_user=Depends(_get_user),
+):
+    """Anexa sello al PDF ya generado por el job (sin volver a armar las memorias)."""
+    _perm_informes_ccd(current_user, "ver")
+    with _pdf_jobs_lock:
+        job = dict(_pdf_jobs.get(job_id) or {})
+    if not job or job.get("contrato_id") != contrato_id:
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+    if job.get("status") != "listo":
+        raise HTTPException(
+            status_code=409,
+            detail="Primero genere el PDF del acta; luego podrá descargar la versión con sello.",
+        )
+    fmt = str(job.get("formato_codigo") or "FO-IDU-EO-04-V2")
+    acta_ref = job.get("acta_id")
+    titulo = f"Memoria de cálculo {fmt}" + (f" — Acta {acta_ref}" if acta_ref else "")
+    return _attachment_pdf_con_pagina_sello_usuario(
+        _pdf_job_read_bytes(job),
+        current_user,
+        titulo_doc=titulo,
+        formato_ccd=fmt,
+        contrato_numero=str(job.get("contrato_numero") or ""),
+        nombre_archivo_pdf=str(job.get("fname") or "memoria.pdf"),
+    )
+
+
+@router.get("/{contrato_id}/ccd/fo-eo-04/preview-html")
+def ccd_fo_eo_04_preview_html(
+    contrato_id: int,
+    subsistema: str = "vial",
+    acta_id: Optional[int] = None,
+    supervisor: str = "",
+    formato_codigo: str = "FO-IDU-EO-04-V2",
+    current_user=Depends(_get_user),
+):
+    """Vista previa HTML del acta (todas las páginas). Botones de rotación no van al PDF."""
+    _perm_informes_ccd(current_user, "ver")
+    if formato_codigo not in FORMATOS_CCD:
+        raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
+    meta = FORMATOS_CCD[formato_codigo]
+    if meta.get("plantilla_html") != "idu_memoria_fo_eo_04_v2":
+        raise HTTPException(status_code=404, detail="Vista previa HTML no disponible para este formato")
+    if acta_id is not None and _resolver_acta_id_en_contrato(contrato_id, acta_id) is None:
+        raise HTTPException(status_code=404, detail="Acta no encontrada en este contrato")
+    cu = current_user if isinstance(current_user, dict) else dict(current_user)
+    acta_norm = _resolver_acta_id_en_contrato(contrato_id, acta_id) if acta_id is not None else None
+    try:
+        html, _, _, _pages = _build_fo_eo_04_html(
+            contrato_id,
+            formato_codigo,
+            subsistema,
+            acta_id,
+            supervisor,
+            current_user=cu,
+            preview_ui=True,
+        )
+    except ValueError as ex:
+        raise HTTPException(status_code=404, detail=str(ex)) from ex
+    n_items = 0
+    if acta_norm:
+        n_items = len(_fetch_items_n3_acta(int(acta_norm), int(contrato_id)))
+    return HTMLResponse(
+        content=_fo_eo_04_html_embed_fragment(html),
+        media_type="text/html; charset=utf-8",
+        headers={"X-CC-Fo-Eo-04-Items": str(n_items)},
     )
 
 
@@ -7932,12 +8476,27 @@ def preview_corte_sub():
 
 # ── Utilidades ─────────────────────────────────────────────────────────────────
 
+_TO_PDF_LOCK = threading.Lock()
+
+
 def _to_pdf(html: str) -> bytes:
     """Genera PDF. xhtml2pdf a veces marca `err` por advertencias aun con salida válida."""
+    with _TO_PDF_LOCK:
+        return _to_pdf_unlocked(html)
+
+
+def _to_pdf_unlocked(html: str) -> bytes:
+    from fo_eo_04_pdf_worker import _pdf_link_callback
+
     buf = io.BytesIO()
     # StringIO + caracteres raros en Windows puede fallar; UTF-8 explícito reduce errores 500.
     src = io.BytesIO(html.encode("utf-8", errors="replace"))
-    result = pisa.CreatePDF(src, dest=buf, encoding="utf-8")
+    result = pisa.CreatePDF(
+        src,
+        dest=buf,
+        encoding="utf-8",
+        link_callback=_pdf_link_callback,
+    )
     buf.seek(0)
     out = buf.read()
     if not out:

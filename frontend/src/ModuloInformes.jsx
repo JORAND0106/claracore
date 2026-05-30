@@ -10,6 +10,15 @@ const FS = {
 
 const _fmtCopEs = (n) =>
   n == null || n === '' || (typeof n === 'number' && !Number.isFinite(n)) ? '—' : formatCOP(n)
+
+/** Tiempo transcurrido en esperas largas (informes / gerencia / FO-EO-04). */
+function formatTiempoEsperaInformes(seg) {
+  const s = Math.max(0, Math.round(Number(seg) || 0))
+  if (s < 60) return `${s} s`
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return `${m}:${String(r).padStart(2, '0')} min`
+}
 const _fmtPctAiuIva = (frac) => {
   if (frac == null || frac === '' || !Number.isFinite(Number(frac))) return '—'
   const f = Number(frac)
@@ -555,6 +564,13 @@ export default function ModuloInformes({
   const [foEo04Job, setFoEo04Job] = useState(null)
   // { id, status, pct, msg, currentItem, totalItems, pdfUrl, error }
   const foEo04JobPollRef = useRef(null)
+  const foEo04TimerRef = useRef(null)
+  const [foEo04LastJobId, setFoEo04LastJobId] = useState(null)
+  const [foEo04OrientarModal, setFoEo04OrientarModal] = useState(false)
+  const [foEo04OrientarIdx, setFoEo04OrientarIdx] = useState(0)
+  const [fotosActaFoEo04, setFotosActaFoEo04] = useState([])
+  const [fotosActaFoEo04Cargando, setFotosActaFoEo04Cargando] = useState(false)
+  const [rotandoImagenFoEo04, setRotandoImagenFoEo04] = useState(null)
   const [formatoMes001Abierto, setFormatoMes001Abierto] = useState(false)
   const [formatoMes002Abierto, setFormatoMes002Abierto] = useState(false)
   /** CC-MES-002: filas por ítem; recogido por defecto (mismo criterio que CC-SUB/CC-SEM). */
@@ -1055,6 +1071,109 @@ export default function ModuloInformes({
     return () => { cancelled = true }
   }, [contratoId, actaIdFoEo04])
 
+  const imagenesUnicasFoEo04 = (() => {
+    const out = []
+    const seenF = new Set()
+    const seenG = new Set()
+    for (const row of fotosActaFoEo04) {
+      if (row.foto_numero != null && row.foto_url && !seenF.has(row.foto_numero)) {
+        seenF.add(row.foto_numero)
+        out.push({
+          tipo: 'foto',
+          numero: row.foto_numero,
+          url: row.foto_url,
+          etiqueta: row.item_descripcion || `Foto #${row.foto_numero}`,
+        })
+      }
+      if (row.grafico_numero != null && row.grafico_url && !seenG.has(row.grafico_numero)) {
+        seenG.add(row.grafico_numero)
+        out.push({
+          tipo: 'grafico',
+          numero: row.grafico_numero,
+          url: row.grafico_url,
+          etiqueta: row.item_descripcion || `Gráfico #${row.grafico_numero}`,
+        })
+      }
+    }
+    return out
+  })()
+
+  useEffect(() => {
+    if (foEo04OrientarIdx >= imagenesUnicasFoEo04.length && imagenesUnicasFoEo04.length > 0) {
+      setFoEo04OrientarIdx(0)
+    }
+  }, [imagenesUnicasFoEo04.length, foEo04OrientarIdx])
+
+  const imagenFoEo04Activa = imagenesUnicasFoEo04[foEo04OrientarIdx] || null
+
+  const rotarImagenFoEo04 = async (numero, tipo = 'foto') => {
+    if (contratoId == null || !numero || rotandoImagenFoEo04) return
+    const authToken = getAuthToken()
+    if (!authToken) return
+    const key = `${tipo}-${numero}`
+    setRotandoImagenFoEo04(key)
+    try {
+      const path =
+        tipo === 'grafico'
+          ? `/sicoe-obra/${contratoId}/graficos/${numero}/rotar`
+          : `/sicoe-obra/${contratoId}/fotos/${numero}/rotar`
+      const r = await fetchConFallback(path, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ angle: 90 }),
+      })
+      if (!r.ok) throw new Error(await leerErrorRespuesta(r))
+      const data = await r.json().catch(() => ({}))
+      const urlKey = tipo === 'grafico' ? 'grafico_url' : 'foto_url'
+      const nuevaUrl = (data.url || '').trim()
+      const urlConCache = nuevaUrl
+        ? `${nuevaUrl}${nuevaUrl.includes('?') ? '&' : '?'}_cc=${Date.now()}`
+        : ''
+      setFotosActaFoEo04((prev) =>
+        prev.map((row) => {
+          const n = tipo === 'grafico' ? row.grafico_numero : row.foto_numero
+          return n === numero
+            ? { ...row, [urlKey]: urlConCache || row[urlKey] }
+            : row
+        }),
+      )
+      setFoEo04LastJobId(null)
+    } catch (e) {
+      setError(e?.message || 'No se pudo rotar la imagen.')
+    } finally {
+      setRotandoImagenFoEo04(null)
+    }
+  }
+
+  useEffect(() => {
+    setFoEo04LastJobId(null)
+  }, [contratoId, actaIdFoEo04, subsistemaFoEo04, supervisorFoEo04])
+
+  useEffect(() => {
+    if (contratoId == null || contratoId === '' || !actaIdFoEo04) {
+      setFotosActaFoEo04([])
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) return
+    let cancelled = false
+    setFotosActaFoEo04Cargando(true)
+    fetchConFallback(
+      `/informes/${contratoId}/ccd/fo-eo-04/fotos-acta?acta_id=${encodeURIComponent(actaIdFoEo04)}`,
+      { headers: { Authorization: `Bearer ${authToken}` } },
+    )
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows) => {
+        if (!cancelled) setFotosActaFoEo04(Array.isArray(rows) ? rows : [])
+      })
+      .catch(() => { if (!cancelled) setFotosActaFoEo04([]) })
+      .finally(() => { if (!cancelled) setFotosActaFoEo04Cargando(false) })
+    return () => { cancelled = true }
+  }, [contratoId, actaIdFoEo04])
+
   useEffect(() => {
     if (contratoId == null || contratoId === '') {
       setGerAutoActaId(null)
@@ -1207,7 +1326,26 @@ export default function ModuloInformes({
       .finally(() => setCargandoIt(false))
   }
 
+  function detenerTimerFoEo04() {
+    if (foEo04TimerRef.current) {
+      clearInterval(foEo04TimerRef.current)
+      foEo04TimerRef.current = null
+    }
+  }
+
+  function iniciarTimerFoEo04() {
+    detenerTimerFoEo04()
+    const t0 = Date.now()
+    foEo04TimerRef.current = setInterval(() => {
+      const seg = Math.round((Date.now() - t0) / 1000)
+      setVistaPrevia((prev) =>
+        prev?.fase === 'progreso' && prev?.tipo === 'idu-plantilla-vacia' ? { ...prev, seg } : prev,
+      )
+    }, 1000)
+  }
+
   function cerrarVistaPrevia() {
+    detenerTimerFoEo04()
     setVistaPrevia((prev) => {
       if (prev?.pdfUrl) {
         try {
@@ -2446,16 +2584,19 @@ export default function ModuloInformes({
       return
     }
 
-    // Limpiar job anterior y su poll
+    // Limpiar job anterior, poll y cronómetro
     if (foEo04JobPollRef.current) {
       clearTimeout(foEo04JobPollRef.current)
       foEo04JobPollRef.current = null
     }
+    detenerTimerFoEo04()
     if (vistaPrevia?.pdfUrl) {
       try { URL.revokeObjectURL(vistaPrevia.pdfUrl) } catch { /* noop */ }
     }
-    setVistaPrevia({ fase: 'progreso', tipo: 'idu-plantilla-vacia' })
-    setFoEo04Job({ id: null, status: 'iniciando', pct: 0, msg: 'Iniciando…', currentItem: null, totalItems: null })
+    setFoEo04LastJobId(null)
+    setVistaPrevia({ fase: 'progreso', tipo: 'idu-plantilla-vacia', seg: 0 })
+    iniciarTimerFoEo04()
+    setFoEo04Job({ id: null, status: 'iniciando', msg: 'Iniciando…', currentItem: null, totalItems: null })
     setError(null)
 
     try {
@@ -2469,6 +2610,7 @@ export default function ModuloInformes({
         { method: 'POST', headers: { Authorization: `Bearer ${authToken}` } }
       )
       if (!rInit.ok) {
+        detenerTimerFoEo04()
         const msg = await leerErrorRespuesta(rInit)
         setVistaPrevia({ fase: 'error', tipo: 'idu-plantilla-vacia', mensaje: msg })
         setFoEo04Job(null)
@@ -2497,13 +2639,18 @@ export default function ModuloInformes({
           if (estado.status === 'listo') {
             done = true
             foEo04JobPollRef.current = null
-            // Actualizar progreso a 100% antes de descargar
-            setFoEo04Job((prev) => ({ ...prev, status: 'listo', pct: 100, currentItem: estado.total_items, totalItems: estado.total_items }))
-            // Descargar PDF
+            setFoEo04Job((prev) => ({
+              ...prev,
+              status: 'listo',
+              msg: 'Preparando descarga del PDF…',
+              currentItem: estado.total_items,
+              totalItems: estado.total_items,
+            }))
             const rPdf = await fetchConFallback(
               `/informes/${contratoId}/ccd/pdf-job/${job_id}/pdf`,
               { headers: { Authorization: `Bearer ${authToken}` } }
             )
+            detenerTimerFoEo04()
             if (!rPdf.ok) {
               setVistaPrevia({ fase: 'error', tipo: 'idu-plantilla-vacia', mensaje: await leerErrorRespuesta(rPdf) })
               setFoEo04Job(null)
@@ -2511,20 +2658,19 @@ export default function ModuloInformes({
             }
             const blob = await rPdf.blob()
             const pdfUrl = URL.createObjectURL(blob)
-            // Una sola actualización de estado → sin parpadeo
+            setFoEo04LastJobId(job_id)
             setFoEo04Job(null)
             setVistaPrevia({ fase: 'ok', tipo: 'idu-plantilla-vacia-pdf', pdfUrl })
           } else if (estado.status === 'error') {
             done = true
             foEo04JobPollRef.current = null
+            detenerTimerFoEo04()
             setVistaPrevia({ fase: 'error', tipo: 'idu-plantilla-vacia', mensaje: estado.error || 'Error al generar el PDF.' })
             setFoEo04Job(null)
           } else {
-            // Aún en progreso — actualizar y programar siguiente poll
             setFoEo04Job((prev) => ({
               ...prev,
               status: estado.status,
-              pct: estado.pct ?? prev?.pct ?? 0,
               msg: estado.msg ?? prev?.msg ?? '',
               currentItem: estado.current_item ?? null,
               totalItems: estado.total_items ?? null,
@@ -2539,6 +2685,7 @@ export default function ModuloInformes({
       foEo04JobPollRef.current = setTimeout(poll, 800)
     } catch (e) {
       if (foEo04JobPollRef.current) { clearTimeout(foEo04JobPollRef.current); foEo04JobPollRef.current = null }
+      detenerTimerFoEo04()
       setVistaPrevia({ fase: 'error', tipo: 'idu-plantilla-vacia', mensaje: String(e?.message || e) })
       setFoEo04Job(null)
     }
@@ -2812,38 +2959,9 @@ export default function ModuloInformes({
                 {abierto && (
                 <div style={{ padding: '12px', borderTop: `1px solid ${t.border}` }}>
                 {fmt.codigo === 'FO-IDU-EO-04-V2' && (
-                  <div style={{ marginBottom: '12px' }}>
-                    <button
-                      type="button"
-                      onClick={() => abrirPreviewPlantillaVacia(fmt.codigo)}
-                      disabled={
-                        vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-plantilla-vacia'
-                      }
-                      style={{
-                        padding: '8px 14px',
-                        borderRadius: '8px',
-                        border: `1px solid ${t.border}`,
-                        background: t.bgCard,
-                        color: t.text,
-                        fontWeight: '700',
-                        fontSize: Math.max(12, f.sub) + 'px',
-                        cursor:
-                          vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-plantilla-vacia'
-                            ? 'wait'
-                            : 'pointer',
-                        opacity:
-                          vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-plantilla-vacia'
-                            ? 0.75
-                            : 1,
-                      }}
-                    >
-                      {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-plantilla-vacia'
-                        ? 'Generando vista previa…'
-                        : 'Vista previa plantilla vacía (PDF)'}
-                    </button>
-                    <div style={{ fontSize: '10px', color: t.textMuted, marginTop: '6px', lineHeight: 1.4 }}>
-                      Misma vista previa en modal que en «Formatos Entidades Externas» (abajo).
-                    </div>
+                  <div style={{ marginBottom: '12px', fontSize: '10px', color: t.textMuted, lineHeight: 1.4 }}>
+                    Vista previa y generación del PDF del acta: use el bloque «Formatos Entidades Externas» más abajo
+                    (acta RPO + botón de lupa).
                   </div>
                 )}
 
@@ -5024,6 +5142,38 @@ export default function ModuloInformes({
                         ))}
                       </select>
                     </div>
+                    {actaIdFoEo04 ? (
+                      <div style={{ width: '100%', maxWidth: '520px', marginTop: '4px' }}>
+                        <button
+                          type="button"
+                          disabled={fotosActaFoEo04Cargando || imagenesUnicasFoEo04.length === 0}
+                          onClick={() => {
+                            setFoEo04OrientarIdx(0)
+                            setFoEo04OrientarModal(true)
+                          }}
+                          style={{
+                            fontSize: ui.hint + 'px',
+                            fontWeight: '700',
+                            color: t.primary,
+                            background: t.bgCard,
+                            border: `1px solid ${t.border}`,
+                            borderRadius: '8px',
+                            cursor: fotosActaFoEo04Cargando || imagenesUnicasFoEo04.length === 0 ? 'not-allowed' : 'pointer',
+                            padding: '8px 14px',
+                            opacity: fotosActaFoEo04Cargando || imagenesUnicasFoEo04.length === 0 ? 0.55 : 1,
+                          }}
+                          title={
+                            imagenesUnicasFoEo04.length === 0
+                              ? 'Este acta no tiene fotos ni gráficos'
+                              : 'Abrir visor para girar imágenes antes del PDF'
+                          }
+                        >
+                          {fotosActaFoEo04Cargando
+                            ? 'Cargando imágenes…'
+                            : `🖼 Orientar fotos y gráficos (${imagenesUnicasFoEo04.length})`}
+                        </button>
+                      </div>
+                    ) : null}
                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', justifyContent: 'flex-end' }}>
                   {actaIdFoEo04 && (() => {
                     const raw = firmasCcd['FO-IDU-EO-04-V2']
@@ -5057,11 +5207,11 @@ export default function ModuloInformes({
                       </div>
                     )
                   })()}
-                  {/* Botón: vista previa con progreso */}
+                  {/* Generar PDF del acta (una sola espera; al terminar se muestra el documento) */}
                   <button
                     type="button"
                     style={btnCcdToolbar(
-                      ['cargando','progreso'].includes(vistaPrevia?.fase) && vistaPrevia?.tipo === 'idu-plantilla-vacia',
+                      ['cargando', 'progreso'].includes(vistaPrevia?.fase) && vistaPrevia?.tipo === 'idu-plantilla-vacia',
                       'vista'
                     )}
                     onClick={abrirPreviewFoEo04ConProgreso}
@@ -5069,18 +5219,18 @@ export default function ModuloInformes({
                       !supervisorFoEo04.trim() ||
                       !actaIdFoEo04 ||
                       (cargandoSub && actasConc.length === 0) ||
-                      (['cargando','progreso'].includes(vistaPrevia?.fase) && vistaPrevia?.tipo === 'idu-plantilla-vacia')
+                      (['cargando', 'progreso'].includes(vistaPrevia?.fase) && vistaPrevia?.tipo === 'idu-plantilla-vacia')
                     }
                     title={
                       !supervisorFoEo04.trim()
                         ? 'Ingrese el nombre del supervisor(a) para continuar'
                         : !actaIdFoEo04
                           ? 'Seleccione un acta RPO'
-                          : 'Vista previa PDF'
+                          : 'Generar PDF de todas las memorias del acta (puede tardar varios minutos)'
                     }
-                    aria-label="Vista previa FO-IDU-EO-04-V2"
+                    aria-label="Generar PDF FO-IDU-EO-04-V2"
                   >
-                    {['cargando','progreso'].includes(vistaPrevia?.fase) && vistaPrevia?.tipo === 'idu-plantilla-vacia' ? (
+                    {['cargando', 'progreso'].includes(vistaPrevia?.fase) && vistaPrevia?.tipo === 'idu-plantilla-vacia' ? (
                       <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                     ) : (
                       <IconoVistaPrevia size={ui.iconSvg} />
@@ -5091,6 +5241,13 @@ export default function ModuloInformes({
                     type="button"
                     style={btnCcdToolbar(concPdfBusy, 'pdf')}
                     onClick={() => {
+                      if (foEo04LastJobId) {
+                        descargarPdfConc(
+                          `/informes/${contratoId}/ccd/pdf-job/${foEo04LastJobId}/con-sello-firma`,
+                          'FO-IDU-EO-04-V2-sello.pdf',
+                        )
+                        return
+                      }
                       const qs = new URLSearchParams({
                         subsistema: subsistemaFoEo04 || 'vial',
                         supervisor: supervisorFoEo04.trim(),
@@ -5098,7 +5255,7 @@ export default function ModuloInformes({
                       }).toString()
                       descargarPdfConc(
                         `/informes/${contratoId}/ccd/preview-plantilla-vacia/FO-IDU-EO-04-V2/con-sello-firma?${qs}`,
-                        'FO-IDU-EO-04-V2.pdf'
+                        'FO-IDU-EO-04-V2.pdf',
                       )
                     }}
                     disabled={!supervisorFoEo04.trim() || !actaIdFoEo04 || concPdfBusy}
@@ -5107,7 +5264,9 @@ export default function ModuloInformes({
                         ? 'Ingrese el nombre del supervisor(a) para continuar'
                         : !actaIdFoEo04
                           ? 'Seleccione un acta RPO'
-                          : 'Descargar PDF con página de sello (firma del perfil, fecha, huella SHA-256)'
+                          : foEo04LastJobId
+                            ? 'Añadir sello al PDF ya generado (rápido; no vuelve a crear las memorias)'
+                            : 'Genera primero el PDF con la lupa; si no, vuelve a crear todo el acta (lento)'
                     }
                     aria-label="Descargar PDF FO-IDU-EO-04-V2 con sello"
                   >
@@ -5138,6 +5297,239 @@ export default function ModuloInformes({
           </>
         )}
       </div>
+
+      {/* Modal orientar fotos FO-EO-04 (visor grande + carrete, antes del PDF) */}
+      {foEo04OrientarModal && actaIdFoEo04 && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Orientar fotos y gráficos del acta"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 99998,
+            background: 'rgba(15, 23, 42, 0.78)',
+            backdropFilter: 'blur(2px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '8px',
+            boxSizing: 'border-box',
+          }}
+          onClick={() => setFoEo04OrientarModal(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 'min(100%, 1400px)',
+              height: 'min(98vh, 1800px)',
+              maxHeight: '98vh',
+              display: 'flex',
+              flexDirection: 'column',
+              backgroundColor: '#ffffff',
+              color: '#0f172a',
+              borderRadius: '14px',
+              border: '1px solid #e2e8f0',
+              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.35)',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'flex-start',
+                gap: '12px',
+                padding: '14px 18px',
+                borderBottom: '1px solid #e2e8f0',
+                flexShrink: 0,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: f.title - 2 + 'px', fontWeight: '800' }}>Orientar fotos y gráficos</div>
+                <div style={{ fontSize: f.sub + 'px', color: '#64748b', marginTop: '4px', lineHeight: 1.4 }}>
+                  Fotos de ítems con validación de interventoría (sellado en el nivel máximo del contrato), los mismos que van al PDF. Gire y luego use la lupa.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFoEo04OrientarModal(false)}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: '8px',
+                  border: '1px solid #cbd5e1',
+                  background: '#f8fafc',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                }}
+              >
+                Cerrar
+              </button>
+            </div>
+            {imagenFoEo04Activa ? (
+              <>
+                <div
+                  style={{
+                    flex: 1,
+                    minHeight: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '16px 24px',
+                    background: '#f1f5f9',
+                    position: 'relative',
+                  }}
+                >
+                  <button
+                    type="button"
+                    disabled={foEo04OrientarIdx <= 0}
+                    onClick={() => setFoEo04OrientarIdx((i) => Math.max(0, i - 1))}
+                    aria-label="Imagen anterior"
+                    style={{
+                      position: 'absolute',
+                      left: '12px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      width: '40px',
+                      height: '40px',
+                      borderRadius: '50%',
+                      border: '1px solid #cbd5e1',
+                      background: '#fff',
+                      cursor: foEo04OrientarIdx <= 0 ? 'not-allowed' : 'pointer',
+                      opacity: foEo04OrientarIdx <= 0 ? 0.4 : 1,
+                      fontSize: '18px',
+                    }}
+                  >
+                    ‹
+                  </button>
+                  <img
+                    key={`${imagenFoEo04Activa.tipo}-${imagenFoEo04Activa.numero}-${imagenFoEo04Activa.url}`}
+                    src={imagenFoEo04Activa.url}
+                    alt=""
+                    style={{
+                      maxWidth: '100%',
+                      maxHeight: '100%',
+                      objectFit: 'contain',
+                      boxShadow: '0 4px 24px rgba(0,0,0,0.12)',
+                    }}
+                  />
+                  <button
+                    type="button"
+                    disabled={foEo04OrientarIdx >= imagenesUnicasFoEo04.length - 1}
+                    onClick={() =>
+                      setFoEo04OrientarIdx((i) => Math.min(imagenesUnicasFoEo04.length - 1, i + 1))
+                    }
+                    aria-label="Imagen siguiente"
+                    style={{
+                      position: 'absolute',
+                      right: '12px',
+                      top: '50%',
+                      transform: 'translateY(-50%)',
+                      width: '40px',
+                      height: '40px',
+                      borderRadius: '50%',
+                      border: '1px solid #cbd5e1',
+                      background: '#fff',
+                      cursor:
+                        foEo04OrientarIdx >= imagenesUnicasFoEo04.length - 1 ? 'not-allowed' : 'pointer',
+                      opacity: foEo04OrientarIdx >= imagenesUnicasFoEo04.length - 1 ? 0.4 : 1,
+                      fontSize: '18px',
+                    }}
+                  >
+                    ›
+                  </button>
+                </div>
+                <div
+                  style={{
+                    flexShrink: 0,
+                    padding: '12px 18px 16px',
+                    borderTop: '1px solid #e2e8f0',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                    <span style={{ fontSize: f.sub + 'px', fontWeight: '700', color: '#0f172a' }}>
+                      {imagenFoEo04Activa.etiqueta || (imagenFoEo04Activa.tipo === 'grafico'
+                        ? `Gráfico #${imagenFoEo04Activa.numero}`
+                        : `Foto #${imagenFoEo04Activa.numero}`)}
+                      {' · '}
+                      {foEo04OrientarIdx + 1} / {imagenesUnicasFoEo04.length}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={rotandoImagenFoEo04 === `${imagenFoEo04Activa.tipo}-${imagenFoEo04Activa.numero}`}
+                      onClick={() => rotarImagenFoEo04(imagenFoEo04Activa.numero, imagenFoEo04Activa.tipo)}
+                      style={{
+                        padding: '10px 20px',
+                        borderRadius: '8px',
+                        border: 'none',
+                        background: 'linear-gradient(90deg,#4f46e5,#6366f1)',
+                        color: '#fff',
+                        fontWeight: '800',
+                        fontSize: f.sub + 'px',
+                        cursor: 'pointer',
+                        opacity:
+                          rotandoImagenFoEo04 === `${imagenFoEo04Activa.tipo}-${imagenFoEo04Activa.numero}`
+                            ? 0.65
+                            : 1,
+                      }}
+                    >
+                      {rotandoImagenFoEo04 === `${imagenFoEo04Activa.tipo}-${imagenFoEo04Activa.numero}`
+                        ? 'Girando…'
+                        : '↻ Girar 90° (guarda en el acta)'}
+                    </button>
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: '8px',
+                      overflowX: 'auto',
+                      paddingBottom: '4px',
+                    }}
+                  >
+                    {imagenesUnicasFoEo04.map((row, idx) => {
+                      const activa = idx === foEo04OrientarIdx
+                      const rotKey = `${row.tipo}-${row.numero}`
+                      return (
+                        <button
+                          key={rotKey}
+                          type="button"
+                          onClick={() => setFoEo04OrientarIdx(idx)}
+                          style={{
+                            flexShrink: 0,
+                            width: '72px',
+                            padding: 0,
+                            border: activa ? '2px solid #4f46e5' : '1px solid #cbd5e1',
+                            borderRadius: '8px',
+                            overflow: 'hidden',
+                            background: '#fff',
+                            cursor: 'pointer',
+                            boxShadow: activa ? '0 0 0 2px rgba(79,70,229,0.25)' : 'none',
+                          }}
+                        >
+                          <div style={{ height: '56px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8fafc' }}>
+                            <img src={row.url} alt="" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+                          </div>
+                          <div style={{ fontSize: '9px', padding: '2px 4px', color: '#64748b', fontWeight: activa ? '800' : '600' }}>
+                            {row.tipo === 'grafico' ? `G#${row.numero}` : `F#${row.numero}`}
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b' }}>
+                Sin imágenes en este acta.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Modal: vista previa = PDF embebido (misma ruta que descarga el backend).
           Fondos opacos fijos: en producción t.bgCard/t.bg pueden ser transparentes y el modal se mezcla con la página. */}
@@ -5216,16 +5608,22 @@ export default function ModuloInformes({
                     if (tp === 'memoria' || tp === 'memoria-pdf') {
                       return `Vista previa · CC-SUB-002 (PDF) · ${vistaPrevia.itemNumero || ''}`
                     }
+                    if (tp === 'idu-plantilla-vacia' && vistaPrevia.fase === 'progreso') {
+                      return 'Generando PDF · FO-IDU-EO-04-V2'
+                    }
                     if (tp === 'idu-plantilla-vacia' || tp === 'idu-plantilla-vacia-pdf') {
-                      return 'Vista previa · FO-IDU-EO-04-V2 · plantilla vacía (PDF)'
+                      return 'FO-IDU-EO-04-V2 · Memorias del acta (PDF)'
                     }
                     return 'Vista previa · PDF'
                   })()}
                 </div>
                 <div style={{ fontSize: f.sub + 'px', color: '#64748b', marginTop: '4px' }}>
-                  Mismo formato PDF que genera el sistema. Puedes usar el menú del visor del navegador para imprimir o guardar.
+                  {vistaPrevia.fase === 'progreso' && vistaPrevia.tipo === 'idu-plantilla-vacia'
+                    ? 'Espere mientras termina la generación (el reloj de arena cuenta el tiempo transcurrido).'
+                    : 'Documento final. Imprimir o guardar desde el visor del navegador. El sello SHA se descarga aparte (rápido si ya generó el PDF).'}
                 </div>
               </div>
+              <div style={{ display: 'flex', gap: '8px', flexShrink: 0, alignItems: 'center' }}>
               <button
                 type="button"
                 onClick={cerrarVistaPrevia}
@@ -5243,6 +5641,7 @@ export default function ModuloInformes({
               >
                 Cerrar
               </button>
+              </div>
             </div>
 
             {vistaPrevia.fase === 'cargando' && (
@@ -5265,23 +5664,18 @@ export default function ModuloInformes({
               </div>
             )}
 
-            {vistaPrevia.fase === 'progreso' && (() => {
+            {vistaPrevia.fase === 'progreso' && (foEo04Job || vistaPrevia.tipo === 'idu-plantilla-vacia') && (() => {
               const job = foEo04Job || {}
-              const pct = Math.min(Math.max(job.pct || 0, 0), 100)
+              const seg = vistaPrevia.seg ?? 0
               const curr = job.currentItem
-              const tot  = job.totalItems
-              // Etiqueta de fase estable (no cambia con cada ítem)
-              const totN = typeof tot === 'number' ? tot : 0
+              const tot = job.totalItems
               const msgBackend = String(job.msg || '').trim()
-              const fase = pct < 30
-                ? 'Consultando información del acta…'
-                : pct < 55
-                ? 'Calculando cantidades…'
-                : pct < 76
-                ? `Generando ítem${tot ? ` (${curr || '…'} de ${tot})` : '…'}`
-                : pct < 100
-                ? (msgBackend || (tot ? `Renderizando PDF (${totN} ítems)…` : 'Renderizando PDF…'))
-                : '¡Listo!'
+              const detalleItem =
+                typeof curr === 'number' && typeof tot === 'number' && tot > 0
+                  ? `Ítem ${curr} de ${tot}`
+                  : typeof tot === 'number' && tot > 0
+                    ? `${tot} memorias en el acta`
+                    : null
               return (
                 <div style={{
                   flex: 1,
@@ -5290,51 +5684,31 @@ export default function ModuloInformes({
                   alignItems: 'center',
                   justifyContent: 'center',
                   padding: '48px 32px',
-                  gap: '20px',
+                  gap: '16px',
                 }}>
-                  {/* Ícono */}
-                  <div style={{ fontSize: '44px', lineHeight: 1, userSelect: 'none' }}>📄</div>
-
-                  {/* Título estable */}
+                  <div style={{ fontSize: '48px', lineHeight: 1, userSelect: 'none' }} aria-hidden>
+                    ⏳
+                  </div>
                   <div style={{ fontWeight: '700', fontSize: (f.body + 2) + 'px', color: '#1e293b', textAlign: 'center' }}>
                     Generando memorias de cálculo
                   </div>
-
-                  {/* Barra de progreso */}
-                  <div style={{ width: '100%', maxWidth: '520px' }}>
-                    <div style={{
-                      width: '100%',
-                      height: '12px',
-                      backgroundColor: '#e2e8f0',
-                      borderRadius: '99px',
-                      overflow: 'hidden',
-                    }}>
-                      <div style={{
-                        height: '100%',
-                        width: `${pct}%`,
-                        backgroundColor: pct >= 100 ? '#16a34a' : '#3b82f6',
-                        borderRadius: '99px',
-                        transition: 'width 0.8s ease',
-                      }} />
-                    </div>
-                    <div style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      marginTop: '6px',
-                      fontSize: f.sub + 'px',
-                      color: '#64748b',
-                    }}>
-                      <span style={pct >= 76 ? { whiteSpace: 'pre-line' } : undefined}>{fase}</span>
-                      <span style={{ fontWeight: '600', color: '#1e293b' }}>{pct}%</span>
-                    </div>
+                  <div style={{ fontSize: (f.title - 4) + 'px', fontWeight: '800', color: '#1e40af', fontVariantNumeric: 'tabular-nums' }}>
+                    {formatTiempoEsperaInformes(seg)}
                   </div>
-
-                  {/* Nota solo si hay muchos ítems */}
-                  {(tot || 0) > 20 && (
-                    <div style={{ fontSize: (f.sub - 1) + 'px', color: '#94a3b8', textAlign: 'center', maxWidth: '400px' }}>
-                      Por favor espere sin cerrar esta ventana.
+                  {msgBackend ? (
+                    <div style={{ fontSize: f.body + 'px', color: '#475569', textAlign: 'center', maxWidth: '480px', lineHeight: 1.45 }}>
+                      {msgBackend}
                     </div>
-                  )}
+                  ) : null}
+                  {detalleItem ? (
+                    <div style={{ fontSize: f.sub + 'px', color: '#64748b', fontWeight: '600' }}>
+                      {detalleItem}
+                    </div>
+                  ) : null}
+                  <div style={{ fontSize: (f.sub - 1) + 'px', color: '#94a3b8', textAlign: 'center', maxWidth: '420px', lineHeight: 1.45 }}>
+                    El proceso sigue en curso aunque el porcentaje no avance de inmediato al renderizar el PDF.
+                    No cierre esta ventana.
+                  </div>
                 </div>
               )
             })()}

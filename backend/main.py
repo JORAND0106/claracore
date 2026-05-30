@@ -1125,6 +1125,46 @@ def _logs_pgrst_unknown_column(err: Exception) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _error_es_columna_reversion_arm(ex: Exception) -> bool:
+    """Columnas reversion_arm_* ausentes o caché PostgREST sin recargar tras migración."""
+    text = str(ex)
+    low = text.lower()
+    if "reversion_arm" in low:
+        return True
+    col = _logs_pgrst_unknown_column(ex)
+    return bool(col and "reversion_arm" in col)
+
+
+def _http_reversion_doble_llave_db_error(ex: Exception) -> HTTPException:
+    """Mensaje accionable: migración SQL y/o recargar esquema API en Supabase."""
+    if _error_es_columna_reversion_arm(ex):
+        return HTTPException(
+            status_code=503,
+            detail=(
+                "Base de datos: ejecute en Supabase (SQL Editor), en este orden: "
+                "1) reversion_n3_doble_llave_so_registros.sql "
+                "2) alter_so_registro_comentarios_tipo_reversion_doble_llave.sql. "
+                "Si ya las ejecutó, vaya a Configuración del proyecto → API → «Reload schema» "
+                "(o ejecute NOTIFY pgrst, 'reload schema';) y reintente."
+            ),
+        )
+    low = str(ex).lower()
+    if "so_registro_comentarios_tipo_check" in low or (
+        "23514" in low and "tipo" in low and "comentario" in low
+    ):
+        return HTTPException(
+            status_code=503,
+            detail=(
+                "Falta ejecutar alter_so_registro_comentarios_tipo_reversion_doble_llave.sql "
+                "en Supabase (tipos de comentario de reversión)."
+            ),
+        )
+    return HTTPException(
+        status_code=500,
+        detail=f"No se pudo guardar la reversión: {str(ex)[:500]}",
+    )
+
+
 def _logs_insert_row(row: Dict[str, Any]) -> bool:
     """Inserta en logs; omite columnas desconocidas y las guarda en caché para no penalizar cada request."""
     payload = dict(row)
@@ -15476,6 +15516,207 @@ async def upload_grafico(contrato_id: int, file: UploadFile = File(...), numero:
     )
     return {"url": result["secure_url"], "numero": numero}
 
+
+class RotarImagenSicoeBody(BaseModel):
+    angle: int = 90
+
+
+def _sicoe_url_con_version(url: str) -> str:
+    if not url or not str(url).strip():
+        return url
+    base = str(url).strip().split("?", 1)[0]
+    return f"{base}?v={int(time.time())}"
+
+
+def _sicoe_descargar_imagen_bytes(url: str, timeout: float = 60.0) -> bytes:
+    r = httpx.get(url, timeout=timeout, follow_redirects=True)
+    r.raise_for_status()
+    return r.content
+
+
+def _sicoe_rotar_imagen_bytes(data: bytes, angle: int) -> bytes:
+    from PIL import Image
+
+    a = int(angle)
+    if a in (-90, 270):
+        pil_angle = 90
+    elif a == 180:
+        pil_angle = 180
+    elif a in (90, -270):
+        pil_angle = -90
+    else:
+        pil_angle = -a
+    img = Image.open(io.BytesIO(data))
+    fmt = (img.format or "JPEG").upper()
+    rotated = img.rotate(pil_angle, expand=True)
+    out = io.BytesIO()
+    if fmt == "PNG":
+        if rotated.mode not in ("RGBA", "RGB", "P"):
+            rotated = rotated.convert("RGBA")
+        rotated.save(out, format="PNG")
+    else:
+        if rotated.mode in ("RGBA", "P"):
+            rotated = rotated.convert("RGB")
+        rotated.save(out, format="JPEG", quality=92)
+    return out.getvalue()
+
+
+def _sicoe_subir_imagen_rotada(
+    contrato_id: int,
+    *,
+    subcarpeta: str,
+    public_id: str,
+    body: bytes,
+) -> str:
+    import cloudinary.uploader
+
+    _cloudinary_config()
+    result = cloudinary.uploader.upload(
+        body,
+        folder=_cloudinary_folder_contrato(int(contrato_id), subcarpeta),
+        public_id=public_id,
+        overwrite=True,
+        invalidate=True,
+        resource_type="image",
+    )
+    url = str(result.get("secure_url") or result.get("url") or "")
+    return _sicoe_url_con_version(url)
+
+
+def _sicoe_rotar_imagen_guardada(
+    contrato_id: int,
+    *,
+    subcarpeta: str,
+    public_id: str,
+    source_url: str,
+    angle: int,
+) -> str:
+    raw = _sicoe_descargar_imagen_bytes(source_url)
+    rotated = _sicoe_rotar_imagen_bytes(raw, angle)
+    return _sicoe_subir_imagen_rotada(
+        contrato_id,
+        subcarpeta=subcarpeta,
+        public_id=public_id,
+        body=rotated,
+    )
+
+
+@app.post("/sicoe-obra/{contrato_id}/fotos/{foto_numero}/rotar")
+def sicoe_rotar_foto(
+    contrato_id: int,
+    foto_numero: int,
+    body: RotarImagenSicoeBody,
+    current_user=Depends(get_current_user),
+):
+    """Rota la foto y actualiza foto_url en todos los registros del contrato con ese número."""
+    angle = int(body.angle)
+    if angle not in (90, 180, 270, -90):
+        raise HTTPException(status_code=422, detail="angle debe ser 90, 180, 270 o -90.")
+    try:
+        num = int(foto_numero)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="foto_numero inválido.")
+
+    def _one():
+        return (
+            supabase.table("so_registros")
+            .select("id, foto_url")
+            .eq("contrato_id", int(contrato_id))
+            .eq("foto_numero", num)
+            .not_.is_("foto_url", "null")
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_one)
+    if not rows or not str(rows[0].get("foto_url") or "").strip():
+        raise HTTPException(status_code=404, detail="No hay foto con ese número en el contrato.")
+    src = str(rows[0]["foto_url"]).strip()
+    try:
+        new_url = _sicoe_rotar_imagen_guardada(
+            contrato_id,
+            subcarpeta=CLOUDINARY_SUB_FOTOS,
+            public_id=f"foto_{num}",
+            source_url=src,
+            angle=angle,
+        )
+    except Exception as ex:
+        raise HTTPException(status_code=502, detail="No se pudo guardar la imagen rotada.") from ex
+    if not new_url:
+        raise HTTPException(status_code=502, detail="No se pudo guardar la imagen rotada.")
+
+    def _upd():
+        return (
+            supabase.table("so_registros")
+            .update({"foto_url": new_url})
+            .eq("contrato_id", int(contrato_id))
+            .eq("foto_numero", num)
+            .execute()
+        )
+
+    supabase_execute(_upd)
+    return {"ok": True, "url": new_url, "foto_numero": num, "angle": angle}
+
+
+@app.post("/sicoe-obra/{contrato_id}/graficos/{grafico_numero}/rotar")
+def sicoe_rotar_grafico(
+    contrato_id: int,
+    grafico_numero: int,
+    body: RotarImagenSicoeBody,
+    current_user=Depends(get_current_user),
+):
+    """Rota el gráfico y actualiza grafico_url en todos los registros del contrato."""
+    angle = int(body.angle)
+    if angle not in (90, 180, 270, -90):
+        raise HTTPException(status_code=422, detail="angle debe ser 90, 180, 270 o -90.")
+    try:
+        num = int(grafico_numero)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="grafico_numero inválido.")
+
+    def _one():
+        return (
+            supabase.table("so_registros")
+            .select("id, grafico_url")
+            .eq("contrato_id", int(contrato_id))
+            .eq("grafico_numero", num)
+            .not_.is_("grafico_url", "null")
+            .limit(1)
+            .execute()
+            .data
+        )
+
+    rows = supabase_execute(_one)
+    if not rows or not str(rows[0].get("grafico_url") or "").strip():
+        raise HTTPException(status_code=404, detail="No hay gráfico con ese número en el contrato.")
+    src = str(rows[0]["grafico_url"]).strip()
+    try:
+        new_url = _sicoe_rotar_imagen_guardada(
+            contrato_id,
+            subcarpeta=CLOUDINARY_SUB_GRAFICOS,
+            public_id=f"grafico_{num}",
+            source_url=src,
+            angle=angle,
+        )
+    except Exception as ex:
+        raise HTTPException(status_code=502, detail="No se pudo guardar la imagen rotada.") from ex
+    if not new_url:
+        raise HTTPException(status_code=502, detail="No se pudo guardar la imagen rotada.")
+
+    def _upd():
+        return (
+            supabase.table("so_registros")
+            .update({"grafico_url": new_url})
+            .eq("contrato_id", int(contrato_id))
+            .eq("grafico_numero", num)
+            .execute()
+        )
+
+    supabase_execute(_upd)
+    return {"ok": True, "url": new_url, "grafico_numero": num, "angle": angle}
+
+
 @app.get("/sicoe-obra/{contrato_id}/galeria")
 def galeria_imagenes(contrato_id: int, tipo: str = "foto", desde: str = None, hasta: str = None, current_user=Depends(get_current_user)):
     def _q():
@@ -22309,7 +22550,12 @@ def reversion_n3_doble_llave(
                 .data
             )
 
-        rows = supabase_execute(_get)
+        try:
+            rows = supabase_execute(_get)
+        except HTTPException:
+            raise
+        except Exception as ex:
+            raise _http_reversion_doble_llave_db_error(ex) from ex
         if not rows:
             raise HTTPException(status_code=404, detail="Registro no encontrado.")
         row = rows[0]
@@ -22431,7 +22677,7 @@ def reversion_n3_doble_llave(
         def _upd():
             return (
                 supabase.table("so_registros")
-                .update({**update, "updated_at": "now()"})
+                .update({**update, "updated_at": datetime.now(timezone.utc).isoformat()})
                 .eq("id", registro_id)
                 .eq("contrato_id", contrato_id)
                 .execute()
@@ -22440,14 +22686,10 @@ def reversion_n3_doble_llave(
 
         try:
             supabase_execute(_upd)
-        except Exception as ex:
-            low = str(ex).lower()
-            if "reversion_arm" in low or "column" in low:
-                raise HTTPException(
-                    status_code=503,
-                    detail="Falta ejecutar la migración SQL reversion_n3_doble_llave_so_registros.sql en la base de datos.",
-                ) from ex
+        except HTTPException:
             raise
+        except Exception as ex:
+            raise _http_reversion_doble_llave_db_error(ex) from ex
 
         accion_log = (
             "REVERSION_DOBLE_EJECUTADA"

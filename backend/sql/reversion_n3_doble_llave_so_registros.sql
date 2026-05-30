@@ -3,6 +3,8 @@
 -- con permiso en el nivel máximo (p. ej. N4 si el contrato sella en nivel4_estado).
 -- Los nombres de columna reversion_arm_n3_* son legado: NO significan «nivel3_estado» del ítem.
 -- Ejecutar en SQL Editor de Supabase (o psql) una vez antes de usar el flujo en API.
+-- Después: también ejecutar alter_so_registro_comentarios_tipo_reversion_doble_llave.sql
+-- y en Supabase → Settings → API → «Reload schema» (o: NOTIFY pgrst, 'reload schema';).
 
 ALTER TABLE public.so_registros
   ADD COLUMN IF NOT EXISTS reversion_arm_n2_usuario_id bigint REFERENCES public.usuarios(id),
