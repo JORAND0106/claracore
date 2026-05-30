@@ -6,6 +6,32 @@ def _fo_eo_04_es_acta_rpo(acta_row):
     return (str(acta_row.get("tipo_grupo") or "").strip().upper()) == "RPO"
 
 
+def _fo_eo_04_parse_entero_acta(val):
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        pass
+    try:
+        f = float(val)
+        if f == int(f):
+            return int(f)
+    except (TypeError, ValueError):
+        pass
+    import re
+
+    m = re.search(r"\d+", str(val).strip())
+    return int(m.group(0)) if m else None
+
+
+def test_parse_entero_acta_prod_formats():
+    assert _fo_eo_04_parse_entero_acta(3) == 3
+    assert _fo_eo_04_parse_entero_acta(3.0) == 3
+    assert _fo_eo_04_parse_entero_acta("4") == 4
+    assert _fo_eo_04_parse_entero_acta("5.0") == 5
+
+
 def test_registro_sellado_cascada_n3_contrato_3_niveles():
     reg = {
         "item_numero": "1.01",

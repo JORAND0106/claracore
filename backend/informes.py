@@ -2157,7 +2157,9 @@ def ccd_fo_eo_04_diagnostico(
     raw_prev = (
         _fo_eo_04_fetch_registros_actas_ids(int(contrato_id), prev_ids) if prev_ids else []
     )
-    tot_batch = _fetch_totales_batch(int(contrato_id), int(acta_norm), items) if items else {}
+    tot_batch, tot_meta = (
+        _fetch_totales_batch(int(contrato_id), int(acta_norm), items) if items else ({}, {})
+    )
     muestra_ant = None
     if items:
         it0 = items[0]
@@ -2174,6 +2176,7 @@ def ccd_fo_eo_04_diagnostico(
         "actas_anteriores_ids": len(prev_ids),
         "registros_actas_anteriores_raw": len(raw_prev),
         "muestra_total_anteriores_item0": muestra_ant,
+        "totales_meta": tot_meta,
         "mensaje": (
             "OK: hay ítems para el PDF."
             if items
@@ -6267,8 +6270,64 @@ def _fo_eo_04_es_acta_rpo(acta_row: Dict[str, Any]) -> bool:
     return (str(acta_row.get("tipo_grupo") or "").strip().upper()) == "RPO"
 
 
+def _fo_eo_04_parse_entero_acta(val: object) -> Optional[int]:
+    """numero_rpo / consecutivo: int, float 3.0, texto '3' (prod y local pueden diferir)."""
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        return None
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        pass
+    try:
+        f = float(val)
+        if f == int(f):
+            return int(f)
+    except (TypeError, ValueError):
+        pass
+    s = str(val).strip()
+    if not s:
+        return None
+    import re
+
+    m = re.search(r"\d+", s)
+    if m:
+        try:
+            return int(m.group(0))
+        except ValueError:
+            pass
+    return None
+
+
+def _fo_eo_04_list_actas_contrato(contrato_id: int) -> List[Dict[str, Any]]:
+    """Todas las actas del contrato (paginado; en prod Supabase limita ~1000 filas por request)."""
+    cid = int(contrato_id)
+    _PAGE = 1000
+    rows: List[Dict[str, Any]] = []
+    off = 0
+    for _ in range(50):
+        part = (
+            _sb.table("actas")
+            .select("id, numero_rpo, consecutivo, tipo_grupo")
+            .eq("contrato_id", cid)
+            .range(off, off + _PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
+        rows.extend(part)
+        if len(part) < _PAGE:
+            break
+        off += _PAGE
+    return rows
+
+
 def _fo_eo_04_actas_anteriores_ids(contrato_id: int, acta_id: int) -> List[int]:
-    """Actas RPO con numero_rpo menor al del acta actual (recibo parcial 1..N-1)."""
+    """
+    Actas RPO anteriores al acta actual.
+    Orden: numero_rpo (como recibo parcial); si falta en actas viejas, consecutivo; último fallback id.
+    """
     try:
         acta_row = (
             _sb.table("actas")
@@ -6281,60 +6340,66 @@ def _fo_eo_04_actas_anteriores_ids(contrato_id: int, acta_id: int) -> List[int]:
         )
     except Exception:
         return []
-    num_rpo = acta_row.get("numero_rpo")
-    consec = acta_row.get("consecutivo")
+    n_cur = _fo_eo_04_parse_entero_acta(acta_row.get("numero_rpo"))
+    c_cur = _fo_eo_04_parse_entero_acta(acta_row.get("consecutivo"))
     try:
-        todas = (
-            _sb.table("actas")
-            .select("id, numero_rpo, consecutivo, tipo_grupo")
-            .eq("contrato_id", int(contrato_id))
-            .execute()
-            .data
-            or []
-        )
+        todas = _fo_eo_04_list_actas_contrato(int(contrato_id))
     except Exception:
         return []
     rpo_actas = [a for a in todas if _fo_eo_04_es_acta_rpo(a)]
     prev: List[int] = []
-    if num_rpo is not None:
+    seen: set = set()
+
+    def _add(aid: int) -> None:
+        if aid not in seen:
+            seen.add(aid)
+            prev.append(aid)
+
+    if n_cur is not None:
+        for a in rpo_actas:
+            aid = a.get("id")
+            if aid is None:
+                continue
+            nr = _fo_eo_04_parse_entero_acta(a.get("numero_rpo"))
+            if nr is not None and nr < n_cur:
+                _add(int(aid))
+            elif nr is None and c_cur is not None:
+                ac = _fo_eo_04_parse_entero_acta(a.get("consecutivo"))
+                if ac is not None and ac < c_cur:
+                    _add(int(aid))
+    if not prev and c_cur is not None:
+        for a in rpo_actas:
+            aid = a.get("id")
+            if aid is None:
+                continue
+            ac = _fo_eo_04_parse_entero_acta(a.get("consecutivo"))
+            if ac is not None and ac < c_cur:
+                _add(int(aid))
+    if not prev:
         try:
-            n_cur = int(num_rpo)
+            aid_cur = int(acta_id)
             for a in rpo_actas:
-                nr = a.get("numero_rpo")
-                if nr is None:
-                    continue
-                try:
-                    if int(nr) < n_cur:
-                        prev.append(int(a["id"]))
-                except (TypeError, ValueError):
-                    continue
-        except (TypeError, ValueError):
-            pass
-    elif consec is not None:
-        try:
-            c_cur = int(consec)
-            for a in rpo_actas:
-                c = a.get("consecutivo")
-                if c is not None:
-                    try:
-                        if int(c) < c_cur:
-                            prev.append(int(a["id"]))
-                    except (TypeError, ValueError):
-                        continue
-        except (TypeError, ValueError):
-            pass
-    else:
-        try:
-            aid = int(acta_id)
-            for a in rpo_actas:
-                if a.get("id") is not None and int(a["id"]) < aid:
-                    prev.append(int(a["id"]))
+                aid = a.get("id")
+                if aid is not None and int(aid) < aid_cur:
+                    _add(int(aid))
         except (TypeError, ValueError):
             pass
     _log.info(
-        "fo_eo_04 actas_anteriores_ids: acta=%s num_rpo=%s prev=%s",
-        acta_id, num_rpo, len(prev),
+        "fo_eo_04 actas_anteriores_ids: acta=%s num_rpo=%s consec=%s prev=%s (rpo_en_contrato=%s)",
+        acta_id,
+        acta_row.get("numero_rpo"),
+        acta_row.get("consecutivo"),
+        len(prev),
+        len(rpo_actas),
     )
+    if not prev and (n_cur is not None and n_cur > 1 or c_cur is not None and c_cur > 1):
+        _log.warning(
+            "fo_eo_04 actas_anteriores VACÍO con acta aparentemente no primera: acta=%s num_rpo=%s consec=%s rpo=%s",
+            acta_id,
+            acta_row.get("numero_rpo"),
+            acta_row.get("consecutivo"),
+            len(rpo_actas),
+        )
     return prev
 
 
@@ -6503,15 +6568,19 @@ def _fetch_total_actas_anteriores(
         return 0.0
 
 
-def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> dict:
+def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> Tuple[dict, Dict[str, Any]]:
     """
-    Calcula totales N3-Aprobado de actas anteriores para TODOS los ítems en un solo lote.
-    Reemplaza N llamadas secuenciales a _fetch_total_actas_anteriores por ~3 queries.
-    Returns: dict { (item_numero, capitulo): total_float }
+    Calcula totales sellados de actas anteriores para TODOS los ítems en un solo lote.
+    Returns: (dict {(item_numero, capitulo): total_float}, meta diagnóstico).
     """
     from collections import defaultdict
+    meta: Dict[str, Any] = {
+        "prev_actas_count": 0,
+        "registros_prev_raw": 0,
+        "items_con_acumulado": 0,
+    }
     if not items or not acta_id:
-        return {}
+        return {}, meta
     default_result: dict = {
         _fo_eo_04_norm_item_key(
             item.get("item_numero") or "", item.get("capitulo") or ""
@@ -6520,8 +6589,15 @@ def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> dict:
     }
     try:
         prev_ids = _fo_eo_04_actas_anteriores_ids(int(contrato_id), int(acta_id))
+        meta["prev_actas_count"] = len(prev_ids)
         if not prev_ids:
-            return default_result
+            _log.warning(
+                "fo_eo_04 totales_batch sin actas previas: contrato=%s acta=%s items=%s",
+                contrato_id,
+                acta_id,
+                len(items),
+            )
+            return default_result, meta
 
         matriz = matriz_params_contrato(_sb, int(contrato_id))
         campo_mx, niveles_act = matriz
@@ -6536,6 +6612,7 @@ def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> dict:
         raw_prev = _fo_eo_04_fetch_registros_actas_ids(
             int(contrato_id), prev_ids, select_cols=_FO_EO_04_SEL_TOTALES
         )
+        meta["registros_prev_raw"] = len(raw_prev)
         for r in raw_prev:
             if not _registro_aprobado_matriz_panel(r, niveles_act, campo_mx):
                 continue
@@ -6545,20 +6622,26 @@ def _fetch_totales_batch(contrato_id: int, acta_id: int, items: list) -> dict:
             if k in items_set:
                 totales[k] += float(r.get("cantidad_total") or 0)
 
+        meta["items_con_acumulado"] = sum(1 for v in totales.values() if v)
         _log.info(
             "fo_eo_04 totales_batch: acta=%s prev_actas=%s raw_prev=%s items=%s con_total=%s",
             acta_id,
             len(prev_ids),
             len(raw_prev),
             len(items_set),
-            sum(1 for v in totales.values() if v),
+            meta["items_con_acumulado"],
         )
         # Combinar: ítems con datos + ítems sin registros anteriores (→ 0.0)
         result = {**default_result, **dict(totales)}
-        return result
+        return result, meta
     except Exception as exc:
-        _log.warning("fetch_totales_batch ERROR: %s", exc)
-        return default_result
+        _log.exception(
+            "fetch_totales_batch ERROR contrato=%s acta=%s (prod suele ser timeout o límite Supabase): %s",
+            contrato_id,
+            acta_id,
+            exc,
+        )
+        return default_result, meta
 
 
 def _fetch_items_n3_acta(acta_id: int, contrato_id: int) -> list:
@@ -7862,9 +7945,22 @@ def _build_fo_eo_04_html(
     Devuelve (html_combinado, fname, contrato_numero, lista_html_por_página).
     """
 
-    def _prog(pct: int, msg: str, current_item: Optional[int] = None, total_items: Optional[int] = None):
+    def _prog(
+        pct: int,
+        msg: str,
+        current_item: Optional[int] = None,
+        total_items: Optional[int] = None,
+        **extra,
+    ):
         if on_progress:
-            on_progress({"pct": pct, "msg": msg, "current_item": current_item, "total_items": total_items})
+            payload = {
+                "pct": pct,
+                "msg": msg,
+                "current_item": current_item,
+                "total_items": total_items,
+            }
+            payload.update(extra)
+            on_progress(payload)
 
     def _fmt_fecha(f: object) -> str:
         if not f:
@@ -8010,7 +8106,17 @@ def _build_fo_eo_04_html(
             f"Calculando totales de actas anteriores ({n_items} ítem{'s' if n_items != 1 else ''})…",
             total_items=n_items,
         )
-        totales_batch = _fetch_totales_batch(contrato_id, acta_id_norm, items_n3) if acta_id_norm else {}
+        totales_batch, fo_totales_meta = (
+            _fetch_totales_batch(contrato_id, acta_id_norm, items_n3)
+            if acta_id_norm
+            else ({}, {})
+        )
+        _prog(
+            49,
+            f"Totales actas anteriores: {fo_totales_meta.get('items_con_acumulado', 0)} ítem(s) con acumulado",
+            total_items=n_items,
+            fo_totales_meta=fo_totales_meta,
+        )
         img_pairs = None if preview_ui else _fo_eo_04_prefetch_item_imgs_data_uri(items_n3)
         if not preview_ui:
             _prog(
@@ -8355,6 +8461,8 @@ def ccd_pdf_job_iniciar(
                 "current_item": d.get("current_item"),
                 "total_items": d.get("total_items"),
             }
+            if d.get("fo_totales_meta"):
+                patch["fo_totales_meta"] = d["fo_totales_meta"]
             with _pdf_jobs_lock:
                 if job_id in _pdf_jobs:
                     _pdf_jobs[job_id].update(patch)
@@ -8368,6 +8476,7 @@ def ccd_pdf_job_iniciar(
             )
             pdf_path = _pdf_job_store_pdf(job_id, pdf_bytes)
             dl_tok = _pdf_job_issue_download_token(job_id)
+            job_snap = _pdf_job_resolve(job_id) or {}
             done_patch = {
                 "status": "listo",
                 "pct": 100,
@@ -8379,6 +8488,7 @@ def ccd_pdf_job_iniciar(
                 "formato_codigo": formato_codigo,
                 "acta_id": acta_id,
                 "download_token": dl_tok,
+                "fo_totales_meta": job_snap.get("fo_totales_meta"),
             }
             with _pdf_jobs_lock:
                 if job_id in _pdf_jobs:
@@ -8421,6 +8531,8 @@ def ccd_pdf_job_estado(
         "total_items": job.get("total_items"),
         "error": job.get("error"),
     }
+    if job.get("fo_totales_meta"):
+        out["fo_totales_meta"] = job.get("fo_totales_meta")
     if job.get("status") == "listo" and job.get("download_token"):
         out["download_token"] = job.get("download_token")
         pdf_p = job.get("pdf_path") or _pdf_job_disk_pdf_path(job_id)

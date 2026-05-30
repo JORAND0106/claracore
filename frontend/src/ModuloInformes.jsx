@@ -2669,10 +2669,20 @@ export default function ModuloInformes({
                 return
               }
               const blob = await rPdf.blob()
+              const foMeta = estado.fo_totales_meta
+              const avisoAcum =
+                foMeta &&
+                Number(foMeta.prev_actas_count) > 0 &&
+                Number(foMeta.items_con_acumulado) === 0
+                  ? ' El servidor encontró actas anteriores pero ningún ítem con acumulado (revise sellado en actas cerradas).'
+                  : foMeta && Number(foMeta.prev_actas_count) === 0
+                    ? ' No se detectaron actas RPO anteriores para este acta (revise numero_rpo/consecutivo en producción).'
+                    : ''
               setVistaPrevia({
                 fase: 'ok',
                 tipo: 'idu-plantilla-vacia-pdf',
                 pdfUrl: URL.createObjectURL(blob),
+                avisoAcumulados: avisoAcum || null,
               })
             } catch (e) {
               detenerTimerFoEo04()
@@ -5649,6 +5659,23 @@ export default function ModuloInformes({
                     ? 'Espere mientras termina la generación (el reloj de arena cuenta el tiempo transcurrido).'
                     : 'Documento final. Imprimir o guardar desde el visor del navegador. El sello SHA se descarga aparte (rápido si ya generó el PDF).'}
                 </div>
+                {vistaPrevia.avisoAcumulados ? (
+                  <div
+                    style={{
+                      marginTop: '8px',
+                      padding: '8px 10px',
+                      borderRadius: '8px',
+                      background: '#fffbeb',
+                      border: '1px solid #fcd34d',
+                      color: '#92400e',
+                      fontSize: f.sub + 'px',
+                      lineHeight: 1.4,
+                      maxWidth: '720px',
+                    }}
+                  >
+                    {vistaPrevia.avisoAcumulados}
+                  </div>
+                ) : null}
               </div>
               <div style={{ display: 'flex', gap: '8px', flexShrink: 0, alignItems: 'center' }}>
               <button
