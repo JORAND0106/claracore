@@ -6868,57 +6868,80 @@ function ModuloSicoeObra({
       })
   }
 
+  const REVERSION_MASIVA_LOTE_HTTP = 10
+
   const ejecutarReversionCantidadesMasivaApi = async (comentarioData, registroIds) => {
     setPopupReversionCantidades(null)
     if (!comentarioData || !registroIds?.length) return
     setEjecutandoReversionCantidades(true)
     setMsgReversionCantidades('')
-    setReversionCantidadesProgresoPct(5)
-    const progressTick = setInterval(() => {
-      setReversionCantidadesProgresoPct((p) => (p >= 86 ? p : p + Math.max(0.45, (86 - p) * 0.065)))
-    }, 400)
+    setReversionCantidadesProgresoPct(2)
+    const ids = [...registroIds]
+    const base = armarPayloadFiltrosRegistrosMasivo()
+    const comentarioBody = {
+      ...comentarioData,
+      rol_origen: nivelInfo.rolOrigen,
+      tipo: 'reversion_doble_llave',
+    }
+    let llavesTotal = 0
+    let ejecutadasTotal = 0
+    let omitidosTotal = 0
     try {
-      const base = armarPayloadFiltrosRegistrosMasivo()
-      const body = {
-        ...base,
-        comentario_data: { ...comentarioData, rol_origen: nivelInfo.rolOrigen, tipo: 'reversion_doble_llave' },
-        registro_ids: registroIds,
-      }
-      const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/reversion-masiva-fase1`, {
-        method: 'POST',
-        headers: hdrsJSON,
-        body: JSON.stringify(body),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        const d = data?.detail
-        const msg =
-          typeof d === 'string'
-            ? d
-            : Array.isArray(d)
-              ? d.map((x) => x?.msg || JSON.stringify(x)).join(', ')
-              : d && typeof d === 'object'
-                ? JSON.stringify(d)
-                : `Error ${res.status}`
-        throw new Error(msg)
+      for (let off = 0; off < ids.length; off += REVERSION_MASIVA_LOTE_HTTP) {
+        const chunk = ids.slice(off, off + REVERSION_MASIVA_LOTE_HTTP)
+        setReversionCantidadesProgresoPct(
+          Math.min(95, Math.round(((off + chunk.length) / ids.length) * 100)),
+        )
+        const res = await fetch(`${API_URL}/sicoe-obra/${contrato_id}/registros/reversion-masiva-fase1`, {
+          method: 'POST',
+          headers: hdrsJSON,
+          body: JSON.stringify({
+            ...base,
+            comentario_data: comentarioBody,
+            registro_ids: chunk,
+          }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          const d = data?.detail
+          const msg =
+            typeof d === 'string'
+              ? d
+              : Array.isArray(d)
+                ? d.map((x) => x?.msg || JSON.stringify(x)).join(', ')
+                : d && typeof d === 'object'
+                  ? JSON.stringify(d)
+                  : `Error ${res.status}`
+          throw new Error(
+            ids.length > REVERSION_MASIVA_LOTE_HTTP
+              ? `${msg} (lote ${Math.floor(off / REVERSION_MASIVA_LOTE_HTTP) + 1}, registros ${off + 1}–${off + chunk.length})`
+              : msg,
+          )
+        }
+        llavesTotal += data.llaves_registradas ?? 0
+        ejecutadasTotal += data.reversiones_ejecutadas ?? 0
+        omitidosTotal += data.omitidos ?? 0
       }
       setReversionCantidadesProgresoPct(100)
       await new Promise((r) => setTimeout(r, 380))
-      let msgOk = `Listo: ${data.llaves_registradas ?? 0} llave(s) registrada(s)`
-      if (data.reversiones_ejecutadas) {
-        msgOk += `, ${data.reversiones_ejecutadas} reversión(es) completada(s)`
-      }
-      if (data.omitidos) msgOk += `, ${data.omitidos} omitido(s)`
-      if (data.alerta_tope) msgOk += `\n\n${data.alerta_tope}`
+      let msgOk = `Listo: ${llavesTotal} llave(s) registrada(s)`
+      if (ejecutadasTotal) msgOk += `, ${ejecutadasTotal} reversión(es) completada(s)`
+      if (omitidosTotal) msgOk += `, ${omitidosTotal} omitido(s)`
       setMsgReversionCantidades(msgOk)
-      if (data.alerta_tope || data.omitidos) window.alert(msgOk)
+      if (omitidosTotal) window.alert(msgOk)
       setModalReversionCantidades(null)
       await ejecutarBusquedaSicoeCompleta(filtros, capasValidacion)
     } catch (e) {
-      setMsgReversionCantidades(`Error: ${e?.message || String(e)}`)
-      window.alert(`Reversión masiva: ${e?.message || String(e)}`)
+      const raw = e?.message || String(e)
+      const esRed =
+        /failed to fetch|networkerror|load failed|cors/i.test(raw) ||
+        (e?.name === 'TypeError' && raw.includes('fetch'))
+      const msg = esRed
+        ? 'No hubo respuesta del servidor a tiempo (lote demasiado grande o timeout en Azure). Se procesa por lotes de 10; vuelva a intentar tras desplegar la última versión o reduzca la selección.'
+        : raw
+      setMsgReversionCantidades(`Error: ${msg}`)
+      window.alert(`Reversión masiva: ${msg}`)
     } finally {
-      clearInterval(progressTick)
       setReversionCantidadesProgresoPct(0)
       setEjecutandoReversionCantidades(false)
     }

@@ -12624,6 +12624,18 @@ def _sicoe_colectar_elegibles_reversion_masiva(
         contrato_id, exp_body, current_user
     )
     candidatos = _sicoe_enriquecer_registros_reversion_meta(contrato_id, candidatos)
+    elegibles, omitidos = _sicoe_filtrar_filas_elegibles_reversion(
+        contrato_id, candidatos, current_user
+    )
+    st = dict(st_collect or {})
+    st["omitidos_reversion"] = omitidos
+    return elegibles, st
+
+
+def _sicoe_filtrar_filas_elegibles_reversion(
+    contrato_id: int, candidatos: List[dict], current_user
+) -> Tuple[List[dict], int]:
+    """Aplica reglas de elegibilidad de reversión sobre filas ya cargadas."""
     autor_id = int(current_user.get("sub") or current_user.get("id", 0))
     nivel_db = _sicoe_db_nivel_validacion_usuario(autor_id)
     if not (
@@ -12635,7 +12647,6 @@ def _sicoe_colectar_elegibles_reversion_masiva(
             status_code=403,
             detail="Solo Residente de costos (Nivel 2) o perfiles de interventoría con permiso de validación pueden iniciar reversión masiva.",
         )
-
     elegibles = []
     omitidos = 0
     for r in candidatos:
@@ -12672,10 +12683,38 @@ def _sicoe_colectar_elegibles_reversion_masiva(
             omitidos += 1
             continue
         elegibles.append(r)
+    return elegibles, omitidos
 
-    st = dict(st_collect or {})
-    st["omitidos_reversion"] = omitidos
-    return elegibles, st
+
+def _sicoe_fetch_registros_reversion_por_ids(
+    contrato_id: int, registro_ids: List[int]
+) -> List[dict]:
+    """Carga directa por id (lotes masivos sin re-ejecutar todo el filtro de grilla)."""
+    want = sorted({int(x) for x in registro_ids})
+    if not want:
+        return []
+    campos = (
+        f"{SICOE_SELECT_NIVELES_ESTADO},bloqueado,contrato_id,solicitud_reversion,"
+        "reversion_arm_n2_usuario_id,reversion_arm_n3_usuario_id,"
+        "item_numero,item_descripcion,cantidad_total,costo_directo,numero_registro"
+    )
+    out: List[dict] = []
+    for ch in _sicoe_chunks_int(want, 200):
+        chunk = list(ch)
+
+        def _q():
+            return (
+                supabase.table("so_registros")
+                .select(campos)
+                .eq("contrato_id", contrato_id)
+                .in_("id", chunk)
+                .execute()
+                .data
+            )
+
+        out.extend(supabase_execute(_q) or [])
+    by_id = {int(r["id"]): r for r in out if r.get("id") is not None}
+    return [by_id[i] for i in want if i in by_id]
 
 
 def _sicoe_masivo_filtro_to_export_body(b: ValidarNivelMasivoFiltroBody) -> ExportarRegistrosBody:
@@ -23093,9 +23132,7 @@ def reversion_masiva_fase1(
     try:
         cd = body_in.comentario_data or {}
         autor_id = int(current_user.get("sub") or current_user.get("id", 0))
-        elegibles, st_collect = _sicoe_colectar_elegibles_reversion_masiva(
-            contrato_id, body_in, current_user
-        )
+        st_collect: Dict[str, Any] = {}
 
         if body_in.registro_ids is not None:
             if len(body_in.registro_ids) == 0:
@@ -23108,13 +23145,23 @@ def reversion_masiva_fase1(
                     status_code=422,
                     detail=f"No puede enviar más de {SICOE_MASIVO_MAX_REGISTROS} registro_ids por solicitud.",
                 )
-            want = {int(x) for x in body_in.registro_ids}
-            elegibles = [r for r in elegibles if int(r["id"]) in want]
+            _sicoe_validar_capas_filtro_solo_nivel_max_aprobado(contrato_id, body_in)
+            filas = _sicoe_fetch_registros_reversion_por_ids(
+                contrato_id, [int(x) for x in body_in.registro_ids]
+            )
+            elegibles, omit_prev = _sicoe_filtrar_filas_elegibles_reversion(
+                contrato_id, filas, current_user
+            )
+            st_collect = {"omitidos_reversion": omit_prev}
             if not elegibles:
                 raise HTTPException(
                     status_code=422,
-                    detail="Ningún registro de la selección coincide con el lote elegible del filtro actual.",
+                    detail="Ningún registro de la selección es elegible para reversión en este lote.",
                 )
+        else:
+            elegibles, st_collect = _sicoe_colectar_elegibles_reversion_masiva(
+                contrato_id, body_in, current_user
+            )
 
         llaves_registradas = 0
         reversiones_ejecutadas = 0
