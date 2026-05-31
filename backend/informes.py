@@ -1935,11 +1935,15 @@ def _resolver_acta_id_en_contrato(contrato_id: int, acta_ref: Optional[int]) -> 
     return None
 
 
-def _distinct_semana_ids_nivel3_rpc(contrato_id: int) -> Optional[set[int]]:
-    """Una sola llamada Postgres (distinct). Requiere backend/sql/ccd_distinct_semanas_nivel3_rpc.sql."""
+_NIVEL_ESTADO_COLS = {f"nivel{n}_estado" for n in range(1, 7)}
+
+
+def _distinct_semana_ids_nivel_max_rpc(contrato_id: int) -> Optional[set[int]]:
+    """Una sola llamada Postgres (distinct) usando el NIVEL MÁXIMO configurado del contrato.
+    Requiere backend/sql/ccd_distinct_semanas_nivel_max_rpc.sql (multinivel)."""
     try:
         res = _sb.rpc(
-            "ccd_distinct_semanas_nivel3_aprobado",
+            "ccd_distinct_semanas_nivel_max_aprobado",
             {"p_contrato_id": int(contrato_id)},
         ).execute()
         raw = getattr(res, "data", None)
@@ -1956,12 +1960,16 @@ def _distinct_semana_ids_nivel3_rpc(contrato_id: int) -> Optional[set[int]]:
                     continue
             return out
     except Exception as e:
-        _log.info("ccd_distinct_semanas_nivel3_aprobado RPC: %s", e)
+        _log.info("ccd_distinct_semanas_nivel_max_aprobado RPC: %s", e)
     return None
 
 
-def _distinct_semana_ids_nivel3_fallback_paginado(contrato_id: int, *, max_pages: int = 20) -> set[int]:
-    """Reserva si no existe la RPC: pagina so_registros (lento; acotado en páginas)."""
+def _distinct_semana_ids_nivel_max_fallback_paginado(
+    contrato_id: int, campo_nivel_max: str, *, max_pages: int = 60
+) -> set[int]:
+    """Reserva si no existe la RPC: pagina so_registros filtrando por el nivel máximo del
+    contrato (lento; acotado en páginas). max_pages alto para cubrir contratos grandes."""
+    campo = campo_nivel_max if campo_nivel_max in _NIVEL_ESTADO_COLS else "nivel3_estado"
     out: set[int] = set()
     chunk = 1000
     start = 0
@@ -1972,14 +1980,15 @@ def _distinct_semana_ids_nivel3_fallback_paginado(contrato_id: int, *, max_pages
                 _sb.table("so_registros")
                 .select("semana_id")
                 .eq("contrato_id", contrato_id)
-                .eq("nivel3_estado", "Aprobado")
+                .eq(campo, "Aprobado")
+                .not_.is_("semana_id", "null")
                 .range(start, start + chunk - 1)
                 .execute()
                 .data
                 or []
             )
         except Exception as e:
-            _log.warning("ccd semanas: paginación registros nivel3: %s", e)
+            _log.warning("ccd semanas: paginación registros %s: %s", campo, e)
             break
         if not page:
             break
@@ -1997,18 +2006,25 @@ def _distinct_semana_ids_nivel3_fallback_paginado(contrato_id: int, *, max_pages
         start += chunk
     if pages >= max_pages:
         _log.warning(
-            "ccd semanas: límite de paginación (%s páginas); despliega la RPC ccd_distinct_semanas_nivel3_aprobado en Supabase.",
+            "ccd semanas: límite de paginación (%s páginas, campo=%s); despliega la RPC "
+            "ccd_distinct_semanas_nivel_max_aprobado en Supabase.",
             max_pages,
+            campo,
         )
     return out
 
 
-def _distinct_semana_ids_nivel3_aprobado_interventoria(contrato_id: int) -> set[int]:
-    """IDs de so_semanas con al menos un registro nivel 3 «Aprobado» (interventoría)."""
-    s = _distinct_semana_ids_nivel3_rpc(contrato_id)
+def _distinct_semana_ids_nivel_max_aprobado(contrato_id: int) -> set[int]:
+    """IDs de so_semanas con al menos un registro en el NIVEL MÁXIMO del contrato «Aprobado».
+
+    El sello de interventoría no siempre es nivel 3: depende de niveles_activos del contrato
+    (multinivel). Por eso se resuelve el campo con matriz_params_contrato.
+    """
+    campo_mx, _niveles_mx = matriz_params_contrato(_sb, int(contrato_id))
+    s = _distinct_semana_ids_nivel_max_rpc(contrato_id)
     if s is not None:
         return s
-    return _distinct_semana_ids_nivel3_fallback_paginado(contrato_id)
+    return _distinct_semana_ids_nivel_max_fallback_paginado(contrato_id, campo_mx)
 
 
 def _fetch_semanas_rows_por_ids(contrato_id: int, sem_ids: List[int]) -> List[Dict[str, Any]]:
@@ -2038,7 +2054,7 @@ def _fetch_semanas_rows_por_ids(contrato_id: int, sem_ids: List[int]) -> List[Di
 @router.get("/{contrato_id}/ccd/semanas")
 def ccd_listar_semanas(contrato_id: int, current_user=Depends(_get_user)):
     _perm_informes_ccd(current_user, "ver")
-    sem_ids = _distinct_semana_ids_nivel3_aprobado_interventoria(contrato_id)
+    sem_ids = _distinct_semana_ids_nivel_max_aprobado(contrato_id)
     if not sem_ids:
         return []
     rows = _fetch_semanas_rows_por_ids(contrato_id, list(sem_ids))

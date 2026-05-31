@@ -214,10 +214,12 @@ def fetch_registros_conciliacion(
     semana_id: Optional[int] = None,
     acta_rpo_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Registros con nivel3 Aprobado; preferiblemente bloqueados. Sin filtro de subcontratista."""
+    """Registros con el nivel máximo del contrato Aprobado; preferiblemente bloqueados.
+    Sin filtro de subcontratista. El nivel máximo es configurable (multinivel), no siempre 3."""
     if semana_id is None and acta_rpo_id is None:
         return []
     n3v = _n3_in_aprob_interventoria()
+    campo_mx, _niveles_mx = matriz_params_contrato(sb, int(contrato_id))
     sel = (
         "item_numero, item_descripcion, unidad, cantidad_total, vlr_unitario, capitulo, "
         "bloqueado, acta_rpo_id, semana_id"
@@ -229,7 +231,7 @@ def fetch_registros_conciliacion(
             sb.table("so_registros")
             .select(sel)
             .eq("contrato_id", cid)
-            .in_("nivel3_estado", n3v)
+            .in_(campo_mx, n3v)
         )
         if sid is not None:
             q = q.eq("semana_id", sid)
@@ -303,10 +305,12 @@ def fetch_registros_memoria_conciliacion(
     acta_rpo_id: Optional[int] = None,
     item_exacto: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Mismo detalle que memoria CC-SUB-002, con filtro semana o acta RPO."""
+    """Mismo detalle que memoria CC-SUB-002, con filtro semana o acta RPO.
+    Filtra por el nivel máximo del contrato (configurable, multinivel), no siempre nivel 3."""
     if semana_id is None and acta_rpo_id is None:
         return []
     n3v = _n3_in_aprob_interventoria()
+    campo_mx, _niveles_mx = matriz_params_contrato(sb, int(contrato_id))
     sel = (
         "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, longitud, ancho, espesor, "
         "cantidad, cantidad_total, observacion, foto_url, foto_numero, item_numero, item_descripcion, unidad, "
@@ -320,7 +324,7 @@ def fetch_registros_memoria_conciliacion(
             sb.table("so_registros")
             .select(sel)
             .eq("contrato_id", cid)
-            .in_("nivel3_estado", n3v)
+            .in_(campo_mx, n3v)
         )
         if sid is not None:
             qq = qq.eq("semana_id", sid)
@@ -458,19 +462,23 @@ def fetch_registros_memoria_cc_mes_alineado_acta(
     item_exacto: bool = False,
 ) -> List[Dict[str, Any]]:
     """
-    Misma lógica de aprobación que el informe mensual alineado a actas (cascada N1·N2·N3),
-    con el detalle de memoria (fotos, PK, etc.); sin regla CCD de bloqueado.
+    Misma lógica de aprobación que el informe mensual alineado a actas (cascada de los niveles
+    ACTIVOS del contrato + nivel máximo «Aprobado»), con el detalle de memoria (fotos, PK, etc.);
+    sin regla CCD de bloqueado. El nivel máximo es configurable (multinivel), no siempre nivel 3.
     """
     if not acta_rpo_id:
         return []
     aprob = _estados_aprob_sql()
+    campo_mx, niveles_act = matriz_params_contrato(sb, int(contrato_id))
     sel = (
         "numero_registro, abs_inicio, abs_final, pk_id_id, pk_ids(pk_id), calzada, longitud, ancho, espesor, "
         "cantidad, cantidad_total, observacion, foto_url, foto_numero, item_numero, item_descripcion, unidad, "
-        "nivel1_estado, nivel2_estado, nivel3_estado, bloqueado, acta_rpo_id, semana_id, costo_directo, vlr_unitario, capitulo"
+        "nivel1_estado, nivel2_estado, nivel3_estado, nivel4_estado, nivel5_estado, nivel6_estado, "
+        "bloqueado, acta_rpo_id, semana_id, costo_directo, vlr_unitario, capitulo"
     )
     itn = (item_numero or "").strip()
     exact = item_exacto
+    niveles_q = [int(n) for n in (niveles_act or [1, 2, 3]) if 1 <= int(n) <= 6]
 
     def _build_mem():
         qq = (
@@ -480,10 +488,9 @@ def fetch_registros_memoria_cc_mes_alineado_acta(
             .eq("acta_rpo_id", int(acta_rpo_id))
             .not_.is_("item_numero", "null")
             .neq("item_numero", "")
-            .in_("nivel1_estado", aprob)
-            .in_("nivel2_estado", aprob)
-            .in_("nivel3_estado", aprob)
         )
+        for n in niveles_q:
+            qq = qq.in_(f"nivel{n}_estado", aprob)
         if exact:
             qq = qq.eq("item_numero", itn)
         else:
@@ -497,15 +504,8 @@ def fetch_registros_memoria_cc_mes_alineado_acta(
         return []
     out: List[Dict[str, Any]] = []
     for r in raw or []:
-        if not (str(r.get("item_numero") or "").strip()):
-            continue
-        if (
-            _nivel_norm_matriz(r.get("nivel1_estado")) != "Aprobado"
-            or _nivel_norm_matriz(r.get("nivel2_estado")) != "Aprobado"
-            or _nivel_norm_matriz(r.get("nivel3_estado")) != "Aprobado"
-        ):
-            continue
-        out.append(r)
+        if _registro_aprobado_matriz_panel(r, niveles_act, campo_mx):
+            out.append(r)
     return out
 
 
