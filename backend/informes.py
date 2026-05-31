@@ -7105,9 +7105,11 @@ _FO_EO04_FIRMA_IMG = "38px"
 _FO_EO04_ITEM_IMG_WORKERS = 16
 _FO_EO04_IMG_MAX_PX = 720
 _FO_EO04_MAX_DATA_URI_LEN = 400_000
-_FO_EO04_PDF_PAGE_WORKERS = max(4, min(10, (_os.cpu_count() or 4)))
 _FO_EO04_PDF_PARALLEL_MIN_PAGES = 2
-_FO_EO04_PDF_PAGES_PER_TASK = 2
+_FO_EO04_PDF_PAGES_PER_TASK = max(
+    1,
+    int(_os.environ.get("FO_EO04_PDF_PAGES_PER_TASK", "2") or "2"),
+)
 _FO_EO04_PDF_TASK_TIMEOUT_SEC = max(
     45,
     int(_os.environ.get("FO_EO04_PDF_TASK_TIMEOUT_SEC", "90") or "90"),
@@ -7116,23 +7118,53 @@ _FO_EO04_IMG_FETCH_TIMEOUT_SEC = max(
     5,
     int(_os.environ.get("FO_EO04_IMG_FETCH_TIMEOUT_SEC", "12") or "12"),
 )
+# Auto-test del pool al crearlo: si el hijo no responde en este tiempo, se asume roto
+# (p. ej. /dev/shm minúsculo o sin permiso de fork en el host) y se cae a secuencial.
+_FO_EO04_POOL_PING_TIMEOUT_SEC = max(
+    8,
+    int(_os.environ.get("FO_EO04_PDF_POOL_PING_TIMEOUT_SEC", "25") or "25"),
+)
+
+
+def _fo_eo_04_pdf_page_workers() -> int:
+    """Nº de procesos para renderizar páginas en paralelo (meta ≈ 2 mem/s).
+
+    Configurable con FO_EO04_PDF_PAGE_WORKERS. IMPORTANTE: en Azure App Service
+    `os.cpu_count()` reporta TODOS los núcleos del HOST (no los del plan), así que
+    dimensionar el pool con cpu_count creaba demasiados procesos → OOM → cuelgue
+    silencioso. Por eso el default en Azure es conservador (3) y NO depende de cpu_count.
+    """
+    raw = (_os.environ.get("FO_EO04_PDF_PAGE_WORKERS") or "").strip()
+    if raw:
+        try:
+            n = int(raw)
+            if n >= 1:
+                return min(n, 12)
+        except ValueError:
+            pass
+    if _os.environ.get("WEBSITE_SITE_NAME") or _os.environ.get("WEBSITE_INSTANCE_ID"):
+        return 3
+    return max(3, min(8, (_os.cpu_count() or 4)))
 
 
 def _fo_eo_04_pdf_use_processes() -> bool:
     """
-    ProcessPool acelera en PC local; en Azure App Service suele colgar (spawn + memoria).
-    FO_EO04_PDF_USE_PROCESSES=1 fuerza procesos; =0 fuerza hilo principal.
+    Renderizar el PDF en procesos hijos mantiene vivo el event loop del worker:
+    el trabajo CPU-bound de xhtml2pdf no bloquea uvicorn (el hilo espera el futuro y
+    suelta el GIL) ⇒ gunicorn --timeout no mata al worker, y además paraleliza.
+
+    Antes se desactivaba en Azure por cuelgues, pero esos cuelgues eran por exceso de
+    procesos (RAM, ver _fo_eo_04_pdf_page_workers). Ahora el nº de procesos es
+    conservador/configurable y hay auto-test con fallback. FO_EO04_PDF_USE_PROCESSES=0
+    fuerza el modo secuencial (hilo principal) si hiciera falta.
     """
     env = (_os.environ.get("FO_EO04_PDF_USE_PROCESSES") or "").strip().lower()
     if env in ("0", "false", "no"):
         return False
-    if env in ("1", "true", "yes"):
-        return True
-    if _os.environ.get("WEBSITE_SITE_NAME") or _os.environ.get("WEBSITE_INSTANCE_ID"):
-        return False
     return True
 _FO_EO04_PROCESS_POOL = None
 _FO_EO04_POOL_LOCK = threading.Lock()
+_FO_EO04_POOL_BROKEN = False
 _FO_EO04_MARCA_LBL_ELABORO = "Elaborado y firmado por:"
 _FO_EO04_MARCA_LBL_REVISO = "Revisado y Aprobado por:"
 
@@ -7355,15 +7387,19 @@ def _fo_eo_04_img_block_html(
     preview_ui: bool,
     empty_label: str,
     max_height: str = "228px",
+    mostrar_rotar: bool = True,
 ) -> str:
     if not url or not str(url).strip():
         return f'<div style="font-size:6pt;color:#94a3b8;padding-top:100px;">{empty_label}</div>'
     src = html.escape(str(url).strip(), quote=True)
+    # En preview HTML (navegador) cargamos las imágenes en diferido para no saturar
+    # la red con 100+ fotos a la vez; xhtml2pdf ignora estos atributos en el PDF.
+    extra_attr = ' loading="lazy" decoding="async"' if preview_ui else ""
     img = (
-        f'<img data-cc-img="1" src="{src}" alt="" '
+        f'<img data-cc-img="1" src="{src}" alt=""{extra_attr} '
         f'style="max-width:98%;max-height:{max_height};display:block;margin:0 auto;object-fit:contain;" />'
     )
-    if not preview_ui or numero is None:
+    if not preview_ui or numero is None or not mostrar_rotar:
         return img
     num = int(numero)
     tipo_esc = html.escape(tipo, quote=True)
@@ -7439,6 +7475,7 @@ def _html_idu_fo_eo_04_v2_plantilla_vacia(
     grafico_url: Optional[str] = None,
     grafico_numero: Optional[int] = None,
     preview_ui: bool = False,
+    mostrar_rotar: bool = True,
 ) -> str:
     """Plantilla FO-EO-04 V2.0: vista previa sin datos de obra.
 
@@ -7789,7 +7826,7 @@ body {{ margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:7pt;
               border-bottom:1px solid {navy};text-align:center;
               background-color:{bg_hdr};color:{navy_hdr};">PLANO/ESQUEMA</div>
   <div style="height:240px;min-height:240px;max-height:240px;padding:6px;text-align:center;overflow:hidden;">
-    {_fo_eo_04_img_block_html(grafico_url, grafico_numero, "grafico", preview_ui=preview_ui, empty_label="Sin gr&aacute;fico")}
+    {_fo_eo_04_img_block_html(grafico_url, grafico_numero, "grafico", preview_ui=preview_ui, empty_label="Sin gr&aacute;fico", mostrar_rotar=mostrar_rotar)}
   </div>
   <div style="height:16px;min-height:16px;font-size:5.5pt;text-align:center;padding:2px;border-top:1px solid {navy};color:{navy_hdr};">
     {"Gr&aacute;fico #" + str(grafico_numero) if grafico_numero else "&nbsp;"}
@@ -7800,7 +7837,7 @@ body {{ margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;font-size:7pt;
               border-bottom:1px solid {navy};text-align:center;
               background-color:{bg_hdr};color:{navy_hdr};">FOTOGRAF&#205;A</div>
   <div style="height:240px;min-height:240px;max-height:240px;padding:6px;text-align:center;overflow:hidden;">
-    {_fo_eo_04_img_block_html(foto_url, foto_numero, "foto", preview_ui=preview_ui, empty_label="Sin fotograf&iacute;a")}
+    {_fo_eo_04_img_block_html(foto_url, foto_numero, "foto", preview_ui=preview_ui, empty_label="Sin fotograf&iacute;a", mostrar_rotar=mostrar_rotar)}
   </div>
   <div style="height:16px;min-height:16px;font-size:5.5pt;text-align:center;padding:2px;border-top:1px solid {navy};color:{navy_hdr};">
     {"Foto #" + str(foto_numero) if foto_numero else "&nbsp;"}
@@ -7905,22 +7942,42 @@ def _fo_eo_04_prefetch_item_imgs_data_uri(
 
 
 def _fo_eo_04_init_pdf_pool() -> None:
-    """Crea el pool en el hilo de la petición HTTP (Windows no permite hijos desde hilos daemon)."""
-    global _FO_EO04_PROCESS_POOL
-    if _FO_EO04_PROCESS_POOL is not None:
+    """Crea el pool en el hilo de la petición HTTP (Windows no permite hijos desde hilos daemon).
+
+    Hace un ping con timeout para detectar hosts donde el ProcessPool no arranca
+    (p. ej. /dev/shm minúsculo en App Service): en ese caso marca el pool como roto
+    y el render cae a modo secuencial en vez de quedarse colgado indefinidamente.
+    """
+    global _FO_EO04_PROCESS_POOL, _FO_EO04_POOL_BROKEN
+    if _FO_EO04_POOL_BROKEN or _FO_EO04_PROCESS_POOL is not None:
         return
     with _FO_EO04_POOL_LOCK:
-        if _FO_EO04_PROCESS_POOL is not None:
+        if _FO_EO04_POOL_BROKEN or _FO_EO04_PROCESS_POOL is not None:
             return
         import multiprocessing
         from concurrent.futures import ProcessPoolExecutor
 
+        workers = _fo_eo_04_pdf_page_workers()
         ctx = multiprocessing.get_context("spawn")
-        _FO_EO04_PROCESS_POOL = ProcessPoolExecutor(
-            max_workers=_FO_EO04_PDF_PAGE_WORKERS,
-            mp_context=ctx,
-        )
-        _log.info("fo_eo_04 PDF pool: %s workers", _FO_EO04_PDF_PAGE_WORKERS)
+        pool = ProcessPoolExecutor(max_workers=workers, mp_context=ctx)
+        try:
+            from fo_eo_04_pdf_worker import ping as _pool_ping
+
+            pool.submit(_pool_ping).result(timeout=_FO_EO04_POOL_PING_TIMEOUT_SEC)
+        except Exception as exc:
+            _FO_EO04_POOL_BROKEN = True
+            _log.warning(
+                "fo_eo_04 PDF pool no operativo (%s); se usará modo secuencial. "
+                "Ajusta FO_EO04_PDF_PAGE_WORKERS o FO_EO04_PDF_USE_PROCESSES=0 si persiste.",
+                exc,
+            )
+            try:
+                pool.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+            return
+        _FO_EO04_PROCESS_POOL = pool
+        _log.info("fo_eo_04 PDF pool: %s workers (ping OK)", workers)
 
 
 def _fo_eo_04_pdf_from_pages(
@@ -8024,10 +8081,14 @@ def _build_fo_eo_04_html(
     *,
     preview_ui: bool = False,
     on_progress=None,
+    standalone: bool = False,
+    mostrar_rotar: bool = True,
 ) -> tuple:
     """
     Arma el HTML del FO-IDU-EO-04-V2 (todas las páginas del acta).
-    preview_ui=True: URLs directas y botones de rotación (solo vista previa en pantalla).
+    preview_ui=True: URLs directas (solo vista previa en pantalla).
+    standalone=True: devuelve un documento HTML completo (para iframe), no un fragmento.
+    mostrar_rotar=False: omite los botones «Girar» (no funcionan fuera de React/iframe).
     Devuelve (html_combinado, fname, contrato_numero, lista_html_por_página).
     """
 
@@ -8251,6 +8312,7 @@ def _build_fo_eo_04_html(
                     grafico_url=graf_src,
                     grafico_numero=item.get("grafico_numero"),
                     preview_ui=preview_ui,
+                    mostrar_rotar=mostrar_rotar,
                 )
             )
         _prog(76, f"Documento listo ({n_items} página{'s' if n_items != 1 else ''})…", total_items=n_items)
@@ -8258,11 +8320,15 @@ def _build_fo_eo_04_html(
         pages_out = pages
     else:
         _prog(76, "Generando plantilla vacía…")
-        pages_out = [_html_idu_fo_eo_04_v2_plantilla_vacia(**_base_kwargs, preview_ui=preview_ui)]
+        pages_out = [_html_idu_fo_eo_04_v2_plantilla_vacia(**_base_kwargs, preview_ui=preview_ui, mostrar_rotar=mostrar_rotar)]
         html = pages_out[0]
 
     if preview_ui:
-        html = _fo_eo_04_wrap_preview_html(_fo_eo_04_html_embed_fragment(html))
+        if standalone:
+            # Documento HTML completo (con estilos del preview) para mostrar en un iframe.
+            html = _fo_eo_04_wrap_preview_html(html)
+        else:
+            html = _fo_eo_04_wrap_preview_html(_fo_eo_04_html_embed_fragment(html))
 
     suffix = f"_acta{num_acta}" if num_acta else ""
     fname = _safe_filename_part(f"{formato_codigo}{suffix}.pdf")
@@ -8731,9 +8797,16 @@ def ccd_fo_eo_04_preview_html(
     acta_id: Optional[int] = None,
     supervisor: str = "",
     formato_codigo: str = "FO-IDU-EO-04-V2",
+    standalone: bool = False,
     current_user=Depends(_get_user),
 ):
-    """Vista previa HTML del acta (todas las páginas). Botones de rotación no van al PDF."""
+    """Vista previa HTML del acta (todas las páginas), renderizada por el navegador.
+
+    Es el camino rápido del botón «lupa»: NO usa xhtml2pdf (sin bloqueo de CPU en el
+    worker), así que 120 memorias se muestran en segundos en cualquier plan de Azure.
+    standalone=True devuelve un documento HTML completo (para cargar en un iframe) y
+    omite los botones «Girar» (la orientación se hace en su propio modal).
+    """
     _perm_informes_ccd(current_user, "ver")
     if formato_codigo not in FORMATOS_CCD:
         raise HTTPException(status_code=404, detail="Código de formato CCD desconocido")
@@ -8753,14 +8826,17 @@ def ccd_fo_eo_04_preview_html(
             supervisor,
             current_user=cu,
             preview_ui=True,
+            standalone=standalone,
+            mostrar_rotar=not standalone,
         )
     except ValueError as ex:
         raise HTTPException(status_code=404, detail=str(ex)) from ex
     n_items = 0
     if acta_norm:
         n_items = len(_fetch_items_n3_acta(int(acta_norm), int(contrato_id)))
+    content = html if standalone else _fo_eo_04_html_embed_fragment(html)
     return HTMLResponse(
-        content=_fo_eo_04_html_embed_fragment(html),
+        content=content,
         media_type="text/html; charset=utf-8",
         headers={"X-CC-Fo-Eo-04-Items": str(n_items)},
     )

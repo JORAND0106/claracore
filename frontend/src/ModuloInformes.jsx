@@ -867,6 +867,12 @@ export default function ModuloInformes({
     }
   }, [formatosEntExtAbierto, contratoId, actasConc, actaIdFoEo04, cargandoSub])
 
+  /** Al cambiar acta/subsistema el PDF generado deja de ser válido: olvidar el job para
+   *  no sellar/descargar un acta que ya no corresponde a lo seleccionado. */
+  useEffect(() => {
+    setFoEo04LastJobId(null)
+  }, [actaIdFoEo04, subsistemaFoEo04])
+
   /** Semanas (pesado en servidor): solo al abrir «Formatos Semanales»; una vez por contrato. */
   useEffect(() => {
     if (!contratoId || !formatosSemAbierto) return
@@ -2568,11 +2574,56 @@ export default function ModuloInformes({
     }
   }
 
-  async function abrirPreviewFoEo04ConProgreso() {
+  /** Vista previa HTML instantánea (sin xhtml2pdf): el navegador renderiza todas las
+   *  memorias del acta. No bloquea el worker y escala a 120+ memorias en segundos. */
+  async function abrirPreviewFoEo04Html() {
+    const authToken = getAuthToken()
+    if (!authToken || !contratoId) { setError('Sesión no autenticada.'); return }
+    if (cargandoSub && !actasConc.length) { setError('Espere a que carguen las actas RPO del contrato.'); return }
+    if (!supervisorFoEo04.trim()) { setError('Ingrese el nombre del supervisor(a) para continuar.'); return }
+    if (!actaIdFoEo04) { setError('Selecciona un acta RPO para generar la memoria.'); return }
+    if (!actasConc.some((a) => String(a.id) === String(actaIdFoEo04))) {
+      setError('El acta seleccionado no está en la lista del contrato. Elija otro acta.')
+      return
+    }
+    if (vistaPrevia?.pdfUrl) { try { URL.revokeObjectURL(vistaPrevia.pdfUrl) } catch { /* noop */ } }
+    setVistaPrevia({ fase: 'cargando', tipo: 'idu-html' })
+    setError(null)
+    try {
+      const params = new URLSearchParams({
+        formato_codigo: 'FO-IDU-EO-04-V2',
+        subsistema: subsistemaFoEo04 || 'vial',
+        standalone: 'true',
+      })
+      if (actaIdFoEo04) params.set('acta_id', actaIdFoEo04)
+      if (supervisorFoEo04.trim()) params.set('supervisor', supervisorFoEo04.trim())
+      const r = await fetchConFallback(
+        `/informes/${contratoId}/ccd/fo-eo-04/preview-html?${params.toString()}`,
+        { headers: { Authorization: `Bearer ${authToken}` } }
+      )
+      if (!r.ok) {
+        setVistaPrevia({ fase: 'error', tipo: 'idu-html', mensaje: await leerErrorRespuesta(r) })
+        return
+      }
+      const htmlTexto = await r.text()
+      const blob = new Blob([htmlTexto], { type: 'text/html;charset=utf-8' })
+      setVistaPrevia({ fase: 'ok', tipo: 'idu-html', pdfUrl: URL.createObjectURL(blob) })
+    } catch (e) {
+      setVistaPrevia({ fase: 'error', tipo: 'idu-html', mensaje: String(e?.message || e) })
+    }
+  }
+
+  /** Genera el PDF real (todas las memorias) en background y, si conSello, descarga la
+   *  versión sellada. El render corre en procesos hijos para no bloquear el worker. */
+  async function generarFoEo04Pdf({ conSello = false } = {}) {
     const authToken = getAuthToken()
     if (!authToken || !contratoId) { setError('Sesión no autenticada.'); return }
     if (cargandoSub && !actasConc.length) {
       setError('Espere a que carguen las actas RPO del contrato.')
+      return
+    }
+    if (!supervisorFoEo04.trim()) {
+      setError('Ingrese el nombre del supervisor(a) para continuar.')
       return
     }
     if (!actaIdFoEo04) {
@@ -2640,6 +2691,39 @@ export default function ModuloInformes({
             done = true
             foEo04JobPollRef.current = null
             setFoEo04LastJobId(job_id)
+            const foMeta = estado.fo_totales_meta
+            const avisoAcum =
+              foMeta &&
+              Number(foMeta.prev_actas_count) > 0 &&
+              Number(foMeta.items_con_acumulado) === 0
+                ? ` El servidor encontró ${foMeta.prev_actas_count} acta(s) anterior(es) y ${foMeta.registros_prev_nivel_max ?? 0} línea(s) con nivel máximo aprobado, pero ningún ítem coincide con acumulado en el PDF (revise ítem/capítulo).`
+                : foMeta && Number(foMeta.prev_actas_count) === 0
+                  ? ' No se detectaron actas RPO anteriores para este acta (revise numero_rpo/consecutivo en producción).'
+                  : ''
+
+            if (conSello) {
+              // Botón azul: anexar sello al PDF recién generado y descargar (sin re-armar).
+              setFoEo04Job({
+                status: 'descargando',
+                msg: 'Añadiendo sello SHA y descargando…',
+                currentItem: estado.total_items,
+                totalItems: estado.total_items,
+              })
+              try {
+                await descargarPdfConc(
+                  `/informes/${contratoId}/ccd/pdf-job/${job_id}/con-sello-firma`,
+                  'FO-IDU-EO-04-V2-sello.pdf',
+                  { skipBusy: true },
+                )
+              } finally {
+                detenerTimerFoEo04()
+                setFoEo04Job(null)
+                setVistaPrevia(null)
+              }
+              return
+            }
+
+            // Vista previa del PDF real (reservado; el botón lupa usa HTML).
             setFoEo04Job({
               status: 'descargando',
               msg: 'Descargando PDF para vista previa…',
@@ -2669,15 +2753,6 @@ export default function ModuloInformes({
                 return
               }
               const blob = await rPdf.blob()
-              const foMeta = estado.fo_totales_meta
-              const avisoAcum =
-                foMeta &&
-                Number(foMeta.prev_actas_count) > 0 &&
-                Number(foMeta.items_con_acumulado) === 0
-                  ? ` El servidor encontró ${foMeta.prev_actas_count} acta(s) anterior(es) y ${foMeta.registros_prev_nivel_max ?? 0} línea(s) con nivel máximo aprobado, pero ningún ítem coincide con acumulado en el PDF (revise ítem/capítulo).`
-                  : foMeta && Number(foMeta.prev_actas_count) === 0
-                    ? ' No se detectaron actas RPO anteriores para este acta (revise numero_rpo/consecutivo en producción).'
-                    : ''
               setVistaPrevia({
                 fase: 'ok',
                 tipo: 'idu-plantilla-vacia-pdf',
@@ -5245,73 +5320,74 @@ export default function ModuloInformes({
                       </div>
                     )
                   })()}
-                  {/* Generar PDF del acta (una sola espera; al terminar se muestra el documento) */}
+                  {/* Vista previa HTML instantánea (renderiza en el navegador, sin xhtml2pdf) */}
                   <button
                     type="button"
                     style={btnCcdToolbar(
-                      ['cargando', 'progreso'].includes(vistaPrevia?.fase) && vistaPrevia?.tipo === 'idu-plantilla-vacia',
+                      vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-html',
                       'vista'
                     )}
-                    onClick={abrirPreviewFoEo04ConProgreso}
+                    onClick={abrirPreviewFoEo04Html}
                     disabled={
                       !supervisorFoEo04.trim() ||
                       !actaIdFoEo04 ||
                       (cargandoSub && actasConc.length === 0) ||
-                      (['cargando', 'progreso'].includes(vistaPrevia?.fase) && vistaPrevia?.tipo === 'idu-plantilla-vacia')
+                      (vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-html')
                     }
                     title={
                       !supervisorFoEo04.trim()
                         ? 'Ingrese el nombre del supervisor(a) para continuar'
                         : !actaIdFoEo04
                           ? 'Seleccione un acta RPO'
-                          : 'Generar PDF de todas las memorias del acta (puede tardar varios minutos)'
+                          : 'Vista previa rápida de todas las memorias del acta (no descarga; se renderiza en pantalla)'
                     }
-                    aria-label="Generar PDF FO-IDU-EO-04-V2"
+                    aria-label="Vista previa FO-IDU-EO-04-V2"
                   >
-                    {['cargando', 'progreso'].includes(vistaPrevia?.fase) && vistaPrevia?.tipo === 'idu-plantilla-vacia' ? (
+                    {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'idu-html' ? (
                       <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                     ) : (
                       <IconoVistaPrevia size={ui.iconSvg} />
                     )}
                   </button>
-                  {/* Botón: descargar PDF con sello */}
+                  {/* Botón: generar (si hace falta) y descargar PDF firmado con sello SHA */}
+                  {(() => {
+                    const generandoPdf =
+                      vistaPrevia?.fase === 'progreso' && vistaPrevia?.tipo === 'idu-plantilla-vacia'
+                    const ocupado = concPdfBusy || generandoPdf
+                    return (
                   <button
                     type="button"
-                    style={btnCcdToolbar(concPdfBusy, 'pdf')}
+                    style={btnCcdToolbar(ocupado, 'pdf')}
                     onClick={() => {
                       if (foEo04LastJobId) {
+                        // PDF ya generado para este acta → solo anexar sello (rápido).
                         descargarPdfConc(
                           `/informes/${contratoId}/ccd/pdf-job/${foEo04LastJobId}/con-sello-firma`,
                           'FO-IDU-EO-04-V2-sello.pdf',
                         )
                         return
                       }
-                      const qs = new URLSearchParams({
-                        subsistema: subsistemaFoEo04 || 'vial',
-                        supervisor: supervisorFoEo04.trim(),
-                        ...(actaIdFoEo04 ? { acta_id: actaIdFoEo04 } : {}),
-                      }).toString()
-                      descargarPdfConc(
-                        `/informes/${contratoId}/ccd/preview-plantilla-vacia/FO-IDU-EO-04-V2/con-sello-firma?${qs}`,
-                        'FO-IDU-EO-04-V2.pdf',
-                      )
+                      // Genera el PDF en background (procesos, no bloquea) y al terminar descarga con sello.
+                      generarFoEo04Pdf({ conSello: true })
                     }}
-                    disabled={!supervisorFoEo04.trim() || !actaIdFoEo04 || concPdfBusy}
+                    disabled={!supervisorFoEo04.trim() || !actaIdFoEo04 || ocupado}
                     title={
                       !supervisorFoEo04.trim()
                         ? 'Ingrese el nombre del supervisor(a) para continuar'
                         : !actaIdFoEo04
                           ? 'Seleccione un acta RPO'
                           : foEo04LastJobId
-                            ? 'Añadir sello al PDF ya generado (rápido; no vuelve a crear las memorias)'
-                            : 'Genera primero el PDF con la lupa; si no, vuelve a crear todo el acta (lento)'
+                            ? 'Descargar PDF firmado con sello SHA (rápido; reutiliza el PDF ya generado)'
+                            : 'Generar y descargar el PDF firmado con sello SHA de todas las memorias del acta'
                     }
                     aria-label="Descargar PDF FO-IDU-EO-04-V2 con sello"
                   >
-                    {concPdfBusy
+                    {ocupado
                       ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
                       : <IconoPdfSello size={ui.iconSvg} />}
                   </button>
+                    )
+                  })()}
                   {/* Botón: registrar firma */}
                   {puedeValidarCcd && (
                     <button
@@ -5575,7 +5651,9 @@ export default function ModuloInformes({
         const esVistaPreviaGerencia =
           vistaPrevia.tipo === 'corte-ger' || vistaPrevia.tipo === 'corte-ger-pdf'
         const esVistaIDUEO04 =
-          vistaPrevia.tipo === 'idu-plantilla-vacia' || vistaPrevia.tipo === 'idu-plantilla-vacia-pdf'
+          vistaPrevia.tipo === 'idu-plantilla-vacia' ||
+          vistaPrevia.tipo === 'idu-plantilla-vacia-pdf' ||
+          vistaPrevia.tipo === 'idu-html'
         return (
         <div
           role="dialog"
@@ -5649,6 +5727,9 @@ export default function ModuloInformes({
                     if (tp === 'idu-plantilla-vacia' && vistaPrevia.fase === 'progreso') {
                       return 'Generando PDF · FO-IDU-EO-04-V2'
                     }
+                    if (tp === 'idu-html') {
+                      return 'FO-IDU-EO-04-V2 · Vista previa de memorias (HTML)'
+                    }
                     if (tp === 'idu-plantilla-vacia' || tp === 'idu-plantilla-vacia-pdf') {
                       return 'FO-IDU-EO-04-V2 · Memorias del acta (PDF)'
                     }
@@ -5714,7 +5795,7 @@ export default function ModuloInformes({
                     </div>
                   </>
                 ) : (
-                  'Generando vista previa PDF…'
+                  'Generando vista previa…'
                 )}
               </div>
             )}

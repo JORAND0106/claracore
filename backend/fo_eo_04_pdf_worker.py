@@ -47,3 +47,15 @@ def render_html_to_pdf(html: str) -> bytes:
 def render_html_batch(htmls: List[str]) -> List[bytes]:
     """Varias memorias en el mismo proceso (menos IPC; ~2 páginas por tarea)."""
     return [render_html_to_pdf(h) for h in htmls]
+
+
+def ping() -> bool:
+    """Auto-test barato del pool: confirma que el proceso hijo arrancó e importa OK.
+
+    Importa xhtml2pdf (la dependencia pesada) para detectar fallos de spawn/RAM/import
+    en el hijo antes de enviarle trabajo real. Si esto cuelga o falla, el padre cae a
+    modo secuencial en vez de quedarse esperando para siempre.
+    """
+    from xhtml2pdf import pisa  # noqa: F401
+
+    return True
