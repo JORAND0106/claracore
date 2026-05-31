@@ -2587,8 +2587,15 @@ export default function ModuloInformes({
       return
     }
     if (vistaPrevia?.pdfUrl) { try { URL.revokeObjectURL(vistaPrevia.pdfUrl) } catch { /* noop */ } }
-    setVistaPrevia({ fase: 'cargando', tipo: 'idu-html' })
+    setVistaPrevia({ fase: 'cargando', tipo: 'idu-html', seg: 0 })
     setError(null)
+    const t0 = Date.now()
+    const tickIv = setInterval(() => {
+      const seg = Math.round((Date.now() - t0) / 1000)
+      setVistaPrevia((prev) =>
+        prev?.tipo === 'idu-html' && prev?.fase === 'cargando' ? { ...prev, seg } : prev
+      )
+    }, 1000)
     try {
       const params = new URLSearchParams({
         formato_codigo: 'FO-IDU-EO-04-V2',
@@ -2610,6 +2617,8 @@ export default function ModuloInformes({
       setVistaPrevia({ fase: 'ok', tipo: 'idu-html', pdfUrl: URL.createObjectURL(blob) })
     } catch (e) {
       setVistaPrevia({ fase: 'error', tipo: 'idu-html', mensaje: String(e?.message || e) })
+    } finally {
+      clearInterval(tickIv)
     }
   }
 
@@ -5794,6 +5803,22 @@ export default function ModuloInformes({
                       Consultando actas RPO y totales de costo directo. No cierre esta ventana.
                     </div>
                   </>
+                ) : vistaPrevia.tipo === 'idu-html' ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px', padding: '16px' }}>
+                    <div style={{ fontSize: '48px', lineHeight: 1, userSelect: 'none', animation: 'ccSpinPulse 1.2s ease-in-out infinite' }} aria-hidden>
+                      ⏳
+                    </div>
+                    <div style={{ fontSize: f.title + 'px', fontWeight: 800, color: '#334155' }}>
+                      Generando vista previa…
+                    </div>
+                    <div style={{ fontSize: (f.title - 4) + 'px', fontWeight: 800, color: '#1e40af', fontVariantNumeric: 'tabular-nums' }}>
+                      ⏳ {vistaPrevia.seg ?? 0} segundo{(vistaPrevia.seg ?? 0) === 1 ? '' : 's'}
+                    </div>
+                    <div style={{ fontSize: f.sub + 'px', maxWidth: '440px', margin: '0 auto', lineHeight: 1.45 }}>
+                      Consultando las memorias del acta y los acumulados de actas anteriores. No cierre esta ventana.
+                    </div>
+                    <style>{'@keyframes ccSpinPulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.18);opacity:.55}}'}</style>
+                  </div>
                 ) : (
                   'Generando vista previa…'
                 )}
