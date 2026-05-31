@@ -6180,6 +6180,90 @@ def _fo_eo_04_paginar_so_registros(q_builder) -> list:
     return rows
 
 
+def _fo_eo_04_registros_via_reporte(
+    contrato_id: int,
+    target_acta_ids: set,
+    *,
+    select_cols: str,
+    item_chunks: List[Optional[List[str]]],
+) -> List[Dict[str, Any]]:
+    """Registros con acta_rpo_id NULL cuyo reporte pertenece a una acta objetivo.
+
+    Estrategia «registros-first»: algunos contratos tienen DECENAS DE MILES de reportes
+    (p. ej. contrato 2: ~27k) pero muy pocos registros con acta nula (~300). El método
+    anterior pedía TODOS los reportes de las actas y luego registros en lotes de 80
+    reporte_id → ~1000 consultas secuenciales → timeout 502 en Azure (sin CORS).
+    Aquí traemos primero esos pocos registros (filtrados por ítem) y luego mapeamos sus
+    reporte_id → acta_rpo_id con 1-2 consultas. Resultado equivalente, ~5 consultas.
+    """
+    cid = int(contrato_id)
+    if not target_acta_ids:
+        return []
+
+    def _cand_q(ic):
+        q = (
+            _sb.table("so_registros")
+            .select(select_cols)
+            .eq("contrato_id", cid)
+            .is_("acta_rpo_id", "null")
+            .not_.is_("reporte_id", "null")
+            .not_.is_("item_numero", "null")
+            .neq("item_numero", "")
+        )
+        if ic is not None:
+            q = q.in_("item_numero", ic)
+        return q
+
+    cand: List[Dict[str, Any]] = []
+    for ic in (item_chunks or [None]):
+        cand.extend(_fo_eo_04_paginar_so_registros(lambda ic=ic: _cand_q(ic)))
+    if not cand:
+        return []
+
+    rep_ids = sorted({int(r["reporte_id"]) for r in cand if r.get("reporte_id") is not None})
+    rep_to_acta: Dict[int, int] = {}
+    for i in range(0, len(rep_ids), 200):
+        chunk = rep_ids[i : i + 200]
+        try:
+            rp = (
+                _sb.table("so_reportes")
+                .select("id, acta_rpo_id")
+                .eq("contrato_id", cid)
+                .in_("id", chunk)
+                .execute()
+                .data
+                or []
+            )
+        except Exception as exc:
+            _log.warning("fo_eo_04 reportes map: %s", exc)
+            rp = []
+        for x in rp:
+            if x.get("id") is None or x.get("acta_rpo_id") is None:
+                continue
+            try:
+                rep_to_acta[int(x["id"])] = int(x["acta_rpo_id"])
+            except (TypeError, ValueError):
+                continue
+
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for r in cand:
+        rid_rep = r.get("reporte_id")
+        if rid_rep is None:
+            continue
+        try:
+            if rep_to_acta.get(int(rid_rep)) not in target_acta_ids:
+                continue
+        except (TypeError, ValueError):
+            continue
+        rid = r.get("id")
+        if rid in seen:
+            continue
+        seen.add(rid)
+        out.append(r)
+    return out
+
+
 def _fo_eo_04_fetch_registros_acta(contrato_id: int, acta_id: int) -> List[Dict[str, Any]]:
     """
     Líneas del acta: acta_rpo_id en el registro y, además, registros de reportes con
@@ -6199,30 +6283,9 @@ def _fo_eo_04_fetch_registros_acta(contrato_id: int, acta_id: int) -> List[Dict[
 
     rows_direct = _fo_eo_04_paginar_so_registros(lambda: _base_q().eq("acta_rpo_id", aid))
 
-    reporte_ids: List[int] = []
-    try:
-        rp = (
-            _sb.table("so_reportes")
-            .select("id")
-            .eq("contrato_id", cid)
-            .eq("acta_rpo_id", aid)
-            .execute()
-            .data
-            or []
-        )
-        reporte_ids = [int(x["id"]) for x in rp if x.get("id") is not None]
-    except Exception as exc:
-        _log.warning("fo_eo_04 reportes acta: %s", exc)
-
-    rows_rep: list = []
-    for i in range(0, len(reporte_ids), 80):
-        chunk = reporte_ids[i : i + 80]
-
-        def _q_rep(ids=chunk):
-            # Solo líneas sin acta en registro (las de acta_rpo_id=acta ya están en rows_direct)
-            return _base_q().in_("reporte_id", ids).is_("acta_rpo_id", "null")
-
-        rows_rep.extend(_fo_eo_04_paginar_so_registros(_q_rep))
+    rows_rep = _fo_eo_04_registros_via_reporte(
+        cid, {aid}, select_cols=_FO_EO_04_SEL_REGISTROS, item_chunks=[None]
+    )
 
     by_id: Dict[Any, Dict[str, Any]] = {}
     for r in rows_direct:
@@ -6435,10 +6498,9 @@ def _fo_eo_04_fetch_registros_actas_ids(
             .neq("item_numero", "")
         )
 
+    # Directos: registros con acta_rpo_id en el conjunto (por lotes de actas + ítem).
     for i in range(0, len(ids_u), 80):
         chunk = ids_u[i : i + 80]
-        chunk_set = set(chunk)
-
         for ic in item_chunks:
             rows_direct = _fo_eo_04_paginar_so_registros(
                 lambda c=chunk, ic=ic: (
@@ -6447,50 +6509,19 @@ def _fo_eo_04_fetch_registros_actas_ids(
                     else _base_q().in_("acta_rpo_id", c)
                 )
             )
-
-            reporte_ids: List[int] = []
-            try:
-                rp = (
-                    _sb.table("so_reportes")
-                    .select("id")
-                    .eq("contrato_id", cid)
-                    .in_("acta_rpo_id", chunk)
-                    .execute()
-                    .data
-                    or []
-                )
-                reporte_ids = [int(x["id"]) for x in rp if x.get("id") is not None]
-            except Exception as exc:
-                _log.warning("fo_eo_04 reportes actas_prev: %s", exc)
-
-            rows_rep: list = []
-            for j in range(0, len(reporte_ids), 80):
-                rep_chunk = reporte_ids[j : j + 80]
-
-                def _q_rep(ids=rep_chunk, ic=ic):
-                    q = _base_q().in_("reporte_id", ids).is_("acta_rpo_id", "null")
-                    if ic is not None:
-                        q = q.in_("item_numero", ic)
-                    return q
-
-                rows_rep.extend(_fo_eo_04_paginar_so_registros(_q_rep))
-
             for r in rows_direct:
                 rid = r.get("id")
                 if rid is not None:
                     by_id[rid] = r
-            for r in rows_rep:
-                rid = r.get("id")
-                if rid is None:
-                    continue
-                ara = r.get("acta_rpo_id")
-                if ara is not None:
-                    try:
-                        if int(ara) not in chunk_set:
-                            continue
-                    except (TypeError, ValueError):
-                        continue
-                by_id[rid] = r
+
+    # Vía reporte (registros con acta nula): «registros-first» para evitar miles de
+    # consultas cuando el contrato tiene decenas de miles de reportes.
+    for r in _fo_eo_04_registros_via_reporte(
+        cid, set(ids_u), select_cols=select_cols, item_chunks=item_chunks
+    ):
+        rid = r.get("id")
+        if rid is not None:
+            by_id[rid] = r
 
     rows = list(by_id.values())
     _log.info(

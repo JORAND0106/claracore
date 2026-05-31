@@ -466,13 +466,43 @@ def _default_severidad(accion: str, modulo: str, resultado: str) -> str:
     return "INFO"
 
 
+_CORS_ORIGIN_REGEX_HANDLER = re.compile(
+    r"^https://([a-z0-9-]+\.)*claracore\.co$|^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+)
+
+
+def _cors_headers_para_error(request: Request) -> dict:
+    """Cabeceras CORS para respuestas de error.
+
+    CRÍTICO: el handler de Exception lo invoca ServerErrorMiddleware, que está POR FUERA
+    del CORSMiddleware; por eso un 500 salía SIN 'Access-Control-Allow-Origin' y el
+    navegador lo reportaba como error de CORS (enmascarando el 500 real). Añadimos las
+    cabeceras a mano, reflejando el Origin si está permitido (mismo criterio que el CORS).
+    """
+    origin = request.headers.get("origin")
+    if not origin:
+        return {}
+    permitido = origin in _cors_origins or bool(_CORS_ORIGIN_REGEX_HANDLER.match(origin))
+    if not permitido:
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Vary": "Origin",
+    }
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_to_json(request: Request, exc: Exception):
-    """Evita HTML genérico 'Internal Server Error'; el front puede mostrar `detail` en JSON."""
+    """Evita HTML genérico 'Internal Server Error'; el front puede mostrar `detail` en JSON.
+
+    Incluye cabeceras CORS para que el 500 sea legible por el navegador (no enmascarado).
+    """
+    cors = _cors_headers_para_error(request)
     if isinstance(exc, HTTPException):
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=cors)
     if isinstance(exc, RequestValidationError):
-        return JSONResponse(status_code=422, content={"detail": exc.errors()})
+        return JSONResponse(status_code=422, content={"detail": exc.errors()}, headers=cors)
     _log_api.exception("Error no manejado: %s %s", request.method, request.url.path)
     try:
         registrar_log_sistema(
@@ -489,7 +519,7 @@ async def unhandled_exception_to_json(request: Request, exc: Exception):
         pass
     debug = os.getenv("CLARACORE_DEBUG", "").lower() in ("1", "true", "yes")
     detail = traceback.format_exc() if debug else f"{type(exc).__name__}: {exc}"
-    return JSONResponse(status_code=500, content={"detail": detail})
+    return JSONResponse(status_code=500, content={"detail": detail}, headers=cors)
 
 
 _SUPABASE_URL = os.getenv("SUPABASE_URL")
