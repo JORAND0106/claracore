@@ -6307,12 +6307,11 @@ def _fo_eo_04_fetch_registros_acta(contrato_id: int, acta_id: int) -> List[Dict[
 
     rows = list(by_id.values())
     _log.info(
-        "fo_eo_04 registros_acta: acta=%s direct=%s via_reporte=%s uniq=%s reportes=%s",
+        "fo_eo_04 registros_acta: acta=%s direct=%s via_reporte=%s uniq=%s",
         aid,
         len(rows_direct),
         len(rows_rep),
         len(rows),
-        len(reporte_ids),
     )
     return rows
 
