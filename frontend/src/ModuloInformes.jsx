@@ -1866,6 +1866,47 @@ export default function ModuloInformes({
     }
   }
 
+  async function abrirVistaPreviaMemoriaMensualCompleto() {
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !actaConcId) {
+      setVistaPrevia({ fase: 'error', tipo: 'memoria-mes-todos', mensaje: 'Selecciona el acta RPO.' })
+      return
+    }
+    setVistaPrevia((prev) => {
+      if (prev?.pdfUrl) {
+        try {
+          URL.revokeObjectURL(prev.pdfUrl)
+        } catch {
+          /* noop */
+        }
+      }
+      return { fase: 'cargando', tipo: 'memoria-mes-todos' }
+    })
+    setError(null)
+    const opts = { headers: { Authorization: `Bearer ${authToken}` } }
+    const cid = encodeURIComponent(contratoId)
+    const aid = encodeURIComponent(actaConcId)
+    const pathPdf = `/informes/${cid}/pdf/cc-mes-002/acta/${aid}/completo`
+    try {
+      const r = await fetchConFallback(pathPdf, opts)
+      if (!r || !r.ok) {
+        const msg = r ? await leerErrorRespuesta(r) : 'Sin respuesta'
+        setVistaPrevia({ fase: 'error', tipo: 'memoria-mes-todos', mensaje: msg })
+        return
+      }
+      const blob = await r.blob()
+      const pdfUrl = URL.createObjectURL(blob)
+      setVistaPrevia({ fase: 'ok', tipo: 'memoria-mes-todos-pdf', pdfUrl })
+    } catch (e) {
+      const msg = String(e?.message || e)
+      setVistaPrevia({ fase: 'error', tipo: 'memoria-mes-todos', mensaje: msg })
+    }
+  }
+
   function nombreArchivoDesdeContentDisposition(cd) {
     if (!cd || typeof cd !== 'string') return null
     const u = /filename\*=UTF-8''([^;\n]+)/i.exec(cd)
@@ -2237,6 +2278,92 @@ export default function ModuloInformes({
       }
       const blob = await r.blob()
       const name = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || `CC-SEM-002-${itemNumero}.xlsx`
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setExcelBusy(null)
+    }
+  }
+
+  async function descargarExcelCcMes002Completo() {
+    if (!puedeExportarCcd) {
+      setError('No tienes permiso para exportar a Excel (acción Exportar en Informes CCD).')
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !actaConcId) {
+      setError('Selecciona contrato y acta RPO de conciliación.')
+      return
+    }
+    setExcelBusy('mes2-all')
+    setError(null)
+    const cid = encodeURIComponent(contratoId)
+    const aid = encodeURIComponent(actaConcId)
+    const path = `/informes/${cid}/excel/cc-mes-002/acta/${aid}/completo`
+    try {
+      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
+      if (!r || !r.ok) {
+        setError(r ? await leerErrorRespuesta(r) : 'Sin respuesta')
+        return
+      }
+      const blob = await r.blob()
+      const name = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || 'CC-MES-002-todos.xlsx'
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = name
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setError(String(e?.message || e))
+    } finally {
+      setExcelBusy(null)
+    }
+  }
+
+  async function descargarExcelCcMes002Item(itemNumero) {
+    if (!puedeExportarCcd) {
+      setError('No tienes permiso para exportar a Excel (acción Exportar en Informes CCD).')
+      return
+    }
+    const authToken = getAuthToken()
+    if (!authToken) {
+      setError('Sesion no autenticada.')
+      return
+    }
+    if (contratoId == null || contratoId === '' || !actaConcId || !itemNumero) {
+      setError('Selecciona contrato, acta RPO e ítem.')
+      return
+    }
+    const key = `m2:${itemNumero}`
+    setExcelBusy(key)
+    setError(null)
+    const cid = encodeURIComponent(contratoId)
+    const aid = encodeURIComponent(actaConcId)
+    const q = encodeURIComponent(itemNumero)
+    const path = `/informes/${cid}/excel/cc-mes-002/acta/${aid}?item_numero=${q}`
+    try {
+      const r = await fetchConFallback(path, { headers: { Authorization: `Bearer ${authToken}` } })
+      if (!r || !r.ok) {
+        setError(r ? await leerErrorRespuesta(r) : 'Sin respuesta')
+        return
+      }
+      const blob = await r.blob()
+      const name = nombreArchivoDesdeContentDisposition(r.headers.get('content-disposition')) || `CC-MES-002-${itemNumero}.xlsx`
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -5045,12 +5172,80 @@ export default function ModuloInformes({
                         </button>
                       </div>
 
-                      {ccMes002ListadoItemsAbierto &&
-                      itemsMensual.map((item) => {
+                      {ccMes002ListadoItemsAbierto && (
+                      <>
+                      <div
+                        style={{
+                          ...itemRowFmt,
+                          marginBottom: '6px',
+                          padding: '6px 10px',
+                          background: t.primary + '0d',
+                          border: `1px solid ${t.primary}35`,
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }} title="Un PDF con todos los ítems del acta en orden de código.">
+                          <div style={{ fontWeight: '800', color: t.text, fontSize: ui.itemEm + 'px' }}>
+                            Todos los ítems · PDF único
+                          </div>
+                          <div style={{ fontSize: Math.max(10, ui.hint - 1) + 'px', color: t.textMuted, marginTop: '2px' }}>
+                            Orden ascendente por código de ítem
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
+                          <button
+                            type="button"
+                            style={btnCcdToolbar(vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'memoria-mes-todos', 'vista')}
+                            onClick={abrirVistaPreviaMemoriaMensualCompleto}
+                            disabled={vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'memoria-mes-todos'}
+                            title="Vista previa: todas las memorias en un solo PDF"
+                            aria-label="Vista previa todas las memorias mensuales"
+                          >
+                            {vistaPrevia?.fase === 'cargando' && vistaPrevia?.tipo === 'memoria-mes-todos'
+                              ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                              : <IconoVistaPrevia size={ui.iconSvg} />}
+                          </button>
+                          {puedeExportarCcd && (
+                          <button
+                            type="button"
+                            style={btnCcdToolbar(!!excelBusy, 'excel')}
+                            onClick={descargarExcelCcMes002Completo}
+                            disabled={!!excelBusy}
+                            title="Descargar Excel: todas las memorias (una hoja por ítem, mismo orden que el PDF)"
+                            aria-label="Descargar Excel todas las memorias mensuales"
+                          >
+                            {excelBusy === 'mes2-all'
+                              ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                              : <IconoDescargaExcel size={ui.iconSvg} />}
+                          </button>
+                          )}
+                          <button
+                            type="button"
+                            style={btnCcdToolbar(concPdfBusy, 'pdf')}
+                            onClick={() =>
+                              descargarPdfConc(
+                                rutaPdfConcConSello(
+                                  `/informes/${contratoId}/pdf/cc-mes-002/acta/${encodeURIComponent(actaConcId)}/completo`
+                                ),
+                                'CC-MES-002-todos.pdf'
+                              )
+                            }
+                            disabled={concPdfBusy}
+                            title="Descargar PDF con todos los ítems y página de sello (firma del perfil, huella SHA-256)"
+                            aria-label="Descargar PDF todas las memorias mensuales con sello"
+                          >
+                            {concPdfBusy
+                              ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                              : <IconoPdfSello size={ui.iconSvg} />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {itemsMensual.map((item) => {
                         const busy =
                           vistaPrevia?.fase === 'cargando' &&
                           vistaPrevia?.tipo === 'memoria-mes' &&
                           vistaPrevia?.itemNumero === item.item_numero
+                        const busyX = excelBusy === `m2:${item.item_numero}`
                         return (
                           <div key={item.item_numero} style={{ ...itemRowFmt, padding: '6px 10px' }}>
                             <div style={{ minWidth: 0 }}>
@@ -5080,12 +5275,15 @@ export default function ModuloInformes({
                               {puedeExportarCcd && (
                               <button
                                 type="button"
-                                style={btnCcdToolbar(true, 'excel')}
-                                disabled
-                                title="Excel no disponible aún para memorias mensuales"
-                                aria-label="Excel no disponible"
+                                style={btnCcdToolbar(!!excelBusy, 'excel')}
+                                onClick={() => descargarExcelCcMes002Item(item.item_numero)}
+                                disabled={!!excelBusy}
+                                title={`Descargar Excel · ${item.item_numero}`}
+                                aria-label={`Descargar Excel ${item.item_numero}`}
                               >
-                                <IconoDescargaExcel size={ui.iconSvg} />
+                                {busyX
+                                  ? <span style={{ fontSize: ui.body + 'px' }} aria-hidden>⏳</span>
+                                  : <IconoDescargaExcel size={ui.iconSvg} />}
                               </button>
                               )}
                               <button
@@ -5111,6 +5309,8 @@ export default function ModuloInformes({
                           </div>
                         )
                       })}
+                      </>
+                      )}
                     </>
                   )}
                 </div>
@@ -5726,6 +5926,9 @@ export default function ModuloInformes({
                     }
                     if (tp === 'memoria-sem' || tp === 'memoria-sem-pdf') {
                       return `Vista previa · CC-SEM-002 (PDF) · ${vistaPrevia.itemNumero || ''}`
+                    }
+                    if (tp === 'memoria-mes-todos' || tp === 'memoria-mes-todos-pdf') {
+                      return 'Vista previa · CC-MES-002 (PDF) · Todos los ítems'
                     }
                     if (tp === 'memoria-mes' || tp === 'memoria-mes-pdf') {
                       return `Vista previa · CC-MES-002 (PDF) · ${vistaPrevia.itemNumero || ''}`

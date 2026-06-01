@@ -3415,10 +3415,13 @@ def _sicoe_so_registros_q_linea_filtros_busqueda(
     if numero_registro is not None:
         q = q.eq("numero_registro", numero_registro)
     q = _so_reg_filtro_abs_solape(q, abs_inicio, abs_final)
+    # La cantidad real de la línea vive en cantidad_total (la columna `cantidad`
+    # quedó casi vacía/legada); es además la que muestra el panel. Filtrar por
+    # `cantidad` no devolvía nada.
     if cantidad_desde is not None:
-        q = q.gte("cantidad", cantidad_desde)
+        q = q.gte("cantidad_total", cantidad_desde)
     if cantidad_hasta is not None:
-        q = q.lte("cantidad", cantidad_hasta)
+        q = q.lte("cantidad_total", cantidad_hasta)
     if costo_directo_desde is not None:
         q = q.gte("costo_directo", costo_directo_desde)
     if costo_directo_hasta is not None:
@@ -13919,10 +13922,12 @@ def analisis_registros_obra(
                 q = q.eq("pk_id_id", pk_id)
             if q_observacion is not None and str(q_observacion).strip():
                 q = q.ilike("observacion", f"%{str(q_observacion).strip()}%")
+            # Cantidad real de la línea: cantidad_total (la columna `cantidad`
+            # quedó casi vacía y es la que mostraba 0 resultados).
             if cantidad_desde is not None:
-                q = q.gte("cantidad", cantidad_desde)
+                q = q.gte("cantidad_total", cantidad_desde)
             if cantidad_hasta is not None:
-                q = q.lte("cantidad", cantidad_hasta)
+                q = q.lte("cantidad_total", cantidad_hasta)
             if costo_directo_desde is not None:
                 q = q.gte("costo_directo", costo_directo_desde)
             if costo_directo_hasta is not None:

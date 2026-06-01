@@ -5847,6 +5847,174 @@ def pdf_cc_mes_002_acta_con_sello_firma(
     )
 
 
+def _cc_mes_002_acta_html_parts_completo(contrato_id: int, acta_id: int, current_user):
+    """Arma el HTML «todos los ítems» de un acta RPO (CC-MES-002). Devuelve (html, contrato, nrpo).
+
+    Reúne, en orden ascendente de código, una memoria por cada ítem aprobado del acta
+    (mismas reglas multinivel que la memoria por ítem). Lanza HTTPException si no hay datos.
+    """
+    reg_agg = fetch_registros_informe_cc_mes_por_acta(_sb, contrato_id, acta_id)
+    items_agg, _total = aggregate_items_conciliacion(reg_agg)
+    _sort_items_corte_por_item_numero_asc(items_agg)
+    numeros = [
+        (it.get("item_numero") or "").strip()
+        for it in items_agg
+        if (it.get("item_numero") or "").strip()
+    ]
+    if not numeros:
+        raise HTTPException(
+            status_code=404,
+            detail="No hay registros aprobados en esta acta para generar memorias",
+        )
+    contrato = _row(
+        "contratos",
+        "numero, objeto, contratista, nit, interventoria, logo_contratista",
+        id=contrato_id,
+    )
+    if not contrato:
+        raise HTTPException(404, "Contrato no encontrado")
+    u = current_user if isinstance(current_user, dict) else dict(current_user)
+    usuario_nombre = f"{u.get('nombre','')} {u.get('apellidos','')}".strip() or "—"
+    usuario_cargo = u.get("cargo_nombre", "—") or "—"
+    ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
+    nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
+    cons = str(ac.get("consecutivo") or "—")
+    conc_meta = {
+        "titulo": "RESUMEN ACTIVIDADES — CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)",
+        "codigo": CODIGO_FORMATO_CCD_CC_MES_002,
+        "cells": [
+            ("CONTRATO", str(contrato.get("numero") or "")),
+            ("ACTA RPO", nrpo),
+            ("CONSECUTIVO", cons),
+            ("FECHA ACTA", "—"),
+        ],
+    }
+    fmt = CODIGO_FORMATO_CCD_CC_MES_002
+    firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="acta_rpo", contexto_id=acta_id)
+    fc = firma_cfg or {}
+    e_uid = _opt_usuario_id(fc.get("elaboro_usuario_id"))
+    r_uid = _opt_usuario_id(fc.get("reviso_usuario_id"))
+    a_uid = _opt_usuario_id(fc.get("aprobo_usuario_id"))
+    enom = str(fc.get("elaboro_nombre") or "").strip()
+    rnom = str(fc.get("reviso_nombre") or "").strip()
+    anom = str(fc.get("aprobo_nombre") or "").strip()
+    elaboro_uri = _firma_data_uri_para_slot_contexto(
+        contrato_id, "acta_rpo", acta_id, fmt, "elaboro", e_uid, enom, current_user
+    )
+    reviso_uri = _firma_data_uri_para_slot_contexto(
+        contrato_id, "acta_rpo", acta_id, fmt, "reviso", r_uid, rnom, current_user
+    )
+    aprobo_uri = _firma_data_uri_para_slot_contexto(
+        contrato_id, "acta_rpo", acta_id, fmt, "aprobo", a_uid, anom, current_user
+    )
+    sub, corte = _sub_corte_dummy_memoria()
+    est = _merge_estilo_pdf(fc.get("estilo_pdf"), fmt)
+    estilo_css = _memoria_pdf_estilo_css(est)
+
+    parts: list[str] = []
+    for item_numero in numeros:
+        registros = fetch_registros_memoria_cc_mes_alineado_acta(
+            _sb, contrato_id, item_numero, acta_rpo_id=acta_id, item_exacto=True
+        )
+        if not registros:
+            continue
+        item_info = {
+            "item_numero": registros[0].get("item_numero", item_numero),
+            "item_descripcion": registros[0].get("item_descripcion", ""),
+            "unidad": registros[0].get("unidad", ""),
+        }
+        inner = _html_memoria_item_body(
+            contrato,
+            sub,
+            corte,
+            item_info,
+            registros,
+            usuario_nombre,
+            usuario_cargo,
+            firma_cfg=firma_cfg,
+            elaboro_firma_data_uri=elaboro_uri,
+            reviso_firma_data_uri=reviso_uri,
+            conc_meta=conc_meta,
+            aprobo_firma_data_uri=aprobo_uri,
+            aprobo_interventoria_desde_config=True,
+            pie_fotos_contexto=f"Acta RPO {nrpo} · cons. {cons}",
+        )
+        if parts:
+            parts.append("<pdf:nextpage />")
+        parts.append(inner)
+
+    if not parts:
+        raise HTTPException(
+            status_code=404,
+            detail="No hay registros aprobados por ítem en esta acta",
+        )
+    html = _wrap_memoria_item_html("".join(parts), estilo_css)
+    return html, contrato, nrpo
+
+
+@router.get("/{contrato_id}/pdf/cc-mes-002/acta/{acta_id}/completo")
+def pdf_cc_mes_002_acta_completo(
+    contrato_id: int,
+    acta_id: int,
+    current_user=Depends(_get_user),
+):
+    """Un solo PDF CC-MES-002: todos los ítems del acta (mismo formato que por ítem, salto entre ítems)."""
+    _perm_informes_ccd(current_user, "ver")
+    try:
+        if not _acta_pertenece_contrato(contrato_id, acta_id):
+            raise HTTPException(404, "Acta no encontrada en este contrato")
+        html, _contrato, nrpo = _cc_mes_002_acta_html_parts_completo(contrato_id, acta_id, current_user)
+        try:
+            pdf_bytes = _to_pdf(html)
+        except Exception as e:
+            _log.exception("pdf_cc_mes_002_acta_completo: fallo PDF")
+            raise HTTPException(500, f"Error generando PDF memoria mensual completa: {e!s}") from e
+        fname = _safe_filename_part(f"CC-MES-002_acta_{nrpo}_todos-items.pdf")
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("pdf_cc_mes_002_acta_completo: error no controlado")
+        raise HTTPException(500, f"Error interno memoria PDF mensual completa: {repr(e)}")
+
+
+@router.get("/{contrato_id}/pdf/cc-mes-002/acta/{acta_id}/completo/con-sello-firma")
+def pdf_cc_mes_002_acta_completo_con_sello_firma(
+    contrato_id: int,
+    acta_id: int,
+    current_user=Depends(_get_user),
+):
+    """Mismo PDF «todos los ítems» CC-MES-002 + página de sello."""
+    _perm_informes_ccd(current_user, "ver")
+    try:
+        if not _acta_pertenece_contrato(contrato_id, acta_id):
+            raise HTTPException(404, "Acta no encontrada en este contrato")
+        html, contrato, nrpo = _cc_mes_002_acta_html_parts_completo(contrato_id, acta_id, current_user)
+        try:
+            pdf_bytes = _to_pdf(html)
+        except Exception as e:
+            _log.exception("pdf_cc_mes_002_acta_completo_con_sello_firma: fallo PDF")
+            raise HTTPException(500, f"Error generando PDF memoria mensual completa: {e!s}") from e
+        fname = _safe_filename_part(f"CC-MES-002_acta_{nrpo}_todos-items.pdf")
+        return _attachment_pdf_con_pagina_sello_usuario(
+            pdf_bytes,
+            current_user,
+            titulo_doc=f"Memorias CC-MES-002 — Acta RPO {nrpo} — todos los ítems",
+            formato_ccd=CODIGO_FORMATO_CCD_CC_MES_002,
+            contrato_numero=str(contrato.get("numero") or ""),
+            nombre_archivo_pdf=fname,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("pdf_cc_mes_002_acta_completo_con_sello_firma: error no controlado")
+        raise HTTPException(500, f"Error interno memoria PDF mensual completa: {repr(e)}")
+
+
 _XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
@@ -6029,6 +6197,58 @@ def excel_cc_sem_002_semana_completo(
         raise HTTPException(500, f"Error generando Excel CC-SEM-002 completo: {repr(e)}") from e
 
 
+@router.get("/{contrato_id}/excel/cc-mes-002/acta/{acta_id}")
+def excel_cc_mes_002_acta(
+    contrato_id: int,
+    acta_id: int,
+    item_numero: str = Query(...),
+    current_user=Depends(_get_user),
+):
+    """Excel CC-MES-002 por ítem: misma estructura que la memoria PDF mensual."""
+    _perm_informes_ccd(current_user, "exportar")
+    try:
+        xbytes = _cc_mes_002_item_excel_bytes(contrato_id, acta_id, item_numero, current_user)
+        ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
+        nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
+        item_safe = _safe_filename_part(item_numero.replace("/", "-").replace(" ", ""))
+        fname = _safe_filename_part(f"CC-MES-002_acta_{nrpo}_{item_safe}.xlsx")
+        return Response(
+            content=xbytes,
+            media_type=_XLSX_MEDIA,
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("excel_cc_mes_002_acta")
+        raise HTTPException(500, f"Error generando Excel CC-MES-002: {repr(e)}") from e
+
+
+@router.get("/{contrato_id}/excel/cc-mes-002/acta/{acta_id}/completo")
+def excel_cc_mes_002_acta_completo(
+    contrato_id: int,
+    acta_id: int,
+    current_user=Depends(_get_user),
+):
+    """Excel CC-MES-002: una hoja por ítem (todos los ítems del acta)."""
+    _perm_informes_ccd(current_user, "exportar")
+    try:
+        xbytes = _cc_mes_002_acta_completo_excel_bytes(contrato_id, acta_id, current_user)
+        ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
+        nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
+        fname = _safe_filename_part(f"CC-MES-002_acta_{nrpo}_todos-items.xlsx")
+        return Response(
+            content=xbytes,
+            media_type=_XLSX_MEDIA,
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception("excel_cc_mes_002_acta_completo")
+        raise HTTPException(500, f"Error generando Excel CC-MES-002 completo: {repr(e)}") from e
+
+
 # ── Preview / desarrollo ───────────────────────────────────────────────────────
 
 def _orden_item_numero(num: str) -> tuple:
@@ -6183,13 +6403,27 @@ _FO_EO_04_SEL_TOTALES = (
 
 
 def _fo_eo_04_paginar_so_registros(q_builder) -> list:
-    """Pagina una query de so_registros (máx. 200k filas)."""
+    """Pagina una query de so_registros (máx. 200k filas).
+
+    IMPORTANTE: ordena SIEMPRE por id antes de paginar. PostgREST/Postgres no
+    garantiza un orden estable entre peticiones .range() sin ORDER BY explícito,
+    de modo que con >1000 filas se SALTABAN registros entre páginas → acumulados
+    incompletos (p. ej. FO-EO-04 «actas anteriores» que junta decenas de miles de
+    filas). El orden por id (clave estable) hace la paginación determinista y completa.
+    """
     _PAGE = 1000
     rows: list = []
     off = 0
+    seen_ids: set = set()
     for _ in range(200):
-        part = q_builder().range(off, off + _PAGE - 1).execute().data or []
-        rows.extend(part)
+        part = q_builder().order("id").range(off, off + _PAGE - 1).execute().data or []
+        for r in part:
+            rid = r.get("id") if isinstance(r, dict) else None
+            if rid is not None:
+                if rid in seen_ids:
+                    continue
+                seen_ids.add(rid)
+            rows.append(r)
         if len(part) < _PAGE:
             break
         off += _PAGE
@@ -6389,6 +6623,7 @@ def _fo_eo_04_list_actas_contrato(contrato_id: int) -> List[Dict[str, Any]]:
             _sb.table("actas")
             .select("id, numero_rpo, consecutivo, tipo_grupo")
             .eq("contrato_id", cid)
+            .order("id")
             .range(off, off + _PAGE - 1)
             .execute()
             .data
@@ -9919,6 +10154,160 @@ def _cc_sem_002_semana_completo_excel_bytes(contrato_id: int, semana_id: int, cu
             )
     if first:
         raise HTTPException(404, "No hay registros aprobados por ítem en esta semana")
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _cc_mes_002_item_excel_bytes(
+    contrato_id: int,
+    acta_id: int,
+    item_numero: str,
+    current_user: dict,
+) -> bytes:
+    """Excel CC-MES-002 por ítem: mismo contenido lógico que el PDF mensual."""
+    if not _acta_pertenece_contrato(contrato_id, acta_id):
+        raise HTTPException(404, "Acta no encontrada en este contrato")
+    registros = fetch_registros_memoria_cc_mes_alineado_acta(
+        _sb, contrato_id, item_numero, acta_rpo_id=acta_id, item_exacto=True
+    )
+    if not registros:
+        raise HTTPException(404, "No hay registros para este ítem y acta")
+    contrato = _row(
+        "contratos",
+        "numero, objeto, contratista, nit, interventoria, logo_contratista",
+        id=contrato_id,
+    )
+    if not contrato:
+        raise HTTPException(404, "Contrato no encontrado")
+    item_info = {
+        "item_numero": registros[0].get("item_numero", item_numero),
+        "item_descripcion": registros[0].get("item_descripcion", ""),
+        "unidad": registros[0].get("unidad", ""),
+    }
+    ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
+    nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
+    cons = str(ac.get("consecutivo") or "—")
+    conc_meta = {
+        "titulo": "RESUMEN ACTIVIDADES — CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)",
+        "codigo": CODIGO_FORMATO_CCD_CC_MES_002,
+        "cells": [
+            ("CONTRATO", str(contrato.get("numero") or "")),
+            ("ACTA RPO", nrpo),
+            ("CONSECUTIVO", cons),
+            ("FECHA ACTA", "—"),
+        ],
+    }
+    fmt = CODIGO_FORMATO_CCD_CC_MES_002
+    firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="acta_rpo", contexto_id=acta_id)
+    sub, corte = _sub_corte_dummy_memoria()
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = _excel_sheet_name(item_info.get("item_numero"))
+    _fill_memoria_excel_ws(
+        ws,
+        contrato,
+        sub,
+        corte,
+        item_info,
+        registros,
+        firma_cfg,
+        conc_meta=conc_meta,
+        pie_fotos_contexto=f"Acta RPO {nrpo} · cons. {cons}",
+        aprobo_interventoria_desde_config=True,
+    )
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _cc_mes_002_acta_completo_excel_bytes(contrato_id: int, acta_id: int, current_user: dict) -> bytes:
+    """Excel CC-MES-002: una hoja por ítem (misma lógica que PDF completo mensual)."""
+    if not _acta_pertenece_contrato(contrato_id, acta_id):
+        raise HTTPException(404, "Acta no encontrada en este contrato")
+    reg_agg = fetch_registros_informe_cc_mes_por_acta(_sb, contrato_id, acta_id)
+    items_agg, _total = aggregate_items_conciliacion(reg_agg)
+    _sort_items_corte_por_item_numero_asc(items_agg)
+    numeros = [
+        (it.get("item_numero") or "").strip()
+        for it in items_agg
+        if (it.get("item_numero") or "").strip()
+    ]
+    if not numeros:
+        raise HTTPException(404, "No hay registros en esta acta para generar memorias")
+
+    contrato = _row(
+        "contratos",
+        "numero, objeto, contratista, nit, interventoria, logo_contratista",
+        id=contrato_id,
+    )
+    if not contrato:
+        raise HTTPException(404, "Contrato no encontrado")
+    ac = _row("actas", "numero_rpo, consecutivo", id=acta_id) or {}
+    nrpo = str(ac.get("numero_rpo") or ac.get("consecutivo") or acta_id)
+    cons = str(ac.get("consecutivo") or "—")
+    conc_meta = {
+        "titulo": "RESUMEN ACTIVIDADES — CONCILIACIÓN MENSUAL (INTERVENTORÍA–CONTRATISTA)",
+        "codigo": CODIGO_FORMATO_CCD_CC_MES_002,
+        "cells": [
+            ("CONTRATO", str(contrato.get("numero") or "")),
+            ("ACTA RPO", nrpo),
+            ("CONSECUTIVO", cons),
+            ("FECHA ACTA", "—"),
+        ],
+    }
+    fmt = CODIGO_FORMATO_CCD_CC_MES_002
+    firma_cfg = _get_firma_cfg_para_documento(contrato_id, fmt, contexto_tipo="acta_rpo", contexto_id=acta_id)
+    sub, corte = _sub_corte_dummy_memoria()
+    pie = f"Acta RPO {nrpo} · cons. {cons}"
+
+    wb = Workbook()
+    first = True
+    for inum in numeros:
+        registros = fetch_registros_memoria_cc_mes_alineado_acta(
+            _sb, contrato_id, inum, acta_rpo_id=acta_id, item_exacto=True
+        )
+        if not registros:
+            continue
+        item_info = {
+            "item_numero": registros[0].get("item_numero", inum),
+            "item_descripcion": registros[0].get("item_descripcion", ""),
+            "unidad": registros[0].get("unidad", ""),
+        }
+        if first:
+            ws = wb.active
+            assert ws is not None
+            ws.title = _excel_unique_sheet_name(wb, item_info.get("item_numero"))
+            _fill_memoria_excel_ws(
+                ws,
+                contrato,
+                sub,
+                corte,
+                item_info,
+                registros,
+                firma_cfg,
+                conc_meta=conc_meta,
+                pie_fotos_contexto=pie,
+                aprobo_interventoria_desde_config=True,
+            )
+            first = False
+        else:
+            ws = wb.create_sheet(title=_excel_unique_sheet_name(wb, item_info.get("item_numero")))
+            _fill_memoria_excel_ws(
+                ws,
+                contrato,
+                sub,
+                corte,
+                item_info,
+                registros,
+                firma_cfg,
+                conc_meta=conc_meta,
+                pie_fotos_contexto=pie,
+                aprobo_interventoria_desde_config=True,
+            )
+    if first:
+        raise HTTPException(404, "No hay registros aprobados por ítem en esta acta")
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
